@@ -9,6 +9,18 @@ import type {
   ToolsConfig
 } from './domainTypes'
 
+export type FileReadResult =
+  | { kind: 'text'; content: string; encoding: 'utf8' }
+  | { kind: 'image'; content: string; encoding: 'base64'; mimeType: string }
+  | { kind: 'unsupported'; ext: string }
+  | { kind: 'too_large'; size: number }
+
+export type FileMetadata = {
+  size: number
+  mtime: number
+  isText: boolean
+}
+
 export type ClaudeChatSendStreamPayload = {
   requestId: string
   model: string
@@ -89,7 +101,14 @@ export type SpaceAssistantApi = {
   configCheckWorkdirWritable: (dir: string) => Promise<{ writable: boolean; error?: string }>
 
   fileListDirectory: (relPath: string) => Promise<FileInfo[]>
-  fileReadFile: (relPath: string) => Promise<{ content: string; encoding: string }>
+  fileReadFile: (relPath: string) => Promise<FileReadResult>
+  fileGetMetadata: (relPath: string) => Promise<FileMetadata>
+  fileOpenInSystem: (relPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  fileShowInExplorer: (relPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  fileExportPdf: (payload: {
+    htmlContent: string
+    defaultPath: string
+  }) => Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }>
   fileCreateFile: (relPath: string) => Promise<void>
   fileCreateDirectory: (relPath: string) => Promise<void>
   fileDelete: (relPath: string) => Promise<void>

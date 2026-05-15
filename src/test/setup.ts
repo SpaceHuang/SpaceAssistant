@@ -1,5 +1,18 @@
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+/** jsdom 未实现带 pseudoElt 的 getComputedStyle，antd/rc-util 会触发告警 */
+if (typeof window !== 'undefined' && window.getComputedStyle) {
+  const orig = window.getComputedStyle.bind(window)
+  window.getComputedStyle = (elt: Element, pseudoElt?: string | null) => {
+    if (pseudoElt) {
+      return {
+        getPropertyValue: () => ''
+      } as unknown as CSSStyleDeclaration
+    }
+    return orig(elt)
+  }
+}
+
 if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = class {
     observe() {}

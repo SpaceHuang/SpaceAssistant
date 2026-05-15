@@ -15,9 +15,11 @@ export type ToolsInteractiveProps = {
 type Props = {
   message: Message
   toolsInteractive?: ToolsInteractiveProps
+  /** 预留：从消息卡片打开文件到详情面板 */
+  onOpenFile?: (relPath: string) => void
 }
 
-export function ChatBubble({ message, toolsInteractive }: Props) {
+export function ChatBubble({ message, toolsInteractive, onOpenFile: _onOpenFile }: Props) {
   const isUser = message.role === 'user'
   const align = isUser ? 'flex-end' : 'flex-start'
   const bg = isUser ? '#1677ff' : 'var(--sa-bubble-assistant, #f0f0f0)'

@@ -2,7 +2,7 @@ import fs from 'fs/promises'
 import type { Dirent } from 'fs'
 import path from 'path'
 import type { IpcMain } from 'electron'
-import { dialog } from 'electron'
+import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
 import type { AppConfig, FileInfo, Message, ModelEntry, SearchResult, Session, ToolsConfig } from '../src/shared/domainTypes'
 import { DEFAULT_MODELS, mergeToolsConfig } from '../src/shared/domainTypes'
@@ -23,6 +23,7 @@ import {
   updateSession
 } from './database'
 import { resolveSafePath } from './pathSecurity'
+import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from './fileReadHelpers'
 import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
@@ -292,12 +293,84 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     return out.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
   })
 
-  ipcMain.handle('file:read-file', async (_e, rel: string): Promise<{ content: string; encoding: string }> => {
+  ipcMain.handle('file:read-file', async (_e, rel: string) => {
     const root = ctx.getWorkDir()
     const target = resolveSafePath(root, rel)
-    const content = await fs.readFile(target, 'utf8')
-    return { content, encoding: 'utf8' }
+    return readFileForViewer(target)
   })
+
+  ipcMain.handle('file:get-metadata', async (_e, rel: string) => {
+    const root = ctx.getWorkDir()
+    const target = resolveSafePath(root, rel)
+    return getFileMetadata(target)
+  })
+
+  ipcMain.handle('file:open-in-system', async (_e, rel: string) => {
+    try {
+      const root = ctx.getWorkDir()
+      const target = resolveSafePath(root, rel)
+      const err = await shell.openPath(target)
+      if (err) return { ok: false as const, error: err }
+      return { ok: true as const }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('file:show-in-explorer', async (_e, rel: string) => {
+    try {
+      const root = ctx.getWorkDir()
+      const target = resolveSafePath(root, rel)
+      shell.showItemInFolder(target)
+      return { ok: true as const }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle(
+    'file:export-pdf',
+    async (
+      _e,
+      payload: { htmlContent: string; defaultPath: string }
+    ): Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }> => {
+      const win = getMainWindow()
+      if (!win) return { ok: false, error: '窗口未就绪' }
+
+      const root = ctx.getWorkDir()
+      const absFile = path.isAbsolute(payload.defaultPath)
+        ? payload.defaultPath
+        : resolveSafePath(root, payload.defaultPath)
+      const absDefault = defaultPdfSavePath(absFile)
+
+      const saveResult = await dialog.showSaveDialog(win, {
+        defaultPath: absDefault,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }]
+      })
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { ok: false, canceled: true }
+      }
+
+      const pdfWin = new BrowserWindow({ show: false, webPreferences: { offscreen: true } })
+      try {
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; line-height: 1.6; }
+          pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }
+          code { font-family: Consolas, monospace; font-size: 13px; }
+          img { max-width: 100%; }
+        </style></head><body>${payload.htmlContent}</body></html>`
+        const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+        await pdfWin.loadURL(dataUrl)
+        const pdfBuffer = await pdfWin.webContents.printToPDF({ printBackground: true })
+        await fs.writeFile(saveResult.filePath, pdfBuffer)
+        return { ok: true, path: saveResult.filePath }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      } finally {
+        pdfWin.destroy()
+      }
+    }
+  )
 
   ipcMain.handle('file:create-file', async (_e, rel: string): Promise<void> => {
     const root = ctx.getWorkDir()

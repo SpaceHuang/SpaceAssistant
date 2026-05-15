@@ -10,6 +10,7 @@ import { ChatView } from './components/Chat/ChatView'
 import { ConfigModal } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
 import { FileTree } from './components/FileTree'
+import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import folderLineRaw from './assets/folder_line.svg?raw'
@@ -143,18 +144,15 @@ function IconTab({
   )
 }
 
-function AppShell() {
+function AppShellInner() {
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
   const [siderKey, setSiderKey] = useState<'sessions' | 'files' | 'search'>('sessions')
-  const [filePreview, setFilePreview] = useState('')
-  const handleFileSelect = async (relPath: string) => {
-    try {
-      const r = await window.api.fileReadFile(relPath)
-      setFilePreview(r.content.slice(0, 4000))
-    } catch (e) {
+  const { openFile } = useDetailPanel()
+  const handleFileSelect = (relPath: string) => {
+    void openFile(relPath).catch((e) => {
       message.error(e instanceof Error ? e.message : String(e))
-    }
+    })
   }
 
   useEffect(() => {
@@ -213,16 +211,20 @@ function AppShell() {
           <ChatView />
         </div>
       </Layout.Content>
-      <Layout.Sider width={240} theme="light" style={{ borderLeft: '1px solid #f0f0f0', padding: 16 }}>
-        {filePreview ? (
-          <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflow: 'auto', height: '100%' }}>{filePreview}</div>
-        ) : (
-          <Text type="secondary">右侧栏预留（功能开发中）</Text>
-        )}
+      <Layout.Sider width={240} theme="light" style={{ borderLeft: '1px solid #f0f0f0', padding: 0, overflow: 'hidden' }}>
+        <DetailPanel />
       </Layout.Sider>
       <ConfigModal />
       <AboutModal />
     </Layout>
+  )
+}
+
+function AppShell() {
+  return (
+    <DetailPanelProvider>
+      <AppShellInner />
+    </DetailPanelProvider>
   )
 }
 

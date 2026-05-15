@@ -48,6 +48,10 @@ const api: SpaceAssistantApi = {
 
   fileListDirectory: (relPath) => ipcRenderer.invoke('file:list-directory', relPath),
   fileReadFile: (relPath) => ipcRenderer.invoke('file:read-file', relPath),
+  fileGetMetadata: (relPath) => ipcRenderer.invoke('file:get-metadata', relPath),
+  fileOpenInSystem: (relPath) => ipcRenderer.invoke('file:open-in-system', relPath),
+  fileShowInExplorer: (relPath) => ipcRenderer.invoke('file:show-in-explorer', relPath),
+  fileExportPdf: (payload) => ipcRenderer.invoke('file:export-pdf', payload),
   fileCreateFile: (relPath) => ipcRenderer.invoke('file:create-file', relPath),
   fileCreateDirectory: (relPath) => ipcRenderer.invoke('file:create-directory', relPath),
   fileDelete: (relPath) => ipcRenderer.invoke('file:delete', relPath),

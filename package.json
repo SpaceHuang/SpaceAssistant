@@ -31,7 +31,8 @@
     "react-redux": "^9.2.0",
     "react-syntax-highlighter": "^15.6.1",
     "rehype-external-links": "^3.0.0",
-    "remark-gfm": "^4.0.0"
+    "remark-gfm": "^4.0.0",
+    "shiki": "^4.0.2"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",
@@ -67,15 +68,21 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
     "mac": {
-      "target": ["dmg"]
+      "target": [
+        "dmg"
+      ]
     },
     "linux": {
-      "target": ["AppImage"]
+      "target": [
+        "AppImage"
+      ]
     }
   }
 }
