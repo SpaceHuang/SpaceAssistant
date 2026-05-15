@@ -34,3 +34,14 @@
   width: 16px;
   flex-shrink: 0;
 }
+
+/* Hide antd's auto-rendered icon — we render our own via titleRender */
+.file-tree .ant-tree-iconEle {
+  display: none;
+}
+
+/* Make Mingcute SVGs fill their container instead of fixed 24x24 */
+.file-tree .ant-tree-title svg {
+  width: 100%;
+  height: 100%;
+}

@@ -4,7 +4,8 @@ import copyLineRaw from '../../assets/copy_line.svg?raw'
 import deleteLineRaw from '../../assets/delete_line.svg?raw'
 import pencilLineRaw from '../../assets/pencil_line.svg?raw'
 
-const patchSvg = (raw: string) => raw.replace(/fill="#09244B"/g, 'fill="currentColor"')
+const patchSvg = (raw: string) =>
+  raw.replace(/fill="#09244B"/g, 'fill="currentColor"').replace(/width="24"/, 'width="1em"').replace(/height="24"/, 'height="1em"')
 
 const copySvg = patchSvg(copyLineRaw)
 const deleteSvg = patchSvg(deleteLineRaw)

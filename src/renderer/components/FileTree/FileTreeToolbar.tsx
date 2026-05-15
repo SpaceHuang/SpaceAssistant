@@ -3,7 +3,8 @@ import addLineRaw from '../../assets/add_line.svg?raw'
 import newFolderLineRaw from '../../assets/new_folder_line.svg?raw'
 import refresh2LineRaw from '../../assets/refresh_2_line.svg?raw'
 
-const patchSvg = (raw: string) => raw.replace(/fill="#09244B"/g, 'fill="currentColor"')
+const patchSvg = (raw: string) =>
+  raw.replace(/fill="#09244B"/g, 'fill="currentColor"').replace(/width="24"/, 'width="1em"').replace(/height="24"/, 'height="1em"')
 
 const addSvg = patchSvg(addLineRaw)
 const newFolderSvg = patchSvg(newFolderLineRaw)

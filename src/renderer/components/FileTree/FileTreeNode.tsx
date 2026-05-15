@@ -3,7 +3,8 @@ import folderLineRaw from '../../assets/folder_line.svg?raw'
 import folderOpenLineRaw from '../../assets/folder_open_line.svg?raw'
 import fileLineRaw from '../../assets/file_line.svg?raw'
 
-const patchSvg = (raw: string) => raw.replace(/fill="#09244B"/g, 'fill="currentColor"')
+const patchSvg = (raw: string) =>
+  raw.replace(/fill="#09244B"/g, 'fill="currentColor"').replace(/width="24"/, 'width="1em"').replace(/height="24"/, 'height="1em"')
 
 const folderSvg = patchSvg(folderLineRaw)
 const folderOpenSvg = patchSvg(folderOpenLineRaw)
@@ -23,7 +24,7 @@ interface FileTreeNodeProps {
   onCreateCancel: () => void
 }
 
-const iconStyle: React.CSSProperties = { width: 16, height: 16, marginRight: 6, flexShrink: 0, verticalAlign: '-2px' }
+const iconStyle: React.CSSProperties = { width: 16, height: 16, marginRight: 6, flexShrink: 0, display: 'inline-block', lineHeight: 0 }
 
 export function FileTreeNode({
   name, isDirectory, expanded, isRenaming, isNewInput, newInputType, newInputDefaultName,
