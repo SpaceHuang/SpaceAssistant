@@ -1,0 +1,55 @@
+import { describe, expect, it, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { FileTreeContextMenu } from './FileTreeContextMenu'
+
+describe('FileTreeContextMenu', () => {
+  const defaultProps = {
+    relPath: 'src/file.ts',
+    name: 'file.ts',
+    isDirectory: false,
+    onAddToChat: vi.fn(),
+    onCopyPath: vi.fn(),
+    onCopyRelPath: vi.fn(),
+    onRename: vi.fn(),
+    onDelete: vi.fn()
+  }
+
+  it('renders all menu items', () => {
+    render(<FileTreeContextMenu {...defaultProps} open={true}>child</FileTreeContextMenu>)
+    expect(screen.getByText('添加到对话')).toBeDefined()
+    expect(screen.getByText('复制路径')).toBeDefined()
+    expect(screen.getByText('复制相对路径')).toBeDefined()
+    expect(screen.getByText('重命名...')).toBeDefined()
+    expect(screen.getByText('删除')).toBeDefined()
+  })
+
+  it('calls onAddToChat', () => {
+    render(<FileTreeContextMenu {...defaultProps} open={true}>child</FileTreeContextMenu>)
+    fireEvent.click(screen.getByText('添加到对话'))
+    expect(defaultProps.onAddToChat).toHaveBeenCalled()
+  })
+
+  it('calls onCopyPath', () => {
+    render(<FileTreeContextMenu {...defaultProps} open={true}>child</FileTreeContextMenu>)
+    fireEvent.click(screen.getByText('复制路径'))
+    expect(defaultProps.onCopyPath).toHaveBeenCalled()
+  })
+
+  it('calls onCopyRelPath', () => {
+    render(<FileTreeContextMenu {...defaultProps} open={true}>child</FileTreeContextMenu>)
+    fireEvent.click(screen.getByText('复制相对路径'))
+    expect(defaultProps.onCopyRelPath).toHaveBeenCalled()
+  })
+
+  it('calls onRename', () => {
+    render(<FileTreeContextMenu {...defaultProps} open={true}>child</FileTreeContextMenu>)
+    fireEvent.click(screen.getByText('重命名...'))
+    expect(defaultProps.onRename).toHaveBeenCalled()
+  })
+
+  it('calls onDelete', () => {
+    render(<FileTreeContextMenu {...defaultProps} open={true}>child</FileTreeContextMenu>)
+    fireEvent.click(screen.getByText('删除'))
+    expect(defaultProps.onDelete).toHaveBeenCalled()
+  })
+})
