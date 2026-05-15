@@ -8,3 +8,6 @@ coverage/
 .env
 .env.local
 .worktrees/
+
+# Claude Code 本地 IDE 配置
+.claude/settings.local.json
