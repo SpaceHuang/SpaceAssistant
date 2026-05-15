@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "rootDir": ".",
+    "outDir": "dist-electron",
+    "sourceMap": true,
+    "declaration": false,
+    "noEmit": false,
+    "incremental": true,
+    "tsBuildInfoFile": "dist-electron/.electron-main.tsbuildinfo",
+    "types": ["node"],
+    "paths": {}
+  },
+  "include": ["electron/**/*.ts", "electron/**/*.d.ts", "src/shared/**/*.ts"],
+  "exclude": ["electron/**/*.test.ts", "src/**/*.test.ts", "src/**/*.test.tsx"]
+}

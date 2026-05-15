@@ -1,0 +1,81 @@
+{
+  "name": "spaceassistant",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron + React + TypeScript desktop assistant",
+  "author": "SpaceAssistant",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:renderer": "vite --strictPort",
+    "dev:electron": "npm run build:electron && npx --yes electron@33.2.0 dist-electron/electron/main.js",
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "build:renderer": "vite build",
+    "build:electron": "rimraf dist-electron && tsc -p tsconfig.electron.json",
+    "reinstall:electron": "rimraf node_modules/electron && npm install",
+    "pack": "npm run build && electron-builder",
+    "pack:win": "npm run build && electron-builder --win",
+    "pack:mac": "npm run build && electron-builder --mac",
+    "pack:linux": "npm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.79.0",
+    "@reduxjs/toolkit": "^2.5.0",
+    "antd": "^5.22.0",
+    "axios": "^1.7.0",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "react-redux": "^9.2.0",
+    "react-syntax-highlighter": "^15.6.1",
+    "rehype-external-links": "^3.0.0",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "^4.1.0",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "jsdom": "^25.0.1",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^4.1.0"
+  },
+  "build": {
+    "appId": "com.spaceassistant.app",
+    "productName": "SpaceAssistant",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "mac": {
+      "target": ["dmg"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
+  }
+}

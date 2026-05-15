@@ -1,0 +1,100 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.chat-md-assistant .ant-typography {
+  color: inherit;
+}
+
+.chat-md-user {
+  white-space: pre-wrap;
+}
+
+.config-modal .ant-form-item-label > label {
+  font-size: 13px;
+}
+
+.activity-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 48px;
+  min-width: 48px;
+  border-right: 1px solid #f0f0f0;
+  padding-top: 4px;
+  justify-content: space-between;
+}
+
+.activity-bar-top {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.activity-bar-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.activity-bar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  color: #8c8c8c;
+}
+
+.activity-bar-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: #434343;
+}
+
+.activity-bar-btn.active {
+  color: #1677ff;
+}
+
+.activity-bar-btn.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: #1677ff;
+  border-radius: 1px;
+}
+
+.activity-bar-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+.sider-content {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sider-content-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 13px;
+}
+
+.sider-content-body {
+  flex: 1;
+  min-height: 0;
+}
