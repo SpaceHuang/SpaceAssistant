@@ -4,6 +4,7 @@ import path from 'path'
 import type { IpcMain } from 'electron'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
+import { DEFAULT_UI_THEME } from '../src/shared/domainTypes'
 import type {
   AppConfig,
   FileInfo,
@@ -14,7 +15,8 @@ import type {
   SessionSkillsState,
   SkillDefinition,
   SkillsConfig,
-  ToolsConfig
+  ToolsConfig,
+  UiThemeMode
 } from '../src/shared/domainTypes'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
 import { createSkillManager } from './skills/skillManager'
@@ -53,7 +55,8 @@ const CONFIG_KEYS = {
   workDir: 'config.workDir',
   apiKeyEnc: 'secrets.apiKeyEnc',
   tools: 'config.tools',
-  skills: 'config.skills'
+  skills: 'config.skills',
+  uiTheme: 'config.uiTheme'
 } as const
 
 export type AppIpcContext = {
@@ -224,6 +227,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
     }
     const skills = readSkillsConfig(ctx.db)
+    const uiThemeRaw = getConfigValue(ctx.db, CONFIG_KEYS.uiTheme) as UiThemeMode | undefined
+    const uiTheme: UiThemeMode =
+      uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
     return {
       apiKeyPresent: Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
@@ -234,6 +240,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
       workDir: wd,
+      uiTheme,
       tools,
       skills
     }
@@ -255,6 +262,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         apiKey: string
         tools: Partial<ToolsConfig>
         skills: Partial<SkillsConfig>
+        uiTheme: UiThemeMode
       }>
     ): Promise<void> => {
       if (payload.baseUrl !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.baseUrl, payload.baseUrl)
@@ -302,6 +310,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeSkillsConfig({ ...cur, ...payload.skills })
         setConfigValue(ctx.db, CONFIG_KEYS.skills, JSON.stringify(next))
+      }
+      if (payload.uiTheme !== undefined) {
+        setConfigValue(ctx.db, CONFIG_KEYS.uiTheme, payload.uiTheme)
       }
     }
   )

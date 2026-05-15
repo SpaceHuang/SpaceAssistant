@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag, message } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
-import type { ModelEntry } from '../../../shared/domainTypes'
+import type { ModelEntry, UiThemeMode } from '../../../shared/domainTypes'
 import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { SkillsTab } from './SkillsTab'
@@ -164,6 +164,7 @@ export function ConfigModal() {
   })
   const [pyTest, setPyTest] = useState<{ ok: boolean; text: string } | null>(null)
   const [pyTesting, setPyTesting] = useState(false)
+  const [uiTheme, setUiTheme] = useState<UiThemeMode>('system')
 
   const refreshConfig = async () => {
     const next = await window.api.configGet()
@@ -202,6 +203,7 @@ export function ConfigModal() {
         grepTimeoutSec: cfg.tools.grepTimeoutSec
       })
       setPyTest(null)
+      setUiTheme(cfg.uiTheme ?? 'system')
     }
   }, [open, cfg, form])
 
@@ -286,6 +288,7 @@ export function ConfigModal() {
         maxFileSnapshots: toolUi.maxFileSnapshots,
         grepTimeoutSec: toolUi.grepTimeoutSec
       },
+      uiTheme,
       ...(v.apiKey && String(v.apiKey).trim() ? { apiKey: String(v.apiKey).trim() } : {})
     })
     const next = await window.api.configGet()
@@ -392,6 +395,13 @@ export function ConfigModal() {
                     />
                   </Form.Item>
                   {workDirError && <Alert type="error" message={workDirError} showIcon style={{ marginBottom: 16 }} />}
+                  <Form.Item label="界面主题">
+                    <Radio.Group value={uiTheme} onChange={(e) => setUiTheme(e.target.value)}>
+                      <Radio value="system">跟随系统</Radio>
+                      <Radio value="light">浅色</Radio>
+                      <Radio value="dark">深色</Radio>
+                    </Radio.Group>
+                  </Form.Item>
                 </>
               )
             },

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileToolbar } from './FileToolbar'
 import { FileContentView } from './FileContentView'
-import { SearchPanel, type SearchPanelMode } from './SearchPanel'
+import { SearchPanel } from './SearchPanel'
 import type { SearchMatch } from './searchUtils'
 
 export function FileOverlay() {
@@ -16,7 +16,7 @@ export function FileOverlay() {
     setViewMode
   } = useDetailPanel()
 
-  const [searchMode, setSearchMode] = useState<SearchPanelMode>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [highlights, setHighlights] = useState<SearchMatch[]>([])
   const [currentHighlightIndex, setCurrentHighlightIndex] = useState(-1)
 
@@ -31,26 +31,22 @@ export function FileOverlay() {
       const mod = e.ctrlKey || e.metaKey
       if (mod && e.key.toLowerCase() === 'f') {
         e.preventDefault()
-        setSearchMode('find')
-      }
-      if (mod && e.key.toLowerCase() === 'h') {
-        e.preventDefault()
-        setSearchMode('replace')
+        setSearchOpen(true)
       }
       if (mod && e.key.toLowerCase() === 'w') {
         e.preventDefault()
         closeFile()
       }
-      if (e.key === 'Escape' && searchMode) {
+      if (e.key === 'Escape' && searchOpen) {
         e.preventDefault()
-        setSearchMode(null)
-      } else if (e.key === 'Escape' && !searchMode) {
+        setSearchOpen(false)
+      } else if (e.key === 'Escape' && !searchOpen) {
         closeFile()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [closeFile, searchMode, selectedFile])
+  }, [closeFile, searchOpen, selectedFile])
 
   if (!selectedFile || !fileType) return null
 
@@ -66,8 +62,8 @@ export function FileOverlay() {
         onRefresh={() => void refreshFile()}
       />
       <SearchPanel
-        mode={searchMode}
-        onClose={() => setSearchMode(null)}
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
         onHighlightsChange={onHighlightsChange}
       />
       <div className="detail-file-body">

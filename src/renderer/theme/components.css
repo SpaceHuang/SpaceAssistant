@@ -1,0 +1,178 @@
+/* ── Icon button (Activity Bar, toolbars) ── */
+.sa-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  color: var(--sa-icon);
+  cursor: pointer;
+  line-height: 0;
+  transition:
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.sa-icon-btn:hover {
+  background: rgba(128, 128, 128, 0.12);
+  color: var(--sa-icon-hover);
+}
+
+.sa-icon-btn:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 2px;
+}
+
+.sa-icon-btn--lg {
+  width: 48px;
+  height: 48px;
+}
+
+.sa-icon-btn--md {
+  width: 28px;
+  height: 28px;
+}
+
+.sa-icon-btn--sm {
+  width: 24px;
+  height: 24px;
+  padding: 2px;
+}
+
+.sa-icon-btn svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ── Segmented icon control ── */
+.sa-segment {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 2px;
+  box-sizing: border-box;
+  background: var(--sa-bg-muted);
+  border-radius: var(--sa-radius-md);
+  gap: 0;
+}
+
+.sa-segment-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  color: var(--sa-text-secondary);
+  cursor: pointer;
+  line-height: 0;
+  transition:
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out),
+    box-shadow var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.sa-segment-item:hover {
+  color: var(--sa-text);
+}
+
+.sa-segment-item--active {
+  background: var(--sa-bg-elevated);
+  color: var(--sa-text);
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.sa-segment-item:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
+}
+
+.sa-segment-item > svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex-shrink: 0;
+}
+
+/* ── Layout splitter ── */
+.sa-splitter {
+  flex-shrink: 0;
+  width: var(--sa-splitter-width);
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+  transition: background var(--sa-duration-fast);
+}
+
+.sa-splitter:hover,
+.sa-splitter--dragging {
+  background: var(--sa-primary-subtle);
+}
+
+.sa-splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: var(--sa-border);
+}
+
+/* ── Prose (shared markdown) ── */
+.sa-prose {
+  font-size: 14px;
+  line-height: 1.65;
+  color: inherit;
+}
+
+.sa-prose pre {
+  background: var(--sa-code-bg);
+  color: var(--sa-code-text);
+  padding: 12px 14px;
+  border-radius: var(--sa-radius-md);
+  overflow-x: auto;
+  font-family: var(--sa-font-mono);
+  font-size: 12px;
+}
+
+.sa-prose code {
+  font-family: var(--sa-font-mono);
+  font-size: 0.9em;
+}
+
+.sa-prose :not(pre) > code {
+  background: var(--sa-bg-muted);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
+.sa-prose a {
+  color: var(--sa-primary);
+}
+
+.chat-md-assistant .ant-typography {
+  color: inherit;
+}
+
+.chat-md-user {
+  white-space: pre-wrap;
+}
+
+.sa-shiki-block pre {
+  margin: 0;
+  border-radius: var(--sa-radius-md);
+  overflow: auto;
+}
+
+.sa-shiki-copy {
+  color: var(--sa-text-secondary) !important;
+}

@@ -1,6 +1,6 @@
 # 文件内容查看器 — 需求规格
 
-**版本：** 1.0
+**版本：** 1.1
 **日期：** 2026-05-16
 **状态：** 待评审
 
@@ -23,7 +23,9 @@
 
 ### 1.1 功能定位
 
-文件内容查看器是用户在详情面板（右侧栏）查看文件内容的核心组件。通过文件树点击或消息卡片触发，在右侧栏展示文件内容，支持多种文件类型的预览、语法高亮、查找替换等功能。
+文件内容查看器是用户在详情面板（右侧栏）**只读预览**文件内容的核心组件。通过文件树点击或消息卡片触发，在右侧栏展示文件内容，支持多种文件类型的预览、语法高亮、查找等功能。
+
+> **功能边界说明：** 查看器不承担内容修改职责。文件内容的增删改统一由 AI 助手通过工具调用完成；用户在查看器中仅需浏览、定位与核对内容。
 
 ### 1.2 目标
 
@@ -73,7 +75,7 @@ const handleFileSelect = async (relPath: string) => {
 | 语法高亮 | 高 | 未集成 Shiki |
 | Markdown 渲染 | 高 | 无代码/渲染双模式 |
 | 工具栏 | 高 | 无 FileToolbar 组件 |
-| 查找替换 | 中 | 无搜索面板 |
+| 查找 | 中 | 无搜索面板 |
 | 图片预览 | 中 | 未实现 |
 | 文件导出 | 低 | 未实现 |
 | 用默认编辑器打开 | 低 | 未实现 |
@@ -179,7 +181,7 @@ const handleFileSelect = async (relPath: string) => {
 
 ---
 
-### 3.5 查找与替换需求
+### 3.5 查找需求
 
 #### 3.5.1 查找功能
 
@@ -192,13 +194,21 @@ const handleFileSelect = async (relPath: string) => {
 - **结果导航**：上一个/下一个，环形循环，自动滚动居中
 - **匹配计数**：显示当前项/总数（如 `3 / 12`）
 
-#### 3.5.2 替换功能
+#### 3.5.2 不提供替换功能（设计决策）
 
-- **快捷键**：`Ctrl+H` 打开替换面板
-- **替换操作**：
-  - 替换单个：替换当前聚焦项，自动跳转下一个
-  - 全部替换：批量替换，需确认提示
-- **正则支持**：支持捕获组引用（`$1`、`$2`）
+**决策：** 文件内容查看器不提供查找替换、就地编辑或写回磁盘能力。
+
+**原因：** 明确查看器的功能定位为**只读预览与内容定位**，避免与 IDE/编辑器职责重叠。内容修改统一由 AI 助手完成——用户通过对话描述修改意图，AI 调用文件读写工具执行变更，用户在查看器中刷新或重新打开文件即可核对结果。
+
+**因此明确排除：**
+
+| 排除项 | 说明 |
+|--------|------|
+| 替换面板 | 不提供 `Ctrl+H` 快捷键及「替换为 / 替换 / 全部」等 UI |
+| 内容写回 | 不提供 `setPreviewContent` 等修改预览内容的对外 API |
+| 就地编辑 | 代码区、渲染区均不可编辑 |
+
+> 若后续确有批量文本替换需求，应通过 AI 对话或独立编辑工具完成，而非在查看器内实现。
 
 #### 3.5.3 面板交互
 
@@ -255,7 +265,7 @@ DetailPanel（详情面板容器）
 | FileOverlay | `src/renderer/components/DetailPanel/FileOverlay.tsx` | 文件浮层，条件渲染 |
 | FileToolbar | `src/renderer/components/DetailPanel/FileToolbar.tsx` | 工具栏按钮组 |
 | FileContentView | `src/renderer/components/DetailPanel/FileContentView.tsx` | 文件内容主视图 |
-| SearchPanel | `src/renderer/components/DetailPanel/SearchPanel.tsx` | 查找替换面板 |
+| SearchPanel | `src/renderer/components/DetailPanel/SearchPanel.tsx` | 查找面板（只读高亮，不支持替换） |
 | shikiHighlighter | `src/renderer/utils/shikiHighlighter.ts` | Shiki 语法高亮封装 |
 
 ### 4.3 状态管理
@@ -321,13 +331,15 @@ interface DetailPanelActions {
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| content | `string` | 文件内容（用于搜索） |
+| open | `boolean` | 是否显示查找面板 |
 | onClose | `() => void` | 关闭回调 |
+| onHighlightsChange | `(matches, index) => void` | 高亮匹配项变化回调 |
 
 **快捷键：**
 - `Ctrl+F` - 打开查找
-- `Ctrl+H` - 打开替换
 - `Escape` - 关闭面板
+
+**不提供：** `Ctrl+H` 替换面板、替换输入框、单个/全部替换操作。
 
 ---
 
@@ -358,7 +370,6 @@ interface DetailPanelActions {
 | 快捷键 | 功能 | 作用域 |
 |--------|------|--------|
 | `Ctrl+F` | 打开查找面板 | FileContentView 聚焦时 |
-| `Ctrl+H` | 打开替换面板 | FileContentView 聚焦时 |
 | `Escape` | 关闭面板/退出搜索 | SearchPanel 打开时 |
 | `Ctrl+W` | 关闭文件 | FileOverlay 聚焦时 |
 
@@ -408,7 +419,7 @@ interface FileMetadata {
 | 行号显示 | 代码模式下左侧显示行号，与内容对齐 |
 | 图片预览 | .png, .jpg, .svg 等图片正确显示 |
 | 查找功能 | Ctrl+F 打开查找，输入即高亮，支持上下跳转 |
-| 替换功能 | Ctrl+H 打开替换，支持单个和全部替换 |
+| 只读边界 | 查看器内不可编辑、不可替换；内容变更仅通过 AI 工具完成 |
 | 工具栏按钮 | 各按钮功能正常，图标正确 |
 | 关闭文件 | 点击关闭或按 Escape 返回占位符状态 |
 | 刷新文件 | 点击刷新按钮重新加载文件内容 |
@@ -449,3 +460,4 @@ interface FileMetadata {
 | 版本 | 日期 | 变更说明 |
 |------|------|----------|
 | 1.0 | 2026-05-16 | 初始版本，结合参考文档与项目实际情况 |
+| 1.1 | 2026-05-16 | 移除替换功能需求：查看器定位为只读预览，内容修改统一由 AI 完成；同步更新 SearchPanel 规格、快捷键与验收标准 |

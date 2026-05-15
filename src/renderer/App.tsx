@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Button, Empty, Input, Layout, List, Typography, message } from 'antd'
-import { Provider } from 'react-redux'
-import { store } from './store'
+import { Button, Empty, Input, Typography, message } from 'antd'
+
+const { Text } = Typography
+import { Trash2 } from 'lucide-react'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession, removeSession } from './store/sessionSlice'
 import { setSession } from './store/chatSlice'
@@ -11,6 +12,8 @@ import { ConfigModal } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
 import { FileTree } from './components/FileTree'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
+import { SplitPane } from './components/ui/SplitPane'
+import { groupSessionsByTime } from './utils/groupSessions'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import folderLineRaw from './assets/folder_line.svg?raw'
@@ -29,8 +32,6 @@ const searchLineSvg = patchSvg(searchLineRaw)
 const searchFillSvg = patchSvg(searchFillRaw)
 const settingsSvg = patchSvg(settingsRaw)
 
-const { Text } = Typography
-
 function LeftSessions() {
   const dispatch = useAppDispatch()
   const sessions = useTypedSelector((s) => s.session.list)
@@ -38,13 +39,7 @@ function LeftSessions() {
   const [q, setQ] = useState('')
 
   const filtered = sessions.filter((s) => s.name.toLowerCase().includes(q.toLowerCase()))
-
-  const create = async () => {
-    const s = await window.api.sessionCreate({ name: `会话 ${sessions.length + 1}` })
-    dispatch(upsertSession(s))
-    dispatch(setSession(s.id))
-    message.success('已创建会话')
-  }
+  const groups = groupSessionsByTime(filtered)
 
   const del = async (id: string) => {
     await window.api.sessionDelete(id)
@@ -54,35 +49,43 @@ function LeftSessions() {
   }
 
   return (
-    <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
-      <Button type="primary" block onClick={create}>
-        新会话
-      </Button>
+    <div className="sider-pane">
       <Input allowClear placeholder="搜索会话" value={q} onChange={(e) => setQ(e.target.value)} />
-      <List
-        size="small"
-        dataSource={filtered}
-        style={{ flex: 1, overflow: 'auto' }}
-        locale={{ emptyText: <Empty description="暂无会话" /> }}
-        renderItem={(item) => (
-          <List.Item
-            style={{
-              cursor: 'pointer',
-              background: item.id === currentId ? 'rgba(22,119,255,0.12)' : undefined,
-              padding: '8px 10px',
-              borderRadius: 8
-            }}
-            onClick={() => dispatch(setSession(item.id))}
-            actions={[
-              <Button type="link" danger size="small" onClick={(e) => (e.stopPropagation(), void del(item.id))}>
-                删除
-              </Button>
-            ]}
-          >
-            <List.Item.Meta title={item.name} description={<Text ellipsis>{item.preview || ' '}</Text>} />
-          </List.Item>
+      <div className="session-list-scroll">
+        {groups.length === 0 ? (
+          <Empty description="暂无会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          groups.map((group) => (
+            <div key={group.label}>
+              <div className="session-group-label">{group.label}</div>
+              {group.sessions.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`session-item${item.id === currentId ? ' session-item--active' : ''}`}
+                    onClick={() => dispatch(setSession(item.id))}
+                  >
+                    <div className="session-item-main">
+                      <div className="session-item-name" title={item.name}>
+                        {item.name}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="session-item-delete"
+                      title="删除会话"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void del(item.id)
+                      }}
+                    >
+                      <Trash2 size={12} strokeWidth={1.75} />
+                    </button>
+                  </div>
+              ))}
+            </div>
+          ))
         )}
-      />
+      </div>
     </div>
   )
 }
@@ -98,23 +101,28 @@ function SearchPane() {
   }
 
   return (
-    <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 8, height: '100%' }}>
+    <div className="sider-pane">
       <Input.Search placeholder="搜索聊天与文本文件" value={q} onChange={(e) => setQ(e.target.value)} onSearch={run} />
-      <List
-        size="small"
-        dataSource={results}
-        style={{ flex: 1, overflow: 'auto' }}
-        renderItem={(item) => (
-          <List.Item
-            style={{ cursor: 'pointer' }}
+      <div className="session-list-scroll">
+        {results.map((item) => (
+          <div
+            key={item.id}
+            className="session-item"
             onClick={() => {
               if (item.sessionId) dispatch(setSession(item.sessionId))
             }}
           >
-            <List.Item.Meta title={`[${item.type}] ${item.title}`} description={<Text ellipsis>{item.preview}</Text>} />
-          </List.Item>
-        )}
-      />
+            <Text strong ellipsis>
+              [{item.type}] {item.title}
+            </Text>
+            <div>
+              <Text type="secondary" ellipsis style={{ fontSize: 12 }}>
+                {item.preview}
+              </Text>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -147,8 +155,17 @@ function IconTab({
 function AppShellInner() {
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
+  const sessions = useTypedSelector((s) => s.session.list)
   const [siderKey, setSiderKey] = useState<'sessions' | 'files' | 'search'>('sessions')
   const { openFile } = useDetailPanel()
+
+  const createSession = async () => {
+    const s = await window.api.sessionCreate({ name: `会话 ${sessions.length + 1}` })
+    dispatch(upsertSession(s))
+    dispatch(setSession(s.id))
+    message.success('已创建会话')
+  }
+
   const handleFileSelect = (relPath: string) => {
     void openFile(relPath).catch((e) => {
       message.error(e instanceof Error ? e.message : String(e))
@@ -170,9 +187,9 @@ function AppShellInner() {
   }, [dispatch])
 
   return (
-    <Layout style={{ height: '100vh' }}>
-      <Layout.Sider width={328} theme="light" style={{ borderRight: '1px solid #f0f0f0' }}>
-        <div style={{ display: 'flex', height: '100%' }}>
+    <div className="app-shell" style={{ display: 'flex', height: '100vh' }}>
+      <SplitPane id="leftSider" defaultSize={328} minSize={248} maxSize={520} side="left" className="app-sider">
+        <div style={{ display: 'flex', height: '100%', width: '100%' }}>
           <div className="activity-bar">
             <div className="activity-bar-top">
               <IconTab lineSvg={chatLineSvg} fillSvg={chatFillSvg} active={siderKey === 'sessions'} onClick={() => setSiderKey('sessions')} title="会话" />
@@ -191,8 +208,13 @@ function AppShellInner() {
           </div>
           <div className="sider-content">
             {siderKey !== 'files' && (
-              <div className="sider-content-header">
-                <Text strong>{siderKey === 'sessions' ? '会话' : '搜索'}</Text>
+              <div className="app-pane-header sider-content-header">
+                <span className="app-pane-header-title">{siderKey === 'sessions' ? '会话' : '搜索'}</span>
+                {siderKey === 'sessions' ? (
+                  <Button type="primary" size="small" onClick={() => void createSession()}>
+                    新会话
+                  </Button>
+                ) : null}
               </div>
             )}
             <div className="sider-content-body">
@@ -202,21 +224,24 @@ function AppShellInner() {
             </div>
           </div>
         </div>
-      </Layout.Sider>
-      <Layout.Content style={{ display: 'flex', flexDirection: 'column', minWidth: 400 }}>
-        <div style={{ padding: '8px 16px', borderBottom: '1px solid #f0f0f0' }}>
-          <Text strong>SpaceAssistant</Text>
+      </SplitPane>
+
+      <main className="app-main" style={{ flex: 1, minWidth: 400 }}>
+        <div className="app-pane-header app-main-header">
+          <span className="app-pane-header-title">SpaceAssistant</span>
         </div>
         <div style={{ flex: 1, minHeight: 0 }}>
           <ChatView />
         </div>
-      </Layout.Content>
-      <Layout.Sider width={240} theme="light" style={{ borderLeft: '1px solid #f0f0f0', padding: 0, overflow: 'hidden' }}>
+      </main>
+
+      <SplitPane id="rightSider" defaultSize={240} minSize={180} maxSize={480} side="right" className="app-detail-sider">
         <DetailPanel />
-      </Layout.Sider>
+      </SplitPane>
+
       <ConfigModal />
       <AboutModal />
-    </Layout>
+    </div>
   )
 }
 
@@ -229,9 +254,5 @@ function AppShell() {
 }
 
 export default function App() {
-  return (
-    <Provider store={store}>
-      <AppShell />
-    </Provider>
-  )
+  return <AppShell />
 }

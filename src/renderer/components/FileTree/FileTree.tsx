@@ -117,14 +117,6 @@ export function FileTree({ workDir, onFileSelect }: FileTreeProps) {
     }
   }
 
-  const handleNewFile = () => {
-    const parentKey = tree.selectedKey || ''
-    tree.setInlineInput({ parentKey, type: 'file', defaultName: 'untitled' })
-    if (!tree.expandedKeys.includes(parentKey)) {
-      void tree.toggleExpand(parentKey)
-    }
-  }
-
   const handleNewDirectory = () => {
     const parentKey = tree.selectedKey || ''
     tree.setInlineInput({ parentKey, type: 'directory', defaultName: '新建文件夹' })
@@ -135,16 +127,17 @@ export function FileTree({ workDir, onFileSelect }: FileTreeProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="sider-content-header" style={{ display: 'flex', alignItems: 'center' }}>
-        <span style={{ fontWeight: 600, fontSize: 13 }}>文件</span>
-        <FileTreeToolbar onNewFile={handleNewFile} onNewDirectory={handleNewDirectory} onRefresh={() => tree.refreshTree()} />
+      <div className="app-pane-header sider-content-header">
+        <span className="app-pane-header-title">文件</span>
+        <FileTreeToolbar onNewDirectory={handleNewDirectory} onRefresh={() => tree.refreshTree()} />
       </div>
       <div className="sider-content-body" style={{ overflow: 'auto', padding: '0 4px' }}>
-        <Tree.DirectoryTree
+        <Tree
           className="file-tree"
           treeData={antdTreeData}
           expandedKeys={tree.expandedKeys}
           selectedKeys={tree.selectedKey ? [tree.selectedKey] : []}
+          showIcon={false}
           onSelect={handleSelect}
           onExpand={handleExpand}
           draggable={{ icon: false, nodeDraggable: () => true }}

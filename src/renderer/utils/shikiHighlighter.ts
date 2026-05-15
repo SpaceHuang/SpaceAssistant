@@ -1,4 +1,5 @@
 import { createHighlighter, type Highlighter } from 'shiki'
+import type { ResolvedTheme } from '../theme/useResolvedTheme'
 
 const LANGS = [
   'typescript',
@@ -36,24 +37,33 @@ const LANGS = [
   'plaintext'
 ] as const
 
+const SHIKI_THEME: Record<ResolvedTheme, string> = {
+  light: 'light-plus',
+  dark: 'dark-plus'
+}
+
 let highlighterPromise: Promise<Highlighter> | null = null
 
 export function preloadShiki(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: ['light-plus'],
+      themes: ['light-plus', 'dark-plus'],
       langs: [...LANGS]
     })
   }
   return highlighterPromise
 }
 
-export async function highlightCode(code: string, lang: string): Promise<string | null> {
+export async function highlightCode(
+  code: string,
+  lang: string,
+  theme: ResolvedTheme = 'light'
+): Promise<string | null> {
   try {
     const highlighter = await preloadShiki()
     const loaded = highlighter.getLoadedLanguages()
     const language = loaded.includes(lang as (typeof LANGS)[number]) ? lang : 'plaintext'
-    return highlighter.codeToHtml(code, { lang: language, theme: 'light-plus' })
+    return highlighter.codeToHtml(code, { lang: language, theme: SHIKI_THEME[theme] })
   } catch {
     return null
   }

@@ -2,13 +2,11 @@ import { InlineInput } from './InlineInput'
 import folderLineRaw from '../../assets/folder_line.svg?raw'
 import folderOpenLineRaw from '../../assets/folder_open_line.svg?raw'
 import fileLineRaw from '../../assets/file_line.svg?raw'
+import { patchSvg } from '../../utils/patchSvg'
 
-const patchSvg = (raw: string) =>
-  raw.replace(/fill="#09244B"/g, 'fill="currentColor"').replace(/width="24"/, 'width="1em"').replace(/height="24"/, 'height="1em"')
-
-const folderSvg = patchSvg(folderLineRaw)
-const folderOpenSvg = patchSvg(folderOpenLineRaw)
-const fileSvg = patchSvg(fileLineRaw)
+const folderSvg = patchSvg(folderLineRaw, 16)
+const folderOpenSvg = patchSvg(folderOpenLineRaw, 16)
+const fileSvg = patchSvg(fileLineRaw, 16)
 
 interface FileTreeNodeProps {
   name: string
@@ -24,8 +22,6 @@ interface FileTreeNodeProps {
   onCreateCancel: () => void
 }
 
-const iconStyle: React.CSSProperties = { width: 16, height: 16, marginRight: 6, flexShrink: 0, display: 'inline-block', lineHeight: 0 }
-
 export function FileTreeNode({
   name, isDirectory, expanded, isRenaming, isNewInput, newInputType, newInputDefaultName,
   onRenameConfirm, onRenameCancel, onCreateConfirm, onCreateCancel
@@ -36,27 +32,27 @@ export function FileTreeNode({
 
   if (isRenaming) {
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', width: '100%' }}>
-        <span dangerouslySetInnerHTML={{ __html: icon }} style={iconStyle} />
+      <div className="file-tree-node">
+        <span className="file-tree-node-icon" dangerouslySetInnerHTML={{ __html: icon }} />
         <InlineInput defaultValue={name} onConfirm={onRenameConfirm} onCancel={onRenameCancel} />
-      </span>
+      </div>
     )
   }
 
   if (isNewInput) {
     const inputIcon = newInputType === 'directory' ? folderSvg : fileSvg
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', width: '100%' }}>
-        <span dangerouslySetInnerHTML={{ __html: inputIcon }} style={iconStyle} />
+      <div className="file-tree-node">
+        <span className="file-tree-node-icon" dangerouslySetInnerHTML={{ __html: inputIcon }} />
         <InlineInput defaultValue={newInputDefaultName} onConfirm={onCreateConfirm} onCancel={onCreateCancel} />
-      </span>
+      </div>
     )
   }
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', overflow: 'hidden' }}>
-      <span dangerouslySetInnerHTML={{ __html: icon }} style={iconStyle} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-    </span>
+    <div className="file-tree-node">
+      <span className="file-tree-node-icon" dangerouslySetInnerHTML={{ __html: icon }} />
+      <span className="file-tree-node-label">{name}</span>
+    </div>
   )
 }

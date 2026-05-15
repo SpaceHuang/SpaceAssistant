@@ -1,7 +1,6 @@
 import { useState } from 'react'
-import { Button, Input, Space, Typography } from 'antd'
-
-const { Text } = Typography
+import { Input } from 'antd'
+import { Send } from 'lucide-react'
 
 type Props = {
   disabled?: boolean
@@ -20,12 +19,12 @@ export function MessageInput({ disabled, modelLabel, onSend }: Props) {
   }
 
   return (
-    <div style={{ borderTop: '1px solid #f0f0f0', padding: 12 }}>
-      <Space direction="vertical" style={{ width: '100%' }} size="small">
+    <div className="composer">
+      <div className="composer-box">
         <Input.TextArea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="输入消息…（Ctrl+Enter 发送）"
+          placeholder="输入消息…"
           autoSize={{ minRows: 2, maxRows: 8 }}
           disabled={disabled}
           onKeyDown={(e) => {
@@ -35,13 +34,16 @@ export function MessageInput({ disabled, modelLabel, onSend }: Props) {
             }
           }}
         />
-        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Text type="secondary">{modelLabel ?? ''}</Text>
-          <Button type="primary" onClick={send} disabled={disabled || !text.trim()}>
-            发送
-          </Button>
-        </Space>
-      </Space>
+        <div className="composer-footer">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            {modelLabel ? <span className="composer-model-chip">{modelLabel}</span> : null}
+            <span className="composer-hint">Ctrl+Enter 发送</span>
+          </div>
+          <button type="button" className="composer-send" onClick={send} disabled={disabled || !text.trim()} title="发送">
+            <Send size={18} />
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

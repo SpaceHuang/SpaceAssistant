@@ -1,28 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Input, Modal, Typography } from 'antd'
+import { Button, Input, Typography } from 'antd'
 import { useDetailPanel } from './DetailPanelContext'
 import { X } from 'lucide-react'
 import {
   findSearchMatches,
   getSearchRegexError,
-  replaceAll,
-  replaceOneAt,
   type SearchMatch,
   type SearchOptions
 } from './searchUtils'
 
-export type SearchPanelMode = 'find' | 'replace' | null
-
 type Props = {
-  mode: SearchPanelMode
+  open: boolean
   onClose: () => void
   onHighlightsChange: (matches: SearchMatch[], currentIndex: number) => void
 }
 
-export function SearchPanel({ mode, onClose, onHighlightsChange }: Props) {
-  const { previewContent, setPreviewContent, fileType, viewMode } = useDetailPanel()
+export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
+  const { previewContent, fileType, viewMode } = useDetailPanel()
   const [query, setQuery] = useState('')
-  const [replacement, setReplacement] = useState('')
   const [currentIndex, setCurrentIndex] = useState(0)
   const [options, setOptions] = useState<SearchOptions>({
     caseSensitive: false,
@@ -76,7 +71,7 @@ export function SearchPanel({ mode, onClose, onHighlightsChange }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  if (!mode || !searchable) return null
+  if (!open || !searchable) return null
 
   const goPrev = () => {
     if (matches.length === 0) return
@@ -86,27 +81,6 @@ export function SearchPanel({ mode, onClose, onHighlightsChange }: Props) {
   const goNext = () => {
     if (matches.length === 0) return
     setCurrentIndex((i) => (i >= matches.length - 1 ? 0 : i + 1))
-  }
-
-  const replaceCurrent = () => {
-    if (currentIndex < 0 || !matches[currentIndex]) return
-    const match = matches[currentIndex]
-    const next = replaceOneAt(content, match, replacement, query, options)
-    setPreviewContent(next)
-  }
-
-  const replaceAllConfirm = () => {
-    if (matches.length === 0) return
-    Modal.confirm({
-      title: '全部替换',
-      content: `确定要替换全部 ${matches.length} 处匹配项吗？`,
-      okText: '替换',
-      cancelText: '取消',
-      onOk: () => {
-        const next = replaceAll(content, query, replacement, options)
-        setPreviewContent(next)
-      }
-    })
   }
 
   const countLabel =
@@ -162,22 +136,6 @@ export function SearchPanel({ mode, onClose, onHighlightsChange }: Props) {
           <X className="detail-toolbar-icon" size={16} strokeWidth={2} aria-hidden />
         </button>
       </div>
-      {mode === 'replace' && (
-        <div className="detail-search-row">
-          <Input
-            size="small"
-            placeholder="替换为"
-            value={replacement}
-            onChange={(e) => setReplacement(e.target.value)}
-          />
-          <Button size="small" onClick={replaceCurrent} disabled={matches.length === 0}>
-            替换
-          </Button>
-          <Button size="small" onClick={replaceAllConfirm} disabled={matches.length === 0}>
-            全部
-          </Button>
-        </div>
-      )}
       {regexError && (
         <Typography.Text type="danger" style={{ fontSize: 12 }}>
           {regexError}

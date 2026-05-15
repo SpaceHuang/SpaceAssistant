@@ -221,6 +221,10 @@ export interface ModelEntry {
   enabled: boolean
 }
 
+export type UiThemeMode = 'light' | 'dark' | 'system'
+
+export const DEFAULT_UI_THEME: UiThemeMode = 'system'
+
 export interface AppConfig {
   apiKeyPresent: boolean
   baseUrl: string
@@ -231,6 +235,7 @@ export interface AppConfig {
   maxTokens: number
   thinkingEnabled: boolean
   workDir: string
+  uiTheme: UiThemeMode
   tools: ToolsConfig
   skills: SkillsConfig
 }

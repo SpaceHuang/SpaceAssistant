@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
-import { Button, Card, Collapse, Progress, Space, Tag, Typography } from 'antd'
+import { useMemo, useState } from 'react'
+import { Button, Collapse, Progress, Space, Tag, Typography } from 'antd'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 
-export type ToolConfirmDiff = NonNullable<ToolCallRecord['confirmDiff']>
+const { Text } = Typography
 
 type Props = {
   record: ToolCallRecord
@@ -42,13 +43,8 @@ function truncate(s: string, max: number): string {
 }
 
 export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props) {
-  const title = (
-    <Space wrap>
-      <Text strong>{record.toolName}</Text>
-      <Tag color={riskColor(record.riskLevel)}>{record.riskLevel}</Tag>
-      <Tag>{statusLabel(record.status)}</Tag>
-    </Space>
-  )
+  const needsAttention = record.status === 'confirming' || record.status === 'executing'
+  const [expanded, setExpanded] = useState(needsAttention)
 
   const paramPreview = useMemo(() => {
     try {
@@ -68,110 +64,100 @@ export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props
   }, [record.result])
 
   return (
-    <Card size="small" title={title} style={{ marginTop: 8 }}>
-      {(record.status === 'calling' || record.status === 'executing') && (
-        <Progress percent={undefined} status="active" showInfo={false} />
-      )}
-      <Collapse
-        size="small"
-        items={[
-          {
-            key: 'params',
-            label: '参数',
-            children: (
-              <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto' }}>{paramPreview}</pre>
-            )
+    <div className="tool-card" style={{ marginTop: 8 }}>
+      <div
+        className="tool-card-header"
+        onClick={() => setExpanded((v) => !v)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded((v) => !v)
           }
-        ]}
-      />
-      {record.status === 'confirming' && onConfirm ? (
-        <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>
-          {record.toolName === 'run_script' && typeof record.input.code === 'string' ? (
-            <pre
-              style={{
-                margin: 0,
-                padding: 8,
-                background: 'var(--sa-code-bg, #1e1e1e)',
-                color: '#d4d4d4',
-                borderRadius: 6,
-                fontSize: 12,
-                maxHeight: 240,
-                overflow: 'auto'
-              }}
-            >
-              {record.input.code}
-            </pre>
-          ) : null}
-          {confirmMode === 'diff' && record.confirmDiff ? (
-            <Space direction="vertical" style={{ width: '100%' }}>
-              <Text type="secondary">{record.confirmDiff.oldPath}</Text>
-              <pre
-                style={{
-                  margin: 0,
-                  padding: 8,
-                  background: '#fff1f0',
-                  borderRadius: 6,
-                  fontSize: 11,
-                  maxHeight: 160,
-                  overflow: 'auto'
-                }}
-              >
-                {truncate(record.confirmDiff.oldContent, 8000)}
-              </pre>
-              <pre
-                style={{
-                  margin: 0,
-                  padding: 8,
-                  background: '#f6ffed',
-                  borderRadius: 6,
-                  fontSize: 11,
-                  maxHeight: 160,
-                  overflow: 'auto'
-                }}
-              >
-                {truncate(record.confirmDiff.newContent, 8000)}
-              </pre>
+        }}
+      >
+        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        <span className="tool-card-name">{record.toolName}</span>
+        <Tag color={riskColor(record.riskLevel)}>{record.riskLevel}</Tag>
+        <Tag>{statusLabel(record.status)}</Tag>
+      </div>
+
+      {expanded ? (
+        <div className="tool-card-body">
+          {(record.status === 'calling' || record.status === 'executing') && (
+            <Progress percent={undefined} status="active" showInfo={false} style={{ marginBottom: 8 }} />
+          )}
+
+          <Collapse
+            size="small"
+            defaultActiveKey={needsAttention ? ['params'] : []}
+            items={[
+              {
+                key: 'params',
+                label: '参数',
+                children: (
+                  <pre className="tool-code-preview" style={{ maxHeight: 200, background: 'var(--sa-bg-muted)', color: 'var(--sa-text)' }}>
+                    {paramPreview}
+                  </pre>
+                )
+              }
+            ]}
+          />
+
+          {record.status === 'confirming' && onConfirm ? (
+            <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>
+              {record.toolName === 'run_script' && typeof record.input.code === 'string' ? (
+                <pre className="tool-code-preview">{record.input.code}</pre>
+              ) : null}
+              {confirmMode === 'diff' && record.confirmDiff ? (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <Text type="secondary">{record.confirmDiff.oldPath}</Text>
+                  <pre className="tool-diff-block tool-diff-block--remove">{truncate(record.confirmDiff.oldContent, 8000)}</pre>
+                  <pre className="tool-diff-block tool-diff-block--add">{truncate(record.confirmDiff.newContent, 8000)}</pre>
+                </Space>
+              ) : null}
+              {confirmMode === 'direct' && (record.toolName === 'edit_file' || record.toolName === 'write_file') ? (
+                <Text type="secondary">{(record.input as { path?: string }).path}</Text>
+              ) : null}
+              <Space>
+                <Button type="primary" size="small" onClick={() => onConfirm(true)}>
+                  确认
+                </Button>
+                <Button size="small" onClick={() => onConfirm(false)}>
+                  拒绝
+                </Button>
+              </Space>
             </Space>
           ) : null}
-          {confirmMode === 'direct' && (record.toolName === 'edit_file' || record.toolName === 'write_file') ? (
-            <Text type="secondary">{(record.input as { path?: string }).path}</Text>
+
+          {record.status === 'executing' && onCancel ? (
+            <Button danger size="small" style={{ marginTop: 8 }} onClick={onCancel}>
+              取消执行
+            </Button>
           ) : null}
-          <Space>
-            <Button type="primary" size="small" onClick={() => onConfirm(true)}>
-              确认
-            </Button>
-            <Button size="small" onClick={() => onConfirm(false)}>
-              拒绝
-            </Button>
-          </Space>
-        </Space>
-      ) : null}
-      {record.status === 'executing' && onCancel ? (
-        <Button danger size="small" style={{ marginTop: 8 }} onClick={onCancel}>
-          取消执行
-        </Button>
-      ) : null}
-      {(record.status === 'completed' || record.status === 'failed' || record.status === 'rejected') && (
-        <Collapse
-          size="small"
-          style={{ marginTop: 8 }}
-          items={[
-            {
-              key: 'res',
-              label: record.result?.success ? '结果' : '详情',
-              children: (
-                <div>
-                  {record.result?.success ? (
-                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto' }}>{resultStr}</pre>
+
+          {(record.status === 'completed' || record.status === 'failed' || record.status === 'rejected') && (
+            <Collapse
+              size="small"
+              style={{ marginTop: 8 }}
+              items={[
+                {
+                  key: 'res',
+                  label: record.result?.success ? '结果' : '详情',
+                  children: record.result?.success ? (
+                    <pre className="tool-code-preview" style={{ maxHeight: 320, background: 'var(--sa-bg-muted)', color: 'var(--sa-text)' }}>
+                      {resultStr}
+                    </pre>
                   ) : (
                     <Text type="danger">{record.result?.error ?? '失败'}</Text>
-                  )}
-                </div>
-              )
-            }
-          ]}
-        />
-      )}
-    </Card>
+                  )
+                }
+              ]}
+            />
+          )}
+        </div>
+      ) : null}
+    </div>
   )
 }

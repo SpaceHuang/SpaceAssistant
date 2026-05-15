@@ -1,0 +1,527 @@
+/* ── App shell ── */
+.app-shell {
+  height: 100vh;
+  background: var(--sa-bg-base);
+}
+
+.app-sider {
+  display: flex;
+  height: 100%;
+  background: var(--sa-bg-elevated);
+  border-color: var(--sa-border) !important;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 400px;
+  background: var(--sa-bg-base);
+}
+
+/* 侧栏 / 主区顶栏共用（高度与底边对齐） */
+.app-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--sa-pane-header-height);
+  min-height: var(--sa-pane-header-height);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--sa-border);
+  background: var(--sa-bg-elevated);
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.app-pane-header-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--sa-text);
+}
+
+.app-main-header {
+  padding: 0 16px;
+}
+
+.app-detail-sider {
+  background: var(--sa-bg-elevated);
+  border-color: var(--sa-border) !important;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ── Activity bar ── */
+.activity-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--sa-activity-bar-width);
+  min-width: var(--sa-activity-bar-width);
+  border-right: 1px solid var(--sa-border);
+  padding-top: 4px;
+  justify-content: space-between;
+  background: var(--sa-bg-subtle);
+}
+
+.activity-bar-top,
+.activity-bar-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.activity-bar-bottom {
+  margin-bottom: 8px;
+}
+
+.activity-bar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  color: var(--sa-icon);
+  transition:
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.activity-bar-btn:hover {
+  background: rgba(128, 128, 128, 0.12);
+  color: var(--sa-icon-hover);
+}
+
+.activity-bar-btn.active {
+  color: var(--sa-primary);
+}
+
+.activity-bar-btn.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--sa-primary);
+  border-radius: 1px;
+}
+
+.activity-bar-btn:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: -2px;
+}
+
+.activity-bar-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* ── Sider content ── */
+.sider-content {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sider-content-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.sider-pane {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+/* ── Session list ── */
+.session-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--sa-text-tertiary);
+  padding: 10px 12px 4px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 4px;
+  padding: 5px 6px 5px 10px;
+  border-radius: var(--sa-radius-sm);
+  cursor: pointer;
+  position: relative;
+  transition: background var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.session-item:hover {
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.session-item--active {
+  background: rgba(128, 128, 128, 0.06);
+}
+
+.session-item--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--sa-primary);
+  border-radius: 1px;
+}
+
+.session-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--sa-text);
+}
+
+.session-item--active .session-item-name {
+  color: var(--sa-primary);
+  font-weight: 600;
+}
+
+.session-item-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--sa-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  flex-shrink: 0;
+  line-height: 0;
+  transition:
+    opacity var(--sa-duration-fast),
+    color var(--sa-duration-fast),
+    background var(--sa-duration-fast);
+}
+
+.session-item-delete:hover {
+  color: #ff4d4f;
+  background: rgba(255, 77, 79, 0.08);
+}
+
+.session-item-delete:focus-visible {
+  outline: 1px solid var(--sa-primary);
+  outline-offset: 1px;
+}
+
+.session-item:hover .session-item-delete,
+.session-item--active .session-item-delete {
+  opacity: 1;
+}
+
+.session-list-scroll {
+  flex: 1;
+  overflow: auto;
+}
+
+/* ── Chat area ── */
+.chat-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chat-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--sa-text-secondary);
+  text-align: center;
+  padding: 24px;
+}
+
+.chat-empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sa-text);
+}
+
+.chat-bubble-row {
+  display: flex;
+  margin-bottom: 12px;
+  animation: sa-message-in var(--sa-duration-normal) var(--sa-ease-out);
+}
+
+.chat-bubble-row--user {
+  justify-content: flex-end;
+}
+
+.chat-bubble-row--assistant {
+  justify-content: flex-start;
+}
+
+@keyframes sa-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-bubble {
+  max-width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--sa-radius-lg);
+  word-break: break-word;
+}
+
+.chat-bubble--user {
+  background: var(--sa-bubble-user);
+  color: var(--sa-bubble-user-text);
+}
+
+.chat-bubble--assistant {
+  background: var(--sa-bubble-assistant);
+  color: var(--sa-bubble-assistant-text);
+  border: 1px solid var(--sa-bubble-assistant-border);
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.chat-bubble-meta {
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+  margin-top: 4px;
+}
+
+.chat-bubble--user .chat-bubble-meta {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.chat-bubble-streaming::after {
+  content: '▋';
+  animation: sa-cursor-blink 1s step-end infinite;
+  margin-left: 2px;
+  opacity: 0.7;
+}
+
+@keyframes sa-cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.chat-system-track {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.chat-skill-hint {
+  font-size: 12px;
+  background: var(--sa-skill-hint-bg);
+  color: var(--sa-text-secondary);
+  padding: 4px 12px;
+  border-radius: var(--sa-radius-md);
+  white-space: pre-wrap;
+  text-align: center;
+  border: 1px solid var(--sa-border);
+}
+
+.chat-tool-track {
+  max-width: 92%;
+  margin-top: 8px;
+}
+
+.chat-tool-track .chat-bubble-row--assistant & {
+  width: 100%;
+}
+
+/* ── Composer (message input) ── */
+.composer {
+  border-top: 1px solid var(--sa-border);
+  padding: 12px 16px;
+  background: var(--sa-bg-elevated);
+}
+
+.composer-box {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-xl);
+  background: var(--sa-bg-base);
+  padding: 10px 12px;
+  transition:
+    border-color var(--sa-duration-fast),
+    box-shadow var(--sa-duration-fast);
+}
+
+.composer-box:focus-within {
+  border-color: var(--sa-primary);
+  box-shadow: 0 0 0 2px var(--sa-primary-subtle);
+}
+
+.composer-box .ant-input {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  resize: none;
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  gap: 8px;
+}
+
+.composer-model-chip {
+  font-size: 12px;
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-muted);
+  padding: 2px 8px;
+  border-radius: 999px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-hint {
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+}
+
+.composer-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: var(--sa-primary);
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background var(--sa-duration-fast),
+    transform var(--sa-duration-fast);
+}
+
+.composer-send:hover:not(:disabled) {
+  background: var(--sa-primary-hover);
+  transform: scale(1.04);
+}
+
+.composer-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer-send:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 2px;
+}
+
+/* ── Tool call card ── */
+.tool-card {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-elevated);
+  overflow: hidden;
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--sa-duration-fast);
+}
+
+.tool-card-header:hover {
+  background: var(--sa-bg-subtle);
+}
+
+.tool-card-body {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--sa-border);
+}
+
+.tool-card-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.tool-diff-block {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--sa-radius-sm);
+  font-family: var(--sa-font-mono);
+  font-size: 11px;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.tool-diff-block--remove {
+  background: var(--sa-diff-remove-bg);
+}
+
+.tool-diff-block--add {
+  background: var(--sa-diff-add-bg);
+}
+
+.tool-code-preview {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--sa-code-bg);
+  color: var(--sa-code-text);
+  border-radius: var(--sa-radius-sm);
+  font-family: var(--sa-font-mono);
+  font-size: 12px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* ── Config modal ── */
+.config-modal .ant-form-item-label > label {
+  font-size: 13px;
+}
+
+.sa-skill-row-highlight td {
+  background: var(--sa-diff-add-bg) !important;
+  transition: background 0.3s ease;
+}

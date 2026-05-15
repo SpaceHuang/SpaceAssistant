@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { message } from 'antd'
+import { message, Typography } from 'antd'
+
+const { Text } = Typography
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { addMessage, patchMessage, setChatStatus, setMessages } from '../../store/chatSlice'
 import { upsertSession } from '../../store/sessionSlice'
@@ -382,16 +384,28 @@ export function ChatView() {
       : undefined
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+    <div className="chat-view">
+      <div ref={scrollRef} className="chat-scroll">
         <SkillHintBubble hints={skillHints} />
-        {messages.map((m) => (
-          <ChatBubble
-            key={m.id}
-            message={m}
-            toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
-          />
-        ))}
+        {!sessionId ? (
+          <div className="chat-empty">
+            <div className="chat-empty-title">选择或创建一个会话</div>
+            <Text type="secondary">在左侧开始与 AI 助手对话</Text>
+          </div>
+        ) : messages.length === 0 && skillHints.length === 0 ? (
+          <div className="chat-empty">
+            <div className="chat-empty-title">开始对话</div>
+            <Text type="secondary">输入问题，或尝试 /skill 命令加载 Skill</Text>
+          </div>
+        ) : (
+          messages.map((m) => (
+            <ChatBubble
+              key={m.id}
+              message={m}
+              toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
+            />
+          ))
+        )}
       </div>
       <MessageInput disabled={busy || !sessionId} modelLabel={cfg?.model} onSend={send} />
     </div>

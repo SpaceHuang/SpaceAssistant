@@ -54,31 +54,3 @@ export function findSearchMatches(content: string, query: string, options: Searc
   }
   return matches
 }
-
-export function replaceAll(content: string, query: string, replacement: string, options: SearchOptions): string {
-  const regex = buildSearchRegex(query, options)
-  if (!regex) return content
-  return content.replace(regex, replacement)
-}
-
-export function replaceOneAt(
-  content: string,
-  match: SearchMatch,
-  replacement: string,
-  query: string,
-  options: SearchOptions
-): string {
-  const slice = content.slice(match.start, match.end)
-  if (options.useRegex) {
-    try {
-      let pattern = query
-      if (options.wholeWord) pattern = `\\b${pattern}\\b`
-      const flags = options.caseSensitive ? '' : 'i'
-      const re = new RegExp(pattern, flags)
-      return content.slice(0, match.start) + slice.replace(re, replacement) + content.slice(match.end)
-    } catch {
-      return content
-    }
-  }
-  return content.slice(0, match.start) + replacement + content.slice(match.end)
-}

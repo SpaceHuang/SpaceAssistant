@@ -11,7 +11,7 @@ export function DetailPanel() {
   if (!selectedFile) {
     return (
       <div className="detail-panel-placeholder">
-        <Typography.Text type="secondary">右侧栏预留（功能开发中）</Typography.Text>
+        <Typography.Text type="secondary">选择文件以预览内容</Typography.Text>
       </div>
     )
   }

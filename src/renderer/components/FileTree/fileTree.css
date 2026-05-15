@@ -5,12 +5,12 @@
 }
 
 .file-tree .ant-tree-treenode:hover .ant-tree-node-content-wrapper {
-  background: rgba(0, 0, 0, 0.04) !important;
+  background: rgba(128, 128, 128, 0.08) !important;
 }
 
 .file-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
 .file-tree .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper {
-  background: rgba(22, 119, 255, 0.12) !important;
+  background: var(--sa-primary-subtle) !important;
 }
 
 .file-tree .ant-tree-indent-unit {
@@ -22,7 +22,7 @@
 }
 
 .file-tree .ant-tree-treenode-drop-over .ant-tree-node-content-wrapper {
-  background: rgba(22, 119, 255, 0.08) !important;
+  background: rgba(10, 132, 255, 0.08) !important;
 }
 
 .file-tree .ant-tree-node-content-wrapper {
@@ -35,13 +35,45 @@
   flex-shrink: 0;
 }
 
-/* Hide antd's auto-rendered icon — we render our own via titleRender */
-.file-tree .ant-tree-iconEle {
-  display: none;
+.file-tree.ant-tree .ant-tree-node-content-wrapper .ant-tree-iconEle {
+  display: none !important;
 }
 
-/* Make Mingcute SVGs fill their container instead of fixed 24x24 */
-.file-tree .ant-tree-title svg {
+.file-tree-node {
+  display: inline-flex;
+  align-items: center;
   width: 100%;
-  height: 100%;
+  min-width: 0;
+}
+
+.file-tree-node-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  line-height: 0;
+}
+
+.file-tree-node-icon svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.file-tree-node-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.file-tree-context-trigger {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
 }

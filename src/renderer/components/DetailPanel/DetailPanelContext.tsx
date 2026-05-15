@@ -32,7 +32,6 @@ export type DetailPanelActions = {
   closeFile: () => void
   refreshFile: () => Promise<void>
   setViewMode: (mode: ViewMode) => void
-  setPreviewContent: (content: string) => void
 }
 
 type DetailPanelContextValue = DetailPanelState & DetailPanelActions
@@ -168,8 +167,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       openFile,
       closeFile,
       refreshFile,
-      setViewMode,
-      setPreviewContent
+      setViewMode
     }),
     [
       selectedFile,

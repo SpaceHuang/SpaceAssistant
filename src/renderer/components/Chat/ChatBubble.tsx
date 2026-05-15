@@ -1,4 +1,4 @@
-import { Card, Collapse, Space, Tag, Typography } from 'antd'
+import { Collapse, Space, Tag, Typography } from 'antd'
 import type { Message } from '../../../shared/domainTypes'
 import { ChatMarkdown } from './ChatMarkdown'
 import { ToolCallCard } from './ToolCallCard'
@@ -15,30 +15,19 @@ export type ToolsInteractiveProps = {
 type Props = {
   message: Message
   toolsInteractive?: ToolsInteractiveProps
-  /** 预留：从消息卡片打开文件到详情面板 */
   onOpenFile?: (relPath: string) => void
 }
 
-export function ChatBubble({ message, toolsInteractive, onOpenFile: _onOpenFile }: Props) {
+export function ChatBubble({ message, toolsInteractive }: Props) {
   const isUser = message.role === 'user'
-  const align = isUser ? 'flex-end' : 'flex-start'
-  const bg = isUser ? '#1677ff' : 'var(--sa-bubble-assistant, #f0f0f0)'
-  const color = isUser ? '#fff' : 'inherit'
+  const streaming = message.status === 'streaming'
 
   return (
-    <div style={{ display: 'flex', justifyContent: align, marginBottom: 12 }}>
-      <div
-        style={{
-          maxWidth: '85%',
-          background: bg,
-          color,
-          padding: '10px 14px',
-          borderRadius: 12,
-          wordBreak: 'break-word'
-        }}
-      >
+    <div className={`chat-bubble-row chat-bubble-row--${isUser ? 'user' : 'assistant'}`}>
+      <div style={{ maxWidth: '92%', display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+      <div className={`chat-bubble chat-bubble--${isUser ? 'user' : 'assistant'}${streaming && !isUser ? ' chat-bubble-streaming' : ''}`}>
         <Space direction="vertical" size="small" style={{ width: '100%' }}>
-          {message.thinking && message.thinking.content ? (
+          {message.thinking?.content ? (
             <Collapse
               size="small"
               items={[
@@ -50,50 +39,62 @@ export function ChatBubble({ message, toolsInteractive, onOpenFile: _onOpenFile 
               ]}
             />
           ) : null}
-          <div className={isUser ? 'chat-md-user' : 'chat-md-assistant'}>
+
+          <div className={isUser ? 'chat-md-user' : undefined}>
             {isUser ? (
-              <Text style={{ color }}>{message.content}</Text>
+              <Text style={{ color: 'var(--sa-bubble-user-text)' }}>{message.content}</Text>
             ) : (
               <ChatMarkdown content={message.content || '…'} />
             )}
           </div>
-          {message.toolCalls?.length
-            ? message.toolCalls.map((tc) => (
-                <ToolCallCard
-                  key={tc.id}
-                  record={tc}
-                  confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
-                  onConfirm={
-                    toolsInteractive && tc.status === 'confirming'
-                      ? (approved) => toolsInteractive.onToolConfirm(tc.id, approved)
-                      : undefined
-                  }
-                  onCancel={
-                    toolsInteractive && tc.status === 'executing'
-                      ? () => toolsInteractive.onToolCancel(tc.id)
-                      : undefined
-                  }
-                />
-              ))
-            : null}
+
           {message.toolUse ? (
-            <Card size="small" title={<Text strong>工具: {message.toolUse.toolName}</Text>}>
-              <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                {JSON.stringify(message.toolUse.parameters, null, 2)}
-              </pre>
-              {message.toolUse.result ? (
-                <Tag color={message.toolUse.result.success ? 'green' : 'red'} style={{ marginTop: 8 }}>
-                  {message.toolUse.result.success ? '成功' : '失败'}
-                </Tag>
-              ) : null}
-            </Card>
+            <div className="tool-card" style={{ marginTop: 8 }}>
+              <div className="tool-card-header" style={{ cursor: 'default' }}>
+                <span className="tool-card-name">工具: {message.toolUse.toolName}</span>
+              </div>
+              <div className="tool-card-body">
+                <pre className="tool-code-preview" style={{ maxHeight: 200 }}>
+                  {JSON.stringify(message.toolUse.parameters, null, 2)}
+                </pre>
+                {message.toolUse.result ? (
+                  <Tag color={message.toolUse.result.success ? 'green' : 'red'} style={{ marginTop: 8 }}>
+                    {message.toolUse.result.success ? '成功' : '失败'}
+                  </Tag>
+                ) : null}
+              </div>
+            </div>
           ) : null}
-          <Text type="secondary" style={{ fontSize: 11 }}>
+
+          <div className="chat-bubble-meta">
             {new Date(message.timestamp).toLocaleString()}
-            {message.status === 'streaming' ? ' · 生成中' : null}
+            {streaming ? ' · 生成中' : null}
             {message.status === 'failed' ? ' · 失败' : null}
-          </Text>
+          </div>
         </Space>
+      </div>
+
+      {message.toolCalls?.length ? (
+        <div className="chat-tool-track">
+          {message.toolCalls.map((tc) => (
+            <ToolCallCard
+              key={tc.id}
+              record={tc}
+              confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
+              onConfirm={
+                toolsInteractive && tc.status === 'confirming'
+                  ? (approved) => toolsInteractive.onToolConfirm(tc.id, approved)
+                  : undefined
+              }
+              onCancel={
+                toolsInteractive && tc.status === 'executing'
+                  ? () => toolsInteractive.onToolCancel(tc.id)
+                  : undefined
+              }
+            />
+          ))}
+        </div>
+      ) : null}
       </div>
     </div>
   )
