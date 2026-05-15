@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppConfig, FileInfo, Message, SearchResult, Session } from '../src/shared/domainTypes'
-import type { ClaudeChatSendStreamPayload, SpaceAssistantApi } from '../src/shared/api'
+import type { ClaudeChatCreateWithToolsPayload, ClaudeChatSendStreamPayload, SpaceAssistantApi } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
@@ -16,6 +16,8 @@ const api: SpaceAssistantApi = {
   chatPatchMessage: (payload) => ipcRenderer.invoke('chat:patch-message', payload),
 
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => ipcRenderer.invoke('claude-chat-send-stream', payload),
+  claudeChatCreateWithTools: (payload: ClaudeChatCreateWithToolsPayload) =>
+    ipcRenderer.invoke('claude-chat-create-with-tools', payload),
   claudeChatOnDelta: (cb) => {
     const fn = (_e: unknown, data: { requestId: string; text: string }) => cb(data)
     ipcRenderer.on('claude-chat-delta', fn)
@@ -64,7 +66,42 @@ const api: SpaceAssistantApi = {
     const fn = () => cb()
     ipcRenderer.on('app:open-about', fn)
     return () => ipcRenderer.removeListener('app:open-about', fn)
-  }
+  },
+
+  toolConfirmResponse: (payload) => ipcRenderer.invoke('tool:confirm-response', payload),
+  toolCancel: (payload) => ipcRenderer.invoke('tool:cancel', payload),
+  toolOnUse: (cb) => {
+    const fn = (_e: unknown, data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => cb(data)
+    ipcRenderer.on('tool:use', fn)
+    return () => ipcRenderer.removeListener('tool:use', fn)
+  },
+  toolOnConfirmRequest: (cb) => {
+    const fn = (
+      _e: unknown,
+      data: {
+        requestId: string
+        toolUseId: string
+        toolName: string
+        input: unknown
+        riskLevel: 'low' | 'medium' | 'high'
+        diff?: { oldContent: string; newContent: string; oldPath: string }
+      }
+    ) => cb(data)
+    ipcRenderer.on('tool:confirm-request', fn)
+    return () => ipcRenderer.removeListener('tool:confirm-request', fn)
+  },
+  toolOnProgress: (cb) => {
+    const fn = (_e: unknown, data: { requestId: string; toolUseId: string; status: string; message?: string }) => cb(data)
+    ipcRenderer.on('tool:progress', fn)
+    return () => ipcRenderer.removeListener('tool:progress', fn)
+  },
+  toolOnResult: (cb) => {
+    const fn = (_e: unknown, data: { requestId: string; toolUseId: string; result: { success: boolean; data?: unknown; error?: string } }) =>
+      cb(data)
+    ipcRenderer.on('tool:result', fn)
+    return () => ipcRenderer.removeListener('tool:result', fn)
+  },
+  toolTestInterpreter: (payload) => ipcRenderer.invoke('tool:test-interpreter', payload)
 }
 
 contextBridge.exposeInMainWorld('api', api)

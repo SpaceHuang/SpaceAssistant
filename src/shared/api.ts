@@ -1,10 +1,37 @@
-import type { AppConfig, FileInfo, Message, SearchResult, Session } from './domainTypes'
+import type {
+  AppConfig,
+  FileInfo,
+  Message,
+  SearchResult,
+  Session,
+  ToolCallResultPersisted,
+  ToolRiskLevel,
+  ToolsConfig
+} from './domainTypes'
 
 export type ClaudeChatSendStreamPayload = {
   requestId: string
   model: string
   baseUrl?: string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
+}
+
+export type ClaudeChatMessageWithBlocks = {
+  role: 'user' | 'assistant'
+  content: string | unknown[]
+  id?: string
+  timestamp?: number
+}
+
+export type ClaudeChatCreateWithToolsPayload = {
+  requestId: string
+  sessionId: string
+  model: string
+  baseUrl?: string
+  messages: ClaudeChatMessageWithBlocks[]
+  tools: Array<Record<string, unknown>>
+  system?: string
+  options?: { maxTokens?: number; enableThinking?: boolean }
 }
 
 export type SpaceAssistantApi = {
@@ -26,10 +53,16 @@ export type SpaceAssistantApi = {
   chatPatchMessage: (payload: {
     messageId: string
     sessionId: string
-    patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking'>>
+    patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls'>>
   }) => Promise<void>
 
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => Promise<{ ok: true } | { ok: false; error: string }>
+  claudeChatCreateWithTools: (
+    payload: ClaudeChatCreateWithToolsPayload
+  ) => Promise<
+    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
+    | { ok: false; error: string }
+  >
   claudeChatOnDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
   claudeChatOnThinkingDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
   claudeChatOnDone: (cb: (data: { requestId: string }) => void) => () => void
@@ -47,6 +80,7 @@ export type SpaceAssistantApi = {
       thinkingEnabled: boolean
       workDir: string
       apiKey: string
+      tools: Partial<ToolsConfig>
     }>
   ) => Promise<void>
   configTestConnection: () => Promise<{ success: boolean; error?: string }>
@@ -67,4 +101,23 @@ export type SpaceAssistantApi = {
 
   onOpenSettings: (cb: () => void) => () => void
   onOpenAbout: (cb: () => void) => () => void
+
+  toolConfirmResponse: (payload: { requestId: string; toolUseId: string; approved: boolean }) => Promise<void>
+  toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
+  toolOnUse: (cb: (data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void) => () => void
+  toolOnConfirmRequest: (
+    cb: (data: {
+      requestId: string
+      toolUseId: string
+      toolName: string
+      input: unknown
+      riskLevel: ToolRiskLevel
+      diff?: { oldContent: string; newContent: string; oldPath: string }
+    }) => void
+  ) => () => void
+  toolOnProgress: (cb: (data: { requestId: string; toolUseId: string; status: string; message?: string }) => void) => () => void
+  toolOnResult: (
+    cb: (data: { requestId: string; toolUseId: string; result: ToolCallResultPersisted }) => void
+  ) => () => void
+  toolTestInterpreter: (payload: { path: string }) => Promise<{ ok: true; version: string } | { ok: false; error: string }>
 }

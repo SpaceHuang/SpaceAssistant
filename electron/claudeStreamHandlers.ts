@@ -1,16 +1,17 @@
 import type { IpcMain, WebContents } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
-import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/toolApiFunctionName'
 import { DEFAULT_TOOL_LOOP_MAX_TOKENS } from '../src/shared/llm/toolLoopMaxTokens'
-import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
+import type { ToolsConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
-import { buildClaudeChatSendStreamParams, buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'
-import { normalizeStopReason } from './stopReason'
-import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
+import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
+import { runToolChatSession } from './toolChatLoop'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
+  getWorkDir: () => string
+  getUserDataPath: () => string
+  getToolsConfig: () => ToolsConfig
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -38,6 +39,7 @@ type ClaudeChatMessageWithContentBlocks = {
 
 type ClaudeChatCreateWithToolsPayload = {
   requestId: string
+  sessionId: string
   model: string
   baseUrl?: string
   messages: ClaudeChatMessageWithContentBlocks[]
@@ -47,15 +49,6 @@ type ClaudeChatCreateWithToolsPayload = {
     maxTokens?: number
     enableThinking?: boolean
   }
-}
-
-function sanitizeAnthropicToolsPayloadForStrictGateways(tools: unknown[]): unknown[] {
-  return tools.map((t) => {
-    if (!t || typeof t !== 'object') return t
-    const o = t as Record<string, unknown>
-    const rawName = typeof o.name === 'string' ? o.name : ''
-    return { ...o, name: toolIdToOpenAiCompatibleApiToolName(rawName) }
-  })
 }
 
 function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessage[] {
@@ -129,23 +122,6 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
   return content
 }
 
-function stripAssistantThinkingBlocksForDisabledThinkingApi(
-  messages: ClaudeChatMessageWithContentBlocks[]
-): ClaudeChatMessageWithContentBlocks[] {
-  return messages.map((m) => {
-    if (m.role !== 'assistant' || typeof m.content === 'string' || !Array.isArray(m.content)) {
-      return m
-    }
-    const filtered = m.content.filter((b: unknown) => {
-      if (!b || typeof b !== 'object') return true
-      const t = (b as { type?: string }).type
-      return t !== 'thinking' && t !== 'redacted_thinking'
-    })
-    if (filtered.length === m.content.length) return m
-    return { ...m, content: filtered }
-  })
-}
-
 function normalizeAndValidateClaudeMessagesWithContentBlocks(messages: unknown): ClaudeChatMessageWithContentBlocks[] {
   if (!Array.isArray(messages)) throw new Error('Invalid messages')
   if (messages.length > 60) throw new Error('Too many messages')
@@ -194,6 +170,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       let requestId = ''
       try {
         requestId = assertValidRequestId(payload.requestId)
+        const sessionId = typeof payload.sessionId === 'string' && payload.sessionId.trim().length > 0 ? payload.sessionId : ''
+        if (!sessionId) throw new Error('Invalid sessionId')
         const model = assertValidModel(payload.model)
         const baseUrl = assertValidOptionalAnthropicBaseUrl(payload.baseUrl)
         const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(payload.messages)
@@ -208,152 +186,36 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         }
 
-        const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsRaw)
-
-        const apiKey = await deps.getApiKey()
-        if (!apiKey) return { ok: false as const, error: 'API key not configured' }
-
-        const client = createAnthropicClient(apiKey, baseUrl)
-        const systemPrompt =
-          typeof payload.system === 'string' && payload.system.trim().length > 0 ? payload.system : undefined
-        const toolLoopOptions = resolveToolLoopModelOptions(payload.options)
-        const thinking = toolLoopOptions.enableThinking ? ({ type: 'adaptive' as const }) : ({ type: 'disabled' as const })
-
-        const messagesForApi = toolLoopOptions.enableThinking
-          ? messages
-          : stripAssistantThinkingBlocksForDisabledThinkingApi(messages)
-
-        const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
+        const res = await runToolChatSession({
+          sender,
+          requestId,
+          sessionId,
           model,
-          max_tokens: toolLoopOptions.maxTokens,
-          system: systemPrompt,
-          messages: messagesForApi,
-          tools,
-          thinking
+          baseUrl,
+          messages,
+          system: payload.system,
+          options: payload.options,
+          toolsConfig: deps.getToolsConfig(),
+          workDir: deps.getWorkDir(),
+          userDataDir: deps.getUserDataPath(),
+          getApiKey: deps.getApiKey
         })
 
-        const stream = client.messages.stream({
-          ...toolLoopStreamParams,
-          messages: messagesForApi as Anthropic.MessageParam[],
-          tools: tools as Anthropic.Tool[]
-        } as Parameters<typeof client.messages.stream>[0])
-
-        const startedAt = Date.now()
-        let firstActivityAt: number | null = null
-        let firstTextAt: number | null = null
-        const contentBlockTypes = new Map<number, string>()
-        const contentBlocks: Array<unknown> = []
-        const pendingToolUseByIndex = new Map<number, { id: string; name: string; input: unknown; partialJson: string }>()
-        const pendingTextByIndex = new Map<number, string>()
-        let stopReason: string | undefined
-
-        const parseToolInput = (baseInput: unknown, partialJson: string): unknown => {
-          const fallback = baseInput ?? {}
-          const jsonText = partialJson.trim()
-          if (!jsonText) return fallback
-          try {
-            return JSON.parse(jsonText)
-          } catch {
-            return fallback
-          }
+        if (!res.ok) {
+          sender.send('claude-chat-error', { requestId, message: res.error })
+          return res
         }
 
-        for await (const evt of stream) {
-          if (firstActivityAt == null) firstActivityAt = Date.now()
-          if (evt?.type === 'content_block_start') {
-            const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-            const blockType = (evt as { content_block?: { type?: string } }).content_block?.type
-            if (index >= 0 && typeof blockType === 'string') {
-              contentBlockTypes.set(index, blockType)
-              if (blockType === 'tool_use') {
-                const block = (evt as { content_block?: { id?: string; name?: string; input?: unknown } }).content_block ?? {}
-                pendingToolUseByIndex.set(index, {
-                  id: typeof block.id === 'string' ? block.id : '',
-                  name: typeof block.name === 'string' ? block.name : '',
-                  input: block.input,
-                  partialJson: ''
-                })
-              } else if (blockType === 'text') {
-                pendingTextByIndex.set(index, '')
-              }
-            }
-          }
-          if (evt?.type === 'content_block_delta' && (evt as { delta?: { type?: string; partial_json?: string } }).delta?.type === 'input_json_delta') {
-            const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-            const pending = pendingToolUseByIndex.get(index)
-            const partialJson = (evt as { delta?: { partial_json?: string } }).delta?.partial_json
-            if (pending && typeof partialJson === 'string') {
-              pending.partialJson += partialJson
-            }
-          }
-          if (evt?.type === 'content_block_delta' && (evt as { delta?: { type?: string; thinking?: string } }).delta?.type === 'thinking_delta') {
-            const thinkingDelta = (evt as { delta?: { thinking?: string } }).delta?.thinking
-            if (typeof thinkingDelta === 'string' && thinkingDelta.length > 0) {
-              sender.send('claude-chat-thinking-delta', { requestId, text: thinkingDelta })
-            }
-          }
-          if (
-            evt?.type === 'content_block_delta' &&
-            (evt as { delta?: { type?: string; text?: string } }).delta?.type === 'text_delta' &&
-            typeof (evt as { delta?: { text?: string } }).delta?.text === 'string' &&
-            (evt as { delta: { text: string } }).delta.text.length > 0
-          ) {
-            const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-            const blockType = contentBlockTypes.get(index)
-            const textDelta = (evt as { delta: { text: string } }).delta.text
-            if (blockType === 'thinking') {
-              sender.send('claude-chat-thinking-delta', { requestId, text: textDelta })
-            } else {
-              if (firstTextAt == null) firstTextAt = Date.now()
-              if (typeof textDelta === 'string' && textDelta.length > 0 && blockType === 'text') {
-                const prev = pendingTextByIndex.get(index) ?? ''
-                pendingTextByIndex.set(index, prev + textDelta)
-              }
-            }
-          }
-          if (evt?.type === 'content_block_stop') {
-            const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-            const blockType = contentBlockTypes.get(index)
-            if (index >= 0 && blockType === 'text') {
-              const text = pendingTextByIndex.get(index) ?? ''
-              pendingTextByIndex.delete(index)
-              if (text.length > 0) {
-                contentBlocks.push({ type: 'text', text })
-              }
-            } else if (index >= 0 && blockType === 'tool_use') {
-              const pending = pendingToolUseByIndex.get(index)
-              pendingToolUseByIndex.delete(index)
-              if (pending && pending.id && pending.name) {
-                const toolUseBlock = {
-                  type: 'tool_use',
-                  id: pending.id,
-                  name: pending.name,
-                  input: parseToolInput(pending.input, pending.partialJson)
-                }
-                contentBlocks.push(toolUseBlock)
-                sender.send('claude-chat-tool-use', { requestId, toolUse: toolUseBlock, at: Date.now() })
-              }
-            }
-          }
-          sender.send('claude-chat-tools-activity', { requestId, at: Date.now() })
-        }
-
-        let content: Array<unknown> = contentBlocks
-        const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
-        const finalContent = Array.isArray(res?.content) ? res.content : []
-        content = finalContent.length > 0 ? finalContent : contentBlocks
-        const rawStopReason = typeof res?.stop_reason === 'string' ? res.stop_reason : undefined
-        stopReason = normalizeStopReason(rawStopReason)
-        const usage = normalizeAnthropicMessageUsage(res)
-
+        sender.send('claude-chat-done', { requestId })
         return {
           ok: true as const,
-          content,
-          stopReason,
-          ...(usage && { usage })
+          content: res.content,
+          stopReason: res.stopReason,
+          ...(res.usage && { usage: res.usage })
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        if (requestId) sender.send('claude-chat-error', { requestId, message })
         return { ok: false as const, error: message }
       }
     }

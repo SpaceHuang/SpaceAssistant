@@ -1,14 +1,23 @@
 import { Card, Collapse, Space, Tag, Typography } from 'antd'
 import type { Message } from '../../../shared/domainTypes'
 import { ChatMarkdown } from './ChatMarkdown'
+import { ToolCallCard } from './ToolCallCard'
 
 const { Text } = Typography
 
-type Props = {
-  message: Message
+export type ToolsInteractiveProps = {
+  requestId: string
+  confirmMode: 'diff' | 'direct'
+  onToolConfirm: (toolUseId: string, approved: boolean) => void
+  onToolCancel: (toolUseId: string) => void
 }
 
-export function ChatBubble({ message }: Props) {
+type Props = {
+  message: Message
+  toolsInteractive?: ToolsInteractiveProps
+}
+
+export function ChatBubble({ message, toolsInteractive }: Props) {
   const isUser = message.role === 'user'
   const align = isUser ? 'flex-end' : 'flex-start'
   const bg = isUser ? '#1677ff' : 'var(--sa-bubble-assistant, #f0f0f0)'
@@ -39,6 +48,32 @@ export function ChatBubble({ message }: Props) {
               ]}
             />
           ) : null}
+          <div className={isUser ? 'chat-md-user' : 'chat-md-assistant'}>
+            {isUser ? (
+              <Text style={{ color }}>{message.content}</Text>
+            ) : (
+              <ChatMarkdown content={message.content || '…'} />
+            )}
+          </div>
+          {message.toolCalls?.length
+            ? message.toolCalls.map((tc) => (
+                <ToolCallCard
+                  key={tc.id}
+                  record={tc}
+                  confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
+                  onConfirm={
+                    toolsInteractive && tc.status === 'confirming'
+                      ? (approved) => toolsInteractive.onToolConfirm(tc.id, approved)
+                      : undefined
+                  }
+                  onCancel={
+                    toolsInteractive && tc.status === 'executing'
+                      ? () => toolsInteractive.onToolCancel(tc.id)
+                      : undefined
+                  }
+                />
+              ))
+            : null}
           {message.toolUse ? (
             <Card size="small" title={<Text strong>工具: {message.toolUse.toolName}</Text>}>
               <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
@@ -51,13 +86,6 @@ export function ChatBubble({ message }: Props) {
               ) : null}
             </Card>
           ) : null}
-          <div className={isUser ? 'chat-md-user' : 'chat-md-assistant'}>
-            {isUser ? (
-              <Text style={{ color }}>{message.content}</Text>
-            ) : (
-              <ChatMarkdown content={message.content || '…'} />
-            )}
-          </div>
           <Text type="secondary" style={{ fontSize: 11 }}>
             {new Date(message.timestamp).toLocaleString()}
             {message.status === 'streaming' ? ' · 生成中' : null}

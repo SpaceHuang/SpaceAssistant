@@ -4,8 +4,8 @@ import path from 'path'
 import type { IpcMain } from 'electron'
 import { dialog } from 'electron'
 import type { AppDatabase } from './database'
-import type { AppConfig, FileInfo, Message, ModelEntry, SearchResult, Session } from '../src/shared/domainTypes'
-import { DEFAULT_MODELS } from '../src/shared/domainTypes'
+import type { AppConfig, FileInfo, Message, ModelEntry, SearchResult, Session, ToolsConfig } from '../src/shared/domainTypes'
+import { DEFAULT_MODELS, mergeToolsConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
 import {
@@ -25,6 +25,8 @@ import {
 import { resolveSafePath } from './pathSecurity'
 import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
+import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
+import { spawn } from 'child_process'
 
 const CONFIG_KEYS = {
   baseUrl: 'config.baseUrl',
@@ -35,7 +37,8 @@ const CONFIG_KEYS = {
   models: 'config.models',
   thinkingEnabled: 'config.thinkingEnabled',
   workDir: 'config.workDir',
-  apiKeyEnc: 'secrets.apiKeyEnc'
+  apiKeyEnc: 'secrets.apiKeyEnc',
+  tools: 'config.tools'
 } as const
 
 export type AppIpcContext = {
@@ -55,6 +58,42 @@ async function syncBackup(ctx: AppIpcContext, sessionId: string): Promise<void> 
 }
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
+  ipcMain.handle(
+    'tool:confirm-response',
+    async (_e, payload: { requestId: string; toolUseId: string; approved: boolean }): Promise<void> => {
+      submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
+    }
+  )
+
+  ipcMain.handle('tool:cancel', async (_e, payload: { requestId: string; toolUseId: string }): Promise<void> => {
+    signalToolCancel(payload.requestId, payload.toolUseId)
+  })
+
+  ipcMain.handle(
+    'tool:test-interpreter',
+    async (_e, payload: { path: string }): Promise<{ ok: true; version: string } | { ok: false; error: string }> => {
+      const py = typeof payload.path === 'string' && payload.path.trim() ? payload.path.trim() : 'python'
+      return await new Promise((resolve) => {
+        const proc = spawn(py, ['--version'], { windowsHide: true, shell: false })
+        let out = ''
+        proc.stdout?.on('data', (d: Buffer) => {
+          out += d.toString('utf8')
+        })
+        proc.stderr?.on('data', (d: Buffer) => {
+          out += d.toString('utf8')
+        })
+        proc.on('error', (err) => {
+          resolve({ ok: false, error: err.message })
+        })
+        proc.on('close', (code) => {
+          const v = out.trim()
+          if (code === 0 && v) resolve({ ok: true, version: v })
+          else resolve({ ok: false, error: v || `进程退出码 ${code}` })
+        })
+      })
+    }
+  )
+
   ipcMain.handle('session:list', (): Session[] => listSessions(ctx.db))
 
   ipcMain.handle(
@@ -107,7 +146,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'chat:patch-message',
-    async (_e, payload: { messageId: string; patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking'>> } & { sessionId: string }) => {
+    async (_e, payload: { messageId: string; patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls'>> } & { sessionId: string }) => {
       updateMessageContent(ctx.db, payload.messageId, payload.patch)
       await syncBackup(ctx, payload.sessionId)
     }
@@ -132,6 +171,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }))
     }
     const defaultEntry = models.find((m) => m.isDefault)
+    let tools: ToolsConfig = mergeToolsConfig(null)
+    const toolsRaw = getConfigValue(ctx.db, CONFIG_KEYS.tools)
+    if (toolsRaw) {
+      try {
+        tools = mergeToolsConfig(JSON.parse(toolsRaw) as Partial<ToolsConfig>)
+      } catch {
+        /* keep default */
+      }
+    }
     return {
       apiKeyPresent: Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
@@ -141,7 +189,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       defaultModel: defaultEntry?.name ?? defaultModelName,
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
-      workDir: wd
+      workDir: wd,
+      tools
     }
   })
 
@@ -159,6 +208,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         thinkingEnabled: boolean
         workDir: string
         apiKey: string
+        tools: Partial<ToolsConfig>
       }>
     ): Promise<void> => {
       if (payload.baseUrl !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.baseUrl, payload.baseUrl)
@@ -180,6 +230,19 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (payload.apiKey !== undefined && payload.apiKey.trim()) {
         await ctx.setApiKey(payload.apiKey.trim())
+      }
+      if (payload.tools !== undefined) {
+        let cur = mergeToolsConfig(null)
+        const curRaw = getConfigValue(ctx.db, CONFIG_KEYS.tools)
+        if (curRaw) {
+          try {
+            cur = mergeToolsConfig(JSON.parse(curRaw) as Partial<ToolsConfig>)
+          } catch {
+            /* ignore */
+          }
+        }
+        const next = mergeToolsConfig({ ...cur, ...payload.tools })
+        setConfigValue(ctx.db, CONFIG_KEYS.tools, JSON.stringify(next))
       }
     }
   )

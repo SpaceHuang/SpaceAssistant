@@ -4,6 +4,7 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { mergeToolsConfig } from '../src/shared/domainTypes'
 import { getConfigValue, openDatabase, setConfigValue } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
@@ -11,6 +12,7 @@ import { setMainWindow } from './windowRef'
 import { decryptSecret, encryptSecret, isSecretStorageAvailable } from './secureApiKey'
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
+const TOOLS_CONFIG_KEY = 'config.tools'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -125,7 +127,20 @@ app.whenReady().then(() => {
 
   ipcMain.handle('ping', async () => 'pong')
 
-  registerClaudeStreamHandlers(ipcMain, { getApiKey })
+  registerClaudeStreamHandlers(ipcMain, {
+    getApiKey,
+    getWorkDir: () => workDirState,
+    getUserDataPath: () => app.getPath('userData'),
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    }
+  })
 
   registerAppIpcHandlers(ipcMain, {
     db,

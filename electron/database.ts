@@ -3,7 +3,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION } from '../src/shared/domainTypes'
-import { rowToMessage, serializeThinkingForDb, serializeToolUseForDb } from './messageCodec'
+import { rowToMessage, serializeThinkingForDb, serializeToolCallsForDb, serializeToolUseForDb } from './messageCodec'
 
 export type StoredMessage = {
   id: string
@@ -11,6 +11,7 @@ export type StoredMessage = {
   role: string
   content: string
   toolUse: string | null
+  toolCalls: string | null
   thinking: string | null
   status: string
   schemaVersion: number
@@ -46,7 +47,12 @@ function loadSnapshot(filePath: string): DbSnapshot {
     const parsed = JSON.parse(raw) as Partial<DbSnapshot>
     return {
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
-      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      messages: Array.isArray(parsed.messages)
+        ? (parsed.messages as StoredMessage[]).map((m) => ({
+            ...m,
+            toolCalls: m.toolCalls ?? null
+          }))
+        : [],
       configs: parsed.configs && typeof parsed.configs === 'object' ? (parsed.configs as DbSnapshot['configs']) : {},
       searchHistory: Array.isArray(parsed.searchHistory) ? parsed.searchHistory : []
     }
@@ -149,6 +155,7 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
       role: r.role,
       content: r.content,
       toolUse: r.toolUse,
+      toolCalls: r.toolCalls ?? null,
       thinking: r.thinking,
       status: r.status,
       schemaVersion: r.schemaVersion,
@@ -171,6 +178,7 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
     role: full.role,
     content: full.content,
     toolUse: serializeToolUseForDb(full.toolUse),
+    toolCalls: serializeToolCallsForDb(full.toolCalls),
     thinking: serializeThinkingForDb(full.thinking),
     status: full.status,
     schemaVersion: full.schemaVersion,
@@ -190,17 +198,19 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
 export function updateMessageContent(
   db: AppDatabase,
   messageId: string,
-  patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking'>>
+  patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls'>>
 ): void {
   const row = db.data.messages.find((m) => m.id === messageId)
   if (!row) return
   const content = patch.content ?? row.content
   const status = patch.status ?? (row.status as MessageStatus)
   const toolUse = patch.toolUse !== undefined ? serializeToolUseForDb(patch.toolUse) : row.toolUse
+  const toolCalls = patch.toolCalls !== undefined ? serializeToolCallsForDb(patch.toolCalls) : row.toolCalls
   const thinking = patch.thinking !== undefined ? serializeThinkingForDb(patch.thinking) : row.thinking
   row.content = content
   row.status = status
   row.toolUse = toolUse
+  row.toolCalls = toolCalls
   row.thinking = thinking
   db.save()
 }

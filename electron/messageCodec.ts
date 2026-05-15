@@ -1,4 +1,4 @@
-import type { Message, ThinkingData, ToolUseData } from '../src/shared/domainTypes'
+import type { Message, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -72,12 +72,60 @@ export function deserializeThinkingFromDb(raw: string | null): ThinkingData | un
   }
 }
 
+export function serializeToolCallsForDb(calls: ToolCallRecord[] | undefined): string | null {
+  if (!calls || calls.length === 0) return null
+  return JSON.stringify(
+    calls.map((c) => ({
+      ...c,
+      input: JSON.stringify(c.input),
+      result: c.result
+        ? {
+            ...c.result,
+            data: c.result.data !== undefined ? JSON.stringify(c.result.data) : undefined
+          }
+        : undefined
+    }))
+  )
+}
+
+export function deserializeToolCallsFromDb(raw: string | null | undefined): ToolCallRecord[] | undefined {
+  if (!raw) return undefined
+  try {
+    const arr = JSON.parse(raw) as Array<
+      ToolCallRecord & { input: string; result?: { success: boolean; data?: string; error?: string } }
+    >
+    if (!Array.isArray(arr)) return undefined
+    return arr.map((c) => ({
+      id: c.id,
+      toolName: c.toolName,
+      input: typeof c.input === 'string' ? JSON.parse(c.input || '{}') : (c.input as Record<string, unknown>),
+      result: c.result
+        ? {
+            success: c.result.success,
+            error: c.result.error,
+            data: c.result.data !== undefined ? JSON.parse(c.result.data) : undefined
+          }
+        : undefined,
+      status: c.status,
+      riskLevel: c.riskLevel,
+      confirmDiff: c.confirmDiff,
+      confirmedAt: c.confirmedAt,
+      startedAt: c.startedAt,
+      completedAt: c.completedAt,
+      duration: c.duration
+    }))
+  } catch {
+    return undefined
+  }
+}
+
 export function rowToMessage(row: {
   id: string
   sessionId: string
   role: string
   content: string
   toolUse: string | null
+  toolCalls?: string | null
   thinking: string | null
   status: string
   schemaVersion: number
@@ -91,6 +139,7 @@ export function rowToMessage(row: {
     content: row.content,
     timestamp: row.timestamp,
     toolUse: deserializeToolUseFromDb(row.toolUse),
+    toolCalls: deserializeToolCallsFromDb(row.toolCalls),
     thinking: deserializeThinkingFromDb(row.thinking),
     status: row.status as Message['status'],
     schemaVersion: row.schemaVersion

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Space, Switch, Tabs, message } from 'antd'
+import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag, message } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry } from '../../../shared/domainTypes'
-import { DEFAULT_MODELS } from '../../../shared/domainTypes'
+import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
+import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 
 function AddIcon() {
   return (
@@ -143,6 +144,22 @@ export function ConfigModal() {
   const [addMaxTokens, setAddMaxTokens] = useState(8192)
   const [addDefault, setAddDefault] = useState(false)
   const [addFast, setAddFast] = useState(false)
+  const [toolUi, setToolUi] = useState({
+    enabled: true,
+    confirmMode: 'diff' as 'diff' | 'direct',
+    deniedTools: [] as string[],
+    /** 白名单模式下：允许的内置工具名 */
+    allowedEdit: [] as string[],
+    whitelistMode: false,
+    pythonPath: 'python',
+    scriptTimeout: 300,
+    maxToolIterations: 10,
+    fileCheckpointingEnabled: true,
+    maxFileSnapshots: 100,
+    grepTimeoutSec: 60
+  })
+  const [pyTest, setPyTest] = useState<{ ok: boolean; text: string } | null>(null)
+  const [pyTesting, setPyTesting] = useState(false)
 
   useEffect(() => {
     if (open && cfg) {
@@ -156,6 +173,22 @@ export function ConfigModal() {
       })
       setModels(cfg.models.length > 0 ? cfg.models : DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
       setWorkDirError(null)
+      const wl = cfg.tools.allowedTools.length > 0
+      const allBuiltin = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
+      setToolUi({
+        enabled: cfg.tools.enabled,
+        confirmMode: cfg.tools.confirmMode,
+        deniedTools: wl ? [] : [...cfg.tools.deniedTools],
+        allowedEdit: wl ? cfg.tools.allowedTools.filter((n) => allBuiltin.includes(n)) : [],
+        whitelistMode: wl,
+        pythonPath: cfg.tools.pythonPath,
+        scriptTimeout: cfg.tools.scriptTimeout,
+        maxToolIterations: cfg.tools.maxToolIterations,
+        fileCheckpointingEnabled: cfg.tools.fileCheckpointingEnabled,
+        maxFileSnapshots: cfg.tools.maxFileSnapshots,
+        grepTimeoutSec: cfg.tools.grepTimeoutSec
+      })
+      setPyTest(null)
     }
   }, [open, cfg, form])
 
@@ -228,6 +261,18 @@ export function ConfigModal() {
       workDir: v.workDir,
       thinkingEnabled: v.thinkingEnabled,
       models,
+      tools: {
+        enabled: toolUi.enabled,
+        confirmMode: toolUi.confirmMode,
+        deniedTools: toolUi.whitelistMode ? [] : toolUi.deniedTools,
+        allowedTools: toolUi.whitelistMode ? toolUi.allowedEdit.filter((n) => BUILTIN_TOOL_DEFINITIONS.some((d) => d.name === n)) : [],
+        pythonPath: toolUi.pythonPath,
+        scriptTimeout: toolUi.scriptTimeout,
+        maxToolIterations: toolUi.maxToolIterations,
+        fileCheckpointingEnabled: toolUi.fileCheckpointingEnabled,
+        maxFileSnapshots: toolUi.maxFileSnapshots,
+        grepTimeoutSec: toolUi.grepTimeoutSec
+      },
       ...(v.apiKey && String(v.apiKey).trim() ? { apiKey: String(v.apiKey).trim() } : {})
     })
     const next = await window.api.configGet()
@@ -244,6 +289,18 @@ export function ConfigModal() {
       else message.error(r.error ?? '失败')
     } finally {
       setTesting(false)
+    }
+  }
+
+  const testPython = async () => {
+    setPyTesting(true)
+    setPyTest(null)
+    try {
+      const r = await window.api.toolTestInterpreter({ path: toolUi.pythonPath })
+      if (r.ok) setPyTest({ ok: true, text: r.version })
+      else setPyTest({ ok: false, text: r.error })
+    } finally {
+      setPyTesting(false)
     }
   }
 
@@ -352,6 +409,158 @@ export function ConfigModal() {
                   <Form.Item name="thinkingEnabled" label="默认开启 Thinking" valuePropName="checked">
                     <Switch />
                   </Form.Item>
+                </>
+              )
+            },
+            {
+              key: 'tools',
+              label: '工具',
+              children: (
+                <>
+                  <Form.Item label="启用内置工具">
+                    <Switch checked={toolUi.enabled} onChange={(checked) => setToolUi((s) => ({ ...s, enabled: checked }))} />
+                  </Form.Item>
+                  <Form.Item
+                    label="仅允许选中的工具（白名单）"
+                    extra="开启后仅下方勾选的工具会注入模型；关闭时未勾选表示禁止（denied）。"
+                  >
+                    <Switch
+                      checked={toolUi.whitelistMode}
+                      onChange={(checked) => {
+                        setToolUi((s) => {
+                          const allNames = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
+                          if (checked) {
+                            const enabled = allNames.filter((n) => !s.deniedTools.includes(n))
+                            return {
+                              ...s,
+                              whitelistMode: true,
+                              allowedEdit: enabled,
+                              deniedTools: []
+                            }
+                          }
+                          const enabledSet = new Set(
+                            s.whitelistMode ? s.allowedEdit : allNames.filter((n) => !s.deniedTools.includes(n))
+                          )
+                          const denied = allNames.filter((n) => !enabledSet.has(n))
+                          return { ...s, whitelistMode: false, deniedTools: denied, allowedEdit: [] }
+                        })
+                      }}
+                    />
+                  </Form.Item>
+                  <Form.Item label="文件写入确认模式">
+                    <Radio.Group
+                      value={toolUi.confirmMode}
+                      onChange={(e) => setToolUi((s) => ({ ...s, confirmMode: e.target.value }))}
+                    >
+                      <Radio value="diff">diff 预览</Radio>
+                      <Radio value="direct">直接确认</Radio>
+                    </Radio.Group>
+                  </Form.Item>
+                  <Form.Item label="Python 路径">
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Input
+                        value={toolUi.pythonPath}
+                        onChange={(e) => setToolUi((s) => ({ ...s, pythonPath: e.target.value }))}
+                        placeholder="python 或绝对路径"
+                      />
+                      <Button loading={pyTesting} onClick={testPython}>
+                        测试
+                      </Button>
+                    </Space.Compact>
+                  </Form.Item>
+                  {pyTest ? (
+                    <Alert type={pyTest.ok ? 'success' : 'error'} message={pyTest.text} showIcon style={{ marginBottom: 12 }} />
+                  ) : null}
+                  <Form.Item label="脚本默认超时（秒）">
+                    <InputNumber
+                      min={10}
+                      max={86400}
+                      value={toolUi.scriptTimeout}
+                      onChange={(v) => setToolUi((s) => ({ ...s, scriptTimeout: v ?? 300 }))}
+                      style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+                  <Form.Item label="grep 超时（秒）">
+                    <InputNumber
+                      min={5}
+                      max={600}
+                      value={toolUi.grepTimeoutSec}
+                      onChange={(v) => setToolUi((s) => ({ ...s, grepTimeoutSec: v ?? 60 }))}
+                      style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+                  <Form.Item label="最大工具循环次数">
+                    <InputNumber
+                      min={1}
+                      max={50}
+                      value={toolUi.maxToolIterations}
+                      onChange={(v) => setToolUi((s) => ({ ...s, maxToolIterations: v ?? 10 }))}
+                      style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+                  <Form.Item label="文件历史备份">
+                    <Switch
+                      checked={toolUi.fileCheckpointingEnabled}
+                      onChange={(c) => setToolUi((s) => ({ ...s, fileCheckpointingEnabled: c }))}
+                    />
+                  </Form.Item>
+                  <Form.Item label="每文件最多快照数">
+                    <InputNumber
+                      min={1}
+                      max={500}
+                      value={toolUi.maxFileSnapshots}
+                      onChange={(v) => setToolUi((s) => ({ ...s, maxFileSnapshots: v ?? 100 }))}
+                      style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>内置工具</div>
+                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, maxHeight: 220, overflow: 'auto' }}>
+                    {BUILTIN_TOOL_DEFINITIONS.map((def) => {
+                      const on = toolUi.whitelistMode
+                        ? toolUi.allowedEdit.includes(def.name)
+                        : !toolUi.deniedTools.includes(def.name)
+                      const risk = builtinToolRiskLevel(def.name)
+                      return (
+                        <div
+                          key={def.name}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: '8px 10px',
+                            borderBottom: '1px solid #f5f5f5'
+                          }}
+                        >
+                          <Switch
+                            size="small"
+                            checked={on}
+                            onChange={(checked) => {
+                              if (toolUi.whitelistMode) {
+                                setToolUi((s) => ({
+                                  ...s,
+                                  allowedEdit: checked
+                                    ? [...new Set([...s.allowedEdit, def.name])]
+                                    : s.allowedEdit.filter((x) => x !== def.name)
+                                }))
+                              } else {
+                                setToolUi((s) => ({
+                                  ...s,
+                                  deniedTools: checked
+                                    ? s.deniedTools.filter((x) => x !== def.name)
+                                    : [...s.deniedTools, def.name]
+                                }))
+                              }
+                            }}
+                          />
+                          <span style={{ flex: 1 }}>{def.name}</span>
+                          <Tag color={risk === 'low' ? 'green' : risk === 'medium' ? 'orange' : 'red'}>{risk}</Tag>
+                          <Tag>
+                            {def.name === 'read_file' || def.name === 'list_directory' || def.name === 'grep' ? '免确认' : '需确认'}
+                          </Tag>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </>
               )
             }

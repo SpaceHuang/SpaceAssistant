@@ -4,6 +4,83 @@ export type MessageRole = 'user' | 'assistant' | 'system'
 
 export type MessageStatus = 'sending' | 'sent' | 'streaming' | 'completed' | 'failed'
 
+export type ToolRiskLevel = 'low' | 'medium' | 'high'
+
+export type ToolCallStatus = 'calling' | 'confirming' | 'executing' | 'completed' | 'failed' | 'rejected'
+
+export interface ToolsConfig {
+  enabled: boolean
+  confirmMode: 'diff' | 'direct'
+  allowedTools: string[]
+  deniedTools: string[]
+  pythonPath: string
+  scriptTimeout: number
+  fileCheckpointingEnabled: boolean
+  maxFileSnapshots: number
+  maxToolIterations: number
+  grepTimeoutSec: number
+}
+
+export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
+  enabled: true,
+  confirmMode: 'diff',
+  allowedTools: [],
+  deniedTools: [],
+  pythonPath: 'python',
+  scriptTimeout: 300,
+  fileCheckpointingEnabled: true,
+  maxFileSnapshots: 100,
+  maxToolIterations: 10,
+  grepTimeoutSec: 60
+}
+
+export function mergeToolsConfig(partial?: Partial<ToolsConfig> | null): ToolsConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_TOOLS_CONFIG }
+  return { ...DEFAULT_TOOLS_CONFIG, ...partial }
+}
+
+export function builtinToolRiskLevel(name: string): ToolRiskLevel {
+  switch (name) {
+    case 'read_file':
+    case 'list_directory':
+    case 'grep':
+      return 'low'
+    case 'edit_file':
+    case 'write_file':
+      return 'medium'
+    case 'run_script':
+      return 'high'
+    default:
+      return 'medium'
+  }
+}
+
+export function builtinToolNeedsConfirmation(name: string): boolean {
+  return name === 'edit_file' || name === 'write_file' || name === 'run_script'
+}
+
+export interface ToolCallResultPersisted {
+  success: boolean
+  data?: unknown
+  error?: string
+}
+
+/** 工具调用记录（持久化到消息中） */
+export interface ToolCallRecord {
+  id: string
+  toolName: string
+  input: Record<string, unknown>
+  result?: ToolCallResultPersisted
+  status: ToolCallStatus
+  riskLevel: ToolRiskLevel
+  /** 确认阶段由主进程下发的 diff，仅会话内使用 */
+  confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
+  confirmedAt?: number
+  startedAt?: number
+  completedAt?: number
+  duration?: number
+}
+
 export interface ToolResult {
   data: unknown
   success: boolean
@@ -52,6 +129,8 @@ export interface Message {
   content: string
   timestamp: number
   toolUse?: ToolUseData
+  /** 新版内置工具调用记录；优先于 toolUse 展示 */
+  toolCalls?: ToolCallRecord[]
   thinking?: ThinkingData
   status: MessageStatus
   schemaVersion: number
@@ -77,6 +156,7 @@ export interface AppConfig {
   maxTokens: number
   thinkingEnabled: boolean
   workDir: string
+  tools: ToolsConfig
 }
 
 export interface SearchResult {
