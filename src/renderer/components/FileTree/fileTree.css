@@ -1,0 +1,36 @@
+.file-tree .ant-tree-treenode {
+  padding: 0;
+  height: 32px;
+  align-items: center;
+}
+
+.file-tree .ant-tree-treenode:hover .ant-tree-node-content-wrapper {
+  background: rgba(0, 0, 0, 0.04) !important;
+}
+
+.file-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
+.file-tree .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper {
+  background: rgba(22, 119, 255, 0.12) !important;
+}
+
+.file-tree .ant-tree-indent-unit {
+  width: 16px;
+}
+
+.file-tree .ant-tree-dragging .ant-tree-treenode-dragging {
+  opacity: 0.5;
+}
+
+.file-tree .ant-tree-treenode-drop-over .ant-tree-node-content-wrapper {
+  background: rgba(22, 119, 255, 0.08) !important;
+}
+
+.file-tree .ant-tree-node-content-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-tree .ant-tree-switcher {
+  width: 16px;
+  flex-shrink: 0;
+}
