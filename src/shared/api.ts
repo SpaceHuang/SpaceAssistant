@@ -56,6 +56,11 @@ export type SpaceAssistantApi = {
 
   fileListDirectory: (relPath: string) => Promise<FileInfo[]>
   fileReadFile: (relPath: string) => Promise<{ content: string; encoding: string }>
+  fileCreateFile: (relPath: string) => Promise<void>
+  fileCreateDirectory: (relPath: string) => Promise<void>
+  fileDelete: (relPath: string) => Promise<void>
+  fileRename: (relPath: string, newName: string) => Promise<void>
+  fileMove: (srcRelPath: string, destDirRelPath: string) => Promise<void>
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>

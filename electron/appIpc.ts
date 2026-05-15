@@ -236,6 +236,47 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     return { content, encoding: 'utf8' }
   })
 
+  ipcMain.handle('file:create-file', async (_e, rel: string): Promise<void> => {
+    const root = ctx.getWorkDir()
+    const target = resolveSafePath(root, rel)
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.writeFile(target, '')
+  })
+
+  ipcMain.handle('file:create-directory', async (_e, rel: string): Promise<void> => {
+    const root = ctx.getWorkDir()
+    const target = resolveSafePath(root, rel)
+    await fs.mkdir(target, { recursive: true })
+  })
+
+  ipcMain.handle('file:delete', async (_e, rel: string): Promise<void> => {
+    const root = ctx.getWorkDir()
+    const target = resolveSafePath(root, rel)
+    await fs.rm(target, { recursive: true, force: true })
+  })
+
+  ipcMain.handle('file:rename', async (_e, rel: string, newName: string): Promise<void> => {
+    if (newName.includes('/') || newName.includes('\\')) {
+      throw new Error('新名称不允许包含路径分隔符')
+    }
+    const root = ctx.getWorkDir()
+    const oldPath = resolveSafePath(root, rel)
+    const newPath = path.join(path.dirname(oldPath), newName)
+    await fs.rename(oldPath, newPath)
+  })
+
+  ipcMain.handle('file:move', async (_e, srcRel: string, destDirRel: string): Promise<void> => {
+    const root = ctx.getWorkDir()
+    const srcPath = resolveSafePath(root, srcRel)
+    const destDirPath = resolveSafePath(root, destDirRel)
+    const destStat = await fs.stat(destDirPath)
+    if (!destStat.isDirectory()) {
+      throw new Error('目标路径不是目录')
+    }
+    const srcName = path.basename(srcPath)
+    await fs.rename(srcPath, path.join(destDirPath, srcName))
+  })
+
   ipcMain.handle('search:execute', async (_e, query: string): Promise<SearchResult[]> => {
     const q = query.trim()
     if (!q) return []

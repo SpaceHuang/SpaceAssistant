@@ -46,6 +46,11 @@ const api: SpaceAssistantApi = {
 
   fileListDirectory: (relPath) => ipcRenderer.invoke('file:list-directory', relPath),
   fileReadFile: (relPath) => ipcRenderer.invoke('file:read-file', relPath),
+  fileCreateFile: (relPath) => ipcRenderer.invoke('file:create-file', relPath),
+  fileCreateDirectory: (relPath) => ipcRenderer.invoke('file:create-directory', relPath),
+  fileDelete: (relPath) => ipcRenderer.invoke('file:delete', relPath),
+  fileRename: (relPath, newName) => ipcRenderer.invoke('file:rename', relPath, newName),
+  fileMove: (srcRelPath, destDirRelPath) => ipcRenderer.invoke('file:move', srcRelPath, destDirRelPath),
 
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),
