@@ -5,6 +5,8 @@ import { setConfig, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry } from '../../../shared/domainTypes'
 import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
+import { SkillsTab } from './SkillsTab'
+import { readSkillActivationLog } from '../../services/skillActivationLog'
 
 function AddIcon() {
   return (
@@ -133,6 +135,8 @@ function ModelList({ value, onChange }: { value: ModelEntry[]; onChange: (v: Mod
 export function ConfigModal() {
   const open = useTypedSelector((s) => s.config.settingsOpen)
   const cfg = useTypedSelector((s) => s.config.config)
+  const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
+  const sessions = useTypedSelector((s) => s.session.list)
   const dispatch = useAppDispatch()
   const [form] = Form.useForm()
   const [testing, setTesting] = useState(false)
@@ -160,6 +164,15 @@ export function ConfigModal() {
   })
   const [pyTest, setPyTest] = useState<{ ok: boolean; text: string } | null>(null)
   const [pyTesting, setPyTesting] = useState(false)
+
+  const refreshConfig = async () => {
+    const next = await window.api.configGet()
+    dispatch(setConfig(next))
+  }
+
+  const skillActivationLog = currentSessionId
+    ? readSkillActivationLog(sessions.find((s) => s.id === currentSessionId)?.metadata ?? {})
+    : []
 
   useEffect(() => {
     if (open && cfg) {
@@ -563,6 +576,13 @@ export function ConfigModal() {
                   </div>
                 </>
               )
+            },
+            {
+              key: 'skills',
+              label: 'Skill',
+              children: cfg ? (
+                <SkillsTab config={cfg} onConfigSaved={refreshConfig} activationLog={skillActivationLog} />
+              ) : null
             }
           ]}
         />

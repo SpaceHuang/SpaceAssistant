@@ -4,8 +4,21 @@ import path from 'path'
 import type { IpcMain } from 'electron'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
-import type { AppConfig, FileInfo, Message, ModelEntry, SearchResult, Session, ToolsConfig } from '../src/shared/domainTypes'
-import { DEFAULT_MODELS, mergeToolsConfig } from '../src/shared/domainTypes'
+import type {
+  AppConfig,
+  FileInfo,
+  Message,
+  ModelEntry,
+  SearchResult,
+  Session,
+  SessionSkillsState,
+  SkillDefinition,
+  SkillsConfig,
+  ToolsConfig
+} from '../src/shared/domainTypes'
+import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
+import { createSkillManager } from './skills/skillManager'
+import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
 import {
@@ -39,7 +52,8 @@ const CONFIG_KEYS = {
   thinkingEnabled: 'config.thinkingEnabled',
   workDir: 'config.workDir',
   apiKeyEnc: 'secrets.apiKeyEnc',
-  tools: 'config.tools'
+  tools: 'config.tools',
+  skills: 'config.skills'
 } as const
 
 export type AppIpcContext = {
@@ -47,8 +61,19 @@ export type AppIpcContext = {
   backup: SessionBackupManager
   getWorkDir: () => string
   setWorkDir: (dir: string) => void
+  getUserDataPath: () => string
   getApiKey: () => Promise<string | null>
   setApiKey: (value: string) => Promise<void>
+}
+
+function readSkillsConfig(db: AppDatabase): SkillsConfig {
+  const raw = getConfigValue(db, CONFIG_KEYS.skills)
+  if (!raw) return mergeSkillsConfig(null)
+  try {
+    return mergeSkillsConfig(JSON.parse(raw) as Partial<SkillsConfig>)
+  } catch {
+    return mergeSkillsConfig(null)
+  }
 }
 
 async function syncBackup(ctx: AppIpcContext, sessionId: string): Promise<void> {
@@ -59,6 +84,11 @@ async function syncBackup(ctx: AppIpcContext, sessionId: string): Promise<void> 
 }
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
+  const skillManager = createSkillManager({
+    getUserDataPath: ctx.getUserDataPath,
+    getWorkDir: ctx.getWorkDir,
+    getSkillsConfig: () => readSkillsConfig(ctx.db)
+  })
   ipcMain.handle(
     'tool:confirm-response',
     async (_e, payload: { requestId: string; toolUseId: string; approved: boolean }): Promise<void> => {
@@ -111,13 +141,25 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'session:update',
-    async (_e, payload: { sessionId: string; name?: string; temperature?: number; maxTokens?: number }): Promise<Session | undefined> => {
+    async (
+      _e,
+      payload: {
+        sessionId: string
+        name?: string
+        temperature?: number
+        maxTokens?: number
+        skillsState?: SessionSkillsState
+        metadata?: Record<string, unknown>
+      }
+    ): Promise<Session | undefined> => {
       const cur = getSession(ctx.db, payload.sessionId)
       if (!cur) return undefined
       const next = updateSession(ctx.db, payload.sessionId, {
         ...(payload.name !== undefined ? { name: payload.name } : {}),
         ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
-        ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {})
+        ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
+        ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
+        ...(payload.metadata !== undefined ? { metadata: payload.metadata } : {})
       })
       if (next) await syncBackup(ctx, next.id)
       return next
@@ -181,6 +223,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         /* keep default */
       }
     }
+    const skills = readSkillsConfig(ctx.db)
     return {
       apiKeyPresent: Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
@@ -191,7 +234,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
       workDir: wd,
-      tools
+      tools,
+      skills
     }
   })
 
@@ -210,6 +254,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         workDir: string
         apiKey: string
         tools: Partial<ToolsConfig>
+        skills: Partial<SkillsConfig>
       }>
     ): Promise<void> => {
       if (payload.baseUrl !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.baseUrl, payload.baseUrl)
@@ -244,6 +289,19 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeToolsConfig({ ...cur, ...payload.tools })
         setConfigValue(ctx.db, CONFIG_KEYS.tools, JSON.stringify(next))
+      }
+      if (payload.skills !== undefined) {
+        let cur = mergeSkillsConfig(null)
+        const curRaw = getConfigValue(ctx.db, CONFIG_KEYS.skills)
+        if (curRaw) {
+          try {
+            cur = mergeSkillsConfig(JSON.parse(curRaw) as Partial<SkillsConfig>)
+          } catch {
+            /* ignore */
+          }
+        }
+        const next = mergeSkillsConfig({ ...cur, ...payload.skills })
+        setConfigValue(ctx.db, CONFIG_KEYS.skills, JSON.stringify(next))
       }
     }
   )
@@ -445,6 +503,69 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
     return { path: result.filePaths[0] }
+  })
+
+  ipcMain.handle('skill:list', async (): Promise<SkillDefinition[]> => skillManager.list(true))
+
+  ipcMain.handle('skill:get', async (_e, payload: { name: string }): Promise<SkillDefinition | null> => {
+    return skillManager.get(payload.name)
+  })
+
+  ipcMain.handle(
+    'skill:match',
+    async (_e, payload: { userInput: string; sessionSkillsState: SessionSkillsState }): Promise<SkillDefinition[]> => {
+      return skillManager.match(payload.userInput, normalizeSessionSkillsState(payload.sessionSkillsState))
+    }
+  )
+
+  ipcMain.handle(
+    'skill:install',
+    async (_e, payload: { sourcePath: string; overwrite?: boolean }): Promise<{ ok: true; skill: SkillDefinition } | { ok: false; error: string }> => {
+      try {
+        const skill = await skillManager.install(payload.sourcePath, payload.overwrite === true)
+        return { ok: true, skill }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  ipcMain.handle('skill:delete', async (_e, payload: { name: string }): Promise<void> => {
+    skillManager.delete(payload.name)
+  })
+
+  ipcMain.handle('skill:toggle-disable', async (_e, payload: { name: string; disabled: boolean }): Promise<void> => {
+    const cur = readSkillsConfig(ctx.db)
+    const set = new Set(cur.disabled)
+    if (payload.disabled) set.add(payload.name)
+    else set.delete(payload.name)
+    setConfigValue(ctx.db, CONFIG_KEYS.skills, JSON.stringify({ ...cur, disabled: [...set] }))
+  })
+
+  ipcMain.handle('skill:open-directory', async (_e, payload: { scope: 'user' | 'project' }): Promise<void> => {
+    ensureSkillsDirs(ctx.getUserDataPath(), ctx.getWorkDir())
+    const dir =
+      payload.scope === 'project'
+        ? getProjectSkillsDir(ctx.getWorkDir())
+        : getUserSkillsDir(ctx.getUserDataPath())
+    if (!dir) throw new Error('工作目录未配置，无法打开项目级 Skill 目录')
+    await shell.openPath(dir)
+  })
+
+  ipcMain.handle(
+    'skill:export',
+    async (_e, payload: { name: string; destPath: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
+      try {
+        await skillManager.exportSkill(payload.name, payload.destPath)
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  ipcMain.handle('skill:invalidate-cache', async (): Promise<void> => {
+    skillManager.invalidateCache()
   })
 
   ipcMain.handle('config:check-workdir-writable', async (_e, dir: string): Promise<{ writable: boolean; error?: string }> => {

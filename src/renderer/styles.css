@@ -17,6 +17,11 @@ body,
   font-size: 13px;
 }
 
+.sa-skill-row-highlight td {
+  background: #f6ffed !important;
+  transition: background 0.3s ease;
+}
+
 .activity-bar {
   display: flex;
   flex-direction: column;

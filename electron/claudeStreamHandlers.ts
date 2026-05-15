@@ -28,6 +28,7 @@ type ClaudeChatSendPayload = {
   model: string
   baseUrl?: string
   messages: ClaudeChatMessage[]
+  system?: string
 }
 
 type ClaudeChatMessageWithContentBlocks = {
@@ -154,7 +155,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const baseUrl = assertValidOptionalAnthropicBaseUrl(payload.baseUrl)
         const messages = normalizeAndValidateClaudeMessages(payload.messages)
 
-        void runSendStream(sender, { requestId, model, baseUrl, messages, deps })
+        const system = typeof payload.system === 'string' ? payload.system : undefined
+        void runSendStream(sender, { requestId, model, baseUrl, messages, system, deps })
         return { ok: true }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -229,10 +231,11 @@ async function runSendStream(
     model: string
     baseUrl: string | undefined
     messages: ClaudeChatMessage[]
+    system?: string
     deps: ClaudeStreamDeps
   }
 ): Promise<void> {
-  const { requestId, model, baseUrl, messages, deps } = args
+  const { requestId, model, baseUrl, messages, system, deps } = args
   try {
     const apiKey = await deps.getApiKey()
     if (!apiKey) {
@@ -250,6 +253,7 @@ async function runSendStream(
       model,
       max_tokens: DEFAULT_TOOL_LOOP_MAX_TOKENS,
       messages: messageParams,
+      system,
       thinking: { type: 'adaptive' as const }
     })
 

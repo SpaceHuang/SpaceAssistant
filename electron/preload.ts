@@ -105,7 +105,17 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('tool:result', fn)
     return () => ipcRenderer.removeListener('tool:result', fn)
   },
-  toolTestInterpreter: (payload) => ipcRenderer.invoke('tool:test-interpreter', payload)
+  toolTestInterpreter: (payload) => ipcRenderer.invoke('tool:test-interpreter', payload),
+
+  skillList: () => ipcRenderer.invoke('skill:list'),
+  skillGet: (payload) => ipcRenderer.invoke('skill:get', payload),
+  skillInstall: (payload) => ipcRenderer.invoke('skill:install', payload),
+  skillDelete: (payload) => ipcRenderer.invoke('skill:delete', payload),
+  skillToggleDisable: (payload) => ipcRenderer.invoke('skill:toggle-disable', payload),
+  skillOpenDirectory: (payload) => ipcRenderer.invoke('skill:open-directory', payload),
+  skillMatch: (payload) => ipcRenderer.invoke('skill:match', payload),
+  skillExport: (payload) => ipcRenderer.invoke('skill:export', payload),
+  skillInvalidateCache: () => ipcRenderer.invoke('skill:invalidate-cache')
 }
 
 contextBridge.exposeInMainWorld('api', api)

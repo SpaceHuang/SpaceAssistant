@@ -39,6 +39,80 @@ export function mergeToolsConfig(partial?: Partial<ToolsConfig> | null): ToolsCo
   return { ...DEFAULT_TOOLS_CONFIG, ...partial }
 }
 
+export interface SkillsConfig {
+  autoDetect: boolean
+  maxConcurrent: number
+  disabled: string[]
+  alwaysLoad: string[]
+}
+
+export const DEFAULT_SKILLS_CONFIG: SkillsConfig = {
+  autoDetect: true,
+  maxConcurrent: 5,
+  disabled: [],
+  alwaysLoad: []
+}
+
+export function mergeSkillsConfig(partial?: Partial<SkillsConfig> | null): SkillsConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_SKILLS_CONFIG }
+  return {
+    ...DEFAULT_SKILLS_CONFIG,
+    ...partial,
+    disabled: Array.isArray(partial.disabled) ? [...partial.disabled] : DEFAULT_SKILLS_CONFIG.disabled,
+    alwaysLoad: Array.isArray(partial.alwaysLoad) ? [...partial.alwaysLoad] : DEFAULT_SKILLS_CONFIG.alwaysLoad
+  }
+}
+
+export interface SkillMeta {
+  name: string
+  description: string
+  triggers: string[]
+  version: string
+  author: string
+}
+
+export type SkillScope = 'project' | 'user'
+
+export interface SkillDefinition {
+  meta: SkillMeta
+  content: string
+  scope: SkillScope
+  directoryPath: string
+  filePath: string
+  lastModified: number
+}
+
+export interface SessionSkillsState {
+  manualActivated: string[]
+  manualDisabled: string[]
+}
+
+export const DEFAULT_SESSION_SKILLS_STATE: SessionSkillsState = {
+  manualActivated: [],
+  manualDisabled: []
+}
+
+export function normalizeSessionSkillsState(state?: Partial<SessionSkillsState> | null): SessionSkillsState {
+  if (!state || typeof state !== 'object') return { ...DEFAULT_SESSION_SKILLS_STATE }
+  return {
+    manualActivated: Array.isArray(state.manualActivated) ? [...state.manualActivated] : [],
+    manualDisabled: Array.isArray(state.manualDisabled) ? [...state.manualDisabled] : []
+  }
+}
+
+export interface SkillsCache {
+  skills: SkillDefinition[]
+  scannedAt: number
+  workDir: string
+}
+
+export interface SkillActivationLogEntry {
+  timestamp: number
+  skillNames: string[]
+  source: 'auto' | 'manual' | 'alwaysLoad'
+  userInput?: string
+}
+
 export function builtinToolRiskLevel(name: string): ToolRiskLevel {
   switch (name) {
     case 'read_file':
@@ -118,6 +192,7 @@ export interface Session {
   createdAt: number
   updatedAt: number
   messageCount: number
+  skillsState: SessionSkillsState
   metadata: Record<string, unknown>
   schemaVersion: number
 }
@@ -157,6 +232,7 @@ export interface AppConfig {
   thinkingEnabled: boolean
   workDir: string
   tools: ToolsConfig
+  skills: SkillsConfig
 }
 
 export interface SearchResult {

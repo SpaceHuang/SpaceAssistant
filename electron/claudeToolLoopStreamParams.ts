@@ -42,8 +42,19 @@ export function buildClaudeChatSendStreamParams(args: {
   model: string
   max_tokens: number
   messages: unknown[]
+  system?: string
   thinking: { type: 'adaptive' }
 }): Record<string, unknown> {
+  const hasSystem = typeof args.system === 'string' && args.system.trim().length > 0
+  if (hasSystem) {
+    return {
+      model: args.model,
+      max_tokens: args.max_tokens,
+      system: args.system,
+      messages: args.messages,
+      thinking: args.thinking
+    }
+  }
   return {
     model: args.model,
     max_tokens: args.max_tokens,

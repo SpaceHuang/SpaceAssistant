@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { message } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { addMessage, patchMessage, setChatStatus, setMessages } from '../../store/chatSlice'
+import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
 import {
@@ -9,11 +10,15 @@ import {
   createToolChatController,
   extractAssistantTextFromApiContent
 } from '../../services/chatToolSessionService'
+import { parseSkillCommand } from '../../services/skillCommandService'
+import { appendSkillActivationLog } from '../../services/skillActivationLog'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
+import { buildSystemPromptFromSkills, formatSkillHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import type { Message } from '../../../shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION } from '../../../shared/domainTypes'
+import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../../../shared/domainTypes'
 import { ChatBubble } from './ChatBubble'
 import { MessageInput } from './MessageInput'
+import { SkillHintBubble } from './SkillHintBubble'
 
 function buildClaudePayload(history: Message[]) {
   return history
@@ -35,7 +40,9 @@ export function ChatView() {
   const chatStatus = useTypedSelector((s) => s.chat.chatStatus)
   const streamingRequestId = useTypedSelector((s) => s.chat.streamingRequestId)
   const cfg = useTypedSelector((s) => s.config.config)
+  const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [skillHints, setSkillHints] = useState<string[]>([])
 
   const streamingAssistantId = useMemo(
     () => messages.find((m) => m.role === 'assistant' && m.status === 'streaming')?.id,
@@ -84,6 +91,18 @@ export function ChatView() {
         return
       }
 
+      const sessionSkillsState = normalizeSessionSkillsState(currentSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE)
+      const cmd = await parseSkillCommand(text, sessionSkillsState)
+      if (cmd.type === 'command') {
+        setSkillHints((prev) => [...prev, cmd.hint])
+        scrollBottom()
+        if (cmd.skillsState) {
+          const updated = await window.api.sessionUpdate({ sessionId, skillsState: cmd.skillsState })
+          if (updated) dispatch(upsertSession(updated))
+        }
+        return
+      }
+
       const userMsg: Message = {
         id: crypto.randomUUID(),
         sessionId,
@@ -115,6 +134,27 @@ export function ChatView() {
 
       const historyForApi = [...messages, userMsg]
       const useToolsApi = cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools).length > 0
+
+      const activeSkills = await window.api.skillMatch({ userInput: text, sessionSkillsState })
+      if (activeSkills.length > 0) {
+        setSkillHints((prev) => [...prev, formatSkillHint(activeSkills, '已自动加载')])
+        scrollBottom()
+        const metadata = appendSkillActivationLog(currentSession?.metadata ?? {}, {
+          skillNames: activeSkills.map((s) => s.meta.name),
+          source: 'auto',
+          userInput: text
+        })
+        void window.api.sessionUpdate({ sessionId, metadata }).then((updated) => {
+          if (updated) dispatch(upsertSession(updated))
+        })
+      }
+
+      const modelEntry = cfg.models.find((m) => m.name === cfg.model)
+      const maxSystemChars = modelEntry ? Math.floor(modelEntry.maximumContext * 0.1) : undefined
+      let systemPrompt = buildSystemPromptFromSkills(activeSkills)
+      if (maxSystemChars && systemPrompt) {
+        systemPrompt = truncateSystemPrompt(systemPrompt, maxSystemChars)
+      }
 
       let buf = ''
       let think = ''
@@ -173,7 +213,8 @@ export function ChatView() {
             messages: historyForApi,
             toolsConfig: cfg.tools,
             maxTokens: cfg.maxTokens,
-            thinkingEnabled: cfg.thinkingEnabled
+            thinkingEnabled: cfg.thinkingEnabled,
+            system: systemPrompt || undefined
           })
           const res = await window.api.claudeChatCreateWithTools(payload)
           if (!res.ok) {
@@ -249,7 +290,8 @@ export function ChatView() {
           requestId,
           model: cfg.model,
           baseUrl: cfg.baseUrl || undefined,
-          messages: basePayload
+          messages: basePayload,
+          system: systemPrompt || undefined
         },
         {
           onDelta: (t) => {
@@ -324,7 +366,7 @@ export function ChatView() {
         }
       )
     },
-    [cfg, dispatch, messages, sessionId, onToolCancel, onToolConfirm]
+    [cfg, currentSession, dispatch, messages, sessionId, onToolCancel, onToolConfirm]
   )
 
   const busy = chatStatus === 'streaming' || chatStatus === 'sending'
@@ -342,6 +384,7 @@ export function ChatView() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: 16 }}>
+        <SkillHintBubble hints={skillHints} />
         {messages.map((m) => (
           <ChatBubble
             key={m.id}

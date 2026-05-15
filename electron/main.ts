@@ -149,6 +149,7 @@ app.whenReady().then(() => {
     setWorkDir: (d: string) => {
       workDirState = d
     },
+    getUserDataPath: () => app.getPath('userData'),
     getApiKey,
     setApiKey
   })
