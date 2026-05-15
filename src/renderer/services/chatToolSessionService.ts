@@ -111,6 +111,7 @@ export function buildToolChatPayload(args: {
   toolsConfig: import('../../shared/domainTypes').ToolsConfig
   maxTokens?: number
   thinkingEnabled?: boolean
+  system?: string
 }): ClaudeChatCreateWithToolsPayload {
   const toolsFiltered = filterBuiltinToolsForRenderer(args.toolsConfig)
   const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
@@ -122,6 +123,7 @@ export function buildToolChatPayload(args: {
     baseUrl: args.baseUrl,
     messages: convo,
     tools: tools as Array<Record<string, unknown>>,
+    system: args.system,
     options: {
       maxTokens: args.maxTokens,
       enableThinking: args.thinkingEnabled

@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../src/shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION } from '../src/shared/domainTypes'
+import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../src/shared/domainTypes'
 import { rowToMessage, serializeThinkingForDb, serializeToolCallsForDb, serializeToolUseForDb } from './messageCodec'
 
 export type StoredMessage = {
@@ -83,12 +83,20 @@ export function openDatabase(filePath: string): AppDatabase {
   return db
 }
 
+function normalizeSession(session: Session): Session {
+  return {
+    ...session,
+    skillsState: normalizeSessionSkillsState(session.skillsState)
+  }
+}
+
 export function listSessions(db: AppDatabase): Session[] {
-  return [...db.data.sessions].sort((a, b) => b.updatedAt - a.updatedAt)
+  return [...db.data.sessions].map(normalizeSession).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export function getSession(db: AppDatabase, sessionId: string): Session | undefined {
-  return db.data.sessions.find((s) => s.id === sessionId)
+  const s = db.data.sessions.find((s) => s.id === sessionId)
+  return s ? normalizeSession(s) : undefined
 }
 
 export function createSession(
@@ -110,6 +118,7 @@ export function createSession(
     createdAt: now,
     updatedAt: now,
     messageCount: 0,
+    skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
     metadata: {},
     schemaVersion: CURRENT_SCHEMA_VERSION
   }
@@ -121,7 +130,7 @@ export function createSession(
 export function updateSession(
   db: AppDatabase,
   sessionId: string,
-  patch: Partial<Pick<Session, 'name' | 'preview' | 'model' | 'temperature' | 'maxTokens' | 'metadata' | 'messageCount'>>
+  patch: Partial<Pick<Session, 'name' | 'preview' | 'model' | 'temperature' | 'maxTokens' | 'metadata' | 'messageCount' | 'skillsState'>>
 ): Session | undefined {
   const cur = getSession(db, sessionId)
   if (!cur) return undefined
@@ -129,6 +138,7 @@ export function updateSession(
     ...cur,
     ...patch,
     metadata: patch.metadata ?? cur.metadata,
+    skillsState: patch.skillsState ? normalizeSessionSkillsState(patch.skillsState) : cur.skillsState,
     updatedAt: Date.now()
   }
   const i = db.data.sessions.findIndex((s) => s.id === sessionId)

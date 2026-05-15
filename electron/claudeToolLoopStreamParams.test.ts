@@ -55,6 +55,18 @@ describe('buildClaudeChatSendStreamParams', () => {
     })
     expect(Object.keys(p)).toEqual(['model', 'max_tokens', 'messages', 'thinking'])
   })
+
+  it('includes system when provided', () => {
+    const p = buildClaudeChatSendStreamParams({
+      model: 'x',
+      max_tokens: 8192,
+      messages: [{ role: 'user', content: 'a' }],
+      system: 'skill prompt',
+      thinking: { type: 'adaptive' }
+    })
+    expect(Object.keys(p)).toEqual(['model', 'max_tokens', 'system', 'messages', 'thinking'])
+    expect(p.system).toBe('skill prompt')
+  })
 })
 
 describe('buildClaudeNarrativeCompletionParams', () => {

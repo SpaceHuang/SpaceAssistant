@@ -4,6 +4,9 @@ import type {
   Message,
   SearchResult,
   Session,
+  SessionSkillsState,
+  SkillDefinition,
+  SkillsConfig,
   ToolCallResultPersisted,
   ToolRiskLevel,
   ToolsConfig
@@ -14,6 +17,7 @@ export type ClaudeChatSendStreamPayload = {
   model: string
   baseUrl?: string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
+  system?: string
 }
 
 export type ClaudeChatMessageWithBlocks = {
@@ -45,6 +49,8 @@ export type SpaceAssistantApi = {
     name?: string
     temperature?: number
     maxTokens?: number
+    skillsState?: SessionSkillsState
+    metadata?: Record<string, unknown>
   }) => Promise<Session | undefined>
   sessionDelete: (sessionId: string) => Promise<void>
 
@@ -81,6 +87,7 @@ export type SpaceAssistantApi = {
       workDir: string
       apiKey: string
       tools: Partial<ToolsConfig>
+      skills: Partial<SkillsConfig>
     }>
   ) => Promise<void>
   configTestConnection: () => Promise<{ success: boolean; error?: string }>
@@ -120,4 +127,14 @@ export type SpaceAssistantApi = {
     cb: (data: { requestId: string; toolUseId: string; result: ToolCallResultPersisted }) => void
   ) => () => void
   toolTestInterpreter: (payload: { path: string }) => Promise<{ ok: true; version: string } | { ok: false; error: string }>
+
+  skillList: () => Promise<SkillDefinition[]>
+  skillGet: (payload: { name: string }) => Promise<SkillDefinition | null>
+  skillInstall: (payload: { sourcePath: string; overwrite?: boolean }) => Promise<{ ok: true; skill: SkillDefinition } | { ok: false; error: string }>
+  skillDelete: (payload: { name: string }) => Promise<void>
+  skillToggleDisable: (payload: { name: string; disabled: boolean }) => Promise<void>
+  skillOpenDirectory: (payload: { scope: 'user' | 'project' }) => Promise<void>
+  skillMatch: (payload: { userInput: string; sessionSkillsState: SessionSkillsState }) => Promise<SkillDefinition[]>
+  skillExport: (payload: { name: string; destPath: string }) => Promise<{ ok: true } | { ok: false; error: string }>
+  skillInvalidateCache: () => Promise<void>
 }
