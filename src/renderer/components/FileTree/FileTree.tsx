@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react'
-import { DirectoryTree } from 'antd'
-import { message } from 'antd'
+import { Tree, message } from 'antd'
 import type { DataNode, EventDataNode } from 'antd/es/tree'
 import { useFileTree } from './useFileTree'
 import type { FileTreeNode as FileTreeNodeData } from './useFileTree'
@@ -141,7 +140,7 @@ export function FileTree({ workDir, onFileSelect }: FileTreeProps) {
         <FileTreeToolbar onNewFile={handleNewFile} onNewDirectory={handleNewDirectory} onRefresh={() => tree.refreshTree()} />
       </div>
       <div className="sider-content-body" style={{ overflow: 'auto', padding: '0 4px' }}>
-        <DirectoryTree
+        <Tree.DirectoryTree
           className="file-tree"
           treeData={antdTreeData}
           expandedKeys={tree.expandedKeys}

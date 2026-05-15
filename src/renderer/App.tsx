@@ -9,6 +9,7 @@ import { setConfig, setSettingsOpen, setAboutOpen } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
 import { ConfigModal } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
+import { FileTree } from './components/FileTree'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import folderLineRaw from './assets/folder_line.svg?raw'
@@ -85,62 +86,6 @@ function LeftSessions() {
   )
 }
 
-function FilePane() {
-  const [rel, setRel] = useState('')
-  const [entries, setEntries] = useState<Awaited<ReturnType<typeof window.api.fileListDirectory>>>([])
-  const [preview, setPreview] = useState('')
-
-  const load = async (r: string) => {
-    try {
-      const list = await window.api.fileListDirectory(r)
-      setEntries(list)
-      setRel(r)
-      setPreview('')
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  useEffect(() => {
-    void load('')
-  }, [])
-
-  return (
-    <div style={{ padding: 8, height: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <Text type="secondary" ellipsis>
-        {rel || '.'}
-      </Text>
-      <List
-        size="small"
-        dataSource={entries}
-        style={{ flex: 1, overflow: 'auto' }}
-        renderItem={(item) => (
-          <List.Item
-            style={{ cursor: 'pointer' }}
-            onClick={async () => {
-              if (item.isDirectory) {
-                const next = rel ? `${rel}/${item.name}` : item.name
-                await load(next)
-              } else {
-                try {
-                  const fp = rel ? `${rel}/${item.name}` : item.name
-                  const r = await window.api.fileReadFile(fp)
-                  setPreview(r.content.slice(0, 4000))
-                } catch (e) {
-                  message.error(e instanceof Error ? e.message : String(e))
-                }
-              }
-            }}
-          >
-            {item.isDirectory ? '📁' : '📄'} {item.name}
-          </List.Item>
-        )}
-      />
-      <div style={{ maxHeight: 160, overflow: 'auto', fontSize: 12, whiteSpace: 'pre-wrap' }}>{preview}</div>
-    </div>
-  )
-}
-
 function SearchPane() {
   const [q, setQ] = useState('')
   const [results, setResults] = useState<Awaited<ReturnType<typeof window.api.searchExecute>>>([])
@@ -200,7 +145,17 @@ function IconTab({
 
 function AppShell() {
   const dispatch = useAppDispatch()
+  const config = useTypedSelector((s) => s.config.config)
   const [siderKey, setSiderKey] = useState<'sessions' | 'files' | 'search'>('sessions')
+  const [filePreview, setFilePreview] = useState('')
+  const handleFileSelect = async (relPath: string) => {
+    try {
+      const r = await window.api.fileReadFile(relPath)
+      setFilePreview(r.content.slice(0, 4000))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   useEffect(() => {
     void window.api.sessionList().then((list) => {
@@ -237,12 +192,14 @@ function AppShell() {
             </div>
           </div>
           <div className="sider-content">
-            <div className="sider-content-header">
-              <Text strong>{siderKey === 'sessions' ? '会话' : siderKey === 'files' ? '文件' : '搜索'}</Text>
-            </div>
+            {siderKey !== 'files' && (
+              <div className="sider-content-header">
+                <Text strong>{siderKey === 'sessions' ? '会话' : '搜索'}</Text>
+              </div>
+            )}
             <div className="sider-content-body">
               {siderKey === 'sessions' && <LeftSessions />}
-              {siderKey === 'files' && <FilePane />}
+              {siderKey === 'files' && <FileTree workDir={config?.workDir ?? ''} onFileSelect={handleFileSelect} />}
               {siderKey === 'search' && <SearchPane />}
             </div>
           </div>
@@ -257,7 +214,11 @@ function AppShell() {
         </div>
       </Layout.Content>
       <Layout.Sider width={240} theme="light" style={{ borderLeft: '1px solid #f0f0f0', padding: 16 }}>
-        <Text type="secondary">右侧栏预留（功能开发中）</Text>
+        {filePreview ? (
+          <div style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflow: 'auto', height: '100%' }}>{filePreview}</div>
+        ) : (
+          <Text type="secondary">右侧栏预留（功能开发中）</Text>
+        )}
       </Layout.Sider>
       <ConfigModal />
       <AboutModal />
