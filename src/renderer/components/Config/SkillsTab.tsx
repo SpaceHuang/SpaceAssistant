@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, Button, Collapse, Modal, Select, Space, Switch, Table, Tag, Typography, message } from 'antd'
+import { Alert, App, Button, Collapse, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd'
 import type { AppConfig, SkillDefinition, SkillActivationLogEntry } from '../../../shared/domainTypes'
 
 function RefreshIcon() {
@@ -42,6 +42,7 @@ type Props = {
 }
 
 export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) {
+  const { message } = App.useApp()
   const [skills, setSkills] = useState<SkillDefinition[]>([])
   const [loading, setLoading] = useState(false)
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; text: string } | null>(null)

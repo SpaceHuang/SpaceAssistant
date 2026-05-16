@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Alert, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag, message } from 'antd'
+import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry, UiThemeMode } from '../../../shared/domainTypes'
@@ -133,6 +133,7 @@ function ModelList({ value, onChange }: { value: ModelEntry[]; onChange: (v: Mod
 }
 
 export function ConfigModal() {
+  const { message } = App.useApp()
   const open = useTypedSelector((s) => s.config.settingsOpen)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
@@ -157,7 +158,6 @@ export function ConfigModal() {
     whitelistMode: false,
     pythonPath: 'python',
     scriptTimeout: 300,
-    maxToolIterations: 10,
     fileCheckpointingEnabled: true,
     maxFileSnapshots: 100,
     grepTimeoutSec: 60
@@ -197,7 +197,6 @@ export function ConfigModal() {
         whitelistMode: wl,
         pythonPath: cfg.tools.pythonPath,
         scriptTimeout: cfg.tools.scriptTimeout,
-        maxToolIterations: cfg.tools.maxToolIterations,
         fileCheckpointingEnabled: cfg.tools.fileCheckpointingEnabled,
         maxFileSnapshots: cfg.tools.maxFileSnapshots,
         grepTimeoutSec: cfg.tools.grepTimeoutSec
@@ -283,7 +282,6 @@ export function ConfigModal() {
         allowedTools: toolUi.whitelistMode ? toolUi.allowedEdit.filter((n) => BUILTIN_TOOL_DEFINITIONS.some((d) => d.name === n)) : [],
         pythonPath: toolUi.pythonPath,
         scriptTimeout: toolUi.scriptTimeout,
-        maxToolIterations: toolUi.maxToolIterations,
         fileCheckpointingEnabled: toolUi.fileCheckpointingEnabled,
         maxFileSnapshots: toolUi.maxFileSnapshots,
         grepTimeoutSec: toolUi.grepTimeoutSec
@@ -429,6 +427,13 @@ export function ConfigModal() {
                   <Form.Item name="temperature" label="Temperature">
                     <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
                   </Form.Item>
+                  <Form.Item
+                    name="maxTokens"
+                    label="最大输出 tokens（兜底）"
+                    extra="实际请求优先使用模型列表中与当前模型名称对应行的「输出」；仅当无法匹配时使用此处数值。"
+                  >
+                    <InputNumber min={256} max={1_000_000} step={256} style={{ width: '100%' }} />
+                  </Form.Item>
                   <Form.Item name="thinkingEnabled" label="默认开启 Thinking" valuePropName="checked">
                     <Switch />
                   </Form.Item>
@@ -509,15 +514,6 @@ export function ConfigModal() {
                       max={600}
                       value={toolUi.grepTimeoutSec}
                       onChange={(v) => setToolUi((s) => ({ ...s, grepTimeoutSec: v ?? 60 }))}
-                      style={{ width: '100%' }}
-                    />
-                  </Form.Item>
-                  <Form.Item label="最大工具循环次数">
-                    <InputNumber
-                      min={1}
-                      max={50}
-                      value={toolUi.maxToolIterations}
-                      onChange={(v) => setToolUi((s) => ({ ...s, maxToolIterations: v ?? 10 }))}
                       style={{ width: '100%' }}
                     />
                   </Form.Item>

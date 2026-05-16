@@ -4,7 +4,7 @@ import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/toolApiFuncti
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'
-import { normalizeStopReason } from './stopReason'
+import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
 import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
@@ -12,6 +12,12 @@ import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolsConfig } from '../src/shared/domainTypes'
 import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
+import {
+  ChatCancelledError,
+  clearChatCancel,
+  registerChatCancel,
+  throwIfChatCancelled
+} from './chatCancelRegistry'
 import {
   clearToolCancel,
   registerToolCancel,
@@ -22,6 +28,12 @@ import fs from 'fs/promises'
 import path from 'path'
 import { resolveSafePathReal } from './pathSecurity'
 import { assertSafeToolInput } from './toolInputGuards'
+import { logAgentEvent } from './agentLogger/agentLogger'
+import { mergeStreamedToolInputsIntoContent, normalizeToolUseInputRecord } from './toolUseInputMerge'
+import {
+  effectiveMaxTokensForBuiltinToolLoop,
+  TOOL_LOOP_MAX_TOKENS_WITH_BUILTIN_TOOLS_MIN
+} from '../src/shared/llm/toolLoopMaxTokens'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -54,6 +66,28 @@ function parseToolInput(baseInput: unknown, partialJson: string): unknown {
   } catch {
     return fallback
   }
+}
+
+function augmentToolInputValidationError(
+  baseMessage: string,
+  stopReason: NormalizedStopReason | undefined,
+  toolName: string,
+  inputObj: Record<string, unknown>
+): string {
+  if (stopReason !== 'max_tokens') return baseMessage
+  if (toolName === 'write_file' && typeof inputObj.content !== 'string') {
+    return `${baseMessage}（本轮 stop_reason 为 max_tokens：输出在写完 write_file 的完整参数前被截断。工具循环已将 max_tokens 下限抬到至少 ${TOOL_LOOP_MAX_TOKENS_WITH_BUILTIN_TOOLS_MIN}；超长报告请在设置中继续提高 max_tokens，或分多次 write_file / edit_file 写入。）`
+  }
+  if (
+    toolName === 'edit_file' &&
+    (typeof inputObj.old_string !== 'string' || typeof inputObj.new_string !== 'string')
+  ) {
+    return `${baseMessage}（本轮 stop_reason 为 max_tokens，可能是 edit_file 参数未生成完毕即被截断。请提高 max_tokens 或缩小单次替换范围。）`
+  }
+  if (toolName === 'run_script' && typeof inputObj.code !== 'string') {
+    return `${baseMessage}（本轮 stop_reason 为 max_tokens，可能是 run_script 的 code 未生成完毕即被截断。请提高 max_tokens 或缩短脚本。）`
+  }
+  return baseMessage
 }
 
 function formatToolResultPayload(r: { success: boolean; data?: unknown; error?: string }): string {
@@ -125,6 +159,20 @@ export type RunToolChatSessionResult =
   | { ok: false; error: string }
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
+  const chatSignal = registerChatCancel(args.requestId)
+  try {
+    return await runToolChatSessionInner({ ...args, chatSignal })
+  } catch (e) {
+    if (e instanceof ChatCancelledError) return { ok: false, error: e.message }
+    throw e
+  } finally {
+    clearChatCancel(args.requestId)
+  }
+}
+
+async function runToolChatSessionInner(
+  args: RunToolChatSessionArgs & { chatSignal: AbortSignal }
+): Promise<RunToolChatSessionResult> {
   const {
     sender,
     requestId,
@@ -137,15 +185,35 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     toolsConfig,
     workDir,
     userDataDir,
-    getApiKey
+    getApiKey,
+    chatSignal
   } = args
 
   const apiKey = await getApiKey()
-  if (!apiKey) return { ok: false, error: 'API key not configured' }
+  if (!apiKey) {
+    logAgentEvent('error', 'llm.error', {
+      requestId,
+      sessionId,
+      model,
+      error: 'API key not configured'
+    })
+    return { ok: false, error: 'API key not configured' }
+  }
 
   const client = createAnthropicClient(apiKey, baseUrl)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
+  const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
   const thinking = toolLoopOptions.enableThinking ? ({ type: 'adaptive' as const }) : ({ type: 'disabled' as const })
+
+  if (maxTokensEffective !== toolLoopOptions.maxTokens) {
+    logAgentEvent('info', 'llm.max_tokens_floor', {
+      requestId,
+      sessionId,
+      configuredMaxTokens: toolLoopOptions.maxTokens,
+      effectiveMaxTokens: maxTokensEffective,
+      floor: TOOL_LOOP_MAX_TOKENS_WITH_BUILTIN_TOOLS_MIN
+    })
+  }
 
   let messagesForApi: Anthropic.MessageParam[] = initialMessages.map((m) => ({
     role: m.role,
@@ -167,19 +235,34 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
 
   const builtinDefs = filterBuiltinToolsForApi(toolsConfig)
   const tools = sanitizeTools(builtinDefs as unknown[])
-  let completedToolExecutions = 0
-  const maxIter = Math.max(1, toolsConfig.maxToolIterations ?? 10)
+  const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
+  let loopRound = 0
 
   while (true) {
+    loopRound++
+    throwIfChatCancelled(chatSignal)
     const systemPrompt = typeof system === 'string' && system.trim().length > 0 ? system : undefined
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,
-      max_tokens: toolLoopOptions.maxTokens,
+      max_tokens: maxTokensEffective,
       system: systemPrompt,
       messages: messagesStripped as Anthropic.MessageParam[],
       tools: tools as Anthropic.Tool[],
       thinking
+    })
+
+    logAgentEvent('info', 'llm.request', {
+      requestId,
+      sessionId,
+      loopRound,
+      model,
+      baseUrl,
+      system: systemPrompt,
+      messages: messagesStripped,
+      toolNames,
+      maxTokens: maxTokensEffective,
+      enableThinking: toolLoopOptions.enableThinking
     })
 
     const stream = client.messages.stream({
@@ -194,6 +277,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     const pendingTextByIndex = new Map<number, string>()
 
     for await (const evt of stream) {
+      throwIfChatCancelled(chatSignal)
       if (evt?.type === 'content_block_start') {
         const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
         const blockType = (evt as { content_block?: { type?: string } }).content_block?.type
@@ -264,6 +348,14 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
               input: parseToolInput(pending.input, pending.partialJson)
             }
             contentBlocks.push(toolUseBlock)
+            logAgentEvent('info', 'tool.request', {
+              requestId,
+              sessionId,
+              loopRound,
+              toolUseId: pending.id,
+              toolName: compatName,
+              input: toolUseBlock.input
+            })
             sender.send('tool:use', {
               requestId,
               toolUse: { id: pending.id, name: compatName, input: toolUseBlock.input }
@@ -276,13 +368,22 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
 
     const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
     const finalContent = Array.isArray(res?.content) ? res.content : []
-    const content = finalContent.length > 0 ? finalContent : contentBlocks
+    const rawContent = finalContent.length > 0 ? finalContent : contentBlocks
+    const content = mergeStreamedToolInputsIntoContent(rawContent, contentBlocks) as Anthropic.ContentBlock[]
     const stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
     const usage = normalizeAnthropicMessageUsage(res)
 
-    const toolUses = content.filter(
-      (b): b is { type: string; id: string; name: string; input: unknown } =>
-        Boolean(b && typeof b === 'object' && (b as { type?: string }).type === 'tool_use')
+    logAgentEvent('info', 'llm.response', {
+      requestId,
+      sessionId,
+      loopRound,
+      stopReason,
+      content,
+      usage
+    })
+
+    const toolUses = content.filter((b) =>
+      Boolean(b && typeof b === 'object' && (b as { type?: string }).type === 'tool_use')
     ) as Array<{ type: 'tool_use'; id: string; name: string; input: unknown }>
 
     messagesForApi = [...messagesForApi, { role: 'assistant', content: content as Anthropic.ContentBlock[] }]
@@ -295,38 +396,60 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     const fileCache = getFileStateCacheForSession(sessionId)
 
     for (const tu of toolUses) {
+      throwIfChatCancelled(chatSignal)
       const toolUseId = tu.id
       const toolName = tu.name
-      const inputObj =
-        tu.input && typeof tu.input === 'object' && !Array.isArray(tu.input) ? (tu.input as Record<string, unknown>) : {}
+      const inputObj = normalizeToolUseInputRecord(tu.input)
 
-      if (completedToolExecutions >= maxIter) {
+      const exec = getToolExecutor(toolName)
+      if (!exec) {
+        const unknownToolError = `未知工具: ${toolName}`
+        logAgentEvent('error', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          error: unknownToolError
+        })
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: `工具调用次数已达上限（${maxIter}次），请结束当前任务`
+          content: unknownToolError
         })
         sender.send('tool:result', {
           requestId,
           toolUseId,
-          result: { success: false, error: `工具调用次数已达上限（${maxIter}次）` }
+          result: { success: false, error: unknownToolError }
         })
         continue
       }
 
-      const exec = getToolExecutor(toolName)
-      if (!exec) {
+      try {
+        assertSafeToolInput(toolName, inputObj)
+      } catch (e) {
+        const base = e instanceof Error ? e.message : String(e)
+        const msg = augmentToolInputValidationError(base, stopReason, toolName, inputObj)
+        logAgentEvent('error', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          error: msg
+        })
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: `未知工具: ${toolName}`
+          content: msg
         })
         sender.send('tool:result', {
           requestId,
           toolUseId,
-          result: { success: false, error: `未知工具: ${toolName}` }
+          result: { success: false, error: msg }
         })
-        completedToolExecutions++
         continue
       }
 
@@ -343,61 +466,82 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
           ...(diff ? { diff } : {})
         })
         outcome = await waitForToolConfirm(requestId, toolUseId)
+        logAgentEvent('info', 'tool.confirm', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          outcome
+        })
+        throwIfChatCancelled(chatSignal)
       }
 
       if (outcome === 'timeout') {
+        const timeoutError = '用户确认超时（5分钟），工具调用已取消'
+        logAgentEvent('error', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          error: timeoutError
+        })
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: '用户确认超时（5分钟），工具调用已取消'
+          content: timeoutError
         })
         sender.send('tool:result', {
           requestId,
           toolUseId,
-          result: { success: false, error: '用户确认超时（5分钟），工具调用已取消' }
+          result: { success: false, error: timeoutError }
         })
-        completedToolExecutions++
         continue
       }
       if (outcome === 'rejected') {
+        const rejectedError = '用户拒绝执行此工具'
+        logAgentEvent('error', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          error: rejectedError
+        })
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: '用户拒绝执行此工具'
+          content: rejectedError
         })
         sender.send('tool:result', {
           requestId,
           toolUseId,
-          result: { success: false, error: '用户拒绝执行此工具' }
+          result: { success: false, error: rejectedError }
         })
-        completedToolExecutions++
-        continue
-      }
-
-      try {
-        assertSafeToolInput(toolName, inputObj)
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUseId,
-          content: msg
-        })
-        sender.send('tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: msg }
-        })
-        completedToolExecutions++
         continue
       }
 
       const signal = registerToolCancel(requestId, toolUseId)
       const sendProgress = (status: string, message?: string) => {
+        if (status === 'error') {
+          logAgentEvent('error', 'tool.progress', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            status,
+            message
+          })
+        }
         sender.send('tool:progress', { requestId, toolUseId, status, message })
       }
 
       let execResult: { success: boolean; data?: unknown; error?: string; duration?: number }
+      const execStartedAt = Date.now()
       try {
         execResult = await exec.execute(inputObj, {
           workDir,
@@ -418,6 +562,41 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
       }
       clearToolCancel(requestId, toolUseId)
 
+      const durationMs = Date.now() - execStartedAt
+      if (execResult.success) {
+        logAgentEvent('info', 'tool.result', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          success: true,
+          data: execResult.data,
+          durationMs
+        })
+      } else {
+        logAgentEvent('error', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          error: execResult.error ?? '执行失败',
+          durationMs
+        })
+        logAgentEvent('info', 'tool.result', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          success: false,
+          error: execResult.error,
+          durationMs
+        })
+      }
+
       const payload = formatToolResultPayload(execResult)
       toolResults.push({
         type: 'tool_result',
@@ -429,7 +608,6 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
         toolUseId,
         result: { success: execResult.success, data: execResult.data, error: execResult.error }
       })
-      completedToolExecutions++
     }
 
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]

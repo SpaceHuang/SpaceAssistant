@@ -9,6 +9,7 @@ import { getConfigValue, openDatabase, setConfigValue } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
 import { setMainWindow } from './windowRef'
+import { getAgentLogDir, initAgentLogger, logAgentEvent } from './agentLogger/agentLogger'
 import { decryptSecret, encryptSecret, isSecretStorageAvailable } from './secureApiKey'
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
@@ -107,6 +108,21 @@ app.whenReady().then(() => {
   const db = openDatabase(dbPath)
 
   workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+
+  initAgentLogger({
+    getWorkDir: () => workDirState,
+    isPackaged: app.isPackaged,
+    mainDirname: __dirname
+  })
+  const agentLogDir = getAgentLogDir()
+  logAgentEvent('info', 'agent.startup', {
+    workDir: workDirState,
+    isPackaged: app.isPackaged,
+    logDir: agentLogDir
+  })
+  if (!app.isPackaged && agentLogDir) {
+    console.info('[AgentLogger] 开发模式日志目录:', agentLogDir)
+  }
 
   const backup = new SessionBackupManager(workDirState)
 

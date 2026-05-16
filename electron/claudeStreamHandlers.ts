@@ -1,10 +1,13 @@
 import type { IpcMain, WebContents } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
-import { DEFAULT_TOOL_LOOP_MAX_TOKENS } from '../src/shared/llm/toolLoopMaxTokens'
+import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
 import type { ToolsConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
+import { CHAT_CANCELLED_MESSAGE, clearChatCancel, registerChatCancel, signalChatCancel } from './chatCancelRegistry'
+import { logAgentEvent } from './agentLogger/agentLogger'
+import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { runToolChatSession } from './toolChatLoop'
 
 export type ClaudeStreamDeps = {
@@ -29,6 +32,7 @@ type ClaudeChatSendPayload = {
   baseUrl?: string
   messages: ClaudeChatMessage[]
   system?: string
+  maxTokens?: number
 }
 
 type ClaudeChatMessageWithContentBlocks = {
@@ -156,10 +160,15 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const messages = normalizeAndValidateClaudeMessages(payload.messages)
 
         const system = typeof payload.system === 'string' ? payload.system : undefined
-        void runSendStream(sender, { requestId, model, baseUrl, messages, system, deps })
+        const maxTokens = typeof payload.maxTokens === 'number' && Number.isFinite(payload.maxTokens) ? payload.maxTokens : undefined
+        void runSendStream(sender, { requestId, model, baseUrl, messages, system, maxTokens, deps })
         return { ok: true }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logAgentEvent('error', 'llm.error', {
+          requestId: typeof payload?.requestId === 'string' ? payload.requestId : undefined,
+          error: message
+        })
         return { ok: false, error: message }
       }
     }
@@ -204,6 +213,12 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         })
 
         if (!res.ok) {
+          logAgentEvent('error', 'llm.error', {
+            requestId,
+            sessionId,
+            model,
+            error: res.error
+          })
           sender.send('claude-chat-error', { requestId, message: res.error })
           return res
         }
@@ -217,11 +232,22 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        logAgentEvent('error', 'llm.error', {
+          requestId: requestId || undefined,
+          sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
+          model: typeof payload?.model === 'string' ? payload.model : undefined,
+          error: message,
+          stack: err instanceof Error ? err.stack : undefined
+        })
         if (requestId) sender.send('claude-chat-error', { requestId, message })
         return { ok: false as const, error: message }
       }
     }
   )
+
+  ipcMain.handle('claude-chat-cancel', async (_event, payload: { requestId: string }): Promise<void> => {
+    signalChatCancel(assertValidRequestId(payload.requestId))
+  })
 }
 
 async function runSendStream(
@@ -232,14 +258,24 @@ async function runSendStream(
     baseUrl: string | undefined
     messages: ClaudeChatMessage[]
     system?: string
+    maxTokens?: number
     deps: ClaudeStreamDeps
   }
 ): Promise<void> {
-  const { requestId, model, baseUrl, messages, system, deps } = args
+  const { requestId, model, baseUrl, messages, system, maxTokens: maxTokensRaw, deps } = args
+  const maxTokens = normalizeToolLoopMaxTokens(maxTokensRaw)
+  const chatSignal = registerChatCancel(requestId)
   try {
     const apiKey = await deps.getApiKey()
     if (!apiKey) {
+      logAgentEvent('error', 'llm.error', { requestId, model, error: 'API key not configured' })
       sender.send('claude-chat-error', { requestId, message: 'API key not configured' })
+      return
+    }
+
+    if (chatSignal.aborted) {
+      logAgentEvent('error', 'llm.error', { requestId, model, error: CHAT_CANCELLED_MESSAGE })
+      sender.send('claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
       return
     }
 
@@ -251,16 +287,30 @@ async function runSendStream(
 
     const streamInput = buildClaudeChatSendStreamParams({
       model,
-      max_tokens: DEFAULT_TOOL_LOOP_MAX_TOKENS,
+      max_tokens: maxTokens,
       messages: messageParams,
       system,
       thinking: { type: 'adaptive' as const }
+    })
+
+    logAgentEvent('info', 'llm.request', {
+      requestId,
+      model,
+      baseUrl,
+      system,
+      messages: messageParams,
+      maxTokens,
+      enableThinking: true
     })
 
     const stream = client.messages.stream(streamInput as Parameters<typeof client.messages.stream>[0])
 
     const contentBlockTypes = new Map<number, string>()
     for await (const evt of stream) {
+      if (chatSignal.aborted) {
+        sender.send('claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
+        return
+      }
       if (evt?.type === 'content_block_start') {
         const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
         const blockType = (evt as { content_block?: { type?: string } }).content_block?.type
@@ -290,9 +340,36 @@ async function runSendStream(
       }
     }
 
+    if (chatSignal.aborted) {
+      logAgentEvent('error', 'llm.error', { requestId, model, error: CHAT_CANCELLED_MESSAGE })
+      sender.send('claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
+      return
+    }
+
+    const res = await stream.finalMessage()
+    const content = Array.isArray(res?.content) ? res.content : []
+    const stopReason = typeof res?.stop_reason === 'string' ? res.stop_reason : undefined
+    const usage = normalizeAnthropicMessageUsage(res)
+
+    logAgentEvent('info', 'llm.response', {
+      requestId,
+      model,
+      stopReason,
+      content,
+      usage
+    })
+
     sender.send('claude-chat-done', { requestId })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    logAgentEvent('error', 'llm.error', {
+      requestId,
+      model,
+      error: message,
+      stack: err instanceof Error ? err.stack : undefined
+    })
     sender.send('claude-chat-error', { requestId, message })
+  } finally {
+    clearChatCancel(requestId)
   }
 }

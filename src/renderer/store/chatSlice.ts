@@ -9,6 +9,8 @@ interface ChatState {
   chatStatus: ChatStatus
   error: string | null
   streamingRequestId: string | null
+  /** 当前正在执行指令（流式/工具循环）的会话 ID */
+  runningSessionId: string | null
 }
 
 const initialState: ChatState = {
@@ -16,7 +18,8 @@ const initialState: ChatState = {
   currentSessionId: null,
   chatStatus: 'idle',
   error: null,
-  streamingRequestId: null
+  streamingRequestId: null,
+  runningSessionId: null
 }
 
 export const chatSlice = createSlice({
@@ -36,16 +39,34 @@ export const chatSlice = createSlice({
       const m = state.messages.find((x) => x.id === action.payload.id)
       if (m) Object.assign(m, action.payload.patch)
     },
-    setChatStatus(state, action: PayloadAction<{ status: ChatStatus; error?: string | null; requestId?: string | null }>) {
+    setChatStatus(
+      state,
+      action: PayloadAction<{
+        status: ChatStatus
+        error?: string | null
+        requestId?: string | null
+        sessionId?: string | null
+      }>
+    ) {
       state.chatStatus = action.payload.status
       state.error = action.payload.error ?? null
       if (action.payload.requestId !== undefined) state.streamingRequestId = action.payload.requestId
+      if (action.payload.sessionId !== undefined) {
+        state.runningSessionId = action.payload.sessionId
+      } else if (
+        action.payload.status === 'idle' ||
+        action.payload.status === 'completed' ||
+        action.payload.status === 'error'
+      ) {
+        state.runningSessionId = null
+      }
     },
     resetChatUi(state) {
       state.messages = []
       state.chatStatus = 'idle'
       state.error = null
       state.streamingRequestId = null
+      state.runningSessionId = null
     }
   }
 })

@@ -1,4 +1,5 @@
 import type { SessionSkillsState, SkillDefinition, SkillsConfig } from '../../src/shared/domainTypes'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 
 export const DESCRIPTION_MATCH_THRESHOLD = 0.4
 
@@ -95,7 +96,19 @@ export function matchSkills(args: {
     return a.meta.name.localeCompare(b.meta.name)
   })
 
-  return sorted.slice(0, Math.max(1, config.maxConcurrent)).map(({ meta, content, scope, directoryPath, filePath, lastModified }) => ({
+  const matched = sorted.slice(0, Math.max(1, config.maxConcurrent))
+  logAgentEvent('info', 'skills.match', {
+    userInput,
+    matched: matched.map((s) => ({
+      name: s.meta.name,
+      score: s.score,
+      matchSource: s.matchSource,
+      scope: s.scope
+    })),
+    excludedCount: skills.length - available.length
+  })
+
+  return matched.map(({ meta, content, scope, directoryPath, filePath, lastModified }) => ({
     meta,
     content,
     scope,

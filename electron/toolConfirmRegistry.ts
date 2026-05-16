@@ -53,3 +53,20 @@ export function clearToolCancel(requestId: string, toolUseId: string): void {
   const key = confirmKey(requestId, toolUseId)
   cancelControllers.delete(key)
 }
+
+export function cancelAllToolConfirmsForRequest(requestId: string): void {
+  const prefix = `${requestId}\0`
+  for (const [key, w] of pending) {
+    if (!key.startsWith(prefix)) continue
+    clearTimeout(w.timeoutId)
+    pending.delete(key)
+    w.resolve('rejected')
+  }
+}
+
+export function cancelAllToolsForRequest(requestId: string): void {
+  const prefix = `${requestId}\0`
+  for (const [key, ctrl] of cancelControllers) {
+    if (key.startsWith(prefix)) ctrl.abort()
+  }
+}

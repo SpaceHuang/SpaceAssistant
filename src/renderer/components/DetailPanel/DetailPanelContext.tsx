@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { message } from 'antd'
+import { App } from 'antd'
 import type { FileTypeCategory } from '../../../shared/fileTypes'
 import { classifyFileType } from '../../../shared/fileTypes'
 import type { FileReadResult } from '../../../shared/api'
@@ -87,6 +87,7 @@ function applyReadResult(
 }
 
 export function DetailPanelProvider({ children }: { children: ReactNode }) {
+  const { message } = App.useApp()
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null)

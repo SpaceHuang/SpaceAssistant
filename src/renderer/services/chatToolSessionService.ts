@@ -33,7 +33,8 @@ export function createToolChatController(args: {
       toolName: d.toolUse.name,
       input: (d.toolUse.input as Record<string, unknown>) ?? {},
       status: 'calling',
-      riskLevel: builtinToolRiskLevel(d.toolUse.name)
+      riskLevel: builtinToolRiskLevel(d.toolUse.name),
+      startedAt: Date.now()
     })
     flush()
   }

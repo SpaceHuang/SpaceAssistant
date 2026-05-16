@@ -17,7 +17,6 @@ export interface ToolsConfig {
   scriptTimeout: number
   fileCheckpointingEnabled: boolean
   maxFileSnapshots: number
-  maxToolIterations: number
   grepTimeoutSec: number
 }
 
@@ -30,7 +29,6 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   scriptTimeout: 300,
   fileCheckpointingEnabled: true,
   maxFileSnapshots: 100,
-  maxToolIterations: 10,
   grepTimeoutSec: 60
 }
 
@@ -174,11 +172,23 @@ export interface ToolUseData {
   metadata?: Record<string, unknown>
 }
 
+export interface TimelineSegment {
+  content: string
+  startTime: number
+  endTime?: number
+}
+
+export type ThinkingSegment = TimelineSegment
+
+export type ContentSegment = TimelineSegment
+
 export interface ThinkingData {
   content: string
   isVisible: boolean
   startTime: number
   endTime?: number
+  /** 多轮工具循环中分段思考；缺省时用 content 作为单段 */
+  segments?: ThinkingSegment[]
   metadata?: Record<string, unknown>
 }
 
@@ -207,6 +217,8 @@ export interface Message {
   /** 新版内置工具调用记录；优先于 toolUse 展示 */
   toolCalls?: ToolCallRecord[]
   thinking?: ThinkingData
+  /** 助手正文分段（与 thinking / toolCalls 按时间线交错展示） */
+  contentSegments?: ContentSegment[]
   status: MessageStatus
   schemaVersion: number
 }

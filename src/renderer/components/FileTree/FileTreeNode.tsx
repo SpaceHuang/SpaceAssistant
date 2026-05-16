@@ -4,9 +4,9 @@ import folderOpenLineRaw from '../../assets/folder_open_line.svg?raw'
 import fileLineRaw from '../../assets/file_line.svg?raw'
 import { patchSvg } from '../../utils/patchSvg'
 
-const folderSvg = patchSvg(folderLineRaw, 16)
-const folderOpenSvg = patchSvg(folderOpenLineRaw, 16)
-const fileSvg = patchSvg(fileLineRaw, 16)
+const folderSvg = patchSvg(folderLineRaw, 14)
+const folderOpenSvg = patchSvg(folderOpenLineRaw, 14)
+const fileSvg = patchSvg(fileLineRaw, 14)
 
 interface FileTreeNodeProps {
   name: string

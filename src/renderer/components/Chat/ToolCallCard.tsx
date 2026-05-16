@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
-import { Button, Collapse, Progress, Space, Tag, Typography } from 'antd'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Space, Typography } from 'antd'
+import { ChevronRight } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
+import { formatToolLabel, formatToolLabelTitle, isFileTool, isFileWriteTool } from './toolCallDisplay'
+import { ToolRowIcon } from './ToolRowIcon'
+import { WriteConfirmCard } from './WriteConfirmCard'
 
 const { Text } = Typography
 
@@ -12,39 +15,62 @@ type Props = {
   onCancel?: () => void
 }
 
-function statusLabel(s: ToolCallRecord['status']): string {
-  switch (s) {
-    case 'calling':
-      return '调用中'
-    case 'confirming':
-      return '待确认'
-    case 'executing':
-      return '执行中'
-    case 'completed':
-      return '已完成'
-    case 'failed':
-      return '失败'
-    case 'rejected':
-      return '已拒绝'
-    default:
-      return s
-  }
-}
-
-function riskColor(level: ToolCallRecord['riskLevel']): string {
-  if (level === 'low') return 'green'
-  if (level === 'medium') return 'orange'
-  return 'red'
-}
-
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s
   return s.slice(0, max) + '\n…'
 }
 
+function defaultExpanded(record: ToolCallRecord): boolean {
+  if (isFileWriteTool(record.toolName) && record.status === 'confirming') return true
+  if (record.status === 'failed' || record.status === 'rejected') return true
+  if (isFileTool(record.toolName)) return false
+  if (record.status === 'confirming') return true
+  return record.status === 'calling' || record.status === 'executing'
+}
+
 export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props) {
-  const needsAttention = record.status === 'confirming' || record.status === 'executing'
-  const [expanded, setExpanded] = useState(needsAttention)
+  const isActive = record.status === 'calling' || record.status === 'executing' || record.status === 'confirming'
+  const isFailed = record.status === 'failed' || record.status === 'rejected'
+  const fileTool = isFileTool(record.toolName)
+  const fileWriteTool = isFileWriteTool(record.toolName)
+  const writeConfirming = fileWriteTool && record.status === 'confirming'
+  const hasDetail =
+    isActive ||
+    isFailed ||
+    Boolean(record.result?.success && record.result.data !== undefined) ||
+    Boolean(record.confirmDiff) ||
+    (!fileTool && record.status === 'completed' && Object.keys(record.input).length > 0)
+
+  const [expanded, setExpanded] = useState(() => defaultExpanded(record))
+
+  useEffect(() => {
+    if (fileWriteTool) {
+      if (record.status === 'confirming') {
+        setExpanded(true)
+        return
+      }
+      if (record.status === 'completed' || record.status === 'executing') {
+        setExpanded(false)
+        return
+      }
+      if (isFailed) {
+        setExpanded(true)
+      }
+      return
+    }
+    if (fileTool && record.status === 'completed') {
+      setExpanded(false)
+      return
+    }
+    if (record.status === 'confirming' || isFailed) {
+      setExpanded(true)
+    }
+  }, [fileTool, fileWriteTool, isFailed, record.status])
+
+  const showDetail = (expanded || writeConfirming) && hasDetail
+
+  const label = useMemo(() => formatToolLabel(record.toolName, record.input), [record.toolName, record.input])
+  const labelTitle = useMemo(() => formatToolLabelTitle(record.toolName, record.input), [record.toolName, record.input])
 
   const paramPreview = useMemo(() => {
     try {
@@ -63,64 +89,57 @@ export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props
     return record.result.error ?? ''
   }, [record.result])
 
+  const toggleExpanded = () => {
+    if (!hasDetail || writeConfirming) return
+    setExpanded((v) => !v)
+  }
+
+  if (writeConfirming && onConfirm) {
+    return <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+  }
+
   return (
-    <div className="tool-card" style={{ marginTop: 8 }}>
+    <div
+      className={[
+        'tool-row',
+        isActive ? 'tool-row--active' : '',
+        isFailed ? 'tool-row--failed' : '',
+        hasDetail ? 'tool-row--clickable' : '',
+        showDetail ? 'tool-row--expanded' : ''
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
       <div
-        className="tool-card-header"
-        onClick={() => setExpanded((v) => !v)}
-        role="button"
-        tabIndex={0}
+        className="tool-row__main"
+        onClick={toggleExpanded}
+        role={hasDetail ? 'button' : undefined}
+        tabIndex={hasDetail ? 0 : undefined}
         onKeyDown={(e) => {
+          if (!hasDetail) return
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
-            setExpanded((v) => !v)
+            toggleExpanded()
           }
         }}
       >
-        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <span className="tool-card-name">{record.toolName}</span>
-        <Tag color={riskColor(record.riskLevel)}>{record.riskLevel}</Tag>
-        <Tag>{statusLabel(record.status)}</Tag>
+        <ToolRowIcon toolName={record.toolName} active={record.status === 'calling' || record.status === 'executing'} />
+        <span className="tool-row__label" title={labelTitle ?? label}>
+          {label}
+        </span>
+        {hasDetail && !isActive ? (
+          <ChevronRight size={12} strokeWidth={2} className="tool-row__chevron" aria-hidden />
+        ) : null}
       </div>
 
-      {expanded ? (
-        <div className="tool-card-body">
-          {(record.status === 'calling' || record.status === 'executing') && (
-            <Progress percent={undefined} status="active" showInfo={false} style={{ marginBottom: 8 }} />
-          )}
-
-          <Collapse
-            size="small"
-            defaultActiveKey={needsAttention ? ['params'] : []}
-            items={[
-              {
-                key: 'params',
-                label: '参数',
-                children: (
-                  <pre className="tool-code-preview" style={{ maxHeight: 200, background: 'var(--sa-bg-muted)', color: 'var(--sa-text)' }}>
-                    {paramPreview}
-                  </pre>
-                )
-              }
-            ]}
-          />
-
+      {showDetail ? (
+        <div className="tool-row-detail">
           {record.status === 'confirming' && onConfirm ? (
-            <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
               {record.toolName === 'run_script' && typeof record.input.code === 'string' ? (
-                <pre className="tool-code-preview">{record.input.code}</pre>
+                <pre className="tool-code-preview tool-code-preview--inline">{record.input.code}</pre>
               ) : null}
-              {confirmMode === 'diff' && record.confirmDiff ? (
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <Text type="secondary">{record.confirmDiff.oldPath}</Text>
-                  <pre className="tool-diff-block tool-diff-block--remove">{truncate(record.confirmDiff.oldContent, 8000)}</pre>
-                  <pre className="tool-diff-block tool-diff-block--add">{truncate(record.confirmDiff.newContent, 8000)}</pre>
-                </Space>
-              ) : null}
-              {confirmMode === 'direct' && (record.toolName === 'edit_file' || record.toolName === 'write_file') ? (
-                <Text type="secondary">{(record.input as { path?: string }).path}</Text>
-              ) : null}
-              <Space>
+              <Space size={8}>
                 <Button type="primary" size="small" onClick={() => onConfirm(true)}>
                   确认
                 </Button>
@@ -132,30 +151,24 @@ export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props
           ) : null}
 
           {record.status === 'executing' && onCancel ? (
-            <Button danger size="small" style={{ marginTop: 8 }} onClick={onCancel}>
+            <Button danger size="small" type="text" className="tool-row-detail__action" onClick={onCancel}>
               取消执行
             </Button>
           ) : null}
 
-          {(record.status === 'completed' || record.status === 'failed' || record.status === 'rejected') && (
-            <Collapse
-              size="small"
-              style={{ marginTop: 8 }}
-              items={[
-                {
-                  key: 'res',
-                  label: record.result?.success ? '结果' : '详情',
-                  children: record.result?.success ? (
-                    <pre className="tool-code-preview" style={{ maxHeight: 320, background: 'var(--sa-bg-muted)', color: 'var(--sa-text)' }}>
-                      {resultStr}
-                    </pre>
-                  ) : (
-                    <Text type="danger">{record.result?.error ?? '失败'}</Text>
-                  )
-                }
-              ]}
-            />
+          {(record.status === 'failed' || record.status === 'rejected') && (
+            <Text type="danger" style={{ fontSize: 12 }}>
+              {record.result?.error ?? (record.status === 'rejected' ? '已拒绝' : '失败')}
+            </Text>
           )}
+
+          {record.status === 'completed' && resultStr ? (
+            <pre className="tool-code-preview tool-code-preview--inline">{truncate(resultStr, 4000)}</pre>
+          ) : null}
+
+          {record.status === 'completed' && !resultStr && !fileTool && Object.keys(record.input).length > 0 ? (
+            <pre className="tool-code-preview tool-code-preview--inline">{paramPreview}</pre>
+          ) : null}
         </div>
       ) : null}
     </div>

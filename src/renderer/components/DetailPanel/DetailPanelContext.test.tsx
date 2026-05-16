@@ -1,6 +1,16 @@
+import type { ReactNode } from 'react'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { App } from 'antd'
 import { DetailPanelProvider, useDetailPanel } from './DetailPanelContext'
+
+function DetailPanelTestWrapper({ children }: { children: ReactNode }) {
+  return (
+    <App>
+      <DetailPanelProvider>{children}</DetailPanelProvider>
+    </App>
+  )
+}
 
 vi.mock('../../utils/shikiHighlighter', () => ({
   preloadShiki: vi.fn().mockResolvedValue({})
@@ -27,7 +37,7 @@ describe('DetailPanelContext', () => {
 
   it('openFile loads text content', async () => {
     const { result } = renderHook(() => useDetailPanel(), {
-      wrapper: DetailPanelProvider
+      wrapper: DetailPanelTestWrapper
     })
 
     await act(async () => {
@@ -43,7 +53,7 @@ describe('DetailPanelContext', () => {
 
   it('closeFile clears state', async () => {
     const { result } = renderHook(() => useDetailPanel(), {
-      wrapper: DetailPanelProvider
+      wrapper: DetailPanelTestWrapper
     })
 
     await act(async () => {

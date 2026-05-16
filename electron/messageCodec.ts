@@ -1,4 +1,4 @@
-import type { Message, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
+import type { ContentSegment, Message, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -72,6 +72,21 @@ export function deserializeThinkingFromDb(raw: string | null): ThinkingData | un
   }
 }
 
+export function serializeContentSegmentsForDb(segments: ContentSegment[] | undefined): string | null {
+  if (!segments?.length) return null
+  return JSON.stringify(segments)
+}
+
+export function deserializeContentSegmentsFromDb(raw: string | null | undefined): ContentSegment[] | undefined {
+  if (!raw) return undefined
+  try {
+    const arr = JSON.parse(raw) as ContentSegment[]
+    return Array.isArray(arr) ? arr : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function serializeToolCallsForDb(calls: ToolCallRecord[] | undefined): string | null {
   if (!calls || calls.length === 0) return null
   return JSON.stringify(
@@ -127,6 +142,7 @@ export function rowToMessage(row: {
   toolUse: string | null
   toolCalls?: string | null
   thinking: string | null
+  contentSegments?: string | null
   status: string
   schemaVersion: number
   timestamp: number
@@ -141,6 +157,7 @@ export function rowToMessage(row: {
     toolUse: deserializeToolUseFromDb(row.toolUse),
     toolCalls: deserializeToolCallsFromDb(row.toolCalls),
     thinking: deserializeThinkingFromDb(row.thinking),
+    contentSegments: deserializeContentSegmentsFromDb(row.contentSegments),
     status: row.status as Message['status'],
     schemaVersion: row.schemaVersion
   }

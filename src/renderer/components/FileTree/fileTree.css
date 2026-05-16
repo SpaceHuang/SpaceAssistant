@@ -1,6 +1,11 @@
+.file-tree-body {
+  overflow: auto;
+  padding: 0 2px;
+}
+
 .file-tree .ant-tree-treenode {
   padding: 0;
-  height: 32px;
+  height: 26px;
   align-items: center;
 }
 
@@ -14,7 +19,7 @@
 }
 
 .file-tree .ant-tree-indent-unit {
-  width: 16px;
+  width: 10px;
 }
 
 .file-tree .ant-tree-dragging .ant-tree-treenode-dragging {
@@ -28,11 +33,18 @@
 .file-tree .ant-tree-node-content-wrapper {
   flex: 1;
   min-width: 0;
+  padding-inline: 2px 4px !important;
+  line-height: 1.4;
 }
 
 .file-tree .ant-tree-switcher {
-  width: 16px;
+  width: 12px;
   flex-shrink: 0;
+  margin-inline-end: 0;
+}
+
+.file-tree .ant-tree-switcher .ant-tree-switcher-icon {
+  font-size: 10px;
 }
 
 .file-tree.ant-tree .ant-tree-node-content-wrapper .ant-tree-iconEle {
@@ -51,16 +63,16 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  margin-right: 6px;
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
   line-height: 0;
 }
 
 .file-tree-node-icon svg {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .file-tree-node-label {

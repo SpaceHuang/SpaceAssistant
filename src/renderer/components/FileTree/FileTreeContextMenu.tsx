@@ -1,4 +1,4 @@
-import { Dropdown, message } from 'antd'
+import { App, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 
 interface FileTreeContextMenuProps {
@@ -27,6 +27,7 @@ export function FileTreeContextMenu({
   children,
   open
 }: FileTreeContextMenuProps) {
+  const { message } = App.useApp()
   const items: MenuProps['items'] = [
     {
       key: 'add-to-chat',

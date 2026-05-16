@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Button, Empty, Input, Typography, message } from 'antd'
+import { App as AntdApp, Button, Empty, Input, Typography } from 'antd'
 
 const { Text } = Typography
 import { Trash2 } from 'lucide-react'
@@ -14,6 +14,7 @@ import { FileTree } from './components/FileTree'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { groupSessionsByTime } from './utils/groupSessions'
+import { SessionListIcon } from './components/SessionList/SessionListIcon'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import folderLineRaw from './assets/folder_line.svg?raw'
@@ -33,9 +34,11 @@ const searchFillSvg = patchSvg(searchFillRaw)
 const settingsSvg = patchSvg(settingsRaw)
 
 function LeftSessions() {
+  const { message } = AntdApp.useApp()
   const dispatch = useAppDispatch()
   const sessions = useTypedSelector((s) => s.session.list)
   const currentId = useTypedSelector((s) => s.chat.currentSessionId)
+  const runningSessionId = useTypedSelector((s) => s.chat.runningSessionId)
   const [q, setQ] = useState('')
 
   const filtered = sessions.filter((s) => s.name.toLowerCase().includes(q.toLowerCase()))
@@ -64,6 +67,7 @@ function LeftSessions() {
                     className={`session-item${item.id === currentId ? ' session-item--active' : ''}`}
                     onClick={() => dispatch(setSession(item.id))}
                   >
+                    <SessionListIcon loading={item.id === runningSessionId} />
                     <div className="session-item-main">
                       <div className="session-item-name" title={item.name}>
                         {item.name}
@@ -116,7 +120,7 @@ function SearchPane() {
               [{item.type}] {item.title}
             </Text>
             <div>
-              <Text type="secondary" ellipsis style={{ fontSize: 12 }}>
+              <Text type="secondary" ellipsis>
                 {item.preview}
               </Text>
             </div>
@@ -153,6 +157,7 @@ function IconTab({
 }
 
 function AppShellInner() {
+  const { message } = AntdApp.useApp()
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
   const sessions = useTypedSelector((s) => s.session.list)

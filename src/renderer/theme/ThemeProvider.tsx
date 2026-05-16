@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { ConfigProvider, theme as antTheme } from 'antd'
+import { App, ConfigProvider, theme as antTheme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { useTypedSelector } from '../hooks'
 import { useResolvedTheme } from './useResolvedTheme'
@@ -26,7 +26,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <ConfigProvider locale={zhCN} theme={antConfig}>
-      {children}
+      <App>{children}</App>
     </ConfigProvider>
   )
 }

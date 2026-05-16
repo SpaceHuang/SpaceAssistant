@@ -51,8 +51,8 @@ export function InlineInput({ defaultValue, onConfirm, onCancel }: InlineInputPr
         border: '1px solid #1677ff',
         borderRadius: 4,
         padding: '0 4px',
-        fontSize: 13,
-        lineHeight: '22px',
+        fontSize: 12,
+        lineHeight: '20px',
         outline: 'none',
         background: '#fff'
       }}

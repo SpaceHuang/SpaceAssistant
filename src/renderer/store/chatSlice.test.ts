@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setSession } from './chatSlice'
+import chatReducer, { addMessage, setChatStatus, setSession } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
@@ -17,5 +17,16 @@ describe('chatSlice', () => {
     const next = chatReducer(base, addMessage(msg))
     expect(next.messages).toHaveLength(1)
     expect(next.messages[0]?.content).toBe('hi')
+  })
+
+  it('tracks running session while streaming', () => {
+    const streaming = chatReducer(
+      undefined,
+      setChatStatus({ status: 'streaming', requestId: 'req-1', sessionId: 's1' })
+    )
+    expect(streaming.runningSessionId).toBe('s1')
+
+    const completed = chatReducer(streaming, setChatStatus({ status: 'completed', requestId: null }))
+    expect(completed.runningSessionId).toBeNull()
   })
 })

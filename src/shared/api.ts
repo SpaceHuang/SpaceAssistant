@@ -30,6 +30,8 @@ export type ClaudeChatSendStreamPayload = {
   baseUrl?: string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>
   system?: string
+  /** 未传时主进程使用内置默认；建议传渲染侧解析后的有效值 */
+  maxTokens?: number
 }
 
 export type ClaudeChatMessageWithBlocks = {
@@ -71,7 +73,7 @@ export type SpaceAssistantApi = {
   chatPatchMessage: (payload: {
     messageId: string
     sessionId: string
-    patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls'>>
+    patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments'>>
   }) => Promise<void>
 
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => Promise<{ ok: true } | { ok: false; error: string }>
@@ -85,6 +87,7 @@ export type SpaceAssistantApi = {
   claudeChatOnThinkingDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
   claudeChatOnDone: (cb: (data: { requestId: string }) => void) => () => void
   claudeChatOnError: (cb: (data: { requestId: string; message: string }) => void) => () => void
+  claudeChatCancel: (payload: { requestId: string }) => Promise<void>
 
   configGet: () => Promise<AppConfig>
   configSet: (

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { message, Typography } from 'antd'
+import { App, Typography } from 'antd'
 
 const { Text } = Typography
 import { useTypedSelector, useAppDispatch } from '../../hooks'
@@ -18,9 +18,28 @@ import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter
 import { buildSystemPromptFromSkills, formatSkillHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import type { Message } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../../../shared/domainTypes'
+import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { ChatBubble } from './ChatBubble'
 import { MessageInput } from './MessageInput'
 import { SkillHintBubble } from './SkillHintBubble'
+import { CHAT_CANCELLED_MESSAGE, isChatCancelledError } from '../../../shared/chatCancel'
+import { buildAssistantStreamPatch } from '../../../shared/assistantStreamPatch'
+import {
+  appendContentDelta,
+  closeOpenContentSegment,
+  createContentState,
+  finalizeContentSegments,
+  hasOpenContentSegment,
+  type ContentState
+} from '../../../shared/contentSegments'
+import {
+  appendThinkingDelta,
+  closeOpenThinkingSegment,
+  createThinkingState,
+  finalizeThinking,
+  hasOpenThinkingSegment,
+  type ThinkingState
+} from '../../../shared/thinkingSegments'
 
 function buildClaudePayload(history: Message[]) {
   return history
@@ -36,6 +55,7 @@ function buildClaudePayload(history: Message[]) {
 }
 
 export function ChatView() {
+  const { message } = App.useApp()
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
@@ -44,6 +64,7 @@ export function ChatView() {
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
   const scrollRef = useRef<HTMLDivElement>(null)
+  const abortRequestedRef = useRef(false)
   const [skillHints, setSkillHints] = useState<string[]>([])
 
   const streamingAssistantId = useMemo(
@@ -82,8 +103,47 @@ export function ChatView() {
     [streamingRequestId]
   )
 
+  const abort = useCallback(() => {
+    abortRequestedRef.current = true
+    if (streamingRequestId) {
+      void window.api.claudeChatCancel({ requestId: streamingRequestId })
+    }
+  }, [streamingRequestId])
+
+  const finishCancelled = useCallback(
+    async (
+      assistantId: string,
+      contentState: ContentState,
+      thinkingState: ThinkingState,
+      toolCalls?: Message['toolCalls']
+    ) => {
+      if (!sessionId) return
+      const thinking = finalizeThinking(thinkingState)
+      const contentSegments = finalizeContentSegments(contentState)
+      const patch = {
+        content: contentState.content,
+        contentSegments,
+        status: 'completed' as const,
+        thinking,
+        toolCalls
+      }
+      dispatch(patchMessage({ id: assistantId, patch }))
+      await window.api.chatPatchMessage({
+        messageId: assistantId,
+        sessionId,
+        patch
+      })
+      dispatch(setChatStatus({ status: 'completed', requestId: null }))
+      message.info(CHAT_CANCELLED_MESSAGE)
+      scrollBottom()
+    },
+    [dispatch, sessionId]
+  )
+
   const send = useCallback(
     async (text: string) => {
+      const liveStatus = store.getState().chat.chatStatus
+      if (liveStatus === 'streaming' || liveStatus === 'sending') return
       if (!sessionId || !cfg) {
         message.warning('请先选择会话并等待配置加载')
         return
@@ -132,7 +192,8 @@ export function ChatView() {
       await window.api.chatAppendMessage(assistantMsg)
 
       const requestId = crypto.randomUUID()
-      dispatch(setChatStatus({ status: 'streaming', requestId }))
+      abortRequestedRef.current = false
+      dispatch(setChatStatus({ status: 'streaming', requestId, sessionId }))
 
       const historyForApi = [...messages, userMsg]
       const useToolsApi = cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools).length > 0
@@ -152,14 +213,20 @@ export function ChatView() {
       }
 
       const modelEntry = cfg.models.find((m) => m.name === cfg.model)
+      const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models, cfg.maxTokens)
       const maxSystemChars = modelEntry ? Math.floor(modelEntry.maximumContext * 0.1) : undefined
       let systemPrompt = buildSystemPromptFromSkills(activeSkills)
       if (maxSystemChars && systemPrompt) {
         systemPrompt = truncateSystemPrompt(systemPrompt, maxSystemChars)
       }
 
-      let buf = ''
-      let think = ''
+      if (abortRequestedRef.current) {
+        await finishCancelled(assistantId, createContentState(assistantMsg.timestamp), createThinkingState(assistantMsg.timestamp))
+        return
+      }
+
+      let contentState = createContentState(assistantMsg.timestamp)
+      let thinkingState = createThinkingState(assistantMsg.timestamp)
 
       if (useToolsApi) {
         const controller = createToolChatController({
@@ -180,29 +247,54 @@ export function ChatView() {
         unsubs.push(
           window.api.claudeChatOnDelta((d) => {
             if (d.requestId !== requestId) return
-            buf += d.text
-            dispatch(patchMessage({ id: assistantId, patch: { content: buf } }))
+            if (hasOpenThinkingSegment(thinkingState)) {
+              thinkingState = closeOpenThinkingSegment(thinkingState)
+            }
+            contentState = appendContentDelta(contentState, d.text)
+            dispatch(
+              patchMessage({
+                id: assistantId,
+                patch: buildAssistantStreamPatch(thinkingState, contentState)
+              })
+            )
             scrollBottom()
           })
         )
         unsubs.push(
           window.api.claudeChatOnThinkingDelta((d) => {
             if (d.requestId !== requestId) return
-            think += d.text
+            if (hasOpenContentSegment(contentState)) {
+              contentState = closeOpenContentSegment(contentState)
+            }
+            thinkingState = appendThinkingDelta(thinkingState, d.text)
             dispatch(
               patchMessage({
                 id: assistantId,
-                patch: {
-                  thinking: {
-                    content: think,
-                    isVisible: true,
-                    startTime: assistantMsg.timestamp,
-                    endTime: undefined
-                  }
-                }
+                patch: buildAssistantStreamPatch(thinkingState, contentState)
               })
             )
             scrollBottom()
+          })
+        )
+        unsubs.push(
+          window.api.toolOnUse((d) => {
+            if (d.requestId !== requestId) return
+            let changed = false
+            if (hasOpenThinkingSegment(thinkingState)) {
+              thinkingState = closeOpenThinkingSegment(thinkingState)
+              changed = true
+            }
+            if (hasOpenContentSegment(contentState)) {
+              contentState = closeOpenContentSegment(contentState)
+              changed = true
+            }
+            if (!changed) return
+            dispatch(
+              patchMessage({
+                id: assistantId,
+                patch: buildAssistantStreamPatch(thinkingState, contentState)
+              })
+            )
           })
         )
 
@@ -214,38 +306,42 @@ export function ChatView() {
             baseUrl: cfg.baseUrl || undefined,
             messages: historyForApi,
             toolsConfig: cfg.tools,
-            maxTokens: cfg.maxTokens,
+            maxTokens: outputMaxTokens,
             thinkingEnabled: cfg.thinkingEnabled,
             system: systemPrompt || undefined
           })
           const res = await window.api.claudeChatCreateWithTools(payload)
           if (!res.ok) {
-            dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: buf || res.error } }))
+            if (isChatCancelledError(res.error) || abortRequestedRef.current) {
+              const assistantRow = store.getState().chat.messages.find((m) => m.id === assistantId)
+              await finishCancelled(assistantId, contentState, thinkingState, assistantRow?.toolCalls)
+              return
+            }
+            dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: contentState.content || res.error } }))
             await window.api.chatPatchMessage({
               messageId: assistantId,
               sessionId,
-              patch: { status: 'failed', content: buf || res.error }
+              patch: { status: 'failed', content: contentState.content || res.error }
             })
             dispatch(setChatStatus({ status: 'error', error: res.error, requestId: null }))
             message.error(res.error)
             return
           }
-          const textOut = extractAssistantTextFromApiContent(res.content as unknown[]) || buf
+          const textOut = extractAssistantTextFromApiContent(res.content as unknown[]) || contentState.content
+          if (textOut !== contentState.content) {
+            contentState = { ...contentState, content: textOut }
+          }
           const assistantRow = store.getState().chat.messages.find((m) => m.id === assistantId)
+          const thinking = finalizeThinking(thinkingState)
+          const contentSegments = finalizeContentSegments(contentState)
           dispatch(
             patchMessage({
               id: assistantId,
               patch: {
                 content: textOut,
+                contentSegments,
                 status: 'completed',
-                thinking: think
-                  ? {
-                      content: think,
-                      isVisible: true,
-                      startTime: assistantMsg.timestamp,
-                      endTime: Date.now()
-                    }
-                  : undefined,
+                thinking,
                 toolCalls: assistantRow?.toolCalls
               }
             })
@@ -255,15 +351,9 @@ export function ChatView() {
             sessionId,
             patch: {
               content: textOut,
+              contentSegments,
               status: 'completed',
-              thinking: think
-                ? {
-                    content: think,
-                    isVisible: true,
-                    startTime: assistantMsg.timestamp,
-                    endTime: Date.now()
-                  }
-                : undefined,
+              thinking,
               toolCalls: assistantRow?.toolCalls
             }
           })
@@ -271,11 +361,16 @@ export function ChatView() {
           scrollBottom()
         } catch (e) {
           const err = e instanceof Error ? e.message : String(e)
-          dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: buf || err } }))
+          if (isChatCancelledError(err) || abortRequestedRef.current) {
+            const assistantRow = store.getState().chat.messages.find((m) => m.id === assistantId)
+            await finishCancelled(assistantId, contentState, thinkingState, assistantRow?.toolCalls)
+            return
+          }
+          dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: contentState.content || err } }))
           await window.api.chatPatchMessage({
             messageId: assistantId,
             sessionId,
-            patch: { status: 'failed', content: buf || err }
+            patch: { status: 'failed', content: contentState.content || err }
           })
           dispatch(setChatStatus({ status: 'error', error: err, requestId: null }))
           message.error(err)
@@ -293,46 +388,47 @@ export function ChatView() {
           model: cfg.model,
           baseUrl: cfg.baseUrl || undefined,
           messages: basePayload,
-          system: systemPrompt || undefined
+          system: systemPrompt || undefined,
+          maxTokens: outputMaxTokens
         },
         {
           onDelta: (t) => {
-            buf += t
-            dispatch(patchMessage({ id: assistantId, patch: { content: buf } }))
-            scrollBottom()
-          },
-          onThinkingDelta: (t) => {
-            think += t
+            if (hasOpenThinkingSegment(thinkingState)) {
+              thinkingState = closeOpenThinkingSegment(thinkingState)
+            }
+            contentState = appendContentDelta(contentState, t)
             dispatch(
               patchMessage({
                 id: assistantId,
-                patch: {
-                  thinking: {
-                    content: think,
-                    isVisible: true,
-                    startTime: assistantMsg.timestamp,
-                    endTime: undefined
-                  }
-                }
+                patch: buildAssistantStreamPatch(thinkingState, contentState)
+              })
+            )
+            scrollBottom()
+          },
+          onThinkingDelta: (t) => {
+            if (hasOpenContentSegment(contentState)) {
+              contentState = closeOpenContentSegment(contentState)
+            }
+            thinkingState = appendThinkingDelta(thinkingState, t)
+            dispatch(
+              patchMessage({
+                id: assistantId,
+                patch: buildAssistantStreamPatch(thinkingState, contentState)
               })
             )
             scrollBottom()
           },
           onDone: async () => {
+            const thinking = finalizeThinking(thinkingState)
+            const contentSegments = finalizeContentSegments(contentState)
             dispatch(
               patchMessage({
                 id: assistantId,
                 patch: {
-                  content: buf,
+                  content: contentState.content,
+                  contentSegments,
                   status: 'completed',
-                  thinking: think
-                    ? {
-                        content: think,
-                        isVisible: true,
-                        startTime: assistantMsg.timestamp,
-                        endTime: Date.now()
-                      }
-                    : undefined
+                  thinking
                 }
               })
             )
@@ -340,27 +436,25 @@ export function ChatView() {
               messageId: assistantId,
               sessionId,
               patch: {
-                content: buf,
+                content: contentState.content,
+                contentSegments,
                 status: 'completed',
-                thinking: think
-                  ? {
-                      content: think,
-                      isVisible: true,
-                      startTime: assistantMsg.timestamp,
-                      endTime: Date.now()
-                    }
-                  : undefined
+                thinking
               }
             })
             dispatch(setChatStatus({ status: 'completed', requestId: null }))
             scrollBottom()
           },
           onError: async (err) => {
-            dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: buf || err } }))
+            if (isChatCancelledError(err) || abortRequestedRef.current) {
+              await finishCancelled(assistantId, contentState, thinkingState)
+              return
+            }
+            dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: contentState.content || err } }))
             await window.api.chatPatchMessage({
               messageId: assistantId,
               sessionId,
-              patch: { status: 'failed', content: buf || err }
+              patch: { status: 'failed', content: contentState.content || err }
             })
             dispatch(setChatStatus({ status: 'error', error: err, requestId: null }))
             message.error(err)
@@ -368,10 +462,10 @@ export function ChatView() {
         }
       )
     },
-    [cfg, currentSession, dispatch, messages, sessionId, onToolCancel, onToolConfirm]
+    [cfg, currentSession, dispatch, messages, sessionId, finishCancelled, onToolCancel, onToolConfirm]
   )
 
-  const busy = chatStatus === 'streaming' || chatStatus === 'sending'
+  const running = chatStatus === 'streaming' || chatStatus === 'sending'
 
   const toolsInteractive =
     cfg?.tools.enabled && chatStatus === 'streaming' && streamingRequestId && streamingAssistantId
@@ -407,7 +501,13 @@ export function ChatView() {
           ))
         )}
       </div>
-      <MessageInput disabled={busy || !sessionId} modelLabel={cfg?.model} onSend={send} />
+      <MessageInput
+        disabled={!sessionId}
+        running={running}
+        modelLabel={cfg?.model}
+        onSend={send}
+        onAbort={abort}
+      />
     </div>
   )
 }

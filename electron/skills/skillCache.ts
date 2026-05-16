@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import type { SkillDefinition, SkillsCache } from '../../src/shared/domainTypes'
 import { getProjectSkillsDir, getUserSkillsDir } from './skillPaths'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 import { scanSkills } from './skillScanner'
 
 let cache: SkillsCache | null = null
@@ -36,12 +37,20 @@ export function getCachedSkills(userDataPath: string, workDir: string): SkillDef
   const skills = scanSkills(userDataPath, workDir)
   const userSig = dirSignature(getUserSkillsDir(userDataPath))
   const projectSig = dirSignature(getProjectSkillsDir(workDir))
+  const scannedAt = Date.now()
   cache = {
     skills,
-    scannedAt: Date.now(),
+    scannedAt,
     workDir,
     signature: `${userSig}|${projectSig}|${workDir}`
   } as SkillsCache & { signature: string }
+  logAgentEvent('info', 'skills.load', {
+    workDir,
+    skillCount: skills.length,
+    skillNames: skills.map((s) => s.meta.name),
+    scannedAt,
+    cacheHit: false
+  })
   return skills
 }
 

@@ -19,6 +19,7 @@ import type {
   UiThemeMode
 } from '../src/shared/domainTypes'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
+import { logAgentEvent } from './agentLogger/agentLogger'
 import { createSkillManager } from './skills/skillManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
@@ -525,7 +526,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   ipcMain.handle(
     'skill:match',
     async (_e, payload: { userInput: string; sessionSkillsState: SessionSkillsState }): Promise<SkillDefinition[]> => {
-      return skillManager.match(payload.userInput, normalizeSessionSkillsState(payload.sessionSkillsState))
+      const matched = skillManager.match(payload.userInput, normalizeSessionSkillsState(payload.sessionSkillsState))
+      if (matched.length > 0) {
+        const systemPrompt = skillManager.buildSystemPrompt(matched)
+        logAgentEvent('info', 'skills.invoke', {
+          skillNames: matched.map((s) => s.meta.name),
+          systemPromptLength: systemPrompt.length
+        })
+      }
+      return matched
     }
   )
 

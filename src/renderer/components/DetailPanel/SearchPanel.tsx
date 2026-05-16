@@ -24,21 +24,19 @@ export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
     wholeWord: false,
     useRegex: false
   })
-  const [regexError, setRegexError] = useState<string | null>(null)
 
   const content = previewContent ?? ''
   const searchable = fileType !== 'image' && fileType !== 'unsupported' && viewMode !== 'render'
 
+  const regexError = useMemo(() => {
+    if (!searchable || !query) return null
+    return getSearchRegexError(query, options)
+  }, [searchable, query, options])
+
   const matches = useMemo(() => {
-    if (!searchable || !query) {
-      setRegexError(null)
-      return []
-    }
-    const err = getSearchRegexError(query, options)
-    setRegexError(err)
-    if (err) return []
+    if (!searchable || !query || regexError) return []
     return findSearchMatches(content, query, options)
-  }, [content, query, options, searchable])
+  }, [content, query, options, searchable, regexError])
 
   useEffect(() => {
     setCurrentIndex(matches.length > 0 ? 0 : -1)

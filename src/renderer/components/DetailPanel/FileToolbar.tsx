@@ -1,4 +1,4 @@
-import { Dropdown, message } from 'antd'
+import { App, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ExternalLink, FileDown, FolderOpen, RefreshCw, X } from 'lucide-react'
@@ -45,6 +45,7 @@ export function FileToolbar({
   onClose,
   onRefresh
 }: Props) {
+  const { message } = App.useApp()
   const isMarkdown = fileType === 'markdown'
 
   const handleOpenInSystem = async () => {

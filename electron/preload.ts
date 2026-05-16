@@ -38,6 +38,7 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('claude-chat-error', fn)
     return () => ipcRenderer.removeListener('claude-chat-error', fn)
   },
+  claudeChatCancel: (payload) => ipcRenderer.invoke('claude-chat-cancel', payload),
 
   configGet: () => ipcRenderer.invoke('config:get'),
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),

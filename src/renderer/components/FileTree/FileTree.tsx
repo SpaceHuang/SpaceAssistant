@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { Tree, message } from 'antd'
+import { App, Tree } from 'antd'
 import type { DataNode, EventDataNode } from 'antd/es/tree'
 import { useFileTree } from './useFileTree'
 import type { FileTreeNode as FileTreeNodeData } from './useFileTree'
@@ -15,6 +15,7 @@ interface FileTreeProps {
 }
 
 export function FileTree({ workDir, onFileSelect }: FileTreeProps) {
+  const { message } = App.useApp()
   const tree = useFileTree(workDir)
   const [deleteTarget, setDeleteTarget] = useState<{ key: string; name: string; isDirectory: boolean } | null>(null)
 
@@ -131,7 +132,7 @@ export function FileTree({ workDir, onFileSelect }: FileTreeProps) {
         <span className="app-pane-header-title">文件</span>
         <FileTreeToolbar onNewDirectory={handleNewDirectory} onRefresh={() => tree.refreshTree()} />
       </div>
-      <div className="sider-content-body" style={{ overflow: 'auto', padding: '0 4px' }}>
+      <div className="sider-content-body file-tree-body">
         <Tree
           className="file-tree"
           treeData={antdTreeData}

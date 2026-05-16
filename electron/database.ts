@@ -3,7 +3,13 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../src/shared/domainTypes'
-import { rowToMessage, serializeThinkingForDb, serializeToolCallsForDb, serializeToolUseForDb } from './messageCodec'
+import {
+  rowToMessage,
+  serializeContentSegmentsForDb,
+  serializeThinkingForDb,
+  serializeToolCallsForDb,
+  serializeToolUseForDb
+} from './messageCodec'
 
 export type StoredMessage = {
   id: string
@@ -13,6 +19,7 @@ export type StoredMessage = {
   toolUse: string | null
   toolCalls: string | null
   thinking: string | null
+  contentSegments?: string | null
   status: string
   schemaVersion: number
   timestamp: number
@@ -167,6 +174,7 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
       toolUse: r.toolUse,
       toolCalls: r.toolCalls ?? null,
       thinking: r.thinking,
+      contentSegments: r.contentSegments ?? null,
       status: r.status,
       schemaVersion: r.schemaVersion,
       timestamp: r.timestamp,
@@ -190,6 +198,7 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
     toolUse: serializeToolUseForDb(full.toolUse),
     toolCalls: serializeToolCallsForDb(full.toolCalls),
     thinking: serializeThinkingForDb(full.thinking),
+    contentSegments: serializeContentSegmentsForDb(full.contentSegments),
     status: full.status,
     schemaVersion: full.schemaVersion,
     timestamp: full.timestamp,
@@ -208,7 +217,7 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
 export function updateMessageContent(
   db: AppDatabase,
   messageId: string,
-  patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls'>>
+  patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments'>>
 ): void {
   const row = db.data.messages.find((m) => m.id === messageId)
   if (!row) return
@@ -217,11 +226,14 @@ export function updateMessageContent(
   const toolUse = patch.toolUse !== undefined ? serializeToolUseForDb(patch.toolUse) : row.toolUse
   const toolCalls = patch.toolCalls !== undefined ? serializeToolCallsForDb(patch.toolCalls) : row.toolCalls
   const thinking = patch.thinking !== undefined ? serializeThinkingForDb(patch.thinking) : row.thinking
+  const contentSegments =
+    patch.contentSegments !== undefined ? serializeContentSegmentsForDb(patch.contentSegments) : row.contentSegments ?? null
   row.content = content
   row.status = status
   row.toolUse = toolUse
   row.toolCalls = toolCalls
   row.thinking = thinking
+  row.contentSegments = contentSegments
   db.save()
 }
 
