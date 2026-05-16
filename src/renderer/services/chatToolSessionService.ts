@@ -17,12 +17,19 @@ export function createToolChatController(args: {
   assistantMessageId: string
   getRequestId: () => string
   onRecordsChange?: () => void
+  /** 多会话并行时由 chatRunner 路由 patch，默认仍写 Redux */
+  applyAssistantPatch?: (patch: Partial<Message>) => void
 }): ToolChatController {
-  const { dispatch, assistantMessageId, getRequestId, onRecordsChange } = args
+  const { dispatch, assistantMessageId, getRequestId, onRecordsChange, applyAssistantPatch } = args
   const records: ToolCallRecord[] = []
 
   const flush = () => {
-    dispatch(patchMessage({ id: assistantMessageId, patch: { toolCalls: [...records] } }))
+    const patch: Partial<Message> = { toolCalls: [...records] }
+    if (applyAssistantPatch) {
+      applyAssistantPatch(patch)
+    } else {
+      dispatch(patchMessage({ id: assistantMessageId, patch }))
+    }
     onRecordsChange?.()
   }
 

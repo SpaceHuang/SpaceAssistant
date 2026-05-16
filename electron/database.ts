@@ -10,6 +10,7 @@ import {
   serializeToolCallsForDb,
   serializeToolUseForDb
 } from './messageCodec'
+import { createDebouncedDbSave } from './dbSaveScheduler'
 
 export type StoredMessage = {
   id: string
@@ -36,7 +37,10 @@ type DbSnapshot = {
 export type AppDatabase = {
   readonly filePath: string
   data: DbSnapshot
+  /** 防抖合并写入（阶段 4） */
   save: () => void
+  /** 立即落盘（删会话、退出应用等关键路径） */
+  flushSave: () => void
 }
 
 function emptySnapshot(): DbSnapshot {
@@ -79,14 +83,15 @@ function atomicWriteJson(filePath: string, data: DbSnapshot): void {
 /** 无原生依赖的本地持久化（JSON 文件）；接口与原先 SQLite 版保持一致，便于日后迁回 better-sqlite3。 */
 export function openDatabase(filePath: string): AppDatabase {
   const data = loadSnapshot(filePath)
+  const writeImmediate = () => atomicWriteJson(filePath, data)
+  const { schedule, flushNow } = createDebouncedDbSave(writeImmediate)
   const db: AppDatabase = {
     filePath,
     data,
-    save() {
-      atomicWriteJson(filePath, data)
-    }
+    save: schedule,
+    flushSave: flushNow
   }
-  db.save()
+  writeImmediate()
   return db
 }
 
@@ -157,7 +162,7 @@ export function updateSession(
 export function deleteSession(db: AppDatabase, sessionId: string): void {
   db.data.sessions = db.data.sessions.filter((s) => s.id !== sessionId)
   db.data.messages = db.data.messages.filter((m) => m.sessionId !== sessionId)
-  db.save()
+  db.flushSave()
 }
 
 export function getMessages(db: AppDatabase, sessionId: string, limit = 500, offset = 0): Message[] {

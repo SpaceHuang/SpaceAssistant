@@ -3,14 +3,21 @@ import type { Message } from '../../shared/domainTypes'
 
 export type ChatStatus = 'idle' | 'sending' | 'streaming' | 'completed' | 'error'
 
+export type RunningSessionMeta = {
+  requestId: string
+  status: 'streaming' | 'error'
+  updatedAt: number
+}
+
 interface ChatState {
   messages: Message[]
   currentSessionId: string | null
   chatStatus: ChatStatus
   error: string | null
-  streamingRequestId: string | null
-  /** 当前正在执行指令（流式/工具循环）的会话 ID */
-  runningSessionId: string | null
+  /** 按会话记录的运行中请求（支持多会话并行） */
+  runningSessions: Record<string, RunningSessionMeta>
+  /** 侧栏待办跳转后高亮的工具确认项 */
+  confirmFocusToolUseId: string | null
 }
 
 const initialState: ChatState = {
@@ -18,8 +25,8 @@ const initialState: ChatState = {
   currentSessionId: null,
   chatStatus: 'idle',
   error: null,
-  streamingRequestId: null,
-  runningSessionId: null
+  runningSessions: {},
+  confirmFocusToolUseId: null
 }
 
 export const chatSlice = createSlice({
@@ -28,6 +35,10 @@ export const chatSlice = createSlice({
   reducers: {
     setSession(state, action: PayloadAction<string | null>) {
       state.currentSessionId = action.payload
+      state.confirmFocusToolUseId = null
+    },
+    setConfirmFocusToolUseId(state, action: PayloadAction<string | null>) {
+      state.confirmFocusToolUseId = action.payload
     },
     setMessages(state, action: PayloadAction<Message[]>) {
       state.messages = action.payload
@@ -48,28 +59,46 @@ export const chatSlice = createSlice({
         sessionId?: string | null
       }>
     ) {
-      state.chatStatus = action.payload.status
-      state.error = action.payload.error ?? null
-      if (action.payload.requestId !== undefined) state.streamingRequestId = action.payload.requestId
-      if (action.payload.sessionId !== undefined) {
-        state.runningSessionId = action.payload.sessionId
-      } else if (
-        action.payload.status === 'idle' ||
-        action.payload.status === 'completed' ||
-        action.payload.status === 'error'
-      ) {
-        state.runningSessionId = null
+      const { status, error, requestId, sessionId } = action.payload
+      state.chatStatus = status
+      state.error = error ?? null
+
+      if (status === 'streaming' && sessionId && requestId) {
+        state.runningSessions[sessionId] = {
+          requestId,
+          status: 'streaming',
+          updatedAt: Date.now()
+        }
       }
+
+      const terminal = status === 'completed' || status === 'error' || status === 'idle'
+      if (terminal && sessionId) {
+        delete state.runningSessions[sessionId]
+      } else if (terminal && !sessionId && requestId === null) {
+        state.runningSessions = {}
+      }
+    },
+    removeRunningSession(state, action: PayloadAction<string>) {
+      delete state.runningSessions[action.payload]
     },
     resetChatUi(state) {
       state.messages = []
       state.chatStatus = 'idle'
       state.error = null
-      state.streamingRequestId = null
-      state.runningSessionId = null
+      state.runningSessions = {}
+      state.confirmFocusToolUseId = null
     }
   }
 })
 
-export const { setSession, setMessages, addMessage, patchMessage, setChatStatus, resetChatUi } = chatSlice.actions
+export const {
+  setSession,
+  setMessages,
+  addMessage,
+  patchMessage,
+  setChatStatus,
+  setConfirmFocusToolUseId,
+  removeRunningSession,
+  resetChatUi
+} = chatSlice.actions
 export default chatSlice.reducer

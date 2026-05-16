@@ -248,6 +248,8 @@ export interface AppConfig {
   thinkingEnabled: boolean
   workDir: string
   uiTheme: UiThemeMode
+  /** 多会话并行 LLM 请求上限（设置页可配置） */
+  maxParallelChatSessions: number
   tools: ToolsConfig
   skills: SkillsConfig
 }

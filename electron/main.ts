@@ -5,6 +5,7 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
 import { mergeToolsConfig } from '../src/shared/domainTypes'
+import type { AppDatabase } from './database'
 import { getConfigValue, openDatabase, setConfigValue } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
@@ -67,6 +68,7 @@ function getRendererIndexPath(): string {
 }
 
 let workDirState = ''
+let appDb: AppDatabase | null = null
 
 async function createMainWindow(): Promise<void> {
   const win = new BrowserWindow({
@@ -106,6 +108,7 @@ async function createMainWindow(): Promise<void> {
 app.whenReady().then(() => {
   const dbPath = path.join(app.getPath('userData'), 'spaceassistant-data.json')
   const db = openDatabase(dbPath)
+  appDb = db
 
   workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
 
@@ -172,6 +175,10 @@ app.whenReady().then(() => {
 
   void createMainWindow()
   setupAppMenu()
+})
+
+app.on('before-quit', () => {
+  appDb?.flushSave()
 })
 
 app.on('window-all-closed', () => {

@@ -34,6 +34,12 @@ import {
   effectiveMaxTokensForBuiltinToolLoop,
   TOOL_LOOP_MAX_TOKENS_WITH_BUILTIN_TOOLS_MIN
 } from '../src/shared/llm/toolLoopMaxTokens'
+import {
+  checkWritePathConflict,
+  claimWritePath,
+  releaseWritePath,
+  releaseAllWritePathsForSession
+} from './toolWriteConflict'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -44,6 +50,11 @@ export function getFileStateCacheForSession(sessionId: string): FileStateCache {
     fileCaches.set(sessionId, c)
   }
   return c
+}
+
+export function clearSessionToolResources(sessionId: string): void {
+  fileCaches.delete(sessionId)
+  releaseAllWritePathsForSession(sessionId)
 }
 
 export type ClaudeContentBlockMessage = {
@@ -524,6 +535,34 @@ async function runToolChatSessionInner(
         continue
       }
 
+      const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
+      if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
+        const conflict = checkWritePathConflict(sessionId, relPath)
+        if (conflict) {
+          logAgentEvent('error', 'tool.error', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            input: inputObj,
+            error: conflict
+          })
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: conflict
+          })
+          sender.send('tool:result', {
+            requestId,
+            toolUseId,
+            result: { success: false, error: conflict }
+          })
+          continue
+        }
+        claimWritePath(sessionId, relPath)
+      }
+
       const signal = registerToolCancel(requestId, toolUseId)
       const sendProgress = (status: string, message?: string) => {
         if (status === 'error') {
@@ -561,6 +600,9 @@ async function runToolChatSessionInner(
         }
       }
       clearToolCancel(requestId, toolUseId)
+      if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
+        releaseWritePath(sessionId, relPath)
+      }
 
       const durationMs = Date.now() - execStartedAt
       if (execResult.success) {

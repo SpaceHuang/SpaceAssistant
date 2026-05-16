@@ -18,6 +18,7 @@ import type {
   ToolsConfig,
   UiThemeMode
 } from '../src/shared/domainTypes'
+import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { createSkillManager } from './skills/skillManager'
@@ -43,6 +44,7 @@ import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from './fileRe
 import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
+import { clearSessionToolResources } from './toolChatLoop'
 import { spawn } from 'child_process'
 
 const CONFIG_KEYS = {
@@ -57,7 +59,8 @@ const CONFIG_KEYS = {
   apiKeyEnc: 'secrets.apiKeyEnc',
   tools: 'config.tools',
   skills: 'config.skills',
-  uiTheme: 'config.uiTheme'
+  uiTheme: 'config.uiTheme',
+  maxParallelChatSessions: 'config.maxParallelChatSessions'
 } as const
 
 export type AppIpcContext = {
@@ -172,6 +175,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('session:delete', async (_e, sessionId: string): Promise<void> => {
     const s = getSession(ctx.db, sessionId)
+    clearSessionToolResources(sessionId)
     deleteSession(ctx.db, sessionId)
     if (s) await ctx.backup.deleteBackup(s)
   })
@@ -231,6 +235,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const uiThemeRaw = getConfigValue(ctx.db, CONFIG_KEYS.uiTheme) as UiThemeMode | undefined
     const uiTheme: UiThemeMode =
       uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
+    const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
     return {
       apiKeyPresent: Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
@@ -242,6 +247,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
       workDir: wd,
       uiTheme,
+      maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
       tools,
       skills
     }
@@ -264,6 +270,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         tools: Partial<ToolsConfig>
         skills: Partial<SkillsConfig>
         uiTheme: UiThemeMode
+        maxParallelChatSessions: number
       }>
     ): Promise<void> => {
       if (payload.baseUrl !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.baseUrl, payload.baseUrl)
@@ -315,6 +322,14 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       if (payload.uiTheme !== undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.uiTheme, payload.uiTheme)
       }
+      if (payload.maxParallelChatSessions !== undefined) {
+        setConfigValue(
+          ctx.db,
+          CONFIG_KEYS.maxParallelChatSessions,
+          String(clampMaxParallelChatSessions(payload.maxParallelChatSessions))
+        )
+      }
+      ctx.db.flushSave()
     }
   )
 

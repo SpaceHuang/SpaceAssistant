@@ -4,6 +4,11 @@ import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry, UiThemeMode } from '../../../shared/domainTypes'
 import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
+import {
+  DEFAULT_MAX_PARALLEL_CHAT_SESSIONS,
+  MAX_MAX_PARALLEL_CHAT_SESSIONS,
+  MIN_MAX_PARALLEL_CHAT_SESSIONS
+} from '../../../shared/chatParallelConfig'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { SkillsTab } from './SkillsTab'
 import { readSkillActivationLog } from '../../services/skillActivationLog'
@@ -165,6 +170,7 @@ export function ConfigModal() {
   const [pyTest, setPyTest] = useState<{ ok: boolean; text: string } | null>(null)
   const [pyTesting, setPyTesting] = useState(false)
   const [uiTheme, setUiTheme] = useState<UiThemeMode>('system')
+  const [maxParallelChatSessions, setMaxParallelChatSessions] = useState(DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
 
   const refreshConfig = async () => {
     const next = await window.api.configGet()
@@ -203,6 +209,7 @@ export function ConfigModal() {
       })
       setPyTest(null)
       setUiTheme(cfg.uiTheme ?? 'system')
+      setMaxParallelChatSessions(cfg.maxParallelChatSessions ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
     }
   }, [open, cfg, form])
 
@@ -287,6 +294,7 @@ export function ConfigModal() {
         grepTimeoutSec: toolUi.grepTimeoutSec
       },
       uiTheme,
+      maxParallelChatSessions,
       ...(v.apiKey && String(v.apiKey).trim() ? { apiKey: String(v.apiKey).trim() } : {})
     })
     const next = await window.api.configGet()
@@ -399,6 +407,18 @@ export function ConfigModal() {
                       <Radio value="light">浅色</Radio>
                       <Radio value="dark">深色</Radio>
                     </Radio.Group>
+                  </Form.Item>
+                  <Form.Item
+                    label="并行会话上限"
+                    extra="多个会话可同时向 AI 发起请求（含工具循环）。超出上限时将提示稍后再试。"
+                  >
+                    <InputNumber
+                      min={MIN_MAX_PARALLEL_CHAT_SESSIONS}
+                      max={MAX_MAX_PARALLEL_CHAT_SESSIONS}
+                      value={maxParallelChatSessions}
+                      onChange={(v) => setMaxParallelChatSessions(v ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)}
+                      style={{ width: '100%' }}
+                    />
                   </Form.Item>
                 </>
               )
