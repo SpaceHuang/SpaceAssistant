@@ -3,7 +3,22 @@ import { App, Typography } from 'antd'
 
 const { Text } = Typography
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { addMessage, patchMessage, setChatStatus, setMessages } from '../../store/chatSlice'
+import { addMessage, setChatStatus, setConfirmFocusToolUseId, setMessages } from '../../store/chatSlice'
+import {
+  clearLiveSession,
+  countRunningSessions,
+  finishSessionRun,
+  flushStreamPersist,
+  getLiveMessages,
+  initLiveSessionFromStore,
+  getMaxParallelChatSessions,
+  mergeDbAndLive,
+  registerSessionRun,
+  routePatchMessage,
+  routeStreamPatchMessage,
+  isSessionRunning
+} from '../../services/chatRunnerService'
+import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
@@ -59,8 +74,8 @@ export function ChatView() {
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
-  const chatStatus = useTypedSelector((s) => s.chat.chatStatus)
-  const streamingRequestId = useTypedSelector((s) => s.chat.streamingRequestId)
+  const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
+  const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -77,7 +92,15 @@ export function ChatView() {
       dispatch(setMessages([]))
       return
     }
-    void window.api.chatGetMessages({ sessionId }).then((rows) => dispatch(setMessages(rows)))
+    let cancelled = false
+    void window.api.chatGetMessages({ sessionId }).then((rows) => {
+      if (cancelled) return
+      const live = getLiveMessages(sessionId)
+      dispatch(setMessages(mergeDbAndLive(rows, live)))
+    })
+    return () => {
+      cancelled = true
+    }
   }, [sessionId, dispatch])
 
   const scrollBottom = () => {
@@ -87,12 +110,17 @@ export function ChatView() {
     })
   }
 
+  const streamingRequestId = sessionId ? runningSessions[sessionId]?.requestId ?? null : null
+
   const onToolConfirm = useCallback(
     (toolUseId: string, approved: boolean) => {
-      if (!streamingRequestId) return
-      void window.api.toolConfirmResponse({ requestId: streamingRequestId, toolUseId, approved })
+      const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
+      const requestId = pending?.requestId ?? streamingRequestId
+      if (!requestId) return
+      pendingConfirmStore.respond(requestId, toolUseId, approved)
+      dispatch(setConfirmFocusToolUseId(null))
     },
-    [streamingRequestId]
+    [dispatch, sessionId, streamingRequestId]
   )
 
   const onToolCancel = useCallback(
@@ -112,12 +140,13 @@ export function ChatView() {
 
   const finishCancelled = useCallback(
     async (
+      runSessionId: string,
+      runRequestId: string,
       assistantId: string,
       contentState: ContentState,
       thinkingState: ThinkingState,
       toolCalls?: Message['toolCalls']
     ) => {
-      if (!sessionId) return
       const thinking = finalizeThinking(thinkingState)
       const contentSegments = finalizeContentSegments(contentState)
       const patch = {
@@ -127,32 +156,42 @@ export function ChatView() {
         thinking,
         toolCalls
       }
-      dispatch(patchMessage({ id: assistantId, patch }))
+      flushStreamPersist(runSessionId, assistantId)
+      routePatchMessage(runSessionId, assistantId, patch)
       await window.api.chatPatchMessage({
         messageId: assistantId,
-        sessionId,
+        sessionId: runSessionId,
         patch
       })
-      dispatch(setChatStatus({ status: 'completed', requestId: null }))
+      dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
+      finishSessionRun(runSessionId, runRequestId, assistantId)
+      clearLiveSession(runSessionId)
       message.info(CHAT_CANCELLED_MESSAGE)
       scrollBottom()
     },
-    [dispatch, sessionId]
+    [dispatch, message]
   )
 
   const send = useCallback(
     async (text: string) => {
-      const liveStatus = store.getState().chat.chatStatus
-      if (liveStatus === 'streaming' || liveStatus === 'sending') return
       if (!sessionId || !cfg) {
         message.warning('请先选择会话并等待配置加载')
+        return
+      }
+      const runSessionId = sessionId
+      if (isSessionRunning(runSessionId)) {
+        message.warning('当前会话已有任务在执行')
+        return
+      }
+      const maxParallel = getMaxParallelChatSessions()
+      if (countRunningSessions() >= maxParallel) {
+        message.warning(`最多同时执行 ${maxParallel} 个会话，请稍后再试`)
         return
       }
       if (!cfg.apiKeyPresent) {
         message.warning('请先在设置中配置 API Key')
         return
       }
-
       const sessionSkillsState = normalizeSessionSkillsState(currentSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE)
       const cmd = await parseSkillCommand(text, sessionSkillsState)
       if (cmd.type === 'command') {
@@ -167,7 +206,7 @@ export function ChatView() {
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
-        sessionId,
+        sessionId: runSessionId,
         role: 'user',
         content: text,
         timestamp: Date.now(),
@@ -176,12 +215,14 @@ export function ChatView() {
       }
 
       dispatch(addMessage(userMsg))
-      await window.api.chatAppendMessage(userMsg)
 
       const assistantId = crypto.randomUUID()
+      const findAssistantRow = () =>
+        getLiveMessages(runSessionId)?.find((m) => m.id === assistantId) ??
+        store.getState().chat.messages.find((m) => m.id === assistantId)
       const assistantMsg: Message = {
         id: assistantId,
-        sessionId,
+        sessionId: runSessionId,
         role: 'assistant',
         content: '',
         timestamp: Date.now(),
@@ -189,13 +230,17 @@ export function ChatView() {
         schemaVersion: CURRENT_SCHEMA_VERSION
       }
       dispatch(addMessage(assistantMsg))
+      initLiveSessionFromStore(runSessionId)
+
+      await window.api.chatAppendMessage(userMsg)
       await window.api.chatAppendMessage(assistantMsg)
 
       const requestId = crypto.randomUUID()
+      registerSessionRun(runSessionId, requestId)
       abortRequestedRef.current = false
-      dispatch(setChatStatus({ status: 'streaming', requestId, sessionId }))
+      dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
 
-      const historyForApi = [...messages, userMsg]
+      const historyForApi = [...store.getState().chat.messages]
       const useToolsApi = cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools).length > 0
 
       const activeSkills = await window.api.skillMatch({ userInput: text, sessionSkillsState })
@@ -221,7 +266,13 @@ export function ChatView() {
       }
 
       if (abortRequestedRef.current) {
-        await finishCancelled(assistantId, createContentState(assistantMsg.timestamp), createThinkingState(assistantMsg.timestamp))
+        await finishCancelled(
+          runSessionId,
+          requestId,
+          assistantId,
+          createContentState(assistantMsg.timestamp),
+          createThinkingState(assistantMsg.timestamp)
+        )
         return
       }
 
@@ -233,7 +284,8 @@ export function ChatView() {
           dispatch,
           assistantMessageId: assistantId,
           getRequestId: () => requestId,
-          onRecordsChange: () => scrollBottom()
+          onRecordsChange: () => scrollBottom(),
+          applyAssistantPatch: (patch) => routePatchMessage(runSessionId, assistantId, patch)
         })
         controller.subscribe()
 
@@ -251,12 +303,7 @@ export function ChatView() {
               thinkingState = closeOpenThinkingSegment(thinkingState)
             }
             contentState = appendContentDelta(contentState, d.text)
-            dispatch(
-              patchMessage({
-                id: assistantId,
-                patch: buildAssistantStreamPatch(thinkingState, contentState)
-              })
-            )
+            routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
             scrollBottom()
           })
         )
@@ -267,12 +314,7 @@ export function ChatView() {
               contentState = closeOpenContentSegment(contentState)
             }
             thinkingState = appendThinkingDelta(thinkingState, d.text)
-            dispatch(
-              patchMessage({
-                id: assistantId,
-                patch: buildAssistantStreamPatch(thinkingState, contentState)
-              })
-            )
+            routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
             scrollBottom()
           })
         )
@@ -289,19 +331,14 @@ export function ChatView() {
               changed = true
             }
             if (!changed) return
-            dispatch(
-              patchMessage({
-                id: assistantId,
-                patch: buildAssistantStreamPatch(thinkingState, contentState)
-              })
-            )
+            routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
           })
         )
 
         try {
           const payload = buildToolChatPayload({
             requestId,
-            sessionId,
+            sessionId: runSessionId,
             model: cfg.model,
             baseUrl: cfg.baseUrl || undefined,
             messages: historyForApi,
@@ -313,17 +350,29 @@ export function ChatView() {
           const res = await window.api.claudeChatCreateWithTools(payload)
           if (!res.ok) {
             if (isChatCancelledError(res.error) || abortRequestedRef.current) {
-              const assistantRow = store.getState().chat.messages.find((m) => m.id === assistantId)
-              await finishCancelled(assistantId, contentState, thinkingState, assistantRow?.toolCalls)
+              await finishCancelled(
+                runSessionId,
+                requestId,
+                assistantId,
+                contentState,
+                thinkingState,
+                findAssistantRow()?.toolCalls
+              )
               return
             }
-            dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: contentState.content || res.error } }))
+            flushStreamPersist(runSessionId, assistantId)
+            routePatchMessage(runSessionId, assistantId, {
+              status: 'failed',
+              content: contentState.content || res.error
+            })
             await window.api.chatPatchMessage({
               messageId: assistantId,
-              sessionId,
+              sessionId: runSessionId,
               patch: { status: 'failed', content: contentState.content || res.error }
             })
-            dispatch(setChatStatus({ status: 'error', error: res.error, requestId: null }))
+            dispatch(setChatStatus({ status: 'error', error: res.error, requestId: null, sessionId: runSessionId }))
+            finishSessionRun(runSessionId, requestId, assistantId)
+            clearLiveSession(runSessionId)
             message.error(res.error)
             return
           }
@@ -331,24 +380,20 @@ export function ChatView() {
           if (textOut !== contentState.content) {
             contentState = { ...contentState, content: textOut }
           }
-          const assistantRow = store.getState().chat.messages.find((m) => m.id === assistantId)
+          flushStreamPersist(runSessionId, assistantId)
+          const assistantRow = findAssistantRow()
           const thinking = finalizeThinking(thinkingState)
           const contentSegments = finalizeContentSegments(contentState)
-          dispatch(
-            patchMessage({
-              id: assistantId,
-              patch: {
-                content: textOut,
-                contentSegments,
-                status: 'completed',
-                thinking,
-                toolCalls: assistantRow?.toolCalls
-              }
-            })
-          )
+          routePatchMessage(runSessionId, assistantId, {
+            content: textOut,
+            contentSegments,
+            status: 'completed',
+            thinking,
+            toolCalls: assistantRow?.toolCalls
+          })
           await window.api.chatPatchMessage({
             messageId: assistantId,
-            sessionId,
+            sessionId: runSessionId,
             patch: {
               content: textOut,
               contentSegments,
@@ -357,22 +402,33 @@ export function ChatView() {
               toolCalls: assistantRow?.toolCalls
             }
           })
-          dispatch(setChatStatus({ status: 'completed', requestId: null }))
+          dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
+          finishSessionRun(runSessionId, requestId, assistantId)
+          clearLiveSession(runSessionId)
           scrollBottom()
         } catch (e) {
           const err = e instanceof Error ? e.message : String(e)
           if (isChatCancelledError(err) || abortRequestedRef.current) {
-            const assistantRow = store.getState().chat.messages.find((m) => m.id === assistantId)
-            await finishCancelled(assistantId, contentState, thinkingState, assistantRow?.toolCalls)
+            await finishCancelled(
+              runSessionId,
+              requestId,
+              assistantId,
+              contentState,
+              thinkingState,
+              findAssistantRow()?.toolCalls
+            )
             return
           }
-          dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: contentState.content || err } }))
+          flushStreamPersist(runSessionId, assistantId)
+          routePatchMessage(runSessionId, assistantId, { status: 'failed', content: contentState.content || err })
           await window.api.chatPatchMessage({
             messageId: assistantId,
-            sessionId,
+            sessionId: runSessionId,
             patch: { status: 'failed', content: contentState.content || err }
           })
-          dispatch(setChatStatus({ status: 'error', error: err, requestId: null }))
+          dispatch(setChatStatus({ status: 'error', error: err, requestId: null, sessionId: runSessionId }))
+          finishSessionRun(runSessionId, requestId, assistantId)
+          clearLiveSession(runSessionId)
           message.error(err)
         } finally {
           cleanup()
@@ -397,12 +453,7 @@ export function ChatView() {
               thinkingState = closeOpenThinkingSegment(thinkingState)
             }
             contentState = appendContentDelta(contentState, t)
-            dispatch(
-              patchMessage({
-                id: assistantId,
-                patch: buildAssistantStreamPatch(thinkingState, contentState)
-              })
-            )
+            routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
             scrollBottom()
           },
           onThinkingDelta: (t) => {
@@ -410,31 +461,22 @@ export function ChatView() {
               contentState = closeOpenContentSegment(contentState)
             }
             thinkingState = appendThinkingDelta(thinkingState, t)
-            dispatch(
-              patchMessage({
-                id: assistantId,
-                patch: buildAssistantStreamPatch(thinkingState, contentState)
-              })
-            )
+            routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
             scrollBottom()
           },
           onDone: async () => {
+            flushStreamPersist(runSessionId, assistantId)
             const thinking = finalizeThinking(thinkingState)
             const contentSegments = finalizeContentSegments(contentState)
-            dispatch(
-              patchMessage({
-                id: assistantId,
-                patch: {
-                  content: contentState.content,
-                  contentSegments,
-                  status: 'completed',
-                  thinking
-                }
-              })
-            )
+            routePatchMessage(runSessionId, assistantId, {
+              content: contentState.content,
+              contentSegments,
+              status: 'completed',
+              thinking
+            })
             await window.api.chatPatchMessage({
               messageId: assistantId,
-              sessionId,
+              sessionId: runSessionId,
               patch: {
                 content: contentState.content,
                 contentSegments,
@@ -442,33 +484,38 @@ export function ChatView() {
                 thinking
               }
             })
-            dispatch(setChatStatus({ status: 'completed', requestId: null }))
+            dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
+            finishSessionRun(runSessionId, requestId, assistantId)
+            clearLiveSession(runSessionId)
             scrollBottom()
           },
           onError: async (err) => {
             if (isChatCancelledError(err) || abortRequestedRef.current) {
-              await finishCancelled(assistantId, contentState, thinkingState)
+              await finishCancelled(runSessionId, requestId, assistantId, contentState, thinkingState)
               return
             }
-            dispatch(patchMessage({ id: assistantId, patch: { status: 'failed', content: contentState.content || err } }))
+            flushStreamPersist(runSessionId, assistantId)
+            routePatchMessage(runSessionId, assistantId, { status: 'failed', content: contentState.content || err })
             await window.api.chatPatchMessage({
               messageId: assistantId,
-              sessionId,
+              sessionId: runSessionId,
               patch: { status: 'failed', content: contentState.content || err }
             })
-            dispatch(setChatStatus({ status: 'error', error: err, requestId: null }))
+            dispatch(setChatStatus({ status: 'error', error: err, requestId: null, sessionId: runSessionId }))
+            finishSessionRun(runSessionId, requestId, assistantId)
+            clearLiveSession(runSessionId)
             message.error(err)
           }
         }
       )
     },
-    [cfg, currentSession, dispatch, messages, sessionId, finishCancelled, onToolCancel, onToolConfirm]
+    [cfg, currentSession, dispatch, sessionId, finishCancelled, message]
   )
 
-  const running = chatStatus === 'streaming' || chatStatus === 'sending'
+  const running = Boolean(sessionId && runningSessions[sessionId])
 
   const toolsInteractive =
-    cfg?.tools.enabled && chatStatus === 'streaming' && streamingRequestId && streamingAssistantId
+    cfg?.tools.enabled && streamingRequestId && streamingAssistantId
       ? {
           requestId: streamingRequestId,
           confirmMode: cfg.tools.confirmMode,
@@ -497,6 +544,7 @@ export function ChatView() {
               key={m.id}
               message={m}
               toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
+              focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
             />
           ))
         )}

@@ -1,0 +1,159 @@
+import type { Message } from '../../shared/domainTypes'
+import { DEFAULT_MAX_PARALLEL_CHAT_SESSIONS, clampMaxParallelChatSessions } from '../../shared/chatParallelConfig'
+import { store } from '../store'
+import { patchMessage, removeRunningSession } from '../store/chatSlice'
+import { pendingConfirmStore } from './pendingConfirmStore'
+import {
+  registerRunRequest,
+  unregisterRunRequest,
+  unregisterRunRequestsForSession
+} from './runRequestIndex'
+
+/** @deprecated 使用 getMaxParallelChatSessions()；保留常量供测试/默认值引用 */
+export const MAX_PARALLEL_CHAT_SESSIONS = DEFAULT_MAX_PARALLEL_CHAT_SESSIONS
+
+export function getMaxParallelChatSessions(): number {
+  const raw = store.getState().config.config?.maxParallelChatSessions
+  return clampMaxParallelChatSessions(raw ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
+}
+
+const STREAM_PERSIST_MS = 2000
+
+const liveBySession = new Map<string, Message[]>()
+const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const persistPendingPatch = new Map<string, Partial<Message>>()
+
+function cloneMessages(msgs: Message[]): Message[] {
+  return msgs.map((m) => ({
+    ...m,
+    toolCalls: m.toolCalls ? m.toolCalls.map((t) => ({ ...t })) : undefined
+  }))
+}
+
+function persistKey(sessionId: string, messageId: string): string {
+  return `${sessionId}:${messageId}`
+}
+
+/**
+ * 将 DB 历史与内存中的 live 快照合并（同 id 以 live 为准），按时间戳排序。
+ */
+export function mergeDbAndLive(db: Message[], live?: Message[] | null): Message[] {
+  if (!live?.length) return db
+  const map = new Map<string, Message>()
+  for (const m of db) map.set(m.id, m)
+  for (const m of live) {
+    map.set(m.id, {
+      ...m,
+      toolCalls: m.toolCalls ? m.toolCalls.map((t) => ({ ...t })) : undefined
+    })
+  }
+  return [...map.values()].sort((a, b) => a.timestamp - b.timestamp)
+}
+
+export function initLiveSessionFromStore(sessionId: string): void {
+  const rows = store.getState().chat.messages
+  liveBySession.set(sessionId, cloneMessages(rows))
+}
+
+export function getLiveMessages(sessionId: string): Message[] | undefined {
+  const x = liveBySession.get(sessionId)
+  return x ? cloneMessages(x) : undefined
+}
+
+export function patchLiveMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
+  const arr = liveBySession.get(sessionId)
+  if (!arr) return
+  const m = arr.find((x) => x.id === messageId)
+  if (!m) return
+  Object.assign(m, patch)
+}
+
+/** 更新 live；若当前正在查看该会话，则同步到 Redux messages */
+export function routePatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
+  patchLiveMessage(sessionId, messageId, patch)
+  if (store.getState().chat.currentSessionId === sessionId) {
+    store.dispatch(patchMessage({ id: messageId, patch }))
+  }
+}
+
+/** 流式增量：同步 live/Redux，并按节流写入 DB（阶段 3） */
+export function routeStreamPatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
+  routePatchMessage(sessionId, messageId, patch)
+  scheduleThrottledPersist(sessionId, messageId, patch)
+}
+
+function scheduleThrottledPersist(sessionId: string, messageId: string, patch: Partial<Message>): void {
+  const key = persistKey(sessionId, messageId)
+  const prev = persistPendingPatch.get(key) ?? {}
+  persistPendingPatch.set(key, { ...prev, ...patch })
+
+  const existing = persistTimers.get(key)
+  if (existing) clearTimeout(existing)
+
+  const timer = setTimeout(() => {
+    persistTimers.delete(key)
+    const merged = persistPendingPatch.get(key)
+    persistPendingPatch.delete(key)
+    if (!merged) return
+    void window.api.chatPatchMessage({
+      messageId,
+      sessionId,
+      patch: merged
+    })
+  }, STREAM_PERSIST_MS)
+
+  persistTimers.set(key, timer)
+}
+
+export function flushStreamPersist(sessionId: string, messageId: string): void {
+  const key = persistKey(sessionId, messageId)
+  const timer = persistTimers.get(key)
+  if (timer) clearTimeout(timer)
+  persistTimers.delete(key)
+  const merged = persistPendingPatch.get(key)
+  persistPendingPatch.delete(key)
+  if (merged) {
+    void window.api.chatPatchMessage({ messageId, sessionId, patch: merged })
+  }
+}
+
+export function clearLiveSession(sessionId: string): void {
+  liveBySession.delete(sessionId)
+  for (const key of [...persistTimers.keys()]) {
+    if (key.startsWith(`${sessionId}:`)) {
+      clearTimeout(persistTimers.get(key))
+      persistTimers.delete(key)
+      persistPendingPatch.delete(key)
+    }
+  }
+}
+
+export function countRunningSessions(): number {
+  return Object.keys(store.getState().chat.runningSessions).length
+}
+
+export function isSessionRunning(sessionId: string): boolean {
+  return Boolean(store.getState().chat.runningSessions[sessionId])
+}
+
+export function registerSessionRun(sessionId: string, requestId: string): void {
+  registerRunRequest(sessionId, requestId)
+}
+
+export function finishSessionRun(sessionId: string, requestId: string, assistantMessageId?: string): void {
+  if (assistantMessageId) flushStreamPersist(sessionId, assistantMessageId)
+  unregisterRunRequest(requestId)
+}
+
+export function abortSessionRun(sessionId: string): void {
+  const meta = store.getState().chat.runningSessions[sessionId]
+  if (meta) {
+    void window.api.claudeChatCancel({ requestId: meta.requestId })
+    unregisterRunRequest(meta.requestId)
+  } else {
+    unregisterRunRequestsForSession(sessionId)
+  }
+  pendingConfirmStore.rejectAllForSession(sessionId)
+  clearLiveSession(sessionId)
+  store.dispatch(removeRunningSession(sessionId))
+}

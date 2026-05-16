@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Space, Typography } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
@@ -11,6 +11,7 @@ const { Text } = Typography
 type Props = {
   record: ToolCallRecord
   confirmMode: 'diff' | 'direct'
+  focus?: boolean
   onConfirm?: (approved: boolean) => void
   onCancel?: () => void
 }
@@ -28,7 +29,8 @@ function defaultExpanded(record: ToolCallRecord): boolean {
   return record.status === 'calling' || record.status === 'executing'
 }
 
-export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props) {
+export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel }: Props) {
+  const cardRef = useRef<HTMLDivElement>(null)
   const isActive = record.status === 'calling' || record.status === 'executing' || record.status === 'confirming'
   const isFailed = record.status === 'failed' || record.status === 'rejected'
   const fileTool = isFileTool(record.toolName)
@@ -42,6 +44,13 @@ export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props
     (!fileTool && record.status === 'completed' && Object.keys(record.input).length > 0)
 
   const [expanded, setExpanded] = useState(() => defaultExpanded(record))
+
+  useEffect(() => {
+    if (focus && cardRef.current) {
+      cardRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      setExpanded(true)
+    }
+  }, [focus])
 
   useEffect(() => {
     if (fileWriteTool) {
@@ -95,11 +104,16 @@ export function ToolCallCard({ record, confirmMode, onConfirm, onCancel }: Props
   }
 
   if (writeConfirming && onConfirm) {
-    return <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+      </div>
+    )
   }
 
   return (
     <div
+      ref={cardRef}
       className={[
         'tool-row',
         isActive ? 'tool-row--active' : '',
