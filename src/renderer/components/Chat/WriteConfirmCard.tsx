@@ -74,7 +74,7 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
             title="允许"
             onClick={() => onConfirm(true)}
           >
-            <Check size={15} strokeWidth={2} />
+            <Check size={16} strokeWidth={2.25} />
           </button>
           <button
             type="button"
@@ -83,7 +83,7 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
             title="拒绝"
             onClick={() => onConfirm(false)}
           >
-            <X size={15} strokeWidth={2} />
+            <X size={16} strokeWidth={2.25} />
           </button>
         </div>
       </div>

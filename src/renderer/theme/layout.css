@@ -195,14 +195,17 @@
   line-height: 0;
 }
 
-.session-item-icon--idle {
+.session-item-icon--idle::before {
+  content: '';
+  display: block;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--sa-text-tertiary);
+  flex-shrink: 0;
 }
 
-.session-item--active .session-item-icon--idle {
+.session-item--active .session-item-icon--idle::before {
   background: var(--sa-text-secondary);
 }
 
@@ -690,7 +693,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
+  min-height: 34px;
   padding: 0 8px 0 10px;
   background: var(--sa-bg-subtle);
   border-bottom: 1px solid var(--sa-border);
@@ -730,35 +733,60 @@
 .write-confirm-card__actions {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  margin-left: 4px;
+  gap: 8px;
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 0;
 }
 
 .write-confirm-card__action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  border: none;
+  line-height: 0;
+  border: 1px solid transparent;
   border-radius: var(--sa-radius-sm);
   background: transparent;
-  color: var(--sa-text-secondary);
   cursor: pointer;
   transition:
     background var(--sa-duration-fast),
-    color var(--sa-duration-fast);
+    border-color var(--sa-duration-fast),
+    color var(--sa-duration-fast),
+    box-shadow var(--sa-duration-fast);
+}
+
+.write-confirm-card__action svg {
+  display: block;
+  flex-shrink: 0;
+}
+
+.write-confirm-card__action--allow {
+  background: var(--sa-write-confirm-allow-bg);
+  border-color: var(--sa-write-confirm-allow-border);
+  color: var(--sa-write-confirm-allow-fg);
 }
 
 .write-confirm-card__action--allow:hover {
-  color: #389e0d;
-  background: var(--sa-diff-add-bg);
+  background: var(--sa-write-confirm-allow-hover-bg);
+  border-color: var(--sa-write-confirm-allow-hover-border);
+  color: var(--sa-write-confirm-allow-fg);
+  box-shadow: var(--sa-shadow-sm);
+}
+
+.write-confirm-card__action--deny {
+  background: var(--sa-write-confirm-deny-bg);
+  border-color: var(--sa-write-confirm-deny-border);
+  color: var(--sa-write-confirm-deny-fg);
 }
 
 .write-confirm-card__action--deny:hover {
-  color: #cf1322;
-  background: var(--sa-diff-remove-bg);
+  background: var(--sa-write-confirm-deny-hover-bg);
+  border-color: var(--sa-write-confirm-deny-hover-border);
+  color: var(--sa-write-confirm-deny-fg);
+  box-shadow: var(--sa-shadow-sm);
 }
 
 .write-confirm-card__action:focus-visible {
