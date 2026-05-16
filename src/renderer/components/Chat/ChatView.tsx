@@ -34,6 +34,7 @@ import { buildSystemPromptFromSkills, formatSkillHint, truncateSystemPrompt } fr
 import type { Message } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
+import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatBubble } from './ChatBubble'
 import { MessageInput } from './MessageInput'
 import { SkillHintBubble } from './SkillHintBubble'
@@ -71,6 +72,7 @@ function buildClaudePayload(history: Message[]) {
 
 export function ChatView() {
   const { message } = App.useApp()
+  const { openFile } = useDetailPanel()
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
@@ -101,6 +103,16 @@ export function ChatView() {
     return () => {
       cancelled = true
     }
+  }, [sessionId, dispatch])
+
+  useEffect(() => {
+    if (!sessionId) return
+    const t = window.setTimeout(() => {
+      void window.api.sessionBackfillAutoTitleIfNeeded({ sessionId }).then((s) => {
+        if (s) dispatch(upsertSession(s))
+      })
+    }, 450)
+    return () => window.clearTimeout(t)
   }, [sessionId, dispatch])
 
   const scrollBottom = () => {
@@ -514,6 +526,15 @@ export function ChatView() {
 
   const running = Boolean(sessionId && runningSessions[sessionId])
 
+  const handleOpenFile = useCallback(
+    (relPath: string) => {
+      void openFile(relPath).catch((e) => {
+        message.error(e instanceof Error ? e.message : String(e))
+      })
+    },
+    [message, openFile]
+  )
+
   const toolsInteractive =
     cfg?.tools.enabled && streamingRequestId && streamingAssistantId
       ? {
@@ -545,6 +566,7 @@ export function ChatView() {
               message={m}
               toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
               focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
+              onOpenFile={handleOpenFile}
             />
           ))
         )}

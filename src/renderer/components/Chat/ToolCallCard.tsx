@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Space, Typography } from 'antd'
+import { Button, Space } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { formatToolLabel, formatToolLabelTitle, isFileTool, isFileWriteTool } from './toolCallDisplay'
 import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
-
-const { Text } = Typography
+import { WriteSuccessCard } from './WriteSuccessCard'
 
 type Props = {
   record: ToolCallRecord
@@ -14,6 +13,7 @@ type Props = {
   focus?: boolean
   onConfirm?: (approved: boolean) => void
   onCancel?: () => void
+  onOpenFile?: (relPath: string) => void
 }
 
 function truncate(s: string, max: number): string {
@@ -29,7 +29,7 @@ function defaultExpanded(record: ToolCallRecord): boolean {
   return record.status === 'calling' || record.status === 'executing'
 }
 
-export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel }: Props) {
+export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel, onOpenFile }: Props) {
   const cardRef = useRef<HTMLDivElement>(null)
   const isActive = record.status === 'calling' || record.status === 'executing' || record.status === 'confirming'
   const isFailed = record.status === 'failed' || record.status === 'rejected'
@@ -103,10 +103,20 @@ export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel }
     setExpanded((v) => !v)
   }
 
+  const writeSucceeded = fileWriteTool && record.status === 'completed' && record.result?.success
+
   if (writeConfirming && onConfirm) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+      </div>
+    )
+  }
+
+  if (writeSucceeded) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <WriteSuccessCard record={record} onView={onOpenFile} />
       </div>
     )
   }
@@ -171,9 +181,9 @@ export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel }
           ) : null}
 
           {(record.status === 'failed' || record.status === 'rejected') && (
-            <Text type="danger" style={{ fontSize: 12 }}>
+            <span className="tool-row-detail__message">
               {record.result?.error ?? (record.status === 'rejected' ? '已拒绝' : '失败')}
-            </Text>
+            </span>
           )}
 
           {record.status === 'completed' && resultStr ? (

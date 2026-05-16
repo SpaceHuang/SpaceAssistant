@@ -9,6 +9,8 @@ const api: SpaceAssistantApi = {
   sessionCreate: (payload) => ipcRenderer.invoke('session:create', payload),
   sessionGet: (sessionId) => ipcRenderer.invoke('session:get', sessionId),
   sessionUpdate: (payload) => ipcRenderer.invoke('session:update', payload),
+  sessionBackfillAutoTitleIfNeeded: (payload: { sessionId: string }) =>
+    ipcRenderer.invoke('session:backfill-auto-title-if-needed', payload) as Promise<Session | undefined>,
   sessionDelete: (sessionId) => ipcRenderer.invoke('session:delete', sessionId),
 
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
@@ -71,6 +73,12 @@ const api: SpaceAssistantApi = {
     const fn = () => cb()
     ipcRenderer.on('app:open-about', fn)
     return () => ipcRenderer.removeListener('app:open-about', fn)
+  },
+
+  sessionOnTitleGenerated: (cb) => {
+    const fn = (_e: unknown, data: { session: Session }) => cb(data)
+    ipcRenderer.on('session:title-generated', fn)
+    return () => ipcRenderer.removeListener('session:title-generated', fn)
   },
 
   toolConfirmResponse: (payload) => ipcRenderer.invoke('tool:confirm-response', payload),

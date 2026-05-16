@@ -11,6 +11,8 @@ import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolsConfig } from '../src/shared/domainTypes'
+import type { AppDatabase } from './database'
+import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
 import {
   ChatCancelledError,
@@ -163,6 +165,8 @@ export type RunToolChatSessionArgs = {
   workDir: string
   userDataDir: string
   getApiKey: () => Promise<string | null>
+  /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
+  appDb?: AppDatabase
 }
 
 export type RunToolChatSessionResult =
@@ -197,6 +201,7 @@ async function runToolChatSessionInner(
     workDir,
     userDataDir,
     getApiKey,
+    appDb,
     chatSignal
   } = args
 
@@ -231,6 +236,9 @@ async function runToolChatSessionInner(
     content: m.content as Anthropic.MessageParam['content']
   }))
 
+  /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
+  const historicalAssistantApiMessageCount = initialMessages.filter((m) => m.role === 'assistant').length
+
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
     if (toolLoopOptions.enableThinking) return msgs
     return msgs.map((m) => {
@@ -248,6 +256,8 @@ async function runToolChatSessionInner(
   const tools = sanitizeTools(builtinDefs as unknown[])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
   let loopRound = 0
+  /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
+  let titleSuggestScheduledThisInvoke = false
 
   while (true) {
     loopRound++
@@ -398,6 +408,23 @@ async function runToolChatSessionInner(
     ) as Array<{ type: 'tool_use'; id: string; name: string; input: unknown }>
 
     messagesForApi = [...messagesForApi, { role: 'assistant', content: content as Anthropic.ContentBlock[] }]
+
+    if (
+      appDb &&
+      !titleSuggestScheduledThisInvoke &&
+      reachedCumulativeAssistantTurnsForTitleSuggest(historicalAssistantApiMessageCount, loopRound)
+    ) {
+      titleSuggestScheduledThisInvoke = true
+      scheduleSessionTitleSuggestion({
+        db: appDb,
+        sender,
+        sessionId,
+        model,
+        baseUrl,
+        messagesForApi,
+        getApiKey
+      })
+    }
 
     if (toolUses.length === 0) {
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(usage && { usage }) }

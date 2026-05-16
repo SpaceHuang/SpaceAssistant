@@ -45,6 +45,7 @@ import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
 import { clearSessionToolResources } from './toolChatLoop'
+import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
 
 const CONFIG_KEYS = {
@@ -147,6 +148,25 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   ipcMain.handle('session:get', (_e, sessionId: string): Session | undefined => getSession(ctx.db, sessionId))
 
   ipcMain.handle(
+    'session:backfill-auto-title-if-needed',
+    async (event, payload: { sessionId: string }): Promise<Session | undefined> => {
+      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+      if (!sessionId) return undefined
+      const baseUrlRaw = getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? undefined
+      const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
+      const next = scheduleSessionTitleOpenBackfillIfNeeded({
+        db: ctx.db,
+        sender: event.sender,
+        sessionId,
+        baseUrl,
+        getApiKey: ctx.getApiKey
+      })
+      if (next) await syncBackup(ctx, next.id)
+      return next
+    }
+  )
+
+  ipcMain.handle(
     'session:update',
     async (
       _e,
@@ -161,12 +181,20 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     ): Promise<Session | undefined> => {
       const cur = getSession(ctx.db, payload.sessionId)
       if (!cur) return undefined
+      const mergedMetadata: Record<string, unknown> = { ...cur.metadata }
+      if (payload.metadata !== undefined) {
+        Object.assign(mergedMetadata, payload.metadata)
+      }
+      if (payload.name !== undefined) {
+        mergedMetadata[SESSION_META_TITLE_USER_CUSTOM] = true
+      }
+      const hasMetaChange = payload.metadata !== undefined || payload.name !== undefined
       const next = updateSession(ctx.db, payload.sessionId, {
         ...(payload.name !== undefined ? { name: payload.name } : {}),
         ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
         ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
-        ...(payload.metadata !== undefined ? { metadata: payload.metadata } : {})
+        ...(hasMetaChange ? { metadata: mergedMetadata } : {})
       })
       if (next) await syncBackup(ctx, next.id)
       return next

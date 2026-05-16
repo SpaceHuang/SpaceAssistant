@@ -265,6 +265,26 @@ function applyEdit(content: string, oldS: string, newS: string, replaceAll: bool
   return content.slice(0, i) + newS + content.slice(i + oldS.length)
 }
 
+const ERR_FILE_NOT_READ_FOR_EDIT =
+  '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
+const ERR_FILE_NOT_READ_FOR_WRITE =
+  '文件尚未在本会话中通过 read_file 读取，请先读取后再写入'
+
+async function recordFileStateAfterWrite(
+  cache: ToolExecutionContext['fileStateCache'],
+  abs: string,
+  content: string
+): Promise<void> {
+  const st = await fs.stat(abs)
+  cache.set(abs, {
+    path: abs,
+    content,
+    mtime: st.mtimeMs,
+    readAt: Date.now(),
+    isPartial: false
+  })
+}
+
 export const editFileExecutor: ToolExecutor = {
   name: 'edit_file',
   async execute(input, ctx): Promise<ToolExecutorResult> {
@@ -289,7 +309,7 @@ export const editFileExecutor: ToolExecutor = {
       let stCache = existed ? ctx.fileStateCache.get(abs) : undefined
       if (existed) {
         if (!ctx.fileStateCache.hasBeenRead(abs)) {
-          return { success: false, error: '请先读取文件内容后再进行修改', duration: Date.now() - started }
+          return { success: false, error: ERR_FILE_NOT_READ_FOR_EDIT, duration: Date.now() - started }
         }
         if (stCache?.isPartial) {
           return { success: false, error: '文件内容被截断，请完整读取后再进行修改', duration: Date.now() - started }
@@ -337,7 +357,7 @@ export const editFileExecutor: ToolExecutor = {
         if (ab) return ab
         throw e
       }
-      ctx.fileStateCache.invalidate(abs)
+      await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
       return {
         success: true,
         data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8') },
@@ -368,7 +388,7 @@ export const writeFileExecutor: ToolExecutor = {
       const body = content.replace(/\r\n/g, '\n')
       if (existed) {
         if (!ctx.fileStateCache.hasBeenRead(abs)) {
-          return { success: false, error: '请先读取文件内容后再进行修改', duration: Date.now() - started }
+          return { success: false, error: ERR_FILE_NOT_READ_FOR_WRITE, duration: Date.now() - started }
         }
         const stCache = ctx.fileStateCache.get(abs)
         if (stCache?.isPartial) {
@@ -404,7 +424,7 @@ export const writeFileExecutor: ToolExecutor = {
         if (ab) return ab
         throw e
       }
-      ctx.fileStateCache.invalidate(abs)
+      await recordFileStateAfterWrite(ctx.fileStateCache, abs, body)
       return { success: true, data: { path: rel }, duration: Date.now() - started }
     } finally {
       dispose()

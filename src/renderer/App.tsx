@@ -207,9 +207,13 @@ function AppShellInner() {
     void window.api.configGet().then((c) => dispatch(setConfig(c)))
     const off1 = window.api.onOpenSettings(() => dispatch(setSettingsOpen(true)))
     const off2 = window.api.onOpenAbout(() => dispatch(setAboutOpen(true)))
+    const offTitle = window.api.sessionOnTitleGenerated(({ session }) => {
+      dispatch(upsertSession(session))
+    })
     return () => {
       off1()
       off2()
+      offTitle()
     }
   }, [dispatch])
 

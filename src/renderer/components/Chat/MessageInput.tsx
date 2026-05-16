@@ -38,7 +38,7 @@ export function MessageInput({ disabled, running, modelLabel, onSend, onAbort }:
           autoSize={{ minRows: 2, maxRows: 8 }}
           disabled={disabled}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               handlePrimaryAction()
             }
@@ -47,7 +47,7 @@ export function MessageInput({ disabled, running, modelLabel, onSend, onAbort }:
         <div className="composer-footer">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             {modelLabel ? <span className="composer-model-chip">{modelLabel}</span> : null}
-            <span className="composer-hint">{running ? '执行中，点击右侧按钮中止' : 'Ctrl+Enter 发送'}</span>
+            <span className="composer-hint">{running ? '执行中，Enter 或点击右侧按钮中止' : 'Enter 发送，Shift+Enter 换行'}</span>
           </div>
           <button
             type="button"

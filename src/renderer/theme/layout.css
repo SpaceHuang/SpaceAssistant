@@ -722,6 +722,15 @@
   font-size: 12px !important;
 }
 
+.tool-row-detail__message {
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .tool-diff-block {
   margin: 0;
   padding: 8px 10px;
@@ -915,6 +924,84 @@
 
 .write-confirm-card__line--remove {
   background: var(--sa-diff-remove-bg);
+}
+
+/* ── Write success card ── */
+.write-success-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  margin: 4px 0;
+  padding: 0 10px;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-elevated);
+}
+
+.write-success-card__icon-wrap {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.write-success-card__icon-wrap .tool-row__icon {
+  color: var(--sa-accent);
+}
+
+.write-success-card__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--sa-font-mono);
+  font-size: 11px;
+  color: var(--sa-text);
+}
+
+.write-success-card__stat {
+  flex-shrink: 0;
+  font-family: var(--sa-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.write-success-card__stat--add {
+  color: #52c41a;
+}
+
+.write-success-card__stat--remove {
+  color: #ff4d4f;
+}
+
+.write-success-card__view {
+  flex-shrink: 0;
+  margin-left: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--sa-border-strong);
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-bg-muted);
+  font-size: 11px;
+  color: var(--sa-text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--sa-duration-fast),
+    color var(--sa-duration-fast),
+    border-color var(--sa-duration-fast);
+}
+
+.write-success-card__view:hover {
+  background: var(--sa-bg-subtle);
+  color: var(--sa-text);
+  border-color: var(--sa-border-strong);
+}
+
+.write-success-card__view:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
 }
 
 /* ── Config modal ── */

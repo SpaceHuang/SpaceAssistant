@@ -37,7 +37,14 @@ export function getToolDescription(toolName: string): string {
 }
 
 export function formatToolLabelTitle(toolName: string, input: Record<string, unknown>): string | undefined {
-  if ((toolName === 'read_file' || toolName === 'list_directory') && typeof input.path === 'string' && input.path) {
+  if (
+    (toolName === 'read_file' ||
+      toolName === 'list_directory' ||
+      toolName === 'edit_file' ||
+      toolName === 'write_file') &&
+    typeof input.path === 'string' &&
+    input.path
+  ) {
     return input.path
   }
   return undefined
@@ -54,9 +61,9 @@ export function formatToolLabel(toolName: string, input: Record<string, unknown>
     case 'list_directory':
       return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '列出目录'
     case 'edit_file':
-      return typeof input.path === 'string' ? input.path : '编辑文件'
+      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '编辑文件'
     case 'write_file':
-      return typeof input.path === 'string' ? input.path : '写入文件'
+      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '写入文件'
     case 'run_script':
       return '运行脚本'
     default:

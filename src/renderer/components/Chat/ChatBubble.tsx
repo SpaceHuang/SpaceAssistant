@@ -25,7 +25,7 @@ type Props = {
   onOpenFile?: (relPath: string) => void
 }
 
-export function ChatBubble({ message, toolsInteractive, focusToolUseId }: Props) {
+export function ChatBubble({ message, toolsInteractive, focusToolUseId, onOpenFile }: Props) {
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
   const thinkingSegments = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
@@ -101,6 +101,7 @@ export function ChatBubble({ message, toolsInteractive, focusToolUseId }: Props)
                       ? () => toolsInteractive.onToolCancel(tc.id)
                       : undefined
                   }
+                  onOpenFile={onOpenFile}
                 />
               )
             })}

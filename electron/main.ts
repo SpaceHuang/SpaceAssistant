@@ -158,7 +158,8 @@ app.whenReady().then(() => {
       } catch {
         return mergeToolsConfig(null)
       }
-    }
+    },
+    getAppDatabase: () => db
   })
 
   registerAppIpcHandlers(ipcMain, {

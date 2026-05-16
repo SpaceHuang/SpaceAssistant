@@ -66,6 +66,7 @@ export type SpaceAssistantApi = {
     skillsState?: SessionSkillsState
     metadata?: Record<string, unknown>
   }) => Promise<Session | undefined>
+  sessionBackfillAutoTitleIfNeeded: (payload: { sessionId: string }) => Promise<Session | undefined>
   sessionDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
@@ -130,6 +131,8 @@ export type SpaceAssistantApi = {
 
   onOpenSettings: (cb: () => void) => () => void
   onOpenAbout: (cb: () => void) => () => void
+
+  sessionOnTitleGenerated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: { requestId: string; toolUseId: string; approved: boolean }) => Promise<void>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>

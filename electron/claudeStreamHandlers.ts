@@ -8,6 +8,7 @@ import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
 import { CHAT_CANCELLED_MESSAGE, clearChatCancel, registerChatCancel, signalChatCancel } from './chatCancelRegistry'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
+import type { AppDatabase } from './database'
 import { runToolChatSession } from './toolChatLoop'
 
 export type ClaudeStreamDeps = {
@@ -15,6 +16,7 @@ export type ClaudeStreamDeps = {
   getWorkDir: () => string
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
+  getAppDatabase: () => AppDatabase
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -209,7 +211,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           toolsConfig: deps.getToolsConfig(),
           workDir: deps.getWorkDir(),
           userDataDir: deps.getUserDataPath(),
-          getApiKey: deps.getApiKey
+          getApiKey: deps.getApiKey,
+          appDb: deps.getAppDatabase()
         })
 
         if (!res.ok) {

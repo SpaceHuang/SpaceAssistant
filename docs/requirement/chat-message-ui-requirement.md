@@ -2,7 +2,7 @@
 
 ## 1. 概述
 
-本文档定义聊天消息列表的视觉样式与交互行为，涵盖用户/助手消息、思考过程、工具调用、写入确认、系统提示及输入区中止等要素。目标风格为轻量、信息密度适中，接近 Cursor / VS Code 类 IDE 助手的活动流体验。
+本文档定义聊天消息列表的视觉样式与交互行为，涵盖用户/助手消息、思考过程、工具调用、写入确认/成功、待确认横幅、系统提示及输入区中止等要素。目标风格为轻量、信息密度适中，接近 Cursor / VS Code 类 IDE 助手的活动流体验。
 
 ---
 
@@ -121,31 +121,36 @@
 |------|---------|-------------------|
 | `grep` | `在工作区搜索 '{pattern}'` | — |
 | `read_file` | 文件名（basename） | 完整相对路径 |
-| `list_directory` | **目录名（basename）** | 完整相对路径 |
-| `edit_file` | 完整路径 | — |
-| `write_file` | 完整路径 | — |
+| `list_directory` | 目录名（basename） | 完整相对路径 |
+| `edit_file` | 文件名（basename） | 完整相对路径 |
+| `write_file` | 文件名（basename） | 完整相对路径 |
 | `run_script` | 「运行脚本」 | — |
+
+行内标签**仅显示 basename**，完整路径通过 `title` 在 hover 时展示；待确认横幅列表（§9）复用同一套 `formatToolLabel` 规则。
 
 ### 6.3 展开/收起规则
 
 | 工具类型 | 状态 | 默认展开 | 可手动收起 |
 |---------|------|---------|-----------|
-| 文件读/写/编辑/列目录（`read_file`、`write_file`、`edit_file`、`list_directory`） | 已完成 | **收起** | 是 |
+| 文件读/列目录（`read_file`、`list_directory`） | 已完成 | **收起** | 是 |
 | 文件写入类（`write_file`、`edit_file`） | 待确认（`confirming`） | **展开**（独立确认卡片，见 §7） | 否 |
-| 文件写入类 | 执行中 / 已完成 | **收起** | 是 |
-| 文件写入类 | 失败 / 已拒绝 | 展开 | 是 |
+| 文件写入类 | 执行中 | **收起** | 是 |
+| 文件写入类 | 已完成且成功 | **不展示**普通工具行，改为写入成功卡片（见 §8） | — |
+| 文件写入类 | 失败 / 已拒绝 | 展开普通工具行 | 是 |
 | 非文件工具 | 调用中 / 执行中 / 待确认 | 展开 | 是 |
 | 非文件工具 | 已完成 | 收起（有详情时可展开） | 是 |
 | 任意工具 | 失败 / 已拒绝 | 展开 | 是 |
 
-### 6.4 详情区内容
+### 6.4 详情区（`tool-row-detail`）内容
 
 | 状态 | 展示 |
 |------|------|
-| 执行中 | 「取消执行」文字按钮（`onCancel` 可用时） |
-| 失败 / 已拒绝 | 错误信息或「已拒绝」 |
-| 已完成 | 结果预览（`pre`，最大截断 4000 字符）；非文件工具无结果时展示输入参数 JSON |
+| 执行中 | 「取消执行」文字按钮（`onCancel` 可用时，仍为 danger 操作色） |
+| 失败 / 已拒绝 | 错误信息或「已拒绝」（`.tool-row-detail__message`，**不使用**红色 danger 强调；12px，`--sa-text-secondary`） |
+| 已完成 | 结果预览（`pre`，最大截断 4000 字符，`--sa-bg-muted` 背景）；非文件工具无结果时展示输入参数 JSON |
 | 待确认（`run_script`） | 脚本代码预览 + 「确认」「拒绝」文字按钮 |
+
+详情区内容主要供模型/开发者阅读，正文与错误信息均保持中性次要文字色，避免红色警示样式干扰阅读。
 
 ---
 
@@ -210,11 +215,67 @@ Diff 算法为行级 LCS 对比，统计新增/删除行数。
 
 ### 7.4 确认后行为
 
-用户点击允许/拒绝后，卡片消失，工具行恢复为普通 `tool-row` 展示；执行中及完成后按 §6.3 规则自动收起。
+用户点击允许/拒绝后，确认卡片消失；进入执行中后按 §6.3 收起；**执行成功**后展示写入成功卡片（§8），不再回退为可折叠的普通工具行。
 
 ---
 
-## 8. 系统 / 提示消息
+## 8. 写入成功卡片
+
+适用于 `write_file`、`edit_file` 执行**成功**（`status === 'completed'` 且 `result.success`）时的专用 UI（`WriteSuccessCard`），替代普通 `tool-row`，在活动流中更醒目地提示用户文件已变更。
+
+### 8.1 卡片容器
+
+| 属性 | 规格 |
+|------|------|
+| 布局 | 单行 flex，水平排列 |
+| 高度 | `min-height: 34px` |
+| 内边距 | `0 10px` |
+| 圆角 | `--sa-radius-md` |
+| 边框 | 1px solid `--sa-border` |
+| 背景 | `--sa-bg-elevated` |
+| 宽度 | 100%（活动流内撑满） |
+
+### 8.2 行内容
+
+| 区域 | 内容 |
+|------|------|
+| 左侧图标 | `ToolRowIcon`（写入/编辑类工具图标，颜色 `--sa-accent`） |
+| 文件名 | basename，等宽 11px；完整路径仅在 `title`（hover） |
+| 变更统计 | `+N`（绿色，仅 `N > 0` 时显示）、`-M`（红色，**仅 `M > 0` 时显示**，不展示 `-0`） |
+| 右侧操作 | **「查看」** 文字按钮 |
+
+### 8.3 「查看」按钮
+
+| 属性 | 规格 |
+|------|------|
+| 文案 | 「查看」（非「查看变更」） |
+| 尺寸 | 高度 26px，`padding: 0 10px` |
+| 样式 | `--sa-bg-muted` 背景 + `--sa-border-strong` 描边，11px 次要文字色 |
+| hover | 背景 `--sa-bg-subtle`，文字 `--sa-text` |
+| 行为 | 调用 `DetailPanelContext.openFile(relPath)`，在**右侧文件内容预览区**打开该文件 |
+
+**变更统计数据来源**（与写入确认卡片一致）：
+
+1. 优先 `ToolCallRecord.confirmDiff` 行级 diff 统计
+2. `write_file` 无 diff 时，按 `input.content` 行数计为新增
+
+---
+
+## 9. 待确认横幅
+
+会话列表顶部的跨会话待确认提示（`PendingConfirmBanner`），当存在待用户确认的工具调用时展示。
+
+| 元素 | 规格 |
+|------|------|
+| 容器 | `.pending-confirm-banner` |
+| 列表 | `.pending-confirm-banner__list`，每项为可点击按钮 |
+| 项文案格式 | `{会话名} · {工具标签}` |
+| 工具标签 | 复用 `formatToolLabel`：**文件名/目录名仅显示 basename**，不展示完整路径 |
+| 点击行为 | 切换到对应会话，并滚动聚焦到待确认工具卡片（`setConfirmFocusToolUseId`） |
+
+---
+
+## 10. 系统 / 提示消息
 
 Skill 提示等系统级消息（`SkillHintBubble`）采用轻量文本样式，**不使用气泡边框或背景**。
 
@@ -228,24 +289,26 @@ Skill 提示等系统级消息（`SkillHintBubble`）采用轻量文本样式，
 
 ---
 
-## 9. 输入区与中止交互
+## 11. 输入区与中止交互
 
-### 9.1 发送按钮
+### 11.1 发送 / 中止按钮
 
 | 状态 | 外观 | 行为 |
 |------|------|------|
-| 空闲 | 蓝色圆形按钮 + Send 图标 | 发送消息（需非空文本） |
-| 执行中 | **红色**圆形按钮（`composer-send--stop`）+ Square 实心图标 | **中止**当前 Agent 执行 |
+| 空闲 | 蓝色圆形按钮（**28×28** px）+ Send 图标（**14px**） | 发送消息（需非空文本） |
+| 执行中 | **红色**圆形按钮（`composer-send--stop`，**28×28** px）+ Square 实心图标（**14px**） | **中止**当前 Agent 执行 |
 | 快捷键 | Ctrl+Enter / ⌘+Enter | 触发主操作（空闲时发送，执行中时中止） |
 
-### 9.2 提示文案
+图标容器使用 `line-height: 0` 与 `svg { display: block }` 保证在圆形按钮内居中对齐。
+
+### 11.2 提示文案
 
 | 状态 | 文案 |
 |------|------|
 | 空闲 | 「Ctrl+Enter 发送」 |
 | 执行中 | 「执行中，点击右侧按钮中止」 |
 
-### 9.3 中止逻辑
+### 11.3 中止逻辑
 
 - 渲染进程调用 `onAbort` → 主进程 `claude-chat-cancel` IPC
 - 中止后标记消息状态为已取消，保留已生成的部分内容
@@ -253,17 +316,20 @@ Skill 提示等系统级消息（`SkillHintBubble`）采用轻量文本样式，
 
 ---
 
-## 10. 组件与样式索引
+## 12. 组件与样式索引
 
 | 区域 | 组件 | 样式类 / 文件 |
 |------|------|-------------|
 | 消息气泡 | `ChatBubble.tsx` | `.chat-bubble-*` |
 | 活动流时间线 | `ChatBubble.tsx` + `assistantActivityTimeline.ts` | `.chat-activity-track` |
 | 思考块 | `ThinkingBlock.tsx` | `.chat-thinking*` |
-| 工具行 | `ToolCallCard.tsx` | `.tool-row*` |
+| 工具行 | `ToolCallCard.tsx` | `.tool-row*`、`.tool-row-detail*` |
 | 写入确认 | `WriteConfirmCard.tsx` | `.write-confirm-card*` |
+| 写入成功 | `WriteSuccessCard.tsx` | `.write-success-card*` |
+| 待确认横幅 | `PendingConfirmBanner.tsx` | `.pending-confirm-banner*` |
 | 系统提示 | `SkillHintBubble.tsx` | `.chat-system-track`、`.chat-skill-hint` |
 | 输入区 | `MessageInput.tsx` | `.composer*` |
-| 样式定义 | — | `src/renderer/theme/layout.css` |
+| 文件预览联动 | `ChatView.tsx` + `DetailPanelContext.tsx` | `openFile(relPath)` |
+| 样式定义 | — | `src/renderer/theme/layout.css`、`tokens.css` |
 | 工具标签 | — | `src/renderer/components/Chat/toolCallDisplay.ts` |
 | Diff 计算 | — | `src/renderer/components/Chat/writeConfirmDiff.ts` |

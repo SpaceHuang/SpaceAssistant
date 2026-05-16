@@ -31,7 +31,8 @@ describe('ToolCallCard file write expand behavior', () => {
     expect(document.querySelector('.write-confirm-card')).not.toBeNull()
   })
 
-  it('collapses after completion', () => {
+  it('shows write success card after completion', () => {
+    const onOpenFile = vi.fn()
     const { rerender } = render(
       <ToolCallCard
         record={writeRecord('confirming')}
@@ -43,11 +44,20 @@ describe('ToolCallCard file write expand behavior', () => {
 
     rerender(
       <ToolCallCard
-        record={writeRecord('completed', { result: { success: true }, completedAt: Date.now() })}
+        record={writeRecord('completed', {
+          result: { success: true },
+          completedAt: Date.now(),
+          confirmDiff: { oldContent: '', newContent: 'hello', oldPath: 'notes.txt' }
+        })}
         confirmMode="direct"
+        onOpenFile={onOpenFile}
       />
     )
     expect(screen.queryByRole('button', { name: '允许' })).toBeNull()
+    expect(document.querySelector('.write-success-card')).not.toBeNull()
+    expect(screen.getByText('notes.txt')).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: '查看' }))
+    expect(onOpenFile).toHaveBeenCalledWith('notes.txt')
   })
 
   it('keeps list_directory collapsed by default when completed', () => {
