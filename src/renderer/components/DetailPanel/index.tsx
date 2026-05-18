@@ -27,6 +27,7 @@ export function DetailPanel() {
         </div>
       </div>
       <ResizeHandle
+        currentRatio={referencedFilesHeight}
         onResize={setReferencedFilesHeight}
         onDoubleClick={resetReferencedFilesHeight}
       />

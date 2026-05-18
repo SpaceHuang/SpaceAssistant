@@ -2,31 +2,38 @@ import { useCallback, useRef } from 'react'
 
 interface ResizeHandleProps {
   onResize: (ratio: number) => void
+  currentRatio: number
   minRatio?: number
   maxRatio?: number
   onDoubleClick?: () => void
 }
 
-export function ResizeHandle({ onResize, minRatio = 0.15, maxRatio = 0.85, onDoubleClick }: ResizeHandleProps) {
+const MIN_PX = 80
+
+export function ResizeHandle({ onResize, currentRatio, minRatio = 0.15, maxRatio = 0.85, onDoubleClick }: ResizeHandleProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const dragState = useRef<{ startY: number; startRatio: number; containerHeight: number } | null>(null)
+  const dragState = useRef<{ startY: number; startBottomHeight: number; containerHeight: number } | null>(null)
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
       const container = containerRef.current?.parentElement
       if (!container) return
+      const containerHeight = container.clientHeight
       dragState.current = {
         startY: e.clientY,
-        startRatio: 0.5,
-        containerHeight: container.clientHeight,
+        startBottomHeight: currentRatio * containerHeight,
+        containerHeight,
       }
 
       const handleMouseMove = (ev: MouseEvent) => {
         if (!dragState.current) return
         const delta = ev.clientY - dragState.current.startY
-        const ratio = 1 - (dragState.current.containerHeight - delta) / dragState.current.containerHeight
-        const clamped = Math.min(maxRatio, Math.max(minRatio, ratio))
+        const newBottomHeight = dragState.current.startBottomHeight + delta
+        const ratio = newBottomHeight / dragState.current.containerHeight
+        const minR = Math.max(minRatio, MIN_PX / dragState.current.containerHeight)
+        const maxR = Math.min(maxRatio, 1 - MIN_PX / dragState.current.containerHeight)
+        const clamped = Math.min(maxR, Math.max(minR, ratio))
         onResize(clamped)
       }
 
@@ -43,7 +50,7 @@ export function ResizeHandle({ onResize, minRatio = 0.15, maxRatio = 0.85, onDou
       document.addEventListener('mousemove', handleMouseMove)
       document.addEventListener('mouseup', handleMouseUp)
     },
-    [onResize, minRatio, maxRatio]
+    [onResize, currentRatio, minRatio, maxRatio]
   )
 
   return (
