@@ -25,6 +25,7 @@ export type DetailPanelState = {
   loadError: string | null
   unsupportedExt: string | null
   tooLargeSize: number | null
+  referencedFilesHeight: number
 }
 
 export type DetailPanelActions = {
@@ -32,6 +33,8 @@ export type DetailPanelActions = {
   closeFile: () => void
   refreshFile: () => Promise<void>
   setViewMode: (mode: ViewMode) => void
+  setReferencedFilesHeight: (ratio: number) => void
+  resetReferencedFilesHeight: () => void
 }
 
 type DetailPanelContextValue = DetailPanelState & DetailPanelActions
@@ -97,6 +100,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [unsupportedExt, setUnsupportedExt] = useState<string | null>(null)
   const [tooLargeSize, setTooLargeSize] = useState<number | null>(null)
+  const [referencedFilesHeight, setReferencedFilesHeightState] = useState(0.5)
 
   useEffect(() => {
     void preloadShiki()
@@ -154,6 +158,14 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     message.success('已刷新')
   }, [loadFile, selectedFile])
 
+  const setReferencedFilesHeight = useCallback((ratio: number) => {
+    setReferencedFilesHeightState(Math.min(0.85, Math.max(0.15, ratio)))
+  }, [])
+
+  const resetReferencedFilesHeight = useCallback(() => {
+    setReferencedFilesHeightState(0.5)
+  }, [])
+
   const value = useMemo<DetailPanelContextValue>(
     () => ({
       selectedFile,
@@ -165,10 +177,13 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       loadError,
       unsupportedExt,
       tooLargeSize,
+      referencedFilesHeight,
       openFile,
       closeFile,
       refreshFile,
-      setViewMode
+      setViewMode,
+      setReferencedFilesHeight,
+      resetReferencedFilesHeight
     }),
     [
       selectedFile,
@@ -180,9 +195,12 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       loadError,
       unsupportedExt,
       tooLargeSize,
+      referencedFilesHeight,
       openFile,
       closeFile,
-      refreshFile
+      refreshFile,
+      setReferencedFilesHeight,
+      resetReferencedFilesHeight
     ]
   )
 
