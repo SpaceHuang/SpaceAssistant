@@ -40,6 +40,10 @@
   color: var(--sa-text);
 }
 
+.sider-new-session-btn {
+  font-size: 12px;
+}
+
 .app-main-header {
   padding: 0 16px;
 }

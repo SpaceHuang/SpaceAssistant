@@ -242,7 +242,7 @@ function AppShellInner() {
               <div className="app-pane-header sider-content-header">
                 <span className="app-pane-header-title">{siderKey === 'sessions' ? '会话' : '搜索'}</span>
                 {siderKey === 'sessions' ? (
-                  <Button type="primary" size="small" onClick={() => void createSession()}>
+                  <Button type="primary" size="small" className="sider-new-session-btn" onClick={() => void createSession()}>
                     新会话
                   </Button>
                 ) : null}
