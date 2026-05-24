@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, resetChatUi } from './chatSlice'
+import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, resetChatUi, setProjectMemoryEnabled } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
@@ -70,5 +70,23 @@ describe('chatSlice', () => {
     state = chatReducer(state, setLastUsage({ input_tokens: 5000 }))
     state = chatReducer(state, resetChatUi())
     expect(state.lastUsage).toBeNull()
+  })
+
+  describe('projectMemoryEnabled', () => {
+    it('defaults to true', () => {
+      const state = chatReducer(undefined, { type: '' })
+      expect(state.projectMemoryEnabled).toBe(true)
+    })
+
+    it('can be toggled', () => {
+      const state = chatReducer(undefined, setProjectMemoryEnabled(false))
+      expect(state.projectMemoryEnabled).toBe(false)
+    })
+
+    it('resets to true on resetChatUi', () => {
+      let state = chatReducer(undefined, setProjectMemoryEnabled(false))
+      state = chatReducer(state, resetChatUi())
+      expect(state.projectMemoryEnabled).toBe(true)
+    })
   })
 })
