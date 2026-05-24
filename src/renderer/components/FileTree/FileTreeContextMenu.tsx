@@ -10,6 +10,9 @@ interface FileTreeContextMenuProps {
   onCopyRelPath: () => void
   onRename: () => void
   onDelete: () => void
+  onCollectToWiki?: () => void
+  showCollectToWiki?: boolean
+  readOnly?: boolean
   children: React.ReactNode
   /** For testing only - controls dropdown open state */
   open?: boolean
@@ -24,11 +27,24 @@ export function FileTreeContextMenu({
   onCopyRelPath,
   onRename,
   onDelete,
+  onCollectToWiki,
+  showCollectToWiki = false,
+  readOnly = false,
   children,
   open
 }: FileTreeContextMenuProps) {
   const { message } = App.useApp()
   const items: MenuProps['items'] = [
+    ...(showCollectToWiki && onCollectToWiki
+      ? [
+          {
+            key: 'collect-wiki',
+            label: '收录到 Wiki',
+            onClick: onCollectToWiki
+          },
+          { type: 'divider' as const }
+        ]
+      : []),
     {
       key: 'add-to-chat',
       label: '添加到对话',
@@ -48,18 +64,22 @@ export function FileTreeContextMenu({
       label: '复制相对路径',
       onClick: onCopyRelPath
     },
-    { type: 'divider' },
-    {
-      key: 'rename',
-      label: '重命名...',
-      onClick: onRename
-    },
-    {
-      key: 'delete',
-      label: '删除',
-      danger: true,
-      onClick: onDelete
-    }
+    ...(readOnly
+      ? []
+      : ([
+          { type: 'divider' as const },
+          {
+            key: 'rename',
+            label: '重命名...',
+            onClick: onRename
+          },
+          {
+            key: 'delete',
+            label: '删除',
+            danger: true,
+            onClick: onDelete
+          }
+        ] as MenuProps['items']))
   ]
 
   return (

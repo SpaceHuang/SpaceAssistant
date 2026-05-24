@@ -98,6 +98,66 @@ export function normalizeSessionSkillsState(state?: Partial<SessionSkillsState> 
   }
 }
 
+export interface WikiConfig {
+  enabled: boolean
+  rootPath: string
+  hideWikiFromFileTree: boolean
+  interactiveIngest: boolean
+  maxBatchIngest: number
+}
+
+export const DEFAULT_WIKI_CONFIG: WikiConfig = {
+  enabled: false,
+  rootPath: 'llm-wiki',
+  hideWikiFromFileTree: true,
+  interactiveIngest: false,
+  maxBatchIngest: 10
+}
+
+export function mergeWikiConfig(partial?: Partial<WikiConfig> | null): WikiConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_WIKI_CONFIG }
+  return { ...DEFAULT_WIKI_CONFIG, ...partial }
+}
+
+export interface FilePaneSectionUiState {
+  fileListCollapsed: boolean
+  llmWikiCollapsed: boolean
+  fileListHeightRatio: number
+}
+
+export const DEFAULT_FILE_PANE_SECTION_UI: FilePaneSectionUiState = {
+  fileListCollapsed: false,
+  llmWikiCollapsed: false,
+  fileListHeightRatio: 0.6
+}
+
+export interface WikiStatus {
+  enabled: boolean
+  rootPath: string
+  initialized: boolean
+  pageCount: number
+  rawCount: number
+  lastLogEntry?: string
+}
+
+export interface SessionWikiState {
+  wikiModeActive: boolean
+  archivedQueries: string[]
+}
+
+export const DEFAULT_SESSION_WIKI_STATE: SessionWikiState = {
+  wikiModeActive: false,
+  archivedQueries: []
+}
+
+export function normalizeSessionWikiState(state?: Partial<SessionWikiState> | null): SessionWikiState {
+  if (!state || typeof state !== 'object') return { ...DEFAULT_SESSION_WIKI_STATE }
+  return {
+    wikiModeActive: Boolean(state.wikiModeActive),
+    archivedQueries: Array.isArray(state.archivedQueries) ? [...state.archivedQueries] : []
+  }
+}
+
 export interface SkillsCache {
   skills: SkillDefinition[]
   scannedAt: number
@@ -272,6 +332,7 @@ export interface AppConfig {
   maxParallelChatSessions: number
   tools: ToolsConfig
   skills: SkillsConfig
+  wiki: WikiConfig
 }
 
 /** 项目记忆加载状态 */

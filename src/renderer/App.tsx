@@ -10,7 +10,8 @@ import { setConfig, setSettingsOpen, setAboutOpen } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
 import { ConfigModal } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
-import { FileTree } from './components/FileTree'
+import { FilePane } from './components/FilePane'
+import { collectToWiki } from './services/wikiImportService'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { groupSessionsByTime } from './utils/groupSessions'
@@ -185,6 +186,7 @@ function AppShellInner() {
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
   const sessions = useTypedSelector((s) => s.session.list)
+  const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const [siderKey, setSiderKey] = useState<'sessions' | 'files' | 'search'>('sessions')
   const { openFile } = useDetailPanel()
 
@@ -198,6 +200,16 @@ function AppShellInner() {
   const handleFileSelect = (relPath: string) => {
     void openFile(relPath).catch((e) => {
       message.error(e instanceof Error ? e.message : String(e))
+    })
+  }
+
+  const handleCollectToWiki = (srcRelPath: string) => {
+    void collectToWiki(srcRelPath, {
+      wikiEnabled: Boolean(config?.wiki?.enabled),
+      sessionId: currentSessionId,
+      onMissingSession: () => message.warning('请先选择或创建一个会话'),
+      onError: (text) => message.error(text),
+      onSuccess: (text) => message.success(text)
     })
   }
 
@@ -252,7 +264,9 @@ function AppShellInner() {
             )}
             <div className="sider-content-body">
               {siderKey === 'sessions' && <LeftSessions />}
-              {siderKey === 'files' && <FileTree workDir={config?.workDir ?? ''} onFileSelect={handleFileSelect} />}
+              {siderKey === 'files' && (
+                <FilePane workDir={config?.workDir ?? ''} onFileSelect={handleFileSelect} onCollectToWiki={handleCollectToWiki} />
+              )}
               {siderKey === 'search' && <SearchPane />}
             </div>
           </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { App } from 'antd'
 import { useAppDispatch, useTypedSelector } from '../../hooks'
 import { setSession } from '../../store/chatSlice'
 import { getPendingPlanMeta } from '../../../shared/planTypes'
@@ -6,9 +7,12 @@ import { useDetailPanel } from './DetailPanelContext'
 import { FileToolbar } from './FileToolbar'
 import { FileContentView } from './FileContentView'
 import { SearchPanel } from './SearchPanel'
+import { useWikiIndexViewState } from './WikiIndexView'
+import { canShowCollectToWiki, collectToWiki } from '../../services/wikiImportService'
 import type { SearchMatch } from './searchUtils'
 
 export function FileOverlay() {
+  const { message } = App.useApp()
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const sessionMeta = useTypedSelector((s) =>
@@ -25,6 +29,25 @@ export function FileOverlay() {
     refreshFile,
     setViewMode
   } = useDetailPanel()
+
+  const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? 'llm-wiki')
+  const wikiEnabled = useTypedSelector((s) => s.config.config?.wiki?.enabled ?? false)
+  const { isIndex, indexView, setIndexView } = useWikiIndexViewState(selectedFile, wikiRoot)
+
+  const showCollectToWiki = Boolean(
+    selectedFile && canShowCollectToWiki(selectedFile, wikiRoot, false, wikiEnabled)
+  )
+
+  const handleCollectToWiki = useCallback(() => {
+    if (!selectedFile) return
+    void collectToWiki(selectedFile, {
+      wikiEnabled,
+      sessionId,
+      onMissingSession: () => message.warning('请先选择或创建一个会话'),
+      onError: (text) => message.error(text),
+      onSuccess: (text) => message.success(text)
+    })
+  }, [message, selectedFile, sessionId, wikiEnabled])
 
   const openPendingPlan = () => {
     if (sessionId) dispatch(setSession(sessionId))
@@ -77,6 +100,11 @@ export function FileOverlay() {
         onClose={closeFile}
         onRefresh={() => void refreshFile()}
         onPendingPlanClick={hasPendingPlan ? openPendingPlan : undefined}
+        showWikiIndexToggle={isIndex}
+        wikiIndexView={indexView}
+        onWikiIndexViewChange={setIndexView}
+        showCollectToWiki={showCollectToWiki}
+        onCollectToWiki={handleCollectToWiki}
       />
       <SearchPanel
         open={searchOpen}
@@ -84,7 +112,11 @@ export function FileOverlay() {
         onHighlightsChange={onHighlightsChange}
       />
       <div className="detail-file-body">
-        <FileContentView searchHighlights={highlights} currentHighlightIndex={currentHighlightIndex} />
+        <FileContentView
+          searchHighlights={highlights}
+          currentHighlightIndex={currentHighlightIndex}
+          wikiIndexView={indexView}
+        />
       </div>
     </div>
   )

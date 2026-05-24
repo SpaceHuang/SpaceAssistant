@@ -24,20 +24,36 @@ type Props = {
   toolsInteractive?: ToolsInteractiveProps
   focusToolUseId?: string | null
   onOpenFile?: (relPath: string) => void
+  wikiRootPath?: string
+  showArchiveToWiki?: boolean
+  onArchiveToWiki?: () => void
 }
 
-function AssistantTextBody({ activeText, body }: { activeText: boolean; body: string }) {
+function AssistantTextBody({
+  activeText,
+  body,
+  onOpenFile,
+  wikiRootPath
+}: {
+  activeText: boolean
+  body: string
+  onOpenFile?: (relPath: string) => void
+  wikiRootPath?: string
+}) {
   if (activeText) {
     return <div className="chat-stream-plain chat-md-assistant">{body}</div>
   }
-  return <ChatMarkdown content={body} />
+  return <ChatMarkdown content={body} onOpenFile={onOpenFile} wikiRootPath={wikiRootPath} />
 }
 
 export const ChatBubble = memo(function ChatBubble({
   message,
   toolsInteractive,
   focusToolUseId,
-  onOpenFile
+  onOpenFile,
+  wikiRootPath,
+  showArchiveToWiki = false,
+  onArchiveToWiki
 }: Props) {
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
@@ -92,7 +108,12 @@ export const ChatBubble = memo(function ChatBubble({
                     key={`${message.id}-act-text-${i}`}
                     className={`chat-bubble chat-bubble--assistant${activeText ? ' chat-bubble-streaming' : ''}`}
                   >
-                    <AssistantTextBody activeText={activeText} body={body} />
+                    <AssistantTextBody
+                      activeText={activeText}
+                      body={body}
+                      onOpenFile={onOpenFile}
+                      wikiRootPath={wikiRootPath}
+                    />
                   </div>
                 )
               }
@@ -146,6 +167,14 @@ export const ChatBubble = memo(function ChatBubble({
           {new Date(message.timestamp).toLocaleString()}
           {streaming ? ' · 生成中' : null}
           {message.status === 'failed' ? ' · 失败' : null}
+          {showArchiveToWiki && onArchiveToWiki ? (
+            <>
+              {' · '}
+              <button type="button" className="chat-archive-wiki-btn" onClick={onArchiveToWiki}>
+                归档到 Wiki
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
     </div>
@@ -154,5 +183,8 @@ export const ChatBubble = memo(function ChatBubble({
   prev.message === next.message &&
   prev.focusToolUseId === next.focusToolUseId &&
   prev.toolsInteractive === next.toolsInteractive &&
-  prev.onOpenFile === next.onOpenFile
+  prev.onOpenFile === next.onOpenFile &&
+  prev.wikiRootPath === next.wikiRootPath &&
+  prev.showArchiveToWiki === next.showArchiveToWiki &&
+  prev.onArchiveToWiki === next.onArchiveToWiki
 )

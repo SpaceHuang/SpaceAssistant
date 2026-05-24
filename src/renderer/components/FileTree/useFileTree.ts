@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileInfo } from '../../../shared/domainTypes'
 
 export interface FileTreeNode {
@@ -18,18 +18,61 @@ export interface InlineInputState {
   defaultName: string
 }
 
-export function useFileTree(workDir: string) {
-  const rootName = workDir.split(/[/\\]/).filter(Boolean).pop() || 'project'
+export interface UseFileTreeOptions {
+  rootRelPath?: string
+  rootDisplayName?: string
+  excludePaths?: string[]
+  readOnly?: boolean
+}
+
+/** 重载目录列表时保留已懒加载的子树，避免展开状态丢失 */
+function mergePreservedDirectoryChildren(previous: FileTreeNode[], next: FileTreeNode[]): FileTreeNode[] {
+  const prevByKey = new Map(previous.map((node) => [node.key, node]))
+  return next.map((node) => {
+    const prev = prevByKey.get(node.key)
+    if (!prev || !node.isDirectory) return node
+    return {
+      ...node,
+      expanded: prev.expanded,
+      loading: prev.loading,
+      children: prev.children.length > 0 ? prev.children : node.children
+    }
+  })
+}
+
+export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
+  const {
+    rootRelPath = '',
+    rootDisplayName,
+    excludePaths = [],
+    readOnly = false
+  } = options
+
+  const rootName =
+    rootDisplayName ??
+    (rootRelPath
+      ? rootRelPath.split('/').filter(Boolean).pop() || rootRelPath
+      : workDir.split(/[/\\]/).filter(Boolean).pop() || 'project')
 
   const [treeData, setTreeData] = useState<FileTreeNode[]>([
-    { key: '', name: rootName, relPath: '', isDirectory: true, expanded: true, loading: false, children: [] }
+    {
+      key: rootRelPath,
+      name: rootName,
+      relPath: rootRelPath,
+      isDirectory: true,
+      expanded: true,
+      loading: false,
+      children: []
+    }
   ])
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([''])
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([rootRelPath])
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [inlineInput, setInlineInput] = useState<InlineInputState | null>(null)
   const [renamingKey, setRenamingKey] = useState<string | null>(null)
 
   const nodeMapRef = useRef(new Map<string, FileTreeNode>())
+  const excludeSet = useRef(new Set(excludePaths))
+  excludeSet.current = new Set(excludePaths)
 
   const rebuildNodeMap = useCallback((nodes: FileTreeNode[]) => {
     const map = new Map<string, FileTreeNode>()
@@ -49,174 +92,288 @@ export function useFileTree(workDir: string) {
     return nodeMapRef.current
   }, [treeData, rebuildNodeMap])
 
-  const fileInfoToNode = useCallback((info: FileInfo): FileTreeNode => ({
-    key: info.path,
-    name: info.name,
-    relPath: info.path,
-    isDirectory: info.isDirectory,
-    size: info.size,
-    expanded: false,
-    loading: false,
-    children: []
-  }), [])
+  const fileInfoToNode = useCallback(
+    (info: FileInfo): FileTreeNode => ({
+      key: info.path,
+      name: info.name,
+      relPath: info.path,
+      isDirectory: info.isDirectory,
+      size: info.size,
+      expanded: false,
+      loading: false,
+      children: []
+    }),
+    []
+  )
 
-  const sortNodes = useCallback((nodes: FileTreeNode[]): FileTreeNode[] =>
-    [...nodes].sort((a, b) => {
-      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
-  , [])
+  const sortNodes = useCallback(
+    (nodes: FileTreeNode[]): FileTreeNode[] =>
+      [...nodes].sort((a, b) => {
+        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+        return a.name.localeCompare(b.name)
+      }),
+    []
+  )
 
-  // Load root children on mount
+  const filterList = useCallback(
+    (list: FileInfo[]) => list.filter((info) => !excludeSet.current.has(info.path)),
+    []
+  )
+
+  const loadDirectory = useCallback(
+    async (dirKey: string) => {
+      const list = await window.api.fileListDirectory(dirKey)
+      return sortNodes(filterList(list).map(fileInfoToNode))
+    },
+    [fileInfoToNode, filterList, sortNodes]
+  )
+
   useEffect(() => {
+    let cancelled = false
     void (async () => {
       try {
-        const list = await window.api.fileListDirectory('')
-        const root = treeData[0]
-        root.children = sortNodes(list.map(fileInfoToNode))
-        const newData = [{ ...root, children: [...root.children] }]
-        setTreeData(newData)
-        rebuildNodeMap(newData)
-      } catch { /* ignore */ }
+        const loaded = await loadDirectory(rootRelPath)
+        if (cancelled) return
+        setTreeData((prev) => {
+          const prevRoot = prev[0]
+          const children = mergePreservedDirectoryChildren(prevRoot?.children ?? [], loaded)
+          const newData: FileTreeNode[] = [
+            {
+              ...prevRoot,
+              key: rootRelPath,
+              name: rootName,
+              relPath: rootRelPath,
+              isDirectory: true,
+              expanded: true,
+              loading: false,
+              children
+            }
+          ]
+          rebuildNodeMap(newData)
+          return newData
+        })
+        setExpandedKeys((prev) => (prev.length > 0 ? prev : [rootRelPath]))
+      } catch {
+        /* ignore */
+      }
     })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const toggleExpand = useCallback(async (key: string) => {
-    const map = ensureNodeMap()
-    const node = map.get(key)
-    if (!node || !node.isDirectory) return
-
-    if (node.expanded) {
-      node.expanded = false
-      setExpandedKeys((prev) => prev.filter((k) => k !== key))
-      setTreeData((prev) => [...prev])
-      return
+    return () => {
+      cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rootRelPath, rootName, excludePaths.join('|')])
 
-    // Lazy load
-    if (node.children.length === 0 && !node.loading) {
-      node.loading = true
+  const toggleExpand = useCallback(
+    async (key: string) => {
+      const map = ensureNodeMap()
+      const node = map.get(key)
+      if (!node || !node.isDirectory) return
+
+      if (node.expanded) {
+        node.expanded = false
+        setExpandedKeys((prev) => prev.filter((k) => k !== key))
+        setTreeData((prev) => [...prev])
+        return
+      }
+
+      if (node.children.length === 0 && !node.loading) {
+        node.loading = true
+        setTreeData((prev) => [...prev])
+        try {
+          node.children = await loadDirectory(key)
+        } catch {
+          node.children = []
+        }
+        node.loading = false
+      }
+
+      node.expanded = true
+      setExpandedKeys((prev) => [...new Set([...prev, key])])
       setTreeData((prev) => [...prev])
+      rebuildNodeMap(treeData)
+    },
+    [ensureNodeMap, loadDirectory, rebuildNodeMap, treeData]
+  )
+
+  const ensureExpanded = useCallback(
+    async (key: string) => {
+      const map = ensureNodeMap()
+      const node = map.get(key)
+      if (!node || !node.isDirectory || node.expanded) return
+
+      if (node.children.length === 0 && !node.loading) {
+        node.loading = true
+        setTreeData((prev) => [...prev])
+        try {
+          node.children = await loadDirectory(key)
+        } catch {
+          node.children = []
+        }
+        node.loading = false
+      }
+
+      node.expanded = true
+      setExpandedKeys((prev) => [...new Set([...prev, key])])
+      setTreeData((prev) => [...prev])
+      rebuildNodeMap(treeData)
+    },
+    [ensureNodeMap, loadDirectory, rebuildNodeMap, treeData]
+  )
+
+  const refreshDirectory = useCallback(
+    async (key: string) => {
+      const map = ensureNodeMap()
+      const node = map.get(key)
+      if (!node || !node.isDirectory) return
       try {
-        const list = await window.api.fileListDirectory(key)
-        node.children = sortNodes(list.map(fileInfoToNode))
+        node.children = await loadDirectory(key)
       } catch {
         node.children = []
       }
-      node.loading = false
-    }
-
-    node.expanded = true
-    setExpandedKeys((prev) => [...prev, key])
-    setTreeData((prev) => [...prev])
-    rebuildNodeMap(treeData)
-  }, [ensureNodeMap, fileInfoToNode, sortNodes, treeData])
-
-  const refreshDirectory = useCallback(async (key: string) => {
-    const map = ensureNodeMap()
-    const node = map.get(key)
-    if (!node || !node.isDirectory) return
-
-    try {
-      const list = await window.api.fileListDirectory(key)
-      node.children = sortNodes(list.map(fileInfoToNode))
-    } catch {
-      node.children = []
-    }
-    setTreeData((prev) => [...prev])
-    rebuildNodeMap(treeData)
-  }, [ensureNodeMap, fileInfoToNode, sortNodes, treeData])
+      setTreeData((prev) => [...prev])
+      rebuildNodeMap(treeData)
+    },
+    [ensureNodeMap, loadDirectory, rebuildNodeMap, treeData]
+  )
 
   const refreshTree = useCallback(async () => {
     try {
-      const list = await window.api.fileListDirectory('')
-      const root = treeData[0]
-      root.children = sortNodes(list.map(fileInfoToNode))
-      const newData = [{ ...root, children: [...root.children] }]
-      setTreeData(newData)
-      setExpandedKeys([''])
-      rebuildNodeMap(newData)
-    } catch { /* ignore */ }
-  }, [fileInfoToNode, sortNodes, treeData])
-
-  const createFile = useCallback(async (parentKey: string, name: string) => {
-    const parent = parentKey === '' ? '' : parentKey
-    const relPath = parent ? `${parent}/${name}` : name
-    await window.api.fileCreateFile(relPath)
-    await refreshDirectory(parentKey)
-  }, [refreshDirectory])
-
-  const createDirectory = useCallback(async (parentKey: string, name: string) => {
-    const parent = parentKey === '' ? '' : parentKey
-    const relPath = parent ? `${parent}/${name}` : name
-    await window.api.fileCreateDirectory(relPath)
-    await refreshDirectory(parentKey)
-  }, [refreshDirectory])
-
-  const deleteNode = useCallback(async (key: string) => {
-    await window.api.fileDelete(key)
-    const map = ensureNodeMap()
-    const node = map.get(key)
-    if (!node) return
-    const parentKey = key.includes('/') ? key.substring(0, key.lastIndexOf('/')) : ''
-    const parent = map.get(parentKey)
-    if (parent) {
-      parent.children = parent.children.filter((c) => c.key !== key)
+      const children = await loadDirectory(rootRelPath)
+      setTreeData((prev) => {
+        const newData: FileTreeNode[] = [
+          {
+            ...prev[0],
+            key: rootRelPath,
+            name: rootName,
+            relPath: rootRelPath,
+            isDirectory: true,
+            expanded: true,
+            loading: false,
+            children
+          }
+        ]
+        rebuildNodeMap(newData)
+        return newData
+      })
+      setExpandedKeys([rootRelPath])
+    } catch {
+      /* ignore */
     }
-    map.delete(key)
-    setTreeData((prev) => [...prev])
-    if (selectedKey === key) setSelectedKey(null)
-  }, [ensureNodeMap, selectedKey])
+  }, [loadDirectory, rebuildNodeMap, rootName, rootRelPath])
 
-  const renameNode = useCallback(async (key: string, newName: string) => {
-    await window.api.fileRename(key, newName)
-    const map = ensureNodeMap()
-    const node = map.get(key)
-    if (!node) return
+  const createFile = useCallback(
+    async (parentKey: string, name: string) => {
+      if (readOnly) return
+      const parent = parentKey === '' ? '' : parentKey
+      const relPath = parent ? `${parent}/${name}` : name
+      await window.api.fileCreateFile(relPath)
+      await refreshDirectory(parentKey)
+    },
+    [readOnly, refreshDirectory]
+  )
 
-    const parentKey = key.includes('/') ? key.substring(0, key.lastIndexOf('/')) : ''
-    const newKey = parentKey ? `${parentKey}/${newName}` : newName
+  const createDirectory = useCallback(
+    async (parentKey: string, name: string) => {
+      if (readOnly) return
+      const parent = parentKey === '' ? '' : parentKey
+      const relPath = parent ? `${parent}/${name}` : name
+      await window.api.fileCreateDirectory(relPath)
+      await refreshDirectory(parentKey)
+    },
+    [readOnly, refreshDirectory]
+  )
 
-    const parent = map.get(parentKey)
-    if (parent) {
-      const idx = parent.children.findIndex((c) => c.key === key)
-      if (idx >= 0) {
+  const deleteNode = useCallback(
+    async (key: string) => {
+      if (readOnly) return
+      await window.api.fileDelete(key)
+      const map = ensureNodeMap()
+      const node = map.get(key)
+      if (!node) return
+      const parentKey = key.includes('/') ? key.substring(0, key.lastIndexOf('/')) : ''
+      const parent = map.get(parentKey)
+      if (parent) {
+        parent.children = parent.children.filter((c) => c.key !== key)
+      }
+      map.delete(key)
+      setTreeData((prev) => [...prev])
+      if (selectedKey === key) setSelectedKey(null)
+    },
+    [ensureNodeMap, readOnly, selectedKey]
+  )
+
+  const renameNode = useCallback(
+    async (key: string, newName: string) => {
+      if (readOnly) return
+      await window.api.fileRename(key, newName)
+      const map = ensureNodeMap()
+      const node = map.get(key)
+      if (!node) return
+
+      const parentKey = key.includes('/') ? key.substring(0, key.lastIndexOf('/')) : ''
+      const newKey = parentKey ? `${parentKey}/${newName}` : newName
+
+      const parent = map.get(parentKey)
+      if (parent) {
         parent.children = sortNodes(
           parent.children.map((c) =>
             c.key === key ? { ...c, key: newKey, name: newName, relPath: newKey } : c
           )
         )
       }
-    }
-    map.delete(key)
-    map.set(newKey, { ...node, key: newKey, name: newName, relPath: newKey })
-    setTreeData((prev) => [...prev])
-    if (selectedKey === key) setSelectedKey(newKey)
-    setRenamingKey(null)
-  }, [ensureNodeMap, selectedKey, sortNodes])
+      map.delete(key)
+      map.set(newKey, { ...node, key: newKey, name: newName, relPath: newKey })
+      setTreeData((prev) => [...prev])
+      if (selectedKey === key) setSelectedKey(newKey)
+      setRenamingKey(null)
+    },
+    [ensureNodeMap, readOnly, selectedKey, sortNodes]
+  )
 
   const validateDrop = useCallback((srcKey: string, destDirKey: string): boolean => {
+    if (readOnly) return false
     if (srcKey === destDirKey) return false
     const srcParentKey = srcKey.includes('/') ? srcKey.substring(0, srcKey.lastIndexOf('/')) : ''
     if (srcParentKey === destDirKey) return false
     if (destDirKey.startsWith(srcKey + '/')) return false
     return true
-  }, [])
+  }, [readOnly])
 
-  const onDrop = useCallback(async (srcKey: string, destDirKey: string) => {
-    if (!validateDrop(srcKey, destDirKey)) return
-    await window.api.fileMove(srcKey, destDirKey)
+  const onDrop = useCallback(
+    async (srcKey: string, destDirKey: string) => {
+      if (readOnly) return
+      if (!validateDrop(srcKey, destDirKey)) return
+      await window.api.fileMove(srcKey, destDirKey)
 
-    const map = ensureNodeMap()
-    const srcParentKey = srcKey.includes('/') ? srcKey.substring(0, srcKey.lastIndexOf('/')) : ''
-    const oldParent = map.get(srcParentKey)
-    if (oldParent) {
-      oldParent.children = oldParent.children.filter((c) => c.key !== srcKey)
-    }
+      const map = ensureNodeMap()
+      const srcParentKey = srcKey.includes('/') ? srcKey.substring(0, srcKey.lastIndexOf('/')) : ''
+      const oldParent = map.get(srcParentKey)
+      if (oldParent) {
+        oldParent.children = oldParent.children.filter((c) => c.key !== srcKey)
+      }
 
-    await refreshDirectory(destDirKey)
-  }, [validateDrop, ensureNodeMap, refreshDirectory])
+      await refreshDirectory(destDirKey)
+    },
+    [ensureNodeMap, readOnly, refreshDirectory, validateDrop]
+  )
+
+  const selectPath = useCallback(
+    async (relPath: string) => {
+      const normalized = relPath.replace(/\\/g, '/')
+      const parts = normalized.split('/').filter(Boolean)
+      const prefix = rootRelPath ? `${rootRelPath}/` : ''
+      if (rootRelPath && normalized !== rootRelPath && !normalized.startsWith(prefix)) return
+
+      const relParts = rootRelPath ? parts.slice(rootRelPath.split('/').filter(Boolean).length) : parts
+      let curKey = rootRelPath
+      for (let i = 0; i < relParts.length - 1; i++) {
+        curKey = curKey ? `${curKey}/${relParts[i]}` : relParts[i]
+        await ensureExpanded(curKey)
+      }
+      setSelectedKey(normalized)
+    },
+    [rootRelPath, ensureExpanded]
+  )
 
   return {
     treeData,
@@ -236,6 +393,9 @@ export function useFileTree(workDir: string) {
     renameNode,
     validateDrop,
     onDrop,
-    workDir
+    selectPath,
+    workDir,
+    readOnly,
+    rootRelPath
   }
 }

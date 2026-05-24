@@ -12,7 +12,7 @@ import { shouldBlockToolInPlanMode, type PlanToolPhaseArg } from './plan/planMod
 import { getSession } from './database'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
-import type { ToolsConfig } from '../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import type { AppDatabase } from './database'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
@@ -165,6 +165,7 @@ export type RunToolChatSessionArgs = {
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   toolsConfig: ToolsConfig
+  wikiConfig?: WikiConfig
   workDir: string
   userDataDir: string
   getApiKey: () => Promise<string | null>
@@ -204,6 +205,7 @@ async function runToolChatSessionInner(
     system,
     options,
     toolsConfig,
+    wikiConfig,
     workDir,
     userDataDir,
     getApiKey,
@@ -657,7 +659,8 @@ async function runToolChatSessionInner(
           sendProgress,
           signal,
           fileStateCache: fileCache,
-          toolsConfig
+          toolsConfig,
+          wikiConfig
         })
       } catch (e) {
         execResult = {

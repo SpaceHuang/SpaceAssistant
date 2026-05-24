@@ -1,7 +1,10 @@
 import { Spin, Typography } from 'antd'
+import { useTypedSelector } from '../../hooks'
+import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { useDetailPanel } from './DetailPanelContext'
 import { CodeView } from './CodeView'
 import { MarkdownRenderView } from './MarkdownRenderView'
+import { WikiIndexView } from './WikiIndexView'
 import { ImageView } from './ImageView'
 import { UnsupportedView } from './UnsupportedView'
 import type { SearchMatch } from './searchUtils'
@@ -9,9 +12,14 @@ import type { SearchMatch } from './searchUtils'
 type Props = {
   searchHighlights?: SearchMatch[]
   currentHighlightIndex?: number
+  wikiIndexView?: boolean
 }
 
-export function FileContentView({ searchHighlights = [], currentHighlightIndex = -1 }: Props) {
+export function FileContentView({
+  searchHighlights = [],
+  currentHighlightIndex = -1,
+  wikiIndexView = false
+}: Props) {
   const {
     selectedFile,
     previewContent,
@@ -21,8 +29,10 @@ export function FileContentView({ searchHighlights = [], currentHighlightIndex =
     isLoading,
     loadError,
     unsupportedExt,
-    tooLargeSize
+    tooLargeSize,
+    openFile
   } = useDetailPanel()
+  const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath)
 
   if (isLoading) {
     return (
@@ -57,8 +67,24 @@ export function FileContentView({ searchHighlights = [], currentHighlightIndex =
     return null
   }
 
+  if (fileType === 'markdown' && wikiIndexView) {
+    return (
+      <WikiIndexView
+        content={previewContent}
+        wikiRootPath={wikiRoot}
+        onOpenEntry={(relPath) => void openFile(relPath)}
+      />
+    )
+  }
+
   if (fileType === 'markdown' && viewMode === 'render') {
-    return <MarkdownRenderView content={previewContent} />
+    return (
+      <MarkdownRenderView
+        content={previewContent}
+        wikiRootPath={wikiRoot}
+        onOpenFile={(relPath) => void openFile(relPath)}
+      />
+    )
   }
 
   return (

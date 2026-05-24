@@ -35,6 +35,11 @@ type Props = {
   onClose: () => void
   onRefresh: () => void
   onPendingPlanClick?: () => void
+  showWikiIndexToggle?: boolean
+  wikiIndexView?: boolean
+  onWikiIndexViewChange?: (enabled: boolean) => void
+  showCollectToWiki?: boolean
+  onCollectToWiki?: () => void
 }
 
 export function FileToolbar({
@@ -45,7 +50,12 @@ export function FileToolbar({
   onViewModeChange,
   onClose,
   onRefresh,
-  onPendingPlanClick
+  onPendingPlanClick,
+  showWikiIndexToggle = false,
+  wikiIndexView = false,
+  onWikiIndexViewChange,
+  showCollectToWiki = false,
+  onCollectToWiki
 }: Props) {
   const { message } = App.useApp()
   const isMarkdown = fileType === 'markdown'
@@ -75,28 +85,51 @@ export function FileToolbar({
       <div className="detail-toolbar-left">
         {isMarkdown && (
           <div className="detail-view-segment" role="tablist" aria-label="Markdown 视图">
+            {showWikiIndexToggle ? (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={wikiIndexView}
+                className={`detail-view-segment-item detail-view-segment-item--text${wikiIndexView ? ' detail-view-segment-item--active' : ''}`}
+                title="Index 视图"
+                onClick={() => onWikiIndexViewChange?.(true)}
+              >
+                Index
+              </button>
+            ) : null}
             <button
               type="button"
               role="tab"
-              aria-selected={viewMode === 'render'}
-              className={`detail-view-segment-item${viewMode === 'render' ? ' detail-view-segment-item--active' : ''}`}
+              aria-selected={!wikiIndexView && viewMode === 'render'}
+              className={`detail-view-segment-item${!wikiIndexView && viewMode === 'render' ? ' detail-view-segment-item--active' : ''}`}
               title="渲染预览"
-              onClick={() => onViewModeChange('render')}
+              onClick={() => {
+                onWikiIndexViewChange?.(false)
+                onViewModeChange('render')
+              }}
               dangerouslySetInnerHTML={{ __html: markdownViewIcons.render }}
             />
             <button
               type="button"
               role="tab"
-              aria-selected={viewMode === 'code'}
-              className={`detail-view-segment-item${viewMode === 'code' ? ' detail-view-segment-item--active' : ''}`}
+              aria-selected={!wikiIndexView && viewMode === 'code'}
+              className={`detail-view-segment-item${!wikiIndexView && viewMode === 'code' ? ' detail-view-segment-item--active' : ''}`}
               title="源代码"
-              onClick={() => onViewModeChange('code')}
+              onClick={() => {
+                onWikiIndexViewChange?.(false)
+                onViewModeChange('code')
+              }}
               dangerouslySetInnerHTML={{ __html: markdownViewIcons.code }}
             />
           </div>
         )}
       </div>
       <div className="detail-toolbar-right">
+        {showCollectToWiki && onCollectToWiki ? (
+          <button type="button" className="detail-toolbar-text-btn" onClick={onCollectToWiki}>
+            收录到 Wiki
+          </button>
+        ) : null}
         {onPendingPlanClick ? (
           <button type="button" className="detail-toolbar-text-btn" onClick={onPendingPlanClick}>
             计划待审批

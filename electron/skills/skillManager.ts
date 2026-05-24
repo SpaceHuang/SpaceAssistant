@@ -1,4 +1,4 @@
-import type { SessionSkillsState, SkillDefinition, SkillsConfig } from '../../src/shared/domainTypes'
+import type { SessionSkillsState, SkillDefinition, SkillsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import { buildSystemPromptFromSkills, truncateSystemPrompt } from '../../src/shared/skillPrompt'
 import { getCachedSkills, invalidateSkillsCache } from './skillCache'
 import { matchSkills } from './skillMatcher'
@@ -17,6 +17,7 @@ export type SkillManagerContext = {
   getUserDataPath: () => string
   getWorkDir: () => string
   getSkillsConfig: () => SkillsConfig
+  getWikiConfig?: () => WikiConfig
 }
 
 export function createSkillManager(ctx: SkillManagerContext) {
@@ -33,8 +34,19 @@ export function createSkillManager(ctx: SkillManagerContext) {
 
     match(userInput: string, sessionState: SessionSkillsState): SkillDefinition[] {
       const skills = getCachedSkills(ctx.getUserDataPath(), ctx.getWorkDir())
-      const config = ctx.getSkillsConfig()
-      return matchSkills({ userInput, skills, config, sessionState })
+      let config = ctx.getSkillsConfig()
+      const wikiConfig = ctx.getWikiConfig?.()
+      if (wikiConfig && !wikiConfig.enabled) {
+        config = {
+          ...config,
+          alwaysLoad: config.alwaysLoad.filter((n) => n !== 'llm-wiki')
+        }
+      }
+      const matched = matchSkills({ userInput, skills, config, sessionState })
+      if (wikiConfig && !wikiConfig.enabled) {
+        return matched.filter((s) => s.meta.name !== 'llm-wiki')
+      }
+      return matched
     },
 
     buildSystemPrompt(skills: SkillDefinition[], maxChars?: number): string {

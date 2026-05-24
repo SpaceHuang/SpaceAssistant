@@ -61,6 +61,7 @@ const api: SpaceAssistantApi = {
   fileDelete: (relPath) => ipcRenderer.invoke('file:delete', relPath),
   fileRename: (relPath, newName) => ipcRenderer.invoke('file:rename', relPath, newName),
   fileMove: (srcRelPath, destDirRelPath) => ipcRenderer.invoke('file:move', srcRelPath, destDirRelPath),
+  fileCopy: (payload) => ipcRenderer.invoke('file:copy', payload),
 
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),
@@ -126,6 +127,12 @@ const api: SpaceAssistantApi = {
   skillMatch: (payload) => ipcRenderer.invoke('skill:match', payload),
   skillExport: (payload) => ipcRenderer.invoke('skill:export', payload),
   skillInvalidateCache: () => ipcRenderer.invoke('skill:invalidate-cache'),
+
+  wikiInit: (payload?: { overwrite?: boolean; installSkill?: boolean }) => ipcRenderer.invoke('wiki:init', payload ?? {}),
+  wikiStatus: () => ipcRenderer.invoke('wiki:status'),
+  wikiGetSchema: () => ipcRenderer.invoke('wiki:get-schema'),
+  wikiResolvePath: (payload: { relPath: string }) => ipcRenderer.invoke('wiki:resolve-path', payload),
+  wikiImportRaw: (payload: { srcRelPath: string }) => ipcRenderer.invoke('wiki:import-raw', payload),
 
   planRead: (payload) => ipcRenderer.invoke('plan:read', payload),
   planApprove: (payload) => ipcRenderer.invoke('plan:approve', payload),
