@@ -3,6 +3,7 @@ import type {
   ChatMode,
   FileInfo,
   Message,
+  ProjectMemoryState,
   SearchResult,
   Session,
   SessionSkillsState,
@@ -207,4 +208,12 @@ export type SpaceAssistantApi = {
   >
   planOnStateChanged: (cb: (data: PlanStateChangedEvent) => void) => () => void
   planOnApprovalReady: (cb: (data: PlanApprovalReadyEvent) => void) => () => void
+
+  projectMemoryGetState: () => Promise<ProjectMemoryState>
+  projectMemoryGenerate: () => Promise<{ success: boolean; prompt?: string; error?: string }>
+  projectMemoryWrite: (payload: { content: string }) => Promise<{ success: boolean; error?: string }>
+  projectMemoryReload: () => Promise<ProjectMemoryState>
+  projectMemoryOnStateChanged: (
+    cb: (data: ProjectMemoryState) => void
+  ) => () => void
 }

@@ -143,7 +143,17 @@ const api: SpaceAssistantApi = {
       cb(data)
     ipcRenderer.on('plan:approval-ready', fn)
     return () => ipcRenderer.removeListener('plan:approval-ready', fn)
-  }
+  },
+
+  projectMemoryGetState: () => ipcRenderer.invoke('project-memory:get-state'),
+  projectMemoryGenerate: () => ipcRenderer.invoke('project-memory:generate'),
+  projectMemoryWrite: (payload) => ipcRenderer.invoke('project-memory:write', payload),
+  projectMemoryReload: () => ipcRenderer.invoke('project-memory:reload'),
+  projectMemoryOnStateChanged: (cb) => {
+    const fn = (_e: unknown, data: import('../src/shared/domainTypes').ProjectMemoryState) => cb(data)
+    ipcRenderer.on('project-memory:state-changed', fn)
+    return () => ipcRenderer.removeListener('project-memory:state-changed', fn)
+  },
 }
 
 contextBridge.exposeInMainWorld('api', api)
