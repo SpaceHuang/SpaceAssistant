@@ -21,6 +21,13 @@ describe('ThinkingBlock', () => {
     expect(screen.queryByText('plan steps')).toBeNull()
   })
 
+  it('uses plain text body while active', () => {
+    render(<ThinkingBlock content="streaming thought" active />)
+    expect(document.querySelector('pre.chat-stream-plain')).toBeNull()
+    expect(document.querySelector('.chat-thinking__body')).not.toBeNull()
+    expect(screen.getByText('streaming thought')).toBeDefined()
+  })
+
   it('starts expanded when active', () => {
     render(<ThinkingBlock content="streaming thought" active />)
     expect(screen.getByText('streaming thought')).toBeDefined()

@@ -29,7 +29,7 @@ export function ResizeHandle({ onResize, currentRatio, minRatio = 0.15, maxRatio
       const handleMouseMove = (ev: MouseEvent) => {
         if (!dragState.current) return
         const delta = ev.clientY - dragState.current.startY
-        const newBottomHeight = dragState.current.startBottomHeight + delta
+        const newBottomHeight = dragState.current.startBottomHeight - delta
         const ratio = newBottomHeight / dragState.current.containerHeight
         const minR = Math.max(minRatio, MIN_PX / dragState.current.containerHeight)
         const maxR = Math.min(maxRatio, 1 - MIN_PX / dragState.current.containerHeight)

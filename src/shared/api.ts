@@ -122,12 +122,21 @@ export type SpaceAssistantApi = {
       thinkingEnabled: boolean
       workDir: string
       apiKey: string
+      llmServices: import('./domainTypes').LlmServiceProfile[]
+      activeLlmServiceId: string
+      llmServiceKeys: Record<string, string>
       tools: Partial<ToolsConfig>
       skills: Partial<SkillsConfig>
       defaultChatMode: ChatMode
+      uiTheme: import('./domainTypes').UiThemeMode
+      maxParallelChatSessions: number
     }>
   ) => Promise<void>
-  configTestConnection: () => Promise<{ success: boolean; error?: string }>
+  configTestConnection: (options?: {
+    serviceId?: string
+    apiKey?: string
+    baseUrl?: string
+  }) => Promise<{ success: boolean; error?: string }>
 
   dialogSelectDirectory: () => Promise<{ path: string } | { canceled: true } | { error: string }>
   configCheckWorkdirWritable: (dir: string) => Promise<{ writable: boolean; error?: string }>

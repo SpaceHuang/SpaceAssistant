@@ -233,13 +233,31 @@ export interface ModelEntry {
   enabled: boolean
 }
 
+import type { ChatMode } from './planTypes'
+export type { ChatMode } from './planTypes'
+export { DEFAULT_CHAT_MODE } from './planTypes'
+
 export type UiThemeMode = 'light' | 'dark' | 'system'
 
 export const DEFAULT_UI_THEME: UiThemeMode = 'system'
 
-export interface AppConfig {
-  apiKeyPresent: boolean
+/** 单套大模型 API 接入配置（不含明文 Key） */
+export interface LlmServiceProfile {
+  id: string
+  name: string
   baseUrl: string
+  apiKeyPresent: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface AppConfig {
+  /** 是否已配置 API Key（激活服务的镜像，兼容旧逻辑） */
+  apiKeyPresent: boolean
+  /** Base URL（激活服务的镜像，兼容旧逻辑） */
+  baseUrl: string
+  llmServices: LlmServiceProfile[]
+  activeLlmServiceId: string
   model: string
   defaultModel: string
   models: ModelEntry[]
@@ -248,6 +266,8 @@ export interface AppConfig {
   thinkingEnabled: boolean
   workDir: string
   uiTheme: UiThemeMode
+  /** 默认聊天模式（发送时可覆盖） */
+  defaultChatMode: ChatMode
   /** 多会话并行 LLM 请求上限（设置页可配置） */
   maxParallelChatSessions: number
   tools: ToolsConfig

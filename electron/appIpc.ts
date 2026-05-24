@@ -8,6 +8,7 @@ import { DEFAULT_UI_THEME } from '../src/shared/domainTypes'
 import type {
   AppConfig,
   FileInfo,
+  LlmServiceProfile,
   Message,
   ModelEntry,
   SearchResult,
@@ -20,11 +21,30 @@ import type {
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
+import { DEFAULT_CHAT_MODE, isChatMode } from '../src/shared/planTypes'
+import {
+  approvePlanInSession,
+  cancelPlanInSession,
+  dismissPlanAbortInSession,
+  readPlanStateForSession,
+  rejectPlanInSession
+} from './plan/planManager'
+import { resumePlanExecution } from './plan/planOrchestrator'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { createSkillManager } from './skills/skillManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
+import {
+  LlmServiceValidationError,
+  LLM_SERVICE_CONFIG_KEYS,
+  migrateLegacyLlmServicesIfNeeded,
+  persistLlmServices,
+  readActiveLlmServiceId,
+  readLlmServices,
+  resolveTestConnectionCredentials,
+  resolveTestConnectionModel
+} from './llmServiceResolver'
 import {
   appendMessage,
   appendSearchHistory,
@@ -49,7 +69,7 @@ import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeede
 import { spawn } from 'child_process'
 
 const CONFIG_KEYS = {
-  baseUrl: 'config.baseUrl',
+  baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
   model: 'config.model',
   temperature: 'config.temperature',
   maxTokens: 'config.maxTokens',
@@ -57,11 +77,14 @@ const CONFIG_KEYS = {
   models: 'config.models',
   thinkingEnabled: 'config.thinkingEnabled',
   workDir: 'config.workDir',
-  apiKeyEnc: 'secrets.apiKeyEnc',
+  apiKeyEnc: LLM_SERVICE_CONFIG_KEYS.apiKeyEnc,
+  llmServices: LLM_SERVICE_CONFIG_KEYS.llmServices,
+  activeLlmServiceId: LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId,
   tools: 'config.tools',
   skills: 'config.skills',
   uiTheme: 'config.uiTheme',
-  maxParallelChatSessions: 'config.maxParallelChatSessions'
+  maxParallelChatSessions: 'config.maxParallelChatSessions',
+  defaultChatMode: 'config.defaultChatMode'
 } as const
 
 export type AppIpcContext = {
@@ -72,6 +95,16 @@ export type AppIpcContext = {
   getUserDataPath: () => string
   getApiKey: () => Promise<string | null>
   setApiKey: (value: string) => Promise<void>
+}
+
+function readToolsConfig(db: AppDatabase): ToolsConfig {
+  const raw = getConfigValue(db, CONFIG_KEYS.tools)
+  if (!raw) return mergeToolsConfig(null)
+  try {
+    return mergeToolsConfig(JSON.parse(raw) as Partial<ToolsConfig>)
+  } catch {
+    return mergeToolsConfig(null)
+  }
 }
 
 function readSkillsConfig(db: AppDatabase): SkillsConfig {
@@ -232,6 +265,11 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   )
 
   ipcMain.handle('config:get', async (): Promise<AppConfig> => {
+    migrateLegacyLlmServicesIfNeeded(ctx.db)
+    const llmServices = readLlmServices(ctx.db)
+    const activeLlmServiceId = readActiveLlmServiceId(ctx.db) ?? llmServices[0]?.id ?? ''
+    const activeService = llmServices.find((s) => s.id === activeLlmServiceId) ?? llmServices[0]
+
     const wd = getConfigValue(ctx.db, CONFIG_KEYS.workDir) ?? path.join(ctx.getWorkDir())
     const defaultModelName = getConfigValue(ctx.db, CONFIG_KEYS.defaultModel) ?? 'claude-sonnet-4-20250514'
     const modelName = getConfigValue(ctx.db, CONFIG_KEYS.model) ?? 'claude-sonnet-4-20250514'
@@ -264,9 +302,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const uiTheme: UiThemeMode =
       uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
+    const defaultChatModeRaw = getConfigValue(ctx.db, CONFIG_KEYS.defaultChatMode)
+    const defaultChatMode = isChatMode(defaultChatModeRaw) ? defaultChatModeRaw : DEFAULT_CHAT_MODE
     return {
-      apiKeyPresent: Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
-      baseUrl: getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
+      apiKeyPresent: activeService?.apiKeyPresent ?? Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
+      baseUrl: activeService?.baseUrl ?? getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
+      llmServices,
+      activeLlmServiceId,
       model: defaultEntry?.name ?? modelName,
       temperature: Number(getConfigValue(ctx.db, CONFIG_KEYS.temperature) ?? 0.7),
       maxTokens: Number(getConfigValue(ctx.db, CONFIG_KEYS.maxTokens) ?? 4096),
@@ -276,6 +318,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       workDir: wd,
       uiTheme,
       maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
+      defaultChatMode,
       tools,
       skills
     }
@@ -295,13 +338,51 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         thinkingEnabled: boolean
         workDir: string
         apiKey: string
+        llmServices: LlmServiceProfile[]
+        activeLlmServiceId: string
+        llmServiceKeys: Record<string, string>
         tools: Partial<ToolsConfig>
         skills: Partial<SkillsConfig>
         uiTheme: UiThemeMode
         maxParallelChatSessions: number
+        defaultChatMode: import('../src/shared/planTypes').ChatMode
       }>
     ): Promise<void> => {
-      if (payload.baseUrl !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.baseUrl, payload.baseUrl)
+      try {
+        if (payload.llmServices !== undefined && payload.activeLlmServiceId !== undefined) {
+          persistLlmServices(ctx.db, payload.llmServices, payload.activeLlmServiceId, payload.llmServiceKeys)
+        } else if (payload.apiKey !== undefined && payload.apiKey.trim()) {
+          migrateLegacyLlmServicesIfNeeded(ctx.db)
+          const activeId = readActiveLlmServiceId(ctx.db) ?? readLlmServices(ctx.db)[0]?.id
+          if (activeId) {
+            const keys: Record<string, string> = { [activeId]: payload.apiKey.trim() }
+            const services = readLlmServices(ctx.db)
+            persistLlmServices(ctx.db, services, activeId, keys)
+          } else {
+            await ctx.setApiKey(payload.apiKey.trim())
+          }
+        } else if (payload.baseUrl !== undefined) {
+          migrateLegacyLlmServicesIfNeeded(ctx.db)
+          const services = readLlmServices(ctx.db)
+          const activeId = readActiveLlmServiceId(ctx.db) ?? services[0]?.id
+          if (activeId && services.length > 0) {
+            const updated = services.map((s) =>
+              s.id === activeId ? { ...s, baseUrl: payload.baseUrl! } : s
+            )
+            persistLlmServices(ctx.db, updated, activeId)
+          } else {
+            setConfigValue(ctx.db, CONFIG_KEYS.baseUrl, payload.baseUrl)
+          }
+        }
+      } catch (e) {
+        if (e instanceof LlmServiceValidationError) {
+          throw new Error(e.message)
+        }
+        throw e
+      }
+      if (payload.baseUrl !== undefined && payload.llmServices === undefined) {
+        /* handled above via persist or legacy */
+      }
       if (payload.models !== undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.models, JSON.stringify(payload.models))
         const defaultEntry = payload.models.find((m) => m.isDefault)
@@ -318,8 +399,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         ctx.setWorkDir(payload.workDir)
         await fs.mkdir(payload.workDir, { recursive: true })
       }
-      if (payload.apiKey !== undefined && payload.apiKey.trim()) {
-        await ctx.setApiKey(payload.apiKey.trim())
+      if (payload.apiKey !== undefined && payload.apiKey.trim() && payload.llmServices === undefined) {
+        /* legacy apiKey without llmServices handled above */
       }
       if (payload.tools !== undefined) {
         let cur = mergeToolsConfig(null)
@@ -357,28 +438,54 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           String(clampMaxParallelChatSessions(payload.maxParallelChatSessions))
         )
       }
+      if (payload.defaultChatMode !== undefined && isChatMode(payload.defaultChatMode)) {
+        setConfigValue(ctx.db, CONFIG_KEYS.defaultChatMode, payload.defaultChatMode)
+      }
       ctx.db.flushSave()
     }
   )
 
-  ipcMain.handle('config:test-connection', async (): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const apiKey = await ctx.getApiKey()
-      if (!apiKey) return { success: false, error: 'API Key 未配置' }
-      const baseUrlRaw = getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? undefined
-      const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
-      const model = getConfigValue(ctx.db, CONFIG_KEYS.model) ?? 'claude-sonnet-4-20250514'
-      const client = createAnthropicClient(apiKey, baseUrl)
-      await client.messages.create({
-        model,
-        max_tokens: 16,
-        messages: [{ role: 'user', content: 'ping' }]
-      })
-      return { success: true }
-    } catch (e) {
-      return { success: false, error: e instanceof Error ? e.message : String(e) }
+  ipcMain.handle(
+    'config:test-connection',
+    async (
+      _e,
+      options?: { serviceId?: string; apiKey?: string; baseUrl?: string }
+    ): Promise<{ success: boolean; error?: string }> => {
+      try {
+        const creds = await resolveTestConnectionCredentials(ctx.db, options)
+        if (creds.error || !creds.apiKey) {
+          return { success: false, error: creds.error ?? 'API Key 未配置' }
+        }
+
+        const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
+        let models: ModelEntry[] = []
+        if (rawModels) {
+          try {
+            models = JSON.parse(rawModels) as ModelEntry[]
+          } catch {
+            models = []
+          }
+        }
+        const enabledModel = resolveTestConnectionModel(ctx.db, models)
+        if (!enabledModel) {
+          return {
+            success: false,
+            error: '请先在默认大模型设置中启用至少一个模型'
+          }
+        }
+
+        const client = createAnthropicClient(creds.apiKey, creds.baseUrl)
+        await client.messages.create({
+          model: enabledModel.name,
+          max_tokens: 16,
+          messages: [{ role: 'user', content: 'ping' }]
+        })
+        return { success: true }
+      } catch (e) {
+        return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
     }
-  })
+  )
 
   ipcMain.handle('file:list-directory', async (_e, rel: string): Promise<FileInfo[]> => {
     const root = ctx.getWorkDir()
@@ -626,6 +733,126 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
     }
   )
+
+  ipcMain.handle('plan:read', async (_e, payload: { sessionId: string }) => {
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) {
+      return {
+        plan: null,
+        pendingPlan: null,
+        displayPlans: [],
+        planDrafting: false,
+        planAbortDismissed: false,
+        abort: null,
+        summary: null,
+        raw: null
+      }
+    }
+    return await readPlanStateForSession({
+      db: ctx.db,
+      workDir: ctx.getWorkDir(),
+      sessionId
+    })
+  })
+
+  ipcMain.handle(
+    'plan:approve',
+    async (event, payload: { sessionId: string; cancelExecuting?: boolean }) => {
+      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+      if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
+      try {
+        const result = await approvePlanInSession({
+          db: ctx.db,
+          sessionId,
+          workDir: ctx.getWorkDir(),
+          cancelExecuting: payload?.cancelExecuting === true
+        })
+        event.sender.send('plan:state-changed', { sessionId })
+        const updated = getSession(ctx.db, sessionId)
+        if (updated) await syncBackup(ctx, sessionId)
+        return { ok: true as const, plan: result.plan, autoExecute: result.autoExecute }
+      } catch (e) {
+        return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  ipcMain.handle('plan:reject', async (event, payload: { sessionId: string; feedback?: string }) => {
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
+    try {
+      await rejectPlanInSession({
+        db: ctx.db,
+        sessionId,
+        workDir: ctx.getWorkDir(),
+        feedback: typeof payload.feedback === 'string' ? payload.feedback : ''
+      })
+      event.sender.send('plan:state-changed', { sessionId })
+      await syncBackup(ctx, sessionId)
+      return { ok: true as const }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('plan:cancel', async (event, payload: { sessionId: string }) => {
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
+    try {
+      await cancelPlanInSession({ db: ctx.db, sessionId })
+      event.sender.send('plan:state-changed', { sessionId })
+      await syncBackup(ctx, sessionId)
+      return { ok: true as const }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('plan:dismiss-abort', async (event, payload: { sessionId: string }) => {
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
+    try {
+      await dismissPlanAbortInSession({ db: ctx.db, sessionId })
+      event.sender.send('plan:state-changed', { sessionId })
+      await syncBackup(ctx, sessionId)
+      return { ok: true as const }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('plan:resume-execution', async (event, payload) => {
+    const sender = event.sender
+    try {
+      const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
+      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+      if (!requestId || !sessionId) return { ok: false as const, error: 'Invalid payload' }
+
+      const res = await resumePlanExecution({
+        sender,
+        requestId,
+        sessionId,
+        model: payload.model,
+        baseUrl: payload.baseUrl,
+        messages: payload.messages,
+        system: payload.system,
+        options: payload.options,
+        deps: {
+          getApiKey: ctx.getApiKey,
+          getWorkDir: ctx.getWorkDir,
+          getUserDataPath: ctx.getUserDataPath,
+          getToolsConfig: () => readToolsConfig(ctx.db),
+          getAppDatabase: () => ctx.db
+        }
+      })
+
+      if (!res.ok) return res
+      sender.send('claude-chat-done', { requestId })
+      return res
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
 
   ipcMain.handle('skill:invalidate-cache', async (): Promise<void> => {
     skillManager.invalidateCache()

@@ -1,8 +1,8 @@
-import { Typography } from 'antd'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileOverlay } from './FileOverlay'
 import { ReferencedFilesPanel } from './ReferencedFilesPanel'
 import { ResizeHandle } from './ResizeHandle'
+import { PlanPanel } from '../Plan/PlanPanel'
 import { useTypedSelector } from '../../hooks'
 import './detailPanel.css'
 
@@ -22,9 +22,7 @@ export function DetailPanel() {
         className="detail-panel-top"
         style={{ flex: 1 - referencedFilesHeight }}
       >
-        <div className="detail-panel-placeholder">
-          <Typography.Text type="secondary">选择文件以预览内容</Typography.Text>
-        </div>
+        <PlanPanel sessionId={currentSessionId} />
       </div>
       <ResizeHandle
         currentRatio={referencedFilesHeight}

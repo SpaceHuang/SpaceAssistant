@@ -22,6 +22,8 @@ const STREAM_PERSIST_MS = 2000
 const liveBySession = new Map<string, Message[]>()
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const persistPendingPatch = new Map<string, Partial<Message>>()
+const pendingUiPatches = new Map<string, Partial<Message>>()
+const uiFlushRafIds = new Map<string, number>()
 
 function cloneMessages(msgs: Message[]): Message[] {
   return msgs.map((m) => ({
@@ -68,17 +70,59 @@ export function patchLiveMessage(sessionId: string, messageId: string, patch: Pa
   Object.assign(m, patch)
 }
 
-/** 更新 live；若当前正在查看该会话，则同步到 Redux messages */
-export function routePatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
-  patchLiveMessage(sessionId, messageId, patch)
+function dispatchPatchToRedux(sessionId: string, messageId: string, patch: Partial<Message>): void {
   if (store.getState().chat.currentSessionId === sessionId) {
     store.dispatch(patchMessage({ id: messageId, patch }))
   }
 }
 
-/** 流式增量：同步 live/Redux，并按节流写入 DB（阶段 3） */
+function flushUiPatchToRedux(sessionId: string, messageId: string): void {
+  const key = persistKey(sessionId, messageId)
+  const rafId = uiFlushRafIds.get(key)
+  if (rafId !== undefined) {
+    cancelAnimationFrame(rafId)
+    uiFlushRafIds.delete(key)
+  }
+  const merged = pendingUiPatches.get(key)
+  pendingUiPatches.delete(key)
+  if (merged) {
+    dispatchPatchToRedux(sessionId, messageId, merged)
+  }
+}
+
+/** 立即将 pending 流式 UI patch flush 到 Redux（onDone / cancel / error 前调用） */
+export function flushUiPatch(sessionId: string, messageId: string): void {
+  flushUiPatchToRedux(sessionId, messageId)
+}
+
+function scheduleUiFlush(sessionId: string, messageId: string): void {
+  if (store.getState().chat.currentSessionId !== sessionId) return
+  const key = persistKey(sessionId, messageId)
+  if (uiFlushRafIds.has(key)) return
+  const rafId = requestAnimationFrame(() => {
+    uiFlushRafIds.delete(key)
+    const merged = pendingUiPatches.get(key)
+    pendingUiPatches.delete(key)
+    if (merged) {
+      dispatchPatchToRedux(sessionId, messageId, merged)
+    }
+  })
+  uiFlushRafIds.set(key, rafId)
+}
+
+/** 更新 live；若当前正在查看该会话，则同步到 Redux messages */
+export function routePatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
+  patchLiveMessage(sessionId, messageId, patch)
+  dispatchPatchToRedux(sessionId, messageId, patch)
+}
+
+/** 流式增量：live 立即更新，Redux rAF 合并，DB 2s 节流 */
 export function routeStreamPatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
-  routePatchMessage(sessionId, messageId, patch)
+  patchLiveMessage(sessionId, messageId, patch)
+  const key = persistKey(sessionId, messageId)
+  const prev = pendingUiPatches.get(key) ?? {}
+  pendingUiPatches.set(key, { ...prev, ...patch })
+  scheduleUiFlush(sessionId, messageId)
   scheduleThrottledPersist(sessionId, messageId, patch)
 }
 
@@ -126,6 +170,14 @@ export function clearLiveSession(sessionId: string): void {
       persistPendingPatch.delete(key)
     }
   }
+  for (const key of [...pendingUiPatches.keys()]) {
+    if (key.startsWith(`${sessionId}:`)) {
+      const rafId = uiFlushRafIds.get(key)
+      if (rafId !== undefined) cancelAnimationFrame(rafId)
+      uiFlushRafIds.delete(key)
+      pendingUiPatches.delete(key)
+    }
+  }
 }
 
 export function countRunningSessions(): number {
@@ -141,7 +193,10 @@ export function registerSessionRun(sessionId: string, requestId: string): void {
 }
 
 export function finishSessionRun(sessionId: string, requestId: string, assistantMessageId?: string): void {
-  if (assistantMessageId) flushStreamPersist(sessionId, assistantMessageId)
+  if (assistantMessageId) {
+    flushUiPatch(sessionId, assistantMessageId)
+    flushStreamPersist(sessionId, assistantMessageId)
+  }
   unregisterRunRequest(requestId)
 }
 

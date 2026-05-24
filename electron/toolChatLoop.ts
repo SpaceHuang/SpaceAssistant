@@ -8,6 +8,8 @@ import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
 import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
+import { shouldBlockToolInPlanMode, type PlanToolPhaseArg } from './plan/planModeAcl'
+import { getSession } from './database'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolsConfig } from '../src/shared/domainTypes'
@@ -167,6 +169,9 @@ export type RunToolChatSessionArgs = {
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
   appDb?: AppDatabase
+  planToolPhase?: PlanToolPhaseArg
+  /** Plan 探索期可传入只读工具子集 */
+  toolsOverride?: unknown[]
 }
 
 export type RunToolChatSessionResult =
@@ -202,7 +207,9 @@ async function runToolChatSessionInner(
     userDataDir,
     getApiKey,
     appDb,
-    chatSignal
+    chatSignal,
+    planToolPhase = null,
+    toolsOverride
   } = args
 
   const apiKey = await getApiKey()
@@ -252,7 +259,7 @@ async function runToolChatSessionInner(
     })
   }
 
-  const builtinDefs = filterBuiltinToolsForApi(toolsConfig)
+  const builtinDefs = toolsOverride ?? filterBuiltinToolsForApi(toolsConfig)
   const tools = sanitizeTools(builtinDefs as unknown[])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
   let loopRound = 0
@@ -460,6 +467,32 @@ async function runToolChatSessionInner(
           requestId,
           toolUseId,
           result: { success: false, error: unknownToolError }
+        })
+        continue
+      }
+
+      const sessionMeta = appDb ? getSession(appDb, sessionId)?.metadata : undefined
+      const planBlock = shouldBlockToolInPlanMode(toolName, sessionMeta, planToolPhase)
+      if (planBlock.blocked) {
+        const blockedError = planBlock.error ?? 'BLOCKED_BY_PLAN_MODE'
+        logAgentEvent('error', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          error: blockedError
+        })
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: blockedError
+        })
+        sender.send('tool:result', {
+          requestId,
+          toolUseId,
+          result: { success: false, error: blockedError }
         })
         continue
       }

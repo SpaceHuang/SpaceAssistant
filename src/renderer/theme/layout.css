@@ -350,6 +350,16 @@
   background: rgba(255, 255, 255, 0.75);
 }
 
+.pending-confirm-banner--plan {
+  background: rgba(22, 119, 255, 0.08);
+  border-color: rgba(22, 119, 255, 0.35);
+  margin-top: 6px;
+}
+
+.pending-confirm-banner--plan .pending-confirm-banner__title {
+  color: #1677ff;
+}
+
 .tool-row--focus {
   outline: 2px solid rgba(250, 173, 20, 0.55);
   outline-offset: 2px;
@@ -461,6 +471,28 @@
   }
 }
 
+.chat-stream-plain {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* 防止流式 plain text 误用 pre 时被 .sa-prose pre 代码块样式覆盖 */
+.sa-prose pre.chat-stream-plain {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  border-radius: 0;
+  font-family: inherit;
+  font-size: inherit;
+}
+
 .chat-system-track {
   margin-bottom: 4px;
   max-width: 92%;
@@ -566,6 +598,7 @@
   background: transparent !important;
   padding: 0 !important;
   resize: none;
+  font-size: 12px;
 }
 
 .composer-footer {
@@ -637,6 +670,55 @@
 
 .composer-send--stop:hover:not(:disabled) {
   background: var(--sa-danger-hover, #dc3d43);
+}
+
+.composer-mode-select {
+  min-width: 108px;
+}
+
+.composer-mode-select .ant-select-selector {
+  border-radius: var(--sa-radius-sm) !important;
+  font-size: 11px !important;
+}
+
+.plan-card {
+  margin: 12px 16px;
+  padding: 14px 16px;
+  border-radius: var(--sa-radius-md);
+  border: 1px solid var(--sa-border);
+  background: var(--sa-surface-elevated, var(--sa-bg));
+  max-width: 92%;
+}
+
+.plan-card--approval {
+  border-color: var(--sa-primary);
+}
+
+.plan-card--abort {
+  border-color: var(--sa-border-strong, var(--sa-border));
+}
+
+.plan-card-section {
+  margin-top: 10px;
+}
+
+.plan-card-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.plan-card-list--risk {
+  color: var(--sa-warning-text, #ad6800);
+}
+
+.plan-card-markdown {
+  font-size: 13px;
+}
+
+.plan-resume-banner {
+  margin: 8px 16px;
+  max-width: 92%;
 }
 
 /* ── Tool call activity row ── */
@@ -1008,9 +1090,143 @@
   outline-offset: 1px;
 }
 
-/* ── Config modal ── */
-.config-modal .ant-form-item-label > label {
+/* ── Config modal：正文 12px；Modal 标题、Tab 标签、区块标题、按钮保持 Ant 默认 ── */
+.config-modal .ant-modal-body {
+  font-size: 12px;
+}
+
+.config-modal .ant-form-item-label > label,
+.config-modal .ant-form-item-extra,
+.config-modal .ant-radio-wrapper,
+.config-modal .ant-checkbox-wrapper,
+.config-modal .ant-input,
+.config-modal .ant-input-affix-wrapper,
+.config-modal .ant-input-number,
+.config-modal .ant-input-number-input,
+.config-modal .ant-alert-message,
+.config-modal .ant-alert-description,
+.config-modal .ant-tag,
+.config-modal .config-model-list,
+.config-modal .config-tool-list,
+.config-modal .llm-service-tab-extra,
+.config-modal .ant-table,
+.config-modal .ant-table-thead > tr > th,
+.config-modal .ant-table-thead > tr > th .ant-table-column-title,
+.config-modal .ant-table-thead .ant-table-cell,
+.config-modal .ant-select-selection-item,
+.config-modal .ant-select-item,
+.config-modal .ant-collapse-header-text,
+.config-modal .ant-typography {
+  font-size: 12px;
+}
+
+.config-modal .config-section-title {
   font-size: 13px;
+  font-weight: 500;
+}
+
+/* 工具 Tab：标签与 Switch 同一行（覆盖 vertical 下 label/control 各 100% 宽） */
+.config-modal .config-form-item-inline .ant-form-item-row {
+  flex-flow: row nowrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label,
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-control {
+  flex: 0 0 auto !important;
+  max-width: none !important;
+  width: auto !important;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label {
+  flex: 1 1 auto !important;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label > label {
+  height: auto;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label > label::after {
+  display: none;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-control {
+  flex: 0 0 auto !important;
+  margin-left: auto;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-control-input {
+  min-height: auto;
+}
+
+/* 带 extra 的项：说明文在 control 内，用 grid 把开关与另两项一样顶右对齐 */
+.config-modal .config-form-item-inline--with-extra .ant-form-item-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: center;
+}
+
+.config-modal .config-form-item-inline--with-extra.ant-form-item-vertical .ant-form-item-label {
+  grid-column: 1;
+  grid-row: 1;
+  flex: none !important;
+  min-width: 0;
+  margin: 0;
+}
+
+.config-modal .config-form-item-inline--with-extra.ant-form-item-vertical .ant-form-item-control {
+  display: contents;
+  margin-left: 0;
+}
+
+.config-modal .config-form-item-inline--with-extra .ant-form-item-control-input {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.config-modal .config-form-item-inline--with-extra .ant-form-item-additional {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.config-modal .config-form-item-inline--with-extra .ant-form-item-extra {
+  margin-top: 0;
+  padding-left: 0;
+}
+
+.config-modal .config-model-badge {
+  font-size: 12px;
+  padding: 0 6px;
+  border-radius: 4px;
+  line-height: 20px;
+}
+
+.config-modal .config-model-badge--default {
+  background: #e6f4ff;
+  color: #1677ff;
+}
+
+.config-modal .config-model-badge--fast {
+  background: #fff7e6;
+  color: #fa8c16;
+}
+
+.config-modal-popover {
+  font-size: 12px;
+}
+
+.config-modal-popover .ant-input,
+.config-modal-popover .ant-input-number,
+.config-modal-popover .ant-checkbox-wrapper {
+  font-size: 12px;
 }
 
 .sa-skill-row-highlight td {

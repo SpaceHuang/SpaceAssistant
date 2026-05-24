@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import { Space, Typography } from 'antd'
 import type { Message } from '../../../shared/domainTypes'
 import { buildAssistantActivityTimeline } from '../../../shared/assistantActivityTimeline'
@@ -25,7 +26,19 @@ type Props = {
   onOpenFile?: (relPath: string) => void
 }
 
-export function ChatBubble({ message, toolsInteractive, focusToolUseId, onOpenFile }: Props) {
+function AssistantTextBody({ activeText, body }: { activeText: boolean; body: string }) {
+  if (activeText) {
+    return <div className="chat-stream-plain chat-md-assistant">{body}</div>
+  }
+  return <ChatMarkdown content={body} />
+}
+
+export const ChatBubble = memo(function ChatBubble({
+  message,
+  toolsInteractive,
+  focusToolUseId,
+  onOpenFile
+}: Props) {
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
   const thinkingSegments = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
@@ -79,7 +92,7 @@ export function ChatBubble({ message, toolsInteractive, focusToolUseId, onOpenFi
                     key={`${message.id}-act-text-${i}`}
                     className={`chat-bubble chat-bubble--assistant${activeText ? ' chat-bubble-streaming' : ''}`}
                   >
-                    <ChatMarkdown content={body} />
+                    <AssistantTextBody activeText={activeText} body={body} />
                   </div>
                 )
               }
@@ -108,7 +121,7 @@ export function ChatBubble({ message, toolsInteractive, focusToolUseId, onOpenFi
           </div>
         ) : streaming ? (
           <div className="chat-bubble chat-bubble--assistant chat-bubble-streaming">
-            <ChatMarkdown content="…" />
+            <div className="chat-stream-plain chat-md-assistant">…</div>
           </div>
         ) : null}
 
@@ -137,5 +150,9 @@ export function ChatBubble({ message, toolsInteractive, focusToolUseId, onOpenFi
       </div>
     </div>
   )
-}
-
+}, (prev, next) =>
+  prev.message === next.message &&
+  prev.focusToolUseId === next.focusToolUseId &&
+  prev.toolsInteractive === next.toolsInteractive &&
+  prev.onOpenFile === next.onOpenFile
+)

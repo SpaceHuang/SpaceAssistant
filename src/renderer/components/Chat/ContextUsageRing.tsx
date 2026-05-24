@@ -1,15 +1,42 @@
 import { useMemo } from 'react'
 import { Tooltip } from 'antd'
 import { useTypedSelector } from '../../hooks'
-import type { LastUsage } from '../../store/chatSlice'
+import { computeContextUsageDisplay } from '../../../shared/contextUsageEstimate'
+import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 
 const RING_SIZE = 28
 const CENTER = RING_SIZE / 2
-const RADII = [11, 8, 5]
-const STROKE_WIDTHS = [3, 2.5, 2]
+const RADIUS = 10
+const STROKE_WIDTH = 3
 
 function formatNum(n: number): string {
   return n.toLocaleString('zh-CN')
+}
+
+type RingSegment = {
+  color: string
+  dashLen: number
+  dashOffset: number
+}
+
+/** 在同一圆环上按顺序拼接：已用 | 输出预留 | 剩余（由底色轨道表示） */
+export function buildContextRingSegments(
+  usedRatio: number,
+  reservedRatio: number,
+  circumference: number
+): RingSegment[] {
+  const usedLen = circumference * usedRatio
+  const reservedLen = circumference * reservedRatio
+  const segments: RingSegment[] = []
+
+  if (usedLen > 0) {
+    segments.push({ color: 'var(--sa-primary)', dashLen: usedLen, dashOffset: 0 })
+  }
+  if (reservedLen > 0) {
+    segments.push({ color: '#666', dashLen: reservedLen, dashOffset: -usedLen })
+  }
+
+  return segments
 }
 
 export function ContextUsageRing() {
@@ -22,41 +49,37 @@ export function ContextUsageRing() {
   }, [config])
 
   const maximumContext = currentModel?.maximumContext
-  const maxTokens = config?.maxTokens
+  const effectiveOutputMax =
+    config != null
+      ? resolveEffectiveOutputMaxTokens(config.model, config.models, config.maxTokens)
+      : undefined
 
-  const hasData = lastUsage != null && maximumContext != null && maximumContext > 0
+  const hasData =
+    lastUsage != null &&
+    maximumContext != null &&
+    maximumContext > 0 &&
+    effectiveOutputMax != null
 
-  const layers = useMemo(() => {
-    if (!hasData || !lastUsage || !maximumContext || maxTokens == null) {
-      return [{ color: '#ddd', ratio: 1 }]
-    }
+  const display = useMemo(() => {
+    if (!hasData || !lastUsage || !maximumContext || effectiveOutputMax == null) return null
+    return computeContextUsageDisplay(lastUsage, maximumContext, effectiveOutputMax)
+  }, [hasData, lastUsage, maximumContext, effectiveOutputMax])
 
-    const total = maximumContext
-    let inputRatio = lastUsage.input_tokens / total
-    let reservedRatio = maxTokens / total
+  const circumference = 2 * Math.PI * RADIUS
 
-    if (inputRatio + reservedRatio > 1) {
-      const scale = 1 / (inputRatio + reservedRatio)
-      inputRatio *= scale
-      reservedRatio *= scale
-    }
-
-    const freeRatio = Math.max(0, 1 - inputRatio - reservedRatio)
-
-    return [
-      { color: 'var(--sa-primary)', ratio: inputRatio },
-      { color: '#666', ratio: reservedRatio },
-      { color: '#ddd', ratio: freeRatio }
-    ]
-  }, [hasData, lastUsage, maximumContext, maxTokens])
+  const segments = useMemo(() => {
+    if (!display) return []
+    return buildContextRingSegments(display.usedRatio, display.reservedRatio, circumference)
+  }, [display, circumference])
 
   const tooltipTitle = useMemo(() => {
-    if (!hasData || !lastUsage) return '暂无上下文用量数据'
+    if (!hasData || !lastUsage || !display) return '暂无上下文用量数据'
 
     const lines: string[] = []
-    lines.push(`输入消耗　${formatNum(lastUsage.input_tokens)}`)
-    if (lastUsage.output_tokens != null) {
-      lines.push(`输出消耗　${formatNum(lastUsage.output_tokens)}`)
+    lines.push(`预估占用　${formatNum(display.estimatedOccupancy)}`)
+    lines.push(`上轮输入　${formatNum(display.totalRequestInput)}`)
+    if (display.lastOutput > 0) {
+      lines.push(`上轮输出　${formatNum(display.lastOutput)}`)
     }
     if (lastUsage.cache_read_input_tokens && lastUsage.cache_read_input_tokens > 0) {
       lines.push(`缓存命中　${formatNum(lastUsage.cache_read_input_tokens)}`)
@@ -64,44 +87,47 @@ export function ContextUsageRing() {
     if (lastUsage.cache_creation_input_tokens && lastUsage.cache_creation_input_tokens > 0) {
       lines.push(`缓存写入　${formatNum(lastUsage.cache_creation_input_tokens)}`)
     }
-    if (maximumContext) {
-      const pct = ((lastUsage.input_tokens / maximumContext) * 100).toFixed(1)
-      lines.push(`─────────`)
-      lines.push(`总计 ${formatNum(lastUsage.input_tokens)} / ${formatNum(maximumContext)}（${pct}%）`)
-    }
+    lines.push(`输出预留　${formatNum(display.effectiveOutputMax)}`)
+    lines.push(`─────────`)
+    lines.push(
+      `总计 ${formatNum(display.estimatedOccupancy)} / ${formatNum(display.maximumContext)}（${display.percentUsed.toFixed(1)}%）`
+    )
+    lines.push(`图例　　■ 已用　■ 输出预留　□ 剩余`)
 
     return (
       <pre style={{ margin: 0, fontFamily: 'inherit', whiteSpace: 'pre', lineHeight: 1.6 }}>
         {lines.join('\n')}
       </pre>
     )
-  }, [hasData, lastUsage, maximumContext])
+  }, [hasData, lastUsage, display])
 
   return (
     <Tooltip title={tooltipTitle} placement="top">
       <span style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}>
         <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
-          {layers.map((layer, i) => {
-            const r = RADII[i] ?? RADII[0]
-            const sw = STROKE_WIDTHS[i] ?? STROKE_WIDTHS[0]
-            const circumference = 2 * Math.PI * r
-            const dashLen = circumference * layer.ratio
-            const gapLen = circumference - dashLen
-            return (
-              <circle
-                key={i}
-                cx={CENTER}
-                cy={CENTER}
-                r={r}
-                fill="none"
-                stroke={layer.color}
-                strokeWidth={sw}
-                strokeDasharray={`${dashLen} ${gapLen}`}
-                strokeLinecap="butt"
-                transform={`rotate(-90 ${CENTER} ${CENTER})`}
-              />
-            )
-          })}
+          <circle
+            cx={CENTER}
+            cy={CENTER}
+            r={RADIUS}
+            fill="none"
+            stroke="#ddd"
+            strokeWidth={STROKE_WIDTH}
+          />
+          {segments.map((seg, i) => (
+            <circle
+              key={i}
+              cx={CENTER}
+              cy={CENTER}
+              r={RADIUS}
+              fill="none"
+              stroke={seg.color}
+              strokeWidth={STROKE_WIDTH}
+              strokeDasharray={`${seg.dashLen} ${circumference - seg.dashLen}`}
+              strokeDashoffset={seg.dashOffset}
+              strokeLinecap="butt"
+              transform={`rotate(-90 ${CENTER} ${CENTER})`}
+            />
+          ))}
         </svg>
       </span>
     </Tooltip>

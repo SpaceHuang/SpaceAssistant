@@ -4,6 +4,9 @@ import type { ToolCallRecord, ToolCallResultPersisted, Message } from '../../sha
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import { buildClaudeToolChatMessages } from '../../shared/claudeToolHistory'
 import { filterBuiltinToolsForRenderer } from '../../shared/toolsConfigFilter'
+import { filterBuiltinToolsForPlanPhase } from '../../shared/planToolsFilter'
+import type { ChatMode } from '../../shared/planTypes'
+import { isPlanDrafting, isSessionPlanExplorationBlocked } from '../../shared/planTypes'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from '../../shared/anthropicToolSanitize'
 import type { ClaudeChatCreateWithToolsPayload } from '../../shared/api'
 
@@ -120,8 +123,22 @@ export function buildToolChatPayload(args: {
   maxTokens?: number
   thinkingEnabled?: boolean
   system?: string
+  chatMode?: ChatMode
+  sessionMetadata?: Record<string, unknown>
+  planRevisionFeedback?: string
 }): ClaudeChatCreateWithToolsPayload {
-  const toolsFiltered = filterBuiltinToolsForRenderer(args.toolsConfig)
+  const planningPhase =
+    args.chatMode === 'plan' &&
+    (isPlanDrafting(args.sessionMetadata) ||
+      !args.sessionMetadata?.plan ||
+      isSessionPlanExplorationBlocked(args.sessionMetadata))
+
+  const toolsFiltered = planningPhase
+    ? filterBuiltinToolsForPlanPhase(args.toolsConfig, 'planning')
+    : args.chatMode === 'plan'
+      ? filterBuiltinToolsForPlanPhase(args.toolsConfig, 'implementation')
+      : filterBuiltinToolsForRenderer(args.toolsConfig)
+
   const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
   const convo = buildClaudeToolChatMessages(args.messages)
   return {
@@ -135,7 +152,9 @@ export function buildToolChatPayload(args: {
     options: {
       maxTokens: args.maxTokens,
       enableThinking: args.thinkingEnabled
-    }
+    },
+    chatMode: args.chatMode,
+    planRevisionFeedback: args.planRevisionFeedback
   }
 }
 

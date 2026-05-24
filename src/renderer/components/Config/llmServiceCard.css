@@ -1,0 +1,100 @@
+.llm-service-tab-extra {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.llm-service-list {
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.llm-service-list .ant-radio-wrapper,
+.llm-service-list .ant-input,
+.llm-service-list .ant-input-affix-wrapper,
+.llm-service-list .ant-input-password,
+.llm-service-list .ant-btn {
+  font-size: 12px;
+}
+
+.llm-service-list .ant-input,
+.llm-service-list .ant-input-affix-wrapper {
+  line-height: 1.5;
+}
+
+.llm-service-card {
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  background: #fff;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.llm-service-card--active {
+  border-left: 2px solid #1677ff;
+  background: #f0f7ff;
+}
+
+.llm-service-card--new {
+  border-style: dashed;
+}
+
+.llm-service-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.llm-service-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-service-card-summary {
+  padding: 0 12px 8px 36px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-service-card-body {
+  padding: 0 12px 12px 36px;
+  border-top: 1px solid #f0f0f0;
+  margin-top: 0;
+  padding-top: 12px;
+  font-size: 12px;
+}
+
+.llm-service-field-label {
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.llm-service-key-field .ant-input-affix-wrapper {
+  display: block;
+}
+
+.llm-service-key-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 4px;
+}
+
+.llm-service-test-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}

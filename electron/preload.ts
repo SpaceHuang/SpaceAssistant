@@ -44,7 +44,8 @@ const api: SpaceAssistantApi = {
 
   configGet: () => ipcRenderer.invoke('config:get'),
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),
-  configTestConnection: () => ipcRenderer.invoke('config:test-connection'),
+  configTestConnection: (options?: { serviceId?: string; apiKey?: string; baseUrl?: string }) =>
+    ipcRenderer.invoke('config:test-connection', options),
 
   dialogSelectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
   configCheckWorkdirWritable: (dir) => ipcRenderer.invoke('config:check-workdir-writable', dir),
@@ -124,7 +125,25 @@ const api: SpaceAssistantApi = {
   skillOpenDirectory: (payload) => ipcRenderer.invoke('skill:open-directory', payload),
   skillMatch: (payload) => ipcRenderer.invoke('skill:match', payload),
   skillExport: (payload) => ipcRenderer.invoke('skill:export', payload),
-  skillInvalidateCache: () => ipcRenderer.invoke('skill:invalidate-cache')
+  skillInvalidateCache: () => ipcRenderer.invoke('skill:invalidate-cache'),
+
+  planRead: (payload) => ipcRenderer.invoke('plan:read', payload),
+  planApprove: (payload) => ipcRenderer.invoke('plan:approve', payload),
+  planReject: (payload) => ipcRenderer.invoke('plan:reject', payload),
+  planCancel: (payload) => ipcRenderer.invoke('plan:cancel', payload),
+  planDismissAbort: (payload) => ipcRenderer.invoke('plan:dismiss-abort', payload),
+  planResumeExecution: (payload) => ipcRenderer.invoke('plan:resume-execution', payload),
+  planOnStateChanged: (cb) => {
+    const fn = (_e: unknown, data: { sessionId: string }) => cb(data)
+    ipcRenderer.on('plan:state-changed', fn)
+    return () => ipcRenderer.removeListener('plan:state-changed', fn)
+  },
+  planOnApprovalReady: (cb) => {
+    const fn = (_e: unknown, data: { sessionId: string; planState: import('../src/shared/api').PlanReadResult }) =>
+      cb(data)
+    ipcRenderer.on('plan:approval-ready', fn)
+    return () => ipcRenderer.removeListener('plan:approval-ready', fn)
+  }
 }
 
 contextBridge.exposeInMainWorld('api', api)

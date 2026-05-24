@@ -1,0 +1,433 @@
+/* Plan 面板 — 适配右侧窄栏，与引用文件区视觉一致 */
+
+.detail-panel-top .plan-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.plan-panel {
+  --plan-panel-pad: 8px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--sa-bg-elevated);
+  font-family: var(--sa-font-sans);
+}
+
+.plan-panel--highlight {
+  animation: plan-panel-highlight 0.75s var(--sa-ease-out) 3;
+}
+
+@keyframes plan-panel-highlight {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: inset 0 0 0 2px var(--sa-primary);
+  }
+}
+
+/* ── 顶栏：复用 referenced-files-header（见 detailPanel.css）── */
+
+.plan-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overflow-x: hidden;
+  padding: var(--plan-panel-pad);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-panel--pending_approval .plan-panel__body {
+  overflow: hidden;
+  padding-bottom: 0;
+}
+
+.plan-panel--pending_approval .plan-panel-approval {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── 空态：顶对齐，不占满整块高度 ── */
+.plan-panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 2px 8px;
+  text-align: left;
+}
+
+.plan-panel-empty__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sa-text);
+  margin: 0;
+}
+
+.plan-panel-empty__hint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+  margin: 0;
+  max-width: 100%;
+}
+
+/* ── 探索 / 终止条 ── */
+.plan-panel-drafting-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--sa-text-secondary);
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-primary-subtle);
+  border: 1px solid rgba(10, 132, 255, 0.2);
+}
+
+.plan-panel-abort-bar {
+  flex-shrink: 0;
+  margin: 0 !important;
+  font-size: 12px;
+}
+
+.plan-panel-abort-bar .ant-alert-message {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plan-panel-abort-bar__report {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plan-panel-abort-bar--compact .plan-panel-abort-bar__report {
+  max-height: 2.8em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ── 计划列表 ── */
+.plan-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-panel-plan-card {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  padding: 8px 10px;
+  background: var(--sa-bg-elevated);
+  transition:
+    border-color var(--sa-duration-fast),
+    box-shadow var(--sa-duration-fast);
+}
+
+.plan-panel-plan-card:hover {
+  border-color: var(--sa-border-strong);
+}
+
+.plan-panel-plan-card--active {
+  border-color: var(--sa-primary);
+  box-shadow: 0 0 0 1px var(--sa-primary-subtle);
+}
+
+.plan-panel-plan-card--completed,
+.plan-panel-plan-card--cancelled {
+  opacity: 0.82;
+  background: var(--sa-bg-subtle);
+}
+
+.plan-panel-plan-card--completed.plan-panel-plan-card--folded {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.plan-panel-plan-card--completed.plan-panel-plan-card--folded:hover {
+  background: var(--sa-bg-muted);
+}
+
+.plan-panel-plan-card--cancelled .plan-panel-plan-card__title {
+  text-decoration: line-through;
+  color: var(--sa-text-secondary);
+}
+
+.plan-panel-plan-card__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-panel-plan-card__title {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sa-text);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-panel-plan-card--folded .plan-panel-plan-card__title {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+
+.plan-panel-plan-card__meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+
+.plan-panel-plan-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.plan-panel-plan-card__open-file {
+  flex-shrink: 0;
+  margin-top: 0 !important;
+  white-space: nowrap;
+}
+
+.plan-panel-plan-card__step {
+  font-size: 11px;
+  color: var(--sa-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-panel-plan-card__summary {
+  display: block;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.plan-panel-plan-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.plan-panel-plan-card__actions .ant-btn {
+  flex: 1 1 calc(50% - 3px);
+  min-width: 0;
+}
+
+.plan-panel-plan-card__link {
+  padding: 0 !important;
+  height: auto !important;
+  font-size: 11px !important;
+}
+
+.plan-panel-plan-card__actions + .plan-panel-plan-card__link,
+.plan-panel-plan-card__summary + .plan-panel-plan-card__link {
+  margin-top: 4px;
+}
+
+.plan-panel-status-tag.ant-tag {
+  margin: 0;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 4px;
+}
+
+/* ── 待审批 ── */
+.plan-panel-approval {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  max-width: none;
+}
+
+.plan-panel-approval__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 4px;
+}
+
+.plan-panel-approval__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--sa-text);
+  word-break: break-word;
+}
+
+.plan-panel-approval__meta {
+  margin: 0;
+  font-size: 11px;
+  color: var(--sa-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-panel-approval__goal {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--sa-text-secondary);
+}
+
+.plan-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan-panel-section__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sa-text-tertiary);
+  text-transform: none;
+  letter-spacing: 0.03em;
+}
+
+.plan-panel-section__list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+}
+
+.plan-panel-section__list--risk {
+  color: var(--sa-warning-text, #ad6800);
+}
+
+.plan-panel-impact {
+  padding: 8px 10px;
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-bg-muted);
+  border: 1px solid var(--sa-border);
+}
+
+.plan-panel-impact__text {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--sa-text-secondary);
+  margin: 0;
+}
+
+.plan-panel-impact-collapse.ant-collapse {
+  background: transparent;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-sm);
+}
+
+.plan-panel-impact-collapse .ant-collapse-header {
+  padding: 6px 10px !important;
+  font-size: 11px !important;
+}
+
+.plan-panel-impact-collapse .ant-collapse-content-box {
+  padding: 6px 8px 8px !important;
+}
+
+.plan-panel-readonly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-panel-approval__footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--sa-border);
+  background: linear-gradient(to top, var(--sa-bg-elevated) 85%, transparent);
+}
+
+.plan-panel-approval__actions {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+}
+
+.plan-panel-approval__actions .ant-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  width: 0;
+  margin: 0;
+  padding-inline: 4px;
+  font-size: 12px;
+}
+
+.plan-panel-approval__advanced {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  text-align: center;
+}
+
+.plan-panel-approval__advanced .ant-btn-link {
+  padding: 0;
+  height: auto;
+  font-size: 11px;
+}
+
+.plan-panel-approval__advanced-hint {
+  display: block;
+  font-size: 10px;
+  color: var(--sa-text-tertiary);
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+/* 覆盖聊天区遗留的 .plan-card 外边距 */
+.plan-panel .plan-card {
+  margin: 0;
+  max-width: none;
+  padding: 0;
+  border: none;
+  background: transparent;
+}

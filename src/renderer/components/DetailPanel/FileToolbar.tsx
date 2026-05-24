@@ -34,6 +34,7 @@ type Props = {
   onViewModeChange: (mode: ViewMode) => void
   onClose: () => void
   onRefresh: () => void
+  onPendingPlanClick?: () => void
 }
 
 export function FileToolbar({
@@ -43,7 +44,8 @@ export function FileToolbar({
   previewContent,
   onViewModeChange,
   onClose,
-  onRefresh
+  onRefresh,
+  onPendingPlanClick
 }: Props) {
   const { message } = App.useApp()
   const isMarkdown = fileType === 'markdown'
@@ -95,6 +97,11 @@ export function FileToolbar({
         )}
       </div>
       <div className="detail-toolbar-right">
+        {onPendingPlanClick ? (
+          <button type="button" className="detail-toolbar-text-btn" onClick={onPendingPlanClick}>
+            计划待审批
+          </button>
+        ) : null}
         <ToolbarBtn title="用默认编辑器打开" icon={ExternalLink} onClick={() => void handleOpenInSystem()} />
         <ToolbarBtn title="查看所在目录" icon={FolderOpen} onClick={() => void handleShowInExplorer()} />
         <ToolbarBtn title="刷新" icon={RefreshCw} onClick={() => void onRefresh()} />

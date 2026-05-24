@@ -10,6 +10,7 @@ import {
   countRunningSessions,
   finishSessionRun,
   flushStreamPersist,
+  flushUiPatch,
   getLiveMessages,
   initLiveSessionFromStore,
   getMaxParallelChatSessions,
@@ -62,6 +63,7 @@ import {
   hasOpenThinkingSegment,
   type ThinkingState
 } from '../../../shared/thinkingSegments'
+import { throttle } from '../../utils/throttle'
 
 const PLAN_REJECT_GUIDE = '请说明拒绝原因或修改方向：'
 const PLAN_REVISE_GUIDE = '请描述你对计划的修改意见：'
@@ -164,12 +166,23 @@ export function ChatView() {
     return () => window.clearTimeout(t)
   }, [sessionId, dispatch])
 
-  const scrollBottom = () => {
+  const scrollBottom = useCallback(() => {
     requestAnimationFrame(() => {
       const el = scrollRef.current
       if (el) el.scrollTop = el.scrollHeight
     })
-  }
+  }, [])
+
+  const scrollBottomThrottled = useMemo(
+    () =>
+      throttle(() => {
+        requestAnimationFrame(() => {
+          const el = scrollRef.current
+          if (el) el.scrollTop = el.scrollHeight
+        })
+      }, 100),
+    []
+  )
 
   const streamingRequestId = sessionId ? runningSessions[sessionId]?.requestId ?? null : null
 
@@ -218,6 +231,7 @@ export function ChatView() {
         toolCalls
       }
       flushStreamPersist(runSessionId, assistantId)
+      flushUiPatch(runSessionId, assistantId)
       routePatchMessage(runSessionId, assistantId, patch)
       await window.api.chatPatchMessage({
         messageId: assistantId,
@@ -230,7 +244,7 @@ export function ChatView() {
       message.info(CHAT_CANCELLED_MESSAGE)
       scrollBottom()
     },
-    [dispatch, message]
+    [dispatch, message, scrollBottom]
   )
 
   const sendInternal = useCallback(
@@ -345,7 +359,7 @@ export function ChatView() {
           dispatch,
           assistantMessageId: assistantId,
           getRequestId: () => requestId,
-          onRecordsChange: () => scrollBottom(),
+          onRecordsChange: () => scrollBottomThrottled(),
           applyAssistantPatch: (patch) => routePatchMessage(runSessionId, assistantId, patch)
         })
         controller.subscribe()
@@ -365,7 +379,7 @@ export function ChatView() {
             }
             contentState = appendContentDelta(contentState, d.text)
             routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
-            scrollBottom()
+            scrollBottomThrottled()
           })
         )
         unsubs.push(
@@ -376,7 +390,7 @@ export function ChatView() {
             }
             thinkingState = appendThinkingDelta(thinkingState, d.text)
             routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
-            scrollBottom()
+            scrollBottomThrottled()
           })
         )
         unsubs.push(
@@ -428,6 +442,7 @@ export function ChatView() {
               return
             }
             flushStreamPersist(runSessionId, assistantId)
+            flushUiPatch(runSessionId, assistantId)
             routePatchMessage(runSessionId, assistantId, {
               status: 'failed',
               content: contentState.content || res.error
@@ -448,6 +463,7 @@ export function ChatView() {
             contentState = { ...contentState, content: textOut }
           }
           flushStreamPersist(runSessionId, assistantId)
+          flushUiPatch(runSessionId, assistantId)
           if (res.usage) {
             dispatch(setLastUsage(res.usage as LastUsage))
           }
@@ -493,6 +509,7 @@ export function ChatView() {
             return
           }
           flushStreamPersist(runSessionId, assistantId)
+          flushUiPatch(runSessionId, assistantId)
           routePatchMessage(runSessionId, assistantId, { status: 'failed', content: contentState.content || err })
           await window.api.chatPatchMessage({
             messageId: assistantId,
@@ -527,7 +544,7 @@ export function ChatView() {
             }
             contentState = appendContentDelta(contentState, t)
             routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
-            scrollBottom()
+            scrollBottomThrottled()
           },
           onThinkingDelta: (t) => {
             if (hasOpenContentSegment(contentState)) {
@@ -535,13 +552,14 @@ export function ChatView() {
             }
             thinkingState = appendThinkingDelta(thinkingState, t)
             routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
-            scrollBottom()
+            scrollBottomThrottled()
           },
           onDone: async (data) => {
             if (data?.usage) {
               dispatch(setLastUsage(data.usage as LastUsage))
             }
             flushStreamPersist(runSessionId, assistantId)
+            flushUiPatch(runSessionId, assistantId)
             const thinking = finalizeThinking(thinkingState)
             const contentSegments = finalizeContentSegments(contentState)
             routePatchMessage(runSessionId, assistantId, {
@@ -571,6 +589,7 @@ export function ChatView() {
               return
             }
             flushStreamPersist(runSessionId, assistantId)
+            flushUiPatch(runSessionId, assistantId)
             routePatchMessage(runSessionId, assistantId, { status: 'failed', content: contentState.content || err })
             await window.api.chatPatchMessage({
               messageId: assistantId,
@@ -789,15 +808,25 @@ export function ChatView() {
     [message, openFile]
   )
 
-  const toolsInteractive =
-    cfg?.tools.enabled && streamingRequestId && streamingAssistantId
-      ? {
-          requestId: streamingRequestId,
-          confirmMode: cfg.tools.confirmMode,
-          onToolConfirm,
-          onToolCancel
-        }
-      : undefined
+  const toolsInteractive = useMemo(
+    () =>
+      cfg?.tools.enabled && streamingRequestId && streamingAssistantId
+        ? {
+            requestId: streamingRequestId,
+            confirmMode: cfg.tools.confirmMode,
+            onToolConfirm,
+            onToolCancel
+          }
+        : undefined,
+    [
+      cfg?.tools.enabled,
+      cfg?.tools.confirmMode,
+      streamingRequestId,
+      streamingAssistantId,
+      onToolConfirm,
+      onToolCancel
+    ]
+  )
 
   return (
     <div className="chat-view">

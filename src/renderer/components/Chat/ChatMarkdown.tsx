@@ -22,6 +22,9 @@ export function ChatMarkdown({ content }: Props) {
               </a>
             )
           },
+          pre({ children }) {
+            return <>{children}</>
+          },
           code(props) {
             const { children, className, ...rest } = props
             const match = /language-(\w+)/.exec(className || '')

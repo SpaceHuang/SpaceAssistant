@@ -38,4 +38,14 @@ describe('sanitizeForLog', () => {
     expect((result[0] as Record<string, unknown>).token).toBe('[REDACTED]')
     expect(result[1]).toBe('safe text')
   })
+
+  it('redacts llmServiceKeys map values', () => {
+    const result = sanitizeForLog({
+      llmServiceKeys: {
+        'svc-1': 'sk-ant-api03-secret-key-value'
+      }
+    }) as Record<string, unknown>
+    const keys = result.llmServiceKeys as Record<string, unknown>
+    expect(keys['svc-1']).toBe('[REDACTED]')
+  })
 })

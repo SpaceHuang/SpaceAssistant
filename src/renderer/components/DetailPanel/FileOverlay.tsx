@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useAppDispatch, useTypedSelector } from '../../hooks'
+import { setSession } from '../../store/chatSlice'
+import { getPendingPlanMeta } from '../../../shared/planTypes'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileToolbar } from './FileToolbar'
 import { FileContentView } from './FileContentView'
@@ -6,6 +9,13 @@ import { SearchPanel } from './SearchPanel'
 import type { SearchMatch } from './searchUtils'
 
 export function FileOverlay() {
+  const dispatch = useAppDispatch()
+  const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
+  const sessionMeta = useTypedSelector((s) =>
+    sessionId ? s.session.list.find((x) => x.id === sessionId)?.metadata : undefined
+  )
+  const hasPendingPlan = getPendingPlanMeta(sessionMeta)?.status === 'awaiting_approval'
+
   const {
     selectedFile,
     fileType,
@@ -15,6 +25,12 @@ export function FileOverlay() {
     refreshFile,
     setViewMode
   } = useDetailPanel()
+
+  const openPendingPlan = () => {
+    if (sessionId) dispatch(setSession(sessionId))
+    closeFile()
+    window.dispatchEvent(new CustomEvent('plan-focus'))
+  }
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [highlights, setHighlights] = useState<SearchMatch[]>([])
@@ -60,6 +76,7 @@ export function FileOverlay() {
         onViewModeChange={setViewMode}
         onClose={closeFile}
         onRefresh={() => void refreshFile()}
+        onPendingPlanClick={hasPendingPlan ? openPendingPlan : undefined}
       />
       <SearchPanel
         open={searchOpen}

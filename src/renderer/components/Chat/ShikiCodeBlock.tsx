@@ -25,6 +25,8 @@ export function ShikiCodeBlock({ code, language }: Props) {
     }
   }, [code, language, resolved])
 
+  const isLight = resolved === 'light'
+
   return (
     <div className="sa-shiki-block" style={{ position: 'relative' }}>
       <Button
@@ -40,7 +42,15 @@ export function ShikiCodeBlock({ code, language }: Props) {
       {html ? (
         <div className="sa-prose" dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
-        <pre className="tool-code-preview">{code}</pre>
+        <pre
+          className="tool-code-preview"
+          style={{
+            background: isLight ? '#ffffff' : undefined,
+            color: isLight ? '#24292f' : undefined
+          }}
+        >
+          {code}
+        </pre>
       )}
     </div>
   )

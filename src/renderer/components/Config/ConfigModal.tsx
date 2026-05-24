@@ -3,6 +3,8 @@ import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover,
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry, UiThemeMode } from '../../../shared/domainTypes'
+import type { ChatMode } from '../../../shared/planTypes'
+import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
 import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
 import {
   DEFAULT_MAX_PARALLEL_CHAT_SESSIONS,
@@ -11,6 +13,12 @@ import {
 } from '../../../shared/chatParallelConfig'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { SkillsTab } from './SkillsTab'
+import { LlmServiceTab } from './LlmServiceTab'
+import {
+  buildLlmServicesSavePayload,
+  useLlmServiceDrafts,
+  validateLlmServiceDrafts
+} from './useLlmServiceDrafts'
 import { readSkillActivationLog } from '../../services/skillActivationLog'
 
 function AddIcon() {
@@ -89,11 +97,15 @@ function ModelList({ value, onChange }: { value: ModelEntry[]; onChange: (v: Mod
   }
 
   if (value.length === 0) {
-    return <div style={{ color: '#999', textAlign: 'center', padding: '16px 0' }}>暂无模型，请点击 + 添加</div>
+    return (
+      <div className="config-model-list" style={{ color: '#999', textAlign: 'center', padding: '16px 0' }}>
+        暂无模型，请点击 + 添加
+      </div>
+    )
   }
 
   return (
-    <>
+    <div className="config-model-list">
       {value.map((m) => (
         <div
           key={m.id}
@@ -108,19 +120,11 @@ function ModelList({ value, onChange }: { value: ModelEntry[]; onChange: (v: Mod
             <span style={{ flex: 1, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {m.name}
             </span>
-            {m.isDefault && (
-              <span style={{ fontSize: 11, background: '#e6f4ff', color: '#1677ff', padding: '0 6px', borderRadius: 4, lineHeight: '20px' }}>
-                默认
-              </span>
-            )}
-            {m.isFast && (
-              <span style={{ fontSize: 11, background: '#fff7e6', color: '#fa8c16', padding: '0 6px', borderRadius: 4, lineHeight: '20px' }}>
-                快速
-              </span>
-            )}
+            {m.isDefault && <span className="config-model-badge config-model-badge--default">默认</span>}
+            {m.isFast && <span className="config-model-badge config-model-badge--fast">快速</span>}
             <Button size="small" type="text" danger icon={<DeleteIcon />} onClick={() => removeModel(m.id)} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4, paddingLeft: 28, fontSize: 12, color: '#888' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4, paddingLeft: 28, color: '#888' }}>
             <span>上下文 {formatNumber(m.maximumContext)}</span>
             <span>输出 {formatNumber(m.maxTokens)}</span>
             <span style={{ flex: 1 }} />
@@ -133,7 +137,7 @@ function ModelList({ value, onChange }: { value: ModelEntry[]; onChange: (v: Mod
           </div>
         </div>
       ))}
-    </>
+    </div>
   )
 }
 
@@ -145,7 +149,7 @@ export function ConfigModal() {
   const sessions = useTypedSelector((s) => s.session.list)
   const dispatch = useAppDispatch()
   const [form] = Form.useForm()
-  const [testing, setTesting] = useState(false)
+  const llmDrafts = useLlmServiceDrafts(open, cfg)
   const [workDirError, setWorkDirError] = useState<string | null>(null)
   const [models, setModels] = useState<ModelEntry[]>([])
   const [addOpen, setAddOpen] = useState(false)
@@ -171,6 +175,7 @@ export function ConfigModal() {
   const [pyTesting, setPyTesting] = useState(false)
   const [uiTheme, setUiTheme] = useState<UiThemeMode>('system')
   const [maxParallelChatSessions, setMaxParallelChatSessions] = useState(DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
+  const [defaultChatMode, setDefaultChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
 
   const refreshConfig = async () => {
     const next = await window.api.configGet()
@@ -184,12 +189,10 @@ export function ConfigModal() {
   useEffect(() => {
     if (open && cfg) {
       form.setFieldsValue({
-        baseUrl: cfg.baseUrl,
         temperature: cfg.temperature,
         maxTokens: cfg.maxTokens,
         workDir: cfg.workDir,
-        thinkingEnabled: cfg.thinkingEnabled,
-        apiKey: ''
+        thinkingEnabled: cfg.thinkingEnabled
       })
       setModels(cfg.models.length > 0 ? cfg.models : DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
       setWorkDirError(null)
@@ -210,6 +213,7 @@ export function ConfigModal() {
       setPyTest(null)
       setUiTheme(cfg.uiTheme ?? 'system')
       setMaxParallelChatSessions(cfg.maxParallelChatSessions ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
+      setDefaultChatMode(cfg.defaultChatMode ?? DEFAULT_CHAT_MODE)
     }
   }, [open, cfg, form])
 
@@ -275,43 +279,44 @@ export function ConfigModal() {
       message.warning('请至少启用一个模型')
       return
     }
-    await window.api.configSet({
-      baseUrl: v.baseUrl,
-      temperature: v.temperature,
-      maxTokens: v.maxTokens,
-      workDir: v.workDir,
-      thinkingEnabled: v.thinkingEnabled,
-      models,
-      tools: {
-        enabled: toolUi.enabled,
-        confirmMode: toolUi.confirmMode,
-        deniedTools: toolUi.whitelistMode ? [] : toolUi.deniedTools,
-        allowedTools: toolUi.whitelistMode ? toolUi.allowedEdit.filter((n) => BUILTIN_TOOL_DEFINITIONS.some((d) => d.name === n)) : [],
-        pythonPath: toolUi.pythonPath,
-        scriptTimeout: toolUi.scriptTimeout,
-        fileCheckpointingEnabled: toolUi.fileCheckpointingEnabled,
-        maxFileSnapshots: toolUi.maxFileSnapshots,
-        grepTimeoutSec: toolUi.grepTimeoutSec
-      },
-      uiTheme,
-      maxParallelChatSessions,
-      ...(v.apiKey && String(v.apiKey).trim() ? { apiKey: String(v.apiKey).trim() } : {})
-    })
+    const llmErr = validateLlmServiceDrafts(llmDrafts.state)
+    if (llmErr) {
+      message.warning(llmErr)
+      return
+    }
+    const llmPayload = buildLlmServicesSavePayload(llmDrafts.state)
+    try {
+      await window.api.configSet({
+        temperature: v.temperature,
+        maxTokens: v.maxTokens,
+        workDir: v.workDir,
+        thinkingEnabled: v.thinkingEnabled,
+        models,
+        ...llmPayload,
+        tools: {
+          enabled: toolUi.enabled,
+          confirmMode: toolUi.confirmMode,
+          deniedTools: toolUi.whitelistMode ? [] : toolUi.deniedTools,
+          allowedTools: toolUi.whitelistMode ? toolUi.allowedEdit.filter((n) => BUILTIN_TOOL_DEFINITIONS.some((d) => d.name === n)) : [],
+          pythonPath: toolUi.pythonPath,
+          scriptTimeout: toolUi.scriptTimeout,
+          fileCheckpointingEnabled: toolUi.fileCheckpointingEnabled,
+          maxFileSnapshots: toolUi.maxFileSnapshots,
+          grepTimeoutSec: toolUi.grepTimeoutSec
+        },
+        uiTheme,
+        maxParallelChatSessions,
+        defaultChatMode
+      })
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e))
+      return
+    }
     const next = await window.api.configGet()
     dispatch(setConfig(next))
+    llmDrafts.resetFromConfig(next)
     message.success('已保存')
     dispatch(setSettingsOpen(false))
-  }
-
-  const test = async () => {
-    setTesting(true)
-    try {
-      const r = await window.api.configTestConnection()
-      if (r.success) message.success('连接成功')
-      else message.error(r.error ?? '失败')
-    } finally {
-      setTesting(false)
-    }
   }
 
   const testPython = async () => {
@@ -375,9 +380,6 @@ export function ConfigModal() {
       footer={
         <Space>
           <Button onClick={() => dispatch(setSettingsOpen(false))}>取消</Button>
-          <Button onClick={test} loading={testing}>
-            测试连接
-          </Button>
           <Button type="primary" onClick={save}>
             保存
           </Button>
@@ -392,13 +394,13 @@ export function ConfigModal() {
               label: '通用',
               children: (
                 <>
-                  <Form.Item name="workDir" label="工作目录（会话明文备份等）" rules={[{ required: true }]}>
-                    <Input
-                      addonAfter={
-                        <Button type="text" size="small" icon={<FolderOpenIcon />} onClick={selectDirectory} style={{ border: 'none', boxShadow: 'none' }} title="选择目录" />
-                      }
-                      onBlur={(e) => void checkWorkDir(e.target.value)}
-                    />
+                  <Form.Item label="工作目录（会话明文备份等）" required>
+                    <Space.Compact style={{ width: '100%' }}>
+                      <Form.Item name="workDir" noStyle rules={[{ required: true }]}>
+                        <Input onBlur={(e) => void checkWorkDir(e.target.value)} />
+                      </Form.Item>
+                      <Button icon={<FolderOpenIcon />} onClick={selectDirectory} title="选择目录" />
+                    </Space.Compact>
                   </Form.Item>
                   {workDirError && <Alert type="error" message={workDirError} showIcon style={{ marginBottom: 16 }} />}
                   <Form.Item label="界面主题">
@@ -406,6 +408,12 @@ export function ConfigModal() {
                       <Radio value="system">跟随系统</Radio>
                       <Radio value="light">浅色</Radio>
                       <Radio value="dark">深色</Radio>
+                    </Radio.Group>
+                  </Form.Item>
+                  <Form.Item label="默认聊天模式" extra="发送消息时可临时切换；Plan 模式需先规划并审批后再写入。">
+                    <Radio.Group value={defaultChatMode} onChange={(e) => setDefaultChatMode(e.target.value)}>
+                      <Radio value="normal">普通模式</Radio>
+                      <Radio value="plan">Plan 模式</Radio>
                     </Radio.Group>
                   </Form.Item>
                   <Form.Item
@@ -424,21 +432,27 @@ export function ConfigModal() {
               )
             },
             {
-              key: 'llm',
-              label: '大模型',
+              key: 'llm-service',
+              label: '大模型服务',
+              children: <LlmServiceTab draftsApi={llmDrafts} />
+            },
+            {
+              key: 'llm-defaults',
+              label: '默认大模型设置',
               children: (
                 <>
-                  <Form.Item name="apiKey" label="API Key（留空则不修改）">
-                    <Input.Password placeholder="sk-ant-..." autoComplete="off" />
-                  </Form.Item>
-                  <Form.Item name="baseUrl" label="Base URL（可选）">
-                    <Input placeholder="默认 Anthropic 官方" />
-                  </Form.Item>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <span style={{ fontSize: 13, fontWeight: 500 }}>模型列表</span>
+                    <span className="config-section-title">模型列表</span>
                     <Space size={4}>
                       <Button size="small" icon={<RefreshIcon />} onClick={resetModels} title="恢复默认" />
-                      <Popover content={addContent} open={addOpen} onOpenChange={setAddOpen} trigger="click" placement="bottomRight">
+                      <Popover
+                        overlayClassName="config-modal-popover"
+                        content={addContent}
+                        open={addOpen}
+                        onOpenChange={setAddOpen}
+                        trigger="click"
+                        placement="bottomRight"
+                      >
                         <Button size="small" type="primary" icon={<AddIcon />} />
                       </Popover>
                     </Space>
@@ -454,7 +468,12 @@ export function ConfigModal() {
                   >
                     <InputNumber min={256} max={1_000_000} step={256} style={{ width: '100%' }} />
                   </Form.Item>
-                  <Form.Item name="thinkingEnabled" label="默认开启 Thinking" valuePropName="checked">
+                  <Form.Item
+                    name="thinkingEnabled"
+                    label="默认开启 Thinking"
+                    valuePropName="checked"
+                    className="config-form-item-inline"
+                  >
                     <Switch />
                   </Form.Item>
                 </>
@@ -465,11 +484,12 @@ export function ConfigModal() {
               label: '工具',
               children: (
                 <>
-                  <Form.Item label="启用内置工具">
+                  <Form.Item label="启用内置工具" className="config-form-item-inline">
                     <Switch checked={toolUi.enabled} onChange={(checked) => setToolUi((s) => ({ ...s, enabled: checked }))} />
                   </Form.Item>
                   <Form.Item
                     label="仅允许选中的工具（白名单）"
+                    className="config-form-item-inline config-form-item-inline--with-extra"
                     extra="开启后仅下方勾选的工具会注入模型；关闭时未勾选表示禁止（denied）。"
                   >
                     <Switch
@@ -537,7 +557,7 @@ export function ConfigModal() {
                       style={{ width: '100%' }}
                     />
                   </Form.Item>
-                  <Form.Item label="文件历史备份">
+                  <Form.Item label="文件历史备份" className="config-form-item-inline">
                     <Switch
                       checked={toolUi.fileCheckpointingEnabled}
                       onChange={(c) => setToolUi((s) => ({ ...s, fileCheckpointingEnabled: c }))}
@@ -552,8 +572,10 @@ export function ConfigModal() {
                       style={{ width: '100%' }}
                     />
                   </Form.Item>
-                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>内置工具</div>
-                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, maxHeight: 220, overflow: 'auto' }}>
+                  <div className="config-section-title" style={{ marginBottom: 8 }}>
+                    内置工具
+                  </div>
+                  <div className="config-tool-list" style={{ border: '1px solid #f0f0f0', borderRadius: 8, maxHeight: 220, overflow: 'auto' }}>
                     {BUILTIN_TOOL_DEFINITIONS.map((def) => {
                       const on = toolUi.whitelistMode
                         ? toolUi.allowedEdit.includes(def.name)

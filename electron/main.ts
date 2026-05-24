@@ -11,7 +11,14 @@ import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
 import { setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent } from './agentLogger/agentLogger'
-import { decryptSecret, encryptSecret, isSecretStorageAvailable } from './secureApiKey'
+import { encryptSecret } from './secureApiKey'
+import {
+  getActiveLlmService,
+  migrateLegacyLlmServicesIfNeeded,
+  persistLlmServices,
+  readActiveLlmServiceId,
+  readLlmServices
+} from './llmServiceResolver'
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -130,18 +137,18 @@ app.whenReady().then(() => {
   const backup = new SessionBackupManager(workDirState)
 
   const getApiKey = async (): Promise<string | null> => {
-    const enc = getConfigValue(db, API_KEY_CONFIG_KEY)
-    if (!enc) return null
-    if (!isSecretStorageAvailable()) return null
-    try {
-      return decryptSecret(enc)
-    } catch {
-      return null
-    }
+    return getActiveLlmService(db).getApiKey()
   }
 
   const setApiKey = async (value: string): Promise<void> => {
-    setConfigValue(db, API_KEY_CONFIG_KEY, encryptSecret(value))
+    migrateLegacyLlmServicesIfNeeded(db)
+    const activeId = readActiveLlmServiceId(db) ?? readLlmServices(db)[0]?.id
+    if (activeId) {
+      const services = readLlmServices(db)
+      persistLlmServices(db, services, activeId, { [activeId]: value })
+    } else {
+      setConfigValue(db, API_KEY_CONFIG_KEY, encryptSecret(value))
+    }
   }
 
   ipcMain.handle('ping', async () => 'pong')

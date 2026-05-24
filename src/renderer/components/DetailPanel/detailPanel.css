@@ -71,6 +71,20 @@
   padding: 0;
 }
 
+.detail-toolbar-text-btn {
+  border: none;
+  background: transparent;
+  color: #1677ff;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 6px;
+  margin-right: 4px;
+}
+
+.detail-toolbar-text-btn:hover {
+  text-decoration: underline;
+}
+
 .detail-view-segment {
   display: inline-flex;
   align-items: center;
@@ -299,8 +313,10 @@
 }
 
 .detail-panel-top {
-  min-height: 80px;
+  min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .detail-panel-bottom {
