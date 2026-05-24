@@ -274,6 +274,23 @@ export interface AppConfig {
   skills: SkillsConfig
 }
 
+/** 项目记忆加载状态 */
+export interface ProjectMemoryState {
+  /** 原始内容（已校验大小） */
+  content: string | null
+  /** 文件名 */
+  fileName: string
+  /** 文件大小（字节），用于 UI 展示 */
+  fileSize: number
+  /** 是否被截断 */
+  truncated: boolean
+  /** 最后加载时间 */
+  loadedAt: number | null
+}
+
+export const PROJECT_MEMORY_FILE_NAME = 'SPACEASSISTANT.md'
+export const PROJECT_MEMORY_MAX_SIZE = 40960 // 40KB
+
 export interface SearchResult {
   id: string
   type: 'session' | 'file'
