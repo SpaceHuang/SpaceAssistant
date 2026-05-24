@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession } from './chatSlice'
+import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, resetChatUi } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
@@ -43,5 +43,32 @@ describe('chatSlice', () => {
     let s = chatReducer(undefined, setChatStatus({ status: 'streaming', requestId: 'r1', sessionId: 'x' }))
     s = chatReducer(s, removeRunningSession('x'))
     expect(Object.keys(s.runningSessions)).toHaveLength(0)
+  })
+
+  it('setLastUsage stores usage data', () => {
+    const base = chatReducer(undefined, setSession('s1'))
+    const next = chatReducer(base, setLastUsage({ input_tokens: 5000, output_tokens: 3000 }))
+    expect(next.lastUsage).toEqual({ input_tokens: 5000, output_tokens: 3000 })
+  })
+
+  it('setLastUsage(null) clears usage', () => {
+    const base = chatReducer(undefined, setSession('s1'))
+    const withData = chatReducer(base, setLastUsage({ input_tokens: 5000 }))
+    const cleared = chatReducer(withData, setLastUsage(null))
+    expect(cleared.lastUsage).toBeNull()
+  })
+
+  it('setSession resets lastUsage', () => {
+    const base = chatReducer(undefined, setSession('s1'))
+    const withData = chatReducer(base, setLastUsage({ input_tokens: 5000 }))
+    const switched = chatReducer(withData, setSession('s2'))
+    expect(switched.lastUsage).toBeNull()
+  })
+
+  it('resetChatUi resets lastUsage', () => {
+    let state = chatReducer(undefined, setSession('s1'))
+    state = chatReducer(state, setLastUsage({ input_tokens: 5000 }))
+    state = chatReducer(state, resetChatUi())
+    expect(state.lastUsage).toBeNull()
   })
 })
