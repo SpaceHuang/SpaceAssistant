@@ -3,6 +3,7 @@ import type {
   ChatMode,
   FileInfo,
   Message,
+  ProjectMemoryState,
   SearchResult,
   Session,
   SessionSkillsState,
@@ -34,6 +35,7 @@ export type ClaudeChatSendStreamPayload = {
   system?: string
   /** 未传时主进程使用内置默认；建议传渲染侧解析后的有效值 */
   maxTokens?: number
+  projectMemoryEnabled?: boolean
 }
 
 export type ClaudeChatMessageWithBlocks = {
@@ -54,6 +56,7 @@ export type ClaudeChatCreateWithToolsPayload = {
   options?: { maxTokens?: number; enableThinking?: boolean }
   chatMode?: ChatMode
   planRevisionFeedback?: string
+  projectMemoryEnabled?: boolean
 }
 
 export type PlanReadResult = {
@@ -207,4 +210,12 @@ export type SpaceAssistantApi = {
   >
   planOnStateChanged: (cb: (data: PlanStateChangedEvent) => void) => () => void
   planOnApprovalReady: (cb: (data: PlanApprovalReadyEvent) => void) => () => void
+
+  projectMemoryGetState: () => Promise<ProjectMemoryState>
+  projectMemoryGenerate: () => Promise<{ success: boolean; prompt?: string; content?: string; error?: string }>
+  projectMemoryWrite: (payload: { content: string }) => Promise<{ success: boolean; error?: string }>
+  projectMemoryReload: () => Promise<ProjectMemoryState>
+  projectMemoryOnStateChanged: (
+    cb: (data: ProjectMemoryState) => void
+  ) => () => void
 }

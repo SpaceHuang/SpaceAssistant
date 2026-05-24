@@ -1,5 +1,5 @@
 import fs from 'fs/promises'
-import type { Dirent } from 'fs'
+import { existsSync, type Dirent } from 'fs'
 import path from 'path'
 import type { IpcMain } from 'electron'
 import { BrowserWindow, dialog, shell } from 'electron'
@@ -31,6 +31,7 @@ import {
 } from './plan/planManager'
 import { resumePlanExecution } from './plan/planOrchestrator'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
@@ -867,6 +868,67 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       return { writable: true }
     } catch (e) {
       return { writable: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('project-memory:get-state', async () => {
+    return getCachedMemoryState()
+  })
+
+  ipcMain.handle('project-memory:reload', async () => {
+    const workDir = ctx.getWorkDir()
+    const state = await loadProjectMemory(workDir)
+    return state
+  })
+
+  ipcMain.handle('project-memory:write', async (_event, payload: { content: string }) => {
+    try {
+      const workDir = ctx.getWorkDir()
+      await writeProjectMemory(workDir, payload.content)
+      return { success: true as const }
+    } catch (err) {
+      return { success: false as const, error: (err as Error).message }
+    }
+  })
+
+  ipcMain.handle('project-memory:generate', async () => {
+    try {
+      const workDir = ctx.getWorkDir()
+
+      // Check if file already exists
+      const memoryPath = path.join(workDir, 'SPACEASSISTANT.md')
+      if (existsSync(memoryPath)) {
+        return { success: false as const, error: 'SPACEASSISTANT.md 已存在，请先删除或编辑现有文件' }
+      }
+
+      const prompt = await generateProjectMemory(workDir)
+
+      const apiKey = await ctx.getApiKey()
+      if (!apiKey) {
+        return { success: false as const, error: 'API Key 未配置，请先在设置中配置 API Key' }
+      }
+
+      const client = createAnthropicClient(apiKey, undefined)
+
+      const model =
+        (getConfigValue(ctx.db, CONFIG_KEYS.defaultModel) as string) ?? 'claude-sonnet-4-20250514'
+
+      const res = await client.messages.create({
+        model,
+        max_tokens: 4096,
+        messages: [{ role: 'user' as const, content: prompt }]
+      })
+
+      const content = res.content[0]?.type === 'text' ? res.content[0].text : ''
+      if (!content) {
+        return { success: false as const, error: 'LLM 未返回有效内容' }
+      }
+
+      await writeProjectMemory(workDir, content)
+
+      return { success: true as const, prompt, content }
+    } catch (err) {
+      return { success: false as const, error: (err as Error).message }
     }
   })
 }

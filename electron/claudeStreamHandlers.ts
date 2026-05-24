@@ -13,6 +13,7 @@ import { runToolChatSession } from './toolChatLoop'
 import { runPlanModeChat } from './plan/planOrchestrator'
 import { readPlanStateForSession } from './plan/planManager'
 import { isChatMode } from '../src/shared/planTypes'
+import { buildSystemPrompt, getCachedMemoryContent } from './projectMemory'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -20,6 +21,7 @@ export type ClaudeStreamDeps = {
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
   getAppDatabase: () => AppDatabase
+  getProjectMemoryEnabled?: () => boolean
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -38,6 +40,7 @@ type ClaudeChatSendPayload = {
   messages: ClaudeChatMessage[]
   system?: string
   maxTokens?: number
+  projectMemoryEnabled?: boolean
 }
 
 type ClaudeChatMessageWithContentBlocks = {
@@ -61,6 +64,7 @@ type ClaudeChatCreateWithToolsPayload = {
   }
   chatMode?: string
   planRevisionFeedback?: string
+  projectMemoryEnabled?: boolean
 }
 
 function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessage[] {
@@ -168,7 +172,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
 
         const system = typeof payload.system === 'string' ? payload.system : undefined
         const maxTokens = typeof payload.maxTokens === 'number' && Number.isFinite(payload.maxTokens) ? payload.maxTokens : undefined
-        void runSendStream(sender, { requestId, model, baseUrl, messages, system, maxTokens, deps })
+        void runSendStream(sender, { requestId, model, baseUrl, messages, system, maxTokens, projectMemoryEnabled: payload.projectMemoryEnabled, deps })
         return { ok: true }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -213,6 +217,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           getAppDatabase: deps.getAppDatabase
         }
 
+        const memoryContent = getCachedMemoryContent()
+        const memoryEnabled = payload.projectMemoryEnabled ?? true
+        const finalSystem = buildSystemPrompt(payload.system, memoryContent, memoryEnabled)
+
         const res =
           chatMode === 'plan'
             ? await runPlanModeChat({
@@ -222,7 +230,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
                 model,
                 baseUrl,
                 messages,
-                system: payload.system,
+                system: finalSystem,
                 options: payload.options,
                 deps: orchestratorDeps,
                 revisionFeedback:
@@ -235,7 +243,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
                 model,
                 baseUrl,
                 messages,
-                system: payload.system,
+                system: finalSystem,
                 options: payload.options,
                 toolsConfig: deps.getToolsConfig(),
                 workDir: deps.getWorkDir(),
@@ -302,6 +310,7 @@ async function runSendStream(
     messages: ClaudeChatMessage[]
     system?: string
     maxTokens?: number
+    projectMemoryEnabled?: boolean
     deps: ClaudeStreamDeps
   }
 ): Promise<void> {
@@ -328,11 +337,15 @@ async function runSendStream(
       content: msg.content
     }))
 
+    const memoryContent = getCachedMemoryContent()
+    const memoryEnabled = args.projectMemoryEnabled ?? true
+    const finalSystem = buildSystemPrompt(system, memoryContent, memoryEnabled)
+
     const streamInput = buildClaudeChatSendStreamParams({
       model,
       max_tokens: maxTokens,
       messages: messageParams,
-      system,
+      system: finalSystem,
       thinking: { type: 'adaptive' as const }
     })
 
@@ -340,7 +353,7 @@ async function runSendStream(
       requestId,
       model,
       baseUrl,
-      system,
+      system: finalSystem,
       messages: messageParams,
       maxTokens,
       enableThinking: true

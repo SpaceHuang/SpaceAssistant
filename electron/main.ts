@@ -9,9 +9,10 @@ import type { AppDatabase } from './database'
 import { getConfigValue, openDatabase, setConfigValue } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
-import { setMainWindow } from './windowRef'
+import { setMainWindow, getMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent } from './agentLogger/agentLogger'
 import { encryptSecret } from './secureApiKey'
+import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
 import {
   getActiveLlmService,
   migrateLegacyLlmServicesIfNeeded,
@@ -119,6 +120,17 @@ app.whenReady().then(() => {
 
   workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
 
+  // Initialize project memory
+  loadProjectMemory(workDirState).catch((err) => {
+    console.warn('[projectMemory] init load failed:', err.message)
+  })
+  startMemoryWatcher(workDirState, (state) => {
+    const win = getMainWindow()
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('project-memory:state-changed', state)
+    }
+  })
+
   initAgentLogger({
     getWorkDir: () => workDirState,
     isPackaged: app.isPackaged,
@@ -166,7 +178,8 @@ app.whenReady().then(() => {
         return mergeToolsConfig(null)
       }
     },
-    getAppDatabase: () => db
+    getAppDatabase: () => db,
+    getProjectMemoryEnabled: () => true
   })
 
   registerAppIpcHandlers(ipcMain, {
@@ -175,6 +188,15 @@ app.whenReady().then(() => {
     getWorkDir: () => workDirState,
     setWorkDir: (d: string) => {
       workDirState = d
+      loadProjectMemory(d).catch((err) => {
+        console.warn('[projectMemory] reload failed:', err.message)
+      })
+      startMemoryWatcher(d, (state) => {
+        const win = getMainWindow()
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('project-memory:state-changed', state)
+        }
+      })
     },
     getUserDataPath: () => app.getPath('userData'),
     getApiKey,
@@ -186,6 +208,7 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
+  stopMemoryWatcher()
   appDb?.flushSave()
 })
 

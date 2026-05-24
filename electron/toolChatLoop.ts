@@ -22,6 +22,7 @@ import {
   registerChatCancel,
   throwIfChatCancelled
 } from './chatCancelRegistry'
+import { buildSystemPrompt, getCachedMemoryContent } from './projectMemory'
 import {
   clearToolCancel,
   registerToolCancel,
@@ -269,7 +270,12 @@ async function runToolChatSessionInner(
   while (true) {
     loopRound++
     throwIfChatCancelled(chatSignal)
-    const systemPrompt = typeof system === 'string' && system.trim().length > 0 ? system : undefined
+    const memoryContent = getCachedMemoryContent()
+    const systemPrompt = buildSystemPrompt(
+      typeof system === 'string' && system.trim().length > 0 ? system : undefined,
+      memoryContent,
+      true
+    )
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,

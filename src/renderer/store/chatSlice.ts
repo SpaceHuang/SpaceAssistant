@@ -26,6 +26,7 @@ interface ChatState {
   /** 侧栏待办跳转后高亮的工具确认项 */
   confirmFocusToolUseId: string | null
   lastUsage: LastUsage
+  projectMemoryEnabled: boolean
 }
 
 const initialState: ChatState = {
@@ -35,7 +36,8 @@ const initialState: ChatState = {
   error: null,
   runningSessions: {},
   confirmFocusToolUseId: null,
-  lastUsage: null
+  lastUsage: null,
+  projectMemoryEnabled: true
 }
 
 export const chatSlice = createSlice({
@@ -101,6 +103,10 @@ export const chatSlice = createSlice({
       state.runningSessions = {}
       state.confirmFocusToolUseId = null
       state.lastUsage = null
+      state.projectMemoryEnabled = true
+    },
+    setProjectMemoryEnabled(state, action: PayloadAction<boolean>) {
+      state.projectMemoryEnabled = action.payload
     }
   }
 })
@@ -114,6 +120,7 @@ export const {
   setConfirmFocusToolUseId,
   removeRunningSession,
   resetChatUi,
-  setLastUsage
+  setLastUsage,
+  setProjectMemoryEnabled
 } = chatSlice.actions
 export default chatSlice.reducer
