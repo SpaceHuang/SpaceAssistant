@@ -1,5 +1,6 @@
 import type {
   AppConfig,
+  ChatMode,
   FileInfo,
   Message,
   SearchResult,
@@ -11,6 +12,7 @@ import type {
   ToolRiskLevel,
   ToolsConfig
 } from './domainTypes'
+import type { PlanAbortMeta, PlanApprovalSummary, PlanDisplayEntry, PlanMeta } from './planTypes'
 
 export type FileReadResult =
   | { kind: 'text'; content: string; encoding: 'utf8' }
@@ -50,7 +52,25 @@ export type ClaudeChatCreateWithToolsPayload = {
   tools: Array<Record<string, unknown>>
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
+  chatMode?: ChatMode
+  planRevisionFeedback?: string
 }
+
+export type PlanReadResult = {
+  plan: PlanMeta | null
+  pendingPlan: PlanMeta | null
+  displayPlans: PlanDisplayEntry[]
+  planDrafting: boolean
+  planAbortDismissed: boolean
+  abort: PlanAbortMeta | null
+  /** 待审批稿摘要（pendingPlan 优先） */
+  summary: PlanApprovalSummary | null
+  raw: string | null
+}
+
+export type PlanStateChangedEvent = { sessionId: string }
+
+export type PlanApprovalReadyEvent = { sessionId: string; planState: PlanReadResult }
 
 export type SpaceAssistantApi = {
   ping: () => Promise<string>
@@ -81,12 +101,12 @@ export type SpaceAssistantApi = {
   claudeChatCreateWithTools: (
     payload: ClaudeChatCreateWithToolsPayload
   ) => Promise<
-    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
+    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown; planState?: PlanReadResult }
     | { ok: false; error: string }
   >
   claudeChatOnDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
   claudeChatOnThinkingDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
-  claudeChatOnDone: (cb: (data: { requestId: string }) => void) => () => void
+  claudeChatOnDone: (cb: (data: { requestId: string; usage?: unknown }) => void) => () => void
   claudeChatOnError: (cb: (data: { requestId: string; message: string }) => void) => () => void
   claudeChatCancel: (payload: { requestId: string }) => Promise<void>
 
@@ -104,6 +124,7 @@ export type SpaceAssistantApi = {
       apiKey: string
       tools: Partial<ToolsConfig>
       skills: Partial<SkillsConfig>
+      defaultChatMode: ChatMode
     }>
   ) => Promise<void>
   configTestConnection: () => Promise<{ success: boolean; error?: string }>
@@ -162,4 +183,19 @@ export type SpaceAssistantApi = {
   skillMatch: (payload: { userInput: string; sessionSkillsState: SessionSkillsState }) => Promise<SkillDefinition[]>
   skillExport: (payload: { name: string; destPath: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   skillInvalidateCache: () => Promise<void>
+
+  planRead: (payload: { sessionId: string }) => Promise<PlanReadResult>
+  planApprove: (payload: {
+    sessionId: string
+    cancelExecuting?: boolean
+  }) => Promise<{ ok: true; plan: PlanMeta; autoExecute: boolean } | { ok: false; error: string }>
+  planDismissAbort: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error: string }>
+  planReject: (payload: { sessionId: string; feedback?: string }) => Promise<{ ok: true } | { ok: false; error: string }>
+  planCancel: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error: string }>
+  planResumeExecution: (payload: ClaudeChatCreateWithToolsPayload) => Promise<
+    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
+    | { ok: false; error: string }
+  >
+  planOnStateChanged: (cb: (data: PlanStateChangedEvent) => void) => () => void
+  planOnApprovalReady: (cb: (data: PlanApprovalReadyEvent) => void) => () => void
 }

@@ -3,7 +3,7 @@ import type { ClaudeChatSendStreamPayload } from '../../shared/api'
 export type StreamCallbacks = {
   onDelta: (text: string) => void
   onThinkingDelta?: (text: string) => void
-  onDone: () => void
+  onDone: (data?: { usage?: unknown }) => void
   onError: (message: string) => void
 }
 
@@ -37,7 +37,7 @@ export async function runClaudeChatStream(
     window.api.claudeChatOnDone((d) => {
       if (d.requestId !== requestId) return
       cleanup()
-      callbacks.onDone()
+      callbacks.onDone({ usage: d.usage })
     })
   )
   unsubs.push(

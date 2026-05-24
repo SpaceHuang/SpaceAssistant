@@ -10,6 +10,9 @@ import { logAgentEvent } from './agentLogger/agentLogger'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
 import { runToolChatSession } from './toolChatLoop'
+import { runPlanModeChat } from './plan/planOrchestrator'
+import { readPlanStateForSession } from './plan/planManager'
+import { isChatMode } from '../src/shared/planTypes'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -56,6 +59,8 @@ type ClaudeChatCreateWithToolsPayload = {
     maxTokens?: number
     enableThinking?: boolean
   }
+  chatMode?: string
+  planRevisionFeedback?: string
 }
 
 function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessage[] {
@@ -199,21 +204,45 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         }
 
-        const res = await runToolChatSession({
-          sender,
-          requestId,
-          sessionId,
-          model,
-          baseUrl,
-          messages,
-          system: payload.system,
-          options: payload.options,
-          toolsConfig: deps.getToolsConfig(),
-          workDir: deps.getWorkDir(),
-          userDataDir: deps.getUserDataPath(),
+        const chatMode = isChatMode(payload.chatMode) ? payload.chatMode : 'normal'
+        const orchestratorDeps = {
           getApiKey: deps.getApiKey,
-          appDb: deps.getAppDatabase()
-        })
+          getWorkDir: deps.getWorkDir,
+          getUserDataPath: deps.getUserDataPath,
+          getToolsConfig: deps.getToolsConfig,
+          getAppDatabase: deps.getAppDatabase
+        }
+
+        const res =
+          chatMode === 'plan'
+            ? await runPlanModeChat({
+                sender,
+                requestId,
+                sessionId,
+                model,
+                baseUrl,
+                messages,
+                system: payload.system,
+                options: payload.options,
+                deps: orchestratorDeps,
+                revisionFeedback:
+                  typeof payload.planRevisionFeedback === 'string' ? payload.planRevisionFeedback : undefined
+              })
+            : await runToolChatSession({
+                sender,
+                requestId,
+                sessionId,
+                model,
+                baseUrl,
+                messages,
+                system: payload.system,
+                options: payload.options,
+                toolsConfig: deps.getToolsConfig(),
+                workDir: deps.getWorkDir(),
+                userDataDir: deps.getUserDataPath(),
+                getApiKey: deps.getApiKey,
+                appDb: deps.getAppDatabase()
+              })
 
         if (!res.ok) {
           logAgentEvent('error', 'llm.error', {
@@ -227,11 +256,22 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         }
 
         sender.send('claude-chat-done', { requestId })
+
+        let planState: Awaited<ReturnType<typeof readPlanStateForSession>> | undefined
+        if (chatMode === 'plan') {
+          planState = await readPlanStateForSession({
+            db: deps.getAppDatabase(),
+            workDir: deps.getWorkDir(),
+            sessionId
+          })
+        }
+
         return {
           ok: true as const,
           content: res.content,
           stopReason: res.stopReason,
-          ...(res.usage && { usage: res.usage })
+          ...('usage' in res && res.usage ? { usage: res.usage } : {}),
+          ...(planState ? { planState } : {})
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -362,7 +402,7 @@ async function runSendStream(
       usage
     })
 
-    sender.send('claude-chat-done', { requestId })
+    sender.send('claude-chat-done', { requestId, usage: usage ?? null })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     logAgentEvent('error', 'llm.error', {
