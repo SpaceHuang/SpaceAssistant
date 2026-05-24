@@ -211,3 +211,18 @@ FileTreeNode {
 - 文件搜索/过滤
 - "添加到对话"的完整实现（首期占位）
 - 多选操作
+
+---
+
+## 11. 与 LLM Wiki 分段的关系
+
+启用 LLM Wiki 后，文件 Tab 由单一文件树扩展为 **上下双分段** 布局，详见 [llm-wiki-requirement.md §10.1](./llm-wiki-requirement.md#101-文件-tab-双分段布局phase-2)：
+
+| 分段 | 位置 | 内容 |
+|------|------|------|
+| **文件列表** | 上 | 本文档 §2–§9 所定义的项目文件树 |
+| **LLM Wiki** | 下 | Wiki 根目录独立树（`SCHEMA.md`、`raw/`、`wiki/` 等） |
+
+- 两段均为 **可收起 Section**，交互对齐 VS Code 资源管理器中的分段折叠
+- 工具栏（§3）仍位于 Tab 顶栏，默认仅作用于 **文件列表** 分段
+- 当 `wiki.hideWikiFromFileTree === true` 时，文件列表分段 **不展示** `llm-wiki/` 目录，避免与下方 Wiki 分段重复
