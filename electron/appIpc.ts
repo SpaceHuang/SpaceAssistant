@@ -31,6 +31,7 @@ import {
 } from './plan/planManager'
 import { resumePlanExecution } from './plan/planOrchestrator'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
@@ -867,6 +868,36 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       return { writable: true }
     } catch (e) {
       return { writable: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('project-memory:get-state', async () => {
+    return getCachedMemoryState()
+  })
+
+  ipcMain.handle('project-memory:reload', async () => {
+    const workDir = ctx.getWorkDir()
+    const state = await loadProjectMemory(workDir)
+    return state
+  })
+
+  ipcMain.handle('project-memory:write', async (_event, payload: { content: string }) => {
+    try {
+      const workDir = ctx.getWorkDir()
+      await writeProjectMemory(workDir, payload.content)
+      return { success: true as const }
+    } catch (err) {
+      return { success: false as const, error: (err as Error).message }
+    }
+  })
+
+  ipcMain.handle('project-memory:generate', async () => {
+    try {
+      const workDir = ctx.getWorkDir()
+      const prompt = await generateProjectMemory(workDir)
+      return { success: true as const, prompt }
+    } catch (err) {
+      return { success: false as const, error: (err as Error).message }
     }
   })
 }
