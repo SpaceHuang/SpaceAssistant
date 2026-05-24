@@ -40,6 +40,7 @@ type ClaudeChatSendPayload = {
   messages: ClaudeChatMessage[]
   system?: string
   maxTokens?: number
+  projectMemoryEnabled?: boolean
 }
 
 type ClaudeChatMessageWithContentBlocks = {
@@ -63,6 +64,7 @@ type ClaudeChatCreateWithToolsPayload = {
   }
   chatMode?: string
   planRevisionFeedback?: string
+  projectMemoryEnabled?: boolean
 }
 
 function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessage[] {
@@ -170,7 +172,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
 
         const system = typeof payload.system === 'string' ? payload.system : undefined
         const maxTokens = typeof payload.maxTokens === 'number' && Number.isFinite(payload.maxTokens) ? payload.maxTokens : undefined
-        void runSendStream(sender, { requestId, model, baseUrl, messages, system, maxTokens, deps })
+        void runSendStream(sender, { requestId, model, baseUrl, messages, system, maxTokens, projectMemoryEnabled: payload.projectMemoryEnabled, deps })
         return { ok: true }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -216,7 +218,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         }
 
         const memoryContent = getCachedMemoryContent()
-        const memoryEnabled = deps.getProjectMemoryEnabled?.() ?? true
+        const memoryEnabled = payload.projectMemoryEnabled ?? true
         const finalSystem = buildSystemPrompt(payload.system, memoryContent, memoryEnabled)
 
         const res =
@@ -308,6 +310,7 @@ async function runSendStream(
     messages: ClaudeChatMessage[]
     system?: string
     maxTokens?: number
+    projectMemoryEnabled?: boolean
     deps: ClaudeStreamDeps
   }
 ): Promise<void> {
@@ -335,7 +338,7 @@ async function runSendStream(
     }))
 
     const memoryContent = getCachedMemoryContent()
-    const memoryEnabled = deps.getProjectMemoryEnabled?.() ?? true
+    const memoryEnabled = args.projectMemoryEnabled ?? true
     const finalSystem = buildSystemPrompt(system, memoryContent, memoryEnabled)
 
     const streamInput = buildClaudeChatSendStreamParams({

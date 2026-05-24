@@ -35,6 +35,7 @@ export type ClaudeChatSendStreamPayload = {
   system?: string
   /** 未传时主进程使用内置默认；建议传渲染侧解析后的有效值 */
   maxTokens?: number
+  projectMemoryEnabled?: boolean
 }
 
 export type ClaudeChatMessageWithBlocks = {
@@ -55,6 +56,7 @@ export type ClaudeChatCreateWithToolsPayload = {
   options?: { maxTokens?: number; enableThinking?: boolean }
   chatMode?: ChatMode
   planRevisionFeedback?: string
+  projectMemoryEnabled?: boolean
 }
 
 export type PlanReadResult = {
