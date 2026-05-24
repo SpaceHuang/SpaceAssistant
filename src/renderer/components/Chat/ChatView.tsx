@@ -476,9 +476,7 @@ export function ChatView() {
           finishSessionRun(runSessionId, requestId, assistantId)
           clearLiveSession(runSessionId)
           if (mode === 'plan') {
-            if (res.planState) setPlanData(res.planState)
             await reloadPlanState()
-            scrollPlanApprovalIntoView()
           }
           scrollBottom()
         } catch (e) {
@@ -837,7 +835,6 @@ export function ChatView() {
         onChatModeChange={setChatMode}
         onSend={send}
         onAbort={abort}
-        maxContext={modelEntry?.maximumContext ?? 200000}
       />
     </div>
   )

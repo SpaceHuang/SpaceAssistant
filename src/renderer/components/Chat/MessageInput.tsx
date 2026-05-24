@@ -4,8 +4,6 @@ import { Send, Square } from 'lucide-react'
 import type { ChatMode } from '../../../shared/planTypes'
 import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
 import { ContextUsageRing } from './ContextUsageRing'
-import type { LastUsage } from '../../store/chatSlice'
-import { useTypedSelector } from '../../hooks'
 
 export type MessageInputHandle = {
   focus: () => void
@@ -22,7 +20,6 @@ type Props = {
   onChatModeChange?: (mode: ChatMode) => void
   onSend: (text: string, chatMode: ChatMode) => void
   onAbort?: () => void
-  maxContext?: number
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, Props>(function MessageInput(
@@ -34,8 +31,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     defaultChatMode = DEFAULT_CHAT_MODE,
     onChatModeChange,
     onSend,
-    onAbort,
-    maxContext = 200000
+    onAbort
   },
   ref
 ) {
@@ -43,7 +39,6 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   const [localMode, setLocalMode] = useState<ChatMode>(defaultChatMode)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const chatMode = chatModeProp ?? localMode
-  const lastUsage = useTypedSelector((s) => s.chat.lastUsage)
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
@@ -93,7 +88,6 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
         />
         <div className="composer-footer">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
-            <ContextUsageRing usage={lastUsage} maxContext={maxContext} />
             <Select
               size="small"
               className="composer-mode-select"
@@ -109,15 +103,18 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
             {modelLabel ? <span className="composer-model-chip">{modelLabel}</span> : null}
             <span className="composer-hint">{running ? '执行中，Enter 或点击右侧按钮中止' : 'Enter 发送，Shift+Enter 换行'}</span>
           </div>
-          <button
-            type="button"
-            className={`composer-send${running ? ' composer-send--stop' : ''}`}
-            onClick={handlePrimaryAction}
-            disabled={running ? false : disabled || !text.trim()}
-            title={running ? '中止' : '发送'}
-          >
-            {running ? <Square size={14} fill="currentColor" /> : <Send size={14} />}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <ContextUsageRing />
+            <button
+              type="button"
+              className={`composer-send${running ? ' composer-send--stop' : ''}`}
+              onClick={handlePrimaryAction}
+              disabled={running ? false : disabled || !text.trim()}
+              title={running ? '中止' : '发送'}
+            >
+              {running ? <Square size={14} fill="currentColor" /> : <Send size={14} />}
+            </button>
+          </div>
         </div>
       </div>
     </div>
