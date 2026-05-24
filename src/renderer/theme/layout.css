@@ -458,6 +458,22 @@
   color: rgba(255, 255, 255, 0.65);
 }
 
+.chat-archive-wiki-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: inherit;
+  color: var(--sa-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-archive-wiki-btn:hover {
+  opacity: 0.85;
+}
+
 .chat-bubble-streaming::after {
   content: '▋';
   animation: sa-cursor-blink 1s step-end infinite;

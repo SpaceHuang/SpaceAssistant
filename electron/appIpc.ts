@@ -67,6 +67,12 @@ import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegist
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
+import { mergeWikiConfig } from '../src/shared/domainTypes'
+import type { WikiConfig, WikiStatus } from '../src/shared/domainTypes'
+import { initWikiStructure, readWikiSchema } from './wiki/wikiInit'
+import { getWikiStatus } from './wiki/wikiStatus'
+import { classifyWikiPath } from './wiki/wikiPaths'
+import { copyFileInWorkDir, importRawFromWorkDir } from './wiki/wikiImport'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
@@ -82,6 +88,7 @@ const CONFIG_KEYS = {
   activeLlmServiceId: LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId,
   tools: 'config.tools',
   skills: 'config.skills',
+  wiki: 'config.wiki',
   uiTheme: 'config.uiTheme',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   defaultChatMode: 'config.defaultChatMode'
@@ -117,6 +124,16 @@ function readSkillsConfig(db: AppDatabase): SkillsConfig {
   }
 }
 
+function readWikiConfig(db: AppDatabase): WikiConfig {
+  const raw = getConfigValue(db, CONFIG_KEYS.wiki)
+  if (!raw) return mergeWikiConfig(null)
+  try {
+    return mergeWikiConfig(JSON.parse(raw) as Partial<WikiConfig>)
+  } catch {
+    return mergeWikiConfig(null)
+  }
+}
+
 async function syncBackup(ctx: AppIpcContext, sessionId: string): Promise<void> {
   const s = getSession(ctx.db, sessionId)
   if (!s) return
@@ -128,7 +145,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   const skillManager = createSkillManager({
     getUserDataPath: ctx.getUserDataPath,
     getWorkDir: ctx.getWorkDir,
-    getSkillsConfig: () => readSkillsConfig(ctx.db)
+    getSkillsConfig: () => readSkillsConfig(ctx.db),
+    getWikiConfig: () => readWikiConfig(ctx.db)
   })
   ipcMain.handle(
     'tool:confirm-response',
@@ -298,6 +316,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
     }
     const skills = readSkillsConfig(ctx.db)
+    const wiki = readWikiConfig(ctx.db)
     const uiThemeRaw = getConfigValue(ctx.db, CONFIG_KEYS.uiTheme) as UiThemeMode | undefined
     const uiTheme: UiThemeMode =
       uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
@@ -320,7 +339,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
       defaultChatMode,
       tools,
-      skills
+      skills,
+      wiki
     }
   })
 
@@ -343,6 +363,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         llmServiceKeys: Record<string, string>
         tools: Partial<ToolsConfig>
         skills: Partial<SkillsConfig>
+        wiki: Partial<WikiConfig>
         uiTheme: UiThemeMode
         maxParallelChatSessions: number
         defaultChatMode: import('../src/shared/planTypes').ChatMode
@@ -427,6 +448,19 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeSkillsConfig({ ...cur, ...payload.skills })
         setConfigValue(ctx.db, CONFIG_KEYS.skills, JSON.stringify(next))
+      }
+      if (payload.wiki !== undefined) {
+        let cur = mergeWikiConfig(null)
+        const curRaw = getConfigValue(ctx.db, CONFIG_KEYS.wiki)
+        if (curRaw) {
+          try {
+            cur = mergeWikiConfig(JSON.parse(curRaw) as Partial<WikiConfig>)
+          } catch {
+            /* ignore */
+          }
+        }
+        const next = mergeWikiConfig({ ...cur, ...payload.wiki })
+        setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
       }
       if (payload.uiTheme !== undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.uiTheme, payload.uiTheme)
@@ -631,6 +665,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const srcName = path.basename(srcPath)
     await fs.rename(srcPath, path.join(destDirPath, srcName))
+  })
+
+  ipcMain.handle('file:copy', async (_e, payload: { srcRelPath: string; destRelPath: string }): Promise<void> => {
+    await copyFileInWorkDir(ctx.getWorkDir(), payload.srcRelPath, payload.destRelPath)
   })
 
   ipcMain.handle('search:execute', async (_e, query: string): Promise<SearchResult[]> => {
@@ -842,6 +880,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           getWorkDir: ctx.getWorkDir,
           getUserDataPath: ctx.getUserDataPath,
           getToolsConfig: () => readToolsConfig(ctx.db),
+          getWikiConfig: () => readWikiConfig(ctx.db),
           getAppDatabase: () => ctx.db
         }
       })
@@ -853,6 +892,50 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
     }
   })
+
+  ipcMain.handle(
+    'wiki:import-raw',
+    async (_e, payload: { srcRelPath: string }) => {
+      const wikiConfig = readWikiConfig(ctx.db)
+      return importRawFromWorkDir(ctx.getWorkDir(), wikiConfig, payload.srcRelPath)
+    }
+  )
+
+  ipcMain.handle('wiki:init', async (_e, payload: { overwrite?: boolean; installSkill?: boolean } = {}) => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const result = await initWikiStructure(ctx.getWorkDir(), wikiConfig, {
+      overwrite: payload.overwrite === true,
+      installSkill: payload.installSkill !== false
+    })
+    if (result.ok) skillManager.invalidateCache()
+    return result
+  })
+
+  ipcMain.handle('wiki:status', async (): Promise<WikiStatus> => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    return getWikiStatus(ctx.getWorkDir(), wikiConfig)
+  })
+
+  ipcMain.handle('wiki:get-schema', async (): Promise<{ content: string } | null> => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const content = readWikiSchema(ctx.getWorkDir(), wikiConfig)
+    return content ? { content } : null
+  })
+
+  ipcMain.handle(
+    'wiki:resolve-path',
+    async (_e, payload: { relPath: string }): Promise<{ absPath: string; kind: ReturnType<typeof classifyWikiPath> } | { error: string }> => {
+      try {
+        const wikiConfig = readWikiConfig(ctx.db)
+        const root = ctx.getWorkDir()
+        const absPath = await resolveSafePath(root, payload.relPath)
+        const rel = path.relative(root, absPath).replace(/\\/g, '/')
+        return { absPath, kind: classifyWikiPath(root, wikiConfig, rel) }
+      } catch (e) {
+        return { error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
 
   ipcMain.handle('skill:invalidate-cache', async (): Promise<void> => {
     skillManager.invalidateCache()

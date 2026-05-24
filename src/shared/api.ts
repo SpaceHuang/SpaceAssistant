@@ -10,7 +10,9 @@ import type {
   SkillsConfig,
   ToolCallResultPersisted,
   ToolRiskLevel,
-  ToolsConfig
+  ToolsConfig,
+  WikiConfig,
+  WikiStatus
 } from './domainTypes'
 import type { PlanAbortMeta, PlanApprovalSummary, PlanDisplayEntry, PlanMeta } from './planTypes'
 
@@ -127,6 +129,7 @@ export type SpaceAssistantApi = {
       llmServiceKeys: Record<string, string>
       tools: Partial<ToolsConfig>
       skills: Partial<SkillsConfig>
+      wiki: Partial<WikiConfig>
       defaultChatMode: ChatMode
       uiTheme: import('./domainTypes').UiThemeMode
       maxParallelChatSessions: number
@@ -155,6 +158,7 @@ export type SpaceAssistantApi = {
   fileDelete: (relPath: string) => Promise<void>
   fileRename: (relPath: string, newName: string) => Promise<void>
   fileMove: (srcRelPath: string, destDirRelPath: string) => Promise<void>
+  fileCopy: (payload: { srcRelPath: string; destRelPath: string }) => Promise<void>
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>
@@ -192,6 +196,19 @@ export type SpaceAssistantApi = {
   skillMatch: (payload: { userInput: string; sessionSkillsState: SessionSkillsState }) => Promise<SkillDefinition[]>
   skillExport: (payload: { name: string; destPath: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   skillInvalidateCache: () => Promise<void>
+
+  wikiInit: (payload?: {
+    overwrite?: boolean
+    installSkill?: boolean
+  }) => Promise<{ ok: true; rootPath: string; skillInstalled: boolean } | { ok: false; error: string }>
+  wikiStatus: () => Promise<WikiStatus>
+  wikiGetSchema: () => Promise<{ content: string } | null>
+  wikiResolvePath: (payload: {
+    relPath: string
+  }) => Promise<{ absPath: string; kind: 'raw' | 'wiki' | 'schema' | 'other' } | { error: string }>
+  wikiImportRaw: (payload: {
+    srcRelPath: string
+  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
 
   planRead: (payload: { sessionId: string }) => Promise<PlanReadResult>
   planApprove: (payload: {

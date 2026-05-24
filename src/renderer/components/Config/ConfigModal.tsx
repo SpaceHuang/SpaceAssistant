@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
-import type { ModelEntry, UiThemeMode } from '../../../shared/domainTypes'
+import type { ModelEntry, UiThemeMode, WikiConfig } from '../../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import type { ChatMode } from '../../../shared/planTypes'
 import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
 import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
@@ -13,6 +14,7 @@ import {
 } from '../../../shared/chatParallelConfig'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { SkillsTab } from './SkillsTab'
+import { WikiTab } from './WikiTab'
 import { LlmServiceTab } from './LlmServiceTab'
 import {
   buildLlmServicesSavePayload,
@@ -176,6 +178,7 @@ export function ConfigModal() {
   const [uiTheme, setUiTheme] = useState<UiThemeMode>('system')
   const [maxParallelChatSessions, setMaxParallelChatSessions] = useState(DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
   const [defaultChatMode, setDefaultChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
+  const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
 
   const refreshConfig = async () => {
     const next = await window.api.configGet()
@@ -214,6 +217,7 @@ export function ConfigModal() {
       setUiTheme(cfg.uiTheme ?? 'system')
       setMaxParallelChatSessions(cfg.maxParallelChatSessions ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
       setDefaultChatMode(cfg.defaultChatMode ?? DEFAULT_CHAT_MODE)
+      setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
     }
   }, [open, cfg, form])
 
@@ -306,7 +310,8 @@ export function ConfigModal() {
         },
         uiTheme,
         maxParallelChatSessions,
-        defaultChatMode
+        defaultChatMode,
+        wiki: wikiUi
       })
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))
@@ -624,6 +629,11 @@ export function ConfigModal() {
                   </div>
                 </>
               )
+            },
+            {
+              key: 'wiki',
+              label: 'LLM Wiki',
+              children: <WikiTab wiki={wikiUi} onChange={setWikiUi} />
             },
             {
               key: 'skills',

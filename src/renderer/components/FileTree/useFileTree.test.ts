@@ -256,4 +256,29 @@ describe('useFileTree', () => {
     const valid = result.current.validateDrop('a.txt', 'dir1')
     expect(valid).toBe(true)
   })
+
+  it('selectPath expands parents without collapsing already expanded dirs', async () => {
+    mockApi.fileListDirectory.mockResolvedValueOnce([
+      { name: 'dir1', path: 'dir1', isDirectory: true, size: undefined },
+      { name: 'a.txt', path: 'a.txt', isDirectory: false, size: 100 }
+    ])
+    mockApi.fileListDirectory.mockResolvedValueOnce([
+      { name: 'inner.txt', path: 'dir1/inner.txt', isDirectory: false, size: 50 }
+    ])
+
+    const { result } = renderHook(() => useFileTree('/project'))
+    await act(() => Promise.resolve())
+
+    await act(async () => {
+      await result.current.toggleExpand('dir1')
+    })
+    expect(result.current.expandedKeys).toContain('dir1')
+
+    await act(async () => {
+      await result.current.selectPath('dir1/inner.txt')
+    })
+
+    expect(result.current.expandedKeys).toContain('dir1')
+    expect(result.current.selectedKey).toBe('dir1/inner.txt')
+  })
 })

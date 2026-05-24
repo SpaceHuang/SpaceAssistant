@@ -1,7 +1,7 @@
 import type { IpcMain, WebContents } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
 import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
-import type { ToolsConfig } from '../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
@@ -19,6 +19,7 @@ export type ClaudeStreamDeps = {
   getWorkDir: () => string
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
+  getWikiConfig: () => WikiConfig
   getAppDatabase: () => AppDatabase
 }
 
@@ -210,6 +211,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           getWorkDir: deps.getWorkDir,
           getUserDataPath: deps.getUserDataPath,
           getToolsConfig: deps.getToolsConfig,
+          getWikiConfig: deps.getWikiConfig,
           getAppDatabase: deps.getAppDatabase
         }
 
@@ -238,6 +240,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
                 system: payload.system,
                 options: payload.options,
                 toolsConfig: deps.getToolsConfig(),
+                wikiConfig: deps.getWikiConfig(),
                 workDir: deps.getWorkDir(),
                 userDataDir: deps.getUserDataPath(),
                 getApiKey: deps.getApiKey,

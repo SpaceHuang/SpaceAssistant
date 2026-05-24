@@ -15,6 +15,10 @@ import { preloadShiki } from '../../utils/shikiHighlighter'
 
 export type ViewMode = 'code' | 'render'
 
+function defaultViewModeForFileType(fileType: FileTypeCategory | null): ViewMode {
+  return fileType === 'markdown' ? 'render' : 'code'
+}
+
 export type DetailPanelState = {
   selectedFile: string | null
   previewContent: string | null
@@ -118,7 +122,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     setTooLargeSize(null)
   }, [])
 
-  const loadFile = useCallback(async (relPath: string) => {
+  const loadFile = useCallback(async (relPath: string, options?: { preserveViewMode?: boolean }) => {
     setIsLoading(true)
     setLoadError(null)
     setUnsupportedExt(null)
@@ -133,7 +137,9 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       setLoadError(applied.loadError)
       setUnsupportedExt(applied.unsupportedExt)
       setTooLargeSize(applied.tooLargeSize)
-      setViewMode('code')
+      if (!options?.preserveViewMode) {
+        setViewMode(defaultViewModeForFileType(applied.fileType))
+      }
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -154,9 +160,9 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
 
   const refreshFile = useCallback(async () => {
     if (!selectedFile) return
-    await loadFile(selectedFile)
+    await loadFile(selectedFile, { preserveViewMode: true })
     message.success('已刷新')
-  }, [loadFile, selectedFile])
+  }, [loadFile, selectedFile, message])
 
   const setReferencedFilesHeight = useCallback((ratio: number) => {
     setReferencedFilesHeightState(Math.min(0.85, Math.max(0.15, ratio)))

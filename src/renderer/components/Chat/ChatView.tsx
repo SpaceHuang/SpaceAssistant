@@ -31,11 +31,15 @@ import {
   extractAssistantTextFromApiContent
 } from '../../services/chatToolSessionService'
 import { parseSkillCommand } from '../../services/skillCommandService'
+import { parseWikiCommand } from '../../services/wikiCommandService'
+import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
+import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
+import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
 import { appendSkillActivationLog } from '../../services/skillActivationLog'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
 import { buildSystemPromptFromSkills, formatSkillHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import type { Message } from '../../../shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../../../shared/domainTypes'
+import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatBubble } from './ChatBubble'
@@ -267,8 +271,36 @@ export function ChatView() {
         message.warning('请先在设置中配置 API Key')
         return
       }
-      const sessionSkillsState = normalizeSessionSkillsState(currentSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE)
-      const cmd = await parseSkillCommand(text, sessionSkillsState)
+      const wikiConfig = cfg.wiki ?? DEFAULT_WIKI_CONFIG
+      let sessionSkillsState = normalizeSessionSkillsState(currentSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE)
+      let chatText = text
+      let wikiModeRun = false
+
+      const wikiCmd = await parseWikiCommand(text, wikiConfig, sessionSkillsState)
+      if (wikiCmd.type === 'command') {
+        setSkillHints((prev) => [...prev, wikiCmd.hint])
+        scrollBottom()
+        if (wikiCmd.skillsState) {
+          const updated = await window.api.sessionUpdate({ sessionId, skillsState: wikiCmd.skillsState })
+          if (updated) dispatch(upsertSession(updated))
+        }
+        return
+      }
+      if (wikiCmd.type === 'run') {
+        setSkillHints((prev) => [...prev, wikiCmd.hint])
+        scrollBottom()
+        chatText = wikiCmd.text
+        sessionSkillsState = wikiCmd.skillsState
+        wikiModeRun = true
+        const updated = await window.api.sessionUpdate({
+          sessionId,
+          skillsState: wikiCmd.skillsState,
+          metadata: patchSessionWikiState(currentSession?.metadata, { wikiModeActive: true })
+        })
+        if (updated) dispatch(upsertSession(updated))
+      }
+
+      const cmd = await parseSkillCommand(chatText, sessionSkillsState)
       if (cmd.type === 'command') {
         setSkillHints((prev) => [...prev, cmd.hint])
         scrollBottom()
@@ -283,7 +315,7 @@ export function ChatView() {
         id: crypto.randomUUID(),
         sessionId: runSessionId,
         role: 'user',
-        content: text,
+        content: chatText,
         timestamp: Date.now(),
         status: 'sent',
         schemaVersion: CURRENT_SCHEMA_VERSION
@@ -318,14 +350,14 @@ export function ChatView() {
       const historyForApi = [...store.getState().chat.messages]
       const useToolsApi = cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools).length > 0
 
-      const activeSkills = await window.api.skillMatch({ userInput: text, sessionSkillsState })
+      const activeSkills = await window.api.skillMatch({ userInput: chatText, sessionSkillsState })
       if (activeSkills.length > 0) {
         setSkillHints((prev) => [...prev, formatSkillHint(activeSkills, '已自动加载')])
         scrollBottom()
         const metadata = appendSkillActivationLog(currentSession?.metadata ?? {}, {
           skillNames: activeSkills.map((s) => s.meta.name),
           source: 'auto',
-          userInput: text
+          userInput: chatText
         })
         void window.api.sessionUpdate({ sessionId, metadata }).then((updated) => {
           if (updated) dispatch(upsertSession(updated))
@@ -336,6 +368,13 @@ export function ChatView() {
       const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models, cfg.maxTokens)
       const maxSystemChars = modelEntry ? Math.floor(modelEntry.maximumContext * 0.1) : undefined
       let systemPrompt = buildSystemPromptFromSkills(activeSkills)
+      const wikiSchemaActive =
+        wikiConfig.enabled &&
+        (wikiModeRun || activeSkills.some((s) => s.meta.name === 'llm-wiki'))
+      if (wikiSchemaActive) {
+        const schema = await window.api.wikiGetSchema()
+        systemPrompt = appendWikiSchemaToSystemPrompt(systemPrompt, schema?.content ?? null) ?? systemPrompt
+      }
       if (maxSystemChars && systemPrompt) {
         systemPrompt = truncateSystemPrompt(systemPrompt, maxSystemChars)
       }
@@ -799,13 +838,47 @@ export function ChatView() {
 
   const running = Boolean(sessionId && runningSessions[sessionId])
 
+  useEffect(() => {
+    const onIngest = (e: Event) => {
+      const detail = (e as CustomEvent<{ rawRelPath: string }>).detail
+      if (!detail?.rawRelPath) return
+      void send(`/wiki ingest ${detail.rawRelPath}`)
+    }
+    window.addEventListener('sa-wiki-ingest-request', onIngest)
+    return () => window.removeEventListener('sa-wiki-ingest-request', onIngest)
+  }, [send])
+
+  const handleArchiveToWiki = useCallback(
+    (assistantContent: string) => {
+      if (!sessionId) return
+      const wikiRoot = (cfg?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath).replace(/\\/g, '/').replace(/^\/+/, '')
+      const date = new Date().toISOString().slice(0, 10)
+      const relPath = `${wikiRoot}/wiki/queries/${date}-archive.md`
+      const excerpt = assistantContent.trim().slice(0, 12000)
+      void window.api
+        .sessionUpdate({
+          sessionId,
+          metadata: appendArchivedQuery(currentSession?.metadata, relPath)
+        })
+        .then((updated) => {
+          if (updated) dispatch(upsertSession(updated))
+        })
+      void send(
+        `/wiki query 请将以下助手回答归档为 Wiki 新页（建议 wiki/queries/${date}-archive.md），更新 index 与 log，并确保正文结构清晰：\n\n${excerpt}`
+      )
+    },
+    [send, sessionId, cfg?.wiki?.rootPath, currentSession?.metadata, dispatch]
+  )
+
   const handleOpenFile = useCallback(
     (relPath: string) => {
+      const wikiRoot = cfg?.wiki?.rootPath ?? 'llm-wiki'
+      requestFilePaneSelect({ relPath, preferWiki: isUnderWikiRoot(relPath, wikiRoot) })
       void openFile(relPath).catch((e) => {
         message.error(e instanceof Error ? e.message : String(e))
       })
     },
-    [message, openFile]
+    [message, openFile, cfg?.wiki?.rootPath]
   )
 
   const toolsInteractive = useMemo(
@@ -840,7 +913,7 @@ export function ChatView() {
         ) : messages.length === 0 && skillHints.length === 0 ? (
           <div className="chat-empty">
             <div className="chat-empty-title">开始对话</div>
-            <Text type="secondary">输入问题，或尝试 /skill 命令加载 Skill</Text>
+            <Text type="secondary">输入问题，或尝试 /skill、/wiki 命令</Text>
           </div>
         ) : (
           messages.map((m) => (
@@ -850,6 +923,9 @@ export function ChatView() {
               toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
               focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
               onOpenFile={handleOpenFile}
+              wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
+              showArchiveToWiki={Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim())}
+              onArchiveToWiki={() => handleArchiveToWiki(m.content)}
             />
           ))
         )}

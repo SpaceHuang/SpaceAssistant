@@ -6,7 +6,7 @@ import chatReducer, { setLastUsage, setSession } from '../../store/chatSlice'
 import configReducer, { setConfig } from '../../store/configSlice'
 import { buildContextRingSegments, ContextUsageRing } from './ContextUsageRing'
 import type { AppConfig } from '../../../shared/domainTypes'
-import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG, DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -28,6 +28,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     maxParallelChatSessions: 3,
     tools: { ...DEFAULT_TOOLS_CONFIG, enabled: false },
     skills: { ...DEFAULT_SKILLS_CONFIG },
+    wiki: { ...DEFAULT_WIKI_CONFIG },
     ...overrides
   } as AppConfig
 }

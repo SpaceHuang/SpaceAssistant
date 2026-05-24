@@ -4,7 +4,7 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
-import { mergeToolsConfig } from '../src/shared/domainTypes'
+import { mergeToolsConfig, mergeWikiConfig } from '../src/shared/domainTypes'
 import type { AppDatabase } from './database'
 import { getConfigValue, openDatabase, setConfigValue } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
@@ -22,6 +22,7 @@ import {
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
+const WIKI_CONFIG_KEY = 'config.wiki'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -164,6 +165,15 @@ app.whenReady().then(() => {
         return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
       } catch {
         return mergeToolsConfig(null)
+      }
+    },
+    getWikiConfig: () => {
+      const raw = getConfigValue(db, WIKI_CONFIG_KEY)
+      if (!raw) return mergeWikiConfig(null)
+      try {
+        return mergeWikiConfig(JSON.parse(raw) as Parameters<typeof mergeWikiConfig>[0])
+      } catch {
+        return mergeWikiConfig(null)
       }
     },
     getAppDatabase: () => db

@@ -51,6 +51,41 @@ describe('DetailPanelContext', () => {
     })
   })
 
+  it('openFile defaults markdown to render preview', async () => {
+    fileReadFile.mockResolvedValueOnce({
+      kind: 'text',
+      content: '# Title',
+      encoding: 'utf8'
+    })
+
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+
+    await act(async () => {
+      await result.current.openFile('docs/readme.md')
+    })
+
+    await waitFor(() => {
+      expect(result.current.fileType).toBe('markdown')
+      expect(result.current.viewMode).toBe('render')
+    })
+  })
+
+  it('openFile defaults non-markdown to code view', async () => {
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+
+    await act(async () => {
+      await result.current.openFile('test.txt')
+    })
+
+    await waitFor(() => {
+      expect(result.current.viewMode).toBe('code')
+    })
+  })
+
   it('closeFile clears state', async () => {
     const { result } = renderHook(() => useDetailPanel(), {
       wrapper: DetailPanelTestWrapper

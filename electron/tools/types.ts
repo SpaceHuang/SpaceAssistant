@@ -1,4 +1,4 @@
-import type { ToolsConfig } from '../../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 
 export interface ToolExecutionContext {
   workDir: string
@@ -10,6 +10,7 @@ export interface ToolExecutionContext {
   signal: AbortSignal
   fileStateCache: import('../fileStateCache').FileStateCache
   toolsConfig: ToolsConfig
+  wikiConfig?: WikiConfig
 }
 
 export interface ToolExecutorResult {

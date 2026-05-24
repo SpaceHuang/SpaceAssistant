@@ -7,11 +7,18 @@ const fileSvg = patchSvg(fileLineRaw, 14)
 
 interface ReferencedFileItemProps {
   file: ReferencedFile
+  wikiKind?: 'raw' | 'wiki' | 'schema' | null
   isActive: boolean
   onClick: () => void
 }
 
-export function ReferencedFileItem({ file, isActive, onClick }: ReferencedFileItemProps) {
+const WIKI_BADGE_LABEL: Record<'raw' | 'wiki' | 'schema', string> = {
+  raw: 'raw',
+  wiki: 'Wiki',
+  schema: 'Schema'
+}
+
+export function ReferencedFileItem({ file, wikiKind, isActive, onClick }: ReferencedFileItemProps) {
   const fileName = file.path.includes('/')
     ? file.path.slice(file.path.lastIndexOf('/') + 1)
     : file.path
@@ -24,7 +31,10 @@ export function ReferencedFileItem({ file, isActive, onClick }: ReferencedFileIt
       <span className="referenced-file-item-icon" dangerouslySetInnerHTML={{ __html: fileSvg }} />
       <div className="referenced-file-item-info">
         <Tooltip title={file.path} mouseEnterDelay={0.5}>
-          <span className="referenced-file-item-name">{fileName}</span>
+          <span className="referenced-file-item-name">
+            {fileName}
+            {wikiKind ? <span className="referenced-file-wiki-badge">{WIKI_BADGE_LABEL[wikiKind]}</span> : null}
+          </span>
         </Tooltip>
         <Tooltip title={file.path} mouseEnterDelay={0.5}>
           <span className="referenced-file-item-path">{file.path}</span>

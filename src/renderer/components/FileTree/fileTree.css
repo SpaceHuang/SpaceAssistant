@@ -83,6 +83,25 @@
   flex: 1;
 }
 
+.file-tree-node--highlight .file-tree-node-label {
+  font-weight: 600;
+}
+
+.file-tree-node--highlight::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  background: var(--sa-primary, #1677ff);
+  border-radius: 1px;
+}
+
+.file-tree-node--highlight {
+  position: relative;
+}
+
 .file-tree-context-trigger {
   display: inline-flex;
   align-items: center;

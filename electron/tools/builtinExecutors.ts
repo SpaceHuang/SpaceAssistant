@@ -4,6 +4,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import type { Dirent } from 'fs'
 import { resolveSafePath, resolveSafePathReal } from '../pathSecurity'
+import { isUnderWikiRaw } from '../wiki/wikiPaths'
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 import {
   combineUserAbortAndTimeout,
@@ -269,6 +270,16 @@ const ERR_FILE_NOT_READ_FOR_EDIT =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
 const ERR_FILE_NOT_READ_FOR_WRITE =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再写入'
+const ERR_WIKI_RAW_READONLY = 'raw/ 为只读源，不可通过工具修改 (WIKI_RAW_READONLY)'
+
+function wikiRawWriteBlocked(ctx: ToolExecutionContext, rel: string): ToolExecutorResult | null {
+  if (!ctx.wikiConfig?.enabled) return null
+  const normalized = rel.replace(/\\/g, '/')
+  if (isUnderWikiRaw(ctx.workDir, ctx.wikiConfig, normalized)) {
+    return { success: false, error: ERR_WIKI_RAW_READONLY }
+  }
+  return null
+}
 
 async function recordFileStateAfterWrite(
   cache: ToolExecutionContext['fileStateCache'],
@@ -293,6 +304,8 @@ export const editFileExecutor: ToolExecutor = {
     const oldS = typeof input.old_string === 'string' ? input.old_string : ''
     const newS = typeof input.new_string === 'string' ? input.new_string : ''
     const replaceAll = Boolean(input.replace_all)
+    const rawBlock = wikiRawWriteBlocked(ctx, rel)
+    if (rawBlock) return { ...rawBlock, duration: Date.now() - started }
     ctx.sendProgress('editing', '正在编辑文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
@@ -375,6 +388,8 @@ export const writeFileExecutor: ToolExecutor = {
     const started = Date.now()
     const rel = typeof input.path === 'string' ? input.path : ''
     const content = typeof input.content === 'string' ? input.content : ''
+    const rawBlock = wikiRawWriteBlocked(ctx, rel)
+    if (rawBlock) return { ...rawBlock, duration: Date.now() - started }
     ctx.sendProgress('writing', '正在写入文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {

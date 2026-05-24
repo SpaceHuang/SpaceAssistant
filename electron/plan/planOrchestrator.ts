@@ -1,5 +1,5 @@
 import type { WebContents } from 'electron'
-import type { ToolsConfig } from '../../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
 import { getSession } from '../database'
 import { runToolChatSession, type ClaudeContentBlockMessage } from '../toolChatLoop'
@@ -28,6 +28,7 @@ export type PlanOrchestratorDeps = {
   getWorkDir: () => string
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
+  getWikiConfig?: () => WikiConfig
   getAppDatabase: () => AppDatabase
 }
 
@@ -110,6 +111,7 @@ async function runPlanningPhase(args: {
   const db = deps.getAppDatabase()
   const workDir = deps.getWorkDir()
   const toolsConfig = deps.getToolsConfig()
+  const wikiConfig = deps.getWikiConfig?.()
   const session = getSession(db, args.sessionId)
   const existingPlan = session
     ? getPendingPlanMeta(session.metadata) ?? getPlanMeta(session.metadata)
@@ -138,6 +140,7 @@ async function runPlanningPhase(args: {
     system: combineSystem(args.system, planPrompt),
     options: args.options,
     toolsConfig,
+    wikiConfig,
     workDir,
     userDataDir: deps.getUserDataPath(),
     getApiKey: deps.getApiKey,
@@ -215,6 +218,7 @@ async function runWorkerExecution(args: {
   const db = deps.getAppDatabase()
   const workDir = deps.getWorkDir()
   const toolsConfig = deps.getToolsConfig()
+  const wikiConfig = deps.getWikiConfig?.()
   let planMeta = args.planMeta
 
   if (planMeta.status === 'approved') {
@@ -257,6 +261,7 @@ async function runWorkerExecution(args: {
     system: combineSystem(args.system, workerSystem),
     options: args.options,
     toolsConfig,
+    wikiConfig,
     workDir,
     userDataDir: deps.getUserDataPath(),
     getApiKey: deps.getApiKey,
