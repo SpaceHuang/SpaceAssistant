@@ -19,6 +19,7 @@ let cache: ProjectMemoryState = {
 }
 
 let watcher: FSWatcher | null = null
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
 export function getCachedMemoryState(): ProjectMemoryState {
   return { ...cache }
@@ -38,10 +39,12 @@ export async function loadProjectMemory(workDir: string): Promise<ProjectMemoryS
       return { ...cache }
     }
 
-    const raw = await fs.readFile(filePath, 'utf-8')
-    const fileSize = Buffer.byteLength(raw, 'utf-8')
+    const buf = await fs.readFile(filePath)
+    const fileSize = buf.length
     const truncated = fileSize > PROJECT_MEMORY_MAX_SIZE
-    const content = truncated ? raw.slice(0, PROJECT_MEMORY_MAX_SIZE) : raw
+    const content = truncated
+      ? buf.subarray(0, PROJECT_MEMORY_MAX_SIZE).toString('utf-8')
+      : buf.toString('utf-8')
 
     cache = {
       content,
@@ -65,6 +68,8 @@ export async function loadProjectMemory(workDir: string): Promise<ProjectMemoryS
         workDir,
         error: (err as Error).message
       })
+      // Keep existing cache on non-ENOENT errors
+      return { ...cache }
     }
 
     cache = { content: null, fileName: PROJECT_MEMORY_FILE_NAME, fileSize: 0, truncated: false, loadedAt: null }
@@ -87,8 +92,6 @@ export function startMemoryWatcher(workDir: string, onChange: (state: ProjectMem
   stopMemoryWatcher()
 
   const filePath = resolveSafePath(workDir, PROJECT_MEMORY_FILE_NAME)
-
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
   try {
     watcher = watch(filePath, (eventType) => {
@@ -116,6 +119,10 @@ export function startMemoryWatcher(workDir: string, onChange: (state: ProjectMem
 }
 
 export function stopMemoryWatcher(): void {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+    debounceTimer = null
+  }
   if (watcher) {
     watcher.close()
     watcher = null
