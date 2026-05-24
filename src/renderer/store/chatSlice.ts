@@ -9,6 +9,13 @@ export type RunningSessionMeta = {
   updatedAt: number
 }
 
+export type LastUsage = {
+  input_tokens: number
+  output_tokens?: number
+  cache_read_input_tokens?: number
+  cache_creation_input_tokens?: number
+} | null
+
 interface ChatState {
   messages: Message[]
   currentSessionId: string | null
@@ -18,6 +25,7 @@ interface ChatState {
   runningSessions: Record<string, RunningSessionMeta>
   /** 侧栏待办跳转后高亮的工具确认项 */
   confirmFocusToolUseId: string | null
+  lastUsage: LastUsage
 }
 
 const initialState: ChatState = {
@@ -26,7 +34,8 @@ const initialState: ChatState = {
   chatStatus: 'idle',
   error: null,
   runningSessions: {},
-  confirmFocusToolUseId: null
+  confirmFocusToolUseId: null,
+  lastUsage: null
 }
 
 export const chatSlice = createSlice({
@@ -36,9 +45,13 @@ export const chatSlice = createSlice({
     setSession(state, action: PayloadAction<string | null>) {
       state.currentSessionId = action.payload
       state.confirmFocusToolUseId = null
+      state.lastUsage = null
     },
     setConfirmFocusToolUseId(state, action: PayloadAction<string | null>) {
       state.confirmFocusToolUseId = action.payload
+    },
+    setLastUsage(state, action: PayloadAction<LastUsage>) {
+      state.lastUsage = action.payload
     },
     setMessages(state, action: PayloadAction<Message[]>) {
       state.messages = action.payload
@@ -87,6 +100,7 @@ export const chatSlice = createSlice({
       state.error = null
       state.runningSessions = {}
       state.confirmFocusToolUseId = null
+      state.lastUsage = null
     }
   }
 })
@@ -99,6 +113,7 @@ export const {
   setChatStatus,
   setConfirmFocusToolUseId,
   removeRunningSession,
-  resetChatUi
+  resetChatUi,
+  setLastUsage
 } = chatSlice.actions
 export default chatSlice.reducer
