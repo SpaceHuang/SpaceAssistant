@@ -447,6 +447,9 @@ export function ChatView() {
             contentState = { ...contentState, content: textOut }
           }
           flushStreamPersist(runSessionId, assistantId)
+          if (res.usage) {
+            dispatch(setLastUsage(res.usage as LastUsage))
+          }
           const assistantRow = findAssistantRow()
           const thinking = finalizeThinking(thinkingState)
           const contentSegments = finalizeContentSegments(contentState)
@@ -679,6 +682,9 @@ export function ChatView() {
       return
     }
     const textOut = extractAssistantTextFromApiContent(res.content as unknown[])
+    if (res.usage) {
+      dispatch(setLastUsage(res.usage as LastUsage))
+    }
     routePatchMessage(runSessionId, assistantId, { content: textOut, status: 'completed' })
     await window.api.chatPatchMessage({
       messageId: assistantId,
