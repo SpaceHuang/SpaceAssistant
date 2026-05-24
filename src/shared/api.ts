@@ -212,7 +212,7 @@ export type SpaceAssistantApi = {
   planOnApprovalReady: (cb: (data: PlanApprovalReadyEvent) => void) => () => void
 
   projectMemoryGetState: () => Promise<ProjectMemoryState>
-  projectMemoryGenerate: () => Promise<{ success: boolean; prompt?: string; error?: string }>
+  projectMemoryGenerate: () => Promise<{ success: boolean; prompt?: string; content?: string; error?: string }>
   projectMemoryWrite: (payload: { content: string }) => Promise<{ success: boolean; error?: string }>
   projectMemoryReload: () => Promise<ProjectMemoryState>
   projectMemoryOnStateChanged: (
