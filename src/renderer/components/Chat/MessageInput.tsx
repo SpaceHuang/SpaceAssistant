@@ -1,23 +1,69 @@
-import { useState } from 'react'
-import { Input } from 'antd'
+import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
+import { Input, Select } from 'antd'
 import { Send, Square } from 'lucide-react'
+import type { ChatMode } from '../../../shared/planTypes'
+import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
+import { ContextUsageRing } from './ContextUsageRing'
+import type { LastUsage } from '../../store/chatSlice'
+import { useTypedSelector } from '../../hooks'
+
+export type MessageInputHandle = {
+  focus: () => void
+  setDraft: (text: string) => void
+  setChatMode: (mode: ChatMode) => void
+}
 
 type Props = {
   disabled?: boolean
   running?: boolean
   modelLabel?: string
-  onSend: (text: string) => void
+  chatMode?: ChatMode
+  defaultChatMode?: ChatMode
+  onChatModeChange?: (mode: ChatMode) => void
+  onSend: (text: string, chatMode: ChatMode) => void
   onAbort?: () => void
+  maxContext?: number
 }
 
-export function MessageInput({ disabled, running, modelLabel, onSend, onAbort }: Props) {
+export const MessageInput = forwardRef<MessageInputHandle, Props>(function MessageInput(
+  {
+    disabled,
+    running,
+    modelLabel,
+    chatMode: chatModeProp,
+    defaultChatMode = DEFAULT_CHAT_MODE,
+    onChatModeChange,
+    onSend,
+    onAbort,
+    maxContext = 200000
+  },
+  ref
+) {
   const [text, setText] = useState('')
+  const [localMode, setLocalMode] = useState<ChatMode>(defaultChatMode)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const chatMode = chatModeProp ?? localMode
+  const lastUsage = useTypedSelector((s) => s.chat.lastUsage)
+
+  useImperativeHandle(ref, () => ({
+    focus: () => textareaRef.current?.focus(),
+    setDraft: (t: string) => setText(t),
+    setChatMode: (mode: ChatMode) => {
+      if (onChatModeChange) onChatModeChange(mode)
+      else setLocalMode(mode)
+    }
+  }))
 
   const send = () => {
     const t = text.trim()
     if (!t || disabled || running) return
     setText('')
-    onSend(t)
+    onSend(t, chatMode)
+  }
+
+  const setMode = (mode: ChatMode) => {
+    if (onChatModeChange) onChatModeChange(mode)
+    else setLocalMode(mode)
   }
 
   const handlePrimaryAction = () => {
@@ -32,6 +78,7 @@ export function MessageInput({ disabled, running, modelLabel, onSend, onAbort }:
     <div className="composer">
       <div className="composer-box">
         <Input.TextArea
+          ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="输入消息…"
@@ -45,7 +92,20 @@ export function MessageInput({ disabled, running, modelLabel, onSend, onAbort }:
           }}
         />
         <div className="composer-footer">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+            <ContextUsageRing usage={lastUsage} maxContext={maxContext} />
+            <Select
+              size="small"
+              className="composer-mode-select"
+              value={chatMode}
+              disabled={disabled || running}
+              onChange={setMode}
+              options={[
+                { value: 'normal', label: '普通模式' },
+                { value: 'plan', label: 'Plan 模式' }
+              ]}
+              popupMatchSelectWidth={false}
+            />
             {modelLabel ? <span className="composer-model-chip">{modelLabel}</span> : null}
             <span className="composer-hint">{running ? '执行中，Enter 或点击右侧按钮中止' : 'Enter 发送，Shift+Enter 换行'}</span>
           </div>
@@ -62,4 +122,4 @@ export function MessageInput({ disabled, running, modelLabel, onSend, onAbort }:
       </div>
     </div>
   )
-}
+})

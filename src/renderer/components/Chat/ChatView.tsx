@@ -89,6 +89,7 @@ export function ChatView() {
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
+  const modelEntry = cfg?.models?.find((m) => m.name === cfg.model)
   const scrollRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<MessageInputHandle>(null)
   const composerPendingAction = useRef<'reject' | 'revise' | null>(null)
@@ -836,6 +837,7 @@ export function ChatView() {
         onChatModeChange={setChatMode}
         onSend={send}
         onAbort={abort}
+        maxContext={modelEntry?.maximumContext ?? 200000}
       />
     </div>
   )
