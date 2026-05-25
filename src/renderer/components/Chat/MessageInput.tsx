@@ -92,6 +92,10 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     return () => observer.disconnect()
   }, [checkOverflow])
 
+  useEffect(() => {
+    checkOverflow()
+  }, [modelLabel, checkOverflow])
+
   const setMode = (mode: ChatMode) => {
     if (onChatModeChange) onChatModeChange(mode)
     else setLocalMode(mode)
