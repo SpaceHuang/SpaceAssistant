@@ -635,11 +635,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .composer-hint {
   font-size: 11px;
   color: var(--sa-text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.composer-hint--hidden {
+  visibility: hidden;
+  position: absolute;
+  pointer-events: none;
 }
 
 .composer-send {
