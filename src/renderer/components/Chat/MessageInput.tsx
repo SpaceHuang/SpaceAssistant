@@ -1,4 +1,4 @@
-import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Input, Select } from 'antd'
 import { Send, Square } from 'lucide-react'
 import type { ChatMode } from '../../../shared/planTypes'
@@ -38,6 +38,10 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   const [text, setText] = useState('')
   const [localMode, setLocalMode] = useState<ChatMode>(defaultChatMode)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const leftRowRef = useRef<HTMLDivElement>(null)
+  const hintRef = useRef<HTMLSpanElement>(null)
+  const modelChipRef = useRef<HTMLSpanElement>(null)
+  const [hintHidden, setHintHidden] = useState(false)
   const chatMode = chatModeProp ?? localMode
 
   useImperativeHandle(ref, () => ({
@@ -55,6 +59,38 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     setText('')
     onSend(t, chatMode)
   }
+
+  const checkOverflow = useCallback(() => {
+    const container = leftRowRef.current
+    const hint = hintRef.current
+    if (!container || !hint) return
+
+    const containerWidth = container.clientWidth
+    const selectEl = container.querySelector('.composer-mode-select') as HTMLElement | null
+    const selectWidth = selectEl ? selectEl.offsetWidth : 108
+    const chipWidth = modelChipRef.current ? modelChipRef.current.offsetWidth : 0
+    const hintWidth = hint.offsetWidth
+
+    const gap = 8
+    let neededWidth = selectWidth + gap + hintWidth
+    if (chipWidth > 0) {
+      neededWidth = selectWidth + gap + chipWidth + gap + hintWidth
+    }
+
+    setHintHidden(neededWidth > containerWidth)
+  }, [])
+
+  useEffect(() => {
+    const container = leftRowRef.current
+    if (!container) return
+
+    const observer = new ResizeObserver(() => {
+      checkOverflow()
+    })
+    observer.observe(container)
+
+    return () => observer.disconnect()
+  }, [checkOverflow])
 
   const setMode = (mode: ChatMode) => {
     if (onChatModeChange) onChatModeChange(mode)
@@ -87,7 +123,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
           }}
         />
         <div className="composer-footer">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+          <div ref={leftRowRef} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
             <Select
               size="small"
               className="composer-mode-select"
@@ -100,8 +136,13 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
               ]}
               popupMatchSelectWidth={false}
             />
-            {modelLabel ? <span className="composer-model-chip">{modelLabel}</span> : null}
-            <span className="composer-hint">{running ? '执行中，Enter 或点击右侧按钮中止' : 'Enter 发送，Shift+Enter 换行'}</span>
+            {modelLabel ? <span ref={modelChipRef} className="composer-model-chip">{modelLabel}</span> : null}
+            <span
+              ref={hintRef}
+              className={`composer-hint${hintHidden && !running ? ' composer-hint--hidden' : ''}`}
+            >
+              {running ? '执行中，Enter 或点击右侧按钮中止' : 'Enter 发送，Shift+Enter 换行'}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <ContextUsageRing />
