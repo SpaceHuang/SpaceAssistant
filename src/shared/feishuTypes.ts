@@ -1,0 +1,158 @@
+export type FeishuEventConnectionState = 'stopped' | 'connecting' | 'connected' | 'error'
+
+export type FeishuRemoteConfirmPolicy = 'inherit' | 'always' | 'remote_read_only' | 'feishu_confirm'
+
+export type FeishuGroupTrigger = 'mention' | 'prefix' | 'both'
+
+export type FeishuRegion = 'feishu' | 'lark'
+
+export type FeishuRemotePlanMode = 'off' | 'auto' | 'always'
+
+export type FeishuIntegrationMode = 'cli' | 'mcp' | 'both'
+
+export interface FeishuConfig {
+  enabled: boolean
+  cliPath?: string
+  useBundledCli?: boolean
+  appConfigured: boolean
+  appIdSuffix?: string
+  userAuthorized: boolean
+  userDisplay?: string
+  remoteEnabled: boolean
+  remoteGroupTrigger: FeishuGroupTrigger
+  remoteCommandPrefix?: string
+  remoteSenderAllowlist?: string[]
+  remoteSessionMergeMinutes?: number
+  remoteNotifyOnReceive: boolean
+  remoteConfirmPolicy: FeishuRemoteConfirmPolicy
+  remoteAllowLocalWrite: boolean
+  remoteDefaultModelId?: string
+  region: FeishuRegion
+  wakeWords?: string[]
+  wakeWordAutoExecute: boolean
+  remotePlanMode: FeishuRemotePlanMode
+  remotePlanKeywords?: string[]
+  remoteRateLimitPerMinute: number
+  integrationMode: FeishuIntegrationMode
+  larkCliDefaultTimeoutSec: number
+  larkCliWriteRequiresConfirm: boolean
+}
+
+export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
+  enabled: false,
+  appConfigured: false,
+  userAuthorized: false,
+  remoteEnabled: false,
+  remoteGroupTrigger: 'mention',
+  remoteCommandPrefix: '/sa ',
+  remoteNotifyOnReceive: true,
+  remoteConfirmPolicy: 'feishu_confirm',
+  remoteAllowLocalWrite: false,
+  remoteSessionMergeMinutes: 0,
+  region: 'feishu',
+  wakeWordAutoExecute: false,
+  remotePlanMode: 'off',
+  remotePlanKeywords: ['重构', '迁移', '全面', '计划'],
+  remoteRateLimitPerMinute: 10,
+  integrationMode: 'cli',
+  larkCliDefaultTimeoutSec: 120,
+  larkCliWriteRequiresConfirm: true
+}
+
+export function mergeFeishuConfig(partial?: Partial<FeishuConfig> | null): FeishuConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_FEISHU_CONFIG }
+  return {
+    ...DEFAULT_FEISHU_CONFIG,
+    ...partial,
+    remoteSenderAllowlist: Array.isArray(partial.remoteSenderAllowlist)
+      ? [...partial.remoteSenderAllowlist]
+      : DEFAULT_FEISHU_CONFIG.remoteSenderAllowlist,
+    wakeWords: Array.isArray(partial.wakeWords) ? [...partial.wakeWords] : DEFAULT_FEISHU_CONFIG.wakeWords,
+    remotePlanKeywords: Array.isArray(partial.remotePlanKeywords)
+      ? [...partial.remotePlanKeywords]
+      : DEFAULT_FEISHU_CONFIG.remotePlanKeywords
+  }
+}
+
+export interface FeishuInboundMessage {
+  messageId: string
+  chatId: string
+  chatType: 'p2p' | 'group' | string
+  senderOpenId: string
+  senderName?: string
+  content: string
+  rawContent?: string
+  createTime: string
+  mentionsBot: boolean
+  msgType?: 'text' | 'post' | 'image' | string
+  attachments?: FeishuInboundAttachment[]
+}
+
+export interface FeishuInboundAttachment {
+  kind: 'image' | 'file'
+  localPath: string
+  fileName?: string
+  mimeType?: string
+}
+
+export interface FeishuCliDetectResult {
+  installed: boolean
+  version?: string
+  path?: string
+  nodeAvailable: boolean
+  npmAvailable: boolean
+  latestNpmVersion?: string
+}
+
+export interface FeishuEventStatus {
+  state: FeishuEventConnectionState
+  lastError?: string
+  processedCount: number
+  startedAt?: number
+}
+
+export interface WorkDirProfile {
+  id: string
+  name: string
+  path: string
+  aliases?: string[]
+  isDefault?: boolean
+  sensitive?: boolean
+}
+
+export const DEFAULT_WORK_DIR_PROFILES: WorkDirProfile[] = []
+
+export type FeishuAuditEvent =
+  | { type: 'inbound'; messageId: string; chatId: string; senderOpenId: string; accepted: boolean; reason?: string; ts: number }
+  | { type: 'agent_start'; sessionId: string; messageId: string; ts: number }
+  | { type: 'agent_done'; sessionId: string; success: boolean; summaryLen: number; ts: number }
+  | { type: 'lark_cli'; sessionId?: string; args: string[]; success: boolean; writeOp: boolean; ts: number }
+  | { type: 'confirm_request'; confirmId: string; decision?: string; ts: number }
+  | { type: 'reply'; messageId: string; len: number; ts: number }
+  | { type: 'workdir_switch'; profileId: string; profileName: string; ts: number }
+  | { type: 'rate_limit'; senderOpenId: string; ts: number }
+
+export interface FeishuAuditQueryResult {
+  entries: FeishuAuditEvent[]
+  truncated: boolean
+}
+
+export interface FeishuPendingConfirmSummary {
+  id: string
+  kind: 'tool_write' | 'plan_execute'
+  sessionId: string
+  toolName?: string
+  messageId: string
+  chatId: string
+  createdAt: number
+  expiresAt: number
+}
+
+export interface FeishuHealthCheck {
+  cli: FeishuCliDetectResult
+  event: FeishuEventStatus
+  lastInboundAt?: number
+  lastReplyAt?: number
+  pendingConfirms: number
+  pendingPlans: number
+}

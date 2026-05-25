@@ -13,9 +13,13 @@ import { getSession } from './database'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
+import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
 import type { AppDatabase } from './database'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
-import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
+import type { FeishuConfig } from '../src/shared/feishuTypes'
+import type { LarkCliRunner } from './feishu/larkCliRunner'
+import type { FeishuRemoteContext } from './tools/types'
+import { isLarkCliWriteOperation } from './feishu/larkCliSecurity'
 import {
   ChatCancelledError,
   clearChatCancel,
@@ -166,6 +170,9 @@ export type RunToolChatSessionArgs = {
   options?: { maxTokens?: number; enableThinking?: boolean }
   toolsConfig: ToolsConfig
   wikiConfig?: WikiConfig
+  feishuConfig?: FeishuConfig
+  larkCliRunner?: LarkCliRunner
+  remoteContext?: FeishuRemoteContext
   workDir: string
   userDataDir: string
   getApiKey: () => Promise<string | null>
@@ -206,6 +213,9 @@ async function runToolChatSessionInner(
     options,
     toolsConfig,
     wikiConfig,
+    feishuConfig,
+    larkCliRunner,
+    remoteContext,
     workDir,
     userDataDir,
     getApiKey,
@@ -262,7 +272,7 @@ async function runToolChatSessionInner(
     })
   }
 
-  const builtinDefs = toolsOverride ?? filterBuiltinToolsForApi(toolsConfig)
+  const builtinDefs = toolsOverride ?? filterBuiltinToolsForApi(toolsConfig, feishuConfig)
   const tools = sanitizeTools(builtinDefs as unknown[])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
   let loopRound = 0
@@ -532,8 +542,48 @@ async function runToolChatSessionInner(
         continue
       }
 
+      const remoteBlock = evaluateFeishuRemoteToolBlock(toolName, inputObj, remoteContext, feishuConfig)
+      if (remoteBlock) {
+        logAgentEvent('error', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          error: remoteBlock
+        })
+        toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: remoteBlock })
+        sender.send('tool:result', {
+          requestId,
+          toolUseId,
+          result: { success: false, error: remoteBlock, blockedReason: 'feishu_remote_write_blocked' }
+        })
+        continue
+      }
+
       let outcome: ToolConfirmOutcome = 'approved'
-      if (builtinToolNeedsConfirmation(toolName)) {
+      const needsConfirm = toolNeedsUserConfirmation(toolName, inputObj, feishuConfig)
+
+      if (needsConfirm && remoteContext?.source === 'feishu') {
+        if (
+          (remoteContext.confirmPolicy === 'feishu_confirm' || remoteContext.confirmPolicy === 'always') &&
+          remoteContext.confirmManager
+        ) {
+          const decision = await remoteContext.confirmManager.requestConfirm({
+            kind: 'tool_write',
+            sessionId,
+            toolCallId: toolUseId,
+            toolName,
+            toolInput: inputObj,
+            messageId: remoteContext.messageId,
+            chatId: remoteContext.chatId ?? ''
+          })
+          outcome = decision === 'y' ? 'approved' : decision === 'timeout' ? 'timeout' : 'rejected'
+        } else {
+          outcome = 'rejected'
+        }
+      } else if (needsConfirm) {
         const diff =
           toolsConfig.confirmMode === 'diff' ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
         sender.send('tool:confirm-request', {
@@ -541,7 +591,7 @@ async function runToolChatSessionInner(
           toolUseId,
           toolName,
           input: inputObj,
-          riskLevel: toolName === 'run_script' ? 'high' : 'medium',
+          riskLevel: toolName === 'run_script' || toolName === 'run_lark_cli' ? 'high' : 'medium',
           ...(diff ? { diff } : {})
         })
         outcome = await waitForToolConfirm(requestId, toolUseId)
@@ -660,7 +710,10 @@ async function runToolChatSessionInner(
           signal,
           fileStateCache: fileCache,
           toolsConfig,
-          wikiConfig
+          wikiConfig,
+          feishuConfig,
+          larkCliRunner,
+          remoteContext
         })
       } catch (e) {
         execResult = {
@@ -723,4 +776,44 @@ async function runToolChatSessionInner(
 
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]
   }
+}
+
+function toolNeedsUserConfirmation(
+  toolName: string,
+  inputObj: Record<string, unknown>,
+  feishuConfig?: FeishuConfig
+): boolean {
+  if (toolName === 'run_lark_cli') {
+    const args = inputObj.args
+    if (!Array.isArray(args)) return feishuConfig?.larkCliWriteRequiresConfirm ?? true
+    if (isLarkCliWriteOperation(args as string[])) {
+      return feishuConfig?.larkCliWriteRequiresConfirm ?? true
+    }
+    return false
+  }
+  return builtinToolNeedsConfirmation(toolName)
+}
+
+function evaluateFeishuRemoteToolBlock(
+  toolName: string,
+  inputObj: Record<string, unknown>,
+  remoteContext: FeishuRemoteContext | undefined,
+  feishuConfig?: FeishuConfig
+): string | null {
+  if (remoteContext?.source !== 'feishu') return null
+  const policy = remoteContext.confirmPolicy
+  const allowLocalWrite = feishuConfig?.remoteAllowLocalWrite ?? false
+
+  if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
+    return '远程飞书指令不允许自动执行本地文件写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+  }
+
+  if (toolName === 'run_lark_cli' && policy === 'remote_read_only') {
+    const args = inputObj.args
+    if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
+      return '远程飞书指令不允许自动执行写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+    }
+  }
+
+  return null
 }

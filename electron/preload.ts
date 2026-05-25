@@ -161,6 +161,32 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('project-memory:state-changed', fn)
     return () => ipcRenderer.removeListener('project-memory:state-changed', fn)
   },
+
+  feishuDetectCli: () => ipcRenderer.invoke('feishu:detect-cli'),
+  feishuInstallCli: () => ipcRenderer.invoke('feishu:install-cli'),
+  feishuInstallSkill: () => ipcRenderer.invoke('feishu:install-skill'),
+  feishuConfigInit: () => ipcRenderer.invoke('feishu:config-init'),
+  feishuAuthLogin: () => ipcRenderer.invoke('feishu:auth-login'),
+  feishuAuthStatus: () => ipcRenderer.invoke('feishu:auth-status'),
+  feishuEventStart: () => ipcRenderer.invoke('feishu:event-start'),
+  feishuEventStop: () => ipcRenderer.invoke('feishu:event-stop'),
+  feishuEventStatus: () => ipcRenderer.invoke('feishu:event-status'),
+  feishuPendingConfirms: () => ipcRenderer.invoke('feishu:pending-confirms'),
+  feishuCancelConfirm: (id) => ipcRenderer.invoke('feishu:cancel-confirm', id),
+  feishuAuditTail: (limit) => ipcRenderer.invoke('feishu:audit-tail', limit),
+  feishuAuditQuery: (opts) => ipcRenderer.invoke('feishu:audit-query', opts),
+  feishuHealthCheck: () => ipcRenderer.invoke('feishu:health-check'),
+  feishuCheckCliUpdate: () => ipcRenderer.invoke('feishu:check-cli-update'),
+  feishuOnInboundMessage: (cb) => {
+    const fn = (_e: unknown, data: { sessionId: string; message: unknown }) => cb(data)
+    ipcRenderer.on('feishu:inbound-message', fn)
+    return () => ipcRenderer.removeListener('feishu:inbound-message', fn)
+  },
+  feishuOnPendingConfirm: (cb) => {
+    const fn = (_e: unknown, data: { sessionId: string; pendingConfirm: boolean }) => cb(data)
+    ipcRenderer.on('feishu:pending-confirm', fn)
+    return () => ipcRenderer.removeListener('feishu:pending-confirm', fn)
+  },
 }
 
 contextBridge.exposeInMainWorld('api', api)

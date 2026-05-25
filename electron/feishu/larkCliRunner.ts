@@ -1,0 +1,151 @@
+import { spawn, type ChildProcess } from 'child_process'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import type { FeishuCliDetectResult } from '../../src/shared/feishuTypes'
+
+const MAX_OUTPUT_BYTES = 512 * 1024
+const TRUNC_SUFFIX = '\n[输出被截断]'
+
+export interface LarkCliRunOptions {
+  args: string[]
+  timeoutSec?: number
+  cwd?: string
+  onStdout?: (chunk: string) => void
+  signal?: AbortSignal
+}
+
+export interface LarkCliRunResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+  timedOut: boolean
+}
+
+function appendWithLimit(current: string, chunk: string, maxBytes: number): string {
+  const next = current + chunk
+  if (Buffer.byteLength(next, 'utf8') <= maxBytes) return next
+  const buf = Buffer.from(next, 'utf8')
+  return buf.subarray(0, maxBytes).toString('utf8') + TRUNC_SUFFIX
+}
+
+async function runWhich(cmd: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const proc = spawn(process.platform === 'win32' ? 'where' : 'which', [cmd], {
+      shell: false,
+      windowsHide: true
+    })
+    let out = ''
+    proc.stdout?.on('data', (d: Buffer) => {
+      out += d.toString()
+    })
+    proc.on('close', (code) => {
+      if (code !== 0) resolve(null)
+      else resolve(out.trim().split(/\r?\n/)[0] || null)
+    })
+    proc.on('error', () => resolve(null))
+  })
+}
+
+export class LarkCliRunner {
+  constructor(private resolveCliPathFn: () => string) {}
+
+  resolveExecutable(): string {
+    const configured = this.resolveCliPathFn().trim()
+    if (configured) return configured
+    return process.platform === 'win32' ? 'lark-cli.cmd' : 'lark-cli'
+  }
+
+  async detect(): Promise<FeishuCliDetectResult> {
+    const node = await runWhich('node')
+    const npm = await runWhich(process.platform === 'win32' ? 'npm.cmd' : 'npm')
+    try {
+      const r = await this.run({ args: ['--version'], timeoutSec: 10 })
+      const version = r.stdout.trim()
+      return {
+        installed: r.exitCode === 0,
+        version: version || undefined,
+        path: this.resolveExecutable(),
+        nodeAvailable: Boolean(node),
+        npmAvailable: Boolean(npm)
+      }
+    } catch {
+      return { installed: false, nodeAvailable: Boolean(node), npmAvailable: Boolean(npm) }
+    }
+  }
+
+  run(options: LarkCliRunOptions): Promise<LarkCliRunResult> {
+    const { args, timeoutSec = 120, cwd, onStdout, signal } = options
+    const cliPath = this.resolveExecutable()
+    const env = {
+      ...process.env,
+      PATH: process.env.PATH ?? process.env.Path ?? ''
+    }
+
+    return new Promise((resolve) => {
+      let stdout = ''
+      let stderr = ''
+      let timedOut = false
+      let settled = false
+
+      const proc: ChildProcess = spawn(cliPath, args, {
+        shell: false,
+        windowsHide: true,
+        cwd: cwd ?? os.homedir(),
+        env
+      })
+
+      const finish = (result: LarkCliRunResult) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(result)
+      }
+
+      const timer = setTimeout(() => {
+        timedOut = true
+        proc.kill('SIGTERM')
+        setTimeout(() => proc.kill('SIGKILL'), 500)
+      }, timeoutSec * 1000)
+
+      const onAbort = () => {
+        proc.kill('SIGTERM')
+        setTimeout(() => proc.kill('SIGKILL'), 500)
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+
+      proc.stdout?.on('data', (d: Buffer) => {
+        const chunk = d.toString()
+        stdout = appendWithLimit(stdout, chunk, MAX_OUTPUT_BYTES)
+        onStdout?.(chunk)
+      })
+      proc.stderr?.on('data', (d: Buffer) => {
+        stderr = appendWithLimit(stderr, d.toString(), MAX_OUTPUT_BYTES)
+      })
+
+      proc.on('close', (code) => {
+        signal?.removeEventListener('abort', onAbort)
+        finish({ exitCode: code ?? 1, stdout, stderr, timedOut })
+      })
+      proc.on('error', (err) => {
+        signal?.removeEventListener('abort', onAbort)
+        stderr = appendWithLimit(stderr, err.message, MAX_OUTPUT_BYTES)
+        finish({ exitCode: 1, stdout, stderr, timedOut })
+      })
+    })
+  }
+
+  runInteractive(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return this.run({ args, timeoutSec: 600 }).then((r) => ({
+      stdout: r.stdout,
+      stderr: r.stderr,
+      exitCode: r.exitCode
+    }))
+  }
+}
+
+export function resolveBundledCliPath(appPath: string): string | null {
+  const wrapper = path.join(appPath, 'resources', 'lark-cli', 'wrapper.mjs')
+  if (fs.existsSync(wrapper)) return process.execPath
+  return null
+}

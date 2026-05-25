@@ -68,8 +68,9 @@ import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegist
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
-import { mergeWikiConfig } from '../src/shared/domainTypes'
-import type { WikiConfig, WikiStatus } from '../src/shared/domainTypes'
+import { mergeWikiConfig, mergeFeishuConfig } from '../src/shared/domainTypes'
+import type { WikiConfig, WikiStatus, FeishuConfig } from '../src/shared/domainTypes'
+import { readFeishuConfigFromDb, persistFeishuConfig } from './feishu/feishuIpc'
 import { initWikiStructure, readWikiSchema } from './wiki/wikiInit'
 import { getWikiStatus } from './wiki/wikiStatus'
 import { classifyWikiPath } from './wiki/wikiPaths'
@@ -90,6 +91,9 @@ const CONFIG_KEYS = {
   tools: 'config.tools',
   skills: 'config.skills',
   wiki: 'config.wiki',
+  feishu: 'config.feishu',
+  workDirProfiles: 'config.workDirProfiles',
+  activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   uiTheme: 'config.uiTheme',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   defaultChatMode: 'config.defaultChatMode'
@@ -318,6 +322,28 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const skills = readSkillsConfig(ctx.db)
     const wiki = readWikiConfig(ctx.db)
+    const feishu = readFeishuConfigFromDb(ctx.db)
+    let workDirProfiles: AppConfig['workDirProfiles'] = []
+    const profilesRaw = getConfigValue(ctx.db, CONFIG_KEYS.workDirProfiles)
+    if (profilesRaw) {
+      try {
+        workDirProfiles = JSON.parse(profilesRaw) as AppConfig['workDirProfiles']
+      } catch {
+        workDirProfiles = []
+      }
+    }
+    if (workDirProfiles.length === 0 && wd) {
+      workDirProfiles = [
+        {
+          id: 'default',
+          name: '默认',
+          path: wd,
+          isDefault: true
+        }
+      ]
+    }
+    const activeWorkDirProfileId =
+      getConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId) ?? workDirProfiles.find((p) => p.isDefault)?.id ?? 'default'
     const uiThemeRaw = getConfigValue(ctx.db, CONFIG_KEYS.uiTheme) as UiThemeMode | undefined
     const uiTheme: UiThemeMode =
       uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
@@ -341,7 +367,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       defaultChatMode,
       tools,
       skills,
-      wiki
+      wiki,
+      feishu,
+      workDirProfiles,
+      activeWorkDirProfileId
     }
   })
 
@@ -365,6 +394,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         tools: Partial<ToolsConfig>
         skills: Partial<SkillsConfig>
         wiki: Partial<WikiConfig>
+        feishu: Partial<FeishuConfig>
+        workDirProfiles: AppConfig['workDirProfiles']
+        activeWorkDirProfileId: string
         uiTheme: UiThemeMode
         maxParallelChatSessions: number
         defaultChatMode: import('../src/shared/planTypes').ChatMode
@@ -462,6 +494,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeWikiConfig({ ...cur, ...payload.wiki })
         setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
+      }
+      if (payload.feishu !== undefined) {
+        persistFeishuConfig(ctx.db, payload.feishu)
+      }
+      if (payload.workDirProfiles !== undefined) {
+        setConfigValue(ctx.db, CONFIG_KEYS.workDirProfiles, JSON.stringify(payload.workDirProfiles))
+      }
+      if (payload.activeWorkDirProfileId !== undefined) {
+        setConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId, payload.activeWorkDirProfileId)
       }
       if (payload.uiTheme !== undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.uiTheme, payload.uiTheme)
@@ -714,8 +755,12 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'skill:match',
-    async (_e, payload: { userInput: string; sessionSkillsState: SessionSkillsState }): Promise<SkillDefinition[]> => {
-      const matched = skillManager.match(payload.userInput, normalizeSessionSkillsState(payload.sessionSkillsState))
+    async (_e, payload: { userInput: string; sessionSkillsState: SessionSkillsState; sessionMetadata?: Record<string, unknown> }): Promise<SkillDefinition[]> => {
+      const matched = skillManager.match(
+        payload.userInput,
+        normalizeSessionSkillsState(payload.sessionSkillsState),
+        payload.sessionMetadata
+      )
       if (matched.length > 0) {
         const systemPrompt = skillManager.buildSystemPrompt(matched)
         logAgentEvent('info', 'skills.invoke', {

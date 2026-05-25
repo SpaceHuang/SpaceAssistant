@@ -11,6 +11,8 @@ import {
   outcomeFromFileToolSignal,
   throwIfAborted
 } from './toolExecutionResource'
+import { runLarkCliExecutor } from './runLarkCliExecutor'
+import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 
 const READ_MAX = 2 * 1024 * 1024
 const GREP_FILE_MAX = 1024 * 1024
@@ -748,7 +750,9 @@ const registry = new Map<string, ToolExecutor>([
   [editFileExecutor.name, editFileExecutor],
   [writeFileExecutor.name, writeFileExecutor],
   [grepExecutor.name, grepExecutor],
-  [runScriptExecutor.name, runScriptExecutor]
+  [runScriptExecutor.name, runScriptExecutor],
+  [runLarkCliExecutor.name, runLarkCliExecutor],
+  [readFeishuAttachmentExecutor.name, readFeishuAttachmentExecutor]
 ])
 
 export function getToolExecutor(name: string): ToolExecutor | undefined {

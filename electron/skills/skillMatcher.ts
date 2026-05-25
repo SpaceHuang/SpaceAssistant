@@ -46,13 +46,16 @@ function keywordMatch(userInput: string, triggers: string[]): boolean {
   return triggers.some((t) => t.length > 0 && lower.includes(t.toLowerCase()))
 }
 
+const FEISHU_KEYWORDS = ['飞书', 'lark', 'feishu', '群消息', '日历', '多维表格', '妙记']
+
 export function matchSkills(args: {
   userInput: string
   skills: SkillDefinition[]
   config: SkillsConfig
   sessionState: SessionSkillsState
+  sessionMetadata?: Record<string, unknown>
 }): SkillDefinition[] {
-  const { userInput, skills, config, sessionState } = args
+  const { userInput, skills, config, sessionState, sessionMetadata } = args
   const excluded = new Set([...config.disabled, ...sessionState.manualDisabled])
   const available = skills.filter((s) => !excluded.has(s.meta.name))
 
@@ -77,10 +80,19 @@ export function matchSkills(args: {
     if (skill) upsert(skill, 0.95, 'manual')
   }
 
+  if (sessionMetadata?.source === 'feishu') {
+    const feishuSkill = available.find(
+      (s) => /lark|feishu|飞书/i.test(s.meta.name) || /lark|feishu|飞书/i.test(s.meta.description)
+    )
+    if (feishuSkill) upsert(feishuSkill, 1.0, 'alwaysLoad')
+  }
+
   if (config.autoDetect && userInput.trim()) {
     for (const skill of available) {
       if (keywordMatch(userInput, skill.meta.triggers)) {
         upsert(skill, 0.8, 'keyword')
+      } else if (FEISHU_KEYWORDS.some((k) => userInput.includes(k)) && /lark|feishu|飞书/i.test(skill.meta.name)) {
+        upsert(skill, 0.85, 'keyword')
       } else {
         const sim = descriptionSimilarity(userInput, skill.meta.description)
         if (sim >= DESCRIPTION_MATCH_THRESHOLD) {

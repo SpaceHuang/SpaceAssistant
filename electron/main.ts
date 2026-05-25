@@ -5,8 +5,13 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
 import { mergeToolsConfig, mergeWikiConfig } from '../src/shared/domainTypes'
-import type { AppDatabase } from './database'
+import {
+  autoStartFeishuEventIfNeeded,
+  createFeishuBundle,
+  registerFeishuIpcHandlers
+} from './feishu/feishuIpc'
 import { getConfigValue, openDatabase, setConfigValue } from './database'
+import type { AppDatabase } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
 import { getMainWindow, setMainWindow } from './windowRef'
@@ -229,6 +234,51 @@ app.whenReady().then(() => {
     getApiKey,
     setApiKey
   })
+
+  const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
+  createFeishuBundle({
+    db,
+    getUserDataPath: () => app.getPath('userData'),
+    getWorkDir: () => workDirState,
+    getApiKey,
+    getBaseUrl: () => getConfigValue(db, 'config.baseUrl') ?? '',
+    getModel: modelName,
+    getMaxParallel: () => {
+      const raw = getConfigValue(db, 'config.maxParallelChatSessions')
+      return raw ? Number(raw) : 3
+    },
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    }
+  })
+  registerFeishuIpcHandlers(ipcMain, {
+    db,
+    getUserDataPath: () => app.getPath('userData'),
+    getWorkDir: () => workDirState,
+    getApiKey,
+    getBaseUrl: () => getConfigValue(db, 'config.baseUrl') ?? '',
+    getModel: modelName,
+    getMaxParallel: () => {
+      const raw = getConfigValue(db, 'config.maxParallelChatSessions')
+      return raw ? Number(raw) : 3
+    },
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    }
+  })
+  void autoStartFeishuEventIfNeeded(db)
 
   initTray({
     createMainWindow,

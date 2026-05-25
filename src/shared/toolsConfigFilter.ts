@@ -1,11 +1,22 @@
+import type { FeishuConfig } from './feishuTypes'
 import type { ToolsConfig } from './domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from './builtinToolDefinitions'
 
-export function filterBuiltinToolsForRenderer(cfg: ToolsConfig): typeof BUILTIN_TOOL_DEFINITIONS {
+export function filterBuiltinToolsForRenderer(
+  cfg: ToolsConfig,
+  feishu?: FeishuConfig | null
+): typeof BUILTIN_TOOL_DEFINITIONS {
   if (!cfg.enabled) return []
-  return BUILTIN_TOOL_DEFINITIONS.filter((t) => {
+  let list = BUILTIN_TOOL_DEFINITIONS.filter((t) => {
     if (cfg.deniedTools.includes(t.name)) return false
     if (cfg.allowedTools.length > 0 && !cfg.allowedTools.includes(t.name)) return false
     return true
   })
+  if (!feishu?.enabled) {
+    list = list.filter((t) => t.name !== 'run_lark_cli' && t.name !== 'read_feishu_attachment')
+  }
+  if (feishu?.integrationMode === 'mcp') {
+    list = list.filter((t) => t.name !== 'run_lark_cli')
+  }
+  return list
 }

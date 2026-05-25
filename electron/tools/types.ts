@@ -1,4 +1,17 @@
+import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import type { ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import type { LarkCliRunner } from '../feishu/larkCliRunner'
+import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
+
+export interface FeishuRemoteContext {
+  source: 'feishu'
+  messageId: string
+  confirmPolicy: FeishuConfig['remoteConfirmPolicy']
+  feishuConfig?: FeishuConfig
+  confirmManager?: FeishuConfirmManager
+  chatId?: string
+  sessionId?: string
+}
 
 export interface ToolExecutionContext {
   workDir: string
@@ -11,6 +24,9 @@ export interface ToolExecutionContext {
   fileStateCache: import('../fileStateCache').FileStateCache
   toolsConfig: ToolsConfig
   wikiConfig?: WikiConfig
+  feishuConfig?: FeishuConfig
+  larkCliRunner?: LarkCliRunner
+  remoteContext?: FeishuRemoteContext
 }
 
 export interface ToolExecutorResult {

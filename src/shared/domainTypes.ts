@@ -176,11 +176,13 @@ export function builtinToolRiskLevel(name: string): ToolRiskLevel {
     case 'read_file':
     case 'list_directory':
     case 'grep':
+    case 'read_feishu_attachment':
       return 'low'
     case 'edit_file':
     case 'write_file':
       return 'medium'
     case 'run_script':
+    case 'run_lark_cli':
       return 'high'
     default:
       return 'medium'
@@ -188,7 +190,12 @@ export function builtinToolRiskLevel(name: string): ToolRiskLevel {
 }
 
 export function builtinToolNeedsConfirmation(name: string): boolean {
-  return name === 'edit_file' || name === 'write_file' || name === 'run_script'
+  return (
+    name === 'edit_file' ||
+    name === 'write_file' ||
+    name === 'run_script' ||
+    name === 'run_lark_cli'
+  )
 }
 
 export interface ToolCallResultPersisted {
@@ -311,6 +318,11 @@ export interface LlmServiceProfile {
   updatedAt?: string
 }
 
+import type { FeishuConfig, WorkDirProfile } from './feishuTypes'
+import { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
+export type { FeishuConfig, WorkDirProfile } from './feishuTypes'
+export { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
+
 export interface AppConfig {
   /** 是否已配置 API Key（激活服务的镜像，兼容旧逻辑） */
   apiKeyPresent: boolean
@@ -325,6 +337,8 @@ export interface AppConfig {
   maxTokens: number
   thinkingEnabled: boolean
   workDir: string
+  workDirProfiles: WorkDirProfile[]
+  activeWorkDirProfileId: string
   uiTheme: UiThemeMode
   /** 默认聊天模式（发送时可覆盖） */
   defaultChatMode: ChatMode
@@ -333,6 +347,7 @@ export interface AppConfig {
   tools: ToolsConfig
   skills: SkillsConfig
   wiki: WikiConfig
+  feishu: FeishuConfig
 }
 
 /** 项目记忆加载状态 */

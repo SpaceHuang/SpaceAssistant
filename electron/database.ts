@@ -113,7 +113,13 @@ export function getSession(db: AppDatabase, sessionId: string): Session | undefi
 
 export function createSession(
   db: AppDatabase,
-  input: { name: string; model?: string; temperature?: number; maxTokens?: number }
+  input: {
+    name: string
+    model?: string
+    temperature?: number
+    maxTokens?: number
+    metadata?: Record<string, unknown>
+  }
 ): Session {
   const now = Date.now()
   const id = randomUUID()
@@ -131,7 +137,7 @@ export function createSession(
     updatedAt: now,
     messageCount: 0,
     skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
-    metadata: {},
+    metadata: input.metadata ? { ...input.metadata } : {},
     schemaVersion: CURRENT_SCHEMA_VERSION
   }
   db.data.sessions.push(session)
