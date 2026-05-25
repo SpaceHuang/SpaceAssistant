@@ -9,7 +9,7 @@ import type { AppDatabase } from './database'
 import { getConfigValue, openDatabase, setConfigValue } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
-import { setMainWindow, getMainWindow } from './windowRef'
+import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent } from './agentLogger/agentLogger'
 import { encryptSecret } from './secureApiKey'
 import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
@@ -20,6 +20,8 @@ import {
   readActiveLlmServiceId,
   readLlmServices
 } from './llmServiceResolver'
+import { destroyTray, initTray, isTrayEnabled, showMainWindow } from './tray'
+import { setupWindowCloseHandler } from './trayLogic'
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -78,11 +80,24 @@ function getRendererIndexPath(): string {
 
 let workDirState = ''
 let appDb: AppDatabase | null = null
+let isQuitting = false
 
-async function createMainWindow(): Promise<void> {
+export function getIsQuitting(): boolean {
+  return isQuitting
+}
+
+export async function createMainWindow(): Promise<void> {
+  const existing = getMainWindow()
+  if (existing && !existing.isDestroyed()) {
+    existing.show()
+    existing.focus()
+    return
+  }
+
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    // backgroundThrottling 默认为 true；隐藏窗口后 renderer 自动节流（NFR-10）
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -90,6 +105,8 @@ async function createMainWindow(): Promise<void> {
     }
   })
   setMainWindow(win)
+
+  setupWindowCloseHandler(win, getIsQuitting, isTrayEnabled)
 
   if (app.isPackaged) {
     await win.loadFile(getRendererIndexPath())
@@ -213,19 +230,35 @@ app.whenReady().then(() => {
     setApiKey
   })
 
+  initTray({
+    createMainWindow,
+    getMainWindow,
+    mainDirname: __dirname
+  })
+
   void createMainWindow()
   setupAppMenu()
 })
 
 app.on('before-quit', () => {
+  isQuitting = true
+  destroyTray()
   stopMemoryWatcher()
   appDb?.flushSave()
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.destroy()
+  }
 })
 
 app.on('window-all-closed', () => {
+  if (isTrayEnabled()) return
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('activate', () => {
+  if (isTrayEnabled()) {
+    void showMainWindow()
+    return
+  }
   if (BrowserWindow.getAllWindows().length === 0) void createMainWindow()
 })

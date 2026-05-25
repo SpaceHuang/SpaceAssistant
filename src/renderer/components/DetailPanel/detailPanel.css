@@ -472,6 +472,10 @@
   flex-shrink: 0;
 }
 
+.referenced-files-filter .ant-segmented-group {
+  font-size: 11px;
+}
+
 .referenced-file-wiki-badge {
   display: inline-block;
   margin-left: 6px;
