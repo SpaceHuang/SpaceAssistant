@@ -14,5 +14,10 @@ export type AgentLogEventName =
   | 'skills.load'
   | 'skills.match'
   | 'skills.invoke'
+  | 'projectMemory.loaded'
+  | 'projectMemory.loadError'
+  | 'projectMemory.watcherError'
+  | 'tray.init_ok'
+  | 'tray.init_failed'
 
 export type AgentLogFields = Record<string, unknown>

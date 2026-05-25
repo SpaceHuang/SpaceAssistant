@@ -12,6 +12,7 @@
     "dev:electron": "npm run build:electron && npx --yes electron@33.2.0 dist-electron/electron/main.js",
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "build:renderer": "vite build",
+    "build:tray-icons": "node scripts/build-tray-icons.mjs",
     "build:electron": "rimraf dist-electron && tsc -p tsconfig.electron.json",
     "reinstall:electron": "rimraf node_modules/electron && npm install",
     "pack": "npm run build && electron-builder",
@@ -48,7 +49,9 @@
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
+    "png-to-ico": "^2.1.8",
     "rimraf": "^6.0.1",
+    "sharp": "^0.33.5",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "vitest": "^4.1.0"
@@ -62,7 +65,14 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
+      "resources/tray/**",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/tray",
+        "to": "tray"
+      }
     ],
     "win": {
       "target": [
