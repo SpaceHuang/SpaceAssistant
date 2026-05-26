@@ -3,8 +3,9 @@ import type { ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
 import { getSession } from '../database'
 import { runToolChatSession, type ClaudeContentBlockMessage } from '../toolChatLoop'
+import { normalizeAnthropicMessageUsage } from '../anthropicUsageNormalize'
 import { filterBuiltinToolsForPlanPhase } from '../../src/shared/planToolsFilter'
-import { getPlanMeta, getPendingPlanMeta, isPlanDrafting, type PlanMeta } from '../../src/shared/planTypes'
+import { getPlanMeta, getPendingPlanMeta, isPlanDrafting, getDisplayPlans, type PlanMeta } from '../../src/shared/planTypes'
 import { extractPlanMarkersFromAssistantContent, extractPlanMarkersFromText } from './planDocExtract'
 import type { PlanReadResult } from '../../src/shared/api'
 import {
@@ -18,7 +19,8 @@ import {
   completePlanInSession,
   appendStepResult,
   advancePlanStep,
-  cancelPlanInSession
+  cancelPlanInSession,
+  syncDisplayPlanStatus
 } from './planManager'
 import { buildPlanApprovalSummary, parsePlanMarkdown } from './planParser'
 import { buildPlanExplorationSystemPrompt, buildPlanRevisionSystemPrompt, buildPlanWorkerSystemPrompt } from './planPrompts'
@@ -77,7 +79,7 @@ export async function runPlanModeChat(args: {
   options?: { maxTokens?: number; enableThinking?: boolean }
   deps: PlanOrchestratorDeps
   revisionFeedback?: string
-}): Promise<{ ok: true; content: unknown[]; stopReason: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; content: unknown[]; stopReason: string; usage?: ReturnType<typeof normalizeAnthropicMessageUsage> } | { ok: false; error: string }> {
   const { deps } = args
   const db = deps.getAppDatabase()
   const session = getSession(db, args.sessionId)
@@ -106,7 +108,7 @@ async function runPlanningPhase(args: {
   options?: { maxTokens?: number; enableThinking?: boolean }
   deps: PlanOrchestratorDeps
   revisionFeedback?: string
-}): Promise<{ ok: true; content: unknown[]; stopReason: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; content: unknown[]; stopReason: string; usage?: ReturnType<typeof normalizeAnthropicMessageUsage> } | { ok: false; error: string }> {
   const { deps } = args
   const db = deps.getAppDatabase()
   const workDir = deps.getWorkDir()
@@ -162,7 +164,7 @@ async function runPlanningPhase(args: {
       reason: 'exploration_abort'
     })
     emitPlanStateChanged(args.sender, args.sessionId)
-    return { ok: true, content, stopReason: res.stopReason }
+    return { ok: true, content, stopReason: res.stopReason, usage: res.usage }
   }
 
   if (marker.kind === 'plan-doc') {
@@ -175,7 +177,7 @@ async function runPlanningPhase(args: {
     })
     emitPlanStateChanged(args.sender, args.sessionId)
     await emitPlanApprovalReady(args.sender, deps, args.sessionId)
-    return { ok: true, content, stopReason: res.stopReason }
+    return { ok: true, content, stopReason: res.stopReason, usage: res.usage }
   }
 
   const text = extractTextFromContent(content)
@@ -199,7 +201,7 @@ async function runPlanningPhase(args: {
     emitPlanStateChanged(args.sender, args.sessionId)
   }
 
-  return { ok: true, content, stopReason: res.stopReason }
+  return { ok: true, content, stopReason: res.stopReason, usage: res.usage }
 }
 
 async function runWorkerExecution(args: {
@@ -213,7 +215,7 @@ async function runWorkerExecution(args: {
   options?: { maxTokens?: number; enableThinking?: boolean }
   deps: PlanOrchestratorDeps
   planMeta: PlanMeta
-}): Promise<{ ok: true; content: unknown[]; stopReason: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; content: unknown[]; stopReason: string; usage?: ReturnType<typeof normalizeAnthropicMessageUsage> } | { ok: false; error: string }> {
   const { deps } = args
   const db = deps.getAppDatabase()
   const workDir = deps.getWorkDir()
@@ -285,20 +287,26 @@ async function runWorkerExecution(args: {
     const plan = getPlanMeta(metadata)
     if (plan) {
       const done = nextIndex >= stepsTotal
+      let displayPlans = getDisplayPlans(metadata)
+      displayPlans = syncDisplayPlanStatus(displayPlans, plan.planId, done ? 'completed' : 'executing', {
+        currentStepIndex: nextIndex,
+        stepsTotal
+      })
       metadata = mergePlanMetadata(metadata, {
         plan: {
           ...plan,
           currentStepIndex: nextIndex,
           stepsTotal,
           status: done ? 'completed' : 'executing'
-        }
+        },
+        display_plans: displayPlans
       })
     }
     saveSessionMetadata(db, args.sessionId, metadata)
     emitPlanStateChanged(args.sender, args.sessionId)
   }
 
-  return { ok: true, content: res.content, stopReason: res.stopReason }
+  return { ok: true, content: res.content, stopReason: res.stopReason, usage: res.usage }
 }
 
 export async function resumePlanExecution(args: {
@@ -311,7 +319,7 @@ export async function resumePlanExecution(args: {
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   deps: PlanOrchestratorDeps
-}): Promise<{ ok: true; content: unknown[]; stopReason: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; content: unknown[]; stopReason: string; usage?: ReturnType<typeof normalizeAnthropicMessageUsage> } | { ok: false; error: string }> {
   const { deps } = args
   const db = deps.getAppDatabase()
   const session = getSession(db, args.sessionId)
@@ -333,7 +341,7 @@ export async function startPlanAfterReject(args: {
   options?: { maxTokens?: number; enableThinking?: boolean }
   deps: PlanOrchestratorDeps
   feedback: string
-}): Promise<{ ok: true; content: unknown[]; stopReason: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; content: unknown[]; stopReason: string; usage?: ReturnType<typeof normalizeAnthropicMessageUsage> } | { ok: false; error: string }> {
   return await runPlanningPhase({ ...args, revisionFeedback: args.feedback })
 }
 
