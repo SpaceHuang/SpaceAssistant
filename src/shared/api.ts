@@ -266,5 +266,17 @@ export type SpaceAssistantApi = {
   feishuCheckCliUpdate: () => Promise<{ latest?: string }>
   feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => () => void
   feishuOnInboundMessage: (cb: (data: { sessionId: string; message: unknown }) => void) => () => void
+  feishuOnRemoteAgentStart: (cb: (data: {
+    sessionId: string
+    assistantMessageId: string
+    requestId: string
+  }) => void) => () => void
   feishuOnPendingConfirm: (cb: (data: { sessionId: string; pendingConfirm: boolean }) => void) => () => void
+  feishuOnAgentDone: (cb: (data: {
+    sessionId: string
+    messageId: string
+    requestId: string
+    ok: boolean
+    summary?: string
+  }) => void) => () => void
 }

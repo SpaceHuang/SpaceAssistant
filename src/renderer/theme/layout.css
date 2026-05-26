@@ -706,6 +706,10 @@
   font-size: 11px !important;
 }
 
+.composer-mode-select-popup .ant-select-item {
+  font-size: 11px;
+}
+
 .plan-card {
   margin: 12px 16px;
   padding: 14px 16px;

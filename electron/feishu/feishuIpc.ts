@@ -106,6 +106,10 @@ export async function autoStartFeishuEventIfNeeded(db: AppDatabase): Promise<voi
   }
 }
 
+export async function shutdownFeishuServices(): Promise<void> {
+  await bundle?.eventService?.stop()
+}
+
 export function registerFeishuIpcHandlers(
   ipcMain: IpcMain,
   deps: {

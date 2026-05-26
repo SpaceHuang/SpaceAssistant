@@ -16,6 +16,7 @@ import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/D
 import { SplitPane } from './components/ui/SplitPane'
 import { groupSessionsByTime } from './utils/groupSessions'
 import { abortSessionRun } from './services/chatRunnerService'
+import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
 import { SessionListIcon } from './components/SessionList/SessionListIcon'
 import { PendingConfirmBanner } from './components/SessionList/PendingConfirmBanner'
 import { PendingPlanBanner } from './components/SessionList/PendingPlanBanner'
@@ -224,10 +225,12 @@ function AppShellInner() {
     const offTitle = window.api.sessionOnTitleGenerated(({ session }) => {
       dispatch(upsertSession(session))
     })
+    const offFeishuStream = initFeishuRemoteStreamBridge()
     return () => {
       off1()
       off2()
       offTitle()
+      offFeishuStream()
     }
   }, [dispatch])
 

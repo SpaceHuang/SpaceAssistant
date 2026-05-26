@@ -65,7 +65,15 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     const hint = hintRef.current
     if (!container || !hint) return
 
-    const containerWidth = container.clientWidth
+    const footer = container.parentElement
+    if (!footer) return
+
+    const rightSection = footer.lastElementChild as HTMLElement | null
+    const rightWidth = rightSection ? rightSection.offsetWidth : 0
+    const footerStyle = getComputedStyle(footer)
+    const footerGap = parseFloat(footerStyle.columnGap) || parseFloat(footerStyle.gap) || 8
+    const availableWidth = footer.clientWidth - rightWidth - footerGap
+
     const selectEl = container.querySelector('.composer-mode-select') as HTMLElement | null
     const selectWidth = selectEl ? selectEl.offsetWidth : 108
     const chipWidth = modelChipRef.current ? modelChipRef.current.offsetWidth : 0
@@ -77,17 +85,20 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
       neededWidth = selectWidth + gap + chipWidth + gap + hintWidth
     }
 
-    setHintHidden(neededWidth > containerWidth)
+    setHintHidden(neededWidth > availableWidth)
   }, [])
 
   useEffect(() => {
     const container = leftRowRef.current
     if (!container) return
 
+    const footer = container.parentElement
+    if (!footer) return
+
     const observer = new ResizeObserver(() => {
       checkOverflow()
     })
-    observer.observe(container)
+    observer.observe(footer)
 
     return () => observer.disconnect()
   }, [checkOverflow])
@@ -131,6 +142,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
             <Select
               size="small"
               className="composer-mode-select"
+              popupClassName="composer-mode-select-popup"
               value={chatMode}
               disabled={disabled || running}
               onChange={setMode}

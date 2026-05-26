@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import { getMessages } from '../database'
@@ -19,6 +18,7 @@ export async function runFeishuRemoteAgent(ctx: {
   sessionId: string
   userMessage: string
   replyMessageId: string
+  requestId: string
   feishuConfig: FeishuConfig
   workDir: string
   userDataDir: string
@@ -31,8 +31,8 @@ export async function runFeishuRemoteAgent(ctx: {
   getToolsConfig: () => ToolsConfig
   getWikiConfig?: () => WikiConfig
   remoteContext: FeishuRemoteContext
-}): Promise<{ summary: string; pendingConfirm: boolean }> {
-  const requestId = randomUUID()
+}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
+  const requestId = ctx.requestId
   const sender = ctx.getMainWebContents()
   const noopSender = {
     send: () => undefined
@@ -78,7 +78,7 @@ export async function runFeishuRemoteAgent(ctx: {
       })
 
       if (!planRes.ok) {
-        return { summary: `计划生成失败：${planRes.error}`, pendingConfirm: false }
+        return { summary: `计划生成失败：${planRes.error}`, pendingConfirm: false, ok: false }
       }
 
       const planState = await readPlanStateForSession({ db: ctx.db, workDir: ctx.workDir, sessionId: ctx.sessionId })
@@ -99,7 +99,8 @@ export async function runFeishuRemoteAgent(ctx: {
         if (decision !== 'y') {
           return {
             summary: decision === 'timeout' ? '计划确认超时，已取消。' : '计划执行已取消。',
-            pendingConfirm: false
+            pendingConfirm: false,
+            ok: false
           }
         }
       }
@@ -109,7 +110,7 @@ export async function runFeishuRemoteAgent(ctx: {
       for (let i = 0; i < maxSteps; i++) {
         const workerRes = await resumePlanExecution({
           sender: effectiveSender,
-          requestId: randomUUID(),
+          requestId,
           sessionId: ctx.sessionId,
           model: ctx.getModel(),
           baseUrl: ctx.getBaseUrl(),
@@ -127,7 +128,7 @@ export async function runFeishuRemoteAgent(ctx: {
         const status = state.plan?.status
         if (status === 'completed' || status === 'cancelled') break
       }
-      return { summary: workerSummary || planSummary, pendingConfirm: false }
+      return { summary: workerSummary || planSummary, pendingConfirm: false, ok: true }
     }
 
     const res = await runToolChatSession({
@@ -152,11 +153,11 @@ export async function runFeishuRemoteAgent(ctx: {
 
     if (!res.ok) {
       const pending = res.error.includes('桌面') || res.error.includes('确认')
-      return { summary: res.error, pendingConfirm: pending }
+      return { summary: res.error, pendingConfirm: pending, ok: false }
     }
 
     const text = extractTextFromContent(res.content)
-    return { summary: text || '任务已完成。', pendingConfirm: false }
+    return { summary: text || '任务已完成。', pendingConfirm: false, ok: true }
   } finally {
     unregisterRunningRemoteAgent(ctx.sessionId)
   }

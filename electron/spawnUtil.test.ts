@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { spawnCommandSafe } from './spawnUtil'
+import { killProcessTree, spawnCommandSafe } from './spawnUtil'
 
 describe('spawnUtil', () => {
   it('spawns npm on Windows without EINVAL', async () => {
@@ -21,4 +21,12 @@ describe('spawnUtil', () => {
 
     expect(version.length).toBeGreaterThan(0)
   })
+
+  it('killProcessTree terminates a child process', async () => {
+    const spawned = spawnCommandSafe(process.execPath, ['-e', 'setInterval(() => {}, 1000)'])
+    expect('error' in spawned).toBe(false)
+    if ('error' in spawned) return
+
+    await expect(killProcessTree(spawned.proc)).resolves.toBeUndefined()
+  }, 10_000)
 })

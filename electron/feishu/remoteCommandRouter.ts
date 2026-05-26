@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import type { AppDatabase } from '../database'
-import { appendMessage } from '../database'
+import { appendMessage, updateMessageContent } from '../database'
+import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { FeishuConfig, FeishuInboundMessage, WorkDirProfile } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
@@ -187,6 +188,20 @@ export class RemoteCommandRouter {
 
     await this.deps.auditLogger.append({ type: 'agent_start', sessionId, messageId: msg.messageId })
 
+    const requestId = randomUUID()
+    const assistantMessageId = randomUUID()
+    const assistantTimestamp = Date.now()
+    appendMessage(this.deps.db, {
+      id: assistantMessageId,
+      sessionId,
+      role: 'assistant',
+      content: '',
+      timestamp: assistantTimestamp,
+      status: 'streaming',
+      schemaVersion: CURRENT_SCHEMA_VERSION
+    })
+    wc?.send('feishu:remote-agent-start', { sessionId, assistantMessageId, requestId })
+
     const remoteContext = {
       source: 'feishu' as const,
       messageId: msg.messageId,
@@ -202,6 +217,7 @@ export class RemoteCommandRouter {
       sessionId,
       userMessage: content,
       replyMessageId: msg.messageId,
+      requestId,
       feishuConfig: config,
       workDir,
       getMainWebContents: this.deps.getMainWebContents,
@@ -215,6 +231,21 @@ export class RemoteCommandRouter {
       userDataDir: this.deps.getUserDataPath(),
       remoteContext
     })
+
+    if (wc) {
+      wc.send('feishu:agent-done', {
+        sessionId,
+        messageId: assistantMessageId,
+        requestId,
+        ok: result.ok,
+        summary: result.summary
+      })
+    } else {
+      updateMessageContent(this.deps.db, assistantMessageId, {
+        content: result.summary,
+        status: result.ok ? 'completed' : 'failed'
+      })
+    }
 
     await replyFeishuText(this.deps.runner, msg.messageId, result.summary)
     this.lastReplyAt = Date.now()

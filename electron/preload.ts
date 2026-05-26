@@ -187,10 +187,23 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('feishu:inbound-message', fn)
     return () => ipcRenderer.removeListener('feishu:inbound-message', fn)
   },
+  feishuOnRemoteAgentStart: (cb) => {
+    const fn = (_e: unknown, data: { sessionId: string; assistantMessageId: string; requestId: string }) => cb(data)
+    ipcRenderer.on('feishu:remote-agent-start', fn)
+    return () => ipcRenderer.removeListener('feishu:remote-agent-start', fn)
+  },
   feishuOnPendingConfirm: (cb) => {
     const fn = (_e: unknown, data: { sessionId: string; pendingConfirm: boolean }) => cb(data)
     ipcRenderer.on('feishu:pending-confirm', fn)
     return () => ipcRenderer.removeListener('feishu:pending-confirm', fn)
+  },
+  feishuOnAgentDone: (cb) => {
+    const fn = (
+      _e: unknown,
+      data: { sessionId: string; messageId: string; requestId: string; ok: boolean; summary?: string }
+    ) => cb(data)
+    ipcRenderer.on('feishu:agent-done', fn)
+    return () => ipcRenderer.removeListener('feishu:agent-done', fn)
   },
 }
 

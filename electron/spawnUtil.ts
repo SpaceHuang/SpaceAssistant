@@ -1,6 +1,71 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process'
 import path from 'path'
 
+const KILL_TREE_TIMEOUT_MS = 3000
+
+/** 终止进程及其子进程。Windows 上 SIGTERM 打到 cmd.exe 会弹出「终止批处理操作吗(Y/N)?」，需用 taskkill /T /F。 */
+export function killProcessTree(proc: ChildProcess): Promise<void> {
+  return new Promise((resolve) => {
+    const pid = proc.pid
+    if (!pid) {
+      try {
+        proc.kill()
+      } catch {
+        /* ignore */
+      }
+      resolve()
+      return
+    }
+
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+
+    const timer = setTimeout(finish, KILL_TREE_TIMEOUT_MS)
+
+    if (process.platform === 'win32') {
+      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore'
+      })
+      killer.on('close', () => {
+        clearTimeout(timer)
+        finish()
+      })
+      killer.on('error', () => {
+        clearTimeout(timer)
+        try {
+          proc.kill()
+        } catch {
+          /* ignore */
+        }
+        finish()
+      })
+      return
+    }
+
+    try {
+      proc.kill('SIGTERM')
+    } catch {
+      clearTimeout(timer)
+      finish()
+      return
+    }
+
+    proc.once('close', () => {
+      clearTimeout(timer)
+      finish()
+    })
+    proc.once('error', () => {
+      clearTimeout(timer)
+      finish()
+    })
+  })
+}
+
 /** Windows 上 spawn 非 .exe（.cmd/.bat 或无扩展名 npm shim）会 EINVAL，需经 cmd.exe。 */
 export function spawnCommand(
   executable: string,

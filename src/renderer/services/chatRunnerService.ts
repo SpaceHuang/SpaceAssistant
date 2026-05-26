@@ -57,6 +57,10 @@ export function initLiveSessionFromStore(sessionId: string): void {
   liveBySession.set(sessionId, cloneMessages(rows))
 }
 
+export function resetLiveSessionMessages(sessionId: string, messages: Message[]): void {
+  liveBySession.set(sessionId, cloneMessages(messages))
+}
+
 export function getLiveMessages(sessionId: string): Message[] | undefined {
   const x = liveBySession.get(sessionId)
   return x ? cloneMessages(x) : undefined

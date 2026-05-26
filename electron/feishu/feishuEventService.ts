@@ -3,12 +3,13 @@ import readline from 'readline'
 import type { FeishuEventConnectionState, FeishuEventStatus, FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { parseCompactInboundEvent } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
-import { spawnCommandSafe } from '../spawnUtil'
+import { killProcessTree, spawnCommandSafe } from '../spawnUtil'
 
 const BACKOFF_MS = [5000, 10000, 30000, 60000]
 
 export class FeishuEventService {
   private proc: ChildProcess | null = null
+  private stdoutReader: readline.Interface | null = null
   private state: FeishuEventConnectionState = 'stopped'
   private restartAttempts = 0
   private restartTimer: ReturnType<typeof setTimeout> | null = null
@@ -56,19 +57,12 @@ export class FeishuEventService {
       this.restartTimer = null
     }
     const proc = this.proc
+    const rl = this.stdoutReader
     this.proc = null
+    this.stdoutReader = null
+    rl?.close()
     if (proc) {
-      proc.kill('SIGTERM')
-      await new Promise<void>((resolve) => {
-        const t = setTimeout(() => {
-          proc.kill('SIGKILL')
-          resolve()
-        }, 3000)
-        proc.on('close', () => {
-          clearTimeout(t)
-          resolve()
-        })
-      })
+      await killProcessTree(proc)
     }
     this.setState('stopped')
   }
@@ -87,7 +81,9 @@ export class FeishuEventService {
     this.proc = spawned.proc
     this.startedAt = Date.now()
 
+    this.stdoutReader?.close()
     const rl = readline.createInterface({ input: this.proc.stdout! })
+    this.stdoutReader = rl
     rl.on('line', (line) => {
       try {
         const raw = JSON.parse(line) as unknown
@@ -109,6 +105,7 @@ export class FeishuEventService {
 
     this.proc.on('close', (code) => {
       rl.close()
+      if (this.stdoutReader === rl) this.stdoutReader = null
       this.proc = null
       if (this.intentionalStop) {
         this.setState('stopped')

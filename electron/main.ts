@@ -8,7 +8,8 @@ import { mergeToolsConfig, mergeWikiConfig } from '../src/shared/domainTypes'
 import {
   autoStartFeishuEventIfNeeded,
   createFeishuBundle,
-  registerFeishuIpcHandlers
+  registerFeishuIpcHandlers,
+  shutdownFeishuServices
 } from './feishu/feishuIpc'
 import { getConfigValue, openDatabase, setConfigValue } from './database'
 import type { AppDatabase } from './database'
@@ -86,6 +87,7 @@ function getRendererIndexPath(): string {
 let workDirState = ''
 let appDb: AppDatabase | null = null
 let isQuitting = false
+let quitCleanupDone = false
 
 export function getIsQuitting(): boolean {
   return isQuitting
@@ -290,14 +292,26 @@ app.whenReady().then(() => {
   setupAppMenu()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (quitCleanupDone) return
+  event.preventDefault()
   isQuitting = true
   destroyTray()
   stopMemoryWatcher()
-  appDb?.flushSave()
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.destroy()
   }
+  void (async () => {
+    try {
+      await shutdownFeishuServices()
+    } catch (err) {
+      console.warn('[shutdown] feishu cleanup failed:', err instanceof Error ? err.message : err)
+    } finally {
+      appDb?.flushSave()
+      quitCleanupDone = true
+      app.quit()
+    }
+  })()
 })
 
 app.on('window-all-closed', () => {
