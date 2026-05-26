@@ -32,7 +32,7 @@ export function createSkillManager(ctx: SkillManagerContext) {
       return getSkillByName(ctx.getUserDataPath(), ctx.getWorkDir(), name)
     },
 
-    match(userInput: string, sessionState: SessionSkillsState): SkillDefinition[] {
+    match(userInput: string, sessionState: SessionSkillsState, sessionMetadata?: Record<string, unknown>): SkillDefinition[] {
       const skills = getCachedSkills(ctx.getUserDataPath(), ctx.getWorkDir())
       let config = ctx.getSkillsConfig()
       const wikiConfig = ctx.getWikiConfig?.()
@@ -42,7 +42,7 @@ export function createSkillManager(ctx: SkillManagerContext) {
           alwaysLoad: config.alwaysLoad.filter((n) => n !== 'llm-wiki')
         }
       }
-      const matched = matchSkills({ userInput, skills, config, sessionState })
+      const matched = matchSkills({ userInput, skills, config, sessionState, sessionMetadata })
       if (wikiConfig && !wikiConfig.enabled) {
         return matched.filter((s) => s.meta.name !== 'llm-wiki')
       }

@@ -94,6 +94,35 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
       },
       required: ['code']
     }
+  },
+  {
+    name: 'run_lark_cli',
+    description:
+      '执行飞书官方 lark-cli 命令，用于操作飞书消息、文档、日历、多维表格、邮箱等。仅允许 lark-cli 参数列表；禁止 shell 管道与重定向。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        args: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'lark-cli 参数列表，不含可执行文件名。例：["message","send","--chat-id","oc_xxx","--text","hello"]'
+        },
+        timeout: { type: 'number', description: '超时秒数，默认 120' }
+      },
+      required: ['args']
+    }
+  },
+  {
+    name: 'read_feishu_attachment',
+    description: '读取 userData/feishu-media 目录下的飞书消息附件（只读，防路径遍历）。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        relativePath: { type: 'string', description: '相对于 feishu-media 根目录的路径' }
+      },
+      required: ['relativePath']
+    }
   }
 ]
 

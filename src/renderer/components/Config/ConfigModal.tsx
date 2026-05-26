@@ -4,6 +4,7 @@ import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry, UiThemeMode, WikiConfig } from '../../../shared/domainTypes'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../../../shared/feishuTypes'
 import type { ChatMode } from '../../../shared/planTypes'
 import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
 import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
@@ -15,6 +16,7 @@ import {
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { SkillsTab } from './SkillsTab'
 import { WikiTab } from './WikiTab'
+import { FeishuSettingsTab } from './FeishuSettingsTab'
 import { LlmServiceTab } from './LlmServiceTab'
 import {
   buildLlmServicesSavePayload,
@@ -179,6 +181,7 @@ export function ConfigModal() {
   const [maxParallelChatSessions, setMaxParallelChatSessions] = useState(DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
   const [defaultChatMode, setDefaultChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
+  const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
 
   const refreshConfig = async () => {
     const next = await window.api.configGet()
@@ -218,6 +221,7 @@ export function ConfigModal() {
       setMaxParallelChatSessions(cfg.maxParallelChatSessions ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
       setDefaultChatMode(cfg.defaultChatMode ?? DEFAULT_CHAT_MODE)
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
+      setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
     }
   }, [open, cfg, form])
 
@@ -311,7 +315,8 @@ export function ConfigModal() {
         uiTheme,
         maxParallelChatSessions,
         defaultChatMode,
-        wiki: wikiUi
+        wiki: wikiUi,
+        feishu: feishuUi
       })
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))
@@ -634,6 +639,11 @@ export function ConfigModal() {
               key: 'wiki',
               label: 'LLM Wiki',
               children: <WikiTab wiki={wikiUi} onChange={setWikiUi} />
+            },
+            {
+              key: 'feishu',
+              label: '飞书',
+              children: <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} models={models} />
             },
             {
               key: 'skills',
