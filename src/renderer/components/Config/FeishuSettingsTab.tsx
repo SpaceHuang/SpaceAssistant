@@ -15,6 +15,10 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
   const [eventStatus, setEventStatus] = useState<FeishuEventStatus | null>(null)
   const [authStatus, setAuthStatus] = useState<string>('')
   const [auditOpen, setAuditOpen] = useState(false)
+  const [installingCli, setInstallingCli] = useState(false)
+  const [configuringApp, setConfiguringApp] = useState(false)
+  const [configStatus, setConfigStatus] = useState('')
+  const [authLoggingIn, setAuthLoggingIn] = useState(false)
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -25,7 +29,9 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           : `未检测到（Node: ${detect.nodeAvailable ? '✓' : '✗'} npm: ${detect.npmAvailable ? '✓' : '✗'}）`
       )
       const auth = await window.api.feishuAuthStatus()
-      setAuthStatus(auth.authorized ? '已授权' : '未登录')
+      setAuthStatus(
+        auth.authorized ? '已授权' : auth.stderr?.trim() ? `未登录（${auth.stderr.trim().slice(-200)}）` : '未登录'
+      )
       if (feishu.remoteEnabled) {
         const es = await window.api.feishuEventStatus()
         setEventStatus(es ?? null)
@@ -47,7 +53,102 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
     return () => clearInterval(t)
   }, [feishu.remoteEnabled])
 
+  const installCli = async () => {
+    if (typeof window.api.feishuInstallCli !== 'function') {
+      message.error('当前应用版本未包含飞书 IPC，请从 feature/feishu-integration 分支启动并重新构建主进程')
+      return
+    }
+    setInstallingCli(true)
+    setCliStatus('正在安装 @larksuite/cli（全局 npm，可能需要 1–3 分钟）…')
+    try {
+      const r = await window.api.feishuInstallCli()
+      if (r.success) {
+        message.success('lark-cli 安装成功')
+        await refreshStatus()
+      } else {
+        const detail = (r.stderr || r.stdout || '未知错误').trim().slice(-800)
+        message.error(r.timedOut ? '安装超时，请检查网络或在终端手动运行 npm install -g @larksuite/cli' : `安装失败：${detail}`)
+        setCliStatus(`安装失败${r.timedOut ? '（超时）' : ''}`)
+      }
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e)
+      message.error(`安装 CLI 失败：${err}`)
+      setCliStatus(`安装失败：${err}`)
+    } finally {
+      setInstallingCli(false)
+    }
+  }
+
   const patch = (p: Partial<FeishuConfig>) => onChange({ ...feishu, ...p })
+
+  const configInit = async () => {
+    if (typeof window.api.feishuConfigInit !== 'function') {
+      message.error('当前应用版本未包含飞书 IPC，请重新构建主进程')
+      return
+    }
+    setConfiguringApp(true)
+    setConfigStatus('正在初始化飞书应用，等待配置链接（约 10–30 秒）…')
+    const unsub =
+      typeof window.api.feishuOnConfigInitProgress === 'function'
+        ? window.api.feishuOnConfigInitProgress(({ line }) => {
+            if (/https?:\/\//.test(line)) {
+              setConfigStatus('已在浏览器打开配置页，请完成扫码/登录后等待…')
+            } else if (line) {
+              setConfigStatus(line.slice(-120))
+            }
+          })
+        : undefined
+    try {
+      const r = await window.api.feishuConfigInit()
+      if (r.success) {
+        message.success('飞书应用配置完成')
+        patch({ appConfigured: true })
+        setConfigStatus('配置完成')
+        await refreshStatus()
+      } else {
+        const detail = (r.stderr || r.stdout || '未知错误').trim().slice(-800)
+        message.error(
+          r.timedOut
+            ? '配置超时：若已在浏览器完成设置，请点「重新检测」或手动开启「应用已配置」'
+            : `配置失败：${detail}`
+        )
+        if (r.authUrl) {
+          message.info('若浏览器未自动打开，请手动访问配置链接（见 CLI 输出）')
+        }
+        setConfigStatus(`配置失败${r.timedOut ? '（超时）' : ''}`)
+      }
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e)
+      message.error(`配置飞书应用失败：${err}`)
+      setConfigStatus(`配置失败：${err}`)
+    } finally {
+      unsub?.()
+      setConfiguringApp(false)
+    }
+  }
+
+  const authLogin = async () => {
+    if (typeof window.api.feishuAuthLogin !== 'function') {
+      message.error('当前应用版本未包含飞书 IPC，请重新构建主进程')
+      return
+    }
+    setAuthLoggingIn(true)
+    try {
+      const r = await window.api.feishuAuthLogin()
+      if (r.success) {
+        message.success('飞书账号登录成功')
+        await refreshStatus()
+      } else {
+        const detail = (r.stderr || r.stdout || '未知错误').trim().slice(-800)
+        message.error(r.timedOut ? '登录超时，请在浏览器完成授权后重试' : `登录失败：${detail}`)
+      }
+      if (r.authUrl) message.info('已在浏览器打开登录页，请完成授权')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAuthLoggingIn(false)
+    }
+  }
 
   return (
     <>
@@ -61,7 +162,9 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           <div style={{ marginBottom: 8, fontWeight: 500 }}>CLI 状态</div>
           <div style={{ marginBottom: 8 }}>{cliStatus}</div>
           <Space wrap>
-            <Button onClick={() => void window.api.feishuInstallCli().then(refreshStatus)}>安装 CLI</Button>
+            <Button loading={installingCli} disabled={installingCli} onClick={() => void installCli()}>
+              安装 CLI
+            </Button>
             <Button onClick={refreshStatus}>重新检测</Button>
             <Input
               style={{ width: 280 }}
@@ -72,24 +175,21 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           </Space>
         </div>
 
-        <Space>
-          <Button
-            onClick={async () => {
-              const r = await window.api.feishuConfigInit()
-              if (r.success) {
-                message.success('应用配置完成')
-                patch({ appConfigured: true })
-              } else message.error(r.stderr ?? '配置失败')
-            }}
-          >
-            配置飞书应用
-          </Button>
-          <Switch checked={feishu.appConfigured} onChange={(appConfigured) => patch({ appConfigured })} />
-          <span>应用已配置</span>
+        <Space direction="vertical" size={4}>
+          <Space wrap>
+            <Button loading={configuringApp} disabled={configuringApp} onClick={() => void configInit()}>
+              配置飞书应用
+            </Button>
+            <Switch checked={feishu.appConfigured} onChange={(appConfigured) => patch({ appConfigured })} />
+            <span>应用已配置</span>
+          </Space>
+          {configStatus ? <div style={{ color: 'var(--ant-color-text-secondary)', fontSize: 12 }}>{configStatus}</div> : null}
         </Space>
 
         <Space>
-          <Button onClick={() => void window.api.feishuAuthLogin()}>登录飞书账号</Button>
+          <Button loading={authLoggingIn} disabled={authLoggingIn} onClick={() => void authLogin()}>
+            登录飞书账号
+          </Button>
           <span>{authStatus}</span>
         </Space>
 

@@ -177,6 +177,11 @@ const api: SpaceAssistantApi = {
   feishuAuditQuery: (opts) => ipcRenderer.invoke('feishu:audit-query', opts),
   feishuHealthCheck: () => ipcRenderer.invoke('feishu:health-check'),
   feishuCheckCliUpdate: () => ipcRenderer.invoke('feishu:check-cli-update'),
+  feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => {
+    const fn = (_e: unknown, data: { line: string }) => cb(data)
+    ipcRenderer.on('feishu:config-init-progress', fn)
+    return () => ipcRenderer.removeListener('feishu:config-init-progress', fn)
+  },
   feishuOnInboundMessage: (cb) => {
     const fn = (_e: unknown, data: { sessionId: string; message: unknown }) => cb(data)
     ipcRenderer.on('feishu:inbound-message', fn)

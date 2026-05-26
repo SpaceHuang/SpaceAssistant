@@ -250,10 +250,10 @@ export type SpaceAssistantApi = {
   ) => () => void
 
   feishuDetectCli: () => Promise<FeishuCliDetectResult>
-  feishuInstallCli: () => Promise<{ success: boolean; stdout?: string; stderr?: string }>
+  feishuInstallCli: () => Promise<{ success: boolean; stdout?: string; stderr?: string; timedOut?: boolean }>
   feishuInstallSkill: () => Promise<{ success: boolean; stdout?: string; stderr?: string }>
-  feishuConfigInit: () => Promise<{ success: boolean; stdout?: string; stderr?: string }>
-  feishuAuthLogin: () => Promise<{ success: boolean; authUrl?: string; stdout?: string; stderr?: string }>
+  feishuConfigInit: () => Promise<{ success: boolean; stdout?: string; stderr?: string; timedOut?: boolean; authUrl?: string }>
+  feishuAuthLogin: () => Promise<{ success: boolean; authUrl?: string; stdout?: string; stderr?: string; timedOut?: boolean }>
   feishuAuthStatus: () => Promise<{ authorized: boolean; stdout?: string; stderr?: string }>
   feishuEventStart: () => Promise<FeishuEventStatus | undefined>
   feishuEventStop: () => Promise<FeishuEventStatus | undefined>
@@ -264,6 +264,7 @@ export type SpaceAssistantApi = {
   feishuAuditQuery: (opts: { since?: number; types?: string[]; limit?: number }) => Promise<FeishuAuditQueryResult>
   feishuHealthCheck: () => Promise<FeishuHealthCheck>
   feishuCheckCliUpdate: () => Promise<{ latest?: string }>
+  feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => () => void
   feishuOnInboundMessage: (cb: (data: { sessionId: string; message: unknown }) => void) => () => void
   feishuOnPendingConfirm: (cb: (data: { sessionId: string; pendingConfirm: boolean }) => void) => () => void
 }

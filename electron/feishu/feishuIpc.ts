@@ -1,5 +1,6 @@
-import { spawn } from 'child_process'
-import { shell, type IpcMain, type WebContents } from 'electron'
+import { type IpcMain } from 'electron'
+import { runNpmCommand, runNpxCommand } from './npmCommandRunner'
+import { runFeishuCliWithBrowserFlow } from './feishuCliFlow'
 import type { AppDatabase } from '../database'
 import { getConfigValue, setConfigValue } from '../database'
 import { mergeFeishuConfig, type FeishuConfig } from '../../src/shared/feishuTypes'
@@ -124,59 +125,80 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle('feishu:detect-cli', async () => b.runner.detect())
 
   ipcMain.handle('feishu:install-cli', async () => {
-    return new Promise<{ success: boolean; stdout?: string; stderr?: string }>((resolve) => {
-      const proc = spawn('npm', ['install', '-g', '@larksuite/cli'], { shell: true, windowsHide: true })
-      let stdout = ''
-      let stderr = ''
-      proc.stdout?.on('data', (d: Buffer) => {
-        stdout += d.toString()
-      })
-      proc.stderr?.on('data', (d: Buffer) => {
-        stderr += d.toString()
-      })
-      proc.on('close', (code) => resolve({ success: code === 0, stdout, stderr }))
-      proc.on('error', (e) => resolve({ success: false, stderr: e.message }))
-    })
+    try {
+      const detect = await b.runner.detect()
+      if (!detect.npmAvailable) {
+        return {
+          success: false,
+          stderr: '未检测到 npm。请先安装 Node.js（https://nodejs.org），并确保终端中可运行 npm --version。'
+        }
+      }
+      const r = await runNpmCommand(['install', '-g', '@larksuite/cli'])
+      return { success: r.success, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { success: false, stderr: msg }
+    }
   })
 
   ipcMain.handle('feishu:install-skill', async () => {
-    return new Promise<{ success: boolean; stdout?: string; stderr?: string }>((resolve) => {
-      const proc = spawn(
-        'npx',
-        ['-y', 'skills', 'add', 'https://open.feishu.cn', '--skill', '-y'],
-        { shell: true, windowsHide: true }
-      )
-      let stdout = ''
-      let stderr = ''
-      proc.stdout?.on('data', (d: Buffer) => {
-        stdout += d.toString()
-      })
-      proc.stderr?.on('data', (d: Buffer) => {
-        stderr += d.toString()
-      })
-      proc.on('close', (code) => resolve({ success: code === 0, stdout, stderr }))
-      proc.on('error', (e) => resolve({ success: false, stderr: e.message }))
-    })
+    try {
+      const r = await runNpxCommand(['-y', 'skills', 'add', 'https://open.feishu.cn', '--skill', '-y'])
+      return { success: r.success, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { success: false, stderr: msg }
+    }
   })
 
   ipcMain.handle('feishu:config-init', async () => {
-    const r = await b.runner.runInteractive(['config', 'init', '--new'])
-    return { success: r.exitCode === 0, stdout: r.stdout, stderr: r.stderr }
+    try {
+      const detect = await b.runner.detect()
+      if (!detect.installed) {
+        return { success: false, stderr: '未检测到 lark-cli，请先点击「安装 CLI」。' }
+      }
+      const wc = getMainWindow()?.webContents
+      const r = await runFeishuCliWithBrowserFlow(b.runner, ['config', 'init', '--new'], {
+        onProgress: (line) => wc?.send('feishu:config-init-progress', { line })
+      })
+      return {
+        success: r.success,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        timedOut: r.timedOut,
+        authUrl: r.authUrl
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { success: false, stderr: msg }
+    }
   })
 
   ipcMain.handle('feishu:auth-login', async () => {
-    const r = await b.runner.runInteractive(['auth', 'login', '--recommend'])
-    const urlMatch = r.stdout.match(/https?:\/\/[^\s]+/)
-    if (urlMatch) await shell.openExternal(urlMatch[0])
-    return { success: r.exitCode === 0, authUrl: urlMatch?.[0], stdout: r.stdout, stderr: r.stderr }
+    try {
+      const detect = await b.runner.detect()
+      if (!detect.installed) {
+        return { success: false, stderr: '未检测到 lark-cli，请先点击「安装 CLI」。' }
+      }
+      const r = await runFeishuCliWithBrowserFlow(b.runner, ['auth', 'login', '--recommend'])
+      return { success: r.success, authUrl: r.authUrl, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { success: false, stderr: msg }
+    }
   })
 
   ipcMain.handle('feishu:auth-status', async () => {
-    const r = await b.runner.run({ args: ['auth', 'status'], timeoutSec: 30 })
-    return {
-      authorized: r.exitCode === 0 && !/not logged/i.test(r.stdout + r.stderr),
-      stdout: r.stdout,
-      stderr: r.stderr
+    try {
+      const r = await b.runner.run({ args: ['auth', 'status'], timeoutSec: 30 })
+      return {
+        authorized: r.exitCode === 0 && !/not logged/i.test(r.stdout + r.stderr),
+        stdout: r.stdout,
+        stderr: r.stderr
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { authorized: false, stdout: '', stderr: msg }
     }
   })
 
@@ -217,15 +239,8 @@ export function registerFeishuIpcHandlers(
   })
 
   ipcMain.handle('feishu:check-cli-update', async () => {
-    return new Promise<{ latest?: string }>((resolve) => {
-      const proc = spawn('npm', ['view', '@larksuite/cli', 'version'], { shell: true, windowsHide: true })
-      let stdout = ''
-      proc.stdout?.on('data', (d: Buffer) => {
-        stdout += d.toString()
-      })
-      proc.on('close', () => resolve({ latest: stdout.trim() || undefined }))
-      proc.on('error', () => resolve({}))
-    })
+    const r = await runNpmCommand(['view', '@larksuite/cli', 'version'], { timeoutMs: 60_000 })
+    return { latest: r.stdout.trim() || undefined }
   })
 }
 

@@ -1,7 +1,8 @@
-import { spawn, type ChildProcess } from 'child_process'
+import { type ChildProcess } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { spawnCommandSafe } from '../spawnUtil'
 import type { FeishuCliDetectResult } from '../../src/shared/feishuTypes'
 
 const MAX_OUTPUT_BYTES = 512 * 1024
@@ -12,6 +13,7 @@ export interface LarkCliRunOptions {
   timeoutSec?: number
   cwd?: string
   onStdout?: (chunk: string) => void
+  onStderr?: (chunk: string) => void
   signal?: AbortSignal
 }
 
@@ -30,11 +32,10 @@ function appendWithLimit(current: string, chunk: string, maxBytes: number): stri
 }
 
 async function runWhich(cmd: string): Promise<string | null> {
+  const spawned = spawnCommandSafe(process.platform === 'win32' ? 'where' : 'which', [cmd])
+  if ('error' in spawned) return null
+  const proc = spawned.proc
   return new Promise((resolve) => {
-    const proc = spawn(process.platform === 'win32' ? 'where' : 'which', [cmd], {
-      shell: false,
-      windowsHide: true
-    })
     let out = ''
     proc.stdout?.on('data', (d: Buffer) => {
       out += d.toString()
@@ -75,7 +76,7 @@ export class LarkCliRunner {
   }
 
   run(options: LarkCliRunOptions): Promise<LarkCliRunResult> {
-    const { args, timeoutSec = 120, cwd, onStdout, signal } = options
+    const { args, timeoutSec = 120, cwd, onStdout, onStderr, signal } = options
     const cliPath = this.resolveExecutable()
     const env = {
       ...process.env,
@@ -88,19 +89,24 @@ export class LarkCliRunner {
       let timedOut = false
       let settled = false
 
-      const proc: ChildProcess = spawn(cliPath, args, {
-        shell: false,
-        windowsHide: true,
-        cwd: cwd ?? os.homedir(),
-        env
-      })
-
       const finish = (result: LarkCliRunResult) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
         resolve(result)
       }
+
+      const spawned = spawnCommandSafe(cliPath, args, {
+        windowsHide: true,
+        cwd: cwd ?? os.homedir(),
+        env
+      })
+      if ('error' in spawned) {
+        finish({ exitCode: 1, stdout: '', stderr: spawned.error, timedOut: false })
+        return
+      }
+
+      const proc: ChildProcess = spawned.proc
 
       const timer = setTimeout(() => {
         timedOut = true
@@ -120,7 +126,9 @@ export class LarkCliRunner {
         onStdout?.(chunk)
       })
       proc.stderr?.on('data', (d: Buffer) => {
-        stderr = appendWithLimit(stderr, d.toString(), MAX_OUTPUT_BYTES)
+        const chunk = d.toString()
+        stderr = appendWithLimit(stderr, chunk, MAX_OUTPUT_BYTES)
+        onStderr?.(chunk)
       })
 
       proc.on('close', (code) => {

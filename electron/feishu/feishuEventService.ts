@@ -1,8 +1,9 @@
-import { spawn, type ChildProcess } from 'child_process'
+import { type ChildProcess } from 'child_process'
 import readline from 'readline'
 import type { FeishuEventConnectionState, FeishuEventStatus, FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { parseCompactInboundEvent } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
+import { spawnCommandSafe } from '../spawnUtil'
 
 const BACKOFF_MS = [5000, 10000, 30000, 60000]
 
@@ -77,7 +78,13 @@ export class FeishuEventService {
     this.setState('connecting')
     const cliPath = this.runner.resolveExecutable()
     const args = ['event', '+subscribe', '--event-types', 'im.message.receive_v1', '--compact', '--quiet']
-    this.proc = spawn(cliPath, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    const spawned = spawnCommandSafe(cliPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    if ('error' in spawned) {
+      this.setState('error', spawned.error)
+      this.scheduleRestart(1)
+      return
+    }
+    this.proc = spawned.proc
     this.startedAt = Date.now()
 
     const rl = readline.createInterface({ input: this.proc.stdout! })
