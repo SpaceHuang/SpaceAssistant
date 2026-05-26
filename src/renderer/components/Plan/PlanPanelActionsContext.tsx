@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ChatMode } from '../../../shared/planTypes'
 import { planPanelActionsStore } from '../../services/planPanelActionsStore'
+import type { PlanExecutionUiState } from './planExecutionUiState'
 
 export type ComposerFocusRequest = {
   prefill: string
@@ -14,6 +15,7 @@ export type PlanPanelActions = {
   onPlanCancel: () => Promise<void>
   onPlanRejectWithFeedback: (feedback: string) => Promise<void>
   planActionLoading: boolean
+  planExecutionUiState: PlanExecutionUiState
 }
 
 export function usePlanPanelActions(): PlanPanelActions | null {

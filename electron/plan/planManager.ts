@@ -156,7 +156,7 @@ export function mergePlanMetadata(
   return next
 }
 
-function syncDisplayPlanStatus(
+export function syncDisplayPlanStatus(
   displayPlans: PlanDisplayEntry[],
   planId: string,
   status: PlanMeta['status'],

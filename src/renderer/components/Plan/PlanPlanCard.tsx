@@ -42,9 +42,12 @@ export function PlanPlanCard({ entry, activePlanId, readonly, onOpenPlanFile }: 
   const isActivePointer = Boolean(activePlanId && entry.planId === activePlanId)
   const showControls =
     !readonly &&
-    (entry.status === 'executing' ||
-      (entry.status === 'approved' && (!activePlanId || isActivePointer)))
+    isActivePointer &&
+    (entry.status === 'executing' || entry.status === 'approved')
   const actions = usePlanPanelActions()
+  const ui = actions?.planExecutionUiState
+  const resumeBusy = ui?.resumeButtonBusy ?? false
+  const resumeDisabled = ui?.resumeButtonDisabled ?? false
   const [expanded, setExpanded] = useState(entry.status !== 'completed')
   const isCompleted = entry.status === 'completed'
   const isCancelled = entry.status === 'cancelled'
@@ -112,12 +115,23 @@ export function PlanPlanCard({ entry, activePlanId, readonly, onOpenPlanFile }: 
           <Button
             type="primary"
             size="small"
+            loading={resumeBusy}
+            disabled={resumeDisabled}
             onClick={() => void actions?.onPlanResume()}
           >
-            {entry.status === 'approved' ? '开始执行' : '继续执行'}
+            {resumeBusy && entry.status === 'executing'
+              ? '执行中…'
+              : entry.status === 'approved'
+                ? '开始执行'
+                : '继续执行'}
           </Button>
           {entry.status === 'executing' ? (
-            <Button size="small" danger onClick={() => void actions?.onPlanCancel()}>
+            <Button
+              size="small"
+              danger
+              loading={actions?.planActionLoading}
+              onClick={() => void actions?.onPlanCancel()}
+            >
               取消
             </Button>
           ) : null}

@@ -45,9 +45,10 @@ import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatBubble } from './ChatBubble'
 import { MessageInput, type MessageInputHandle } from './MessageInput'
 import type { ComposerFocusRequest } from '../Plan/PlanPanelActionsContext'
+import { derivePlanExecutionUiState } from '../Plan/planExecutionUiState'
 import { planPanelActionsStore } from '../../services/planPanelActionsStore'
 import type { ChatMode } from '../../../shared/planTypes'
-import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
+import { DEFAULT_CHAT_MODE, getPlanMeta, isPlanDrafting } from '../../../shared/planTypes'
 import { SkillHintBubble } from './SkillHintBubble'
 import { CHAT_CANCELLED_MESSAGE, isChatCancelledError } from '../../../shared/chatCancel'
 import { buildAssistantStreamPatch } from '../../../shared/assistantStreamPatch'
@@ -160,6 +161,31 @@ export function ChatView() {
     }
   }, [sessionId, dispatch])
 
+  const reloadSessionMessagesFromDb = useCallback(
+    async (targetSessionId: string) => {
+      if (store.getState().chat.currentSessionId !== targetSessionId) return
+      const rows = await window.api.chatGetMessages({ sessionId: targetSessionId })
+      const live = getLiveMessages(targetSessionId)
+      dispatch(setMessages(mergeDbAndLive(rows, live)))
+    },
+    [dispatch]
+  )
+
+  useEffect(() => {
+    const refreshSessionMeta = (targetSessionId: string) => {
+      void window.api.sessionGet(targetSessionId).then((s) => {
+        if (s) dispatch(upsertSession(s))
+      })
+    }
+    const offInbound = window.api.feishuOnInboundMessage(({ sessionId: inboundSessionId }) => {
+      refreshSessionMeta(inboundSessionId)
+      void reloadSessionMessagesFromDb(inboundSessionId)
+    })
+    return () => {
+      offInbound()
+    }
+  }, [dispatch, reloadSessionMessagesFromDb])
+
   useEffect(() => {
     if (!sessionId) return
     const t = window.setTimeout(() => {
@@ -189,6 +215,20 @@ export function ChatView() {
   )
 
   const streamingRequestId = sessionId ? runningSessions[sessionId]?.requestId ?? null : null
+
+  const activePlanId = currentSession ? getPlanMeta(currentSession.metadata)?.planId ?? null : null
+  const planDrafting = currentSession ? isPlanDrafting(currentSession.metadata) : false
+  const sessionRunning = Boolean(sessionId && runningSessions[sessionId])
+  const planExecutionUiState = useMemo(
+    () =>
+      derivePlanExecutionUiState({
+        sessionRunning,
+        planActionLoading,
+        activePlanId,
+        planDrafting
+      }),
+    [sessionRunning, planActionLoading, activePlanId, planDrafting]
+  )
 
   const onToolConfirm = useCallback(
     (toolUseId: string, approved: boolean) => {
@@ -758,7 +798,6 @@ export function ChatView() {
     async (options?: { cancelExecuting?: boolean }) => {
       if (!sessionId) return
       setPlanActionLoading(true)
-      let autoExecute = false
       try {
         const res = await window.api.planApprove({
           sessionId,
@@ -768,13 +807,12 @@ export function ChatView() {
           message.error(res.error)
           return
         }
-        autoExecute = res.autoExecute
         await reloadPlanState()
+        if (res.autoExecute) {
+          await runPlanWorkerWithoutNewUser()
+        }
       } finally {
         setPlanActionLoading(false)
-      }
-      if (autoExecute) {
-        await runPlanWorkerWithoutNewUser()
       }
     },
     [sessionId, runPlanWorkerWithoutNewUser, message, reloadPlanState]
@@ -810,8 +848,14 @@ export function ChatView() {
   }, [sessionId, dispatch, message, reloadPlanState])
 
   const handlePlanResume = useCallback(async () => {
-    await runPlanWorkerWithoutNewUser()
-  }, [runPlanWorkerWithoutNewUser])
+    if (!sessionId || isSessionRunning(sessionId)) return
+    setPlanActionLoading(true)
+    try {
+      await runPlanWorkerWithoutNewUser()
+    } finally {
+      setPlanActionLoading(false)
+    }
+  }, [sessionId, runPlanWorkerWithoutNewUser])
 
   useEffect(() => {
     planPanelActionsStore.set({
@@ -825,7 +869,8 @@ export function ChatView() {
         composerRef.current?.setChatMode('plan')
         composerRef.current?.focus()
       },
-      planActionLoading
+      planActionLoading,
+      planExecutionUiState
     })
     return () => planPanelActionsStore.set(null)
   }, [
@@ -833,10 +878,11 @@ export function ChatView() {
     handlePlanApprove,
     handlePlanResume,
     handlePlanCancel,
-    planActionLoading
+    planActionLoading,
+    planExecutionUiState
   ])
 
-  const running = Boolean(sessionId && runningSessions[sessionId])
+  const running = sessionRunning
 
   useEffect(() => {
     const onIngest = (e: Event) => {
