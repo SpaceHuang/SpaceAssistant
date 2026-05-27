@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, App, Button, Collapse, Select, Space, Switch, Table, Tag, Typography } from 'antd'
 import type { AppConfig, SkillDefinition, SkillActivationLogEntry } from '../../../shared/domainTypes'
 
@@ -33,6 +33,57 @@ function DownloadIcon() {
       />
     </svg>
   )
+}
+
+function useResizableColumns(initialWidths: Record<string, number>) {
+  const [widths, setWidths] = useState(initialWidths)
+  const draggingRef = useRef<{ key: string; startX: number; startW: number } | null>(null)
+
+  useEffect(() => {
+    setWidths(initialWidths)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleMouseDown = (key: string, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    draggingRef.current = { key, startX: e.clientX, startW: widths[key] ?? 80 }
+
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return
+      const delta = ev.clientX - draggingRef.current.startX
+      const newW = Math.max(40, draggingRef.current.startW + delta)
+      setWidths((prev) => ({ ...prev, [key]: newW }))
+    }
+    const onUp = () => {
+      draggingRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  const headerTitle = (key: string, label: string) => (
+    <span style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
+      {label}
+      <span
+        onMouseDown={(e) => handleMouseDown(key, e)}
+        style={{
+          position: 'absolute',
+          right: -8,
+          top: -8,
+          bottom: -8,
+          width: 12,
+          cursor: 'col-resize',
+          zIndex: 1,
+          userSelect: 'none'
+        }}
+        onClick={(e) => e.stopPropagation()}
+      />
+    </span>
+  )
+
+  return { widths, headerTitle }
 }
 
 type Props = {
@@ -137,6 +188,15 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
 
   const skillOptions = skills.map((s) => ({ label: s.meta.name, value: s.meta.name }))
 
+  const { widths, headerTitle } = useResizableColumns({
+    enable: 64,
+    name: 140,
+    scope: 88,
+    desc: 200,
+    version: 72,
+    actions: 120
+  })
+
   return (
     <div>
       {alert ? <Alert type={alert.type} message={alert.text} showIcon style={{ marginBottom: 12 }} closable onClose={() => setAlert(null)} /> : null}
@@ -187,13 +247,13 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <Typography.Text strong>Skill 管理</Typography.Text>
         <Space>
-          <Button icon={<RefreshIcon />} loading={loading} onClick={() => void loadSkills()}>
+          <Button icon={<RefreshIcon />} loading={loading} onClick={() => void loadSkills()} style={{ fontSize: 11 }}>
             扫描 Skill
           </Button>
-          <Button icon={<DownloadIcon />} onClick={() => void onInstall()}>
+          <Button icon={<DownloadIcon />} onClick={() => void onInstall()} style={{ fontSize: 11 }}>
             安装 Skill
           </Button>
-          <Button icon={<FolderOpenIcon />} onClick={() => void window.api.skillOpenDirectory({ scope: 'user' })}>
+          <Button icon={<FolderOpenIcon />} onClick={() => void window.api.skillOpenDirectory({ scope: 'user' })} style={{ fontSize: 11 }}>
             打开目录
           </Button>
         </Space>
@@ -206,10 +266,11 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
         pagination={false}
         dataSource={skills}
         rowClassName={(r) => (r.meta.name === highlightName ? 'sa-skill-row-highlight' : '')}
+        onRow={() => ({ style: { fontSize: 12 } })}
         columns={[
           {
-            title: '启用',
-            width: 64,
+            title: headerTitle('enable', '启用'),
+            width: widths.enable,
             render: (_, skill) => {
               const disabled = disabledGlobal.includes(skill.meta.name)
               return (
@@ -225,36 +286,36 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
             }
           },
           {
-            title: '名称',
+            title: headerTitle('name', '名称'),
             dataIndex: ['meta', 'name'],
-            width: 140
+            width: widths.name
           },
           {
-            title: '作用域',
-            width: 88,
+            title: headerTitle('scope', '作用域'),
+            width: widths.scope,
             render: (_, skill) => (
               <Tag color={skill.scope === 'project' ? 'blue' : 'green'}>{skill.scope === 'project' ? '项目级' : '用户级'}</Tag>
             )
           },
           {
-            title: '描述',
+            title: headerTitle('desc', '描述'),
             ellipsis: true,
             render: (_, skill) => skill.meta.description
           },
           {
-            title: '版本',
-            width: 72,
+            title: headerTitle('version', '版本'),
+            width: widths.version,
             render: (_, skill) => skill.meta.version
           },
           {
-            title: '操作',
-            width: 120,
+            title: headerTitle('actions', '操作'),
+            width: widths.actions,
             render: (_, skill) => (
               <Space size={4}>
-                <Button type="link" size="small" onClick={() => void onExport(skill)}>
+                <Button type="link" size="small" style={{ fontSize: 12 }} onClick={() => void onExport(skill)}>
                   导出
                 </Button>
-                <Button type="link" size="small" danger disabled={skill.scope === 'project'} onClick={() => onDelete(skill)}>
+                <Button type="link" size="small" danger style={{ fontSize: 12 }} disabled={skill.scope === 'project'} onClick={() => onDelete(skill)}>
                   删除
                 </Button>
               </Space>
@@ -287,4 +348,3 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
     </div>
   )
 }
-
