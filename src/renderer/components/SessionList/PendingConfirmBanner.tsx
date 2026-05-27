@@ -3,9 +3,16 @@ import { AlertTriangle } from 'lucide-react'
 import { useAppDispatch, useTypedSelector } from '../../hooks'
 import { setConfirmFocusToolUseId, setSession } from '../../store/chatSlice'
 import { pendingConfirmStore, type PendingConfirmItem } from '../../services/pendingConfirmStore'
+import {
+  labelForPendingConfirmItem,
+  useActionablePendingConfirms
+} from '../../hooks/useActionablePendingConfirms'
 import { formatToolLabel } from '../Chat/toolCallDisplay'
 
 function labelForItem(item: PendingConfirmItem, sessionName: string): string {
+  if (item.toolName === 'run_script' || item.toolName === 'run_lark_cli') {
+    return labelForPendingConfirmItem(item, sessionName)
+  }
   const tool = formatToolLabel(item.toolName, item.input as Record<string, unknown>)
   return `${sessionName} · ${tool}`
 }
@@ -13,6 +20,7 @@ function labelForItem(item: PendingConfirmItem, sessionName: string): string {
 export function PendingConfirmBanner() {
   const dispatch = useAppDispatch()
   const sessions = useTypedSelector((s) => s.session.list)
+  const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const [items, setItems] = useState<PendingConfirmItem[]>(() => pendingConfirmStore.getItems())
 
   useEffect(() => {
@@ -20,7 +28,9 @@ export function PendingConfirmBanner() {
     return pendingConfirmStore.subscribe(() => setItems(pendingConfirmStore.getItems()))
   }, [])
 
-  if (items.length === 0) return null
+  const actionable = useActionablePendingConfirms(items, sessions, runningSessions)
+
+  if (actionable.length === 0) return null
 
   const sessionName = (id: string) => sessions.find((s) => s.id === id)?.name ?? '会话'
 
@@ -28,12 +38,10 @@ export function PendingConfirmBanner() {
     <div className="pending-confirm-banner" role="region" aria-label="待确认工具">
       <div className="pending-confirm-banner__title">
         <AlertTriangle size={14} strokeWidth={1.75} aria-hidden />
-        <span>
-          {items.length} 项待确认
-        </span>
+        <span>{actionable.length} 项待确认</span>
       </div>
       <div className="pending-confirm-banner__list">
-        {items.map((item) => (
+        {actionable.map((item) => (
           <button
             key={`${item.requestId}:${item.toolUseId}`}
             type="button"

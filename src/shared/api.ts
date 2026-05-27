@@ -6,6 +6,8 @@ import type {
   ProjectMemoryState,
   SearchResult,
   Session,
+  SkillRouteRecentMessage,
+  SkillRouteResult,
   SessionSkillsState,
   SkillDefinition,
   SkillsConfig,
@@ -13,7 +15,8 @@ import type {
   ToolRiskLevel,
   ToolsConfig,
   WikiConfig,
-  WikiStatus
+  WikiStatus,
+  PlanConfig
 } from './domainTypes'
 import type {
   FeishuCliDetectResult,
@@ -83,7 +86,41 @@ export type PlanReadResult = {
   raw: string | null
 }
 
-export type PlanStateChangedEvent = { sessionId: string }
+export type PlanStateChangedEvent = {
+  sessionId: string
+  clearStaleToolConfirms?: boolean
+  activeRunRequestId?: string | null
+}
+
+export type PlanStepCompletedEvent = {
+  sessionId: string
+  stepIndex: number
+  stepsTotal: number
+  summary: string
+  requestId: string
+}
+
+export type PlanStepStartedEvent = {
+  sessionId: string
+  stepIndex: number
+  stepsTotal: number
+  requestId: string
+}
+
+export type PlanRunPayload = Omit<ClaudeChatCreateWithToolsPayload, 'requestId' | 'tools'> & {
+  loopRequestId: string
+}
+
+export type PlanRunResult =
+  | {
+      ok: true
+      completed: boolean
+      paused: boolean
+      pauseReason?: string
+      lastContent?: unknown[]
+      usage?: unknown
+    }
+  | { ok: false; error: string }
 
 export type PlanApprovalReadyEvent = { sessionId: string; planState: PlanReadResult }
 
@@ -144,6 +181,7 @@ export type SpaceAssistantApi = {
       skills: Partial<SkillsConfig>
       wiki: Partial<WikiConfig>
       feishu: Partial<FeishuConfig>
+      plan: Partial<PlanConfig>
       workDirProfiles: WorkDirProfile[]
       activeWorkDirProfileId: string
       defaultChatMode: ChatMode
@@ -210,6 +248,14 @@ export type SpaceAssistantApi = {
   skillToggleDisable: (payload: { name: string; disabled: boolean }) => Promise<void>
   skillOpenDirectory: (payload: { scope: 'user' | 'project' }) => Promise<void>
   skillMatch: (payload: { userInput: string; sessionSkillsState: SessionSkillsState }) => Promise<SkillDefinition[]>
+  skillRoute: (payload: {
+    userInput: string
+    sessionSkillsState: SessionSkillsState
+    sessionId?: string
+    sessionMetadata?: Record<string, unknown>
+    recentMessages?: SkillRouteRecentMessage[]
+    model?: string
+  }) => Promise<SkillRouteResult>
   skillExport: (payload: { name: string; destPath: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   skillInvalidateCache: () => Promise<void>
 
@@ -238,7 +284,11 @@ export type SpaceAssistantApi = {
     | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
     | { ok: false; error: string }
   >
+  planRun: (payload: PlanRunPayload) => Promise<PlanRunResult>
+  planPause: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   planOnStateChanged: (cb: (data: PlanStateChangedEvent) => void) => () => void
+  planOnStepCompleted: (cb: (data: PlanStepCompletedEvent) => void) => () => void
+  planOnStepStarted: (cb: (data: PlanStepStartedEvent) => void) => () => void
   planOnApprovalReady: (cb: (data: PlanApprovalReadyEvent) => void) => () => void
 
   projectMemoryGetState: () => Promise<ProjectMemoryState>

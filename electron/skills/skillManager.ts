@@ -1,7 +1,15 @@
-import type { SessionSkillsState, SkillDefinition, SkillsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import type {
+  SessionSkillsState,
+  SkillDefinition,
+  SkillRouteRecentMessage,
+  SkillRouteResult,
+  SkillsConfig,
+  WikiConfig
+} from '../../src/shared/domainTypes'
 import { buildSystemPromptFromSkills, truncateSystemPrompt } from '../../src/shared/skillPrompt'
 import { getCachedSkills, invalidateSkillsCache } from './skillCache'
 import { matchSkills } from './skillMatcher'
+import { routeSkills } from './skillRouter'
 import { getSkillByName } from './skillScanner'
 import {
   deleteUserSkill,
@@ -47,6 +55,72 @@ export function createSkillManager(ctx: SkillManagerContext) {
         return matched.filter((s) => s.meta.name !== 'llm-wiki')
       }
       return matched
+    },
+
+    async route(args: {
+      userInput: string
+      sessionState: SessionSkillsState
+      sessionMetadata?: Record<string, unknown>
+      recentMessages?: SkillRouteRecentMessage[]
+      model: string
+      baseUrl?: string
+      getApiKey: () => Promise<string | null>
+      sessionId?: string
+    }): Promise<SkillRouteResult> {
+      const skills = getCachedSkills(ctx.getUserDataPath(), ctx.getWorkDir())
+      let config = ctx.getSkillsConfig()
+      const wikiConfig = ctx.getWikiConfig?.()
+
+      if (wikiConfig && !wikiConfig.enabled) {
+        config = {
+          ...config,
+          alwaysLoad: config.alwaysLoad.filter((n) => n !== 'llm-wiki')
+        }
+      }
+
+      if (config.routing.mode === 'legacy') {
+        const matched = matchSkills({
+          userInput: args.userInput,
+          skills,
+          config,
+          sessionState: args.sessionState,
+          sessionMetadata: args.sessionMetadata
+        })
+        let filtered = matched
+        if (wikiConfig && !wikiConfig.enabled) {
+          filtered = matched.filter((s) => s.meta.name !== 'llm-wiki')
+        }
+        return {
+          skills: filtered,
+          meta: {
+            sources: Object.fromEntries(filtered.map((s) => [s.meta.name, 'legacy' as const])),
+            durationMs: 0
+          }
+        }
+      }
+
+      const result = await routeSkills({
+        userInput: args.userInput,
+        skills,
+        config,
+        sessionState: args.sessionState,
+        sessionMetadata: args.sessionMetadata,
+        recentMessages: args.recentMessages,
+        model: args.model,
+        baseUrl: args.baseUrl,
+        getApiKey: args.getApiKey,
+        sessionId: args.sessionId
+      })
+
+      if (wikiConfig && !wikiConfig.enabled) {
+        const filtered = result.skills.filter((s) => s.meta.name !== 'llm-wiki')
+        const sources = Object.fromEntries(
+          filtered.map((s) => [s.meta.name, result.meta.sources[s.meta.name]]).filter(([, src]) => src)
+        )
+        return { ...result, skills: filtered, meta: { ...result.meta, sources } }
+      }
+
+      return result
     },
 
     buildSystemPrompt(skills: SkillDefinition[], maxChars?: number): string {

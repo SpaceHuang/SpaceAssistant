@@ -1,11 +1,11 @@
 import type { WebContents } from 'electron'
-import type { ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig, PlanConfig } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
 import { getSession } from '../database'
 import { runToolChatSession, type ClaudeContentBlockMessage } from '../toolChatLoop'
 import { normalizeAnthropicMessageUsage } from '../anthropicUsageNormalize'
 import { filterBuiltinToolsForPlanPhase } from '../../src/shared/planToolsFilter'
-import { getPlanMeta, getPendingPlanMeta, isPlanDrafting, getDisplayPlans, type PlanMeta } from '../../src/shared/planTypes'
+import { getPlanMeta, getPendingPlanMeta, isPlanDrafting, getDisplayPlans, getPlanExecutionMeta, type PlanMeta } from '../../src/shared/planTypes'
 import { extractPlanMarkersFromAssistantContent, extractPlanMarkersFromText } from './planDocExtract'
 import type { PlanReadResult } from '../../src/shared/api'
 import {
@@ -24,6 +24,22 @@ import {
 } from './planManager'
 import { buildPlanApprovalSummary, parsePlanMarkdown } from './planParser'
 import { buildPlanExplorationSystemPrompt, buildPlanRevisionSystemPrompt, buildPlanWorkerSystemPrompt } from './planPrompts'
+import {
+  acquireSessionExecutionLock,
+  releaseSessionExecutionLock,
+  PlanExecutionLockError
+} from './planExecutionLock'
+import {
+  clearPlanPauseRequest,
+  isPlanPauseRequested,
+  markPlanRunState,
+  readPlanExecutionMetaFromDb,
+  requestPlanPause,
+  updatePlanExecutionMeta
+} from './planExecutionState'
+import { consumePlanConfirmFailure } from './planConfirmFailure'
+import { clearProvenanceContext } from './runScriptProvenance'
+import { randomUUID } from 'crypto'
 
 export type PlanOrchestratorDeps = {
   getApiKey: () => Promise<string | null>
@@ -32,10 +48,29 @@ export type PlanOrchestratorDeps = {
   getToolsConfig: () => ToolsConfig
   getWikiConfig?: () => WikiConfig
   getAppDatabase: () => AppDatabase
+  getPlanConfig: () => PlanConfig
 }
 
-function emitPlanStateChanged(sender: WebContents, sessionId: string): void {
-  sender.send('plan:state-changed', { sessionId })
+function emitPlanStateChanged(
+  sender: WebContents,
+  sessionId: string,
+  extra?: { clearStaleToolConfirms?: boolean; activeRunRequestId?: string | null }
+): void {
+  sender.send('plan:state-changed', { sessionId, ...extra })
+}
+
+function emitPlanStepCompleted(
+  sender: WebContents,
+  payload: { sessionId: string; stepIndex: number; stepsTotal: number; summary: string; requestId: string }
+): void {
+  sender.send('plan:step-completed', payload)
+}
+
+function emitPlanStepStarted(
+  sender: WebContents,
+  payload: { sessionId: string; stepIndex: number; stepsTotal: number; requestId: string }
+): void {
+  sender.send('plan:step-started', payload)
 }
 
 async function emitPlanApprovalReady(
@@ -268,8 +303,21 @@ async function runWorkerExecution(args: {
     userDataDir: deps.getUserDataPath(),
     getApiKey: deps.getApiKey,
     appDb: db,
-    planToolPhase: 'implementation'
+    planToolPhase: 'implementation',
+    planConfig: deps.getPlanConfig()
   })
+
+  clearProvenanceContext(args.requestId)
+
+  const confirmFailure = consumePlanConfirmFailure(args.requestId)
+  if (confirmFailure) {
+    markPlanRunState(db, args.sessionId, 'paused_blocked', {
+      pauseReason: confirmFailure,
+      activeRunRequestId: null
+    })
+    emitPlanStateChanged(args.sender, args.sessionId, { clearStaleToolConfirms: true })
+    return { ok: false, error: confirmFailure }
+  }
 
   if (!res.ok) return res
 
@@ -308,6 +356,179 @@ async function runWorkerExecution(args: {
 
   return { ok: true, content: res.content, stopReason: res.stopReason, usage: res.usage }
 }
+
+export type PlanRunResult =
+  | {
+      ok: true
+      completed: boolean
+      paused: boolean
+      pauseReason?: string
+      lastContent?: unknown[]
+      usage?: ReturnType<typeof normalizeAnthropicMessageUsage>
+    }
+  | { ok: false; error: string }
+
+export async function runPlanUntilDone(args: {
+  sender: WebContents
+  loopRequestId: string
+  sessionId: string
+  model: string
+  baseUrl?: string
+  messages: ClaudeContentBlockMessage[]
+  system?: string
+  options?: { maxTokens?: number; enableThinking?: boolean }
+  deps: PlanOrchestratorDeps
+}): Promise<PlanRunResult> {
+  const { deps, sender, sessionId } = args
+  const db = deps.getAppDatabase()
+
+  try {
+    acquireSessionExecutionLock(sessionId, args.loopRequestId)
+  } catch (e) {
+    if (e instanceof PlanExecutionLockError) {
+      return { ok: false, error: e.message }
+    }
+    throw e
+  }
+
+  clearPlanPauseRequest(sessionId)
+  markPlanRunState(db, sessionId, 'running', {
+    startedAt: Date.now(),
+    activeRunRequestId: args.loopRequestId
+  })
+  emitPlanStateChanged(sender, sessionId)
+
+  let messages = [...args.messages]
+  let lastContent: unknown[] | undefined
+  let lastUsage: ReturnType<typeof normalizeAnthropicMessageUsage> | undefined
+
+  try {
+    const maxSteps = 50
+    for (let i = 0; i < maxSteps; i++) {
+      if (isPlanPauseRequested(sessionId)) {
+        clearPlanPauseRequest(sessionId)
+        markPlanRunState(db, sessionId, 'paused_user', { activeRunRequestId: null })
+        emitPlanStateChanged(sender, sessionId, { clearStaleToolConfirms: true })
+        return { ok: true, completed: false, paused: true, pauseReason: '用户已暂停执行', lastContent, usage: lastUsage }
+      }
+
+      const session = getSession(db, sessionId)
+      const planMeta = session ? getPlanMeta(session.metadata) : undefined
+      if (!planMeta || planMeta.status === 'completed' || planMeta.status === 'cancelled') {
+        const completed = planMeta?.status === 'completed'
+        if (completed) {
+          markPlanRunState(db, sessionId, 'completed', { activeRunRequestId: null })
+        }
+        emitPlanStateChanged(sender, sessionId)
+        return { ok: true, completed: Boolean(completed), paused: false, lastContent, usage: lastUsage }
+      }
+
+      const execMeta = readPlanExecutionMetaFromDb(db, sessionId)
+      const executionMode = execMeta?.executionMode ?? deps.getPlanConfig().executionMode
+
+      const raw = await readPlanFile(deps.getWorkDir(), planMeta.planFilePath)
+      const parsed = parsePlanMarkdown(raw)
+      const stepsTotal = parsed.steps.length || planMeta.stepsTotal
+      const stepIndex = planMeta.currentStepIndex
+
+      if (stepIndex >= stepsTotal) {
+        await completePlanInSession({ db, sessionId })
+        markPlanRunState(db, sessionId, 'completed', { activeRunRequestId: null })
+        emitPlanStateChanged(sender, sessionId)
+        return { ok: true, completed: true, paused: false, lastContent, usage: lastUsage }
+      }
+
+      const stepRequestId = randomUUID()
+      updatePlanExecutionMeta(db, sessionId, { activeRunRequestId: stepRequestId })
+      emitPlanStepStarted(sender, { sessionId, stepIndex, stepsTotal, requestId: stepRequestId })
+
+      const res = await runWorkerExecution({
+        sender,
+        requestId: stepRequestId,
+        sessionId,
+        model: args.model,
+        baseUrl: args.baseUrl,
+        messages,
+        system: args.system,
+        options: args.options,
+        deps,
+        planMeta
+      })
+
+      if (!res.ok) {
+        const execAfter = readPlanExecutionMetaFromDb(db, sessionId)
+        if (execAfter?.runState !== 'paused_blocked') {
+          markPlanRunState(db, sessionId, 'paused_blocked', {
+            pauseReason: res.error,
+            activeRunRequestId: null
+          })
+        }
+        emitPlanStateChanged(sender, sessionId, { clearStaleToolConfirms: true })
+        return { ok: true, completed: false, paused: true, pauseReason: res.error, lastContent, usage: lastUsage }
+      }
+
+      lastContent = res.content
+      lastUsage = res.usage
+      messages = [...messages, { role: 'assistant', content: res.content }]
+
+      const summary = extractTextFromContent(res.content as unknown[]).slice(0, 500) || '步骤已完成'
+      emitPlanStepCompleted(sender, {
+        sessionId,
+        stepIndex,
+        stepsTotal,
+        summary,
+        requestId: stepRequestId
+      })
+      updatePlanExecutionMeta(db, sessionId, { lastStepCompletedAt: Date.now() })
+      emitPlanStateChanged(sender, sessionId, {
+        clearStaleToolConfirms: true,
+        activeRunRequestId: stepRequestId
+      })
+
+      const sessionAfter = getSession(db, sessionId)
+      const planAfter = sessionAfter ? getPlanMeta(sessionAfter.metadata) : undefined
+      if (planAfter?.status === 'completed' || planAfter?.status === 'cancelled') {
+        const completed = planAfter.status === 'completed'
+        if (completed) {
+          markPlanRunState(db, sessionId, 'completed', { activeRunRequestId: null })
+        }
+        emitPlanStateChanged(sender, sessionId)
+        return { ok: true, completed, paused: false, lastContent, usage: lastUsage }
+      }
+
+      if (executionMode === 'step_manual') {
+        markPlanRunState(db, sessionId, 'idle', { activeRunRequestId: null })
+        emitPlanStateChanged(sender, sessionId, { clearStaleToolConfirms: true })
+        return { ok: true, completed: false, paused: false, lastContent, usage: lastUsage }
+      }
+
+      if (isPlanPauseRequested(sessionId)) {
+        clearPlanPauseRequest(sessionId)
+        markPlanRunState(db, sessionId, 'paused_user', { activeRunRequestId: null })
+        emitPlanStateChanged(sender, sessionId, { clearStaleToolConfirms: true })
+        return { ok: true, completed: false, paused: true, pauseReason: '用户已暂停执行', lastContent, usage: lastUsage }
+      }
+    }
+
+    markPlanRunState(db, sessionId, 'paused_blocked', {
+      pauseReason: '超过最大步数限制',
+      activeRunRequestId: null
+    })
+    emitPlanStateChanged(sender, sessionId)
+    return {
+      ok: true,
+      completed: false,
+      paused: true,
+      pauseReason: '超过最大步数限制',
+      lastContent,
+      usage: lastUsage
+    }
+  } finally {
+    releaseSessionExecutionLock(sessionId, args.loopRequestId)
+  }
+}
+
+export { requestPlanPause }
 
 export async function resumePlanExecution(args: {
   sender: WebContents

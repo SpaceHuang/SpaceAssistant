@@ -1,4 +1,4 @@
-import { App, Button, Modal } from 'antd'
+import { App, Button } from 'antd'
 import { LlmServiceCard } from './LlmServiceCard'
 import { MAX_LLM_SERVICES } from './llmServiceDrafts'
 import type { useLlmServiceDrafts } from './useLlmServiceDrafts'
@@ -11,7 +11,7 @@ type Props = {
 }
 
 export function LlmServiceTab({ draftsApi }: Props) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const { state, cardRefs, selectActive, toggleExpanded, addService, removeService, patchDraft } = draftsApi
 
   const handleAdd = () => {
@@ -23,7 +23,7 @@ export function LlmServiceTab({ draftsApi }: Props) {
   }
 
   const handleDelete = (serviceId: string) => {
-    Modal.confirm({
+    modal.confirm({
       title: '删除大模型服务',
       content: '确定删除该服务？删除后不可恢复。',
       okText: '删除',

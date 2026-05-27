@@ -8,7 +8,8 @@ import type {
   PlanMeta,
   PlanVersionEntry,
   PlanAbortMeta,
-  PlanStepResult
+  PlanStepResult,
+  PlanExecutionMeta
 } from '../../src/shared/planTypes'
 import type { PlanReadResult } from '../../src/shared/api'
 import {
@@ -20,6 +21,7 @@ import {
   SESSION_META_PLAN_ABORT_DISMISSED,
   SESSION_META_PLAN_STEP_RESULTS,
   SESSION_META_PLAN_VERSIONS,
+  SESSION_META_PLAN_EXECUTION,
   getPlanAbort,
   getPlanMeta,
   getPendingPlanMeta,
@@ -32,6 +34,8 @@ import {
 import { plansDirAbs, relPlanPathFromAbs, planFileAbs } from './planPaths'
 import { parsePlanMarkdown, countPlanSteps, buildPlanApprovalSummary } from './planParser'
 import { captureGitHead } from './planGitSnapshot'
+import type { PlanConfig } from '../../src/shared/domainTypes'
+import { createPlanExecutionSnapshot } from './planExecutionState'
 
 function slugFromTitle(title: string): string {
   const s = title
@@ -119,6 +123,7 @@ export function mergePlanMetadata(
     plan_abort_dismissed?: boolean | null
     plan_versions?: PlanVersionEntry[]
     plan_step_results?: PlanStepResult[]
+    plan_execution?: PlanExecutionMeta | null
   }
 ): Record<string, unknown> {
   const next = { ...sessionMetadata }
@@ -152,6 +157,10 @@ export function mergePlanMetadata(
   }
   if (patch.plan_step_results !== undefined) {
     next[SESSION_META_PLAN_STEP_RESULTS] = patch.plan_step_results
+  }
+  if (patch.plan_execution !== undefined) {
+    if (patch.plan_execution === null) delete next[SESSION_META_PLAN_EXECUTION]
+    else next[SESSION_META_PLAN_EXECUTION] = patch.plan_execution
   }
   return next
 }
@@ -394,6 +403,7 @@ export async function approvePlanInSession(args: {
   sessionId: string
   workDir: string
   cancelExecuting?: boolean
+  planConfig?: PlanConfig
 }): Promise<{ plan: PlanMeta; autoExecute: boolean }> {
   const session = getSession(args.db, args.sessionId)
   if (!session) throw new Error('Session not found')
@@ -431,11 +441,14 @@ export async function approvePlanInSession(args: {
     : []
   ).map((v) => (v.version === pending.version ? { ...v, approvalResult: 'approved' as const } : v))
 
+  const planExecution = args.planConfig ? createPlanExecutionSnapshot(args.planConfig) : undefined
+
   const metadata = mergePlanMetadata(session.metadata, {
     plan: next,
     pending_plan: null,
     display_plans: mergedDisplay,
-    plan_versions: versions
+    plan_versions: versions,
+    ...(planExecution ? { plan_execution: planExecution } : {})
   })
   saveSessionMetadata(args.db, args.sessionId, metadata)
 

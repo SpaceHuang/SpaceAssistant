@@ -1,7 +1,7 @@
 import type { IpcMain, WebContents } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
 import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
-import type { ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig, PlanConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
@@ -23,6 +23,7 @@ export type ClaudeStreamDeps = {
   getWikiConfig: () => WikiConfig
   getAppDatabase: () => AppDatabase
   getProjectMemoryEnabled?: () => boolean
+  getPlanConfig: () => PlanConfig
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -216,7 +217,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           getUserDataPath: deps.getUserDataPath,
           getToolsConfig: deps.getToolsConfig,
           getWikiConfig: deps.getWikiConfig,
-          getAppDatabase: deps.getAppDatabase
+          getAppDatabase: deps.getAppDatabase,
+          getPlanConfig: deps.getPlanConfig
         }
 
         const memoryContent = getCachedMemoryContent()

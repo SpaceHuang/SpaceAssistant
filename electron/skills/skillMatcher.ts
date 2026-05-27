@@ -108,7 +108,7 @@ export function matchSkills(args: {
     return a.meta.name.localeCompare(b.meta.name)
   })
 
-  const matched = sorted.slice(0, Math.max(1, config.maxConcurrent))
+  const matched = sorted.slice(0, Math.max(0, config.maxConcurrent))
   logAgentEvent('info', 'skills.match', {
     userInput,
     matched: matched.map((s) => ({

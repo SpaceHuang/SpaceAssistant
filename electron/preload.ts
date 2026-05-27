@@ -125,6 +125,7 @@ const api: SpaceAssistantApi = {
   skillToggleDisable: (payload) => ipcRenderer.invoke('skill:toggle-disable', payload),
   skillOpenDirectory: (payload) => ipcRenderer.invoke('skill:open-directory', payload),
   skillMatch: (payload) => ipcRenderer.invoke('skill:match', payload),
+  skillRoute: (payload) => ipcRenderer.invoke('skill:route', payload),
   skillExport: (payload) => ipcRenderer.invoke('skill:export', payload),
   skillInvalidateCache: () => ipcRenderer.invoke('skill:invalidate-cache'),
 
@@ -140,10 +141,22 @@ const api: SpaceAssistantApi = {
   planCancel: (payload) => ipcRenderer.invoke('plan:cancel', payload),
   planDismissAbort: (payload) => ipcRenderer.invoke('plan:dismiss-abort', payload),
   planResumeExecution: (payload) => ipcRenderer.invoke('plan:resume-execution', payload),
+  planRun: (payload) => ipcRenderer.invoke('plan:run', payload),
+  planPause: (payload) => ipcRenderer.invoke('plan:pause', payload),
   planOnStateChanged: (cb) => {
-    const fn = (_e: unknown, data: { sessionId: string }) => cb(data)
+    const fn = (_e: unknown, data: import('../src/shared/api').PlanStateChangedEvent) => cb(data)
     ipcRenderer.on('plan:state-changed', fn)
     return () => ipcRenderer.removeListener('plan:state-changed', fn)
+  },
+  planOnStepCompleted: (cb) => {
+    const fn = (_e: unknown, data: import('../src/shared/api').PlanStepCompletedEvent) => cb(data)
+    ipcRenderer.on('plan:step-completed', fn)
+    return () => ipcRenderer.removeListener('plan:step-completed', fn)
+  },
+  planOnStepStarted: (cb) => {
+    const fn = (_e: unknown, data: import('../src/shared/api').PlanStepStartedEvent) => cb(data)
+    ipcRenderer.on('plan:step-started', fn)
+    return () => ipcRenderer.removeListener('plan:step-started', fn)
   },
   planOnApprovalReady: (cb) => {
     const fn = (_e: unknown, data: { sessionId: string; planState: import('../src/shared/api').PlanReadResult }) =>

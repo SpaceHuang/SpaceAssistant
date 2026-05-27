@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { Alert, Button, Collapse, Modal } from 'antd'
+import { Alert, App, Button, Collapse } from 'antd'
 import type { PlanApprovalSummary, PlanDisplayEntry, PlanMeta } from '../../../shared/planTypes'
 import { buildPlanApprovalImpactText } from './planPanelState'
 import { usePlanPanelActions } from './PlanPanelActionsContext'
@@ -13,6 +13,7 @@ type Props = {
 }
 
 export function PlanPanelApproval({ pendingPlan, summary, displayPlans, onOpenPlanFile }: Props) {
+  const { modal } = App.useApp()
   const actions = usePlanPanelActions()
   const approvalRef = useRef<HTMLDivElement>(null)
 
@@ -21,7 +22,7 @@ export function PlanPanelApproval({ pendingPlan, summary, displayPlans, onOpenPl
     const executing = displayPlans.find((p) => p.status === 'executing')
     if (executing) {
       const step = Math.min(executing.currentStepIndex + 1, Math.max(executing.stepsTotal, 1))
-      Modal.confirm({
+      modal.confirm({
         title: '确认批准新计划',
         content: `当前计划「${executing.title}」执行到第 ${step}/${executing.stepsTotal || '?'} 步。批准新计划后，旧计划将标记为已取消，新计划加入列表且不会自动开始执行。是否继续？`,
         okText: '继续批准',

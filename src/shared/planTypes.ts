@@ -50,6 +50,36 @@ export interface PlanStepResult {
   errors?: string[]
 }
 
+/** 计划执行驱动方式（会话级或全局配置，默认 auto） */
+export type PlanExecutionMode = 'auto' | 'step_manual' | 'step_confirm'
+
+export type PlanToolConfirmPolicy =
+  | 'trust_plan'
+  | 'trust_plan_all'
+  | 'always_confirm'
+  | 'confirm_high_risk'
+
+export type PlanExecutionRunState =
+  | 'idle'
+  | 'running'
+  | 'paused_user'
+  | 'paused_blocked'
+  | 'paused_confirm'
+  | 'completed'
+  | 'cancelled'
+
+export interface PlanExecutionMeta {
+  runState: PlanExecutionRunState
+  executionMode: PlanExecutionMode
+  toolConfirmPolicy: PlanToolConfirmPolicy
+  startedAt: number | null
+  pausedAt: number | null
+  pauseReason?: string
+  lastStepCompletedAt?: number
+  /** 主进程 execution lock 持有者 requestId，防并发 */
+  activeRunRequestId?: string | null
+}
+
 export const SESSION_META_PLAN = 'plan'
 export const SESSION_META_PENDING_PLAN = 'pending_plan'
 export const SESSION_META_DISPLAY_PLANS = 'display_plans'
@@ -58,6 +88,7 @@ export const SESSION_META_PLAN_VERSIONS = 'plan_versions'
 export const SESSION_META_PLAN_ABORT = 'plan_abort'
 export const SESSION_META_PLAN_ABORT_DISMISSED = 'plan_abort_dismissed'
 export const SESSION_META_PLAN_STEP_RESULTS = 'plan_step_results'
+export const SESSION_META_PLAN_EXECUTION = 'plan_execution'
 
 export interface PlanDisplayEntry {
   planId: string
@@ -286,4 +317,72 @@ export function isSessionPlanExplorationBlocked(metadata: Record<string, unknown
   if (pending?.status === 'awaiting_approval') return true
   const plan = getPlanMeta(metadata)
   return plan ? isPlanExplorationBlocked(plan.status) : false
+}
+
+export function normalizePlanExecutionMeta(raw: unknown): PlanExecutionMeta | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const o = raw as Record<string, unknown>
+  const runState = o.runState
+  const executionMode = o.executionMode
+  const toolConfirmPolicy = o.toolConfirmPolicy
+  if (
+    runState !== 'idle' &&
+    runState !== 'running' &&
+    runState !== 'paused_user' &&
+    runState !== 'paused_blocked' &&
+    runState !== 'paused_confirm' &&
+    runState !== 'completed' &&
+    runState !== 'cancelled'
+  ) {
+    return undefined
+  }
+  if (executionMode !== 'auto' && executionMode !== 'step_manual' && executionMode !== 'step_confirm') {
+    return undefined
+  }
+  if (
+    toolConfirmPolicy !== 'trust_plan' &&
+    toolConfirmPolicy !== 'trust_plan_all' &&
+    toolConfirmPolicy !== 'always_confirm' &&
+    toolConfirmPolicy !== 'confirm_high_risk'
+  ) {
+    return undefined
+  }
+  return {
+    runState,
+    executionMode,
+    toolConfirmPolicy,
+    startedAt: typeof o.startedAt === 'number' ? o.startedAt : o.startedAt === null ? null : null,
+    pausedAt: typeof o.pausedAt === 'number' ? o.pausedAt : o.pausedAt === null ? null : null,
+    pauseReason: typeof o.pauseReason === 'string' ? o.pauseReason : undefined,
+    lastStepCompletedAt: typeof o.lastStepCompletedAt === 'number' ? o.lastStepCompletedAt : undefined,
+    activeRunRequestId:
+      typeof o.activeRunRequestId === 'string'
+        ? o.activeRunRequestId
+        : o.activeRunRequestId === null
+          ? null
+          : undefined
+  }
+}
+
+export function getPlanExecutionMeta(metadata: Record<string, unknown> | undefined): PlanExecutionMeta | undefined {
+  if (!metadata) return undefined
+  return normalizePlanExecutionMeta(metadata[SESSION_META_PLAN_EXECUTION])
+}
+
+/** 应用重启后：running 视为 paused_blocked（不 silently 续跑） */
+export function reconcilePlanExecutionOnLoad(
+  metadata: Record<string, unknown>
+): Record<string, unknown> {
+  const exec = getPlanExecutionMeta(metadata)
+  if (!exec || exec.runState !== 'running') return metadata
+  return {
+    ...metadata,
+    [SESSION_META_PLAN_EXECUTION]: {
+      ...exec,
+      runState: 'paused_blocked' as const,
+      pausedAt: Date.now(),
+      pauseReason: '执行已中断，是否继续？',
+      activeRunRequestId: null
+    }
+  }
 }

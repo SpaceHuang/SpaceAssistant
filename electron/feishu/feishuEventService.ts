@@ -47,6 +47,12 @@ export class FeishuEventService {
 
   async start(): Promise<void> {
     this.intentionalStop = false
+    this.restartAttempts = 0
+    this.restartTimestamps = []
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = null
+    }
     await this.spawnSubscribe()
   }
 
@@ -84,6 +90,7 @@ export class FeishuEventService {
     this.stdoutReader?.close()
     const rl = readline.createInterface({ input: this.proc.stdout! })
     this.stdoutReader = rl
+    let gotFirstEvent = false;
     rl.on('line', (line) => {
       try {
         const raw = JSON.parse(line) as unknown
@@ -91,6 +98,10 @@ export class FeishuEventService {
         if (msg) {
           this.processedCount++
           this.onMessage(msg)
+          if (!gotFirstEvent) {
+            gotFirstEvent = true
+            this.setState('connected')
+          }
           this.emitState()
         }
       } catch {
@@ -118,8 +129,6 @@ export class FeishuEventService {
       this.lastError = err.message
       this.setState('error', err.message)
     })
-
-    this.setState('connected')
   }
 
   private scheduleRestart(exitCode: number): void {

@@ -11,6 +11,7 @@ import {
   outcomeFromFileToolSignal,
   throwIfAborted
 } from './toolExecutionResource'
+import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 
@@ -268,6 +269,8 @@ function applyEdit(content: string, oldS: string, newS: string, replaceAll: bool
   return content.slice(0, i) + newS + content.slice(i + oldS.length)
 }
 
+import { toolErrMissingPath } from '../toolInputGuards'
+
 const ERR_FILE_NOT_READ_FOR_EDIT =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
 const ERR_FILE_NOT_READ_FOR_WRITE =
@@ -303,6 +306,9 @@ export const editFileExecutor: ToolExecutor = {
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const rel = typeof input.path === 'string' ? input.path : ''
+    if (!rel.trim()) {
+      return { success: false, error: toolErrMissingPath('edit_file'), duration: Date.now() - started }
+    }
     const oldS = typeof input.old_string === 'string' ? input.old_string : ''
     const newS = typeof input.new_string === 'string' ? input.new_string : ''
     const replaceAll = Boolean(input.replace_all)
@@ -389,6 +395,9 @@ export const writeFileExecutor: ToolExecutor = {
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const rel = typeof input.path === 'string' ? input.path : ''
+    if (!rel.trim()) {
+      return { success: false, error: toolErrMissingPath('write_file'), duration: Date.now() - started }
+    }
     const content = typeof input.content === 'string' ? input.content : ''
     const rawBlock = wikiRawWriteBlocked(ctx, rel)
     if (rawBlock) return { ...rawBlock, duration: Date.now() - started }
@@ -684,10 +693,9 @@ export const runScriptExecutor: ToolExecutor = {
     const timeoutSec = typeof input.timeout === 'number' ? input.timeout : ctx.toolsConfig.scriptTimeout
     const py = ctx.toolsConfig.pythonPath || 'python'
     ctx.sendProgress('script', '启动 Python...')
-    const env = {
-      PATH: process.env.PATH ?? '',
-      ...(process.platform === 'win32' ? { USERPROFILE: process.env.USERPROFILE ?? '' } : { HOME: process.env.HOME ?? '' })
-    }
+    const env = buildPythonScriptEnv()
+    const stdoutDecoder = createStreamTextDecoder('utf-8')
+    const stderrDecoder = createStreamTextDecoder('utf-8')
     let stdout = ''
     let stderr = ''
     return await new Promise((resolve) => {
@@ -698,12 +706,12 @@ export const runScriptExecutor: ToolExecutor = {
         shell: false
       })
       const onDataOut = (b: Buffer) => {
-        stdout += b.toString('utf8')
+        stdout += stdoutDecoder.write(b)
         if (stdout.length > SCRIPT_IO_MAX) stdout = stdout.slice(0, SCRIPT_IO_MAX) + '\n[输出被截断]'
         ctx.sendProgress('script', stdout.slice(-4000))
       }
       const onDataErr = (b: Buffer) => {
-        stderr += b.toString('utf8')
+        stderr += stderrDecoder.write(b)
         if (stderr.length > SCRIPT_IO_MAX) stderr = stderr.slice(0, SCRIPT_IO_MAX) + '\n[输出被截断]'
       }
       proc.stdout?.on('data', onDataOut)
@@ -725,6 +733,8 @@ export const runScriptExecutor: ToolExecutor = {
       proc.on('close', (code) => {
         clearTimeout(killTimer)
         ctx.signal.removeEventListener('abort', onAbort)
+        stdout += stdoutDecoder.end()
+        stderr += stderrDecoder.end()
         if (ctx.signal.aborted) {
           resolve({ success: false, error: '用户取消执行', duration: Date.now() - started })
           return

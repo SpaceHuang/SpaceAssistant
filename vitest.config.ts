@@ -3,8 +3,8 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    // Windows 上 forks 池易出现 worker 启动超时；单 worker threads 更稳定（Vitest 4：勿用 poolOptions）
-    pool: 'threads',
+    // Windows 上 threads 池易出现 worker 启动超时；forks 更稳定
+    pool: 'forks',
     maxWorkers: 1,
     fileParallelism: false,
     environment: 'jsdom',

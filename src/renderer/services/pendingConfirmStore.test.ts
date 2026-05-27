@@ -88,4 +88,26 @@ describe('pendingConfirmStore', () => {
     expect(pendingConfirmStore.getItems()).toHaveLength(1)
     expect(pendingConfirmStore.getItems()[0]?.sessionId).toBe('s2')
   })
+
+  it('removeAllForRequest clears orphan items', () => {
+    registerRunRequest('s1', 'r1')
+    registerRunRequest('s1', 'r2')
+    confirmCb?.({
+      requestId: 'r1',
+      toolUseId: 't1',
+      toolName: 'write_file',
+      input: {},
+      riskLevel: 'medium'
+    })
+    confirmCb?.({
+      requestId: 'r2',
+      toolUseId: 't2',
+      toolName: 'write_file',
+      input: {},
+      riskLevel: 'medium'
+    })
+    pendingConfirmStore.removeAllForRequest('r1')
+    expect(pendingConfirmStore.getItems()).toHaveLength(1)
+    expect(pendingConfirmStore.getItems()[0]?.requestId).toBe('r2')
+  })
 })

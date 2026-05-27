@@ -1,4 +1,4 @@
-import type { SkillDefinition } from './domainTypes'
+import type { SkillDefinition, SkillActivationSource } from './domainTypes'
 
 export function buildSystemPromptFromSkills(skills: SkillDefinition[]): string {
   if (skills.length === 0) return ''
@@ -15,6 +15,28 @@ export function formatSkillHint(skills: SkillDefinition[], prefix: string): stri
   if (skills.length === 0) return ''
   const names = skills.map((s) => `${s.meta.name}（${s.scope === 'project' ? '项目级' : '用户级'}）`).join('、')
   return `[Skill] ${prefix}: ${names}`
+}
+
+const SOURCE_HINT_LABEL: Record<SkillActivationSource, string> = {
+  llm: 'AI 匹配',
+  manual: '手动激活',
+  alwaysLoad: '始终加载',
+  feishu: '飞书',
+  legacy: '本地匹配'
+}
+
+export function formatSkillRouteHint(
+  skills: SkillDefinition[],
+  sources: Record<string, SkillActivationSource>
+): string {
+  if (skills.length === 0) return ''
+  const parts = skills.map((s) => {
+    const scope = s.scope === 'project' ? '项目级' : '用户级'
+    const src = sources[s.meta.name]
+    const srcLabel = src ? SOURCE_HINT_LABEL[src] : ''
+    return srcLabel ? `${s.meta.name}（${scope}，${srcLabel}）` : `${s.meta.name}（${scope}）`
+  })
+  return `[Skill] 已加载: ${parts.join('、')}`
 }
 
 export function truncateSystemPrompt(system: string, maxChars: number): string {

@@ -8,11 +8,21 @@ import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
 import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
+import { getPlanMeta, getPlanExecutionMeta } from '../src/shared/planTypes'
+import { shouldSkipToolConfirm, toolConfirmSkipReason } from './plan/planToolConfirm'
+import {
+  getOrCreateProvenanceContext,
+  clearProvenanceContext,
+  recordReadFileForProvenance,
+  recordWriteFileForProvenance
+} from './plan/runScriptProvenance'
+import { markPlanConfirmFailure } from './plan/planConfirmFailure'
 import { shouldBlockToolInPlanMode, type PlanToolPhaseArg } from './plan/planModeAcl'
 import { getSession } from './database'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
-import type { ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig, PlanConfig } from '../src/shared/domainTypes'
+import { mergePlanConfig } from '../src/shared/domainTypes'
 import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
 import type { AppDatabase } from './database'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
@@ -121,6 +131,34 @@ function formatToolResultPayload(r: { success: boolean; data?: unknown; error?: 
   }
 }
 
+const MAX_CONSECUTIVE_SAME_TOOL_ERROR = 3
+
+function buildToolErrorResult(toolUseId: string, error: string): Anthropic.ToolResultBlockParam {
+  return { type: 'tool_result', tool_use_id: toolUseId, content: error, is_error: true }
+}
+
+function makeToolErrorRepeatTracker() {
+  let lastKey: string | null = null
+  let count = 0
+  return {
+    noteFailure(toolName: string, error: string): boolean {
+      const key = `${toolName}\0${error}`
+      if (key === lastKey) count++
+      else {
+        lastKey = key
+        count = 1
+      }
+      return count >= MAX_CONSECUTIVE_SAME_TOOL_ERROR
+    },
+    noteSuccess(toolName: string): void {
+      if (lastKey?.startsWith(`${toolName}\0`)) {
+        lastKey = null
+        count = 0
+      }
+    }
+  }
+}
+
 async function maybeBuildConfirmDiff(
   workDir: string,
   toolName: string,
@@ -181,6 +219,7 @@ export type RunToolChatSessionArgs = {
   planToolPhase?: PlanToolPhaseArg
   /** Plan 探索期可传入只读工具子集 */
   toolsOverride?: unknown[]
+  planConfig?: PlanConfig
 }
 
 export type RunToolChatSessionResult =
@@ -222,8 +261,11 @@ async function runToolChatSessionInner(
     appDb,
     chatSignal,
     planToolPhase = null,
-    toolsOverride
+    toolsOverride,
+    planConfig: planConfigArg
   } = args
+
+  const planConfig = mergePlanConfig(planConfigArg)
 
   const apiKey = await getApiKey()
   if (!apiKey) {
@@ -278,6 +320,7 @@ async function runToolChatSessionInner(
   let loopRound = 0
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
+  const toolErrorRepeat = makeToolErrorRepeatTracker()
 
   while (true) {
     loopRound++
@@ -457,6 +500,7 @@ async function runToolChatSessionInner(
 
     const toolResults: Anthropic.ToolResultBlockParam[] = []
     const fileCache = getFileStateCacheForSession(sessionId)
+    let abortRepeatedToolError: string | null = null
 
     for (const tu of toolUses) {
       throwIfChatCancelled(chatSignal)
@@ -476,16 +520,16 @@ async function runToolChatSessionInner(
           input: inputObj,
           error: unknownToolError
         })
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUseId,
-          content: unknownToolError
-        })
+        toolResults.push(buildToolErrorResult(toolUseId, unknownToolError))
         sender.send('tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: unknownToolError }
         })
+        if (toolErrorRepeat.noteFailure(toolName, unknownToolError)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${unknownToolError}`
+          break
+        }
         continue
       }
 
@@ -502,16 +546,16 @@ async function runToolChatSessionInner(
           input: inputObj,
           error: blockedError
         })
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUseId,
-          content: blockedError
-        })
+        toolResults.push(buildToolErrorResult(toolUseId, blockedError))
         sender.send('tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: blockedError }
         })
+        if (toolErrorRepeat.noteFailure(toolName, blockedError)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${blockedError}`
+          break
+        }
         continue
       }
 
@@ -529,16 +573,16 @@ async function runToolChatSessionInner(
           input: inputObj,
           error: msg
         })
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUseId,
-          content: msg
-        })
+        toolResults.push(buildToolErrorResult(toolUseId, msg))
         sender.send('tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: msg }
         })
+        if (toolErrorRepeat.noteFailure(toolName, msg)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${msg}`
+          break
+        }
         continue
       }
 
@@ -553,19 +597,49 @@ async function runToolChatSessionInner(
           input: inputObj,
           error: remoteBlock
         })
-        toolResults.push({ type: 'tool_result', tool_use_id: toolUseId, content: remoteBlock })
+        toolResults.push(buildToolErrorResult(toolUseId, remoteBlock))
         sender.send('tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: remoteBlock, blockedReason: 'feishu_remote_write_blocked' }
         })
+        if (toolErrorRepeat.noteFailure(toolName, remoteBlock)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${remoteBlock}`
+          break
+        }
         continue
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
       const needsConfirm = toolNeedsUserConfirmation(toolName, inputObj, feishuConfig)
+      const planMeta = sessionMeta ? getPlanMeta(sessionMeta) ?? null : null
+      const planExec = sessionMeta ? getPlanExecutionMeta(sessionMeta) : undefined
+      const confirmPolicy = planExec?.toolConfirmPolicy ?? planConfig.toolConfirmPolicy
+      const provenance = getOrCreateProvenanceContext(requestId)
+      const skipConfirm =
+        needsConfirm &&
+        shouldSkipToolConfirm({
+          planToolPhase,
+          planMeta,
+          policy: confirmPolicy,
+          toolName,
+          toolInput: inputObj,
+          provenance,
+          planConfig
+        })
 
-      if (needsConfirm && remoteContext?.source === 'feishu') {
+      if (skipConfirm) {
+        const reason = toolConfirmSkipReason({ toolName, toolInput: inputObj, provenance, planConfig })
+        logAgentEvent('info', 'tool.confirm', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName,
+          outcome: 'auto_approved',
+          reason
+        })
+      } else if (needsConfirm && remoteContext?.source === 'feishu') {
         if (
           (remoteContext.confirmPolicy === 'feishu_confirm' || remoteContext.confirmPolicy === 'always') &&
           remoteContext.confirmManager
@@ -608,6 +682,9 @@ async function runToolChatSessionInner(
 
       if (outcome === 'timeout') {
         const timeoutError = '用户确认超时（5分钟），工具调用已取消'
+        if (planToolPhase === 'implementation' && needsConfirm && !skipConfirm) {
+          markPlanConfirmFailure(requestId, '确认超时，已暂停；请返回后重试本步')
+        }
         logAgentEvent('error', 'tool.error', {
           requestId,
           sessionId,
@@ -617,20 +694,23 @@ async function runToolChatSessionInner(
           input: inputObj,
           error: timeoutError
         })
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUseId,
-          content: timeoutError
-        })
+        toolResults.push(buildToolErrorResult(toolUseId, timeoutError))
         sender.send('tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: timeoutError }
         })
+        if (toolErrorRepeat.noteFailure(toolName, timeoutError)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${timeoutError}`
+          break
+        }
         continue
       }
       if (outcome === 'rejected') {
         const rejectedError = '用户拒绝执行此工具'
+        if (planToolPhase === 'implementation' && needsConfirm && !skipConfirm) {
+          markPlanConfirmFailure(requestId, '本步脚本/命令未批准')
+        }
         logAgentEvent('error', 'tool.error', {
           requestId,
           sessionId,
@@ -640,16 +720,16 @@ async function runToolChatSessionInner(
           input: inputObj,
           error: rejectedError
         })
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUseId,
-          content: rejectedError
-        })
+        toolResults.push(buildToolErrorResult(toolUseId, rejectedError))
         sender.send('tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: rejectedError }
         })
+        if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
+          break
+        }
         continue
       }
 
@@ -666,16 +746,16 @@ async function runToolChatSessionInner(
             input: inputObj,
             error: conflict
           })
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUseId,
-            content: conflict
-          })
+          toolResults.push(buildToolErrorResult(toolUseId, conflict))
           sender.send('tool:result', {
             requestId,
             toolUseId,
             result: { success: false, error: conflict }
           })
+          if (toolErrorRepeat.noteFailure(toolName, conflict)) {
+            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${conflict}`
+            break
+          }
           continue
         }
         claimWritePath(sessionId, relPath)
@@ -728,6 +808,27 @@ async function runToolChatSessionInner(
 
       const durationMs = Date.now() - execStartedAt
       if (execResult.success) {
+        if (toolName === 'read_file' && typeof inputObj.path === 'string') {
+          const readContent =
+            execResult.data && typeof execResult.data === 'object' && 'content' in (execResult.data as object)
+              ? String((execResult.data as { content?: unknown }).content ?? '')
+              : typeof execResult.data === 'string'
+                ? execResult.data
+                : ''
+          if (readContent) {
+            recordReadFileForProvenance(provenance, inputObj.path, readContent)
+          }
+        }
+        if (
+          (toolName === 'write_file' || toolName === 'edit_file') &&
+          typeof inputObj.path === 'string' &&
+          typeof inputObj.content === 'string'
+        ) {
+          recordWriteFileForProvenance(provenance, inputObj.path, inputObj.content)
+        }
+        if (toolName === 'edit_file' && typeof inputObj.path === 'string' && typeof inputObj.new_string === 'string') {
+          recordWriteFileForProvenance(provenance, inputObj.path, inputObj.new_string)
+        }
         logAgentEvent('info', 'tool.result', {
           requestId,
           sessionId,
@@ -738,6 +839,7 @@ async function runToolChatSessionInner(
           data: execResult.data,
           durationMs
         })
+        toolErrorRepeat.noteSuccess(toolName)
       } else {
         logAgentEvent('error', 'tool.error', {
           requestId,
@@ -762,19 +864,31 @@ async function runToolChatSessionInner(
       }
 
       const payload = formatToolResultPayload(execResult)
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: toolUseId,
-        content: payload
-      })
+      if (execResult.success) {
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: payload
+        })
+      } else {
+        const execError = execResult.error ?? '执行失败'
+        toolResults.push(buildToolErrorResult(toolUseId, execError))
+        if (toolErrorRepeat.noteFailure(toolName, execError)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execError}`
+        }
+      }
       sender.send('tool:result', {
         requestId,
         toolUseId,
         result: { success: execResult.success, data: execResult.data, error: execResult.error }
       })
+      if (abortRepeatedToolError) break
     }
 
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]
+    if (abortRepeatedToolError) {
+      return { ok: false, error: abortRepeatedToolError }
+    }
   }
 }
 

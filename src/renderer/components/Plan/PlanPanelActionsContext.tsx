@@ -12,6 +12,7 @@ export type PlanPanelActions = {
   requestComposerFocus: (req: ComposerFocusRequest) => void
   onApproveAndExecute: (options?: { cancelExecuting?: boolean }) => Promise<void>
   onPlanResume: () => Promise<void>
+  onPlanPause?: () => Promise<void>
   onPlanCancel: () => Promise<void>
   onPlanRejectWithFeedback: (feedback: string) => Promise<void>
   planActionLoading: boolean

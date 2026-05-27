@@ -37,27 +37,82 @@ export function mergeToolsConfig(partial?: Partial<ToolsConfig> | null): ToolsCo
   return { ...DEFAULT_TOOLS_CONFIG, ...partial }
 }
 
+export interface SkillsRoutingConfig {
+  /** llm：大模型路由（默认）；legacy：保留旧本地匹配（回滚用） */
+  mode: 'llm' | 'legacy'
+  /** 是否启用 LLM 路由（autoDetect 为 true 且 mode 为 llm 时生效） */
+  enabled: boolean
+  /** 可选：路由专用模型 name；空则与会话模型相同 */
+  model?: string
+  /** 路由上下文策略 */
+  context: 'none' | 'last_user_turn' | 'last_n_turns'
+  contextTurns?: number
+  contextMaxChars?: number
+  timeoutMs?: number
+  /** 是否在 catalog 中附带 triggers（默认 false） */
+  includeTriggersInCatalog?: boolean
+}
+
+export const DEFAULT_SKILLS_ROUTING_CONFIG: SkillsRoutingConfig = {
+  mode: 'llm',
+  enabled: true,
+  context: 'last_user_turn',
+  contextTurns: 2,
+  contextMaxChars: 2000,
+  timeoutMs: 15000,
+  includeTriggersInCatalog: false
+}
+
+export function mergeSkillsRoutingConfig(partial?: Partial<SkillsRoutingConfig> | null): SkillsRoutingConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_SKILLS_ROUTING_CONFIG }
+  return { ...DEFAULT_SKILLS_ROUTING_CONFIG, ...partial }
+}
+
 export interface SkillsConfig {
   autoDetect: boolean
   maxConcurrent: number
   disabled: string[]
   alwaysLoad: string[]
+  routing: SkillsRoutingConfig
 }
 
 export const DEFAULT_SKILLS_CONFIG: SkillsConfig = {
   autoDetect: true,
   maxConcurrent: 5,
   disabled: [],
-  alwaysLoad: []
+  alwaysLoad: [],
+  routing: { ...DEFAULT_SKILLS_ROUTING_CONFIG }
 }
 
 export function mergeSkillsConfig(partial?: Partial<SkillsConfig> | null): SkillsConfig {
-  if (!partial || typeof partial !== 'object') return { ...DEFAULT_SKILLS_CONFIG }
+  if (!partial || typeof partial !== 'object') {
+    return { ...DEFAULT_SKILLS_CONFIG, routing: { ...DEFAULT_SKILLS_ROUTING_CONFIG } }
+  }
   return {
     ...DEFAULT_SKILLS_CONFIG,
     ...partial,
     disabled: Array.isArray(partial.disabled) ? [...partial.disabled] : DEFAULT_SKILLS_CONFIG.disabled,
-    alwaysLoad: Array.isArray(partial.alwaysLoad) ? [...partial.alwaysLoad] : DEFAULT_SKILLS_CONFIG.alwaysLoad
+    alwaysLoad: Array.isArray(partial.alwaysLoad) ? [...partial.alwaysLoad] : DEFAULT_SKILLS_CONFIG.alwaysLoad,
+    routing: mergeSkillsRoutingConfig(partial.routing)
+  }
+}
+
+export type SkillActivationSource = 'manual' | 'alwaysLoad' | 'llm' | 'feishu' | 'legacy'
+
+export interface SkillRouteRecentMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface SkillRouteResult {
+  skills: SkillDefinition[]
+  meta: {
+    sources: Record<string, SkillActivationSource>
+    llmRecommended?: string[]
+    routingFailed?: boolean
+    routingError?: string
+    durationMs: number
+    routingRequestId?: string
   }
 }
 
@@ -167,8 +222,12 @@ export interface SkillsCache {
 export interface SkillActivationLogEntry {
   timestamp: number
   skillNames: string[]
-  source: 'auto' | 'manual' | 'alwaysLoad'
+  source: SkillActivationSource | 'auto'
   userInput?: string
+  routingRequestId?: string
+  llmRecommended?: string[]
+  routingFailed?: boolean
+  routingError?: string
 }
 
 export function builtinToolRiskLevel(name: string): ToolRiskLevel {
@@ -300,9 +359,32 @@ export interface ModelEntry {
   enabled: boolean
 }
 
-import type { ChatMode } from './planTypes'
-export type { ChatMode } from './planTypes'
+import type { ChatMode, PlanExecutionMode, PlanToolConfirmPolicy } from './planTypes'
+export type { ChatMode, PlanExecutionMode, PlanToolConfirmPolicy } from './planTypes'
 export { DEFAULT_CHAT_MODE } from './planTypes'
+
+export interface PlanConfig {
+  /** 默认 auto */
+  executionMode: PlanExecutionMode
+  /** 默认 confirm_high_risk */
+  toolConfirmPolicy: PlanToolConfirmPolicy
+  /** Plan 执行期：Agent 自生成 run_script 自动批准。默认 true。 */
+  autoApproveAgentGeneratedScripts: boolean
+  /** 自动执行时单步完成后是否插入聊天进度消息，默认 true */
+  emitStepProgressMessages: boolean
+}
+
+export const DEFAULT_PLAN_CONFIG: PlanConfig = {
+  executionMode: 'auto',
+  toolConfirmPolicy: 'confirm_high_risk',
+  autoApproveAgentGeneratedScripts: true,
+  emitStepProgressMessages: true
+}
+
+export function mergePlanConfig(partial?: Partial<PlanConfig> | null): PlanConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_PLAN_CONFIG }
+  return { ...DEFAULT_PLAN_CONFIG, ...partial }
+}
 
 export type UiThemeMode = 'light' | 'dark' | 'system'
 
@@ -348,6 +430,7 @@ export interface AppConfig {
   skills: SkillsConfig
   wiki: WikiConfig
   feishu: FeishuConfig
+  plan: PlanConfig
 }
 
 /** 项目记忆加载状态 */

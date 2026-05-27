@@ -73,13 +73,14 @@ describe('PlanPlanCard resume button', () => {
     expect(screen.queryByRole('button', { name: '继续执行' })).toBeNull()
   })
 
-  it('disables resume when session is running', () => {
+  it('disables resume when session is running in step_manual', () => {
     stubActions({
       planExecutionUiState: derivePlanExecutionUiState({
         sessionRunning: true,
         planActionLoading: false,
         activePlanId: 'plan-1',
-        planDrafting: false
+        planDrafting: false,
+        executionMode: 'step_manual'
       })
     })
     render(<PlanPlanCard entry={displayEntry()} activePlanId="plan-1" />)
@@ -90,5 +91,20 @@ describe('PlanPlanCard resume button', () => {
   it('does not show resume on readonly card', () => {
     render(<PlanPlanCard entry={displayEntry()} activePlanId="plan-1" readonly />)
     expect(screen.queryByRole('button', { name: '继续执行' })).toBeNull()
+  })
+
+  it('shows 暂停执行 when auto mode is running', () => {
+    stubActions({
+      planExecutionUiState: derivePlanExecutionUiState({
+        sessionRunning: true,
+        planActionLoading: false,
+        activePlanId: 'plan-1',
+        planDrafting: false,
+        runState: 'running',
+        executionMode: 'auto'
+      })
+    })
+    render(<PlanPlanCard entry={displayEntry()} activePlanId="plan-1" />)
+    expect(screen.getByRole('button', { name: '暂停执行' })).toBeDefined()
   })
 })

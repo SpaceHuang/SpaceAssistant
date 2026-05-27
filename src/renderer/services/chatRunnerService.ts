@@ -201,6 +201,7 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
     flushUiPatch(sessionId, assistantMessageId)
     flushStreamPersist(sessionId, assistantMessageId)
   }
+  pendingConfirmStore.removeAllForRequest(requestId)
   unregisterRunRequest(requestId)
 }
 

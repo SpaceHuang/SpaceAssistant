@@ -99,7 +99,7 @@ class PendingPlanStore {
     this.notify()
   }
 
-  private removeSession(sessionId: string): void {
+  removeSession(sessionId: string): void {
     const before = this.items.length
     this.items = this.items.filter((i) => i.sessionId !== sessionId)
     if (this.items.length !== before) this.notify()

@@ -12,9 +12,10 @@ import { FeishuEventService } from './feishuEventService'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
-import { mergeToolsConfig } from '../../src/shared/domainTypes'
+import { mergeToolsConfig, mergePlanConfig } from '../../src/shared/domainTypes'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
+const PLAN_CONFIG_KEY = 'config.plan'
 const WORKDIR_PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_WORKDIR_KEY = 'config.activeWorkDirProfileId'
 
@@ -85,7 +86,16 @@ export function createFeishuBundle(deps: {
     getBaseUrl: deps.getBaseUrl,
     getMainWebContents: () => getMainWindow()?.webContents ?? null,
     getModel: deps.getModel,
-    getToolsConfig: deps.getToolsConfig
+    getToolsConfig: deps.getToolsConfig,
+    getPlanConfig: () => {
+      const raw = getConfigValue(deps.db, PLAN_CONFIG_KEY)
+      if (!raw) return mergePlanConfig(null)
+      try {
+        return mergePlanConfig(JSON.parse(raw) as Partial<import('../../src/shared/domainTypes').PlanConfig>)
+      } catch {
+        return mergePlanConfig(null)
+      }
+    }
   }
 
   const router = new RemoteCommandRouter(routerDeps)

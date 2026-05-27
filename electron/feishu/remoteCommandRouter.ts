@@ -4,7 +4,8 @@ import { appendMessage, updateMessageContent } from '../database'
 import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { FeishuConfig, FeishuInboundMessage, WorkDirProfile } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
-import type { ToolsConfig } from '../../src/shared/domainTypes'
+import type { ToolsConfig, PlanConfig } from '../../src/shared/domainTypes'
+import { mergePlanConfig } from '../../src/shared/domainTypes'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuConfirmManager } from './feishuConfirmManager'
 import { shouldAcceptInbound } from './feishuInboundParser'
@@ -44,6 +45,7 @@ export type RemoteCommandRouterDeps = {
   getModel: () => string
   getToolsConfig: () => ToolsConfig
   getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
+  getPlanConfig?: () => PlanConfig
 }
 
 const pendingDisambiguation = new Map<string, { profiles: WorkDirProfile[]; originalMsg: FeishuInboundMessage }>()
@@ -228,6 +230,7 @@ export class RemoteCommandRouter {
       confirmManager: this.deps.confirmManager,
       getToolsConfig: this.deps.getToolsConfig,
       getWikiConfig: this.deps.getWikiConfig,
+      getPlanConfig: this.deps.getPlanConfig,
       userDataDir: this.deps.getUserDataPath(),
       remoteContext
     })

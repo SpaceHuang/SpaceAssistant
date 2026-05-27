@@ -1,5 +1,7 @@
+export type SkillHint = { text: string; timestamp: number }
+
 type Props = {
-  hints: string[]
+  hints: SkillHint[]
 }
 
 export function SkillHintBubble({ hints }: Props) {
@@ -7,8 +9,8 @@ export function SkillHintBubble({ hints }: Props) {
   return (
     <>
       {hints.map((hint, i) => (
-        <div key={`${i}-${hint.slice(0, 24)}`} className="chat-system-track">
-          <span className="chat-skill-hint">{hint}</span>
+        <div key={`${i}-${hint.text.slice(0, 24)}`} className="chat-system-track">
+          <span className="chat-skill-hint">{hint.text}</span>
         </div>
       ))}
     </>

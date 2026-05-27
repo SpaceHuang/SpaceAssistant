@@ -30,6 +30,11 @@ import {
   createToolChatController,
   extractAssistantTextFromApiContent
 } from '../../services/chatToolSessionService'
+import {
+  beginPlanAutoExecutionStream,
+  endPlanAutoExecutionStream,
+  isPlanAutoExecutionStreamActive
+} from '../../services/planAutoExecutionStreamService'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
 import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
@@ -37,8 +42,8 @@ import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiS
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
 import { appendSkillActivationLog } from '../../services/skillActivationLog'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
-import { buildSystemPromptFromSkills, formatSkillHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
-import type { Message } from '../../../shared/domainTypes'
+import { buildSystemPromptFromSkills, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
+import type { Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
@@ -48,8 +53,9 @@ import type { ComposerFocusRequest } from '../Plan/PlanPanelActionsContext'
 import { derivePlanExecutionUiState } from '../Plan/planExecutionUiState'
 import { planPanelActionsStore } from '../../services/planPanelActionsStore'
 import type { ChatMode } from '../../../shared/planTypes'
-import { DEFAULT_CHAT_MODE, getPlanMeta, isPlanDrafting } from '../../../shared/planTypes'
-import { SkillHintBubble } from './SkillHintBubble'
+import { DEFAULT_CHAT_MODE, getPlanMeta, getPlanExecutionMeta, isPlanDrafting } from '../../../shared/planTypes'
+import { pendingPlanStore } from '../../services/pendingPlanStore'
+import type { SkillHint } from './SkillHintBubble'
 import { CHAT_CANCELLED_MESSAGE, isChatCancelledError } from '../../../shared/chatCancel'
 import { buildAssistantStreamPatch } from '../../../shared/assistantStreamPatch'
 import {
@@ -101,7 +107,7 @@ export function ChatView() {
   const composerRef = useRef<MessageInputHandle>(null)
   const composerPendingAction = useRef<'reject' | 'revise' | null>(null)
   const abortRequestedRef = useRef(false)
-  const [skillHints, setSkillHints] = useState<string[]>([])
+  const [skillHints, setSkillHints] = useState<SkillHint[]>([])
   const [chatMode, setChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
   const [planActionLoading, setPlanActionLoading] = useState(false)
   const [planRevisionFeedback, setPlanRevisionFeedback] = useState<string | undefined>(undefined)
@@ -125,10 +131,39 @@ export function ChatView() {
   useEffect(() => {
     if (!sessionId) return
     const unsub = window.api.planOnStateChanged((d) => {
-      if (d.sessionId === sessionId) void reloadPlanState()
+      if (d.sessionId !== sessionId) return
+      if (d.clearStaleToolConfirms) {
+        const activeId = d.activeRunRequestId
+        pendingConfirmStore.reconcileForSession(
+          sessionId,
+          activeId ? new Set([activeId]) : new Set()
+        )
+      }
+      void reloadPlanState()
     })
     return unsub
   }, [sessionId, reloadPlanState])
+
+  useEffect(() => {
+    if (!sessionId) return
+    const unsub = window.api.planOnStepCompleted((d) => {
+      if (d.sessionId !== sessionId) return
+      if (isPlanAutoExecutionStreamActive(sessionId)) return
+      if (cfg?.plan?.emitStepProgressMessages === false) return
+      const progressMsg: Message = {
+        id: crypto.randomUUID(),
+        sessionId,
+        role: 'assistant',
+        content: `✓ 步骤 ${d.stepIndex + 1}/${d.stepsTotal} 完成：${d.summary}`,
+        timestamp: Date.now(),
+        status: 'completed',
+        schemaVersion: CURRENT_SCHEMA_VERSION
+      }
+      dispatch(addMessage(progressMsg))
+      void window.api.chatAppendMessage(progressMsg)
+    })
+    return unsub
+  }, [sessionId, cfg?.plan?.emitStepProgressMessages, dispatch])
 
   useEffect(() => {
     if (!sessionId) return
@@ -144,6 +179,10 @@ export function ChatView() {
     () => messages.find((m) => m.role === 'assistant' && m.status === 'streaming')?.id,
     [messages]
   )
+
+  useEffect(() => {
+    setSkillHints([])
+  }, [sessionId])
 
   useEffect(() => {
     if (!sessionId) {
@@ -219,15 +258,18 @@ export function ChatView() {
   const activePlanId = currentSession ? getPlanMeta(currentSession.metadata)?.planId ?? null : null
   const planDrafting = currentSession ? isPlanDrafting(currentSession.metadata) : false
   const sessionRunning = Boolean(sessionId && runningSessions[sessionId])
+  const planExecMeta = currentSession ? getPlanExecutionMeta(currentSession.metadata) : undefined
   const planExecutionUiState = useMemo(
     () =>
       derivePlanExecutionUiState({
         sessionRunning,
         planActionLoading,
         activePlanId,
-        planDrafting
+        planDrafting,
+        runState: planExecMeta?.runState,
+        executionMode: planExecMeta?.executionMode ?? cfg?.plan?.executionMode
       }),
-    [sessionRunning, planActionLoading, activePlanId, planDrafting]
+    [sessionRunning, planActionLoading, activePlanId, planDrafting, planExecMeta, cfg?.plan?.executionMode]
   )
 
   const onToolConfirm = useCallback(
@@ -318,7 +360,7 @@ export function ChatView() {
 
       const wikiCmd = await parseWikiCommand(text, wikiConfig, sessionSkillsState)
       if (wikiCmd.type === 'command') {
-        setSkillHints((prev) => [...prev, wikiCmd.hint])
+        setSkillHints((prev) => [...prev, { text: wikiCmd.hint, timestamp: Date.now() }])
         scrollBottom()
         if (wikiCmd.skillsState) {
           const updated = await window.api.sessionUpdate({ sessionId, skillsState: wikiCmd.skillsState })
@@ -327,7 +369,7 @@ export function ChatView() {
         return
       }
       if (wikiCmd.type === 'run') {
-        setSkillHints((prev) => [...prev, wikiCmd.hint])
+        setSkillHints((prev) => [...prev, { text: wikiCmd.hint, timestamp: Date.now() }])
         scrollBottom()
         chatText = wikiCmd.text
         sessionSkillsState = wikiCmd.skillsState
@@ -342,7 +384,7 @@ export function ChatView() {
 
       const cmd = await parseSkillCommand(chatText, sessionSkillsState)
       if (cmd.type === 'command') {
-        setSkillHints((prev) => [...prev, cmd.hint])
+        setSkillHints((prev) => [...prev, { text: cmd.hint, timestamp: Date.now() }])
         scrollBottom()
         if (cmd.skillsState) {
           const updated = await window.api.sessionUpdate({ sessionId, skillsState: cmd.skillsState })
@@ -390,14 +432,34 @@ export function ChatView() {
       const historyForApi = [...store.getState().chat.messages]
       const useToolsApi = cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools).length > 0
 
-      const activeSkills = await window.api.skillMatch({ userInput: chatText, sessionSkillsState })
+      const recentMessages: SkillRouteRecentMessage[] = historyForApi
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.status !== 'streaming' && m.content.trim())
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+
+      const routeResult = await window.api.skillRoute({
+        userInput: chatText,
+        sessionSkillsState,
+        sessionId: runSessionId,
+        sessionMetadata: currentSession?.metadata,
+        recentMessages,
+        model: cfg.model
+      })
+      const activeSkills = routeResult.skills
       if (activeSkills.length > 0) {
-        setSkillHints((prev) => [...prev, formatSkillHint(activeSkills, '已自动加载')])
+        setSkillHints((prev) => [...prev, { text: formatSkillRouteHint(activeSkills, routeResult.meta.sources), timestamp: Date.now() }])
         scrollBottom()
+        const logSource: SkillActivationSource =
+          activeSkills.map((s) => routeResult.meta.sources[s.meta.name]).find((src) => src === 'llm') ??
+          routeResult.meta.sources[activeSkills[0]!.meta.name] ??
+          'llm'
         const metadata = appendSkillActivationLog(currentSession?.metadata ?? {}, {
           skillNames: activeSkills.map((s) => s.meta.name),
-          source: 'auto',
-          userInput: chatText
+          source: logSource,
+          userInput: chatText,
+          llmRecommended: routeResult.meta.llmRecommended,
+          routingFailed: routeResult.meta.routingFailed,
+          routingError: routeResult.meta.routingError,
+          routingRequestId: routeResult.meta.routingRequestId
         })
         void window.api.sessionUpdate({ sessionId, metadata }).then((updated) => {
           if (updated) dispatch(upsertSession(updated))
@@ -733,6 +795,55 @@ export function ChatView() {
     [sendInternal, sessionId, message, reloadPlanState]
   )
 
+  const runPlanAutoExecution = useCallback(async () => {
+    if (!sessionId || !cfg) return
+    const runSessionId = sessionId
+    if (isSessionRunning(runSessionId)) {
+      message.warning('当前会话已有任务在执行')
+      return
+    }
+    const historyForApi = [...store.getState().chat.messages]
+    const loopRequestId = crypto.randomUUID()
+    registerSessionRun(runSessionId, loopRequestId)
+    dispatch(setChatStatus({ status: 'streaming', requestId: loopRequestId, sessionId: runSessionId }))
+    initLiveSessionFromStore(runSessionId)
+    beginPlanAutoExecutionStream({
+      sessionId: runSessionId,
+      loopRequestId,
+      onScroll: scrollBottomThrottled
+    })
+    const modelEntry = cfg.models.find((m) => m.name === cfg.model)
+    const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models, cfg.maxTokens)
+    const sessionMeta = store.getState().session.list.find((x) => x.id === runSessionId)?.metadata
+    const payload = buildToolChatPayload({
+      requestId: loopRequestId,
+      sessionId: runSessionId,
+      model: cfg.model,
+      baseUrl: cfg.baseUrl || undefined,
+      messages: historyForApi,
+      toolsConfig: cfg.tools,
+      maxTokens: outputMaxTokens,
+      thinkingEnabled: cfg.thinkingEnabled,
+      chatMode: 'plan',
+      sessionMetadata: sessionMeta
+    })
+    const { requestId: _rid, tools: _tools, ...planRunBody } = payload
+    try {
+      const res = await window.api.planRun({ loopRequestId, ...planRunBody })
+      if (!res.ok) {
+        message.error(res.error)
+      } else if (res.paused && res.pauseReason) {
+        message.warning(res.pauseReason)
+      }
+    } finally {
+      endPlanAutoExecutionStream(runSessionId)
+      finishSessionRun(runSessionId, loopRequestId)
+      dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
+      clearLiveSession(runSessionId)
+      void reloadPlanState()
+    }
+  }, [sessionId, cfg, dispatch, message, reloadPlanState, scrollBottomThrottled])
+
   const runPlanWorkerWithoutNewUser = useCallback(async () => {
     if (!sessionId || !cfg) return
     const runSessionId = sessionId
@@ -808,15 +919,29 @@ export function ChatView() {
           return
         }
         await reloadPlanState()
+        pendingPlanStore.removeSession(sessionId)
         if (res.autoExecute) {
-          await runPlanWorkerWithoutNewUser()
+          const execMode =
+            getPlanExecutionMeta(store.getState().session.list.find((x) => x.id === sessionId)?.metadata)
+              ?.executionMode ?? cfg?.plan?.executionMode ?? 'auto'
+          if (execMode === 'auto') {
+            await runPlanAutoExecution()
+          } else {
+            await runPlanWorkerWithoutNewUser()
+          }
         }
       } finally {
         setPlanActionLoading(false)
       }
     },
-    [sessionId, runPlanWorkerWithoutNewUser, message, reloadPlanState]
+    [sessionId, runPlanWorkerWithoutNewUser, runPlanAutoExecution, cfg?.plan?.executionMode, message, reloadPlanState]
   )
+
+  const handlePlanPause = useCallback(async () => {
+    if (!sessionId) return
+    await window.api.planPause({ sessionId })
+    message.info('将在当前步骤完成后暂停')
+  }, [sessionId, message])
 
   const requestComposerFocus = useCallback((req: ComposerFocusRequest) => {
     if (req.prefill.startsWith(PLAN_REJECT_GUIDE)) composerPendingAction.current = 'reject'
@@ -851,17 +976,25 @@ export function ChatView() {
     if (!sessionId || isSessionRunning(sessionId)) return
     setPlanActionLoading(true)
     try {
-      await runPlanWorkerWithoutNewUser()
+      const sessionMeta = store.getState().session.list.find((x) => x.id === sessionId)?.metadata
+      const execMode =
+        getPlanExecutionMeta(sessionMeta)?.executionMode ?? cfg?.plan?.executionMode ?? 'auto'
+      if (execMode === 'auto') {
+        await runPlanAutoExecution()
+      } else {
+        await runPlanWorkerWithoutNewUser()
+      }
     } finally {
       setPlanActionLoading(false)
     }
-  }, [sessionId, runPlanWorkerWithoutNewUser])
+  }, [sessionId, cfg?.plan?.executionMode, runPlanAutoExecution, runPlanWorkerWithoutNewUser])
 
   useEffect(() => {
     planPanelActionsStore.set({
       requestComposerFocus,
       onApproveAndExecute: handlePlanApprove,
       onPlanResume: handlePlanResume,
+      onPlanPause: handlePlanPause,
       onPlanCancel: handlePlanCancel,
       onPlanRejectWithFeedback: async (feedback: string) => {
         composerPendingAction.current = 'reject'
@@ -877,6 +1010,7 @@ export function ChatView() {
     requestComposerFocus,
     handlePlanApprove,
     handlePlanResume,
+    handlePlanPause,
     handlePlanCancel,
     planActionLoading,
     planExecutionUiState
@@ -947,33 +1081,54 @@ export function ChatView() {
     ]
   )
 
+  const timeline = useMemo(() => {
+    const items: Array<
+      | { kind: 'message'; message: Message; timestamp: number }
+      | { kind: 'hint'; hint: SkillHint; timestamp: number }
+    > = [
+      ...messages.map((m) => ({ kind: 'message' as const, message: m, timestamp: m.timestamp })),
+      ...skillHints.map((h) => ({ kind: 'hint' as const, hint: h, timestamp: h.timestamp }))
+    ]
+    items.sort((a, b) => a.timestamp - b.timestamp)
+    return items
+  }, [messages, skillHints])
+
   return (
     <div className="chat-view">
       <div ref={scrollRef} className="chat-scroll">
-        <SkillHintBubble hints={skillHints} />
         {!sessionId ? (
           <div className="chat-empty">
             <div className="chat-empty-title">选择或创建一个会话</div>
             <Text type="secondary">在左侧开始与 AI 助手对话</Text>
           </div>
-        ) : messages.length === 0 && skillHints.length === 0 ? (
+        ) : timeline.length === 0 ? (
           <div className="chat-empty">
             <div className="chat-empty-title">开始对话</div>
             <Text type="secondary">输入问题，或尝试 /skill、/wiki 命令</Text>
           </div>
         ) : (
-          messages.map((m) => (
-            <ChatBubble
-              key={m.id}
-              message={m}
-              toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
-              focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
-              onOpenFile={handleOpenFile}
-              wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
-              showArchiveToWiki={Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim())}
-              onArchiveToWiki={() => handleArchiveToWiki(m.content)}
-            />
-          ))
+          timeline.map((item) => {
+            if (item.kind === 'hint') {
+              return (
+                <div key={`hint-${item.hint.timestamp}`} className="chat-system-track">
+                  <span className="chat-skill-hint">{item.hint.text}</span>
+                </div>
+              )
+            }
+            const m = item.message
+            return (
+              <ChatBubble
+                key={m.id}
+                message={m}
+                toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
+                focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
+                onOpenFile={handleOpenFile}
+                wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
+                showArchiveToWiki={Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim())}
+                onArchiveToWiki={() => handleArchiveToWiki(m.content)}
+              />
+            )
+          })
         )}
       </div>
       <MessageInput

@@ -2,14 +2,15 @@ import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import { getMessages } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
-import type { ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import type { ToolsConfig, WikiConfig, PlanConfig } from '../../src/shared/domainTypes'
+import { mergePlanConfig } from '../../src/shared/domainTypes'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { buildSystemPrompt, getCachedMemoryContent } from '../projectMemory'
 import { registerRunningRemoteAgent, unregisterRunningRemoteAgent } from './runningRemoteAgentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
 import type { FeishuConfirmManager } from './feishuConfirmManager'
-import { runPlanModeChat, resumePlanExecution } from '../plan/planOrchestrator'
+import { runPlanModeChat, runPlanUntilDone } from '../plan/planOrchestrator'
 import { readPlanStateForSession } from '../plan/planManager'
 import type { FeishuRemoteContext } from '../tools/types'
 
@@ -30,6 +31,7 @@ export async function runFeishuRemoteAgent(ctx: {
   confirmManager: FeishuConfirmManager
   getToolsConfig: () => ToolsConfig
   getWikiConfig?: () => WikiConfig
+  getPlanConfig?: () => PlanConfig
   remoteContext: FeishuRemoteContext
 }): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
   const requestId = ctx.requestId
@@ -61,7 +63,8 @@ export async function runFeishuRemoteAgent(ctx: {
       getUserDataPath: () => ctx.userDataDir,
       getToolsConfig: () => ctx.getToolsConfig(),
       getWikiConfig: ctx.getWikiConfig,
-      getAppDatabase: () => ctx.db
+      getAppDatabase: () => ctx.db,
+      getPlanConfig: () => ctx.getPlanConfig?.() ?? mergePlanConfig(null)
     }
 
     if (shouldUseRemotePlan(ctx.userMessage, ctx.feishuConfig)) {
@@ -106,29 +109,25 @@ export async function runFeishuRemoteAgent(ctx: {
       }
 
       let workerSummary = ''
-      const maxSteps = 20
-      for (let i = 0; i < maxSteps; i++) {
-        const workerRes = await resumePlanExecution({
-          sender: effectiveSender,
-          requestId,
-          sessionId: ctx.sessionId,
-          model: ctx.getModel(),
-          baseUrl: ctx.getBaseUrl(),
-          messages,
-          system,
-          options: { maxTokens: 8192 },
-          deps: planDeps
-        })
-        if (!workerRes.ok) {
-          workerSummary = `执行失败：${workerRes.error}`
-          break
-        }
-        workerSummary = extractTextFromContent(workerRes.content) || '步骤完成'
-        const state = await readPlanStateForSession({ db: ctx.db, workDir: ctx.workDir, sessionId: ctx.sessionId })
-        const status = state.plan?.status
-        if (status === 'completed' || status === 'cancelled') break
+      const runRes = await runPlanUntilDone({
+        sender: effectiveSender,
+        loopRequestId: requestId,
+        sessionId: ctx.sessionId,
+        model: ctx.getModel(),
+        baseUrl: ctx.getBaseUrl(),
+        messages,
+        system,
+        options: { maxTokens: 8192 },
+        deps: planDeps
+      })
+      if (!runRes.ok) {
+        workerSummary = `执行失败：${runRes.error}`
+      } else if (runRes.lastContent) {
+        workerSummary = extractTextFromContent(runRes.lastContent as unknown[]) || '步骤完成'
+      } else {
+        workerSummary = '步骤完成'
       }
-      return { summary: workerSummary || planSummary, pendingConfirm: false, ok: true }
+      return { summary: workerSummary || planSummary, pendingConfirm: false, ok: runRes.ok }
     }
 
     const res = await runToolChatSession({

@@ -107,4 +107,21 @@ describe('edit/write fileStateCache', () => {
     expect(edit.success).toBe(false)
     expect(edit.error).toBe('文件尚未在本会话中通过 read_file 读取，请先读取后再编辑')
   })
+
+  it('rejects edit when path is missing', async () => {
+    const ctx = makeCtx(tmpDir, cache)
+    const edit = await editFileExecutor.execute(
+      { old_string: 'a', new_string: 'b' },
+      ctx
+    )
+    expect(edit.success).toBe(false)
+    expect(edit.error).toBe('工具参数无效：edit_file 缺少必填参数 path')
+  })
+
+  it('rejects write when path is missing', async () => {
+    const ctx = makeCtx(tmpDir, cache)
+    const write = await writeFileExecutor.execute({ content: 'hello' }, ctx)
+    expect(write.success).toBe(false)
+    expect(write.error).toBe('工具参数无效：write_file 缺少必填参数 path')
+  })
 })

@@ -16,11 +16,14 @@ import type {
   SessionSkillsState,
   SkillDefinition,
   SkillsConfig,
+  SkillRouteRecentMessage,
+  SkillRouteResult,
   ToolsConfig,
   UiThemeMode
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
-import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
+import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, mergePlanConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
+import type { PlanConfig } from '../src/shared/domainTypes'
 import { DEFAULT_CHAT_MODE, isChatMode } from '../src/shared/planTypes'
 import {
   approvePlanInSession,
@@ -29,7 +32,8 @@ import {
   readPlanStateForSession,
   rejectPlanInSession
 } from './plan/planManager'
-import { resumePlanExecution } from './plan/planOrchestrator'
+import { resumePlanExecution, runPlanUntilDone, requestPlanPause } from './plan/planOrchestrator'
+import type { PlanOrchestratorDeps } from './plan/planOrchestrator'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
@@ -96,7 +100,8 @@ const CONFIG_KEYS = {
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   uiTheme: 'config.uiTheme',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
-  defaultChatMode: 'config.defaultChatMode'
+  defaultChatMode: 'config.defaultChatMode',
+  plan: 'config.plan'
 } as const
 
 export type AppIpcContext = {
@@ -107,6 +112,28 @@ export type AppIpcContext = {
   getUserDataPath: () => string
   getApiKey: () => Promise<string | null>
   setApiKey: (value: string) => Promise<void>
+}
+
+function readPlanConfig(db: AppDatabase): PlanConfig {
+  const raw = getConfigValue(db, CONFIG_KEYS.plan)
+  if (!raw) return mergePlanConfig(null)
+  try {
+    return mergePlanConfig(JSON.parse(raw) as Partial<PlanConfig>)
+  } catch {
+    return mergePlanConfig(null)
+  }
+}
+
+function buildPlanOrchestratorDeps(ctx: AppIpcContext): PlanOrchestratorDeps {
+  return {
+    getApiKey: ctx.getApiKey,
+    getWorkDir: ctx.getWorkDir,
+    getUserDataPath: ctx.getUserDataPath,
+    getToolsConfig: () => readToolsConfig(ctx.db),
+    getWikiConfig: () => readWikiConfig(ctx.db),
+    getAppDatabase: () => ctx.db,
+    getPlanConfig: () => readPlanConfig(ctx.db)
+  }
 }
 
 function readToolsConfig(db: AppDatabase): ToolsConfig {
@@ -350,6 +377,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
     const defaultChatModeRaw = getConfigValue(ctx.db, CONFIG_KEYS.defaultChatMode)
     const defaultChatMode = isChatMode(defaultChatModeRaw) ? defaultChatModeRaw : DEFAULT_CHAT_MODE
+    const plan = readPlanConfig(ctx.db)
     return {
       apiKeyPresent: activeService?.apiKeyPresent ?? Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: activeService?.baseUrl ?? getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
@@ -370,7 +398,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       wiki,
       feishu,
       workDirProfiles,
-      activeWorkDirProfileId
+      activeWorkDirProfileId,
+      plan
     }
   })
 
@@ -400,6 +429,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         uiTheme: UiThemeMode
         maxParallelChatSessions: number
         defaultChatMode: import('../src/shared/planTypes').ChatMode
+        plan: Partial<PlanConfig>
       }>
     ): Promise<void> => {
       try {
@@ -516,6 +546,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (payload.defaultChatMode !== undefined && isChatMode(payload.defaultChatMode)) {
         setConfigValue(ctx.db, CONFIG_KEYS.defaultChatMode, payload.defaultChatMode)
+      }
+      if (payload.plan !== undefined) {
+        const next = mergePlanConfig({ ...readPlanConfig(ctx.db), ...payload.plan })
+        setConfigValue(ctx.db, CONFIG_KEYS.plan, JSON.stringify(next))
       }
       ctx.db.flushSave()
     }
@@ -773,6 +807,53 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   )
 
   ipcMain.handle(
+    'skill:route',
+    async (
+      _e,
+      payload: {
+        userInput: string
+        sessionSkillsState: SessionSkillsState
+        sessionId?: string
+        sessionMetadata?: Record<string, unknown>
+        recentMessages?: SkillRouteRecentMessage[]
+        model?: string
+      }
+    ): Promise<SkillRouteResult> => {
+      const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : undefined
+      const session = sessionId ? getSession(ctx.db, sessionId) : undefined
+      const modelName =
+        (typeof payload.model === 'string' && payload.model.trim()) ||
+        session?.model ||
+        getConfigValue(ctx.db, CONFIG_KEYS.model) ||
+        'claude-sonnet-4-20250514'
+      const baseUrlRaw = getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? undefined
+      const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
+
+      const result = await skillManager.route({
+        userInput: payload.userInput,
+        sessionState: normalizeSessionSkillsState(payload.sessionSkillsState),
+        sessionMetadata: payload.sessionMetadata ?? session?.metadata,
+        recentMessages: payload.recentMessages,
+        model: modelName,
+        baseUrl,
+        getApiKey: ctx.getApiKey,
+        sessionId
+      })
+
+      if (result.skills.length > 0) {
+        const systemPrompt = skillManager.buildSystemPrompt(result.skills)
+        logAgentEvent('info', 'skills.invoke', {
+          skillNames: result.skills.map((s) => s.meta.name),
+          systemPromptLength: systemPrompt.length,
+          sources: result.meta.sources
+        })
+      }
+
+      return result
+    }
+  )
+
+  ipcMain.handle(
     'skill:install',
     async (_e, payload: { sourcePath: string; overwrite?: boolean }): Promise<{ ok: true; skill: SkillDefinition } | { ok: false; error: string }> => {
       try {
@@ -849,7 +930,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           db: ctx.db,
           sessionId,
           workDir: ctx.getWorkDir(),
-          cancelExecuting: payload?.cancelExecuting === true
+          cancelExecuting: payload?.cancelExecuting === true,
+          planConfig: readPlanConfig(ctx.db)
         })
         event.sender.send('plan:state-changed', { sessionId })
         const updated = getSession(ctx.db, sessionId)
@@ -921,14 +1003,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         messages: payload.messages,
         system: payload.system,
         options: payload.options,
-        deps: {
-          getApiKey: ctx.getApiKey,
-          getWorkDir: ctx.getWorkDir,
-          getUserDataPath: ctx.getUserDataPath,
-          getToolsConfig: () => readToolsConfig(ctx.db),
-          getWikiConfig: () => readWikiConfig(ctx.db),
-          getAppDatabase: () => ctx.db
-        }
+        deps: buildPlanOrchestratorDeps(ctx)
       })
 
       if (!res.ok) return res
@@ -937,6 +1012,41 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     } catch (e) {
       return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
     }
+  })
+
+  ipcMain.handle('plan:run', async (event, payload) => {
+    const sender = event.sender
+    try {
+      const loopRequestId = typeof payload?.loopRequestId === 'string' ? payload.loopRequestId : ''
+      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+      if (!loopRequestId || !sessionId) return { ok: false as const, error: 'Invalid payload' }
+
+      const res = await runPlanUntilDone({
+        sender,
+        loopRequestId,
+        sessionId,
+        model: payload.model,
+        baseUrl: payload.baseUrl,
+        messages: payload.messages ?? [],
+        system: payload.system,
+        options: payload.options,
+        deps: buildPlanOrchestratorDeps(ctx)
+      })
+
+      if (res.ok) {
+        await syncBackup(ctx, sessionId)
+      }
+      return res
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
+
+  ipcMain.handle('plan:pause', async (_event, payload: { sessionId: string }) => {
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
+    requestPlanPause(sessionId)
+    return { ok: true as const }
   })
 
   ipcMain.handle(

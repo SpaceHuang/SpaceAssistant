@@ -142,7 +142,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
             <Select
               size="small"
               className="composer-mode-select"
-              popupClassName="composer-mode-select-popup"
+              classNames={{ popup: { root: 'composer-mode-select-popup' } }}
               value={chatMode}
               disabled={disabled || running}
               onChange={setMode}

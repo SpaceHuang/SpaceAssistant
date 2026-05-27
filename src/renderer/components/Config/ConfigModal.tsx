@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsOpen } from '../../store/configSlice'
-import type { ModelEntry, UiThemeMode, WikiConfig } from '../../../shared/domainTypes'
-import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
+import type { ModelEntry, UiThemeMode, WikiConfig, PlanConfig } from '../../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG, DEFAULT_PLAN_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../../../shared/feishuTypes'
 import type { ChatMode } from '../../../shared/planTypes'
 import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
@@ -182,6 +182,7 @@ export function ConfigModal() {
   const [defaultChatMode, setDefaultChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
+  const [planUi, setPlanUi] = useState<PlanConfig>({ ...DEFAULT_PLAN_CONFIG })
 
   const refreshConfig = async () => {
     const next = await window.api.configGet()
@@ -222,6 +223,7 @@ export function ConfigModal() {
       setDefaultChatMode(cfg.defaultChatMode ?? DEFAULT_CHAT_MODE)
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
+      setPlanUi(cfg.plan ?? { ...DEFAULT_PLAN_CONFIG })
     }
   }, [open, cfg, form])
 
@@ -316,7 +318,8 @@ export function ConfigModal() {
         maxParallelChatSessions,
         defaultChatMode,
         wiki: wikiUi,
-        feishu: feishuUi
+        feishu: feishuUi,
+        plan: planUi
       })
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))
@@ -436,6 +439,48 @@ export function ConfigModal() {
                       value={maxParallelChatSessions}
                       onChange={(v) => setMaxParallelChatSessions(v ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)}
                       style={{ width: '100%' }}
+                    />
+                  </Form.Item>
+                </>
+              )
+            },
+            {
+              key: 'plan',
+              label: 'Plan 模式',
+              children: (
+                <>
+                  <Form.Item label="执行方式" extra="批准后如何推进计划步骤。">
+                    <Radio.Group
+                      value={planUi.executionMode}
+                      onChange={(e) => setPlanUi((p) => ({ ...p, executionMode: e.target.value }))}
+                    >
+                      <Radio value="auto">自动连续执行（推荐）</Radio>
+                      <Radio value="step_manual">每步完成后手动继续</Radio>
+                    </Radio.Group>
+                  </Form.Item>
+                  <Form.Item label="工具确认策略" extra="Plan 执行期的写入与脚本确认策略。">
+                    <Radio.Group
+                      value={planUi.toolConfirmPolicy}
+                      onChange={(e) => setPlanUi((p) => ({ ...p, toolConfirmPolicy: e.target.value }))}
+                    >
+                      <Radio value="confirm_high_risk">计划级信任（仅高风险确认）</Radio>
+                      <Radio value="always_confirm">逐步逐工具确认</Radio>
+                      <Radio value="trust_plan_all">全部自动批准（激进）</Radio>
+                    </Radio.Group>
+                  </Form.Item>
+                  <Form.Item
+                    label="自动批准 Agent 生成的脚本"
+                    extra="Plan 执行中，若 run_script 的代码由 Agent 在本步骤内编写（非直接运行仓库已有脚本），则不再单独确认。"
+                  >
+                    <Switch
+                      checked={planUi.autoApproveAgentGeneratedScripts}
+                      onChange={(checked) => setPlanUi((p) => ({ ...p, autoApproveAgentGeneratedScripts: checked }))}
+                    />
+                  </Form.Item>
+                  <Form.Item label="步骤完成进度消息">
+                    <Switch
+                      checked={planUi.emitStepProgressMessages}
+                      onChange={(checked) => setPlanUi((p) => ({ ...p, emitStepProgressMessages: checked }))}
                     />
                   </Form.Item>
                 </>

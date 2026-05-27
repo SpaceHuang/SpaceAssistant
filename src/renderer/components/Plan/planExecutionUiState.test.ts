@@ -45,4 +45,17 @@ describe('derivePlanExecutionUiState', () => {
     expect(state.resumeButtonBusy).toBe(false)
     expect(state.resumeButtonDisabled).toBe(true)
   })
+
+  it('shows pause button when auto running', () => {
+    const state = derivePlanExecutionUiState({
+      sessionRunning: true,
+      planActionLoading: false,
+      activePlanId: 'p1',
+      planDrafting: false,
+      runState: 'running',
+      executionMode: 'auto'
+    })
+    expect(state.showPauseButton).toBe(true)
+    expect(state.isAutoRunning).toBe(true)
+  })
 })

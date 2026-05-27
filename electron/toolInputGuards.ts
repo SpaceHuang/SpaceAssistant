@@ -24,6 +24,18 @@ function optStringLen(v: unknown, field: string, max: number): void {
   assertStringLen(v, field, max)
 }
 
+function reqStringLen(v: unknown, field: string, max: number): void {
+  if (typeof v !== 'string' || v.trim().length === 0) {
+    throw new Error(`工具参数无效：缺少必填参数 ${field}`)
+  }
+  assertStringLen(v, field, max)
+}
+
+/** 与 assertSafeToolInput / 执行器前置校验保持一致 */
+export function toolErrMissingPath(toolName: string): string {
+  return `工具参数无效：${toolName} 缺少必填参数 path`
+}
+
 export function assertSafeToolInput(toolName: string, input: Record<string, unknown>): void {
   switch (toolName) {
     case 'read_file':
@@ -59,7 +71,7 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
       return
     }
     case 'edit_file': {
-      optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+      reqStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
       const oldS = input.old_string
       const newS = input.new_string
       if (typeof oldS !== 'string' || typeof newS !== 'string') throw new Error('工具参数无效：edit_file 需要 old_string 与 new_string')
@@ -68,7 +80,7 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
       return
     }
     case 'write_file': {
-      optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+      reqStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
       const content = input.content
       if (typeof content !== 'string') throw new Error('工具参数无效：write_file 需要 content')
       assertStringLen(content, 'content', TOOL_LARGE_TEXT_MAX)

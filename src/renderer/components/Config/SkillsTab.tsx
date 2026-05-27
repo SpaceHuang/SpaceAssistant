@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, App, Button, Collapse, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, Collapse, Select, Space, Switch, Table, Tag, Typography } from 'antd'
 import type { AppConfig, SkillDefinition, SkillActivationLogEntry } from '../../../shared/domainTypes'
 
 function RefreshIcon() {
@@ -42,7 +42,7 @@ type Props = {
 }
 
 export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [skills, setSkills] = useState<SkillDefinition[]>([])
   const [loading, setLoading] = useState(false)
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -88,7 +88,7 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
     let res = await window.api.skillInstall({ sourcePath: picked.path })
     if (!res.ok && res.error.includes('已存在')) {
       const ok = await new Promise<boolean>((resolve) => {
-        Modal.confirm({
+        modal.confirm({
           title: 'Skill 已存在',
           content: `${res.error}，是否覆盖？`,
           onOk: () => resolve(true),
@@ -110,7 +110,7 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
 
   const onDelete = (skill: SkillDefinition) => {
     if (skill.scope === 'project') return
-    Modal.confirm({
+    modal.confirm({
       title: `删除 Skill「${skill.meta.name}」？`,
       content: '将永久删除用户级 Skill 目录，此操作不可撤销。',
       okType: 'danger',
@@ -143,7 +143,7 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
 
       <Space direction="vertical" style={{ width: '100%', marginBottom: 12 }} size="middle">
         <Space wrap>
-          <Typography.Text>自动检测</Typography.Text>
+          <Typography.Text>由 AI 根据 Skill 描述自动选择要加载的 Skill</Typography.Text>
           <Switch
             checked={autoDetect}
             onChange={async (checked) => {

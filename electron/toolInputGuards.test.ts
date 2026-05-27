@@ -25,4 +25,16 @@ describe('assertSafeToolInput', () => {
   it('rejects write_file missing content', () => {
     expect(() => assertSafeToolInput('write_file', { path: 'a.txt' })).toThrow(/content/)
   })
+
+  it('rejects edit_file missing path', () => {
+    expect(() => assertSafeToolInput('edit_file', { old_string: 'a', new_string: 'b' })).toThrow(/缺少必填参数 path/)
+  })
+
+  it('rejects write_file missing path', () => {
+    expect(() => assertSafeToolInput('write_file', { content: 'hello' })).toThrow(/缺少必填参数 path/)
+  })
+
+  it('rejects edit_file with blank path', () => {
+    expect(() => assertSafeToolInput('edit_file', { path: '   ', old_string: 'a', new_string: 'b' })).toThrow(/缺少必填参数 path/)
+  })
 })

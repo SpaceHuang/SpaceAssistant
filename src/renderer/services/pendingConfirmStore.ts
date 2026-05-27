@@ -98,6 +98,20 @@ class PendingConfirmStore {
     if (this.items.length !== before) this.notify()
   }
 
+  removeAllForRequest(requestId: string): void {
+    const before = this.items.length
+    this.items = this.items.filter((i) => i.requestId !== requestId)
+    if (this.items.length !== before) this.notify()
+  }
+
+  reconcileForSession(sessionId: string, activeRequestIds: Set<string>): void {
+    const before = this.items.length
+    this.items = this.items.filter(
+      (i) => i.sessionId !== sessionId || activeRequestIds.has(i.requestId)
+    )
+    if (this.items.length !== before) this.notify()
+  }
+
   /** 测试用 */
   reset(): void {
     this.items = []

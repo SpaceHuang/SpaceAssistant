@@ -48,12 +48,28 @@ export function PlanPlanCard({ entry, activePlanId, readonly, onOpenPlanFile }: 
   const ui = actions?.planExecutionUiState
   const resumeBusy = ui?.resumeButtonBusy ?? false
   const resumeDisabled = ui?.resumeButtonDisabled ?? false
+  const showPause = ui?.showPauseButton ?? false
+  const isAutoRunning = ui?.isAutoRunning ?? false
   const [expanded, setExpanded] = useState(entry.status !== 'completed')
   const isCompleted = entry.status === 'completed'
   const isCancelled = entry.status === 'cancelled'
   const step =
     entry.status === 'executing'
       ? Math.min(entry.currentStepIndex + 1, Math.max(entry.stepsTotal, 1))
+      : null
+
+  const primaryLabel = (() => {
+    if (showPause) return '暂停执行'
+    if (resumeBusy && entry.status === 'executing') return '执行中…'
+    if (entry.status === 'approved') return '开始执行'
+    return '继续执行'
+  })()
+
+  const stepLabel =
+    step !== null
+      ? isAutoRunning
+        ? `自动执行中 · 第 ${step}/${entry.stepsTotal || '?'} 步`
+        : `第 ${step}/${entry.stepsTotal || '?'} 步 · 等待继续`
       : null
 
   const cardClass = [
@@ -90,11 +106,7 @@ export function PlanPlanCard({ entry, activePlanId, readonly, onOpenPlanFile }: 
             {isCompleted ? <CheckCircle size={14} aria-hidden style={{ color: 'var(--sa-primary)' }} /> : null}
             {isCancelled ? <XCircle size={14} aria-hidden style={{ color: 'var(--sa-text-tertiary)' }} /> : null}
             {statusTag(entry.status)}
-            {step !== null ? (
-              <span className="plan-panel-plan-card__step">
-                第 {step}/{entry.stepsTotal || '?'} 步
-              </span>
-            ) : null}
+            {stepLabel ? <span className="plan-panel-plan-card__step">{stepLabel}</span> : null}
           </div>
           {onOpenPlanFile && !readonly ? (
             <Button
@@ -117,13 +129,12 @@ export function PlanPlanCard({ entry, activePlanId, readonly, onOpenPlanFile }: 
             size="small"
             loading={resumeBusy}
             disabled={resumeDisabled}
-            onClick={() => void actions?.onPlanResume()}
+            onClick={() => {
+              if (showPause) void actions?.onPlanPause?.()
+              else void actions?.onPlanResume()
+            }}
           >
-            {resumeBusy && entry.status === 'executing'
-              ? '执行中…'
-              : entry.status === 'approved'
-                ? '开始执行'
-                : '继续执行'}
+            {primaryLabel}
           </Button>
           {entry.status === 'executing' ? (
             <Button
