@@ -77,7 +77,7 @@ export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, c
         borderLeft: side === 'right' ? '1px solid var(--sa-border)' : undefined
       }}
     >
-      {children}
+      <div className="sa-split-pane-body">{children}</div>
       <div
         className={`sa-splitter${isDragging ? ' sa-splitter--dragging' : ''}`}
         role="separator"

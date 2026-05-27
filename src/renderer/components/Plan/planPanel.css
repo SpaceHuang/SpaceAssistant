@@ -9,7 +9,7 @@
   --plan-panel-pad: 8px;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-height: 0;
   overflow: hidden;
   background: var(--sa-bg-elevated);
@@ -41,6 +41,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.plan-panel--empty .plan-panel__body {
+  overflow: hidden;
 }
 
 .plan-panel--pending_approval .plan-panel__body {

@@ -104,7 +104,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [unsupportedExt, setUnsupportedExt] = useState<string | null>(null)
   const [tooLargeSize, setTooLargeSize] = useState<number | null>(null)
-  const [referencedFilesHeight, setReferencedFilesHeightState] = useState(0.5)
+  const [referencedFilesHeight, setReferencedFilesHeightState] = useState(0.46)
 
   useEffect(() => {
     void preloadShiki()
@@ -169,7 +169,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const resetReferencedFilesHeight = useCallback(() => {
-    setReferencedFilesHeightState(0.5)
+    setReferencedFilesHeightState(0.46)
   }, [])
 
   const value = useMemo<DetailPanelContextValue>(

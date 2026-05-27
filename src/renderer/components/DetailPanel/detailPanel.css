@@ -313,31 +313,41 @@
   height: 48px;
 }
 
-/* ===== 分栏布局 ===== */
+/* ===== 分栏布局（Grid：拖动手柄占固定行，避免 flex 下总高度超出 100%）===== */
 .detail-panel-split {
-  display: flex;
-  flex-direction: column;
+  --feishu-remote-status-bar-height: 32px;
+  --detail-resize-handle-height: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) var(--detail-resize-handle-height) minmax(0, 1fr) var(--feishu-remote-status-bar-height);
+  flex: 1 1 0;
+  min-height: 0;
   height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.detail-panel-split > .detail-panel-top,
+.detail-panel-split > .detail-panel-bottom {
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .detail-panel-top {
-  min-height: 0;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
 .detail-panel-bottom {
-  min-height: 80px;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
 /* ===== 可拖动分隔条 ===== */
 .detail-resize-handle {
-  flex-shrink: 0;
-  height: 4px;
+  height: var(--detail-resize-handle-height);
+  min-height: var(--detail-resize-handle-height);
   background: var(--sa-border);
   cursor: row-resize;
   transition: background var(--sa-duration-fast);
@@ -351,7 +361,8 @@
 .referenced-files-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -383,6 +394,10 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+.referenced-files-panel:has(.referenced-files-empty) .referenced-files-list {
+  overflow: hidden;
 }
 
 .referenced-files-empty {
@@ -518,4 +533,93 @@
   display: block;
   font-size: 11px;
   margin-top: 2px;
+}
+
+/* ===== 飞书远程监听状态栏 ===== */
+.feishu-remote-status-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: var(--feishu-remote-status-bar-height);
+  min-height: var(--feishu-remote-status-bar-height);
+  max-height: var(--feishu-remote-status-bar-height);
+  overflow: hidden;
+  padding: 0 8px;
+  gap: 8px;
+  font-size: 12px;
+  background: var(--sa-bg-panel);
+  border-top: 1px solid var(--sa-border);
+  box-sizing: border-box;
+}
+
+.feishu-remote-status-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.feishu-remote-status-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.feishu-remote-status-dot--idle {
+  background: var(--sa-text-tertiary);
+}
+
+.feishu-remote-status-dot--listening {
+  background: var(--sa-success);
+}
+
+.feishu-remote-status-dot--error {
+  background: var(--sa-error);
+}
+
+.feishu-remote-status-badge {
+  flex-shrink: 0;
+}
+
+.feishu-remote-status-label {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.feishu-remote-status-label-desc {
+  color: var(--sa-text-tertiary);
+  font-weight: 400;
+}
+
+.feishu-remote-status-label-value {
+  font-weight: 600;
+  color: var(--sa-text-secondary);
+}
+
+.feishu-remote-status-sub {
+  flex: 1;
+  min-width: 0;
+  color: var(--sa-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feishu-remote-status-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.feishu-remote-status-actions .ant-btn {
+  font-size: 11px;
 }

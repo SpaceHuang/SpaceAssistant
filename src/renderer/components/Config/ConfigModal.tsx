@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { setConfig, setSettingsOpen } from '../../store/configSlice'
+import { setConfig, setSettingsActiveTab, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry, UiThemeMode, WikiConfig, PlanConfig } from '../../../shared/domainTypes'
 import { DEFAULT_WIKI_CONFIG, DEFAULT_PLAN_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../../../shared/feishuTypes'
@@ -148,6 +148,7 @@ function ModelList({ value, onChange }: { value: ModelEntry[]; onChange: (v: Mod
 export function ConfigModal() {
   const { message } = App.useApp()
   const open = useTypedSelector((s) => s.config.settingsOpen)
+  const settingsActiveTab = useTypedSelector((s) => s.config.settingsActiveTab)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const sessions = useTypedSelector((s) => s.session.list)
@@ -401,6 +402,8 @@ export function ConfigModal() {
     >
       <Form form={form} layout="vertical">
         <Tabs
+          activeKey={settingsActiveTab ?? 'general'}
+          onChange={(key) => dispatch(setSettingsActiveTab(key))}
           items={[
             {
               key: 'general',

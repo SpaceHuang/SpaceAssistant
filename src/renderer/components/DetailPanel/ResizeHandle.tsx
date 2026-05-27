@@ -8,7 +8,10 @@ interface ResizeHandleProps {
   onDoubleClick?: () => void
 }
 
-const MIN_PX = 80
+/** 引用文件列表最小高度（飞书状态栏为独立网格行，不计入此比例） */
+const MIN_REFERENCED_FILES_PX = 80
+/** 与 detailPanel.css --feishu-remote-status-bar-height 一致 */
+const FEISHU_STATUS_BAR_PX = 32
 
 export function ResizeHandle({ onResize, currentRatio, minRatio = 0.15, maxRatio = 0.85, onDoubleClick }: ResizeHandleProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -18,8 +21,9 @@ export function ResizeHandle({ onResize, currentRatio, minRatio = 0.15, maxRatio
     (e: React.MouseEvent) => {
       e.preventDefault()
       const container = containerRef.current?.parentElement
-      if (!container) return
-      const containerHeight = container.clientHeight
+      const handleEl = containerRef.current
+      if (!container || !handleEl) return
+      const containerHeight = container.clientHeight - handleEl.offsetHeight - FEISHU_STATUS_BAR_PX
       dragState.current = {
         startY: e.clientY,
         startBottomHeight: currentRatio * containerHeight,
@@ -31,8 +35,8 @@ export function ResizeHandle({ onResize, currentRatio, minRatio = 0.15, maxRatio
         const delta = ev.clientY - dragState.current.startY
         const newBottomHeight = dragState.current.startBottomHeight - delta
         const ratio = newBottomHeight / dragState.current.containerHeight
-        const minR = Math.max(minRatio, MIN_PX / dragState.current.containerHeight)
-        const maxR = Math.min(maxRatio, 1 - MIN_PX / dragState.current.containerHeight)
+        const minR = Math.max(minRatio, MIN_REFERENCED_FILES_PX / dragState.current.containerHeight)
+        const maxR = Math.min(maxRatio, 1 - MIN_REFERENCED_FILES_PX / dragState.current.containerHeight)
         const clamped = Math.min(maxR, Math.max(minR, ratio))
         onResize(clamped)
       }
