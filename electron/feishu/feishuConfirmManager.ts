@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { stripCommandPrefix } from './feishuInboundParser'
+import { logFeishuCliEvent } from './feishuCliLogger'
+import type { FeishuAuditLogger } from './feishuAuditLogger'
 
 export interface InboundAcceptResult {
   accept: boolean
@@ -70,6 +72,8 @@ export class FeishuConfirmManager {
   private pending = new Map<string, FeishuPendingConfirm>()
   private resolvers = new Map<string, (v: 'y' | 'n' | 'timeout') => void>()
 
+  constructor(private auditLogger?: FeishuAuditLogger) {}
+
   listPending(): FeishuPendingConfirm[] {
     return [...this.pending.values()]
   }
@@ -81,6 +85,7 @@ export class FeishuConfirmManager {
   cancel(id: string): boolean {
     const p = this.pending.get(id)
     if (!p) return false
+    logFeishuCliEvent('info', 'feishu.confirm.cancel', { confirmId: id })
     this.resolve(id, 'n')
     return true
   }
@@ -95,11 +100,14 @@ export class FeishuConfirmManager {
     if (!match) return false
 
     const decision: 'y' | 'n' = /^[Yy]$|^确认$/.test(text) ? 'y' : 'n'
+    logFeishuCliEvent('info', 'feishu.inbound.confirm_resolved', { confirmId: match.id, decision })
     this.resolve(match.id, decision)
     return true
   }
 
   private resolve(id: string, decision: 'y' | 'n' | 'timeout'): void {
+    logFeishuCliEvent('info', 'feishu.confirm.resolved', { confirmId: id, decision })
+    void this.auditLogger?.append({ type: 'confirm_request', confirmId: id, decision })
     const resolver = this.resolvers.get(id)
     this.resolvers.delete(id)
     this.pending.delete(id)
@@ -124,6 +132,19 @@ export class FeishuConfirmManager {
       expiresAt: now + timeoutMs
     }
     this.pending.set(id, entry)
+    logFeishuCliEvent('info', 'feishu.confirm.request', {
+      confirmId: id,
+      kind: entry.kind,
+      sessionId: entry.sessionId,
+      toolName: entry.toolName,
+      messageId: entry.messageId,
+      chatId: entry.chatId,
+      expiresAt: entry.expiresAt
+    })
+    void this.auditLogger?.append({
+      type: 'confirm_request',
+      confirmId: id
+    })
 
     return new Promise((resolve) => {
       this.resolvers.set(id, resolve)

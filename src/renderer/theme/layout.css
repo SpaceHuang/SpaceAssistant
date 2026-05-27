@@ -57,6 +57,12 @@
   padding: 0 16px;
 }
 
+.app-sider,
+.app-detail-sider {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .app-detail-sider {
   background: var(--sa-bg-elevated);
   border-color: var(--sa-border) !important;

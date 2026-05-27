@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process'
 import path from 'path'
+import { logFeishuCliEvent } from './feishuCliLogger'
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -94,28 +95,60 @@ export function runNpmCommand(
   options?: { timeoutMs?: number; cwd?: string }
 ): Promise<NpmCommandResult> {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const startedAt = Date.now()
 
   let proc: ChildProcess
   try {
     proc = spawnPackageManager('npm', args, { cwd: options?.cwd })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    logFeishuCliEvent('info', 'feishu.npm.command', {
+      command: 'npm',
+      argsRedacted: args.join(' '),
+      success: false,
+      durationMs: Date.now() - startedAt
+    })
     return Promise.resolve({ success: false, stdout: '', stderr: msg })
   }
 
-  return runSpawnedCommand(proc, timeoutMs, '安装超时')
+  return runSpawnedCommand(proc, timeoutMs, '安装超时').then((r) => {
+    logFeishuCliEvent('info', 'feishu.npm.command', {
+      command: 'npm',
+      argsRedacted: args.join(' '),
+      success: r.success,
+      timedOut: r.timedOut,
+      durationMs: Date.now() - startedAt
+    })
+    return r
+  })
 }
 
 export function runNpxCommand(args: string[], options?: { timeoutMs?: number }): Promise<NpmCommandResult> {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const startedAt = Date.now()
 
   let proc: ChildProcess
   try {
     proc = spawnPackageManager('npx', args)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    logFeishuCliEvent('info', 'feishu.npm.command', {
+      command: 'npx',
+      argsRedacted: args.join(' '),
+      success: false,
+      durationMs: Date.now() - startedAt
+    })
     return Promise.resolve({ success: false, stdout: '', stderr: msg })
   }
 
-  return runSpawnedCommand(proc, timeoutMs, '命令超时')
+  return runSpawnedCommand(proc, timeoutMs, '命令超时').then((r) => {
+    logFeishuCliEvent('info', 'feishu.npm.command', {
+      command: 'npx',
+      argsRedacted: args.join(' '),
+      success: r.success,
+      timedOut: r.timedOut,
+      durationMs: Date.now() - startedAt
+    })
+    return r
+  })
 }

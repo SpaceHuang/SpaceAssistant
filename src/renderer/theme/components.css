@@ -104,6 +104,9 @@
 .sa-split-pane-body {
   flex: 1 1 0;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
   overflow: hidden;
   display: flex;
   flex-direction: column;

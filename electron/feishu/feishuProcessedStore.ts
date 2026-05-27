@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { logFeishuCliEvent } from './feishuCliLogger'
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -43,6 +44,10 @@ export class FeishuProcessedStore {
     if (this.data.entries.some((e) => e.messageId === messageId)) return
     this.data.entries.push({ messageId, processedAt: now })
     this.purgeExpired(now)
+    logFeishuCliEvent('info', 'feishu.processed.mark', {
+      messageId,
+      entryCount: this.data.entries.length
+    })
     await this.save()
   }
 

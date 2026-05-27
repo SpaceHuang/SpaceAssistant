@@ -18,6 +18,7 @@ import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent } from './agentLogger/agentLogger'
+import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { encryptSecret } from './secureApiKey'
 import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
 import {
@@ -172,6 +173,12 @@ app.whenReady().then(() => {
   if (!app.isPackaged && agentLogDir) {
     console.info('[AgentLogger] 开发模式日志目录:', agentLogDir)
   }
+
+  initFeishuCliLogger({
+    getWorkDir: () => workDirState,
+    isPackaged: app.isPackaged,
+    mainDirname: __dirname
+  })
 
   const backup = new SessionBackupManager(workDirState)
 

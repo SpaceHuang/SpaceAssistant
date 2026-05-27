@@ -13,6 +13,8 @@ import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteComma
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
 import { mergeToolsConfig, mergePlanConfig } from '../../src/shared/domainTypes'
+import { logFeishuCliEvent } from './feishuCliLogger'
+import { authUrlHostOnly, previewText } from './feishuCliLogFields'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
 const PLAN_CONFIG_KEY = 'config.plan'
@@ -64,8 +66,8 @@ export function createFeishuBundle(deps: {
   const readCfg = () => readFeishuConfigFromDb(deps.db)
   const runner = new LarkCliRunner(() => readCfg().cliPath ?? '')
   const processedStore = new FeishuProcessedStore(userData)
-  const confirmManager = new FeishuConfirmManager()
   const auditLogger = new FeishuAuditLogger(userData)
+  const confirmManager = new FeishuConfirmManager(auditLogger)
 
   const routerDeps: RemoteCommandRouterDeps = {
     db: deps.db,
@@ -101,7 +103,12 @@ export function createFeishuBundle(deps: {
   const router = new RemoteCommandRouter(routerDeps)
   const eventService = new FeishuEventService(runner, (msg) => void router.handleInbound(msg), () => {})
 
+  const cfg = readCfg()
   bundle = { runner, processedStore, confirmManager, auditLogger, eventService, router }
+  logFeishuCliEvent('info', 'feishu.service.bundle_created', {
+    hasRunner: true,
+    remoteEnabled: cfg.remoteEnabled
+  })
   return bundle
 }
 
@@ -113,11 +120,24 @@ export async function autoStartFeishuEventIfNeeded(db: AppDatabase): Promise<voi
   const cfg = readFeishuConfigFromDb(db)
   if (cfg.enabled && cfg.remoteEnabled && cfg.appConfigured && bundle?.eventService) {
     await bundle.eventService.start()
+    logFeishuCliEvent('info', 'feishu.ipc.auto_start', { started: true })
+    return
   }
+  const reason = !cfg.enabled
+    ? 'disabled'
+    : !cfg.remoteEnabled
+      ? 'remote_off'
+      : !cfg.appConfigured
+        ? 'not_configured'
+        : !bundle?.eventService
+          ? 'no_event_service'
+          : 'unknown'
+  logFeishuCliEvent('info', 'feishu.ipc.auto_start', { started: false, reason })
 }
 
 export async function shutdownFeishuServices(): Promise<void> {
   await bundle?.eventService?.stop()
+  logFeishuCliEvent('info', 'feishu.service.shutdown', {})
 }
 
 export function registerFeishuIpcHandlers(
@@ -136,7 +156,16 @@ export function registerFeishuIpcHandlers(
   if (!bundle) createFeishuBundle(deps)
   const b = bundle!
 
-  ipcMain.handle('feishu:detect-cli', async () => b.runner.detect())
+  ipcMain.handle('feishu:detect-cli', async () => {
+    const r = await b.runner.detect()
+    logFeishuCliEvent('info', 'feishu.ipc.detect_cli', {
+      installed: r.installed,
+      version: r.version,
+      nodeAvailable: r.nodeAvailable,
+      npmAvailable: r.npmAvailable
+    })
+    return r
+  })
 
   ipcMain.handle('feishu:install-cli', async () => {
     try {
@@ -148,9 +177,16 @@ export function registerFeishuIpcHandlers(
         }
       }
       const r = await runNpmCommand(['install', '-g', '@larksuite/cli'])
-      return { success: r.success, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+      const result = { success: r.success, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+      logFeishuCliEvent(r.success ? 'info' : 'warn', 'feishu.ipc.install_cli', {
+        success: r.success,
+        timedOut: r.timedOut,
+        stderr: r.stderr
+      })
+      return result
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      logFeishuCliEvent('warn', 'feishu.ipc.install_cli', { success: false, stderr: msg })
       return { success: false, stderr: msg }
     }
   })
@@ -158,9 +194,16 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle('feishu:install-skill', async () => {
     try {
       const r = await runNpxCommand(['-y', 'skills', 'add', 'https://open.feishu.cn', '--skill', '-y'])
-      return { success: r.success, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+      const result = { success: r.success, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+      logFeishuCliEvent(r.success ? 'info' : 'warn', 'feishu.ipc.install_skill', {
+        success: r.success,
+        timedOut: r.timedOut,
+        stderr: r.stderr
+      })
+      return result
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      logFeishuCliEvent('warn', 'feishu.ipc.install_skill', { success: false, stderr: msg })
       return { success: false, stderr: msg }
     }
   })
@@ -172,18 +215,35 @@ export function registerFeishuIpcHandlers(
         return { success: false, stderr: '未检测到 lark-cli，请先点击「安装 CLI」。' }
       }
       const wc = getMainWindow()?.webContents
+      let lastProgressLog = 0
       const r = await runFeishuCliWithBrowserFlow(b.runner, ['config', 'init', '--new'], {
-        onProgress: (line) => wc?.send('feishu:config-init-progress', { line })
+        onProgress: (line) => {
+          wc?.send('feishu:config-init-progress', { line })
+          const now = Date.now()
+          if (now - lastProgressLog >= 2000) {
+            lastProgressLog = now
+            logFeishuCliEvent('info', 'feishu.ipc.config_init.progress', {
+              linePreview: previewText(line, 300)
+            })
+          }
+        }
       })
-      return {
+      const result = {
         success: r.success,
         stdout: r.stdout,
         stderr: r.stderr,
         timedOut: r.timedOut,
         authUrl: r.authUrl
       }
+      logFeishuCliEvent('info', 'feishu.ipc.config_init', {
+        success: r.success,
+        timedOut: r.timedOut,
+        authUrlHost: authUrlHostOnly(r.authUrl)
+      })
+      return result
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      logFeishuCliEvent('warn', 'feishu.ipc.config_init', { success: false, stderr: msg })
       return { success: false, stderr: msg }
     }
   })
@@ -195,9 +255,16 @@ export function registerFeishuIpcHandlers(
         return { success: false, stderr: '未检测到 lark-cli，请先点击「安装 CLI」。' }
       }
       const r = await runFeishuCliWithBrowserFlow(b.runner, ['auth', 'login', '--recommend'])
-      return { success: r.success, authUrl: r.authUrl, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+      const result = { success: r.success, authUrl: r.authUrl, stdout: r.stdout, stderr: r.stderr, timedOut: r.timedOut }
+      logFeishuCliEvent('info', 'feishu.ipc.auth_login', {
+        success: r.success,
+        timedOut: r.timedOut,
+        browserOpened: Boolean(r.authUrl)
+      })
+      return result
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      logFeishuCliEvent('warn', 'feishu.ipc.auth_login', { success: false, stderr: msg })
       return { success: false, stderr: msg }
     }
   })
@@ -205,25 +272,28 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle('feishu:auth-status', async () => {
     try {
       const r = await b.runner.run({ args: ['auth', 'status'], timeoutSec: 30 })
-      return {
-        authorized: r.exitCode === 0 && !/not logged/i.test(r.stdout + r.stderr),
-        stdout: r.stdout,
-        stderr: r.stderr
-      }
+      const authorized = r.exitCode === 0 && !/not logged/i.test(r.stdout + r.stderr)
+      logFeishuCliEvent('info', 'feishu.ipc.auth_status', { authorized, exitCode: r.exitCode })
+      return { authorized, stdout: r.stdout, stderr: r.stderr }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      logFeishuCliEvent('info', 'feishu.ipc.auth_status', { authorized: false, exitCode: 1 })
       return { authorized: false, stdout: '', stderr: msg }
     }
   })
 
   ipcMain.handle('feishu:event-start', async () => {
     await b.eventService?.start()
-    return b.eventService?.getStatus()
+    const status = b.eventService?.getStatus()
+    logFeishuCliEvent('info', 'feishu.ipc.event_start', { status })
+    return status
   })
 
   ipcMain.handle('feishu:event-stop', async () => {
     await b.eventService?.stop()
-    return b.eventService?.getStatus()
+    const status = b.eventService?.getStatus()
+    logFeishuCliEvent('info', 'feishu.ipc.event_stop', { status })
+    return status
   })
 
   ipcMain.handle('feishu:event-status', async () => b.eventService?.getStatus())
@@ -242,24 +312,36 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle('feishu:health-check', async () => {
     const cli = await b.runner.detect()
     const event = b.eventService?.getStatus() ?? { state: 'stopped' as const, processedCount: 0 }
-    return {
+    const pendingConfirms = b.confirmManager.countPending()
+    const result = {
       cli,
       event,
       lastInboundAt: b.router?.getLastInboundAt(),
       lastReplyAt: b.router?.getLastReplyAt(),
-      pendingConfirms: b.confirmManager.countPending(),
+      pendingConfirms,
       pendingPlans: b.confirmManager.listPending().filter((p) => p.kind === 'plan_execute').length
     }
+    if (!cli.installed || event.state === 'error') {
+      logFeishuCliEvent('info', 'feishu.ipc.health_check', {
+        cliInstalled: cli.installed,
+        eventState: event.state,
+        pendingConfirms
+      })
+    }
+    return result
   })
 
   ipcMain.handle('feishu:check-cli-update', async () => {
     const r = await runNpmCommand(['view', '@larksuite/cli', 'version'], { timeoutMs: 60_000 })
-    return { latest: r.stdout.trim() || undefined }
+    const latest = r.stdout.trim() || undefined
+    logFeishuCliEvent('info', 'feishu.ipc.check_cli_update', { latest })
+    return { latest }
   })
 }
 
 export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConfig>): FeishuConfig {
   const next = mergeFeishuConfig({ ...readFeishuConfigFromDb(db), ...partial })
   setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next))
+  logFeishuCliEvent('info', 'feishu.config.persist', { keys: Object.keys(partial) })
   return next
 }

@@ -51,6 +51,17 @@ describe('resolveFeishuRemoteDisplayStatus', () => {
       expect(r.label).toBe('未配置')
     })
 
+    it('treats live auth as authorized when config flag is stale', () => {
+      const r = resolveFeishuRemoteDisplayStatus(
+        readyConfig({ userAuthorized: false }),
+        readyHealth({ event: { state: 'stopped', processedCount: 0 } }),
+        null,
+        true
+      )
+      expect(r.label).toBe('已停止')
+      expect(r.startEnabled).toBe(true)
+    })
+
     it('shows 未配置 when CLI not installed', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),

@@ -13,6 +13,7 @@ import type { FeishuConfirmManager } from './feishuConfirmManager'
 import { runPlanModeChat, runPlanUntilDone } from '../plan/planOrchestrator'
 import { readPlanStateForSession } from '../plan/planManager'
 import type { FeishuRemoteContext } from '../tools/types'
+import { logFeishuCliEvent } from './feishuCliLogger'
 
 export async function runFeishuRemoteAgent(ctx: {
   db: AppDatabase
@@ -42,6 +43,13 @@ export async function runFeishuRemoteAgent(ctx: {
 
   const effectiveSender = sender ?? noopSender
   registerRunningRemoteAgent(ctx.sessionId)
+  logFeishuCliEvent('info', 'feishu.agent.remote.start', {
+    sessionId: ctx.sessionId,
+    requestId,
+    workDir: ctx.workDir,
+    planMode: ctx.feishuConfig.remotePlanMode,
+    confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy
+  })
 
   try {
     const toolsConfig = ctx.getToolsConfig()
@@ -68,6 +76,7 @@ export async function runFeishuRemoteAgent(ctx: {
     }
 
     if (shouldUseRemotePlan(ctx.userMessage, ctx.feishuConfig)) {
+      logFeishuCliEvent('info', 'feishu.agent.remote.plan_branch', {})
       const planRes = await runPlanModeChat({
         sender: effectiveSender,
         requestId,
@@ -127,7 +136,13 @@ export async function runFeishuRemoteAgent(ctx: {
       } else {
         workerSummary = '步骤完成'
       }
-      return { summary: workerSummary || planSummary, pendingConfirm: false, ok: runRes.ok }
+      const planResult = { summary: workerSummary || planSummary, pendingConfirm: false, ok: runRes.ok }
+      logFeishuCliEvent('info', 'feishu.agent.remote.done', {
+        ok: planResult.ok,
+        pendingConfirm: planResult.pendingConfirm,
+        summaryLen: planResult.summary.length
+      })
+      return planResult
     }
 
     const res = await runToolChatSession({
@@ -156,7 +171,17 @@ export async function runFeishuRemoteAgent(ctx: {
     }
 
     const text = extractTextFromContent(res.content)
-    return { summary: text || '任务已完成。', pendingConfirm: false, ok: true }
+    const result = { summary: text || '任务已完成。', pendingConfirm: false, ok: true }
+    logFeishuCliEvent('info', 'feishu.agent.remote.done', {
+      ok: result.ok,
+      pendingConfirm: result.pendingConfirm,
+      summaryLen: result.summary.length
+    })
+    return result
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e)
+    logFeishuCliEvent('error', 'feishu.agent.remote.error', { error, sessionId: ctx.sessionId })
+    throw e
   } finally {
     unregisterRunningRemoteAgent(ctx.sessionId)
   }

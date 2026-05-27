@@ -96,6 +96,15 @@ API Key 通过 Electron 的 `safeStorage` API 加密（`electron/secureApiKey.ts
 
 使用 Vitest。渲染进程测试使用 `jsdom` 环境；主进程测试使用 `node` 环境（通过 `environmentMatchGlobs` 配置）。测试文件就近放置：`electron/*.test.ts` 和 `src/renderer/**/*.test.{ts,tsx}`。
 
+## 排障：飞书 CLI 文件日志
+
+飞书主进程全链路调试日志写入 **JSON Lines**，文件名 `FeishuCli-{YYYYmmdd}.log`，目录与 Agent 日志相同：
+
+- 开发模式（`npm run dev`）：`{项目根}/logs/`
+- 打包模式：`{workDir}/.agent/logs/`
+
+初始化后会写入 `feishu.logger.startup`。写入前经 `sanitizeForLog` 与飞书字段规则脱敏（不落用户消息正文、token、secret 等）。设置页「飞书操作记录」仍使用 `{userData}/logs/feishu-audit.log`，二者分工不同。
+
 ## IPC 通道参考
 
 所有通道定义在 `electron/preload.ts` 和 `electron/appIpc.ts`：

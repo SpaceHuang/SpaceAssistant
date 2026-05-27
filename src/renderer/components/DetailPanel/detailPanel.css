@@ -540,6 +540,9 @@
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   height: var(--feishu-remote-status-bar-height);
   min-height: var(--feishu-remote-status-bar-height);
   max-height: var(--feishu-remote-status-bar-height);
@@ -550,6 +553,8 @@
   background: var(--sa-bg-panel);
   border-top: 1px solid var(--sa-border);
   box-sizing: border-box;
+  container-type: inline-size;
+  container-name: feishu-status;
 }
 
 .feishu-remote-status-main {
@@ -586,11 +591,12 @@
 }
 
 .feishu-remote-status-label {
-  flex-shrink: 0;
+  flex: 0 1 auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .feishu-remote-status-label-desc {
@@ -601,6 +607,9 @@
 .feishu-remote-status-label-value {
   font-weight: 600;
   color: var(--sa-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .feishu-remote-status-sub {
@@ -622,4 +631,11 @@
 
 .feishu-remote-status-actions .ant-btn {
   font-size: 11px;
+}
+
+@container feishu-status (max-width: 300px) {
+  .feishu-remote-status-label-desc,
+  .feishu-remote-status-sub {
+    display: none;
+  }
 }

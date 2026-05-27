@@ -21,6 +21,8 @@ import {
 } from './feishuWorkDirResolver'
 import type { FeishuProcessedStore } from './feishuProcessedStore'
 import type { WebContents } from 'electron'
+import { logFeishuCliEvent } from './feishuCliLogger'
+import { contentHash, inboundSummaryForLog } from './feishuCliLogFields'
 
 const senderRateMap = new Map<string, number[]>()
 
@@ -80,6 +82,7 @@ export class RemoteCommandRouter {
   async handleInbound(msg: FeishuInboundMessage): Promise<void> {
     this.lastInboundAt = Date.now()
     const config = mergeFeishuConfig(this.deps.getFeishuConfig())
+    logFeishuCliEvent('info', 'feishu.inbound.received', inboundSummaryForLog(msg))
 
     if (this.deps.confirmManager.tryResolveFromInbound(msg)) return
 
@@ -105,24 +108,37 @@ export class RemoteCommandRouter {
     })
 
     if (!accept.accept) {
+      logFeishuCliEvent('info', 'feishu.inbound.reject', { reason: accept.reason })
       if (accept.reason === 'too_long') {
         await replyFeishuText(this.deps.runner, msg.messageId, '消息过长，请控制在 4000 字以内')
       }
       return
     }
 
+    const userContent = accept.userMessage ?? msg.content
+    logFeishuCliEvent('info', 'feishu.inbound.accept', {
+      reason: accept.reason,
+      contentLen: userContent.length,
+      contentHash: contentHash(userContent)
+    })
+
     if (config.remoteSenderAllowlist?.length && !config.remoteSenderAllowlist.includes(msg.senderOpenId)) {
+      logFeishuCliEvent('warn', 'feishu.inbound.allowlist_reject', { senderOpenId: msg.senderOpenId })
       await replyFeishuText(this.deps.runner, msg.messageId, '您暂无权限向此 Bot 发送指令。')
       return
     }
 
     if (!checkRateLimit(msg.senderOpenId, config.remoteRateLimitPerMinute)) {
       await this.deps.auditLogger.append({ type: 'rate_limit', senderOpenId: msg.senderOpenId })
+      logFeishuCliEvent('warn', 'feishu.inbound.rate_limit', { senderOpenId: msg.senderOpenId })
       await replyFeishuText(this.deps.runner, msg.messageId, '指令过于频繁，请稍后再试。')
       return
     }
 
-    if (await this.deps.processedStore.has(msg.messageId)) return
+    if (await this.deps.processedStore.has(msg.messageId)) {
+      logFeishuCliEvent('info', 'feishu.inbound.duplicate', { messageId: msg.messageId })
+      return
+    }
     await this.deps.processedStore.mark(msg.messageId)
 
     const appCfg = this.deps.getAppConfig()
@@ -133,13 +149,26 @@ export class RemoteCommandRouter {
     )
 
     if (workDirResult.ambiguous?.length) {
+      logFeishuCliEvent('info', 'feishu.inbound.disambiguation', {
+        profileIds: workDirResult.ambiguous.map((p) => p.id),
+        chatId: msg.chatId
+      })
       pendingDisambiguation.set(disambigKey, { profiles: workDirResult.ambiguous, originalMsg: msg })
       await replyFeishuText(this.deps.runner, msg.messageId, buildDisambiguationReply(workDirResult.ambiguous))
       return
     }
 
     const profile = workDirResult.profile
+    if (profile) {
+      logFeishuCliEvent('info', 'feishu.workdir.resolved', {
+        profileId: profile.id,
+        profileName: profile.name,
+        ambiguousCount: 0
+      })
+    }
+
     if (profile?.sensitive) {
+      logFeishuCliEvent('warn', 'feishu.inbound.sensitive_workdir', { profileId: profile.id })
       await replyFeishuText(this.deps.runner, msg.messageId, '该项目标记为敏感，禁止远程执行，请在桌面端操作。')
       return
     }
@@ -157,12 +186,19 @@ export class RemoteCommandRouter {
   ): Promise<void> {
     const appCfg = this.deps.getAppConfig()
     if (countRunningRemoteAgents() >= appCfg.maxParallelChatSessions) {
+      logFeishuCliEvent('warn', 'feishu.inbound.parallel_full', { maxParallel: appCfg.maxParallelChatSessions })
       await replyFeishuText(this.deps.runner, msg.messageId, '当前并行任务已满，请稍后再试')
       return
     }
 
     const content = userMessage ?? msg.content.trim()
     const { sessionId, isNew } = await resolveFeishuSession(this.deps.db, msg, config, this.deps.getModel())
+    logFeishuCliEvent('info', 'feishu.session.resolved', {
+      sessionId,
+      isNew,
+      chatId: msg.chatId,
+      mergeWindowMs: (config.remoteSessionMergeMinutes ?? 0) * 60_000
+    })
 
     if (profile) {
       await this.deps.auditLogger.append({

@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { FeishuAuditEvent } from '../../src/shared/feishuTypes'
+import { logFeishuAuditMirror } from './feishuCliLogger'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 const MAX_BACKUPS = 5
@@ -21,7 +22,7 @@ export class FeishuAuditLogger {
   private hashPreview(text: string): string {
     let h = 0
     for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
-    return Math.abs(h).toString(16).slice(0, 8)
+    return Math.abs(h).toString(16).padStart(8, '0').slice(0, 8)
   }
 
   async append(event: { type: string; ts?: number } & Record<string, unknown>): Promise<void> {
@@ -33,7 +34,8 @@ export class FeishuAuditLogger {
       /* new file */
     }
     const entry: FeishuAuditEvent = { ...event, ts: event.ts ?? Date.now() } as FeishuAuditEvent
-  await fs.appendFile(this.logPath, `${JSON.stringify(entry)}\n`, 'utf8')
+    await fs.appendFile(this.logPath, `${JSON.stringify(entry)}\n`, 'utf8')
+    logFeishuAuditMirror(entry as { type: string } & Record<string, unknown>)
   }
 
   private async rotate(): Promise<void> {

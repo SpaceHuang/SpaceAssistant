@@ -10,14 +10,16 @@ export function useFeishuRemoteDisplayStatus() {
   const config = useMemo(() => mergeFeishuConfig(feishuConfig ?? DEFAULT_FEISHU_CONFIG), [feishuConfig])
 
   const [health, setHealth] = useState<FeishuHealthCheck | null>(null)
+  const [liveUserAuthorized, setLiveUserAuthorized] = useState<boolean | null>(null)
   const [eventOverride, setEventOverride] = useState<FeishuEventStatus | null>(null)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<'start' | 'stop' | null>(null)
 
   const refreshHealth = useCallback(async () => {
     try {
-      const h = await window.api.feishuHealthCheck()
+      const [h, auth] = await Promise.all([window.api.feishuHealthCheck(), window.api.feishuAuthStatus()])
       setHealth(h)
+      setLiveUserAuthorized(auth.authorized)
       setFetchError(null)
     } catch (e) {
       setFetchError(e instanceof Error ? e.message : String(e))
@@ -51,7 +53,12 @@ export function useFeishuRemoteDisplayStatus() {
   }, [config.remoteEnabled, refreshEvent])
 
   const status: FeishuRemoteDisplayStatus = useMemo(() => {
-    const base = resolveFeishuRemoteDisplayStatus(config, health, eventOverride)
+    const base = resolveFeishuRemoteDisplayStatus(
+      config,
+      health,
+      eventOverride,
+      liveUserAuthorized ?? undefined
+    )
     if (fetchError && base.displayState !== 'error') {
       return {
         ...base,
@@ -60,7 +67,7 @@ export function useFeishuRemoteDisplayStatus() {
       }
     }
     return base
-  }, [config, health, eventOverride, fetchError])
+  }, [config, health, eventOverride, liveUserAuthorized, fetchError])
 
   const start = useCallback(async () => {
     setActionLoading('start')

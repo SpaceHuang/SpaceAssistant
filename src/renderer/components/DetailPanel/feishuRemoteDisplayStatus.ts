@@ -23,10 +23,16 @@ function isActiveRemoteEvent(event: FeishuEventStatus): boolean {
 }
 
 /** 与设置页一致：远程监听已开且服务在跑时，不因 health 未就绪误判为未配置 */
-function prerequisitesMet(config: FeishuConfig, health: FeishuHealthCheck | null, event: FeishuEventStatus): boolean {
+function prerequisitesMet(
+  config: FeishuConfig,
+  health: FeishuHealthCheck | null,
+  event: FeishuEventStatus,
+  liveUserAuthorized?: boolean
+): boolean {
   if (!config.enabled && !config.remoteEnabled) return false
   if (config.remoteEnabled && isActiveRemoteEvent(event)) return true
-  if (!config.appConfigured || !config.userAuthorized) return false
+  const userAuthorized = config.userAuthorized || liveUserAuthorized === true
+  if (!config.appConfigured || !userAuthorized) return false
   const cliInstalled =
     health?.cli.installed === true || event.state === 'connecting' || event.state === 'connected'
   return cliInstalled
@@ -99,11 +105,12 @@ function buildErrorTooltip(event: FeishuEventStatus, health: FeishuHealthCheck |
 export function resolveFeishuRemoteDisplayStatus(
   config: FeishuConfig,
   health: FeishuHealthCheck | null,
-  eventOverride?: FeishuEventStatus | null
+  eventOverride?: FeishuEventStatus | null,
+  liveUserAuthorized?: boolean
 ): FeishuRemoteDisplayStatus {
   const event = resolveEvent(health, eventOverride)
 
-  if (!prerequisitesMet(config, health, event)) {
+  if (!prerequisitesMet(config, health, event, liveUserAuthorized)) {
     const buttons = resolveButtonState('unconfigured', config)
     return {
       displayState: 'unconfigured',

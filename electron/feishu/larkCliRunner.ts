@@ -4,6 +4,8 @@ import os from 'os'
 import path from 'path'
 import { spawnCommandSafe } from '../spawnUtil'
 import type { FeishuCliDetectResult } from '../../src/shared/feishuTypes'
+import { logFeishuCliEvent } from './feishuCliLogger'
+import { redactLarkCliArgsForLog } from './feishuCliLogFields'
 
 const MAX_OUTPUT_BYTES = 512 * 1024
 const TRUNC_SUFFIX = '\n[输出被截断]'
@@ -63,21 +65,32 @@ export class LarkCliRunner {
     try {
       const r = await this.run({ args: ['--version'], timeoutSec: 10 })
       const version = r.stdout.trim()
-      return {
+      const result: FeishuCliDetectResult = {
         installed: r.exitCode === 0,
         version: version || undefined,
         path: this.resolveExecutable(),
         nodeAvailable: Boolean(node),
         npmAvailable: Boolean(npm)
       }
+      logFeishuCliEvent('info', 'feishu.cli.detect', { ...result })
+      return result
     } catch {
-      return { installed: false, nodeAvailable: Boolean(node), npmAvailable: Boolean(npm) }
+      const result = { installed: false, nodeAvailable: Boolean(node), npmAvailable: Boolean(npm) }
+      logFeishuCliEvent('info', 'feishu.cli.detect', result)
+      return result
     }
   }
 
   run(options: LarkCliRunOptions): Promise<LarkCliRunResult> {
     const { args, timeoutSec = 120, cwd, onStdout, onStderr, signal } = options
     const cliPath = this.resolveExecutable()
+    const startedAt = Date.now()
+    const { argsRedacted } = redactLarkCliArgsForLog(args)
+    logFeishuCliEvent('info', 'feishu.cli.run.start', {
+      argsRedacted,
+      timeoutSec,
+      cwd: cwd ?? undefined
+    })
     const env = {
       ...process.env,
       PATH: process.env.PATH ?? process.env.Path ?? ''
@@ -102,6 +115,7 @@ export class LarkCliRunner {
         env
       })
       if ('error' in spawned) {
+        logFeishuCliEvent('error', 'feishu.cli.run.spawn_error', { error: spawned.error })
         finish({ exitCode: 1, stdout: '', stderr: spawned.error, timedOut: false })
         return
       }
@@ -131,14 +145,28 @@ export class LarkCliRunner {
         onStderr?.(chunk)
       })
 
+      const logDone = (result: LarkCliRunResult) => {
+        logFeishuCliEvent(result.exitCode === 0 && !result.timedOut ? 'info' : 'warn', 'feishu.cli.run.done', {
+          exitCode: result.exitCode,
+          timedOut: result.timedOut,
+          durationMs: Date.now() - startedAt,
+          stdout,
+          stderr
+        })
+      }
+
       proc.on('close', (code) => {
         signal?.removeEventListener('abort', onAbort)
-        finish({ exitCode: code ?? 1, stdout, stderr, timedOut })
+        const result = { exitCode: code ?? 1, stdout, stderr, timedOut }
+        logDone(result)
+        finish(result)
       })
       proc.on('error', (err) => {
         signal?.removeEventListener('abort', onAbort)
         stderr = appendWithLimit(stderr, err.message, MAX_OUTPUT_BYTES)
-        finish({ exitCode: 1, stdout, stderr, timedOut })
+        const result = { exitCode: 1, stdout, stderr, timedOut }
+        logDone(result)
+        finish(result)
       })
     })
   }

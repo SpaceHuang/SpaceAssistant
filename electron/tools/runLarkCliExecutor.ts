@@ -2,6 +2,10 @@ import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './t
 import { assertSafeLarkCliArgs } from '../feishu/larkCliSecurity'
 import { parseLarkCliError } from '../feishu/larkCliErrors'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
+import { logFeishuCliEvent } from '../feishu/feishuCliLogger'
+import { isLarkCliWriteOperation } from '../feishu/larkCliSecurity'
+import { redactLarkCliArgsForLog } from '../feishu/feishuCliLogFields'
+import { getFeishuBundle } from '../feishu/feishuIpc'
 
 export const runLarkCliExecutor: ToolExecutor = {
   name: 'run_lark_cli',
@@ -11,6 +15,7 @@ export const runLarkCliExecutor: ToolExecutor = {
     try {
       args = assertSafeLarkCliArgs(input.args)
     } catch (e) {
+      logFeishuCliEvent('warn', 'feishu.tool.run_lark_cli.rejected', { error: String(e) })
       return { success: false, error: String(e), duration: Date.now() - started }
     }
 
@@ -31,22 +36,78 @@ export const runLarkCliExecutor: ToolExecutor = {
       signal: ctx.signal
     })
 
+    const durationMs = Date.now() - started
+    const { argsRedacted } = redactLarkCliArgsForLog(args)
+    const writeOp = isLarkCliWriteOperation(args)
+    const shouldAudit = ctx.remoteContext?.source === 'feishu' || Boolean(ctx.feishuConfig)
+
     if (r.timedOut) {
-      return { success: false, error: 'lark-cli 执行超时', duration: Date.now() - started }
+      logFeishuCliEvent('warn', 'feishu.tool.run_lark_cli', {
+        sessionId: ctx.sessionId,
+        argsRedacted,
+        success: false,
+        writeOp,
+        durationMs,
+        error: 'lark-cli 执行超时'
+      })
+      if (shouldAudit) {
+        void getFeishuBundle()?.auditLogger.append({
+          type: 'lark_cli',
+          sessionId: ctx.sessionId,
+          args,
+          success: false,
+          writeOp
+        })
+      }
+      return { success: false, error: 'lark-cli 执行超时', duration: durationMs }
     }
+
     if (r.exitCode !== 0) {
       const parsed = parseLarkCliError(r.stderr)
+      logFeishuCliEvent('warn', 'feishu.tool.run_lark_cli', {
+        sessionId: ctx.sessionId,
+        argsRedacted,
+        success: false,
+        writeOp,
+        durationMs,
+        error: parsed.message
+      })
+      if (shouldAudit) {
+        void getFeishuBundle()?.auditLogger.append({
+          type: 'lark_cli',
+          sessionId: ctx.sessionId,
+          args,
+          success: false,
+          writeOp
+        })
+      }
       return {
         success: false,
         error: parsed.message,
         data: { stdout: r.stdout, stderr: r.stderr, hint: parsed.hint },
-        duration: Date.now() - started
+        duration: durationMs
       }
+    }
+    logFeishuCliEvent('info', 'feishu.tool.run_lark_cli', {
+      sessionId: ctx.sessionId,
+      argsRedacted,
+      success: true,
+      writeOp,
+      durationMs
+    })
+    if (shouldAudit) {
+      void getFeishuBundle()?.auditLogger.append({
+        type: 'lark_cli',
+        sessionId: ctx.sessionId,
+        args,
+        success: true,
+        writeOp
+      })
     }
     return {
       success: true,
       data: { stdout: r.stdout, stderr: r.stderr },
-      duration: Date.now() - started
+      duration: durationMs
     }
   }
 }

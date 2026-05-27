@@ -22,6 +22,8 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
   const [configStatus, setConfigStatus] = useState('')
   const [authLoggingIn, setAuthLoggingIn] = useState(false)
 
+  const patch = useCallback((p: Partial<FeishuConfig>) => onChange({ ...feishu, ...p }), [feishu, onChange])
+
   const refreshStatus = useCallback(async () => {
     try {
       const detect = await window.api.feishuDetectCli()
@@ -34,6 +36,9 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
       setAuthStatus(
         auth.authorized ? '已授权' : auth.stderr?.trim() ? `未登录（${auth.stderr.trim().slice(-200)}）` : '未登录'
       )
+      if (auth.authorized !== feishu.userAuthorized) {
+        patch({ userAuthorized: auth.authorized })
+      }
       if (feishu.remoteEnabled) {
         const es = await window.api.feishuEventStatus()
         setEventStatus(es ?? null)
@@ -41,7 +46,7 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
     } catch (e) {
       setCliStatus(e instanceof Error ? e.message : String(e))
     }
-  }, [feishu.remoteEnabled])
+  }, [feishu.remoteEnabled, feishu.userAuthorized, patch])
 
   useEffect(() => {
     if (feishu.enabled) void refreshStatus()
@@ -80,8 +85,6 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
       setInstallingCli(false)
     }
   }
-
-  const patch = (p: Partial<FeishuConfig>) => onChange({ ...feishu, ...p })
 
   const configInit = async () => {
     if (typeof window.api.feishuConfigInit !== 'function') {
@@ -139,6 +142,7 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
       const r = await window.api.feishuAuthLogin()
       if (r.success) {
         message.success('飞书账号登录成功')
+        patch({ userAuthorized: true })
         await refreshStatus()
       } else {
         const detail = (r.stderr || r.stdout || '未知错误').trim().slice(-800)

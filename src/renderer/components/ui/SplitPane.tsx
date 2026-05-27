@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { clampSplitPaneSize } from './splitPaneLayout'
 
 const STORAGE_PREFIX = 'sa.layout.'
 
@@ -20,9 +21,19 @@ export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, c
     return Number.isFinite(n) ? Math.min(maxSize, Math.max(minSize, n)) : defaultSize
   })
   const [isDragging, setIsDragging] = useState(false)
+  const paneRef = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
   const startX = useRef(0)
   const startSize = useRef(size)
+
+  const clampToShell = useCallback(
+    (next: number) => {
+      const shell = paneRef.current?.closest('.app-shell')
+      if (!shell) return Math.min(maxSize, Math.max(minSize, next))
+      return clampSplitPaneSize(shell, side, next, minSize, maxSize)
+    },
+    [maxSize, minSize, side]
+  )
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -42,7 +53,7 @@ export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, c
       if (!dragging.current) return
       const delta = e.clientX - startX.current
       const next = side === 'left' ? startSize.current + delta : startSize.current - delta
-      setSize(Math.min(maxSize, Math.max(minSize, next)))
+      setSize(clampToShell(next))
     }
     const onUp = () => {
       if (!dragging.current) return
@@ -57,6 +68,27 @@ export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, c
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
+  }, [clampToShell, maxSize, minSize, side])
+
+  useEffect(() => {
+    const shell = paneRef.current?.closest('.app-shell')
+    if (!shell) return
+
+    const syncSize = () => {
+      setSize((cur) => {
+        const capped = clampSplitPaneSize(shell, side, cur, minSize, maxSize)
+        return capped === cur ? cur : capped
+      })
+    }
+
+    syncSize()
+    const ro = new ResizeObserver(syncSize)
+    ro.observe(shell)
+    window.addEventListener('resize', syncSize)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', syncSize)
+    }
   }, [maxSize, minSize, side])
 
   useEffect(() => {
@@ -65,10 +97,13 @@ export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, c
 
   return (
     <div
+      ref={paneRef}
       className={className}
       style={{
         width: size,
-        flexShrink: 0,
+        minWidth: minSize,
+        maxWidth: '100%',
+        flexShrink: 1,
         display: 'flex',
         flexDirection: 'column',
         position: 'relative',
