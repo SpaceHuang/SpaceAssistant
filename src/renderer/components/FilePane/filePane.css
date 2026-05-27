@@ -31,8 +31,17 @@
 .file-pane-section-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   width: 100%;
+  flex: 0 0 auto;
+}
+
+.file-pane-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
   padding: 4px 8px;
   border: none;
   background: transparent;
@@ -42,10 +51,9 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  flex: 0 0 auto;
 }
 
-.file-pane-section-header:hover {
+.file-pane-section-toggle:hover {
   background: rgba(128, 128, 128, 0.08);
 }
 
@@ -62,7 +70,10 @@
 
 .file-pane-section-actions {
   display: flex;
+  flex-shrink: 0;
+  align-items: center;
   gap: 2px;
+  padding-right: 4px;
 }
 
 .file-pane-section-body {

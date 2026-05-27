@@ -1,7 +1,16 @@
 /* ── App shell ── */
 .app-shell {
+  display: flex;
   height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   background: var(--sa-bg-base);
+}
+
+.app-shell > .app-sider,
+.app-shell > .app-detail-sider,
+.app-shell > .app-main {
+  min-height: 0;
 }
 
 .app-sider {
@@ -52,6 +61,14 @@
   background: var(--sa-bg-elevated);
   border-color: var(--sa-border) !important;
   padding: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.app-detail-sider .sa-split-pane-body > .detail-panel-split {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 

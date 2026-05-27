@@ -4,11 +4,11 @@ import { derivePlanPanelMainState } from '../../../shared/planTypes'
 export { derivePlanPanelMainState }
 export type { PlanPanelMainState } from '../../../shared/planTypes'
 
-/** 下半区「引用文件」占比；上半区 Plan 随状态自动调节 */
+/** 下半区「引用文件」占比（不含底部飞书状态栏固定行）；上半区 Plan 随状态自动调节 */
 export const PLAN_PANEL_HEIGHT_BY_STATE = {
-  empty: 0.68,
-  plans: 0.48,
-  pending_approval: 0.58
+  empty: 0.64,
+  plans: 0.45,
+  pending_approval: 0.55
 } as const
 
 export function planPanelBadgeLabel(state: PlanPanelMainState): string {
