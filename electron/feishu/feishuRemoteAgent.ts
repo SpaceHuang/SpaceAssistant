@@ -2,8 +2,7 @@ import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import { getMessages } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
-import type { BrowserConfig, ToolsConfig, WikiConfig, PlanConfig } from '../../src/shared/domainTypes'
-import { mergePlanConfig } from '../../src/shared/domainTypes'
+import type { BrowserConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { resolveFeishuBrowserRemoteHint } from '../../src/shared/browserRemotePolicy'
@@ -11,8 +10,6 @@ import { buildSystemPrompt, getCachedMemoryContent } from '../projectMemory'
 import { registerRunningRemoteAgent, unregisterRunningRemoteAgent } from './runningRemoteAgentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
 import type { FeishuConfirmManager } from './feishuConfirmManager'
-import { runPlanModeChat, runPlanUntilDone } from '../plan/planOrchestrator'
-import { readPlanStateForSession } from '../plan/planManager'
 import type { FeishuRemoteContext } from '../tools/types'
 import { logFeishuCliEvent } from './feishuCliLogger'
 
@@ -34,7 +31,6 @@ export async function runFeishuRemoteAgent(ctx: {
   getToolsConfig: () => ToolsConfig
   getBrowserConfig?: () => BrowserConfig
   getWikiConfig?: () => WikiConfig
-  getPlanConfig?: () => PlanConfig
   remoteContext: FeishuRemoteContext
 }): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
   const requestId = ctx.requestId
@@ -49,7 +45,6 @@ export async function runFeishuRemoteAgent(ctx: {
     sessionId: ctx.sessionId,
     requestId,
     workDir: ctx.workDir,
-    planMode: ctx.feishuConfig.remotePlanMode,
     confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy
   })
 
@@ -71,87 +66,6 @@ export async function runFeishuRemoteAgent(ctx: {
     })
     const memoryContent = getCachedMemoryContent()
     const system = buildSystemPrompt(appendix, memoryContent, true)
-
-    const planDeps = {
-      getApiKey: ctx.getApiKey,
-      getWorkDir: () => ctx.workDir,
-      getUserDataPath: () => ctx.userDataDir,
-      getToolsConfig: () => ctx.getToolsConfig(),
-      getBrowserConfig: ctx.getBrowserConfig,
-      getWikiConfig: ctx.getWikiConfig,
-      getAppDatabase: () => ctx.db,
-      getPlanConfig: () => ctx.getPlanConfig?.() ?? mergePlanConfig(null)
-    }
-
-    if (shouldUseRemotePlan(ctx.userMessage, ctx.feishuConfig)) {
-      logFeishuCliEvent('info', 'feishu.agent.remote.plan_branch', {})
-      const planRes = await runPlanModeChat({
-        sender: effectiveSender,
-        requestId,
-        sessionId: ctx.sessionId,
-        model: ctx.getModel(),
-        baseUrl: ctx.getBaseUrl(),
-        messages,
-        system,
-        options: { maxTokens: 8192 },
-        deps: planDeps
-      })
-
-      if (!planRes.ok) {
-        return { summary: `计划生成失败：${planRes.error}`, pendingConfirm: false, ok: false }
-      }
-
-      const planState = await readPlanStateForSession({ db: ctx.db, workDir: ctx.workDir, sessionId: ctx.sessionId })
-      const stepCount = planState.plan?.stepsTotal ?? 0
-      const summaryText = extractTextFromContent(planRes.content)
-      const planSummary = `📋 执行计划（共 ${stepCount} 步）\n${summaryText.slice(0, 3500)}\n回复 Y 开始执行，N 取消（30 分钟内有效）`
-
-      if (ctx.feishuConfig.remoteConfirmPolicy === 'feishu_confirm') {
-        const decision = await ctx.confirmManager.requestConfirm(
-          {
-            kind: 'plan_execute',
-            sessionId: ctx.sessionId,
-            messageId: ctx.replyMessageId,
-            chatId: ctx.remoteContext.chatId ?? ''
-          },
-          30 * 60_000
-        )
-        if (decision !== 'y') {
-          return {
-            summary: decision === 'timeout' ? '计划确认超时，已取消。' : '计划执行已取消。',
-            pendingConfirm: false,
-            ok: false
-          }
-        }
-      }
-
-      let workerSummary = ''
-      const runRes = await runPlanUntilDone({
-        sender: effectiveSender,
-        loopRequestId: requestId,
-        sessionId: ctx.sessionId,
-        model: ctx.getModel(),
-        baseUrl: ctx.getBaseUrl(),
-        messages,
-        system,
-        options: { maxTokens: 8192 },
-        deps: planDeps
-      })
-      if (!runRes.ok) {
-        workerSummary = `执行失败：${runRes.error}`
-      } else if (runRes.lastContent) {
-        workerSummary = extractTextFromContent(runRes.lastContent as unknown[]) || '步骤完成'
-      } else {
-        workerSummary = '步骤完成'
-      }
-      const planResult = { summary: workerSummary || planSummary, pendingConfirm: false, ok: runRes.ok }
-      logFeishuCliEvent('info', 'feishu.agent.remote.done', {
-        ok: planResult.ok,
-        pendingConfirm: planResult.pendingConfirm,
-        summaryLen: planResult.summary.length
-      })
-      return planResult
-    }
 
     const res = await runToolChatSession({
       sender: effectiveSender,
@@ -194,13 +108,6 @@ export async function runFeishuRemoteAgent(ctx: {
   } finally {
     unregisterRunningRemoteAgent(ctx.sessionId)
   }
-}
-
-function shouldUseRemotePlan(content: string, config: FeishuConfig): boolean {
-  if (config.remotePlanMode === 'off') return false
-  if (config.remotePlanMode === 'always') return true
-  const keywords = config.remotePlanKeywords ?? []
-  return keywords.some((k) => k.length > 0 && content.includes(k))
 }
 
 function extractTextFromContent(content: unknown[]): string {

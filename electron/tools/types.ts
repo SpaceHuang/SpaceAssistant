@@ -1,6 +1,5 @@
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import type { BrowserConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
-import type { PlanToolPhaseArg } from '../plan/planModeAcl'
 import type { AppDatabase } from '../database'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
@@ -29,7 +28,6 @@ export interface ToolExecutionContext {
   wikiConfig?: WikiConfig
   feishuConfig?: FeishuConfig
   browserConfig?: BrowserConfig
-  planToolPhase?: PlanToolPhaseArg
   appDatabase?: AppDatabase
   larkCliRunner?: LarkCliRunner
   remoteContext?: FeishuRemoteContext

@@ -12,14 +12,13 @@ import { FeishuEventService } from './feishuEventService'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
-import { mergeToolsConfig, mergePlanConfig } from '../../src/shared/domainTypes'
+import { mergeToolsConfig } from '../../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
-const PLAN_CONFIG_KEY = 'config.plan'
 const WORKDIR_PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_WORKDIR_KEY = 'config.activeWorkDirProfileId'
 
@@ -91,16 +90,7 @@ export function createFeishuBundle(deps: {
     getMainWebContents: () => getMainWindow()?.webContents ?? null,
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
-    getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
-    getPlanConfig: () => {
-      const raw = getConfigValue(deps.db, PLAN_CONFIG_KEY)
-      if (!raw) return mergePlanConfig(null)
-      try {
-        return mergePlanConfig(JSON.parse(raw) as Partial<import('../../src/shared/domainTypes').PlanConfig>)
-      } catch {
-        return mergePlanConfig(null)
-      }
-    }
+    getBrowserConfig: () => readBrowserConfigFromDb(deps.db)
   }
 
   const router = new RemoteCommandRouter(routerDeps)
@@ -324,8 +314,7 @@ export function registerFeishuIpcHandlers(
       event,
       lastInboundAt: b.router?.getLastInboundAt(),
       lastReplyAt: b.router?.getLastReplyAt(),
-      pendingConfirms,
-      pendingPlans: b.confirmManager.listPending().filter((p) => p.kind === 'plan_execute').length
+      pendingConfirms
     }
     if (!cli.installed || event.state === 'error') {
       logFeishuCliEvent('info', 'feishu.ipc.health_check', {

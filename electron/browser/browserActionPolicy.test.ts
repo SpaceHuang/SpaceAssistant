@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { DEFAULT_BROWSER_CONFIG } from '../../src/shared/domainTypes'
 import {
   browserActionConsumesInference,
-  browserActionNeedsConfirmation,
-  isPlanReadonlyBrowserAction
+  browserActionNeedsConfirmation
 } from './browserActionPolicy'
 import { rememberBrowserSessionTrustedUrl, resetBrowserSessionTrustForTests } from './browserSessionTrust'
 
@@ -85,19 +84,5 @@ describe('browserActionConsumesInference', () => {
     expect(browserActionConsumesInference('navigate')).toBe(false)
     expect(browserActionConsumesInference('screenshot')).toBe(false)
     expect(browserActionConsumesInference('close')).toBe(false)
-  })
-})
-
-describe('isPlanReadonlyBrowserAction', () => {
-  it('readonly actions', () => {
-    expect(isPlanReadonlyBrowserAction('observe')).toBe(true)
-    expect(isPlanReadonlyBrowserAction('extract')).toBe(true)
-    expect(isPlanReadonlyBrowserAction('screenshot')).toBe(true)
-    expect(isPlanReadonlyBrowserAction('close')).toBe(true)
-  })
-
-  it('write actions', () => {
-    expect(isPlanReadonlyBrowserAction('navigate')).toBe(false)
-    expect(isPlanReadonlyBrowserAction('act')).toBe(false)
   })
 })

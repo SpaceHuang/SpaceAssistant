@@ -1,7 +1,7 @@
 import type { IpcMain, WebContents } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
 import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
-import type { BrowserConfig, ToolsConfig, WikiConfig, PlanConfig } from '../src/shared/domainTypes'
+import type { BrowserConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
@@ -10,9 +10,6 @@ import { logAgentEvent } from './agentLogger/agentLogger'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
 import { runToolChatSession } from './toolChatLoop'
-import { runPlanModeChat } from './plan/planOrchestrator'
-import { readPlanStateForSession } from './plan/planManager'
-import { isChatMode } from '../src/shared/planTypes'
 import { buildSystemPrompt, getCachedMemoryContent } from './projectMemory'
 
 export type ClaudeStreamDeps = {
@@ -24,7 +21,6 @@ export type ClaudeStreamDeps = {
   getWikiConfig: () => WikiConfig
   getAppDatabase: () => AppDatabase
   getProjectMemoryEnabled?: () => boolean
-  getPlanConfig: () => PlanConfig
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -65,8 +61,6 @@ type ClaudeChatCreateWithToolsPayload = {
     maxTokens?: number
     enableThinking?: boolean
   }
-  chatMode?: string
-  planRevisionFeedback?: string
   projectMemoryEnabled?: boolean
 }
 
@@ -211,53 +205,27 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         }
 
-        const chatMode = isChatMode(payload.chatMode) ? payload.chatMode : 'normal'
-        const orchestratorDeps = {
-          getApiKey: deps.getApiKey,
-          getWorkDir: deps.getWorkDir,
-          getUserDataPath: deps.getUserDataPath,
-          getToolsConfig: deps.getToolsConfig,
-          getWikiConfig: deps.getWikiConfig,
-          getAppDatabase: deps.getAppDatabase,
-          getPlanConfig: deps.getPlanConfig
-        }
-
         const memoryContent = getCachedMemoryContent()
         const memoryEnabled = payload.projectMemoryEnabled ?? true
         const finalSystem = buildSystemPrompt(payload.system, memoryContent, memoryEnabled)
 
-        const res =
-          chatMode === 'plan'
-            ? await runPlanModeChat({
-                sender,
-                requestId,
-                sessionId,
-                model,
-                baseUrl,
-                messages,
-                system: finalSystem,
-                options: payload.options,
-                deps: orchestratorDeps,
-                revisionFeedback:
-                  typeof payload.planRevisionFeedback === 'string' ? payload.planRevisionFeedback : undefined
-              })
-            : await runToolChatSession({
-                sender,
-                requestId,
-                sessionId,
-                model,
-                baseUrl,
-                messages,
-                system: finalSystem,
-                options: payload.options,
-                toolsConfig: deps.getToolsConfig(),
-                browserConfig: deps.getBrowserConfig(),
-                wikiConfig: deps.getWikiConfig(),
-                workDir: deps.getWorkDir(),
-                userDataDir: deps.getUserDataPath(),
-                getApiKey: deps.getApiKey,
-                appDb: deps.getAppDatabase()
-              })
+        const res = await runToolChatSession({
+          sender,
+          requestId,
+          sessionId,
+          model,
+          baseUrl,
+          messages,
+          system: finalSystem,
+          options: payload.options,
+          toolsConfig: deps.getToolsConfig(),
+          browserConfig: deps.getBrowserConfig(),
+          wikiConfig: deps.getWikiConfig(),
+          workDir: deps.getWorkDir(),
+          userDataDir: deps.getUserDataPath(),
+          getApiKey: deps.getApiKey,
+          appDb: deps.getAppDatabase()
+        })
 
         if (!res.ok) {
           logAgentEvent('error', 'llm.error', {
@@ -272,21 +240,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
 
         sender.send('claude-chat-done', { requestId })
 
-        let planState: Awaited<ReturnType<typeof readPlanStateForSession>> | undefined
-        if (chatMode === 'plan') {
-          planState = await readPlanStateForSession({
-            db: deps.getAppDatabase(),
-            workDir: deps.getWorkDir(),
-            sessionId
-          })
-        }
-
         return {
           ok: true as const,
           content: res.content,
           stopReason: res.stopReason,
-          ...('usage' in res && res.usage ? { usage: res.usage } : {}),
-          ...(planState ? { planState } : {})
+          ...('usage' in res && res.usage ? { usage: res.usage } : {})
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)

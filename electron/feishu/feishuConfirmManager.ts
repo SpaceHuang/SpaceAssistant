@@ -51,7 +51,7 @@ export function truncateTitle(content: string, max = 30): string {
   return t.length <= max ? t : `${t.slice(0, max)}…`
 }
 
-export type FeishuConfirmKind = 'tool_write' | 'plan_execute'
+export type FeishuConfirmKind = 'tool_write'
 
 export interface FeishuPendingConfirm {
   id: string
@@ -63,13 +63,11 @@ export interface FeishuPendingConfirm {
   messageId: string
   confirmMessageId?: string
   chatId: string
-  planDocPath?: string
   createdAt: number
   expiresAt: number
 }
 
 const CONFIRM_RE = /^[Yy]$|^[Nn]$|^确认$|^取消$/
-const PLAN_CONFIRM_RE = /^[Yy]$|^[Nn]$|^确认$|^取消$/
 
 export class FeishuConfirmManager {
   private pending = new Map<string, FeishuPendingConfirm>()
@@ -129,7 +127,7 @@ export class FeishuConfirmManager {
 
   requestConfirm(
     pending: Omit<FeishuPendingConfirm, 'id' | 'createdAt' | 'expiresAt'>,
-    timeoutMs = pending.kind === 'plan_execute' ? 30 * 60_000 : 10 * 60_000
+    timeoutMs = 10 * 60_000
   ): Promise<'y' | 'n' | 'timeout'> {
     const existingForSession = [...this.pending.values()].find((p) => p.sessionId === pending.sessionId)
     if (existingForSession) {
@@ -175,9 +173,6 @@ export class FeishuConfirmManager {
 
   buildConfirmPromptText(pending: FeishuPendingConfirm): string {
     const progressPrefix = formatFeishuRemoteProgressPrefix(pending.sessionId)
-    if (pending.kind === 'plan_execute') {
-      return `${progressPrefix}📋 执行计划已就绪\n回复 Y 开始执行，N 取消（30 分钟内有效）`
-    }
     if (pending.toolName === 'browser' && pending.toolInput) {
       const action = pending.toolInput.action
       if (action === 'navigate' && typeof pending.toolInput.url === 'string') {
@@ -208,8 +203,4 @@ export class FeishuConfirmManager {
       })
     })
   }
-}
-
-export function isPlanConfirmReply(text: string): boolean {
-  return PLAN_CONFIRM_RE.test(text.trim())
 }

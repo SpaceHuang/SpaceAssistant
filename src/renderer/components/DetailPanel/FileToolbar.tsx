@@ -34,7 +34,6 @@ type Props = {
   onViewModeChange: (mode: ViewMode) => void
   onClose: () => void
   onRefresh: () => void
-  onPendingPlanClick?: () => void
   showWikiIndexToggle?: boolean
   wikiIndexView?: boolean
   onWikiIndexViewChange?: (enabled: boolean) => void
@@ -50,7 +49,6 @@ export function FileToolbar({
   onViewModeChange,
   onClose,
   onRefresh,
-  onPendingPlanClick,
   showWikiIndexToggle = false,
   wikiIndexView = false,
   onWikiIndexViewChange,
@@ -128,11 +126,6 @@ export function FileToolbar({
         {showCollectToWiki && onCollectToWiki ? (
           <button type="button" className="detail-toolbar-text-btn" onClick={onCollectToWiki}>
             收录到 Wiki
-          </button>
-        ) : null}
-        {onPendingPlanClick ? (
-          <button type="button" className="detail-toolbar-text-btn" onClick={onPendingPlanClick}>
-            计划待审批
           </button>
         ) : null}
         <ToolbarBtn title="用默认编辑器打开" icon={ExternalLink} onClick={() => void handleOpenInSystem()} />

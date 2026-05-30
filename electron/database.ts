@@ -263,6 +263,13 @@ export function setConfigValue(db: AppDatabase, key: string, value: string): voi
   db.save()
 }
 
+export function deleteConfigValue(db: AppDatabase, key: string): boolean {
+  if (!(key in db.data.configs)) return false
+  delete db.data.configs[key]
+  db.save()
+  return true
+}
+
 export function appendSearchHistory(db: AppDatabase, query: string): void {
   db.data.searchHistory.push({ id: randomUUID(), query, timestamp: Date.now() })
   db.save()

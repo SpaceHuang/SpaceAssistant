@@ -18,7 +18,6 @@ function readyHealth(over: Partial<FeishuHealthCheck> = {}): FeishuHealthCheck {
     cli: { installed: true, nodeAvailable: true, npmAvailable: true },
     event: { state: 'stopped', processedCount: 0 },
     pendingConfirms: 0,
-    pendingPlans: 0,
     ...over
   }
 }

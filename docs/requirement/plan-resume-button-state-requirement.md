@@ -1,5 +1,7 @@
 # Plan 模式「继续执行」按钮状态 — 需求规格
 
+> **状态：已废弃 — 见 [remove-plan-mode-requirement.md](./remove-plan-mode-requirement.md)**
+
 **版本：** 1.0  
 **日期：** 2026-05-26  
 **状态：** 待评审  

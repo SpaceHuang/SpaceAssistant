@@ -116,23 +116,6 @@ describe('browserExecutor', () => {
     expect(r.error).toContain('已被禁用')
   })
 
-  it('blocks navigate in plan planning', async () => {
-    const r = await browserExecutor.execute(
-      { action: 'navigate', mode: 'open', url: 'https://example.com' },
-      baseCtx({ planToolPhase: 'planning' })
-    )
-    expect(r.success).toBe(false)
-    expect(r.error).toContain('Plan 探索期')
-  })
-
-  it('allows observe in plan planning', async () => {
-    const r = await browserExecutor.execute(
-      { action: 'observe', instruction: 'find buttons' },
-      baseCtx({ planToolPhase: 'planning' })
-    )
-    expect(r.success).toBe(true)
-  })
-
   it('navigate open calls goto', async () => {
     const r = await browserExecutor.execute(
       { action: 'navigate', mode: 'open', url: 'https://example.com' },

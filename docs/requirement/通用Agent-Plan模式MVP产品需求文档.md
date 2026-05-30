@@ -1,5 +1,7 @@
 # 通用 Agent Plan 模式 MVP 产品需求文档
 
+> **状态：已废弃 — 见 [remove-plan-mode-requirement.md](./remove-plan-mode-requirement.md)**
+
 > 版本：v2.0（MVP 阶段）
 > 目标：在执行前插入「用户主动触发的规划+审批」环节，解决 Agent 方向跑偏、返工成本高的问题。
 > 设计原则：先跑通单线流程，再逐步叠加并行、自治、审查等高级能力。

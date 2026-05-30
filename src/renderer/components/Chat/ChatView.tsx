@@ -30,11 +30,6 @@ import {
   createToolChatController,
   extractAssistantTextFromApiContent
 } from '../../services/chatToolSessionService'
-import {
-  beginPlanAutoExecutionStream,
-  endPlanAutoExecutionStream,
-  isPlanAutoExecutionStreamActive
-} from '../../services/planAutoExecutionStreamService'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
 import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
@@ -49,12 +44,6 @@ import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTo
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatBubble } from './ChatBubble'
 import { MessageInput, type MessageInputHandle } from './MessageInput'
-import type { ComposerFocusRequest } from '../Plan/PlanPanelActionsContext'
-import { derivePlanExecutionUiState } from '../Plan/planExecutionUiState'
-import { planPanelActionsStore } from '../../services/planPanelActionsStore'
-import type { ChatMode } from '../../../shared/planTypes'
-import { DEFAULT_CHAT_MODE, getPlanMeta, getPlanExecutionMeta, isPlanDrafting } from '../../../shared/planTypes'
-import { pendingPlanStore } from '../../services/pendingPlanStore'
 import type { SkillHint } from './SkillHintBubble'
 import { CHAT_CANCELLED_MESSAGE, isChatCancelledError } from '../../../shared/chatCancel'
 import { buildAssistantStreamPatch } from '../../../shared/assistantStreamPatch'
@@ -75,9 +64,6 @@ import {
   type ThinkingState
 } from '../../../shared/thinkingSegments'
 import { throttle } from '../../utils/throttle'
-
-const PLAN_REJECT_GUIDE = '请说明拒绝原因或修改方向：'
-const PLAN_REVISE_GUIDE = '请描述你对计划的修改意见：'
 
 function buildClaudePayload(history: Message[]) {
   return history
@@ -102,78 +88,10 @@ export function ChatView() {
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
-  const modelEntry = cfg?.models?.find((m) => m.name === cfg.model)
   const scrollRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<MessageInputHandle>(null)
-  const composerPendingAction = useRef<'reject' | 'revise' | null>(null)
   const abortRequestedRef = useRef(false)
   const [skillHints, setSkillHints] = useState<SkillHint[]>([])
-  const [chatMode, setChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
-  const [planActionLoading, setPlanActionLoading] = useState(false)
-  const [planRevisionFeedback, setPlanRevisionFeedback] = useState<string | undefined>(undefined)
-
-  const reloadPlanState = useCallback(async () => {
-    if (!sessionId) return null
-    const data = await window.api.planRead({ sessionId })
-    const s = await window.api.sessionGet(sessionId)
-    if (s) dispatch(upsertSession(s))
-    return data
-  }, [sessionId, dispatch])
-
-  useEffect(() => {
-    setChatMode(cfg?.defaultChatMode ?? DEFAULT_CHAT_MODE)
-  }, [cfg?.defaultChatMode])
-
-  useEffect(() => {
-    void reloadPlanState()
-  }, [reloadPlanState])
-
-  useEffect(() => {
-    if (!sessionId) return
-    const unsub = window.api.planOnStateChanged((d) => {
-      if (d.sessionId !== sessionId) return
-      if (d.clearStaleToolConfirms) {
-        const activeId = d.activeRunRequestId
-        pendingConfirmStore.reconcileForSession(
-          sessionId,
-          activeId ? new Set([activeId]) : new Set()
-        )
-      }
-      void reloadPlanState()
-    })
-    return unsub
-  }, [sessionId, reloadPlanState])
-
-  useEffect(() => {
-    if (!sessionId) return
-    const unsub = window.api.planOnStepCompleted((d) => {
-      if (d.sessionId !== sessionId) return
-      if (isPlanAutoExecutionStreamActive(sessionId)) return
-      if (cfg?.plan?.emitStepProgressMessages === false) return
-      const progressMsg: Message = {
-        id: crypto.randomUUID(),
-        sessionId,
-        role: 'assistant',
-        content: `✓ 步骤 ${d.stepIndex + 1}/${d.stepsTotal} 完成：${d.summary}`,
-        timestamp: Date.now(),
-        status: 'completed',
-        schemaVersion: CURRENT_SCHEMA_VERSION
-      }
-      dispatch(addMessage(progressMsg))
-      void window.api.chatAppendMessage(progressMsg)
-    })
-    return unsub
-  }, [sessionId, cfg?.plan?.emitStepProgressMessages, dispatch])
-
-  useEffect(() => {
-    if (!sessionId) return
-    const unsub = window.api.planOnApprovalReady((d) => {
-      if (d.sessionId !== sessionId) return
-      void reloadPlanState()
-      window.dispatchEvent(new CustomEvent('plan-focus'))
-    })
-    return unsub
-  }, [sessionId, reloadPlanState])
 
   const streamingAssistantId = useMemo(
     () => messages.find((m) => m.role === 'assistant' && m.status === 'streaming')?.id,
@@ -255,22 +173,7 @@ export function ChatView() {
 
   const streamingRequestId = sessionId ? runningSessions[sessionId]?.requestId ?? null : null
 
-  const activePlanId = currentSession ? getPlanMeta(currentSession.metadata)?.planId ?? null : null
-  const planDrafting = currentSession ? isPlanDrafting(currentSession.metadata) : false
   const sessionRunning = Boolean(sessionId && runningSessions[sessionId])
-  const planExecMeta = currentSession ? getPlanExecutionMeta(currentSession.metadata) : undefined
-  const planExecutionUiState = useMemo(
-    () =>
-      derivePlanExecutionUiState({
-        sessionRunning,
-        planActionLoading,
-        activePlanId,
-        planDrafting,
-        runState: planExecMeta?.runState,
-        executionMode: planExecMeta?.executionMode ?? cfg?.plan?.executionMode
-      }),
-    [sessionRunning, planActionLoading, activePlanId, planDrafting, planExecMeta, cfg?.plan?.executionMode]
-  )
 
   const onToolConfirm = useCallback(
     (toolUseId: string, approved: boolean) => {
@@ -334,7 +237,7 @@ export function ChatView() {
   )
 
   const sendInternal = useCallback(
-    async (text: string, mode: ChatMode = chatMode) => {
+    async (text: string) => {
       if (!sessionId || !cfg) {
         message.warning('请先选择会话并等待配置加载')
         return
@@ -553,8 +456,6 @@ export function ChatView() {
         )
 
         try {
-          const sessionMeta =
-            store.getState().session.list.find((x) => x.id === runSessionId)?.metadata ?? currentSession?.metadata
           const payload = buildToolChatPayload({
             requestId,
             sessionId: runSessionId,
@@ -565,12 +466,8 @@ export function ChatView() {
             browserConfig: cfg.browser,
             maxTokens: outputMaxTokens,
             thinkingEnabled: cfg.thinkingEnabled,
-            system: systemPrompt || undefined,
-            chatMode: mode,
-            sessionMetadata: sessionMeta,
-            planRevisionFeedback: mode === 'plan' ? planRevisionFeedback : undefined
+            system: systemPrompt || undefined
           })
-          if (planRevisionFeedback) setPlanRevisionFeedback(undefined)
           const res = await window.api.claudeChatCreateWithTools(payload)
           if (!res.ok) {
             if (isChatCancelledError(res.error) || abortRequestedRef.current) {
@@ -634,9 +531,6 @@ export function ChatView() {
           dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
           finishSessionRun(runSessionId, requestId, assistantId)
           clearLiveSession(runSessionId)
-          if (mode === 'plan') {
-            await reloadPlanState()
-          }
           scrollBottom()
         } catch (e) {
           const err = e instanceof Error ? e.message : String(e)
@@ -747,278 +641,15 @@ export function ChatView() {
         }
       )
     },
-    [
-      cfg,
-      currentSession,
-      dispatch,
-      sessionId,
-      finishCancelled,
-      message,
-      chatMode,
-      planRevisionFeedback,
-      reloadPlanState
-    ]
+    [cfg, currentSession, dispatch, sessionId, finishCancelled, message]
   )
 
   const send = useCallback(
-    async (text: string, mode: ChatMode = chatMode) => {
-      const pending = composerPendingAction.current
-      if (pending === 'reject') {
-        composerPendingAction.current = null
-        const fb = text.startsWith(PLAN_REJECT_GUIDE) ? text.slice(PLAN_REJECT_GUIDE.length).trim() : text.trim()
-        if (!fb) {
-          message.warning('请填写拒绝原因')
-          return
-        }
-        setPlanActionLoading(true)
-        try {
-          const res = await window.api.planReject({ sessionId: sessionId!, feedback: fb })
-          if (!res.ok) {
-            message.error(res.error)
-            return
-          }
-          setPlanRevisionFeedback(fb)
-          await reloadPlanState()
-        } finally {
-          setPlanActionLoading(false)
-        }
-        await sendInternal(text, 'plan')
-        return
-      }
-      if (pending === 'revise') {
-        composerPendingAction.current = null
-        const fb = text.startsWith(PLAN_REVISE_GUIDE) ? text.slice(PLAN_REVISE_GUIDE.length).trim() : text.trim()
-        if (fb) setPlanRevisionFeedback(fb)
-        await sendInternal(text, 'plan')
-        return
-      }
-      await sendInternal(text, mode)
+    async (text: string) => {
+      await sendInternal(text)
     },
-    [sendInternal, sessionId, message, reloadPlanState]
+    [sendInternal]
   )
-
-  const runPlanAutoExecution = useCallback(async () => {
-    if (!sessionId || !cfg) return
-    const runSessionId = sessionId
-    if (isSessionRunning(runSessionId)) {
-      message.warning('当前会话已有任务在执行')
-      return
-    }
-    const historyForApi = [...store.getState().chat.messages]
-    const loopRequestId = crypto.randomUUID()
-    registerSessionRun(runSessionId, loopRequestId)
-    dispatch(setChatStatus({ status: 'streaming', requestId: loopRequestId, sessionId: runSessionId }))
-    initLiveSessionFromStore(runSessionId)
-    beginPlanAutoExecutionStream({
-      sessionId: runSessionId,
-      loopRequestId,
-      onScroll: scrollBottomThrottled
-    })
-    const modelEntry = cfg.models.find((m) => m.name === cfg.model)
-    const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models)
-    const sessionMeta = store.getState().session.list.find((x) => x.id === runSessionId)?.metadata
-    const payload = buildToolChatPayload({
-      requestId: loopRequestId,
-      sessionId: runSessionId,
-      model: cfg.model,
-      baseUrl: cfg.baseUrl || undefined,
-      messages: historyForApi,
-      toolsConfig: cfg.tools,
-      browserConfig: cfg.browser,
-      maxTokens: outputMaxTokens,
-      thinkingEnabled: cfg.thinkingEnabled,
-      chatMode: 'plan',
-      sessionMetadata: sessionMeta
-    })
-    const { requestId: _rid, tools: _tools, ...planRunBody } = payload
-    try {
-      const res = await window.api.planRun({ loopRequestId, ...planRunBody })
-      if (!res.ok) {
-        message.error(res.error)
-      } else if (res.paused && res.pauseReason) {
-        message.warning(res.pauseReason)
-      }
-    } finally {
-      endPlanAutoExecutionStream(runSessionId)
-      finishSessionRun(runSessionId, loopRequestId)
-      dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
-      clearLiveSession(runSessionId)
-      void reloadPlanState()
-    }
-  }, [sessionId, cfg, dispatch, message, reloadPlanState, scrollBottomThrottled])
-
-  const runPlanWorkerWithoutNewUser = useCallback(async () => {
-    if (!sessionId || !cfg) return
-    const runSessionId = sessionId
-    if (isSessionRunning(runSessionId)) {
-      message.warning('当前会话已有任务在执行')
-      return
-    }
-    const historyForApi = [...store.getState().chat.messages]
-    const assistantId = crypto.randomUUID()
-    const assistantMsg: Message = {
-      id: assistantId,
-      sessionId: runSessionId,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      status: 'streaming',
-      schemaVersion: CURRENT_SCHEMA_VERSION
-    }
-    dispatch(addMessage(assistantMsg))
-    initLiveSessionFromStore(runSessionId)
-    await window.api.chatAppendMessage(assistantMsg)
-    const requestId = crypto.randomUUID()
-    registerSessionRun(runSessionId, requestId)
-    dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
-    const modelEntry = cfg.models.find((m) => m.name === cfg.model)
-    const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models)
-    const sessionMeta = store.getState().session.list.find((x) => x.id === runSessionId)?.metadata
-    const payload = buildToolChatPayload({
-      requestId,
-      sessionId: runSessionId,
-      model: cfg.model,
-      baseUrl: cfg.baseUrl || undefined,
-      messages: historyForApi,
-      toolsConfig: cfg.tools,
-      browserConfig: cfg.browser,
-      maxTokens: outputMaxTokens,
-      thinkingEnabled: cfg.thinkingEnabled,
-      chatMode: 'plan',
-      sessionMetadata: sessionMeta
-    })
-    const res = await window.api.claudeChatCreateWithTools(payload)
-    if (!res.ok) {
-      message.error(res.error)
-      finishSessionRun(runSessionId, requestId, assistantId)
-      return
-    }
-    const textOut = extractAssistantTextFromApiContent(res.content as unknown[])
-    if (res.usage) {
-      dispatch(setLastUsage(res.usage as LastUsage))
-    }
-    routePatchMessage(runSessionId, assistantId, { content: textOut, status: 'completed' })
-    await window.api.chatPatchMessage({
-      messageId: assistantId,
-      sessionId: runSessionId,
-      patch: { content: textOut, status: 'completed' }
-    })
-    dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
-    finishSessionRun(runSessionId, requestId, assistantId)
-    clearLiveSession(runSessionId)
-    void reloadPlanState()
-  }, [sessionId, cfg, dispatch, message, reloadPlanState])
-
-  const handlePlanApprove = useCallback(
-    async (options?: { cancelExecuting?: boolean }) => {
-      if (!sessionId) return
-      setPlanActionLoading(true)
-      try {
-        const res = await window.api.planApprove({
-          sessionId,
-          cancelExecuting: options?.cancelExecuting
-        })
-        if (!res.ok) {
-          message.error(res.error)
-          return
-        }
-        await reloadPlanState()
-        pendingPlanStore.removeSession(sessionId)
-        if (res.autoExecute) {
-          const execMode =
-            getPlanExecutionMeta(store.getState().session.list.find((x) => x.id === sessionId)?.metadata)
-              ?.executionMode ?? cfg?.plan?.executionMode ?? 'auto'
-          if (execMode === 'auto') {
-            await runPlanAutoExecution()
-          } else {
-            await runPlanWorkerWithoutNewUser()
-          }
-        }
-      } finally {
-        setPlanActionLoading(false)
-      }
-    },
-    [sessionId, runPlanWorkerWithoutNewUser, runPlanAutoExecution, cfg?.plan?.executionMode, message, reloadPlanState]
-  )
-
-  const handlePlanPause = useCallback(async () => {
-    if (!sessionId) return
-    await window.api.planPause({ sessionId })
-    message.info('将在当前步骤完成后暂停')
-  }, [sessionId, message])
-
-  const requestComposerFocus = useCallback((req: ComposerFocusRequest) => {
-    if (req.prefill.startsWith(PLAN_REJECT_GUIDE)) composerPendingAction.current = 'reject'
-    else if (req.prefill.startsWith(PLAN_REVISE_GUIDE)) composerPendingAction.current = 'revise'
-    else composerPendingAction.current = null
-    composerRef.current?.setDraft(req.prefill)
-    if (req.mode) composerRef.current?.setChatMode(req.mode)
-    composerRef.current?.focus()
-  }, [])
-
-  const handlePlanCancel = useCallback(async () => {
-    if (!sessionId) return
-    setPlanActionLoading(true)
-    try {
-      if (isSessionRunning(sessionId)) {
-        abortRequestedRef.current = true
-        abortSessionRun(sessionId)
-        dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId }))
-      }
-      const res = await window.api.planCancel({ sessionId })
-      if (!res.ok) message.error(res.error)
-      else {
-        message.success('计划已取消')
-        await reloadPlanState()
-      }
-    } finally {
-      setPlanActionLoading(false)
-    }
-  }, [sessionId, dispatch, message, reloadPlanState])
-
-  const handlePlanResume = useCallback(async () => {
-    if (!sessionId || isSessionRunning(sessionId)) return
-    setPlanActionLoading(true)
-    try {
-      const sessionMeta = store.getState().session.list.find((x) => x.id === sessionId)?.metadata
-      const execMode =
-        getPlanExecutionMeta(sessionMeta)?.executionMode ?? cfg?.plan?.executionMode ?? 'auto'
-      if (execMode === 'auto') {
-        await runPlanAutoExecution()
-      } else {
-        await runPlanWorkerWithoutNewUser()
-      }
-    } finally {
-      setPlanActionLoading(false)
-    }
-  }, [sessionId, cfg?.plan?.executionMode, runPlanAutoExecution, runPlanWorkerWithoutNewUser])
-
-  useEffect(() => {
-    planPanelActionsStore.set({
-      requestComposerFocus,
-      onApproveAndExecute: handlePlanApprove,
-      onPlanResume: handlePlanResume,
-      onPlanPause: handlePlanPause,
-      onPlanCancel: handlePlanCancel,
-      onPlanRejectWithFeedback: async (feedback: string) => {
-        composerPendingAction.current = 'reject'
-        composerRef.current?.setDraft(`${PLAN_REJECT_GUIDE}${feedback}`)
-        composerRef.current?.setChatMode('plan')
-        composerRef.current?.focus()
-      },
-      planActionLoading,
-      planExecutionUiState
-    })
-    return () => planPanelActionsStore.set(null)
-  }, [
-    requestComposerFocus,
-    handlePlanApprove,
-    handlePlanResume,
-    handlePlanPause,
-    handlePlanCancel,
-    planActionLoading,
-    planExecutionUiState
-  ])
 
   const running = sessionRunning
 
@@ -1140,9 +771,6 @@ export function ChatView() {
         disabled={!sessionId}
         running={running}
         modelLabel={cfg?.model}
-        chatMode={chatMode}
-        defaultChatMode={cfg?.defaultChatMode ?? DEFAULT_CHAT_MODE}
-        onChatModeChange={setChatMode}
         onSend={send}
         onAbort={abort}
       />

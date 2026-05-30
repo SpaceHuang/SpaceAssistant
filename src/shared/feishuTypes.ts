@@ -6,8 +6,6 @@ export type FeishuGroupTrigger = 'mention' | 'prefix' | 'both'
 
 export type FeishuRegion = 'feishu' | 'lark'
 
-export type FeishuRemotePlanMode = 'off' | 'auto' | 'always'
-
 export type FeishuIntegrationMode = 'cli' | 'mcp' | 'both'
 
 export interface FeishuConfig {
@@ -30,8 +28,6 @@ export interface FeishuConfig {
   region: FeishuRegion
   wakeWords?: string[]
   wakeWordAutoExecute: boolean
-  remotePlanMode: FeishuRemotePlanMode
-  remotePlanKeywords?: string[]
   remoteRateLimitPerMinute: number
   integrationMode: FeishuIntegrationMode
   larkCliDefaultTimeoutSec: number
@@ -51,8 +47,6 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteSessionMergeMinutes: 0,
   region: 'feishu',
   wakeWordAutoExecute: false,
-  remotePlanMode: 'off',
-  remotePlanKeywords: ['重构', '迁移', '全面', '计划'],
   remoteRateLimitPerMinute: 10,
   integrationMode: 'cli',
   larkCliDefaultTimeoutSec: 120,
@@ -67,10 +61,7 @@ export function mergeFeishuConfig(partial?: Partial<FeishuConfig> | null): Feish
     remoteSenderAllowlist: Array.isArray(partial.remoteSenderAllowlist)
       ? [...partial.remoteSenderAllowlist]
       : DEFAULT_FEISHU_CONFIG.remoteSenderAllowlist,
-    wakeWords: Array.isArray(partial.wakeWords) ? [...partial.wakeWords] : DEFAULT_FEISHU_CONFIG.wakeWords,
-    remotePlanKeywords: Array.isArray(partial.remotePlanKeywords)
-      ? [...partial.remotePlanKeywords]
-      : DEFAULT_FEISHU_CONFIG.remotePlanKeywords
+    wakeWords: Array.isArray(partial.wakeWords) ? [...partial.wakeWords] : DEFAULT_FEISHU_CONFIG.wakeWords
   }
 }
 
@@ -139,7 +130,7 @@ export interface FeishuAuditQueryResult {
 
 export interface FeishuPendingConfirmSummary {
   id: string
-  kind: 'tool_write' | 'plan_execute'
+  kind: 'tool_write'
   sessionId: string
   toolName?: string
   messageId: string
@@ -154,5 +145,4 @@ export interface FeishuHealthCheck {
   lastInboundAt?: number
   lastReplyAt?: number
   pendingConfirms: number
-  pendingPlans: number
 }

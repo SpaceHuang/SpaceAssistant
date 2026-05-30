@@ -1,63 +1,42 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { Input, Select } from 'antd'
+import { Input } from 'antd'
 import { Send, Square } from 'lucide-react'
-import type { ChatMode } from '../../../shared/planTypes'
-import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
 import { ContextUsageRing } from './ContextUsageRing'
 
 export type MessageInputHandle = {
   focus: () => void
   setDraft: (text: string) => void
-  setChatMode: (mode: ChatMode) => void
 }
 
 type Props = {
   disabled?: boolean
   running?: boolean
   modelLabel?: string
-  chatMode?: ChatMode
-  defaultChatMode?: ChatMode
-  onChatModeChange?: (mode: ChatMode) => void
-  onSend: (text: string, chatMode: ChatMode) => void
+  onSend: (text: string) => void
   onAbort?: () => void
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, Props>(function MessageInput(
-  {
-    disabled,
-    running,
-    modelLabel,
-    chatMode: chatModeProp,
-    defaultChatMode = DEFAULT_CHAT_MODE,
-    onChatModeChange,
-    onSend,
-    onAbort
-  },
+  { disabled, running, modelLabel, onSend, onAbort },
   ref
 ) {
   const [text, setText] = useState('')
-  const [localMode, setLocalMode] = useState<ChatMode>(defaultChatMode)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const leftRowRef = useRef<HTMLDivElement>(null)
   const hintRef = useRef<HTMLSpanElement>(null)
   const modelChipRef = useRef<HTMLSpanElement>(null)
   const [hintHidden, setHintHidden] = useState(false)
-  const chatMode = chatModeProp ?? localMode
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
-    setDraft: (t: string) => setText(t),
-    setChatMode: (mode: ChatMode) => {
-      if (onChatModeChange) onChatModeChange(mode)
-      else setLocalMode(mode)
-    }
+    setDraft: (t: string) => setText(t)
   }))
 
   const send = () => {
     const t = text.trim()
     if (!t || disabled || running) return
     setText('')
-    onSend(t, chatMode)
+    onSend(t)
   }
 
   const checkOverflow = useCallback(() => {
@@ -74,15 +53,13 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     const footerGap = parseFloat(footerStyle.columnGap) || parseFloat(footerStyle.gap) || 8
     const availableWidth = footer.clientWidth - rightWidth - footerGap
 
-    const selectEl = container.querySelector('.composer-mode-select') as HTMLElement | null
-    const selectWidth = selectEl ? selectEl.offsetWidth : 108
     const chipWidth = modelChipRef.current ? modelChipRef.current.offsetWidth : 0
     const hintWidth = hint.offsetWidth
 
     const gap = 8
-    let neededWidth = selectWidth + gap + hintWidth
+    let neededWidth = hintWidth
     if (chipWidth > 0) {
-      neededWidth = selectWidth + gap + chipWidth + gap + hintWidth
+      neededWidth = chipWidth + gap + hintWidth
     }
 
     setHintHidden(neededWidth > availableWidth)
@@ -106,11 +83,6 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   useEffect(() => {
     checkOverflow()
   }, [modelLabel, checkOverflow])
-
-  const setMode = (mode: ChatMode) => {
-    if (onChatModeChange) onChatModeChange(mode)
-    else setLocalMode(mode)
-  }
 
   const handlePrimaryAction = () => {
     if (running) {
@@ -139,19 +111,6 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
         />
         <div className="composer-footer">
           <div ref={leftRowRef} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
-            <Select
-              size="small"
-              className="composer-mode-select"
-              classNames={{ popup: { root: 'composer-mode-select-popup' } }}
-              value={chatMode}
-              disabled={disabled || running}
-              onChange={setMode}
-              options={[
-                { value: 'normal', label: '普通模式' },
-                { value: 'plan', label: 'Plan 模式' }
-              ]}
-              popupMatchSelectWidth={false}
-            />
             {modelLabel ? <span ref={modelChipRef} className="composer-model-chip">{modelLabel}</span> : null}
             <span
               ref={hintRef}

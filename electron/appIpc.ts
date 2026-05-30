@@ -22,18 +22,8 @@ import type {
   UiThemeMode
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
-import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, mergePlanConfig, normalizeSessionSkillsState } from '../src/shared/domainTypes'
-import type { PlanConfig } from '../src/shared/domainTypes'
-import { DEFAULT_CHAT_MODE, isChatMode } from '../src/shared/planTypes'
-import {
-  approvePlanInSession,
-  cancelPlanInSession,
-  dismissPlanAbortInSession,
-  readPlanStateForSession,
-  rejectPlanInSession
-} from './plan/planManager'
-import { resumePlanExecution, runPlanUntilDone, requestPlanPause } from './plan/planOrchestrator'
-import type { PlanOrchestratorDeps } from './plan/planOrchestrator'
+import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
+import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
@@ -61,6 +51,7 @@ import {
   listSearchHistory,
   listSessions,
   setConfigValue,
+  deleteConfigValue,
   updateMessageContent,
   updateSession
 } from './database'
@@ -101,8 +92,6 @@ const CONFIG_KEYS = {
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   uiTheme: 'config.uiTheme',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
-  defaultChatMode: 'config.defaultChatMode',
-  plan: 'config.plan',
   browser: 'config.browser'
 } as const
 
@@ -117,26 +106,37 @@ export type AppIpcContext = {
   getBrowserDetectContext: () => BrowserDetectContext
 }
 
-function readPlanConfig(db: AppDatabase): PlanConfig {
-  const raw = getConfigValue(db, CONFIG_KEYS.plan)
-  if (!raw) return mergePlanConfig(null)
-  try {
-    return mergePlanConfig(JSON.parse(raw) as Partial<PlanConfig>)
-  } catch {
-    return mergePlanConfig(null)
-  }
+function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Session {
+  if (!hasPlanMetadataKeys(session.metadata)) return session
+  const metadata = stripPlanFieldsFromSessionMetadata(session.metadata ?? {})
+  return updateSession(db, session.id, { metadata }) ?? session
 }
 
-function buildPlanOrchestratorDeps(ctx: AppIpcContext): PlanOrchestratorDeps {
-  return {
-    getApiKey: ctx.getApiKey,
-    getWorkDir: ctx.getWorkDir,
-    getUserDataPath: ctx.getUserDataPath,
-    getToolsConfig: () => readToolsConfig(ctx.db),
-    getBrowserConfig: () => readBrowserConfigFromDb(ctx.db),
-    getWikiConfig: () => readWikiConfig(ctx.db),
-    getAppDatabase: () => ctx.db,
-    getPlanConfig: () => readPlanConfig(ctx.db)
+function stripAllSessionsAndPersist(db: AppDatabase): Session[] {
+  const sessions = listSessions(db)
+  let changed = false
+  const result = sessions.map((s) => {
+    if (!hasPlanMetadataKeys(s.metadata)) return s
+    changed = true
+    const metadata = stripPlanFieldsFromSessionMetadata(s.metadata ?? {})
+    return updateSession(db, s.id, { metadata }) ?? { ...s, metadata }
+  })
+  if (changed) db.flushSave()
+  return result
+}
+
+function stripPlanConfigFromDbIfNeeded(db: AppDatabase): void {
+  deleteConfigValue(db, 'config.defaultChatMode')
+  deleteConfigValue(db, 'config.plan')
+  const feishuRaw = getConfigValue(db, CONFIG_KEYS.feishu)
+  if (!feishuRaw) return
+  try {
+    const parsed = mergeFeishuConfig(JSON.parse(feishuRaw) as Partial<FeishuConfig>)
+    if (!('remotePlanMode' in parsed) && !('remotePlanKeywords' in parsed)) return
+    const stripped = stripPlanFieldsFromFeishuConfig(parsed)
+    setConfigValue(db, CONFIG_KEYS.feishu, JSON.stringify(stripped))
+  } catch {
+    /* ignore */
   }
 }
 
@@ -232,7 +232,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     return openTerminalAtCwd(detect.recommendedCwd, ctx.getBrowserDetectContext())
   })
 
-  ipcMain.handle('session:list', (): Session[] => listSessions(ctx.db))
+  ipcMain.handle('session:list', (): Session[] => stripAllSessionsAndPersist(ctx.db))
 
   ipcMain.handle(
     'session:create',
@@ -244,7 +244,11 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
   )
 
-  ipcMain.handle('session:get', (_e, sessionId: string): Session | undefined => getSession(ctx.db, sessionId))
+  ipcMain.handle('session:get', (_e, sessionId: string): Session | undefined => {
+    const session = getSession(ctx.db, sessionId)
+    if (!session) return undefined
+    return stripSessionMetadataAndPersist(ctx.db, session)
+  })
 
   ipcMain.handle(
     'session:backfill-auto-title-if-needed',
@@ -391,11 +395,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const uiTheme: UiThemeMode =
       uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
-    const defaultChatModeRaw = getConfigValue(ctx.db, CONFIG_KEYS.defaultChatMode)
-    const defaultChatMode = isChatMode(defaultChatModeRaw) ? defaultChatModeRaw : DEFAULT_CHAT_MODE
-    const plan = readPlanConfig(ctx.db)
     const browser = readBrowserConfigFromDb(ctx.db)
-    return {
+    stripPlanConfigFromDbIfNeeded(ctx.db)
+    return stripPlanFieldsFromAppConfig({
       apiKeyPresent: activeService?.apiKeyPresent ?? Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: activeService?.baseUrl ?? getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
       llmServices,
@@ -407,16 +409,14 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       workDir: wd,
       uiTheme,
       maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
-      defaultChatMode,
       tools,
       skills,
       wiki,
       feishu,
       workDirProfiles,
       activeWorkDirProfileId,
-      plan,
       browser
-    }
+    } as AppConfig)
   })
 
   ipcMain.handle(
@@ -442,8 +442,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         activeWorkDirProfileId: string
         uiTheme: UiThemeMode
         maxParallelChatSessions: number
-        defaultChatMode: import('../src/shared/planTypes').ChatMode
-        plan: Partial<PlanConfig>
         browser: Partial<BrowserConfig>
       }>
     ): Promise<void> => {
@@ -557,16 +555,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           String(clampMaxParallelChatSessions(payload.maxParallelChatSessions))
         )
       }
-      if (payload.defaultChatMode !== undefined && isChatMode(payload.defaultChatMode)) {
-        setConfigValue(ctx.db, CONFIG_KEYS.defaultChatMode, payload.defaultChatMode)
-      }
-      if (payload.plan !== undefined) {
-        const next = mergePlanConfig({ ...readPlanConfig(ctx.db), ...payload.plan })
-        setConfigValue(ctx.db, CONFIG_KEYS.plan, JSON.stringify(next))
-      }
       if (payload.browser !== undefined) {
         persistBrowserConfig(ctx.db, payload.browser)
       }
+      stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()
     }
   )
@@ -933,156 +925,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
     }
   )
-
-  ipcMain.handle('plan:read', async (_e, payload: { sessionId: string }) => {
-    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-    if (!sessionId) {
-      return {
-        plan: null,
-        pendingPlan: null,
-        displayPlans: [],
-        planDrafting: false,
-        planAbortDismissed: false,
-        abort: null,
-        summary: null,
-        raw: null
-      }
-    }
-    return await readPlanStateForSession({
-      db: ctx.db,
-      workDir: ctx.getWorkDir(),
-      sessionId
-    })
-  })
-
-  ipcMain.handle(
-    'plan:approve',
-    async (event, payload: { sessionId: string; cancelExecuting?: boolean }) => {
-      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-      if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
-      try {
-        const result = await approvePlanInSession({
-          db: ctx.db,
-          sessionId,
-          workDir: ctx.getWorkDir(),
-          cancelExecuting: payload?.cancelExecuting === true,
-          planConfig: readPlanConfig(ctx.db)
-        })
-        event.sender.send('plan:state-changed', { sessionId })
-        const updated = getSession(ctx.db, sessionId)
-        if (updated) await syncBackup(ctx, sessionId)
-        return { ok: true as const, plan: result.plan, autoExecute: result.autoExecute }
-      } catch (e) {
-        return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-      }
-    }
-  )
-
-  ipcMain.handle('plan:reject', async (event, payload: { sessionId: string; feedback?: string }) => {
-    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
-    try {
-      await rejectPlanInSession({
-        db: ctx.db,
-        sessionId,
-        workDir: ctx.getWorkDir(),
-        feedback: typeof payload.feedback === 'string' ? payload.feedback : ''
-      })
-      event.sender.send('plan:state-changed', { sessionId })
-      await syncBackup(ctx, sessionId)
-      return { ok: true as const }
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.handle('plan:cancel', async (event, payload: { sessionId: string }) => {
-    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
-    try {
-      await cancelPlanInSession({ db: ctx.db, sessionId })
-      event.sender.send('plan:state-changed', { sessionId })
-      await syncBackup(ctx, sessionId)
-      return { ok: true as const }
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.handle('plan:dismiss-abort', async (event, payload: { sessionId: string }) => {
-    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
-    try {
-      await dismissPlanAbortInSession({ db: ctx.db, sessionId })
-      event.sender.send('plan:state-changed', { sessionId })
-      await syncBackup(ctx, sessionId)
-      return { ok: true as const }
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.handle('plan:resume-execution', async (event, payload) => {
-    const sender = event.sender
-    try {
-      const requestId = typeof payload?.requestId === 'string' ? payload.requestId : ''
-      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-      if (!requestId || !sessionId) return { ok: false as const, error: 'Invalid payload' }
-
-      const res = await resumePlanExecution({
-        sender,
-        requestId,
-        sessionId,
-        model: payload.model,
-        baseUrl: payload.baseUrl,
-        messages: payload.messages,
-        system: payload.system,
-        options: payload.options,
-        deps: buildPlanOrchestratorDeps(ctx)
-      })
-
-      if (!res.ok) return res
-      sender.send('claude-chat-done', { requestId })
-      return res
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.handle('plan:run', async (event, payload) => {
-    const sender = event.sender
-    try {
-      const loopRequestId = typeof payload?.loopRequestId === 'string' ? payload.loopRequestId : ''
-      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-      if (!loopRequestId || !sessionId) return { ok: false as const, error: 'Invalid payload' }
-
-      const res = await runPlanUntilDone({
-        sender,
-        loopRequestId,
-        sessionId,
-        model: payload.model,
-        baseUrl: payload.baseUrl,
-        messages: payload.messages ?? [],
-        system: payload.system,
-        options: payload.options,
-        deps: buildPlanOrchestratorDeps(ctx)
-      })
-
-      if (res.ok) {
-        await syncBackup(ctx, sessionId)
-      }
-      return res
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.handle('plan:pause', async (_event, payload: { sessionId: string }) => {
-    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-    if (!sessionId) return { ok: false as const, error: 'Invalid sessionId' }
-    requestPlanPause(sessionId)
-    return { ok: true as const }
-  })
 
   ipcMain.handle(
     'wiki:import-raw',

@@ -3,7 +3,6 @@ import { FileOverlay } from './FileOverlay'
 import { ReferencedFilesPanel } from './ReferencedFilesPanel'
 import { FeishuRemoteStatusBar } from './FeishuRemoteStatusBar'
 import { ResizeHandle } from './ResizeHandle'
-import { PlanPanel } from '../Plan/PlanPanel'
 import { useTypedSelector } from '../../hooks'
 import './detailPanel.css'
 
@@ -27,8 +26,8 @@ export function DetailPanel() {
         gridTemplateRows: `minmax(0, ${topFr}fr) var(--detail-resize-handle-height) minmax(0, ${bottomFr}fr) var(--feishu-remote-status-bar-height)`
       }}
     >
-      <div className="detail-panel-top">
-        <PlanPanel sessionId={currentSessionId} />
+      <div className="detail-panel-top detail-panel-top--empty" role="region" aria-label="详情面板">
+        暂无详情
       </div>
       <ResizeHandle
         currentRatio={referencedFilesHeight}

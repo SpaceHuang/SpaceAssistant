@@ -139,36 +139,6 @@ const api: SpaceAssistantApi = {
   wikiResolvePath: (payload: { relPath: string }) => ipcRenderer.invoke('wiki:resolve-path', payload),
   wikiImportRaw: (payload: { srcRelPath: string }) => ipcRenderer.invoke('wiki:import-raw', payload),
 
-  planRead: (payload) => ipcRenderer.invoke('plan:read', payload),
-  planApprove: (payload) => ipcRenderer.invoke('plan:approve', payload),
-  planReject: (payload) => ipcRenderer.invoke('plan:reject', payload),
-  planCancel: (payload) => ipcRenderer.invoke('plan:cancel', payload),
-  planDismissAbort: (payload) => ipcRenderer.invoke('plan:dismiss-abort', payload),
-  planResumeExecution: (payload) => ipcRenderer.invoke('plan:resume-execution', payload),
-  planRun: (payload) => ipcRenderer.invoke('plan:run', payload),
-  planPause: (payload) => ipcRenderer.invoke('plan:pause', payload),
-  planOnStateChanged: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/api').PlanStateChangedEvent) => cb(data)
-    ipcRenderer.on('plan:state-changed', fn)
-    return () => ipcRenderer.removeListener('plan:state-changed', fn)
-  },
-  planOnStepCompleted: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/api').PlanStepCompletedEvent) => cb(data)
-    ipcRenderer.on('plan:step-completed', fn)
-    return () => ipcRenderer.removeListener('plan:step-completed', fn)
-  },
-  planOnStepStarted: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/api').PlanStepStartedEvent) => cb(data)
-    ipcRenderer.on('plan:step-started', fn)
-    return () => ipcRenderer.removeListener('plan:step-started', fn)
-  },
-  planOnApprovalReady: (cb) => {
-    const fn = (_e: unknown, data: { sessionId: string; planState: import('../src/shared/api').PlanReadResult }) =>
-      cb(data)
-    ipcRenderer.on('plan:approval-ready', fn)
-    return () => ipcRenderer.removeListener('plan:approval-ready', fn)
-  },
-
   projectMemoryGetState: () => ipcRenderer.invoke('project-memory:get-state'),
   projectMemoryGenerate: () => ipcRenderer.invoke('project-memory:generate'),
   projectMemoryWrite: (payload) => ipcRenderer.invoke('project-memory:write', payload),

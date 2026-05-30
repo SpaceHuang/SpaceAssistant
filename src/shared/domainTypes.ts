@@ -427,32 +427,10 @@ export interface ModelEntry {
   enabled: boolean
 }
 
-import type { ChatMode, PlanExecutionMode, PlanToolConfirmPolicy } from './planTypes'
-export type { ChatMode, PlanExecutionMode, PlanToolConfirmPolicy } from './planTypes'
-export { DEFAULT_CHAT_MODE } from './planTypes'
-
-export interface PlanConfig {
-  /** 默认 auto */
-  executionMode: PlanExecutionMode
-  /** 默认 confirm_high_risk */
-  toolConfirmPolicy: PlanToolConfirmPolicy
-  /** Plan 执行期：Agent 自生成 run_script 自动批准。默认 true。 */
-  autoApproveAgentGeneratedScripts: boolean
-  /** 自动执行时单步完成后是否插入聊天进度消息，默认 true */
-  emitStepProgressMessages: boolean
-}
-
-export const DEFAULT_PLAN_CONFIG: PlanConfig = {
-  executionMode: 'auto',
-  toolConfirmPolicy: 'confirm_high_risk',
-  autoApproveAgentGeneratedScripts: true,
-  emitStepProgressMessages: true
-}
-
-export function mergePlanConfig(partial?: Partial<PlanConfig> | null): PlanConfig {
-  if (!partial || typeof partial !== 'object') return { ...DEFAULT_PLAN_CONFIG }
-  return { ...DEFAULT_PLAN_CONFIG, ...partial }
-}
+import type { FeishuConfig, WorkDirProfile } from './feishuTypes'
+import { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
+export type { FeishuConfig, WorkDirProfile } from './feishuTypes'
+export { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 
 export type UiThemeMode = 'light' | 'dark' | 'system'
 
@@ -467,11 +445,6 @@ export interface LlmServiceProfile {
   createdAt?: string
   updatedAt?: string
 }
-
-import type { FeishuConfig, WorkDirProfile } from './feishuTypes'
-import { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
-export type { FeishuConfig, WorkDirProfile } from './feishuTypes'
-export { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 
 export interface AppConfig {
   /** 是否已配置 API Key（激活服务的镜像，兼容旧逻辑） */
@@ -488,19 +461,32 @@ export interface AppConfig {
   workDirProfiles: WorkDirProfile[]
   activeWorkDirProfileId: string
   uiTheme: UiThemeMode
-  /** 默认聊天模式（发送时可覆盖） */
-  defaultChatMode: ChatMode
   /** 多会话并行 LLM 请求上限（设置页可配置） */
   maxParallelChatSessions: number
   tools: ToolsConfig
   skills: SkillsConfig
   wiki: WikiConfig
   feishu: FeishuConfig
-  plan: PlanConfig
   browser: BrowserConfig
 }
 
-/** 项目记忆加载状态 */
+/** 从 FeishuConfig 移除 Plan 远程字段；幂等 */
+export function stripPlanFieldsFromFeishuConfig(feishu: FeishuConfig): FeishuConfig {
+  const next = { ...feishu } as FeishuConfig & { remotePlanMode?: unknown; remotePlanKeywords?: unknown }
+  delete next.remotePlanMode
+  delete next.remotePlanKeywords
+  return next as FeishuConfig
+}
+
+/** 从 AppConfig 移除遗留 Plan 字段；幂等（兼容旧 DB 读取路径） */
+export function stripPlanFieldsFromAppConfig(config: AppConfig & { defaultChatMode?: unknown; plan?: unknown }): AppConfig {
+  const next = { ...config }
+  delete next.defaultChatMode
+  delete next.plan
+  next.feishu = stripPlanFieldsFromFeishuConfig(config.feishu)
+  return next
+}
+
 export interface ProjectMemoryState {
   /** 原始内容（已校验大小） */
   content: string | null

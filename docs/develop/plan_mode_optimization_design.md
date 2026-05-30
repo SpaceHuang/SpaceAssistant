@@ -1,5 +1,7 @@
 # SpaceAssistant Plan 模式优化技术方案
 
+> **状态：已废弃 — 见 [remove-plan-mode-requirement.md](../requirement/remove-plan-mode-requirement.md)**
+
 > 版本：v2.2
 > 设计日期：2026-05-25
 > 状态：草案

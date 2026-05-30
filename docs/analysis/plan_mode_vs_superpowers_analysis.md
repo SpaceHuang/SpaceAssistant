@@ -1,5 +1,7 @@
 # SpaceAssistant Plan 模式 vs Superpowers 技能：目标理解与任务拆解方案对比分析
 
+> **状态：已废弃 — 见 [remove-plan-mode-requirement.md](../requirement/remove-plan-mode-requirement.md)**
+
 | 字段 | 内容 |
 |------|------|
 | 文档版本 | v1.0 |

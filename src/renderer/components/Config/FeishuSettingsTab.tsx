@@ -286,20 +286,6 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           />
         </ConfigField>
 
-        <ConfigField label="远程 Plan 模式">
-          <Select
-            style={{ maxWidth: 280 }}
-            value={feishu.remotePlanMode}
-            onChange={(remotePlanMode) => patch({ remotePlanMode })}
-            popupClassName={CONFIG_MODAL_SELECT_POPUP}
-            options={[
-              { value: 'off', label: '关闭' },
-              { value: 'auto', label: '关键词自动' },
-              { value: 'always', label: '总是先 Plan' }
-            ]}
-          />
-        </ConfigField>
-
         <ConfigField label="集成模式">
           <Select
             style={{ maxWidth: 280 }}

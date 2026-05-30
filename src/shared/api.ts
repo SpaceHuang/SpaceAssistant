@@ -1,6 +1,5 @@
 import type {
   AppConfig,
-  ChatMode,
   FileInfo,
   Message,
   ProjectMemoryState,
@@ -15,8 +14,7 @@ import type {
   ToolRiskLevel,
   ToolsConfig,
   WikiConfig,
-  WikiStatus,
-  PlanConfig
+  WikiStatus
 } from './domainTypes'
 import type {
   FeishuCliDetectResult,
@@ -28,7 +26,6 @@ import type {
   FeishuPendingConfirmSummary,
   WorkDirProfile
 } from './feishuTypes'
-import type { PlanAbortMeta, PlanApprovalSummary, PlanDisplayEntry, PlanMeta } from './planTypes'
 import type {
   BrowserDetectResult,
   BrowserDependencyFailureCode,
@@ -80,60 +77,8 @@ export type ClaudeChatCreateWithToolsPayload = {
   tools: Array<Record<string, unknown>>
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
-  chatMode?: ChatMode
-  planRevisionFeedback?: string
   projectMemoryEnabled?: boolean
 }
-
-export type PlanReadResult = {
-  plan: PlanMeta | null
-  pendingPlan: PlanMeta | null
-  displayPlans: PlanDisplayEntry[]
-  planDrafting: boolean
-  planAbortDismissed: boolean
-  abort: PlanAbortMeta | null
-  /** 待审批稿摘要（pendingPlan 优先） */
-  summary: PlanApprovalSummary | null
-  raw: string | null
-}
-
-export type PlanStateChangedEvent = {
-  sessionId: string
-  clearStaleToolConfirms?: boolean
-  activeRunRequestId?: string | null
-}
-
-export type PlanStepCompletedEvent = {
-  sessionId: string
-  stepIndex: number
-  stepsTotal: number
-  summary: string
-  requestId: string
-}
-
-export type PlanStepStartedEvent = {
-  sessionId: string
-  stepIndex: number
-  stepsTotal: number
-  requestId: string
-}
-
-export type PlanRunPayload = Omit<ClaudeChatCreateWithToolsPayload, 'requestId' | 'tools'> & {
-  loopRequestId: string
-}
-
-export type PlanRunResult =
-  | {
-      ok: true
-      completed: boolean
-      paused: boolean
-      pauseReason?: string
-      lastContent?: unknown[]
-      usage?: unknown
-    }
-  | { ok: false; error: string }
-
-export type PlanApprovalReadyEvent = { sessionId: string; planState: PlanReadResult }
 
 export type SpaceAssistantApi = {
   ping: () => Promise<string>
@@ -164,7 +109,7 @@ export type SpaceAssistantApi = {
   claudeChatCreateWithTools: (
     payload: ClaudeChatCreateWithToolsPayload
   ) => Promise<
-    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown; planState?: PlanReadResult }
+    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
     | { ok: false; error: string }
   >
   claudeChatOnDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
@@ -190,10 +135,8 @@ export type SpaceAssistantApi = {
       skills: Partial<SkillsConfig>
       wiki: Partial<WikiConfig>
       feishu: Partial<FeishuConfig>
-      plan: Partial<PlanConfig>
       workDirProfiles: WorkDirProfile[]
       activeWorkDirProfileId: string
-      defaultChatMode: ChatMode
       uiTheme: import('./domainTypes').UiThemeMode
       maxParallelChatSessions: number
     }>
@@ -286,25 +229,6 @@ export type SpaceAssistantApi = {
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
-
-  planRead: (payload: { sessionId: string }) => Promise<PlanReadResult>
-  planApprove: (payload: {
-    sessionId: string
-    cancelExecuting?: boolean
-  }) => Promise<{ ok: true; plan: PlanMeta; autoExecute: boolean } | { ok: false; error: string }>
-  planDismissAbort: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error: string }>
-  planReject: (payload: { sessionId: string; feedback?: string }) => Promise<{ ok: true } | { ok: false; error: string }>
-  planCancel: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error: string }>
-  planResumeExecution: (payload: ClaudeChatCreateWithToolsPayload) => Promise<
-    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
-    | { ok: false; error: string }
-  >
-  planRun: (payload: PlanRunPayload) => Promise<PlanRunResult>
-  planPause: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error: string }>
-  planOnStateChanged: (cb: (data: PlanStateChangedEvent) => void) => () => void
-  planOnStepCompleted: (cb: (data: PlanStepCompletedEvent) => void) => () => void
-  planOnStepStarted: (cb: (data: PlanStepStartedEvent) => void) => () => void
-  planOnApprovalReady: (cb: (data: PlanApprovalReadyEvent) => void) => () => void
 
   projectMemoryGetState: () => Promise<ProjectMemoryState>
   projectMemoryGenerate: () => Promise<{ success: boolean; prompt?: string; content?: string; error?: string }>

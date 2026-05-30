@@ -4,13 +4,6 @@ import { extractHostname, isTrustedDomain } from './urlSecurity'
 
 export type BrowserAction = 'navigate' | 'observe' | 'extract' | 'act' | 'screenshot' | 'close'
 
-export const PLAN_READONLY_BROWSER_ACTIONS: readonly BrowserAction[] = [
-  'observe',
-  'extract',
-  'screenshot',
-  'close'
-]
-
 export function browserActionNeedsConfirmation(
   action: BrowserAction,
   input: Record<string, unknown>,
@@ -35,8 +28,4 @@ export function browserActionNeedsConfirmation(
 
 export function browserActionConsumesInference(action: BrowserAction): boolean {
   return action === 'observe' || action === 'extract' || action === 'act'
-}
-
-export function isPlanReadonlyBrowserAction(action: string): boolean {
-  return (PLAN_READONLY_BROWSER_ACTIONS as readonly string[]).includes(action)
 }

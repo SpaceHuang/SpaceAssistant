@@ -4,8 +4,7 @@ import { appendMessage, updateMessageContent } from '../database'
 import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { FeishuConfig, FeishuInboundMessage, WorkDirProfile } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
-import type { ToolsConfig, PlanConfig } from '../../src/shared/domainTypes'
-import { mergePlanConfig } from '../../src/shared/domainTypes'
+import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuConfirmManager } from './feishuConfirmManager'
 import { shouldAcceptInbound } from './feishuInboundParser'
@@ -49,7 +48,6 @@ export type RemoteCommandRouterDeps = {
   getToolsConfig: () => ToolsConfig
   getBrowserConfig?: () => import('../../src/shared/domainTypes').BrowserConfig
   getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
-  getPlanConfig?: () => PlanConfig
 }
 
 const pendingDisambiguation = new Map<string, { profiles: WorkDirProfile[]; originalMsg: FeishuInboundMessage }>()
@@ -270,7 +268,6 @@ export class RemoteCommandRouter {
       getToolsConfig: this.deps.getToolsConfig,
       getBrowserConfig: this.deps.getBrowserConfig,
       getWikiConfig: this.deps.getWikiConfig,
-      getPlanConfig: this.deps.getPlanConfig,
       userDataDir: this.deps.getUserDataPath(),
       remoteContext
     })

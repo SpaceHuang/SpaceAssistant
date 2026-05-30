@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { App } from 'antd'
-import { useAppDispatch, useTypedSelector } from '../../hooks'
-import { setSession } from '../../store/chatSlice'
-import { getPendingPlanMeta } from '../../../shared/planTypes'
+import { useTypedSelector } from '../../hooks'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileToolbar } from './FileToolbar'
 import { FileContentView } from './FileContentView'
@@ -13,12 +11,7 @@ import type { SearchMatch } from './searchUtils'
 
 export function FileOverlay() {
   const { message } = App.useApp()
-  const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
-  const sessionMeta = useTypedSelector((s) =>
-    sessionId ? s.session.list.find((x) => x.id === sessionId)?.metadata : undefined
-  )
-  const hasPendingPlan = getPendingPlanMeta(sessionMeta)?.status === 'awaiting_approval'
 
   const {
     selectedFile,
@@ -48,12 +41,6 @@ export function FileOverlay() {
       onSuccess: (text) => message.success(text)
     })
   }, [message, selectedFile, sessionId, wikiEnabled])
-
-  const openPendingPlan = () => {
-    if (sessionId) dispatch(setSession(sessionId))
-    closeFile()
-    window.dispatchEvent(new CustomEvent('plan-focus'))
-  }
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [highlights, setHighlights] = useState<SearchMatch[]>([])
@@ -99,7 +86,6 @@ export function FileOverlay() {
         onViewModeChange={setViewMode}
         onClose={closeFile}
         onRefresh={() => void refreshFile()}
-        onPendingPlanClick={hasPendingPlan ? openPendingPlan : undefined}
         showWikiIndexToggle={isIndex}
         wikiIndexView={indexView}
         onWikiIndexViewChange={setIndexView}

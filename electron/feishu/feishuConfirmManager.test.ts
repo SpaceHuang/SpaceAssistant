@@ -94,8 +94,9 @@ describe('FeishuConfirmManager', () => {
   it('cancelAllPending resolves every waiter without waiting for timeout', async () => {
     const mgr = new FeishuConfirmManager()
     const p = mgr.requestConfirm({
-      kind: 'plan_execute',
+      kind: 'tool_write',
       sessionId: 's3',
+      toolName: 'write_file',
       messageId: 'm1',
       chatId: 'c1'
     })

@@ -4,8 +4,7 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
-import type { PlanConfig } from '../src/shared/domainTypes'
-import { mergePlanConfig, mergeToolsConfig, mergeWikiConfig } from '../src/shared/domainTypes'
+import { mergeToolsConfig, mergeWikiConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { stagehandService } from './browser/stagehandService'
 import {
@@ -36,7 +35,6 @@ import { setupWindowCloseHandler } from './trayLogic'
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
 const WIKI_CONFIG_KEY = 'config.wiki'
-const PLAN_CONFIG_KEY = 'config.plan'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -231,15 +229,6 @@ app.whenReady().then(() => {
     },
     getAppDatabase: () => db,
     getProjectMemoryEnabled: () => true,
-    getPlanConfig: (): PlanConfig => {
-      const raw = getConfigValue(db, PLAN_CONFIG_KEY)
-      if (!raw) return mergePlanConfig(null)
-      try {
-        return mergePlanConfig(JSON.parse(raw) as Partial<PlanConfig>)
-      } catch {
-        return mergePlanConfig(null)
-      }
-    },
     getBrowserConfig: () => readBrowserConfigFromDb(db)
   })
 

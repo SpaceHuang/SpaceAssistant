@@ -1,5 +1,7 @@
 # Plan 详情面板 — 需求规格
 
+> **状态：已废弃 — 见 [remove-plan-mode-requirement.md](./remove-plan-mode-requirement.md)**
+
 **版本：** 1.1  
 **日期：** 2026-05-20  
 **状态：** 待评审（已吸收 [plan-detail-panel-requirement-review.md](../review/plan-detail-panel-requirement-review.md)）  

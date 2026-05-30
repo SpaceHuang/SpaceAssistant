@@ -6,7 +6,8 @@ import chatReducer, { setLastUsage, setSession } from '../../store/chatSlice'
 import configReducer, { setConfig } from '../../store/configSlice'
 import { buildContextRingSegments, ContextUsageRing } from './ContextUsageRing'
 import type { AppConfig } from '../../../shared/domainTypes'
-import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG, DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_FEISHU_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -22,11 +23,12 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     thinkingEnabled: false,
     workDir: '',
     uiTheme: 'system',
-    defaultChatMode: 'normal',
     maxParallelChatSessions: 3,
     tools: { ...DEFAULT_TOOLS_CONFIG, enabled: false },
     skills: { ...DEFAULT_SKILLS_CONFIG },
     wiki: { ...DEFAULT_WIKI_CONFIG },
+    feishu: { ...DEFAULT_FEISHU_CONFIG },
+    browser: { ...DEFAULT_BROWSER_CONFIG },
     ...overrides
   } as AppConfig
 }

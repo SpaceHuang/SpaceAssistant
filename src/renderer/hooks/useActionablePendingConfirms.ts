@@ -1,8 +1,6 @@
 import { useMemo } from 'react'
 import type { PendingConfirmItem } from '../services/pendingConfirmStore'
 import type { Session } from '../../shared/domainTypes'
-import { getPlanExecutionMeta, getPlanMeta } from '../../shared/planTypes'
-import { DEFAULT_PLAN_CONFIG } from '../../shared/domainTypes'
 
 export function shouldShowToolConfirm(
   item: PendingConfirmItem,
@@ -13,26 +11,7 @@ export function shouldShowToolConfirm(
 ): boolean {
   const session = ctx.sessions.find((s) => s.id === item.sessionId)
   if (!session) return false
-
-  if (!ctx.activeRequestIds.has(item.requestId)) return false
-
-  const planMeta = getPlanMeta(session.metadata)
-  const planExec = getPlanExecutionMeta(session.metadata)
-  const toolConfirmPolicy = planExec?.toolConfirmPolicy ?? DEFAULT_PLAN_CONFIG.toolConfirmPolicy
-  const planRunState = planExec?.runState ?? 'idle'
-  const planStatus = planMeta?.status
-
-  if (planRunState === 'running' && toolConfirmPolicy !== 'always_confirm') {
-    if (item.toolName === 'run_lark_cli') return true
-    if (item.toolName === 'run_script') return true
-    if (item.toolName !== 'run_script' && item.toolName !== 'run_lark_cli') return false
-  }
-
-  if (planStatus === 'executing' && planRunState !== 'running') {
-    return false
-  }
-
-  return true
+  return ctx.activeRequestIds.has(item.requestId)
 }
 
 export function useActionablePendingConfirms(

@@ -19,7 +19,6 @@ import { abortSessionRun } from './services/chatRunnerService'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
 import { SessionListIcon } from './components/SessionList/SessionListIcon'
 import { PendingConfirmBanner } from './components/SessionList/PendingConfirmBanner'
-import { PendingPlanBanner } from './components/SessionList/PendingPlanBanner'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import folderLineRaw from './assets/folder_line.svg?raw'
@@ -66,7 +65,6 @@ function LeftSessions() {
     <div className="sider-pane">
       <Input allowClear placeholder="搜索会话" value={q} onChange={(e) => setQ(e.target.value)} />
       <PendingConfirmBanner />
-      <PendingPlanBanner />
       <div className="session-list-scroll">
         {groups.length === 0 ? (
           <Empty description="暂无会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />

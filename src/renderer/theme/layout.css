@@ -373,16 +373,6 @@
   background: rgba(255, 255, 255, 0.75);
 }
 
-.pending-confirm-banner--plan {
-  background: rgba(22, 119, 255, 0.08);
-  border-color: rgba(22, 119, 255, 0.35);
-  margin-top: 6px;
-}
-
-.pending-confirm-banner--plan .pending-confirm-banner__title {
-  color: #1677ff;
-}
-
 .tool-row--focus {
   outline: 2px solid rgba(250, 173, 20, 0.55);
   outline-offset: 2px;
@@ -718,59 +708,6 @@
 
 .composer-send--stop:hover:not(:disabled) {
   background: var(--sa-danger-hover, #dc3d43);
-}
-
-.composer-mode-select {
-  min-width: 108px;
-}
-
-.composer-mode-select .ant-select-selector {
-  border-radius: var(--sa-radius-sm) !important;
-  font-size: 11px !important;
-}
-
-.composer-mode-select-popup .ant-select-item {
-  font-size: 11px;
-}
-
-.plan-card {
-  margin: 12px 16px;
-  padding: 14px 16px;
-  border-radius: var(--sa-radius-md);
-  border: 1px solid var(--sa-border);
-  background: var(--sa-surface-elevated, var(--sa-bg));
-  max-width: 92%;
-}
-
-.plan-card--approval {
-  border-color: var(--sa-primary);
-}
-
-.plan-card--abort {
-  border-color: var(--sa-border-strong, var(--sa-border));
-}
-
-.plan-card-section {
-  margin-top: 10px;
-}
-
-.plan-card-list {
-  margin: 6px 0 0;
-  padding-left: 18px;
-  font-size: 13px;
-}
-
-.plan-card-list--risk {
-  color: var(--sa-warning-text, #ad6800);
-}
-
-.plan-card-markdown {
-  font-size: 13px;
-}
-
-.plan-resume-banner {
-  margin: 8px 16px;
-  max-width: 92%;
 }
 
 /* ── Tool call activity row ── */

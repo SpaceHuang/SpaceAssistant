@@ -5,7 +5,6 @@ import type { BrowserConfig } from '../../src/shared/domainTypes'
 import { assertSafeInstruction } from '../browser/instructionGuards'
 import {
   browserActionConsumesInference,
-  isPlanReadonlyBrowserAction,
   type BrowserAction
 } from '../browser/browserActionPolicy'
 import { browserErrorKindFromAction, mapErrorToFailureCode, shouldAttachDependencyRecovery, toBrowserDependencyToolError, toBrowserUserError } from '../browser/browserUserErrors'
@@ -177,14 +176,6 @@ export const browserExecutor: ToolExecutor = {
 
     if (cfg.deniedActions.includes(action)) {
       return { success: false, error: `${action} 已被禁用`, duration: Date.now() - started }
-    }
-
-    if (ctx.planToolPhase === 'planning' && !isPlanReadonlyBrowserAction(action)) {
-      return {
-        success: false,
-        error: `Plan 探索期不允许使用 browser ${action}。请先完成计划。`,
-        duration: Date.now() - started
-      }
     }
 
     const navTimeout = cfg.actionTimeoutSec * 1000

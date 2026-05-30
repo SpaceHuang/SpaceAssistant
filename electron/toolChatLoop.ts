@@ -8,21 +8,10 @@ import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
 import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
-import { getPlanMeta, getPlanExecutionMeta } from '../src/shared/planTypes'
-import { shouldSkipToolConfirm, toolConfirmSkipReason } from './plan/planToolConfirm'
-import {
-  getOrCreateProvenanceContext,
-  clearProvenanceContext,
-  recordReadFileForProvenance,
-  recordWriteFileForProvenance
-} from './plan/runScriptProvenance'
-import { markPlanConfirmFailure } from './plan/planConfirmFailure'
-import { shouldBlockToolInPlanMode, type PlanToolPhaseArg } from './plan/planModeAcl'
-import { getSession } from './database'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolExecutorResult } from './tools/types'
-import type { BrowserConfig, ToolsConfig, WikiConfig, PlanConfig } from '../src/shared/domainTypes'
+import type { BrowserConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { browserActionNeedsConfirmation, type BrowserAction } from './browser/browserActionPolicy'
 import {
   clearBrowserSessionTrust,
@@ -33,7 +22,6 @@ import {
   formatDependencyRecoveryToolContent,
   resolveDependencyRecoverySkill
 } from './browser/browserDependencyRecovery'
-import { mergePlanConfig } from '../src/shared/domainTypes'
 import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
 import type { AppDatabase } from './database'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
@@ -246,10 +234,6 @@ export type RunToolChatSessionArgs = {
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
   appDb?: AppDatabase
-  planToolPhase?: PlanToolPhaseArg
-  /** Plan 探索期可传入只读工具子集 */
-  toolsOverride?: unknown[]
-  planConfig?: PlanConfig
 }
 
 export type RunToolChatSessionResult =
@@ -290,13 +274,8 @@ async function runToolChatSessionInner(
     userDataDir,
     getApiKey,
     appDb,
-    chatSignal,
-    planToolPhase = null,
-    toolsOverride,
-    planConfig: planConfigArg
+    chatSignal
   } = args
-
-  const planConfig = mergePlanConfig(planConfigArg)
 
   const apiKey = await getApiKey()
   if (!apiKey) {
@@ -345,8 +324,7 @@ async function runToolChatSessionInner(
     })
   }
 
-  const builtinDefs =
-    toolsOverride ?? filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext)
+  const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext)
   const tools = sanitizeTools(builtinDefs as unknown[])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
   if (toolNames.includes('browser')) {
@@ -576,28 +554,6 @@ async function runToolChatSessionInner(
         continue
       }
 
-      const sessionMeta = appDb ? getSession(appDb, sessionId)?.metadata : undefined
-      const planBlock = shouldBlockToolInPlanMode(toolName, sessionMeta, planToolPhase)
-      if (planBlock.blocked) {
-        const blockedError = planBlock.error ?? 'BLOCKED_BY_PLAN_MODE'
-        logToolLoopError(
-          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-          blockedError,
-          blockedError
-        )
-        toolResults.push(buildToolErrorResult(toolUseId, blockedError))
-        sender.send('tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: blockedError }
-        })
-        if (toolErrorRepeat.noteFailure(toolName, blockedError)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${blockedError}`
-          break
-        }
-        continue
-      }
-
       try {
         assertSafeToolInput(toolName, inputObj)
       } catch (e) {
@@ -681,34 +637,8 @@ async function runToolChatSessionInner(
         browserConfig,
         sessionId
       )
-      const planMeta = sessionMeta ? getPlanMeta(sessionMeta) ?? null : null
-      const planExec = sessionMeta ? getPlanExecutionMeta(sessionMeta) : undefined
-      const confirmPolicy = planExec?.toolConfirmPolicy ?? planConfig.toolConfirmPolicy
-      const provenance = getOrCreateProvenanceContext(requestId)
-      const skipConfirm =
-        needsConfirm &&
-        shouldSkipToolConfirm({
-          planToolPhase,
-          planMeta,
-          policy: confirmPolicy,
-          toolName,
-          toolInput: inputObj,
-          provenance,
-          planConfig
-        })
 
-      if (skipConfirm) {
-        const reason = toolConfirmSkipReason({ toolName, toolInput: inputObj, provenance, planConfig })
-        logAgentEvent('info', 'tool.confirm', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          outcome: 'auto_approved',
-          reason
-        })
-      } else if (needsConfirm && remoteContext?.source === 'feishu') {
+      if (needsConfirm && remoteContext?.source === 'feishu') {
         if (
           (remoteContext.confirmPolicy === 'feishu_confirm' || remoteContext.confirmPolicy === 'always') &&
           remoteContext.confirmManager
@@ -754,9 +684,6 @@ async function runToolChatSessionInner(
           remoteContext?.source === 'feishu'
             ? '飞书确认超时（10分钟），工具调用已取消。请查看 Bot 发出的确认消息后回复 Y，或重新发送指令。'
             : '用户确认超时（5分钟），工具调用已取消'
-        if (planToolPhase === 'implementation' && needsConfirm && !skipConfirm) {
-          markPlanConfirmFailure(requestId, '确认超时，已暂停；请返回后重试本步')
-        }
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           timeoutError,
@@ -787,9 +714,6 @@ async function runToolChatSessionInner(
 
       if (outcome === 'rejected') {
         const rejectedError = '用户拒绝执行此工具'
-        if (planToolPhase === 'implementation' && needsConfirm && !skipConfirm) {
-          markPlanConfirmFailure(requestId, '本步脚本/命令未批准')
-        }
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
@@ -851,7 +775,7 @@ async function runToolChatSessionInner(
       let execResult: ToolExecutorResult
       let execThrew = false
       const execStartedAt = Date.now()
-      const toolUserConfirmed = needsConfirm && !skipConfirm && outcome === 'approved'
+      const toolUserConfirmed = needsConfirm && outcome === 'approved'
       try {
         execResult = await exec.execute(inputObj, {
           workDir,
@@ -864,7 +788,6 @@ async function runToolChatSessionInner(
           fileStateCache: fileCache,
           toolsConfig,
           browserConfig,
-          planToolPhase,
           appDatabase: appDb,
           wikiConfig,
           feishuConfig,
@@ -900,27 +823,6 @@ async function runToolChatSessionInner(
 
       const durationMs = Date.now() - execStartedAt
       if (execResult.success) {
-        if (toolName === 'read_file' && typeof inputObj.path === 'string') {
-          const readContent =
-            execResult.data && typeof execResult.data === 'object' && 'content' in (execResult.data as object)
-              ? String((execResult.data as { content?: unknown }).content ?? '')
-              : typeof execResult.data === 'string'
-                ? execResult.data
-                : ''
-          if (readContent) {
-            recordReadFileForProvenance(provenance, inputObj.path, readContent)
-          }
-        }
-        if (
-          (toolName === 'write_file' || toolName === 'edit_file') &&
-          typeof inputObj.path === 'string' &&
-          typeof inputObj.content === 'string'
-        ) {
-          recordWriteFileForProvenance(provenance, inputObj.path, inputObj.content)
-        }
-        if (toolName === 'edit_file' && typeof inputObj.path === 'string' && typeof inputObj.new_string === 'string') {
-          recordWriteFileForProvenance(provenance, inputObj.path, inputObj.new_string)
-        }
         logAgentEvent('info', 'tool.result', {
           requestId,
           sessionId,
