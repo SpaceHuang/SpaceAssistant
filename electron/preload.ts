@@ -118,9 +118,13 @@ const api: SpaceAssistantApi = {
   },
   toolTestInterpreter: (payload) => ipcRenderer.invoke('tool:test-interpreter', payload),
 
+  browserDetect: (force?: boolean) => ipcRenderer.invoke('browser:detect', force),
+  browserOpenTerminal: () => ipcRenderer.invoke('browser:open-terminal'),
+
   skillList: () => ipcRenderer.invoke('skill:list'),
   skillGet: (payload) => ipcRenderer.invoke('skill:get', payload),
   skillInstall: (payload) => ipcRenderer.invoke('skill:install', payload),
+  skillInstallFromUrl: (payload) => ipcRenderer.invoke('skill:install-from-url', payload),
   skillDelete: (payload) => ipcRenderer.invoke('skill:delete', payload),
   skillToggleDisable: (payload) => ipcRenderer.invoke('skill:toggle-disable', payload),
   skillOpenDirectory: (payload) => ipcRenderer.invoke('skill:open-directory', payload),

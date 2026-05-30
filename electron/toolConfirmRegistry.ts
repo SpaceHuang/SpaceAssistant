@@ -70,3 +70,15 @@ export function cancelAllToolsForRequest(requestId: string): void {
     if (key.startsWith(prefix)) ctrl.abort()
   }
 }
+
+export function cancelAllPendingToolConfirms(): void {
+  for (const [key, w] of pending) {
+    clearTimeout(w.timeoutId)
+    pending.delete(key)
+    w.resolve('rejected')
+  }
+  for (const [, ctrl] of cancelControllers) {
+    ctrl.abort()
+  }
+  cancelControllers.clear()
+}

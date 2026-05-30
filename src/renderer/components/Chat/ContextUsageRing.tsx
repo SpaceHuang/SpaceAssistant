@@ -51,7 +51,7 @@ export function ContextUsageRing() {
   const maximumContext = currentModel?.maximumContext
   const effectiveOutputMax =
     config != null
-      ? resolveEffectiveOutputMaxTokens(config.model, config.models, config.maxTokens)
+      ? resolveEffectiveOutputMaxTokens(config.model, config.models)
       : undefined
 
   const hasData =

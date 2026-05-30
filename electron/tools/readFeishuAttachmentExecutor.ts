@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { ToolExecutor, ToolExecutorResult } from './types'
+import { toToolUserError } from './toolUserErrors'
 
 const FEISHU_MEDIA_ROOT = 'feishu-media'
 
@@ -31,7 +32,7 @@ export const readFeishuAttachmentExecutor: ToolExecutor = {
     } catch (e) {
       return {
         success: false,
-        error: e instanceof Error ? e.message : String(e),
+        error: toToolUserError(e, { toolName: 'read_feishu_attachment' }),
         duration: Date.now() - started
       }
     }

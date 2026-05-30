@@ -22,5 +22,7 @@ export type AgentLogEventName =
   | 'projectMemory.watcherError'
   | 'tray.init_ok'
   | 'tray.init_failed'
+  | 'browser.action'
+  | 'browser.error'
 
 export type AgentLogFields = Record<string, unknown>

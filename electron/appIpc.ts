@@ -73,7 +73,10 @@ import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
 import { mergeWikiConfig, mergeFeishuConfig } from '../src/shared/domainTypes'
-import type { WikiConfig, WikiStatus, FeishuConfig } from '../src/shared/domainTypes'
+import type { WikiConfig, WikiStatus, FeishuConfig, BrowserConfig } from '../src/shared/domainTypes'
+import { readBrowserConfigFromDb, persistBrowserConfig } from './browser/browserConfigDb'
+import { stagehandService } from './browser/stagehandService'
+import type { BrowserDetectContext } from './browser/browserDependencyDetect'
 import { readFeishuConfigFromDb, persistFeishuConfig } from './feishu/feishuIpc'
 import { initWikiStructure, readWikiSchema } from './wiki/wikiInit'
 import { getWikiStatus } from './wiki/wikiStatus'
@@ -83,8 +86,6 @@ import { copyFileInWorkDir, importRawFromWorkDir } from './wiki/wikiImport'
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
   model: 'config.model',
-  temperature: 'config.temperature',
-  maxTokens: 'config.maxTokens',
   defaultModel: 'config.defaultModel',
   models: 'config.models',
   thinkingEnabled: 'config.thinkingEnabled',
@@ -101,7 +102,8 @@ const CONFIG_KEYS = {
   uiTheme: 'config.uiTheme',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   defaultChatMode: 'config.defaultChatMode',
-  plan: 'config.plan'
+  plan: 'config.plan',
+  browser: 'config.browser'
 } as const
 
 export type AppIpcContext = {
@@ -112,6 +114,7 @@ export type AppIpcContext = {
   getUserDataPath: () => string
   getApiKey: () => Promise<string | null>
   setApiKey: (value: string) => Promise<void>
+  getBrowserDetectContext: () => BrowserDetectContext
 }
 
 function readPlanConfig(db: AppDatabase): PlanConfig {
@@ -130,6 +133,7 @@ function buildPlanOrchestratorDeps(ctx: AppIpcContext): PlanOrchestratorDeps {
     getWorkDir: ctx.getWorkDir,
     getUserDataPath: ctx.getUserDataPath,
     getToolsConfig: () => readToolsConfig(ctx.db),
+    getBrowserConfig: () => readBrowserConfigFromDb(ctx.db),
     getWikiConfig: () => readWikiConfig(ctx.db),
     getAppDatabase: () => ctx.db,
     getPlanConfig: () => readPlanConfig(ctx.db)
@@ -215,6 +219,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       })
     }
   )
+
+  ipcMain.handle('browser:detect', async (_e, force?: boolean) => {
+    stagehandService.configureDetectContext(ctx.getBrowserDetectContext())
+    return stagehandService.detectDependencies(force === true)
+  })
+
+  ipcMain.handle('browser:open-terminal', async () => {
+    stagehandService.configureDetectContext(ctx.getBrowserDetectContext())
+    const detect = await stagehandService.detectDependencies(true)
+    const { openTerminalAtCwd } = await import('./browser/openTerminalAtCwd')
+    return openTerminalAtCwd(detect.recommendedCwd, ctx.getBrowserDetectContext())
+  })
 
   ipcMain.handle('session:list', (): Session[] => listSessions(ctx.db))
 
@@ -378,14 +394,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const defaultChatModeRaw = getConfigValue(ctx.db, CONFIG_KEYS.defaultChatMode)
     const defaultChatMode = isChatMode(defaultChatModeRaw) ? defaultChatModeRaw : DEFAULT_CHAT_MODE
     const plan = readPlanConfig(ctx.db)
+    const browser = readBrowserConfigFromDb(ctx.db)
     return {
       apiKeyPresent: activeService?.apiKeyPresent ?? Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: activeService?.baseUrl ?? getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
       llmServices,
       activeLlmServiceId,
       model: defaultEntry?.name ?? modelName,
-      temperature: Number(getConfigValue(ctx.db, CONFIG_KEYS.temperature) ?? 0.7),
-      maxTokens: Number(getConfigValue(ctx.db, CONFIG_KEYS.maxTokens) ?? 4096),
       defaultModel: defaultEntry?.name ?? defaultModelName,
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
@@ -399,7 +414,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       feishu,
       workDirProfiles,
       activeWorkDirProfileId,
-      plan
+      plan,
+      browser
     }
   })
 
@@ -410,8 +426,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       payload: Partial<{
         baseUrl: string
         model: string
-        temperature: number
-        maxTokens: number
         defaultModel: string
         models: AppConfig['models']
         thinkingEnabled: boolean
@@ -430,6 +444,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         maxParallelChatSessions: number
         defaultChatMode: import('../src/shared/planTypes').ChatMode
         plan: Partial<PlanConfig>
+        browser: Partial<BrowserConfig>
       }>
     ): Promise<void> => {
       try {
@@ -475,8 +490,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           setConfigValue(ctx.db, CONFIG_KEYS.defaultModel, defaultEntry.name)
         }
       }
-      if (payload.temperature !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.temperature, String(payload.temperature))
-      if (payload.maxTokens !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.maxTokens, String(payload.maxTokens))
       if (payload.thinkingEnabled !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled, String(payload.thinkingEnabled))
       if (payload.workDir !== undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
@@ -550,6 +563,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       if (payload.plan !== undefined) {
         const next = mergePlanConfig({ ...readPlanConfig(ctx.db), ...payload.plan })
         setConfigValue(ctx.db, CONFIG_KEYS.plan, JSON.stringify(next))
+      }
+      if (payload.browser !== undefined) {
+        persistBrowserConfig(ctx.db, payload.browser)
       }
       ctx.db.flushSave()
     }
@@ -859,6 +875,25 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       try {
         const skill = await skillManager.install(payload.sourcePath, payload.overwrite === true)
         return { ok: true, skill }
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'skill:install-from-url',
+    async (
+      _e,
+      payload: { sourceUrl: string; subPath?: string; installAll?: boolean; overwrite?: boolean }
+    ): Promise<{ ok: true; skills: SkillDefinition[] } | { ok: false; error: string }> => {
+      try {
+        const skills = await skillManager.installFromUrl(payload.sourceUrl, {
+          subPath: payload.subPath,
+          installAll: payload.installAll === true,
+          overwrite: payload.overwrite === true
+        })
+        return { ok: true, skills }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) }
       }

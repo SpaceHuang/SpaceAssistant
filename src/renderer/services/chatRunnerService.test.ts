@@ -30,8 +30,6 @@ describe('getMaxParallelChatSessions', () => {
         model: 'm',
         defaultModel: 'm',
         models: [],
-        temperature: 0.7,
-        maxTokens: 4096,
         thinkingEnabled: true,
         workDir: '/tmp',
         uiTheme: 'system',

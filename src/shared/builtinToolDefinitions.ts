@@ -123,6 +123,38 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
       },
       required: ['relativePath']
     }
+  },
+  {
+    name: 'browser',
+    description:
+      '在隔离浏览器中访问网页（基于 Stagehand）。navigate 打开 URL；observe 发现可交互元素；extract 抽取页面内容；act 执行单步自然语言操作（需确认，指令须原子化）；screenshot 截图；close 关闭会话。workflow 建议：navigate → observe/extract → act。未在可信域名中的 URL 需用户确认。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['navigate', 'observe', 'extract', 'act', 'screenshot', 'close']
+        },
+        url: { type: 'string', description: 'action=navigate 且 mode=open 时必填' },
+        mode: {
+          type: 'string',
+          enum: ['open', 'refresh', 'back', 'forward'],
+          description: 'action=navigate 时，默认 open'
+        },
+        wait_until: {
+          type: 'string',
+          enum: ['load', 'domcontentloaded', 'networkidle'],
+          description: 'navigate(mode=open) 的 Playwright waitUntil，默认 domcontentloaded'
+        },
+        instruction: {
+          type: 'string',
+          description: 'action=observe/extract/act 时的自然语言指令；act 须为单步原子操作'
+        },
+        selector: { type: 'string', description: 'action=observe/extract 可选，缩小 DOM 范围' },
+        full_page: { type: 'boolean', description: 'action=screenshot，默认 false' }
+      },
+      required: ['action']
+    }
   }
 ]
 

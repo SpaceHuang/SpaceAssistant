@@ -1,5 +1,7 @@
 export const CURRENT_SCHEMA_VERSION = 1
 
+import type { BrowserDependencyToolError } from './browserTypes'
+
 export type MessageRole = 'user' | 'assistant' | 'system'
 
 export type MessageStatus = 'sending' | 'sent' | 'streaming' | 'completed' | 'failed'
@@ -35,6 +37,63 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
 export function mergeToolsConfig(partial?: Partial<ToolsConfig> | null): ToolsConfig {
   if (!partial || typeof partial !== 'object') return { ...DEFAULT_TOOLS_CONFIG }
   return { ...DEFAULT_TOOLS_CONFIG, ...partial }
+}
+
+export interface BrowserConfig {
+  enabled: boolean
+  env: 'LOCAL' | 'BROWSERBASE'
+  allowedDomains: string[]
+  trustedDomains: string[]
+  allowHttp: boolean
+  headless: boolean
+  stagehandModel: string
+  reuseActiveLlmProfile: boolean
+  actionTimeoutSec: number
+  idleTimeoutSec: number
+  maxOutputChars: number
+  maxInferencesPerRequest: number
+  navigateRequiresConfirm: boolean
+  actRequiresConfirm: boolean
+  deniedActions: string[]
+  allowRemoteSessions: boolean
+  captureSubdir: string
+}
+
+export const DEFAULT_BROWSER_CONFIG: BrowserConfig = {
+  enabled: true,
+  env: 'LOCAL',
+  allowedDomains: [],
+  trustedDomains: [],
+  allowHttp: true,
+  headless: true,
+  stagehandModel: '',
+  reuseActiveLlmProfile: true,
+  actionTimeoutSec: 90,
+  idleTimeoutSec: 1800,
+  maxOutputChars: 50000,
+  maxInferencesPerRequest: 8,
+  navigateRequiresConfirm: true,
+  actRequiresConfirm: true,
+  deniedActions: [],
+  allowRemoteSessions: false,
+  captureSubdir: 'browser-captures'
+}
+
+export function mergeBrowserConfig(partial?: Partial<BrowserConfig> | null): BrowserConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_BROWSER_CONFIG }
+  return {
+    ...DEFAULT_BROWSER_CONFIG,
+    ...partial,
+    allowedDomains: Array.isArray(partial.allowedDomains)
+      ? [...partial.allowedDomains]
+      : DEFAULT_BROWSER_CONFIG.allowedDomains,
+    trustedDomains: Array.isArray(partial.trustedDomains)
+      ? [...partial.trustedDomains]
+      : DEFAULT_BROWSER_CONFIG.trustedDomains,
+    deniedActions: Array.isArray(partial.deniedActions)
+      ? [...partial.deniedActions]
+      : DEFAULT_BROWSER_CONFIG.deniedActions
+  }
 }
 
 export interface SkillsRoutingConfig {
@@ -125,6 +184,13 @@ export interface SkillMeta {
 }
 
 export type SkillScope = 'project' | 'user'
+
+/** 产品内置 Skill（由应用自动安装/管理，不在设置页 Skill 列表展示） */
+export const PRODUCT_BUILTIN_SKILL_NAMES = ['llm-wiki'] as const
+
+export function isProductBuiltinSkill(name: string): boolean {
+  return (PRODUCT_BUILTIN_SKILL_NAMES as readonly string[]).includes(name)
+}
 
 export interface SkillDefinition {
   meta: SkillMeta
@@ -236,6 +302,7 @@ export function builtinToolRiskLevel(name: string): ToolRiskLevel {
     case 'list_directory':
     case 'grep':
     case 'read_feishu_attachment':
+    case 'browser':
       return 'low'
     case 'edit_file':
     case 'write_file':
@@ -261,6 +328,7 @@ export interface ToolCallResultPersisted {
   success: boolean
   data?: unknown
   error?: string
+  dependencyRecovery?: BrowserDependencyToolError
 }
 
 /** 工具调用记录（持久化到消息中） */
@@ -415,8 +483,6 @@ export interface AppConfig {
   model: string
   defaultModel: string
   models: ModelEntry[]
-  temperature: number
-  maxTokens: number
   thinkingEnabled: boolean
   workDir: string
   workDirProfiles: WorkDirProfile[]
@@ -431,6 +497,7 @@ export interface AppConfig {
   wiki: WikiConfig
   feishu: FeishuConfig
   plan: PlanConfig
+  browser: BrowserConfig
 }
 
 /** 项目记忆加载状态 */
@@ -450,6 +517,13 @@ export interface ProjectMemoryState {
 export const PROJECT_MEMORY_FILE_NAME = 'SPACEASSISTANT.md'
 export const PROJECT_MEMORY_MAX_SIZE = 40960 // 40KB
 
+/** 各 LLM 场景未单独指定 temperature 时的共用默认值 */
+export const DEFAULT_LLM_TEMPERATURE = 0.7
+
+/** 自定义模型未填写时的默认上下文 / 输出上限；亦作模型列表未匹配时的输出兜底 */
+export const DEFAULT_MODEL_MAX_CONTEXT = 200_000
+export const DEFAULT_MODEL_MAX_TOKENS = 64_000
+
 export interface SearchResult {
   id: string
   type: 'session' | 'file'
@@ -468,9 +542,9 @@ export interface FileInfo {
 
 export const DEFAULT_MODELS: Omit<ModelEntry, 'id'>[] = [
   { name: 'kimi-k2.6', maximumContext: 262144, maxTokens: 98304, isDefault: false, isFast: false, enabled: true },
-  { name: 'glm-5.1', maximumContext: 200000, maxTokens: 128000, isDefault: true, isFast: false, enabled: true },
+  { name: 'glm-5.1', maximumContext: 200000, maxTokens: 128000, isDefault: false, isFast: false, enabled: true },
   { name: 'minimax-m2.7', maximumContext: 204800, maxTokens: 204800, isDefault: false, isFast: false, enabled: true },
-  { name: 'deepseek-v4-pro', maximumContext: 1000000, maxTokens: 384000, isDefault: false, isFast: false, enabled: true },
+  { name: 'deepseek-v4-pro', maximumContext: 1000000, maxTokens: 384000, isDefault: true, isFast: false, enabled: true },
   { name: 'deepseek-v4-flash', maximumContext: 1000000, maxTokens: 384000, isDefault: false, isFast: true, enabled: true },
   { name: 'claude-sonnet-4-6', maximumContext: 1000000, maxTokens: 64000, isDefault: false, isFast: false, enabled: true },
   { name: 'claude-opus-4-7', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, enabled: true },

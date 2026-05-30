@@ -15,6 +15,11 @@ export function resolveDevAgentLogDir(mainDirname: string): string {
   return path.resolve(mainDirname, '..', '..', 'logs')
 }
 
+/** 发布态：日志写入工作目录；开发态：日志写入项目代码目录下的 logs/ */
+export function isAgentLogProductionMode(isPackaged: boolean): boolean {
+  return isPackaged
+}
+
 export function resolveAgentLogDir(isPackaged: boolean, workDir: string, mainDirname: string): string {
   if (isPackaged) {
     return path.join(workDir, '.agent', 'logs')

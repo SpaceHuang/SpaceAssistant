@@ -120,6 +120,7 @@ export function buildToolChatPayload(args: {
   baseUrl?: string
   messages: Message[]
   toolsConfig: import('../../shared/domainTypes').ToolsConfig
+  browserConfig?: import('../../shared/domainTypes').BrowserConfig
   maxTokens?: number
   thinkingEnabled?: boolean
   system?: string
@@ -134,10 +135,10 @@ export function buildToolChatPayload(args: {
       isSessionPlanExplorationBlocked(args.sessionMetadata))
 
   const toolsFiltered = planningPhase
-    ? filterBuiltinToolsForPlanPhase(args.toolsConfig, 'planning')
+    ? filterBuiltinToolsForPlanPhase(args.toolsConfig, 'planning', args.browserConfig)
     : args.chatMode === 'plan'
-      ? filterBuiltinToolsForPlanPhase(args.toolsConfig, 'implementation')
-      : filterBuiltinToolsForRenderer(args.toolsConfig)
+      ? filterBuiltinToolsForPlanPhase(args.toolsConfig, 'implementation', args.browserConfig)
+      : filterBuiltinToolsForRenderer(args.toolsConfig, undefined, args.browserConfig)
 
   const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
   const convo = buildClaudeToolChatMessages(args.messages)

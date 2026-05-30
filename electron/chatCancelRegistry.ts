@@ -1,5 +1,9 @@
 import { CHAT_CANCELLED_MESSAGE } from '../src/shared/chatCancel'
-import { cancelAllToolConfirmsForRequest, cancelAllToolsForRequest } from './toolConfirmRegistry'
+import {
+  cancelAllPendingToolConfirms,
+  cancelAllToolConfirmsForRequest,
+  cancelAllToolsForRequest
+} from './toolConfirmRegistry'
 
 export { CHAT_CANCELLED_MESSAGE }
 
@@ -32,4 +36,15 @@ export function clearChatCancel(requestId: string): void {
 
 export function throwIfChatCancelled(signal: AbortSignal): void {
   if (signal.aborted) throw new ChatCancelledError()
+}
+
+/** 应用退出时中止全部进行中的聊天/远程 Agent，释放 HTTP 与工具等待。 */
+export function cancelAllActiveChats(): void {
+  for (const [requestId, ac] of chatCancelControllers) {
+    ac.abort()
+    cancelAllToolConfirmsForRequest(requestId)
+    cancelAllToolsForRequest(requestId)
+  }
+  chatCancelControllers.clear()
+  cancelAllPendingToolConfirms()
 }

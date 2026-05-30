@@ -433,6 +433,29 @@ vi.mock('../browser/stagehandService', () => ({
 
 ---
 
-**文档版本:** v1.1
+## 10. browser-playwright-install-guide 测试用例
+
+**关联需求：** `docs/requirement/browser-playwright-install-guide-requirement.md`
+
+| 文件 | 覆盖 |
+|------|------|
+| `electron/browser/browserDependencyDetect.test.ts` | primaryFailure、canInitialize、recommendedCwd、headless_only |
+| `electron/browser/browserDependencyRecovery.test.ts` | 恢复 Skill 白名单 |
+| `electron/browser/openTerminalAtCwd.test.ts` | 路径白名单、spawn |
+| `electron/tools/browserExecutor.test.ts` | dependencyError 结构化返回 |
+| `electron/browser/browserUserErrors.test.ts` | 文案不含项目目录 |
+| `src/shared/browserSetupGuideContent.test.ts` | 分场景引导内容 |
+
+### 10.1 手动 E2E Checklist（Win / Mac 各一次）
+
+- [ ] 未执行 `playwright install chromium` 时，设置页检测 `primaryFailure=chromium_missing`
+- [ ] 分步引导可复制目录与 install 命令
+- [ ] 聊天中 browser 失败展示 `BrowserSetupGuide` 卡片
+- [ ] 「在终端中打开」可用；「重新检测」安装后通过
+- [ ] `browser navigate` 成功
+
+---
+
+**文档版本:** v1.2
 **创建日期:** 2026-05-27
-**修订记录:** v1.1 — 根据评审意见补充：IDN/Punycode 测试、localhost/回环地址测试、act 连接词扩展测试（&& || | 管道符、中文变体）、空白名单一致性测试、Chromium 崩溃恢复测试、并发配额测试、LLM 错误分类测试、空闲竞态测试、截断边界测试、空指令默认值测试
+**修订记录:** v1.2 — 新增 §10 browser-playwright-install-guide 单测与手动 E2E checklist；v1.1 — 根据评审意见补充 IDN/Punycode、回环地址、act 连接词等用例

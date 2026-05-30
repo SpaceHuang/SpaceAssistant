@@ -4,6 +4,8 @@ import type { FeishuConfig, FeishuEventStatus } from '../../../shared/feishuType
 import { formatFeishuEventStatusText } from '../../../shared/feishuEventLabels'
 import { FeishuAuditDrawer } from './FeishuAuditDrawer'
 import type { ModelEntry } from '../../../shared/domainTypes'
+import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
+import { CONFIG_MODAL_SELECT_POPUP } from './configModalUi'
 
 type Props = {
   feishu: FeishuConfig
@@ -158,16 +160,17 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
 
   return (
     <>
-      <Space direction="vertical" style={{ width: '100%' }} size="middle">
-        <Space>
-          <Switch checked={feishu.enabled} onChange={(enabled) => patch({ enabled })} />
-          <span>启用飞书集成</span>
-        </Space>
+      <ConfigSettingsStack>
+        <ConfigSwitchRow
+          label="启用飞书集成"
+          checked={feishu.enabled}
+          onChange={(enabled) => patch({ enabled })}
+        />
 
-        <div>
-          <div style={{ marginBottom: 8, fontWeight: 500 }}>CLI 状态</div>
-          <div style={{ marginBottom: 8 }}>{cliStatus}</div>
-          <Space wrap>
+        <div className="config-field">
+          <div className="config-field__label">CLI 状态</div>
+          <div className="config-status-text">{cliStatus}</div>
+          <Space wrap className="config-field__control">
             <Button loading={installingCli} disabled={installingCli} onClick={() => void installCli()}>
               安装 CLI
             </Button>
@@ -181,27 +184,27 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           </Space>
         </div>
 
-        <Space direction="vertical" size={4}>
+        <div className="config-field">
           <Space wrap>
             <Button loading={configuringApp} disabled={configuringApp} onClick={() => void configInit()}>
               配置飞书应用
             </Button>
             <Switch checked={feishu.appConfigured} onChange={(appConfigured) => patch({ appConfigured })} />
-            <span>应用已配置</span>
+            <span className="config-inline-label">应用已配置</span>
           </Space>
-          {configStatus ? <div style={{ color: 'var(--ant-color-text-secondary)', fontSize: 12 }}>{configStatus}</div> : null}
-        </Space>
+          {configStatus ? <div className="config-status-text">{configStatus}</div> : null}
+        </div>
 
-        <Space>
+        <Space wrap>
           <Button loading={authLoggingIn} disabled={authLoggingIn} onClick={() => void authLogin()}>
             登录飞书账号
           </Button>
-          <span>{authStatus}</span>
+          <span className="config-status-text">{authStatus}</span>
         </Space>
 
-        <Space>
+        <Space wrap align="center">
           <Switch checked={feishu.remoteEnabled} onChange={(remoteEnabled) => patch({ remoteEnabled })} />
-          <span>启用远程指令监听</span>
+          <span className="config-inline-label">启用远程指令监听</span>
           {eventStatus && (
             <Badge
               status={
@@ -222,37 +225,35 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           收到指令时发送系统通知
         </Checkbox>
 
-        <div>
-          <div style={{ marginBottom: 4 }}>群聊触发</div>
+        <ConfigField label="群聊触发">
           <Radio.Group value={feishu.remoteGroupTrigger} onChange={(e) => patch({ remoteGroupTrigger: e.target.value })}>
             <Radio value="mention">@Bot</Radio>
             <Radio value="prefix">前缀</Radio>
             <Radio value="both">两者</Radio>
           </Radio.Group>
           <Input
-            style={{ marginTop: 8, width: 200 }}
+            style={{ marginTop: 8, maxWidth: 280 }}
             value={feishu.remoteCommandPrefix ?? '/sa '}
             onChange={(e) => patch({ remoteCommandPrefix: e.target.value })}
             placeholder="命令前缀"
           />
-        </div>
+        </ConfigField>
 
-        <div>
-          <div style={{ marginBottom: 4 }}>会话合并（分钟，0=每条新会话）</div>
+        <ConfigField label="会话合并（分钟，0=每条新会话）">
           <InputNumber
             min={0}
             max={120}
             value={feishu.remoteSessionMergeMinutes ?? 0}
             onChange={(v) => patch({ remoteSessionMergeMinutes: v ?? 0 })}
           />
-        </div>
+        </ConfigField>
 
-        <div>
-          <div style={{ marginBottom: 4 }}>远程写确认策略</div>
+        <ConfigField label="远程写确认策略">
           <Select
-            style={{ width: 280 }}
+            style={{ maxWidth: 280 }}
             value={feishu.remoteConfirmPolicy}
             onChange={(remoteConfirmPolicy) => patch({ remoteConfirmPolicy })}
+            popupClassName={CONFIG_MODAL_SELECT_POPUP}
             options={[
               { value: 'remote_read_only', label: '禁止远程写' },
               { value: 'feishu_confirm', label: '飞书内 Y/N 确认' },
@@ -260,65 +261,62 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
               { value: 'inherit', label: '与工具设置一致' }
             ]}
           />
-        </div>
+        </ConfigField>
 
         <Checkbox checked={feishu.remoteAllowLocalWrite} onChange={(e) => patch({ remoteAllowLocalWrite: e.target.checked })}>
           允许远程指令执行本地文件写操作
         </Checkbox>
 
-        <div>
-          <div style={{ marginBottom: 4 }}>区域</div>
+        <ConfigField label="区域">
           <Radio.Group value={feishu.region} onChange={(e) => patch({ region: e.target.value })}>
             <Radio value="feishu">飞书国内</Radio>
             <Radio value="lark">Lark 国际</Radio>
           </Radio.Group>
-        </div>
+        </ConfigField>
 
-        <div>
-          <div style={{ marginBottom: 4 }}>远程默认模型</div>
+        <ConfigField label="远程默认模型">
           <Select
             allowClear
-            style={{ width: 280 }}
+            style={{ maxWidth: 280 }}
             placeholder="与全局默认相同"
             value={feishu.remoteDefaultModelId}
             onChange={(remoteDefaultModelId) => patch({ remoteDefaultModelId })}
+            popupClassName={CONFIG_MODAL_SELECT_POPUP}
             options={models.filter((m) => m.enabled).map((m) => ({ value: m.name, label: m.name }))}
           />
-        </div>
+        </ConfigField>
 
-        <div>
-          <div style={{ marginBottom: 4 }}>远程 Plan 模式</div>
+        <ConfigField label="远程 Plan 模式">
           <Select
-            style={{ width: 200 }}
+            style={{ maxWidth: 280 }}
             value={feishu.remotePlanMode}
             onChange={(remotePlanMode) => patch({ remotePlanMode })}
+            popupClassName={CONFIG_MODAL_SELECT_POPUP}
             options={[
               { value: 'off', label: '关闭' },
               { value: 'auto', label: '关键词自动' },
               { value: 'always', label: '总是先 Plan' }
             ]}
           />
-        </div>
+        </ConfigField>
 
-        <div>
-          <div style={{ marginBottom: 4 }}>集成模式</div>
+        <ConfigField label="集成模式">
           <Select
-            style={{ width: 200 }}
+            style={{ maxWidth: 280 }}
             value={feishu.integrationMode}
             onChange={(integrationMode) => patch({ integrationMode })}
+            popupClassName={CONFIG_MODAL_SELECT_POPUP}
             options={[
               { value: 'cli', label: 'CLI（推荐）' },
               { value: 'mcp', label: 'MCP' },
               { value: 'both', label: '并存' }
             ]}
           />
-          <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 12 }}>
-            若已配置 MCP 飞书工具，请在工具 Tab 避免重复启用冲突能力。
-          </div>
-        </div>
+          <p className="config-field__hint">若已配置 MCP 飞书工具，请在工具 Tab 避免重复启用冲突能力。</p>
+        </ConfigField>
 
         <Button onClick={() => setAuditOpen(true)}>查看操作记录</Button>
-      </Space>
+      </ConfigSettingsStack>
 
       <FeishuAuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} />
     </>

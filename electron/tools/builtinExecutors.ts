@@ -6,6 +6,7 @@ import type { Dirent } from 'fs'
 import { resolveSafePath, resolveSafePathReal } from '../pathSecurity'
 import { isUnderWikiRaw } from '../wiki/wikiPaths'
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
+import { sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
 import {
   combineUserAbortAndTimeout,
   outcomeFromFileToolSignal,
@@ -14,6 +15,7 @@ import {
 import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
+import { browserExecutor } from './browserExecutor'
 
 const READ_MAX = 2 * 1024 * 1024
 const GREP_FILE_MAX = 1024 * 1024
@@ -537,7 +539,7 @@ async function grepFallbackJs(
   try {
     lineRe = new RegExp(pattern, flags)
   } catch (e) {
-    return `Error: 无效正则: ${e instanceof Error ? e.message : String(e)}`
+    return `Error: ${toToolUserError(e, { toolName: 'grep' })}`
   }
   const headLimit = args.headLimit <= 0 ? Infinity : args.headLimit
   const filesWithMatches: string[] = []
@@ -726,7 +728,7 @@ export const runScriptExecutor: ToolExecutor = {
         ctx.signal.removeEventListener('abort', onAbort)
         resolve({
           success: false,
-          error: `无法执行脚本：${err.message}`,
+          error: toToolUserError(err, { toolName: 'run_script' }),
           duration: Date.now() - started
         })
       })
@@ -740,14 +742,27 @@ export const runScriptExecutor: ToolExecutor = {
           return
         }
         if (code !== 0) {
+          const failMsg = `脚本执行失败（退出码: ${code}）\n${stderr}`
           resolve({
             success: false,
-            error: `脚本执行失败（退出码: ${code}）\n${stderr}`,
-            data: { exitCode: code, stdout, stderr },
+            error: toToolUserError(new Error(failMsg), { toolName: 'run_script' }),
+            data: {
+              exitCode: code,
+              stdout: sanitizeToolOutputText(stdout, 'run_script'),
+              stderr: sanitizeToolOutputText(stderr, 'run_script')
+            },
             duration: Date.now() - started
           })
         } else {
-          resolve({ success: true, data: { exitCode: code, stdout, stderr }, duration: Date.now() - started })
+          resolve({
+            success: true,
+            data: {
+              exitCode: code,
+              stdout: sanitizeToolOutputText(stdout, 'run_script'),
+              stderr: sanitizeToolOutputText(stderr, 'run_script')
+            },
+            duration: Date.now() - started
+          })
         }
       })
     })
@@ -762,7 +777,8 @@ const registry = new Map<string, ToolExecutor>([
   [grepExecutor.name, grepExecutor],
   [runScriptExecutor.name, runScriptExecutor],
   [runLarkCliExecutor.name, runLarkCliExecutor],
-  [readFeishuAttachmentExecutor.name, readFeishuAttachmentExecutor]
+  [readFeishuAttachmentExecutor.name, readFeishuAttachmentExecutor],
+  [browserExecutor.name, browserExecutor]
 ])
 
 export function getToolExecutor(name: string): ToolExecutor | undefined {

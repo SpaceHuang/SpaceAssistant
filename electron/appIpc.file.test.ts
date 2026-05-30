@@ -68,8 +68,14 @@ function makeCtx(): AppIpcContext {
     backup: { backupSession: vi.fn(), deleteBackup: vi.fn() } as unknown as AppIpcContext['backup'],
     getWorkDir: () => WORK_DIR,
     setWorkDir: vi.fn(),
+    getUserDataPath: () => '/fake/userdata',
     getApiKey: vi.fn().mockResolvedValue(null),
-    setApiKey: vi.fn()
+    setApiKey: vi.fn(),
+    getBrowserDetectContext: () => ({
+      isPackaged: false,
+      appPath: '/fake/app',
+      devRoot: '/fake/project'
+    })
   }
 }
 

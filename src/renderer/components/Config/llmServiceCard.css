@@ -1,6 +1,6 @@
 .llm-service-tab-extra {
-  font-size: 12px;
-  color: rgba(0, 0, 0, 0.45);
+  font-size: 11px;
+  color: var(--sa-text-secondary);
   margin-bottom: 12px;
   line-height: 1.5;
 }
@@ -17,6 +17,7 @@
 .llm-service-list .ant-radio-wrapper,
 .llm-service-list .ant-input,
 .llm-service-list .ant-input-affix-wrapper,
+.llm-service-list .ant-input-affix-wrapper > input.ant-input,
 .llm-service-list .ant-input-password,
 .llm-service-list .ant-btn {
   font-size: 12px;
@@ -28,15 +29,19 @@
 }
 
 .llm-service-card {
-  border: 1px solid #d9d9d9;
-  border-radius: 8px;
-  background: #fff;
-  transition: border-color 0.2s, background 0.2s;
+  border: 1px solid var(--sa-border-strong);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-elevated);
+  color: var(--sa-text);
+  transition:
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    background var(--sa-duration-fast) var(--sa-ease-out);
 }
 
 .llm-service-card--active {
-  border-left: 2px solid #1677ff;
-  background: #f0f7ff;
+  border-color: color-mix(in srgb, var(--sa-primary) 45%, var(--sa-border-strong));
+  border-left: 2px solid var(--sa-primary);
+  background: var(--sa-primary-subtle);
 }
 
 .llm-service-card--new {
@@ -55,6 +60,7 @@
   min-width: 0;
   font-size: 12px;
   font-weight: 500;
+  color: var(--sa-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -63,33 +69,48 @@
 .llm-service-card-summary {
   padding: 0 12px 8px 36px;
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--sa-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .llm-service-card-body {
-  padding: 0 12px 12px 36px;
-  border-top: 1px solid #f0f0f0;
-  margin-top: 0;
-  padding-top: 12px;
+  padding: 12px 12px 12px 36px;
+  border-top: 1px solid var(--sa-border);
   font-size: 12px;
 }
 
 .llm-service-field-label {
   margin-bottom: 4px;
   font-size: 12px;
+  color: var(--sa-text);
+  line-height: 1.45;
+}
+
+.llm-service-key-field,
+.llm-service-url-field {
+  margin-bottom: 8px;
 }
 
 .llm-service-key-field .ant-input-affix-wrapper {
-  display: block;
+  width: 100%;
+}
+
+.llm-service-list .ant-input-affix-wrapper {
+  display: inline-flex;
+  align-items: center;
+}
+
+.llm-service-list .ant-input-affix-wrapper .ant-input-suffix {
+  flex-shrink: 0;
+  margin-inline-start: 4px;
 }
 
 .llm-service-key-hint {
-  font-size: 12px;
-  line-height: 1.5;
-  color: rgba(0, 0, 0, 0.45);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
   margin-top: 4px;
 }
 
@@ -97,4 +118,15 @@
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+/* 深色模式下保证卡片内输入框与卡片背景层次清晰 */
+[data-theme='dark'] .llm-service-card .ant-input,
+[data-theme='dark'] .llm-service-card .ant-input-affix-wrapper {
+  background: var(--sa-bg-subtle);
+}
+
+[data-theme='dark'] .llm-service-card--active .ant-input,
+[data-theme='dark'] .llm-service-card--active .ant-input-affix-wrapper {
+  background: var(--sa-bg-elevated);
 }

@@ -13,7 +13,9 @@ import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteComma
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
 import { mergeToolsConfig, mergePlanConfig } from '../../src/shared/domainTypes'
-import { logFeishuCliEvent } from './feishuCliLogger'
+import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
+import { cancelAllActiveChats } from '../chatCancelRegistry'
+import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
@@ -67,7 +69,7 @@ export function createFeishuBundle(deps: {
   const runner = new LarkCliRunner(() => readCfg().cliPath ?? '')
   const processedStore = new FeishuProcessedStore(userData)
   const auditLogger = new FeishuAuditLogger(userData)
-  const confirmManager = new FeishuConfirmManager(auditLogger)
+  const confirmManager = new FeishuConfirmManager(auditLogger, runner)
 
   const routerDeps: RemoteCommandRouterDeps = {
     db: deps.db,
@@ -89,6 +91,7 @@ export function createFeishuBundle(deps: {
     getMainWebContents: () => getMainWindow()?.webContents ?? null,
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
+    getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
     getPlanConfig: () => {
       const raw = getConfigValue(deps.db, PLAN_CONFIG_KEY)
       if (!raw) return mergePlanConfig(null)
@@ -136,8 +139,11 @@ export async function autoStartFeishuEventIfNeeded(db: AppDatabase): Promise<voi
 }
 
 export async function shutdownFeishuServices(): Promise<void> {
+  cancelAllActiveChats()
+  bundle?.confirmManager.cancelAllPending()
   await bundle?.eventService?.stop()
   logFeishuCliEvent('info', 'feishu.service.shutdown', {})
+  await flushFeishuCliLogger()
 }
 
 export function registerFeishuIpcHandlers(

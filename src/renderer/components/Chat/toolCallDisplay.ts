@@ -31,6 +31,8 @@ export function getToolDescription(toolName: string): string {
       return '将完整内容写入文件'
     case 'run_script':
       return '执行 Python 脚本'
+    case 'browser':
+      return '在隔离浏览器中访问网页'
     default:
       return `调用工具：${toolName}`
   }
@@ -66,6 +68,8 @@ export function formatToolLabel(toolName: string, input: Record<string, unknown>
       return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '写入文件'
     case 'run_script':
       return '运行脚本'
+    case 'browser':
+      return 'browser'
     default:
       return toolName
   }

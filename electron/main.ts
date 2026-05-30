@@ -6,6 +6,8 @@ import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
 import type { PlanConfig } from '../src/shared/domainTypes'
 import { mergePlanConfig, mergeToolsConfig, mergeWikiConfig } from '../src/shared/domainTypes'
+import { readBrowserConfigFromDb } from './browser/browserConfigDb'
+import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
   createFeishuBundle,
@@ -91,6 +93,12 @@ let workDirState = ''
 let appDb: AppDatabase | null = null
 let isQuitting = false
 let quitCleanupDone = false
+const SHUTDOWN_TIMEOUT_MS = 12_000
+
+async function runShutdownCleanup(): Promise<void> {
+  await stagehandService.closeAll()
+  await shutdownFeishuServices()
+}
 
 export function getIsQuitting(): boolean {
   return isQuitting
@@ -231,7 +239,8 @@ app.whenReady().then(() => {
       } catch {
         return mergePlanConfig(null)
       }
-    }
+    },
+    getBrowserConfig: () => readBrowserConfigFromDb(db)
   })
 
   registerAppIpcHandlers(ipcMain, {
@@ -252,7 +261,12 @@ app.whenReady().then(() => {
     },
     getUserDataPath: () => app.getPath('userData'),
     getApiKey,
-    setApiKey
+    setApiKey,
+    getBrowserDetectContext: () => ({
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      devRoot: path.join(__dirname, '..', '..')
+    })
   })
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
@@ -320,11 +334,22 @@ app.on('before-quit', (event) => {
     if (!win.isDestroyed()) win.destroy()
   }
   void (async () => {
+    let timedOut = false
+    const timeout = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        timedOut = true
+        console.warn(`[shutdown] cleanup exceeded ${SHUTDOWN_TIMEOUT_MS}ms, forcing quit`)
+        resolve()
+      }, SHUTDOWN_TIMEOUT_MS)
+    })
     try {
-      await shutdownFeishuServices()
+      await Promise.race([runShutdownCleanup(), timeout])
     } catch (err) {
-      console.warn('[shutdown] feishu cleanup failed:', err instanceof Error ? err.message : err)
+      console.warn('[shutdown] cleanup failed:', err instanceof Error ? err.message : err)
     } finally {
+      if (timedOut) {
+        console.warn('[shutdown] some resources may not have been released cleanly')
+      }
       appDb?.flushSave()
       quitCleanupDone = true
       app.quit()

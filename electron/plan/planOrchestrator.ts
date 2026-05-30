@@ -1,5 +1,5 @@
 import type { WebContents } from 'electron'
-import type { ToolsConfig, WikiConfig, PlanConfig } from '../../src/shared/domainTypes'
+import type { BrowserConfig, ToolsConfig, WikiConfig, PlanConfig } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
 import { getSession } from '../database'
 import { runToolChatSession, type ClaudeContentBlockMessage } from '../toolChatLoop'
@@ -46,6 +46,7 @@ export type PlanOrchestratorDeps = {
   getWorkDir: () => string
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
+  getBrowserConfig?: () => BrowserConfig
   getWikiConfig?: () => WikiConfig
   getAppDatabase: () => AppDatabase
   getPlanConfig: () => PlanConfig
@@ -177,6 +178,7 @@ async function runPlanningPhase(args: {
     system: combineSystem(args.system, planPrompt),
     options: args.options,
     toolsConfig,
+    browserConfig: deps.getBrowserConfig?.(),
     wikiConfig,
     workDir,
     userDataDir: deps.getUserDataPath(),
@@ -298,6 +300,7 @@ async function runWorkerExecution(args: {
     system: combineSystem(args.system, workerSystem),
     options: args.options,
     toolsConfig,
+    browserConfig: deps.getBrowserConfig?.(),
     wikiConfig,
     workDir,
     userDataDir: deps.getUserDataPath(),

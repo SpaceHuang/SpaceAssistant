@@ -3,6 +3,9 @@ import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishu
 import { stripCommandPrefix } from './feishuInboundParser'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
+import type { LarkCliRunner } from './larkCliRunner'
+import { replyFeishuText } from './feishuReply'
+import { formatFeishuRemoteProgressPrefix } from './feishuRemoteProgress'
 
 export interface InboundAcceptResult {
   accept: boolean
@@ -72,7 +75,10 @@ export class FeishuConfirmManager {
   private pending = new Map<string, FeishuPendingConfirm>()
   private resolvers = new Map<string, (v: 'y' | 'n' | 'timeout') => void>()
 
-  constructor(private auditLogger?: FeishuAuditLogger) {}
+  constructor(
+    private auditLogger?: FeishuAuditLogger,
+    private runner?: LarkCliRunner
+  ) {}
 
   listPending(): FeishuPendingConfirm[] {
     return [...this.pending.values()]
@@ -88,6 +94,13 @@ export class FeishuConfirmManager {
     logFeishuCliEvent('info', 'feishu.confirm.cancel', { confirmId: id })
     this.resolve(id, 'n')
     return true
+  }
+
+  /** 应用退出时取消全部待确认，避免 10–30 分钟定时器阻止进程结束。 */
+  cancelAllPending(): void {
+    for (const id of [...this.pending.keys()]) {
+      this.resolve(id, 'n')
+    }
   }
 
   tryResolveFromInbound(msg: FeishuInboundMessage): boolean {
@@ -145,6 +158,7 @@ export class FeishuConfirmManager {
       type: 'confirm_request',
       confirmId: id
     })
+    void this.notifyConfirmPrompt(entry)
 
     return new Promise((resolve) => {
       this.resolvers.set(id, resolve)
@@ -160,14 +174,39 @@ export class FeishuConfirmManager {
   }
 
   buildConfirmPromptText(pending: FeishuPendingConfirm): string {
+    const progressPrefix = formatFeishuRemoteProgressPrefix(pending.sessionId)
     if (pending.kind === 'plan_execute') {
-      return `📋 执行计划已就绪\n回复 Y 开始执行，N 取消（30 分钟内有效）`
+      return `${progressPrefix}📋 执行计划已就绪\n回复 Y 开始执行，N 取消（30 分钟内有效）`
+    }
+    if (pending.toolName === 'browser' && pending.toolInput) {
+      const action = pending.toolInput.action
+      if (action === 'navigate' && typeof pending.toolInput.url === 'string') {
+        return `${progressPrefix}⚠️ 需要在浏览器中打开网页：\n${pending.toolInput.url.slice(0, 500)}\n回复 Y 确认，N 取消（10 分钟内有效）`
+      }
+      if (action === 'act' && typeof pending.toolInput.instruction === 'string') {
+        return `${progressPrefix}⚠️ 需要在浏览器中执行操作：\n${pending.toolInput.instruction.slice(0, 200)}\n回复 Y 确认，N 取消（10 分钟内有效）`
+      }
     }
     const cmd =
       pending.toolName === 'run_lark_cli' && pending.toolInput?.args
         ? `lark-cli ${(pending.toolInput.args as string[]).join(' ')}`
-        : pending.toolName ?? 'unknown'
-    return `⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${cmd.slice(0, 200)}\n回复 Y 确认执行，N 取消（10 分钟内有效）`
+        : pending.toolName === 'run_script' && typeof pending.toolInput?.code === 'string'
+          ? pending.toolInput.code.trim().split('\n').find((l) => l.trim() && !l.trim().startsWith('#'))?.slice(0, 120) ??
+            'run_script'
+          : (pending.toolName ?? 'unknown')
+    return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${cmd.slice(0, 200)}\n回复 Y 确认执行，N 取消（10 分钟内有效）`
+  }
+
+  private notifyConfirmPrompt(entry: FeishuPendingConfirm): void {
+    if (!this.runner) return
+    const text = this.buildConfirmPromptText(entry)
+    void replyFeishuText(this.runner, entry.messageId, text).catch((e) => {
+      logFeishuCliEvent('error', 'feishu.confirm.prompt_failed', {
+        confirmId: entry.id,
+        messageId: entry.messageId,
+        error: e instanceof Error ? e.message : String(e)
+      })
+    })
   }
 }
 

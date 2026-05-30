@@ -3,6 +3,25 @@ import path from 'path'
 
 const KILL_TREE_TIMEOUT_MS = 3000
 
+/** 断开子进程 stdio，避免进程未退出时管道句柄阻止 Node 事件循环结束。 */
+export function detachChildProcessStreams(proc: ChildProcess): void {
+  try {
+    proc.stdout?.destroy()
+  } catch {
+    /* ignore */
+  }
+  try {
+    proc.stderr?.destroy()
+  } catch {
+    /* ignore */
+  }
+  try {
+    proc.stdin?.destroy()
+  } catch {
+    /* ignore */
+  }
+}
+
 /** 终止进程及其子进程。Windows 上 SIGTERM 打到 cmd.exe 会弹出「终止批处理操作吗(Y/N)?」，需用 taskkill /T /F。 */
 export function killProcessTree(proc: ChildProcess): Promise<void> {
   return new Promise((resolve) => {
@@ -13,6 +32,7 @@ export function killProcessTree(proc: ChildProcess): Promise<void> {
       } catch {
         /* ignore */
       }
+      detachChildProcessStreams(proc)
       resolve()
       return
     }
@@ -21,6 +41,7 @@ export function killProcessTree(proc: ChildProcess): Promise<void> {
     const finish = () => {
       if (settled) return
       settled = true
+      detachChildProcessStreams(proc)
       resolve()
     }
 

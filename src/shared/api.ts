@@ -29,6 +29,17 @@ import type {
   WorkDirProfile
 } from './feishuTypes'
 import type { PlanAbortMeta, PlanApprovalSummary, PlanDisplayEntry, PlanMeta } from './planTypes'
+import type {
+  BrowserDetectResult,
+  BrowserDependencyFailureCode,
+  BrowserDependencyToolError
+} from './browserTypes'
+
+export type {
+  BrowserDetectResult,
+  BrowserDependencyFailureCode,
+  BrowserDependencyToolError
+} from './browserTypes'
 
 export type FileReadResult =
   | { kind: 'text'; content: string; encoding: 'utf8' }
@@ -167,8 +178,6 @@ export type SpaceAssistantApi = {
     payload: Partial<{
       baseUrl: string
       model: string
-      temperature: number
-      maxTokens: number
       defaultModel: string
       models: import('./domainTypes').ModelEntry[]
       thinkingEnabled: boolean
@@ -244,6 +253,12 @@ export type SpaceAssistantApi = {
   skillList: () => Promise<SkillDefinition[]>
   skillGet: (payload: { name: string }) => Promise<SkillDefinition | null>
   skillInstall: (payload: { sourcePath: string; overwrite?: boolean }) => Promise<{ ok: true; skill: SkillDefinition } | { ok: false; error: string }>
+  skillInstallFromUrl: (payload: {
+    sourceUrl: string
+    subPath?: string
+    installAll?: boolean
+    overwrite?: boolean
+  }) => Promise<{ ok: true; skills: SkillDefinition[] } | { ok: false; error: string }>
   skillDelete: (payload: { name: string }) => Promise<void>
   skillToggleDisable: (payload: { name: string; disabled: boolean }) => Promise<void>
   skillOpenDirectory: (payload: { scope: 'user' | 'project' }) => Promise<void>
@@ -313,6 +328,8 @@ export type SpaceAssistantApi = {
   feishuAuditTail: (limit?: number) => Promise<FeishuAuditEvent[]>
   feishuAuditQuery: (opts: { since?: number; types?: string[]; limit?: number }) => Promise<FeishuAuditQueryResult>
   feishuHealthCheck: () => Promise<FeishuHealthCheck>
+  browserDetect: (force?: boolean) => Promise<BrowserDetectResult>
+  browserOpenTerminal: () => Promise<{ ok: true } | { ok: false; error: string }>
   feishuCheckCliUpdate: () => Promise<{ latest?: string }>
   feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => () => void
   feishuOnInboundMessage: (cb: (data: { sessionId: string; message: unknown }) => void) => () => void

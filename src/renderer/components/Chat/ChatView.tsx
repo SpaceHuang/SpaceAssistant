@@ -430,7 +430,8 @@ export function ChatView() {
       dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
 
       const historyForApi = [...store.getState().chat.messages]
-      const useToolsApi = cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools).length > 0
+      const useToolsApi =
+        cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
 
       const recentMessages: SkillRouteRecentMessage[] = historyForApi
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.status !== 'streaming' && m.content.trim())
@@ -467,7 +468,7 @@ export function ChatView() {
       }
 
       const modelEntry = cfg.models.find((m) => m.name === cfg.model)
-      const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models, cfg.maxTokens)
+      const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models)
       const maxSystemChars = modelEntry ? Math.floor(modelEntry.maximumContext * 0.1) : undefined
       let systemPrompt = buildSystemPromptFromSkills(activeSkills)
       const wikiSchemaActive =
@@ -561,6 +562,7 @@ export function ChatView() {
             baseUrl: cfg.baseUrl || undefined,
             messages: historyForApi,
             toolsConfig: cfg.tools,
+            browserConfig: cfg.browser,
             maxTokens: outputMaxTokens,
             thinkingEnabled: cfg.thinkingEnabled,
             system: systemPrompt || undefined,
@@ -813,7 +815,7 @@ export function ChatView() {
       onScroll: scrollBottomThrottled
     })
     const modelEntry = cfg.models.find((m) => m.name === cfg.model)
-    const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models, cfg.maxTokens)
+    const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models)
     const sessionMeta = store.getState().session.list.find((x) => x.id === runSessionId)?.metadata
     const payload = buildToolChatPayload({
       requestId: loopRequestId,
@@ -822,6 +824,7 @@ export function ChatView() {
       baseUrl: cfg.baseUrl || undefined,
       messages: historyForApi,
       toolsConfig: cfg.tools,
+      browserConfig: cfg.browser,
       maxTokens: outputMaxTokens,
       thinkingEnabled: cfg.thinkingEnabled,
       chatMode: 'plan',
@@ -869,7 +872,7 @@ export function ChatView() {
     registerSessionRun(runSessionId, requestId)
     dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
     const modelEntry = cfg.models.find((m) => m.name === cfg.model)
-    const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models, cfg.maxTokens)
+    const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models)
     const sessionMeta = store.getState().session.list.find((x) => x.id === runSessionId)?.metadata
     const payload = buildToolChatPayload({
       requestId,
@@ -878,6 +881,7 @@ export function ChatView() {
       baseUrl: cfg.baseUrl || undefined,
       messages: historyForApi,
       toolsConfig: cfg.tools,
+      browserConfig: cfg.browser,
       maxTokens: outputMaxTokens,
       thinkingEnabled: cfg.thinkingEnabled,
       chatMode: 'plan',

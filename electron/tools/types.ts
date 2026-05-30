@@ -1,5 +1,7 @@
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
-import type { ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import type { BrowserConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import type { PlanToolPhaseArg } from '../plan/planModeAcl'
+import type { AppDatabase } from '../database'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
 
@@ -9,6 +11,7 @@ export interface FeishuRemoteContext {
   confirmPolicy: FeishuConfig['remoteConfirmPolicy']
   feishuConfig?: FeishuConfig
   confirmManager?: FeishuConfirmManager
+  larkCliRunner?: LarkCliRunner
   chatId?: string
   sessionId?: string
 }
@@ -25,15 +28,23 @@ export interface ToolExecutionContext {
   toolsConfig: ToolsConfig
   wikiConfig?: WikiConfig
   feishuConfig?: FeishuConfig
+  browserConfig?: BrowserConfig
+  planToolPhase?: PlanToolPhaseArg
+  appDatabase?: AppDatabase
   larkCliRunner?: LarkCliRunner
   remoteContext?: FeishuRemoteContext
+  /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
+  toolUserConfirmed?: boolean
 }
+
+import type { BrowserDependencyToolError } from '../../src/shared/browserTypes'
 
 export interface ToolExecutorResult {
   success: boolean
   data?: unknown
   error?: string
   duration?: number
+  dependencyError?: BrowserDependencyToolError
 }
 
 export interface ToolExecutor {

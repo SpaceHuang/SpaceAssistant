@@ -21,7 +21,18 @@ import { shouldBlockToolInPlanMode, type PlanToolPhaseArg } from './plan/planMod
 import { getSession } from './database'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
-import type { ToolsConfig, WikiConfig, PlanConfig } from '../src/shared/domainTypes'
+import type { ToolExecutorResult } from './tools/types'
+import type { BrowserConfig, ToolsConfig, WikiConfig, PlanConfig } from '../src/shared/domainTypes'
+import { browserActionNeedsConfirmation, type BrowserAction } from './browser/browserActionPolicy'
+import {
+  clearBrowserSessionTrust,
+  rememberBrowserSessionTrustedUrl
+} from './browser/browserSessionTrust'
+import { stagehandService } from './browser/stagehandService'
+import {
+  formatDependencyRecoveryToolContent,
+  resolveDependencyRecoverySkill
+} from './browser/browserDependencyRecovery'
 import { mergePlanConfig } from '../src/shared/domainTypes'
 import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
 import type { AppDatabase } from './database'
@@ -30,6 +41,8 @@ import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { FeishuRemoteContext } from './tools/types'
 import { isLarkCliWriteOperation } from './feishu/larkCliSecurity'
+import { BROWSER_FEISHU_REMOTE_DISABLED_ERROR } from '../src/shared/browserRemotePolicy'
+import { publishFeishuRemoteProgress } from './feishu/feishuRemoteProgress'
 import {
   ChatCancelledError,
   clearChatCancel,
@@ -47,7 +60,8 @@ import fs from 'fs/promises'
 import path from 'path'
 import { resolveSafePathReal } from './pathSecurity'
 import { assertSafeToolInput } from './toolInputGuards'
-import { logAgentEvent } from './agentLogger/agentLogger'
+import { logAgentEvent, logAgentError } from './agentLogger/agentLogger'
+import { sanitizeToolErrorString, toToolUserError } from './tools/toolUserErrors'
 import { mergeStreamedToolInputsIntoContent, normalizeToolUseInputRecord } from './toolUseInputMerge'
 import {
   effectiveMaxTokensForBuiltinToolLoop,
@@ -74,6 +88,7 @@ export function getFileStateCacheForSession(sessionId: string): FileStateCache {
 export function clearSessionToolResources(sessionId: string): void {
   fileCaches.delete(sessionId)
   releaseAllWritePathsForSession(sessionId)
+  clearBrowserSessionTrust(sessionId)
 }
 
 export type ClaudeContentBlockMessage = {
@@ -118,6 +133,20 @@ function augmentToolInputValidationError(
     return `${baseMessage}（本轮 stop_reason 为 max_tokens，可能是 run_script 的 code 未生成完毕即被截断。请提高 max_tokens 或缩短脚本。）`
   }
   return baseMessage
+}
+
+function logToolLoopError(
+  fields: Record<string, unknown>,
+  err: unknown,
+  userMessage?: string
+): void {
+  const toolName = typeof fields.toolName === 'string' ? fields.toolName : undefined
+  const user =
+    userMessage ??
+    (typeof err === 'string'
+      ? sanitizeToolErrorString(err, toolName)
+      : toToolUserError(err, { toolName }))
+  logAgentError('tool.error', fields, err, user)
 }
 
 function formatToolResultPayload(r: { success: boolean; data?: unknown; error?: string }): string {
@@ -207,6 +236,7 @@ export type RunToolChatSessionArgs = {
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   toolsConfig: ToolsConfig
+  browserConfig?: BrowserConfig
   wikiConfig?: WikiConfig
   feishuConfig?: FeishuConfig
   larkCliRunner?: LarkCliRunner
@@ -251,6 +281,7 @@ async function runToolChatSessionInner(
     system,
     options,
     toolsConfig,
+    browserConfig,
     wikiConfig,
     feishuConfig,
     larkCliRunner,
@@ -314,9 +345,13 @@ async function runToolChatSessionInner(
     })
   }
 
-  const builtinDefs = toolsOverride ?? filterBuiltinToolsForApi(toolsConfig, feishuConfig)
+  const builtinDefs =
+    toolsOverride ?? filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext)
   const tools = sanitizeTools(builtinDefs as unknown[])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
+  if (toolNames.includes('browser')) {
+    stagehandService.resetInferenceCount(sessionId)
+  }
   let loopRound = 0
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
@@ -424,6 +459,18 @@ async function runToolChatSessionInner(
           pendingTextByIndex.delete(index)
           if (text.length > 0) {
             contentBlocks.push({ type: 'text', text })
+            if (
+              remoteContext?.source === 'feishu' &&
+              remoteContext.larkCliRunner &&
+              remoteContext.messageId
+            ) {
+              void publishFeishuRemoteProgress(
+                remoteContext.larkCliRunner,
+                remoteContext.messageId,
+                sessionId,
+                text
+              ).catch(() => undefined)
+            }
           }
         } else if (index >= 0 && blockType === 'tool_use') {
           const pending = pendingToolUseByIndex.get(index)
@@ -511,15 +558,11 @@ async function runToolChatSessionInner(
       const exec = getToolExecutor(toolName)
       if (!exec) {
         const unknownToolError = `未知工具: ${toolName}`
-        logAgentEvent('error', 'tool.error', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          error: unknownToolError
-        })
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          unknownToolError,
+          unknownToolError
+        )
         toolResults.push(buildToolErrorResult(toolUseId, unknownToolError))
         sender.send('tool:result', {
           requestId,
@@ -537,15 +580,11 @@ async function runToolChatSessionInner(
       const planBlock = shouldBlockToolInPlanMode(toolName, sessionMeta, planToolPhase)
       if (planBlock.blocked) {
         const blockedError = planBlock.error ?? 'BLOCKED_BY_PLAN_MODE'
-        logAgentEvent('error', 'tool.error', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          error: blockedError
-        })
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          blockedError,
+          blockedError
+        )
         toolResults.push(buildToolErrorResult(toolUseId, blockedError))
         sender.send('tool:result', {
           requestId,
@@ -564,23 +603,27 @@ async function runToolChatSessionInner(
       } catch (e) {
         const base = e instanceof Error ? e.message : String(e)
         const msg = augmentToolInputValidationError(base, stopReason, toolName, inputObj)
-        logAgentEvent('error', 'tool.error', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          error: msg
-        })
-        toolResults.push(buildToolErrorResult(toolUseId, msg))
+        const userMsg = sanitizeToolErrorString(msg, toolName)
+        logToolLoopError(
+          {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            input: inputObj
+          },
+          e,
+          userMsg
+        )
+        toolResults.push(buildToolErrorResult(toolUseId, userMsg))
         sender.send('tool:result', {
           requestId,
           toolUseId,
-          result: { success: false, error: msg }
+          result: { success: false, error: userMsg }
         })
-        if (toolErrorRepeat.noteFailure(toolName, msg)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${msg}`
+        if (toolErrorRepeat.noteFailure(toolName, userMsg)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${userMsg}`
           break
         }
         continue
@@ -588,15 +631,11 @@ async function runToolChatSessionInner(
 
       const remoteBlock = evaluateFeishuRemoteToolBlock(toolName, inputObj, remoteContext, feishuConfig)
       if (remoteBlock) {
-        logAgentEvent('error', 'tool.error', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          error: remoteBlock
-        })
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          remoteBlock,
+          remoteBlock
+        )
         toolResults.push(buildToolErrorResult(toolUseId, remoteBlock))
         sender.send('tool:result', {
           requestId,
@@ -610,8 +649,38 @@ async function runToolChatSessionInner(
         continue
       }
 
+      if (
+        toolName === 'browser' &&
+        remoteContext?.source === 'feishu' &&
+        browserConfig &&
+        !browserConfig.allowRemoteSessions
+      ) {
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          BROWSER_FEISHU_REMOTE_DISABLED_ERROR,
+          BROWSER_FEISHU_REMOTE_DISABLED_ERROR
+        )
+        toolResults.push(buildToolErrorResult(toolUseId, BROWSER_FEISHU_REMOTE_DISABLED_ERROR))
+        sender.send('tool:result', {
+          requestId,
+          toolUseId,
+          result: { success: false, error: BROWSER_FEISHU_REMOTE_DISABLED_ERROR }
+        })
+        if (toolErrorRepeat.noteFailure(toolName, BROWSER_FEISHU_REMOTE_DISABLED_ERROR)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${BROWSER_FEISHU_REMOTE_DISABLED_ERROR}`
+          break
+        }
+        continue
+      }
+
       let outcome: ToolConfirmOutcome = 'approved'
-      const needsConfirm = toolNeedsUserConfirmation(toolName, inputObj, feishuConfig)
+      const needsConfirm = toolNeedsUserConfirmation(
+        toolName,
+        inputObj,
+        feishuConfig,
+        browserConfig,
+        sessionId
+      )
       const planMeta = sessionMeta ? getPlanMeta(sessionMeta) ?? null : null
       const planExec = sessionMeta ? getPlanExecutionMeta(sessionMeta) : undefined
       const confirmPolicy = planExec?.toolConfirmPolicy ?? planConfig.toolConfirmPolicy
@@ -681,19 +750,18 @@ async function runToolChatSessionInner(
       }
 
       if (outcome === 'timeout') {
-        const timeoutError = '用户确认超时（5分钟），工具调用已取消'
+        const timeoutError =
+          remoteContext?.source === 'feishu'
+            ? '飞书确认超时（10分钟），工具调用已取消。请查看 Bot 发出的确认消息后回复 Y，或重新发送指令。'
+            : '用户确认超时（5分钟），工具调用已取消'
         if (planToolPhase === 'implementation' && needsConfirm && !skipConfirm) {
           markPlanConfirmFailure(requestId, '确认超时，已暂停；请返回后重试本步')
         }
-        logAgentEvent('error', 'tool.error', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          error: timeoutError
-        })
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          timeoutError,
+          timeoutError
+        )
         toolResults.push(buildToolErrorResult(toolUseId, timeoutError))
         sender.send('tool:result', {
           requestId,
@@ -706,20 +774,27 @@ async function runToolChatSessionInner(
         }
         continue
       }
+      if (
+        outcome === 'approved' &&
+        toolName === 'browser' &&
+        inputObj.action === 'navigate' &&
+        (typeof inputObj.mode !== 'string' || inputObj.mode === 'open') &&
+        typeof inputObj.url === 'string' &&
+        inputObj.url.trim()
+      ) {
+        rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
+      }
+
       if (outcome === 'rejected') {
         const rejectedError = '用户拒绝执行此工具'
         if (planToolPhase === 'implementation' && needsConfirm && !skipConfirm) {
           markPlanConfirmFailure(requestId, '本步脚本/命令未批准')
         }
-        logAgentEvent('error', 'tool.error', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          error: rejectedError
-        })
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          rejectedError,
+          rejectedError
+        )
         toolResults.push(buildToolErrorResult(toolUseId, rejectedError))
         sender.send('tool:result', {
           requestId,
@@ -737,15 +812,11 @@ async function runToolChatSessionInner(
       if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
         const conflict = checkWritePathConflict(sessionId, relPath)
         if (conflict) {
-          logAgentEvent('error', 'tool.error', {
-            requestId,
-            sessionId,
-            loopRound,
-            toolUseId,
-            toolName,
-            input: inputObj,
-            error: conflict
-          })
+          logToolLoopError(
+            { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+            conflict,
+            conflict
+          )
           toolResults.push(buildToolErrorResult(toolUseId, conflict))
           sender.send('tool:result', {
             requestId,
@@ -777,8 +848,10 @@ async function runToolChatSessionInner(
         sender.send('tool:progress', { requestId, toolUseId, status, message })
       }
 
-      let execResult: { success: boolean; data?: unknown; error?: string; duration?: number }
+      let execResult: ToolExecutorResult
+      let execThrew = false
       const execStartedAt = Date.now()
+      const toolUserConfirmed = needsConfirm && !skipConfirm && outcome === 'approved'
       try {
         execResult = await exec.execute(inputObj, {
           workDir,
@@ -790,16 +863,35 @@ async function runToolChatSessionInner(
           signal,
           fileStateCache: fileCache,
           toolsConfig,
+          browserConfig,
+          planToolPhase,
+          appDatabase: appDb,
           wikiConfig,
           feishuConfig,
           larkCliRunner,
-          remoteContext
+          remoteContext,
+          toolUserConfirmed
         })
-      } catch (e) {
-        execResult = {
-          success: false,
-          error: e instanceof Error ? e.message : String(e)
+        if (toolName === 'browser' && browserConfig) {
+          stagehandService.scheduleIdleClose(sessionId, browserConfig.idleTimeoutSec)
         }
+      } catch (e) {
+        execThrew = true
+        const userErr = toToolUserError(e, { toolName })
+        execResult = { success: false, error: userErr }
+        logToolLoopError(
+          {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            input: inputObj,
+            phase: 'execute_throw'
+          },
+          e,
+          userErr
+        )
       }
       clearToolCancel(requestId, toolUseId)
       if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
@@ -841,16 +933,24 @@ async function runToolChatSessionInner(
         })
         toolErrorRepeat.noteSuccess(toolName)
       } else {
-        logAgentEvent('error', 'tool.error', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          error: execResult.error ?? '执行失败',
-          durationMs
-        })
+        const rawError = execResult.error ?? '执行失败'
+        const userErr = execThrew ? (execResult.error ?? '执行失败') : sanitizeToolErrorString(rawError, toolName)
+        if (!execThrew) {
+          execResult = { ...execResult, error: userErr }
+          logToolLoopError(
+            {
+              requestId,
+              sessionId,
+              loopRound,
+              toolUseId,
+              toolName,
+              input: inputObj,
+              durationMs
+            },
+            rawError,
+            userErr
+          )
+        }
         logAgentEvent('info', 'tool.result', {
           requestId,
           sessionId,
@@ -858,18 +958,31 @@ async function runToolChatSessionInner(
           toolUseId,
           toolName,
           success: false,
-          error: execResult.error,
+          error: userErr,
           durationMs
         })
       }
 
       const payload = formatToolResultPayload(execResult)
+      const recoverySkill =
+        execResult.dependencyError &&
+        resolveDependencyRecoverySkill(execResult.dependencyError.errorCode)
+
       if (execResult.success) {
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseId,
           content: payload
         })
+      } else if (recoverySkill && execResult.dependencyError) {
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: formatDependencyRecoveryToolContent(execResult.dependencyError)
+        })
+        if (toolErrorRepeat.noteFailure(toolName, execResult.error ?? 'dependency')) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execResult.error ?? '依赖未就绪'}`
+        }
       } else {
         const execError = execResult.error ?? '执行失败'
         toolResults.push(buildToolErrorResult(toolUseId, execError))
@@ -880,7 +993,12 @@ async function runToolChatSessionInner(
       sender.send('tool:result', {
         requestId,
         toolUseId,
-        result: { success: execResult.success, data: execResult.data, error: execResult.error }
+        result: {
+          success: execResult.success,
+          data: execResult.data,
+          error: execResult.error,
+          ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {})
+        }
       })
       if (abortRepeatedToolError) break
     }
@@ -895,8 +1013,15 @@ async function runToolChatSessionInner(
 function toolNeedsUserConfirmation(
   toolName: string,
   inputObj: Record<string, unknown>,
-  feishuConfig?: FeishuConfig
+  feishuConfig?: FeishuConfig,
+  browserConfig?: BrowserConfig,
+  sessionId?: string
 ): boolean {
+  if (toolName === 'browser' && browserConfig) {
+    const action = inputObj.action
+    if (typeof action !== 'string') return true
+    return browserActionNeedsConfirmation(action as BrowserAction, inputObj, browserConfig, sessionId)
+  }
   if (toolName === 'run_lark_cli') {
     const args = inputObj.args
     if (!Array.isArray(args)) return feishuConfig?.larkCliWriteRequiresConfirm ?? true

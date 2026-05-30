@@ -1,8 +1,18 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { bindAgentLogErrorDeps, buildAgentLogErrorFields } from './agentLogError'
 import type { AgentLogEventName, AgentLogFields, AgentLogLevel } from './types'
 import { formatAgentLogDateKey, formatAgentLogFileName, resolveAgentLogDir } from './agentLogPaths'
 import { sanitizeForLog } from './sanitize'
+
+export {
+  bindAgentLogErrorDeps,
+  buildAgentLogErrorFields,
+  errorDetailForLog,
+  extractDevErrorDetail,
+  isAgentLogProductionModeActive
+} from './agentLogError'
+export { isAgentLogProductionMode } from './agentLogPaths'
 
 export type AgentLoggerDeps = {
   getWorkDir: () => string
@@ -20,7 +30,20 @@ export function initAgentLogger(loggerDeps: AgentLoggerDeps): void {
     ...loggerDeps,
     mainDirname: loggerDeps.mainDirname ?? path.resolve(__dirname, '..')
   }
+  bindAgentLogErrorDeps(() => deps)
   currentDateKey = ''
+}
+
+export function logAgentError(
+  event: AgentLogEventName,
+  fields: AgentLogFields,
+  err: unknown,
+  userMessage: string
+): void {
+  logAgentEvent('error', event, {
+    ...fields,
+    ...buildAgentLogErrorFields(err, userMessage)
+  })
 }
 
 export function getAgentLogDir(): string | null {
@@ -30,6 +53,7 @@ export function getAgentLogDir(): string | null {
 
 export function resetAgentLoggerForTests(): void {
   deps = null
+  bindAgentLogErrorDeps(() => null)
   currentDateKey = ''
   writeChain = Promise.resolve()
 }

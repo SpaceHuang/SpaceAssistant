@@ -22,7 +22,9 @@ function killExistingLarkCliEvents(): Promise<void> {
 
 export class FeishuEventService {
   private proc: ChildProcess | null = null
+  private stdoutReader: readline.Interface | null = null
   private stderrReader: readline.Interface | null = null
+  private connectedTimer: ReturnType<typeof setTimeout> | null = null
   private state: FeishuEventConnectionState = 'stopped'
   private restartAttempts = 0
   private restartTimer: ReturnType<typeof setTimeout> | null = null
@@ -73,6 +75,17 @@ export class FeishuEventService {
     await this.spawnSubscribe()
   }
 
+  private closeReaders(): void {
+    if (this.connectedTimer) {
+      clearTimeout(this.connectedTimer)
+      this.connectedTimer = null
+    }
+    this.stdoutReader?.close()
+    this.stdoutReader = null
+    this.stderrReader?.close()
+    this.stderrReader = null
+  }
+
   async stop(): Promise<void> {
     this.intentionalStop = true
     if (this.restartTimer) {
@@ -80,13 +93,12 @@ export class FeishuEventService {
       this.restartTimer = null
     }
     const proc = this.proc
-    const rl = this.stderrReader
     this.proc = null
-    this.stderrReader = null
-    rl?.close()
+    this.closeReaders()
     if (proc) {
       await killProcessTree(proc)
     }
+    await killExistingLarkCliEvents()
     this.setState('stopped')
   }
 
@@ -108,9 +120,11 @@ export class FeishuEventService {
 
     const stdoutRl = readline.createInterface({ input: this.proc.stdout! })
     const stderrRl = readline.createInterface({ input: this.proc.stderr! })
+    this.stdoutReader = stdoutRl
     this.stderrReader = stderrRl
     let gotFirstEvent = false
-    const connectedTimer = setTimeout(() => {
+    this.connectedTimer = setTimeout(() => {
+      this.connectedTimer = null
       if (!gotFirstEvent && this.proc) {
         logFeishuCliEvent('info', 'feishu.event.connected_by_timeout', {})
         this.setState('connected')
@@ -127,7 +141,10 @@ export class FeishuEventService {
           this.onMessage(msg)
           if (!gotFirstEvent) {
             gotFirstEvent = true
-            clearTimeout(connectedTimer)
+            if (this.connectedTimer) {
+              clearTimeout(this.connectedTimer)
+              this.connectedTimer = null
+            }
             this.setState('connected')
           }
           this.emitState()
@@ -152,9 +169,11 @@ export class FeishuEventService {
     stderrRl.on('line', (line) => handleLine('stderr', line))
 
     this.proc.on('close', (code) => {
-      clearTimeout(connectedTimer)
-      stdoutRl.close()
-      stderrRl.close()
+      if (this.connectedTimer) {
+        clearTimeout(this.connectedTimer)
+        this.connectedTimer = null
+      }
+      this.closeReaders()
       this.proc = null
       logFeishuCliEvent(this.intentionalStop ? 'info' : 'warn', 'feishu.event.process_close', {
         exitCode: code ?? 1,

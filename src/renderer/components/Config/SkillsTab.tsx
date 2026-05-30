@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, App, Button, Collapse, Select, Space, Switch, Table, Tag, Typography } from 'antd'
-import type { AppConfig, SkillDefinition, SkillActivationLogEntry } from '../../../shared/domainTypes'
-
-function RefreshIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
-      <path
-        fill="currentColor"
-        d="M2 12.08c-.006-.862.91-1.356 1.618-.975l.095.058 2.678 1.804c.972.655.377 2.143-.734 2.007l-.117-.02-1.063-.234a8.002 8.002 0 0 0 14.804.605 1 1 0 0 1 1.82.828c-1.987 4.37-6.896 6.793-11.687 5.509A10.003 10.003 0 0 1 2 12.08m.903-4.228C4.89 3.482 9.799 1.06 14.59 2.343a10.002 10.002 0 0 1 7.414 9.581c.007.863-.91 1.358-1.617.976l-.096-.058-2.678-1.804c-.972-.655-.377-2.143.734-2.007l.117.02 1.063.234A8.002 8.002 0 0 0 4.723 8.68a1 1 0 1 1-1.82-.828"
-      />
-    </svg>
-  )
-}
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Alert, App, Button, Collapse, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import {
+  isProductBuiltinSkill,
+  type AppConfig,
+  type SkillActivationLogEntry,
+  type SkillDefinition
+} from '../../../shared/domainTypes'
+import {
+  getRecommendedSkillAuthor,
+  isRecommendedSkillInstalled,
+  RECOMMENDED_SKILLS,
+  type RecommendedSkillEntry
+} from '../../../shared/recommendedSkills'
+import { CONFIG_MODAL_SELECT_POPUP } from './configModalUi'
 
 function FolderOpenIcon() {
   return (
@@ -63,8 +64,8 @@ function useResizableColumns(initialWidths: Record<string, number>) {
     document.addEventListener('mouseup', onUp)
   }
 
-  const headerTitle = (key: string, label: string) => (
-    <span style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
+  const headerTitle = (key: string, label: string, align: 'left' | 'center' = 'left') => (
+    <span style={{ position: 'relative', display: 'inline-block', width: '100%', textAlign: align }}>
       {label}
       <span
         onMouseDown={(e) => handleMouseDown(key, e)}
@@ -87,12 +88,13 @@ function useResizableColumns(initialWidths: Record<string, number>) {
 }
 
 type Props = {
+  active: boolean
   config: AppConfig
   onConfigSaved: () => Promise<void>
   activationLog?: SkillActivationLogEntry[]
 }
 
-export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) {
+export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }: Props) {
   const { message, modal } = App.useApp()
   const [skills, setSkills] = useState<SkillDefinition[]>([])
   const [loading, setLoading] = useState(false)
@@ -100,7 +102,8 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
   const [highlightName, setHighlightName] = useState<string | null>(null)
   const [autoDetect, setAutoDetect] = useState(config.skills.autoDetect)
   const [alwaysLoad, setAlwaysLoad] = useState<string[]>(config.skills.alwaysLoad)
-  const [disabledGlobal, setDisabledGlobal] = useState<string[]>(config.skills.disabled)
+  const [managementTab, setManagementTab] = useState<'installed' | 'recommended'>('installed')
+  const [installingRecommendedId, setInstallingRecommendedId] = useState<string | null>(null)
 
   const loadSkills = useCallback(async () => {
     setLoading(true)
@@ -114,18 +117,40 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
   }, [])
 
   useEffect(() => {
-    void loadSkills()
-  }, [loadSkills])
+    if (active) void loadSkills()
+  }, [active, loadSkills])
 
   useEffect(() => {
     setAutoDetect(config.skills.autoDetect)
     setAlwaysLoad(config.skills.alwaysLoad)
-    setDisabledGlobal(config.skills.disabled)
   }, [config.skills])
 
   const saveSkillsConfig = async (patch: Partial<AppConfig['skills']>) => {
     await window.api.configSet({ skills: patch })
     await onConfigSaved()
+  }
+
+  const showInstallSuccess = (skillNames: string[]) => {
+    if (skillNames.length === 1) {
+      setAlert({ type: 'success', text: `Skill「${skillNames[0]}」安装成功` })
+      setHighlightName(skillNames[0]!)
+    } else {
+      setAlert({ type: 'success', text: `已成功安装 ${skillNames.length} 个 Skill` })
+      setHighlightName(skillNames[0] ?? null)
+    }
+    setTimeout(() => setHighlightName(null), 2000)
+  }
+
+  const installFromUrl = async (
+    entry: Pick<RecommendedSkillEntry, 'sourceUrl' | 'subPath' | 'installAll'>,
+    overwrite = false
+  ) => {
+    return window.api.skillInstallFromUrl({
+      sourceUrl: entry.sourceUrl,
+      subPath: entry.subPath,
+      installAll: entry.installAll,
+      overwrite
+    })
   }
 
   const onInstall = async () => {
@@ -153,10 +178,37 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
       setAlert({ type: 'error', text: res.error })
       return
     }
-    setAlert({ type: 'success', text: `Skill「${res.skill.meta.name}」安装成功` })
-    setHighlightName(res.skill.meta.name)
-    setTimeout(() => setHighlightName(null), 2000)
+    showInstallSuccess([res.skill.meta.name])
     await loadSkills()
+  }
+
+  const onInstallRecommended = async (entry: RecommendedSkillEntry) => {
+    setAlert(null)
+    setInstallingRecommendedId(entry.id)
+    try {
+      let res = await installFromUrl(entry)
+      if (!res.ok && res.error.includes('已存在')) {
+        const ok = await new Promise<boolean>((resolve) => {
+          modal.confirm({
+            title: 'Skill 已存在',
+            content: `${res.error}，是否覆盖？`,
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false)
+          })
+        })
+        if (!ok) return
+        res = await installFromUrl(entry, true)
+      }
+      if (!res.ok) {
+        setAlert({ type: 'error', text: res.error })
+        return
+      }
+      showInstallSuccess(res.skills.map((skill) => skill.meta.name))
+      setManagementTab('installed')
+      await loadSkills()
+    } finally {
+      setInstallingRecommendedId(null)
+    }
   }
 
   const onDelete = (skill: SkillDefinition) => {
@@ -186,15 +238,20 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
     else message.success(`已导出到 ${dest}`)
   }
 
-  const skillOptions = skills.map((s) => ({ label: s.meta.name, value: s.meta.name }))
+  const visibleSkills = skills.filter((s) => !isProductBuiltinSkill(s.meta.name))
+  const skillOptions = visibleSkills.map((s) => ({ label: s.meta.name, value: s.meta.name }))
+  const installedSkillNames = useMemo(() => new Set(visibleSkills.map((s) => s.meta.name)), [visibleSkills])
 
   const { widths, headerTitle } = useResizableColumns({
     enable: 64,
-    name: 140,
-    scope: 88,
-    desc: 200,
-    version: 72,
+    skill: 320,
     actions: 120
+  })
+
+  const recommendedWidths = useResizableColumns({
+    skill: 320,
+    source: 140,
+    actions: 96
   })
 
   return (
@@ -220,105 +277,167 @@ export function SkillsTab({ config, onConfigSaved, activationLog = [] }: Props) 
             style={{ width: '100%' }}
             placeholder="选择每次会话始终加载的 Skill"
             options={skillOptions}
-            value={alwaysLoad}
+            value={alwaysLoad.filter((n) => !isProductBuiltinSkill(n))}
+            popupClassName={CONFIG_MODAL_SELECT_POPUP}
             onChange={async (v) => {
               setAlwaysLoad(v)
               await saveSkillsConfig({ alwaysLoad: v })
             }}
           />
         </div>
-        <div>
-          <Typography.Text style={{ display: 'block', marginBottom: 4 }}>全局禁用</Typography.Text>
-          <Select
-            mode="multiple"
-            allowClear
-            style={{ width: '100%' }}
-            placeholder="选择永久禁用的 Skill"
-            options={skillOptions}
-            value={disabledGlobal}
-            onChange={async (v) => {
-              setDisabledGlobal(v)
-              await saveSkillsConfig({ disabled: v })
-            }}
-          />
-        </div>
       </Space>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <Typography.Text strong>Skill 管理</Typography.Text>
-        <Space>
-          <Button icon={<RefreshIcon />} loading={loading} onClick={() => void loadSkills()} style={{ fontSize: 11 }}>
-            扫描 Skill
-          </Button>
-          <Button icon={<DownloadIcon />} onClick={() => void onInstall()} style={{ fontSize: 11 }}>
-            安装 Skill
-          </Button>
-          <Button icon={<FolderOpenIcon />} onClick={() => void window.api.skillOpenDirectory({ scope: 'user' })} style={{ fontSize: 11 }}>
-            打开目录
-          </Button>
+      <div className="config-skill-section-header">
+        <span className="config-section-title">Skill 管理</span>
+        <Space size={4}>
+          {managementTab === 'installed' ? (
+            <Tooltip title="安装本地 Skill">
+              <Button
+                type="primary"
+                size="small"
+                icon={<DownloadIcon />}
+                aria-label="安装本地 Skill"
+                onClick={() => void onInstall()}
+              />
+            </Tooltip>
+          ) : null}
+          <Tooltip title="打开目录">
+            <Button
+              size="small"
+              icon={<FolderOpenIcon />}
+              aria-label="打开目录"
+              onClick={() => void window.api.skillOpenDirectory({ scope: 'user' })}
+            />
+          </Tooltip>
         </Space>
       </div>
 
-      <Table
+      <Tabs
         size="small"
-        rowKey={(r) => `${r.scope}-${r.meta.name}`}
-        loading={loading}
-        pagination={false}
-        dataSource={skills}
-        rowClassName={(r) => (r.meta.name === highlightName ? 'sa-skill-row-highlight' : '')}
-        onRow={() => ({ style: { fontSize: 12 } })}
-        columns={[
+        activeKey={managementTab}
+        onChange={(key) => setManagementTab(key as 'installed' | 'recommended')}
+        items={[
           {
-            title: headerTitle('enable', '启用'),
-            width: widths.enable,
-            render: (_, skill) => {
-              const disabled = disabledGlobal.includes(skill.meta.name)
-              return (
-                <Switch
-                  size="small"
-                  checked={!disabled}
-                  onChange={async (checked) => {
-                    await window.api.skillToggleDisable({ name: skill.meta.name, disabled: !checked })
-                    await onConfigSaved()
-                  }}
-                />
-              )
-            }
-          },
-          {
-            title: headerTitle('name', '名称'),
-            dataIndex: ['meta', 'name'],
-            width: widths.name
-          },
-          {
-            title: headerTitle('scope', '作用域'),
-            width: widths.scope,
-            render: (_, skill) => (
-              <Tag color={skill.scope === 'project' ? 'blue' : 'green'}>{skill.scope === 'project' ? '项目级' : '用户级'}</Tag>
+            key: 'installed',
+            label: '已安装',
+            children: (
+              <Table
+                size="small"
+                rowKey={(r) => `${r.scope}-${r.meta.name}`}
+                loading={loading}
+                pagination={false}
+                dataSource={visibleSkills}
+                rowClassName={(r) => (r.meta.name === highlightName ? 'sa-skill-row-highlight' : '')}
+                onRow={() => ({ style: { fontSize: 12 } })}
+                columns={[
+                  {
+                    title: headerTitle('enable', '启用'),
+                    width: widths.enable,
+                    onCell: () => ({ style: { verticalAlign: 'middle' } }),
+                    render: (_, skill) => {
+                      const disabled = config.skills.disabled.includes(skill.meta.name)
+                      return (
+                        <Switch
+                          size="small"
+                          checked={!disabled}
+                          onChange={async (checked) => {
+                            await window.api.skillToggleDisable({ name: skill.meta.name, disabled: !checked })
+                            await onConfigSaved()
+                          }}
+                        />
+                      )
+                    }
+                  },
+                  {
+                    title: headerTitle('skill', 'Skill'),
+                    width: widths.skill,
+                    render: (_, skill) => (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.5 }}>
+                        <span className="config-field__label">{skill.meta.name}</span>
+                        <Typography.Text type="secondary" className="config-field__hint" style={{ display: 'block' }}>
+                          {skill.meta.description}
+                        </Typography.Text>
+                      </div>
+                    )
+                  },
+                  {
+                    title: headerTitle('actions', '操作', 'center'),
+                    width: widths.actions,
+                    onHeaderCell: () => ({ style: { textAlign: 'center' } }),
+                    onCell: () => ({ style: { verticalAlign: 'middle' } }),
+                    render: (_, skill) => (
+                      <Space size={4}>
+                        <Button type="link" size="small" onClick={() => void onExport(skill)}>
+                          导出
+                        </Button>
+                        <Button type="link" size="small" danger disabled={skill.scope === 'project'} onClick={() => onDelete(skill)}>
+                          删除
+                        </Button>
+                      </Space>
+                    )
+                  }
+                ]}
+              />
             )
           },
           {
-            title: headerTitle('desc', '描述'),
-            ellipsis: true,
-            render: (_, skill) => skill.meta.description
-          },
-          {
-            title: headerTitle('version', '版本'),
-            width: widths.version,
-            render: (_, skill) => skill.meta.version
-          },
-          {
-            title: headerTitle('actions', '操作'),
-            width: widths.actions,
-            render: (_, skill) => (
-              <Space size={4}>
-                <Button type="link" size="small" style={{ fontSize: 12 }} onClick={() => void onExport(skill)}>
-                  导出
-                </Button>
-                <Button type="link" size="small" danger style={{ fontSize: 12 }} disabled={skill.scope === 'project'} onClick={() => onDelete(skill)}>
-                  删除
-                </Button>
-              </Space>
+            key: 'recommended',
+            label: '推荐',
+            children: (
+              <Table
+                size="small"
+                rowKey="id"
+                pagination={false}
+                dataSource={RECOMMENDED_SKILLS}
+                onRow={() => ({ style: { fontSize: 12 } })}
+                columns={[
+                  {
+                    title: recommendedWidths.headerTitle('skill', 'Skill'),
+                    width: recommendedWidths.widths.skill,
+                    render: (_, entry) => (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.5 }}>
+                        <span className="config-field__label">{entry.name}</span>
+                        <Typography.Text type="secondary" className="config-field__hint" style={{ display: 'block' }}>
+                          {entry.description}
+                        </Typography.Text>
+                      </div>
+                    )
+                  },
+                  {
+                    title: recommendedWidths.headerTitle('source', '来源'),
+                    width: recommendedWidths.widths.source,
+                    render: (_, entry) => (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.5 }}>
+                        <Typography.Text style={{ fontSize: 12 }}>{getRecommendedSkillAuthor(entry)}</Typography.Text>
+                        <Typography.Link href={entry.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+                          GitHub
+                        </Typography.Link>
+                      </div>
+                    )
+                  },
+                  {
+                    title: recommendedWidths.headerTitle('actions', '操作'),
+                    width: recommendedWidths.widths.actions,
+                    onCell: () => ({ style: { verticalAlign: 'middle' } }),
+                    render: (_, entry) => {
+                      const installed = isRecommendedSkillInstalled(entry, installedSkillNames)
+                      return installed ? (
+                        <Tag color="success">已安装</Tag>
+                      ) : (
+                        <Button
+                          type="primary"
+                          size="small"
+                          icon={<DownloadIcon />}
+                          loading={installingRecommendedId === entry.id}
+                          onClick={() => void onInstallRecommended(entry)}
+                        >
+                          安装
+                        </Button>
+                      )
+                    }
+                  }
+                ]}
+              />
             )
           }
         ]}

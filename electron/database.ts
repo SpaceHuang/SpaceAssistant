@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../src/shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../src/shared/domainTypes'
+import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../src/shared/domainTypes'
 import {
   rowToMessage,
   serializeContentSegmentsForDb,
@@ -124,7 +124,7 @@ export function createSession(
   const now = Date.now()
   const id = randomUUID()
   const model = input.model ?? 'claude-sonnet-4-20250514'
-  const temperature = input.temperature ?? 0.7
+  const temperature = input.temperature ?? DEFAULT_LLM_TEMPERATURE
   const maxTokens = input.maxTokens ?? 4096
   const session: Session = {
     id,

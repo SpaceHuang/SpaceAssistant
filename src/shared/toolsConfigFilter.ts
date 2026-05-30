@@ -1,10 +1,11 @@
 import type { FeishuConfig } from './feishuTypes'
-import type { ToolsConfig } from './domainTypes'
+import type { BrowserConfig, ToolsConfig } from './domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from './builtinToolDefinitions'
 
 export function filterBuiltinToolsForRenderer(
   cfg: ToolsConfig,
-  feishu?: FeishuConfig | null
+  feishu?: FeishuConfig | null,
+  browserConfig?: BrowserConfig | null
 ): typeof BUILTIN_TOOL_DEFINITIONS {
   if (!cfg.enabled) return []
   let list = BUILTIN_TOOL_DEFINITIONS.filter((t) => {
@@ -17,6 +18,9 @@ export function filterBuiltinToolsForRenderer(
   }
   if (feishu?.integrationMode === 'mcp') {
     list = list.filter((t) => t.name !== 'run_lark_cli')
+  }
+  if (!browserConfig?.enabled) {
+    list = list.filter((t) => t.name !== 'browser')
   }
   return list
 }

@@ -70,7 +70,6 @@ export function validateSkillMeta(frontMatter: Record<string, unknown>): SkillVa
   const missing: string[] = []
   if (frontMatter.name === undefined) missing.push('name')
   if (frontMatter.description === undefined) missing.push('description')
-  if (frontMatter.triggers === undefined) missing.push('triggers')
   if (missing.length > 0) return { ok: false, error: `SKILL.md 缺少必填字段：${missing.join('、')}` }
 
   const name = String(frontMatter.name).trim()
@@ -85,10 +84,12 @@ export function validateSkillMeta(frontMatter: Record<string, unknown>): SkillVa
   if (!description) return { ok: false, error: 'Skill 描述不能为空' }
 
   const triggersRaw = frontMatter.triggers
-  const triggers = Array.isArray(triggersRaw)
-    ? triggersRaw.map((t) => String(t).trim()).filter(Boolean)
-    : [String(triggersRaw).trim()].filter(Boolean)
-  if (triggers.length === 0) return { ok: false, error: 'Skill 触发关键词不能为空' }
+  const triggers =
+    triggersRaw === undefined
+      ? []
+      : Array.isArray(triggersRaw)
+        ? triggersRaw.map((t) => String(t).trim()).filter(Boolean)
+        : [String(triggersRaw).trim()].filter(Boolean)
 
   const meta: SkillMeta = {
     name,

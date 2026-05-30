@@ -108,7 +108,7 @@ export function LlmServiceCard({
       {!expanded && <div className="llm-service-card-summary">{buildServiceSummary(draft)}</div>}
       {expanded && (
         <div className="llm-service-card-body">
-          <div className="llm-service-key-field" style={{ marginBottom: 8 }}>
+          <div className="llm-service-key-field">
             <div className="llm-service-field-label">API Key（留空则不修改）</div>
             <Input.Password
               placeholder="sk-ant-..."
@@ -122,7 +122,7 @@ export function LlmServiceCard({
                 : '尚未配置 Key'}
             </div>
           </div>
-          <div style={{ marginBottom: 8 }}>
+          <div className="llm-service-url-field">
             <div className="llm-service-field-label">Base URL（可选，留空为 Anthropic 官方）</div>
             <Input
               placeholder="默认 Anthropic 官方"

@@ -16,10 +16,10 @@ describe('resolveEffectiveOutputMaxTokens', () => {
   ]
 
   it('uses model row maxTokens when name matches', () => {
-    expect(resolveEffectiveOutputMaxTokens('kimi-k2.6', models, 4096)).toBe(98304)
+    expect(resolveEffectiveOutputMaxTokens('kimi-k2.6', models)).toBe(98304)
   })
 
-  it('falls back to normalized config when model not in list', () => {
-    expect(resolveEffectiveOutputMaxTokens('unknown', models, 4096)).toBe(4096)
+  it('falls back to default when model not in list', () => {
+    expect(resolveEffectiveOutputMaxTokens('unknown', models)).toBe(64_000)
   })
 })

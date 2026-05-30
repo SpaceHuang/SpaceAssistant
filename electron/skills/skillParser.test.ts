@@ -41,6 +41,12 @@ version: "2.0.0"
     if (!result.ok) expect(result.error).toContain('名称格式')
   })
 
+  it('allows missing triggers for external skills', () => {
+    const result = validateSkillMeta({ name: 'demo-skill', description: 'demo' })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.meta.triggers).toEqual([])
+  })
+
   it('reads skill from directory', () => {
     const dir = mkTmpDir()
     fs.writeFileSync(

@@ -6,6 +6,7 @@ import { logFeishuCliEvent } from '../feishu/feishuCliLogger'
 import { isLarkCliWriteOperation } from '../feishu/larkCliSecurity'
 import { redactLarkCliArgsForLog } from '../feishu/feishuCliLogFields'
 import { getFeishuBundle } from '../feishu/feishuIpc'
+import { sanitizeToolErrorString, toToolUserError } from './toolUserErrors'
 
 export const runLarkCliExecutor: ToolExecutor = {
   name: 'run_lark_cli',
@@ -16,7 +17,11 @@ export const runLarkCliExecutor: ToolExecutor = {
       args = assertSafeLarkCliArgs(input.args)
     } catch (e) {
       logFeishuCliEvent('warn', 'feishu.tool.run_lark_cli.rejected', { error: String(e) })
-      return { success: false, error: String(e), duration: Date.now() - started }
+      return {
+        success: false,
+        error: toToolUserError(e, { toolName: 'run_lark_cli' }),
+        duration: Date.now() - started
+      }
     }
 
     const runner = ctx.larkCliRunner as LarkCliRunner | undefined
@@ -83,7 +88,7 @@ export const runLarkCliExecutor: ToolExecutor = {
       }
       return {
         success: false,
-        error: parsed.message,
+        error: sanitizeToolErrorString(parsed.message, 'run_lark_cli'),
         data: { stdout: r.stdout, stderr: r.stderr, hint: parsed.hint },
         duration: durationMs
       }

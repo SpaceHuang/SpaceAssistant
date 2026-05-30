@@ -58,6 +58,44 @@ export function throwIfAborted(signal: AbortSignal): void {
   }
 }
 
+export function isUserAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
+}
+
+/**
+ * 在用户中止（聊天中止 / tool:cancel）时拒绝；可选 onAbort 用于打断底层 I/O（如 page.goto）。
+ */
+export function raceWithUserAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+  onAbort?: () => void
+): Promise<T> {
+  throwIfAborted(signal)
+  return new Promise((resolve, reject) => {
+    const onAbortHandler = () => {
+      cleanup()
+      try {
+        onAbort?.()
+      } catch {
+        /* ignore */
+      }
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    const cleanup = () => signal.removeEventListener('abort', onAbortHandler)
+    signal.addEventListener('abort', onAbortHandler, { once: true })
+    promise.then(
+      (v) => {
+        cleanup()
+        resolve(v)
+      },
+      (e) => {
+        cleanup()
+        reject(e)
+      }
+    )
+  })
+}
+
 export function outcomeFromFileToolSignal(op: AbortSignal): FileToolAbortOutcome {
   if (!op.aborted) return null
   if (op.reason === FILE_TOOL_TIMEOUT_REASON) return 'timeout'

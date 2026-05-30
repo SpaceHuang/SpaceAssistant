@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   formatAgentLogDateKey,
   formatAgentLogFileName,
+  isAgentLogProductionMode,
   resolveAgentLogDir,
   resolveDevAgentLogDir
 } from './agentLogPaths'
@@ -28,5 +29,10 @@ describe('agentLogPaths', () => {
   it('resolves dev log dir when not packaged', () => {
     const mainDir = path.join('C:', 'project', 'dist-electron', 'electron')
     expect(resolveAgentLogDir(false, path.join('D:', 'work', 'root'), mainDir)).toBe(path.join('C:', 'project', 'logs'))
+  })
+
+  it('production mode flag matches packaged app', () => {
+    expect(isAgentLogProductionMode(true)).toBe(true)
+    expect(isAgentLogProductionMode(false)).toBe(false)
   })
 })

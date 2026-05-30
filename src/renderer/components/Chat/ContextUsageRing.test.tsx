@@ -19,8 +19,6 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     models: [
       { id: '1', name: 'claude-sonnet-4-6', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: false, enabled: true }
     ],
-    temperature: 0,
-    maxTokens: 4096,
     thinkingEnabled: false,
     workDir: '',
     uiTheme: 'system',
@@ -138,8 +136,8 @@ describe('ContextUsageRing', () => {
     expect(screen.queryByText(/缓存写入/)).toBeNull()
   })
 
-  it('uses model maxTokens for output reserve not global config maxTokens', async () => {
-    renderRing({ input_tokens: 10000, output_tokens: 0 }, { maxTokens: 4096 })
+  it('uses model maxTokens for output reserve', async () => {
+    renderRing({ input_tokens: 10000, output_tokens: 0 })
     const svg = document.querySelector('svg')!
     fireEvent.mouseEnter(svg)
     await waitFor(() => {

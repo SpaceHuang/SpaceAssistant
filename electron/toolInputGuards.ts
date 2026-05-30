@@ -86,6 +86,26 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
       assertStringLen(content, 'content', TOOL_LARGE_TEXT_MAX)
       return
     }
+    case 'browser': {
+      const BROWSER_ACTIONS = ['navigate', 'observe', 'extract', 'act', 'screenshot', 'close'] as const
+      const action = input.action
+      if (typeof action !== 'string' || !BROWSER_ACTIONS.includes(action as (typeof BROWSER_ACTIONS)[number])) {
+        throw new Error('工具参数无效：browser 缺少有效的 action')
+      }
+      if (action === 'navigate') {
+        const mode = typeof input.mode === 'string' ? input.mode : 'open'
+        if (mode === 'open') {
+          reqStringLen(input.url, 'url', 4096)
+        }
+      }
+      if (action === 'extract' || action === 'act') {
+        reqStringLen(input.instruction, 'instruction', 1024)
+      }
+      if (action === 'observe' && input.instruction !== undefined && input.instruction !== null) {
+        optStringLen(input.instruction, 'instruction', 1024)
+      }
+      return
+    }
     default:
       return
   }

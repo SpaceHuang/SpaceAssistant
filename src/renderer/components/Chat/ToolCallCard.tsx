@@ -3,8 +3,11 @@ import { Button, Space } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { formatToolLabel, formatToolLabelTitle, isFileTool, isFileWriteTool } from './toolCallDisplay'
+import { formatBrowserToolLabel, formatBrowserToolLabelTitle } from './browserConfirmDisplay'
 import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
+import { BrowserConfirmCard } from './BrowserConfirmCard'
+import { BrowserDependencyGuideCard } from './BrowserDependencyGuideCard'
 import { WriteSuccessCard } from './WriteSuccessCard'
 
 type Props = {
@@ -21,8 +24,14 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max) + '\n…'
 }
 
+/** 浏览器列表行默认收起；确认态由 BrowserConfirmCard 单独展示 */
+function isBrowserListRowCollapsed(record: ToolCallRecord): boolean {
+  return record.toolName === 'browser' && record.status !== 'confirming'
+}
+
 function defaultExpanded(record: ToolCallRecord): boolean {
   if (isFileWriteTool(record.toolName) && record.status === 'confirming') return true
+  if (isBrowserListRowCollapsed(record)) return false
   if (record.status === 'failed' || record.status === 'rejected') return true
   if (isFileTool(record.toolName)) return false
   if (record.status === 'confirming') return true
@@ -35,6 +44,7 @@ export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel, 
   const isFailed = record.status === 'failed' || record.status === 'rejected'
   const fileTool = isFileTool(record.toolName)
   const fileWriteTool = isFileWriteTool(record.toolName)
+  const browserConfirming = record.toolName === 'browser' && record.status === 'confirming'
   const writeConfirming = fileWriteTool && record.status === 'confirming'
   const hasDetail =
     isActive ||
@@ -71,15 +81,25 @@ export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel, 
       setExpanded(false)
       return
     }
+    if (isBrowserListRowCollapsed(record)) {
+      setExpanded(false)
+      return
+    }
     if (record.status === 'confirming' || isFailed) {
       setExpanded(true)
     }
-  }, [fileTool, fileWriteTool, isFailed, record.status])
+  }, [fileTool, fileWriteTool, isFailed, record.status, record.toolName])
 
-  const showDetail = (expanded || writeConfirming) && hasDetail
+  const showDetail = (expanded || writeConfirming || browserConfirming) && hasDetail
 
-  const label = useMemo(() => formatToolLabel(record.toolName, record.input), [record.toolName, record.input])
-  const labelTitle = useMemo(() => formatToolLabelTitle(record.toolName, record.input), [record.toolName, record.input])
+  const label = useMemo(() => {
+    if (record.toolName === 'browser') return formatBrowserToolLabel(record.input)
+    return formatToolLabel(record.toolName, record.input)
+  }, [record.toolName, record.input])
+  const labelTitle = useMemo(() => {
+    if (record.toolName === 'browser') return formatBrowserToolLabelTitle(record.input)
+    return formatToolLabelTitle(record.toolName, record.input)
+  }, [record.toolName, record.input])
 
   const paramPreview = useMemo(() => {
     try {
@@ -109,6 +129,32 @@ export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel, 
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+      </div>
+    )
+  }
+
+  if (browserConfirming && onConfirm) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <BrowserConfirmCard record={record} onConfirm={onConfirm} />
+      </div>
+    )
+  }
+
+  if (record.toolName === 'browser' && record.result?.dependencyRecovery) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <div className="tool-row tool-row--failed tool-row--expanded">
+          <div className="tool-row__main">
+            <ToolRowIcon toolName={record.toolName} active={false} />
+            <span className="tool-row__label" title={labelTitle ?? label}>
+              {label}
+            </span>
+          </div>
+          <div className="tool-row-detail">
+            <BrowserDependencyGuideCard dependencyRecovery={record.result.dependencyRecovery} />
+          </div>
+        </div>
       </div>
     )
   }
@@ -174,7 +220,7 @@ export function ToolCallCard({ record, confirmMode, focus, onConfirm, onCancel, 
             </Space>
           ) : null}
 
-          {record.status === 'executing' && onCancel ? (
+          {record.status === 'executing' && onCancel && record.toolName !== 'browser' ? (
             <Button danger size="small" type="text" className="tool-row-detail__action" onClick={onCancel}>
               取消执行
             </Button>

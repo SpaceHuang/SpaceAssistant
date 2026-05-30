@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Space, Switch, Tabs, Tag } from 'antd'
+import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Select, Space, Switch, Tabs } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsActiveTab, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry, UiThemeMode, WikiConfig, PlanConfig } from '../../../shared/domainTypes'
-import { DEFAULT_WIKI_CONFIG, DEFAULT_PLAN_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG, DEFAULT_PLAN_CONFIG, DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
+import type { BrowserConfig } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../../../shared/feishuTypes'
 import type { ChatMode } from '../../../shared/planTypes'
 import { DEFAULT_CHAT_MODE } from '../../../shared/planTypes'
-import { DEFAULT_MODELS, builtinToolRiskLevel } from '../../../shared/domainTypes'
+import { DEFAULT_MODELS, DEFAULT_MODEL_MAX_CONTEXT, DEFAULT_MODEL_MAX_TOKENS } from '../../../shared/domainTypes'
 import {
   DEFAULT_MAX_PARALLEL_CHAT_SESSIONS,
   MAX_MAX_PARALLEL_CHAT_SESSIONS,
@@ -17,6 +18,7 @@ import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions
 import { SkillsTab } from './SkillsTab'
 import { WikiTab } from './WikiTab'
 import { FeishuSettingsTab } from './FeishuSettingsTab'
+import { ToolsSettingsTab } from './ToolsSettingsTab'
 import { LlmServiceTab } from './LlmServiceTab'
 import {
   buildLlmServicesSavePayload,
@@ -24,22 +26,16 @@ import {
   validateLlmServiceDrafts
 } from './useLlmServiceDrafts'
 import { readSkillActivationLog } from '../../services/skillActivationLog'
+import { ConfigModelOptionContent } from './ConfigModelOption'
+import { CONFIG_MODAL_SELECT_POPUP } from './configModalUi'
+
+const DEFAULT_ADD_MODEL_MAX_CONTEXT = DEFAULT_MODEL_MAX_CONTEXT
+const DEFAULT_ADD_MODEL_MAX_TOKENS = DEFAULT_MODEL_MAX_TOKENS
 
 function AddIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
       <path fill="currentColor" d="M11 20a1 1 0 1 0 2 0v-7h7a1 1 0 1 0 0-2h-7V4a1 1 0 1 0-2 0v7H4a1 1 0 1 0 0 2h7z" />
-    </svg>
-  )
-}
-
-function DeleteIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
-      <path
-        fill="currentColor"
-        d="M14.28 2a2 2 0 0 1 1.897 1.368L16.72 5H20a1 1 0 1 1 0 2l-.003.071-.867 12.143A3 3 0 0 1 16.138 22H7.862a3 3 0 0 1-2.992-2.786L4.003 7.07A1.01 1.01 0 0 1 4 7a1 1 0 0 1 0-2h3.28l.543-1.632A2 2 0 0 1 9.721 2zm3.717 5H6.003l.862 12.071a1 1 0 0 0 .997.929h8.276a1 1 0 0 0 .997-.929zM10 10a1 1 0 0 1 .993.883L11 11v5a1 1 0 0 1-1.993.117L9 16v-5a1 1 0 0 1 1-1m4 0a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0v-5a1 1 0 0 1 1-1m.28-6H9.72l-.333 1h5.226z"
-      />
     </svg>
   )
 }
@@ -66,82 +62,37 @@ function FolderOpenIcon() {
   )
 }
 
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}K`
-  return String(n)
-}
+function ModelSelect({ value, onChange }: { value: ModelEntry[]; onChange: (v: ModelEntry[]) => void }) {
+  const selectable = value.filter((m) => m.enabled)
+  const defaultModel = selectable.find((m) => m.isDefault) ?? selectable[0]
 
-function ModelList({ value, onChange }: { value: ModelEntry[]; onChange: (v: ModelEntry[]) => void }) {
-  const removeModel = (id: string) => {
-    const next = value.filter((m) => m.id !== id)
-    if (next.length > 0 && !next.some((m) => m.isDefault)) {
-      next[0].isDefault = true
-    }
-    onChange(next)
-  }
-
-  const toggleDefault = (id: string) => {
+  const handleChange = (id: string) => {
     onChange(value.map((m) => ({ ...m, isDefault: m.id === id })))
   }
 
-  const toggleFast = (id: string) => {
-    onChange(value.map((m) => (m.id === id ? { ...m, isFast: !m.isFast } : m)))
-  }
-
-  const toggleEnabled = (id: string) => {
-    const next = value.map((m) => (m.id === id ? { ...m, enabled: !m.enabled } : m))
-    if (next.length > 0 && !next.some((m) => m.isDefault && m.enabled)) {
-      const first = next.find((m) => m.enabled)
-      if (first) {
-        for (const m of next) m.isDefault = m.id === first.id
-      }
-    }
-    onChange(next)
-  }
-
-  if (value.length === 0) {
+  if (selectable.length === 0) {
     return (
-      <div className="config-model-list" style={{ color: '#999', textAlign: 'center', padding: '16px 0' }}>
-        暂无模型，请点击 + 添加
-      </div>
+      <div className="config-model-select-empty">暂无可用模型</div>
     )
   }
 
   return (
-    <div className="config-model-list">
-      {value.map((m) => (
-        <div
-          key={m.id}
-          style={{
-            padding: '8px 10px',
-            borderBottom: '1px solid #f0f0f0',
-            opacity: m.enabled ? 1 : 0.45
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Switch size="small" checked={m.enabled} onChange={() => toggleEnabled(m.id)} />
-            <span style={{ flex: 1, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {m.name}
-            </span>
-            {m.isDefault && <span className="config-model-badge config-model-badge--default">默认</span>}
-            {m.isFast && <span className="config-model-badge config-model-badge--fast">快速</span>}
-            <Button size="small" type="text" danger icon={<DeleteIcon />} onClick={() => removeModel(m.id)} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4, paddingLeft: 28, color: '#888' }}>
-            <span>上下文 {formatNumber(m.maximumContext)}</span>
-            <span>输出 {formatNumber(m.maxTokens)}</span>
-            <span style={{ flex: 1 }} />
-            <Checkbox checked={m.isDefault} onChange={() => toggleDefault(m.id)} disabled={!m.enabled}>
-              默认
-            </Checkbox>
-            <Checkbox checked={m.isFast} onChange={() => toggleFast(m.id)} disabled={!m.enabled}>
-              快速
-            </Checkbox>
-          </div>
-        </div>
-      ))}
-    </div>
+    <Select
+      className="config-model-select"
+      style={{ width: '100%' }}
+      value={defaultModel?.id}
+      onChange={handleChange}
+      popupClassName={`${CONFIG_MODAL_SELECT_POPUP} config-model-select-popup`}
+      options={selectable.map((m) => ({ value: m.id, label: m.name }))}
+      optionRender={(opt) => {
+        const m = selectable.find((x) => x.id === opt.value)
+        return m ? <ConfigModelOptionContent m={m} /> : opt.label
+      }}
+      labelRender={(item) => {
+        const m = selectable.find((x) => x.id === item.value)
+        return m ? <ConfigModelOptionContent m={m} selected /> : item.label
+      }}
+    />
   )
 }
 
@@ -149,6 +100,7 @@ export function ConfigModal() {
   const { message } = App.useApp()
   const open = useTypedSelector((s) => s.config.settingsOpen)
   const settingsActiveTab = useTypedSelector((s) => s.config.settingsActiveTab)
+  const settingsToolsSubTab = useTypedSelector((s) => s.config.settingsToolsSubTab)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const sessions = useTypedSelector((s) => s.session.list)
@@ -159,17 +111,12 @@ export function ConfigModal() {
   const [models, setModels] = useState<ModelEntry[]>([])
   const [addOpen, setAddOpen] = useState(false)
   const [addName, setAddName] = useState('')
-  const [addMaxCtx, setAddMaxCtx] = useState(200000)
-  const [addMaxTokens, setAddMaxTokens] = useState(8192)
-  const [addDefault, setAddDefault] = useState(false)
+  const [addMaxCtx, setAddMaxCtx] = useState<number | null>(null)
+  const [addMaxTokens, setAddMaxTokens] = useState<number | null>(null)
   const [addFast, setAddFast] = useState(false)
   const [toolUi, setToolUi] = useState({
-    enabled: true,
     confirmMode: 'diff' as 'diff' | 'direct',
     deniedTools: [] as string[],
-    /** 白名单模式下：允许的内置工具名 */
-    allowedEdit: [] as string[],
-    whitelistMode: false,
     pythonPath: 'python',
     scriptTimeout: 300,
     fileCheckpointingEnabled: true,
@@ -183,6 +130,7 @@ export function ConfigModal() {
   const [defaultChatMode, setDefaultChatMode] = useState<ChatMode>(DEFAULT_CHAT_MODE)
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
+  const [browserUi, setBrowserUi] = useState<BrowserConfig>({ ...DEFAULT_BROWSER_CONFIG })
   const [planUi, setPlanUi] = useState<PlanConfig>({ ...DEFAULT_PLAN_CONFIG })
 
   const refreshConfig = async () => {
@@ -197,21 +145,30 @@ export function ConfigModal() {
   useEffect(() => {
     if (open && cfg) {
       form.setFieldsValue({
-        temperature: cfg.temperature,
-        maxTokens: cfg.maxTokens,
         workDir: cfg.workDir,
         thinkingEnabled: cfg.thinkingEnabled
       })
       setModels(cfg.models.length > 0 ? cfg.models : DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
       setWorkDirError(null)
-      const wl = cfg.tools.allowedTools.length > 0
       const allBuiltin = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
+      let deniedTools: string[]
+      if (!cfg.tools.enabled) {
+        deniedTools = [...allBuiltin]
+      } else if (cfg.tools.allowedTools.length > 0) {
+        deniedTools = allBuiltin.filter((n) => !cfg.tools.allowedTools.includes(n))
+      } else {
+        deniedTools = [...cfg.tools.deniedTools]
+      }
+      const browserCfg = cfg.browser ?? { ...DEFAULT_BROWSER_CONFIG }
+      if (!browserCfg.enabled && !deniedTools.includes('browser')) {
+        deniedTools = [...deniedTools, 'browser']
+      }
+      const trustedDomains = [
+        ...new Set([...(browserCfg.trustedDomains ?? []), ...(browserCfg.allowedDomains ?? [])])
+      ]
       setToolUi({
-        enabled: cfg.tools.enabled,
         confirmMode: cfg.tools.confirmMode,
-        deniedTools: wl ? [] : [...cfg.tools.deniedTools],
-        allowedEdit: wl ? cfg.tools.allowedTools.filter((n) => allBuiltin.includes(n)) : [],
-        whitelistMode: wl,
+        deniedTools,
         pythonPath: cfg.tools.pythonPath,
         scriptTimeout: cfg.tools.scriptTimeout,
         fileCheckpointingEnabled: cfg.tools.fileCheckpointingEnabled,
@@ -224,6 +181,7 @@ export function ConfigModal() {
       setDefaultChatMode(cfg.defaultChatMode ?? DEFAULT_CHAT_MODE)
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
+      setBrowserUi({ ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] })
       setPlanUi(cfg.plan ?? { ...DEFAULT_PLAN_CONFIG })
     }
   }, [open, cfg, form])
@@ -253,21 +211,20 @@ export function ConfigModal() {
       return
     }
     const id = crypto.randomUUID()
-    const entry: ModelEntry = { id, name, maximumContext: addMaxCtx, maxTokens: addMaxTokens, isDefault: addDefault, isFast: addFast, enabled: true }
+    const maximumContext = addMaxCtx ?? DEFAULT_ADD_MODEL_MAX_CONTEXT
+    const maxTokens = addMaxTokens ?? DEFAULT_ADD_MODEL_MAX_TOKENS
+    const entry: ModelEntry = { id, name, maximumContext, maxTokens, isDefault: false, isFast: addFast, enabled: true }
     const updated = [...models, entry]
-    if (addDefault) {
-      for (const m of updated) {
-        if (m.id !== id) m.isDefault = false
-      }
+    if (updated.length === 1) {
+      entry.isDefault = true
     }
     if (updated.length > 0 && !updated.some((m) => m.isDefault)) {
       updated[0].isDefault = true
     }
     setModels(updated)
     setAddName('')
-    setAddMaxCtx(200000)
-    setAddMaxTokens(8192)
-    setAddDefault(false)
+    setAddMaxCtx(null)
+    setAddMaxTokens(null)
     setAddFast(false)
     setAddOpen(false)
   }
@@ -298,17 +255,15 @@ export function ConfigModal() {
     const llmPayload = buildLlmServicesSavePayload(llmDrafts.state)
     try {
       await window.api.configSet({
-        temperature: v.temperature,
-        maxTokens: v.maxTokens,
         workDir: v.workDir,
         thinkingEnabled: v.thinkingEnabled,
         models,
         ...llmPayload,
         tools: {
-          enabled: toolUi.enabled,
+          enabled: true,
           confirmMode: toolUi.confirmMode,
-          deniedTools: toolUi.whitelistMode ? [] : toolUi.deniedTools,
-          allowedTools: toolUi.whitelistMode ? toolUi.allowedEdit.filter((n) => BUILTIN_TOOL_DEFINITIONS.some((d) => d.name === n)) : [],
+          deniedTools: toolUi.deniedTools,
+          allowedTools: [],
           pythonPath: toolUi.pythonPath,
           scriptTimeout: toolUi.scriptTimeout,
           fileCheckpointingEnabled: toolUi.fileCheckpointingEnabled,
@@ -320,6 +275,7 @@ export function ConfigModal() {
         defaultChatMode,
         wiki: wikiUi,
         feishu: feishuUi,
+        browser: { ...browserUi, enabled: true, allowedDomains: [] },
         plan: planUi
       })
     } catch (e) {
@@ -346,43 +302,51 @@ export function ConfigModal() {
   }
 
   const addContent = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: 260 }}>
-      <Input
-        placeholder="模型名称"
-        value={addName}
-        onChange={(e) => setAddName(e.target.value)}
-        onPressEnter={addModel}
-        autoFocus
-      />
-      <div style={{ display: 'flex', gap: 8 }}>
-        <InputNumber
-          placeholder="最大上下文"
-          value={addMaxCtx}
-          onChange={(v) => setAddMaxCtx(v ?? 200000)}
-          min={1}
-          style={{ flex: 1 }}
-        />
-        <InputNumber
-          placeholder="最大输出"
-          value={addMaxTokens}
-          onChange={(v) => setAddMaxTokens(v ?? 8192)}
-          min={1}
-          style={{ flex: 1 }}
+    <div className="config-add-model-popover">
+      <div className="config-add-model-field">
+        <span className="config-add-model-label">模型名称</span>
+        <Input
+          placeholder="（按照您的服务商提供的模型名称填写）"
+          value={addName}
+          onChange={(e) => setAddName(e.target.value)}
+          onPressEnter={addModel}
+          autoFocus
         />
       </div>
-      <div style={{ display: 'flex', gap: 12 }}>
-        <Checkbox checked={addDefault} onChange={(e) => setAddDefault(e.target.checked)}>
-          默认
-        </Checkbox>
-        <Checkbox checked={addFast} onChange={(e) => setAddFast(e.target.checked)}>
-          快速
-        </Checkbox>
+      <div className="config-add-model-row">
+        <div className="config-add-model-field">
+          <span className="config-add-model-label">最大上下文</span>
+          <InputNumber
+            placeholder="留空默认 200K"
+            value={addMaxCtx}
+            onChange={(v) => setAddMaxCtx(typeof v === 'number' ? v : null)}
+            min={1}
+            style={{ width: '100%' }}
+          />
+        </div>
+        <div className="config-add-model-field">
+          <span className="config-add-model-label">最大输出</span>
+          <InputNumber
+            placeholder="留空默认 64K"
+            value={addMaxTokens}
+            onChange={(v) => setAddMaxTokens(typeof v === 'number' ? v : null)}
+            min={1}
+            style={{ width: '100%' }}
+          />
+        </div>
       </div>
-      <Button type="primary" size="small" onClick={addModel} disabled={!addName.trim()}>
+      <p className="config-add-model-hint">用于帮助 Agent 更好的管理上下文。若您不确定，可以留空。</p>
+      <Checkbox checked={addFast} onChange={(e) => setAddFast(e.target.checked)}>
+        标注为快速模型（用于处理低成本简单任务）
+      </Checkbox>
+      <Button type="primary" size="small" block onClick={addModel} disabled={!addName.trim()}>
         确认
       </Button>
     </div>
   )
+
+  const settingsTabKey =
+    settingsActiveTab === 'browser' ? 'tools' : (settingsActiveTab ?? 'general')
 
   return (
     <Modal
@@ -402,7 +366,7 @@ export function ConfigModal() {
     >
       <Form form={form} layout="vertical">
         <Tabs
-          activeKey={settingsActiveTab ?? 'general'}
+          activeKey={settingsTabKey}
           onChange={(key) => dispatch(setSettingsActiveTab(key))}
           items={[
             {
@@ -499,33 +463,25 @@ export function ConfigModal() {
               label: '默认大模型设置',
               children: (
                 <>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <span className="config-section-title">模型列表</span>
-                    <Space size={4}>
-                      <Button size="small" icon={<RefreshIcon />} onClick={resetModels} title="恢复默认" />
-                      <Popover
-                        overlayClassName="config-modal-popover"
-                        content={addContent}
-                        open={addOpen}
-                        onOpenChange={setAddOpen}
-                        trigger="click"
-                        placement="bottomRight"
-                      >
-                        <Button size="small" type="primary" icon={<AddIcon />} />
-                      </Popover>
-                    </Space>
+                  <div className="config-model-field">
+                    <div className="config-model-field__header">
+                      <span className="config-model-field__label">默认模型</span>
+                      <Space size={4}>
+                        <Button size="small" icon={<RefreshIcon />} onClick={resetModels} title="恢复默认" />
+                        <Popover
+                          overlayClassName="config-modal-popover"
+                          content={addContent}
+                          open={addOpen}
+                          onOpenChange={setAddOpen}
+                          trigger="click"
+                          placement="bottomRight"
+                        >
+                          <Button size="small" type="primary" icon={<AddIcon />} />
+                        </Popover>
+                      </Space>
+                    </div>
+                    <ModelSelect value={models} onChange={setModels} />
                   </div>
-                  <ModelList value={models} onChange={setModels} />
-                  <Form.Item name="temperature" label="Temperature">
-                    <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
-                  </Form.Item>
-                  <Form.Item
-                    name="maxTokens"
-                    label="最大输出 tokens（兜底）"
-                    extra="实际请求优先使用模型列表中与当前模型名称对应行的「输出」；仅当无法匹配时使用此处数值。"
-                  >
-                    <InputNumber min={256} max={1_000_000} step={256} style={{ width: '100%' }} />
-                  </Form.Item>
                   <Form.Item
                     name="thinkingEnabled"
                     label="默认开启 Thinking"
@@ -541,146 +497,19 @@ export function ConfigModal() {
               key: 'tools',
               label: '工具',
               children: (
-                <>
-                  <Form.Item label="启用内置工具" className="config-form-item-inline">
-                    <Switch checked={toolUi.enabled} onChange={(checked) => setToolUi((s) => ({ ...s, enabled: checked }))} />
-                  </Form.Item>
-                  <Form.Item
-                    label="仅允许选中的工具（白名单）"
-                    className="config-form-item-inline config-form-item-inline--with-extra"
-                    extra="开启后仅下方勾选的工具会注入模型；关闭时未勾选表示禁止（denied）。"
-                  >
-                    <Switch
-                      checked={toolUi.whitelistMode}
-                      onChange={(checked) => {
-                        setToolUi((s) => {
-                          const allNames = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
-                          if (checked) {
-                            const enabled = allNames.filter((n) => !s.deniedTools.includes(n))
-                            return {
-                              ...s,
-                              whitelistMode: true,
-                              allowedEdit: enabled,
-                              deniedTools: []
-                            }
-                          }
-                          const enabledSet = new Set(
-                            s.whitelistMode ? s.allowedEdit : allNames.filter((n) => !s.deniedTools.includes(n))
-                          )
-                          const denied = allNames.filter((n) => !enabledSet.has(n))
-                          return { ...s, whitelistMode: false, deniedTools: denied, allowedEdit: [] }
-                        })
-                      }}
-                    />
-                  </Form.Item>
-                  <Form.Item label="文件写入确认模式">
-                    <Radio.Group
-                      value={toolUi.confirmMode}
-                      onChange={(e) => setToolUi((s) => ({ ...s, confirmMode: e.target.value }))}
-                    >
-                      <Radio value="diff">diff 预览</Radio>
-                      <Radio value="direct">直接确认</Radio>
-                    </Radio.Group>
-                  </Form.Item>
-                  <Form.Item label="Python 路径">
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Input
-                        value={toolUi.pythonPath}
-                        onChange={(e) => setToolUi((s) => ({ ...s, pythonPath: e.target.value }))}
-                        placeholder="python 或绝对路径"
-                      />
-                      <Button loading={pyTesting} onClick={testPython}>
-                        测试
-                      </Button>
-                    </Space.Compact>
-                  </Form.Item>
-                  {pyTest ? (
-                    <Alert type={pyTest.ok ? 'success' : 'error'} message={pyTest.text} showIcon style={{ marginBottom: 12 }} />
-                  ) : null}
-                  <Form.Item label="脚本默认超时（秒）">
-                    <InputNumber
-                      min={10}
-                      max={86400}
-                      value={toolUi.scriptTimeout}
-                      onChange={(v) => setToolUi((s) => ({ ...s, scriptTimeout: v ?? 300 }))}
-                      style={{ width: '100%' }}
-                    />
-                  </Form.Item>
-                  <Form.Item label="grep 超时（秒）">
-                    <InputNumber
-                      min={5}
-                      max={600}
-                      value={toolUi.grepTimeoutSec}
-                      onChange={(v) => setToolUi((s) => ({ ...s, grepTimeoutSec: v ?? 60 }))}
-                      style={{ width: '100%' }}
-                    />
-                  </Form.Item>
-                  <Form.Item label="文件历史备份" className="config-form-item-inline">
-                    <Switch
-                      checked={toolUi.fileCheckpointingEnabled}
-                      onChange={(c) => setToolUi((s) => ({ ...s, fileCheckpointingEnabled: c }))}
-                    />
-                  </Form.Item>
-                  <Form.Item label="每文件最多快照数">
-                    <InputNumber
-                      min={1}
-                      max={500}
-                      value={toolUi.maxFileSnapshots}
-                      onChange={(v) => setToolUi((s) => ({ ...s, maxFileSnapshots: v ?? 100 }))}
-                      style={{ width: '100%' }}
-                    />
-                  </Form.Item>
-                  <div className="config-section-title" style={{ marginBottom: 8 }}>
-                    内置工具
-                  </div>
-                  <div className="config-tool-list" style={{ border: '1px solid #f0f0f0', borderRadius: 8, maxHeight: 220, overflow: 'auto' }}>
-                    {BUILTIN_TOOL_DEFINITIONS.map((def) => {
-                      const on = toolUi.whitelistMode
-                        ? toolUi.allowedEdit.includes(def.name)
-                        : !toolUi.deniedTools.includes(def.name)
-                      const risk = builtinToolRiskLevel(def.name)
-                      return (
-                        <div
-                          key={def.name}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            padding: '8px 10px',
-                            borderBottom: '1px solid #f5f5f5'
-                          }}
-                        >
-                          <Switch
-                            size="small"
-                            checked={on}
-                            onChange={(checked) => {
-                              if (toolUi.whitelistMode) {
-                                setToolUi((s) => ({
-                                  ...s,
-                                  allowedEdit: checked
-                                    ? [...new Set([...s.allowedEdit, def.name])]
-                                    : s.allowedEdit.filter((x) => x !== def.name)
-                                }))
-                              } else {
-                                setToolUi((s) => ({
-                                  ...s,
-                                  deniedTools: checked
-                                    ? s.deniedTools.filter((x) => x !== def.name)
-                                    : [...s.deniedTools, def.name]
-                                }))
-                              }
-                            }}
-                          />
-                          <span style={{ flex: 1 }}>{def.name}</span>
-                          <Tag color={risk === 'low' ? 'green' : risk === 'medium' ? 'orange' : 'red'}>{risk}</Tag>
-                          <Tag>
-                            {def.name === 'read_file' || def.name === 'list_directory' || def.name === 'grep' ? '免确认' : '需确认'}
-                          </Tag>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </>
+                <ToolsSettingsTab
+                  toolUi={toolUi}
+                  setToolUi={setToolUi}
+                  browserUi={browserUi}
+                  setBrowserUi={setBrowserUi}
+                  models={models}
+                  pyTest={pyTest}
+                  pyTesting={pyTesting}
+                  onTestPython={() => void testPython()}
+                  initialSubTab={
+                    settingsToolsSubTab ?? (settingsActiveTab === 'browser' ? 'browser' : undefined)
+                  }
+                />
               )
             },
             {
@@ -697,7 +526,12 @@ export function ConfigModal() {
               key: 'skills',
               label: 'Skill',
               children: cfg ? (
-                <SkillsTab config={cfg} onConfigSaved={refreshConfig} activationLog={skillActivationLog} />
+                <SkillsTab
+                  active={open && settingsTabKey === 'skills'}
+                  config={cfg}
+                  onConfigSaved={refreshConfig}
+                  activationLog={skillActivationLog}
+                />
               ) : null
             }
           ]}

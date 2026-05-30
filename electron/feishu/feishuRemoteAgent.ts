@@ -2,10 +2,11 @@ import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import { getMessages } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
-import type { ToolsConfig, WikiConfig, PlanConfig } from '../../src/shared/domainTypes'
+import type { BrowserConfig, ToolsConfig, WikiConfig, PlanConfig } from '../../src/shared/domainTypes'
 import { mergePlanConfig } from '../../src/shared/domainTypes'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
+import { resolveFeishuBrowserRemoteHint } from '../../src/shared/browserRemotePolicy'
 import { buildSystemPrompt, getCachedMemoryContent } from '../projectMemory'
 import { registerRunningRemoteAgent, unregisterRunningRemoteAgent } from './runningRemoteAgentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
@@ -31,6 +32,7 @@ export async function runFeishuRemoteAgent(ctx: {
   runner: LarkCliRunner
   confirmManager: FeishuConfirmManager
   getToolsConfig: () => ToolsConfig
+  getBrowserConfig?: () => BrowserConfig
   getWikiConfig?: () => WikiConfig
   getPlanConfig?: () => PlanConfig
   remoteContext: FeishuRemoteContext
@@ -58,9 +60,14 @@ export async function runFeishuRemoteAgent(ctx: {
       content: m.content
     }))
 
+    const browserConfig = ctx.getBrowserConfig?.()
     const appendix = buildFeishuRemoteSystemAppendix({
       messageId: ctx.replyMessageId,
-      confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy
+      confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy,
+      browserRemoteHint: resolveFeishuBrowserRemoteHint(
+        browserConfig?.enabled,
+        browserConfig?.allowRemoteSessions
+      )
     })
     const memoryContent = getCachedMemoryContent()
     const system = buildSystemPrompt(appendix, memoryContent, true)
@@ -70,6 +77,7 @@ export async function runFeishuRemoteAgent(ctx: {
       getWorkDir: () => ctx.workDir,
       getUserDataPath: () => ctx.userDataDir,
       getToolsConfig: () => ctx.getToolsConfig(),
+      getBrowserConfig: ctx.getBrowserConfig,
       getWikiConfig: ctx.getWikiConfig,
       getAppDatabase: () => ctx.db,
       getPlanConfig: () => ctx.getPlanConfig?.() ?? mergePlanConfig(null)
@@ -155,6 +163,7 @@ export async function runFeishuRemoteAgent(ctx: {
       system,
       options: { maxTokens: 8192 },
       toolsConfig,
+      browserConfig: ctx.getBrowserConfig?.(),
       wikiConfig: ctx.getWikiConfig?.(),
       workDir: ctx.workDir,
       userDataDir: ctx.userDataDir,

@@ -26,6 +26,10 @@ describe('shouldBlockToolInPlanMode', () => {
     expect(shouldBlockToolInPlanMode('read_file', undefined, 'planning').blocked).toBe(false)
   })
 
+  it('allows browser tool during planning phase (write actions blocked in executor)', () => {
+    expect(shouldBlockToolInPlanMode('browser', undefined, 'planning').blocked).toBe(false)
+  })
+
   it('blocks write when session is awaiting_approval', () => {
     const meta = { plan: { ...draftingPlan, status: 'awaiting_approval' as const } }
     const r = shouldBlockToolInPlanMode('edit_file', meta, null)

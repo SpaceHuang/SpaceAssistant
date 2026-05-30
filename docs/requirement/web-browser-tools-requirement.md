@@ -1,7 +1,7 @@
 # Agent 网页访问工具 — 产品需求文档
 
-**版本：** 1.0  
-**日期：** 2026-05-26  
+**版本：** 1.1  
+**日期：** 2026-05-26（修订 2026-05-28）  
 **状态：** 待评审  
 
 **参考来源：**
@@ -71,6 +71,7 @@ Stagehand 适合动态 DOM、Shadow DOM、SPA 等场景。SpaceAssistant 通过*
 
 - **单一工具 + action 白名单**：只暴露 `browser`；`action` 为封闭枚举，映射到 Stagehand/Playwright 固定调用路径；**不**暴露 `stagehand.agent()` 或任意 SDK 透传。
 - **SpaceAssistant 握确认权**：Stagehand 内部无 GUI 确认；`navigate`（open）与 `act` 必须在 `toolChatLoop` 获得用户批准后才调用 SDK。
+- **会话内域名记忆**：用户曾在确认卡片中批准 `navigate`(open) 的 URL 后，**同一 SpaceAssistant 会话（对话）内**再访问该 URL 所在域名（含其子域名）时，**不再弹出 navigate 确认**；`act` 仍按配置单独确认。记忆仅存于主进程内存，删除会话即清除。
 - **LOCAL 优先**：MVP 仅 `env: 'LOCAL'`，页面与 Cookie 留在本机；Browserbase 云端为可选增强。
 - **LLM 成本可控**：限制每轮 tool chat 内 Stagehand 推理次数；`observe`/`extract` 优先于反复 `act`。
 - **默认关闭**：`browser.enabled` 默认 `false`。
@@ -303,7 +304,7 @@ flowchart TB
 | `screenshot` | `page.screenshot()` | 否 | low | 否 | ✅ |
 | `close` | `stagehand.close()` | 否 | low | 否 | ✅ |
 
-¹ `trustedDomains` 内 URL 可配置免确认。
+¹ `trustedDomains` 内 URL 可配置免确认；用户曾在**本会话**确认卡片中批准过的 navigate(open) 域名，视同会话级免确认（见 §7.5、§10.2.1）。
 
 **`browser.deniedActions`**：如 `['act']` 禁止交互。
 
@@ -397,11 +398,28 @@ flowchart TB
 
 | action | 确认 |
 |--------|------|
-| `navigate` + open | URL ∉ `trustedDomains` 或 HTTP（若允许） |
+| `navigate` + open | URL 主机名 ∉ `trustedDomains`，且 ∉ **本会话已批准域名**（见下） |
 | `act` | 始终（除非 `actRequiresConfirm=false`） |
 | 其余 | 否 |
 
 确认卡片展示：`action` + `url` 或 `instruction`（不展示 API Key、Cookie、完整 DOM）。
+
+#### 7.5.1 会话内已批准域名（对话范围免重复确认）
+
+**场景：** 用户首次访问 `https://www.sohu.com/...` 时在确认卡片点击「确认」；同一会话内 Agent 再次 `navigate`(open) 到 `https://news.sohu.com/...` 或其它 `*.sohu.com` 路径时，不应反复打断用户。
+
+| 项 | 规则 |
+|----|------|
+| 范围 | 单个 **SpaceAssistant 会话**（`Session.id`），非全局、非跨会话 |
+| 触发 | 用户对 `browser` + `navigate` + `mode=open` 在确认卡片选择 **批准** 后，从 URL 解析主机名并登记 |
+| 登记内容 | URL 主机名；若为多级主机名（如 `www.sohu.com`），同时登记可匹配子域的后缀域（如 `sohu.com`），使 `news.sohu.com` 等子域命中 |
+| 生效 | `browserActionNeedsConfirmation(navigate, open)` 返回 `false`；`urlSecurity.validateUrl` 对该主机名通过（等同白名单/可信域） |
+| 不生效 | `act` 仍走 `actRequiresConfirm`；`refresh`/`back`/`forward` 本就不确认；其它会话、应用重启后需重新确认 |
+| 清理 | 删除 SpaceAssistant 会话时清除该会话的登记；应用退出后内存清空 |
+
+**与 `trustedDomains` 区别：** `trustedDomains` 为全局配置、持久化；会话内批准为**用户单次对话中的显式授权**，仅减少同站重复确认，不写入数据库。
+
+**UI 提示（可选）：** 确认卡片可增加一行说明：「确认后，本会话内访问同域名将不再询问。」
 
 ---
 
@@ -511,7 +529,17 @@ interface BrowserConfig {
 
 ### 10.2 URL 安全（`urlSecurity.ts`）
 
-拒绝非 http(s)、loopback、私有 IP、link-local、metadata、`file://` 等；`allowedDomains` 为空则禁止 `navigate` open。
+拒绝非 http(s)、loopback、私有 IP、link-local、metadata、`file://` 等；`allowedDomains` 为空则禁止 `navigate` open（除非用户当次已确认、或命中可信/会话已批准域，见 §10.2.1）。
+
+#### 10.2.1 会话内已批准域名（`browserSessionTrust.ts`）
+
+主进程维护 `Map<sessionId, Set<hostname>>`（仅内存）：
+
+- **写入：** `toolChatLoop` 在用户对 `navigate`(open) 确认卡片 **批准** 后调用 `rememberBrowserSessionTrustedUrl(sessionId, url)`。
+- **读取：** `browserActionNeedsConfirmation`、`validateUrl` 在判定前调用 `isBrowserSessionTrustedHost(sessionId, hostname)`（主机名精确匹配或子域后缀匹配）。
+- **清除：** `clearBrowserSessionTrust(sessionId)` 在 `clearSessionToolResources` / 删除会话时调用。
+
+SSRF 与 loopback 等硬规则**不受**会话批准豁免。
 
 ### 10.3 指令安全（`instructionGuards.ts`）
 
@@ -535,14 +563,18 @@ export type BrowserAction =
 export function browserActionNeedsConfirmation(
   action: BrowserAction,
   input: Record<string, unknown>,
-  cfg: BrowserConfig
+  cfg: BrowserConfig,
+  sessionId?: string
 ): boolean {
   if (action === 'act') return cfg.actRequiresConfirm
   if (action === 'navigate') {
     const mode = (input.mode as string) ?? 'open'
     if (mode !== 'open') return false
     if (!cfg.navigateRequiresConfirm) return false
-    return !isTrustedDomain(input.url as string, cfg.trustedDomains)
+    const host = extractHostname(input.url as string)
+    if (!host) return true
+    if (sessionId && isBrowserSessionTrustedHost(sessionId, host)) return false
+    return !isTrustedDomain(host, cfg.trustedDomains)
   }
   return false
 }
@@ -618,7 +650,7 @@ interface StagehandSessionState {
 
 | action | ToolCallCard |
 |--------|--------------|
-| `navigate` | URL + mode；确认态完整 URL |
+| `navigate` | URL + mode；确认态完整 URL；可附「本会话同域名不再询问」提示 |
 | `observe` | instruction + 返回 actions 列表（折叠） |
 | `extract` | instruction + extraction 摘要 |
 | `act` | **instruction 全文** + 确认按钮 |
@@ -677,6 +709,8 @@ interface StagehandSessionState {
 - [ ] 白名单域名下 `navigate` + `extract` 可用
 - [ ] `127.0.0.1` / `file://` 被拒绝
 - [ ] `act` 前出现确认卡片，展示 instruction
+- [ ] 用户对某站 `navigate`(open) 确认后，同会话内访问同域名（含子域）不再弹出 navigate 确认
+- [ ] 删除会话后会话内域名记忆清除；新会话访问同站需重新确认
 - [ ] Plan 探索期 `navigate` / `act` 被拒绝
 - [ ] 单轮 tool chat 第 9 次 observe/extract/act 返回配额错误
 - [ ] 删除会话后 Stagehand 实例关闭
@@ -719,6 +753,7 @@ interface StagehandSessionState {
 | `electron/urlSecurity.ts` | URL/SSRF |
 | `electron/browser/instructionGuards.ts` | 指令校验 |
 | `electron/browser/browserActionPolicy.ts` | action 策略 |
+| `electron/browser/browserSessionTrust.ts` | 会话内已批准 navigate 域名（内存） |
 | `electron/browser/stagehandService.ts` | Stagehand 生命周期 |
 | `electron/tools/browserExecutor.ts` | 工具执行 |
 | `electron/toolInputGuards.ts` | 入参校验 |
@@ -727,6 +762,7 @@ interface StagehandSessionState {
 
 ---
 
-**文档版本**: v1.0  
+**文档版本**: v1.1  
 **创建日期**: 2026-05-26  
+**修订日期**: 2026-05-28 — 增加 §7.5.1 / §10.2.1 会话内已批准域名（对话范围免重复 navigate 确认）  
 **适用范围**: SpaceAssistant — Agent 网页访问（基于 Stagehand）

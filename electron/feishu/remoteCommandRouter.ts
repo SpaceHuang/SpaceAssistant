@@ -11,6 +11,7 @@ import { FeishuConfirmManager } from './feishuConfirmManager'
 import { shouldAcceptInbound } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
+import { clearFeishuRemoteProgress } from './feishuRemoteProgress'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { countRunningRemoteAgents } from './runningRemoteAgentRegistry'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
@@ -46,6 +47,7 @@ export type RemoteCommandRouterDeps = {
   getMainWebContents: () => WebContents | null
   getModel: () => string
   getToolsConfig: () => ToolsConfig
+  getBrowserConfig?: () => import('../../src/shared/domainTypes').BrowserConfig
   getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
   getPlanConfig?: () => PlanConfig
 }
@@ -246,6 +248,7 @@ export class RemoteCommandRouter {
       confirmPolicy: config.remoteConfirmPolicy,
       feishuConfig: config,
       confirmManager: this.deps.confirmManager,
+      larkCliRunner: this.deps.runner,
       chatId: msg.chatId,
       sessionId
     }
@@ -265,6 +268,7 @@ export class RemoteCommandRouter {
       runner: this.deps.runner,
       confirmManager: this.deps.confirmManager,
       getToolsConfig: this.deps.getToolsConfig,
+      getBrowserConfig: this.deps.getBrowserConfig,
       getWikiConfig: this.deps.getWikiConfig,
       getPlanConfig: this.deps.getPlanConfig,
       userDataDir: this.deps.getUserDataPath(),
@@ -288,6 +292,7 @@ export class RemoteCommandRouter {
 
     await replyFeishuText(this.deps.runner, msg.messageId, result.summary)
     this.lastReplyAt = Date.now()
+    clearFeishuRemoteProgress(sessionId)
     await this.deps.auditLogger.append({
       type: 'agent_done',
       sessionId,
