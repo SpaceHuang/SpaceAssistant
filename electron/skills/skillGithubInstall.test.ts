@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseGithubSkillUrl, resolveSkillSourceDirs } from './skillGithubInstall'
+import { parseGithubSkillUrl, resolveSkillSourceDirs, buildGithubArchiveExtractMembers, githubArchiveRootFolder } from './skillGithubInstall'
 
 const tmpDirs: string[] = []
 
@@ -54,5 +54,14 @@ describe('skillGithubInstall', () => {
     }
 
     expect(resolveSkillSourceDirs(root, 'skills', true).map((p) => path.basename(p))).toEqual(['alpha', 'beta'])
+  })
+
+  it('builds selective archive members for sub path installs', () => {
+    expect(githubArchiveRootFolder('superpowers', 'main')).toBe('superpowers-main')
+    expect(buildGithubArchiveExtractMembers('superpowers', 'main', 'skills')).toEqual(['superpowers-main/skills'])
+    expect(buildGithubArchiveExtractMembers('skills', 'main', 'skills/pptx-generator')).toEqual([
+      'skills-main/skills/pptx-generator'
+    ])
+    expect(buildGithubArchiveExtractMembers('guizang-social-card-skill', 'main')).toEqual(['guizang-social-card-skill-main'])
   })
 })

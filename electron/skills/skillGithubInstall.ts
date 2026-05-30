@@ -54,7 +54,28 @@ export function resolveSkillSourceDirs(
   throw new Error('所选路径不是有效的 Skill 目录')
 }
 
-async function downloadGithubArchive(owner: string, repo: string, branch: string, destDir: string): Promise<string> {
+/** GitHub codeload 归档解压后的顶层目录名，如 superpowers-main */
+export function githubArchiveRootFolder(repo: string, branch: string): string {
+  return `${repo}-${branch}`
+}
+
+/**
+ * 仅解压归档中需要的成员，避免整仓解压时因根目录符号链接（如 AGENTS.md）在 Windows 上失败。
+ */
+export function buildGithubArchiveExtractMembers(repo: string, branch: string, subPath?: string): string[] {
+  const root = githubArchiveRootFolder(repo, branch)
+  const normalized = subPath?.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+  if (normalized) return [`${root}/${normalized}`]
+  return [root]
+}
+
+async function downloadGithubArchive(
+  owner: string,
+  repo: string,
+  branch: string,
+  destDir: string,
+  subPath?: string
+): Promise<string> {
   const branches = branch === 'main' ? [branch, 'master'] : [branch]
   let lastError = '下载失败'
 
@@ -72,11 +93,11 @@ async function downloadGithubArchive(owner: string, repo: string, branch: string
 
       const extractDir = path.join(destDir, 'extract')
       fs.mkdirSync(extractDir, { recursive: true })
-      await extractTarGz(archivePath, extractDir)
+      const members = buildGithubArchiveExtractMembers(repo, ref, subPath)
+      await extractTarGz(archivePath, extractDir, members)
 
-      const entries = fs.readdirSync(extractDir, { withFileTypes: true }).filter((ent) => ent.isDirectory())
-      if (entries.length !== 1) throw new Error('解压后的仓库结构异常')
-      return path.join(extractDir, entries[0].name)
+      const extractedRepoRoot = resolveExtractedRepoRoot(extractDir, repo, ref)
+      return extractedRepoRoot
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err)
     }
@@ -85,9 +106,21 @@ async function downloadGithubArchive(owner: string, repo: string, branch: string
   throw new Error(lastError)
 }
 
-function extractTarGz(archivePath: string, destDir: string): Promise<void> {
+function resolveExtractedRepoRoot(extractDir: string, repo: string, ref: string): string {
+  const expected = path.join(extractDir, githubArchiveRootFolder(repo, ref))
+  if (fs.existsSync(expected) && fs.statSync(expected).isDirectory()) {
+    return expected
+  }
+  const entries = fs.readdirSync(extractDir, { withFileTypes: true }).filter((ent) => ent.isDirectory())
+  if (entries.length === 1) return path.join(extractDir, entries[0].name)
+  throw new Error('解压后的仓库结构异常')
+}
+
+function extractTarGz(archivePath: string, destDir: string, members?: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const spawned = spawnCommandSafe('tar', ['-xzf', archivePath, '-C', destDir])
+    const args = ['-xzf', archivePath, '-C', destDir, ...(members ?? [])]
+    const tarBin = process.platform === 'win32' ? 'tar.exe' : 'tar'
+    const spawned = spawnCommandSafe(tarBin, args)
     if ('error' in spawned) {
       reject(new Error(`无法解压仓库：${spawned.error}`))
       return
@@ -118,7 +151,13 @@ export async function installSkillsFromGithub(
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-skill-github-'))
 
   try {
-    const extractedRepoRoot = await downloadGithubArchive(parsed.owner, parsed.repo, parsed.branch, tempRoot)
+    const extractedRepoRoot = await downloadGithubArchive(
+      parsed.owner,
+      parsed.repo,
+      parsed.branch,
+      tempRoot,
+      subPath || undefined
+    )
     const sourceDirs = resolveSkillSourceDirs(extractedRepoRoot, subPath, installAll)
     const installed: SkillDefinition[] = []
 
