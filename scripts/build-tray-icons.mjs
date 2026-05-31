@@ -6,7 +6,7 @@ import pngToIco from 'png-to-ico'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
-const srcSvg = path.join(root, 'res/mingcute-icons-main/svg/part/head_ai_fill.svg')
+const srcSvg = path.join(root, 'resources/tray/robot_fill.svg')
 const outDir = path.join(root, 'resources/tray')
 
 async function main() {

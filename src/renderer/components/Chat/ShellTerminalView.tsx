@@ -3,19 +3,24 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import '@xterm/xterm/css/xterm.css'
-import { exportTerminalScrollback, type TerminalExportSource } from '../../../shared/terminalScrollback'
+import { decodeProgressRawTailForXterm, exportTerminalScrollback, type TerminalExportSource } from '../../../shared/terminalScrollback'
 import type { ShellTerminalScrollback } from '../../../shared/domainTypes'
 import { buildShellTerminalOptions, SHELL_TERMINAL_COLS } from './terminalTheme'
 import {
+  appendTerminalRawProgress,
+  attachShellTerminalCopy,
   deferDisposeTerminal,
   replayTerminalRaw,
   safeFitTerminalRows,
   scheduleTerminalMount,
-  whenDocumentFontsReady
+  whenDocumentFontsReady,
+  type TerminalRawWriteState
 } from './xtermHelpers'
 
 type Props = {
   progressOutputRaw?: string
+  /** 卡片展开时为 true；收起时保持挂载但隐藏，展开后需 refit/重绘 */
+  visible?: boolean
   onExportReady?: (exporter: () => ShellTerminalScrollback | null) => void
   /** 卸载前导出 scrollback（在 dispose 之前调用） */
   onBeforeDispose?: (scrollback: ShellTerminalScrollback | null) => void
@@ -24,6 +29,7 @@ type Props = {
 
 export function ShellTerminalView({
   progressOutputRaw,
+  visible = true,
   onExportReady,
   onBeforeDispose,
   onInitFailed
@@ -33,11 +39,11 @@ export function ShellTerminalView({
   const fitRef = useRef<FitAddon | null>(null)
   const serializeRef = useRef<SerializeAddon | null>(null)
   const latestRawRef = useRef('')
+  const writeStateRef = useRef<TerminalRawWriteState>({ writtenTextLen: 0, cols: SHELL_TERMINAL_COLS })
   const followRef = useRef(true)
   const disposedRef = useRef(false)
   const readyRef = useRef(false)
   const [showResumeFollow, setShowResumeFollow] = useState(false)
-  const rafRef = useRef<number | null>(null)
   const onBeforeDisposeRef = useRef(onBeforeDispose)
   const onExportReadyRef = useRef(onExportReady)
   const onInitFailedRef = useRef(onInitFailed)
@@ -48,20 +54,17 @@ export function ShellTerminalView({
     onInitFailedRef.current = onInitFailed
   })
 
-  const replayOutput = useCallback(() => {
+  const syncOutput = useCallback(() => {
     if (disposedRef.current || !readyRef.current) return
     const term = termRef.current
     if (!term) return
-    replayTerminalRaw(term, latestRawRef.current, { followBottom: followRef.current })
+    writeStateRef.current = appendTerminalRawProgress(
+      term,
+      latestRawRef.current,
+      writeStateRef.current,
+      { followBottom: followRef.current }
+    )
   }, [])
-
-  const scheduleReplay = useCallback(() => {
-    if (disposedRef.current || rafRef.current !== null) return
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null
-      replayOutput()
-    })
-  }, [replayOutput])
 
   useEffect(() => {
     const host = hostRef.current
@@ -74,9 +77,11 @@ export function ShellTerminalView({
     let ro: ResizeObserver | null = null
     let readyRaf: number | null = null
     let scrollDispose: { dispose: () => void } | undefined
+    let copyDispose: { dispose: () => void } | undefined
 
     disposedRef.current = false
     readyRef.current = false
+    writeStateRef.current = { writtenTextLen: 0, cols: SHELL_TERMINAL_COLS }
 
     const buildExporter = (): (() => ShellTerminalScrollback | null) => {
       return () => {
@@ -108,10 +113,10 @@ export function ShellTerminalView({
       }
     }
 
-    const refitAndReplay = () => {
+    const refitAndSync = () => {
       if (cancelled || disposedRef.current || !term || !fit) return
       safeFitTerminalRows(term, fit, hostRef.current, SHELL_TERMINAL_COLS)
-      if (readyRef.current) replayOutput()
+      if (readyRef.current) syncOutput()
     }
 
     const mountTerminal = () => {
@@ -145,10 +150,12 @@ export function ShellTerminalView({
           }
         })
 
-        ro = new ResizeObserver(() => refitAndReplay())
+        copyDispose = attachShellTerminalCopy(term)
+
+        ro = new ResizeObserver(() => refitAndSync())
         ro.observe(hostRef.current)
 
-        void whenDocumentFontsReady().then(() => refitAndReplay())
+        void whenDocumentFontsReady().then(() => refitAndSync())
 
         onExportReadyRef.current?.(buildExporter())
 
@@ -156,7 +163,7 @@ export function ShellTerminalView({
           readyRaf = null
           if (cancelled || disposedRef.current) return
           readyRef.current = true
-          replayOutput()
+          syncOutput()
         })
       } catch {
         onInitFailedRef.current?.()
@@ -176,12 +183,9 @@ export function ShellTerminalView({
       }
       ro?.disconnect()
       scrollDispose?.dispose()
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
+      copyDispose?.dispose()
 
-      replayOutput()
+      syncOutput()
       const exported = buildExporter()()
       onBeforeDisposeRef.current?.(exported)
 
@@ -192,12 +196,28 @@ export function ShellTerminalView({
       deferDisposeTerminal(term)
       term = null
     }
-  }, [replayOutput])
+  }, [syncOutput])
 
   useEffect(() => {
     latestRawRef.current = progressOutputRaw ?? ''
-    scheduleReplay()
-  }, [progressOutputRaw, scheduleReplay])
+    syncOutput()
+  }, [progressOutputRaw, syncOutput])
+
+  useEffect(() => {
+    if (!visible || !readyRef.current) return
+    const term = termRef.current
+    const fit = fitRef.current
+    if (!term || !fit) return
+    requestAnimationFrame(() => {
+      if (disposedRef.current || !readyRef.current) return
+      safeFitTerminalRows(term, fit, hostRef.current, SHELL_TERMINAL_COLS)
+      replayTerminalRaw(term, latestRawRef.current)
+      writeStateRef.current = {
+        writtenTextLen: latestRawRef.current ? decodeProgressRawTailForXterm(latestRawRef.current).length : 0,
+        cols: term.cols
+      }
+    })
+  }, [visible])
 
   const resumeFollow = () => {
     followRef.current = true
@@ -210,7 +230,7 @@ export function ShellTerminalView({
   }
 
   return (
-    <div className="shell-terminal-wrap">
+    <div className="shell-terminal-wrap" onMouseDown={(e) => e.stopPropagation()}>
       <div ref={hostRef} className="shell-terminal-host" />
       {showResumeFollow ? (
         <button type="button" className="shell-terminal__resume-follow" onClick={resumeFollow}>

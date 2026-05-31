@@ -13,6 +13,16 @@ coverage/
 # Claude Code 本地 IDE 配置
 .claude/settings.local.json
 
+# Claude Code Agent 技能定义（本地开发用）
+.agents/
+
+# Mingcute 图标库源码（已复制所需图标到 src/renderer/assets/）
+res/mingcute-icons-main/
+
+# 本地测试脚本
+test-browser.js
+
 # 本地参考文档，不纳入版本控制
 docs/references/
 docs/review/
+docs/project/

@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runShellExecutor, resolveShellSpawnSpec } from './runShellExecutor'
-import { decodeProgressRawTail } from '../../src/shared/terminalScrollback'
+import { appendProgressOutputRaw, decodeProgressRawTail } from '../../src/shared/terminalScrollback'
 
 vi.mock('../shell/shellAgentLogger', () => ({
   logShellAgentEvent: vi.fn()
@@ -189,7 +189,9 @@ describe('runShellExecutor', () => {
     await runShellExecutor.execute({ command: cmd }, ctx)
     const progressCalls = vi.mocked(ctx.sendProgress).mock.calls
     expect(
-      progressCalls.some(([, payload]) => typeof payload === 'object' && payload && 'raw' in payload && Boolean(payload.raw))
+      progressCalls.some(([, payload]) =>
+        typeof payload === 'object' && payload && ('rawDelta' in payload || 'raw' in payload)
+      )
     ).toBe(true)
   }, 20_000)
 
@@ -206,13 +208,15 @@ describe('runShellExecutor', () => {
     await runShellExecutor.execute({ command: cmd }, ctx)
     const rawPayloads = vi
       .mocked(ctx.sendProgress)
-      .mock.calls.map(([, payload]) =>
-        payload && typeof payload === 'object' && 'raw' in payload ? String(payload.raw) : ''
-      )
-      .filter(Boolean)
+      .mock.calls.flatMap(([, payload]) => {
+        if (!payload || typeof payload !== 'object') return []
+        if ('rawDelta' in payload && payload.rawDelta) return [String(payload.rawDelta)]
+        if ('raw' in payload && payload.raw) return [String(payload.raw)]
+        return []
+      })
     expect(rawPayloads.length).toBeGreaterThan(0)
-    const lastRaw = rawPayloads.at(-1)!
-    const decoded = new TextDecoder().decode(decodeProgressRawTail(lastRaw))
+    const accumulated = rawPayloads.reduce((acc, delta) => appendProgressOutputRaw(acc, delta), '')
+    const decoded = new TextDecoder().decode(decodeProgressRawTail(accumulated))
     expect(decoded).toMatch(/chunk1/)
     expect(decoded).toMatch(/chunk2/)
   }, 20_000)

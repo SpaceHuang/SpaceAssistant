@@ -42,7 +42,7 @@ export function buildShellTerminalOptions(overrides?: Partial<ITerminalOptions>)
     cols: SHELL_TERMINAL_COLS,
     rows: 24,
     disableStdin: true,
-    convertEol: true,
+    rightClickSelectsWord: true,
     scrollback: 5000,
     fontSize: SHELL_TERMINAL_FONT_SIZE,
     fontFamily: SHELL_TERMINAL_FONT_FAMILY,

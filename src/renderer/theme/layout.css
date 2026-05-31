@@ -1099,7 +1099,7 @@
 }
 
 .shell-terminal-wrap--static .shell-terminal-host {
-  pointer-events: none;
+  cursor: text;
 }
 
 .shell-terminal-host {
@@ -1111,6 +1111,7 @@
 
 .shell-terminal-host .xterm {
   padding: 0;
+  cursor: text;
 }
 
 .shell-terminal__resume-follow {

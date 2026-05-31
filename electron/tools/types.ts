@@ -16,7 +16,7 @@ export interface FeishuRemoteContext {
   sessionId?: string
 }
 
-export type ToolProgressPayload = { message?: string; raw?: string; seq?: number }
+export type ToolProgressPayload = { message?: string; raw?: string; rawDelta?: string; seq?: number }
 
 export interface ToolExecutionContext {
   workDir: string

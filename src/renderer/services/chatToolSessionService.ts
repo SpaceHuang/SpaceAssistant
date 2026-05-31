@@ -1,4 +1,5 @@
 import { patchMessage } from '../store/chatSlice'
+import { appendProgressOutputRaw } from '../../shared/terminalScrollback'
 import type { AppDispatch } from '../store'
 import type { ToolCallRecord, ToolCallResultPersisted, Message } from '../../shared/domainTypes'
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
@@ -73,13 +74,21 @@ export function createToolChatController(args: {
     status: string
     message?: string
     raw?: string
+    rawDelta?: string
     seq?: number
   }) => {
     if (d.requestId !== getRequestId()) return
     const i = records.findIndex((t) => t.id === d.toolUseId)
     if (i >= 0) {
       const prev = records[i]!
-      if (typeof d.raw === 'string') {
+      if (typeof d.rawDelta === 'string') {
+        records[i] = {
+          ...prev,
+          status: 'executing',
+          progressOutputRaw: appendProgressOutputRaw(prev.progressOutputRaw, d.rawDelta),
+          progressSeq: d.seq ?? prev.progressSeq
+        }
+      } else if (typeof d.raw === 'string') {
         records[i] = {
           ...prev,
           status: 'executing',

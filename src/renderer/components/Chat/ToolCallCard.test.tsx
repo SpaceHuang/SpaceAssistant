@@ -396,3 +396,74 @@ describe('ToolCallCard run_shell output display', () => {
     expect(document.querySelector('.shell-output')).toBeNull()
   })
 })
+
+const terminalShellCardProps = {
+  shellConfig: { enabled: true, shellDefaultTimeoutSec: 300, outputMode: 'terminal' as const }
+}
+
+const terminalWrite = vi.fn()
+const terminalDispose = vi.fn()
+
+vi.mock('@xterm/xterm', () => {
+  class Terminal {
+    cols = 80
+    rows = 24
+    loadAddon = vi.fn()
+    open = vi.fn()
+    write = terminalWrite
+    clear = vi.fn()
+    resize = vi.fn()
+    dispose = terminalDispose
+    scrollToBottom = vi.fn()
+    onScroll = vi.fn(() => ({ dispose: vi.fn() }))
+    attachCustomKeyEventHandler = vi.fn()
+    hasSelection = vi.fn(() => false)
+    getSelection = vi.fn(() => '')
+    buffer = {
+      active: {
+        length: 1,
+        baseY: 0,
+        viewportY: 0,
+        getLine: () => ({ translateToString: () => 'line' })
+      }
+    }
+  }
+  return { Terminal }
+})
+
+vi.mock('@xterm/addon-fit', () => {
+  class FitAddon {
+    fit = vi.fn()
+    proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }))
+  }
+  return { FitAddon }
+})
+
+vi.mock('@xterm/addon-serialize', () => {
+  class SerializeAddon {
+    serialize = vi.fn(() => 'serialized')
+  }
+  return { SerializeAddon }
+})
+
+describe('ToolCallCard run_shell terminal collapse', () => {
+  it('keeps live terminal mounted when collapsed during execution', () => {
+    terminalWrite.mockClear()
+    const raw = Buffer.from('downloading packages\n').toString('base64')
+    render(
+      <ToolCallCard
+        record={shellRecord('executing', { progressOutputRaw: raw })}
+        confirmMode="direct"
+        {...terminalShellCardProps}
+      />
+    )
+    expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
+    fireEvent.click(document.querySelector('.tool-row__main')!)
+    const detail = document.querySelector('.tool-row-detail')
+    expect(detail?.hasAttribute('hidden')).toBe(true)
+    expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
+    fireEvent.click(document.querySelector('.tool-row__main')!)
+    expect(document.querySelector('.tool-row-detail')?.hasAttribute('hidden')).toBe(false)
+    expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
+  })
+})

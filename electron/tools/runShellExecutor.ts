@@ -12,7 +12,7 @@ import { buildShellEnv, decodeProcessOutput } from '../processOutputEncoding'
 import { applyPlaywrightInstallShellEnv } from '../shell/shellSpawnEnv'
 import { sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
 import { normalizeTerminalOutput } from '../../src/shared/terminalOutputSanitize'
-import { encodeProgressRawBytes, PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
+import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
 
 const PROGRESS_TAIL = 4000
 const DEFAULT_IO_MAX = 100 * 1024
@@ -130,7 +130,7 @@ async function runForeground(
     if (terminalMode && rawChunk && rawChunk.length > 0) {
       rawTailBuf = appendRawTailBuffer(rawTailBuf, rawChunk)
       progressSeq += 1
-      ctx.sendProgress('shell', { raw: encodeProgressRawBytes(new Uint8Array(rawTailBuf)), seq: progressSeq })
+      ctx.sendProgress('shell', { rawDelta: rawChunk.toString('base64'), seq: progressSeq })
       return
     }
     ctx.sendProgress('shell', shellProgressMessage(stdoutSnap, stderrSnap))

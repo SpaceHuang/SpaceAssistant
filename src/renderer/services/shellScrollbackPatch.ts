@@ -10,15 +10,20 @@ export function mergeToolCallScrollback(
   const i = list.findIndex((t) => t.id === toolUseId)
   if (i < 0) return list
   const prev = list[i]!
+  const preserveProgress = prev.status === 'executing'
   const prevData =
     prev.result?.data && typeof prev.result.data === 'object'
       ? { ...(prev.result.data as Record<string, unknown>) }
       : {}
   list[i] = {
     ...prev,
-    progressOutput: undefined,
-    progressOutputRaw: undefined,
-    progressSeq: undefined,
+    ...(preserveProgress
+      ? {}
+      : {
+          progressOutput: undefined,
+          progressOutputRaw: undefined,
+          progressSeq: undefined
+        }),
     result: prev.result
       ? {
           ...prev.result,

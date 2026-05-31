@@ -107,6 +107,29 @@ describe('createToolChatController progressOutput', () => {
     expect(lastPatch.toolCalls?.[0]?.progressSeq).toBe(1)
   })
 
+  it('accumulates progressOutputRaw from rawDelta chunks', () => {
+    const { applyAssistantPatch } = setupController()
+    handlers.progress?.({
+      requestId: 'req-1',
+      toolUseId: 'tool-1',
+      status: 'shell',
+      rawDelta: Buffer.from('hel').toString('base64'),
+      seq: 1
+    })
+    handlers.progress?.({
+      requestId: 'req-1',
+      toolUseId: 'tool-1',
+      status: 'shell',
+      rawDelta: Buffer.from('lo').toString('base64'),
+      seq: 2
+    })
+    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as {
+      toolCalls?: { progressOutputRaw?: string }[]
+    }
+    const raw = lastPatch.toolCalls?.[0]?.progressOutputRaw ?? ''
+    expect(Buffer.from(raw, 'base64').toString('utf8')).toBe('hello')
+  })
+
   it('preserves progressOutput after tool:result', () => {
     const { applyAssistantPatch } = setupController()
     handlers.progress?.({

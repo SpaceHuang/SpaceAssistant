@@ -34,6 +34,23 @@ describe('shellScrollbackPatch', () => {
     expect(next[0]?.progressOutputRaw).toBeUndefined()
   })
 
+  it('preserves progress fields while tool is still executing', () => {
+    const toolCalls: ToolCallRecord[] = [
+      {
+        id: 't1',
+        toolName: 'run_shell',
+        input: { command: 'npm install' },
+        status: 'executing',
+        riskLevel: 'medium',
+        progressOutputRaw: 'cmF3',
+        progressSeq: 3
+      }
+    ]
+    const next = mergeToolCallScrollback(toolCalls, 't1', { cols: 80, rows: 24, serialized: 'snap' })
+    expect(next[0]?.progressOutputRaw).toBe('cmF3')
+    expect(next[0]?.progressSeq).toBe(3)
+  })
+
   it('invokes chatPatchMessage on patch', () => {
     patchShellTerminalScrollback({
       sessionId: 's1',

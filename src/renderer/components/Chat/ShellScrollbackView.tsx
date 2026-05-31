@@ -7,6 +7,7 @@ import { pickScrollbackRestorePayload } from '../../../shared/terminalScrollback
 import { buildShellTerminalOptions } from './terminalTheme'
 import { ShellOutputView } from './ShellOutputView'
 import {
+  attachShellTerminalCopy,
   deferDisposeTerminal,
   restoreTerminalScrollbackPayload,
   safeFitTerminalRows,
@@ -48,6 +49,7 @@ export function ShellScrollbackView({
     let cancelled = false
     let term: Terminal | null = null
     let ro: ResizeObserver | null = null
+    let copyDispose: { dispose: () => void } | undefined
 
     const mountTerminal = () => {
       if (cancelled || !hostRef.current || restoredRef.current) return
@@ -64,6 +66,7 @@ export function ShellScrollbackView({
         term.loadAddon(fit)
         term.open(hostRef.current)
         safeFitTerminalRows(term, fit, hostRef.current, fixedCols)
+        copyDispose = attachShellTerminalCopy(term)
         requestAnimationFrame(() => {
           if (cancelled || !term) return
           safeFitTerminalRows(term, fit, hostRef.current, fixedCols)
@@ -94,6 +97,7 @@ export function ShellScrollbackView({
       cancelled = true
       cancelMount()
       ro?.disconnect()
+      copyDispose?.dispose()
       restoredRef.current = false
       deferDisposeTerminal(term)
       term = null
@@ -122,7 +126,10 @@ export function ShellScrollbackView({
       {scrollback?.truncated ? (
         <div className="shell-output__meta">终端记录已截断（超过 256KB）</div>
       ) : null}
-      <div className="shell-terminal-wrap shell-terminal-wrap--static">
+      <div
+        className="shell-terminal-wrap shell-terminal-wrap--static"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div ref={hostRef} className="shell-terminal-host" />
       </div>
       {truncated && persistedOutputPath ? (

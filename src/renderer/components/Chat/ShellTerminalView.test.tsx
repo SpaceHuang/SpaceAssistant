@@ -78,4 +78,16 @@ describe('ShellTerminalView', () => {
     )
     expect(dispose).toHaveBeenCalled()
   })
+
+  it('replays progress after unmount and remount', async () => {
+    const raw = Buffer.from('hello\rworld').toString('base64')
+    const { unmount } = render(<ShellTerminalView progressOutputRaw={raw} />)
+    await flushRaf(8)
+    write.mockClear()
+    unmount()
+    await flushRaf(4)
+    render(<ShellTerminalView progressOutputRaw={raw} />)
+    await flushRaf(8)
+    await waitFor(() => expect(write).toHaveBeenCalled())
+  })
 })

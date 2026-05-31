@@ -134,6 +134,7 @@ export function ToolCallCard({
   const handleTerminalBeforeDispose = useCallback(
     (scrollback: ShellTerminalScrollback | null) => {
       if (scrollbackPatchedRef.current || !scrollback || !messageId || !sessionId) return
+      if (record.status === 'executing') return
       scrollbackPatchedRef.current = true
       patchShellTerminalScrollback({
         sessionId,
@@ -143,7 +144,7 @@ export function ToolCallCard({
         scrollback
       })
     },
-    [messageId, sessionId, record.id, toolCalls]
+    [messageId, sessionId, record.id, record.status, toolCalls]
   )
 
   const shellCommand =
@@ -242,6 +243,7 @@ export function ToolCallCard({
     Boolean(record.progressOutput?.trim())
   const showShellLiveTerminal =
     record.toolName === 'run_shell' && record.status === 'executing' && useTerminalUi
+  const keepLiveTerminalMounted = showShellLiveTerminal
   const showShellCompletedOutput =
     record.toolName === 'run_shell' &&
     (record.status === 'completed' || record.status === 'failed') &&
@@ -338,8 +340,12 @@ export function ToolCallCard({
         ) : null}
       </div>
 
-      {showDetail ? (
-        <div className="tool-row-detail">
+      {(showDetail || keepLiveTerminalMounted) ? (
+        <div
+          className="tool-row-detail"
+          hidden={!showDetail && keepLiveTerminalMounted}
+          aria-hidden={!showDetail && keepLiveTerminalMounted}
+        >
           {record.status === 'confirming' && onConfirm ? (
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
               {record.toolName === 'run_script' && typeof record.input.code === 'string' ? (
@@ -359,6 +365,7 @@ export function ToolCallCard({
           {showShellLiveTerminal ? (
             <ShellTerminalView
               progressOutputRaw={record.progressOutputRaw}
+              visible={showDetail}
               onBeforeDispose={handleTerminalBeforeDispose}
               onInitFailed={() => setTerminalFallbackPlain(true)}
             />

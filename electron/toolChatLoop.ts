@@ -895,12 +895,14 @@ async function runToolChatSessionInner(
       const sendProgress = (status: string, payload?: string | import('./tools/types').ToolProgressPayload) => {
         let message: string | undefined
         let raw: string | undefined
+        let rawDelta: string | undefined
         let seq: number | undefined
         if (typeof payload === 'string') {
           message = payload
         } else if (payload) {
           message = payload.message
           raw = payload.raw
+          rawDelta = payload.rawDelta
           seq = payload.seq
         }
         if (status === 'error') {
@@ -914,7 +916,7 @@ async function runToolChatSessionInner(
             message
           })
         }
-        safeWebContentsSend(sender,'tool:progress', { requestId, toolUseId, status, message, raw, seq })
+        safeWebContentsSend(sender,'tool:progress', { requestId, toolUseId, status, message, raw, rawDelta, seq })
         if (
           message?.trim() &&
           remoteContext?.source === 'feishu' &&

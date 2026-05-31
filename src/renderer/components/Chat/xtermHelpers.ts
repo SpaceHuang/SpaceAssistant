@@ -61,6 +61,8 @@ export function safeWriteTerminal(term: Terminal, data: string | Uint8Array): vo
   }
 }
 
+export type TerminalRawWriteState = { writtenTextLen: number; cols: number }
+
 /** 清空并重放 live progress（base64 raw tail） */
 export function replayTerminalRaw(
   term: Terminal,
@@ -77,6 +79,36 @@ export function replayTerminalRaw(
   } catch {
     /* disposed */
   }
+}
+
+/** 增量写入 raw tail（保留 \\r 进度条语义，避免每次 clear 全量重放） */
+export function appendTerminalRawProgress(
+  term: Terminal,
+  rawB64: string | undefined,
+  state: TerminalRawWriteState,
+  options?: { followBottom?: boolean }
+): TerminalRawWriteState {
+  const full = decodeProgressRawTailForXterm(rawB64)
+  const cols = term.cols
+
+  if (cols !== state.cols || full.length < state.writtenTextLen) {
+    replayTerminalRaw(term, rawB64, options)
+    return { writtenTextLen: full.length, cols }
+  }
+
+  if (full.length > state.writtenTextLen) {
+    safeWriteTerminal(term, full.slice(state.writtenTextLen))
+    if (options?.followBottom !== false) {
+      try {
+        term.scrollToBottom()
+      } catch {
+        /* disposed */
+      }
+    }
+    return { writtenTextLen: full.length, cols }
+  }
+
+  return { ...state, cols }
 }
 
 /** 恢复完成态 scrollback（serialized / ansi 明文，非 base64） */
@@ -109,6 +141,56 @@ export function deferDisposeTerminal(term: Terminal | null | undefined): void {
       /* ignore */
     }
   })
+}
+
+/** 绑定选区复制（Ctrl/Cmd+C、copy 事件）；只读终端 disableStdin 时系统 copy 常失效 */
+export function attachShellTerminalCopy(term: Terminal): { dispose: () => void } {
+  const el = term.element
+  if (!el) return { dispose: () => {} }
+
+  const writeClipboard = (text: string): void => {
+    if (!text) return
+    void navigator.clipboard.writeText(text).catch(() => {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = text
+        ta.style.position = 'fixed'
+        ta.style.left = '-9999px'
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      } catch {
+        /* ignore */
+      }
+    })
+  }
+
+  const handler = (event: KeyboardEvent): boolean => {
+    if (event.type !== 'keydown') return true
+    const mod = event.ctrlKey || event.metaKey
+    if (!mod || event.key.toLowerCase() !== 'c' || !term.hasSelection()) return true
+    writeClipboard(term.getSelection())
+    return false
+  }
+
+  term.attachCustomKeyEventHandler(handler)
+
+  const onCopy = (event: ClipboardEvent) => {
+    if (!term.hasSelection()) return
+    event.preventDefault()
+    event.clipboardData?.setData('text/plain', term.getSelection())
+  }
+
+  el.addEventListener('copy', onCopy)
+
+  return {
+    dispose: () => {
+      term.attachCustomKeyEventHandler(() => true)
+      el.removeEventListener('copy', onCopy)
+    }
+  }
 }
 
 /** 双 rAF 延迟挂载，规避 React Strict Mode 快速 mount/unmount 与 renderer 未就绪 */
