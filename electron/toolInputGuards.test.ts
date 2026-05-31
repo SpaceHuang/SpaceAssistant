@@ -77,4 +77,22 @@ describe('assertSafeToolInput', () => {
       })
     ).toThrow(/url/)
   })
+
+  it('accepts valid run_shell command', () => {
+    expect(() =>
+      assertSafeToolInput('run_shell', { command: 'git status', description: 'check status' })
+    ).not.toThrow()
+  })
+
+  it('rejects run_shell without command', () => {
+    expect(() => assertSafeToolInput('run_shell', {})).toThrow(/command/)
+  })
+
+  it('rejects run_shell command too long', () => {
+    expect(() => assertSafeToolInput('run_shell', { command: 'x'.repeat(8193) })).toThrow(/command/)
+  })
+
+  it('rejects run_shell timeout out of range', () => {
+    expect(() => assertSafeToolInput('run_shell', { command: 'echo', timeout: 0 })).toThrow(/timeout/)
+  })
 })

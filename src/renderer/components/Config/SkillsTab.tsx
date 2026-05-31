@@ -12,7 +12,7 @@ import {
   RECOMMENDED_SKILLS,
   type RecommendedSkillEntry
 } from '../../../shared/recommendedSkills'
-import { CONFIG_MODAL_SELECT_POPUP } from './configModalUi'
+import { configModalSelectPopupClassNames } from './configModalUi'
 
 function FolderOpenIcon() {
   return (
@@ -256,9 +256,18 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
 
   return (
     <div>
-      {alert ? <Alert type={alert.type} message={alert.text} showIcon style={{ marginBottom: 12 }} closable onClose={() => setAlert(null)} /> : null}
+      {alert ? (
+        <Alert
+          type={alert.type}
+          message={alert.text}
+          showIcon
+          className="config-alert-block"
+          closable
+          onClose={() => setAlert(null)}
+        />
+      ) : null}
 
-      <Space direction="vertical" style={{ width: '100%', marginBottom: 12 }} size="middle">
+      <Space direction="vertical" className="config-stack-block" size="middle">
         <Space wrap>
           <Typography.Text>由 AI 根据 Skill 描述自动选择要加载的 Skill</Typography.Text>
           <Switch
@@ -270,7 +279,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
           />
         </Space>
         <div>
-          <Typography.Text style={{ display: 'block', marginBottom: 4 }}>始终加载</Typography.Text>
+          <Typography.Text className="config-field-label-block">始终加载</Typography.Text>
           <Select
             mode="multiple"
             allowClear
@@ -278,7 +287,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
             placeholder="选择每次会话始终加载的 Skill"
             options={skillOptions}
             value={alwaysLoad.filter((n) => !isProductBuiltinSkill(n))}
-            popupClassName={CONFIG_MODAL_SELECT_POPUP}
+            classNames={configModalSelectPopupClassNames}
             onChange={async (v) => {
               setAlwaysLoad(v)
               await saveSkillsConfig({ alwaysLoad: v })
@@ -328,7 +337,6 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                 pagination={false}
                 dataSource={visibleSkills}
                 rowClassName={(r) => (r.meta.name === highlightName ? 'sa-skill-row-highlight' : '')}
-                onRow={() => ({ style: { fontSize: 12 } })}
                 columns={[
                   {
                     title: headerTitle('enable', '启用'),
@@ -352,9 +360,9 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                     title: headerTitle('skill', 'Skill'),
                     width: widths.skill,
                     render: (_, skill) => (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.5 }}>
+                      <div className="config-skill-table-cell">
                         <span className="config-field__label">{skill.meta.name}</span>
-                        <Typography.Text type="secondary" className="config-field__hint" style={{ display: 'block' }}>
+                        <Typography.Text type="secondary" className="config-field__hint">
                           {skill.meta.description}
                         </Typography.Text>
                       </div>
@@ -389,15 +397,14 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                 rowKey="id"
                 pagination={false}
                 dataSource={RECOMMENDED_SKILLS}
-                onRow={() => ({ style: { fontSize: 12 } })}
                 columns={[
                   {
                     title: recommendedWidths.headerTitle('skill', 'Skill'),
                     width: recommendedWidths.widths.skill,
                     render: (_, entry) => (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.5 }}>
+                      <div className="config-skill-table-cell">
                         <span className="config-field__label">{entry.name}</span>
-                        <Typography.Text type="secondary" className="config-field__hint" style={{ display: 'block' }}>
+                        <Typography.Text type="secondary" className="config-field__hint">
                           {entry.description}
                         </Typography.Text>
                       </div>
@@ -407,9 +414,9 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                     title: recommendedWidths.headerTitle('source', '来源'),
                     width: recommendedWidths.widths.source,
                     render: (_, entry) => (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.5 }}>
-                        <Typography.Text style={{ fontSize: 12 }}>{getRecommendedSkillAuthor(entry)}</Typography.Text>
-                        <Typography.Link href={entry.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+                      <div className="config-skill-table-cell">
+                        <Typography.Text>{getRecommendedSkillAuthor(entry)}</Typography.Text>
+                        <Typography.Link href={entry.sourceUrl} target="_blank" rel="noreferrer">
                           GitHub
                         </Typography.Link>
                       </div>
@@ -445,14 +452,14 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
 
       {activationLog.length > 0 ? (
         <Collapse
-          style={{ marginTop: 12 }}
+          className="config-block-spacer"
           size="small"
           items={[
             {
               key: 'log',
               label: '激活审计（当前会话）',
               children: (
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                <ul className="config-activation-log">
                   {activationLog.map((e, i) => (
                     <li key={i}>
                       {new Date(e.timestamp).toLocaleString()} — {e.skillNames.join('、')} ({e.source})

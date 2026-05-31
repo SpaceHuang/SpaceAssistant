@@ -30,3 +30,9 @@ export type BrowserDependencyToolError = {
 
 export const CHROMIUM_INSTALL_CMD = 'npx playwright install chromium'
 export const NPM_INSTALL_CMD = 'npm install @browserbasehq/stagehand playwright zod'
+
+export type BrowserDetectContext = {
+  isPackaged: boolean
+  appPath: string
+  devRoot: string
+}

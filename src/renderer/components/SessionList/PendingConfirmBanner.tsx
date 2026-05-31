@@ -10,7 +10,7 @@ import {
 import { formatToolLabel } from '../Chat/toolCallDisplay'
 
 function labelForItem(item: PendingConfirmItem, sessionName: string): string {
-  if (item.toolName === 'run_script' || item.toolName === 'run_lark_cli') {
+  if (item.toolName === 'run_script' || item.toolName === 'run_lark_cli' || item.toolName === 'run_shell') {
     return labelForPendingConfirmItem(item, sessionName)
   }
   const tool = formatToolLabel(item.toolName, item.input as Record<string, unknown>)

@@ -6,6 +6,7 @@ import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS
 import {
   rowToMessage,
   serializeContentSegmentsForDb,
+  serializeSkillHintsForDb,
   serializeThinkingForDb,
   serializeToolCallsForDb,
   serializeToolUseForDb
@@ -21,6 +22,7 @@ export type StoredMessage = {
   toolCalls: string | null
   thinking: string | null
   contentSegments?: string | null
+  skillHints?: string | null
   status: string
   schemaVersion: number
   timestamp: number
@@ -61,7 +63,8 @@ function loadSnapshot(filePath: string): DbSnapshot {
       messages: Array.isArray(parsed.messages)
         ? (parsed.messages as StoredMessage[]).map((m) => ({
             ...m,
-            toolCalls: m.toolCalls ?? null
+            toolCalls: m.toolCalls ?? null,
+            skillHints: m.skillHints ?? null
           }))
         : [],
       configs: parsed.configs && typeof parsed.configs === 'object' ? (parsed.configs as DbSnapshot['configs']) : {},
@@ -186,6 +189,7 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
       toolCalls: r.toolCalls ?? null,
       thinking: r.thinking,
       contentSegments: r.contentSegments ?? null,
+      skillHints: r.skillHints ?? null,
       status: r.status,
       schemaVersion: r.schemaVersion,
       timestamp: r.timestamp,
@@ -210,6 +214,7 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
     toolCalls: serializeToolCallsForDb(full.toolCalls),
     thinking: serializeThinkingForDb(full.thinking),
     contentSegments: serializeContentSegmentsForDb(full.contentSegments),
+    skillHints: serializeSkillHintsForDb(full.skillHints),
     status: full.status,
     schemaVersion: full.schemaVersion,
     timestamp: full.timestamp,
@@ -228,7 +233,7 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
 export function updateMessageContent(
   db: AppDatabase,
   messageId: string,
-  patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments'>>
+  patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>>
 ): void {
   const row = db.data.messages.find((m) => m.id === messageId)
   if (!row) return
@@ -239,12 +244,15 @@ export function updateMessageContent(
   const thinking = patch.thinking !== undefined ? serializeThinkingForDb(patch.thinking) : row.thinking
   const contentSegments =
     patch.contentSegments !== undefined ? serializeContentSegmentsForDb(patch.contentSegments) : row.contentSegments ?? null
+  const skillHints =
+    patch.skillHints !== undefined ? serializeSkillHintsForDb(patch.skillHints) : row.skillHints ?? null
   row.content = content
   row.status = status
   row.toolUse = toolUse
   row.toolCalls = toolCalls
   row.thinking = thinking
   row.contentSegments = contentSegments
+  row.skillHints = skillHints
   db.save()
 }
 

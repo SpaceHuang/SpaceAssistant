@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import { createRequire } from 'node:module'
 import type {
   BrowserDependencyFailureCode,
+  BrowserDetectContext,
   BrowserDetectResult
 } from '../../src/shared/browserTypes'
 import {
@@ -10,18 +11,13 @@ import {
   NPM_INSTALL_CMD
 } from '../../src/shared/browserTypes'
 import { importEsmModule } from '../esmDynamicImport'
-import { resolveFullChromiumExecutable } from './playwrightBrowserHost'
+import { resolveFullChromiumExecutable, type PlaywrightModule } from './playwrightBrowserHost'
 
 const nodeRequire = createRequire(__filename)
 
 export const MIN_NODE_MAJOR = 18
 export { CHROMIUM_INSTALL_CMD, NPM_INSTALL_CMD } from '../../src/shared/browserTypes'
-
-export type BrowserDetectContext = {
-  isPackaged: boolean
-  appPath: string
-  devRoot: string
-}
+export type { BrowserDetectContext } from '../../src/shared/browserTypes'
 
 type ChromiumCheck = {
   ready: boolean
@@ -76,18 +72,10 @@ function buildErrors(checks: DependencyChecks, primaryFailure: BrowserDependency
     )
   }
   if (primaryFailure === 'stagehand_missing') {
-    if (checks.installContext === 'packaged') {
-      errors.push('浏览器引擎组件缺失，请重新安装应用或联系支持')
-    } else {
-      errors.push(`未安装 @browserbasehq/stagehand，请在${label}执行 npm install`)
-    }
+    errors.push('浏览器引擎组件缺失，请重新安装应用或联系支持')
   }
   if (primaryFailure === 'playwright_missing') {
-    if (checks.installContext === 'packaged') {
-      errors.push('Playwright 组件缺失，请重新安装应用或联系支持')
-    } else {
-      errors.push(`未安装 playwright，请在${label}执行 npm install`)
-    }
+    errors.push('Playwright 组件缺失，请重新安装应用或联系支持')
   }
   if (primaryFailure === 'chromium_headless_only') {
     errors.push(`未检测到完整 Chromium（仅有 headless shell），请在${label}运行：${CHROMIUM_INSTALL_CMD}`)
@@ -132,7 +120,7 @@ export function buildBrowserDetectResult(checks: DependencyChecks): BrowserDetec
 
 async function checkChromiumExecutable(): Promise<ChromiumCheck> {
   try {
-    const { chromium } = await importEsmModule<typeof import('playwright')>('playwright')
+    const { chromium } = await importEsmModule<PlaywrightModule>('playwright')
     const exe = await resolveFullChromiumExecutable(chromium)
     const revision = exe.match(/chromium-(\d+)/i)?.[1]
 
@@ -226,6 +214,5 @@ export function isChromiumRecoveryFailure(code: BrowserDependencyFailureCode): b
 }
 
 export function isAllowedTerminalCwd(cwd: string, ctx: BrowserDetectContext): boolean {
-  const allowed = resolveRecommendedCwd(ctx)
-  return cwd === allowed
+  return cwd === resolveRecommendedCwd(ctx)
 }

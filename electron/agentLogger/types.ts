@@ -24,5 +24,16 @@ export type AgentLogEventName =
   | 'tray.init_failed'
   | 'browser.action'
   | 'browser.error'
+  | 'shell.security.deny'
+  | 'shell.path.confirm'
+  | 'shell.path.reject'
+  | 'shell.precheck'
+  | 'shell.confirm'
+  | 'shell.exec.start'
+  | 'shell.exec.spawned'
+  | 'shell.exec.auto_background'
+  | 'shell.exec.background'
+  | 'shell.exec.finish'
+  | 'shell.exec.error'
 
 export type AgentLogFields = Record<string, unknown>

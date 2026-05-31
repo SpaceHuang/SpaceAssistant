@@ -16,6 +16,8 @@ import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputE
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { browserExecutor } from './browserExecutor'
+import { browserDetectExecutor } from './browserDetectExecutor'
+import { runShellExecutor } from './runShellExecutor'
 
 const READ_MAX = 2 * 1024 * 1024
 const GREP_FILE_MAX = 1024 * 1024
@@ -778,7 +780,9 @@ const registry = new Map<string, ToolExecutor>([
   [runScriptExecutor.name, runScriptExecutor],
   [runLarkCliExecutor.name, runLarkCliExecutor],
   [readFeishuAttachmentExecutor.name, readFeishuAttachmentExecutor],
-  [browserExecutor.name, browserExecutor]
+  [browserExecutor.name, browserExecutor],
+  [browserDetectExecutor.name, browserDetectExecutor],
+  [runShellExecutor.name, runShellExecutor]
 ])
 
 export function getToolExecutor(name: string): ToolExecutor | undefined {

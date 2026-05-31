@@ -13,6 +13,8 @@ import type {
   ToolCallResultPersisted,
   ToolRiskLevel,
   ToolsConfig,
+  ShellConfig,
+  ShellSecurityHints,
   WikiConfig,
   WikiStatus
 } from './domainTypes'
@@ -84,7 +86,13 @@ export type SpaceAssistantApi = {
   ping: () => Promise<string>
 
   sessionList: () => Promise<Session[]>
-  sessionCreate: (payload: { name: string; model?: string; temperature?: number; maxTokens?: number }) => Promise<Session>
+  sessionCreate: (payload: {
+    name: string
+    model?: string
+    temperature?: number
+    maxTokens?: number
+    metadata?: Record<string, unknown>
+  }) => Promise<Session>
   sessionGet: (sessionId: string) => Promise<Session | undefined>
   sessionUpdate: (payload: {
     sessionId: string
@@ -102,7 +110,7 @@ export type SpaceAssistantApi = {
   chatPatchMessage: (payload: {
     messageId: string
     sessionId: string
-    patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments'>>
+    patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>>
   }) => Promise<void>
 
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => Promise<{ ok: true } | { ok: false; error: string }>
@@ -139,6 +147,8 @@ export type SpaceAssistantApi = {
       activeWorkDirProfileId: string
       uiTheme: import('./domainTypes').UiThemeMode
       maxParallelChatSessions: number
+      browser: Partial<import('./domainTypes').BrowserConfig>
+      shell: Partial<ShellConfig>
     }>
   ) => Promise<void>
   configTestConnection: (options?: {
@@ -185,13 +195,29 @@ export type SpaceAssistantApi = {
       input: unknown
       riskLevel: ToolRiskLevel
       diff?: { oldContent: string; newContent: string; oldPath: string }
+      shellSecurityHints?: ShellSecurityHints
     }) => void
   ) => () => void
-  toolOnProgress: (cb: (data: { requestId: string; toolUseId: string; status: string; message?: string }) => void) => () => void
+  toolOnProgress: (
+    cb: (data: {
+      requestId: string
+      toolUseId: string
+      status: string
+      message?: string
+      raw?: string
+      seq?: number
+    }) => void
+  ) => () => void
+  shellOpenTerminal: (payload: { cwd: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   toolOnResult: (
     cb: (data: { requestId: string; toolUseId: string; result: ToolCallResultPersisted }) => void
   ) => () => void
   toolTestInterpreter: (payload: { path: string }) => Promise<{ ok: true; version: string } | { ok: false; error: string }>
+  shellTestExecutable: (payload: {
+    executable?: string
+    argsPrefix?: string[]
+  }) => Promise<{ ok: boolean; error?: string }>
+  shellOpenOutputPath: (absPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
   skillList: () => Promise<SkillDefinition[]>
   skillGet: (payload: { name: string }) => Promise<SkillDefinition | null>
@@ -243,7 +269,7 @@ export type SpaceAssistantApi = {
   feishuInstallSkill: () => Promise<{ success: boolean; stdout?: string; stderr?: string }>
   feishuConfigInit: () => Promise<{ success: boolean; stdout?: string; stderr?: string; timedOut?: boolean; authUrl?: string }>
   feishuAuthLogin: () => Promise<{ success: boolean; authUrl?: string; stdout?: string; stderr?: string; timedOut?: boolean }>
-  feishuAuthStatus: () => Promise<{ authorized: boolean; stdout?: string; stderr?: string }>
+  feishuAuthStatus: () => Promise<{ authorized: boolean; stdout?: string; stderr?: string; hint?: string }>
   feishuEventStart: () => Promise<FeishuEventStatus | undefined>
   feishuEventStop: () => Promise<FeishuEventStatus | undefined>
   feishuEventStatus: () => Promise<FeishuEventStatus | undefined>

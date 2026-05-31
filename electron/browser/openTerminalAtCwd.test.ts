@@ -24,8 +24,19 @@ describe('openTerminalAtCwd', () => {
     if (!r.ok) expect(r.error).toMatch(/不允许/)
   })
 
-  it('accepts recommended devRoot', () => {
+  it('accepts recommended cwd (devRoot in development)', () => {
     const r = openTerminalAtCwd(ctx.devRoot, ctx)
     expect(r.ok).toBe(true)
+  })
+
+  it('accepts session workDir when allowedWorkDir matches', () => {
+    const workDir = 'D:\\Projects\\my-app'
+    const r = openTerminalAtCwd(workDir, ctx, { allowedWorkDir: workDir })
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects workDir mismatch', () => {
+    const r = openTerminalAtCwd('D:\\other', ctx, { allowedWorkDir: ctx.devRoot })
+    expect(r.ok).toBe(false)
   })
 })

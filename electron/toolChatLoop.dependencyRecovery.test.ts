@@ -30,7 +30,7 @@ describe('toolChatLoop dependency recovery integration', () => {
     })
     const parsed = JSON.parse(content) as { message: string; dependencySetupRequired: boolean }
     expect(parsed.dependencySetupRequired).toBe(true)
-    expect(parsed.message).toMatch(/安装引导/)
+    expect(parsed.message).toMatch(/网络访问修复/)
     expect(parsed.message).not.toMatch(/node_modules/)
   })
 })

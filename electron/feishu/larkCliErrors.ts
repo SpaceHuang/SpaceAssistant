@@ -4,7 +4,11 @@ export interface ParsedLarkCliError {
 }
 
 const ERROR_PATTERNS: Array<{ re: RegExp; message: string; hint?: string }> = [
-  { re: /command not found|不是内部或外部命令/i, message: '请先安装 lark-cli', hint: '设置 → 飞书 → 安装 CLI' },
+  {
+    re: /command not found|不是内部或外部命令|is not recognized as an internal or external command/i,
+    message: '请先安装 lark-cli',
+    hint: '设置 → 飞书 → 安装 CLI'
+  },
   { re: /not configured|config init/i, message: '请完成飞书应用配置', hint: '设置 → 飞书 → 配置飞书应用' },
   {
     re: /scope|permission/i,

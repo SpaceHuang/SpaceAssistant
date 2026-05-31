@@ -4,8 +4,9 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
-import { mergeToolsConfig, mergeWikiConfig } from '../src/shared/domainTypes'
+import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
+import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
@@ -229,7 +230,13 @@ app.whenReady().then(() => {
     },
     getAppDatabase: () => db,
     getProjectMemoryEnabled: () => true,
-    getBrowserConfig: () => readBrowserConfigFromDb(db)
+    getBrowserConfig: () => readBrowserConfigFromDb(db),
+    getShellConfig: () => readShellConfigFromDb(db),
+    getBrowserDetectContext: () => ({
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      devRoot: path.join(__dirname, '..', '..')
+    })
   })
 
   registerAppIpcHandlers(ipcMain, {

@@ -25,6 +25,8 @@ interface ChatState {
   runningSessions: Record<string, RunningSessionMeta>
   /** 侧栏待办跳转后高亮的工具确认项 */
   confirmFocusToolUseId: string | null
+  /** 搜索结果跳转后滚动定位的消息 ID */
+  scrollToMessageId: string | null
   lastUsage: LastUsage
   projectMemoryEnabled: boolean
 }
@@ -36,6 +38,7 @@ const initialState: ChatState = {
   error: null,
   runningSessions: {},
   confirmFocusToolUseId: null,
+  scrollToMessageId: null,
   lastUsage: null,
   projectMemoryEnabled: true
 }
@@ -47,10 +50,14 @@ export const chatSlice = createSlice({
     setSession(state, action: PayloadAction<string | null>) {
       state.currentSessionId = action.payload
       state.confirmFocusToolUseId = null
+      state.scrollToMessageId = null
       state.lastUsage = null
     },
     setConfirmFocusToolUseId(state, action: PayloadAction<string | null>) {
       state.confirmFocusToolUseId = action.payload
+    },
+    setScrollToMessageId(state, action: PayloadAction<string | null>) {
+      state.scrollToMessageId = action.payload
     },
     setLastUsage(state, action: PayloadAction<LastUsage>) {
       state.lastUsage = action.payload
@@ -102,6 +109,7 @@ export const chatSlice = createSlice({
       state.error = null
       state.runningSessions = {}
       state.confirmFocusToolUseId = null
+      state.scrollToMessageId = null
       state.lastUsage = null
       state.projectMemoryEnabled = true
     },
@@ -118,6 +126,7 @@ export const {
   patchMessage,
   setChatStatus,
   setConfirmFocusToolUseId,
+  setScrollToMessageId,
   removeRunningSession,
   resetChatUi,
   setLastUsage,

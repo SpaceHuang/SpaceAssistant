@@ -27,11 +27,35 @@
   --sa-bubble-assistant-text: var(--sa-text);
   --sa-bubble-assistant-border: var(--sa-border);
 
+  /* 消息列表 */
+  --sa-chat-scroll-padding: 20px 24px 28px;
+  --sa-chat-row-gap: 20px;
+  --sa-chat-user-max-width: min(480px, 88%);
+  --sa-chat-assistant-max-width: min(760px, 100%);
+  --sa-chat-assistant-accent: color-mix(in srgb, var(--sa-primary) 18%, var(--sa-border) 82%);
+  --sa-chat-user-shadow: 0 2px 8px color-mix(in srgb, var(--sa-primary) 22%, transparent);
+  --sa-chat-assistant-shadow: var(--sa-shadow-sm);
+  --sa-chat-failed-fg: #cf1322;
+  --sa-chat-failed-bg: #fff1f0;
+  --sa-chat-failed-border: #ffa39e;
+  --sa-chat-streaming-fg: var(--sa-primary);
+
   --sa-skill-hint-bg: var(--sa-bg-subtle);
   --sa-code-bg: #1e1e1e;
   --sa-code-text: #d4d4d4;
   --sa-diff-remove-bg: #fff1f0;
   --sa-diff-add-bg: #f6ffed;
+
+  /* 确认卡片 */
+  --sa-confirm-accent: var(--sa-primary);
+  --sa-confirm-accent-subtle: var(--sa-primary-subtle);
+  --sa-confirm-border: color-mix(in srgb, var(--sa-border) 80%, var(--sa-primary) 20%);
+  --sa-confirm-shadow: 0 1px 3px rgba(10, 132, 255, 0.06), 0 4px 14px rgba(0, 0, 0, 0.04);
+  --sa-confirm-header-bg: linear-gradient(180deg, var(--sa-bg-elevated) 0%, var(--sa-bg-subtle) 100%);
+  --sa-confirm-risk-accent: #d48806;
+  --sa-confirm-risk-subtle: rgba(250, 173, 20, 0.14);
+  --sa-confirm-browser-accent: var(--sa-accent);
+  --sa-confirm-browser-subtle: var(--sa-accent-subtle);
 
   /* 写入确认卡片：待操作主按钮（与 diff 绿/红语义一致，对比更强） */
   --sa-write-confirm-allow-bg: #f6ffed;
@@ -63,6 +87,23 @@
   --sa-activity-bar-width: 48px;
   --sa-splitter-width: 4px;
   --sa-pane-header-height: 40px;
+
+  /* 设置弹窗：字号与间距（与侧栏 13px 顶栏对齐，避免 12/11px 混用） */
+  --sa-config-font: 13px;
+  --sa-config-font-sm: 12px;
+  --sa-config-font-meta: 11px;
+  --sa-config-font-section: 14px;
+  --sa-config-font-title: 15px;
+  --sa-config-line: 1.5;
+  --sa-config-line-tight: 1.4;
+  --sa-config-gap-tight: 4px;
+  --sa-config-gap-field: 8px;
+  --sa-config-gap-stack: 16px;
+  --sa-config-gap-substack: 12px;
+  --sa-config-gap-section: 20px;
+  --sa-config-gap-block: 24px;
+  --sa-config-form-item-gap: 16px;
+  --sa-config-control-min-height: 32px;
 }
 
 [data-theme='dark'] {
@@ -91,11 +132,33 @@
   --sa-bubble-assistant-text: var(--sa-text);
   --sa-bubble-assistant-border: var(--sa-border);
 
+  --sa-chat-scroll-padding: 20px 24px 28px;
+  --sa-chat-row-gap: 20px;
+  --sa-chat-user-max-width: min(480px, 88%);
+  --sa-chat-assistant-max-width: min(760px, 100%);
+  --sa-chat-assistant-accent: color-mix(in srgb, var(--sa-primary) 28%, var(--sa-border) 72%);
+  --sa-chat-user-shadow: 0 2px 12px rgba(22, 104, 220, 0.28);
+  --sa-chat-assistant-shadow: var(--sa-shadow-sm);
+  --sa-chat-failed-fg: #ff7875;
+  --sa-chat-failed-bg: rgba(255, 77, 79, 0.12);
+  --sa-chat-failed-border: rgba(255, 120, 117, 0.45);
+  --sa-chat-streaming-fg: var(--sa-primary);
+
   --sa-skill-hint-bg: var(--sa-bg-muted);
   --sa-code-bg: #0d1117;
   --sa-code-text: #e6edf3;
   --sa-diff-remove-bg: rgba(255, 77, 79, 0.12);
   --sa-diff-add-bg: rgba(82, 196, 26, 0.12);
+
+  --sa-confirm-accent: #4096ff;
+  --sa-confirm-accent-subtle: var(--sa-primary-subtle);
+  --sa-confirm-border: color-mix(in srgb, var(--sa-border) 70%, var(--sa-primary) 30%);
+  --sa-confirm-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 20px rgba(0, 0, 0, 0.25);
+  --sa-confirm-header-bg: linear-gradient(180deg, var(--sa-bg-elevated) 0%, var(--sa-bg-subtle) 100%);
+  --sa-confirm-risk-accent: #faad14;
+  --sa-confirm-risk-subtle: rgba(250, 173, 20, 0.16);
+  --sa-confirm-browser-accent: var(--sa-accent);
+  --sa-confirm-browser-subtle: var(--sa-accent-subtle);
 
   --sa-write-confirm-allow-bg: rgba(82, 196, 26, 0.22);
   --sa-write-confirm-allow-border: rgba(115, 209, 61, 0.55);

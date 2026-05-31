@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
 
 type Size = 'sm' | 'md' | 'lg'
 
@@ -14,9 +14,13 @@ const sizeClass: Record<Size, string> = {
   lg: 'sa-icon-btn--lg'
 }
 
-export function SaIconButton({ size = 'md', active, className = '', children, ...rest }: Props) {
+export const SaIconButton = forwardRef<HTMLButtonElement, Props>(function SaIconButton(
+  { size = 'md', active, className = '', children, ...rest },
+  ref
+) {
   return (
     <button
+      ref={ref}
       type="button"
       className={`sa-icon-btn ${sizeClass[size]}${active ? ' sa-icon-btn--active' : ''}${className ? ` ${className}` : ''}`}
       {...rest}
@@ -24,4 +28,4 @@ export function SaIconButton({ size = 'md', active, className = '', children, ..
       {children}
     </button>
   )
-}
+})

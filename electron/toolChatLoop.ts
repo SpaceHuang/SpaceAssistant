@@ -1,4 +1,5 @@
 import type { WebContents } from 'electron'
+import { isWebContentsAlive, safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/toolApiFunctionName'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
@@ -11,7 +12,12 @@ import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolExecutorResult } from './tools/types'
-import type { BrowserConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
+import type { BrowserConfig, ShellConfig, ShellSecurityHints, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
+import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
+import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
+import { getSkillByName } from './skills/skillScanner'
+import { getSession, updateSession } from './database'
+import type { BrowserDetectContext } from '../src/shared/browserTypes'
 import { browserActionNeedsConfirmation, type BrowserAction } from './browser/browserActionPolicy'
 import {
   clearBrowserSessionTrust,
@@ -30,6 +36,15 @@ import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { FeishuRemoteContext } from './tools/types'
 import { isLarkCliWriteOperation } from './feishu/larkCliSecurity'
 import { BROWSER_FEISHU_REMOTE_DISABLED_ERROR } from '../src/shared/browserRemotePolicy'
+import { SHELL_FEISHU_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
+import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
+import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
+import {
+  logShellPathConfirm,
+  logShellSecurityDeny,
+  precheckRunShellTool,
+  type RunShellPrecheckResult
+} from './shell/shellToolLoopHelpers'
 import { publishFeishuRemoteProgress } from './feishu/feishuRemoteProgress'
 import {
   ChatCancelledError,
@@ -225,6 +240,7 @@ export type RunToolChatSessionArgs = {
   options?: { maxTokens?: number; enableThinking?: boolean }
   toolsConfig: ToolsConfig
   browserConfig?: BrowserConfig
+  shellConfig?: ShellConfig | null
   wikiConfig?: WikiConfig
   feishuConfig?: FeishuConfig
   larkCliRunner?: LarkCliRunner
@@ -234,6 +250,7 @@ export type RunToolChatSessionArgs = {
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
   appDb?: AppDatabase
+  getBrowserDetectContext?: () => BrowserDetectContext
 }
 
 export type RunToolChatSessionResult =
@@ -266,6 +283,7 @@ async function runToolChatSessionInner(
     options,
     toolsConfig,
     browserConfig,
+    shellConfig,
     wikiConfig,
     feishuConfig,
     larkCliRunner,
@@ -274,7 +292,8 @@ async function runToolChatSessionInner(
     userDataDir,
     getApiKey,
     appDb,
-    chatSignal
+    chatSignal,
+    getBrowserDetectContext
   } = args
 
   const apiKey = await getApiKey()
@@ -289,6 +308,8 @@ async function runToolChatSessionInner(
   }
 
   const client = createAnthropicClient(apiKey, baseUrl)
+  const sessionMeta = appDb ? getSession(appDb, sessionId)?.metadata : undefined
+  const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
   const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
   const thinking = toolLoopOptions.enableThinking ? ({ type: 'adaptive' as const }) : ({ type: 'disabled' as const })
@@ -324,7 +345,7 @@ async function runToolChatSessionInner(
     })
   }
 
-  const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext)
+  const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext, shellConfig)
   const tools = sanitizeTools(builtinDefs as unknown[])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
   if (toolNames.includes('browser')) {
@@ -334,16 +355,25 @@ async function runToolChatSessionInner(
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
+  let recoverySkillSystemSuffix = ''
 
   while (true) {
     loopRound++
     throwIfChatCancelled(chatSignal)
+    if (!isWebContentsAlive(sender)) {
+      logAgentEvent('warn', 'llm.error', { requestId, sessionId, error: 'Window closed' })
+      return { ok: false, error: 'Window closed' }
+    }
     const memoryContent = getCachedMemoryContent()
-    const systemPrompt = buildSystemPrompt(
-      typeof system === 'string' && system.trim().length > 0 ? system : undefined,
-      memoryContent,
-      true
-    )
+    const baseSystemWithRecovery = recoverySkillSystemSuffix
+      ? [typeof system === 'string' && system.trim().length > 0 ? system : undefined, recoverySkillSystemSuffix]
+          .filter(Boolean)
+          .join('\n\n')
+      : typeof system === 'string' && system.trim().length > 0
+        ? system
+        : undefined
+    const systemWithTools = appendAvailableToolsHint(baseSystemWithRecovery, toolNames)
+    const systemPrompt = buildSystemPrompt(systemWithTools, memoryContent, true)
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,
@@ -409,7 +439,7 @@ async function runToolChatSessionInner(
       if (evt?.type === 'content_block_delta' && (evt as { delta?: { type?: string; thinking?: string } }).delta?.type === 'thinking_delta') {
         const thinkingDelta = (evt as { delta?: { thinking?: string } }).delta?.thinking
         if (typeof thinkingDelta === 'string' && thinkingDelta.length > 0) {
-          sender.send('claude-chat-thinking-delta', { requestId, text: thinkingDelta })
+          safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text: thinkingDelta })
         }
       }
       if (
@@ -422,9 +452,9 @@ async function runToolChatSessionInner(
         const blockType = contentBlockTypes.get(index)
         const textDelta = (evt as { delta: { text: string } }).delta.text
         if (blockType === 'thinking') {
-          sender.send('claude-chat-thinking-delta', { requestId, text: textDelta })
+          safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text: textDelta })
         } else if (blockType === 'text') {
-          sender.send('claude-chat-delta', { requestId, text: textDelta })
+          safeWebContentsSend(sender,'claude-chat-delta', { requestId, text: textDelta })
           const prev = pendingTextByIndex.get(index) ?? ''
           pendingTextByIndex.set(index, prev + textDelta)
         }
@@ -470,14 +500,14 @@ async function runToolChatSessionInner(
               toolName: compatName,
               input: toolUseBlock.input
             })
-            sender.send('tool:use', {
+            safeWebContentsSend(sender,'tool:use', {
               requestId,
               toolUse: { id: pending.id, name: compatName, input: toolUseBlock.input }
             })
           }
         }
       }
-      sender.send('claude-chat-tools-activity', { requestId, at: Date.now() })
+      safeWebContentsSend(sender,'claude-chat-tools-activity', { requestId, at: Date.now() })
     }
 
     const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
@@ -542,7 +572,7 @@ async function runToolChatSessionInner(
           unknownToolError
         )
         toolResults.push(buildToolErrorResult(toolUseId, unknownToolError))
-        sender.send('tool:result', {
+        safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: unknownToolError }
@@ -573,7 +603,7 @@ async function runToolChatSessionInner(
           userMsg
         )
         toolResults.push(buildToolErrorResult(toolUseId, userMsg))
-        sender.send('tool:result', {
+        safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: userMsg }
@@ -593,7 +623,7 @@ async function runToolChatSessionInner(
           remoteBlock
         )
         toolResults.push(buildToolErrorResult(toolUseId, remoteBlock))
-        sender.send('tool:result', {
+        safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: remoteBlock, blockedReason: 'feishu_remote_write_blocked' }
@@ -617,7 +647,7 @@ async function runToolChatSessionInner(
           BROWSER_FEISHU_REMOTE_DISABLED_ERROR
         )
         toolResults.push(buildToolErrorResult(toolUseId, BROWSER_FEISHU_REMOTE_DISABLED_ERROR))
-        sender.send('tool:result', {
+        safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: BROWSER_FEISHU_REMOTE_DISABLED_ERROR }
@@ -629,14 +659,83 @@ async function runToolChatSessionInner(
         continue
       }
 
+      if (toolName === 'run_shell' && remoteContext?.source === 'feishu') {
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          SHELL_FEISHU_REMOTE_DISABLED_ERROR,
+          SHELL_FEISHU_REMOTE_DISABLED_ERROR
+        )
+        toolResults.push(buildToolErrorResult(toolUseId, SHELL_FEISHU_REMOTE_DISABLED_ERROR))
+        safeWebContentsSend(sender,'tool:result', {
+          requestId,
+          toolUseId,
+          result: { success: false, error: SHELL_FEISHU_REMOTE_DISABLED_ERROR }
+        })
+        if (toolErrorRepeat.noteFailure(toolName, SHELL_FEISHU_REMOTE_DISABLED_ERROR)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${SHELL_FEISHU_REMOTE_DISABLED_ERROR}`
+          break
+        }
+        continue
+      }
+
+      let shellPrecheck: RunShellPrecheckResult | null = null
+      let shellSecurityHints: ShellSecurityHints | undefined
+      if (toolName === 'run_shell') {
+        const command = typeof inputObj.command === 'string' ? inputObj.command : ''
+        shellPrecheck = await precheckRunShellTool({
+          command,
+          workDir,
+          userDataDir,
+          shellConfig
+        })
+        if (!shellPrecheck.ok) {
+          logShellSecurityDeny({
+            requestId,
+            sessionId,
+            command,
+            reason: shellPrecheck.auditReason
+          })
+          logToolLoopError(
+            { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+            shellPrecheck.error,
+            shellPrecheck.error
+          )
+          toolResults.push(buildToolErrorResult(toolUseId, shellPrecheck.error))
+          safeWebContentsSend(sender,'tool:result', {
+            requestId,
+            toolUseId,
+            result: { success: false, error: shellPrecheck.error }
+          })
+          if (toolErrorRepeat.noteFailure(toolName, shellPrecheck.error)) {
+            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${shellPrecheck.error}`
+            break
+          }
+          continue
+        }
+        shellSecurityHints = shellPrecheck.hints
+        logShellPrecheck({
+          requestId,
+          sessionId,
+          toolUseId,
+          loopRound,
+          command,
+          verdict: shellPrecheck.analysis.verdict,
+          skipConfirm: shellPrecheck.skipConfirm,
+          hints: shellPrecheck.hints
+        })
+      }
+
       let outcome: ToolConfirmOutcome = 'approved'
-      const needsConfirm = toolNeedsUserConfirmation(
+      let needsConfirm = toolNeedsUserConfirmation(
         toolName,
         inputObj,
         feishuConfig,
         browserConfig,
         sessionId
       )
+      if (toolName === 'run_shell' && shellPrecheck?.ok && shellPrecheck.skipConfirm) {
+        needsConfirm = false
+      }
 
       if (needsConfirm && remoteContext?.source === 'feishu') {
         if (
@@ -659,15 +758,37 @@ async function runToolChatSessionInner(
       } else if (needsConfirm) {
         const diff =
           toolsConfig.confirmMode === 'diff' ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
-        sender.send('tool:confirm-request', {
+        safeWebContentsSend(sender,'tool:confirm-request', {
           requestId,
           toolUseId,
           toolName,
           input: inputObj,
-          riskLevel: toolName === 'run_script' || toolName === 'run_lark_cli' ? 'high' : 'medium',
-          ...(diff ? { diff } : {})
+          riskLevel:
+            toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+          ...(diff ? { diff } : {}),
+          ...(shellSecurityHints ? { shellSecurityHints } : {})
         })
         outcome = await waitForToolConfirm(requestId, toolUseId)
+        if (toolName === 'run_shell' && shellSecurityHints) {
+          const command = typeof inputObj.command === 'string' ? inputObj.command : ''
+          if (outcome === 'approved' && shellSecurityHints.requiresRiskAck) {
+            logShellPathConfirm({
+              requestId,
+              sessionId,
+              command,
+              outcome: 'confirm',
+              hints: shellSecurityHints
+            })
+          } else if (outcome === 'rejected' && shellSecurityHints.requiresRiskAck) {
+            logShellPathConfirm({
+              requestId,
+              sessionId,
+              command,
+              outcome: 'reject',
+              hints: shellSecurityHints
+            })
+          }
+        }
         logAgentEvent('info', 'tool.confirm', {
           requestId,
           sessionId,
@@ -677,6 +798,20 @@ async function runToolChatSessionInner(
           outcome
         })
         throwIfChatCancelled(chatSignal)
+      }
+
+      if (toolName === 'run_shell' && shellPrecheck?.ok) {
+        const command = typeof inputObj.command === 'string' ? inputObj.command : ''
+        logShellConfirmOutcome({
+          requestId,
+          sessionId,
+          toolUseId,
+          loopRound,
+          command,
+          outcome: shellPrecheck.skipConfirm && !needsConfirm ? 'skip_confirm' : outcome,
+          skipConfirm: shellPrecheck.skipConfirm,
+          hints: shellSecurityHints
+        })
       }
 
       if (outcome === 'timeout') {
@@ -690,7 +825,7 @@ async function runToolChatSessionInner(
           timeoutError
         )
         toolResults.push(buildToolErrorResult(toolUseId, timeoutError))
-        sender.send('tool:result', {
+        safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: timeoutError }
@@ -720,7 +855,7 @@ async function runToolChatSessionInner(
           rejectedError
         )
         toolResults.push(buildToolErrorResult(toolUseId, rejectedError))
-        sender.send('tool:result', {
+        safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
           result: { success: false, error: rejectedError }
@@ -742,7 +877,7 @@ async function runToolChatSessionInner(
             conflict
           )
           toolResults.push(buildToolErrorResult(toolUseId, conflict))
-          sender.send('tool:result', {
+          safeWebContentsSend(sender,'tool:result', {
             requestId,
             toolUseId,
             result: { success: false, error: conflict }
@@ -757,7 +892,17 @@ async function runToolChatSessionInner(
       }
 
       const signal = registerToolCancel(requestId, toolUseId)
-      const sendProgress = (status: string, message?: string) => {
+      const sendProgress = (status: string, payload?: string | import('./tools/types').ToolProgressPayload) => {
+        let message: string | undefined
+        let raw: string | undefined
+        let seq: number | undefined
+        if (typeof payload === 'string') {
+          message = payload
+        } else if (payload) {
+          message = payload.message
+          raw = payload.raw
+          seq = payload.seq
+        }
         if (status === 'error') {
           logAgentEvent('error', 'tool.progress', {
             requestId,
@@ -769,7 +914,20 @@ async function runToolChatSessionInner(
             message
           })
         }
-        sender.send('tool:progress', { requestId, toolUseId, status, message })
+        safeWebContentsSend(sender,'tool:progress', { requestId, toolUseId, status, message, raw, seq })
+        if (
+          message?.trim() &&
+          remoteContext?.source === 'feishu' &&
+          remoteContext.larkCliRunner &&
+          remoteContext.messageId
+        ) {
+          void publishFeishuRemoteProgress(
+            remoteContext.larkCliRunner,
+            remoteContext.messageId,
+            sessionId,
+            message
+          ).catch(() => undefined)
+        }
       }
 
       let execResult: ToolExecutorResult
@@ -788,12 +946,15 @@ async function runToolChatSessionInner(
           fileStateCache: fileCache,
           toolsConfig,
           browserConfig,
+          shellConfig,
+          shellOutputMode,
           appDatabase: appDb,
           wikiConfig,
           feishuConfig,
           larkCliRunner,
           remoteContext,
-          toolUserConfirmed
+          toolUserConfirmed,
+          getBrowserDetectContext
         })
         if (toolName === 'browser' && browserConfig) {
           stagehandService.scheduleIdleClose(sessionId, browserConfig.idleTimeoutSec)
@@ -877,6 +1038,18 @@ async function runToolChatSessionInner(
           content: payload
         })
       } else if (recoverySkill && execResult.dependencyError) {
+        if (!recoverySkillSystemSuffix && appDb) {
+          const cur = getSession(appDb, sessionId)
+          if (cur) {
+            updateSession(appDb, sessionId, {
+              skillsState: activateRecoverySkillInState(cur.skillsState, recoverySkill)
+            })
+            const skill = getSkillByName(userDataDir, workDir, recoverySkill)
+            if (skill) {
+              recoverySkillSystemSuffix = buildSystemPromptFromSkills([skill])
+            }
+          }
+        }
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseId,
@@ -892,7 +1065,7 @@ async function runToolChatSessionInner(
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execError}`
         }
       }
-      sender.send('tool:result', {
+      safeWebContentsSend(sender,'tool:result', {
         requestId,
         toolUseId,
         result: {

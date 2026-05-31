@@ -1,0 +1,36 @@
+import { describe, expect, it, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { App, ConfigProvider } from 'antd'
+import { ShellSettingsTab } from './ShellSettingsTab'
+import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+
+describe('ShellSettingsTab', () => {
+  it('shows builtin deny rules', () => {
+    render(
+      <ConfigProvider>
+        <App>
+          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={vi.fn()} />
+        </App>
+      </ConfigProvider>
+    )
+    expect(screen.getByText(/sudo:\*/)).toBeTruthy()
+    expect(screen.getByText(/lark-cli:\*/)).toBeTruthy()
+  })
+
+  it('adds a rule when clicking add button', () => {
+    const onChange = vi.fn()
+    render(
+      <ConfigProvider>
+        <App>
+          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={onChange} />
+        </App>
+      </ConfigProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: '添加规则' }))
+    expect(onChange).toHaveBeenCalled()
+    const updater = onChange.mock.calls[0]?.[0] as (prev: typeof DEFAULT_SHELL_CONFIG) => typeof DEFAULT_SHELL_CONFIG
+    const next = updater(DEFAULT_SHELL_CONFIG)
+    expect(next.rules?.length).toBe(1)
+    expect(next.rules?.[0]?.decision).toBe('allow')
+  })
+})

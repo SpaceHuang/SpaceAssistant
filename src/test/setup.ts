@@ -21,6 +21,19 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   }
 }
 
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  window.matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false
+  })
+}
+
 if (typeof localStorage === 'undefined') {
   const store: Record<string, string> = {}
   Object.defineProperty(globalThis, 'localStorage', {

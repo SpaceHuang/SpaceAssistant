@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App, Typography } from 'antd'
-
-const { Text } = Typography
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { App } from 'antd'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { addMessage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages } from '../../store/chatSlice'
+import { addMessage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId } from '../../store/chatSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
   clearLiveSession,
@@ -36,15 +34,18 @@ import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
 import { appendSkillActivationLog } from '../../services/skillActivationLog'
+import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserRecoverySkillService'
+import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
+import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
-import { buildSystemPromptFromSkills, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
+import { buildSystemPromptFromSkills, buildSkillRouteSignature, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
+import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState } from '../../../shared/domainTypes'
+import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatBubble } from './ChatBubble'
 import { MessageInput, type MessageInputHandle } from './MessageInput'
-import type { SkillHint } from './SkillHintBubble'
 import { CHAT_CANCELLED_MESSAGE, isChatCancelledError } from '../../../shared/chatCancel'
 import { buildAssistantStreamPatch } from '../../../shared/assistantStreamPatch'
 import {
@@ -86,12 +87,14 @@ export function ChatView() {
   const messages = useTypedSelector((s) => s.chat.messages)
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
+  const scrollToMessageId = useTypedSelector((s) => s.chat.scrollToMessageId)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
+  const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const scrollRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<MessageInputHandle>(null)
   const abortRequestedRef = useRef(false)
-  const [skillHints, setSkillHints] = useState<SkillHint[]>([])
+  const lastSkillRouteSignatureRef = useRef('')
 
   const streamingAssistantId = useMemo(
     () => messages.find((m) => m.role === 'assistant' && m.status === 'streaming')?.id,
@@ -99,7 +102,7 @@ export function ChatView() {
   )
 
   useEffect(() => {
-    setSkillHints([])
+    lastSkillRouteSignatureRef.current = ''
   }, [sessionId])
 
   useEffect(() => {
@@ -117,6 +120,15 @@ export function ChatView() {
       cancelled = true
     }
   }, [sessionId, dispatch])
+
+  useEffect(() => {
+    if (!scrollToMessageId || messages.length === 0) return
+    const el = scrollRef.current?.querySelector(`[data-message-id="${scrollToMessageId}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      dispatch(setScrollToMessageId(null))
+    }
+  }, [scrollToMessageId, messages, dispatch])
 
   const reloadSessionMessagesFromDb = useCallback(
     async (targetSessionId: string) => {
@@ -236,8 +248,18 @@ export function ChatView() {
     [dispatch, message, scrollBottom]
   )
 
+  const persistSkillHintSystemMessage = useCallback(
+    async (targetSessionId: string, text: string, shownAt = Date.now()) => {
+      const msg = createSkillHintSystemMessage(targetSessionId, text, shownAt)
+      dispatch(addMessage(msg))
+      await window.api.chatAppendMessage(msg)
+      scrollBottom()
+    },
+    [dispatch, scrollBottom]
+  )
+
   const sendInternal = useCallback(
-    async (text: string) => {
+    async (text: string, skillsStateOverride?: SessionSkillsState) => {
       if (!sessionId || !cfg) {
         message.warning('请先选择会话并等待配置加载')
         return
@@ -257,14 +279,15 @@ export function ChatView() {
         return
       }
       const wikiConfig = cfg.wiki ?? DEFAULT_WIKI_CONFIG
-      let sessionSkillsState = normalizeSessionSkillsState(currentSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE)
+      let sessionSkillsState = normalizeSessionSkillsState(
+        skillsStateOverride ?? currentSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE
+      )
       let chatText = text
       let wikiModeRun = false
 
       const wikiCmd = await parseWikiCommand(text, wikiConfig, sessionSkillsState)
       if (wikiCmd.type === 'command') {
-        setSkillHints((prev) => [...prev, { text: wikiCmd.hint, timestamp: Date.now() }])
-        scrollBottom()
+        await persistSkillHintSystemMessage(runSessionId, wikiCmd.hint)
         if (wikiCmd.skillsState) {
           const updated = await window.api.sessionUpdate({ sessionId, skillsState: wikiCmd.skillsState })
           if (updated) dispatch(upsertSession(updated))
@@ -272,8 +295,7 @@ export function ChatView() {
         return
       }
       if (wikiCmd.type === 'run') {
-        setSkillHints((prev) => [...prev, { text: wikiCmd.hint, timestamp: Date.now() }])
-        scrollBottom()
+        await persistSkillHintSystemMessage(runSessionId, wikiCmd.hint)
         chatText = wikiCmd.text
         sessionSkillsState = wikiCmd.skillsState
         wikiModeRun = true
@@ -287,8 +309,7 @@ export function ChatView() {
 
       const cmd = await parseSkillCommand(chatText, sessionSkillsState)
       if (cmd.type === 'command') {
-        setSkillHints((prev) => [...prev, { text: cmd.hint, timestamp: Date.now() }])
-        scrollBottom()
+        await persistSkillHintSystemMessage(runSessionId, cmd.hint)
         if (cmd.skillsState) {
           const updated = await window.api.sessionUpdate({ sessionId, skillsState: cmd.skillsState })
           if (updated) dispatch(upsertSession(updated))
@@ -307,25 +328,7 @@ export function ChatView() {
       }
 
       dispatch(addMessage(userMsg))
-
-      const assistantId = crypto.randomUUID()
-      const findAssistantRow = () =>
-        getLiveMessages(runSessionId)?.find((m) => m.id === assistantId) ??
-        store.getState().chat.messages.find((m) => m.id === assistantId)
-      const assistantMsg: Message = {
-        id: assistantId,
-        sessionId: runSessionId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        status: 'streaming',
-        schemaVersion: CURRENT_SCHEMA_VERSION
-      }
-      dispatch(addMessage(assistantMsg))
-      initLiveSessionFromStore(runSessionId)
-
       await window.api.chatAppendMessage(userMsg)
-      await window.api.chatAppendMessage(assistantMsg)
 
       const requestId = crypto.randomUUID()
       registerSessionRun(runSessionId, requestId)
@@ -349,9 +352,15 @@ export function ChatView() {
         model: cfg.model
       })
       const activeSkills = routeResult.skills
+      let skillHintTimestamp: number | undefined
+      let routeSkillHintText: string | undefined
       if (activeSkills.length > 0) {
-        setSkillHints((prev) => [...prev, { text: formatSkillRouteHint(activeSkills, routeResult.meta.sources), timestamp: Date.now() }])
-        scrollBottom()
+        const routeSignature = buildSkillRouteSignature(activeSkills, routeResult.meta.sources)
+        if (routeSignature !== lastSkillRouteSignatureRef.current) {
+          lastSkillRouteSignatureRef.current = routeSignature
+          skillHintTimestamp = Date.now()
+          routeSkillHintText = formatSkillRouteHint(activeSkills, routeResult.meta.sources)
+        }
         const logSource: SkillActivationSource =
           activeSkills.map((s) => routeResult.meta.sources[s.meta.name]).find((src) => src === 'llm') ??
           routeResult.meta.sources[activeSkills[0]!.meta.name] ??
@@ -386,6 +395,35 @@ export function ChatView() {
       }
 
       if (abortRequestedRef.current) {
+        dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
+        finishSessionRun(runSessionId, requestId)
+        message.info(CHAT_CANCELLED_MESSAGE)
+        scrollBottom()
+        return
+      }
+
+      const assistantId = crypto.randomUUID()
+      const findAssistantRow = () =>
+        getLiveMessages(runSessionId)?.find((m) => m.id === assistantId) ??
+        store.getState().chat.messages.find((m) => m.id === assistantId)
+      const assistantMsg: Message = {
+        id: assistantId,
+        sessionId: runSessionId,
+        role: 'assistant',
+        content: '',
+        timestamp: skillHintTimestamp != null ? skillHintTimestamp + 1 : Date.now(),
+        skillHints:
+          routeSkillHintText && skillHintTimestamp != null
+            ? [createSkillHintRecord(routeSkillHintText, skillHintTimestamp)]
+            : undefined,
+        status: 'streaming',
+        schemaVersion: CURRENT_SCHEMA_VERSION
+      }
+      dispatch(addMessage(assistantMsg))
+      initLiveSessionFromStore(runSessionId)
+      await window.api.chatAppendMessage(assistantMsg)
+
+      if (abortRequestedRef.current) {
         await finishCancelled(
           runSessionId,
           requestId,
@@ -405,7 +443,30 @@ export function ChatView() {
           assistantMessageId: assistantId,
           getRequestId: () => requestId,
           onRecordsChange: () => scrollBottomThrottled(),
-          applyAssistantPatch: (patch) => routePatchMessage(runSessionId, assistantId, patch)
+          applyAssistantPatch: (patch) => routePatchMessage(runSessionId, assistantId, patch),
+          onDependencyRecovery: (recovery) => {
+            void activateBrowserRecoverySkillIfNeeded({
+              dependencyRecovery: recovery,
+              sessionId: runSessionId,
+              currentSkillsState: store.getState().session.list.find((x) => x.id === runSessionId)?.skillsState
+            }).then((result) => {
+              if (!result.activated || !result.hint) return
+              lastSkillRouteSignatureRef.current = `${BROWSER_SETUP_RECOVERY_SKILL}@manual`
+              const shownAt = Date.now()
+              const row = findAssistantRow()
+              const skillHints = appendSkillHintRecord(row?.skillHints, result.hint, shownAt)
+              routePatchMessage(runSessionId, assistantId, { skillHints })
+              void window.api.chatPatchMessage({
+                messageId: assistantId,
+                sessionId: runSessionId,
+                patch: { skillHints }
+              })
+              scrollBottomThrottled()
+              void window.api.sessionGet(runSessionId).then((s) => {
+                if (s) dispatch(upsertSession(s))
+              })
+            })
+          }
         })
         controller.subscribe()
 
@@ -464,6 +525,7 @@ export function ChatView() {
             messages: historyForApi,
             toolsConfig: cfg.tools,
             browserConfig: cfg.browser,
+            shellConfig: cfg.shell,
             maxTokens: outputMaxTokens,
             thinkingEnabled: cfg.thinkingEnabled,
             system: systemPrompt || undefined
@@ -641,7 +703,7 @@ export function ChatView() {
         }
       )
     },
-    [cfg, currentSession, dispatch, sessionId, finishCancelled, message]
+    [cfg, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage]
   )
 
   const send = useCallback(
@@ -650,6 +712,35 @@ export function ChatView() {
     },
     [sendInternal]
   )
+
+  const launchIntentConsumedRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!chatLaunchIntent || !sessionId || chatLaunchIntent.sessionId !== sessionId || !cfg) return
+    const key = `${chatLaunchIntent.sessionId}:${chatLaunchIntent.initialUserMessage}`
+    if (launchIntentConsumedRef.current === key) return
+    launchIntentConsumedRef.current = key
+
+    const consume = async () => {
+      const skillsState = activateRecoverySkillInState(
+        currentSession?.skillsState,
+        chatLaunchIntent.skillName
+      )
+      const updated = await window.api.sessionUpdate({
+        sessionId,
+        skillsState,
+        metadata: {
+          ...(currentSession?.metadata ?? {}),
+          chatLaunchSource: chatLaunchIntent.source,
+          ...(chatLaunchIntent.metadata ?? {})
+        }
+      })
+      if (updated) dispatch(upsertSession(updated))
+      dispatch(clearChatLaunchIntent())
+      await sendInternal(chatLaunchIntent.initialUserMessage, updated?.skillsState ?? skillsState)
+    }
+    void consume()
+  }, [chatLaunchIntent, sessionId, cfg, currentSession, dispatch, sendInternal])
 
   const running = sessionRunning
 
@@ -716,54 +807,43 @@ export function ChatView() {
     ]
   )
 
-  const timeline = useMemo(() => {
-    const items: Array<
-      | { kind: 'message'; message: Message; timestamp: number }
-      | { kind: 'hint'; hint: SkillHint; timestamp: number }
-    > = [
-      ...messages.map((m) => ({ kind: 'message' as const, message: m, timestamp: m.timestamp })),
-      ...skillHints.map((h) => ({ kind: 'hint' as const, hint: h, timestamp: h.timestamp }))
-    ]
-    items.sort((a, b) => a.timestamp - b.timestamp)
-    return items
-  }, [messages, skillHints])
-
   return (
     <div className="chat-view">
       <div ref={scrollRef} className="chat-scroll">
         {!sessionId ? (
           <div className="chat-empty">
+            <div className="chat-empty-icon" aria-hidden>
+              ◇
+            </div>
             <div className="chat-empty-title">选择或创建一个会话</div>
-            <Text type="secondary">在左侧开始与 AI 助手对话</Text>
+            <p className="chat-empty-desc">在左侧开始与 AI 助手对话</p>
           </div>
-        ) : timeline.length === 0 ? (
+        ) : messages.length === 0 ? (
           <div className="chat-empty">
+            <div className="chat-empty-icon" aria-hidden>
+              ↗
+            </div>
             <div className="chat-empty-title">开始对话</div>
-            <Text type="secondary">输入问题，或尝试 /skill、/wiki 命令</Text>
+            <p className="chat-empty-desc">输入问题，或尝试 /skill、/wiki 命令</p>
           </div>
         ) : (
-          timeline.map((item) => {
-            if (item.kind === 'hint') {
-              return (
-                <div key={`hint-${item.hint.timestamp}`} className="chat-system-track">
-                  <span className="chat-skill-hint">{item.hint.text}</span>
-                </div>
-              )
-            }
-            const m = item.message
-            return (
+          <div className="chat-message-list">
+            {messages.map((m) => (
               <ChatBubble
                 key={m.id}
                 message={m}
                 toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
                 focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
+                workDir={cfg?.workDir}
+                shellConfig={cfg?.shell}
+                sessionMetadata={currentSession?.metadata}
                 onOpenFile={handleOpenFile}
                 wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
                 showArchiveToWiki={Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim())}
                 onArchiveToWiki={() => handleArchiveToWiki(m.content)}
               />
-            )
-          })
+            ))}
+          </div>
         )}
       </div>
       <MessageInput

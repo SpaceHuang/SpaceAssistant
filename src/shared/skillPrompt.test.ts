@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SkillDefinition } from './domainTypes'
-import { buildSystemPromptFromSkills, truncateSystemPrompt } from './skillPrompt'
+import { buildAvailableToolsHint, buildSkillRouteSignature, buildSystemPromptFromSkills, truncateSystemPrompt } from './skillPrompt'
 
 describe('skillPrompt', () => {
   it('builds system prompt from skills', () => {
@@ -24,5 +24,27 @@ describe('skillPrompt', () => {
     const truncated = truncateSystemPrompt(long, 100)
     expect(truncated.length).toBeLessThanOrEqual(100)
     expect(truncated).toContain('截断')
+  })
+
+  it('buildAvailableToolsHint lists tools and notes when run_shell disabled', () => {
+    const hint = buildAvailableToolsHint(['read_file', 'browser_detect'])
+    expect(hint).toContain('read_file, browser_detect')
+    expect(hint).toContain('run_shell 当前未启用')
+    expect(hint).toContain('run_script')
+  })
+
+  it('buildSkillRouteSignature is stable for same route', () => {
+    const skills = [
+      {
+        meta: { name: 'browser-setup-guide', description: '', triggers: [], version: '1', author: '' },
+        content: '',
+        scope: 'builtin' as const,
+        directoryPath: '',
+        filePath: '',
+        lastModified: 0
+      }
+    ]
+    const sources = { 'browser-setup-guide': 'manual' as const }
+    expect(buildSkillRouteSignature(skills, sources)).toBe('browser-setup-guide@manual')
   })
 })

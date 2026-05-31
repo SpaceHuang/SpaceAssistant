@@ -1,4 +1,4 @@
-import type { ContentSegment, ThinkingData, ToolCallRecord } from './domainTypes'
+import type { ContentSegment, SkillHintRecord, ThinkingData, ToolCallRecord } from './domainTypes'
 import { contentSegmentsForRender } from './contentSegments'
 import { thinkingSegmentsForRender } from './thinkingSegments'
 
@@ -6,15 +6,18 @@ export type AssistantActivityItem =
   | { kind: 'thinking'; segmentIndex: number }
   | { kind: 'text'; segmentIndex: number }
   | { kind: 'tool'; toolId: string }
+  | { kind: 'skill'; hintId: string }
 
-const KIND_ORDER = { thinking: 0, text: 1, tool: 2 } as const
+const KIND_ORDER = { thinking: 0, skill: 1, text: 2, tool: 3 } as const
 
 function zipInterleaveLegacy(
   thinkingSegs: ReturnType<typeof thinkingSegmentsForRender>,
   tools: ToolCallRecord[],
-  textSegs: ContentSegment[]
+  textSegs: ContentSegment[],
+  skills: SkillHintRecord[]
 ): AssistantActivityItem[] {
   const out: AssistantActivityItem[] = []
+  skills.forEach((hint) => out.push({ kind: 'skill', hintId: hint.id }))
   const n = Math.max(thinkingSegs.length, tools.length)
   for (let i = 0; i < n; i++) {
     if (i < thinkingSegs.length) out.push({ kind: 'thinking', segmentIndex: i })
@@ -24,23 +27,26 @@ function zipInterleaveLegacy(
   return out
 }
 
-/** 按发生顺序交错思考、正文与工具调用，供助手消息活动流渲染 */
+/** 按发生顺序交错思考、Skill 提示、正文与工具调用，供助手消息活动流渲染 */
 export function buildAssistantActivityTimeline(message: {
   content: string
   contentSegments?: ContentSegment[]
   thinking?: ThinkingData
   toolCalls?: ToolCallRecord[]
+  skillHints?: SkillHintRecord[]
   timestamp: number
 }): AssistantActivityItem[] {
   const thinkingSegs = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
   const textSegs = contentSegmentsForRender(message)
   const tools = message.toolCalls ?? []
-  if (thinkingSegs.length === 0 && textSegs.length === 0 && tools.length === 0) return []
+  const skills = message.skillHints ?? []
+  if (thinkingSegs.length === 0 && textSegs.length === 0 && tools.length === 0 && skills.length === 0) return []
 
   const toolsHaveTimeline = tools.some((t) => t.startedAt != null)
   const textHasTimeline = Boolean(message.contentSegments?.length)
-  if (!toolsHaveTimeline && !textHasTimeline) {
-    return zipInterleaveLegacy(thinkingSegs, tools, textSegs)
+  const skillsHaveTimeline = skills.length > 0
+  if (!toolsHaveTimeline && !textHasTimeline && !skillsHaveTimeline) {
+    return zipInterleaveLegacy(thinkingSegs, tools, textSegs, skills)
   }
 
   type Sortable = AssistantActivityItem & { sortAt: number; order: number }
@@ -50,7 +56,15 @@ export function buildAssistantActivityTimeline(message: {
       kind: 'thinking',
       segmentIndex: i,
       sortAt: seg.startTime,
-      order: i * 3 + KIND_ORDER.thinking
+      order: i * 4 + KIND_ORDER.thinking
+    })
+  })
+  skills.forEach((hint, i) => {
+    items.push({
+      kind: 'skill',
+      hintId: hint.id,
+      sortAt: hint.shownAt,
+      order: i * 4 + KIND_ORDER.skill
     })
   })
   textSegs.forEach((seg, i) => {
@@ -58,7 +72,7 @@ export function buildAssistantActivityTimeline(message: {
       kind: 'text',
       segmentIndex: i,
       sortAt: seg.startTime,
-      order: i * 3 + KIND_ORDER.text
+      order: i * 4 + KIND_ORDER.text
     })
   })
   tools.forEach((tc, i) => {
@@ -66,7 +80,7 @@ export function buildAssistantActivityTimeline(message: {
       kind: 'tool',
       toolId: tc.id,
       sortAt: tc.startedAt ?? tc.completedAt ?? i * 1000 + 999,
-      order: i * 3 + KIND_ORDER.tool
+      order: i * 4 + KIND_ORDER.tool
     })
   })
   items.sort((a, b) => {
@@ -76,6 +90,7 @@ export function buildAssistantActivityTimeline(message: {
   })
   return items.map((item) => {
     if (item.kind === 'thinking') return { kind: 'thinking', segmentIndex: item.segmentIndex }
+    if (item.kind === 'skill') return { kind: 'skill', hintId: item.hintId }
     if (item.kind === 'text') return { kind: 'text', segmentIndex: item.segmentIndex }
     return { kind: 'tool', toolId: item.toolId }
   })

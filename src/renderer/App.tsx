@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react'
-import { App as AntdApp, Button, Empty, Input, Typography } from 'antd'
-
-const { Text } = Typography
+import { App as AntdApp, Button, Empty, Input } from 'antd'
 import { Square, Trash2 } from 'lucide-react'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession, removeSession } from './store/sessionSlice'
-import { setSession } from './store/chatSlice'
+import { setSession, setScrollToMessageId } from './store/chatSlice'
 import { setConfig, setSettingsOpen, setAboutOpen } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
 import { ConfigModal } from './components/Config/ConfigModal'
@@ -19,6 +17,8 @@ import { abortSessionRun } from './services/chatRunnerService'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
 import { SessionListIcon } from './components/SessionList/SessionListIcon'
 import { PendingConfirmBanner } from './components/SessionList/PendingConfirmBanner'
+import { SearchPane } from './components/Search/SearchPane'
+import { requestFilePaneSelect } from './services/filePaneNavigation'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import folderLineRaw from './assets/folder_line.svg?raw'
@@ -118,43 +118,6 @@ function LeftSessions() {
   )
 }
 
-function SearchPane() {
-  const [q, setQ] = useState('')
-  const [results, setResults] = useState<Awaited<ReturnType<typeof window.api.searchExecute>>>([])
-  const dispatch = useAppDispatch()
-
-  const run = async () => {
-    const rows = await window.api.searchExecute(q)
-    setResults(rows)
-  }
-
-  return (
-    <div className="sider-pane">
-      <Input.Search placeholder="搜索聊天与文本文件" value={q} onChange={(e) => setQ(e.target.value)} onSearch={run} />
-      <div className="session-list-scroll">
-        {results.map((item) => (
-          <div
-            key={item.id}
-            className="session-item"
-            onClick={() => {
-              if (item.sessionId) dispatch(setSession(item.sessionId))
-            }}
-          >
-            <Text strong ellipsis>
-              [{item.type}] {item.title}
-            </Text>
-            <div>
-              <Text type="secondary" ellipsis>
-                {item.preview}
-              </Text>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 function IconTab({
   lineSvg,
   fillSvg,
@@ -200,6 +163,17 @@ function AppShellInner() {
     void openFile(relPath).catch((e) => {
       message.error(e instanceof Error ? e.message : String(e))
     })
+  }
+
+  const handleSearchSessionClick = (sessionId: string, messageId: string) => {
+    dispatch(setSession(sessionId))
+    dispatch(setScrollToMessageId(messageId))
+  }
+
+  const handleSearchFileClick = (relPath: string) => {
+    setSiderKey('files')
+    requestFilePaneSelect({ relPath })
+    handleFileSelect(relPath)
   }
 
   const handleCollectToWiki = (srcRelPath: string) => {
@@ -268,7 +242,12 @@ function AppShellInner() {
               {siderKey === 'files' && (
                 <FilePane workDir={config?.workDir ?? ''} onFileSelect={handleFileSelect} onCollectToWiki={handleCollectToWiki} />
               )}
-              {siderKey === 'search' && <SearchPane />}
+              <div className={siderKey === 'search' ? 'search-pane-mount' : 'search-pane-mount search-pane-mount--hidden'}>
+                <SearchPane
+                  onSessionResultClick={handleSearchSessionClick}
+                  onFileResultClick={handleSearchFileClick}
+                />
+              </div>
             </div>
           </div>
         </div>

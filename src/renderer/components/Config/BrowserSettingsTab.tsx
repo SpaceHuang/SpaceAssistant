@@ -1,13 +1,22 @@
-import { Alert, Select, Tooltip } from 'antd'
-import { useMemo } from 'react'
+import { Alert, Button, Select, Tooltip } from 'antd'
+import { useMemo, useState } from 'react'
 import type { BrowserConfig, ModelEntry } from '../../../shared/domainTypes'
-import { BrowserSetupGuide } from '../Browser/BrowserSetupGuide'
+import {
+  BROWSER_SETUP_REPAIR_INITIAL_MESSAGE,
+  BROWSER_SETUP_REPAIR_SESSION_NAME
+} from '../../../shared/domainTypes'
+import { BrowserDetectStatusSummary } from '../Browser/BrowserDetectStatusSummary'
 import { useBrowserDetect } from '../../hooks/useBrowserDetect'
+import { useAppDispatch } from '../../hooks'
+import { setSettingsOpen } from '../../store/configSlice'
+import { setChatLaunchIntent } from '../../store/chatLaunchSlice'
+import { setSession } from '../../store/chatSlice'
+import { upsertSession } from '../../store/sessionSlice'
 import refresh2LineRaw from '../../assets/refresh_2_line.svg?raw'
 import { patchSvg } from '../../utils/patchSvg'
 import { SaIconButton } from '../ui/SaIconButton'
 import { ConfigModelOptionContent, sortModelsFastFirst } from './ConfigModelOption'
-import { CONFIG_MODAL_SELECT_POPUP } from './configModalUi'
+import { configModalModelSelectPopupClassNames, configModalSelectPopupClassNames } from './configModalUi'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 
 const refreshSvg = patchSvg(refresh2LineRaw)
@@ -21,13 +30,39 @@ type Props = {
 }
 
 export function BrowserSettingsTab({ browser, onChange, models = [], active = false }: Props) {
+  const dispatch = useAppDispatch()
   const { detect, detecting, refresh } = useBrowserDetect({ active })
+  const [repairLoading, setRepairLoading] = useState(false)
 
   const patch = (p: Partial<BrowserConfig>) => onChange({ ...browser, ...p })
   const stagehandModels = useMemo(
     () => sortModelsFastFirst(models.filter((m) => m.enabled)),
     [models]
   )
+
+  const handleRepairInChat = async () => {
+    if (repairLoading) return
+    setRepairLoading(true)
+    try {
+      dispatch(setSettingsOpen(false))
+      const session = await window.api.sessionCreate({
+        name: BROWSER_SETUP_REPAIR_SESSION_NAME,
+        metadata: { chatLaunchSource: 'browser-settings-repair' }
+      })
+      dispatch(upsertSession(session))
+      dispatch(setSession(session.id))
+      dispatch(
+        setChatLaunchIntent({
+          sessionId: session.id,
+          skillName: 'browser-setup-guide',
+          initialUserMessage: BROWSER_SETUP_REPAIR_INITIAL_MESSAGE,
+          source: 'browser-settings-repair'
+        })
+      )
+    } finally {
+      setRepairLoading(false)
+    }
+  }
 
   return (
     <ConfigSettingsStack>
@@ -41,8 +76,9 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         <Alert
           type="warning"
           showIcon
+          className="config-alert--compact"
           message="浏览器依赖未就绪"
-          description={detect.errors[0] ?? '请完成下方安装引导后再使用 browser 工具。'}
+          description={detect.errors[0] ?? '请点击下方按钮在对话中完成修复。'}
         />
       ) : null}
 
@@ -61,12 +97,15 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
             </SaIconButton>
           </Tooltip>
         </div>
-        <BrowserSetupGuide
-          detect={detect}
-          detecting={detecting}
-          onRefresh={async (force) => refresh(force)}
-          mode="settings"
-        />
+        {detect ? (
+          <BrowserDetectStatusSummary detect={detect} detecting={detecting}>
+            {!detect.canInitialize ? (
+              <Button type="primary" block loading={repairLoading} onClick={() => void handleRepairInChat()}>
+                帮我修复
+              </Button>
+            ) : null}
+          </BrowserDetectStatusSummary>
+        ) : null}
       </div>
 
       <section className="browser-engine-section">
@@ -79,7 +118,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
               placeholder="留空则复用当前 LLM 模型（自动转为 provider/模型名）"
               value={browser.stagehandModel || undefined}
               onChange={(v) => patch({ stagehandModel: v ?? '' })}
-              popupClassName={`${CONFIG_MODAL_SELECT_POPUP} config-model-select-popup`}
+              classNames={configModalModelSelectPopupClassNames}
               options={stagehandModels.map((m) => ({ value: m.name, label: m.name }))}
               optionRender={(opt) => {
                 const m = stagehandModels.find((x) => x.name === opt.value)
@@ -95,7 +134,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
             <Select
               value={browser.maxInferencesPerRequest}
               onChange={(v) => patch({ maxInferencesPerRequest: v })}
-              popupClassName={CONFIG_MODAL_SELECT_POPUP}
+              classNames={configModalSelectPopupClassNames}
               options={[2, 4, 6, 8, 12, 16].map((n) => ({ value: n, label: String(n) }))}
             />
           </ConfigField>
@@ -111,7 +150,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
           placeholder="例：example.com"
           value={browser.trustedDomains}
           onChange={(v) => patch({ trustedDomains: v })}
-          popupClassName={CONFIG_MODAL_SELECT_POPUP}
+          classNames={configModalSelectPopupClassNames}
         />
       </ConfigField>
 
@@ -133,7 +172,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         <Select
           value={browser.actionTimeoutSec}
           onChange={(v) => patch({ actionTimeoutSec: v })}
-          popupClassName={CONFIG_MODAL_SELECT_POPUP}
+          classNames={configModalSelectPopupClassNames}
           options={[30, 60, 90, 120, 180].map((n) => ({ value: n, label: String(n) }))}
         />
       </ConfigField>
@@ -142,7 +181,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         <Select
           value={browser.idleTimeoutSec}
           onChange={(v) => patch({ idleTimeoutSec: v })}
-          popupClassName={CONFIG_MODAL_SELECT_POPUP}
+          classNames={configModalSelectPopupClassNames}
           options={[600, 1200, 1800, 3600].map((n) => ({ value: n, label: String(n) }))}
         />
       </ConfigField>
@@ -153,7 +192,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
           placeholder="选择要禁用的 browser action"
           value={browser.deniedActions}
           onChange={(v) => patch({ deniedActions: v })}
-          popupClassName={CONFIG_MODAL_SELECT_POPUP}
+          classNames={configModalSelectPopupClassNames}
           options={['navigate', 'observe', 'extract', 'act', 'screenshot', 'close'].map((a) => ({
             value: a,
             label: a

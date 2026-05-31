@@ -2,6 +2,7 @@ import { type ChildProcess } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { decodeProcessOutput } from '../processOutputEncoding'
 import { spawnCommandSafe } from '../spawnUtil'
 import type { FeishuCliDetectResult } from '../../src/shared/feishuTypes'
 import { logFeishuCliEvent } from './feishuCliLogger'
@@ -26,11 +27,14 @@ export interface LarkCliRunResult {
   timedOut: boolean
 }
 
-function appendWithLimit(current: string, chunk: string, maxBytes: number): string {
-  const next = current + chunk
-  if (Buffer.byteLength(next, 'utf8') <= maxBytes) return next
-  const buf = Buffer.from(next, 'utf8')
-  return buf.subarray(0, maxBytes).toString('utf8') + TRUNC_SUFFIX
+function appendBufferWithLimit(
+  current: Buffer<ArrayBufferLike>,
+  chunk: Buffer<ArrayBufferLike>,
+  maxBytes: number
+): Buffer<ArrayBufferLike> {
+  const next = Buffer.concat([current, chunk])
+  if (next.length <= maxBytes) return next
+  return Buffer.concat([next.subarray(0, maxBytes), Buffer.from(TRUNC_SUFFIX, 'utf8')])
 }
 
 async function runWhich(cmd: string): Promise<string | null> {
@@ -97,8 +101,8 @@ export class LarkCliRunner {
     }
 
     return new Promise((resolve) => {
-      let stdout = ''
-      let stderr = ''
+      let stdoutBuf: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+      let stderrBuf: Buffer<ArrayBufferLike> = Buffer.alloc(0)
       let timedOut = false
       let settled = false
 
@@ -134,15 +138,20 @@ export class LarkCliRunner {
       }
       signal?.addEventListener('abort', onAbort, { once: true })
 
-      proc.stdout?.on('data', (d: Buffer) => {
-        const chunk = d.toString()
-        stdout = appendWithLimit(stdout, chunk, MAX_OUTPUT_BYTES)
-        onStdout?.(chunk)
+      proc.stdout?.on('data', (d: Buffer<ArrayBufferLike>) => {
+        stdoutBuf = appendBufferWithLimit(stdoutBuf, d, MAX_OUTPUT_BYTES)
+        onStdout?.(d.toString('utf8'))
       })
-      proc.stderr?.on('data', (d: Buffer) => {
-        const chunk = d.toString()
-        stderr = appendWithLimit(stderr, chunk, MAX_OUTPUT_BYTES)
-        onStderr?.(chunk)
+      proc.stderr?.on('data', (d: Buffer<ArrayBufferLike>) => {
+        stderrBuf = appendBufferWithLimit(stderrBuf, d, MAX_OUTPUT_BYTES)
+        onStderr?.(d.toString('utf8'))
+      })
+
+      const buildResult = (exitCode: number): LarkCliRunResult => ({
+        exitCode,
+        stdout: decodeProcessOutput(stdoutBuf),
+        stderr: decodeProcessOutput(stderrBuf),
+        timedOut
       })
 
       const logDone = (result: LarkCliRunResult) => {
@@ -150,21 +159,21 @@ export class LarkCliRunner {
           exitCode: result.exitCode,
           timedOut: result.timedOut,
           durationMs: Date.now() - startedAt,
-          stdout,
-          stderr
+          stdout: result.stdout,
+          stderr: result.stderr
         })
       }
 
       proc.on('close', (code) => {
         signal?.removeEventListener('abort', onAbort)
-        const result = { exitCode: code ?? 1, stdout, stderr, timedOut }
+        const result = buildResult(code ?? 1)
         logDone(result)
         finish(result)
       })
       proc.on('error', (err) => {
         signal?.removeEventListener('abort', onAbort)
-        stderr = appendWithLimit(stderr, err.message, MAX_OUTPUT_BYTES)
-        const result = { exitCode: 1, stdout, stderr, timedOut }
+        stderrBuf = appendBufferWithLimit(stderrBuf, Buffer.from(`${err.message}\n`, 'utf8'), MAX_OUTPUT_BYTES)
+        const result = buildResult(1)
         logDone(result)
         finish(result)
       })

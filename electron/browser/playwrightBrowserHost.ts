@@ -2,6 +2,29 @@ import { access } from 'node:fs/promises'
 import { join } from 'node:path'
 import { importEsmModule } from '../esmDynamicImport'
 
+/** Playwright 为可选运行时依赖；编译期不引用 node_modules/playwright。 */
+export interface PlaywrightChromiumBrowserType {
+  executablePath(): string
+}
+
+export interface PlaywrightModule {
+  chromium: PlaywrightChromiumBrowserType
+}
+
+interface ChromeLauncherHandle {
+  port: number
+  kill: () => Promise<void>
+}
+
+interface ChromeLauncherModule {
+  launch(opts: {
+    chromePath: string
+    chromeFlags: string[]
+    connectionPollInterval?: number
+    maxConnectionRetries?: number
+  }): Promise<ChromeLauncherHandle>
+}
+
 export interface PlaywrightBrowserHost {
   cdpUrl: string
   close: () => Promise<void>
@@ -39,7 +62,7 @@ export async function resolveCdpWebSocketUrl(
 
 /** headless 时 Playwright 默认走 headless_shell，其 CDP HTTP 端口不可靠；改用完整 Chromium。 */
 export async function resolveFullChromiumExecutable(
-  chromium: import('playwright').BrowserType
+  chromium: PlaywrightChromiumBrowserType
 ): Promise<string> {
   const exe = chromium.executablePath()
   const rev = exe.match(/(?:chromium[_-]headless[_-]shell|chromium)-(\d+)/i)?.[1]
@@ -84,9 +107,9 @@ export async function resolveFullChromiumExecutable(
  * 避免：1) CJS require chrome-launcher；2) launchServer WS 非 CDP；3) headless_shell 无调试端口。
  */
 export async function launchPlaywrightBrowserHost(headless: boolean): Promise<PlaywrightBrowserHost> {
-  const { chromium } = await importEsmModule<typeof import('playwright')>('playwright')
+  const { chromium } = await importEsmModule<PlaywrightModule>('playwright')
   const chromePath = await resolveFullChromiumExecutable(chromium)
-  const { launch } = await importEsmModule<typeof import('chrome-launcher')>('chrome-launcher')
+  const { launch } = await importEsmModule<ChromeLauncherModule>('chrome-launcher')
 
   const chromeFlags = [
     headless ? '--headless=new' : undefined,

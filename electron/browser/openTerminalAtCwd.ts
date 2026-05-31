@@ -1,11 +1,33 @@
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 import type { BrowserDetectContext } from './browserDependencyDetect'
 import { isAllowedTerminalCwd } from './browserDependencyDetect'
 
 export type OpenTerminalResult = { ok: true } | { ok: false; error: string }
 
-export function openTerminalAtCwd(cwd: string, ctx: BrowserDetectContext): OpenTerminalResult {
-  if (!isAllowedTerminalCwd(cwd, ctx)) {
+export type OpenTerminalAtCwdOptions = {
+  /** Shell 卡片：允许会话工作目录（与 config.workDir 一致） */
+  allowedWorkDir?: string
+}
+
+function isAllowedShellWorkDir(cwd: string, allowedWorkDir: string): boolean {
+  try {
+    return path.resolve(cwd) === path.resolve(allowedWorkDir)
+  } catch {
+    return false
+  }
+}
+
+export function openTerminalAtCwd(
+  cwd: string,
+  ctx: BrowserDetectContext,
+  options?: OpenTerminalAtCwdOptions
+): OpenTerminalResult {
+  const allowedWorkDir = options?.allowedWorkDir?.trim()
+  const permitted = allowedWorkDir
+    ? isAllowedShellWorkDir(cwd, allowedWorkDir)
+    : isAllowedTerminalCwd(cwd, ctx)
+  if (!permitted) {
     return { ok: false, error: '不允许在该目录打开终端' }
   }
 

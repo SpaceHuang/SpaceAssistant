@@ -26,7 +26,7 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   enabled: true,
   confirmMode: 'diff',
   allowedTools: [],
-  deniedTools: [],
+  deniedTools: ['run_shell'],
   pythonPath: 'python',
   scriptTimeout: 300,
   fileCheckpointingEnabled: true,
@@ -93,6 +93,66 @@ export function mergeBrowserConfig(partial?: Partial<BrowserConfig> | null): Bro
     deniedActions: Array.isArray(partial.deniedActions)
       ? [...partial.deniedActions]
       : DEFAULT_BROWSER_CONFIG.deniedActions
+  }
+}
+
+export type ShellRuleDecision = 'allow' | 'deny' | 'ask'
+
+export interface ShellRule {
+  id: string
+  pattern: string
+  decision: ShellRuleDecision
+  note?: string
+}
+
+export interface ShellSecurityHints {
+  requiresRiskAck: boolean
+  outsideWorkDirRisk: boolean
+  warnings?: string[]
+  scannedPaths?: string[]
+  violationCodes?: string[]
+}
+
+export type ShellOutputMode = 'plain' | 'terminal'
+
+export interface ShellTerminalScrollback {
+  serialized?: string
+  ansiText?: string
+  plainText?: string
+  cols: number
+  rows: number
+  truncated?: boolean
+}
+
+export interface ShellConfig {
+  enabled: boolean
+  shellDefaultTimeoutSec: number
+  executable?: string
+  argsPrefix?: string[]
+  rules?: ShellRule[]
+  maxInlineOutputBytes?: number
+  customSensitivePrefixes?: string[]
+  /** plain：v1 纯文本；terminal：xterm + scrollback（默认） */
+  outputMode?: ShellOutputMode
+}
+
+export const DEFAULT_SHELL_CONFIG: ShellConfig = {
+  enabled: false,
+  shellDefaultTimeoutSec: 300,
+  maxInlineOutputBytes: 102400,
+  outputMode: 'terminal'
+}
+
+export function mergeShellConfig(partial?: Partial<ShellConfig> | null): ShellConfig {
+  if (!partial || typeof partial !== 'object') return { ...DEFAULT_SHELL_CONFIG }
+  return {
+    ...DEFAULT_SHELL_CONFIG,
+    ...partial,
+    rules: Array.isArray(partial.rules) ? [...partial.rules] : partial.rules,
+    argsPrefix: Array.isArray(partial.argsPrefix) ? [...partial.argsPrefix] : partial.argsPrefix,
+    customSensitivePrefixes: Array.isArray(partial.customSensitivePrefixes)
+      ? [...partial.customSensitivePrefixes]
+      : partial.customSensitivePrefixes
   }
 }
 
@@ -183,13 +243,33 @@ export interface SkillMeta {
   author: string
 }
 
-export type SkillScope = 'project' | 'user'
+export type SkillScope = 'project' | 'user' | 'builtin'
 
 /** 产品内置 Skill（由应用自动安装/管理，不在设置页 Skill 列表展示） */
-export const PRODUCT_BUILTIN_SKILL_NAMES = ['llm-wiki'] as const
+export const PRODUCT_BUILTIN_SKILL_NAMES = ['llm-wiki', 'browser-setup-guide', 'shell-setup-guide'] as const
+
+/** 一次性聊天启动意图，消费后清空 */
+export interface ChatLaunchIntent {
+  skillName: 'browser-setup-guide'
+  initialUserMessage: string
+  source: 'browser-settings-repair'
+  metadata?: Record<string, unknown>
+}
+
+export const BROWSER_SETUP_REPAIR_INITIAL_MESSAGE =
+  '请帮我检查并修复网络访问（browser 工具）所需的浏览器依赖。'
+
+export const BROWSER_SETUP_REPAIR_SESSION_NAME = '网络访问修复'
 
 export function isProductBuiltinSkill(name: string): boolean {
   return (PRODUCT_BUILTIN_SKILL_NAMES as readonly string[]).includes(name)
+}
+
+/** 仅通过手动/依赖恢复链路激活，不参与 LLM Skill 路由 */
+export const LLM_ROUTING_EXCLUDED_SKILL_NAMES = ['browser-setup-guide', 'shell-setup-guide'] as const
+
+export function isLlmRoutingExcludedSkill(name: string): boolean {
+  return (LLM_ROUTING_EXCLUDED_SKILL_NAMES as readonly string[]).includes(name)
 }
 
 export interface SkillDefinition {
@@ -303,12 +383,14 @@ export function builtinToolRiskLevel(name: string): ToolRiskLevel {
     case 'grep':
     case 'read_feishu_attachment':
     case 'browser':
+    case 'browser_detect':
       return 'low'
     case 'edit_file':
     case 'write_file':
       return 'medium'
     case 'run_script':
     case 'run_lark_cli':
+    case 'run_shell':
       return 'high'
     default:
       return 'medium'
@@ -320,7 +402,8 @@ export function builtinToolNeedsConfirmation(name: string): boolean {
     name === 'edit_file' ||
     name === 'write_file' ||
     name === 'run_script' ||
-    name === 'run_lark_cli'
+    name === 'run_lark_cli' ||
+    name === 'run_shell'
   )
 }
 
@@ -341,10 +424,17 @@ export interface ToolCallRecord {
   riskLevel: ToolRiskLevel
   /** 确认阶段由主进程下发的 diff，仅会话内使用 */
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
+  /** run_shell 路径/安全警示（确认卡片展示） */
+  shellSecurityHints?: ShellSecurityHints
   confirmedAt?: number
   startedAt?: number
   completedAt?: number
   duration?: number
+  /** run_shell plain 模式实时输出（最近 N 字符） */
+  progressOutput?: string
+  /** run_shell terminal 模式 base64 raw 增量（executing 内存，完成后清除） */
+  progressOutputRaw?: string
+  progressSeq?: number
 }
 
 export interface ToolResult {
@@ -373,6 +463,13 @@ export interface TimelineSegment {
 }
 
 export type ThinkingSegment = TimelineSegment
+
+/** Skill 提示（持久化到消息，与工具卡片按 shownAt 交错展示） */
+export interface SkillHintRecord {
+  id: string
+  text: string
+  shownAt: number
+}
 
 export type ContentSegment = TimelineSegment
 
@@ -413,6 +510,8 @@ export interface Message {
   thinking?: ThinkingData
   /** 助手正文分段（与 thinking / toolCalls 按时间线交错展示） */
   contentSegments?: ContentSegment[]
+  /** Skill 提示（与工具卡片按 shownAt 交错展示；system 消息可仅含此项） */
+  skillHints?: SkillHintRecord[]
   status: MessageStatus
   schemaVersion: number
 }
@@ -468,6 +567,7 @@ export interface AppConfig {
   wiki: WikiConfig
   feishu: FeishuConfig
   browser: BrowserConfig
+  shell: ShellConfig
 }
 
 /** 从 FeishuConfig 移除 Plan 远程字段；幂等 */
@@ -517,6 +617,8 @@ export interface SearchResult {
   preview: string
   path?: string
   sessionId?: string
+  /** session 类型：用于点击后滚动定位到消息 */
+  messageId?: string
 }
 
 export interface FileInfo {

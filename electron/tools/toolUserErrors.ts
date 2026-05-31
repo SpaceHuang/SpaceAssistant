@@ -20,6 +20,7 @@ const TOOL_DEFAULT_MESSAGES: Record<string, string> = {
   list_directory: '列出目录失败，请检查路径后重试',
   grep: '搜索失败，请检查搜索参数后重试',
   run_script: '脚本执行失败，请检查代码后重试',
+  run_shell: '命令执行失败，请检查命令后重试',
   run_lark_cli: '飞书 CLI 执行失败，请稍后重试',
   read_feishu_attachment: '读取飞书附件失败，请稍后重试',
   browser: '浏览器操作失败，请稍后重试'

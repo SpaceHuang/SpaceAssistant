@@ -3,8 +3,8 @@ import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover,
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { setConfig, setSettingsActiveTab, setSettingsOpen } from '../../store/configSlice'
 import type { ModelEntry, UiThemeMode, WikiConfig } from '../../../shared/domainTypes'
-import { DEFAULT_WIKI_CONFIG, DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
-import type { BrowserConfig } from '../../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG, DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import type { BrowserConfig, ShellConfig } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../../../shared/feishuTypes'
 import { DEFAULT_MODELS, DEFAULT_MODEL_MAX_CONTEXT, DEFAULT_MODEL_MAX_TOKENS } from '../../../shared/domainTypes'
 import {
@@ -25,7 +25,7 @@ import {
 } from './useLlmServiceDrafts'
 import { readSkillActivationLog } from '../../services/skillActivationLog'
 import { ConfigModelOptionContent } from './ConfigModelOption'
-import { CONFIG_MODAL_SELECT_POPUP } from './configModalUi'
+import { configModalModelSelectPopupClassNames } from './configModalUi'
 
 const DEFAULT_ADD_MODEL_MAX_CONTEXT = DEFAULT_MODEL_MAX_CONTEXT
 const DEFAULT_ADD_MODEL_MAX_TOKENS = DEFAULT_MODEL_MAX_TOKENS
@@ -80,7 +80,7 @@ function ModelSelect({ value, onChange }: { value: ModelEntry[]; onChange: (v: M
       style={{ width: '100%' }}
       value={defaultModel?.id}
       onChange={handleChange}
-      popupClassName={`${CONFIG_MODAL_SELECT_POPUP} config-model-select-popup`}
+      classNames={configModalModelSelectPopupClassNames}
       options={selectable.map((m) => ({ value: m.id, label: m.name }))}
       optionRender={(opt) => {
         const m = selectable.find((x) => x.id === opt.value)
@@ -128,6 +128,9 @@ export function ConfigModal() {
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
   const [browserUi, setBrowserUi] = useState<BrowserConfig>({ ...DEFAULT_BROWSER_CONFIG })
+  const [shellUi, setShellUi] = useState<ShellConfig>({ ...DEFAULT_SHELL_CONFIG })
+  const [shellTest, setShellTest] = useState<{ ok: boolean; text: string } | null>(null)
+  const [shellTesting, setShellTesting] = useState(false)
 
   const refreshConfig = async () => {
     const next = await window.api.configGet()
@@ -177,8 +180,20 @@ export function ConfigModal() {
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
       setBrowserUi({ ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] })
+      setShellUi(cfg.shell ?? { ...DEFAULT_SHELL_CONFIG })
+      setShellTest(null)
     }
   }, [open, cfg, form])
+
+  const shellEnabled = !toolUi.deniedTools.includes('run_shell')
+
+  const onShellEnabledChange = (enabled: boolean) => {
+    setShellUi((s) => ({ ...s, enabled }))
+    setToolUi((s) => ({
+      ...s,
+      deniedTools: enabled ? s.deniedTools.filter((x) => x !== 'run_shell') : [...s.deniedTools, 'run_shell']
+    }))
+  }
 
   const selectDirectory = async () => {
     const result = await window.api.dialogSelectDirectory()
@@ -268,7 +283,8 @@ export function ConfigModal() {
         maxParallelChatSessions,
         wiki: wikiUi,
         feishu: feishuUi,
-        browser: { ...browserUi, enabled: true, allowedDomains: [] }
+        browser: { ...browserUi, enabled: true, allowedDomains: [] },
+        shell: { ...shellUi, enabled: shellEnabled }
       })
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))
@@ -290,6 +306,21 @@ export function ConfigModal() {
       else setPyTest({ ok: false, text: r.error })
     } finally {
       setPyTesting(false)
+    }
+  }
+
+  const testShell = async () => {
+    setShellTesting(true)
+    setShellTest(null)
+    try {
+      const r = await window.api.shellTestExecutable({
+        executable: shellUi.executable,
+        argsPrefix: shellUi.argsPrefix
+      })
+      if (r.ok) setShellTest({ ok: true, text: 'Shell 测试成功' })
+      else setShellTest({ ok: false, text: r.error ?? '测试失败' })
+    } finally {
+      setShellTesting(false)
     }
   }
 
@@ -374,7 +405,7 @@ export function ConfigModal() {
                       <Button icon={<FolderOpenIcon />} onClick={selectDirectory} title="选择目录" />
                     </Space.Compact>
                   </Form.Item>
-                  {workDirError && <Alert type="error" message={workDirError} showIcon style={{ marginBottom: 16 }} />}
+                  {workDirError && <Alert type="error" message={workDirError} showIcon className="config-alert-block--loose" />}
                   <Form.Item label="界面主题">
                     <Radio.Group value={uiTheme} onChange={(e) => setUiTheme(e.target.value)}>
                       <Radio value="system">跟随系统</Radio>
@@ -446,6 +477,12 @@ export function ConfigModal() {
                   setToolUi={setToolUi}
                   browserUi={browserUi}
                   setBrowserUi={setBrowserUi}
+                  shellUi={shellUi}
+                  setShellUi={setShellUi}
+                  onShellEnabledChange={onShellEnabledChange}
+                  onTestShell={() => void testShell()}
+                  shellTesting={shellTesting}
+                  shellTest={shellTest}
                   models={models}
                   pyTest={pyTest}
                   pyTesting={pyTesting}
@@ -455,16 +492,6 @@ export function ConfigModal() {
                   }
                 />
               )
-            },
-            {
-              key: 'wiki',
-              label: 'LLM Wiki',
-              children: <WikiTab wiki={wikiUi} onChange={setWikiUi} />
-            },
-            {
-              key: 'feishu',
-              label: '飞书',
-              children: <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} models={models} />
             },
             {
               key: 'skills',
@@ -477,6 +504,16 @@ export function ConfigModal() {
                   activationLog={skillActivationLog}
                 />
               ) : null
+            },
+            {
+              key: 'wiki',
+              label: 'LLM Wiki',
+              children: <WikiTab wiki={wikiUi} onChange={setWikiUi} />
+            },
+            {
+              key: 'feishu',
+              label: '飞书',
+              children: <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} models={models} />
             }
           ]}
         />

@@ -1,7 +1,8 @@
 import type { IpcMain, WebContents } from 'electron'
+import { safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
-import type { BrowserConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
+import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
@@ -18,9 +19,11 @@ export type ClaudeStreamDeps = {
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
   getBrowserConfig: () => BrowserConfig
+  getShellConfig: () => ShellConfig
   getWikiConfig: () => WikiConfig
   getAppDatabase: () => AppDatabase
   getProjectMemoryEnabled?: () => boolean
+  getBrowserDetectContext: () => import('../src/shared/browserTypes').BrowserDetectContext
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -220,11 +223,13 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           options: payload.options,
           toolsConfig: deps.getToolsConfig(),
           browserConfig: deps.getBrowserConfig(),
+          shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
           workDir: deps.getWorkDir(),
           userDataDir: deps.getUserDataPath(),
           getApiKey: deps.getApiKey,
-          appDb: deps.getAppDatabase()
+          appDb: deps.getAppDatabase(),
+          getBrowserDetectContext: deps.getBrowserDetectContext
         })
 
         if (!res.ok) {
@@ -234,11 +239,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             model,
             error: res.error
           })
-          sender.send('claude-chat-error', { requestId, message: res.error })
+          safeWebContentsSend(sender,'claude-chat-error', { requestId, message: res.error })
           return res
         }
 
-        sender.send('claude-chat-done', { requestId })
+        safeWebContentsSend(sender,'claude-chat-done', { requestId })
 
         return {
           ok: true as const,
@@ -255,7 +260,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           error: message,
           stack: err instanceof Error ? err.stack : undefined
         })
-        if (requestId) sender.send('claude-chat-error', { requestId, message })
+        if (requestId) safeWebContentsSend(sender,'claude-chat-error', { requestId, message })
         return { ok: false as const, error: message }
       }
     }
@@ -286,13 +291,13 @@ async function runSendStream(
     const apiKey = await deps.getApiKey()
     if (!apiKey) {
       logAgentEvent('error', 'llm.error', { requestId, model, error: 'API key not configured' })
-      sender.send('claude-chat-error', { requestId, message: 'API key not configured' })
+      safeWebContentsSend(sender,'claude-chat-error', { requestId, message: 'API key not configured' })
       return
     }
 
     if (chatSignal.aborted) {
       logAgentEvent('error', 'llm.error', { requestId, model, error: CHAT_CANCELLED_MESSAGE })
-      sender.send('claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
+      safeWebContentsSend(sender,'claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
       return
     }
 
@@ -329,7 +334,7 @@ async function runSendStream(
     const contentBlockTypes = new Map<number, string>()
     for await (const evt of stream) {
       if (chatSignal.aborted) {
-        sender.send('claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
+        safeWebContentsSend(sender,'claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
         return
       }
       if (evt?.type === 'content_block_start') {
@@ -342,7 +347,7 @@ async function runSendStream(
       if (evt?.type === 'content_block_delta' && (evt as { delta?: { type?: string; thinking?: string } }).delta?.type === 'thinking_delta') {
         const thinking = (evt as { delta?: { thinking?: string } }).delta?.thinking
         if (typeof thinking === 'string' && thinking.length > 0) {
-          sender.send('claude-chat-thinking-delta', { requestId, text: thinking })
+          safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text: thinking })
         }
       }
       if (evt?.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
@@ -351,19 +356,19 @@ async function runSendStream(
         const blockType = contentBlockTypes.get(index)
         if (blockType === 'thinking') {
           if (typeof text === 'string' && text.length > 0) {
-            sender.send('claude-chat-thinking-delta', { requestId, text })
+            safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text })
           }
           continue
         }
         if (typeof text === 'string' && text.length > 0) {
-          sender.send('claude-chat-delta', { requestId, text })
+          safeWebContentsSend(sender,'claude-chat-delta', { requestId, text })
         }
       }
     }
 
     if (chatSignal.aborted) {
       logAgentEvent('error', 'llm.error', { requestId, model, error: CHAT_CANCELLED_MESSAGE })
-      sender.send('claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
+      safeWebContentsSend(sender,'claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
       return
     }
 
@@ -380,7 +385,7 @@ async function runSendStream(
       usage
     })
 
-    sender.send('claude-chat-done', { requestId, usage: usage ?? null })
+    safeWebContentsSend(sender,'claude-chat-done', { requestId, usage: usage ?? null })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     logAgentEvent('error', 'llm.error', {
@@ -389,7 +394,7 @@ async function runSendStream(
       error: message,
       stack: err instanceof Error ? err.stack : undefined
     })
-    sender.send('claude-chat-error', { requestId, message })
+    safeWebContentsSend(sender,'claude-chat-error', { requestId, message })
   } finally {
     clearChatCancel(requestId)
   }

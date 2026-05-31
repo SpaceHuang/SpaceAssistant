@@ -28,7 +28,8 @@ const uiFlushRafIds = new Map<string, number>()
 function cloneMessages(msgs: Message[]): Message[] {
   return msgs.map((m) => ({
     ...m,
-    toolCalls: m.toolCalls ? m.toolCalls.map((t) => ({ ...t })) : undefined
+    toolCalls: m.toolCalls ? m.toolCalls.map((t) => ({ ...t })) : undefined,
+    skillHints: m.skillHints ? m.skillHints.map((h) => ({ ...h })) : undefined
   }))
 }
 
@@ -46,7 +47,8 @@ export function mergeDbAndLive(db: Message[], live?: Message[] | null): Message[
   for (const m of live) {
     map.set(m.id, {
       ...m,
-      toolCalls: m.toolCalls ? m.toolCalls.map((t) => ({ ...t })) : undefined
+      toolCalls: m.toolCalls ? m.toolCalls.map((t) => ({ ...t })) : undefined,
+      skillHints: m.skillHints ? m.skillHints.map((h) => ({ ...h })) : undefined
     })
   }
   return [...map.values()].sort((a, b) => a.timestamp - b.timestamp)

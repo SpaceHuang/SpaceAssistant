@@ -140,6 +140,25 @@ describe('skillRouter hard rules', () => {
     expect(merged[0]?.meta.name).toBe('proj')
   })
 
+  it('skips llm recommendations for recovery-only skills', () => {
+    const skills = [
+      skill('good', 'project', 'desc'),
+      skill('browser-setup-guide', 'builtin', 'browser recovery')
+    ]
+    const available = getAvailableSkills(skills, config, emptyState)
+    const scored = collectHardRuleSkills({ available, config, sessionState: emptyState })
+    applyLlmRecommendations({
+      scored,
+      llmRecommended: ['browser-setup-guide', 'good'],
+      available,
+      excluded: new Set<string>()
+    })
+    const { skills: merged, sources } = mergeRouteSkills(scored, 5)
+    expect(merged.some((s) => s.meta.name === 'good')).toBe(true)
+    expect(merged.some((s) => s.meta.name === 'browser-setup-guide')).toBe(false)
+    expect(sources['good']).toBe('llm')
+  })
+
   it('respects maxConcurrent after merge', () => {
     const skills = [
       skill('a', 'user', 'a'),

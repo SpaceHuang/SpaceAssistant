@@ -1,8 +1,14 @@
 import fs from 'fs'
 import path from 'path'
 import type { SkillDefinition } from '../../src/shared/domainTypes'
+import { getBundledBrowserSetupGuideSkill } from './bundled/browserSetupGuideSkill'
+import { getBundledShellSetupGuideSkill } from './bundled/shellSetupGuideSkill'
 import { assertInsideDir, getProjectSkillsDir, getUserSkillsDir } from './skillPaths'
 import { readSkillFromDirectory } from './skillParser'
+
+function getBundledSkills(): SkillDefinition[] {
+  return [getBundledBrowserSetupGuideSkill(), getBundledShellSetupGuideSkill()]
+}
 
 function scanScopeDir(baseDir: string, scope: 'project' | 'user'): SkillDefinition[] {
   if (!fs.existsSync(baseDir)) return []
@@ -34,6 +40,7 @@ export function scanSkills(userDataPath: string, workDir: string): SkillDefiniti
   const byName = new Map<string, SkillDefinition>()
   for (const skill of userSkills) byName.set(skill.meta.name, skill)
   for (const skill of projectSkills) byName.set(skill.meta.name, skill)
+  for (const skill of getBundledSkills()) byName.set(skill.meta.name, skill)
 
   return [...byName.values()].sort((a, b) => a.meta.name.localeCompare(b.meta.name))
 }

@@ -24,15 +24,16 @@ describe('browserSetupGuideContent', () => {
     expect(content.chromiumInstallCmd).toContain('playwright install chromium')
   })
 
-  it('shows npm install for development L1 missing', () => {
+  it('L1 missing shows packaged defect not npm install', () => {
     const content = buildBrowserSetupGuideContent(
       detect({ primaryFailure: 'playwright_missing', playwright: { installed: false, browsers: [] } }),
       'win32'
     )
-    expect(content.showNpmInstall).toBe(true)
+    expect(content.showNpmInstall).toBe(false)
+    expect(content.showPackagedDefect).toBe(true)
   })
 
-  it('packaged L1 missing shows defect not npm install', () => {
+  it('stagehand missing shows packaged defect', () => {
     const content = buildBrowserSetupGuideContent(
       detect({
         primaryFailure: 'stagehand_missing',

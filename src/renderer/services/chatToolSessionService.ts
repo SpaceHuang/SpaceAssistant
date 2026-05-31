@@ -2,6 +2,7 @@ import { patchMessage } from '../store/chatSlice'
 import type { AppDispatch } from '../store'
 import type { ToolCallRecord, ToolCallResultPersisted, Message } from '../../shared/domainTypes'
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
+import type { BrowserDependencyToolError } from '../../shared/browserTypes'
 import { buildClaudeToolChatMessages } from '../../shared/claudeToolHistory'
 import { filterBuiltinToolsForRenderer } from '../../shared/toolsConfigFilter'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from '../../shared/anthropicToolSanitize'
@@ -19,8 +20,9 @@ export function createToolChatController(args: {
   onRecordsChange?: () => void
   /** 多会话并行时由 chatRunner 路由 patch，默认仍写 Redux */
   applyAssistantPatch?: (patch: Partial<Message>) => void
+  onDependencyRecovery?: (recovery: BrowserDependencyToolError) => void
 }): ToolChatController {
-  const { dispatch, assistantMessageId, getRequestId, onRecordsChange, applyAssistantPatch } = args
+  const { dispatch, assistantMessageId, getRequestId, onRecordsChange, applyAssistantPatch, onDependencyRecovery } = args
   const records: ToolCallRecord[] = []
 
   const flush = () => {
@@ -65,15 +67,35 @@ export function createToolChatController(args: {
     void d.riskLevel
   }
 
-  const onProgress = (d: { requestId: string; toolUseId: string; status: string; message?: string }) => {
+  const onProgress = (d: {
+    requestId: string
+    toolUseId: string
+    status: string
+    message?: string
+    raw?: string
+    seq?: number
+  }) => {
     if (d.requestId !== getRequestId()) return
     const i = records.findIndex((t) => t.id === d.toolUseId)
     if (i >= 0) {
-      records[i] = { ...records[i]!, status: 'executing' }
+      const prev = records[i]!
+      if (typeof d.raw === 'string') {
+        records[i] = {
+          ...prev,
+          status: 'executing',
+          progressOutputRaw: d.raw,
+          progressSeq: d.seq ?? prev.progressSeq
+        }
+      } else {
+        records[i] = {
+          ...prev,
+          status: 'executing',
+          progressOutput: d.message ?? prev.progressOutput
+        }
+      }
       flush()
     }
     void d.status
-    void d.message
   }
 
   const onResult = (d: { requestId: string; toolUseId: string; result: ToolCallResultPersisted }) => {
@@ -91,6 +113,9 @@ export function createToolChatController(args: {
       confirmDiff: undefined
     }
     flush()
+    if (d.result.dependencyRecovery) {
+      onDependencyRecovery?.(d.result.dependencyRecovery)
+    }
   }
 
   const unsubs: Array<() => void> = []
@@ -118,11 +143,17 @@ export function buildToolChatPayload(args: {
   messages: Message[]
   toolsConfig: import('../../shared/domainTypes').ToolsConfig
   browserConfig?: import('../../shared/domainTypes').BrowserConfig
+  shellConfig?: import('../../shared/domainTypes').ShellConfig
   maxTokens?: number
   thinkingEnabled?: boolean
   system?: string
 }): ClaudeChatCreateWithToolsPayload {
-  const toolsFiltered = filterBuiltinToolsForRenderer(args.toolsConfig, undefined, args.browserConfig)
+  const toolsFiltered = filterBuiltinToolsForRenderer(
+    args.toolsConfig,
+    undefined,
+    args.browserConfig,
+    args.shellConfig
+  )
   const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
   const convo = buildClaudeToolChatMessages(args.messages)
   return {

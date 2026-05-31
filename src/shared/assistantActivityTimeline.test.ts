@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildAssistantActivityTimeline } from './assistantActivityTimeline'
-import type { ThinkingData, ToolCallRecord } from './domainTypes'
+import type { SkillHintRecord, ThinkingData, ToolCallRecord } from './domainTypes'
 
 const baseTool = (id: string, startedAt?: number): ToolCallRecord => ({
   id,
@@ -9,6 +9,12 @@ const baseTool = (id: string, startedAt?: number): ToolCallRecord => ({
   status: 'completed',
   riskLevel: 'low',
   ...(startedAt != null ? { startedAt } : {})
+})
+
+const baseSkillHint = (id: string, shownAt: number): SkillHintRecord => ({
+  id,
+  text: `[Skill] 已加载: ${id}`,
+  shownAt
 })
 
 describe('buildAssistantActivityTimeline', () => {
@@ -29,6 +35,34 @@ describe('buildAssistantActivityTimeline', () => {
       { kind: 'thinking', segmentIndex: 0 },
       { kind: 'tool', toolId: 't1' },
       { kind: 'text', segmentIndex: 0 }
+    ])
+  })
+
+  it('places skill hint before tools when shownAt is earlier', () => {
+    const message = {
+      content: '',
+      timestamp: 100,
+      skillHints: [baseSkillHint('h1', 120)],
+      toolCalls: [baseTool('t1', 500)]
+    }
+    expect(buildAssistantActivityTimeline(message)).toEqual([
+      { kind: 'skill', hintId: 'h1' },
+      { kind: 'tool', toolId: 't1' }
+    ])
+  })
+
+  it('places mid-run skill hint between tools by shownAt', () => {
+    const message = {
+      content: '',
+      timestamp: 1,
+      skillHints: [baseSkillHint('route', 50), baseSkillHint('recovery', 350)],
+      toolCalls: [baseTool('t1', 200), baseTool('t2', 500)]
+    }
+    expect(buildAssistantActivityTimeline(message)).toEqual([
+      { kind: 'skill', hintId: 'route' },
+      { kind: 'tool', toolId: 't1' },
+      { kind: 'skill', hintId: 'recovery' },
+      { kind: 'tool', toolId: 't2' }
     ])
   })
 

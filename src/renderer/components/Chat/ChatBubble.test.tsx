@@ -64,4 +64,34 @@ describe('ChatBubble streaming render', () => {
     rerender(<ChatBubble message={msg} />)
     expect(chatMarkdownRenderCount.mock.calls.length).toBe(afterFirst)
   })
+
+  it('sets data-message-id on assistant bubble row', () => {
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          id: 'assistant-42',
+          status: 'completed',
+          contentSegments: [{ content: 'Done', startTime: 1, endTime: 2 }]
+        })}
+      />
+    )
+    expect(document.querySelector('[data-message-id="assistant-42"]')).not.toBeNull()
+  })
+
+  it('sets data-message-id on user bubble row', () => {
+    render(
+      <ChatBubble
+        message={{
+          id: 'user-99',
+          sessionId: 's1',
+          role: 'user',
+          content: 'question',
+          timestamp: 1,
+          status: 'sent',
+          schemaVersion: 1
+        }}
+      />
+    )
+    expect(document.querySelector('[data-message-id="user-99"]')).not.toBeNull()
+  })
 })

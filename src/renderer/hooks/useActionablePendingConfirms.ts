@@ -35,6 +35,9 @@ export function labelForPendingConfirmItem(
   if (item.toolName === 'run_script') {
     return `${sessionName} · 待确认 · 运行已有脚本`
   }
+  if (item.toolName === 'run_shell') {
+    return `${sessionName} · 待确认 · Shell 命令`
+  }
   if (item.toolName === 'run_lark_cli') {
     return `${sessionName} · 待确认 · 飞书 CLI`
   }

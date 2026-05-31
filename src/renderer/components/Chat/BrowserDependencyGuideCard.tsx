@@ -1,34 +1,38 @@
-import { Button, Space } from 'antd'
+import { App, Button, Space, Typography } from 'antd'
 import type { BrowserDependencyToolError } from '../../../shared/browserTypes'
-import { BrowserSetupGuide } from '../Browser/BrowserSetupGuide'
-import { useAppDispatch } from '../../hooks'
-import { useBrowserDetect } from '../../hooks/useBrowserDetect'
-import { openSettings } from '../../store/configSlice'
 
 type Props = {
   dependencyRecovery: BrowserDependencyToolError
 }
 
 export function BrowserDependencyGuideCard({ dependencyRecovery }: Props) {
-  const dispatch = useAppDispatch()
-  const { detect, detecting, refresh } = useBrowserDetect({ seed: dependencyRecovery.detectResult })
+  const { message } = App.useApp()
 
   return (
-    <Space direction="vertical" size="small" style={{ width: '100%' }}>
-      <Button
-        type="link"
-        size="small"
-        className="browser-dependency-guide__settings-link"
-        onClick={() => dispatch(openSettings({ tab: 'tools', toolsSubTab: 'browser' }))}
-      >
-        打开设置 → 网络访问
-      </Button>
-      <BrowserSetupGuide
-        detect={detect}
-        detecting={detecting}
-        onRefresh={async (force) => refresh(force)}
-        mode="chat"
-      />
-    </Space>
+    <div className="browser-dependency-guide-card">
+      <Typography.Text type="warning" strong>
+        ⚠ 网络访问依赖未就绪
+      </Typography.Text>
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 8, marginTop: 4 }}>
+        助手将代为运行安装命令（需你确认）；若 Shell 未启用，可使用下方按钮在终端中手动操作。
+      </Typography.Paragraph>
+      <Space>
+        {typeof window.api?.browserOpenTerminal === 'function' ? (
+          <Button
+            size="small"
+            onClick={() => {
+              void window.api.browserOpenTerminal().then((r) => {
+                if (!r.ok) message.error(r.error)
+              })
+            }}
+          >
+            在终端中打开
+          </Button>
+        ) : null}
+      </Space>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+        工作目录：{dependencyRecovery.recommendedCwd}
+      </Typography.Paragraph>
+    </div>
   )
 }

@@ -64,8 +64,9 @@ import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
 import { mergeWikiConfig, mergeFeishuConfig } from '../src/shared/domainTypes'
-import type { WikiConfig, WikiStatus, FeishuConfig, BrowserConfig } from '../src/shared/domainTypes'
+import type { WikiConfig, WikiStatus, FeishuConfig, BrowserConfig, ShellConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb, persistBrowserConfig } from './browser/browserConfigDb'
+import { persistShellConfig, readShellConfigFromDb, syncShellDeniedTools } from './shell/shellConfigDb'
 import { stagehandService } from './browser/stagehandService'
 import type { BrowserDetectContext } from './browser/browserDependencyDetect'
 import { readFeishuConfigFromDb, persistFeishuConfig } from './feishu/feishuIpc'
@@ -220,6 +221,38 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
   )
 
+  ipcMain.handle(
+    'shell:test-executable',
+    async (
+      _e,
+      payload: { executable?: string; argsPrefix?: string[] }
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const { testShellExecutable } = await import('./tools/runShellExecutor')
+      const exe = typeof payload.executable === 'string' ? payload.executable.trim() : ''
+      if (!exe) return { ok: false, error: '请填写可执行文件路径' }
+      return testShellExecutable(exe, payload.argsPrefix, ctx.getWorkDir())
+    }
+  )
+
+  ipcMain.handle(
+    'shell:open-output-path',
+    async (_e, absPath: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const target = typeof absPath === 'string' ? absPath.trim() : ''
+      if (!target) return { ok: false, error: '路径无效' }
+      const err = await shell.openPath(target)
+      return err ? { ok: false, error: err } : { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'shell:open-terminal',
+    async (_e, payload: { cwd?: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const cwd = typeof payload?.cwd === 'string' && payload.cwd.trim() ? payload.cwd.trim() : ctx.getWorkDir()
+      const { openTerminalAtCwd } = await import('./browser/openTerminalAtCwd')
+      return openTerminalAtCwd(cwd, ctx.getBrowserDetectContext(), { allowedWorkDir: ctx.getWorkDir() })
+    }
+  )
+
   ipcMain.handle('browser:detect', async (_e, force?: boolean) => {
     stagehandService.configureDetectContext(ctx.getBrowserDetectContext())
     return stagehandService.detectDependencies(force === true)
@@ -236,7 +269,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'session:create',
-    async (_e, payload: { name: string; model?: string; temperature?: number; maxTokens?: number }): Promise<Session> => {
+    async (
+      _e,
+      payload: { name: string; model?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown> }
+    ): Promise<Session> => {
       const s = createSession(ctx.db, payload)
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
       await ctx.backup.backupSession(s, [])
@@ -328,7 +364,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'chat:patch-message',
-    async (_e, payload: { messageId: string; patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls'>> } & { sessionId: string }) => {
+    async (_e, payload: { messageId: string; patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>> } & { sessionId: string }) => {
       updateMessageContent(ctx.db, payload.messageId, payload.patch)
       await syncBackup(ctx, payload.sessionId)
     }
@@ -396,6 +432,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
     const browser = readBrowserConfigFromDb(ctx.db)
+    const shell = readShellConfigFromDb(ctx.db)
     stripPlanConfigFromDbIfNeeded(ctx.db)
     return stripPlanFieldsFromAppConfig({
       apiKeyPresent: activeService?.apiKeyPresent ?? Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
@@ -415,7 +452,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       feishu,
       workDirProfiles,
       activeWorkDirProfileId,
-      browser
+      browser,
+      shell
     } as AppConfig)
   })
 
@@ -443,6 +481,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         uiTheme: UiThemeMode
         maxParallelChatSessions: number
         browser: Partial<BrowserConfig>
+        shell: Partial<ShellConfig>
       }>
     ): Promise<void> => {
       try {
@@ -557,6 +596,24 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (payload.browser !== undefined) {
         persistBrowserConfig(ctx.db, payload.browser)
+      }
+      if (payload.shell !== undefined) {
+        const nextShell = persistShellConfig(ctx.db, payload.shell)
+        let curTools = mergeToolsConfig(null)
+        const curToolsRaw = getConfigValue(ctx.db, CONFIG_KEYS.tools)
+        if (curToolsRaw) {
+          try {
+            curTools = mergeToolsConfig(JSON.parse(curToolsRaw) as Partial<ToolsConfig>)
+          } catch {
+            /* ignore */
+          }
+        }
+        const deniedTools = syncShellDeniedTools(nextShell, curTools.deniedTools)
+        setConfigValue(
+          ctx.db,
+          CONFIG_KEYS.tools,
+          JSON.stringify(mergeToolsConfig({ ...curTools, deniedTools }))
+        )
       }
       stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()
@@ -771,7 +828,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         type: 'session',
         title: s?.name ?? m.sessionId,
         preview: m.content.slice(0, 160),
-        sessionId: m.sessionId
+        sessionId: m.sessionId,
+        messageId: m.id
       })
     }
     const root = ctx.getWorkDir()

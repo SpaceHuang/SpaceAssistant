@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Form, Input, InputNumber, Radio, Space, Switch, Tabs } from 'antd'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolSettingsCopy } from '../../../shared/builtinToolSettingsCopy'
-import type { BrowserConfig, ModelEntry } from '../../../shared/domainTypes'
+import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
+import { ShellSettingsTab } from './ShellSettingsTab'
 
 export type ToolsSettingsUi = {
   confirmMode: 'diff' | 'direct'
@@ -21,6 +22,12 @@ type Props = {
   setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
   browserUi: BrowserConfig
   setBrowserUi: React.Dispatch<React.SetStateAction<BrowserConfig>>
+  shellUi: ShellConfig
+  setShellUi: React.Dispatch<React.SetStateAction<ShellConfig>>
+  onShellEnabledChange: (enabled: boolean) => void
+  onTestShell?: () => void
+  shellTesting?: boolean
+  shellTest?: { ok: boolean; text: string } | null
   models: ModelEntry[]
   pyTest: { ok: boolean; text: string } | null
   pyTesting: boolean
@@ -31,10 +38,12 @@ type Props = {
 
 function BuiltinToolSwitchList({
   toolUi,
-  setToolUi
+  setToolUi,
+  onShellEnabledChange
 }: {
   toolUi: ToolsSettingsUi
   setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
+  onShellEnabledChange?: (enabled: boolean) => void
 }) {
   return (
     <Space direction="vertical" className="config-settings-stack" size="middle" style={{ width: '100%' }}>
@@ -52,6 +61,10 @@ function BuiltinToolSwitchList({
                 className="config-tool-row__switch"
                 checked={on}
                 onChange={(checked) => {
+                  if (def.name === 'run_shell' && onShellEnabledChange) {
+                    onShellEnabledChange(checked)
+                    return
+                  }
                   setToolUi((s) => ({
                     ...s,
                     deniedTools: checked
@@ -78,6 +91,12 @@ export function ToolsSettingsTab({
   setToolUi,
   browserUi,
   setBrowserUi,
+  shellUi,
+  setShellUi,
+  onShellEnabledChange,
+  onTestShell,
+  shellTesting,
+  shellTest,
   models,
   pyTest,
   pyTesting,
@@ -99,7 +118,13 @@ export function ToolsSettingsTab({
         {
           key: 'switches',
           label: '工具开关',
-          children: <BuiltinToolSwitchList toolUi={toolUi} setToolUi={setToolUi} />
+          children: (
+            <BuiltinToolSwitchList
+              toolUi={toolUi}
+              setToolUi={setToolUi}
+              onShellEnabledChange={onShellEnabledChange}
+            />
+          )
         },
         {
           key: 'file',
@@ -151,7 +176,7 @@ export function ToolsSettingsTab({
                 </Space.Compact>
               </Form.Item>
               {pyTest ? (
-                <Alert type={pyTest.ok ? 'success' : 'error'} message={pyTest.text} showIcon style={{ marginBottom: 12 }} />
+                <Alert type={pyTest.ok ? 'success' : 'error'} message={pyTest.text} showIcon className="config-alert-block" />
               ) : null}
               <Form.Item label="脚本默认超时（秒）">
                 <InputNumber
@@ -172,6 +197,19 @@ export function ToolsSettingsTab({
                 />
               </Form.Item>
             </>
+          )
+        },
+        {
+          key: 'shell',
+          label: 'Shell 命令',
+          children: (
+            <ShellSettingsTab
+              shell={shellUi}
+              onChange={setShellUi}
+              onTestShell={onTestShell}
+              shellTesting={shellTesting}
+              shellTest={shellTest}
+            />
           )
         },
         {

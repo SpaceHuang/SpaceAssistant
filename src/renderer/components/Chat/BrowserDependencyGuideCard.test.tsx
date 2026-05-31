@@ -4,8 +4,6 @@ import { App, ConfigProvider } from 'antd'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
 import { BrowserDependencyGuideCard } from './BrowserDependencyGuideCard'
-import configReducer from '../../store/configSlice'
-import browserDetectReducer from '../../store/browserDetectSlice'
 import type { BrowserDependencyToolError } from '../../../shared/browserTypes'
 
 const dependencyRecovery: BrowserDependencyToolError = {
@@ -30,28 +28,33 @@ describe('BrowserDependencyGuideCard', () => {
   beforeEach(() => {
     window.api = {
       ...window.api,
-      browserDetect: vi.fn(),
       browserOpenTerminal: vi.fn().mockResolvedValue({ ok: true })
     } as typeof window.api
   })
 
-  it('opens settings on tools network sub tab', () => {
-    const store = configureStore({
-      reducer: { config: configReducer, browserDetect: browserDetectReducer }
-    })
+  it('shows slim recovery bar with open terminal action', () => {
     render(
-      <Provider store={store}>
-        <ConfigProvider>
-          <App>
-            <BrowserDependencyGuideCard dependencyRecovery={dependencyRecovery} />
-          </App>
-        </ConfigProvider>
-      </Provider>
+      <ConfigProvider>
+        <App>
+          <BrowserDependencyGuideCard dependencyRecovery={dependencyRecovery} />
+        </App>
+      </ConfigProvider>
     )
-    fireEvent.click(screen.getByRole('button', { name: '打开设置 → 网络访问' }))
-    const { config } = store.getState()
-    expect(config.settingsOpen).toBe(true)
-    expect(config.settingsActiveTab).toBe('tools')
-    expect(config.settingsToolsSubTab).toBe('browser')
+    expect(screen.getByText(/网络访问依赖未就绪/)).toBeTruthy()
+    expect(screen.getByText(/助手将代为运行安装命令/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '在终端中打开' })).toBeTruthy()
+    expect(screen.queryByText(/打开设置/)).toBeNull()
+  })
+
+  it('opens terminal when button clicked', () => {
+    render(
+      <ConfigProvider>
+        <App>
+          <BrowserDependencyGuideCard dependencyRecovery={dependencyRecovery} />
+        </App>
+      </ConfigProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: '在终端中打开' }))
+    expect(window.api.browserOpenTerminal).toHaveBeenCalled()
   })
 })

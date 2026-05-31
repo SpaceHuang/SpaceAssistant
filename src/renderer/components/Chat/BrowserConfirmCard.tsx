@@ -1,4 +1,4 @@
-import { Globe } from 'lucide-react'
+import { Check, Globe, X } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { summarizeBrowserConfirmInput } from './browserConfirmDisplay'
 
@@ -12,26 +12,30 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
   if (!summary) return null
 
   return (
-    <div className="browser-confirm-card">
-      <div className="browser-confirm-card__header">
-        <Globe size={14} strokeWidth={1.75} className="browser-confirm-card__icon" aria-hidden />
+    <div className="write-confirm-card browser-confirm-card">
+      <div className="write-confirm-card__header">
+        <span className="write-confirm-card__icon-badge" aria-hidden>
+          <Globe size={14} strokeWidth={1.75} />
+        </span>
         <span className="browser-confirm-card__headline">{summary.headline}</span>
-        <div className="browser-confirm-card__actions">
+        <div className="write-confirm-card__actions">
           <button
             type="button"
-            className="browser-confirm-card__action browser-confirm-card__action--allow"
+            className="write-confirm-card__action write-confirm-card__action--allow"
             aria-label="确认"
+            title="确认"
             onClick={() => onConfirm(true)}
           >
-            确认
+            <Check size={16} strokeWidth={2.25} />
           </button>
           <button
             type="button"
-            className="browser-confirm-card__action browser-confirm-card__action--deny"
+            className="write-confirm-card__action write-confirm-card__action--deny"
             aria-label="拒绝"
+            title="拒绝"
             onClick={() => onConfirm(false)}
           >
-            拒绝
+            <X size={16} strokeWidth={2.25} />
           </button>
         </div>
       </div>

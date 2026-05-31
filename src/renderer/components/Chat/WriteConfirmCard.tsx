@@ -60,7 +60,9 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
   return (
     <div className="write-confirm-card">
       <div className="write-confirm-card__header">
-        <FileIcon size={14} strokeWidth={1.75} className="write-confirm-card__file-icon" aria-hidden />
+        <span className="write-confirm-card__icon-badge" aria-hidden>
+          <FileIcon size={14} strokeWidth={1.75} className="write-confirm-card__file-icon" />
+        </span>
         <span className="write-confirm-card__filename" title={path || fileName}>
           {fileName}
         </span>

@@ -30,7 +30,11 @@ export const BUILTIN_TOOL_SETTINGS_COPY: Record<string, BuiltinToolSettingsCopy>
   },
   run_script: {
     summary: '运行 Python 脚本（执行前需你确认）。',
-    disabledHint: '关闭后 Agent 无法执行脚本或本地命令。'
+    disabledHint: '关闭后 Agent 无法执行 Python 脚本。'
+  },
+  run_shell: {
+    summary: '在会话工作目录下执行 shell 命令（执行前需你确认）。',
+    disabledHint: '关闭后 Agent 无法代为运行 npm、git 等 CLI 命令。'
   },
   run_lark_cli: {
     summary: '调用飞书 lark-cli，操作消息、文档、日历等。',
@@ -43,6 +47,10 @@ export const BUILTIN_TOOL_SETTINGS_COPY: Record<string, BuiltinToolSettingsCopy>
   browser: {
     summary: '在隔离浏览器中打开网页、读取页面并执行点击等操作。',
     disabledHint: '关闭后 Agent 无法访问网页或自动化浏览器。'
+  },
+  browser_detect: {
+    summary: '检测网络访问（browser）所需的 Stagehand、Playwright、Chromium 依赖是否就绪。',
+    disabledHint: '关闭后 Agent 无法在对话中自动检测浏览器依赖状态。'
   }
 }
 

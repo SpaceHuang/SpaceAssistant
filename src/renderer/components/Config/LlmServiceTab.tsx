@@ -65,7 +65,7 @@ export function LlmServiceTab({ draftsApi }: Props) {
       <Button
         type="dashed"
         block
-        style={{ marginTop: 12 }}
+        className="config-block-spacer"
         disabled={state.order.length >= MAX_LLM_SERVICES}
         onClick={handleAdd}
       >

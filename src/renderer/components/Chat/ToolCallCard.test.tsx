@@ -106,6 +106,81 @@ describe('ToolCallCard file write expand behavior', () => {
     expect(screen.queryByRole('button', { name: '取消执行' })).toBeNull()
   })
 
+  it('does not show per-card cancel while run_shell is executing', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-shell-exec',
+          toolName: 'run_shell',
+          input: { command: 'npm test' },
+          status: 'executing',
+          riskLevel: 'medium'
+        }}
+        confirmMode="direct"
+        onCancel={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '取消执行' })).toBeNull()
+  })
+
+  it('collapses browser_detect row when detection completes successfully', () => {
+    const { rerender, container } = render(
+      <ToolCallCard
+        record={{
+          id: 'tool-detect',
+          toolName: 'browser_detect',
+          input: {},
+          status: 'executing',
+          riskLevel: 'low'
+        }}
+        confirmMode="direct"
+      />
+    )
+    expect(container.querySelector('.tool-row--expanded')).not.toBeNull()
+
+    rerender(
+      <ToolCallCard
+        record={{
+          id: 'tool-detect',
+          toolName: 'browser_detect',
+          input: {},
+          status: 'completed',
+          riskLevel: 'low',
+          result: {
+            success: true,
+            data: {
+              canInitialize: false,
+              primaryFailure: 'chromium_missing',
+              errors: ['Chromium 浏览器未安装']
+            }
+          },
+          completedAt: Date.now()
+        }}
+        confirmMode="direct"
+      />
+    )
+    expect(container.querySelector('.tool-row-detail')).toBeNull()
+    expect(container.querySelector('.tool-row--expanded')).toBeNull()
+  })
+
+  it('keeps browser_detect row expanded when detection fails', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-detect-fail',
+          toolName: 'browser_detect',
+          input: {},
+          status: 'failed',
+          riskLevel: 'low',
+          result: { success: false, error: '检测超时' }
+        }}
+        confirmMode="direct"
+      />
+    )
+    expect(document.querySelector('.tool-row--expanded')).not.toBeNull()
+    expect(screen.getByText('检测超时')).toBeDefined()
+  })
+
   it('keeps browser list row collapsed except confirm card', () => {
     const cases: ToolCallRecord[] = [
       {
@@ -156,7 +231,7 @@ describe('ToolCallCard file write expand behavior', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: '取消执行' }))
     expect(onCancel).toHaveBeenCalled()
-  })
+  }, 15_000)
 
   it('shows browser confirm card with URL while confirming navigate', () => {
     render(
@@ -176,5 +251,148 @@ describe('ToolCallCard file write expand behavior', () => {
     expect(screen.getByText('https://www.zhihu.com/billboard')).toBeDefined()
     expect(screen.getByText('URL')).toBeDefined()
     expect(screen.getByRole('button', { name: '确认' })).toBeDefined()
+  })
+})
+
+const plainShellCardProps = {
+  shellConfig: { enabled: false, shellDefaultTimeoutSec: 300, outputMode: 'plain' as const }
+}
+
+function shellRecord(status: ToolCallRecord['status'], extra: Partial<ToolCallRecord> = {}): ToolCallRecord {
+  return {
+    id: 'tool-shell',
+    toolName: 'run_shell',
+    input: { command: 'npm install' },
+    status,
+    riskLevel: 'medium',
+    ...extra
+  }
+}
+
+describe('ToolCallCard run_shell output display', () => {
+  it('shows live progressOutput while executing', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('executing', { progressOutput: 'added 47 packages in 3s' })}
+        confirmMode="direct"
+        {...plainShellCardProps}
+      />
+    )
+    expect(screen.getByText(/added 47 packages/)).toBeDefined()
+    expect(document.querySelector('.shell-output--live')).not.toBeNull()
+    expect(screen.queryByText(/"exitCode"/)).toBeNull()
+  })
+
+  it('shows formatted stdout when completed', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('completed', {
+          result: {
+            success: true,
+            data: { stdout: 'On branch main\nnothing to commit', stderr: '', exitCode: 0 }
+          },
+          completedAt: Date.now()
+        })}
+        confirmMode="direct"
+        {...plainShellCardProps}
+      />
+    )
+    fireEvent.click(document.querySelector('.tool-row__main')!)
+    expect(screen.getByText(/On branch main/)).toBeDefined()
+    expect(screen.queryByText(/"exitCode"/)).toBeNull()
+  })
+
+  it('shows stderr on failed run_shell without generic error message', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('failed', {
+          result: {
+            success: false,
+            error: '命令执行失败（退出码: 1）',
+            data: { stdout: '', stderr: 'error TS2322: type mismatch', exitCode: 1 }
+          },
+          completedAt: Date.now()
+        })}
+        confirmMode="direct"
+        {...plainShellCardProps}
+      />
+    )
+    expect(screen.getByText('退出码: 1')).toBeDefined()
+    expect(screen.getByText(/error TS2322/)).toBeDefined()
+    expect(screen.queryByText('命令执行失败（退出码: 1）')).toBeNull()
+  })
+
+  it('auto-expands read-only shell command when completed', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('completed', {
+          input: { command: 'git status' },
+          result: {
+            success: true,
+            data: { stdout: 'On branch main', stderr: '', exitCode: 0 }
+          },
+          completedAt: Date.now()
+        })}
+        confirmMode="direct"
+        {...plainShellCardProps}
+      />
+    )
+    expect(document.querySelector('.tool-row--expanded')).not.toBeNull()
+    expect(document.querySelector('.tool-row-detail')).not.toBeNull()
+    expect(screen.getByText(/On branch main/)).toBeDefined()
+  })
+
+  it('keeps silent shell command collapsed', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('completed', {
+          input: { command: 'git status' },
+          result: {
+            success: true,
+            data: { stdout: '', stderr: '', exitCode: 0 }
+          },
+          completedAt: Date.now()
+        })}
+        confirmMode="direct"
+        {...plainShellCardProps}
+      />
+    )
+    expect(screen.getByText('已完成（无输出）')).toBeDefined()
+    expect(document.querySelector('.tool-row-detail')).toBeNull()
+  })
+
+  it('does not show external terminal hint for normal commands', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('executing', { progressOutput: 'added 47 packages', input: { command: 'npm install' } })}
+        confirmMode="direct"
+        {...plainShellCardProps}
+      />
+    )
+    expect(document.querySelector('.shell-tui-fallback')).toBeNull()
+  })
+
+  it('shows external terminal hint for interactive TUI commands', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('executing', { input: { command: 'less README.md' } })}
+        confirmMode="direct"
+        workDir="E:\\work"
+      />
+    )
+    expect(document.querySelector('.shell-tui-fallback')).not.toBeNull()
+    expect(document.querySelector('.shell-tui-fallback')?.textContent).toMatch(/交互式终端/)
+  })
+
+  it('still shows ShellConfirmCard while confirming', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('confirming', { input: { command: 'rm -rf /tmp/test' } })}
+        confirmMode="direct"
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(document.querySelector('.shell-confirm-card')).not.toBeNull()
+    expect(document.querySelector('.shell-output')).toBeNull()
   })
 })

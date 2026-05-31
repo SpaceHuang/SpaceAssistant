@@ -1,5 +1,8 @@
 /** 工具调用单行摘要与图标映射（轻量活动流展示） */
 
+import type { ToolCallRecord } from '../../../shared/domainTypes'
+import { isShellReadOnlyCommand, isShellSilentResult } from '../../../shared/shellToolDisplay'
+
 const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_directory'])
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file'])
 
@@ -31,8 +34,12 @@ export function getToolDescription(toolName: string): string {
       return '将完整内容写入文件'
     case 'run_script':
       return '执行 Python 脚本'
+    case 'run_shell':
+      return '在会话工作目录下执行 shell 命令'
     case 'browser':
       return '在隔离浏览器中访问网页'
+    case 'browser_detect':
+      return '检测 browser 工具依赖是否就绪'
     default:
       return `调用工具：${toolName}`
   }
@@ -48,6 +55,9 @@ export function formatToolLabelTitle(toolName: string, input: Record<string, unk
     input.path
   ) {
     return input.path
+  }
+  if (toolName === 'run_shell' && typeof input.command === 'string' && input.command) {
+    return input.command
   }
   return undefined
 }
@@ -68,8 +78,15 @@ export function formatToolLabel(toolName: string, input: Record<string, unknown>
       return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '写入文件'
     case 'run_script':
       return '运行脚本'
+    case 'run_shell': {
+      const cmd = typeof input.command === 'string' ? input.command : ''
+      if (!cmd) return '运行命令'
+      return cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd
+    }
     case 'browser':
       return 'browser'
+    case 'browser_detect':
+      return '检测浏览器依赖'
     default:
       return toolName
   }
@@ -93,4 +110,23 @@ export function getToolIconKind(toolName: string): ToolIconKind {
     default:
       return 'default'
   }
+}
+
+/** browser_detect 成功后默认折叠详情（检测摘要见单行标题，详情按需展开） */
+export function shouldCollapseBrowserDetectRow(record: ToolCallRecord): boolean {
+  return record.toolName === 'browser_detect' && record.status === 'completed' && record.result?.success === true
+}
+
+/** 只读 shell 命令（git status 等）完成后默认展开详情 */
+export function shouldAutoExpandShellToolRow(record: ToolCallRecord): boolean {
+  if (record.toolName !== 'run_shell') return false
+  const cmd = typeof record.input.command === 'string' ? record.input.command : ''
+  return isShellReadOnlyCommand(cmd)
+}
+
+/** 静默命令（exit 0 且无输出）展示专用标签 */
+export function shellToolCompletedLabel(record: ToolCallRecord): string | undefined {
+  if (record.toolName !== 'run_shell' || record.status !== 'completed') return undefined
+  if (isShellSilentResult(record.result?.data)) return '已完成（无输出）'
+  return undefined
 }

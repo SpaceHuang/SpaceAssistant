@@ -1,0 +1,93 @@
+# SpaceAssistant
+
+SpaceAssistant — 你的桌面 AI 助手
+
+这是什么？
+
+SpaceAssistant 是一款桌面 AI 助手应用，它不仅能和你对话，还能直接操作你的电脑——读文件、写代码、搜索内容、打开浏览器帮你查资料、执行命令行任务。它就像一个坐在你电脑前的智能搭档，你说做什么，它就去执行。
+
+SpaceAssistant 有什么特点？
+
+- 安全的工具执行
+
+  写文件和执行命令前，AI 会先给你看改了什么（diff
+  模式），你确认后才执行。每类工具有风险等级标记，高危操作（运行脚本、执行命令）必须确认。
+
+- 多种 AI 模型支持
+
+  支持 11+ 主流大模型：Claude
+  全系（Opus/Sonnet/Haiku）、DeepSeek、GPT、Gemini、Kimi、GLM、MiniMax。你可以根据任务需求自由切换。
+
+- 本地数据存储
+
+  所有数据存储在你电脑上（JSON 文件），API Key 通过操作系统级加密保护。你的对话数据不会上传到第三方服务器。
+
+- 飞书集成
+
+  连接飞书后，你可以在飞书里远程指挥 AI：
+
+  - 给飞书机器人发消息，AI 在电脑上执行任务并回复结果
+  - 操作飞书文档、日历、多维表格、邮箱
+  - 远程确认工具执行（写文件、运行命令等高危操作）
+
+  人不在电脑前也能让 AI 干活。
+
+- 支持 Skill 扩展
+
+  - 支持安装第三方 Skill
+  - AI 自动识别用户意图并匹配对应 Skill
+
+支持 Windows、macOS、Linux。
+
+## 第三方库许可证
+
+本项目使用了以下开源库，在此对其作者和贡献者表示感谢。
+
+### 生产依赖
+
+| 库 | 许可证 |
+|---|--------|
+| [@anthropic-ai/sdk](https://github.com/anthropics/anthropic-sdk-typescript) | MIT |
+| [@browserbasehq/stagehand](https://github.com/browserbase/stagehand) | MIT |
+| [@reduxjs/toolkit](https://github.com/reduxjs/redux-toolkit) | MIT |
+| [antd](https://github.com/ant-design/ant-design) | MIT |
+| [axios](https://github.com/axios/axios) | MIT |
+| [lucide-react](https://github.com/lucide-icons/lucide) | ISC |
+| [mingcute_icon](https://github.com/Richard9394/MingCute) | Apache-2.0 |
+| [playwright](https://github.com/microsoft/playwright) | Apache-2.0 |
+| [react](https://github.com/facebook/react) | MIT |
+| [react-dom](https://github.com/facebook/react) | MIT |
+| [react-markdown](https://github.com/remarkjs/react-markdown) | MIT |
+| [react-redux](https://github.com/reduxjs/react-redux) | MIT |
+| [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | MIT |
+| [rehype-external-links](https://github.com/rehypejs/rehype-external-links) | MIT |
+| [remark-gfm](https://github.com/remarkjs/remark-gfm) | MIT |
+| [shiki](https://github.com/shikijs/shiki) | MIT |
+| [zod](https://github.com/colinhacks/zod) | MIT |
+
+### 主要间接依赖
+
+| 库 | 许可证 |
+|---|--------|
+| [@ai-sdk/*](https://github.com/vercel/ai) (Vercel AI SDK 系列) | Apache-2.0 |
+| [@langchain/core](https://github.com/langchain-ai/langchainjs) | MIT |
+| [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) | MIT |
+| [highlight.js](https://github.com/highlightjs/highlight.js) | BSD-3-Clause |
+
+### 开发依赖
+
+| 库 | 许可证 |
+|---|--------|
+| [electron](https://github.com/electron/electron) | MIT |
+| [electron-builder](https://github.com/electron-userland/electron-builder) | MIT |
+| [vite](https://github.com/vitejs/vite) | MIT |
+| [vitest](https://github.com/vitest-dev/vitest) | MIT |
+| [typescript](https://github.com/microsoft/TypeScript) | Apache-2.0 |
+| [sharp](https://github.com/lovell/sharp) | Apache-2.0 |
+| [jsdom](https://github.com/jsdom/jsdom) | MIT |
+
+以上列表仅涵盖直接依赖及部分主要间接依赖。完整的依赖树及许可证信息可通过 `npm ls --all` 或运行 `npx license-checker` 查看。
+
+## 许可证
+
+本项目基于 [MIT License](LICENSE) 开源。

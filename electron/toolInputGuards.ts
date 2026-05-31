@@ -86,6 +86,17 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
       assertStringLen(content, 'content', TOOL_LARGE_TEXT_MAX)
       return
     }
+    case 'run_shell': {
+      reqStringLen(input.command, 'command', STRING_FIELD_MAX)
+      optStringLen(input.description, 'description', 512)
+      const to = input.timeout
+      if (to !== undefined && to !== null) {
+        if (typeof to !== 'number' || !Number.isFinite(to) || to < 1 || to > RUN_SCRIPT_TIMEOUT_MAX_SEC) {
+          throw new Error(`工具参数无效：timeout 须为 1～${RUN_SCRIPT_TIMEOUT_MAX_SEC} 的数字（秒）`)
+        }
+      }
+      return
+    }
     case 'browser': {
       const BROWSER_ACTIONS = ['navigate', 'observe', 'extract', 'act', 'screenshot', 'close'] as const
       const action = input.action

@@ -16,7 +16,7 @@ describe('toBrowserUserError', () => {
       new Error("Executable doesn't exist at C:\\Users\\x\\ms-playwright\\chromium"),
       'init'
     )
-    expect(msg).toMatch(/playwright install chromium|设置 → 浏览器/)
+    expect(msg).toMatch(/playwright install chromium|对话中/)
     expect(msg).not.toMatch(/Users/)
     expect(msg).not.toMatch(/项目目录/)
   })

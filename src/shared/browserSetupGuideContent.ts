@@ -23,11 +23,8 @@ function terminalHint(platform: string): string {
   return '打开终端'
 }
 
-function cwdDescription(detect: BrowserDetectResult): string {
-  if (detect.installContext === 'packaged') {
-    return '请在下方目录打开终端（应用安装位置）'
-  }
-  return '请在 SpaceAssistant 源码根目录（含 package.json）打开终端'
+function cwdDescription(_detect: BrowserDetectResult): string {
+  return '请在下方目录打开终端（应用安装位置）'
 }
 
 function buildTroubleshooting(platform: string): Array<{ title: string; body: string }> {
@@ -84,12 +81,8 @@ export function buildBrowserSetupGuideContent(
   platform: string = typeof process !== 'undefined' ? process.platform : 'win32'
 ): BrowserSetupGuideContent {
   const failure = detect.primaryFailure
-  const showNpmInstall =
-    (failure === 'stagehand_missing' || failure === 'playwright_missing') &&
-    detect.installContext === 'development'
-  const showPackagedDefect =
-    (failure === 'stagehand_missing' || failure === 'playwright_missing') &&
-    detect.installContext === 'packaged'
+  const showNpmInstall = false
+  const showPackagedDefect = failure === 'stagehand_missing' || failure === 'playwright_missing'
   const showForceInstall =
     failure === 'chromium_missing' ||
     failure === 'chromium_headless_only' ||

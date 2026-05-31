@@ -22,7 +22,7 @@ export function classifyBrowserLlmError(err: unknown): string {
   if (/thinking mode does not support.*tool_choice|thinking mode does not support this tool/i.test(lower)) {
     return (
       '浏览器所用 DeepSeek 模型处于思考（Thinking）模式，无法提取或分析页面内容。' +
-      '请完全退出并重启应用后重试；若仍失败，请在设置 → 浏览器中更换 Stagehand 模型（例如 deepseek-v4-flash）。'
+      '请完全退出并重启应用后重试；若仍失败，请在设置 → 工具 → 网络访问 中更换 Stagehand 模型（例如 deepseek-v4-flash）。'
     )
   }
 

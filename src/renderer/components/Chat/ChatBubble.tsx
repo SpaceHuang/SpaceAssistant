@@ -1,16 +1,16 @@
 import { memo } from 'react'
-import { Space, Typography } from 'antd'
-import type { Message } from '../../../shared/domainTypes'
+import type { Message, ShellConfig } from '../../../shared/domainTypes'
 import { buildAssistantActivityTimeline } from '../../../shared/assistantActivityTimeline'
 import { contentSegmentsForRender } from '../../../shared/contentSegments'
 import { thinkingSegmentsForRender } from '../../../shared/thinkingSegments'
 import { ChatMarkdown } from './ChatMarkdown'
+import { formatChatTimestamp } from './formatChatTimestamp'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallCard } from './ToolCallCard'
+import { SkillHintRow } from './SkillHintRow'
 import { formatToolLabel, formatToolLabelTitle } from './toolCallDisplay'
+import { SkillHintBubble } from './SkillHintBubble'
 import { ToolRowIcon } from './ToolRowIcon'
-
-const { Text } = Typography
 
 export type ToolsInteractiveProps = {
   requestId: string
@@ -23,6 +23,9 @@ type Props = {
   message: Message
   toolsInteractive?: ToolsInteractiveProps
   focusToolUseId?: string | null
+  workDir?: string
+  shellConfig?: ShellConfig
+  sessionMetadata?: Record<string, unknown>
   onOpenFile?: (relPath: string) => void
   wikiRootPath?: string
   showArchiveToWiki?: boolean
@@ -46,10 +49,40 @@ function AssistantTextBody({
   return <ChatMarkdown content={body} onOpenFile={onOpenFile} wikiRootPath={wikiRootPath} />
 }
 
+function MessageMeta({
+  timestamp,
+  streaming,
+  failed,
+  showArchiveToWiki,
+  onArchiveToWiki
+}: {
+  timestamp: number
+  streaming: boolean
+  failed: boolean
+  showArchiveToWiki?: boolean
+  onArchiveToWiki?: () => void
+}) {
+  return (
+    <div className="chat-bubble-meta">
+      <time dateTime={new Date(timestamp).toISOString()}>{formatChatTimestamp(timestamp)}</time>
+      {streaming ? <span className="chat-bubble-status chat-bubble-status--streaming">生成中</span> : null}
+      {failed ? <span className="chat-bubble-status chat-bubble-status--failed">失败</span> : null}
+      {showArchiveToWiki && onArchiveToWiki ? (
+        <button type="button" className="chat-archive-wiki-btn" onClick={onArchiveToWiki}>
+          归档到 Wiki
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
 export const ChatBubble = memo(function ChatBubble({
   message,
   toolsInteractive,
   focusToolUseId,
+  workDir,
+  shellConfig,
+  sessionMetadata,
   onOpenFile,
   wikiRootPath,
   showArchiveToWiki = false,
@@ -57,33 +90,44 @@ export const ChatBubble = memo(function ChatBubble({
 }: Props) {
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
+  const failed = message.status === 'failed'
   const thinkingSegments = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
   const textSegments = contentSegmentsForRender(message)
   const toolById = new Map((message.toolCalls ?? []).map((tc) => [tc.id, tc]))
-  const activityTimeline = !isUser ? buildAssistantActivityTimeline(message) : []
+  const skillById = new Map((message.skillHints ?? []).map((h) => [h.id, h]))
+  const activityTimeline = !isUser && message.role !== 'system' ? buildAssistantActivityTimeline(message) : []
+
+  if (message.role === 'system') {
+    const hints = message.skillHints ?? []
+    if (hints.length === 0) return null
+    return <SkillHintBubble hints={hints} />
+  }
 
   if (isUser) {
     return (
-      <div className="chat-bubble-row chat-bubble-row--user">
-        <div style={{ maxWidth: '92%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+      <div className="chat-bubble-row chat-bubble-row--user" data-message-id={message.id}>
+        <div className="chat-bubble-col chat-bubble-col--user">
           <div className="chat-bubble chat-bubble--user">
-            <Space direction="vertical" size="small" style={{ width: '100%' }}>
-              <div className="chat-md-user">
-                <Text style={{ color: 'var(--sa-bubble-user-text)' }}>{message.content}</Text>
-              </div>
-              <div className="chat-bubble-meta">
-                {new Date(message.timestamp).toLocaleString()}
-              </div>
-            </Space>
+            <div className="chat-md-user">{message.content}</div>
           </div>
+          <MessageMeta timestamp={message.timestamp} streaming={false} failed={false} />
         </div>
       </div>
     )
   }
 
+  const rowClass = [
+    'chat-bubble-row',
+    'chat-bubble-row--assistant',
+    streaming ? 'chat-bubble-row--streaming' : '',
+    failed ? 'chat-bubble-row--failed' : ''
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
-    <div className="chat-bubble-row chat-bubble-row--assistant">
-      <div style={{ maxWidth: '92%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+    <div className={rowClass} data-message-id={message.id}>
+      <div className="chat-bubble-col chat-bubble-col--assistant">
         {activityTimeline.length > 0 ? (
           <div className="chat-activity-track">
             {activityTimeline.map((item, i) => {
@@ -117,12 +161,27 @@ export const ChatBubble = memo(function ChatBubble({
                   </div>
                 )
               }
+              if (item.kind === 'skill') {
+                const hint = skillById.get(item.hintId)
+                if (!hint) return null
+                return (
+                  <div key={`${message.id}-act-skill-${hint.id}`} className="chat-system-track">
+                    <SkillHintRow text={hint.text} />
+                  </div>
+                )
+              }
               const tc = toolById.get(item.toolId)
               if (!tc) return null
               return (
                 <ToolCallCard
                   key={`${message.id}-act-tool-${tc.id}`}
                   record={tc}
+                  messageId={message.id}
+                  sessionId={message.sessionId}
+                  toolCalls={message.toolCalls}
+                  workDir={workDir}
+                  shellConfig={shellConfig}
+                  sessionMetadata={sessionMetadata}
                   focus={focusToolUseId === tc.id}
                   confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
                   onConfirm={
@@ -139,6 +198,11 @@ export const ChatBubble = memo(function ChatBubble({
                 />
               )
             })}
+            {streaming && !message.content && thinkingSegments.every((seg) => seg.endTime !== undefined) ? (
+              <div className="chat-bubble chat-bubble--assistant chat-bubble-streaming">
+                <div className="chat-stream-plain chat-md-assistant">…</div>
+              </div>
+            ) : null}
           </div>
         ) : streaming ? (
           <div className="chat-bubble chat-bubble--assistant chat-bubble-streaming">
@@ -163,19 +227,19 @@ export const ChatBubble = memo(function ChatBubble({
           </div>
         ) : null}
 
-        <div className="chat-bubble-meta">
-          {new Date(message.timestamp).toLocaleString()}
-          {streaming ? ' · 生成中' : null}
-          {message.status === 'failed' ? ' · 失败' : null}
-          {showArchiveToWiki && onArchiveToWiki ? (
-            <>
-              {' · '}
-              <button type="button" className="chat-archive-wiki-btn" onClick={onArchiveToWiki}>
-                归档到 Wiki
-              </button>
-            </>
-          ) : null}
-        </div>
+        {failed ? (
+          <div className="chat-message-error" role="alert">
+            回复未能完成。你可以重新发送问题，或基于已有上下文继续对话。
+          </div>
+        ) : null}
+
+        <MessageMeta
+          timestamp={message.timestamp}
+          streaming={streaming}
+          failed={failed}
+          showArchiveToWiki={showArchiveToWiki}
+          onArchiveToWiki={onArchiveToWiki}
+        />
       </div>
     </div>
   )

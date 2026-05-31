@@ -10,6 +10,7 @@ import type {
   SkillRouteResult,
   SkillsConfig
 } from '../../src/shared/domainTypes'
+import { isLlmRoutingExcludedSkill } from '../../src/shared/domainTypes'
 import {
   ROUTING_SYSTEM_PROMPT,
   buildRecentContext,
@@ -115,7 +116,7 @@ export function applyLlmRecommendations(args: {
   const availableNames = new Set(available.map((s) => s.meta.name))
 
   llmRecommended.forEach((name, index) => {
-    if (!availableNames.has(name) || excluded.has(name)) return
+    if (!availableNames.has(name) || excluded.has(name) || isLlmRoutingExcludedSkill(name)) return
     const skill = available.find((s) => s.meta.name === name)
     if (!skill) return
     const scopeBonus = skill.scope === 'project' ? 0.01 : 0
@@ -204,7 +205,7 @@ export async function routeSkills(args: {
   let routingError: string | undefined
 
   if (shouldCallLlm) {
-    const catalogSkills = available
+    const catalogSkills = available.filter((s) => !isLlmRoutingExcludedSkill(s.meta.name))
     const catalog = buildSkillsCatalog(catalogSkills, routing.includeTriggersInCatalog === true)
     const recentContext = buildRecentContext(userInput, recentMessages, routing)
     const userMessage = buildRoutingUserMessage({ userInput, catalog, recentContext })

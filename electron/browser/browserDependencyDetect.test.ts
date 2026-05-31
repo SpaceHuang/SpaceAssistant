@@ -85,28 +85,19 @@ describe('browserDependencyDetect', () => {
     expect(failure).toBe('node_version_low')
   })
 
-  it('packaged stagehand_missing error suggests reinstall', () => {
+  it('stagehand_missing error suggests reinstall in all environments', () => {
     const result = buildBrowserDetectResult(
       baseChecks({
         stagehandInstalled: false,
         playwrightInstalled: true,
-        installContext: 'packaged',
-        recommendedCwd: packagedCtx.appPath,
+        installContext: 'development',
+        recommendedCwd: devCtx.devRoot,
         chromium: { ready: false, failure: 'chromium_missing' }
       })
     )
     expect(result.primaryFailure).toBe('stagehand_missing')
     expect(result.errors[0]).toMatch(/重新安装/)
-  })
-
-  it('development stagehand_missing mentions npm install', () => {
-    const result = buildBrowserDetectResult(
-      baseChecks({
-        stagehandInstalled: false,
-        chromium: { ready: false, failure: null }
-      })
-    )
-    expect(result.errors[0]).toMatch(/源码根目录/)
+    expect(result.errors[0]).not.toMatch(/npm install/)
   })
 
   it('ok state has empty errors', () => {
@@ -121,8 +112,34 @@ describe('browserDependencyDetect', () => {
     expect(isChromiumRecoveryFailure('stagehand_missing')).toBe(false)
   })
 
-  it('isAllowedTerminalCwd rejects arbitrary paths', () => {
+  it('isAllowedTerminalCwd allows recommended cwd only', () => {
     expect(isAllowedTerminalCwd(devCtx.devRoot, devCtx)).toBe(true)
+    expect(isAllowedTerminalCwd(devCtx.appPath, devCtx)).toBe(false)
+    expect(isAllowedTerminalCwd(packagedCtx.appPath, packagedCtx)).toBe(true)
+    expect(isAllowedTerminalCwd(packagedCtx.devRoot, packagedCtx)).toBe(false)
     expect(isAllowedTerminalCwd('C:\\evil', devCtx)).toBe(false)
+  })
+
+  it('chromium_missing error uses 源码根目录 label in development', () => {
+    const result = buildBrowserDetectResult(
+      baseChecks({
+        chromium: { ready: false, failure: 'chromium_missing' },
+        installContext: 'development',
+        recommendedCwd: devCtx.devRoot
+      })
+    )
+    expect(result.errors[0]).toMatch(/源码根目录/)
+    expect(result.errors[0]).not.toMatch(/应用安装目录/)
+  })
+
+  it('chromium_missing error uses 应用安装目录 label when packaged', () => {
+    const result = buildBrowserDetectResult(
+      baseChecks({
+        chromium: { ready: false, failure: 'chromium_missing' },
+        installContext: 'packaged',
+        recommendedCwd: packagedCtx.appPath
+      })
+    )
+    expect(result.errors[0]).toMatch(/应用安装目录/)
   })
 })

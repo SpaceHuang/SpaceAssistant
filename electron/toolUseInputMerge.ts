@@ -49,6 +49,7 @@ function coalesceToolUseInputs(
   if (toolName === 'write_file') ensureString('path', 'content')
   else if (toolName === 'edit_file') ensureString('path', 'old_string', 'new_string')
   else if (toolName === 'run_script') ensureString('code')
+  else if (toolName === 'run_shell') ensureString('command')
   else if (toolName === 'grep') ensureString('pattern', 'path', 'glob')
   return merged
 }

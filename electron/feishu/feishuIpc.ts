@@ -17,6 +17,7 @@ import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
+import { parseLarkCliError } from './larkCliErrors'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
 const WORKDIR_PROFILES_KEY = 'config.workDirProfiles'
@@ -267,10 +268,22 @@ export function registerFeishuIpcHandlers(
 
   ipcMain.handle('feishu:auth-status', async () => {
     try {
+      const detect = await b.runner.detect()
+      if (!detect.installed) {
+        const parsed = parseLarkCliError('不是内部或外部命令')
+        logFeishuCliEvent('info', 'feishu.ipc.auth_status', { authorized: false, exitCode: 1, cliMissing: true })
+        return { authorized: false, stdout: '', stderr: parsed.message, hint: parsed.hint }
+      }
       const r = await b.runner.run({ args: ['auth', 'status'], timeoutSec: 30 })
       const authorized = r.exitCode === 0 && !/not logged/i.test(r.stdout + r.stderr)
+      const parsed = authorized ? null : parseLarkCliError(r.stderr)
       logFeishuCliEvent('info', 'feishu.ipc.auth_status', { authorized, exitCode: r.exitCode })
-      return { authorized, stdout: r.stdout, stderr: r.stderr }
+      return {
+        authorized,
+        stdout: r.stdout,
+        stderr: parsed?.message ?? r.stderr,
+        hint: parsed?.hint
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       logFeishuCliEvent('info', 'feishu.ipc.auth_status', { authorized: false, exitCode: 1 })

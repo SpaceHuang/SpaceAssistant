@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, resetChatUi, setProjectMemoryEnabled } from './chatSlice'
+import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
@@ -63,6 +63,19 @@ describe('chatSlice', () => {
     const withData = chatReducer(base, setLastUsage({ input_tokens: 5000 }))
     const switched = chatReducer(withData, setSession('s2'))
     expect(switched.lastUsage).toBeNull()
+  })
+
+  it('setScrollToMessageId stores pending scroll target', () => {
+    const state = chatReducer(undefined, setScrollToMessageId('m42'))
+    expect(state.scrollToMessageId).toBe('m42')
+    const cleared = chatReducer(state, setScrollToMessageId(null))
+    expect(cleared.scrollToMessageId).toBeNull()
+  })
+
+  it('setSession clears scrollToMessageId', () => {
+    let state = chatReducer(undefined, setScrollToMessageId('m42'))
+    state = chatReducer(state, setSession('s2'))
+    expect(state.scrollToMessageId).toBeNull()
   })
 
   it('resetChatUi resets lastUsage', () => {

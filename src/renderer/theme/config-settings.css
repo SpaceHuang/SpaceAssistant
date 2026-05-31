@@ -1,0 +1,704 @@
+/* ── 设置弹窗视觉规范（字号 / 间距 token 见 tokens.css --sa-config-*）── */
+
+.config-modal .ant-modal-title {
+  font-size: var(--sa-config-font-title);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+}
+
+.config-modal .ant-modal-body {
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line);
+  padding-top: var(--sa-config-gap-field);
+}
+
+.config-modal .ant-tabs-tab {
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line-tight);
+  padding: 8px 0;
+}
+
+.config-modal .ant-tabs-nav {
+  margin-bottom: var(--sa-config-gap-stack);
+}
+
+.config-modal .ant-form-item {
+  margin-bottom: var(--sa-config-form-item-gap);
+}
+
+.config-modal .ant-form-item:last-child {
+  margin-bottom: 0;
+}
+
+.config-modal .ant-form-item-label > label {
+  font-size: var(--sa-config-font);
+  font-weight: 500;
+  line-height: var(--sa-config-line);
+  height: auto;
+}
+
+.config-modal .ant-form-item-extra {
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+  margin-top: var(--sa-config-gap-tight);
+}
+
+.config-modal .ant-radio-wrapper,
+.config-modal .ant-checkbox-wrapper,
+.config-modal .ant-input,
+.config-modal .ant-input-affix-wrapper,
+.config-modal .ant-input-affix-wrapper > input.ant-input,
+.config-modal .ant-input-password input,
+.config-modal .ant-input-number,
+.config-modal .ant-input-number-input,
+.config-modal .ant-select .ant-select-selector,
+.config-modal .ant-select-selection-search-input,
+.config-modal .ant-select-selection-placeholder,
+.config-modal .ant-select-selection-item,
+.config-modal .ant-select-selection-item-content,
+.config-modal .ant-select-multiple .ant-select-selection-item,
+.config-modal .ant-alert-message,
+.config-modal .ant-alert-description,
+.config-modal .ant-tag,
+.config-modal .ant-btn,
+.config-modal .ant-table,
+.config-modal .ant-table-thead > tr > th,
+.config-modal .ant-table-thead > tr > th .ant-table-column-title,
+.config-modal .ant-table-thead .ant-table-cell,
+.config-modal .ant-collapse-header-text,
+.config-modal .ant-typography {
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line);
+}
+
+.config-modal .config-section-title {
+  font-size: var(--sa-config-font-section);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  margin: 0 0 var(--sa-config-gap-field);
+  color: var(--sa-text);
+}
+
+.config-modal .config-settings-stack {
+  width: 100%;
+}
+
+.config-modal .config-settings-stack.ant-space-vertical {
+  gap: var(--sa-config-gap-stack);
+}
+
+.config-modal .browser-engine-section__body.config-settings-stack.ant-space-vertical {
+  gap: var(--sa-config-gap-substack);
+}
+
+.config-modal .config-field + .config-field,
+.config-modal .config-field + .browser-detect-section,
+.config-modal .browser-detect-section + .browser-engine-section {
+  margin-top: 0;
+}
+
+.config-modal .config-field__label {
+  font-size: var(--sa-config-font);
+  font-weight: 500;
+  color: var(--sa-text);
+  line-height: var(--sa-config-line);
+}
+
+.config-modal .config-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-substack);
+}
+
+.config-modal .config-field-row .config-field__label {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-modal .config-field__hint {
+  margin-top: var(--sa-config-gap-tight);
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.config-modal .config-field__hint--inline {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sa-config-gap-tight);
+}
+
+.config-modal .config-field-label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.config-modal .config-field-help-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--sa-text-secondary) 45%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  font-size: var(--sa-config-font-meta);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: middle;
+  transition:
+    color var(--sa-duration-fast) var(--sa-ease-out),
+    border-color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.config-modal .config-field-help-trigger:hover {
+  color: var(--sa-text);
+  border-color: var(--sa-text-secondary);
+}
+
+.config-modal .config-field-help-tip p {
+  margin: 0;
+}
+
+.config-modal .config-field-help-tip p + p {
+  margin-top: var(--sa-config-gap-field);
+}
+
+.config-modal .config-field-help-tip ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.config-modal .config-field-help-tip li + li {
+  margin-top: 4px;
+}
+
+.config-modal .config-field__control {
+  margin-top: var(--sa-config-gap-tight);
+}
+
+.config-modal .config-field__control > .config-field__hint {
+  margin-top: var(--sa-config-gap-field);
+}
+
+.config-modal .config-field__control .ant-select,
+.config-modal .config-field__control .ant-input,
+.config-modal .config-field__control .ant-input-number {
+  width: 100%;
+  max-width: 100%;
+}
+
+.config-modal .config-field__control .ant-select:not(.config-stagehand-model-select) {
+  width: 100%;
+}
+
+.config-modal .config-field__control .ant-space .config-field__control-input-flex {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.config-modal .config-field__control-nested {
+  margin-top: var(--sa-config-gap-field);
+}
+
+.config-modal .config-block-spacer,
+.config-modal .config-block-spacer.ant-form-item {
+  margin-top: var(--sa-config-gap-substack);
+}
+
+.config-modal .config-alert-block {
+  margin-bottom: var(--sa-config-gap-substack);
+}
+
+.config-modal .config-alert--compact.ant-alert {
+  padding: 10px 12px;
+  align-items: flex-start;
+}
+
+.config-modal .config-alert--compact.ant-alert-with-description .ant-alert-icon {
+  font-size: 16px;
+  line-height: 1.2;
+  margin-inline-end: 8px;
+  margin-top: 1px;
+  padding: 0;
+}
+
+.config-modal .config-alert--compact .ant-alert-content {
+  min-width: 0;
+}
+
+.config-modal .config-alert--compact .ant-alert-message {
+  margin-bottom: 2px;
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+}
+
+.config-modal .config-alert--compact .ant-alert-description {
+  margin: 0;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.config-modal .config-alert-block--loose {
+  margin-bottom: var(--sa-config-gap-stack);
+}
+
+.config-modal .config-model-select-empty {
+  color: var(--sa-text-tertiary);
+  text-align: center;
+  padding: var(--sa-config-gap-field) 0;
+  font-size: var(--sa-config-font-sm);
+}
+
+.config-modal .config-skill-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-substack);
+  margin-bottom: var(--sa-config-gap-field);
+}
+
+.config-modal .config-model-field__header .ant-btn.ant-btn-sm.ant-btn-icon-only,
+.config-modal .config-skill-section-header .ant-btn.ant-btn-sm.ant-btn-icon-only {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: var(--sa-config-font);
+}
+
+.config-modal .config-tools-subtabs {
+  margin-top: 0;
+}
+
+.config-modal .config-tools-subtabs > .ant-tabs-nav {
+  margin-bottom: var(--sa-config-gap-substack);
+}
+
+.config-modal .config-tool-list-intro {
+  display: block;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+}
+
+.config-modal .config-tool-list {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  max-height: min(520px, 60vh);
+  overflow: auto;
+  background: var(--sa-bg-elevated);
+}
+
+.config-modal .config-tool-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sa-config-gap-field);
+  padding: var(--sa-config-gap-field) var(--sa-config-gap-substack);
+  border-bottom: 1px solid var(--sa-border);
+}
+
+.config-modal .config-tool-row:last-child {
+  border-bottom: none;
+}
+
+.config-modal .config-status-text {
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.config-modal .config-status-text + .config-field__control,
+.config-modal .config-field__label + .config-status-text {
+  margin-top: var(--sa-config-gap-tight);
+}
+
+.config-modal .config-inline-label {
+  font-size: var(--sa-config-font);
+  color: var(--sa-text);
+  line-height: var(--sa-config-line);
+}
+
+.config-modal .config-tool-row--off {
+  background: color-mix(in srgb, var(--sa-bg-muted) 80%, transparent);
+}
+
+.config-modal .config-tool-row--off .config-tool-row__name {
+  color: var(--sa-text-secondary);
+}
+
+.config-modal .config-tool-row__switch {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.config-modal .config-tool-row__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-tight);
+}
+
+.config-modal .config-tool-row__name {
+  display: block;
+  font-size: var(--sa-config-font);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+}
+
+.config-modal .config-tool-row__summary,
+.config-modal .config-tool-row__disabled-hint {
+  display: block;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.config-modal .config-tool-row__disabled-hint {
+  color: var(--sa-text-tertiary);
+}
+
+.config-modal .config-tool-row--off .config-tool-row__disabled-hint {
+  color: var(--sa-text-secondary);
+}
+
+.config-modal .browser-detect-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-field);
+  margin-bottom: var(--sa-config-gap-field);
+}
+
+.config-modal .browser-detect-section__refresh--loading svg {
+  animation: tool-row-spin 0.9s linear infinite;
+}
+
+/* 工具 Tab：标签与 Switch 同一行 */
+.config-modal .config-form-item-inline .ant-form-item-row {
+  flex-flow: row nowrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-substack);
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label,
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-control {
+  flex: 0 0 auto !important;
+  max-width: none !important;
+  width: auto !important;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label {
+  flex: 1 1 auto !important;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label > label {
+  height: auto;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-label > label::after {
+  display: none;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-control {
+  flex: 0 0 auto !important;
+  margin-left: auto;
+}
+
+.config-modal .config-form-item-inline.ant-form-item-vertical .ant-form-item-control-input {
+  min-height: auto;
+}
+
+.config-modal .config-form-item-inline--with-extra .ant-form-item-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: var(--sa-config-gap-substack);
+  row-gap: var(--sa-config-gap-tight);
+  align-items: center;
+}
+
+.config-modal .config-form-item-inline--with-extra.ant-form-item-vertical .ant-form-item-label {
+  grid-column: 1;
+  grid-row: 1;
+  flex: none !important;
+  min-width: 0;
+  margin: 0;
+}
+
+.config-modal .config-form-item-inline--with-extra.ant-form-item-vertical .ant-form-item-control {
+  display: contents;
+  margin-left: 0;
+}
+
+.config-modal .config-form-item-inline--with-extra .ant-form-item-control-input {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.config-modal .config-form-item-inline--with-extra .ant-form-item-additional {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.config-modal .config-form-item-inline--with-extra .ant-form-item-extra {
+  margin-top: 0;
+  padding-left: 0;
+}
+
+.config-modal .config-model-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--sa-config-font-meta);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  line-height: 1;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  transition:
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    box-shadow var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.config-modal .config-model-badge__icon {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.config-modal .config-model-badge--fast {
+  color: var(--sa-accent);
+  background: var(--sa-accent-subtle);
+  border-color: color-mix(in srgb, var(--sa-accent) 32%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 24%, transparent),
+    0 0 0 0 transparent;
+}
+
+.config-model-select-popup .ant-select-item-option-active .config-model-badge--fast,
+.config-model-select-popup .ant-select-item-option-selected .config-model-badge--fast {
+  border-color: color-mix(in srgb, var(--sa-accent) 48%, transparent);
+  background: color-mix(in srgb, var(--sa-accent) 22%, var(--sa-bg-elevated));
+}
+
+.config-modal .config-model-select.ant-select-single .ant-select-selector {
+  height: auto !important;
+  min-height: 52px;
+  padding: var(--sa-config-gap-field) 11px !important;
+  align-items: center;
+  position: relative;
+}
+
+.config-modal .config-model-select .ant-select-selection-wrap {
+  align-self: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.config-modal .config-model-select .ant-select-selection-item {
+  line-height: var(--sa-config-line);
+  white-space: normal;
+  height: auto !important;
+  overflow: visible;
+  padding-right: 20px;
+  align-self: center;
+}
+
+.config-modal .config-model-select .ant-select-arrow,
+.config-modal .config-model-select .ant-select-suffix {
+  position: absolute;
+  inset-block-start: 50% !important;
+  inset-block-end: auto !important;
+  top: 50% !important;
+  bottom: auto !important;
+  inset-inline-end: 11px;
+  margin: 0 !important;
+  transform: translateY(-50%) !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.config-modal .config-model-select .ant-select-arrow .anticon,
+.config-modal .config-model-select .ant-select-suffix .anticon {
+  display: block;
+  line-height: 1;
+}
+
+.config-model-select-popup.ant-select-dropdown,
+.config-modal-select-popup.ant-select-dropdown {
+  font-size: var(--sa-config-font);
+}
+
+.config-model-select-popup .ant-select-item,
+.config-modal-select-popup .ant-select-item {
+  font-size: var(--sa-config-font);
+}
+
+.config-model-select-popup .ant-select-item {
+  padding-top: var(--sa-config-gap-field);
+  padding-bottom: var(--sa-config-gap-field);
+}
+
+.config-modal-select-popup .ant-select-item {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.config-model-option__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.config-model-option__name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-model-option__meta {
+  margin-top: 3px;
+  color: var(--sa-text-secondary);
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+}
+
+.config-model-option--selected {
+  padding: 1px 0 2px;
+}
+
+.config-model-option--selected .config-model-option__meta {
+  margin-top: var(--sa-config-gap-tight);
+}
+
+.config-modal .config-stagehand-model-select.ant-select-single .ant-select-selector {
+  height: auto !important;
+  min-height: var(--sa-config-control-min-height);
+  padding: var(--sa-config-gap-tight) 11px !important;
+}
+
+.config-modal .config-stagehand-model-select .ant-select-selection-item {
+  line-height: var(--sa-config-line);
+  white-space: normal;
+  height: auto !important;
+  overflow: visible;
+}
+
+.config-model-option--compact .config-model-option__name {
+  font-size: var(--sa-config-font);
+  font-weight: 500;
+}
+
+.config-model-field {
+  margin-bottom: var(--sa-config-gap-section);
+}
+
+.config-model-field__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-substack);
+  margin-bottom: var(--sa-config-gap-field);
+}
+
+.config-model-field__label {
+  font-size: var(--sa-config-font);
+  font-weight: 500;
+  color: var(--sa-text);
+}
+
+.config-modal-popover {
+  font-size: var(--sa-config-font);
+}
+
+.config-add-model-popover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-field);
+  width: 300px;
+}
+
+.config-add-model-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-tight);
+  min-width: 0;
+}
+
+.config-add-model-label {
+  font-size: var(--sa-config-font);
+  font-weight: 500;
+  color: var(--sa-text);
+  line-height: var(--sa-config-line-tight);
+}
+
+.config-add-model-row {
+  display: flex;
+  gap: var(--sa-config-gap-field);
+}
+
+.config-add-model-row .config-add-model-field {
+  flex: 1;
+}
+
+.config-add-model-hint {
+  margin: 0;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.config-modal-popover .ant-input,
+.config-modal-popover .ant-input-number,
+.config-modal-popover .ant-checkbox-wrapper {
+  font-size: var(--sa-config-font);
+}
+
+.config-modal .config-skill-table-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-tight);
+  line-height: var(--sa-config-line);
+}
+
+.config-modal .config-skill-table-cell .config-field__hint {
+  margin-top: 0;
+}
+
+.config-modal .config-stack-block {
+  width: 100%;
+  margin-bottom: var(--sa-config-gap-substack);
+}
+
+.config-modal .config-field-label-block {
+  display: block;
+  margin-bottom: var(--sa-config-gap-tight);
+}
+
+.config-modal .config-activation-log {
+  margin: 0;
+  padding-left: 1.125rem;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+}

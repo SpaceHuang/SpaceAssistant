@@ -46,7 +46,7 @@ function mapKnownTechnicalError(msg: string, kind: BrowserUserErrorKind): string
     return (
       '浏览器 LLM 在 DeepSeek 思考（Thinking）模式下无法提取或分析页面内容。' +
       '请完全退出并重新启动应用（确保已执行 npm run build:electron）；' +
-      '若仍失败，请在设置 → 浏览器 将 Stagehand 模型改为 deepseek-v4-flash。'
+      '若仍失败，请在设置 → 工具 → 网络访问 将 Stagehand 模型改为 deepseek-v4-flash。'
     )
   }
 
@@ -63,21 +63,21 @@ function mapKnownTechnicalError(msg: string, kind: BrowserUserErrorKind): string
   }
 
   if (/UnsupportedModelError|Unsupported model/i.test(msg)) {
-    return '浏览器模型配置无效，请在设置 → 浏览器 中指定 Stagehand 模型（格式：provider/模型名，如 anthropic/claude-sonnet-4-6）'
+    return '浏览器模型配置无效，请在设置 → 工具 → 网络访问 中指定 Stagehand 模型（格式：provider/模型名，如 anthropic/claude-sonnet-4-6）'
   }
 
   if (
     /undefined undefined|CdpConnection|连接 Chromium CDP|CDP 超时/i.test(msg) &&
     kind === 'init'
   ) {
-    return '浏览器 CDP 连接失败。请完全退出应用后，在设置 → 浏览器 查看安装引导执行 npx playwright install chromium，再重启应用'
+    return '浏览器 CDP 连接失败。请完全退出应用后，在对话中请助手引导修复网络访问依赖，或运行：npx playwright install chromium，再重启应用'
   }
 
   if (
     /executable doesn't exist|browser has been closed|browserType\.launch/i.test(lower) &&
     !/浏览器引擎/.test(msg)
   ) {
-    return '未检测到 Playwright Chromium，请在设置 → 浏览器 查看安装引导，或运行：npx playwright install chromium'
+    return '未检测到 Playwright Chromium，请在对话中请助手引导修复，或运行：npx playwright install chromium'
   }
 
   if (/浏览器初始化失败/i.test(msg) && containsInternalDetails(msg)) {

@@ -5,7 +5,7 @@ import { formatFeishuEventStatusText } from '../../../shared/feishuEventLabels'
 import { FeishuAuditDrawer } from './FeishuAuditDrawer'
 import type { ModelEntry } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
-import { CONFIG_MODAL_SELECT_POPUP } from './configModalUi'
+import { configModalSelectPopupClassNames } from './configModalUi'
 
 type Props = {
   feishu: FeishuConfig
@@ -36,7 +36,11 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
       )
       const auth = await window.api.feishuAuthStatus()
       setAuthStatus(
-        auth.authorized ? '已授权' : auth.stderr?.trim() ? `未登录（${auth.stderr.trim().slice(-200)}）` : '未登录'
+        auth.authorized
+          ? '已授权'
+          : auth.stderr?.trim()
+            ? `未登录（${auth.stderr.trim()}${auth.hint ? `，${auth.hint}` : ''}）`
+            : '未登录'
       )
       if (auth.authorized !== feishu.userAuthorized) {
         patch({ userAuthorized: auth.authorized })
@@ -176,7 +180,7 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
             </Button>
             <Button onClick={refreshStatus}>重新检测</Button>
             <Input
-              style={{ width: 280 }}
+              className="config-field__control-input-flex"
               placeholder="自定义 cliPath（可选）"
               value={feishu.cliPath ?? ''}
               onChange={(e) => patch({ cliPath: e.target.value || undefined })}
@@ -232,7 +236,7 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
             <Radio value="both">两者</Radio>
           </Radio.Group>
           <Input
-            style={{ marginTop: 8, maxWidth: 280 }}
+            className="config-field__control-nested"
             value={feishu.remoteCommandPrefix ?? '/sa '}
             onChange={(e) => patch({ remoteCommandPrefix: e.target.value })}
             placeholder="命令前缀"
@@ -250,10 +254,9 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
 
         <ConfigField label="远程写确认策略">
           <Select
-            style={{ maxWidth: 280 }}
             value={feishu.remoteConfirmPolicy}
             onChange={(remoteConfirmPolicy) => patch({ remoteConfirmPolicy })}
-            popupClassName={CONFIG_MODAL_SELECT_POPUP}
+            classNames={configModalSelectPopupClassNames}
             options={[
               { value: 'remote_read_only', label: '禁止远程写' },
               { value: 'feishu_confirm', label: '飞书内 Y/N 确认' },
@@ -277,21 +280,19 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
         <ConfigField label="远程默认模型">
           <Select
             allowClear
-            style={{ maxWidth: 280 }}
             placeholder="与全局默认相同"
             value={feishu.remoteDefaultModelId}
             onChange={(remoteDefaultModelId) => patch({ remoteDefaultModelId })}
-            popupClassName={CONFIG_MODAL_SELECT_POPUP}
+            classNames={configModalSelectPopupClassNames}
             options={models.filter((m) => m.enabled).map((m) => ({ value: m.name, label: m.name }))}
           />
         </ConfigField>
 
         <ConfigField label="集成模式">
           <Select
-            style={{ maxWidth: 280 }}
             value={feishu.integrationMode}
             onChange={(integrationMode) => patch({ integrationMode })}
-            popupClassName={CONFIG_MODAL_SELECT_POPUP}
+            classNames={configModalSelectPopupClassNames}
             options={[
               { value: 'cli', label: 'CLI（推荐）' },
               { value: 'mcp', label: 'MCP' },

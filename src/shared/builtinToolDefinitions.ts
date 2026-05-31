@@ -85,7 +85,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'run_script',
     description:
-      '执行一段 Python 脚本代码。脚本在工作目录下执行，有超时限制。执行前需用户确认。',
+      '执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。',
     input_schema: {
       type: 'object',
       properties: {
@@ -93,6 +93,20 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         timeout: { type: 'number', description: '超时时间（秒），默认 300' }
       },
       required: ['code']
+    }
+  },
+  {
+    name: 'run_shell',
+    description:
+      '在会话工作目录下执行 shell 命令（Windows: cmd，Unix: bash）。用于 npm、git、构建/测试等 CLI；Python 片段请用 run_script，飞书请用 run_lark_cli。执行前需用户确认。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '要执行的 shell 命令（可含 &&、||、| 等）' },
+        description: { type: 'string', description: '命令用途简述（可选，≤512 字符）' },
+        timeout: { type: 'number', description: '超时秒数，默认使用设置中的 shell 默认超时' }
+      },
+      required: ['command']
     }
   },
   {
@@ -154,6 +168,20 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         full_page: { type: 'boolean', description: 'action=screenshot，默认 false' }
       },
       required: ['action']
+    }
+  },
+  {
+    name: 'browser_detect',
+    description:
+      '检测 browser 工具依赖（Stagehand、Playwright、Chromium、Node）是否就绪。返回 canInitialize、primaryFailure 与各组件状态。修复网络访问依赖时优先调用；用户表示安装完成后传 force=true 重新检测。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        force: {
+          type: 'boolean',
+          description: '跳过缓存强制重新检测，默认 false'
+        }
+      }
     }
   }
 ]

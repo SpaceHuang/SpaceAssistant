@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { formatToolLabel, formatToolLabelTitle, getToolDescription, pathBasename } from './toolCallDisplay'
+import type { ToolCallRecord } from '../../../shared/domainTypes'
+import {
+  formatToolLabel,
+  formatToolLabelTitle,
+  getToolDescription,
+  pathBasename,
+  shellToolCompletedLabel,
+  shouldAutoExpandShellToolRow
+} from './toolCallDisplay'
 
 describe('pathBasename', () => {
   it('returns filename from posix path', () => {
@@ -33,5 +41,43 @@ describe('getToolDescription', () => {
   it('returns chinese description for builtin tools', () => {
     expect(getToolDescription('read_file')).toBe('读取指定文件的完整内容')
     expect(getToolDescription('grep')).toBe('在工作目录下搜索匹配的文件内容')
+  })
+})
+
+describe('shouldAutoExpandShellToolRow', () => {
+  it('returns true for read-only commands', () => {
+    const record: ToolCallRecord = {
+      id: 't1',
+      toolName: 'run_shell',
+      input: { command: 'git status' },
+      status: 'completed',
+      riskLevel: 'low'
+    }
+    expect(shouldAutoExpandShellToolRow(record)).toBe(true)
+  })
+
+  it('returns false for mutating commands', () => {
+    const record: ToolCallRecord = {
+      id: 't2',
+      toolName: 'run_shell',
+      input: { command: 'npm install' },
+      status: 'completed',
+      riskLevel: 'medium'
+    }
+    expect(shouldAutoExpandShellToolRow(record)).toBe(false)
+  })
+})
+
+describe('shellToolCompletedLabel', () => {
+  it('returns silent completion label for empty output', () => {
+    const record: ToolCallRecord = {
+      id: 't3',
+      toolName: 'run_shell',
+      input: { command: 'git status' },
+      status: 'completed',
+      riskLevel: 'low',
+      result: { success: true, data: { stdout: '', stderr: '', exitCode: 0 } }
+    }
+    expect(shellToolCompletedLabel(record)).toBe('已完成（无输出）')
   })
 })

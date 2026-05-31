@@ -6,7 +6,7 @@ import chatReducer, { setLastUsage, setSession } from '../../store/chatSlice'
 import configReducer, { setConfig } from '../../store/configSlice'
 import { buildContextRingSegments, ContextUsageRing } from './ContextUsageRing'
 import type { AppConfig } from '../../../shared/domainTypes'
-import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_FEISHU_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_FEISHU_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
@@ -29,6 +29,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     wiki: { ...DEFAULT_WIKI_CONFIG },
     feishu: { ...DEFAULT_FEISHU_CONFIG },
     browser: { ...DEFAULT_BROWSER_CONFIG },
+    shell: { ...DEFAULT_SHELL_CONFIG },
     ...overrides
   } as AppConfig
 }

@@ -13,7 +13,7 @@ describe('browserDependencyRecovery', () => {
     expect(resolveDependencyRecoverySkill('stagehand_missing')).toBeNull()
   })
 
-  it('formatDependencyRecoveryToolContent is JSON with setup flag', () => {
+  it('formatDependencyRecoveryToolContent is JSON with setup flag and updated message', () => {
     const text = formatDependencyRecoveryToolContent({
       errorCode: 'chromium_missing',
       errorMessage: 'Chromium 未安装',
@@ -31,7 +31,8 @@ describe('browserDependencyRecovery', () => {
         installContext: 'development'
       }
     })
-    const parsed = JSON.parse(text) as { dependencySetupRequired?: boolean }
+    const parsed = JSON.parse(text) as { dependencySetupRequired?: boolean; message?: string }
     expect(parsed.dependencySetupRequired).toBe(true)
+    expect(parsed.message).toMatch(/网络访问修复/)
   })
 })

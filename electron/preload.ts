@@ -100,6 +100,7 @@ const api: SpaceAssistantApi = {
         input: unknown
         riskLevel: 'low' | 'medium' | 'high'
         diff?: { oldContent: string; newContent: string; oldPath: string }
+        shellSecurityHints?: import('../src/shared/domainTypes').ShellSecurityHints
       }
     ) => cb(data)
     ipcRenderer.on('tool:confirm-request', fn)
@@ -117,6 +118,10 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('tool:result', fn)
   },
   toolTestInterpreter: (payload) => ipcRenderer.invoke('tool:test-interpreter', payload),
+  shellTestExecutable: (payload: { executable?: string; argsPrefix?: string[] }) =>
+    ipcRenderer.invoke('shell:test-executable', payload),
+  shellOpenOutputPath: (absPath: string) => ipcRenderer.invoke('shell:open-output-path', absPath),
+  shellOpenTerminal: (payload: { cwd: string }) => ipcRenderer.invoke('shell:open-terminal', payload),
 
   browserDetect: (force?: boolean) => ipcRenderer.invoke('browser:detect', force),
   browserOpenTerminal: () => ipcRenderer.invoke('browser:open-terminal'),

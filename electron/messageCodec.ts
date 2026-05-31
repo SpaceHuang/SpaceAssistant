@@ -1,4 +1,4 @@
-import type { ContentSegment, Message, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
+import type { ContentSegment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -134,6 +134,24 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
   }
 }
 
+export function serializeSkillHintsForDb(hints: SkillHintRecord[] | undefined): string | null {
+  if (!hints?.length) return null
+  return JSON.stringify(hints)
+}
+
+export function deserializeSkillHintsFromDb(raw: string | null | undefined): SkillHintRecord[] | undefined {
+  if (!raw) return undefined
+  try {
+    const arr = JSON.parse(raw) as SkillHintRecord[]
+    if (!Array.isArray(arr)) return undefined
+    return arr
+      .filter((h) => h && typeof h.id === 'string' && typeof h.text === 'string' && typeof h.shownAt === 'number')
+      .map((h) => ({ id: h.id, text: h.text, shownAt: h.shownAt }))
+  } catch {
+    return undefined
+  }
+}
+
 export function rowToMessage(row: {
   id: string
   sessionId: string
@@ -143,6 +161,7 @@ export function rowToMessage(row: {
   toolCalls?: string | null
   thinking: string | null
   contentSegments?: string | null
+  skillHints?: string | null
   status: string
   schemaVersion: number
   timestamp: number
@@ -158,6 +177,7 @@ export function rowToMessage(row: {
     toolCalls: deserializeToolCallsFromDb(row.toolCalls),
     thinking: deserializeThinkingFromDb(row.thinking),
     contentSegments: deserializeContentSegmentsFromDb(row.contentSegments),
+    skillHints: deserializeSkillHintsFromDb(row.skillHints),
     status: row.status as Message['status'],
     schemaVersion: row.schemaVersion
   }
