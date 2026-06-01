@@ -531,10 +531,6 @@ import { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 export type { FeishuConfig, WorkDirProfile } from './feishuTypes'
 export { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 
-export type UiThemeMode = 'light' | 'dark' | 'system'
-
-export const DEFAULT_UI_THEME: UiThemeMode = 'system'
-
 /** 单套大模型 API 接入配置（不含明文 Key） */
 export interface LlmServiceProfile {
   id: string
@@ -559,7 +555,6 @@ export interface AppConfig {
   workDir: string
   workDirProfiles: WorkDirProfile[]
   activeWorkDirProfileId: string
-  uiTheme: UiThemeMode
   /** 多会话并行 LLM 请求上限（设置页可配置） */
   maxParallelChatSessions: number
   tools: ToolsConfig

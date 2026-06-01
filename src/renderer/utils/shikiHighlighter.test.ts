@@ -14,6 +14,15 @@ describe('shikiHighlighter', () => {
     codeToHtml.mockClear()
   })
 
+  it('strips inline pre styles from shiki output', async () => {
+    const { stripShikiPreInlineStyle } = await import('./shikiHighlighter')
+    expect(
+      stripShikiPreInlineStyle(
+        '<pre class="shiki light-plus" style="background-color:#FFFFFF;color:#000000"><code>x</code></pre>'
+      )
+    ).toBe('<pre class="shiki light-plus"><code>x</code></pre>')
+  })
+
   it('highlights code via shiki', async () => {
     const { highlightCode } = await import('./shikiHighlighter')
     const html = await highlightCode('const x = 1', 'typescript')

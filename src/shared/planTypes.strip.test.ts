@@ -61,7 +61,6 @@ describe('stripPlanFieldsFromAppConfig', () => {
     workDir: '/tmp',
     workDirProfiles: [],
     activeWorkDirProfileId: 'default',
-    uiTheme: 'system' as const,
     maxParallelChatSessions: 2,
     tools: { ...DEFAULT_TOOLS_CONFIG },
     skills: { ...DEFAULT_SKILLS_CONFIG },

@@ -32,7 +32,6 @@ describe('getMaxParallelChatSessions', () => {
         models: [],
         thinkingEnabled: true,
         workDir: '/tmp',
-        uiTheme: 'system',
         maxParallelChatSessions: 5,
         tools: {
           enabled: true,

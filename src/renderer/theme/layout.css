@@ -761,26 +761,29 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--sa-border);
-  border-radius: var(--sa-radius-md);
-  background: var(--sa-bg-subtle);
+  min-height: 26px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
   cursor: pointer;
   font-size: 11px;
   font-weight: 500;
-  color: var(--sa-text-secondary);
+  color: var(--sa-text-tertiary);
   font-family: inherit;
   line-height: 1.4;
   transition:
     color var(--sa-duration-fast),
-    background var(--sa-duration-fast),
-    border-color var(--sa-duration-fast);
+    background var(--sa-duration-fast);
 }
 
 .chat-thinking__toggle:hover {
-  color: var(--sa-text);
-  background: var(--sa-bg-muted);
-  border-color: var(--sa-border-strong);
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-subtle);
+}
+
+.chat-thinking__toggle[aria-expanded='true'] {
+  color: var(--sa-text-secondary);
 }
 
 .chat-thinking__toggle:active {
@@ -794,7 +797,12 @@
 
 .chat-thinking__icon {
   flex-shrink: 0;
-  color: var(--sa-text-tertiary);
+  color: var(--sa-icon);
+}
+
+.chat-thinking__toggle:hover .chat-thinking__icon,
+.chat-thinking__toggle[aria-expanded='true'] .chat-thinking__icon {
+  color: var(--sa-icon-hover);
 }
 
 .chat-thinking__body {
@@ -1652,24 +1660,52 @@
 }
 
 .script-confirm-card__code--highlighted {
+  position: relative;
+  max-height: 280px;
   padding: 0;
-  background: transparent;
-  color: inherit;
+  overflow: auto;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-subtle);
+  color: var(--sa-text);
 }
 
-.script-confirm-card__code--highlighted .sa-prose pre {
+.script-confirm-card__code--highlighted::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  display: block;
+  height: 20px;
+  margin-top: -20px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--sa-bg-subtle));
+  border-radius: 0 0 var(--sa-radius-md) var(--sa-radius-md);
+}
+
+.script-confirm-card__code--highlighted .sa-prose pre,
+.script-confirm-card__code--highlighted .sa-prose pre.shiki {
   margin: 0;
-  max-height: 320px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   padding: 10px 12px;
   font-size: 11px;
   line-height: 1.6;
-  border-radius: var(--sa-radius-md);
+  border-radius: 0;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--sa-text) !important;
+}
+
+.script-confirm-card__code--highlighted .shiki-placeholder {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .script-confirm-card__code--plain {
   white-space: pre-wrap;
   word-break: break-word;
+  max-height: 280px;
+  overflow: auto;
 }
 
 .shell-confirm-card__command-line {

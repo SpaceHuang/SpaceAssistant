@@ -22,7 +22,6 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     ],
     thinkingEnabled: false,
     workDir: '',
-    uiTheme: 'system',
     maxParallelChatSessions: 3,
     tools: { ...DEFAULT_TOOLS_CONFIG, enabled: false },
     skills: { ...DEFAULT_SKILLS_CONFIG },

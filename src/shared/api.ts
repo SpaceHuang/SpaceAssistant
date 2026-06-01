@@ -147,7 +147,6 @@ export type SpaceAssistantApi = {
       feishu: Partial<FeishuConfig>
       workDirProfiles: WorkDirProfile[]
       activeWorkDirProfileId: string
-      uiTheme: import('./domainTypes').UiThemeMode
       maxParallelChatSessions: number
       browser: Partial<import('./domainTypes').BrowserConfig>
       shell: Partial<ShellConfig>

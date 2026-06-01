@@ -4,7 +4,6 @@ import path from 'path'
 import type { IpcMain } from 'electron'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
-import { DEFAULT_UI_THEME } from '../src/shared/domainTypes'
 import type {
   AppConfig,
   FileInfo,
@@ -18,8 +17,7 @@ import type {
   SkillsConfig,
   SkillRouteRecentMessage,
   SkillRouteResult,
-  ToolsConfig,
-  UiThemeMode
+  ToolsConfig
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
@@ -92,7 +90,6 @@ const CONFIG_KEYS = {
   feishu: 'config.feishu',
   workDirProfiles: 'config.workDirProfiles',
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
-  uiTheme: 'config.uiTheme',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   browser: 'config.browser'
 } as const
@@ -442,9 +439,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const activeWorkDirProfileId =
       getConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId) ?? workDirProfiles.find((p) => p.isDefault)?.id ?? 'default'
-    const uiThemeRaw = getConfigValue(ctx.db, CONFIG_KEYS.uiTheme) as UiThemeMode | undefined
-    const uiTheme: UiThemeMode =
-      uiThemeRaw === 'light' || uiThemeRaw === 'dark' || uiThemeRaw === 'system' ? uiThemeRaw : DEFAULT_UI_THEME
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
     const browser = readBrowserConfigFromDb(ctx.db)
     const shell = readShellConfigFromDb(ctx.db)
@@ -459,7 +453,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
       workDir: wd,
-      uiTheme,
       maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
       tools,
       skills,
@@ -493,7 +486,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         feishu: Partial<FeishuConfig>
         workDirProfiles: AppConfig['workDirProfiles']
         activeWorkDirProfileId: string
-        uiTheme: UiThemeMode
         maxParallelChatSessions: number
         browser: Partial<BrowserConfig>
         shell: Partial<ShellConfig>
@@ -598,9 +590,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (payload.activeWorkDirProfileId !== undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId, payload.activeWorkDirProfileId)
-      }
-      if (payload.uiTheme !== undefined) {
-        setConfigValue(ctx.db, CONFIG_KEYS.uiTheme, payload.uiTheme)
       }
       if (payload.maxParallelChatSessions !== undefined) {
         setConfigValue(

@@ -1,5 +1,4 @@
 import { createHighlighter, type Highlighter } from 'shiki'
-import type { ResolvedTheme } from '../theme/useResolvedTheme'
 
 const LANGS = [
   'typescript',
@@ -37,33 +36,47 @@ const LANGS = [
   'plaintext'
 ] as const
 
-const SHIKI_THEME: Record<ResolvedTheme, string> = {
-  light: 'light-plus',
-  dark: 'dark-plus'
-}
+const SHIKI_THEME = 'light-plus'
 
 let highlighterPromise: Promise<Highlighter> | null = null
+const highlightCache = new Map<string, string>()
+
+function cacheKey(lang: string, code: string): string {
+  return `${lang}\0${code}`
+}
+
+/** 去掉 Shiki pre 上的 inline background，避免与 .sa-prose pre 深色底交替闪烁 */
+export function stripShikiPreInlineStyle(html: string): string {
+  return html.replace(/(<pre[^>]*)\sstyle="[^"]*"/i, '$1')
+}
+
+export function getCachedHighlight(code: string, lang: string): string | null {
+  return highlightCache.get(cacheKey(lang, code)) ?? null
+}
 
 export function preloadShiki(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: ['light-plus', 'dark-plus'],
+      themes: [SHIKI_THEME],
       langs: [...LANGS]
     })
   }
   return highlighterPromise
 }
 
-export async function highlightCode(
-  code: string,
-  lang: string,
-  theme: ResolvedTheme = 'light'
-): Promise<string | null> {
+export async function highlightCode(code: string, lang: string): Promise<string | null> {
+  const key = cacheKey(lang, code)
+  const cached = highlightCache.get(key)
+  if (cached) return cached
+
   try {
     const highlighter = await preloadShiki()
     const loaded = highlighter.getLoadedLanguages()
     const language = loaded.includes(lang as (typeof LANGS)[number]) ? lang : 'plaintext'
-    return highlighter.codeToHtml(code, { lang: language, theme: SHIKI_THEME[theme] })
+    const html = highlighter.codeToHtml(code, { lang: language, theme: SHIKI_THEME })
+    const normalized = stripShikiPreInlineStyle(html)
+    highlightCache.set(key, normalized)
+    return normalized
   } catch {
     return null
   }

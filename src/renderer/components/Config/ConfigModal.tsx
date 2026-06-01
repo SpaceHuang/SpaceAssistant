@@ -8,7 +8,7 @@ import { useTypedSelector, useAppDispatch } from '../../hooks'
 
 import { setConfig, setSettingsActiveTab, setSettingsOpen, setSettingsToolsSubTab } from '../../store/configSlice'
 
-import type { ModelEntry, UiThemeMode, WikiConfig } from '../../../shared/domainTypes'
+import type { ModelEntry, WikiConfig } from '../../../shared/domainTypes'
 
 import { DEFAULT_WIKI_CONFIG, DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 
@@ -170,8 +170,6 @@ export function ConfigSettingsPage() {
 
   const [pyTesting, setPyTesting] = useState(false)
 
-  const [uiTheme, setUiTheme] = useState<UiThemeMode>('system')
-
   const [maxParallelChatSessions, setMaxParallelChatSessions] = useState(DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
 
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
@@ -276,8 +274,6 @@ export function ConfigSettingsPage() {
 
       setPyTest(null)
 
-      setUiTheme(cfg.uiTheme ?? 'system')
-
       setMaxParallelChatSessions(cfg.maxParallelChatSessions ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
 
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
@@ -354,8 +350,6 @@ export function ConfigSettingsPage() {
 
       toolUi,
 
-      uiTheme,
-
       maxParallelChatSessions,
 
       wiki: wikiUi,
@@ -383,8 +377,6 @@ export function ConfigSettingsPage() {
     llmDrafts.state,
 
     toolUi,
-
-    uiTheme,
 
     maxParallelChatSessions,
 
@@ -549,8 +541,6 @@ export function ConfigSettingsPage() {
           grepTimeoutSec: toolUi.grepTimeoutSec
 
         },
-
-        uiTheme,
 
         maxParallelChatSessions,
 
@@ -778,20 +768,6 @@ export function ConfigSettingsPage() {
               <Alert type="error" message={workDirError} showIcon className="config-alert-block--loose" />
 
             ) : null}
-
-            <Form.Item label="界面主题">
-
-              <Radio.Group value={uiTheme} onChange={(e) => setUiTheme(e.target.value)}>
-
-                <Radio value="system">跟随系统</Radio>
-
-                <Radio value="light">浅色</Radio>
-
-                <Radio value="dark">深色</Radio>
-
-              </Radio.Group>
-
-            </Form.Item>
 
             <Form.Item
 

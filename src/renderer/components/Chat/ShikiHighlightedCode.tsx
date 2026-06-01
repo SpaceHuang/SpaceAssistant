@@ -1,12 +1,9 @@
-import { useEffect, useState } from 'react'
-import { useTypedSelector } from '../../hooks'
-import { useResolvedTheme, type ResolvedTheme } from '../../theme/useResolvedTheme'
-import { highlightCode } from '../../utils/shikiHighlighter'
+import { useEffect, useRef, useState } from 'react'
+import { getCachedHighlight, highlightCode } from '../../utils/shikiHighlighter'
 
 type BodyProps = {
   code: string
   language: string
-  theme: ResolvedTheme
   className?: string
   fallbackClassName?: string
 }
@@ -14,37 +11,53 @@ type BodyProps = {
 export function ShikiHighlightedCodeBody({
   code,
   language,
-  theme,
   className,
   fallbackClassName = 'tool-code-preview'
 }: BodyProps) {
-  const [html, setHtml] = useState<string | null>(null)
+  const [html, setHtml] = useState<string | null>(() => getCachedHighlight(code, language))
+  const requestIdRef = useRef(0)
 
   useEffect(() => {
-    let cancelled = false
-    void highlightCode(code, language, theme).then((result) => {
-      if (!cancelled) setHtml(result)
-    })
-    return () => {
-      cancelled = true
+    const cached = getCachedHighlight(code, language)
+    if (cached) {
+      setHtml(cached)
+      return
     }
-  }, [code, language, theme])
+
+    const requestId = ++requestIdRef.current
+    void highlightCode(code, language).then((result) => {
+      if (requestId !== requestIdRef.current || !result) return
+      setHtml(result)
+    })
+  }, [code, language])
+
+  if (className) {
+    return (
+      <div className={className}>
+        <div className="sa-prose">
+          {html ? (
+            <div dangerouslySetInnerHTML={{ __html: html }} />
+          ) : (
+            <pre className="shiki shiki-placeholder">
+              <code>{code}</code>
+            </pre>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   if (html) {
     return (
-      <div className={className}>
-        <div className="sa-prose" dangerouslySetInnerHTML={{ __html: html }} />
-      </div>
+      <div className="sa-prose" dangerouslySetInnerHTML={{ __html: html }} />
     )
   }
 
   return <pre className={fallbackClassName}>{code}</pre>
 }
 
-type Props = Omit<BodyProps, 'theme'>
+type Props = Omit<BodyProps, never>
 
 export function ShikiHighlightedCode(props: Props) {
-  const uiTheme = useTypedSelector((s) => s.config.config?.uiTheme ?? 'system')
-  const resolved = useResolvedTheme(uiTheme)
-  return <ShikiHighlightedCodeBody {...props} theme={resolved} />
+  return <ShikiHighlightedCodeBody {...props} />
 }

@@ -154,16 +154,6 @@
   flex-shrink: 0;
 }
 
-[data-theme='dark'] .config-models-settings .llm-service-card .ant-input,
-[data-theme='dark'] .config-models-settings .llm-service-card .ant-input-affix-wrapper {
-  background: var(--sa-bg-subtle);
-}
-
-[data-theme='dark'] .config-models-settings .llm-service-card--active .ant-input,
-[data-theme='dark'] .config-models-settings .llm-service-card--active .ant-input-affix-wrapper {
-  background: var(--sa-bg-elevated);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .config-models-settings .llm-service-card {
     transition: none;

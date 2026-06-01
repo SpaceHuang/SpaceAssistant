@@ -4,7 +4,6 @@ import type {
   FeishuConfig,
   ModelEntry,
   ShellConfig,
-  UiThemeMode,
   WikiConfig
 } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
@@ -17,7 +16,6 @@ export type ConfigModalSnapshotInput = {
   models: ModelEntry[]
   llmState: LlmServiceTabState
   toolUi: ToolsSettingsUi
-  uiTheme: UiThemeMode
   maxParallelChatSessions: number
   wiki: WikiConfig
   feishu: FeishuConfig
@@ -72,7 +70,6 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
       maxFileSnapshots: input.toolUi.maxFileSnapshots,
       grepTimeoutSec: input.toolUi.grepTimeoutSec
     },
-    uiTheme: input.uiTheme,
     maxParallelChatSessions: input.maxParallelChatSessions,
     wiki: input.wiki,
     feishu: input.feishu,
@@ -106,7 +103,6 @@ export function buildConfigModalSnapshotFromConfig(
       maxFileSnapshots: cfg.tools.maxFileSnapshots,
       grepTimeoutSec: cfg.tools.grepTimeoutSec
     },
-    uiTheme: cfg.uiTheme ?? 'system',
     maxParallelChatSessions: cfg.maxParallelChatSessions,
     wiki: cfg.wiki,
     feishu: cfg.feishu,

@@ -55,7 +55,6 @@ export function ScriptConfirmCard({ record, onConfirm }: Props) {
           code={displayCode}
           language="python"
           className="script-confirm-card__code script-confirm-card__code--highlighted"
-          fallbackClassName="script-confirm-card__code script-confirm-card__code--plain"
         />
         {timeout !== undefined ? (
           <div className="script-confirm-card__meta">

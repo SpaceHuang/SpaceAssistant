@@ -9,6 +9,7 @@ import { ScriptConfirmCard } from './ScriptConfirmCard'
 import { ShikiHighlightedCodeBody } from './ShikiHighlightedCode'
 
 vi.mock('../../utils/shikiHighlighter', () => ({
+  getCachedHighlight: vi.fn(() => null),
   highlightCode: vi.fn().mockResolvedValue('<pre class="shiki"><code>highlighted</code></pre>')
 }))
 
@@ -52,7 +53,6 @@ describe('ScriptConfirmCard', () => {
       <ShikiHighlightedCodeBody
         code={'import os\nos.makedirs("tmp")'}
         language="python"
-        theme="light"
         className="script-confirm-card__code script-confirm-card__code--highlighted"
       />
     )
@@ -60,8 +60,7 @@ describe('ScriptConfirmCard', () => {
     await waitFor(() => {
       expect(highlightCode).toHaveBeenCalledWith(
         expect.stringContaining('import os'),
-        'python',
-        'light'
+        'python'
       )
     })
   })

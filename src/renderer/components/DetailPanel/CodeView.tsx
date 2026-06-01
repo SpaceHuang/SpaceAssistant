@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { extToShikiLang } from '../../../shared/fileTypes'
-import { useTypedSelector } from '../../hooks'
-import { useResolvedTheme } from '../../theme/useResolvedTheme'
 import { highlightCode } from '../../utils/shikiHighlighter'
 import type { SearchMatch } from './searchUtils'
 
@@ -30,8 +28,6 @@ function renderWithHighlights(content: string, highlights: SearchMatch[], curren
 }
 
 export function CodeView({ content, filePath, highlights = [], currentHighlightIndex = -1 }: Props) {
-  const uiTheme = useTypedSelector((s) => s.config.config?.uiTheme ?? 'system')
-  const resolvedTheme = useResolvedTheme(uiTheme)
   const [html, setHtml] = useState<string | null>(null)
   const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const lang = extToShikiLang(filePath)
@@ -44,13 +40,13 @@ export function CodeView({ content, filePath, highlights = [], currentHighlightI
       return
     }
     let cancelled = false
-    void highlightCode(content, lang, resolvedTheme).then((result) => {
+    void highlightCode(content, lang).then((result) => {
       if (!cancelled) setHtml(result)
     })
     return () => {
       cancelled = true
     }
-  }, [content, lang, usePlain, resolvedTheme])
+  }, [content, lang, usePlain])
 
   useEffect(() => {
     if (currentHighlightIndex < 0 || highlights.length === 0) return

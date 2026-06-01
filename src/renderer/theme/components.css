@@ -11,6 +11,108 @@
   border: 0;
 }
 
+/* ── Subtle scrollbars (app-wide) ── */
+.sa-subtle-scrollbar,
+.chat-scroll,
+.session-list-scroll,
+.file-tree-scroll,
+.file-tree-body,
+.referenced-files-list,
+.wiki-index-view,
+.tool-code-preview,
+.tool-diff-block,
+.shell-output,
+.write-confirm-card__body,
+.script-confirm-card__code--highlighted,
+.script-confirm-card__code--plain {
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sa-border-strong) transparent;
+}
+
+.sa-subtle-scrollbar::-webkit-scrollbar,
+.chat-scroll::-webkit-scrollbar,
+.session-list-scroll::-webkit-scrollbar,
+.file-tree-scroll::-webkit-scrollbar,
+.file-tree-body::-webkit-scrollbar,
+.referenced-files-list::-webkit-scrollbar,
+.wiki-index-view::-webkit-scrollbar,
+.tool-code-preview::-webkit-scrollbar,
+.tool-diff-block::-webkit-scrollbar,
+.shell-output::-webkit-scrollbar,
+.write-confirm-card__body::-webkit-scrollbar,
+.script-confirm-card__code--highlighted::-webkit-scrollbar,
+.script-confirm-card__code--plain::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.sa-subtle-scrollbar::-webkit-scrollbar-track,
+.chat-scroll::-webkit-scrollbar-track,
+.session-list-scroll::-webkit-scrollbar-track,
+.file-tree-scroll::-webkit-scrollbar-track,
+.file-tree-body::-webkit-scrollbar-track,
+.referenced-files-list::-webkit-scrollbar-track,
+.wiki-index-view::-webkit-scrollbar-track,
+.tool-code-preview::-webkit-scrollbar-track,
+.tool-diff-block::-webkit-scrollbar-track,
+.shell-output::-webkit-scrollbar-track,
+.write-confirm-card__body::-webkit-scrollbar-track,
+.script-confirm-card__code--highlighted::-webkit-scrollbar-track,
+.script-confirm-card__code--plain::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 6px;
+}
+
+.sa-subtle-scrollbar::-webkit-scrollbar-thumb,
+.chat-scroll::-webkit-scrollbar-thumb,
+.session-list-scroll::-webkit-scrollbar-thumb,
+.file-tree-scroll::-webkit-scrollbar-thumb,
+.file-tree-body::-webkit-scrollbar-thumb,
+.referenced-files-list::-webkit-scrollbar-thumb,
+.wiki-index-view::-webkit-scrollbar-thumb,
+.tool-code-preview::-webkit-scrollbar-thumb,
+.tool-diff-block::-webkit-scrollbar-thumb,
+.shell-output::-webkit-scrollbar-thumb,
+.write-confirm-card__body::-webkit-scrollbar-thumb,
+.script-confirm-card__code--highlighted::-webkit-scrollbar-thumb,
+.script-confirm-card__code--plain::-webkit-scrollbar-thumb {
+  background: var(--sa-border-strong);
+  border-radius: 999px;
+}
+
+.sa-subtle-scrollbar::-webkit-scrollbar-thumb:hover,
+.chat-scroll::-webkit-scrollbar-thumb:hover,
+.session-list-scroll::-webkit-scrollbar-thumb:hover,
+.file-tree-scroll::-webkit-scrollbar-thumb:hover,
+.file-tree-body::-webkit-scrollbar-thumb:hover,
+.referenced-files-list::-webkit-scrollbar-thumb:hover,
+.wiki-index-view::-webkit-scrollbar-thumb:hover,
+.tool-code-preview::-webkit-scrollbar-thumb:hover,
+.tool-diff-block::-webkit-scrollbar-thumb:hover,
+.shell-output::-webkit-scrollbar-thumb:hover,
+.write-confirm-card__body::-webkit-scrollbar-thumb:hover,
+.script-confirm-card__code--highlighted::-webkit-scrollbar-thumb:hover,
+.script-confirm-card__code--plain::-webkit-scrollbar-thumb:hover {
+  background: var(--sa-text-tertiary);
+}
+
+.sa-subtle-scrollbar::-webkit-scrollbar-corner,
+.chat-scroll::-webkit-scrollbar-corner,
+.session-list-scroll::-webkit-scrollbar-corner,
+.file-tree-scroll::-webkit-scrollbar-corner,
+.file-tree-body::-webkit-scrollbar-corner,
+.referenced-files-list::-webkit-scrollbar-corner,
+.wiki-index-view::-webkit-scrollbar-corner,
+.tool-code-preview::-webkit-scrollbar-corner,
+.tool-diff-block::-webkit-scrollbar-corner,
+.shell-output::-webkit-scrollbar-corner,
+.write-confirm-card__body::-webkit-scrollbar-corner,
+.script-confirm-card__code--highlighted::-webkit-scrollbar-corner,
+.script-confirm-card__code--plain::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* ── Icon button (Activity Bar, toolbars) ── */
 .sa-icon-btn {
   display: inline-flex;

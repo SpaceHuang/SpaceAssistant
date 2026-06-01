@@ -37,7 +37,6 @@ describe('buildConfigModalSnapshot', () => {
         maxFileSnapshots: 100,
         grepTimeoutSec: 60
       },
-      uiTheme: 'system' as const,
       maxParallelChatSessions: 3,
       wiki: { ...DEFAULT_WIKI_CONFIG },
       feishu: { ...DEFAULT_FEISHU_CONFIG },
@@ -67,7 +66,6 @@ describe('buildConfigModalSnapshot', () => {
           maxFileSnapshots: 100,
           grepTimeoutSec: 60
         },
-        uiTheme: 'system',
         maxParallelChatSessions: 3,
         wiki: { ...DEFAULT_WIKI_CONFIG },
         feishu: { ...DEFAULT_FEISHU_CONFIG },
