@@ -74,6 +74,7 @@ import { initWikiStructure, readWikiSchema } from './wiki/wikiInit'
 import { getWikiStatus } from './wiki/wikiStatus'
 import { classifyWikiPath } from './wiki/wikiPaths'
 import { copyFileInWorkDir, importRawFromWorkDir } from './wiki/wikiImport'
+import { openExternalLink } from './externalLink'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
@@ -185,6 +186,20 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     getSkillsConfig: () => readSkillsConfig(ctx.db),
     getWikiConfig: () => readWikiConfig(ctx.db)
   })
+
+  ipcMain.handle('app:open-external', async (_e, url: unknown) => {
+    if (typeof url !== 'string') {
+      return { ok: false as const, error: 'invalid url' }
+    }
+    try {
+      await openExternalLink(url)
+      return { ok: true as const }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return { ok: false as const, error: message }
+    }
+  })
+
   ipcMain.handle(
     'tool:confirm-response',
     async (_e, payload: { requestId: string; toolUseId: string; approved: boolean }): Promise<void> => {

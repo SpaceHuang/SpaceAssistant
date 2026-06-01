@@ -32,6 +32,7 @@ import {
 } from './llmServiceResolver'
 import { destroyTray, initTray, isTrayEnabled, showMainWindow } from './tray'
 import { setupWindowCloseHandler } from './trayLogic'
+import { isAllowedExternalUrl, openExternalLink } from './externalLink'
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -122,6 +123,13 @@ export async function createMainWindow(): Promise<void> {
     }
   })
   setMainWindow(win)
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalUrl(url)) {
+      void openExternalLink(url)
+    }
+    return { action: 'deny' }
+  })
 
   setupWindowCloseHandler(win, getIsQuitting, isTrayEnabled)
 

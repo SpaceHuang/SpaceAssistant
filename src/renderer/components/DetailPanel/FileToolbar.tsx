@@ -1,7 +1,7 @@
 import { App, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ExternalLink, FileDown, FolderOpen, RefreshCw, X } from 'lucide-react'
+import { BookPlus, ExternalLink, FileDown, FolderOpen, RefreshCw, X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { FileTypeCategory } from '../../../shared/fileTypes'
 import type { ViewMode } from './DetailPanelContext'
@@ -18,9 +18,15 @@ const markdownViewIcons = {
 const ICON_SIZE = 16
 const ICON_STROKE = 2
 
+function fileBaseName(path: string): string {
+  const normalized = path.replace(/\\/g, '/')
+  const i = normalized.lastIndexOf('/')
+  return i >= 0 ? normalized.slice(i + 1) : normalized
+}
+
 function ToolbarBtn({ title, icon: Icon, onClick }: { title: string; icon: LucideIcon; onClick: () => void }) {
   return (
-    <button type="button" className="detail-toolbar-btn" title={title} onClick={onClick}>
+    <button type="button" className="detail-toolbar-btn" title={title} aria-label={title} onClick={onClick}>
       <Icon className="detail-toolbar-icon" size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden />
     </button>
   )
@@ -77,11 +83,12 @@ export function FileToolbar({
   }
 
   const exportItems: MenuProps['items'] = [{ key: 'pdf', label: 'PDF', onClick: () => void handleExportPdf() }]
+  const fileName = fileBaseName(filePath)
 
   return (
     <div className="detail-file-toolbar">
       <div className="detail-toolbar-left">
-        {isMarkdown && (
+        {isMarkdown ? (
           <div className="detail-view-segment" role="tablist" aria-label="Markdown 视图">
             {showWikiIndexToggle ? (
               <button
@@ -120,20 +127,22 @@ export function FileToolbar({
               dangerouslySetInnerHTML={{ __html: markdownViewIcons.code }}
             />
           </div>
+        ) : (
+          <span className="detail-toolbar-filename" title={filePath}>
+            {fileName}
+          </span>
         )}
       </div>
       <div className="detail-toolbar-right">
         {showCollectToWiki && onCollectToWiki ? (
-          <button type="button" className="detail-toolbar-text-btn" onClick={onCollectToWiki}>
-            收录到 Wiki
-          </button>
+          <ToolbarBtn title="收录到 Wiki" icon={BookPlus} onClick={onCollectToWiki} />
         ) : null}
         <ToolbarBtn title="用默认编辑器打开" icon={ExternalLink} onClick={() => void handleOpenInSystem()} />
         <ToolbarBtn title="查看所在目录" icon={FolderOpen} onClick={() => void handleShowInExplorer()} />
         <ToolbarBtn title="刷新" icon={RefreshCw} onClick={() => void onRefresh()} />
         {isMarkdown && (
           <Dropdown menu={{ items: exportItems }} trigger={['click']}>
-            <button type="button" className="detail-toolbar-btn" title="导出为...">
+            <button type="button" className="detail-toolbar-btn" title="导出为..." aria-label="导出为 PDF">
               <FileDown className="detail-toolbar-icon" size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden />
             </button>
           </Dropdown>

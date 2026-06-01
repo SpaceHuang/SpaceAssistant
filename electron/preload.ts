@@ -4,6 +4,7 @@ import type { ClaudeChatCreateWithToolsPayload, ClaudeChatSendStreamPayload, Spa
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
+  appOpenExternal: (url) => ipcRenderer.invoke('app:open-external', url),
 
   sessionList: () => ipcRenderer.invoke('session:list'),
   sessionCreate: (payload) => ipcRenderer.invoke('session:create', payload),

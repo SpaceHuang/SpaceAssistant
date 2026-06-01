@@ -178,6 +178,14 @@ describe('openSettings action', () => {
   it('sets tools sub tab when provided', () => {
     const store = configureStore({ reducer: { config: configReducer } })
     store.dispatch(openSettings({ tab: 'tools', toolsSubTab: 'browser' }))
+    expect(store.getState().config.settingsActiveTab).toBe('tools')
+    expect(store.getState().config.settingsToolsSubTab).toBe('browser')
+  })
+
+  it('maps browser tab to tools browser sub tab', () => {
+    const store = configureStore({ reducer: { config: configReducer } })
+    store.dispatch(openSettings({ tab: 'browser' }))
+    expect(store.getState().config.settingsActiveTab).toBe('tools')
     expect(store.getState().config.settingsToolsSubTab).toBe('browser')
   })
 })

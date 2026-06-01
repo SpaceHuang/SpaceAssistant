@@ -12,6 +12,15 @@ import type { ClaudeChatCreateWithToolsPayload } from '../../shared/api'
 export type ToolChatController = {
   subscribe: () => void
   unsubscribe: () => void
+  /** 用户点击确认/拒绝后立即更新 UI，避免等待主进程浏览器启动等重活 */
+  applyConfirmOutcome: (toolUseId: string, approved: boolean) => void
+}
+
+function optimisticProgressForTool(record: ToolCallRecord): string {
+  if (record.toolName === 'browser') return '正在准备浏览器…'
+  if (record.toolName === 'run_shell') return '等待执行…'
+  if (record.toolName === 'write_file' || record.toolName === 'edit_file') return '正在写入…'
+  return '执行中…'
 }
 
 export function createToolChatController(args: {
@@ -141,7 +150,31 @@ export function createToolChatController(args: {
     unsubs.length = 0
   }
 
-  return { subscribe, unsubscribe }
+  const applyConfirmOutcome = (toolUseId: string, approved: boolean) => {
+    const i = records.findIndex((t) => t.id === toolUseId)
+    if (i < 0) return
+    const prev = records[i]!
+    if (prev.status !== 'confirming') return
+    if (!approved) {
+      records[i] = {
+        ...prev,
+        status: 'rejected',
+        completedAt: Date.now(),
+        confirmDiff: undefined
+      }
+      flush()
+      return
+    }
+    records[i] = {
+      ...prev,
+      status: 'executing',
+      progressOutput: optimisticProgressForTool(prev),
+      confirmDiff: undefined
+    }
+    flush()
+  }
+
+  return { subscribe, unsubscribe, applyConfirmOutcome }
 }
 
 export function buildToolChatPayload(args: {

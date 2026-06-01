@@ -59,11 +59,13 @@ describe('buildContextRingSegments', () => {
     const segs = buildContextRingSegments(0.1, 0.32, C)
     expect(segs).toHaveLength(2)
     expect(segs[0]).toEqual({ color: 'var(--sa-primary)', dashLen: 10, dashOffset: 0 })
-    expect(segs[1]).toEqual({ color: '#666', dashLen: 32, dashOffset: -10 })
+    expect(segs[1]).toEqual({ color: 'var(--sa-context-ring-reserved)', dashLen: 32, dashOffset: -10 })
   })
 
   it('omits zero-length segments', () => {
-    expect(buildContextRingSegments(0, 0.5, C)).toEqual([{ color: '#666', dashLen: 50, dashOffset: -0 }])
+    expect(buildContextRingSegments(0, 0.5, C)).toEqual([
+      { color: 'var(--sa-context-ring-reserved)', dashLen: 50, dashOffset: -0 }
+    ])
     expect(buildContextRingSegments(0.2, 0, C)).toEqual([
       { color: 'var(--sa-primary)', dashLen: 20, dashOffset: 0 }
     ])
@@ -75,26 +77,26 @@ describe('ContextUsageRing', () => {
     renderRing()
     const circles = document.querySelectorAll('circle')
     expect(circles).toHaveLength(1)
-    expect(circles[0]?.getAttribute('stroke')).toBe('#ddd')
+    expect(circles[0]?.getAttribute('stroke')).toBe('var(--sa-context-ring-track)')
   })
 
   it('renders contiguous segments on one ring when usage data is available', () => {
     renderRing({ input_tokens: 10000, output_tokens: 5000 })
     const circles = document.querySelectorAll('circle')
     expect(circles).toHaveLength(3)
-    expect(circles[0]?.getAttribute('stroke')).toBe('#ddd')
+    expect(circles[0]?.getAttribute('stroke')).toBe('var(--sa-context-ring-track)')
     const radii = Array.from(circles).map((c) => c.getAttribute('r'))
     expect(new Set(radii).size).toBe(1)
     const colors = Array.from(circles).map((c) => c.getAttribute('stroke'))
     expect(colors).toContain('var(--sa-primary)')
-    expect(colors).toContain('#666')
+    expect(colors).toContain('var(--sa-context-ring-reserved)')
   })
 
   it('offsets reserved segment after used segment', () => {
     renderRing({ input_tokens: 10000, output_tokens: 5000 })
     const circles = Array.from(document.querySelectorAll('circle'))
     const used = circles.find((c) => c.getAttribute('stroke') === 'var(--sa-primary)')
-    const reserved = circles.find((c) => c.getAttribute('stroke') === '#666')
+    const reserved = circles.find((c) => c.getAttribute('stroke') === 'var(--sa-context-ring-reserved)')
     expect(used?.getAttribute('stroke-dashoffset')).toBe('0')
     expect(Number(reserved?.getAttribute('stroke-dashoffset'))).toBeLessThan(0)
   })
@@ -103,7 +105,7 @@ describe('ContextUsageRing', () => {
     renderRing({ input_tokens: 199000, output_tokens: 1000 })
     const circles = Array.from(document.querySelectorAll('circle'))
     expect(circles.length).toBeGreaterThan(1)
-    const segments = circles.filter((c) => c.getAttribute('stroke') !== '#ddd')
+    const segments = circles.filter((c) => c.getAttribute('stroke') !== 'var(--sa-context-ring-track)')
     expect(segments.length).toBeGreaterThan(0)
     segments.forEach((c) => {
       expect(c.getAttribute('stroke-dasharray')).toBeTruthy()
@@ -164,7 +166,7 @@ describe('ContextUsageRing', () => {
     renderRing({ input_tokens: 100 }, { models: [] })
     const circles = document.querySelectorAll('circle')
     expect(circles).toHaveLength(1)
-    expect(circles[0]?.getAttribute('stroke')).toBe('#ddd')
+    expect(circles[0]?.getAttribute('stroke')).toBe('var(--sa-context-ring-track)')
   })
 
   it('resets to empty ring when lastUsage becomes null after session switch', () => {
@@ -179,6 +181,6 @@ describe('ContextUsageRing', () => {
     )
     const circles = document.querySelectorAll('circle')
     expect(circles).toHaveLength(1)
-    expect(circles[0]?.getAttribute('stroke')).toBe('#ddd')
+    expect(circles[0]?.getAttribute('stroke')).toBe('var(--sa-context-ring-track)')
   })
 })

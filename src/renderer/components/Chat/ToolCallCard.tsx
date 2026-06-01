@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Space } from 'antd'
+import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
 import {
@@ -15,7 +15,6 @@ import {
   formatToolLabelTitle,
   isFileTool,
   isFileWriteTool,
-  shouldAutoExpandShellToolRow,
   shouldCollapseBrowserDetectRow,
   shellToolCompletedLabel
 } from './toolCallDisplay'
@@ -24,12 +23,15 @@ import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
 import { ShellConfirmCard } from './ShellConfirmCard'
+import { ScriptConfirmCard } from './ScriptConfirmCard'
+import { LarkCliConfirmCard } from './LarkCliConfirmCard'
 import { BrowserDependencyGuideCard } from './BrowserDependencyGuideCard'
 import { WriteSuccessCard } from './WriteSuccessCard'
 import { ShellOutputView } from './ShellOutputView'
 import { ShellTerminalView } from './ShellTerminalView'
 import { ShellScrollbackView } from './ShellScrollbackView'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
+import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
 
 type Props = {
   record: ToolCallRecord
@@ -56,22 +58,14 @@ function isBrowserListRowCollapsed(record: ToolCallRecord): boolean {
   return record.toolName === 'browser' && record.status !== 'confirming'
 }
 
-function shouldExpandReadOnlyShellOnComplete(record: ToolCallRecord): boolean {
-  return (
-    shouldAutoExpandShellToolRow(record) &&
-    record.status === 'completed' &&
-    !isShellSilentResult(record.result?.data)
-  )
-}
-
 function defaultExpanded(record: ToolCallRecord): boolean {
   if (isFileWriteTool(record.toolName) && record.status === 'confirming') return true
   if (isBrowserListRowCollapsed(record)) return false
-  if (shouldExpandReadOnlyShellOnComplete(record)) return true
   if (shouldCollapseBrowserDetectRow(record)) return false
   if (record.status === 'failed' || record.status === 'rejected') return true
   if (isFileTool(record.toolName)) return false
   if (record.status === 'confirming') return true
+  if (record.status === 'completed') return false
   return record.status === 'calling' || record.status === 'executing'
 }
 
@@ -101,6 +95,8 @@ export function ToolCallCard({
   const fileWriteTool = isFileWriteTool(record.toolName)
   const browserConfirming = record.toolName === 'browser' && record.status === 'confirming'
   const shellConfirming = record.toolName === 'run_shell' && record.status === 'confirming'
+  const scriptConfirming = record.toolName === 'run_script' && record.status === 'confirming'
+  const larkCliConfirming = record.toolName === 'run_lark_cli' && record.status === 'confirming'
   const writeConfirming = fileWriteTool && record.status === 'confirming'
   const shellResultData = useMemo(
     () => (record.toolName === 'run_shell' ? parseShellResultData(record.result?.data) : undefined),
@@ -156,7 +152,7 @@ export function ToolCallCard({
 
   useEffect(() => {
     if (focus && cardRef.current) {
-      cardRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      scrollIntoViewWithMotionPreference(cardRef.current, { block: 'nearest', behavior: 'smooth' })
       setExpanded(true)
     }
   }, [focus])
@@ -188,16 +184,12 @@ export function ToolCallCard({
       setExpanded(false)
       return
     }
-    if (shouldExpandReadOnlyShellOnComplete(record)) {
-      setExpanded(true)
-      return
-    }
     if (record.status === 'confirming' || isFailed) {
       setExpanded(true)
     }
   }, [fileTool, fileWriteTool, isFailed, record.status, record.toolName, record.input, record.result?.data])
 
-  const showDetail = (expanded || writeConfirming || browserConfirming || shellConfirming) && hasDetail
+  const showDetail = (expanded || writeConfirming || browserConfirming || shellConfirming || scriptConfirming || larkCliConfirming) && hasDetail
 
   const label = useMemo(() => {
     const silent = shellToolCompletedLabel(record)
@@ -279,6 +271,22 @@ export function ToolCallCard({
     )
   }
 
+  if (scriptConfirming && onConfirm) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <ScriptConfirmCard record={record} onConfirm={onConfirm} />
+      </div>
+    )
+  }
+
+  if (larkCliConfirming && onConfirm) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <LarkCliConfirmCard record={record} onConfirm={onConfirm} />
+      </div>
+    )
+  }
+
   if (record.toolName === 'browser' && record.result?.dependencyRecovery) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
@@ -346,22 +354,6 @@ export function ToolCallCard({
           hidden={!showDetail && keepLiveTerminalMounted}
           aria-hidden={!showDetail && keepLiveTerminalMounted}
         >
-          {record.status === 'confirming' && onConfirm ? (
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              {record.toolName === 'run_script' && typeof record.input.code === 'string' ? (
-                <pre className="tool-code-preview tool-code-preview--inline">{record.input.code}</pre>
-              ) : null}
-              <Space size={8}>
-                <Button type="primary" size="small" onClick={() => onConfirm(true)}>
-                  确认
-                </Button>
-                <Button size="small" onClick={() => onConfirm(false)}>
-                  拒绝
-                </Button>
-              </Space>
-            </Space>
-          ) : null}
-
           {showShellLiveTerminal ? (
             <ShellTerminalView
               progressOutputRaw={record.progressOutputRaw}

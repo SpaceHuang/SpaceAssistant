@@ -1,523 +1,1110 @@
-import { useEffect, useState } from 'react'
-import { Alert, App, Button, Checkbox, Form, Input, InputNumber, Modal, Popover, Radio, Select, Space, Switch, Tabs } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+
+import { Alert, App, Button, Form, Input, InputNumber, Radio, Space } from 'antd'
+
+import { ArrowLeft } from 'lucide-react'
+
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { setConfig, setSettingsActiveTab, setSettingsOpen } from '../../store/configSlice'
+
+import { setConfig, setSettingsActiveTab, setSettingsOpen, setSettingsToolsSubTab } from '../../store/configSlice'
+
 import type { ModelEntry, UiThemeMode, WikiConfig } from '../../../shared/domainTypes'
+
 import { DEFAULT_WIKI_CONFIG, DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+
 import type { BrowserConfig, ShellConfig } from '../../../shared/domainTypes'
+
 import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../../../shared/feishuTypes'
-import { DEFAULT_MODELS, DEFAULT_MODEL_MAX_CONTEXT, DEFAULT_MODEL_MAX_TOKENS } from '../../../shared/domainTypes'
+
+import { DEFAULT_MODELS } from '../../../shared/domainTypes'
+
 import {
+
   DEFAULT_MAX_PARALLEL_CHAT_SESSIONS,
+
   MAX_MAX_PARALLEL_CHAT_SESSIONS,
+
   MIN_MAX_PARALLEL_CHAT_SESSIONS
+
 } from '../../../shared/chatParallelConfig'
+
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
+
 import { SkillsTab } from './SkillsTab'
+
 import { WikiTab } from './WikiTab'
+
 import { FeishuSettingsTab } from './FeishuSettingsTab'
+
 import { ToolsSettingsTab } from './ToolsSettingsTab'
-import { LlmServiceTab } from './LlmServiceTab'
+
+import { ModelsSettingsTab } from './ModelsSettingsTab'
+
 import {
+
+  buildConfigModalSnapshot,
+
+  buildConfigModalSnapshotFromConfig,
+
+  configModalSnapshotsEqual,
+
+  normalizeSettingsTabKey
+
+} from './configModalSnapshot'
+
+import {
+
   buildLlmServicesSavePayload,
+
   useLlmServiceDrafts,
+
   validateLlmServiceDrafts
+
 } from './useLlmServiceDrafts'
+
+import { initLlmServiceTabState } from './llmServiceDrafts'
+
 import { readSkillActivationLog } from '../../services/skillActivationLog'
-import { ConfigModelOptionContent } from './ConfigModelOption'
-import { configModalModelSelectPopupClassNames } from './configModalUi'
+import type { ToolsSettingsSubTab } from '../../store/configSlice'
+import {
+  DEFAULT_TOOLS_SETTINGS_SUB_TAB,
+  getToolsSettingsSectionLabel,
+  TOOLS_SETTINGS_NAV
+} from './toolsSettingsNav'
 
-const DEFAULT_ADD_MODEL_MAX_CONTEXT = DEFAULT_MODEL_MAX_CONTEXT
-const DEFAULT_ADD_MODEL_MAX_TOKENS = DEFAULT_MODEL_MAX_TOKENS
+const SETTINGS_SECTIONS = [
+  { key: 'general', label: '通用' },
+  { key: 'models', label: '模型' },
+  { key: 'skills', label: '技能' },
+  { key: 'wiki', label: '项目 Wiki' },
+  { key: 'feishu', label: '飞书' }
+] as const
 
-function AddIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
-      <path fill="currentColor" d="M11 20a1 1 0 1 0 2 0v-7h7a1 1 0 1 0 0-2h-7V4a1 1 0 1 0-2 0v7H4a1 1 0 1 0 0 2h7z" />
-    </svg>
-  )
-}
 
-function RefreshIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
-      <path
-        fill="currentColor"
-        d="M2 12.08c-.006-.862.91-1.356 1.618-.975l.095.058 2.678 1.804c.972.655.377 2.143-.734 2.007l-.117-.02-1.063-.234a8.002 8.002 0 0 0 14.804.605 1 1 0 0 1 1.82.828c-1.987 4.37-6.896 6.793-11.687 5.509A10.003 10.003 0 0 1 2 12.08m.903-4.228C4.89 3.482 9.799 1.06 14.59 2.343a10.002 10.002 0 0 1 7.414 9.581c.007.863-.91 1.358-1.617.976l-.096-.058-2.678-1.804c-.972-.655-.377-2.143.734-2.007l.117.02 1.063.234A8.002 8.002 0 0 0 4.723 8.68a1 1 0 1 1-1.82-.828"
-      />
-    </svg>
-  )
-}
+
+type SettingsSectionKey = (typeof SETTINGS_SECTIONS)[number]['key']
+
+
 
 function FolderOpenIcon() {
+
   return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">
+
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+
       <path
+
         fill="currentColor"
+
         d="M3.087 9a2 2 0 0 1 .166-.77l.046-.095L4.77 4.97A3 3 0 0 1 7.47 3h9.06a3 3 0 0 1 2.7 1.97l1.47 3.165c.12.252.2.528.227.82a1 1 0 0 1 .073.37v6.695a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V9.37a1 1 0 0 1 .087-.37M7.47 5a1 1 0 0 0-.9.657L5.588 8H9V5zm4 0H11v3h4V5zm3.06 0H15v3h3.412l-.982-2.343A1 1 0 0 0 16.53 5M5 16.695a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10H5z"
+
       />
+
     </svg>
+
   )
+
 }
 
-function ModelSelect({ value, onChange }: { value: ModelEntry[]; onChange: (v: ModelEntry[]) => void }) {
-  const selectable = value.filter((m) => m.enabled)
-  const defaultModel = selectable.find((m) => m.isDefault) ?? selectable[0]
 
-  const handleChange = (id: string) => {
-    onChange(value.map((m) => ({ ...m, isDefault: m.id === id })))
-  }
 
-  if (selectable.length === 0) {
-    return (
-      <div className="config-model-select-empty">暂无可用模型</div>
-    )
-  }
+/** @deprecated 使用 ConfigSettingsPage；保留别名以兼容现有 import */
 
-  return (
-    <Select
-      className="config-model-select"
-      style={{ width: '100%' }}
-      value={defaultModel?.id}
-      onChange={handleChange}
-      classNames={configModalModelSelectPopupClassNames}
-      options={selectable.map((m) => ({ value: m.id, label: m.name }))}
-      optionRender={(opt) => {
-        const m = selectable.find((x) => x.id === opt.value)
-        return m ? <ConfigModelOptionContent m={m} /> : opt.label
-      }}
-      labelRender={(item) => {
-        const m = selectable.find((x) => x.id === item.value)
-        return m ? <ConfigModelOptionContent m={m} selected /> : item.label
-      }}
-    />
-  )
-}
+export const ConfigModal = ConfigSettingsPage
 
-export function ConfigModal() {
-  const { message } = App.useApp()
+
+
+export function ConfigSettingsPage() {
+
+  const { message, modal } = App.useApp()
+
   const open = useTypedSelector((s) => s.config.settingsOpen)
+
   const settingsActiveTab = useTypedSelector((s) => s.config.settingsActiveTab)
+
   const settingsToolsSubTab = useTypedSelector((s) => s.config.settingsToolsSubTab)
+
   const cfg = useTypedSelector((s) => s.config.config)
+
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
+
   const sessions = useTypedSelector((s) => s.session.list)
+
   const dispatch = useAppDispatch()
+
   const [form] = Form.useForm()
+
+  const workDirWatch = Form.useWatch('workDir', form)
+
+  const thinkingEnabledWatch = Form.useWatch('thinkingEnabled', form)
+
   const llmDrafts = useLlmServiceDrafts(open, cfg)
+
+  const baselineRef = useRef<string | null>(null)
+
+  const closeBtnRef = useRef<HTMLButtonElement>(null)
+
   const [workDirError, setWorkDirError] = useState<string | null>(null)
+
   const [models, setModels] = useState<ModelEntry[]>([])
-  const [addOpen, setAddOpen] = useState(false)
-  const [addName, setAddName] = useState('')
-  const [addMaxCtx, setAddMaxCtx] = useState<number | null>(null)
-  const [addMaxTokens, setAddMaxTokens] = useState<number | null>(null)
-  const [addFast, setAddFast] = useState(false)
+
   const [toolUi, setToolUi] = useState({
+
     confirmMode: 'diff' as 'diff' | 'direct',
+
     deniedTools: [] as string[],
+
     pythonPath: 'python',
+
     scriptTimeout: 300,
+
     fileCheckpointingEnabled: true,
+
     maxFileSnapshots: 100,
+
     grepTimeoutSec: 60
+
   })
+
   const [pyTest, setPyTest] = useState<{ ok: boolean; text: string } | null>(null)
+
   const [pyTesting, setPyTesting] = useState(false)
+
   const [uiTheme, setUiTheme] = useState<UiThemeMode>('system')
+
   const [maxParallelChatSessions, setMaxParallelChatSessions] = useState(DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
+
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
+
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
+
   const [browserUi, setBrowserUi] = useState<BrowserConfig>({ ...DEFAULT_BROWSER_CONFIG })
+
   const [shellUi, setShellUi] = useState<ShellConfig>({ ...DEFAULT_SHELL_CONFIG })
+
   const [shellTest, setShellTest] = useState<{ ok: boolean; text: string } | null>(null)
+
   const [shellTesting, setShellTesting] = useState(false)
 
+  const [saving, setSaving] = useState(false)
+
+
+
   const refreshConfig = async () => {
+
     const next = await window.api.configGet()
+
     dispatch(setConfig(next))
+
   }
 
+
+
   const skillActivationLog = currentSessionId
+
     ? readSkillActivationLog(sessions.find((s) => s.id === currentSessionId)?.metadata ?? {})
+
     : []
 
+
+
   useEffect(() => {
+
     if (open && cfg) {
+
       form.setFieldsValue({
+
         workDir: cfg.workDir,
+
         thinkingEnabled: cfg.thinkingEnabled
+
       })
+
       setModels(cfg.models.length > 0 ? cfg.models : DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
+
       setWorkDirError(null)
+
       const allBuiltin = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
+
       let deniedTools: string[]
+
       if (!cfg.tools.enabled) {
+
         deniedTools = [...allBuiltin]
+
       } else if (cfg.tools.allowedTools.length > 0) {
+
         deniedTools = allBuiltin.filter((n) => !cfg.tools.allowedTools.includes(n))
+
       } else {
+
         deniedTools = [...cfg.tools.deniedTools]
+
       }
+
       const browserCfg = cfg.browser ?? { ...DEFAULT_BROWSER_CONFIG }
+
       if (!browserCfg.enabled && !deniedTools.includes('browser')) {
+
         deniedTools = [...deniedTools, 'browser']
+
       }
+
       const trustedDomains = [
+
         ...new Set([...(browserCfg.trustedDomains ?? []), ...(browserCfg.allowedDomains ?? [])])
+
       ]
+
       setToolUi({
+
         confirmMode: cfg.tools.confirmMode,
+
         deniedTools,
+
         pythonPath: cfg.tools.pythonPath,
+
         scriptTimeout: cfg.tools.scriptTimeout,
+
         fileCheckpointingEnabled: cfg.tools.fileCheckpointingEnabled,
+
         maxFileSnapshots: cfg.tools.maxFileSnapshots,
+
         grepTimeoutSec: cfg.tools.grepTimeoutSec
+
       })
+
       setPyTest(null)
+
       setUiTheme(cfg.uiTheme ?? 'system')
+
       setMaxParallelChatSessions(cfg.maxParallelChatSessions ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
+
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
+
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
+
       setBrowserUi({ ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] })
+
       setShellUi(cfg.shell ?? { ...DEFAULT_SHELL_CONFIG })
+
       setShellTest(null)
+
+
+
+      const shellEnabledInit = !deniedTools.includes('run_shell')
+
+      const llmState = initLlmServiceTabState(cfg.llmServices ?? [], cfg.activeLlmServiceId ?? '')
+
+      const timer = window.setTimeout(() => {
+
+        baselineRef.current = buildConfigModalSnapshotFromConfig(cfg, llmState, deniedTools, shellEnabledInit)
+
+        closeBtnRef.current?.focus()
+
+      }, 0)
+
+      return () => window.clearTimeout(timer)
+
     }
+
+    baselineRef.current = null
+
+    return undefined
+
   }, [open, cfg, form])
+
+
+
+  useEffect(() => {
+
+    if (!open) return
+
+    const prevOverflow = document.body.style.overflow
+
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+
+      document.body.style.overflow = prevOverflow
+
+    }
+
+  }, [open])
+
+
 
   const shellEnabled = !toolUi.deniedTools.includes('run_shell')
 
+
+
+  const currentSnapshot = useMemo(() => {
+
+    if (!open) return null
+
+    return buildConfigModalSnapshot({
+
+      workDir: typeof workDirWatch === 'string' ? workDirWatch : '',
+
+      thinkingEnabled: Boolean(thinkingEnabledWatch),
+
+      models,
+
+      llmState: llmDrafts.state,
+
+      toolUi,
+
+      uiTheme,
+
+      maxParallelChatSessions,
+
+      wiki: wikiUi,
+
+      feishu: feishuUi,
+
+      browser: browserUi,
+
+      shell: shellUi,
+
+      shellEnabled
+
+    })
+
+  }, [
+
+    open,
+
+    workDirWatch,
+
+    thinkingEnabledWatch,
+
+    models,
+
+    llmDrafts.state,
+
+    toolUi,
+
+    uiTheme,
+
+    maxParallelChatSessions,
+
+    wikiUi,
+
+    feishuUi,
+
+    browserUi,
+
+    shellUi,
+
+    shellEnabled
+
+  ])
+
+
+
+  const isDirty =
+
+    open && baselineRef.current != null && currentSnapshot != null
+
+      ? !configModalSnapshotsEqual(currentSnapshot, baselineRef.current)
+
+      : false
+
+
+
+  const attemptCloseRef = useRef<() => void>(() => {})
+
+
+
   const onShellEnabledChange = (enabled: boolean) => {
+
     setShellUi((s) => ({ ...s, enabled }))
+
     setToolUi((s) => ({
+
       ...s,
+
       deniedTools: enabled ? s.deniedTools.filter((x) => x !== 'run_shell') : [...s.deniedTools, 'run_shell']
+
     }))
+
   }
+
+
 
   const selectDirectory = async () => {
+
     const result = await window.api.dialogSelectDirectory()
+
     if ('path' in result) {
+
       form.setFieldValue('workDir', result.path)
+
       void checkWorkDir(result.path)
+
     }
+
   }
+
+
 
   const checkWorkDir = async (dir: string) => {
+
     if (!dir) {
+
       setWorkDirError(null)
+
       return
+
     }
+
     const r = await window.api.configCheckWorkdirWritable(dir)
+
     setWorkDirError(r.writable ? null : `该目录不可写入：${r.error ?? '权限不足'}，请更换工作目录`)
+
   }
 
-  const addModel = () => {
-    const name = addName.trim()
-    if (!name) return
-    if (models.some((m) => m.name === name)) {
-      message.warning('模型名称已存在')
-      return
-    }
-    const id = crypto.randomUUID()
-    const maximumContext = addMaxCtx ?? DEFAULT_ADD_MODEL_MAX_CONTEXT
-    const maxTokens = addMaxTokens ?? DEFAULT_ADD_MODEL_MAX_TOKENS
-    const entry: ModelEntry = { id, name, maximumContext, maxTokens, isDefault: false, isFast: addFast, enabled: true }
-    const updated = [...models, entry]
-    if (updated.length === 1) {
-      entry.isDefault = true
-    }
-    if (updated.length > 0 && !updated.some((m) => m.isDefault)) {
-      updated[0].isDefault = true
-    }
-    setModels(updated)
-    setAddName('')
-    setAddMaxCtx(null)
-    setAddMaxTokens(null)
-    setAddFast(false)
-    setAddOpen(false)
-  }
+
 
   const resetModels = () => {
+
     setModels(DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
+
   }
 
-  const save = async () => {
+
+
+  const persistSettings = async (closeAfterSave: boolean) => {
+
     const v = await form.validateFields()
+
     if (v.workDir) {
+
       const r = await window.api.configCheckWorkdirWritable(v.workDir)
+
       if (!r.writable) {
+
         setWorkDirError(`该目录不可写入：${r.error ?? '权限不足'}，请更换工作目录`)
-        return
+
+        return false
+
       }
+
     }
+
     const enabledModels = models.filter((m) => m.enabled)
+
     if (enabledModels.length === 0) {
+
       message.warning('请至少启用一个模型')
-      return
+
+      return false
+
     }
+
     const llmErr = validateLlmServiceDrafts(llmDrafts.state)
+
     if (llmErr) {
+
       message.warning(llmErr)
-      return
+
+      return false
+
     }
+
     const llmPayload = buildLlmServicesSavePayload(llmDrafts.state)
+
+    setSaving(true)
+
     try {
+
       await window.api.configSet({
+
         workDir: v.workDir,
+
         thinkingEnabled: v.thinkingEnabled,
+
         models,
+
         ...llmPayload,
+
         tools: {
+
           enabled: true,
+
           confirmMode: toolUi.confirmMode,
+
           deniedTools: toolUi.deniedTools,
+
           allowedTools: [],
+
           pythonPath: toolUi.pythonPath,
+
           scriptTimeout: toolUi.scriptTimeout,
+
           fileCheckpointingEnabled: toolUi.fileCheckpointingEnabled,
+
           maxFileSnapshots: toolUi.maxFileSnapshots,
+
           grepTimeoutSec: toolUi.grepTimeoutSec
+
         },
+
         uiTheme,
+
         maxParallelChatSessions,
+
         wiki: wikiUi,
+
         feishu: feishuUi,
+
         browser: { ...browserUi, enabled: true, allowedDomains: [] },
+
         shell: { ...shellUi, enabled: shellEnabled }
+
       })
+
     } catch (e) {
+
       message.error(e instanceof Error ? e.message : String(e))
-      return
+
+      return false
+
+    } finally {
+
+      setSaving(false)
+
     }
+
     const next = await window.api.configGet()
+
     dispatch(setConfig(next))
+
     llmDrafts.resetFromConfig(next)
+
+    baselineRef.current = buildConfigModalSnapshotFromConfig(
+
+      next,
+
+      initLlmServiceTabState(next.llmServices ?? [], next.activeLlmServiceId ?? ''),
+
+      toolUi.deniedTools,
+
+      shellEnabled
+
+    )
+
     message.success('已保存')
-    dispatch(setSettingsOpen(false))
+
+    if (closeAfterSave) {
+
+      dispatch(setSettingsOpen(false))
+
+    }
+
+    return true
+
   }
+
+
+
+  const attemptClose = () => {
+
+    if (!isDirty) {
+
+      dispatch(setSettingsOpen(false))
+
+      return
+
+    }
+
+    modal.confirm({
+
+      title: '放弃未保存的更改？',
+
+      content: '你在设置中所做的修改尚未保存。',
+
+      okText: '放弃更改',
+
+      okType: 'danger',
+
+      cancelText: '继续编辑',
+
+      onOk: () => dispatch(setSettingsOpen(false))
+
+    })
+
+  }
+
+
+
+  attemptCloseRef.current = attemptClose
+
+
+
+  useEffect(() => {
+
+    if (!open) return
+
+    const onKey = (e: KeyboardEvent) => {
+
+      if (e.key === 'Escape') {
+
+        e.preventDefault()
+
+        attemptCloseRef.current()
+
+      }
+
+    }
+
+    window.addEventListener('keydown', onKey)
+
+    return () => window.removeEventListener('keydown', onKey)
+
+  }, [open])
+
+
 
   const testPython = async () => {
+
     setPyTesting(true)
+
     setPyTest(null)
+
     try {
+
       const r = await window.api.toolTestInterpreter({ path: toolUi.pythonPath })
+
       if (r.ok) setPyTest({ ok: true, text: r.version })
+
       else setPyTest({ ok: false, text: r.error })
+
     } finally {
+
       setPyTesting(false)
+
     }
+
   }
+
+
 
   const testShell = async () => {
+
     setShellTesting(true)
+
     setShellTest(null)
+
     try {
+
       const r = await window.api.shellTestExecutable({
+
         executable: shellUi.executable,
+
         argsPrefix: shellUi.argsPrefix
+
       })
+
       if (r.ok) setShellTest({ ok: true, text: 'Shell 测试成功' })
+
       else setShellTest({ ok: false, text: r.error ?? '测试失败' })
+
     } finally {
+
       setShellTesting(false)
+
     }
+
   }
 
-  const addContent = (
-    <div className="config-add-model-popover">
-      <div className="config-add-model-field">
-        <span className="config-add-model-label">模型名称</span>
-        <Input
-          placeholder="（按照您的服务商提供的模型名称填写）"
-          value={addName}
-          onChange={(e) => setAddName(e.target.value)}
-          onPressEnter={addModel}
-          autoFocus
-        />
-      </div>
-      <div className="config-add-model-row">
-        <div className="config-add-model-field">
-          <span className="config-add-model-label">最大上下文</span>
-          <InputNumber
-            placeholder="留空默认 200K"
-            value={addMaxCtx}
-            onChange={(v) => setAddMaxCtx(typeof v === 'number' ? v : null)}
-            min={1}
-            style={{ width: '100%' }}
-          />
-        </div>
-        <div className="config-add-model-field">
-          <span className="config-add-model-label">最大输出</span>
-          <InputNumber
-            placeholder="留空默认 64K"
-            value={addMaxTokens}
-            onChange={(v) => setAddMaxTokens(typeof v === 'number' ? v : null)}
-            min={1}
-            style={{ width: '100%' }}
-          />
-        </div>
-      </div>
-      <p className="config-add-model-hint">用于帮助 Agent 更好的管理上下文。若您不确定，可以留空。</p>
-      <Checkbox checked={addFast} onChange={(e) => setAddFast(e.target.checked)}>
-        标注为快速模型（用于处理低成本简单任务）
-      </Checkbox>
-      <Button type="primary" size="small" block onClick={addModel} disabled={!addName.trim()}>
-        确认
-      </Button>
-    </div>
-  )
 
-  const settingsTabKey =
-    settingsActiveTab === 'browser' ? 'tools' : (settingsActiveTab ?? 'general')
+
+  const settingsTabKey = (normalizeSettingsTabKey(settingsActiveTab) ?? 'general') as SettingsSectionKey | 'tools'
+
+  const toolsSection: ToolsSettingsSubTab =
+    settingsToolsSubTab ??
+    (settingsActiveTab === 'browser' ? 'browser' : DEFAULT_TOOLS_SETTINGS_SUB_TAB)
+
+  const activeSectionLabel =
+    settingsTabKey === 'tools'
+      ? getToolsSettingsSectionLabel(toolsSection)
+      : SETTINGS_SECTIONS.find((s) => s.key === settingsTabKey)?.label ?? '设置'
+
+
+
+  if (!open) return null
+
+
+
+  const renderSectionContent = () => {
+
+    switch (settingsTabKey) {
+
+      case 'general':
+
+        return (
+
+          <>
+
+            <Form.Item label="工作目录（会话明文备份等）" required>
+
+              <Space.Compact style={{ width: '100%' }}>
+
+                <Form.Item name="workDir" noStyle rules={[{ required: true }]}>
+
+                  <Input onBlur={(e) => void checkWorkDir(e.target.value)} />
+
+                </Form.Item>
+
+                <Button
+
+                  icon={<FolderOpenIcon />}
+
+                  onClick={selectDirectory}
+
+                  title="选择目录"
+
+                  aria-label="选择目录"
+
+                />
+
+              </Space.Compact>
+
+            </Form.Item>
+
+            {workDirError ? (
+
+              <Alert type="error" message={workDirError} showIcon className="config-alert-block--loose" />
+
+            ) : null}
+
+            <Form.Item label="界面主题">
+
+              <Radio.Group value={uiTheme} onChange={(e) => setUiTheme(e.target.value)}>
+
+                <Radio value="system">跟随系统</Radio>
+
+                <Radio value="light">浅色</Radio>
+
+                <Radio value="dark">深色</Radio>
+
+              </Radio.Group>
+
+            </Form.Item>
+
+            <Form.Item
+
+              label="并行会话上限"
+
+              extra="多个会话可同时向 AI 发起请求（含工具循环）。超出上限时将提示稍后再试。"
+
+            >
+
+              <InputNumber
+
+                min={MIN_MAX_PARALLEL_CHAT_SESSIONS}
+
+                max={MAX_MAX_PARALLEL_CHAT_SESSIONS}
+
+                value={maxParallelChatSessions}
+
+                onChange={(v) => setMaxParallelChatSessions(v ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)}
+
+                style={{ width: '100%' }}
+
+              />
+
+            </Form.Item>
+
+          </>
+
+        )
+
+      case 'models':
+
+        return (
+
+          <ModelsSettingsTab
+
+            draftsApi={llmDrafts}
+
+            models={models}
+
+            onModelsChange={setModels}
+
+            onResetModels={resetModels}
+
+          />
+
+        )
+
+      case 'tools':
+
+        return (
+
+          <ToolsSettingsTab
+
+            section={toolsSection}
+
+            toolUi={toolUi}
+
+            setToolUi={setToolUi}
+
+            browserUi={browserUi}
+
+            setBrowserUi={setBrowserUi}
+
+            shellUi={shellUi}
+
+            setShellUi={setShellUi}
+
+            onShellEnabledChange={onShellEnabledChange}
+
+            onTestShell={() => void testShell()}
+
+            shellTesting={shellTesting}
+
+            shellTest={shellTest}
+
+            models={models}
+
+            pyTest={pyTest}
+
+            pyTesting={pyTesting}
+
+            onTestPython={() => void testPython()}
+
+          />
+
+        )
+
+      case 'skills':
+
+        return cfg ? (
+
+          <SkillsTab
+
+            active={settingsTabKey === 'skills'}
+
+            config={cfg}
+
+            onConfigSaved={refreshConfig}
+
+            activationLog={skillActivationLog}
+
+          />
+
+        ) : null
+
+      case 'wiki':
+
+        return <WikiTab wiki={wikiUi} onChange={setWikiUi} />
+
+      case 'feishu':
+
+        return <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} models={models} />
+
+      default:
+
+        return null
+
+    }
+
+  }
+
+
 
   return (
-    <Modal
-      className="config-modal"
-      title="设置"
-      open={open}
-      onCancel={() => dispatch(setSettingsOpen(false))}
-      width={560}
-      footer={
-        <Space>
-          <Button onClick={() => dispatch(setSettingsOpen(false))}>取消</Button>
-          <Button type="primary" onClick={save}>
-            保存
-          </Button>
-        </Space>
-      }
+
+    <div
+
+      className="config-settings-page"
+
+      role="dialog"
+
+      aria-modal="true"
+
+      aria-labelledby="config-settings-page-title"
+
     >
-      <Form form={form} layout="vertical">
-        <Tabs
-          activeKey={settingsTabKey}
-          onChange={(key) => dispatch(setSettingsActiveTab(key))}
-          items={[
-            {
-              key: 'general',
-              label: '通用',
-              children: (
-                <>
-                  <Form.Item label="工作目录（会话明文备份等）" required>
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Form.Item name="workDir" noStyle rules={[{ required: true }]}>
-                        <Input onBlur={(e) => void checkWorkDir(e.target.value)} />
-                      </Form.Item>
-                      <Button icon={<FolderOpenIcon />} onClick={selectDirectory} title="选择目录" />
-                    </Space.Compact>
-                  </Form.Item>
-                  {workDirError && <Alert type="error" message={workDirError} showIcon className="config-alert-block--loose" />}
-                  <Form.Item label="界面主题">
-                    <Radio.Group value={uiTheme} onChange={(e) => setUiTheme(e.target.value)}>
-                      <Radio value="system">跟随系统</Radio>
-                      <Radio value="light">浅色</Radio>
-                      <Radio value="dark">深色</Radio>
-                    </Radio.Group>
-                  </Form.Item>
-                  <Form.Item
-                    label="并行会话上限"
-                    extra="多个会话可同时向 AI 发起请求（含工具循环）。超出上限时将提示稍后再试。"
-                  >
-                    <InputNumber
-                      min={MIN_MAX_PARALLEL_CHAT_SESSIONS}
-                      max={MAX_MAX_PARALLEL_CHAT_SESSIONS}
-                      value={maxParallelChatSessions}
-                      onChange={(v) => setMaxParallelChatSessions(v ?? DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)}
-                      style={{ width: '100%' }}
-                    />
-                  </Form.Item>
-                </>
-              )
-            },
-            {
-              key: 'llm-service',
-              label: '大模型服务',
-              children: <LlmServiceTab draftsApi={llmDrafts} />
-            },
-            {
-              key: 'llm-defaults',
-              label: '默认大模型设置',
-              children: (
-                <>
-                  <div className="config-model-field">
-                    <div className="config-model-field__header">
-                      <span className="config-model-field__label">默认模型</span>
-                      <Space size={4}>
-                        <Button size="small" icon={<RefreshIcon />} onClick={resetModels} title="恢复默认" />
-                        <Popover
-                          overlayClassName="config-modal-popover"
-                          content={addContent}
-                          open={addOpen}
-                          onOpenChange={setAddOpen}
-                          trigger="click"
-                          placement="bottomRight"
-                        >
-                          <Button size="small" type="primary" icon={<AddIcon />} />
-                        </Popover>
-                      </Space>
-                    </div>
-                    <ModelSelect value={models} onChange={setModels} />
-                  </div>
-                  <Form.Item
-                    name="thinkingEnabled"
-                    label="默认开启 Thinking"
-                    valuePropName="checked"
-                    className="config-form-item-inline"
-                  >
-                    <Switch />
-                  </Form.Item>
-                </>
-              )
-            },
-            {
-              key: 'tools',
-              label: '工具',
-              children: (
-                <ToolsSettingsTab
-                  toolUi={toolUi}
-                  setToolUi={setToolUi}
-                  browserUi={browserUi}
-                  setBrowserUi={setBrowserUi}
-                  shellUi={shellUi}
-                  setShellUi={setShellUi}
-                  onShellEnabledChange={onShellEnabledChange}
-                  onTestShell={() => void testShell()}
-                  shellTesting={shellTesting}
-                  shellTest={shellTest}
-                  models={models}
-                  pyTest={pyTest}
-                  pyTesting={pyTesting}
-                  onTestPython={() => void testPython()}
-                  initialSubTab={
-                    settingsToolsSubTab ?? (settingsActiveTab === 'browser' ? 'browser' : undefined)
-                  }
-                />
-              )
-            },
-            {
-              key: 'skills',
-              label: 'Skill',
-              children: cfg ? (
-                <SkillsTab
-                  active={open && settingsTabKey === 'skills'}
-                  config={cfg}
-                  onConfigSaved={refreshConfig}
-                  activationLog={skillActivationLog}
-                />
-              ) : null
-            },
-            {
-              key: 'wiki',
-              label: 'LLM Wiki',
-              children: <WikiTab wiki={wikiUi} onChange={setWikiUi} />
-            },
-            {
-              key: 'feishu',
-              label: '飞书',
-              children: <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} models={models} />
-            }
-          ]}
-        />
-      </Form>
-    </Modal>
+
+      <div className="config-settings-page__shell">
+
+        <aside className="config-settings-page__nav" aria-label="设置分类">
+
+          <div className="config-settings-page__nav-brand">设置</div>
+
+          <nav className="config-settings-page__nav-list">
+
+            {SETTINGS_SECTIONS.slice(0, 2).map((section) => (
+
+              <button
+
+                key={section.key}
+
+                type="button"
+
+                className={`config-settings-page__nav-item${settingsTabKey === section.key ? ' config-settings-page__nav-item--active' : ''}`}
+
+                aria-current={settingsTabKey === section.key ? 'page' : undefined}
+
+                onClick={() => dispatch(setSettingsActiveTab(section.key))}
+
+              >
+
+                {section.label}
+
+              </button>
+
+            ))}
+
+            <div className="config-settings-page__nav-group" role="group" aria-label="工具">
+
+              <div className="config-settings-page__nav-group-label">工具</div>
+
+              {TOOLS_SETTINGS_NAV.map((item) => (
+
+                <button
+
+                  key={item.id}
+
+                  type="button"
+
+                  className={`config-settings-page__nav-item config-settings-page__nav-item--sub${settingsTabKey === 'tools' && toolsSection === item.id ? ' config-settings-page__nav-item--active' : ''}`}
+
+                  aria-current={settingsTabKey === 'tools' && toolsSection === item.id ? 'page' : undefined}
+
+                  onClick={() => dispatch(setSettingsToolsSubTab(item.id))}
+
+                >
+
+                  {item.label}
+
+                </button>
+
+              ))}
+
+            </div>
+
+            {SETTINGS_SECTIONS.slice(2).map((section) => (
+
+              <button
+
+                key={section.key}
+
+                type="button"
+
+                className={`config-settings-page__nav-item${settingsTabKey === section.key ? ' config-settings-page__nav-item--active' : ''}`}
+
+                aria-current={settingsTabKey === section.key ? 'page' : undefined}
+
+                onClick={() => dispatch(setSettingsActiveTab(section.key))}
+
+              >
+
+                {section.label}
+
+              </button>
+
+            ))}
+
+          </nav>
+
+        </aside>
+
+
+
+        <div className="config-settings-page__main">
+
+          <header className="config-settings-page__header">
+
+            <button
+
+              ref={closeBtnRef}
+
+              type="button"
+
+              className="config-settings-page__back"
+
+              onClick={attemptClose}
+
+              aria-label="返回工作台"
+
+            >
+
+              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+
+              <span>返回</span>
+
+            </button>
+
+            <h1 id="config-settings-page-title" className="config-settings-page__title">
+
+              {activeSectionLabel}
+
+            </h1>
+
+            {isDirty ? (
+
+              <span className="config-settings-page__dirty-hint">有未保存的更改</span>
+
+            ) : (
+
+              <span className="config-settings-page__dirty-hint config-settings-page__dirty-hint--hidden" />
+
+            )}
+
+          </header>
+
+
+
+          <div className="config-settings-page__body">
+
+            <div className="config-settings-page__content">
+
+              <Form form={form} layout="vertical">
+
+                {renderSectionContent()}
+
+              </Form>
+
+            </div>
+
+          </div>
+
+
+
+          <footer className="config-settings-page__footer">
+
+            <Space>
+
+              <Button onClick={attemptClose}>取消</Button>
+
+              <Button loading={saving} disabled={!isDirty} onClick={() => void persistSettings(false)}>
+
+                应用
+
+              </Button>
+
+              <Button type="primary" loading={saving} disabled={!isDirty} onClick={() => void persistSettings(true)}>
+
+                保存并返回
+
+              </Button>
+
+            </Space>
+
+          </footer>
+
+        </div>
+
+      </div>
+
+    </div>
+
   )
+
 }
+
+

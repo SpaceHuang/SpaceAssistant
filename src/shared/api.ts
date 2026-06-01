@@ -85,6 +85,8 @@ export type ClaudeChatCreateWithToolsPayload = {
 export type SpaceAssistantApi = {
   ping: () => Promise<string>
 
+  appOpenExternal: (url: string) => Promise<{ ok: true } | { ok: false; error: string }>
+
   sessionList: () => Promise<Session[]>
   sessionCreate: (payload: {
     name: string

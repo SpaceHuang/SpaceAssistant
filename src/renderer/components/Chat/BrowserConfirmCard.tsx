@@ -22,8 +22,8 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
           <button
             type="button"
             className="write-confirm-card__action write-confirm-card__action--allow"
-            aria-label="确认"
-            title="确认"
+            aria-label="确认浏览器操作"
+            title="确认浏览器操作"
             onClick={() => onConfirm(true)}
           >
             <Check size={16} strokeWidth={2.25} />
@@ -31,8 +31,8 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
           <button
             type="button"
             className="write-confirm-card__action write-confirm-card__action--deny"
-            aria-label="拒绝"
-            title="拒绝"
+            aria-label="拒绝浏览器操作"
+            title="拒绝浏览器操作"
             onClick={() => onConfirm(false)}
           >
             <X size={16} strokeWidth={2.25} />

@@ -151,3 +151,58 @@ describe('createToolChatController progressOutput', () => {
     expect(lastPatch.toolCalls?.[0]?.status).toBe('completed')
   })
 })
+
+describe('createToolChatController applyConfirmOutcome', () => {
+  const unsub = vi.fn()
+  const localHandlers: { use?: (d: unknown) => void; confirm?: (d: unknown) => void } = {}
+
+  beforeEach(() => {
+    vi.stubGlobal('window', {
+      api: {
+        toolOnUse: vi.fn((cb: (d: unknown) => void) => {
+          localHandlers.use = cb
+          return unsub
+        }),
+        toolOnConfirmRequest: vi.fn((cb: (d: unknown) => void) => {
+          localHandlers.confirm = cb
+          return unsub
+        }),
+        toolOnProgress: vi.fn(() => unsub),
+        toolOnResult: vi.fn(() => unsub)
+      }
+    })
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('optimistically marks browser confirm as executing', () => {
+    const applyAssistantPatch = vi.fn()
+    const controller = createToolChatController({
+      dispatch: vi.fn(),
+      assistantMessageId: 'msg-1',
+      getRequestId: () => 'req-1',
+      applyAssistantPatch
+    })
+    controller.subscribe()
+    localHandlers.use?.({
+      requestId: 'req-1',
+      toolUse: { id: 'tool-browser', name: 'browser', input: { action: 'navigate', url: 'https://example.com' } }
+    })
+    localHandlers.confirm?.({
+      requestId: 'req-1',
+      toolUseId: 'tool-browser',
+      toolName: 'browser',
+      input: {},
+      riskLevel: 'medium'
+    })
+    controller.applyConfirmOutcome('tool-browser', true)
+    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as {
+      toolCalls?: { status: string; progressOutput?: string }[]
+    }
+    expect(lastPatch.toolCalls?.[0]?.status).toBe('executing')
+    expect(lastPatch.toolCalls?.[0]?.progressOutput).toBe('正在准备浏览器…')
+  })
+})

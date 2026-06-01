@@ -54,6 +54,23 @@ export function ConfigModelOptionContent({ m, selected, compact }: ConfigModelOp
   )
 }
 
+/** Select 收起态：双行信息，与下拉选项区分 */
+export function ConfigModelSelectValue({ m }: { m: ModelEntry }) {
+  return (
+    <div className="config-model-select-value">
+      <div className="config-model-select-value__primary">
+        <span className="config-model-select-value__name" title={m.name}>
+          {m.name}
+        </span>
+        {m.isFast ? <ConfigModelFastBadge /> : null}
+      </div>
+      <span className="config-model-select-value__meta">
+        上下文 {formatNumber(m.maximumContext)} · 输出 {formatNumber(m.maxTokens)}
+      </span>
+    </div>
+  )
+}
+
 /** 快速模型排在列表最前，其余保持原顺序 */
 export function sortModelsFastFirst(models: ModelEntry[]): ModelEntry[] {
   const fast: ModelEntry[] = []

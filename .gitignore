@@ -3,6 +3,7 @@ dist/
 dist-electron/
 release/
 *.log
+*.map
 logs/
 .DS_Store
 coverage/

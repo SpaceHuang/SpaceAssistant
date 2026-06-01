@@ -30,6 +30,7 @@ type Props = {
   wikiRootPath?: string
   showArchiveToWiki?: boolean
   onArchiveToWiki?: () => void
+  onRetry?: () => void
 }
 
 function AssistantTextBody({
@@ -86,7 +87,8 @@ export const ChatBubble = memo(function ChatBubble({
   onOpenFile,
   wikiRootPath,
   showArchiveToWiki = false,
-  onArchiveToWiki
+  onArchiveToWiki,
+  onRetry
 }: Props) {
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
@@ -127,7 +129,13 @@ export const ChatBubble = memo(function ChatBubble({
 
   return (
     <div className={rowClass} data-message-id={message.id}>
-      <div className="chat-bubble-col chat-bubble-col--assistant">
+      <div
+        className="chat-bubble-col chat-bubble-col--assistant"
+        role="region"
+        aria-label="助手回复"
+        aria-live={streaming ? 'polite' : undefined}
+        aria-busy={streaming ? true : undefined}
+      >
         {activityTimeline.length > 0 ? (
           <div className="chat-activity-track">
             {activityTimeline.map((item, i) => {
@@ -229,7 +237,14 @@ export const ChatBubble = memo(function ChatBubble({
 
         {failed ? (
           <div className="chat-message-error" role="alert">
-            回复未能完成。你可以重新发送问题，或基于已有上下文继续对话。
+            <span className="chat-message-error__text">
+              回复未能完成。你可以重试生成，或基于已有上下文继续对话。
+            </span>
+            {onRetry ? (
+              <button type="button" className="chat-message-error__retry" onClick={onRetry}>
+                重试回复
+              </button>
+            ) : null}
           </div>
         ) : null}
 
@@ -250,5 +265,6 @@ export const ChatBubble = memo(function ChatBubble({
   prev.onOpenFile === next.onOpenFile &&
   prev.wikiRootPath === next.wikiRootPath &&
   prev.showArchiveToWiki === next.showArchiveToWiki &&
-  prev.onArchiveToWiki === next.onArchiveToWiki
+  prev.onArchiveToWiki === next.onArchiveToWiki &&
+  prev.onRetry === next.onRetry
 )

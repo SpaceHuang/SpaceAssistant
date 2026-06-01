@@ -48,8 +48,8 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
           <button
             type="button"
             className="write-confirm-card__action write-confirm-card__action--deny"
-            aria-label="拒绝"
-            title="拒绝"
+            aria-label="拒绝执行"
+            title="拒绝执行"
             onClick={() => onConfirm(false)}
           >
             <X size={16} strokeWidth={2.25} />

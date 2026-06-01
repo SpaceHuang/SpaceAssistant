@@ -39,14 +39,30 @@ export const configSlice = createSlice({
     ) {
       state.settingsOpen = true
       if (action.payload?.tab) {
-        state.settingsActiveTab = action.payload.tab
+        const tab = action.payload.tab
+        if (tab === 'browser') {
+          state.settingsActiveTab = 'tools'
+          state.settingsToolsSubTab = 'browser'
+        } else if (tab === 'llm-service' || tab === 'llm-defaults') {
+          state.settingsActiveTab = 'models'
+        } else {
+          state.settingsActiveTab = tab
+          if (tab === 'tools' && !action.payload.toolsSubTab) {
+            state.settingsToolsSubTab = 'switches'
+          }
+        }
       }
       if (action.payload?.toolsSubTab) {
+        state.settingsActiveTab = 'tools'
         state.settingsToolsSubTab = action.payload.toolsSubTab
       }
     },
     setSettingsActiveTab(state, action: PayloadAction<string | undefined>) {
       state.settingsActiveTab = action.payload
+    },
+    setSettingsToolsSubTab(state, action: PayloadAction<ToolsSettingsSubTab>) {
+      state.settingsActiveTab = 'tools'
+      state.settingsToolsSubTab = action.payload
     },
     setAboutOpen(state, action: PayloadAction<boolean>) {
       state.aboutOpen = action.payload
@@ -54,5 +70,5 @@ export const configSlice = createSlice({
   }
 })
 
-export const { setConfig, setSettingsOpen, openSettings, setSettingsActiveTab, setAboutOpen } = configSlice.actions
+export const { setConfig, setSettingsOpen, openSettings, setSettingsActiveTab, setSettingsToolsSubTab, setAboutOpen } = configSlice.actions
 export default configSlice.reducer

@@ -13,6 +13,12 @@ type Props = {
   className?: string
 }
 
+function splitPaneClassName(side: 'left' | 'right', className?: string) {
+  return ['sa-split-pane', side === 'left' ? 'sa-split-pane--left' : 'sa-split-pane--right', className]
+    .filter(Boolean)
+    .join(' ')
+}
+
 export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, className }: Props) {
   const storageKey = `${STORAGE_PREFIX}${id}`
   const [size, setSize] = useState(() => {
@@ -98,7 +104,7 @@ export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, c
   return (
     <div
       ref={paneRef}
-      className={className}
+      className={splitPaneClassName(side, className)}
       style={{
         width: size,
         minWidth: minSize,
@@ -107,9 +113,7 @@ export function SplitPane({ id, defaultSize, minSize, maxSize, side, children, c
         display: 'flex',
         flexDirection: 'column',
         position: 'relative',
-        height: '100%',
-        borderRight: side === 'left' ? '1px solid var(--sa-border)' : undefined,
-        borderLeft: side === 'right' ? '1px solid var(--sa-border)' : undefined
+        height: '100%'
       }}
     >
       <div className="sa-split-pane-body">{children}</div>

@@ -6,6 +6,7 @@ import { classifyWikiReferencedPath } from '../../../shared/wikiMarkdown'
 import { useDetailPanel } from './DetailPanelContext'
 import { useReferencedFiles } from './useReferencedFiles'
 import { ReferencedFileItem } from './ReferencedFileItem'
+import { isUnderWikiRoot, requestFilePaneSelect } from '../../services/filePaneNavigation'
 
 interface ReferencedFilesPanelProps {
   sessionId: string | null
@@ -37,14 +38,16 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
 
   const handleFileClick = (path: string) => {
     if (path === selectedFile) return
+    const preferWiki = wikiEnabled && isUnderWikiRoot(path, wikiRoot)
+    requestFilePaneSelect({ relPath: path, preferWiki: preferWiki || undefined })
     void openFile(path)
   }
 
   return (
     <div className="referenced-files-panel">
-      <div className="referenced-files-header">
-        <span className="referenced-files-title">引用的文件</span>
-        {files.length > 0 && <span className="referenced-files-count">{visible.length}</span>}
+      <div className="detail-panel-section-header referenced-files-header">
+        <span className="detail-panel-section-title">引用的文件</span>
+        {files.length > 0 ? <span className="detail-panel-section-badge">{visible.length}</span> : null}
       </div>
       {wikiEnabled && files.length > 0 ? (
         <div className="referenced-files-filter">

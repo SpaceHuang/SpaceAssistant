@@ -1,35 +1,42 @@
-.llm-service-tab-extra {
-  font-size: var(--sa-config-font-sm);
-  color: var(--sa-text-secondary);
-  margin: 0 0 var(--sa-config-gap-substack);
-  line-height: var(--sa-config-line);
-}
+/* 模型页 · API 服务卡片（仅在 .config-models-settings 内生效） */
 
-.llm-service-list {
-  max-height: 360px;
-  overflow-y: auto;
+.config-models-settings {
+  --llm-service-content-indent: 92px;
   display: flex;
   flex-direction: column;
-  gap: var(--sa-config-gap-field);
-  font-size: var(--sa-config-font);
+  gap: var(--sa-config-gap-block);
 }
 
-.llm-service-list .ant-radio-wrapper,
-.llm-service-list .ant-input,
-.llm-service-list .ant-input-affix-wrapper,
-.llm-service-list .ant-input-affix-wrapper > input.ant-input,
-.llm-service-list .ant-input-password,
-.llm-service-list .ant-btn {
+.config-models-settings .llm-service-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-stack);
   font-size: var(--sa-config-font);
-}
-
-.llm-service-list .ant-input,
-.llm-service-list .ant-input-affix-wrapper {
   line-height: var(--sa-config-line);
 }
 
-.llm-service-card {
-  border: 1px solid var(--sa-border-strong);
+.config-models-settings .llm-service-list .ant-radio-wrapper,
+.config-models-settings .llm-service-list .ant-input,
+.config-models-settings .llm-service-list .ant-input-affix-wrapper,
+.config-models-settings .llm-service-list .ant-input-affix-wrapper > input.ant-input,
+.config-models-settings .llm-service-list .ant-input-password,
+.config-models-settings .llm-service-list .ant-btn {
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line);
+}
+
+.config-models-settings .llm-service-list .ant-radio-wrapper {
+  margin-inline-end: 0;
+  white-space: nowrap;
+  color: var(--sa-text-secondary);
+}
+
+.config-models-settings .llm-service-list .ant-radio-wrapper-checked {
+  color: var(--sa-text);
+}
+
+.config-models-settings .llm-service-card {
+  border: 1px solid var(--sa-border);
   border-radius: var(--sa-radius-md);
   background: var(--sa-bg-elevated);
   color: var(--sa-text);
@@ -38,96 +45,127 @@
     background var(--sa-duration-fast) var(--sa-ease-out);
 }
 
-.llm-service-card--active {
-  border-color: color-mix(in srgb, var(--sa-primary) 45%, var(--sa-border-strong));
-  border-left: 2px solid var(--sa-primary);
-  background: var(--sa-primary-subtle);
+.config-models-settings .llm-service-card--active {
+  border-color: color-mix(in srgb, var(--sa-primary) 50%, var(--sa-border-strong));
+  background: color-mix(in srgb, var(--sa-primary-subtle) 55%, var(--sa-bg-elevated));
 }
 
-.llm-service-card--new {
+.config-models-settings .llm-service-card--new {
   border-style: dashed;
+  border-color: var(--sa-border-strong);
 }
 
-.llm-service-card-header {
+.config-models-settings .llm-service-card-header {
   display: flex;
   align-items: center;
-  gap: var(--sa-config-gap-field);
-  padding: var(--sa-config-gap-field) var(--sa-config-gap-substack);
+  gap: var(--sa-config-gap-substack);
+  padding: var(--sa-config-gap-substack);
+  min-height: var(--sa-config-control-min-height);
 }
 
-.llm-service-card-title {
+.config-models-settings .llm-service-card-title {
   flex: 1;
   min-width: 0;
   font-size: var(--sa-config-font);
   font-weight: 500;
+  line-height: var(--sa-config-line-tight);
   color: var(--sa-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.llm-service-card-summary {
-  padding: 0 var(--sa-config-gap-substack) var(--sa-config-gap-field) 36px;
+.config-models-settings .llm-service-card-title.ant-input {
+  font-weight: 500;
+}
+
+.config-models-settings .llm-service-card-summary {
+  padding: 0 var(--sa-config-gap-substack) var(--sa-config-gap-substack) var(--llm-service-content-indent);
   font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.llm-service-card-body {
-  padding: var(--sa-config-gap-substack) var(--sa-config-gap-substack) var(--sa-config-gap-substack) 36px;
+.config-models-settings .llm-service-card-body {
+  padding: var(--sa-config-gap-substack) var(--sa-config-gap-substack) var(--sa-config-gap-stack)
+    var(--llm-service-content-indent);
   border-top: 1px solid var(--sa-border);
   font-size: var(--sa-config-font);
 }
 
-.llm-service-field-label {
+.config-models-settings .llm-service-field-label {
   margin-bottom: var(--sa-config-gap-tight);
-  font-size: var(--sa-config-font);
+  font-size: var(--sa-config-font-sm);
   font-weight: 500;
   color: var(--sa-text);
-  line-height: var(--sa-config-line);
+  line-height: var(--sa-config-line-tight);
 }
 
-.llm-service-key-field,
-.llm-service-url-field {
-  margin-bottom: var(--sa-config-gap-field);
+.config-models-settings .llm-service-key-field,
+.config-models-settings .llm-service-url-field {
+  margin-bottom: var(--sa-config-gap-stack);
 }
 
-.llm-service-key-field .ant-input-affix-wrapper {
+.config-models-settings .llm-service-key-field:last-child,
+.config-models-settings .llm-service-url-field:last-child {
+  margin-bottom: 0;
+}
+
+.config-models-settings .llm-service-key-field .ant-input-affix-wrapper {
   width: 100%;
 }
 
-.llm-service-list .ant-input-affix-wrapper {
+.config-models-settings .llm-service-list .ant-input-affix-wrapper {
   display: inline-flex;
   align-items: center;
+  min-height: var(--sa-config-control-min-height);
 }
 
-.llm-service-list .ant-input-affix-wrapper .ant-input-suffix {
+.config-models-settings .llm-service-list .ant-input-affix-wrapper .ant-input-suffix {
   flex-shrink: 0;
   margin-inline-start: var(--sa-config-gap-tight);
 }
 
-.llm-service-key-hint {
+.config-models-settings .llm-service-key-hint {
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);
   margin-top: var(--sa-config-gap-tight);
 }
 
-.llm-service-test-row {
+.config-models-settings .llm-service-test-row {
   display: flex;
   justify-content: flex-end;
-  margin-top: var(--sa-config-gap-field);
+  margin-top: var(--sa-config-gap-stack);
 }
 
-/* 深色模式下保证卡片内输入框与卡片背景层次清晰 */
-[data-theme='dark'] .llm-service-card .ant-input,
-[data-theme='dark'] .llm-service-card .ant-input-affix-wrapper {
+.config-models-settings .llm-service-add-btn {
+  margin-top: 0;
+  font-size: var(--sa-config-font);
+}
+
+.config-models-settings .llm-service-card-header .ant-btn.ant-btn-sm.ant-btn-icon-only {
+  width: var(--sa-config-control-min-height);
+  height: var(--sa-config-control-min-height);
+  padding: 0;
+  flex-shrink: 0;
+}
+
+[data-theme='dark'] .config-models-settings .llm-service-card .ant-input,
+[data-theme='dark'] .config-models-settings .llm-service-card .ant-input-affix-wrapper {
   background: var(--sa-bg-subtle);
 }
 
-[data-theme='dark'] .llm-service-card--active .ant-input,
-[data-theme='dark'] .llm-service-card--active .ant-input-affix-wrapper {
+[data-theme='dark'] .config-models-settings .llm-service-card--active .ant-input,
+[data-theme='dark'] .config-models-settings .llm-service-card--active .ant-input-affix-wrapper {
   background: var(--sa-bg-elevated);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .config-models-settings .llm-service-card {
+    transition: none;
+  }
 }

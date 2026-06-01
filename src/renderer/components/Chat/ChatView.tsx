@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { App } from 'antd'
+import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { addMessage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId } from '../../store/chatSlice'
 import type { LastUsage } from '../../store/chatSlice'
@@ -26,7 +27,8 @@ import { runClaudeChatStream } from '../../services/chatStreamService'
 import {
   buildToolChatPayload,
   createToolChatController,
-  extractAssistantTextFromApiContent
+  extractAssistantTextFromApiContent,
+  type ToolChatController
 } from '../../services/chatToolSessionService'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
@@ -65,6 +67,11 @@ import {
   type ThinkingState
 } from '../../../shared/thinkingSegments'
 import { throttle } from '../../utils/throttle'
+import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
+
+type SendInternalOptions = {
+  skipUserMessage?: boolean
+}
 
 function buildClaudePayload(history: Message[]) {
   return history
@@ -125,7 +132,7 @@ export function ChatView() {
     if (!scrollToMessageId || messages.length === 0) return
     const el = scrollRef.current?.querySelector(`[data-message-id="${scrollToMessageId}"]`)
     if (el) {
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      scrollIntoViewWithMotionPreference(el, { block: 'center', behavior: 'smooth' })
       dispatch(setScrollToMessageId(null))
     }
   }, [scrollToMessageId, messages, dispatch])
@@ -187,11 +194,14 @@ export function ChatView() {
 
   const sessionRunning = Boolean(sessionId && runningSessions[sessionId])
 
+  const toolChatControllerRef = useRef<ToolChatController | null>(null)
+
   const onToolConfirm = useCallback(
     (toolUseId: string, approved: boolean) => {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
       const requestId = pending?.requestId ?? streamingRequestId
       if (!requestId) return
+      toolChatControllerRef.current?.applyConfirmOutcome(toolUseId, approved)
       pendingConfirmStore.respond(requestId, toolUseId, approved)
       dispatch(setConfirmFocusToolUseId(null))
     },
@@ -259,7 +269,7 @@ export function ChatView() {
   )
 
   const sendInternal = useCallback(
-    async (text: string, skillsStateOverride?: SessionSkillsState) => {
+    async (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => {
       if (!sessionId || !cfg) {
         message.warning('请先选择会话并等待配置加载')
         return
@@ -327,8 +337,10 @@ export function ChatView() {
         schemaVersion: CURRENT_SCHEMA_VERSION
       }
 
-      dispatch(addMessage(userMsg))
-      await window.api.chatAppendMessage(userMsg)
+      if (!options?.skipUserMessage) {
+        dispatch(addMessage(userMsg))
+        await window.api.chatAppendMessage(userMsg)
+      }
 
       const requestId = crypto.randomUUID()
       registerSessionRun(runSessionId, requestId)
@@ -469,9 +481,11 @@ export function ChatView() {
           }
         })
         controller.subscribe()
+        toolChatControllerRef.current = controller
 
         const unsubs: Array<() => void> = []
         const cleanup = () => {
+          toolChatControllerRef.current = null
           controller.unsubscribe()
           for (const u of unsubs) u()
           unsubs.length = 0
@@ -713,6 +727,33 @@ export function ChatView() {
     [sendInternal]
   )
 
+  const retryFailedAssistant = useCallback(
+    async (assistantMessageId: string) => {
+      const msgs = store.getState().chat.messages
+      const idx = msgs.findIndex((m) => m.id === assistantMessageId)
+      if (idx < 0) return
+      const assistant = msgs[idx]
+      if (assistant.role !== 'assistant' || assistant.status !== 'failed') return
+
+      let userText = ''
+      for (let i = idx - 1; i >= 0; i--) {
+        const row = msgs[i]
+        if (row.role === 'user' && row.content.trim()) {
+          userText = row.content
+          break
+        }
+      }
+      if (!userText.trim()) {
+        message.warning('找不到可重试的上一条用户消息')
+        return
+      }
+
+      dispatch(setMessages(msgs.filter((m) => m.id !== assistantMessageId)))
+      await sendInternal(userText, undefined, { skipUserMessage: true })
+    },
+    [dispatch, message, sendInternal]
+  )
+
   const launchIntentConsumedRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -813,18 +854,20 @@ export function ChatView() {
         {!sessionId ? (
           <div className="chat-empty">
             <div className="chat-empty-icon" aria-hidden>
-              ◇
+              <MessagesSquare size={22} strokeWidth={1.75} />
             </div>
             <div className="chat-empty-title">选择或创建一个会话</div>
-            <p className="chat-empty-desc">在左侧开始与 AI 助手对话</p>
+            <p className="chat-empty-desc">在左侧会话列表中新建或打开对话</p>
           </div>
         ) : messages.length === 0 ? (
           <div className="chat-empty">
             <div className="chat-empty-icon" aria-hidden>
-              ↗
+              <MessageSquare size={22} strokeWidth={1.75} />
             </div>
             <div className="chat-empty-title">开始对话</div>
-            <p className="chat-empty-desc">输入问题，或尝试 /skill、/wiki 命令</p>
+            <p className="chat-empty-desc">
+              输入问题开始协作，例如：帮我整理 README 的要点。也可使用 /skill 或 /wiki 命令。
+            </p>
           </div>
         ) : (
           <div className="chat-message-list">
@@ -841,6 +884,11 @@ export function ChatView() {
                 wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
                 showArchiveToWiki={Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim())}
                 onArchiveToWiki={() => handleArchiveToWiki(m.content)}
+                onRetry={
+                  m.role === 'assistant' && m.status === 'failed' && !running
+                    ? () => void retryFailedAssistant(m.id)
+                    : undefined
+                }
               />
             ))}
           </div>

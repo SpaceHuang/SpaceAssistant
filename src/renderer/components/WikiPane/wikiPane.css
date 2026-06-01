@@ -1,0 +1,63 @@
+.wiki-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: transparent;
+}
+
+.wiki-pane-header {
+  flex: 0 0 auto;
+}
+
+.wiki-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.wiki-pane-body .file-tree-scroll {
+  padding: 2px 4px 6px;
+}
+
+.wiki-pane .file-tree .ant-tree-treenode-selected .file-tree-node-label {
+  color: var(--sa-primary);
+  font-weight: 600;
+}
+
+.wiki-pane-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 20px;
+  text-align: center;
+}
+
+.wiki-pane-empty-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--sa-text);
+  text-wrap: balance;
+}
+
+.wiki-pane-empty-desc {
+  margin: 0 0 4px;
+  max-width: 22ch;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--sa-text-tertiary);
+  text-wrap: pretty;
+}
+
+.wiki-pane-init-btn {
+  margin-top: 4px;
+  font-size: 12px;
+}

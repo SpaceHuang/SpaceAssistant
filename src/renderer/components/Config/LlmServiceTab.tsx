@@ -38,9 +38,6 @@ export function LlmServiceTab({ draftsApi }: Props) {
 
   return (
     <>
-      <p className="llm-service-tab-extra">
-        每套服务包含独立的 API Key 与 Base URL。勾选「当前使用」的服务将用于所有聊天请求。
-      </p>
       <div className="llm-service-list">
         {state.order.map((id) => {
           const draft = state.drafts[id]
@@ -65,11 +62,11 @@ export function LlmServiceTab({ draftsApi }: Props) {
       <Button
         type="dashed"
         block
-        className="config-block-spacer"
+        className="llm-service-add-btn"
         disabled={state.order.length >= MAX_LLM_SERVICES}
         onClick={handleAdd}
       >
-        + 添加服务
+        添加服务
       </Button>
     </>
   )

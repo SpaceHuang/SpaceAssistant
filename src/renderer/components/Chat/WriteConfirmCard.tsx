@@ -72,8 +72,8 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
           <button
             type="button"
             className="write-confirm-card__action write-confirm-card__action--allow"
-            aria-label="允许"
-            title="允许"
+            aria-label="允许写入"
+            title="允许写入"
             onClick={() => onConfirm(true)}
           >
             <Check size={16} strokeWidth={2.25} />
@@ -81,8 +81,8 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
           <button
             type="button"
             className="write-confirm-card__action write-confirm-card__action--deny"
-            aria-label="拒绝"
-            title="拒绝"
+            aria-label="拒绝写入"
+            title="拒绝写入"
             onClick={() => onConfirm(false)}
           >
             <X size={16} strokeWidth={2.25} />

@@ -74,7 +74,7 @@ export function setupAppMenu(): void {
       },
       {
         label: '文档',
-        click: () => void shell.openExternal('https://github.com')
+        click: () => void shell.openExternal('https://github.com/SpaceHuang/SpaceAssistant')
       }
     ]
   })

@@ -33,7 +33,7 @@ export function buildContextRingSegments(
     segments.push({ color: 'var(--sa-primary)', dashLen: usedLen, dashOffset: 0 })
   }
   if (reservedLen > 0) {
-    segments.push({ color: '#666', dashLen: reservedLen, dashOffset: -usedLen })
+    segments.push({ color: 'var(--sa-context-ring-reserved)', dashLen: reservedLen, dashOffset: -usedLen })
   }
 
   return segments
@@ -103,14 +103,18 @@ export function ContextUsageRing() {
 
   return (
     <Tooltip title={tooltipTitle} placement="top">
-      <span style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}>
-        <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
+      <span
+        className="context-usage-ring"
+        style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}
+        aria-label={hasData && display ? `上下文用量约 ${display.percentUsed.toFixed(1)}%` : '暂无上下文用量数据'}
+      >
+        <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden>
           <circle
             cx={CENTER}
             cy={CENTER}
             r={RADIUS}
             fill="none"
-            stroke="#ddd"
+            stroke="var(--sa-context-ring-track)"
             strokeWidth={STROKE_WIDTH}
           />
           {segments.map((seg, i) => (

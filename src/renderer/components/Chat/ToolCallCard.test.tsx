@@ -3,6 +3,14 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { ToolCallCard } from './ToolCallCard'
 
+vi.mock('./ShikiHighlightedCode', () => ({
+  ShikiHighlightedCode: ({ code, className }: { code: string; className?: string }) => (
+    <div className={className}>
+      <pre className="shiki">{code}</pre>
+    </div>
+  )
+}))
+
 function writeRecord(status: ToolCallRecord['status'], extra: Partial<ToolCallRecord> = {}): ToolCallRecord {
   return {
     id: 'tool-1',
@@ -25,8 +33,8 @@ describe('ToolCallCard file write expand behavior', () => {
         onConfirm={vi.fn()}
       />
     )
-    expect(screen.getByRole('button', { name: '允许' })).toBeDefined()
-    expect(screen.getByRole('button', { name: '拒绝' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '允许写入' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝写入' })).toBeDefined()
     expect(screen.getByText('notes.txt')).toBeDefined()
     expect(document.querySelector('.write-confirm-card')).not.toBeNull()
   })
@@ -40,7 +48,7 @@ describe('ToolCallCard file write expand behavior', () => {
         onConfirm={vi.fn()}
       />
     )
-    expect(screen.getByRole('button', { name: '允许' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '允许写入' })).toBeDefined()
 
     rerender(
       <ToolCallCard
@@ -53,7 +61,7 @@ describe('ToolCallCard file write expand behavior', () => {
         onOpenFile={onOpenFile}
       />
     )
-    expect(screen.queryByRole('button', { name: '允许' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '允许写入' })).toBeNull()
     expect(document.querySelector('.write-success-card')).not.toBeNull()
     expect(screen.getByText('notes.txt')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '查看' }))
@@ -83,9 +91,9 @@ describe('ToolCallCard file write expand behavior', () => {
     render(
       <ToolCallCard record={writeRecord('confirming')} confirmMode="direct" onConfirm={onConfirm} />
     )
-    fireEvent.click(screen.getByRole('button', { name: '允许' }))
+    fireEvent.click(screen.getByRole('button', { name: '允许写入' }))
     expect(onConfirm).toHaveBeenCalledWith(true)
-    fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
+    fireEvent.click(screen.getByRole('button', { name: '拒绝写入' }))
     expect(onConfirm).toHaveBeenCalledWith(false)
   })
 
@@ -250,7 +258,7 @@ describe('ToolCallCard file write expand behavior', () => {
     expect(document.querySelector('.browser-confirm-card')).not.toBeNull()
     expect(screen.getByText('https://www.zhihu.com/billboard')).toBeDefined()
     expect(screen.getByText('URL')).toBeDefined()
-    expect(screen.getByRole('button', { name: '确认' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '确认浏览器操作' })).toBeDefined()
   })
 })
 
@@ -322,7 +330,7 @@ describe('ToolCallCard run_shell output display', () => {
     expect(screen.queryByText('命令执行失败（退出码: 1）')).toBeNull()
   })
 
-  it('auto-expands read-only shell command when completed', () => {
+  it('keeps read-only shell command collapsed by default when completed', () => {
     render(
       <ToolCallCard
         record={shellRecord('completed', {
@@ -337,8 +345,10 @@ describe('ToolCallCard run_shell output display', () => {
         {...plainShellCardProps}
       />
     )
+    expect(document.querySelector('.tool-row--expanded')).toBeNull()
+    expect(document.querySelector('.tool-row-detail')).toBeNull()
+    fireEvent.click(screen.getByRole('button'))
     expect(document.querySelector('.tool-row--expanded')).not.toBeNull()
-    expect(document.querySelector('.tool-row-detail')).not.toBeNull()
     expect(screen.getByText(/On branch main/)).toBeDefined()
   })
 
@@ -394,6 +404,44 @@ describe('ToolCallCard run_shell output display', () => {
     )
     expect(document.querySelector('.shell-confirm-card')).not.toBeNull()
     expect(document.querySelector('.shell-output')).toBeNull()
+  })
+
+  it('shows ScriptConfirmCard while run_script is confirming', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'script-tool',
+          toolName: 'run_script',
+          input: { code: 'print("hello")' },
+          status: 'confirming',
+          riskLevel: 'high'
+        }}
+        confirmMode="direct"
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(document.querySelector('.script-confirm-card')).not.toBeNull()
+    expect(screen.getByRole('button', { name: '确认运行脚本' })).toBeDefined()
+    expect(document.querySelector('.tool-row-detail')).toBeNull()
+  })
+
+  it('shows LarkCliConfirmCard while run_lark_cli is confirming', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'lark-tool',
+          toolName: 'run_lark_cli',
+          input: { args: ['message', 'search', '--query', 'hello'] },
+          status: 'confirming',
+          riskLevel: 'high'
+        }}
+        confirmMode="direct"
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(document.querySelector('.lark-cli-confirm-card')).not.toBeNull()
+    expect(screen.getByRole('button', { name: '确认飞书命令' })).toBeDefined()
+    expect(document.querySelector('.tool-row-detail')).toBeNull()
   })
 })
 

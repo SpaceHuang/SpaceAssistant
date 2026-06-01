@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import type { Message } from '../../../shared/domainTypes'
 import { ChatBubble } from './ChatBubble'
 
@@ -93,5 +93,44 @@ describe('ChatBubble streaming render', () => {
       />
     )
     expect(document.querySelector('[data-message-id="user-99"]')).not.toBeNull()
+  })
+
+  it('exposes aria-live region while assistant message is streaming', () => {
+    render(<ChatBubble message={assistantMessage()} />)
+    const region = document.querySelector('.chat-bubble-col--assistant')
+    expect(region?.getAttribute('aria-live')).toBe('polite')
+    expect(region?.getAttribute('aria-busy')).toBe('true')
+  })
+
+  it('does not set aria-live when assistant message is completed', () => {
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'completed',
+          contentSegments: [{ content: 'Hello world', startTime: now, endTime: now }]
+        })}
+      />
+    )
+    const region = document.querySelector('.chat-bubble-col--assistant')
+    expect(region?.getAttribute('aria-live')).toBeNull()
+    expect(region?.getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('shows retry action on failed assistant message', () => {
+    const onRetry = vi.fn()
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'failed',
+          content: 'partial',
+          contentSegments: [{ content: 'partial', startTime: now, endTime: now }]
+        })}
+        onRetry={onRetry}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '重试回复' }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
   })
 })

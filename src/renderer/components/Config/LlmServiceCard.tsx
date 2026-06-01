@@ -93,7 +93,14 @@ export function LlmServiceCard({
           <span className="llm-service-card-title">{displayTitle}</span>
         )}
         {showCollapse && (
-          <Button type="text" size="small" icon={<ChevronIcon down={expanded} />} onClick={onToggleExpand} title={expanded ? '收起' : '展开'} />
+          <Button
+            type="text"
+            size="small"
+            icon={<ChevronIcon down={expanded} />}
+            onClick={onToggleExpand}
+            title={expanded ? '收起' : '展开'}
+            aria-label={expanded ? '收起服务详情' : '展开服务详情'}
+          />
         )}
         <Button
           type="text"
@@ -102,6 +109,7 @@ export function LlmServiceCard({
           icon={<DeleteIcon />}
           disabled={!canDelete}
           title={canDelete ? '删除' : '至少保留一套服务'}
+          aria-label={canDelete ? '删除服务' : '至少保留一套服务'}
           onClick={onDelete}
         />
       </div>

@@ -6,9 +6,9 @@ import { setSessions, upsertSession, removeSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
 import { setConfig, setSettingsOpen, setAboutOpen } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
-import { ConfigModal } from './components/Config/ConfigModal'
+import { ConfigSettingsPage } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
-import { FilePane } from './components/FilePane'
+import { WikiPane } from './components/WikiPane'
 import { collectToWiki } from './services/wikiImportService'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
@@ -18,21 +18,22 @@ import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamServi
 import { SessionListIcon } from './components/SessionList/SessionListIcon'
 import { PendingConfirmBanner } from './components/SessionList/PendingConfirmBanner'
 import { SearchPane } from './components/Search/SearchPane'
-import { requestFilePaneSelect } from './services/filePaneNavigation'
+import { requestFilePaneSelect, isUnderWikiRoot } from './services/filePaneNavigation'
+import { DEFAULT_WIKI_CONFIG } from '../shared/domainTypes'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
-import folderLineRaw from './assets/folder_line.svg?raw'
-import folderFillRaw from './assets/folder_fill.svg?raw'
+import wikiLineRaw from './assets/book_2_ai_line.svg?raw'
+import wikiFillRaw from './assets/book_2_ai_fill.svg?raw'
 import searchLineRaw from './assets/search_line.svg?raw'
 import searchFillRaw from './assets/search_fill.svg?raw'
 import settingsRaw from './assets/settings_1_line.svg?raw'
 
-const patchSvg = (raw: string) => raw.replace(/fill="#09244B"/g, 'fill="currentColor"')
+const patchSvg = (raw: string) => raw.replace(/fill="#09244[bB]"/g, 'fill="currentColor"')
 
 const chatLineSvg = patchSvg(chatLineRaw)
 const chatFillSvg = patchSvg(chatFillRaw)
-const folderLineSvg = patchSvg(folderLineRaw)
-const folderFillSvg = patchSvg(folderFillRaw)
+const wikiLineSvg = patchSvg(wikiLineRaw)
+const wikiFillSvg = patchSvg(wikiFillRaw)
 const searchLineSvg = patchSvg(searchLineRaw)
 const searchFillSvg = patchSvg(searchFillRaw)
 const settingsSvg = patchSvg(settingsRaw)
@@ -149,8 +150,9 @@ function AppShellInner() {
   const config = useTypedSelector((s) => s.config.config)
   const sessions = useTypedSelector((s) => s.session.list)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
-  const [siderKey, setSiderKey] = useState<'sessions' | 'files' | 'search'>('sessions')
+  const [siderKey, setSiderKey] = useState<'sessions' | 'wiki' | 'search'>('sessions')
   const { openFile } = useDetailPanel()
+  const wikiEnabled = Boolean(config?.wiki?.enabled)
 
   const createSession = async () => {
     const s = await window.api.sessionCreate({ name: `会话 ${sessions.length + 1}` })
@@ -171,8 +173,14 @@ function AppShellInner() {
   }
 
   const handleSearchFileClick = (relPath: string) => {
-    setSiderKey('files')
-    requestFilePaneSelect({ relPath })
+    const wikiRoot = config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath
+    const isWikiPath = wikiEnabled && isUnderWikiRoot(relPath, wikiRoot)
+    if (isWikiPath) {
+      setSiderKey('wiki')
+      requestFilePaneSelect({ relPath, preferWiki: true })
+    } else {
+      requestFilePaneSelect({ relPath })
+    }
     handleFileSelect(relPath)
   }
 
@@ -209,11 +217,13 @@ function AppShellInner() {
   return (
     <div className="app-shell" style={{ display: 'flex', height: '100vh' }}>
       <SplitPane id="leftSider" defaultSize={328} minSize={248} maxSize={520} side="left" className="app-sider">
-        <div style={{ display: 'flex', height: '100%', width: '100%' }}>
+        <div className="sa-split-pane-inner">
           <div className="activity-bar">
             <div className="activity-bar-top">
               <IconTab lineSvg={chatLineSvg} fillSvg={chatFillSvg} active={siderKey === 'sessions'} onClick={() => setSiderKey('sessions')} title="会话" />
-              <IconTab lineSvg={folderLineSvg} fillSvg={folderFillSvg} active={siderKey === 'files'} onClick={() => setSiderKey('files')} title="文件" />
+              {wikiEnabled ? (
+                <IconTab lineSvg={wikiLineSvg} fillSvg={wikiFillSvg} active={siderKey === 'wiki'} onClick={() => setSiderKey('wiki')} title="Wiki" />
+              ) : null}
               <IconTab lineSvg={searchLineSvg} fillSvg={searchFillSvg} active={siderKey === 'search'} onClick={() => setSiderKey('search')} title="搜索" />
             </div>
             <div className="activity-bar-bottom">
@@ -227,7 +237,7 @@ function AppShellInner() {
             </div>
           </div>
           <div className="sider-content">
-            {siderKey !== 'files' && (
+            {(siderKey === 'sessions' || siderKey === 'search') && (
               <div className="app-pane-header sider-content-header">
                 <span className="app-pane-header-title">{siderKey === 'sessions' ? '会话' : '搜索'}</span>
                 {siderKey === 'sessions' ? (
@@ -239,8 +249,13 @@ function AppShellInner() {
             )}
             <div className="sider-content-body">
               {siderKey === 'sessions' && <LeftSessions />}
-              {siderKey === 'files' && (
-                <FilePane workDir={config?.workDir ?? ''} onFileSelect={handleFileSelect} onCollectToWiki={handleCollectToWiki} />
+              {siderKey === 'wiki' && wikiEnabled && (
+                <WikiPane
+                  workDir={config?.workDir ?? ''}
+                  onFileSelect={handleFileSelect}
+                  onSwitchToWikiTab={() => setSiderKey('wiki')}
+                  onCollectToWiki={handleCollectToWiki}
+                />
               )}
               <div className={siderKey === 'search' ? 'search-pane-mount' : 'search-pane-mount search-pane-mount--hidden'}>
                 <SearchPane
@@ -266,7 +281,7 @@ function AppShellInner() {
         <DetailPanel />
       </SplitPane>
 
-      <ConfigModal />
+      <ConfigSettingsPage />
       <AboutModal />
     </div>
   )

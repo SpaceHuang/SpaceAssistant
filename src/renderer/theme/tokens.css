@@ -20,6 +20,8 @@
   --sa-text-tertiary: rgba(0, 0, 0, 0.35);
   --sa-icon: #8c8c8c;
   --sa-icon-hover: #434343;
+  --sa-context-ring-track: var(--sa-border-strong);
+  --sa-context-ring-reserved: #737373;
 
   --sa-bubble-user: var(--sa-primary);
   --sa-bubble-user-text: #ffffff;
@@ -49,13 +51,13 @@
   /* 确认卡片 */
   --sa-confirm-accent: var(--sa-primary);
   --sa-confirm-accent-subtle: var(--sa-primary-subtle);
-  --sa-confirm-border: color-mix(in srgb, var(--sa-border) 80%, var(--sa-primary) 20%);
-  --sa-confirm-shadow: 0 1px 3px rgba(10, 132, 255, 0.06), 0 4px 14px rgba(0, 0, 0, 0.04);
-  --sa-confirm-header-bg: linear-gradient(180deg, var(--sa-bg-elevated) 0%, var(--sa-bg-subtle) 100%);
+  --sa-confirm-border: var(--sa-border);
+  --sa-confirm-shadow: var(--sa-shadow-sm);
+  --sa-confirm-header-bg: var(--sa-bg-subtle);
   --sa-confirm-risk-accent: #d48806;
   --sa-confirm-risk-subtle: rgba(250, 173, 20, 0.14);
-  --sa-confirm-browser-accent: var(--sa-accent);
-  --sa-confirm-browser-subtle: var(--sa-accent-subtle);
+  --sa-confirm-browser-accent: var(--sa-confirm-accent);
+  --sa-confirm-browser-subtle: var(--sa-confirm-accent-subtle);
 
   /* 写入确认卡片：待操作主按钮（与 diff 绿/红语义一致，对比更强） */
   --sa-write-confirm-allow-bg: #f6ffed;
@@ -87,6 +89,33 @@
   --sa-activity-bar-width: 48px;
   --sa-splitter-width: 4px;
   --sa-pane-header-height: 40px;
+
+  --sa-icon-btn-size-xs: 22px;
+  --sa-icon-size-xs: 14px;
+  --sa-icon-btn-size-sm: 24px;
+
+  /* 右侧详情栏：与左侧 sider-content-body 对齐的字号体系 */
+  --sa-detail-font-size: 12px;
+  --sa-detail-line-height: 1.45;
+  --sa-bg-panel: var(--sa-bg-subtle);
+
+  /* 侧栏 / 详情 SplitPane：温和面板底，弱化硬边 */
+  --sa-split-pane-bg: var(--sa-bg-panel);
+  --sa-split-pane-edge: color-mix(in srgb, var(--sa-border) 58%, transparent);
+  --sa-split-pane-header-bg: var(--sa-split-pane-bg);
+  --sa-pane-header-title: color-mix(in srgb, var(--sa-text) 58%, var(--sa-text-secondary));
+  --sa-main-pane-header-bg: var(--sa-bg-base);
+  /* 面板内选中 / 抬升：基于 panel 底色混合，避免纯白块 */
+  --sa-surface-highlight: color-mix(in srgb, var(--sa-primary) 14%, var(--sa-split-pane-bg));
+  --sa-surface-highlight-hover: color-mix(in srgb, var(--sa-primary) 10%, var(--sa-split-pane-bg));
+  --sa-surface-raised: color-mix(in srgb, var(--sa-bg-muted) 36%, var(--sa-split-pane-bg));
+  --sa-surface-inset: color-mix(in srgb, var(--sa-bg-muted) 22%, var(--sa-split-pane-bg));
+
+  --sa-success: #389e0d;
+  --sa-success-subtle: rgba(56, 158, 13, 0.12);
+  --sa-warning: #d48806;
+  --sa-warning-subtle: rgba(250, 173, 20, 0.14);
+  --sa-error: #cf1322;
 
   /* 设置弹窗：字号与间距（与侧栏 13px 顶栏对齐，避免 12/11px 混用） */
   --sa-config-font: 13px;
@@ -125,6 +154,8 @@
   --sa-text-tertiary: rgba(255, 255, 255, 0.35);
   --sa-icon: rgba(255, 255, 255, 0.45);
   --sa-icon-hover: rgba(255, 255, 255, 0.85);
+  --sa-context-ring-track: var(--sa-border-strong);
+  --sa-context-ring-reserved: rgba(255, 255, 255, 0.45);
 
   --sa-bubble-user: #1668dc;
   --sa-bubble-user-text: #ffffff;
@@ -152,13 +183,13 @@
 
   --sa-confirm-accent: #4096ff;
   --sa-confirm-accent-subtle: var(--sa-primary-subtle);
-  --sa-confirm-border: color-mix(in srgb, var(--sa-border) 70%, var(--sa-primary) 30%);
-  --sa-confirm-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 20px rgba(0, 0, 0, 0.25);
-  --sa-confirm-header-bg: linear-gradient(180deg, var(--sa-bg-elevated) 0%, var(--sa-bg-subtle) 100%);
+  --sa-confirm-border: var(--sa-border);
+  --sa-confirm-shadow: var(--sa-shadow-sm);
+  --sa-confirm-header-bg: var(--sa-bg-subtle);
   --sa-confirm-risk-accent: #faad14;
   --sa-confirm-risk-subtle: rgba(250, 173, 20, 0.16);
-  --sa-confirm-browser-accent: var(--sa-accent);
-  --sa-confirm-browser-subtle: var(--sa-accent-subtle);
+  --sa-confirm-browser-accent: var(--sa-confirm-accent);
+  --sa-confirm-browser-subtle: var(--sa-confirm-accent-subtle);
 
   --sa-write-confirm-allow-bg: rgba(82, 196, 26, 0.22);
   --sa-write-confirm-allow-border: rgba(115, 209, 61, 0.55);
@@ -176,6 +207,22 @@
 
   --sa-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --sa-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+  --sa-bg-panel: var(--sa-bg-subtle);
+  --sa-split-pane-bg: var(--sa-bg-panel);
+  --sa-split-pane-edge: color-mix(in srgb, var(--sa-border) 72%, transparent);
+  --sa-split-pane-header-bg: var(--sa-split-pane-bg);
+  --sa-pane-header-title: color-mix(in srgb, var(--sa-text) 55%, var(--sa-text-secondary));
+  --sa-main-pane-header-bg: var(--sa-bg-base);
+  --sa-surface-highlight: color-mix(in srgb, var(--sa-primary) 18%, var(--sa-split-pane-bg));
+  --sa-surface-highlight-hover: color-mix(in srgb, var(--sa-primary) 12%, var(--sa-split-pane-bg));
+  --sa-surface-raised: color-mix(in srgb, var(--sa-bg-muted) 42%, var(--sa-split-pane-bg));
+  --sa-surface-inset: color-mix(in srgb, var(--sa-bg-muted) 28%, var(--sa-split-pane-bg));
+  --sa-success: #73d13d;
+  --sa-success-subtle: rgba(115, 209, 61, 0.16);
+  --sa-warning: #faad14;
+  --sa-warning-subtle: rgba(250, 173, 20, 0.16);
+  --sa-error: #ff7875;
 }
 
 html,

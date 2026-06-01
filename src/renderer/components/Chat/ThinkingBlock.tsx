@@ -21,6 +21,7 @@ export function ThinkingBlock({ content, active = false }: Props) {
         className="chat-thinking__toggle"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
+        aria-label={expanded ? '收起思考过程' : '展开思考过程'}
       >
         <Brain size={14} strokeWidth={1.75} className="chat-thinking__icon" aria-hidden />
         <span>思考</span>

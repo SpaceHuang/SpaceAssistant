@@ -1,25 +1,74 @@
+.file-tree {
+  --sa-file-tree-row-height: 28px;
+  --sa-file-tree-indent: 12px;
+  --sa-file-tree-switcher: 16px;
+}
+
 .file-tree-body {
   overflow: auto;
   padding: 0 2px;
 }
 
-.file-tree .ant-tree-treenode {
-  padding: 0;
-  height: 26px;
+.file-tree.ant-tree .ant-tree-treenode {
+  display: flex;
   align-items: center;
+  padding: 0;
+  margin: 0 2px;
+  min-height: var(--sa-file-tree-row-height);
+  border-radius: var(--sa-radius-sm);
+}
+
+.file-tree.ant-tree .ant-tree-indent {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+}
+
+.file-tree .ant-tree-indent-unit {
+  width: var(--sa-file-tree-indent);
+}
+
+.file-tree.ant-tree .ant-tree-switcher {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sa-file-tree-switcher);
+  height: var(--sa-file-tree-row-height);
+  flex-shrink: 0;
+  margin-inline-end: 0;
+  line-height: 1;
+  align-self: center;
+}
+
+.file-tree.ant-tree .ant-tree-switcher .ant-tree-switcher-icon,
+.file-tree.ant-tree .ant-tree-switcher .anticon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  vertical-align: middle;
 }
 
 .file-tree .ant-tree-treenode:hover .ant-tree-node-content-wrapper {
   background: rgba(128, 128, 128, 0.08) !important;
 }
 
-.file-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
-.file-tree .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper {
-  background: var(--sa-primary-subtle) !important;
+.file-tree .ant-tree-node-content-wrapper {
+  display: flex !important;
+  align-items: center !important;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--sa-file-tree-row-height);
+  padding: 0 4px 0 2px !important;
+  line-height: 1 !important;
+  border-radius: var(--sa-radius-sm);
+  transition: background var(--sa-duration-fast) var(--sa-ease-out);
 }
 
-.file-tree .ant-tree-indent-unit {
-  width: 10px;
+.file-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
+.file-tree .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper {
+  background: var(--sa-surface-highlight) !important;
 }
 
 .file-tree .ant-tree-dragging .ant-tree-treenode-dragging {
@@ -30,42 +79,26 @@
   background: rgba(10, 132, 255, 0.08) !important;
 }
 
-.file-tree .ant-tree-node-content-wrapper {
-  flex: 1;
-  min-width: 0;
-  padding-inline: 2px 4px !important;
-  line-height: 1.4;
-}
-
-.file-tree .ant-tree-switcher {
-  width: 12px;
-  flex-shrink: 0;
-  margin-inline-end: 0;
-}
-
-.file-tree .ant-tree-switcher .ant-tree-switcher-icon {
-  font-size: 10px;
-}
-
 .file-tree.ant-tree .ant-tree-node-content-wrapper .ant-tree-iconEle {
   display: none !important;
 }
 
 .file-tree-node {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  gap: 4px;
   width: 100%;
   min-width: 0;
+  min-height: var(--sa-file-tree-row-height);
 }
 
 .file-tree-node-icon {
   flex-shrink: 0;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 14px;
   height: 14px;
-  margin-right: 4px;
   line-height: 0;
 }
 
@@ -76,11 +109,14 @@
 }
 
 .file-tree-node-label {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
-  flex: 1;
+  font-size: inherit;
+  line-height: 1;
+  color: var(--sa-text);
 }
 
 .file-tree-node--highlight .file-tree-node-label {
@@ -91,10 +127,10 @@
   content: '';
   position: absolute;
   left: -8px;
-  top: 3px;
-  bottom: 3px;
+  top: 5px;
+  bottom: 5px;
   width: 2px;
-  background: var(--sa-primary, #1677ff);
+  background: var(--sa-primary);
   border-radius: 1px;
 }
 
@@ -103,8 +139,30 @@
 }
 
 .file-tree-context-trigger {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   width: 100%;
   min-width: 0;
+  min-height: var(--sa-file-tree-row-height);
+}
+
+.file-tree-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 0 2px;
+}
+
+.file-tree-scroll--embedded {
+  min-height: 0;
+}
+
+.file-tree-scroll--embedded .file-tree,
+.file-tree-scroll--embedded .file-tree .ant-tree-list,
+.file-tree-scroll--embedded .file-tree .ant-tree-list-holder,
+.file-tree-scroll--embedded .file-tree .ant-tree-list-holder-inner {
+  background: transparent;
+}
+
+.file-tree-node--wiki-highlight > .file-tree-node-content-wrapper {
+  font-weight: 600;
 }

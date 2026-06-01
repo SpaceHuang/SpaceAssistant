@@ -30,7 +30,9 @@ export function submitToolConfirmResponse(requestId: string, toolUseId: string, 
   if (!w) return
   clearTimeout(w.timeoutId)
   pending.delete(key)
-  w.resolve(approved ? 'approved' : 'rejected')
+  const outcome: ToolConfirmOutcome = approved ? 'approved' : 'rejected'
+  // 推迟到下一事件循环，避免在 IPC handler 返回前同步续跑 toolChatLoop（浏览器启动等重活）
+  setImmediate(() => w.resolve(outcome))
 }
 
 const cancelControllers = new Map<string, AbortController>()

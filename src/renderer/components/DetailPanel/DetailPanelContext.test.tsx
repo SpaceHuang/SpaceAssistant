@@ -101,4 +101,24 @@ describe('DetailPanelContext', () => {
     expect(result.current.selectedFile).toBeNull()
     expect(result.current.previewContent).toBeNull()
   })
+
+  it('defaults referencedFilesHeight to 0.38', () => {
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+    expect(result.current.referencedFilesHeight).toBe(0.38)
+  })
+
+  it('resetReferencedFilesHeight restores default ratio', () => {
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+    act(() => {
+      result.current.setReferencedFilesHeight(0.5)
+    })
+    act(() => {
+      result.current.resetReferencedFilesHeight()
+    })
+    expect(result.current.referencedFilesHeight).toBe(0.38)
+  })
 })

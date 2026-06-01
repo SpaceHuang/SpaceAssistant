@@ -936,6 +936,9 @@ async function runToolChatSessionInner(
       let execThrew = false
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
+      if (toolUserConfirmed && toolName === 'browser') {
+        sendProgress('preparing', '正在准备浏览器…')
+      }
       try {
         execResult = await exec.execute(inputObj, {
           workDir,
