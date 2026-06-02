@@ -27,3 +27,6 @@ test-browser.js
 docs/references/
 docs/review/
 docs/project/
+
+# Impeccable 代码审查工具输出
+.impeccable/
