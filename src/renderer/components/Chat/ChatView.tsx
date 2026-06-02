@@ -939,7 +939,6 @@ export function ChatView() {
             <div className="chat-empty-title">开始对话</div>
             <p className="chat-empty-desc">
               输入问题开始协作，例如：帮我整理 README 的要点。也可使用 /skill 或 /wiki 命令。
-              {import.meta.env.DEV ? ' 开发模式可用 /test-cards 预览交互卡片。' : ''}
             </p>
           </div>
         ) : (
