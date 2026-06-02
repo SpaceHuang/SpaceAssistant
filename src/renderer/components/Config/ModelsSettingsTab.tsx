@@ -202,7 +202,7 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
           <div className="config-field config-models-thinking-field">
             <div className="config-field-row">
               <span className="config-field__label">默认开启 Thinking</span>
-              <Form.Item name="thinkingEnabled" valuePropName="checked" noStyle>
+              <Form.Item name="thinkingEnabled" valuePropName="checked" noStyle preserve>
                 <Switch aria-label="默认开启 Thinking" />
               </Form.Item>
             </div>

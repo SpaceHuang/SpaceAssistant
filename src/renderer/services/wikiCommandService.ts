@@ -1,5 +1,6 @@
 import type { SessionSkillsState, WikiConfig, WikiStatus } from '../../shared/domainTypes'
 import { normalizeSessionSkillsState } from '../../shared/domainTypes'
+import { resolveWikiAbsolutePathLink } from '../../shared/markdownLinkResolve'
 
 export type WikiCommandResult =
   | { type: 'chat'; text: string }
@@ -143,10 +144,5 @@ export async function parseWikiCommand(
 }
 
 export function isWikiPathLink(href: string, wikiRootPath = 'llm-wiki'): string | null {
-  if (!href || href.startsWith('http://') || href.startsWith('https://') || href.startsWith('#')) return null
-  const normalized = href.replace(/\\/g, '/').replace(/^\.\//, '')
-  if (normalized.startsWith(`${wikiRootPath}/`) || normalized.startsWith('wiki/')) {
-    return normalized.startsWith('wiki/') ? `${wikiRootPath}/${normalized}` : normalized
-  }
-  return null
+  return resolveWikiAbsolutePathLink(href, wikiRootPath)
 }

@@ -284,6 +284,15 @@
   color: var(--sa-text-secondary);
 }
 
+.detail-md-render h1[id],
+.detail-md-render h2[id],
+.detail-md-render h3[id],
+.detail-md-render h4[id],
+.detail-md-render h5[id],
+.detail-md-render h6[id] {
+  scroll-margin-top: 12px;
+}
+
 .detail-md-render {
   padding: 12px 16px;
   font-size: 13px;

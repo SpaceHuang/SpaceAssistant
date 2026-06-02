@@ -2,15 +2,16 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeExternalLinks from 'rehype-external-links'
 import { ShikiCodeBlock } from './ShikiCodeBlock'
-import { isWikiPathLink } from '../../services/wikiCommandService'
+import { MarkdownAnchor } from '../shared/MarkdownAnchor'
 
 type Props = {
   content: string
   wikiRootPath?: string
-  onOpenFile?: (relPath: string) => void
+  baseRelPath?: string | null
+  onOpenFile?: (relPath: string, fragment?: string) => void
 }
 
-export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', onOpenFile }: Props) {
+export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', baseRelPath, onOpenFile }: Props) {
   return (
     <div className="sa-prose chat-md-assistant">
       <ReactMarkdown
@@ -19,25 +20,16 @@ export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', onOpenFile }:
         components={{
           a(props) {
             const { children, href, ...rest } = props
-            const wikiPath = href ? isWikiPathLink(href, wikiRootPath) : null
-            if (wikiPath && onOpenFile) {
-              return (
-                <a
-                  {...rest}
-                  href={href}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    onOpenFile(wikiPath)
-                  }}
-                >
-                  {children}
-                </a>
-              )
-            }
             return (
-              <a {...rest} href={href} target="_blank" rel="noopener noreferrer">
+              <MarkdownAnchor
+                {...rest}
+                href={href}
+                wikiRootPath={wikiRootPath}
+                baseRelPath={baseRelPath}
+                onOpenFile={onOpenFile}
+              >
                 {children}
-              </a>
+              </MarkdownAnchor>
             )
           },
           pre({ children }) {

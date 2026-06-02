@@ -23,12 +23,16 @@
   border-right: 1px solid var(--sa-border);
 }
 
+.config-settings-page__nav-header {
+  flex: 0 0 auto;
+  padding: 12px 8px 4px;
+}
+
 .config-settings-page__nav-brand {
   flex: 0 0 auto;
-  height: var(--sa-pane-header-height, 40px);
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  padding: 4px 16px 8px;
   font-size: var(--sa-config-font-title);
   font-weight: 600;
   line-height: var(--sa-config-line-tight);
@@ -98,9 +102,9 @@
 
 .config-settings-page__header {
   flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   height: var(--sa-pane-header-height, 40px);
   padding: 0 20px;
@@ -112,7 +116,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px 4px 4px;
+  width: 100%;
+  padding: 6px 10px;
   margin: 0;
   border: none;
   border-radius: var(--sa-radius-sm);

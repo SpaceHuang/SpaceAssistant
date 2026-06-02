@@ -1,6 +1,8 @@
+import { useCallback, useState } from 'react'
 import { Spin, Typography } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
+import { isUnderWikiRoot, requestFilePaneSelect } from '../../services/filePaneNavigation'
 import { useDetailPanel } from './DetailPanelContext'
 import { CodeView } from './CodeView'
 import { MarkdownRenderView } from './MarkdownRenderView'
@@ -33,6 +35,16 @@ export function FileContentView({
     openFile
   } = useDetailPanel()
   const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath)
+  const [pendingScrollFragment, setPendingScrollFragment] = useState<string | null>(null)
+
+  const handleOpenLinkedFile = useCallback(
+    (relPath: string, fragment?: string) => {
+      requestFilePaneSelect({ relPath, preferWiki: isUnderWikiRoot(relPath, wikiRoot) })
+      if (fragment) setPendingScrollFragment(fragment)
+      void openFile(relPath)
+    },
+    [openFile, wikiRoot]
+  )
 
   if (isLoading) {
     return (
@@ -72,7 +84,7 @@ export function FileContentView({
       <WikiIndexView
         content={previewContent}
         wikiRootPath={wikiRoot}
-        onOpenEntry={(relPath) => void openFile(relPath)}
+        onOpenEntry={handleOpenLinkedFile}
       />
     )
   }
@@ -82,7 +94,10 @@ export function FileContentView({
       <MarkdownRenderView
         content={previewContent}
         wikiRootPath={wikiRoot}
-        onOpenFile={(relPath) => void openFile(relPath)}
+        baseRelPath={selectedFile}
+        onOpenFile={handleOpenLinkedFile}
+        pendingScrollFragment={pendingScrollFragment}
+        onPendingScrollFragmentHandled={() => setPendingScrollFragment(null)}
       />
     )
   }

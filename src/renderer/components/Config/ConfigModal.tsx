@@ -84,7 +84,28 @@ const SETTINGS_SECTIONS = [
 
 type SettingsSectionKey = (typeof SETTINGS_SECTIONS)[number]['key']
 
+/** 表单项随 Tab 卸载时 useWatch 会变为 undefined，脏检查须回退到 form / cfg */
+function resolveWorkDirForSnapshot(
+  watch: unknown,
+  form: ReturnType<typeof Form.useForm>[0],
+  cfg: { workDir: string } | null
+): string {
+  if (typeof watch === 'string') return watch
+  const fromForm = form.getFieldValue('workDir')
+  if (typeof fromForm === 'string') return fromForm
+  return cfg?.workDir ?? ''
+}
 
+function resolveThinkingEnabledForSnapshot(
+  watch: unknown,
+  form: ReturnType<typeof Form.useForm>[0],
+  cfg: { thinkingEnabled: boolean } | null
+): boolean {
+  if (typeof watch === 'boolean') return watch
+  const fromForm = form.getFieldValue('thinkingEnabled')
+  if (typeof fromForm === 'boolean') return fromForm
+  return Boolean(cfg?.thinkingEnabled)
+}
 
 function FolderOpenIcon() {
 
@@ -340,9 +361,9 @@ export function ConfigSettingsPage() {
 
     return buildConfigModalSnapshot({
 
-      workDir: typeof workDirWatch === 'string' ? workDirWatch : '',
+      workDir: resolveWorkDirForSnapshot(workDirWatch, form, cfg),
 
-      thinkingEnabled: Boolean(thinkingEnabledWatch),
+      thinkingEnabled: resolveThinkingEnabledForSnapshot(thinkingEnabledWatch, form, cfg),
 
       models,
 
@@ -367,6 +388,10 @@ export function ConfigSettingsPage() {
   }, [
 
     open,
+
+    cfg,
+
+    form,
 
     workDirWatch,
 
@@ -741,7 +766,7 @@ export function ConfigSettingsPage() {
 
               <Space.Compact style={{ width: '100%' }}>
 
-                <Form.Item name="workDir" noStyle rules={[{ required: true }]}>
+                <Form.Item name="workDir" noStyle preserve rules={[{ required: true }]}>
 
                   <Input onBlur={(e) => void checkWorkDir(e.target.value)} />
 
@@ -909,6 +934,30 @@ export function ConfigSettingsPage() {
 
         <aside className="config-settings-page__nav" aria-label="设置分类">
 
+          <div className="config-settings-page__nav-header">
+
+            <button
+
+              ref={closeBtnRef}
+
+              type="button"
+
+              className="config-settings-page__back"
+
+              onClick={attemptClose}
+
+              aria-label="返回工作台"
+
+            >
+
+              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
+
+              <span>返回</span>
+
+            </button>
+
+          </div>
+
           <div className="config-settings-page__nav-brand">设置</div>
 
           <nav className="config-settings-page__nav-list">
@@ -994,26 +1043,6 @@ export function ConfigSettingsPage() {
         <div className="config-settings-page__main">
 
           <header className="config-settings-page__header">
-
-            <button
-
-              ref={closeBtnRef}
-
-              type="button"
-
-              className="config-settings-page__back"
-
-              onClick={attemptClose}
-
-              aria-label="返回工作台"
-
-            >
-
-              <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
-
-              <span>返回</span>
-
-            </button>
 
             <h1 id="config-settings-page-title" className="config-settings-page__title">
 
