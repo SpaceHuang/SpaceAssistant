@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { Check, FileCode, X } from 'lucide-react'
+import { Check, X } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { ShikiHighlightedCode } from './ShikiHighlightedCode'
+import { ToolKindIcon } from './ToolRowIcon'
 
 type Props = {
   record: ToolCallRecord
@@ -26,7 +27,7 @@ export function ScriptConfirmCard({ record, onConfirm }: Props) {
     <div className="write-confirm-card script-confirm-card">
       <div className="write-confirm-card__header">
         <span className="write-confirm-card__icon-badge" aria-hidden>
-          <FileCode size={14} strokeWidth={1.75} className="write-confirm-card__file-icon" />
+          <ToolKindIcon kind="script" className="write-confirm-card__file-icon" />
         </span>
         <span className="script-confirm-card__title">Python 脚本</span>
         <div className="write-confirm-card__actions">

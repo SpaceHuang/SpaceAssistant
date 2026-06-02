@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { AlertTriangle, Check, Terminal, X } from 'lucide-react'
+import { AlertTriangle, Check, X } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
+import { ToolKindIcon } from './ToolRowIcon'
 
 type Props = {
   record: ToolCallRecord
@@ -29,7 +30,7 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
     <div className={`write-confirm-card shell-confirm-card${requiresRiskAck ? ' shell-confirm-card--risk' : ''}`}>
       <div className="write-confirm-card__header shell-confirm-card__header">
         <span className="write-confirm-card__icon-badge" aria-hidden>
-          <Terminal size={14} strokeWidth={1.75} className="write-confirm-card__file-icon" />
+          <ToolKindIcon kind="shell" className="write-confirm-card__file-icon" />
         </span>
         <span className="shell-confirm-card__title">Shell 命令</span>
         {requiresRiskAck ? (
