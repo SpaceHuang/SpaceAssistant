@@ -50,9 +50,17 @@
   --sa-chat-line-body: 1.55;
   --sa-chat-line-prose: 1.65;
   --sa-chat-line-mono: 1.6;
-  --sa-chat-detail-bg: var(--sa-bg-subtle);
+  --sa-confirm-command-font-size: var(--sa-chat-font-mono);
+  --sa-confirm-command-font-weight: 500;
+  --sa-confirm-command-line-height: var(--sa-chat-line-mono);
+  /* 聊天区内嵌块：命令预览、展开结果、确认卡详情（统一表面，避免按卡片各配一套灰） */
+  --sa-chat-inset-bg: color-mix(in srgb, var(--sa-bg-subtle) 42%, var(--sa-bg-elevated));
+  --sa-chat-inset-border: color-mix(in srgb, var(--sa-border) 55%, var(--sa-bg-elevated));
+  --sa-command-inset-bg: var(--sa-chat-inset-bg);
+  --sa-command-inset-border: var(--sa-chat-inset-border);
+  --sa-command-inset-text: var(--sa-text);
+  --sa-chat-detail-bg: var(--sa-bg-elevated);
   --sa-chat-detail-border: var(--sa-border);
-  --sa-chat-inset-bg: var(--sa-bg-muted);
   --sa-selection-bg: rgba(10, 132, 255, 0.22);
 
   --sa-skill-hint-bg: var(--sa-bg-subtle);
@@ -60,6 +68,9 @@
   --sa-code-text: #d4d4d4;
   --sa-code-stderr: #f48771;
   --sa-code-stderr-bg: rgba(244, 135, 113, 0.12);
+  /* plain / inset Shell 输出中的 stderr：与 stdout 同表面，仅用字色略作区分 */
+  --sa-shell-stderr-text: color-mix(in srgb, var(--sa-chat-failed-fg) 42%, var(--sa-text));
+  --sa-shell-stderr-bg: transparent;
   --sa-code-border: #2d2d2d;
   --sa-code-scrollbar-track: var(--sa-code-bg);
   --sa-code-scrollbar-thumb: color-mix(in srgb, var(--sa-code-text) 26%, var(--sa-code-bg));
@@ -86,6 +97,9 @@
   --sa-write-confirm-allow-fg: #237804;
   --sa-write-confirm-allow-hover-bg: #d9f7be;
   --sa-write-confirm-allow-hover-border: #73d13d;
+  --sa-write-confirm-allow-solid-bg: #389e0d;
+  --sa-write-confirm-allow-solid-fg: #ffffff;
+  --sa-write-confirm-allow-solid-hover-bg: #52c41a;
   --sa-write-confirm-deny-bg: #fff1f0;
   --sa-write-confirm-deny-border: #ffa39e;
   --sa-write-confirm-deny-fg: #a8071a;

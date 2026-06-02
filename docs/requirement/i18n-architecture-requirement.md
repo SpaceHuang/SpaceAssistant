@@ -16,7 +16,7 @@
 |------|------|
 | 首期语言 | zh-CN（中文简体）、en-US（英文） |
 | 覆盖区域 | 渲染进程 UI（React 组件）、主进程用户可见文案（IPC 错误消息、通知） |
-| 不覆盖 | Electron 原生菜单（初期保持跟随系统）、第三方库内部文案（Ant Design 已有国际化） |
+| 不覆盖 | Electron 原生菜单（第四期统一处理，见风险 9.1）、第三方库内部文案（Ant Design 已有国际化） |
 | 切换方式 | 设置面板手动切换 + 首次启动跟随系统语言自动检测 |
 
 ---
@@ -206,12 +206,50 @@ src/renderer/i18n/
 - 插值参数也需类型检查
 - 支持 IDE 自动补全翻译 key
 
+**类型生成方案：**
+
+采用**构建脚本从 JSON 生成类型**方案（不引入额外依赖如 `i18next-typed`）：
+
+1. 编写 `scripts/generate-i18n-types.ts` 脚本
+2. 深度遍历 `resources/zh-CN/` 下所有 JSON 文件
+3. 生成 `src/renderer/i18n/types.ts`，导出：
+   - `I18nKeyPaths` — 所有合法 key 路径的联合类型（如 `'chat.thinking.label'`）
+   - `I18nNamespaces` — 命名空间联合类型（如 `'common' | 'chat' | ...`）
+   - `NamespaceKeyMap` — 各命名空间对应的 key 子集映射
+4. 脚本集成到 `npm run build:renderer` 和 `npm run dev` 的启动前阶段
+5. 生成的 types.ts 加入 `.gitignore`（或提交以便 CI 直接检查类型）
+
 ```typescript
 // 使用示例
 const { t } = useTypedTranslation('chat');
 t('thinking.label');           // ✅ 类型安全
 t('thinking.unknownKey');      // ❌ TypeScript 编译错误
 t('thinking.label', { count: 3 }); // ✅ 插值
+```
+
+**类型生成脚本示例（附录 C）：**
+
+```typescript
+// scripts/generate-i18n-types.ts 核心逻辑
+import * as fs from 'fs';
+import * as path from 'path';
+
+function walkJson(obj: Record<string, unknown>, prefix = ''): string[] {
+  const keys: string[] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    const fullKey = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+      keys.push(...walkJson(v as Record<string, unknown>, fullKey));
+    } else {
+      keys.push(fullKey);
+    }
+  }
+  return keys;
+}
+
+const resourcesDir = path.resolve(__dirname, '../src/renderer/i18n/resources/zh-CN');
+const namespaces = fs.readdirSync(resourcesDir).map(f => path.basename(f, '.json'));
+// 生成 I18nKeyPaths、I18nNamespaces、NamespaceKeyMap 类型...
 ```
 
 ### FR-03：语言切换机制
@@ -265,6 +303,21 @@ t('thinking.label', { count: 3 }); // ✅ 插值
 - 消息时间戳（列表中的简短格式）也需本地化
 - 数字千分位分隔符跟随语言
 
+**locale 传递方式：**
+
+当前 `formatChatTimestamp` 使用 `undefined` 作为 locale（跟随系统），需改造为显式传入：
+
+```typescript
+// 改造前（src/renderer/components/Chat/formatChatTimestamp.ts）
+return date.toLocaleString(undefined, opts)
+
+// 改造后
+import i18next from 'i18next';
+return date.toLocaleString(i18next.language, opts)
+```
+
+对于非 React 组件环境（工具函数、纯函数）中的日期格式化，统一通过 `i18next.language` 获取当前语言。i18next 实例在初始化后即可在任何地方 `import` 使用，不依赖 React 上下文。
+
 ### FR-07：主进程文案适配
 
 **描述：** 主进程中的用户可见文案支持多语言。
@@ -282,6 +335,86 @@ t('thinking.label', { count: 3 }); // ✅ 插值
 - 渲染进程 `errors.json` 维护 `code → 各语言文案` 映射
 - 系统通知（Notification API）文案由渲染进程控制
 
+**实施路径（分步改造）：**
+
+当前主进程存在多处硬编码中文错误消息，需要按以下步骤逐步迁移：
+
+**Step 1 — 定义统一错误码枚举（`src/shared/errorCodes.ts`）：**
+
+```typescript
+// src/shared/errorCodes.ts
+export const ErrorCodes = {
+  // 文件操作
+  FILE_NOT_FOUND: 'FILE_NOT_FOUND',
+  FILE_PATH_TRAVERSAL: 'FILE_PATH_TRAVERSAL',
+  TARGET_NOT_DIRECTORY: 'TARGET_NOT_DIRECTORY',
+  NAME_CONTAINS_PATH_SEPARATOR: 'NAME_CONTAINS_PATH_SEPARATOR',
+  // 配置
+  WORK_DIR_NOT_CONFIGURED: 'WORK_DIR_NOT_CONFIGURED',
+  API_KEY_INVALID: 'API_KEY_INVALID',
+  // 浏览器
+  BROWSER_FEISHU_REMOTE_DISABLED: 'BROWSER_FEISHU_REMOTE_DISABLED',
+  // ...更多错误码
+} as const;
+
+export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
+```
+
+**Step 2 — 在 `errors.json` 中维护错误码 → 各语言文案映射：**
+
+```json
+// src/renderer/i18n/resources/zh-CN/errors.json
+{
+  "NAME_CONTAINS_PATH_SEPARATOR": "新名称不允许包含路径分隔符",
+  "TARGET_NOT_DIRECTORY": "目标路径不是目录",
+  "WORK_DIR_NOT_CONFIGURED": "工作目录未配置，无法打开项目级 Skill 目录",
+  "BROWSER_FEISHU_REMOTE_DISABLED": "飞书远程浏览器策略已禁用"
+}
+
+// src/renderer/i18n/resources/en-US/errors.json
+{
+  "NAME_CONTAINS_PATH_SEPARATOR": "Name must not contain path separators",
+  "TARGET_NOT_DIRECTORY": "Target path is not a directory",
+  "WORK_DIR_NOT_CONFIGURED": "Work directory not configured, cannot open project-level skill directory",
+  "BROWSER_FEISHU_REMOTE_DISABLED": "Feishu remote browser policy is disabled"
+}
+```
+
+**Step 3 — 主进程抛出错误时使用错误码：**
+
+```typescript
+// 改造前（electron/appIpc.ts）
+throw new Error('新名称不允许包含路径分隔符')
+
+// 改造后
+throw new Error(ErrorCodes.NAME_CONTAINS_PATH_SEPARATOR)
+// 或：throw Object.assign(new Error(ErrorCodes.NAME_CONTAINS_PATH_SEPARATOR), { code: ErrorCodes.NAME_CONTAINS_PATH_SEPARATOR })
+```
+
+**Step 4 — 渲染进程错误处理统一转换：**
+
+```typescript
+// src/renderer/utils/errorTranslator.ts
+import { t } from 'i18next'; // 或使用 useTypedTranslation
+
+export function translateError(error: { code: string; params?: Record<string, string | number> }): string {
+  const key = `errors:${error.code}`;
+  // i18next 回退机制：若 key 不存在，返回 code 本身（用于未迁移的错误）
+  return t(key, { defaultValue: error.code, ...error.params });
+}
+```
+
+**Step 5 — 迁移顺序：**
+
+| 优先级 | 文件 | 影响范围 | 说明 |
+|--------|------|---------|------|
+| P0 | `electron/appIpc.ts` | 所有 IPC 操作的错误消息 | 约 10 处硬编码中文错误 |
+| P1 | `src/shared/browserRemotePolicy.ts` | `BROWSER_FEISHU_REMOTE_DISABLED` | 被主进程多处引用，改为错误码常量 |
+| P2 | `electron/toolChatLoop.ts` | 工具循环错误 | 引用 `browserRemotePolicy.ts` 的常量 |
+| P3 | `electron/tools/browserExecutor.ts` | 浏览器执行器错误 | 引用 `browserRemotePolicy.ts` 的常量 |
+
+**向后兼容：** 渲染进程 `translateError` 使用 `defaultValue: error.code` 作为回退——对于尚未在 `errors.json` 中定义文案的错误码，至少显示错误码本身而非空白。
+
 ### FR-08：第三方组件库国际化
 
 **描述：** Ant Design 组件的内置文案跟随应用语言。
@@ -297,16 +430,83 @@ t('thinking.label', { count: 3 }); // ✅ 插值
 
 **描述：** `src/shared/` 目录中包含主进程和渲染进程共享的硬编码中文文案，需特殊处理。
 
-**涉及文件：**
-- `src/shared/appMeta.ts`：`APP_TAGLINE`、`APP_DESCRIPTION`
-- `src/shared/browserRemotePolicy.ts`：飞书远程策略提示文案
-- `src/shared/browserSetupGuideContent.ts`：浏览器安装引导的全部步骤文案（~30 处）
-- `src/shared/builtinToolDefinitions.ts`：工具定义的 `description` 字段（发给 LLM，不面向用户，可暂不翻译）
+**涉及文件与具体策略：**
 
-**策略：**
-- `appMeta.ts` 文案迁移到 i18n 资源文件
-- `browserSetupGuideContent.ts` 重构为接收翻译函数参数
-- `builtinToolDefinitions.ts` 的工具描述是发给 LLM 的 prompt，保持英文（LLM 通用语言）
+#### 1. `src/shared/appMeta.ts` — 迁移到 i18n 资源文件
+
+**当前状态：** 硬编码中文常量
+```typescript
+export const APP_TAGLINE = 'AI 驱动的桌面助手';
+export const APP_DESCRIPTION = 'SpaceAssistant 是一款...';
+```
+
+**改造方案：** 将文案移至 `common.json`，在渲染进程中通过 `t()` 获取
+```typescript
+// 改造后：只保留 key 引用
+export const APP_TAGLINE_KEY = 'common.app.tagline';
+export const APP_DESCRIPTION_KEY = 'common.app.description';
+
+// 渲染进程使用
+const tagline = t('common.app.tagline');
+const description = t('common.app.description');
+```
+
+#### 2. `src/shared/browserSetupGuideContent.ts` — 重构为工厂函数
+
+**当前状态：** 约 30 处硬编码中文，直接返回包含中文文案的对象
+
+**改造方案：** 重构为接收翻译函数参数的工厂函数
+```typescript
+// 改造前
+export function buildBrowserSetupGuideContent(
+  detect: BrowserDetectResult,
+  platform: string
+): BrowserSetupGuideContent {
+  return {
+    title: '浏览器未安装',
+    steps: [
+      { title: '第一步', description: '下载浏览器安装包...' },
+      // ...
+    ]
+  };
+}
+
+// 改造后
+export function buildBrowserSetupGuideContent(
+  detect: BrowserDetectResult,
+  platform: string,
+  t: (key: string) => string  // 翻译函数注入
+): BrowserSetupGuideContent {
+  return {
+    title: t('feishu.browser.notInstalled'),
+    steps: [
+      { title: t('feishu.browser.step1Title'), description: t('feishu.browser.step1Desc') },
+      // ...
+    ]
+  };
+}
+```
+
+**注意：** `browserSetupGuideContent.ts` 的调用方同时在主进程（`electron/tools/browserSetup.ts`）和渲染进程（飞书设置面板）。主进程调用时需要传入一个简易的翻译函数（从 `errors.json` 模式读取），渲染进程调用时直接传入 i18next 的 `t` 函数。
+
+#### 3. `src/shared/browserRemotePolicy.ts` — 改为错误码常量
+
+**当前状态：** 中文错误消息常量，被主进程多处引用
+```typescript
+export const BROWSER_FEISHU_REMOTE_DISABLED_ERROR = '飞书远程浏览器策略已禁用';
+```
+
+**改造方案：** 改为错误码常量，文案移至 `errors.json`
+```typescript
+// 改造后
+export const BROWSER_FEISHU_REMOTE_DISABLED_CODE = 'BROWSER_FEISHU_REMOTE_DISABLED';
+```
+
+引用方（`electron/toolChatLoop.ts`、`electron/tools/browserExecutor.ts`）改为使用错误码，渲染进程通过 `translateError` 查表显示文案。详见 FR-07 错误码模式。
+
+#### 4. `src/shared/builtinToolDefinitions.ts` — 保持英文
+
+**策略：** 工具 `description` 字段是发给 LLM 的 system prompt 内容，英文是 LLM 通用语言，**不翻译**。此项不纳入国际化范围。
 
 ---
 
@@ -321,14 +521,20 @@ t('thinking.label', { count: 3 }); // ✅ 插值
 | 首屏加载额外开销 | < 10KB gzip（i18next 核心 + react-i18next） |
 | 翻译函数调用开销 | < 0.1ms / 次（可忽略） |
 
+**测试方法：**
+- 语言切换响应时间：在 `i18next.changeLanguage()` 前后使用 `performance.now()` 测量，在单元测试中断言 `elapsed < 200`
+- 资源文件大小：构建后检查 `dist/renderer/` 中 i18n 相关 chunk 的大小
+- 首屏加载开销：对比引入 i18next 前后的初始 bundle 大小（`npm run build:renderer` 输出）
+
 ### NFR-02：可维护性
 
 - 翻译 key 缺失时，开发环境 console.warn 提示
-- 提供 `npm run i18n:check` 脚本检查：
-  - 各语言翻译 key 是否对齐
-  - 是否存在未使用的 key
-  - 是否存在硬编码中文残留
-- 翻译资源文件使用 Prettier 格式化，保持排序一致性
+- 提供 `npm run i18n:check` 脚本，检查项包括：
+  - ✅ 各语言翻译 key 是否对齐（zh-CN 和 en-US 的 key 结构一致）
+  - ✅ 是否存在未使用的 key（在资源文件中定义但代码中未引用）
+  - ✅ 是否存在硬编码中文残留（扫描 `src/renderer/` 下 `.tsx`/`.ts` 文件中的中文字符）
+  - ✅ 翻译文件格式检查（JSON 语法 + Prettier 格式化）
+- 翻译资源文件使用 Prettier 格式化，保持 key 排序一致性（按字母序）
 
 ### NFR-03：可扩展性
 
@@ -350,11 +556,12 @@ t('thinking.label', { count: 3 }); // ✅ 插值
 
 | 属性 | 规格 |
 |------|------|
-| 位置 | 设置弹窗 → 「通用」标签页 → 新增「界面语言」区域 |
+| 位置 | 设置弹窗 → 「通用」标签页 → 「工作目录」配置项之后、其他配置项之前 |
 | 控件 | Ant Design `Select`，宽度 200px |
 | 选项 | `中文` / `English`（以当前语言显示选项名称） |
 | 标签 | 「界面语言」/「Interface Language」 |
 | 提示 | 「切换后立即生效」/「Takes effect immediately」 |
+| 布局 | 与现有表单项保持一致的 `Form.Item` 样式，左对齐标签 + 右对齐控件 |
 
 ### 6.2 语言敏感组件的适配要求
 
@@ -441,8 +648,12 @@ interface AppConfig {
 1. 英文翻译校对（建议由英语母语者 Review）
 2. `npm run i18n:check` 脚本实现
 3. 日期/时间/数字格式化适配
-4. 全量回归测试
-5. 更新 CLAUDE.md 和开发文档
+4. **Electron 原生菜单国际化**（`electron/menu.ts`）
+   - 菜单文案通过 IPC 从渲染进程获取翻译
+   - 或主进程独立加载菜单翻译 JSON
+   - 语言切换时重建菜单
+5. 全量回归测试
+6. 更新 CLAUDE.md 和开发文档
 
 ---
 
@@ -456,6 +667,7 @@ interface AppConfig {
 | 英文翻译质量不佳 | 英文用户体验下降 | 英语母语者 Review + 翻译术语表 |
 | 文案长度变化导致布局溢出 | 英文通常比中文长 30–50% | 关键区域做溢出测试 + flex 弹性布局 |
 | i18next 包体积增加 | 首屏加载变慢 | 命名空间懒加载 + Tree shaking |
+| Electron 原生菜单语言不一致 | 英文界面下菜单栏仍显示中文，体验割裂 | 第四期同步处理菜单国际化；初期风险较低因菜单使用频率低（用户主要通过活动栏操作） |
 
 ### 约束
 
@@ -463,6 +675,44 @@ interface AppConfig {
 - 所有新增 UI 文案**必须**通过 `t()` 使用，禁止硬编码
 - 翻译资源文件的 key 结构必须在各语言间保持一致
 - `zh-CN` 是**翻译 key 的真实来源**（TypeScript 类型从它推导）
+
+### 9.2 测试策略
+
+为确保多语言功能的正确性和可维护性，需在实施各阶段同步编写测试：
+
+**单元测试（Vitest）：**
+
+| 测试对象 | 测试内容 | 优先级 |
+|---------|---------|--------|
+| `useTypedTranslation` | 验证类型安全 Hook 在各命名空间下返回正确的 `t` 函数 | P0 |
+| `translateError` | 验证错误码 → 文案转换在两种语言下的正确性 | P0 |
+| `formatChatTimestamp` | 验证日期格式化在 zh-CN / en-US locale 下的输出格式 | P1 |
+| `buildBrowserSetupGuideContent` | 验证工厂函数接收翻译函数后的输出正确性 | P1 |
+| 语言检测逻辑 | 验证 `navigator.language` → locale 映射规则（zh 开头 → zh-CN，其他 → en-US） | P1 |
+
+**集成测试：**
+
+| 测试场景 | 测试内容 | 优先级 |
+|---------|---------|--------|
+| 语言切换流程 | 模拟切换语言 → 验证 i18next.changeLanguage 调用 → 验证 Redux store 更新 → 验证 localStorage 持久化 | P1 |
+| ConfigProvider 联动 | 切换语言后验证 Ant Design ConfigProvider 接收到的 locale 值变化 | P1 |
+
+**E2E / 手工验证场景：**
+
+- 首次启动自动检测系统语言
+- 设置面板切换语言后所有可见文案即时更新
+- 英文界面下无中文残留（全量走查）
+- 两种语言下关键组件无布局溢出
+
+**CI 集成：**
+
+```yaml
+# 在 CI 流程中增加 i18n 检查步骤
+- name: Check i18n
+  run: |
+    npm run i18n:check    # key 对齐 + 硬编码检测
+    npm test              # 包含 i18n 相关单元测试
+```
 
 ---
 
@@ -519,3 +769,86 @@ interface AppConfig {
 - [Ant Design 国际化](https://ant.design/docs/react/i18n)
 - [BCP 47 语言标签规范](https://tools.ietf.org/html/bcp47)
 - 现有需求文档：[聊天消息 UI 需求](./chat-message-ui-requirement.md)、[设置面板需求](./settings-requirement.md)
+
+### C. `i18n:check` 脚本参考结构
+
+```typescript
+// scripts/i18n-check.ts
+// 集成到 package.json: "i18n:check": "tsx scripts/i18n-check.ts"
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+const RESOURCES_DIR = path.resolve(__dirname, '../src/renderer/i18n/resources');
+const LANGS = ['zh-CN', 'en-US'];
+
+// 1. 检查各语言翻译 key 是否对齐
+function checkKeyAlignment() {
+  const zhKeys = collectKeys(path.join(RESOURCES_DIR, 'zh-CN'));
+  const enKeys = collectKeys(path.join(RESOURCES_DIR, 'en-US'));
+
+  const zhOnly = diffKeys(zhKeys, enKeys);
+  const enOnly = diffKeys(enKeys, zhKeys);
+
+  if (zhOnly.length > 0) {
+    console.error('❌ Keys in zh-CN but missing in en-US:', zhOnly);
+  }
+  if (enOnly.length > 0) {
+    console.error('❌ Keys in en-US but missing in zh-CN:', enOnly);
+  }
+  return zhOnly.length === 0 && enOnly.length === 0;
+}
+
+// 2. 检查是否存在硬编码中文残留
+function checkHardcodedChinese() {
+  const srcDir = path.resolve(__dirname, '../src/renderer');
+  const files = walkDir(srcDir, ['.tsx', '.ts']);
+  const chinesePattern = /[一-鿿]+/;
+  let count = 0;
+
+  for (const file of files) {
+    // 跳过 i18n 资源文件本身
+    if (file.includes('i18n/resources/')) continue;
+    const content = fs.readFileSync(file, 'utf-8');
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (chinesePattern.test(lines[i])) {
+        console.warn(`⚠️  Hardcoded Chinese: ${file}:${i + 1}`);
+        count++;
+      }
+    }
+  }
+  console.log(`${count} hardcoded Chinese occurrences found`);
+  return count === 0;
+}
+
+// 3. 检查 JSON 格式有效性
+function checkJsonFormat() {
+  for (const lang of LANGS) {
+    const langDir = path.join(RESOURCES_DIR, lang);
+    const files = fs.readdirSync(langDir).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        JSON.parse(fs.readFileSync(path.join(langDir, file), 'utf-8'));
+      } catch (e) {
+        console.error(`❌ Invalid JSON: ${lang}/${file}`);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// 主流程
+const alignmentOk = checkKeyAlignment();
+const jsonOk = checkJsonFormat();
+const noChinese = checkHardcodedChinese();
+
+if (alignmentOk && jsonOk && noChinese) {
+  console.log('✅ i18n check passed');
+  process.exit(0);
+} else {
+  console.error('❌ i18n check failed');
+  process.exit(1);
+}
+```

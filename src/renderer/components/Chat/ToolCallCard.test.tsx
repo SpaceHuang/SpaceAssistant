@@ -35,7 +35,7 @@ describe('ToolCallCard file write expand behavior', () => {
     )
     expect(screen.getByRole('button', { name: '允许写入' })).toBeDefined()
     expect(screen.getByRole('button', { name: '拒绝写入' })).toBeDefined()
-    expect(screen.getByText('notes.txt')).toBeDefined()
+    expect(screen.getByText(/写入「notes\.txt」/)).toBeDefined()
     expect(document.querySelector('.write-confirm-card')).not.toBeNull()
   })
 
@@ -298,13 +298,16 @@ describe('ToolCallCard file write expand behavior', () => {
     )
     expect(document.querySelector('.browser-confirm-card')).not.toBeNull()
     expect(screen.getByText('https://www.zhihu.com/billboard')).toBeDefined()
-    expect(screen.getByText('URL')).toBeDefined()
-    expect(screen.getByRole('button', { name: '确认浏览器操作' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '确认操作' })).toBeDefined()
   })
 })
 
 const plainShellCardProps = {
   shellConfig: { enabled: false, shellDefaultTimeoutSec: 300, outputMode: 'plain' as const }
+}
+
+const terminalShellCardProps = {
+  shellConfig: { enabled: true, shellDefaultTimeoutSec: 300, outputMode: 'terminal' as const }
 }
 
 function shellRecord(status: ToolCallRecord['status'], extra: Partial<ToolCallRecord> = {}): ToolCallRecord {
@@ -331,6 +334,20 @@ describe('ToolCallCard run_shell output display', () => {
     expect(screen.getByText(/added 47 packages/)).toBeDefined()
     expect(document.querySelector('.shell-output--live')).not.toBeNull()
     expect(screen.queryByText(/"exitCode"/)).toBeNull()
+  })
+
+  it('uses plain live output for progressOutput when outputMode is terminal', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('executing', { progressOutput: 'added 47 packages in 3s' })}
+        confirmMode="direct"
+        {...terminalShellCardProps}
+      />
+    )
+    fireEvent.click(document.querySelector('.tool-row__main')!)
+    expect(screen.getByText(/added 47 packages/)).toBeDefined()
+    expect(document.querySelector('.shell-output--live')).not.toBeNull()
+    expect(document.querySelector('.shell-terminal-host')).toBeNull()
   })
 
   it('shows formatted stdout when completed', () => {
@@ -367,7 +384,7 @@ describe('ToolCallCard run_shell output display', () => {
         {...plainShellCardProps}
       />
     )
-    expect(screen.getByText('退出码: 1')).toBeDefined()
+    expect(screen.getByText(/退出码 1/)).toBeDefined()
     expect(screen.getByText(/error TS2322/)).toBeDefined()
     expect(screen.queryByText('命令执行失败（退出码: 1）')).toBeNull()
   })
@@ -430,10 +447,12 @@ describe('ToolCallCard run_shell output display', () => {
         record={shellRecord('executing', { input: { command: 'less README.md' } })}
         confirmMode="direct"
         workDir="E:\\work"
+        {...terminalShellCardProps}
       />
     )
     expect(document.querySelector('.shell-tui-fallback')).not.toBeNull()
     expect(document.querySelector('.shell-tui-fallback')?.textContent).toMatch(/交互式终端/)
+    expect(document.querySelector('.shell-terminal-host')).toBeNull()
   })
 
   it('still shows ShellConfirmCard while confirming', () => {
@@ -463,7 +482,7 @@ describe('ToolCallCard run_shell output display', () => {
       />
     )
     expect(document.querySelector('.script-confirm-card')).not.toBeNull()
-    expect(screen.getByRole('button', { name: '确认运行脚本' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '确认运行' })).toBeDefined()
     expect(document.querySelector('.tool-row-detail')).toBeNull()
   })
 
@@ -486,10 +505,6 @@ describe('ToolCallCard run_shell output display', () => {
     expect(document.querySelector('.tool-row-detail')).toBeNull()
   })
 })
-
-const terminalShellCardProps = {
-  shellConfig: { enabled: true, shellDefaultTimeoutSec: 300, outputMode: 'terminal' as const }
-}
 
 const terminalWrite = vi.fn()
 const terminalDispose = vi.fn()

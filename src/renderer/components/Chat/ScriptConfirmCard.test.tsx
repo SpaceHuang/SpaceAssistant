@@ -35,15 +35,15 @@ describe('ScriptConfirmCard', () => {
     renderCard(<ScriptConfirmCard record={record()} onConfirm={onConfirm} />)
 
     expect(document.querySelector('.write-confirm-card.script-confirm-card')).not.toBeNull()
-    expect(screen.getByText('Python 脚本')).toBeDefined()
-    expect(screen.getByRole('button', { name: '确认运行脚本' })).toBeDefined()
-    expect(screen.getByRole('button', { name: '拒绝运行脚本' })).toBeDefined()
+    expect(screen.getByText('运行 Python 脚本')).toBeDefined()
+    expect(screen.getByRole('button', { name: '确认运行' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝运行' })).toBeDefined()
 
     await waitFor(() => {
       expect(document.querySelector('.script-confirm-card__code--highlighted .shiki')).not.toBeNull()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: '确认运行脚本' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认运行' }))
     expect(onConfirm).toHaveBeenCalledWith(true)
   })
 

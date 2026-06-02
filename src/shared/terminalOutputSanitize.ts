@@ -34,3 +34,12 @@ export function normalizeTerminalOutput(text: string): string {
   out = out.replace(CONTROL_CHARS, '')
   return out
 }
+
+/** plain 输出：非零退出码并入 stderr 文本，避免单独占一行 */
+export function formatShellStderrDisplay(stderr: string, exitCode?: number | null): string {
+  const err = normalizeTerminalOutput(stderr)
+  const showExit = typeof exitCode === 'number' && exitCode !== 0
+  if (!showExit) return err
+  const tag = `退出码 ${exitCode}`
+  return err.trim() ? `${tag}\n${err}` : tag
+}

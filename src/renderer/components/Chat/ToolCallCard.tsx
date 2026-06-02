@@ -9,6 +9,7 @@ import {
   parseShellResultData
 } from '../../../shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../../../shared/shellOutputMode'
+import { isInteractiveShellTuiCommand } from '../../../shared/shellInteractiveTui'
 import { patchShellTerminalScrollback } from '../../services/shellScrollbackPatch'
 import {
   formatToolLabel,
@@ -88,7 +89,16 @@ export function ToolCallCard({
   const [terminalFallbackPlain, setTerminalFallbackPlain] = useState(false)
   const scrollbackPatchedRef = useRef(false)
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMetadata)
-  const useTerminalUi = record.toolName === 'run_shell' && shellOutputMode === 'terminal' && !terminalFallbackPlain
+  const shellCommand =
+    record.toolName === 'run_shell' && typeof record.input.command === 'string' ? record.input.command : ''
+  const isInteractiveTui = shellCommand ? isInteractiveShellTuiCommand(shellCommand) : false
+  const hasPlainProgress = Boolean(record.progressOutput?.trim())
+  const hasRawProgress = Boolean(record.progressOutputRaw?.trim())
+  const useTerminalUi =
+    record.toolName === 'run_shell' &&
+    shellOutputMode === 'terminal' &&
+    !terminalFallbackPlain &&
+    !isInteractiveTui
   const isPending = record.status === 'calling' || record.status === 'executing'
   const isFailed = record.status === 'failed' || record.status === 'rejected'
   const fileTool = isFileTool(record.toolName)
@@ -148,9 +158,6 @@ export function ToolCallCard({
     },
     [messageId, sessionId, record.id, record.status, toolCalls]
   )
-
-  const shellCommand =
-    record.toolName === 'run_shell' && typeof record.input.command === 'string' ? record.input.command : ''
 
   useEffect(() => {
     if (record.status === 'executing') scrollbackPatchedRef.current = false
@@ -234,13 +241,16 @@ export function ToolCallCard({
   }
 
   const writeSucceeded = fileWriteTool && record.status === 'completed' && record.result?.success
+  const showShellLiveTerminal =
+    record.toolName === 'run_shell' &&
+    record.status === 'executing' &&
+    useTerminalUi &&
+    (hasRawProgress || !hasPlainProgress)
   const showShellLivePlain =
     record.toolName === 'run_shell' &&
     record.status === 'executing' &&
-    !useTerminalUi &&
-    Boolean(record.progressOutput?.trim())
-  const showShellLiveTerminal =
-    record.toolName === 'run_shell' && record.status === 'executing' && useTerminalUi
+    hasPlainProgress &&
+    !showShellLiveTerminal
   const keepLiveTerminalMounted = showShellLiveTerminal
   const showShellCompletedOutput =
     record.toolName === 'run_shell' &&
@@ -303,8 +313,10 @@ export function ToolCallCard({
               {label}
             </span>
           </div>
-          <div className="tool-row-detail">
-            <BrowserDependencyGuideCard dependencyRecovery={record.result.dependencyRecovery} />
+          <div className="tool-row-detail tool-row-detail--open">
+            <div className="tool-row-detail__inner">
+              <BrowserDependencyGuideCard dependencyRecovery={record.result.dependencyRecovery} />
+            </div>
           </div>
         </div>
       </div>
@@ -379,6 +391,7 @@ export function ToolCallCard({
           record.toolName === 'run_shell' &&
           !showShellLiveTerminal &&
           !showShellLivePlain &&
+          !isInteractiveTui &&
           executingHint ? (
             <span className="tool-row-detail__message">仍在运行…</span>
           ) : null}
@@ -425,11 +438,11 @@ export function ToolCallCard({
           ) : null}
 
           {record.status === 'completed' && resultStr ? (
-            <pre className="sa-chat-inset-code">{truncate(resultStr, 4000)}</pre>
+            <pre className="sa-chat-inset-code sa-command-inset">{truncate(resultStr, 4000)}</pre>
           ) : null}
 
           {record.status === 'completed' && !resultStr && !fileTool && !showShellCompletedOutput && Object.keys(record.input).length > 0 ? (
-            <pre className="sa-chat-inset-code">{paramPreview}</pre>
+            <pre className="sa-chat-inset-code sa-command-inset">{paramPreview}</pre>
           ) : null}
           </div>
         </div>

@@ -26,7 +26,7 @@ describe('LarkCliConfirmCard', () => {
     expect(screen.getByText('写入')).toBeDefined()
     expect(screen.getByText(/lark-cli message send/)).toBeDefined()
     expect(screen.getByRole('button', { name: '确认飞书写入' })).toBeDefined()
-    expect(screen.getByRole('button', { name: '拒绝飞书命令' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝写入' })).toBeDefined()
 
     fireEvent.click(screen.getByRole('button', { name: '确认飞书写入' }))
     expect(onConfirm).toHaveBeenCalledWith(true)
@@ -41,5 +41,6 @@ describe('LarkCliConfirmCard', () => {
     )
     expect(screen.queryByText('写入')).toBeNull()
     expect(screen.getByRole('button', { name: '确认飞书命令' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝命令' })).toBeDefined()
   })
 })

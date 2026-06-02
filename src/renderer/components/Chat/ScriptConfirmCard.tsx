@@ -1,8 +1,7 @@
 import { useMemo } from 'react'
-import { Check, X } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
+import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { ShikiHighlightedCode } from './ShikiHighlightedCode'
-import { ToolKindIcon } from './ToolRowIcon'
 
 type Props = {
   record: ToolCallRecord
@@ -25,38 +24,21 @@ export function ScriptConfirmCard({ record, onConfirm }: Props) {
 
   return (
     <div className="write-confirm-card script-confirm-card">
-      <div className="write-confirm-card__header">
-        <span className="write-confirm-card__icon-badge" aria-hidden>
-          <ToolKindIcon kind="script" className="write-confirm-card__file-icon" />
-        </span>
-        <span className="script-confirm-card__title">Python 脚本</span>
-        <div className="write-confirm-card__actions">
-          <button
-            type="button"
-            className="write-confirm-card__action write-confirm-card__action--allow"
-            aria-label="确认运行脚本"
-            title="确认运行脚本"
-            onClick={() => onConfirm(true)}
-          >
-            <Check size={16} strokeWidth={2.25} />
-          </button>
-          <button
-            type="button"
-            className="write-confirm-card__action write-confirm-card__action--deny"
-            aria-label="拒绝运行脚本"
-            title="拒绝运行脚本"
-            onClick={() => onConfirm(false)}
-          >
-            <X size={16} strokeWidth={2.25} />
-          </button>
+      <ConfirmCardDecision
+        actionSummary="运行 Python 脚本"
+        allowLabel="确认运行"
+        denyLabel="拒绝运行"
+        onConfirm={onConfirm}
+      />
+      <div className="write-confirm-card__detail script-confirm-card__detail">
+        <div className="write-confirm-card__command write-confirm-card__command--code">
+          <ShikiHighlightedCode
+            code={displayCode}
+            language="python"
+            surface="light"
+            className="script-confirm-card__code script-confirm-card__code--highlighted"
+          />
         </div>
-      </div>
-      <div className="write-confirm-card__body script-confirm-card__body">
-        <ShikiHighlightedCode
-          code={displayCode}
-          language="python"
-          className="script-confirm-card__code script-confirm-card__code--highlighted sa-code-surface"
-        />
         {timeout !== undefined ? (
           <div className="script-confirm-card__meta">
             <span className="script-confirm-card__meta-item">

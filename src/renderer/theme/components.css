@@ -21,6 +21,7 @@
 .wiki-index-view,
 .tool-code-preview,
 .sa-chat-code-block,
+.sa-shiki-block.sa-code-surface,
 .sa-chat-inset-code,
 .tool-diff-block,
 .shell-output,
@@ -41,6 +42,7 @@
 .wiki-index-view::-webkit-scrollbar,
 .tool-code-preview::-webkit-scrollbar,
 .sa-chat-code-block::-webkit-scrollbar,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar,
 .sa-chat-inset-code::-webkit-scrollbar,
 .tool-diff-block::-webkit-scrollbar,
 .shell-output::-webkit-scrollbar,
@@ -60,6 +62,7 @@
 .wiki-index-view::-webkit-scrollbar-track,
 .tool-code-preview::-webkit-scrollbar-track,
 .sa-chat-code-block::-webkit-scrollbar-track,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-track,
 .sa-chat-inset-code::-webkit-scrollbar-track,
 .tool-diff-block::-webkit-scrollbar-track,
 .shell-output::-webkit-scrollbar-track,
@@ -79,6 +82,7 @@
 .wiki-index-view::-webkit-scrollbar-thumb,
 .tool-code-preview::-webkit-scrollbar-thumb,
 .sa-chat-code-block::-webkit-scrollbar-thumb,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-thumb,
 .sa-chat-inset-code::-webkit-scrollbar-thumb,
 .tool-diff-block::-webkit-scrollbar-thumb,
 .shell-output::-webkit-scrollbar-thumb,
@@ -98,6 +102,7 @@
 .wiki-index-view::-webkit-scrollbar-thumb:hover,
 .tool-code-preview::-webkit-scrollbar-thumb:hover,
 .sa-chat-code-block::-webkit-scrollbar-thumb:hover,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-thumb:hover,
 .sa-chat-inset-code::-webkit-scrollbar-thumb:hover,
 .tool-diff-block::-webkit-scrollbar-thumb:hover,
 .shell-output::-webkit-scrollbar-thumb:hover,
@@ -116,6 +121,7 @@
 .wiki-index-view::-webkit-scrollbar-corner,
 .tool-code-preview::-webkit-scrollbar-corner,
 .sa-chat-code-block::-webkit-scrollbar-corner,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-corner,
 .sa-chat-inset-code::-webkit-scrollbar-corner,
 .tool-diff-block::-webkit-scrollbar-corner,
 .shell-output::-webkit-scrollbar-corner,
@@ -126,32 +132,27 @@
 }
 
 /* 深色代码/终端：滚动条与底同色，避免浅灰横条 */
-.sa-chat-code-block,
-.tool-row-detail .shell-output,
+.sa-shiki-block.sa-code-surface,
 .shell-terminal-wrap.sa-code-scrollbar {
   scrollbar-color: var(--sa-code-scrollbar-thumb) var(--sa-code-scrollbar-track);
 }
 
-.sa-chat-code-block::-webkit-scrollbar-thumb,
-.tool-row-detail .shell-output::-webkit-scrollbar-thumb,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-thumb,
 .shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-thumb {
   background: var(--sa-code-scrollbar-thumb);
 }
 
-.sa-chat-code-block::-webkit-scrollbar-thumb:hover,
-.tool-row-detail .shell-output::-webkit-scrollbar-thumb:hover,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-thumb:hover,
 .shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--sa-code-scrollbar-thumb-hover);
 }
 
-.sa-chat-code-block::-webkit-scrollbar-track,
-.tool-row-detail .shell-output::-webkit-scrollbar-track,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-track,
 .shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-track {
   background: var(--sa-code-scrollbar-track);
 }
 
-.sa-chat-code-block::-webkit-scrollbar-corner,
-.tool-row-detail .shell-output::-webkit-scrollbar-corner,
+.sa-shiki-block.sa-code-surface::-webkit-scrollbar-corner,
 .shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-corner {
   background: var(--sa-code-scrollbar-track);
 }
@@ -398,23 +399,90 @@
   background: transparent;
 }
 
-.sa-code-surface .sa-prose pre.shiki {
-  border: none;
-  padding: 0;
-}
-
 .sa-shiki-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
   color: color-mix(in srgb, var(--sa-code-text) 72%, var(--sa-text-secondary)) !important;
+  background: color-mix(in srgb, var(--sa-code-bg) 92%, var(--sa-code-text) 8%) !important;
+  border-radius: var(--sa-radius-sm);
 }
 
 .sa-shiki-copy:hover {
   color: var(--sa-code-text) !important;
-  background: color-mix(in srgb, var(--sa-code-text) 12%, transparent) !important;
+  background: color-mix(in srgb, var(--sa-code-text) 14%, var(--sa-code-bg)) !important;
+}
+
+/* 聊天 Markdown Shiki 块：外层滚动 + 内层 pre 承载行高与复制按钮留白 */
+.sa-shiki-block.sa-code-surface {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0.65em 0;
+  border: 1px solid var(--sa-code-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-code-bg);
+  color: var(--sa-code-text);
+  max-height: min(420px, 70vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.sa-shiki-block.sa-code-surface .sa-prose {
+  margin: 0;
+  min-width: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.sa-shiki-block.sa-code-surface .sa-prose pre,
+.sa-shiki-block.sa-code-surface .sa-prose pre.shiki,
+.sa-code-surface .sa-shiki-block .sa-prose pre.shiki {
+  margin: 0;
+  padding: 10px 4.75rem 10px 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent !important;
+  background-color: transparent !important;
+  overflow: visible;
+  max-height: none;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-mono, 12px);
+  line-height: var(--sa-chat-line-mono, 1.6);
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.sa-shiki-block.sa-code-surface pre.shiki code,
+.sa-shiki-block.sa-code-surface .shiki-placeholder code {
+  display: block;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: inherit;
+  background: transparent;
+  padding: 0;
+}
+
+.sa-shiki-block.sa-code-surface .shiki .line {
+  display: block;
+}
+
+.sa-shiki-block.sa-code-surface pre.shiki-placeholder {
+  margin: 0;
+  white-space: pre;
 }
 
 .sa-prose code {
   font-family: var(--sa-font-mono);
   font-size: 0.9em;
+}
+
+.sa-prose pre code {
+  font-size: inherit;
 }
 
 .sa-prose :not(pre) > code {
@@ -437,9 +505,4 @@
   line-height: var(--sa-chat-line-body, 1.55);
 }
 
-.sa-shiki-block pre {
-  margin: 0;
-  border-radius: var(--sa-radius-md);
-  overflow: auto;
-}
 

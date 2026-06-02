@@ -9,13 +9,12 @@ type Props = {
 
 export function ShikiCodeBlock({ code, language }: Props) {
   return (
-    <div className="sa-shiki-block sa-code-surface" style={{ position: 'relative' }}>
+    <div className="sa-shiki-block sa-code-surface sa-subtle-scrollbar">
       <Button
         type="text"
         size="small"
         icon={<Copy size={14} />}
         className="sa-shiki-copy"
-        style={{ position: 'absolute', right: 8, top: 8, zIndex: 1 }}
         onClick={() => void navigator.clipboard.writeText(code)}
       >
         复制

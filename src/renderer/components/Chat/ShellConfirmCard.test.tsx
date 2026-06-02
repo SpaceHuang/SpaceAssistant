@@ -29,6 +29,8 @@ describe('ShellConfirmCard', () => {
       />
     )
     expect(screen.getByRole('button', { name: '我了解风险，确认执行' })).toBeTruthy()
+    expect(screen.getByText('高风险')).toBeTruthy()
+    expect(screen.getAllByText(/npm install|rm -rf/).length).toBeGreaterThan(0)
     expect(screen.getByText(/路径安全警示/)).toBeTruthy()
   })
 
@@ -40,7 +42,7 @@ describe('ShellConfirmCard', () => {
       />
     )
     expect(screen.getByRole('button', { name: '确认执行' })).toBeTruthy()
-    expect(screen.getByText('Shell 命令')).toBeTruthy()
+    expect(screen.getByText('执行 Shell 命令')).toBeTruthy()
     expect(screen.getByText(/下载 Playwright Chromium/)).toBeTruthy()
     expect(screen.getByText(/npm install/)).toBeTruthy()
     expect(document.querySelector('.shell-tui-fallback')).toBeNull()

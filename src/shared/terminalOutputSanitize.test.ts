@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeTerminalOutput } from './terminalOutputSanitize'
+import { formatShellStderrDisplay, normalizeTerminalOutput } from './terminalOutputSanitize'
 
 describe('normalizeTerminalOutput', () => {
   it('strips ANSI SGR sequences', () => {
@@ -23,5 +23,19 @@ describe('normalizeTerminalOutput', () => {
 
   it('preserves Windows CRLF lines', () => {
     expect(normalizeTerminalOutput('hello\r\nworld\r\n')).toBe('hello\nworld\n')
+  })
+})
+
+describe('formatShellStderrDisplay', () => {
+  it('prefixes non-zero exit code before stderr', () => {
+    expect(formatShellStderrDisplay('error TS2322', 1)).toBe('退出码 1\nerror TS2322')
+  })
+
+  it('returns only exit tag when stderr is empty', () => {
+    expect(formatShellStderrDisplay('', 1)).toBe('退出码 1')
+  })
+
+  it('returns stderr unchanged when exit code is zero', () => {
+    expect(formatShellStderrDisplay('ok', 0)).toBe('ok')
   })
 })

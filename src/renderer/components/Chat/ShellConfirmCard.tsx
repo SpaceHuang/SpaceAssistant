@@ -1,8 +1,8 @@
 import { useMemo } from 'react'
-import { AlertTriangle, Check, X } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
+import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
-import { ToolKindIcon } from './ToolRowIcon'
 
 type Props = {
   record: ToolCallRecord
@@ -25,40 +25,35 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
   const warnings = hints?.warnings ?? []
   const allowLabel = requiresRiskAck ? '我了解风险，确认执行' : '确认执行'
   const commandLines = useMemo(() => commandPreviewLines(command), [command])
+  const commandHead = commandLines[0]?.trim()
+  const hasCommandHead = Boolean(commandHead && commandHead !== '(空)')
+  const actionSummary = requiresRiskAck
+    ? hasCommandHead
+      ? commandHead!
+      : 'Shell 命令'
+    : description
+      ? '执行 Shell 命令'
+      : hasCommandHead
+        ? commandHead!
+        : '执行 Shell 命令'
 
   return (
     <div className={`write-confirm-card shell-confirm-card${requiresRiskAck ? ' shell-confirm-card--risk' : ''}`}>
-      <div className="write-confirm-card__header shell-confirm-card__header">
-        <span className="write-confirm-card__icon-badge" aria-hidden>
-          <ToolKindIcon kind="shell" className="write-confirm-card__file-icon" />
-        </span>
-        <span className="shell-confirm-card__title">Shell 命令</span>
-        {requiresRiskAck ? (
-          <span className="write-confirm-card__stat write-confirm-card__stat--risk">风险</span>
-        ) : null}
-        <div className="write-confirm-card__actions">
-          <button
-            type="button"
-            className="write-confirm-card__action write-confirm-card__action--allow"
-            aria-label={allowLabel}
-            title={allowLabel}
-            onClick={() => onConfirm(true)}
-          >
-            <Check size={16} strokeWidth={2.25} />
-          </button>
-          <button
-            type="button"
-            className="write-confirm-card__action write-confirm-card__action--deny"
-            aria-label="拒绝执行"
-            title="拒绝执行"
-            onClick={() => onConfirm(false)}
-          >
-            <X size={16} strokeWidth={2.25} />
-          </button>
-        </div>
-      </div>
-      <div className="write-confirm-card__body shell-confirm-card__body">
-        {description ? <p className="shell-confirm-card__description">{description}</p> : null}
+      <ConfirmCardDecision
+        actionSummary={actionSummary}
+        allowLabel={allowLabel}
+        denyLabel="拒绝执行"
+        onConfirm={onConfirm}
+        badges={
+          requiresRiskAck ? (
+            <span className="write-confirm-card__stat write-confirm-card__stat--risk">
+              高风险
+            </span>
+          ) : undefined
+        }
+      />
+      <div className="write-confirm-card__detail shell-confirm-card__detail">
+        {description ? <p className="write-confirm-card__note shell-confirm-card__description">{description}</p> : null}
         {warnings.length > 0 ? (
           <div className="shell-confirm-card__alert" role="alert">
             <AlertTriangle size={14} strokeWidth={2} className="shell-confirm-card__alert-icon" aria-hidden />
@@ -73,7 +68,7 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
           </div>
         ) : null}
         <ShellTuiFallbackHint command={command} workDir={workDir} />
-        <pre className="shell-confirm-card__command">
+        <pre className="write-confirm-card__command shell-confirm-card__command">
           {commandLines.map((line, i) => (
             <code key={`cmd-${i}`} className="shell-confirm-card__command-line">
               {line || ' '}

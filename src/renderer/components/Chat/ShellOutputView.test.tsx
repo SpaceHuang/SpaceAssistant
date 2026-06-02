@@ -41,7 +41,7 @@ describe('ShellOutputView', () => {
 
   it('shows exit code and stderr styling when exitCode is non-zero', () => {
     render(<ShellOutputView stdout="" stderr="error TS2322" exitCode={1} />)
-    expect(screen.getByText('退出码: 1')).toBeDefined()
+    expect(screen.getByText(/退出码 1/)).toBeDefined()
     expect(document.querySelector('.shell-output__stderr')?.textContent).toContain('error TS2322')
   })
 

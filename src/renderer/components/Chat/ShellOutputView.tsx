@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { normalizeTerminalOutput } from '../../../shared/terminalOutputSanitize'
+import { formatShellStderrDisplay, normalizeTerminalOutput } from '../../../shared/terminalOutputSanitize'
 
 type Props = {
   /** 实时模式：合并的 stdout+stderr 尾部 */
@@ -34,24 +34,22 @@ export function ShellOutputView({
     const text = normalizeTerminalOutput(content ?? '')
     if (!text.trim()) return null
     return (
-      <pre ref={preRef} className="shell-output shell-output--live">
+      <pre ref={preRef} className="shell-output shell-output--live sa-command-inset">
         {text}
       </pre>
     )
   }
 
   const out = normalizeTerminalOutput(stdout ?? '')
-  const err = normalizeTerminalOutput(stderr ?? '')
-  if (!out.trim() && !err.trim()) return null
+  const errDisplay = formatShellStderrDisplay(stderr ?? '', exitCode)
+  if (!out.trim() && !errDisplay.trim()) return null
 
-  const showExitCode = typeof exitCode === 'number' && exitCode !== 0
-  const hasFailure = showExitCode || Boolean(err.trim())
+  const hasFailure = Boolean(errDisplay.trim())
 
   return (
     <div className={`shell-output-block${hasFailure ? ' shell-output-block--failed' : ''}`}>
-      {showExitCode ? <div className="shell-output__meta">退出码: {exitCode}</div> : null}
       {out.trim() ? <pre className="shell-output">{out}</pre> : null}
-      {err.trim() ? <pre className="shell-output shell-output__stderr">{err}</pre> : null}
+      {errDisplay.trim() ? <pre className="shell-output shell-output__stderr">{errDisplay}</pre> : null}
       {truncated && persistedOutputPath ? (
         <button
           type="button"

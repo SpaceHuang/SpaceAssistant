@@ -1192,6 +1192,8 @@
 
 /* ── Tool call activity row ── */
 .tool-row {
+  min-width: 0;
+  width: 100%;
   font-size: var(--sa-chat-font-body);
   line-height: var(--sa-chat-line-body);
   color: var(--sa-text-secondary);
@@ -1293,6 +1295,8 @@
   display: grid;
   grid-template-rows: 0fr;
   margin: 0;
+  min-width: 0;
+  width: 100%;
   opacity: 0;
   transition:
     grid-template-rows var(--sa-duration-normal) var(--sa-ease-out),
@@ -1313,16 +1317,22 @@
   flex-direction: column;
   gap: 8px;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
   overflow: hidden;
-  padding: 8px 12px 10px;
+  padding: 4px 12px 12px;
   border: none;
   border-radius: 0;
-  border-top: 1px solid var(--sa-chat-detail-border);
+  border-top: none;
   background: transparent;
+  box-sizing: border-box;
 }
 
 .tool-row-detail__message {
   display: block;
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--sa-font-sans);
   font-size: var(--sa-chat-font-body);
   line-height: var(--sa-chat-line-body);
   color: var(--sa-text-secondary);
@@ -1330,154 +1340,100 @@
   word-break: break-word;
 }
 
-/* 终端 / Shell / 代码块：仅详情区用代码表面，标题栏与其他工具卡一致 */
-.tool-row-detail__inner:has(> .shell-terminal-wrap),
-.tool-row-detail__inner:has(> .shell-output-block),
-.tool-row-detail__inner:has(> .shell-output--live),
-.tool-row-detail__inner:has(> .sa-chat-code-block) {
-  padding: 0;
-  gap: 0;
-  border-top: 1px solid var(--sa-code-border);
-  background: var(--sa-code-bg);
-}
-
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-terminal-wrap,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-output-block,
-.tool-row-detail__inner:has(> .shell-output--live),
-.tool-row-detail__inner:has(> .sa-chat-code-block) {
-  margin-inline: 0;
+/* 展开区内嵌块：与确认卡命令块同一 token（--sa-chat-inset-*） */
+.tool-row--expanded .tool-row-detail__inner > .tool-row-detail__message,
+.tool-row--expanded .tool-row-detail__inner > .sa-command-inset,
+.tool-row--expanded .tool-row-detail__inner > .sa-chat-inset-code,
+.tool-row--expanded .tool-row-detail__inner > .sa-chat-code-block,
+.tool-row--expanded .tool-row-detail__inner > .tool-code-preview,
+.tool-row--expanded .tool-row-detail__inner > .browser-setup-guide,
+.tool-row--expanded .tool-row-detail__inner > .shell-tui-fallback,
+.tool-row--expanded .tool-row-detail__inner > .shell-output--live,
+.tool-row--expanded .tool-row-detail .shell-output-block:not(:has(.shell-terminal-wrap)) {
   width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+  box-sizing: border-box;
+  background: var(--sa-chat-inset-bg);
+  border: 1px solid var(--sa-chat-inset-border);
+  border-radius: var(--sa-radius-sm);
+  color: var(--sa-command-inset-text);
 }
 
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .tool-row-detail__message,
-.tool-row-detail__inner:has(> .shell-output-block) > .tool-row-detail__message,
-.tool-row-detail__inner:has(> .shell-output--live) > .tool-row-detail__message {
+.tool-row--expanded .tool-row-detail__inner > .sa-command-inset,
+.tool-row--expanded .tool-row-detail__inner > .sa-chat-inset-code,
+.tool-row--expanded .tool-row-detail__inner > .sa-chat-code-block,
+.tool-row--expanded .tool-row-detail__inner > .tool-code-preview,
+.tool-row--expanded .tool-row-detail__inner > .shell-output--live {
+  font-family: var(--sa-font-mono);
+}
+
+/* 交互式 xterm：卡片内唯一深色块，贴底圆角与外框一致 */
+.tool-row-detail__inner:has(> .shell-terminal-wrap) {
+  padding: 4px 8px 8px;
+  gap: 8px;
+}
+
+.tool-row-detail__inner:has(> .shell-terminal-wrap) > .tool-row-detail__message {
   padding: 8px 12px;
-  color: var(--sa-code-muted);
+  color: var(--sa-text-secondary);
+  background: var(--sa-chat-inset-bg);
+  border: 1px solid var(--sa-chat-inset-border);
+  border-radius: var(--sa-radius-sm);
 }
 
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-tui-fallback,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-tui-fallback {
+.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-terminal-wrap {
+  width: 100%;
+  border: 1px solid var(--sa-code-border);
+  border-radius: var(--sa-radius-sm);
+  overflow: hidden;
+}
+
+.tool-row-detail__inner:has(> .shell-terminal-wrap) .tool-row-detail__action {
   margin: 0;
-  padding: 10px 12px;
-  border: none;
-  border-top: 1px solid var(--sa-code-border);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--sa-code-text) 10%, var(--sa-code-bg));
-}
-
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-tui-fallback .shell-tui-fallback__header,
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-tui-fallback .shell-tui-fallback__title,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-tui-fallback .shell-tui-fallback__header,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-tui-fallback .shell-tui-fallback__title {
-  color: var(--sa-code-text);
-}
-
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-tui-fallback .shell-tui-fallback__line,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-tui-fallback .shell-tui-fallback__line {
-  color: var(--sa-code-muted);
-}
-
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-tui-fallback .shell-tui-fallback__header svg,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-tui-fallback .shell-tui-fallback__header svg {
-  color: var(--sa-accent);
-}
-
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-tui-fallback .shell-tui-fallback__action.ant-btn-link,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-tui-fallback .shell-tui-fallback__action.ant-btn-link {
-  color: var(--sa-code-accent) !important;
-}
-
-.tool-row-detail__inner:has(> .shell-terminal-wrap) > .shell-tui-fallback .shell-tui-fallback__action.ant-btn-link:hover,
-.tool-row-detail__inner:has(> .shell-output-block) > .shell-tui-fallback .shell-tui-fallback__action.ant-btn-link:hover {
-  color: color-mix(in srgb, var(--sa-code-accent) 82%, #ffffff) !important;
-}
-
-.tool-row-detail__inner:has(> .shell-terminal-wrap) .tool-row-detail__action,
-.tool-row-detail__inner:has(> .shell-output-block) .tool-row-detail__action {
-  margin: 0 12px 10px;
-}
-
-.tool-row-detail__inner > .sa-chat-code-block,
-.tool-row-detail__inner > .sa-chat-inset-code,
-.tool-row-detail__inner > .shell-output-block,
-.tool-row-detail__inner > .shell-terminal-wrap,
-.tool-row-detail__inner > .shell-tui-fallback,
-.tool-row-detail__inner > .tool-diff-block,
-.tool-row-detail__inner > .browser-setup-guide {
-  margin: 0;
+  align-self: flex-start;
 }
 
 .tool-row-detail .shell-output-block {
   gap: 0;
   overflow: hidden;
-  background: var(--sa-code-bg);
-}
-
-.tool-row-detail .shell-output-block--failed .shell-output__meta {
-  color: color-mix(in srgb, var(--sa-code-text) 72%, transparent);
+  padding: 0;
 }
 
 .tool-row-detail .shell-output__meta {
-  padding: 8px 12px 6px;
+  padding: 8px 12px 0;
   margin-bottom: 0;
   font-family: var(--sa-font-sans);
   font-size: var(--sa-chat-font-meta);
   font-weight: 500;
-  color: color-mix(in srgb, var(--sa-code-text) 62%, transparent);
-  border-bottom: 1px solid var(--sa-code-border);
-}
-
-.tool-row-detail .shell-output__meta:only-child {
-  border-bottom: none;
-}
-
-.tool-row-detail__inner > .shell-output--live,
-.tool-row-detail__inner .shell-terminal-wrap {
-  border: none;
-  border-radius: 0;
-}
-
-.tool-row-detail__inner > .shell-output--live {
-  background: var(--sa-code-bg);
+  color: var(--sa-text-secondary);
 }
 
 .tool-row-detail .shell-output-block .shell-output {
+  margin: 0;
   border: none;
   border-radius: 0;
   background: transparent;
+  color: var(--sa-command-inset-text);
 }
 
-.tool-row-detail .shell-output-block .shell-output.shell-output__stderr {
-  color: var(--sa-code-stderr);
-}
-
-.tool-row-detail .shell-output__meta + .shell-output {
-  padding-top: 8px;
+.tool-row-detail .shell-output-block .shell-output.shell-output__stderr,
+.tool-row-detail .shell-output-block .shell-output.shell-output__exit-tag {
+  color: var(--sa-shell-stderr-text);
+  background: var(--sa-shell-stderr-bg);
 }
 
 .tool-row-detail .shell-output__truncated-hint {
   padding: 8px 12px 10px;
-  color: color-mix(in srgb, var(--sa-code-text) 55%, transparent);
+  color: var(--sa-text-tertiary);
 }
 
 .tool-row-detail .shell-output__truncated-hint:hover {
   color: var(--sa-primary);
 }
 
-.tool-row-detail .shell-output--live {
-  border-bottom: 2px solid var(--sa-primary);
-}
-
-.tool-row-detail__inner > .sa-chat-code-block,
-.tool-row-detail__inner .sa-chat-inset-code {
-  border: none;
-  border-radius: 0;
-}
-
-.tool-row-detail__inner > .sa-chat-inset-code {
-  margin-inline: 0;
-  width: 100%;
+.tool-row-detail__inner > .browser-setup-guide {
+  padding: 10px 12px;
 }
 
 .tool-row-detail__action {
@@ -1506,38 +1462,39 @@
   background: var(--sa-diff-add-bg);
 }
 
+/* 命令/输出 inset：确认卡、tool-row 展开区共用 --sa-chat-inset-*（xterm 终端除外） */
+.sa-command-inset,
+.write-confirm-card__command,
 .sa-chat-code-block,
-.tool-code-preview {
+.tool-code-preview,
+.sa-chat-inset-code,
+.shell-output {
   margin: 0;
   padding: 10px 12px;
-  background: var(--sa-code-bg);
-  color: var(--sa-code-text);
-  border: 1px solid var(--sa-code-border);
+  background: var(--sa-command-inset-bg);
+  color: var(--sa-command-inset-text);
+  border: 1px solid var(--sa-command-inset-border);
   border-radius: var(--sa-radius-sm);
   font-family: var(--sa-font-mono);
-  font-size: var(--sa-chat-font-mono);
-  line-height: var(--sa-chat-line-mono);
+  font-size: var(--sa-confirm-command-font-size);
+  font-weight: var(--sa-confirm-command-font-weight);
+  line-height: var(--sa-confirm-command-line-height);
+  font-synthesis: none;
+  letter-spacing: 0;
   max-height: 240px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.sa-chat-inset-code,
 .tool-code-preview--inline {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--sa-chat-inset-bg);
-  color: var(--sa-text);
-  border: 1px solid var(--sa-chat-detail-border);
   border-radius: var(--sa-radius-sm);
-  font-family: var(--sa-font-mono);
-  font-size: var(--sa-chat-font-mono);
-  line-height: var(--sa-chat-line-mono);
-  max-height: 240px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
+}
+
+.shell-output-block:not(:has(.shell-terminal-wrap)) {
+  background: var(--sa-command-inset-bg);
+  color: var(--sa-command-inset-text);
+  border: 1px solid var(--sa-command-inset-border);
 }
 
 .shell-output-block {
@@ -1547,30 +1504,14 @@
 }
 
 .shell-output {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--sa-code-border);
-  border-radius: var(--sa-radius-sm);
-  font-family: var(--sa-font-mono);
-  font-size: var(--sa-chat-font-mono);
-  line-height: var(--sa-chat-line-mono);
-  max-height: 240px;
   overflow-x: auto;
   overflow-y: auto;
-  background: var(--sa-code-bg);
-  color: var(--sa-code-text);
-  white-space: pre-wrap;
-  word-break: break-word;
   overflow-wrap: anywhere;
 }
 
-.shell-output--live {
-  border-bottom: 2px solid var(--sa-primary);
-}
-
 .shell-output__stderr {
-  color: var(--sa-code-stderr);
-  background: transparent;
+  color: var(--sa-shell-stderr-text);
+  background: var(--sa-shell-stderr-bg);
 }
 
 .shell-output__meta {
@@ -1586,8 +1527,8 @@
   margin: 0;
   padding: 10px 12px;
   border-radius: var(--sa-radius-sm);
-  background: var(--sa-chat-inset-bg);
-  border: 1px solid var(--sa-chat-detail-border);
+  background: var(--sa-command-inset-bg);
+  border: 1px solid var(--sa-command-inset-border);
 }
 
 .shell-tui-fallback__header {
@@ -1724,9 +1665,9 @@
 .browser-setup-guide {
   margin-top: 0;
   padding: 12px;
-  border: 1px solid var(--sa-chat-detail-border);
+  border: 1px solid var(--sa-command-inset-border);
   border-radius: var(--sa-radius-sm);
-  background: var(--sa-chat-inset-bg);
+  background: var(--sa-command-inset-bg);
 }
 
 .browser-setup-guide--chat {
@@ -1800,6 +1741,71 @@
   border-color: var(--sa-border-strong);
 }
 
+.write-confirm-card__decision {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px 14px 14px;
+  background: var(--sa-bg-elevated);
+  border-bottom: 1px solid var(--sa-border);
+}
+
+.write-confirm-card__decision-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.write-confirm-card__decision-summary {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: var(--sa-chat-font-body);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  color: var(--sa-text);
+  text-wrap: balance;
+}
+
+.write-confirm-card__decision-badges {
+  display: inline-flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 决策区标签：统一小号 chip（写入 / 高风险 / diff 行数） */
+.write-confirm-card__decision-badges .write-confirm-card__stat {
+  min-height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.write-confirm-card__decision-badges .write-confirm-card__stat--add,
+.write-confirm-card__decision-badges .write-confirm-card__stat--remove {
+  padding: 0 5px;
+  font-family: var(--sa-font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border: none;
+}
+
+.shell-confirm-card--risk .write-confirm-card__decision-summary {
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-meta);
+  font-weight: 600;
+}
+
 .write-confirm-card__header {
   display: flex;
   align-items: center;
@@ -1848,7 +1854,7 @@
   font-weight: 500;
 }
 
-/* 确认卡片标题栏标签：中文用语 sans 加粗；diff 行数用 mono */
+/* 确认卡片标签基类（决策区由 .decision-badges 覆写为 chip 尺寸） */
 .write-confirm-card__stat {
   flex-shrink: 0;
   display: inline-flex;
@@ -1899,29 +1905,58 @@
 .write-confirm-card__actions {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
   flex-shrink: 0;
   margin-left: auto;
   padding: 0;
+}
+
+.write-confirm-card__decision .write-confirm-card__actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  width: 100%;
+  gap: 8px;
+  margin-left: 0;
+}
+
+.write-confirm-card__decision .write-confirm-card__action {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: var(--sa-chat-font-meta);
+  width: 100%;
+}
+
+.shell-confirm-card--risk .write-confirm-card__decision .write-confirm-card__action {
+  min-height: 30px;
+  padding: 0 8px;
+  gap: 4px;
+}
+
+.shell-confirm-card--risk .write-confirm-card__decision .write-confirm-card__action--allow {
+  line-height: 1.25;
 }
 
 .write-confirm-card__action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  line-height: 0;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
   border: 1px solid transparent;
   border-radius: var(--sa-radius-sm);
-  background: transparent;
+  font-family: var(--sa-font-sans);
+  font-size: var(--sa-sider-font-size);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     background var(--sa-duration-fast) var(--sa-ease-out),
     border-color var(--sa-duration-fast) var(--sa-ease-out),
     color var(--sa-duration-fast) var(--sa-ease-out),
-    box-shadow var(--sa-duration-fast) var(--sa-ease-out),
     transform var(--sa-duration-fast) var(--sa-ease-out);
 }
 
@@ -1931,25 +1966,25 @@
 }
 
 .write-confirm-card__action--allow {
-  background: var(--sa-write-confirm-allow-bg);
-  border-color: var(--sa-write-confirm-allow-border);
-  color: var(--sa-write-confirm-allow-fg);
+  background: var(--sa-write-confirm-allow-solid-bg);
+  border-color: var(--sa-write-confirm-allow-solid-bg);
+  color: var(--sa-write-confirm-allow-solid-fg);
 }
 
 .write-confirm-card__action--allow:hover {
-  background: var(--sa-write-confirm-allow-hover-bg);
-  border-color: var(--sa-write-confirm-allow-hover-border);
-  color: var(--sa-write-confirm-allow-fg);
+  background: var(--sa-write-confirm-allow-solid-hover-bg);
+  border-color: var(--sa-write-confirm-allow-solid-hover-bg);
+  color: var(--sa-write-confirm-allow-solid-fg);
 }
 
 .write-confirm-card__action--allow:active {
-  transform: scale(0.96);
+  transform: scale(0.98);
 }
 
 .write-confirm-card__action--deny {
   background: var(--sa-bg-elevated);
   border-color: var(--sa-border-strong);
-  color: var(--sa-text-secondary);
+  color: var(--sa-text);
 }
 
 .write-confirm-card__action--deny:hover {
@@ -1959,7 +1994,14 @@
 }
 
 .write-confirm-card__action--deny:active {
-  transform: scale(0.96);
+  transform: scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .write-confirm-card__action--allow:active,
+  .write-confirm-card__action--deny:active {
+    transform: none;
+  }
 }
 
 .write-confirm-card__action:focus-visible {
@@ -1971,7 +2013,190 @@
   position: relative;
   max-height: 240px;
   overflow: auto;
-  padding-bottom: 2px;
+  padding: 0;
+}
+
+.write-confirm-card__body--diff {
+  max-height: none;
+  overflow: visible;
+}
+
+.write-confirm-card__body--diff::after {
+  display: none;
+}
+
+.write-confirm-card__collapsible-viewport {
+  position: relative;
+  min-height: 72px;
+}
+
+.write-confirm-card__collapsible--clamped:not(.write-confirm-card__collapsible--expanded)
+  .write-confirm-card__collapsible-viewport {
+  max-height: 168px;
+  overflow: hidden;
+}
+
+.write-confirm-card__collapsible--clamped.write-confirm-card__collapsible--expanded
+  .write-confirm-card__collapsible-viewport {
+  overflow: auto;
+}
+
+.write-confirm-card__collapsible--clamped:not(.write-confirm-card__collapsible--expanded)
+  .write-confirm-card__collapsible-viewport::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  display: block;
+  height: 28px;
+  margin-top: -28px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--sa-bg-elevated));
+}
+
+.write-confirm-card__collapsible-bar {
+  display: flex;
+  justify-content: center;
+  padding: 6px 12px 10px;
+  border-top: 1px solid var(--sa-border);
+  background: var(--sa-bg-elevated);
+}
+
+.write-confirm-card__expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  font-family: var(--sa-font-sans);
+  font-size: var(--sa-chat-font-meta);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sa-primary);
+  cursor: pointer;
+  transition: background var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.write-confirm-card__expand-btn:hover {
+  background: var(--sa-primary-subtle);
+}
+
+.write-confirm-card__expand-btn:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 2px;
+}
+
+.write-confirm-card__expand-btn-icon {
+  transition: transform var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.write-confirm-card__collapsible--expanded .write-confirm-card__expand-btn-icon {
+  transform: rotate(180deg);
+}
+
+.write-confirm-card__preview-cap {
+  margin: 0;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--sa-border);
+  font-size: var(--sa-chat-font-meta);
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+}
+
+.write-confirm-card__detail-kicker {
+  margin: 0;
+  padding: 10px 12px 0;
+  font-size: var(--sa-chat-font-meta);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--sa-text-tertiary);
+}
+
+.write-confirm-card__note {
+  margin: 0;
+  padding: 8px 12px 12px;
+  font-size: var(--sa-chat-font-meta);
+  line-height: 1.55;
+  color: var(--sa-text-secondary);
+}
+
+.write-confirm-card__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.write-confirm-card__detail .write-confirm-card__note {
+  padding: 0;
+}
+
+.write-confirm-card__command {
+  display: block;
+  max-height: none;
+  overflow-x: auto;
+}
+
+.write-confirm-card__command code {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+.write-confirm-card__command--code {
+  padding: 0;
+  overflow: hidden;
+}
+
+.write-confirm-card__command--code .script-confirm-card__code--highlighted {
+  max-height: 280px;
+  overflow: auto;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-color: var(--sa-border-strong) transparent;
+}
+
+.write-confirm-card__command--code .script-confirm-card__code--highlighted::after {
+  background: linear-gradient(to bottom, transparent, var(--sa-bg-subtle));
+}
+
+.write-confirm-card__command--code .script-confirm-card__code--highlighted .sa-prose pre,
+.write-confirm-card__command--code .script-confirm-card__code--highlighted .sa-prose pre.shiki,
+.write-confirm-card__command--code .script-confirm-card__code--highlighted pre.shiki-placeholder,
+.write-confirm-card__command--code .script-confirm-card__code--highlighted .sa-prose pre.shiki code,
+.write-confirm-card__command--code .script-confirm-card__code--highlighted pre.shiki-placeholder code,
+.write-confirm-card__command--code .script-confirm-card__code--highlighted .shiki .line {
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent !important;
+  background-color: transparent !important;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-confirm-command-font-size);
+  font-weight: var(--sa-confirm-command-font-weight);
+  line-height: var(--sa-confirm-command-line-height);
+  font-synthesis: none;
+  letter-spacing: 0;
+  color: var(--sa-text);
+}
+
+.write-confirm-card__command--code .script-confirm-card__code--highlighted .sa-prose pre,
+.write-confirm-card__command--code .script-confirm-card__code--highlighted .sa-prose pre.shiki,
+.write-confirm-card__command--code .script-confirm-card__code--highlighted pre.shiki-placeholder {
+  padding: 10px 12px;
+}
+
+.write-confirm-card__detail .shell-confirm-card__meta,
+.write-confirm-card__detail .script-confirm-card__meta,
+.write-confirm-card__detail .lark-cli-confirm-card__meta {
+  margin: 0;
+  padding: 0;
+  border-top: none;
 }
 
 .write-confirm-card__body::after {
@@ -1987,11 +2212,21 @@
 
 .write-confirm-card__code {
   margin: 0;
-  padding: 4px 0;
+  padding: 6px 0 4px;
+  border-top: 1px solid var(--sa-border);
   font-family: var(--sa-font-mono);
   font-size: var(--sa-chat-font-mono);
   line-height: var(--sa-chat-line-mono);
   color: var(--sa-text);
+}
+
+.write-confirm-card__body--diff .write-confirm-card__code {
+  border-top: none;
+  padding: 8px 0 4px;
+}
+
+.write-confirm-card__decision + .write-confirm-card__body > .write-confirm-card__code:first-child {
+  border-top: none;
 }
 
 .write-confirm-card__line {
@@ -2030,101 +2265,17 @@
   color: #cf1322;
 }
 
-/* ── Browser confirm card (shared chrome) ── */
-.browser-confirm-card__body {
-  padding: 12px 14px 14px;
-}
-
-.browser-confirm-card__field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.browser-confirm-card__label {
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  color: var(--sa-text-tertiary);
-}
-
-.browser-confirm-card__url,
-.browser-confirm-card__value {
-  padding: 10px 12px;
-  border: 1px solid var(--sa-chat-detail-border);
-  border-radius: var(--sa-radius-sm);
-  background: var(--sa-chat-inset-bg);
-  font-family: var(--sa-font-mono);
-  font-size: var(--sa-chat-font-mono);
-  line-height: var(--sa-chat-line-mono);
-  color: var(--sa-text);
+/* ── Browser confirm card ── */
+.browser-confirm-card__url {
   word-break: break-all;
-  white-space: pre-wrap;
-}
-
-.browser-confirm-card__hint {
-  margin: 10px 0 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--sa-border);
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--sa-text-secondary);
-}
-
-/* ── Shell / Script / Lark CLI confirm cards (shared body chrome) ── */
-.shell-confirm-card .write-confirm-card__body,
-.script-confirm-card .write-confirm-card__body,
-.lark-cli-confirm-card .write-confirm-card__body {
-  max-height: none;
-  overflow: visible;
-  padding-bottom: 0;
-}
-
-.shell-confirm-card .write-confirm-card__body::after,
-.script-confirm-card .write-confirm-card__body::after,
-.lark-cli-confirm-card .write-confirm-card__body::after {
-  display: none;
-}
-
-.shell-confirm-card--risk .write-confirm-card__icon-badge {
-  background: var(--sa-confirm-risk-subtle);
-  color: var(--sa-confirm-risk-accent);
 }
 
 .shell-confirm-card__description {
-  margin: 0;
-  padding: 12px 14px 0;
-  font-size: 12px;
-  line-height: 1.55;
-  color: var(--sa-text-secondary);
   word-break: break-word;
-}
-
-.shell-confirm-card__command,
-.script-confirm-card__code,
-.lark-cli-confirm-card__command {
-  display: block;
-  margin: 10px 14px 0;
-  padding: 10px 12px;
-  overflow-x: auto;
-  border: 1px solid var(--sa-code-border);
-  border-radius: var(--sa-radius-md);
-  background: var(--sa-code-bg);
-  font-family: var(--sa-font-mono);
-  font-size: var(--sa-chat-font-mono);
-  line-height: var(--sa-chat-line-mono);
-  color: var(--sa-code-text);
 }
 
 .script-confirm-card__code--highlighted {
   position: relative;
-  max-height: 280px;
-  padding: 0;
-  overflow: auto;
-  border: 1px solid var(--sa-border);
-  border-radius: var(--sa-radius-md);
-  background: var(--sa-code-bg);
-  color: var(--sa-code-text);
 }
 
 .script-confirm-card__code--highlighted::after {
@@ -2135,26 +2286,15 @@
   height: 20px;
   margin-top: -20px;
   pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--sa-code-bg));
-  border-radius: 0 0 var(--sa-radius-md) var(--sa-radius-md);
+  background: linear-gradient(to bottom, transparent, var(--sa-bg-subtle));
 }
 
-.script-confirm-card__code--highlighted.sa-code-surface .sa-prose pre,
-.script-confirm-card__code--highlighted.sa-code-surface .sa-prose pre.shiki {
+.script-confirm-card__code--highlighted .sa-prose {
   margin: 0;
-  max-height: none;
-  overflow: visible;
-  padding: 10px 12px;
-  font-size: var(--sa-chat-font-mono);
-  line-height: var(--sa-chat-line-mono);
-  border-radius: 0;
-  background: transparent !important;
-  background-color: transparent !important;
+  min-width: 0;
 }
 
-.script-confirm-card__code--highlighted .shiki-placeholder,
 .script-confirm-card__code--highlighted .shiki-placeholder code {
-  color: var(--sa-code-text);
   background: transparent;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2168,7 +2308,6 @@
 }
 
 .shell-confirm-card__command-line {
-  display: block;
   white-space: pre;
   word-break: normal;
 }
@@ -2177,8 +2316,15 @@
   margin-top: 4px;
 }
 
-.lark-cli-confirm-card__command-line {
+.lark-cli-confirm-card__command-line,
+.shell-confirm-card__command-line {
   display: block;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+.lark-cli-confirm-card__command-line {
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -2189,7 +2335,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px 20px;
-  padding: 10px 14px 14px;
   font-family: var(--sa-font-mono);
   font-size: 11px;
   line-height: 1.45;
@@ -2227,10 +2372,10 @@
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  margin: 10px 14px 0;
+  margin: 0;
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--sa-confirm-risk-accent) 35%, var(--sa-border) 65%);
-  border-radius: var(--sa-radius-md);
+  border-radius: var(--sa-radius-sm);
   background: var(--sa-confirm-risk-subtle);
   color: var(--sa-text);
 }
@@ -2263,11 +2408,11 @@
 }
 
 
-.lark-cli-confirm-card__hint {
-  margin: 10px 14px 0;
-  font-size: 11px;
-  line-height: 1.55;
-  color: var(--sa-text-secondary);
+
+@media (prefers-reduced-motion: reduce) {
+  .write-confirm-card__expand-btn-icon {
+    transition: none;
+  }
 }
 
 /* ── Write success card ── */

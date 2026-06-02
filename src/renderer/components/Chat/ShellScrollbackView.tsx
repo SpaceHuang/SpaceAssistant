@@ -117,12 +117,18 @@ export function ShellScrollbackView({
   }
 
   if (!expanded) {
-    return showExitCode ? <div className="shell-output__meta">退出码: {exitCode}</div> : null
+    return showExitCode ? (
+      <ShellOutputView stdout="" stderr="" exitCode={exitCode} />
+    ) : null
   }
 
   return (
     <div className="shell-output-block">
-      {showExitCode ? <div className="shell-output__meta">退出码: {exitCode}</div> : null}
+      {showExitCode ? (
+        <pre className="shell-output shell-output__stderr shell-output__exit-tag">
+          {`退出码 ${exitCode}`}
+        </pre>
+      ) : null}
       {scrollback?.truncated ? (
         <div className="shell-output__meta">终端记录已截断（超过 256KB）</div>
       ) : null}
