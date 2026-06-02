@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
@@ -31,6 +31,8 @@ import {
   type ToolChatController
 } from '../../services/chatToolSessionService'
 import { parseSkillCommand } from '../../services/skillCommandService'
+import { parseTestCardsCommand } from '../../services/testCardsCommandService'
+import { runTestCardsPreview } from '../../services/testCardsPreviewService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
 import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
@@ -68,6 +70,8 @@ import {
 } from '../../../shared/thinkingSegments'
 import { throttle } from '../../utils/throttle'
 import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
+import { isChatScrollNearBottom, scrollChatToBottom } from '../../utils/chatScroll'
+import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
 
 type SendInternalOptions = {
   skipUserMessage?: boolean
@@ -99,17 +103,34 @@ export function ChatView() {
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
   const composerRef = useRef<MessageInputHandle>(null)
   const abortRequestedRef = useRef(false)
   const lastSkillRouteSignatureRef = useRef('')
+  const [testPreviewMessageIds, setTestPreviewMessageIds] = useState<Set<string>>(() => new Set())
 
   const streamingAssistantId = useMemo(
     () => messages.find((m) => m.role === 'assistant' && m.status === 'streaming')?.id,
     [messages]
   )
 
+  const messageIds = useMemo(() => messages.map((m) => m.id), [messages])
+  const enterMessageId = useChatMessageEnter(sessionId, messageIds)
+
   useEffect(() => {
     lastSkillRouteSignatureRef.current = ''
+    setTestPreviewMessageIds(new Set())
+    stickToBottomRef.current = true
+  }, [sessionId])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onScroll = () => {
+      stickToBottomRef.current = isChatScrollNearBottom(el)
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
   }, [sessionId])
 
   useEffect(() => {
@@ -172,19 +193,21 @@ export function ChatView() {
     return () => window.clearTimeout(t)
   }, [sessionId, dispatch])
 
-  const scrollBottom = useCallback(() => {
+  const scrollBottom = useCallback((force = false) => {
     requestAnimationFrame(() => {
       const el = scrollRef.current
-      if (el) el.scrollTop = el.scrollHeight
+      if (!el) return
+      scrollChatToBottom(el, { force, stickToBottom: stickToBottomRef.current })
     })
   }, [])
 
   const scrollBottomThrottled = useMemo(
     () =>
-      throttle(() => {
+      throttle((force = false) => {
         requestAnimationFrame(() => {
           const el = scrollRef.current
-          if (el) el.scrollTop = el.scrollHeight
+          if (!el) return
+          scrollChatToBottom(el, { force, stickToBottom: stickToBottomRef.current })
         })
       }, 100),
     []
@@ -253,7 +276,7 @@ export function ChatView() {
       finishSessionRun(runSessionId, runRequestId, assistantId)
       clearLiveSession(runSessionId)
       message.info(CHAT_CANCELLED_MESSAGE)
-      scrollBottom()
+      scrollBottom(true)
     },
     [dispatch, message, scrollBottom]
   )
@@ -263,7 +286,7 @@ export function ChatView() {
       const msg = createSkillHintSystemMessage(targetSessionId, text, shownAt)
       dispatch(addMessage(msg))
       await window.api.chatAppendMessage(msg)
-      scrollBottom()
+      scrollBottom(true)
     },
     [dispatch, scrollBottom]
   )
@@ -284,6 +307,26 @@ export function ChatView() {
         message.warning(`最多同时执行 ${maxParallel} 个会话，请稍后再试`)
         return
       }
+
+      const testCmd = parseTestCardsCommand(text)
+      if (testCmd.type === 'command') {
+        await persistSkillHintSystemMessage(runSessionId, testCmd.hint)
+        return
+      }
+      if (testCmd.type === 'run') {
+        await runTestCardsPreview({
+          sessionId: runSessionId,
+          text,
+          dispatch,
+          scrollBottom,
+          onPreviewMessageId: (messageId) => {
+            setTestPreviewMessageIds((prev) => new Set([...prev, messageId]))
+          },
+          persistSystemHint: (hint) => persistSkillHintSystemMessage(runSessionId, hint)
+        })
+        return
+      }
+
       if (!cfg.apiKeyPresent) {
         message.warning('请先在设置中配置 API Key')
         return
@@ -340,6 +383,7 @@ export function ChatView() {
       if (!options?.skipUserMessage) {
         dispatch(addMessage(userMsg))
         await window.api.chatAppendMessage(userMsg)
+        stickToBottomRef.current = true
       }
 
       const requestId = crypto.randomUUID()
@@ -434,6 +478,8 @@ export function ChatView() {
       dispatch(addMessage(assistantMsg))
       initLiveSessionFromStore(runSessionId)
       await window.api.chatAppendMessage(assistantMsg)
+      stickToBottomRef.current = true
+      scrollBottom(true)
 
       if (abortRequestedRef.current) {
         await finishCancelled(
@@ -828,6 +874,23 @@ export function ChatView() {
     [message, openFile, cfg?.wiki?.rootPath]
   )
 
+  const testPreviewToolsInteractive = useMemo(
+    () =>
+      cfg
+        ? {
+            requestId: 'test-cards-preview',
+            confirmMode: cfg.tools.confirmMode,
+            onToolConfirm: (_toolUseId: string, approved: boolean) => {
+              message.info(approved ? '测试预览：已确认（无实际操作）' : '测试预览：已拒绝（无实际操作）')
+            },
+            onToolCancel: () => {
+              message.info('测试预览：已取消（无实际操作）')
+            }
+          }
+        : undefined,
+    [cfg, message]
+  )
+
   const toolsInteractive = useMemo(
     () =>
       cfg?.tools.enabled && streamingRequestId && streamingAssistantId
@@ -846,6 +909,15 @@ export function ChatView() {
       onToolConfirm,
       onToolCancel
     ]
+  )
+
+  const resolveToolsInteractive = useCallback(
+    (messageId: string) => {
+      if (messageId === streamingAssistantId) return toolsInteractive
+      if (testPreviewMessageIds.has(messageId)) return testPreviewToolsInteractive
+      return undefined
+    },
+    [streamingAssistantId, toolsInteractive, testPreviewMessageIds, testPreviewToolsInteractive]
   )
 
   return (
@@ -867,6 +939,7 @@ export function ChatView() {
             <div className="chat-empty-title">开始对话</div>
             <p className="chat-empty-desc">
               输入问题开始协作，例如：帮我整理 README 的要点。也可使用 /skill 或 /wiki 命令。
+              {import.meta.env.DEV ? ' 开发模式可用 /test-cards 预览交互卡片。' : ''}
             </p>
           </div>
         ) : (
@@ -875,7 +948,8 @@ export function ChatView() {
               <ChatBubble
                 key={m.id}
                 message={m}
-                toolsInteractive={m.id === streamingAssistantId ? toolsInteractive : undefined}
+                enter={m.id === enterMessageId}
+                toolsInteractive={resolveToolsInteractive(m.id)}
                 focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
                 workDir={cfg?.workDir}
                 shellConfig={cfg?.shell}

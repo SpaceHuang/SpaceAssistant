@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Brain } from 'lucide-react'
+import { Brain, ChevronRight } from 'lucide-react'
 
 type Props = {
   content: string
@@ -15,7 +15,7 @@ export function ThinkingBlock({ content, active = false }: Props) {
   }, [active])
 
   return (
-    <div className="chat-thinking">
+    <div className={`chat-thinking${expanded ? ' chat-thinking--expanded' : ''}`}>
       <button
         type="button"
         className="chat-thinking__toggle"
@@ -25,8 +25,13 @@ export function ThinkingBlock({ content, active = false }: Props) {
       >
         <Brain size={14} strokeWidth={1.75} className="chat-thinking__icon" aria-hidden />
         <span>思考</span>
+        <ChevronRight size={12} strokeWidth={2} className="chat-thinking__chevron" aria-hidden />
       </button>
-      {expanded ? <div className="chat-thinking__body">{content}</div> : null}
+      <div className="chat-thinking__panel">
+        <div className="chat-thinking__panel-inner">
+          <div className="chat-thinking__body">{content}</div>
+        </div>
+      </div>
     </div>
   )
 }

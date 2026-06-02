@@ -21,6 +21,8 @@ export type ToolsInteractiveProps = {
 
 type Props = {
   message: Message
+  /** 新追加的消息行入场动效（由 ChatView 按条数增量判定） */
+  enter?: boolean
   toolsInteractive?: ToolsInteractiveProps
   focusToolUseId?: string | null
   workDir?: string
@@ -79,6 +81,7 @@ function MessageMeta({
 
 export const ChatBubble = memo(function ChatBubble({
   message,
+  enter = false,
   toolsInteractive,
   focusToolUseId,
   workDir,
@@ -107,7 +110,12 @@ export const ChatBubble = memo(function ChatBubble({
 
   if (isUser) {
     return (
-      <div className="chat-bubble-row chat-bubble-row--user" data-message-id={message.id}>
+      <div
+        className={['chat-bubble-row', 'chat-bubble-row--user', enter ? 'chat-bubble-row--enter' : '']
+          .filter(Boolean)
+          .join(' ')}
+        data-message-id={message.id}
+      >
         <div className="chat-bubble-col chat-bubble-col--user">
           <div className="chat-bubble chat-bubble--user">
             <div className="chat-md-user">{message.content}</div>
@@ -121,6 +129,7 @@ export const ChatBubble = memo(function ChatBubble({
   const rowClass = [
     'chat-bubble-row',
     'chat-bubble-row--assistant',
+    enter ? 'chat-bubble-row--enter' : '',
     streaming ? 'chat-bubble-row--streaming' : '',
     failed ? 'chat-bubble-row--failed' : ''
   ]
@@ -260,6 +269,7 @@ export const ChatBubble = memo(function ChatBubble({
   )
 }, (prev, next) =>
   prev.message === next.message &&
+  prev.enter === next.enter &&
   prev.focusToolUseId === next.focusToolUseId &&
   prev.toolsInteractive === next.toolsInteractive &&
   prev.onOpenFile === next.onOpenFile &&

@@ -8,7 +8,7 @@ export function SessionListIcon({ loading }: Props) {
   if (loading) {
     return (
       <span className="session-item-icon session-item-icon--loading" aria-hidden>
-        <Loader2 size={12} strokeWidth={2} />
+        <Loader2 size={14} strokeWidth={2} />
       </span>
     )
   }

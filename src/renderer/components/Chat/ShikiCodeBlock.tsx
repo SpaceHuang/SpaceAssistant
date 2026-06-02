@@ -9,7 +9,7 @@ type Props = {
 
 export function ShikiCodeBlock({ code, language }: Props) {
   return (
-    <div className="sa-shiki-block" style={{ position: 'relative' }}>
+    <div className="sa-shiki-block sa-code-surface" style={{ position: 'relative' }}>
       <Button
         type="text"
         size="small"

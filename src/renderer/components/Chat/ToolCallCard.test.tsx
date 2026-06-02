@@ -83,7 +83,8 @@ describe('ToolCallCard file write expand behavior', () => {
         confirmMode="direct"
       />
     )
-    expect(document.querySelector('.tool-row-detail')).toBeNull()
+    expect(document.querySelector('.tool-row--expanded')).toBeNull()
+    expect(document.querySelector('.tool-row-detail--collapsed')).not.toBeNull()
   })
 
   it('calls onConfirm when allow or deny icon is clicked', () => {
@@ -131,6 +132,40 @@ describe('ToolCallCard file write expand behavior', () => {
     expect(screen.queryByRole('button', { name: '取消执行' })).toBeNull()
   })
 
+  it('does not show per-card cancel while browser_detect is executing', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-detect-exec',
+          toolName: 'browser_detect',
+          input: {},
+          status: 'executing',
+          riskLevel: 'low'
+        }}
+        confirmMode="direct"
+        onCancel={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '取消执行' })).toBeNull()
+  })
+
+  it('does not show per-card cancel while grep is executing', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-grep-exec',
+          toolName: 'grep',
+          input: { pattern: 'foo' },
+          status: 'executing',
+          riskLevel: 'low'
+        }}
+        confirmMode="direct"
+        onCancel={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('button', { name: '取消执行' })).toBeNull()
+  })
+
   it('collapses browser_detect row when detection completes successfully', () => {
     const { rerender, container } = render(
       <ToolCallCard
@@ -144,7 +179,8 @@ describe('ToolCallCard file write expand behavior', () => {
         confirmMode="direct"
       />
     )
-    expect(container.querySelector('.tool-row--expanded')).not.toBeNull()
+    expect(container.querySelector('.tool-row--expanded')).toBeNull()
+    expect(container.querySelector('.tool-row-detail')).toBeNull()
 
     rerender(
       <ToolCallCard
@@ -167,8 +203,8 @@ describe('ToolCallCard file write expand behavior', () => {
         confirmMode="direct"
       />
     )
-    expect(container.querySelector('.tool-row-detail')).toBeNull()
     expect(container.querySelector('.tool-row--expanded')).toBeNull()
+    expect(container.querySelector('.tool-row-detail--collapsed')).not.toBeNull()
   })
 
   it('keeps browser_detect row expanded when detection fails', () => {
@@ -216,8 +252,12 @@ describe('ToolCallCard file write expand behavior', () => {
     ]
     for (const record of cases) {
       const { container, unmount } = render(<ToolCallCard record={record} confirmMode="direct" />)
-      expect(container.querySelector('.tool-row-detail')).toBeNull()
       expect(container.querySelector('.tool-row--expanded')).toBeNull()
+      if (record.status === 'failed') {
+        expect(container.querySelector('.tool-row-detail--collapsed')).not.toBeNull()
+      } else {
+        expect(container.querySelector('.tool-row-detail')).toBeNull()
+      }
       unmount()
     }
   })
@@ -227,16 +267,17 @@ describe('ToolCallCard file write expand behavior', () => {
     render(
       <ToolCallCard
         record={{
-          id: 'tool-grep',
-          toolName: 'grep',
-          input: { pattern: 'foo' },
+          id: 'tool-script',
+          toolName: 'run_script',
+          input: { code: 'print(1)' },
           status: 'executing',
-          riskLevel: 'low'
+          riskLevel: 'high'
         }}
         confirmMode="direct"
         onCancel={onCancel}
       />
     )
+    fireEvent.click(document.querySelector('.tool-row__main')!)
     fireEvent.click(screen.getByRole('button', { name: '取消执行' }))
     expect(onCancel).toHaveBeenCalled()
   }, 15_000)
@@ -286,6 +327,7 @@ describe('ToolCallCard run_shell output display', () => {
         {...plainShellCardProps}
       />
     )
+    fireEvent.click(document.querySelector('.tool-row__main')!)
     expect(screen.getByText(/added 47 packages/)).toBeDefined()
     expect(document.querySelector('.shell-output--live')).not.toBeNull()
     expect(screen.queryByText(/"exitCode"/)).toBeNull()
@@ -346,7 +388,7 @@ describe('ToolCallCard run_shell output display', () => {
       />
     )
     expect(document.querySelector('.tool-row--expanded')).toBeNull()
-    expect(document.querySelector('.tool-row-detail')).toBeNull()
+    expect(document.querySelector('.tool-row-detail--collapsed')).not.toBeNull()
     fireEvent.click(screen.getByRole('button'))
     expect(document.querySelector('.tool-row--expanded')).not.toBeNull()
     expect(screen.getByText(/On branch main/)).toBeDefined()
@@ -506,12 +548,11 @@ describe('ToolCallCard run_shell terminal collapse', () => {
       />
     )
     expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
-    fireEvent.click(document.querySelector('.tool-row__main')!)
     const detail = document.querySelector('.tool-row-detail')
-    expect(detail?.hasAttribute('hidden')).toBe(true)
-    expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
+    expect(detail?.classList.contains('tool-row-detail--collapsed')).toBe(true)
+    expect(detail?.getAttribute('aria-hidden')).toBe('true')
     fireEvent.click(document.querySelector('.tool-row__main')!)
-    expect(document.querySelector('.tool-row-detail')?.hasAttribute('hidden')).toBe(false)
+    expect(document.querySelector('.tool-row-detail')?.classList.contains('tool-row-detail--open')).toBe(true)
     expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
   })
 })

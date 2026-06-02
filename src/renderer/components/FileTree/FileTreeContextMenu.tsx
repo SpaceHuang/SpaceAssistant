@@ -1,5 +1,14 @@
 import { App, Dropdown } from 'antd'
-import type { MenuProps } from 'antd'
+import type { MenuInfo, MenuProps } from 'antd/es/menu/interface'
+
+/** 阻止菜单点击冒泡到 Tree 节点，避免误触发文件选中/打开 */
+function wrapMenuClick(handler: () => void): (info: MenuInfo) => void {
+  return ({ domEvent }) => {
+    domEvent.stopPropagation()
+    domEvent.preventDefault()
+    handler()
+  }
+}
 
 interface FileTreeContextMenuProps {
   relPath: string
@@ -40,7 +49,7 @@ export function FileTreeContextMenu({
           {
             key: 'collect-wiki',
             label: '收录到 Wiki',
-            onClick: onCollectToWiki
+            onClick: wrapMenuClick(onCollectToWiki)
           },
           { type: 'divider' as const }
         ]
@@ -48,21 +57,21 @@ export function FileTreeContextMenu({
     {
       key: 'add-to-chat',
       label: '添加到对话',
-      onClick: () => {
+      onClick: wrapMenuClick(() => {
         onAddToChat()
         message.info('功能开发中')
-      }
+      })
     },
     { type: 'divider' },
     {
       key: 'copy-path',
       label: '复制路径',
-      onClick: onCopyPath
+      onClick: wrapMenuClick(onCopyPath)
     },
     {
       key: 'copy-rel-path',
       label: '复制相对路径',
-      onClick: onCopyRelPath
+      onClick: wrapMenuClick(onCopyRelPath)
     },
     ...(readOnly
       ? []
@@ -71,19 +80,31 @@ export function FileTreeContextMenu({
           {
             key: 'rename',
             label: '重命名...',
-            onClick: onRename
+            onClick: wrapMenuClick(onRename)
           },
           {
             key: 'delete',
             label: '删除',
             danger: true,
-            onClick: onDelete
+            onClick: wrapMenuClick(onDelete)
           }
         ] as MenuProps['items']))
   ]
 
   return (
-    <Dropdown menu={{ items }} trigger={['contextMenu']} open={open}>
+    <Dropdown
+      menu={{ items }}
+      trigger={['contextMenu']}
+      open={open}
+      popupRender={(menu) => (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {menu}
+        </div>
+      )}
+    >
       <div className="file-tree-context-trigger">{children}</div>
     </Dropdown>
   )

@@ -20,6 +20,8 @@
 .referenced-files-list,
 .wiki-index-view,
 .tool-code-preview,
+.sa-chat-code-block,
+.sa-chat-inset-code,
 .tool-diff-block,
 .shell-output,
 .write-confirm-card__body,
@@ -38,6 +40,8 @@
 .referenced-files-list::-webkit-scrollbar,
 .wiki-index-view::-webkit-scrollbar,
 .tool-code-preview::-webkit-scrollbar,
+.sa-chat-code-block::-webkit-scrollbar,
+.sa-chat-inset-code::-webkit-scrollbar,
 .tool-diff-block::-webkit-scrollbar,
 .shell-output::-webkit-scrollbar,
 .write-confirm-card__body::-webkit-scrollbar,
@@ -55,6 +59,8 @@
 .referenced-files-list::-webkit-scrollbar-track,
 .wiki-index-view::-webkit-scrollbar-track,
 .tool-code-preview::-webkit-scrollbar-track,
+.sa-chat-code-block::-webkit-scrollbar-track,
+.sa-chat-inset-code::-webkit-scrollbar-track,
 .tool-diff-block::-webkit-scrollbar-track,
 .shell-output::-webkit-scrollbar-track,
 .write-confirm-card__body::-webkit-scrollbar-track,
@@ -72,6 +78,8 @@
 .referenced-files-list::-webkit-scrollbar-thumb,
 .wiki-index-view::-webkit-scrollbar-thumb,
 .tool-code-preview::-webkit-scrollbar-thumb,
+.sa-chat-code-block::-webkit-scrollbar-thumb,
+.sa-chat-inset-code::-webkit-scrollbar-thumb,
 .tool-diff-block::-webkit-scrollbar-thumb,
 .shell-output::-webkit-scrollbar-thumb,
 .write-confirm-card__body::-webkit-scrollbar-thumb,
@@ -89,6 +97,8 @@
 .referenced-files-list::-webkit-scrollbar-thumb:hover,
 .wiki-index-view::-webkit-scrollbar-thumb:hover,
 .tool-code-preview::-webkit-scrollbar-thumb:hover,
+.sa-chat-code-block::-webkit-scrollbar-thumb:hover,
+.sa-chat-inset-code::-webkit-scrollbar-thumb:hover,
 .tool-diff-block::-webkit-scrollbar-thumb:hover,
 .shell-output::-webkit-scrollbar-thumb:hover,
 .write-confirm-card__body::-webkit-scrollbar-thumb:hover,
@@ -105,12 +115,45 @@
 .referenced-files-list::-webkit-scrollbar-corner,
 .wiki-index-view::-webkit-scrollbar-corner,
 .tool-code-preview::-webkit-scrollbar-corner,
+.sa-chat-code-block::-webkit-scrollbar-corner,
+.sa-chat-inset-code::-webkit-scrollbar-corner,
 .tool-diff-block::-webkit-scrollbar-corner,
 .shell-output::-webkit-scrollbar-corner,
 .write-confirm-card__body::-webkit-scrollbar-corner,
 .script-confirm-card__code--highlighted::-webkit-scrollbar-corner,
 .script-confirm-card__code--plain::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* 深色代码/终端：滚动条与底同色，避免浅灰横条 */
+.sa-chat-code-block,
+.tool-row-detail .shell-output,
+.shell-terminal-wrap.sa-code-scrollbar {
+  scrollbar-color: var(--sa-code-scrollbar-thumb) var(--sa-code-scrollbar-track);
+}
+
+.sa-chat-code-block::-webkit-scrollbar-thumb,
+.tool-row-detail .shell-output::-webkit-scrollbar-thumb,
+.shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--sa-code-scrollbar-thumb);
+}
+
+.sa-chat-code-block::-webkit-scrollbar-thumb:hover,
+.tool-row-detail .shell-output::-webkit-scrollbar-thumb:hover,
+.shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--sa-code-scrollbar-thumb-hover);
+}
+
+.sa-chat-code-block::-webkit-scrollbar-track,
+.tool-row-detail .shell-output::-webkit-scrollbar-track,
+.shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-track {
+  background: var(--sa-code-scrollbar-track);
+}
+
+.sa-chat-code-block::-webkit-scrollbar-corner,
+.tool-row-detail .shell-output::-webkit-scrollbar-corner,
+.shell-terminal-wrap.sa-code-scrollbar::-webkit-scrollbar-corner {
+  background: var(--sa-code-scrollbar-track);
 }
 
 /* ── Icon button (Activity Bar, toolbars) ── */
@@ -325,19 +368,48 @@
 
 /* ── Prose (shared markdown) ── */
 .sa-prose {
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: var(--sa-chat-font-prose, 14px);
+  line-height: var(--sa-chat-line-prose, 1.65);
   color: inherit;
+}
+
+.chat-md-assistant.sa-prose,
+.chat-md-assistant .sa-prose {
+  font-size: var(--sa-chat-font-prose, 14px);
+  line-height: var(--sa-chat-line-prose, 1.65);
 }
 
 .sa-prose pre {
   background: var(--sa-code-bg);
   color: var(--sa-code-text);
   padding: 12px 14px;
+  border: 1px solid var(--sa-code-border);
   border-radius: var(--sa-radius-md);
   overflow-x: auto;
   font-family: var(--sa-font-mono);
-  font-size: 12px;
+  font-size: var(--sa-chat-font-mono, 12px);
+  line-height: var(--sa-chat-line-mono, 1.6);
+}
+
+/* 深色代码区：Shiki 占位与 light 主题残留 */
+.sa-code-surface pre.shiki-placeholder,
+.sa-code-surface pre.shiki-placeholder code {
+  color: var(--sa-code-text);
+  background: transparent;
+}
+
+.sa-code-surface .sa-prose pre.shiki {
+  border: none;
+  padding: 0;
+}
+
+.sa-shiki-copy {
+  color: color-mix(in srgb, var(--sa-code-text) 72%, var(--sa-text-secondary)) !important;
+}
+
+.sa-shiki-copy:hover {
+  color: var(--sa-code-text) !important;
+  background: color-mix(in srgb, var(--sa-code-text) 12%, transparent) !important;
 }
 
 .sa-prose code {
@@ -361,6 +433,8 @@
 
 .chat-md-user {
   white-space: pre-wrap;
+  font-size: var(--sa-chat-font-body, 13px);
+  line-height: var(--sa-chat-line-body, 1.55);
 }
 
 .sa-shiki-block pre {
@@ -369,6 +443,3 @@
   overflow: auto;
 }
 
-.sa-shiki-copy {
-  color: var(--sa-text-secondary) !important;
-}

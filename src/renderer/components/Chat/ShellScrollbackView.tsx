@@ -65,11 +65,11 @@ export function ShellScrollbackView({
         const fixedCols = scrollback?.cols ?? SHELL_TERMINAL_COLS
         term.loadAddon(fit)
         term.open(hostRef.current)
-        safeFitTerminalRows(term, fit, hostRef.current, fixedCols)
+        safeFitTerminalRows(term, fit, hostRef.current, { savedCols: fixedCols })
         copyDispose = attachShellTerminalCopy(term)
         requestAnimationFrame(() => {
           if (cancelled || !term) return
-          safeFitTerminalRows(term, fit, hostRef.current, fixedCols)
+          safeFitTerminalRows(term, fit, hostRef.current, { savedCols: fixedCols })
           restoreTerminalScrollbackPayload(
             term,
             restore.payload,
@@ -78,11 +78,11 @@ export function ShellScrollbackView({
         })
         void whenDocumentFontsReady().then(() => {
           if (cancelled || !term) return
-          safeFitTerminalRows(term, fit, hostRef.current, fixedCols)
+          safeFitTerminalRows(term, fit, hostRef.current, { savedCols: fixedCols })
         })
         ro = new ResizeObserver(() => {
           if (cancelled || !term) return
-          safeFitTerminalRows(term, fit, hostRef.current, fixedCols)
+          safeFitTerminalRows(term, fit, hostRef.current, { savedCols: fixedCols })
         })
         ro.observe(hostRef.current)
         restoredRef.current = true
@@ -127,7 +127,7 @@ export function ShellScrollbackView({
         <div className="shell-output__meta">终端记录已截断（超过 256KB）</div>
       ) : null}
       <div
-        className="shell-terminal-wrap shell-terminal-wrap--static"
+        className="shell-terminal-wrap shell-terminal-wrap--static sa-code-scrollbar"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div ref={hostRef} className="shell-terminal-host" />

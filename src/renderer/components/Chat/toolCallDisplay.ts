@@ -92,7 +92,16 @@ export function formatToolLabel(toolName: string, input: Record<string, unknown>
   }
 }
 
-export type ToolIconKind = 'grep' | 'read' | 'list' | 'edit' | 'script' | 'default'
+export type ToolIconKind =
+  | 'grep'
+  | 'read'
+  | 'list'
+  | 'edit'
+  | 'script'
+  | 'shell'
+  | 'browser'
+  | 'lark'
+  | 'generic'
 
 export function getToolIconKind(toolName: string): ToolIconKind {
   switch (toolName) {
@@ -107,8 +116,15 @@ export function getToolIconKind(toolName: string): ToolIconKind {
       return 'edit'
     case 'run_script':
       return 'script'
+    case 'run_shell':
+      return 'shell'
+    case 'browser':
+    case 'browser_detect':
+      return 'browser'
+    case 'run_lark_cli':
+      return 'lark'
     default:
-      return 'default'
+      return 'generic'
   }
 }
 

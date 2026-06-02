@@ -54,7 +54,7 @@ export function ScriptConfirmCard({ record, onConfirm }: Props) {
         <ShikiHighlightedCode
           code={displayCode}
           language="python"
-          className="script-confirm-card__code script-confirm-card__code--highlighted"
+          className="script-confirm-card__code script-confirm-card__code--highlighted sa-code-surface"
         />
         {timeout !== undefined ? (
           <div className="script-confirm-card__meta">

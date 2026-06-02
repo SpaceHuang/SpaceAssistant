@@ -8,6 +8,7 @@ import {
   useActionablePendingConfirms
 } from '../../hooks/useActionablePendingConfirms'
 import { formatToolLabel } from '../Chat/toolCallDisplay'
+import { sessionDisplayName } from '../../utils/sessionDisplay'
 
 function labelForItem(item: PendingConfirmItem, sessionName: string): string {
   if (item.toolName === 'run_script' || item.toolName === 'run_lark_cli' || item.toolName === 'run_shell') {
@@ -32,7 +33,10 @@ export function PendingConfirmBanner() {
 
   if (actionable.length === 0) return null
 
-  const sessionName = (id: string) => sessions.find((s) => s.id === id)?.name ?? '会话'
+  const sessionName = (id: string) => {
+    const s = sessions.find((x) => x.id === id)
+    return s ? sessionDisplayName(s.name) : '会话'
+  }
 
   return (
     <div className="pending-confirm-banner" role="region" aria-label="待确认工具">
@@ -41,19 +45,23 @@ export function PendingConfirmBanner() {
         <span>{actionable.length} 项待确认</span>
       </div>
       <div className="pending-confirm-banner__list">
-        {actionable.map((item) => (
-          <button
-            key={`${item.requestId}:${item.toolUseId}`}
-            type="button"
-            className="pending-confirm-banner__item"
-            onClick={() => {
-              dispatch(setSession(item.sessionId))
-              dispatch(setConfirmFocusToolUseId(item.toolUseId))
-            }}
-          >
-            {labelForItem(item, sessionName(item.sessionId))}
-          </button>
-        ))}
+        {actionable.map((item) => {
+          const label = labelForItem(item, sessionName(item.sessionId))
+          return (
+            <button
+              key={`${item.requestId}:${item.toolUseId}`}
+              type="button"
+              className="pending-confirm-banner__item"
+              title={label}
+              onClick={() => {
+                dispatch(setSession(item.sessionId))
+                dispatch(setConfirmFocusToolUseId(item.toolUseId))
+              }}
+            >
+              {label}
+            </button>
+          )
+        })}
       </div>
     </div>
   )

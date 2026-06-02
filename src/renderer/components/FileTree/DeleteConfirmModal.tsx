@@ -1,4 +1,5 @@
 import { Modal } from 'antd'
+import '../ui/saConfirmModal.css'
 
 interface DeleteConfirmModalProps {
   open: boolean
@@ -15,8 +16,11 @@ export function DeleteConfirmModal({ open, name, isDirectory, onConfirm, onCance
 
   return (
     <Modal
+      className="sa-confirm-modal"
       open={open}
       title="确认删除"
+      width={400}
+      centered
       onCancel={onCancel}
       okText="删除"
       cancelText="取消"
@@ -24,7 +28,7 @@ export function DeleteConfirmModal({ open, name, isDirectory, onConfirm, onCance
       onOk={onConfirm}
       destroyOnHidden
     >
-      <p>{description}</p>
+      <p className="sa-confirm-modal__message">{description}</p>
     </Modal>
   )
 }

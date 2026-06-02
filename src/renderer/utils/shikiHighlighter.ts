@@ -36,36 +36,50 @@ const LANGS = [
   'plaintext'
 ] as const
 
-const SHIKI_THEME = 'light-plus'
+/** 与 --sa-code-bg 配套的 Shiki 主题；浅色面板仍用 light-plus */
+export type ShikiSurface = 'dark' | 'light'
+
+const SHIKI_THEME: Record<ShikiSurface, string> = {
+  dark: 'dark-plus',
+  light: 'light-plus'
+}
 
 let highlighterPromise: Promise<Highlighter> | null = null
 const highlightCache = new Map<string, string>()
 
-function cacheKey(lang: string, code: string): string {
-  return `${lang}\0${code}`
+function cacheKey(surface: ShikiSurface, lang: string, code: string): string {
+  return `${surface}\0${lang}\0${code}`
 }
 
-/** 去掉 Shiki pre 上的 inline background，避免与 .sa-prose pre 深色底交替闪烁 */
+/** 去掉 Shiki pre 上的 inline background，由外层 --sa-code-bg 或面板底承载 */
 export function stripShikiPreInlineStyle(html: string): string {
   return html.replace(/(<pre[^>]*)\sstyle="[^"]*"/i, '$1')
 }
 
-export function getCachedHighlight(code: string, lang: string): string | null {
-  return highlightCache.get(cacheKey(lang, code)) ?? null
+export function getCachedHighlight(
+  code: string,
+  lang: string,
+  surface: ShikiSurface = 'dark'
+): string | null {
+  return highlightCache.get(cacheKey(surface, lang, code)) ?? null
 }
 
 export function preloadShiki(): Promise<Highlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: [SHIKI_THEME],
+      themes: [SHIKI_THEME.dark, SHIKI_THEME.light],
       langs: [...LANGS]
     })
   }
   return highlighterPromise
 }
 
-export async function highlightCode(code: string, lang: string): Promise<string | null> {
-  const key = cacheKey(lang, code)
+export async function highlightCode(
+  code: string,
+  lang: string,
+  surface: ShikiSurface = 'dark'
+): Promise<string | null> {
+  const key = cacheKey(surface, lang, code)
   const cached = highlightCache.get(key)
   if (cached) return cached
 
@@ -73,7 +87,7 @@ export async function highlightCode(code: string, lang: string): Promise<string 
     const highlighter = await preloadShiki()
     const loaded = highlighter.getLoadedLanguages()
     const language = loaded.includes(lang as (typeof LANGS)[number]) ? lang : 'plaintext'
-    const html = highlighter.codeToHtml(code, { lang: language, theme: SHIKI_THEME })
+    const html = highlighter.codeToHtml(code, { lang: language, theme: SHIKI_THEME[surface] })
     const normalized = stripShikiPreInlineStyle(html)
     highlightCache.set(key, normalized)
     return normalized

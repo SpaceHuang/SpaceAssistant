@@ -33,7 +33,7 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
         </span>
         <span className="shell-confirm-card__title">Shell 命令</span>
         {requiresRiskAck ? (
-          <span className="write-confirm-card__stat write-confirm-card__stat--remove">风险</span>
+          <span className="write-confirm-card__stat write-confirm-card__stat--risk">风险</span>
         ) : null}
         <div className="write-confirm-card__actions">
           <button

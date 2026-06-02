@@ -9,7 +9,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       token: {
         colorPrimary: '#0a84ff',
         borderRadius: 8,
-        fontFamily: 'var(--sa-font-sans)'
+        fontFamily: 'var(--sa-font-sans)',
+        fontSize: 13,
+        lineHeight: 1.5
       }
     }),
     []

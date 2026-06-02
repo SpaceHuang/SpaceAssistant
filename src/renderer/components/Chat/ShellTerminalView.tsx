@@ -115,7 +115,7 @@ export function ShellTerminalView({
 
     const refitAndSync = () => {
       if (cancelled || disposedRef.current || !term || !fit) return
-      safeFitTerminalRows(term, fit, hostRef.current, SHELL_TERMINAL_COLS)
+      safeFitTerminalRows(term, fit, hostRef.current)
       if (readyRef.current) syncOutput()
     }
 
@@ -129,7 +129,7 @@ export function ShellTerminalView({
         term.loadAddon(fit)
         term.loadAddon(serialize)
         term.open(hostRef.current)
-        safeFitTerminalRows(term, fit, hostRef.current, SHELL_TERMINAL_COLS)
+        safeFitTerminalRows(term, fit, hostRef.current)
 
         termRef.current = term
         fitRef.current = fit
@@ -210,7 +210,7 @@ export function ShellTerminalView({
     if (!term || !fit) return
     requestAnimationFrame(() => {
       if (disposedRef.current || !readyRef.current) return
-      safeFitTerminalRows(term, fit, hostRef.current, SHELL_TERMINAL_COLS)
+      safeFitTerminalRows(term, fit, hostRef.current)
       replayTerminalRaw(term, latestRawRef.current)
       writeStateRef.current = {
         writtenTextLen: latestRawRef.current ? decodeProgressRawTailForXterm(latestRawRef.current).length : 0,
@@ -230,7 +230,10 @@ export function ShellTerminalView({
   }
 
   return (
-    <div className="shell-terminal-wrap" onMouseDown={(e) => e.stopPropagation()}>
+    <div
+      className="shell-terminal-wrap sa-code-scrollbar"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       <div ref={hostRef} className="shell-terminal-host" />
       {showResumeFollow ? (
         <button type="button" className="shell-terminal__resume-follow" onClick={resumeFollow}>

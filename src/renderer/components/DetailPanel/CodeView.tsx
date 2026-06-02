@@ -40,7 +40,7 @@ export function CodeView({ content, filePath, highlights = [], currentHighlightI
       return
     }
     let cancelled = false
-    void highlightCode(content, lang).then((result) => {
+    void highlightCode(content, lang, 'light').then((result) => {
       if (!cancelled) setHtml(result)
     })
     return () => {

@@ -1,7 +1,10 @@
 import type { ITheme, ITerminalOptions } from '@xterm/xterm'
 
-export const SHELL_TERMINAL_FONT_SIZE = 11
+export const SHELL_TERMINAL_FONT_SIZE = 12
+/** 会话导出与宽屏时的列上限 */
 export const SHELL_TERMINAL_COLS = 80
+/** 低于此列宽时 ANSI 进度条等易错位 */
+export const SHELL_TERMINAL_MIN_COLS = 40
 
 const SHELL_TERMINAL_FONT_FAMILY =
   'Consolas, "Cascadia Mono", "Courier New", monospace'
@@ -13,10 +16,10 @@ export function buildXtermThemeFromCss(): ITheme {
   const pick = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback
 
   return {
-    background: pick('--sa-bg-subtle', '#1e1e1e'),
-    foreground: pick('--sa-text-secondary', '#cccccc'),
-    cursor: pick('--sa-accent', '#3794ff'),
-    cursorAccent: pick('--sa-bg-subtle', '#1e1e1e'),
+    background: pick('--sa-code-bg', '#1e1e1e'),
+    foreground: pick('--sa-code-text', '#d4d4d4'),
+    cursor: pick('--sa-primary', '#3794ff'),
+    cursorAccent: pick('--sa-code-bg', '#1e1e1e'),
     selectionBackground: pick('--sa-selection-bg', 'rgba(55, 148, 255, 0.3)'),
     black: '#000000',
     red: pick('--sa-accent', '#f14c4c'),
@@ -25,7 +28,7 @@ export function buildXtermThemeFromCss(): ITheme {
     blue: '#3b8eea',
     magenta: '#d670d6',
     cyan: '#29b8db',
-    white: pick('--sa-text', '#e0e0e0'),
+    white: pick('--sa-code-text', '#d4d4d4'),
     brightBlack: '#666666',
     brightRed: '#f14c4c',
     brightGreen: '#23d18b',
@@ -33,7 +36,7 @@ export function buildXtermThemeFromCss(): ITheme {
     brightBlue: '#3b8eea',
     brightMagenta: '#d670d6',
     brightCyan: '#29b8db',
-    brightWhite: pick('--sa-text', '#ffffff')
+    brightWhite: pick('--sa-code-text', '#eeeeee')
   }
 }
 

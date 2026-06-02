@@ -66,7 +66,7 @@ function defaultExpanded(record: ToolCallRecord): boolean {
   if (isFileTool(record.toolName)) return false
   if (record.status === 'confirming') return true
   if (record.status === 'completed') return false
-  return record.status === 'calling' || record.status === 'executing'
+  return false
 }
 
 export function ToolCallCard({
@@ -89,7 +89,7 @@ export function ToolCallCard({
   const scrollbackPatchedRef = useRef(false)
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMetadata)
   const useTerminalUi = record.toolName === 'run_shell' && shellOutputMode === 'terminal' && !terminalFallbackPlain
-  const isActive = record.status === 'calling' || record.status === 'executing' || record.status === 'confirming'
+  const isPending = record.status === 'calling' || record.status === 'executing'
   const isFailed = record.status === 'failed' || record.status === 'rejected'
   const fileTool = isFileTool(record.toolName)
   const fileWriteTool = isFileWriteTool(record.toolName)
@@ -107,10 +107,16 @@ export function ToolCallCard({
     record.toolName === 'run_shell' &&
     record.status === 'completed' &&
     isShellSilentResult(record.result?.data)
+  const pendingHasDetail =
+    isPending &&
+    (record.toolName === 'run_shell' ||
+      (record.toolName !== 'browser' &&
+        record.toolName !== 'browser_detect' &&
+        record.toolName !== 'grep'))
   const hasDetail =
     !silentShellComplete &&
-    (isActive ||
-      isFailed ||
+    (isFailed ||
+      pendingHasDetail ||
       Boolean(record.result?.success && record.result.data !== undefined) ||
       Boolean(record.confirmDiff) ||
       Boolean(record.toolName === 'run_shell' && (record.progressOutput || record.progressOutputRaw)) ||
@@ -292,7 +298,7 @@ export function ToolCallCard({
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <div className="tool-row tool-row--failed tool-row--expanded">
           <div className="tool-row__main">
-            <ToolRowIcon toolName={record.toolName} active={false} />
+            <ToolRowIcon toolName={record.toolName} />
             <span className="tool-row__label" title={labelTitle ?? label}>
               {label}
             </span>
@@ -318,7 +324,7 @@ export function ToolCallCard({
       ref={cardRef}
       className={[
         'tool-row',
-        isActive ? 'tool-row--active' : '',
+        isPending ? 'tool-row--pending' : '',
         isFailed ? 'tool-row--failed' : '',
         hasDetail ? 'tool-row--clickable' : '',
         showDetail ? 'tool-row--expanded' : ''
@@ -331,6 +337,7 @@ export function ToolCallCard({
         onClick={toggleExpanded}
         role={hasDetail ? 'button' : undefined}
         tabIndex={hasDetail ? 0 : undefined}
+        aria-expanded={hasDetail ? showDetail : undefined}
         onKeyDown={(e) => {
           if (!hasDetail) return
           if (e.key === 'Enter' || e.key === ' ') {
@@ -339,21 +346,24 @@ export function ToolCallCard({
           }
         }}
       >
-        <ToolRowIcon toolName={record.toolName} active={record.status === 'calling' || record.status === 'executing'} />
+        <ToolRowIcon toolName={record.toolName} pending={isPending} />
         <span className="tool-row__label" title={labelTitle ?? label}>
           {label}
         </span>
-        {hasDetail && !isActive ? (
+        {hasDetail ? (
           <ChevronRight size={12} strokeWidth={2} className="tool-row__chevron" aria-hidden />
         ) : null}
       </div>
 
-      {(showDetail || keepLiveTerminalMounted) ? (
+      {(hasDetail || keepLiveTerminalMounted) ? (
         <div
-          className="tool-row-detail"
-          hidden={!showDetail && keepLiveTerminalMounted}
-          aria-hidden={!showDetail && keepLiveTerminalMounted}
+          className={[
+            'tool-row-detail',
+            showDetail ? 'tool-row-detail--open' : 'tool-row-detail--collapsed'
+          ].join(' ')}
+          aria-hidden={!showDetail}
         >
+          <div className="tool-row-detail__inner">
           {showShellLiveTerminal ? (
             <ShellTerminalView
               progressOutputRaw={record.progressOutputRaw}
@@ -378,6 +388,8 @@ export function ToolCallCard({
           {record.status === 'executing' &&
           onCancel &&
           record.toolName !== 'browser' &&
+          record.toolName !== 'browser_detect' &&
+          record.toolName !== 'grep' &&
           record.toolName !== 'run_shell' ? (
             <Button danger size="small" type="text" className="tool-row-detail__action" onClick={onCancel}>
               取消执行
@@ -413,12 +425,13 @@ export function ToolCallCard({
           ) : null}
 
           {record.status === 'completed' && resultStr ? (
-            <pre className="tool-code-preview tool-code-preview--inline">{truncate(resultStr, 4000)}</pre>
+            <pre className="sa-chat-inset-code">{truncate(resultStr, 4000)}</pre>
           ) : null}
 
           {record.status === 'completed' && !resultStr && !fileTool && !showShellCompletedOutput && Object.keys(record.input).length > 0 ? (
-            <pre className="tool-code-preview tool-code-preview--inline">{paramPreview}</pre>
+            <pre className="sa-chat-inset-code">{paramPreview}</pre>
           ) : null}
+          </div>
         </div>
       ) : null}
     </div>

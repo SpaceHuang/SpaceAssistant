@@ -60,7 +60,8 @@ describe('ScriptConfirmCard', () => {
     await waitFor(() => {
       expect(highlightCode).toHaveBeenCalledWith(
         expect.stringContaining('import os'),
-        'python'
+        'python',
+        'dark'
       )
     })
   })

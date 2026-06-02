@@ -120,5 +120,6 @@ API Key 通过 Electron 的 `safeStorage` API 加密（`electron/secureApiKey.ts
 
 - 左侧边栏使用 VS Code 风格的活动栏（图标条）切换会话、文件、搜索面板
 - SVG 图标来自 `src/renderer/assets/`，使用 `?raw` 导入；运行时将 `fill` 替换为 `currentColor`
+- 如需新图标，可从 `res/mingcute-icons-main/svg/` 目录按分类查找（如 `arrow/`、`file/`、`device/`、`editor/` 等），复制 SVG 文件到 `src/renderer/assets/` 后使用
 - 全局使用 Ant Design 组件；自定义样式在 `src/renderer/styles.css`
 - 三栏布局：左侧边栏（328px）| 中间聊天区 | 右侧边栏（240px，预留位）

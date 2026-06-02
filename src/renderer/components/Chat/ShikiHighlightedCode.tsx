@@ -1,35 +1,38 @@
 import { useEffect, useRef, useState } from 'react'
-import { getCachedHighlight, highlightCode } from '../../utils/shikiHighlighter'
+import { getCachedHighlight, highlightCode, type ShikiSurface } from '../../utils/shikiHighlighter'
 
 type BodyProps = {
   code: string
   language: string
   className?: string
   fallbackClassName?: string
+  /** 默认 dark，与聊天区 --sa-code-bg 一致 */
+  surface?: ShikiSurface
 }
 
 export function ShikiHighlightedCodeBody({
   code,
   language,
   className,
-  fallbackClassName = 'tool-code-preview'
+  fallbackClassName = 'sa-chat-code-block',
+  surface = 'dark'
 }: BodyProps) {
-  const [html, setHtml] = useState<string | null>(() => getCachedHighlight(code, language))
+  const [html, setHtml] = useState<string | null>(() => getCachedHighlight(code, language, surface))
   const requestIdRef = useRef(0)
 
   useEffect(() => {
-    const cached = getCachedHighlight(code, language)
+    const cached = getCachedHighlight(code, language, surface)
     if (cached) {
       setHtml(cached)
       return
     }
 
     const requestId = ++requestIdRef.current
-    void highlightCode(code, language).then((result) => {
+    void highlightCode(code, language, surface).then((result) => {
       if (requestId !== requestIdRef.current || !result) return
       setHtml(result)
     })
-  }, [code, language])
+  }, [code, language, surface])
 
   if (className) {
     return (

@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
-import { App as AntdApp, Button, Empty, Input } from 'antd'
-import { Square, Trash2 } from 'lucide-react'
+import { App as AntdApp, Button } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
-import { setSessions, upsertSession, removeSession } from './store/sessionSlice'
+import { setSessions, upsertSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
 import { setConfig, setSettingsOpen, setAboutOpen } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
@@ -12,11 +11,8 @@ import { WikiPane } from './components/WikiPane'
 import { collectToWiki } from './services/wikiImportService'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
-import { groupSessionsByTime } from './utils/groupSessions'
-import { abortSessionRun } from './services/chatRunnerService'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
-import { SessionListIcon } from './components/SessionList/SessionListIcon'
-import { PendingConfirmBanner } from './components/SessionList/PendingConfirmBanner'
+import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
 import { requestFilePaneSelect, isUnderWikiRoot } from './services/filePaneNavigation'
 import { DEFAULT_WIKI_CONFIG } from '../shared/domainTypes'
@@ -37,87 +33,6 @@ const wikiFillSvg = patchSvg(wikiFillRaw)
 const searchLineSvg = patchSvg(searchLineRaw)
 const searchFillSvg = patchSvg(searchFillRaw)
 const settingsSvg = patchSvg(settingsRaw)
-
-function LeftSessions() {
-  const { message } = AntdApp.useApp()
-  const dispatch = useAppDispatch()
-  const sessions = useTypedSelector((s) => s.session.list)
-  const currentId = useTypedSelector((s) => s.chat.currentSessionId)
-  const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
-  const [q, setQ] = useState('')
-
-  const filtered = sessions.filter((s) => s.name.toLowerCase().includes(q.toLowerCase()))
-  const groups = groupSessionsByTime(filtered)
-
-  const stopRun = (id: string) => {
-    abortSessionRun(id)
-    message.info('已中止该会话的执行')
-  }
-
-  const del = async (id: string) => {
-    abortSessionRun(id)
-    await window.api.sessionDelete(id)
-    dispatch(removeSession(id))
-    if (currentId === id) dispatch(setSession(null))
-    message.success('已删除')
-  }
-
-  return (
-    <div className="sider-pane">
-      <Input allowClear placeholder="搜索会话" value={q} onChange={(e) => setQ(e.target.value)} />
-      <PendingConfirmBanner />
-      <div className="session-list-scroll">
-        {groups.length === 0 ? (
-          <Empty description="暂无会话" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : (
-          groups.map((group) => (
-            <div key={group.label}>
-              <div className="session-group-label">{group.label}</div>
-              {group.sessions.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`session-item${item.id === currentId ? ' session-item--active' : ''}`}
-                    onClick={() => dispatch(setSession(item.id))}
-                  >
-                    <SessionListIcon loading={Boolean(runningSessions[item.id])} />
-                    <div className="session-item-main">
-                      <div className="session-item-name" title={item.name}>
-                        {item.name}
-                      </div>
-                    </div>
-                    {runningSessions[item.id] ? (
-                      <button
-                        type="button"
-                        className="session-item-stop"
-                        title="中止执行"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          stopRun(item.id)
-                        }}
-                      >
-                        <Square size={10} strokeWidth={2} fill="currentColor" />
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="session-item-delete"
-                      title="删除会话"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void del(item.id)
-                      }}
-                    >
-                      <Trash2 size={12} strokeWidth={1.75} />
-                    </button>
-                  </div>
-              ))}
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  )
-}
 
 function IconTab({
   lineSvg,
@@ -155,10 +70,14 @@ function AppShellInner() {
   const wikiEnabled = Boolean(config?.wiki?.enabled)
 
   const createSession = async () => {
-    const s = await window.api.sessionCreate({ name: `会话 ${sessions.length + 1}` })
-    dispatch(upsertSession(s))
-    dispatch(setSession(s.id))
-    message.success('已创建会话')
+    try {
+      const s = await window.api.sessionCreate({ name: `会话 ${sessions.length + 1}` })
+      dispatch(upsertSession(s))
+      dispatch(setSession(s.id))
+      message.success('已创建会话')
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '创建会话失败，请稍后重试')
+    }
   }
 
   const handleFileSelect = (relPath: string) => {
@@ -195,10 +114,15 @@ function AppShellInner() {
   }
 
   useEffect(() => {
-    void window.api.sessionList().then((list) => {
-      dispatch(setSessions(list))
-      if (list[0]) dispatch(setSession(list[0].id))
-    })
+    void window.api
+      .sessionList()
+      .then((list) => {
+        dispatch(setSessions(list))
+        if (list[0]) dispatch(setSession(list[0].id))
+      })
+      .catch((e) => {
+        message.error(e instanceof Error ? e.message : '加载会话列表失败，请重启应用后重试')
+      })
     void window.api.configGet().then((c) => dispatch(setConfig(c)))
     const off1 = window.api.onOpenSettings(() => dispatch(setSettingsOpen(true)))
     const off2 = window.api.onOpenAbout(() => dispatch(setAboutOpen(true)))
@@ -248,7 +172,7 @@ function AppShellInner() {
               </div>
             )}
             <div className="sider-content-body">
-              {siderKey === 'sessions' && <LeftSessions />}
+              {siderKey === 'sessions' && <SessionListPane />}
               {siderKey === 'wiki' && wikiEnabled && (
                 <WikiPane
                   workDir={config?.workDir ?? ''}

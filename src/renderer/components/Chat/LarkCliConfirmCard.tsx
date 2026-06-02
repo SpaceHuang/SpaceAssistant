@@ -21,7 +21,7 @@ export function LarkCliConfirmCard({ record, onConfirm }: Props) {
         </span>
         <span className="lark-cli-confirm-card__title">{summary.headline}</span>
         {summary.isWriteOperation ? (
-          <span className="write-confirm-card__stat write-confirm-card__stat--remove">写入</span>
+          <span className="write-confirm-card__stat write-confirm-card__stat--write">写入</span>
         ) : null}
         <div className="write-confirm-card__actions">
           <button

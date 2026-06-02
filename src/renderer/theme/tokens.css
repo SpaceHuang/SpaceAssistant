@@ -42,9 +42,30 @@
   --sa-chat-failed-border: #ffa39e;
   --sa-chat-streaming-fg: var(--sa-primary);
 
+  /* 消息列表：统一字号与展开区表面 */
+  --sa-chat-font-body: 13px;
+  --sa-chat-font-prose: 14px;
+  --sa-chat-font-meta: 11px;
+  --sa-chat-font-mono: 12px;
+  --sa-chat-line-body: 1.55;
+  --sa-chat-line-prose: 1.65;
+  --sa-chat-line-mono: 1.6;
+  --sa-chat-detail-bg: var(--sa-bg-subtle);
+  --sa-chat-detail-border: var(--sa-border);
+  --sa-chat-inset-bg: var(--sa-bg-muted);
+  --sa-selection-bg: rgba(10, 132, 255, 0.22);
+
   --sa-skill-hint-bg: var(--sa-bg-subtle);
   --sa-code-bg: #1e1e1e;
   --sa-code-text: #d4d4d4;
+  --sa-code-stderr: #f48771;
+  --sa-code-stderr-bg: rgba(244, 135, 113, 0.12);
+  --sa-code-border: #2d2d2d;
+  --sa-code-scrollbar-track: var(--sa-code-bg);
+  --sa-code-scrollbar-thumb: color-mix(in srgb, var(--sa-code-text) 26%, var(--sa-code-bg));
+  --sa-code-scrollbar-thumb-hover: color-mix(in srgb, var(--sa-code-text) 40%, var(--sa-code-bg));
+  --sa-code-muted: color-mix(in srgb, var(--sa-code-text) 78%, var(--sa-code-bg));
+  --sa-code-accent: #3b9eff;
   --sa-diff-remove-bg: #fff1f0;
   --sa-diff-add-bg: #f6ffed;
 
@@ -94,7 +115,13 @@
   --sa-icon-size-xs: 14px;
   --sa-icon-btn-size-sm: 24px;
 
-  /* 右侧详情栏：与左侧 sider-content-body 对齐的字号体系 */
+  /* 左侧侧栏列表（会话 / Wiki / 搜索）：可读 UI 13px 下限 */
+  --sa-sider-font-size: 13px;
+  --sa-sider-line-height: 1.5;
+  --sa-sider-label-font-size: 12px;
+  --sa-sider-label-line-height: 1.45;
+
+  /* 右侧详情栏：密度例外，行高须 ≥1.45 */
   --sa-detail-font-size: 12px;
   --sa-detail-line-height: 1.45;
   --sa-bg-panel: var(--sa-bg-subtle);
