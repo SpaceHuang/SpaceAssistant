@@ -86,5 +86,11 @@
     "tools": "工具",
     "wiki": "项目 Wiki"
   },
-  "unsavedChanges": "有未保存的更改"
+  "unsavedChanges": "有未保存的更改",
+  "status": {
+    "installed": "已安装",
+    "notInstalled": "未安装",
+    "ready": "已就绪",
+    "builtinNode": "（应用内置）"
+  }
 }
