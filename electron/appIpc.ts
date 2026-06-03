@@ -28,6 +28,7 @@ import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generatePr
 import { createSkillManager } from './skills/skillManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
+import { rebuildAppMenu } from './menu'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
 import {
   LlmServiceValidationError,
