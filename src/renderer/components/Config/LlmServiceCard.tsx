@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { App, Button, Input, Radio } from 'antd'
 import type { LlmServiceDraft } from './llmServiceDrafts'
-import { buildServiceSummary } from './llmServiceDrafts'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './llmServiceCard.css'
 
 function ChevronIcon({ down }: { down: boolean }) {
@@ -21,6 +21,15 @@ function DeleteIcon() {
       />
     </svg>
   )
+}
+
+function buildServiceSummary(draft: LlmServiceDraft, t: ReturnType<typeof useTypedTranslation<'config'>>['t']): string {
+  const keyLabel =
+    draft.apiKeyPresent || draft.apiKeyDraft.trim() ? t('llmService.keyConfigured') : t('llmService.keyNotConfigured')
+  if (draft.baseUrl.trim()) {
+    return `${draft.baseUrl.trim()} · ${keyLabel}`
+  }
+  return `${t('llmService.officialDefault')} · ${keyLabel}`
 }
 
 type Props = {
@@ -45,6 +54,8 @@ export function LlmServiceCard({
   onPatch
 }: Props) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('config')
+  const { t: tCommon } = useTypedTranslation('common')
   const [testing, setTesting] = useState(false)
   const expanded = draft.expanded
   const showCollapse = !isActive
@@ -57,14 +68,14 @@ export function LlmServiceCard({
         apiKey: draft.apiKeyDraft.trim() || undefined,
         baseUrl: draft.baseUrl
       })
-      if (r.success) message.success('连接成功')
-      else message.error(r.error ?? '失败')
+      if (r.success) message.success(t('messages.connectionSuccess'))
+      else message.error(r.error ?? t('messages.connectionFailed'))
     } finally {
       setTesting(false)
     }
   }
 
-  const displayTitle = draft.name.trim() || (draft.isNew ? '新服务' : '未命名服务')
+  const displayTitle = draft.name.trim() || (draft.isNew ? t('llmService.newService') : t('llmService.unnamedService'))
 
   return (
     <div
@@ -79,14 +90,14 @@ export function LlmServiceCard({
     >
       <div className="llm-service-card-header">
         <Radio checked={isActive} onChange={onSelectActive}>
-          当前使用
+          {t('llmService.active')}
         </Radio>
         {expanded ? (
           <Input
             className="llm-service-card-title"
             value={draft.name}
             onChange={(e) => onPatch({ name: e.target.value })}
-            placeholder="服务名称"
+            placeholder={t('llmService.serviceNamePlaceholder')}
             maxLength={32}
           />
         ) : (
@@ -98,8 +109,8 @@ export function LlmServiceCard({
             size="small"
             icon={<ChevronIcon down={expanded} />}
             onClick={onToggleExpand}
-            title={expanded ? '收起' : '展开'}
-            aria-label={expanded ? '收起服务详情' : '展开服务详情'}
+            title={expanded ? t('llmService.collapse') : t('llmService.expand')}
+            aria-label={expanded ? t('llmService.collapseAria') : t('llmService.expandAria')}
           />
         )}
         <Button
@@ -108,16 +119,16 @@ export function LlmServiceCard({
           danger
           icon={<DeleteIcon />}
           disabled={!canDelete}
-          title={canDelete ? '删除' : '至少保留一套服务'}
-          aria-label={canDelete ? '删除服务' : '至少保留一套服务'}
+          title={canDelete ? tCommon('delete') : t('llmService.keepAtLeastOne')}
+          aria-label={canDelete ? t('llmService.deleteAria') : t('llmService.keepAtLeastOneAria')}
           onClick={onDelete}
         />
       </div>
-      {!expanded && <div className="llm-service-card-summary">{buildServiceSummary(draft)}</div>}
+      {!expanded && <div className="llm-service-card-summary">{buildServiceSummary(draft, t)}</div>}
       {expanded && (
         <div className="llm-service-card-body">
           <div className="llm-service-key-field">
-            <div className="llm-service-field-label">API Key（留空则不修改）</div>
+            <div className="llm-service-field-label">{t('llmService.apiKeyLabel')}</div>
             <Input.Password
               placeholder="sk-ant-..."
               autoComplete="off"
@@ -126,21 +137,21 @@ export function LlmServiceCard({
             />
             <div className="llm-service-key-hint">
               {draft.apiKeyPresent || draft.apiKeyDraft.trim()
-                ? '已配置 Key · 输入新值将覆盖'
-                : '尚未配置 Key'}
+                ? t('llmService.apiKeyHintConfigured')
+                : t('llmService.apiKeyHintEmpty')}
             </div>
           </div>
           <div className="llm-service-url-field">
-            <div className="llm-service-field-label">Base URL（可选，留空为 Anthropic 官方）</div>
+            <div className="llm-service-field-label">{t('llmService.baseUrlLabel')}</div>
             <Input
-              placeholder="默认 Anthropic 官方"
+              placeholder={t('llmService.baseUrlPlaceholder')}
               value={draft.baseUrl}
               onChange={(e) => onPatch({ baseUrl: e.target.value })}
             />
           </div>
           <div className="llm-service-test-row">
             <Button onClick={() => void testConnection()} loading={testing}>
-              测试连接
+              {t('llmService.testConnection')}
             </Button>
           </div>
         </div>

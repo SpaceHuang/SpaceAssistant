@@ -35,7 +35,7 @@ import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { FeishuRemoteContext } from './tools/types'
 import { isLarkCliWriteOperation } from './feishu/larkCliSecurity'
-import { BROWSER_FEISHU_REMOTE_DISABLED_ERROR } from '../src/shared/browserRemotePolicy'
+import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_FEISHU_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
 import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
@@ -643,17 +643,17 @@ async function runToolChatSessionInner(
       ) {
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-          BROWSER_FEISHU_REMOTE_DISABLED_ERROR,
-          BROWSER_FEISHU_REMOTE_DISABLED_ERROR
+          BROWSER_FEISHU_REMOTE_DISABLED_CODE,
+          BROWSER_FEISHU_REMOTE_DISABLED_CODE
         )
-        toolResults.push(buildToolErrorResult(toolUseId, BROWSER_FEISHU_REMOTE_DISABLED_ERROR))
+        toolResults.push(buildToolErrorResult(toolUseId, BROWSER_FEISHU_REMOTE_DISABLED_CODE))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
-          result: { success: false, error: BROWSER_FEISHU_REMOTE_DISABLED_ERROR }
+          result: { success: false, error: BROWSER_FEISHU_REMOTE_DISABLED_CODE }
         })
-        if (toolErrorRepeat.noteFailure(toolName, BROWSER_FEISHU_REMOTE_DISABLED_ERROR)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${BROWSER_FEISHU_REMOTE_DISABLED_ERROR}`
+        if (toolErrorRepeat.noteFailure(toolName, BROWSER_FEISHU_REMOTE_DISABLED_CODE)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${BROWSER_FEISHU_REMOTE_DISABLED_CODE}`
           break
         }
         continue

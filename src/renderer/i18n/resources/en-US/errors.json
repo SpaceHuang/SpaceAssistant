@@ -1,0 +1,17 @@
+{
+  "API_KEY_NOT_CONFIGURED": "API Key is not configured. Configure it in Settings first.",
+  "BROWSER_FEISHU_REMOTE_DISABLED": "Browser tools are disabled for Feishu remote sessions. In SpaceAssistant desktop, open Settings → Browser and enable \"Allow Feishu remote sessions\".",
+  "CANNOT_OPEN_LINK": "Could not open link",
+  "CANNOT_OPEN_TERMINAL": "Could not open terminal",
+  "FILE_NOT_FOUND": "File not found",
+  "INVALID_PATH": "Invalid path",
+  "LLM_EMPTY_RESPONSE": "The model returned no usable content",
+  "NAME_CONTAINS_PATH_SEPARATOR": "Name must not contain path separators",
+  "NO_ENABLED_MODEL": "Enable at least one model in default model settings first",
+  "PROJECT_MEMORY_ALREADY_EXISTS": "SPACEASSISTANT.md already exists. Delete or edit it first.",
+  "SHELL_EXECUTABLE_REQUIRED": "Enter the executable path",
+  "SHELL_PROCESS_EXIT_CODE": "Process exited with code {{code}}",
+  "TARGET_NOT_DIRECTORY": "Target path is not a directory",
+  "WINDOW_NOT_READY": "Window is not ready",
+  "WORK_DIR_NOT_CONFIGURED": "Work directory not configured, cannot open project-level skill directory"
+}

@@ -16,6 +16,9 @@ import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
 import { requestFilePaneSelect, isUnderWikiRoot } from './services/filePaneNavigation'
 import { DEFAULT_WIKI_CONFIG } from '../shared/domainTypes'
+import { syncLocaleFromConfig } from './i18n/localeSync'
+import { useTypedTranslation } from './i18n/useTypedTranslation'
+import { formatUserFacingError } from './utils/formatUserFacingError'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import wikiLineRaw from './assets/book_2_ai_line.svg?raw'
@@ -60,6 +63,7 @@ function IconTab({
 }
 
 function AppShellInner() {
+  const { t } = useTypedTranslation('common')
   const { message } = AntdApp.useApp()
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
@@ -71,18 +75,20 @@ function AppShellInner() {
 
   const createSession = async () => {
     try {
-      const s = await window.api.sessionCreate({ name: `会话 ${sessions.length + 1}` })
+      const s = await window.api.sessionCreate({
+        name: t('session.defaultName', { index: sessions.length + 1 })
+      })
       dispatch(upsertSession(s))
       dispatch(setSession(s.id))
-      message.success('已创建会话')
+      message.success(t('appShell.sessionCreated'))
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '创建会话失败，请稍后重试')
+      message.error(formatUserFacingError(e instanceof Error ? e.message : t('appShell.createSessionFailed')))
     }
   }
 
   const handleFileSelect = (relPath: string) => {
     void openFile(relPath).catch((e) => {
-      message.error(e instanceof Error ? e.message : String(e))
+      message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
     })
   }
 
@@ -107,8 +113,8 @@ function AppShellInner() {
     void collectToWiki(srcRelPath, {
       wikiEnabled: Boolean(config?.wiki?.enabled),
       sessionId: currentSessionId,
-      onMissingSession: () => message.warning('请先选择或创建一个会话'),
-      onError: (text) => message.error(text),
+      onMissingSession: () => message.warning(t('appShell.selectSessionFirst')),
+      onError: (text) => message.error(formatUserFacingError(text)),
       onSuccess: (text) => message.success(text)
     })
   }
@@ -121,9 +127,12 @@ function AppShellInner() {
         if (list[0]) dispatch(setSession(list[0].id))
       })
       .catch((e) => {
-        message.error(e instanceof Error ? e.message : '加载会话列表失败，请重启应用后重试')
+        message.error(formatUserFacingError(e instanceof Error ? e.message : t('appShell.loadSessionsFailed')))
       })
-    void window.api.configGet().then((c) => dispatch(setConfig(c)))
+    void window.api.configGet().then((c) => {
+      dispatch(setConfig(c))
+      syncLocaleFromConfig(c.locale)
+    })
     const off1 = window.api.onOpenSettings(() => dispatch(setSettingsOpen(true)))
     const off2 = window.api.onOpenAbout(() => dispatch(setAboutOpen(true)))
     const offTitle = window.api.sessionOnTitleGenerated(({ session }) => {
@@ -144,18 +153,18 @@ function AppShellInner() {
         <div className="sa-split-pane-inner">
           <div className="activity-bar">
             <div className="activity-bar-top">
-              <IconTab lineSvg={chatLineSvg} fillSvg={chatFillSvg} active={siderKey === 'sessions'} onClick={() => setSiderKey('sessions')} title="会话" />
+              <IconTab lineSvg={chatLineSvg} fillSvg={chatFillSvg} active={siderKey === 'sessions'} onClick={() => setSiderKey('sessions')} title={t('activity.sessions')} />
               {wikiEnabled ? (
-                <IconTab lineSvg={wikiLineSvg} fillSvg={wikiFillSvg} active={siderKey === 'wiki'} onClick={() => setSiderKey('wiki')} title="Wiki" />
+                <IconTab lineSvg={wikiLineSvg} fillSvg={wikiFillSvg} active={siderKey === 'wiki'} onClick={() => setSiderKey('wiki')} title={t('activity.wiki')} />
               ) : null}
-              <IconTab lineSvg={searchLineSvg} fillSvg={searchFillSvg} active={siderKey === 'search'} onClick={() => setSiderKey('search')} title="搜索" />
+              <IconTab lineSvg={searchLineSvg} fillSvg={searchFillSvg} active={siderKey === 'search'} onClick={() => setSiderKey('search')} title={t('activity.search')} />
             </div>
             <div className="activity-bar-bottom">
               <button
                 type="button"
                 className="activity-bar-btn"
                 onClick={() => dispatch(setSettingsOpen(true))}
-                title="设置"
+                title={t('activity.settings')}
                 dangerouslySetInnerHTML={{ __html: settingsSvg }}
               />
             </div>
@@ -163,10 +172,12 @@ function AppShellInner() {
           <div className="sider-content">
             {(siderKey === 'sessions' || siderKey === 'search') && (
               <div className="app-pane-header sider-content-header">
-                <span className="app-pane-header-title">{siderKey === 'sessions' ? '会话' : '搜索'}</span>
+                <span className="app-pane-header-title">
+                  {siderKey === 'sessions' ? t('activity.sessions') : t('activity.search')}
+                </span>
                 {siderKey === 'sessions' ? (
                   <Button type="primary" size="small" className="sider-new-session-btn" onClick={() => void createSession()}>
-                    新会话
+                    {t('session.new')}
                   </Button>
                 ) : null}
               </div>

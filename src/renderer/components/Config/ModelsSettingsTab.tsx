@@ -6,6 +6,7 @@ import { ConfigModelOptionContent, ConfigModelSelectValue } from './ConfigModelO
 import { configModalModelSelectPopupClassNames } from './configModalUi'
 import { LlmServiceTab } from './LlmServiceTab'
 import type { useLlmServiceDrafts } from './useLlmServiceDrafts'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const DEFAULT_ADD_MODEL_MAX_CONTEXT = DEFAULT_MODEL_MAX_CONTEXT
 const DEFAULT_ADD_MODEL_MAX_TOKENS = DEFAULT_MODEL_MAX_TOKENS
@@ -30,6 +31,7 @@ function RefreshIcon() {
 }
 
 function ModelSelect({ value, onChange }: { value: ModelEntry[]; onChange: (v: ModelEntry[]) => void }) {
+  const { t } = useTypedTranslation('config')
   const selectable = value.filter((m) => m.enabled)
   const defaultModel = selectable.find((m) => m.isDefault) ?? selectable[0]
 
@@ -38,7 +40,7 @@ function ModelSelect({ value, onChange }: { value: ModelEntry[]; onChange: (v: M
   }
 
   if (selectable.length === 0) {
-    return <div className="config-model-select-empty">暂无可用模型，请先添加或启用模型</div>
+    return <div className="config-model-select-empty">{t('models.noModelsAvailable')}</div>
   }
 
   return (
@@ -72,6 +74,7 @@ type Props = {
 
 export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetModels }: Props) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('config')
   const [addOpen, setAddOpen] = useState(false)
   const [addName, setAddName] = useState('')
   const [addMaxCtx, setAddMaxCtx] = useState<number | null>(null)
@@ -82,7 +85,7 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
     const name = addName.trim()
     if (!name) return
     if (models.some((m) => m.name === name)) {
-      message.warning('模型名称已存在')
+      message.warning(t('models.nameExists'))
       return
     }
     const id = crypto.randomUUID()
@@ -107,9 +110,9 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
   const addContent = (
     <div className="config-add-model-popover">
       <div className="config-add-model-field">
-        <span className="config-add-model-label">模型名称</span>
+        <span className="config-add-model-label">{t('models.add.nameLabel')}</span>
         <Input
-          placeholder="按服务商提供的模型 ID 填写"
+          placeholder={t('models.add.namePlaceholder')}
           value={addName}
           onChange={(e) => setAddName(e.target.value)}
           onPressEnter={addModel}
@@ -118,9 +121,9 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
       </div>
       <div className="config-add-model-row">
         <div className="config-add-model-field">
-          <span className="config-add-model-label">最大上下文</span>
+          <span className="config-add-model-label">{t('models.add.maxContextLabel')}</span>
           <InputNumber
-            placeholder="留空默认 200K"
+            placeholder={t('models.add.maxContextPlaceholder')}
             value={addMaxCtx}
             onChange={(v) => setAddMaxCtx(typeof v === 'number' ? v : null)}
             min={1}
@@ -128,9 +131,9 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
           />
         </div>
         <div className="config-add-model-field">
-          <span className="config-add-model-label">最大输出</span>
+          <span className="config-add-model-label">{t('models.add.maxOutputLabel')}</span>
           <InputNumber
-            placeholder="留空默认 64K"
+            placeholder={t('models.add.maxOutputPlaceholder')}
             value={addMaxTokens}
             onChange={(v) => setAddMaxTokens(typeof v === 'number' ? v : null)}
             min={1}
@@ -138,12 +141,12 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
           />
         </div>
       </div>
-      <p className="config-add-model-hint">用于帮助 Agent 管理上下文窗口。不确定时可留空。</p>
+      <p className="config-add-model-hint">{t('models.add.hint')}</p>
       <Checkbox checked={addFast} onChange={(e) => setAddFast(e.target.checked)}>
-        标注为快速模型（用于低成本简单任务）
+        {t('models.add.fastLabel')}
       </Checkbox>
       <Button type="primary" size="small" block onClick={addModel} disabled={!addName.trim()}>
-        添加模型
+        {t('models.add.submit')}
       </Button>
     </div>
   )
@@ -152,11 +155,9 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
     <div className="config-models-settings">
       <section className="config-models-section" aria-labelledby="config-models-api-title">
         <h2 id="config-models-api-title" className="config-models-section__title">
-          API 服务
+          {t('models.apiServices.title')}
         </h2>
-        <p className="config-models-section__intro">
-          每套服务包含独立的 API Key 与 Base URL。勾选「当前使用」的服务将用于所有聊天请求。
-        </p>
+        <p className="config-models-section__intro">{t('models.apiServices.intro')}</p>
         <div className="config-models-section__content">
           <LlmServiceTab draftsApi={draftsApi} />
         </div>
@@ -164,23 +165,21 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
 
       <section className="config-models-section" aria-labelledby="config-models-default-title">
         <h2 id="config-models-default-title" className="config-models-section__title">
-          大模型设置
+          {t('models.defaults.title')}
         </h2>
-        <p className="config-models-section__intro">
-          选择对话默认调用的模型；Thinking 开启后，支持该能力的模型会展示推理过程。
-        </p>
+        <p className="config-models-section__intro">{t('models.defaults.intro')}</p>
 
         <div className="config-models-field-stack">
           <div className="config-field config-model-field">
             <div className="config-field-row">
-              <span className="config-field__label">默认大模型</span>
+              <span className="config-field__label">{t('models.defaults.defaultModel')}</span>
               <Space size={6} className="config-model-field__actions">
                 <Button
                   size="small"
                   icon={<RefreshIcon />}
                   onClick={onResetModels}
-                  aria-label="恢复默认模型列表"
-                  title="恢复默认"
+                  aria-label={t('models.defaults.resetDefaultAria')}
+                  title={t('models.defaults.resetDefault')}
                 />
                 <Popover
                   overlayClassName="config-settings-popover"
@@ -190,7 +189,13 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
                   trigger="click"
                   placement="bottomRight"
                 >
-                  <Button size="small" type="primary" icon={<AddIcon />} aria-label="添加模型" title="添加模型" />
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<AddIcon />}
+                    aria-label={t('models.defaults.addModel')}
+                    title={t('models.defaults.addModel')}
+                  />
                 </Popover>
               </Space>
             </div>
@@ -201,12 +206,12 @@ export function ModelsSettingsTab({ draftsApi, models, onModelsChange, onResetMo
 
           <div className="config-field config-models-thinking-field">
             <div className="config-field-row">
-              <span className="config-field__label">默认开启 Thinking</span>
+              <span className="config-field__label">{t('models.defaults.thinkingLabel')}</span>
               <Form.Item name="thinkingEnabled" valuePropName="checked" noStyle preserve>
-                <Switch aria-label="默认开启 Thinking" />
+                <Switch aria-label={t('models.defaults.thinkingAria')} />
               </Form.Item>
             </div>
-            <p className="config-field__hint">仅对支持 extended thinking 的模型生效</p>
+            <p className="config-field__hint">{t('models.defaults.thinkingHint')}</p>
           </div>
         </div>
       </section>

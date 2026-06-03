@@ -1,0 +1,124 @@
+{
+  "thinking": {
+    "label": "Thinking",
+    "expandHint": "Expand thinking",
+    "collapseHint": "Collapse thinking"
+  },
+  "streaming": {
+    "inProgress": "Generating",
+    "failed": "Failed"
+  },
+  "bubble": {
+    "archiveToWiki": "Archive to Wiki",
+    "assistantReply": "Assistant reply",
+    "retryFailedMessage": "The reply could not be completed. You can retry or continue from the existing context.",
+    "retry": "Retry reply"
+  },
+  "tool": {
+    "view": "View",
+    "cancel": "Cancel",
+    "pending": "Still running…",
+    "rejected": "Rejected",
+    "failed": "Failed",
+    "empty": "(empty)",
+    "fileFallback": "File",
+    "completedNoOutput": "Completed (no output)",
+    "labels": {
+      "grep": {
+        "default": "Search workspace",
+        "withPattern": "Search workspace for '{{pattern}}'"
+      },
+      "readFile": "Read file",
+      "listDirectory": "List directory",
+      "editFile": "Edit file",
+      "writeFile": "Write file",
+      "runScript": "Run script",
+      "runShellEmpty": "Run command",
+      "browserDetect": "Check browser dependencies",
+      "invokeTool": "Invoke tool: {{toolName}}"
+    },
+    "descriptions": {
+      "grep": "Search file contents under the working directory",
+      "readFile": "Read the full contents of a file",
+      "listDirectory": "List files and subdirectories in a directory",
+      "editFile": "Edit a file via string replacement",
+      "writeFile": "Write full contents to a file",
+      "runScript": "Execute a Python script",
+      "runShell": "Run a shell command in the session working directory",
+      "browser": "Browse the web in an isolated browser",
+      "browserDetect": "Check whether browser tool dependencies are ready",
+      "invokeTool": "Invoke tool: {{toolName}}"
+    }
+  },
+  "input": {
+    "placeholder": "Type a message…",
+    "send": "Send message",
+    "abort": "Stop generation",
+    "hintIdle": "Enter to send, Shift+Enter for newline",
+    "hintRunning": "Running — Enter or click the button to stop"
+  },
+  "confirm": {
+    "decisionAriaLabel": "Confirm: {{action}}",
+    "write": {
+      "allow": "Allow write",
+      "deny": "Deny write",
+      "editAction": "Edit \"{{fileName}}\"",
+      "writeAction": "Write \"{{fileName}}\"",
+      "writeFileFallback": "Write file",
+      "editFileFallback": "Edit file"
+    },
+    "shell": {
+      "allow": "Confirm run",
+      "allowWithRisk": "I understand the risk — run",
+      "deny": "Deny run",
+      "defaultTitle": "Shell command",
+      "executeTitle": "Run shell command",
+      "highRisk": "High risk",
+      "pathSecurityWarning": "Path safety warning"
+    },
+    "script": {
+      "actionSummary": "Run Python script",
+      "allow": "Confirm run",
+      "deny": "Deny run"
+    },
+    "lark": {
+      "allowWrite": "Confirm Feishu write",
+      "allowCommand": "Confirm Feishu command",
+      "denyWrite": "Deny write",
+      "denyCommand": "Deny command",
+      "writeBadge": "Write"
+    },
+    "browser": {
+      "allow": "Confirm action",
+      "deny": "Deny action"
+    },
+    "collapsible": {
+      "collapse": "Collapse preview",
+      "expand": "Expand all ({{count}} lines)"
+    },
+    "previewTruncatedLine": "… (showing first 500 lines only)",
+    "previewCap": "Changes exceed 500 lines; preview truncated. Use the file tree for the full diff."
+  },
+  "chatView": {
+    "warnings": {
+      "selectSession": "Select a session and wait for settings to load",
+      "sessionRunning": "This session already has a task running",
+      "maxParallel": "At most {{max}} sessions can run at once. Try again later.",
+      "apiKeyMissing": "Configure an API Key in Settings first",
+      "retryNoUserMessage": "Could not find a previous user message to retry"
+    },
+    "empty": {
+      "noSessionTitle": "Select or create a session",
+      "noSessionDesc": "Create or open a conversation in the session list",
+      "startTitle": "Start a conversation",
+      "startDesc": "Ask a question to collaborate — e.g. summarize the README. You can also use /skill or /wiki commands."
+    }
+  },
+  "shell": {
+    "tuiTitle": "This command needs an interactive terminal",
+    "tuiLine1": "run_shell in SpaceAssistant is read-only and cannot run full-screen or interactive programs such as less, vim, top, or interactive npm init.",
+    "tuiLine2": "Run this command in an external terminal at the working directory; use the button below to open one.",
+    "openTerminal": "Open terminal at working directory",
+    "workDirNotConfigured": "Working directory is not configured. Set it in Settings first."
+  }
+}

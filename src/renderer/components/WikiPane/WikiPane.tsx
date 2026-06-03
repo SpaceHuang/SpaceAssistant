@@ -5,6 +5,7 @@ import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
 import { WikiPaneToolbar } from './WikiPaneToolbar'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import './wikiPane.css'
 
 type Props = {
@@ -61,7 +62,7 @@ export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectTo
   const initWiki = async () => {
     const result = await window.api.wikiInit({ installSkill: true })
     if (!result.ok) {
-      message.error(result.error)
+      message.error(formatUserFacingError(result.error))
       return
     }
     message.success('Wiki 已初始化')

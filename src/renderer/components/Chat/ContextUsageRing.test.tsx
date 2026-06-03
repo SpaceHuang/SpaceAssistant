@@ -11,6 +11,7 @@ import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
+    locale: 'zh-CN',
     apiKeyPresent: true,
     baseUrl: '',
     llmServices: [],

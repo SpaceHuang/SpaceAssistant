@@ -1,6 +1,9 @@
 export const CURRENT_SCHEMA_VERSION = 1
 
 import type { BrowserDependencyToolError } from './browserTypes'
+import type { AppLocale } from './locale'
+
+export type { AppLocale }
 
 export type MessageRole = 'user' | 'assistant' | 'system'
 
@@ -542,6 +545,8 @@ export interface LlmServiceProfile {
 }
 
 export interface AppConfig {
+  /** 界面语言，遵循 BCP 47 标签 */
+  locale: AppLocale
   /** 是否已配置 API Key（激活服务的镜像，兼容旧逻辑） */
   apiKeyPresent: boolean
   /** Base URL（激活服务的镜像，兼容旧逻辑） */

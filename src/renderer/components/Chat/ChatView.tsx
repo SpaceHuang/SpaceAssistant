@@ -24,6 +24,7 @@ import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import {
   buildToolChatPayload,
   createToolChatController,
@@ -72,6 +73,7 @@ import { throttle } from '../../utils/throttle'
 import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
 import { isChatScrollNearBottom, scrollChatToBottom } from '../../utils/chatScroll'
 import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type SendInternalOptions = {
   skipUserMessage?: boolean
@@ -92,6 +94,7 @@ function buildClaudePayload(history: Message[]) {
 
 export function ChatView() {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('chat')
   const { openFile } = useDetailPanel()
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
@@ -294,17 +297,17 @@ export function ChatView() {
   const sendInternal = useCallback(
     async (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => {
       if (!sessionId || !cfg) {
-        message.warning('请先选择会话并等待配置加载')
+        message.warning(t('chatView.warnings.selectSession'))
         return
       }
       const runSessionId = sessionId
       if (isSessionRunning(runSessionId)) {
-        message.warning('当前会话已有任务在执行')
+        message.warning(t('chatView.warnings.sessionRunning'))
         return
       }
       const maxParallel = getMaxParallelChatSessions()
       if (countRunningSessions() >= maxParallel) {
-        message.warning(`最多同时执行 ${maxParallel} 个会话，请稍后再试`)
+        message.warning(t('chatView.warnings.maxParallel', { max: maxParallel }))
         return
       }
 
@@ -328,7 +331,7 @@ export function ChatView() {
       }
 
       if (!cfg.apiKeyPresent) {
-        message.warning('请先在设置中配置 API Key')
+        message.warning(t('chatView.warnings.apiKeyMissing'))
         return
       }
       const wikiConfig = cfg.wiki ?? DEFAULT_WIKI_CONFIG
@@ -617,7 +620,7 @@ export function ChatView() {
             dispatch(setChatStatus({ status: 'error', error: res.error, requestId: null, sessionId: runSessionId }))
             finishSessionRun(runSessionId, requestId, assistantId)
             clearLiveSession(runSessionId)
-            message.error(res.error)
+            message.error(formatUserFacingError(res.error))
             return
           }
           const textOut = extractAssistantTextFromApiContent(res.content as unknown[]) || contentState.content
@@ -678,7 +681,7 @@ export function ChatView() {
           dispatch(setChatStatus({ status: 'error', error: err, requestId: null, sessionId: runSessionId }))
           finishSessionRun(runSessionId, requestId, assistantId)
           clearLiveSession(runSessionId)
-          message.error(err)
+          message.error(formatUserFacingError(err))
         } finally {
           cleanup()
         }
@@ -758,12 +761,12 @@ export function ChatView() {
             dispatch(setChatStatus({ status: 'error', error: err, requestId: null, sessionId: runSessionId }))
             finishSessionRun(runSessionId, requestId, assistantId)
             clearLiveSession(runSessionId)
-            message.error(err)
+            message.error(formatUserFacingError(err))
           }
         }
       )
     },
-    [cfg, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage]
+    [cfg, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t]
   )
 
   const send = useCallback(
@@ -790,14 +793,14 @@ export function ChatView() {
         }
       }
       if (!userText.trim()) {
-        message.warning('找不到可重试的上一条用户消息')
+        message.warning(t('chatView.warnings.retryNoUserMessage'))
         return
       }
 
       dispatch(setMessages(msgs.filter((m) => m.id !== assistantMessageId)))
       await sendInternal(userText, undefined, { skipUserMessage: true })
     },
-    [dispatch, message, sendInternal]
+    [dispatch, message, sendInternal, t]
   )
 
   const launchIntentConsumedRef = useRef<string | null>(null)
@@ -868,7 +871,7 @@ export function ChatView() {
       const wikiRoot = cfg?.wiki?.rootPath ?? 'llm-wiki'
       requestFilePaneSelect({ relPath, preferWiki: isUnderWikiRoot(relPath, wikiRoot) })
       void openFile(relPath).catch((e) => {
-        message.error(e instanceof Error ? e.message : String(e))
+        message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
       })
     },
     [message, openFile, cfg?.wiki?.rootPath]
@@ -928,18 +931,16 @@ export function ChatView() {
             <div className="chat-empty-icon" aria-hidden>
               <MessagesSquare size={22} strokeWidth={1.75} />
             </div>
-            <div className="chat-empty-title">选择或创建一个会话</div>
-            <p className="chat-empty-desc">在左侧会话列表中新建或打开对话</p>
+            <div className="chat-empty-title">{t('chatView.empty.noSessionTitle')}</div>
+            <p className="chat-empty-desc">{t('chatView.empty.noSessionDesc')}</p>
           </div>
         ) : messages.length === 0 ? (
           <div className="chat-empty">
             <div className="chat-empty-icon" aria-hidden>
               <MessageSquare size={22} strokeWidth={1.75} />
             </div>
-            <div className="chat-empty-title">开始对话</div>
-            <p className="chat-empty-desc">
-              输入问题开始协作，例如：帮我整理 README 的要点。也可使用 /skill 或 /wiki 命令。
-            </p>
+            <div className="chat-empty-title">{t('chatView.empty.startTitle')}</div>
+            <p className="chat-empty-desc">{t('chatView.empty.startDesc')}</p>
           </div>
         ) : (
           <div className="chat-message-list">

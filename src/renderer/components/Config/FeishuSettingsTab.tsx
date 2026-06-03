@@ -6,6 +6,7 @@ import { FeishuAuditDrawer } from './FeishuAuditDrawer'
 import type { ModelEntry } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   feishu: FeishuConfig
@@ -15,7 +16,8 @@ type Props = {
 
 export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
   const { message } = App.useApp()
-  const [cliStatus, setCliStatus] = useState<string>('检测中…')
+  const { t } = useTypedTranslation('config')
+  const [cliStatus, setCliStatus] = useState<string>(t('feishu.detecting'))
   const [eventStatus, setEventStatus] = useState<FeishuEventStatus | null>(null)
   const [authStatus, setAuthStatus] = useState<string>('')
   const [auditOpen, setAuditOpen] = useState(false)
@@ -31,16 +33,24 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
       const detect = await window.api.feishuDetectCli()
       setCliStatus(
         detect.installed
-          ? `已安装 ${detect.version ?? ''} ${detect.path ? `(${detect.path})` : ''}`
-          : `未检测到（Node: ${detect.nodeAvailable ? '✓' : '✗'} npm: ${detect.npmAvailable ? '✓' : '✗'}）`
+          ? t('feishu.cliInstalled', {
+              version: detect.version ?? '',
+              path: detect.path ? `(${detect.path})` : ''
+            })
+          : t('feishu.cliNotDetected', {
+              node: detect.nodeAvailable ? t('feishu.checkMark') : t('feishu.crossMark'),
+              npm: detect.npmAvailable ? t('feishu.checkMark') : t('feishu.crossMark')
+            })
       )
       const auth = await window.api.feishuAuthStatus()
       setAuthStatus(
         auth.authorized
-          ? '已授权'
+          ? t('feishu.authorized')
           : auth.stderr?.trim()
-            ? `未登录（${auth.stderr.trim()}${auth.hint ? `，${auth.hint}` : ''}）`
-            : '未登录'
+            ? t('feishu.notLoggedInWithDetail', {
+                detail: `${auth.stderr.trim()}${auth.hint ? `，${auth.hint}` : ''}`
+              })
+            : t('feishu.notLoggedIn')
       )
       if (auth.authorized !== feishu.userAuthorized) {
         patch({ userAuthorized: auth.authorized })
@@ -52,7 +62,7 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
     } catch (e) {
       setCliStatus(e instanceof Error ? e.message : String(e))
     }
-  }, [feishu.remoteEnabled, feishu.userAuthorized, patch])
+  }, [feishu.remoteEnabled, feishu.userAuthorized, patch, t])
 
   useEffect(() => {
     if (feishu.enabled) void refreshStatus()
@@ -60,33 +70,33 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
 
   useEffect(() => {
     if (!feishu.remoteEnabled) return
-    const t = setInterval(() => {
+    const timer = setInterval(() => {
       void window.api.feishuEventStatus().then(setEventStatus)
     }, 5000)
-    return () => clearInterval(t)
+    return () => clearInterval(timer)
   }, [feishu.remoteEnabled])
 
   const installCli = async () => {
     if (typeof window.api.feishuInstallCli !== 'function') {
-      message.error('当前应用版本未包含飞书 IPC，请从 feature/feishu-integration 分支启动并重新构建主进程')
+      message.error(t('feishu.ipcMissingBuild'))
       return
     }
     setInstallingCli(true)
-    setCliStatus('正在安装 @larksuite/cli（全局 npm，可能需要 1–3 分钟）…')
+    setCliStatus(t('feishu.installingCli'))
     try {
       const r = await window.api.feishuInstallCli()
       if (r.success) {
-        message.success('lark-cli 安装成功')
+        message.success(t('feishu.installSuccess'))
         await refreshStatus()
       } else {
-        const detail = (r.stderr || r.stdout || '未知错误').trim().slice(-800)
-        message.error(r.timedOut ? '安装超时，请检查网络或在终端手动运行 npm install -g @larksuite/cli' : `安装失败：${detail}`)
-        setCliStatus(`安装失败${r.timedOut ? '（超时）' : ''}`)
+        const detail = (r.stderr || r.stdout || t('feishu.unknownError')).trim().slice(-800)
+        message.error(r.timedOut ? t('feishu.installTimeout') : t('feishu.installFailed', { detail }))
+        setCliStatus(r.timedOut ? t('feishu.installFailedTimeoutStatus') : t('feishu.installFailedStatus'))
       }
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
-      message.error(`安装 CLI 失败：${err}`)
-      setCliStatus(`安装失败：${err}`)
+      message.error(t('feishu.installCliFailed', { error: err }))
+      setCliStatus(t('feishu.installFailedStatus') + `: ${err}`)
     } finally {
       setInstallingCli(false)
     }
@@ -94,16 +104,16 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
 
   const configInit = async () => {
     if (typeof window.api.feishuConfigInit !== 'function') {
-      message.error('当前应用版本未包含飞书 IPC，请重新构建主进程')
+      message.error(t('feishu.ipcMissingRebuild'))
       return
     }
     setConfiguringApp(true)
-    setConfigStatus('正在初始化飞书应用，等待配置链接（约 10–30 秒）…')
+    setConfigStatus(t('feishu.configuringApp'))
     const unsub =
       typeof window.api.feishuOnConfigInitProgress === 'function'
         ? window.api.feishuOnConfigInitProgress(({ line }) => {
             if (/https?:\/\//.test(line)) {
-              setConfigStatus('已在浏览器打开配置页，请完成扫码/登录后等待…')
+              setConfigStatus(t('feishu.configBrowserOpened'))
             } else if (line) {
               setConfigStatus(line.slice(-120))
             }
@@ -112,26 +122,22 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
     try {
       const r = await window.api.feishuConfigInit()
       if (r.success) {
-        message.success('飞书应用配置完成')
+        message.success(t('feishu.configSuccess'))
         patch({ appConfigured: true })
-        setConfigStatus('配置完成')
+        setConfigStatus(t('feishu.configDone'))
         await refreshStatus()
       } else {
-        const detail = (r.stderr || r.stdout || '未知错误').trim().slice(-800)
-        message.error(
-          r.timedOut
-            ? '配置超时：若已在浏览器完成设置，请点「重新检测」或手动开启「应用已配置」'
-            : `配置失败：${detail}`
-        )
+        const detail = (r.stderr || r.stdout || t('feishu.unknownError')).trim().slice(-800)
+        message.error(r.timedOut ? t('feishu.configTimeout') : t('feishu.configFailed', { detail }))
         if (r.authUrl) {
-          message.info('若浏览器未自动打开，请手动访问配置链接（见 CLI 输出）')
+          message.info(t('feishu.configManualUrl'))
         }
-        setConfigStatus(`配置失败${r.timedOut ? '（超时）' : ''}`)
+        setConfigStatus(r.timedOut ? t('feishu.configFailedTimeoutStatus') : t('feishu.configFailedStatus'))
       }
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
-      message.error(`配置飞书应用失败：${err}`)
-      setConfigStatus(`配置失败：${err}`)
+      message.error(t('feishu.configAppFailed', { error: err }))
+      setConfigStatus(`${t('feishu.configFailedStatus')}: ${err}`)
     } finally {
       unsub?.()
       setConfiguringApp(false)
@@ -140,21 +146,21 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
 
   const authLogin = async () => {
     if (typeof window.api.feishuAuthLogin !== 'function') {
-      message.error('当前应用版本未包含飞书 IPC，请重新构建主进程')
+      message.error(t('feishu.ipcMissingRebuild'))
       return
     }
     setAuthLoggingIn(true)
     try {
       const r = await window.api.feishuAuthLogin()
       if (r.success) {
-        message.success('飞书账号登录成功')
+        message.success(t('feishu.loginSuccess'))
         patch({ userAuthorized: true })
         await refreshStatus()
       } else {
-        const detail = (r.stderr || r.stdout || '未知错误').trim().slice(-800)
-        message.error(r.timedOut ? '登录超时，请在浏览器完成授权后重试' : `登录失败：${detail}`)
+        const detail = (r.stderr || r.stdout || t('feishu.unknownError')).trim().slice(-800)
+        message.error(r.timedOut ? t('feishu.loginTimeout') : t('feishu.loginFailed', { detail }))
       }
-      if (r.authUrl) message.info('已在浏览器打开登录页，请完成授权')
+      if (r.authUrl) message.info(t('feishu.loginBrowserOpened'))
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))
     } finally {
@@ -166,22 +172,22 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
     <>
       <ConfigSettingsStack>
         <ConfigSwitchRow
-          label="启用飞书集成"
+          label={t('feishu.enableLabel')}
           checked={feishu.enabled}
           onChange={(enabled) => patch({ enabled })}
         />
 
         <div className="config-field">
-          <div className="config-field__label">CLI 状态</div>
+          <div className="config-field__label">{t('feishu.cliStatusLabel')}</div>
           <div className="config-status-text">{cliStatus}</div>
           <Space wrap className="config-field__control">
             <Button loading={installingCli} disabled={installingCli} onClick={() => void installCli()}>
-              安装 CLI
+              {t('feishu.installCli')}
             </Button>
-            <Button onClick={refreshStatus}>重新检测</Button>
+            <Button onClick={() => void refreshStatus()}>{t('feishu.redetect')}</Button>
             <Input
               className="config-field__control-input-flex"
-              placeholder="自定义 cliPath（可选）"
+              placeholder={t('feishu.cliPathPlaceholder')}
               value={feishu.cliPath ?? ''}
               onChange={(e) => patch({ cliPath: e.target.value || undefined })}
             />
@@ -191,24 +197,24 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
         <div className="config-field">
           <Space wrap>
             <Button loading={configuringApp} disabled={configuringApp} onClick={() => void configInit()}>
-              配置飞书应用
+              {t('feishu.configApp')}
             </Button>
             <Switch checked={feishu.appConfigured} onChange={(appConfigured) => patch({ appConfigured })} />
-            <span className="config-inline-label">应用已配置</span>
+            <span className="config-inline-label">{t('feishu.appConfigured')}</span>
           </Space>
           {configStatus ? <div className="config-status-text">{configStatus}</div> : null}
         </div>
 
         <Space wrap>
           <Button loading={authLoggingIn} disabled={authLoggingIn} onClick={() => void authLogin()}>
-            登录飞书账号
+            {t('feishu.loginAccount')}
           </Button>
           <span className="config-status-text">{authStatus}</span>
         </Space>
 
         <Space wrap align="center">
           <Switch checked={feishu.remoteEnabled} onChange={(remoteEnabled) => patch({ remoteEnabled })} />
-          <span className="config-inline-label">启用远程指令监听</span>
+          <span className="config-inline-label">{t('feishu.remoteListen')}</span>
           {eventStatus && (
             <Badge
               status={
@@ -218,32 +224,32 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
             />
           )}
           <Button size="small" onClick={() => void window.api.feishuEventStart().then(setEventStatus)}>
-            启动
+            {t('feishu.start')}
           </Button>
           <Button size="small" onClick={() => void window.api.feishuEventStop().then(setEventStatus)}>
-            停止
+            {t('feishu.stop')}
           </Button>
         </Space>
 
         <Checkbox checked={feishu.remoteNotifyOnReceive} onChange={(e) => patch({ remoteNotifyOnReceive: e.target.checked })}>
-          收到指令时发送系统通知
+          {t('feishu.notifyOnReceive')}
         </Checkbox>
 
-        <ConfigField label="群聊触发">
+        <ConfigField label={t('feishu.groupTriggerLabel')}>
           <Radio.Group value={feishu.remoteGroupTrigger} onChange={(e) => patch({ remoteGroupTrigger: e.target.value })}>
-            <Radio value="mention">@Bot</Radio>
-            <Radio value="prefix">前缀</Radio>
-            <Radio value="both">两者</Radio>
+            <Radio value="mention">{t('feishu.groupTriggerMention')}</Radio>
+            <Radio value="prefix">{t('feishu.groupTriggerPrefix')}</Radio>
+            <Radio value="both">{t('feishu.groupTriggerBoth')}</Radio>
           </Radio.Group>
           <Input
             className="config-field__control-nested"
             value={feishu.remoteCommandPrefix ?? '/sa '}
             onChange={(e) => patch({ remoteCommandPrefix: e.target.value })}
-            placeholder="命令前缀"
+            placeholder={t('feishu.commandPrefixPlaceholder')}
           />
         </ConfigField>
 
-        <ConfigField label="会话合并（分钟，0=每条新会话）">
+        <ConfigField label={t('feishu.sessionMergeLabel')}>
           <InputNumber
             min={0}
             max={120}
@@ -252,35 +258,35 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           />
         </ConfigField>
 
-        <ConfigField label="远程写确认策略">
+        <ConfigField label={t('feishu.remoteConfirmLabel')}>
           <Select
             value={feishu.remoteConfirmPolicy}
             onChange={(remoteConfirmPolicy) => patch({ remoteConfirmPolicy })}
             classNames={configModalSelectPopupClassNames}
             options={[
-              { value: 'remote_read_only', label: '禁止远程写' },
-              { value: 'feishu_confirm', label: '飞书内 Y/N 确认' },
-              { value: 'always', label: '一律确认' },
-              { value: 'inherit', label: '与工具设置一致' }
+              { value: 'remote_read_only', label: t('feishu.remoteConfirmReadOnly') },
+              { value: 'feishu_confirm', label: t('feishu.remoteConfirmFeishu') },
+              { value: 'always', label: t('feishu.remoteConfirmAlways') },
+              { value: 'inherit', label: t('feishu.remoteConfirmInherit') }
             ]}
           />
         </ConfigField>
 
         <Checkbox checked={feishu.remoteAllowLocalWrite} onChange={(e) => patch({ remoteAllowLocalWrite: e.target.checked })}>
-          允许远程指令执行本地文件写操作
+          {t('feishu.remoteAllowLocalWrite')}
         </Checkbox>
 
-        <ConfigField label="区域">
+        <ConfigField label={t('feishu.regionLabel')}>
           <Radio.Group value={feishu.region} onChange={(e) => patch({ region: e.target.value })}>
-            <Radio value="feishu">飞书国内</Radio>
-            <Radio value="lark">Lark 国际</Radio>
+            <Radio value="feishu">{t('feishu.regionFeishu')}</Radio>
+            <Radio value="lark">{t('feishu.regionLark')}</Radio>
           </Radio.Group>
         </ConfigField>
 
-        <ConfigField label="远程默认模型">
+        <ConfigField label={t('feishu.remoteDefaultModelLabel')}>
           <Select
             allowClear
-            placeholder="与全局默认相同"
+            placeholder={t('feishu.remoteDefaultModelPlaceholder')}
             value={feishu.remoteDefaultModelId}
             onChange={(remoteDefaultModelId) => patch({ remoteDefaultModelId })}
             classNames={configModalSelectPopupClassNames}
@@ -288,21 +294,21 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           />
         </ConfigField>
 
-        <ConfigField label="集成模式">
+        <ConfigField label={t('feishu.integrationModeLabel')}>
           <Select
             value={feishu.integrationMode}
             onChange={(integrationMode) => patch({ integrationMode })}
             classNames={configModalSelectPopupClassNames}
             options={[
-              { value: 'cli', label: 'CLI（推荐）' },
-              { value: 'mcp', label: 'MCP' },
-              { value: 'both', label: '并存' }
+              { value: 'cli', label: t('feishu.integrationCli') },
+              { value: 'mcp', label: t('feishu.integrationMcp') },
+              { value: 'both', label: t('feishu.integrationBoth') }
             ]}
           />
-          <p className="config-field__hint">若已配置 MCP 飞书工具，请在工具 Tab 避免重复启用冲突能力。</p>
+          <p className="config-field__hint">{t('feishu.integrationHint')}</p>
         </ConfigField>
 
-        <Button onClick={() => setAuditOpen(true)}>查看操作记录</Button>
+        <Button onClick={() => setAuditOpen(true)}>{t('feishu.viewAudit')}</Button>
       </ConfigSettingsStack>
 
       <FeishuAuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} />

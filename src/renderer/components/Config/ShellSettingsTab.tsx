@@ -1,6 +1,7 @@
 import { Alert, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
 import type { ShellConfig, ShellRule } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   shell: ShellConfig
@@ -10,27 +11,33 @@ type Props = {
   shellTest?: { ok: boolean; text: string } | null
 }
 
-const CUSTOM_SENSITIVE_PREFIXES_HELP = (
-  <div className="config-field-help-tip">
-    <p>把需要特别小心的文件夹路径填在这里。AI 用 Shell 动到这些目录时，会先弹出明显警告，需要你明确确认才会执行。</p>
-    <p>适合添加的情况，例如：</p>
-    <ul>
-      <li>团队密钥、证书、生产配置所在目录</li>
-      <li>本地数据库备份、内网凭据文件夹</li>
-      <li>任何你不希望 AI 悄无声息碰到的目录</li>
-    </ul>
-    <p>没有这类目录可以留空；系统本身还会保护 .ssh、.env 等常见敏感位置。</p>
-  </div>
-)
-
-const BUILTIN_DENY_DISPLAY = [
-  { pattern: 'sudo:*', reason: '提权' },
-  { pattern: 'doas:*', reason: '提权' },
-  { pattern: 'rm -rf:*', reason: '破坏性删除' },
-  { pattern: 'lark-cli:*', reason: '请使用 run_lark_cli' }
-]
+function SensitivePrefixesHelp() {
+  const { t } = useTypedTranslation('config')
+  return (
+    <div className="config-field-help-tip">
+      <p>{t('shell.sensitivePrefixesHelpIntro')}</p>
+      <p>{t('shell.sensitivePrefixesHelpWhenTitle')}</p>
+      <ul>
+        <li>{t('shell.sensitivePrefixesHelpExample1')}</li>
+        <li>{t('shell.sensitivePrefixesHelpExample2')}</li>
+        <li>{t('shell.sensitivePrefixesHelpExample3')}</li>
+      </ul>
+      <p>{t('shell.sensitivePrefixesHelpOutro')}</p>
+    </div>
+  )
+}
 
 export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, shellTest }: Props) {
+  const { t } = useTypedTranslation('config')
+  const { t: tCommon } = useTypedTranslation('common')
+
+  const builtinDenyDisplay = [
+    { pattern: 'sudo:*', reason: t('shell.builtinDenyReason.privilege') },
+    { pattern: 'doas:*', reason: t('shell.builtinDenyReason.privilege') },
+    { pattern: 'rm -rf:*', reason: t('shell.builtinDenyReason.destructiveDelete') },
+    { pattern: 'lark-cli:*', reason: t('shell.builtinDenyReason.useRunLarkCli') }
+  ]
+
   const patch = (partial: Partial<ShellConfig>) => onChange((s) => ({ ...s, ...partial }))
 
   const addRule = () => {
@@ -54,10 +61,10 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
         type="warning"
         showIcon
         className="config-alert--compact"
-        message="Shell 命令能力边界"
-        description="Shell 在会话工作目录下启动，系统会扫描命令中的路径并在越界/敏感时显著警示；注入类高危模式会直接拒绝。Shell 无法像文件工具一样约束子进程的全部行为。请勿对不可信命令点击确认。"
+        message={t('shell.boundaryTitle')}
+        description={t('shell.boundaryDescription')}
       />
-      <Form.Item label="默认超时（秒）">
+      <Form.Item label={t('shell.defaultTimeoutLabel')}>
         <InputNumber
           min={1}
           max={86400}
@@ -66,21 +73,21 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
           style={{ width: '100%' }}
         />
       </Form.Item>
-      <Form.Item label="命令输出">
+      <Form.Item label={t('shell.outputModeLabel')}>
         <Select
           value={shell.outputMode ?? 'terminal'}
           style={{ width: '100%' }}
           options={[
-            { value: 'terminal', label: '终端视图（ANSI / 进度条）' },
-            { value: 'plain', label: '纯文本（v1）' }
+            { value: 'terminal', label: t('shell.outputTerminal') },
+            { value: 'plain', label: t('shell.outputPlain') }
           ]}
           onChange={(v) => patch({ outputMode: v })}
         />
         <p className="config-field__hint" style={{ marginTop: 6 }}>
-          飞书远程会话始终使用纯文本。交互式全屏命令（less、vim、top 等）请在外部终端运行。
+          {t('shell.outputHint')}
         </p>
       </Form.Item>
-      <Form.Item label="内联输出上限（字节）">
+      <Form.Item label={t('shell.maxInlineOutputLabel')}>
         <InputNumber
           min={1024}
           max={10_485_760}
@@ -92,14 +99,14 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
       <Form.Item
         label={
           <span className="config-field-label-with-help">
-            自定义敏感路径前缀
+            {t('shell.sensitivePrefixesLabel')}
             <Tooltip
-              title={CUSTOM_SENSITIVE_PREFIXES_HELP}
+              title={<SensitivePrefixesHelp />}
               trigger="click"
               placement="topLeft"
               styles={{ root: { maxWidth: 320 } }}
             >
-              <button type="button" className="config-field-help-trigger" aria-label="自定义敏感路径前缀说明">
+              <button type="button" className="config-field-help-trigger" aria-label={t('shell.sensitivePrefixesAria')}>
                 ?
               </button>
             </Tooltip>
@@ -116,22 +123,22 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
               .filter(Boolean)
             patch({ customSensitivePrefixes: lines.length ? lines : undefined })
           }}
-          placeholder="每行一个路径，例如：D:\secrets"
+          placeholder={t('shell.sensitivePrefixesPlaceholder')}
         />
       </Form.Item>
 
       <details className="config-shell-advanced">
-        <summary>高级：自定义 Shell 可执行路径</summary>
-        <Form.Item label="可执行文件路径" className="config-block-spacer">
+        <summary>{t('shell.advancedSummary')}</summary>
+        <Form.Item label={t('shell.executableLabel')} className="config-block-spacer">
           <Space.Compact style={{ width: '100%' }}>
             <Input
               value={shell.executable ?? ''}
               onChange={(e) => patch({ executable: e.target.value || undefined })}
-              placeholder="留空使用平台默认（Windows: cmd，Unix: bash）"
+              placeholder={t('shell.executablePlaceholder')}
             />
             {onTestShell ? (
               <Button loading={shellTesting} onClick={onTestShell}>
-                测试
+                {t('shell.test')}
               </Button>
             ) : null}
           </Space.Compact>
@@ -143,9 +150,9 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
 
       <div>
         <div className="config-skill-section-header">
-          <strong>命令规则（allow 可跳过确认）</strong>
+          <strong>{t('shell.rulesTitle')}</strong>
           <Button size="small" onClick={addRule}>
-            添加规则
+            {t('shell.addRule')}
           </Button>
         </div>
         <Table
@@ -153,10 +160,10 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
           pagination={false}
           rowKey="id"
           dataSource={shell.rules ?? []}
-          locale={{ emptyText: '暂无自定义规则；默认均需确认' }}
+          locale={{ emptyText: t('shell.emptyRules') }}
           columns={[
             {
-              title: '模式',
+              title: t('shell.columnPattern'),
               dataIndex: 'pattern',
               render: (_, row) => (
                 <Input
@@ -167,7 +174,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
               )
             },
             {
-              title: '决策',
+              title: t('shell.columnDecision'),
               dataIndex: 'decision',
               width: 100,
               render: (_, row) => (
@@ -185,7 +192,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
               )
             },
             {
-              title: '备注',
+              title: t('shell.columnNote'),
               dataIndex: 'note',
               render: (_, row) => (
                 <Input
@@ -200,17 +207,17 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
               width: 60,
               render: (_, row) => (
                 <Button size="small" type="link" danger onClick={() => removeRule(row.id)}>
-                  删除
+                  {tCommon('delete')}
                 </Button>
               )
             }
           ]}
         />
         <p className="config-field__hint" style={{ marginTop: 8 }}>
-          内置 deny 规则（不可删除）：
+          {t('shell.builtinDenyTitle')}
         </p>
         <ul className="config-field__hint">
-          {BUILTIN_DENY_DISPLAY.map((r) => (
+          {builtinDenyDisplay.map((r) => (
             <li key={r.pattern}>
               {r.pattern} — {r.reason}
             </li>

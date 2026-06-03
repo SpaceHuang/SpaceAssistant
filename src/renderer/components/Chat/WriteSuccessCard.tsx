@@ -3,6 +3,7 @@ import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { pathBasename } from './toolCallDisplay'
 import { ToolRowIcon } from './ToolRowIcon'
 import { buildUnifiedDiffLines, diffLineStats } from './writeConfirmDiff'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
@@ -29,8 +30,9 @@ function resolveChangeStats(record: ToolCallRecord): { add: number; remove: numb
 }
 
 export function WriteSuccessCard({ record, onView }: Props) {
+  const { t } = useTypedTranslation('chat')
   const path = useMemo(() => resolveFilePath(record), [record])
-  const fileName = path ? pathBasename(path) : '文件'
+  const fileName = path ? pathBasename(path) : t('tool.fileFallback')
   const { add, remove } = useMemo(() => resolveChangeStats(record), [record])
 
   const handleView = () => {
@@ -49,7 +51,7 @@ export function WriteSuccessCard({ record, onView }: Props) {
       {remove > 0 ? <span className="write-success-card__stat write-success-card__stat--remove">-{remove}</span> : null}
       {path && onView ? (
         <button type="button" className="write-success-card__view" onClick={handleView}>
-          查看
+          {t('tool.view')}
         </button>
       ) : null}
     </div>

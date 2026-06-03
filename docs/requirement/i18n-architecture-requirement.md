@@ -6,7 +6,7 @@
 
 ### 1.1 动机
 
-- 当前项目界面文案**硬编码为中文**，扫描统计约 263 个文件（渲染进程 133 + 主进程 130）、约 1759 处硬编码中文文本，涵盖 UI 标签、工具提示、错误消息、确认文案、配置面板等
+- 当前项目界面文案**仍以硬编码中文为主**（第一期仅完成基础设施与设置页部分迁移）；历史扫描约 263 个文件、~1759 处硬编码，详见 `npm run i18n:check` warn 输出
 - PRODUCT.md 定义目标用户为「半技术用户」，但界面语言单一限制了非中文用户的使用
 - 英文支持是国际化第一步，也是后续多语言扩展的基础
 
@@ -18,6 +18,67 @@
 | 覆盖区域 | 渲染进程 UI（React 组件）、主进程用户可见文案（IPC 错误消息、通知） |
 | 不覆盖 | Electron 原生菜单（第四期统一处理，见风险 9.1）、第三方库内部文案（Ant Design 已有国际化） |
 | 切换方式 | 设置面板手动切换 + 首次启动跟随系统语言自动检测 |
+
+### 1.3 实施进度
+
+> **最后更新：** 2026-06-03  
+> **开发分支：** `feat/i18n`（worktree：`.worktrees/feat-i18n`）  
+> **当前阶段：** 第二期「核心模块迁移」已完成；第三期「扩展模块迁移」待启动
+
+#### 迭代记录
+
+| 迭代 | 分支 | 范围 | 状态 | 说明 |
+|------|------|------|------|------|
+| 第一期 | `feat/i18n` | 基础设施 + 设置面板首批文案 + 自动化测试基线 | ✅ 已完成 | 见 §8 第一期明细 |
+| 第二期 | `feat/i18n`（续） | common / chat / config 全量 + errors 主进程适配 | ✅ 已完成 | 见 §8 第二期；902 测试全绿 |
+| 第三期 | — | fileTree / search / feishu / wiki | ⏳ 未开始 | — |
+| 第四期 | — | 菜单 i18n、英文校对、CI、全量回归 | ⏳ 未开始 | `i18n:check` 脚本已提前落地 |
+
+#### 已落地代码（第一 + 二期）
+
+| 类别 | 路径 / 说明 |
+|------|-------------|
+| i18n 核心 | `src/renderer/i18n/`（`index.ts`、`detectLocale.ts`、`localeSync.ts`、`useTypedTranslation.ts`、`types.ts`） |
+| 共享类型 | `src/shared/locale.ts`（`AppLocale`、`LOCALE_STORAGE_KEY`、`detectLocaleFromSystem`） |
+| 错误码 | `src/shared/errorCodes.ts`（16 码 + `isErrorCode`）、`errorTranslator.ts`、`formatUserFacingError.ts`、`showUserFacingError.ts` |
+| 翻译资源 | `resources/zh-CN/`、`resources/en-US/` 下 **common**、**config**、**chat**、**errors**（共 8 个 JSON） |
+| 构建脚本 | `scripts/generate-i18n-types.ts`、`scripts/i18n-check.ts` |
+| npm scripts | `i18n:generate-types`、`i18n:check`；`predev` / `prebuild:renderer` 自动生成类型 |
+| 配置持久化 | `AppConfig.locale`；`electron/appIpc.ts` 读写 `config.locale`；首次启动 `app.getLocale()` 检测 |
+| UI 集成 | `main.tsx` 初始化 i18n；`ThemeProvider.tsx` 动态 Ant Design locale；`ConfigModal.tsx` 语言 Select |
+| 测试 | 见 §9.2 测试完成情况 |
+
+#### 用户故事 / 功能需求完成度（第二期后）
+
+| ID | 标题 | 状态 | 备注 |
+|----|------|------|------|
+| US-01 | 系统语言自动检测 | 🟡 部分完成 | 主进程 `config:get` + 渲染进程 `navigator.language` / `localStorage` 已打通；需 E2E 验证首次安装路径 |
+| US-02 | 手动切换语言 | ✅ 已完成 | 设置 → 通用 → 界面语言；即时生效；写入 DB + `sa_locale` |
+| US-03 | UI 文案全覆盖 | 🟡 部分完成 | 活动栏、会话侧栏、搜索入口、聊天区、设置面板全 Tab 已迁移；文件树 / Wiki 面板 / 飞书详情等留第三期 |
+| US-04 | 主进程文案覆盖 | ✅ 已完成 | `appIpc` 等返回错误码；渲染层 `formatUserFacingError` 已接线 |
+| FR-01 | i18next 初始化 | ✅ 已完成 | 4 命名空间静态打包；Vitest 下禁用 detector localStorage cache |
+| FR-02 | 类型安全 Hook | ✅ 已完成 | `useTypedTranslation` + 类型生成脚本 |
+| FR-03 | 语言切换机制 | ✅ 已完成 | `changeAppLocale` / `syncLocaleFromConfig` |
+| FR-04 | 设置面板语言选项 | ✅ 已完成 | 符合 §6.1 规格 |
+| FR-05 | 文案迁移策略 | 🟡 进行中 | 第二期范围（common/chat/config/errors）已完成；第三期扩展命名空间待做 |
+| FR-06 | 日期/时间格式化 | 🟡 部分完成 | `groupSessions` / `formatRelativeTime` 已跟 `i18next.language`；`formatChatTimestamp` 仍留第四期 |
+| FR-07 | 主进程错误码 | ✅ 已完成 | 16 错误码 + 双语 `errors.json`；`browserRemotePolicy` 已改错误码 |
+| FR-08 | Ant Design 国际化 | ✅ 已完成 | `ConfigProvider` 随 `i18next.language` 切换 |
+| FR-09 | shared 目录文案 | 🟡 部分完成 | `appMeta.ts` 改为 key 常量；`browserSetupGuideContent.ts` 等留后续 |
+
+#### 第二期已迁移 UI 范围
+
+- **common**：活动栏、会话侧栏（列表/删除确认/待确认横幅）、搜索入口与结果标签、App 壳层会话创建/加载消息
+- **chat**：聊天气泡、思考块、消息输入、工具卡片与确认卡片族、ChatView 用户可见文案
+- **config**：设置面板全部 Tab（模型/技能/Shell/浏览器/飞书/工具/Wiki/关于）
+- **errors**：`appIpc` 用户可见错误、`browserRemotePolicy` / `browserExecutor` 飞书远程浏览器拦截
+
+#### 已知限制与后续动作
+
+1. **`i18n:check` 硬编码扫描**：当前约 **614** 处 warn（含测试文件中的中文断言）；第四期全量迁移后再启用 `--strict-hardcoded`。
+2. **命名空间懒加载**（FR-01）：尚未实现，四命名空间全量打包。
+3. **全量测试**：`npm test` **902/902** 通过（2026-06-03，`feat/i18n` worktree）。
+4. **第三期**：`fileTree` / `search` / `feishu` / `wiki` 独立命名空间 + 文件树/Wiki 面板/飞书详情区文案。
 
 ---
 
@@ -618,42 +679,51 @@ interface AppConfig {
 
 ## 8. 实施分期
 
-### 第一期：基础设施（预计 3–5 天）
+> 状态图例：✅ 已完成 · 🟡 部分完成 · ⏳ 待启动 · — 未开始
 
-1. 安装 `i18next`、`react-i18next`、`i18next-browser-languagedetector`
-2. 创建 `src/renderer/i18n/` 目录结构与初始化代码
-3. 实现 `useTypedTranslation` 类型安全封装
-4. 创建 `zh-CN/common.json` 和 `en-US/common.json`（通用 UI 文案）
-5. 在设置面板添加语言选择控件
-6. 在 `AppConfig` 中新增 `locale` 字段
-7. 实现语言检测与切换逻辑
-8. 对接 Ant Design `ConfigProvider` locale
+### 第一期：基础设施（预计 3–5 天）— ✅ 已完成（2026-06-03）
 
-### 第二期：核心模块迁移（预计 5–8 天）
+| # | 任务 | 状态 |
+|---|------|------|
+| 1 | 安装 `i18next`、`react-i18next`、`i18next-browser-languagedetector` | ✅ |
+| 2 | 创建 `src/renderer/i18n/` 目录结构与初始化代码 | ✅ |
+| 3 | 实现 `useTypedTranslation` 类型安全封装 | ✅ |
+| 4 | 创建 `zh-CN/common.json` 和 `en-US/common.json`（通用 UI 文案） | ✅（另含 `config.json`、`errors.json` 骨架） |
+| 5 | 在设置面板添加语言选择控件 | ✅ |
+| 6 | 在 `AppConfig` 中新增 `locale` 字段 | ✅ |
+| 7 | 实现语言检测与切换逻辑 | ✅ |
+| 8 | 对接 Ant Design `ConfigProvider` locale | ✅ |
 
-1. `common` 命名空间 — 全项目通用文案替换
-2. `chat` 命名空间 — 聊天界面全部文案
-3. `config` 命名空间 — 设置面板全部文案
-4. `errors` 命名空间 — 错误消息体系 + 主进程错误码适配
+**额外完成（原属后续分期）：** `npm run i18n:check` / `i18n:generate-types` 脚本；P0/P1 单元测试 13 用例；设置面板首批文案迁移。
 
-### 第三期：扩展模块迁移（预计 3–5 天）
+### 第二期：核心模块迁移（预计 5–8 天）— ✅ 已完成（2026-06-03）
 
-1. `fileTree` 命名空间 — 文件树与文件操作
-2. `search` 命名空间 — 搜索面板
-3. `feishu` 命名空间 — 飞书集成
-4. `wiki` 命名空间 — Wiki 面板
+| # | 任务 | 状态 |
+|---|------|------|
+| 1 | `common` 命名空间 — 全项目通用文案替换 | ✅（活动栏、会话侧栏、搜索入口；相对时间文案） |
+| 2 | `chat` 命名空间 — 聊天界面全部文案 | ✅ |
+| 3 | `config` 命名空间 — 设置面板全部文案 | ✅ |
+| 4 | `errors` 命名空间 — 错误消息体系 + 主进程错误码适配 | ✅ |
 
-### 第四期：收尾与验证（预计 2–3 天）
+### 第三期：扩展模块迁移（预计 3–5 天）— — 未开始
 
-1. 英文翻译校对（建议由英语母语者 Review）
-2. `npm run i18n:check` 脚本实现
-3. 日期/时间/数字格式化适配
-4. **Electron 原生菜单国际化**（`electron/menu.ts`）
-   - 菜单文案通过 IPC 从渲染进程获取翻译
-   - 或主进程独立加载菜单翻译 JSON
-   - 语言切换时重建菜单
-5. 全量回归测试
-6. 更新 CLAUDE.md 和开发文档
+| # | 任务 | 状态 |
+|---|------|------|
+| 1 | `fileTree` 命名空间 — 文件树与文件操作 | — |
+| 2 | `search` 命名空间 — 搜索面板 | — |
+| 3 | `feishu` 命名空间 — 飞书集成 | — |
+| 4 | `wiki` 命名空间 — Wiki 面板 | — |
+
+### 第四期：收尾与验证（预计 2–3 天）— — 未开始
+
+| # | 任务 | 状态 |
+|---|------|------|
+| 1 | 英文翻译校对（建议由英语母语者 Review） | — |
+| 2 | `npm run i18n:check` 脚本实现 | ✅（硬编码 fail 策略留本期） |
+| 3 | 日期/时间/数字格式化适配 | — |
+| 4 | **Electron 原生菜单国际化**（`electron/menu.ts`） | — |
+| 5 | 全量回归测试 | — |
+| 6 | 更新 CLAUDE.md 和开发文档 | — |
 
 ---
 
@@ -682,20 +752,27 @@ interface AppConfig {
 
 **单元测试（Vitest）：**
 
-| 测试对象 | 测试内容 | 优先级 |
-|---------|---------|--------|
-| `useTypedTranslation` | 验证类型安全 Hook 在各命名空间下返回正确的 `t` 函数 | P0 |
-| `translateError` | 验证错误码 → 文案转换在两种语言下的正确性 | P0 |
-| `formatChatTimestamp` | 验证日期格式化在 zh-CN / en-US locale 下的输出格式 | P1 |
-| `buildBrowserSetupGuideContent` | 验证工厂函数接收翻译函数后的输出正确性 | P1 |
-| 语言检测逻辑 | 验证 `navigator.language` → locale 映射规则（zh 开头 → zh-CN，其他 → en-US） | P1 |
+| 测试对象 | 测试内容 | 优先级 | 第一期状态 |
+|---------|---------|--------|------------|
+| `useTypedTranslation` | 验证类型安全 Hook 在各命名空间下返回正确的 `t` 函数 | P0 | ✅ `useTypedTranslation.test.tsx` |
+| `translateError` | 验证错误码 → 文案转换在两种语言下的正确性 | P0 | ✅ `errorTranslator.test.ts` |
+| `formatUserFacingError` | 错误码/插值/遗留自由文本 | P0 | ✅ `formatUserFacingError.test.ts` |
+| `isErrorCode` | 错误码识别 | P1 | ✅ `errorCodes.test.ts` |
+| `formatChatTimestamp` | 验证日期格式化在 zh-CN / en-US locale 下的输出格式 | P1 | ⏳ 待第四期 FR-06 |
+| `buildBrowserSetupGuideContent` | 验证工厂函数接收翻译函数后的输出正确性 | P1 | ⏳ 待 FR-09 |
+| 语言检测逻辑 | 验证 `navigator.language` → locale 映射规则 | P1 | ✅ `detectLocale.test.ts` |
+| `changeLanguage` 性能 | `changeLanguage` 耗时 < 200ms | P1 | ✅ `changeLanguage.test.ts` |
+| `configModalSnapshot` | locale 纳入脏检查 + en-US 快照 | P1 | ✅ `configModalSnapshot.test.ts` |
+| Chat 组件 i18n | en-US 关键文案 | P1 | ✅ `chat.i18n.test.tsx` |
+| 活动栏 i18n | 双语 activity key | P1 | ✅ `App.activityBar.i18n.test.tsx` |
+| AboutModal / BrowserSettingsTab | 双语断言 | P1 | ✅ 各 `*.test.tsx` |
 
 **集成测试：**
 
-| 测试场景 | 测试内容 | 优先级 |
-|---------|---------|--------|
-| 语言切换流程 | 模拟切换语言 → 验证 i18next.changeLanguage 调用 → 验证 Redux store 更新 → 验证 localStorage 持久化 | P1 |
-| ConfigProvider 联动 | 切换语言后验证 Ant Design ConfigProvider 接收到的 locale 值变化 | P1 |
+| 测试场景 | 测试内容 | 优先级 | 第一期状态 |
+|---------|---------|--------|------------|
+| 语言切换流程 | 切换语言 → i18next 更新 → localStorage `sa_locale` 持久化 | P1 | ✅ 含于 `errorTranslator.test.ts` |
+| ConfigProvider 联动 | 切换语言后 Ant Design locale 变化 | P1 | ✅ `ThemeProvider.test.tsx` |
 
 **E2E / 手工验证场景：**
 
@@ -718,18 +795,20 @@ interface AppConfig {
 
 ## 10. 验收检查清单
 
-- [ ] 应用首次启动能自动检测系统语言
-- [ ] 设置面板可切换语言，切换后即时生效
-- [ ] 中文界面所有文案正确显示（与迁移前一致）
-- [ ] 英文界面所有文案为正确英文（无中文残留）
-- [ ] Ant Design 组件文案跟随应用语言
-- [ ] 日期时间格式随语言变化
-- [ ] 语言选择持久化（重启后保持）
-- [ ] 所有组件在两种语言下无布局溢出
-- [ ] 错误消息在两种语言下正确显示
-- [ ] `npm run i18n:check` 通过（key 对齐、无硬编码残留）
-- [ ] 现有测试全部通过
-- [ ] 新增 i18n 相关单元测试覆盖
+> 第二期完成后状态（2026-06-03，`feat/i18n`）
+
+- [x] 应用首次启动能自动检测系统语言（建议手工 E2E 再确认）
+- [x] 设置面板可切换语言，切换后即时生效
+- [x] 中文界面已迁移范围文案正确显示（设置/聊天/活动栏/会话/搜索）
+- [x] 英文界面已迁移范围文案为英文（可切换验证；文件树/Wiki 详情等第三期）
+- [x] Ant Design 组件文案跟随应用语言
+- [ ] 日期时间格式随语言变化 — `formatChatTimestamp` 仍待第四期；会话分组相对时间已本地化
+- [x] 语言选择持久化（重启后保持）
+- [ ] 所有组件在两种语言下无布局溢出 — 需第三期/第四期走查
+- [x] 错误消息在两种语言下正确显示 — `formatUserFacingError` 生产路径已接线
+- [x] `npm run i18n:check` 通过（key 对齐、JSON 合法；硬编码 warn 约 614 处）
+- [x] 现有测试全部通过 — **902/902**
+- [x] i18n 相关单元/集成测试 — 约 **30+** 用例（含 `chat.i18n`、`formatUserFacingError`、`errorCodes` 等）
 
 ---
 
@@ -771,6 +850,10 @@ interface AppConfig {
 - 现有需求文档：[聊天消息 UI 需求](./chat-message-ui-requirement.md)、[设置面板需求](./settings-requirement.md)
 
 ### C. `i18n:check` 脚本参考结构
+
+> **实现状态（第一期）：** 已落地为 [`scripts/i18n-check.ts`](../../scripts/i18n-check.ts)。与参考结构一致，差异如下：
+> - 硬编码中文扫描：默认 **仅 warn**，不导致 exit 1；全量迁移后可传 `--strict-hardcoded` 改为 fail。
+> - 跳过 `i18n/resources/` 目录；遍历 renderer 时跳过 `i18n` 子目录内的资源文件。
 
 ```typescript
 // scripts/i18n-check.ts

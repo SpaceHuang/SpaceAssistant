@@ -1,10 +1,15 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { App, ConfigProvider } from 'antd'
 import { ShellSettingsTab } from './ShellSettingsTab'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import { changeAppLocale } from '../../i18n/localeSync'
 
 describe('ShellSettingsTab', () => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
+  })
+
   it('shows builtin deny rules', () => {
     render(
       <ConfigProvider>
@@ -17,7 +22,7 @@ describe('ShellSettingsTab', () => {
     expect(screen.getByText(/lark-cli:\*/)).toBeTruthy()
   })
 
-  it('adds a rule when clicking add button', () => {
+  it('adds a rule when clicking add button (zh-CN)', () => {
     const onChange = vi.fn()
     render(
       <ConfigProvider>
@@ -32,5 +37,19 @@ describe('ShellSettingsTab', () => {
     const next = updater(DEFAULT_SHELL_CONFIG)
     expect(next.rules?.length).toBe(1)
     expect(next.rules?.[0]?.decision).toBe('allow')
+  })
+
+  it('adds a rule when clicking add button (en-US)', async () => {
+    await changeAppLocale('en-US')
+    const onChange = vi.fn()
+    render(
+      <ConfigProvider>
+        <App>
+          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={onChange} />
+        </App>
+      </ConfigProvider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add rule' }))
+    expect(onChange).toHaveBeenCalled()
   })
 })

@@ -2,9 +2,16 @@
 
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { isShellReadOnlyCommand, isShellSilentResult } from '../../../shared/shellToolDisplay'
+import i18n from '../../i18n'
 
 const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_directory'])
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file'])
+
+export type ToolCallDisplayT = (key: string, options?: Record<string, unknown>) => string
+
+function defaultT(key: string, options?: Record<string, unknown>): string {
+  return i18n.t(key, { ns: 'chat', ...options })
+}
 
 export function isFileTool(toolName: string): boolean {
   return FILE_TOOLS.has(toolName)
@@ -20,28 +27,28 @@ export function pathBasename(filePath: string): string {
   return idx >= 0 ? normalized.slice(idx + 1) : normalized
 }
 
-export function getToolDescription(toolName: string): string {
+export function getToolDescription(toolName: string, t: ToolCallDisplayT = defaultT): string {
   switch (toolName) {
     case 'grep':
-      return '在工作目录下搜索匹配的文件内容'
+      return t('tool.descriptions.grep')
     case 'read_file':
-      return '读取指定文件的完整内容'
+      return t('tool.descriptions.readFile')
     case 'list_directory':
-      return '列出目录下的文件和子目录'
+      return t('tool.descriptions.listDirectory')
     case 'edit_file':
-      return '通过字符串替换编辑文件'
+      return t('tool.descriptions.editFile')
     case 'write_file':
-      return '将完整内容写入文件'
+      return t('tool.descriptions.writeFile')
     case 'run_script':
-      return '执行 Python 脚本'
+      return t('tool.descriptions.runScript')
     case 'run_shell':
-      return '在会话工作目录下执行 shell 命令'
+      return t('tool.descriptions.runShell')
     case 'browser':
-      return '在隔离浏览器中访问网页'
+      return t('tool.descriptions.browser')
     case 'browser_detect':
-      return '检测 browser 工具依赖是否就绪'
+      return t('tool.descriptions.browserDetect')
     default:
-      return `调用工具：${toolName}`
+      return t('tool.descriptions.invokeTool', { toolName })
   }
 }
 
@@ -62,31 +69,35 @@ export function formatToolLabelTitle(toolName: string, input: Record<string, unk
   return undefined
 }
 
-export function formatToolLabel(toolName: string, input: Record<string, unknown>): string {
+export function formatToolLabel(
+  toolName: string,
+  input: Record<string, unknown>,
+  t: ToolCallDisplayT = defaultT
+): string {
   switch (toolName) {
     case 'grep': {
       const pattern = typeof input.pattern === 'string' ? input.pattern : ''
-      return pattern ? `在工作区搜索 '${pattern}'` : '在工作区搜索'
+      return pattern ? t('tool.labels.grep.withPattern', { pattern }) : t('tool.labels.grep.default')
     }
     case 'read_file':
-      return typeof input.path === 'string' ? pathBasename(input.path) : '读取文件'
+      return typeof input.path === 'string' ? pathBasename(input.path) : t('tool.labels.readFile')
     case 'list_directory':
-      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '列出目录'
+      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : t('tool.labels.listDirectory')
     case 'edit_file':
-      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '编辑文件'
+      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : t('tool.labels.editFile')
     case 'write_file':
-      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : '写入文件'
+      return typeof input.path === 'string' && input.path ? pathBasename(input.path) : t('tool.labels.writeFile')
     case 'run_script':
-      return '运行脚本'
+      return t('tool.labels.runScript')
     case 'run_shell': {
       const cmd = typeof input.command === 'string' ? input.command : ''
-      if (!cmd) return '运行命令'
+      if (!cmd) return t('tool.labels.runShellEmpty')
       return cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd
     }
     case 'browser':
       return 'browser'
     case 'browser_detect':
-      return '检测浏览器依赖'
+      return t('tool.labels.browserDetect')
     default:
       return toolName
   }
@@ -141,8 +152,8 @@ export function shouldAutoExpandShellToolRow(record: ToolCallRecord): boolean {
 }
 
 /** 静默命令（exit 0 且无输出）展示专用标签 */
-export function shellToolCompletedLabel(record: ToolCallRecord): string | undefined {
+export function shellToolCompletedLabel(record: ToolCallRecord, t: ToolCallDisplayT = defaultT): string | undefined {
   if (record.toolName !== 'run_shell' || record.status !== 'completed') return undefined
-  if (isShellSilentResult(record.result?.data)) return '已完成（无输出）'
+  if (isShellSilentResult(record.result?.data)) return t('tool.completedNoOutput')
   return undefined
 }

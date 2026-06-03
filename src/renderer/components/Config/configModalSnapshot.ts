@@ -1,5 +1,6 @@
 import type {
   AppConfig,
+  AppLocale,
   BrowserConfig,
   FeishuConfig,
   ModelEntry,
@@ -12,6 +13,7 @@ import type { ToolsSettingsUi } from './ToolsSettingsTab'
 
 export type ConfigModalSnapshotInput = {
   workDir: string
+  locale: AppLocale
   thinkingEnabled: boolean
   models: ModelEntry[]
   llmState: LlmServiceTabState
@@ -58,6 +60,7 @@ function normalizeLlmState(state: LlmServiceTabState) {
 export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): string {
   const payload = {
     workDir: input.workDir.trim(),
+    locale: input.locale,
     thinkingEnabled: input.thinkingEnabled,
     models: normalizeModels(input.models),
     llm: normalizeLlmState(input.llmState),
@@ -91,6 +94,7 @@ export function buildConfigModalSnapshotFromConfig(
   ]
   return buildConfigModalSnapshot({
     workDir: cfg.workDir,
+    locale: cfg.locale,
     thinkingEnabled: cfg.thinkingEnabled,
     models: cfg.models,
     llmState,

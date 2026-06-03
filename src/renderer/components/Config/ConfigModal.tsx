@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Alert, App, Button, Form, Input, InputNumber, Radio, Space } from 'antd'
+import { Alert, App, Button, Form, Input, InputNumber, Radio, Select, Space } from 'antd'
 
 import { ArrowLeft } from 'lucide-react'
 
@@ -8,7 +8,7 @@ import { useTypedSelector, useAppDispatch } from '../../hooks'
 
 import { setConfig, setSettingsActiveTab, setSettingsOpen, setSettingsToolsSubTab } from '../../store/configSlice'
 
-import type { ModelEntry, WikiConfig } from '../../../shared/domainTypes'
+import type { AppLocale, ModelEntry, WikiConfig } from '../../../shared/domainTypes'
 
 import { DEFAULT_WIKI_CONFIG, DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 
@@ -68,21 +68,15 @@ import { readSkillActivationLog } from '../../services/skillActivationLog'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import {
   DEFAULT_TOOLS_SETTINGS_SUB_TAB,
-  getToolsSettingsSectionLabel,
-  TOOLS_SETTINGS_NAV
+  getToolsSettingsNav,
+  getToolsSettingsSectionLabel
 } from './toolsSettingsNav'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 
-const SETTINGS_SECTIONS = [
-  { key: 'general', label: '通用' },
-  { key: 'models', label: '模型' },
-  { key: 'skills', label: '技能' },
-  { key: 'wiki', label: '项目 Wiki' },
-  { key: 'feishu', label: '飞书' }
-] as const
+const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'feishu'] as const
 
-
-
-type SettingsSectionKey = (typeof SETTINGS_SECTIONS)[number]['key']
+type SettingsSectionKey = (typeof SETTINGS_SECTION_KEYS)[number]
 
 /** 表单项随 Tab 卸载时 useWatch 会变为 undefined，脏检查须回退到 form / cfg */
 function resolveWorkDirForSnapshot(
@@ -94,6 +88,17 @@ function resolveWorkDirForSnapshot(
   const fromForm = form.getFieldValue('workDir')
   if (typeof fromForm === 'string') return fromForm
   return cfg?.workDir ?? ''
+}
+
+function resolveLocaleForSnapshot(
+  watch: unknown,
+  form: ReturnType<typeof Form.useForm>[0],
+  cfg: { locale: AppLocale } | null
+): AppLocale {
+  if (watch === 'zh-CN' || watch === 'en-US') return watch
+  const fromForm = form.getFieldValue('locale')
+  if (fromForm === 'zh-CN' || fromForm === 'en-US') return fromForm
+  return cfg?.locale ?? 'zh-CN'
 }
 
 function resolveThinkingEnabledForSnapshot(
@@ -138,6 +143,8 @@ export const ConfigModal = ConfigSettingsPage
 export function ConfigSettingsPage() {
 
   const { message, modal } = App.useApp()
+  const { t: tCommon } = useTypedTranslation('common')
+  const { t: tConfig } = useTypedTranslation('config')
 
   const open = useTypedSelector((s) => s.config.settingsOpen)
 
@@ -156,6 +163,8 @@ export function ConfigSettingsPage() {
   const [form] = Form.useForm()
 
   const workDirWatch = Form.useWatch('workDir', form)
+
+  const localeWatch = Form.useWatch('locale', form)
 
   const thinkingEnabledWatch = Form.useWatch('thinkingEnabled', form)
 
@@ -227,6 +236,21 @@ export function ConfigSettingsPage() {
 
 
 
+  const settingsSections = useMemo(() => {
+    const labels: Record<SettingsSectionKey, string> = {
+      general: tCommon('settings.general'),
+      models: tCommon('settings.models'),
+      skills: tCommon('settings.skills'),
+      wiki: tCommon('settings.wiki'),
+      feishu: tCommon('settings.feishu')
+    }
+    return SETTINGS_SECTION_KEYS.map((key) => ({ key, label: labels[key] }))
+  }, [tCommon])
+
+  const toolsSettingsNav = useMemo(() => getToolsSettingsNav(tConfig), [tConfig])
+
+
+
   useEffect(() => {
 
     if (open && cfg) {
@@ -234,6 +258,8 @@ export function ConfigSettingsPage() {
       form.setFieldsValue({
 
         workDir: cfg.workDir,
+
+        locale: cfg.locale,
 
         thinkingEnabled: cfg.thinkingEnabled
 
@@ -363,6 +389,8 @@ export function ConfigSettingsPage() {
 
       workDir: resolveWorkDirForSnapshot(workDirWatch, form, cfg),
 
+      locale: resolveLocaleForSnapshot(localeWatch, form, cfg),
+
       thinkingEnabled: resolveThinkingEnabledForSnapshot(thinkingEnabledWatch, form, cfg),
 
       models,
@@ -394,6 +422,8 @@ export function ConfigSettingsPage() {
     form,
 
     workDirWatch,
+
+    localeWatch,
 
     thinkingEnabledWatch,
 
@@ -449,6 +479,26 @@ export function ConfigSettingsPage() {
 
 
 
+  const handleLocaleChange = async (locale: AppLocale) => {
+    form.setFieldValue('locale', locale)
+    await changeAppLocale(locale)
+    await persistLocaleToBackend(locale)
+    if (cfg) {
+      const nextCfg = { ...cfg, locale }
+      dispatch(setConfig(nextCfg))
+      if (open) {
+        baselineRef.current = buildConfigModalSnapshotFromConfig(
+          nextCfg,
+          llmDrafts.state,
+          toolUi.deniedTools,
+          shellEnabled
+        )
+      }
+    }
+  }
+
+
+
   const selectDirectory = async () => {
 
     const result = await window.api.dialogSelectDirectory()
@@ -477,7 +527,13 @@ export function ConfigSettingsPage() {
 
     const r = await window.api.configCheckWorkdirWritable(dir)
 
-    setWorkDirError(r.writable ? null : `该目录不可写入：${r.error ?? '权限不足'}，请更换工作目录`)
+    setWorkDirError(
+      r.writable
+        ? null
+        : tConfig('workDir.notWritable', {
+            error: r.error ?? tConfig('workDir.permissionDenied')
+          })
+    )
 
   }
 
@@ -501,7 +557,11 @@ export function ConfigSettingsPage() {
 
       if (!r.writable) {
 
-        setWorkDirError(`该目录不可写入：${r.error ?? '权限不足'}，请更换工作目录`)
+        setWorkDirError(
+          tConfig('workDir.notWritable', {
+            error: r.error ?? tConfig('workDir.permissionDenied')
+          })
+        )
 
         return false
 
@@ -513,7 +573,7 @@ export function ConfigSettingsPage() {
 
     if (enabledModels.length === 0) {
 
-      message.warning('请至少启用一个模型')
+      message.warning(tConfig('messages.enableAtLeastOneModel'))
 
       return false
 
@@ -538,6 +598,8 @@ export function ConfigSettingsPage() {
       await window.api.configSet({
 
         workDir: v.workDir,
+
+        locale: v.locale,
 
         thinkingEnabled: v.thinkingEnabled,
 
@@ -609,7 +671,7 @@ export function ConfigSettingsPage() {
 
     )
 
-    message.success('已保存')
+    message.success(tConfig('messages.saved'))
 
     if (closeAfterSave) {
 
@@ -635,15 +697,15 @@ export function ConfigSettingsPage() {
 
     modal.confirm({
 
-      title: '放弃未保存的更改？',
+      title: tConfig('discardChanges.title'),
 
-      content: '你在设置中所做的修改尚未保存。',
+      content: tConfig('discardChanges.content'),
 
-      okText: '放弃更改',
+      okText: tConfig('discardChanges.ok'),
 
       okType: 'danger',
 
-      cancelText: '继续编辑',
+      cancelText: tConfig('discardChanges.cancel'),
 
       onOk: () => dispatch(setSettingsOpen(false))
 
@@ -721,9 +783,9 @@ export function ConfigSettingsPage() {
 
       })
 
-      if (r.ok) setShellTest({ ok: true, text: 'Shell 测试成功' })
+      if (r.ok) setShellTest({ ok: true, text: tConfig('messages.shellTestSuccess') })
 
-      else setShellTest({ ok: false, text: r.error ?? '测试失败' })
+      else setShellTest({ ok: false, text: r.error ?? tConfig('messages.shellTestFailed') })
 
     } finally {
 
@@ -743,8 +805,8 @@ export function ConfigSettingsPage() {
 
   const activeSectionLabel =
     settingsTabKey === 'tools'
-      ? getToolsSettingsSectionLabel(toolsSection)
-      : SETTINGS_SECTIONS.find((s) => s.key === settingsTabKey)?.label ?? '设置'
+      ? getToolsSettingsSectionLabel(toolsSection, tConfig)
+      : settingsSections.find((s) => s.key === settingsTabKey)?.label ?? tCommon('settings.title')
 
 
 
@@ -762,7 +824,7 @@ export function ConfigSettingsPage() {
 
           <>
 
-            <Form.Item label="工作目录（会话明文备份等）" required>
+            <Form.Item label={tConfig('workDir.label')} required>
 
               <Space.Compact style={{ width: '100%' }}>
 
@@ -778,9 +840,9 @@ export function ConfigSettingsPage() {
 
                   onClick={selectDirectory}
 
-                  title="选择目录"
+                  title={tConfig('workDir.selectDir')}
 
-                  aria-label="选择目录"
+                  aria-label={tConfig('workDir.selectDir')}
 
                 />
 
@@ -794,13 +856,24 @@ export function ConfigSettingsPage() {
 
             ) : null}
 
-            <Form.Item
+            <Form.Item label={tConfig('language.label')} extra={tConfig('language.hint')}>
 
-              label="并行会话上限"
+              <Form.Item name="locale" noStyle preserve>
 
-              extra="多个会话可同时向 AI 发起请求（含工具循环）。超出上限时将提示稍后再试。"
+                <Select
+                  style={{ width: 200 }}
+                  options={[
+                    { value: 'zh-CN', label: tCommon('language.zhCN') },
+                    { value: 'en-US', label: tCommon('language.enUS') }
+                  ]}
+                  onChange={(value: AppLocale) => void handleLocaleChange(value)}
+                />
 
-            >
+              </Form.Item>
+
+            </Form.Item>
+
+            <Form.Item label={tConfig('parallelSessions.label')} extra={tConfig('parallelSessions.hint')}>
 
               <InputNumber
 
@@ -932,7 +1005,7 @@ export function ConfigSettingsPage() {
 
       <div className="config-settings-page__shell">
 
-        <aside className="config-settings-page__nav" aria-label="设置分类">
+        <aside className="config-settings-page__nav" aria-label={tConfig('navigation.categoriesAria')}>
 
           <div className="config-settings-page__nav-header">
 
@@ -946,23 +1019,23 @@ export function ConfigSettingsPage() {
 
               onClick={attemptClose}
 
-              aria-label="返回工作台"
+              aria-label={tConfig('navigation.backToWorkbench')}
 
             >
 
               <ArrowLeft size={16} strokeWidth={1.75} aria-hidden />
 
-              <span>返回</span>
+              <span>{tCommon('back')}</span>
 
             </button>
 
           </div>
 
-          <div className="config-settings-page__nav-brand">设置</div>
+          <div className="config-settings-page__nav-brand">{tCommon('settings.title')}</div>
 
           <nav className="config-settings-page__nav-list">
 
-            {SETTINGS_SECTIONS.slice(0, 2).map((section) => (
+            {settingsSections.slice(0, 2).map((section) => (
 
               <button
 
@@ -984,11 +1057,11 @@ export function ConfigSettingsPage() {
 
             ))}
 
-            <div className="config-settings-page__nav-group" role="group" aria-label="工具">
+            <div className="config-settings-page__nav-group" role="group" aria-label={tCommon('settings.tools')}>
 
-              <div className="config-settings-page__nav-group-label">工具</div>
+              <div className="config-settings-page__nav-group-label">{tCommon('settings.tools')}</div>
 
-              {TOOLS_SETTINGS_NAV.map((item) => (
+              {toolsSettingsNav.map((item) => (
 
                 <button
 
@@ -1012,7 +1085,7 @@ export function ConfigSettingsPage() {
 
             </div>
 
-            {SETTINGS_SECTIONS.slice(2).map((section) => (
+            {settingsSections.slice(2).map((section) => (
 
               <button
 
@@ -1052,7 +1125,7 @@ export function ConfigSettingsPage() {
 
             {isDirty ? (
 
-              <span className="config-settings-page__dirty-hint">有未保存的更改</span>
+              <span className="config-settings-page__dirty-hint">{tCommon('unsavedChanges')}</span>
 
             ) : (
 
@@ -1084,17 +1157,17 @@ export function ConfigSettingsPage() {
 
             <Space>
 
-              <Button onClick={attemptClose}>取消</Button>
+              <Button onClick={attemptClose}>{tCommon('cancel')}</Button>
 
               <Button loading={saving} disabled={!isDirty} onClick={() => void persistSettings(false)}>
 
-                应用
+                {tCommon('apply')}
 
               </Button>
 
               <Button type="primary" loading={saving} disabled={!isDirty} onClick={() => void persistSettings(true)}>
 
-                保存并返回
+                {tCommon('saveAndReturn')}
 
               </Button>
 

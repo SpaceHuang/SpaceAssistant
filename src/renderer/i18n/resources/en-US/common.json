@@ -1,0 +1,90 @@
+{
+  "activity": {
+    "search": "Search",
+    "sessions": "Sessions",
+    "settings": "Settings",
+    "wiki": "Wiki"
+  },
+  "app": {
+    "description": "Streaming chat, tool-call confirmation, project files, and Wiki browsing.",
+    "tagline": "AI-powered desktop assistant"
+  },
+  "appShell": {
+    "createSessionFailed": "Could not create session. Try again later.",
+    "loadSessionsFailed": "Could not load sessions. Restart the app and try again.",
+    "selectSessionFirst": "Select or create a session first",
+    "sessionCreated": "Session created"
+  },
+  "about": {
+    "close": "Close",
+    "docs": "Documentation",
+    "github": "GitHub repository",
+    "license": "{{license}} License",
+    "title": "About",
+    "version": "Version {{version}}"
+  },
+  "apply": "Apply",
+  "back": "Back",
+  "cancel": "Cancel",
+  "confirm": "Confirm",
+  "delete": "Delete",
+  "language": {
+    "enUS": "English",
+    "zhCN": "中文"
+  },
+  "loading": "Loading",
+  "save": "Save",
+  "saveAndReturn": "Save and return",
+  "search": {
+    "placeholder": "Search chats and text files",
+    "tagChat": "Chat",
+    "tagFile": "File"
+  },
+  "session": {
+    "aborted": "Stopped execution for this session",
+    "createFailed": "Could not create session. Try again later.",
+    "created": "Session created",
+    "defaultName": "Session {{index}}",
+    "deleteAria": "Delete session \"{{name}}\"",
+    "deleteFailed": "Could not delete session. Try again later.",
+    "deleteOk": "Delete session",
+    "deletePermanentNote": "All messages will be removed and cannot be recovered.",
+    "deleteRunningWarning": "This session is running. Deleting will stop it.",
+    "deleteTitle": "Delete session",
+    "deleted": "Deleted",
+    "emptyDefault": "No sessions",
+    "emptyNoMatch": "No matching sessions",
+    "emptyNoSessions": "No sessions yet. Click \"New session\" to start.",
+    "fallbackName": "Session",
+    "groups": {
+      "last7Days": "Last 7 days",
+      "older": "Older",
+      "today": "Today",
+      "yesterday": "Yesterday"
+    },
+    "new": "New session",
+    "pendingConfirm": {
+      "aria": "Pending tool confirmations",
+      "count": "{{count}} pending"
+    },
+    "searchAria": "Search sessions",
+    "searchPlaceholder": "Search sessions",
+    "stopAria": "Stop execution for \"{{name}}\"",
+    "unnamed": "Untitled session"
+  },
+  "time": {
+    "hoursAgo": "{{count}}h ago",
+    "justNow": "Just now",
+    "minutesAgo": "{{count}}m ago"
+  },
+  "settings": {
+    "feishu": "Feishu",
+    "general": "General",
+    "models": "Models",
+    "skills": "Skills",
+    "title": "Settings",
+    "tools": "Tools",
+    "wiki": "Project Wiki"
+  },
+  "unsavedChanges": "Unsaved changes"
+}

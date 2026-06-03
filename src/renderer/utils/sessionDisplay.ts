@@ -1,7 +1,9 @@
+import i18n from '../i18n'
+
 /** 侧栏会话列表展示用名称（空标题兜底） */
 export function sessionDisplayName(name: string | undefined | null): string {
   const trimmed = name?.trim()
-  return trimmed || '未命名会话'
+  return trimmed || i18n.t('session.unnamed', { ns: 'common' })
 }
 
 /** 确认框等短文案中的长标题截断 */
@@ -14,7 +16,7 @@ export function sessionListEmptyDescription(
   totalCount: number,
   hasSearchQuery: boolean
 ): string {
-  if (totalCount === 0) return '暂无会话，点击「新会话」开始'
-  if (hasSearchQuery) return '没有匹配的会话'
-  return '暂无会话'
+  if (totalCount === 0) return i18n.t('session.emptyNoSessions', { ns: 'common' })
+  if (hasSearchQuery) return i18n.t('session.emptyNoMatch', { ns: 'common' })
+  return i18n.t('session.emptyDefault', { ns: 'common' })
 }

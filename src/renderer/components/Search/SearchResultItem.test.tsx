@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { changeAppLocale } from '../../i18n/localeSync'
 import type { SearchResult } from '../../../shared/domainTypes'
 import { SearchResultItem } from './SearchResultItem'
 
@@ -21,7 +22,11 @@ const fileItem: SearchResult = {
 }
 
 describe('SearchResultItem', () => {
-  it('renders session result with 聊天 tag and preview', () => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
+  })
+
+  it('renders session result with chat tag and preview (zh-CN)', () => {
     render(<SearchResultItem item={sessionItem} onClick={vi.fn()} />)
     expect(screen.getByText('聊天')).toBeDefined()
     expect(screen.getByText('性能讨论')).toBeDefined()
@@ -29,11 +34,20 @@ describe('SearchResultItem', () => {
     expect(screen.queryByText('[session]')).toBeNull()
   })
 
-  it('renders file result with 文件 tag and directory auxiliary', () => {
+  it('renders file result with file tag (zh-CN)', () => {
     render(<SearchResultItem item={fileItem} onClick={vi.fn()} />)
     expect(screen.getByText('文件')).toBeDefined()
     expect(screen.getByText(/📂 src\/utils/)).toBeDefined()
     expect(screen.queryByText('[file]')).toBeNull()
+  })
+
+  it('renders English tags in en-US', async () => {
+    await changeAppLocale('en-US')
+    render(<SearchResultItem item={sessionItem} onClick={vi.fn()} />)
+    expect(screen.getByText('Chat')).toBeDefined()
+    await changeAppLocale('en-US')
+    render(<SearchResultItem item={fileItem} onClick={vi.fn()} />)
+    expect(screen.getAllByText('File').length).toBeGreaterThan(0)
   })
 
   it('calls onClick when clicked', () => {

@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import type { Message } from '../../../shared/domainTypes'
 import { ChatBubble } from './ChatBubble'
+import { changeAppLocale } from '../../i18n/localeSync'
 
 const chatMarkdownRenderCount = vi.fn()
 
@@ -28,6 +29,10 @@ function assistantMessage(over: Partial<Message> = {}): Message {
 }
 
 describe('ChatBubble streaming render', () => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
+  })
+
   it('uses plain text while streaming', () => {
     chatMarkdownRenderCount.mockClear()
     render(<ChatBubble message={assistantMessage()} />)

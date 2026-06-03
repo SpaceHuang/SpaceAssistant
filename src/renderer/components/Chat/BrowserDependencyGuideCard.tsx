@@ -1,5 +1,6 @@
 import { App, Button, Space, Typography } from 'antd'
 import type { BrowserDependencyToolError } from '../../../shared/browserTypes'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
 
 type Props = {
   dependencyRecovery: BrowserDependencyToolError
@@ -22,7 +23,7 @@ export function BrowserDependencyGuideCard({ dependencyRecovery }: Props) {
             size="small"
             onClick={() => {
               void window.api.browserOpenTerminal().then((r) => {
-                if (!r.ok) message.error(r.error)
+                if (!r.ok) message.error(formatUserFacingError(r.error))
               })
             }}
           >

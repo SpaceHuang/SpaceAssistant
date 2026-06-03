@@ -5,6 +5,7 @@ import {
   buildBrowserSetupGuideContent,
   buildDiagnosticText
 } from '../../../shared/browserSetupGuideContent'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
 
 type Props = {
   detect: BrowserDetectResult | null
@@ -226,7 +227,7 @@ export function BrowserSetupGuide({
               <Button
                 onClick={() => {
                   void window.api.browserOpenTerminal().then((r) => {
-                    if (!r.ok) message.error(r.error)
+                    if (!r.ok) message.error(formatUserFacingError(r.error))
                   })
                 }}
               >

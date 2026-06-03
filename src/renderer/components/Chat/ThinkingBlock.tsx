@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Brain, ChevronRight } from 'lucide-react'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   content: string
@@ -8,11 +9,14 @@ type Props = {
 }
 
 export function ThinkingBlock({ content, active = false }: Props) {
+  const { t } = useTypedTranslation('chat')
   const [expanded, setExpanded] = useState(active)
 
   useEffect(() => {
     setExpanded(active)
   }, [active])
+
+  const toggleLabel = expanded ? t('thinking.collapseHint') : t('thinking.expandHint')
 
   return (
     <div className={`chat-thinking${expanded ? ' chat-thinking--expanded' : ''}`}>
@@ -21,10 +25,10 @@ export function ThinkingBlock({ content, active = false }: Props) {
         className="chat-thinking__toggle"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        aria-label={expanded ? '收起思考过程' : '展开思考过程'}
+        aria-label={toggleLabel}
       >
         <Brain size={14} strokeWidth={1.75} className="chat-thinking__icon" aria-hidden />
-        <span>思考</span>
+        <span>{t('thinking.label')}</span>
         <ChevronRight size={12} strokeWidth={2} className="chat-thinking__chevron" aria-hidden />
       </button>
       <div className="chat-thinking__panel">

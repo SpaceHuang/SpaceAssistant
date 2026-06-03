@@ -11,6 +11,7 @@ import chatLaunchReducer from '../../store/chatLaunchSlice'
 import browserDetectReducer from '../../store/browserDetectSlice'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 import type { BrowserDetectResult } from '../../../shared/browserTypes'
+import { changeAppLocale } from '../../i18n/localeSync'
 
 const detectMissing: BrowserDetectResult = {
   stagehand: { installed: true, version: '3.0.0' },
@@ -59,20 +60,40 @@ function renderTab(active = true) {
 }
 
 describe('BrowserSettingsTab', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks()
+    await changeAppLocale('zh-CN')
   })
 
-  it('shows repair button without full install steps when deps missing', async () => {
+  it('shows repair button without full install steps when deps missing (zh-CN)', async () => {
     renderTab()
     expect(await screen.findByRole('button', { name: '帮我修复' })).toBeTruthy()
     expect(screen.queryByText('安装步骤')).toBeNull()
     expect(screen.queryByText('复制全部步骤')).toBeNull()
   })
 
-  it('creates session and launch intent on repair click', async () => {
+  it('shows repair button without full install steps when deps missing (en-US)', async () => {
+    await changeAppLocale('en-US')
+    renderTab()
+    expect(await screen.findByRole('button', { name: 'Help me fix' })).toBeTruthy()
+    expect(screen.queryByText('安装步骤')).toBeNull()
+    expect(screen.queryByText('复制全部步骤')).toBeNull()
+  })
+
+  it('creates session and launch intent on repair click (zh-CN)', async () => {
     const store = renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '帮我修复' }))
+    await waitFor(() => {
+      expect(window.api.sessionCreate).toHaveBeenCalled()
+      expect(store.getState().chatLaunch.intent?.sessionId).toBe('new-session')
+    })
+    expect(store.getState().config.settingsOpen).toBe(false)
+  })
+
+  it('creates session and launch intent on repair click (en-US)', async () => {
+    await changeAppLocale('en-US')
+    const store = renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: 'Help me fix' }))
     await waitFor(() => {
       expect(window.api.sessionCreate).toHaveBeenCalled()
       expect(store.getState().chatLaunch.intent?.sessionId).toBe('new-session')

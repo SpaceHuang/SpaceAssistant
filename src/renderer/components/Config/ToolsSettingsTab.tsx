@@ -6,6 +6,7 @@ import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ShellSettingsTab } from './ShellSettingsTab'
 import { getToolsSettingsSectionHint } from './toolsSettingsNav'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 export type ToolsSettingsUi = {
   confirmMode: 'diff' | 'direct'
@@ -44,11 +45,11 @@ function BuiltinToolSwitchList({
   setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
   onShellEnabledChange?: (enabled: boolean) => void
 }) {
+  const { t } = useTypedTranslation('config')
+
   return (
     <Space direction="vertical" className="config-settings-stack" size="middle" style={{ width: '100%' }}>
-      <p className="config-field__hint config-tool-list-intro">
-        关闭某工具后，Agent 在对话中将无法调用它，相关任务可能失败或只能改用其它能力。
-      </p>
+      <p className="config-field__hint config-tool-list-intro">{t('tools.listIntro')}</p>
       <div className="config-tool-list">
         {BUILTIN_TOOL_DEFINITIONS.map((def) => {
           const on = !toolUi.deniedTools.includes(def.name)
@@ -76,7 +77,10 @@ function BuiltinToolSwitchList({
                 <span className="config-tool-row__name">{copy.displayName}</span>
                 <code className="config-tool-row__id">{def.name}</code>
                 <span className="config-tool-row__summary">{copy.summary}</span>
-                <span className="config-tool-row__disabled-hint">关闭后：{copy.disabledHint}</span>
+                <span className="config-tool-row__disabled-hint">
+                  {t('tools.disabledHintPrefix')}
+                  {copy.disabledHint}
+                </span>
               </div>
             </div>
           )
@@ -103,7 +107,8 @@ export function ToolsSettingsTab({
   pyTesting,
   onTestPython
 }: Props) {
-  const hint = getToolsSettingsSectionHint(section)
+  const { t } = useTypedTranslation('config')
+  const hint = getToolsSettingsSectionHint(section, t)
 
   const renderSection = () => {
     switch (section) {
@@ -118,22 +123,22 @@ export function ToolsSettingsTab({
       case 'file':
         return (
           <>
-            <Form.Item label="文件写入确认模式">
+            <Form.Item label={t('tools.file.confirmModeLabel')}>
               <Radio.Group
                 value={toolUi.confirmMode}
                 onChange={(e) => setToolUi((s) => ({ ...s, confirmMode: e.target.value }))}
               >
-                <Radio value="diff">展示文件修改内容</Radio>
-                <Radio value="direct">直接确认</Radio>
+                <Radio value="diff">{t('tools.file.confirmDiff')}</Radio>
+                <Radio value="direct">{t('tools.file.confirmDirect')}</Radio>
               </Radio.Group>
             </Form.Item>
-            <Form.Item label="文件历史备份" className="config-form-item-inline">
+            <Form.Item label={t('tools.file.checkpointLabel')} className="config-form-item-inline">
               <Switch
                 checked={toolUi.fileCheckpointingEnabled}
                 onChange={(c) => setToolUi((s) => ({ ...s, fileCheckpointingEnabled: c }))}
               />
             </Form.Item>
-            <Form.Item label="每文件最多快照数">
+            <Form.Item label={t('tools.file.maxSnapshotsLabel')}>
               <InputNumber
                 min={1}
                 max={500}
@@ -147,22 +152,22 @@ export function ToolsSettingsTab({
       case 'script':
         return (
           <>
-            <Form.Item label="Python 路径">
+            <Form.Item label={t('tools.script.pythonPathLabel')}>
               <Space.Compact style={{ width: '100%' }}>
                 <Input
                   value={toolUi.pythonPath}
                   onChange={(e) => setToolUi((s) => ({ ...s, pythonPath: e.target.value }))}
-                  placeholder="python 或绝对路径"
+                  placeholder={t('tools.script.pythonPathPlaceholder')}
                 />
                 <Button loading={pyTesting} onClick={onTestPython}>
-                  测试
+                  {t('tools.script.test')}
                 </Button>
               </Space.Compact>
             </Form.Item>
             {pyTest ? (
               <Alert type={pyTest.ok ? 'success' : 'error'} message={pyTest.text} showIcon className="config-alert-block" />
             ) : null}
-            <Form.Item label="脚本默认超时（秒）">
+            <Form.Item label={t('tools.script.timeoutLabel')}>
               <InputNumber
                 min={10}
                 max={86400}
@@ -171,7 +176,7 @@ export function ToolsSettingsTab({
                 style={{ width: '100%' }}
               />
             </Form.Item>
-            <Form.Item label="grep 超时（秒）">
+            <Form.Item label={t('tools.script.grepTimeoutLabel')}>
               <InputNumber
                 min={5}
                 max={600}

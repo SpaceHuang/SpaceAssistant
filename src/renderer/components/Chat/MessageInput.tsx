@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { Input, Tooltip } from 'antd'
 import { Keyboard, Send, Square } from 'lucide-react'
 import { ContextUsageRing } from './ContextUsageRing'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 export type MessageInputHandle = {
   focus: () => void
@@ -20,6 +21,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   { disabled, running, modelLabel, onSend, onAbort },
   ref
 ) {
+  const { t } = useTypedTranslation('chat')
   const [text, setText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const leftRowRef = useRef<HTMLDivElement>(null)
@@ -27,8 +29,8 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   const modelChipRef = useRef<HTMLSpanElement>(null)
   const [hintCollapsed, setHintCollapsed] = useState(false)
 
-  const hintText = running ? '执行中，Enter 或点击右侧按钮中止' : 'Enter 发送，Shift+Enter 换行'
-  const primaryActionLabel = running ? '中止生成' : '发送消息'
+  const hintText = running ? t('input.hintRunning') : t('input.hintIdle')
+  const primaryActionLabel = running ? t('input.abort') : t('input.send')
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
@@ -104,7 +106,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="输入消息…"
+          placeholder={t('input.placeholder')}
           autoSize={{ minRows: 2, maxRows: 8 }}
           disabled={disabled}
           onKeyDown={(e) => {
