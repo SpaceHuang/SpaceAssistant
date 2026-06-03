@@ -123,3 +123,14 @@ API Key 通过 Electron 的 `safeStorage` API 加密（`electron/secureApiKey.ts
 - 如需新图标，可从 `res/mingcute-icons-main/svg/` 目录按分类查找（如 `arrow/`、`file/`、`device/`、`editor/` 等），复制 SVG 文件到 `src/renderer/assets/` 后使用
 - 全局使用 Ant Design 组件；自定义样式在 `src/renderer/styles.css`
 - 三栏布局：左侧边栏（328px）| 中间聊天区 | 右侧边栏（240px，预留位）
+
+## i18n 国际化开发规范
+
+- 所有新增 UI 文案**必须**通过 `t()` 函数使用，禁止硬编码中文或英文
+- 翻译 key 命名遵循 `模块.组件.语义` 层级（camelCase，最多 4 层）
+- `zh-CN` 是翻译 key 的真实来源；TypeScript 类型从 `src/renderer/i18n/resources/zh-CN/` 自动推导
+- 新增 key 后运行 `npm run i18n:generate-types` 更新类型
+- 提交前运行 `npm run i18n:check` 确保 key 对齐、JSON 合法
+- 复用性高的文案放 `common` 命名空间；模块专属文案放对应命名空间
+- 错误消息使用 `errors` 命名空间 + `src/shared/errorCodes.ts` 错误码模式
+- 翻译资源文件在 `src/renderer/i18n/resources/{locale}/` 下按命名空间分文件
