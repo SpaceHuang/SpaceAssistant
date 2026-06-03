@@ -1,0 +1,10 @@
+{
+  "detail": {
+    "caseSensitiveTitle": "Match case (Alt+C)",
+    "closeTitle": "Close",
+    "placeholder": "Find",
+    "regexInvalid": "Invalid regular expression",
+    "regexTitle": "Regular expression (Alt+R)",
+    "wholeWordTitle": "Whole word (Alt+W)"
+  }
+}
