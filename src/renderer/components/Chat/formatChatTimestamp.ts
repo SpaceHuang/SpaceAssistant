@@ -1,3 +1,5 @@
+import i18next from 'i18next'
+
 /** 聊天消息时间：当天仅显示时分，跨天显示月日+时分 */
 export function formatChatTimestamp(timestamp: number): string {
   const date = new Date(timestamp)
@@ -6,5 +8,5 @@ export function formatChatTimestamp(timestamp: number): string {
   const opts: Intl.DateTimeFormatOptions = sameDay
     ? { hour: '2-digit', minute: '2-digit' }
     : { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }
-  return date.toLocaleString(undefined, opts)
+  return date.toLocaleString(i18next.language, opts)
 }
