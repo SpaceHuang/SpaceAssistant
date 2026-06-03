@@ -75,6 +75,7 @@ import { classifyWikiPath } from './wiki/wikiPaths'
 import { copyFileInWorkDir, importRawFromWorkDir } from './wiki/wikiImport'
 import { openExternalLink } from './externalLink'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
+import { rebuildAppMenu } from './menu'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
@@ -97,7 +98,7 @@ const CONFIG_KEYS = {
   locale: 'config.locale'
 } as const
 
-function readAppLocale(db: AppDatabase): AppConfig['locale'] {
+export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
   const stored = getConfigValue(db, CONFIG_KEYS.locale)
   if (stored && isAppLocale(stored)) return stored
   const detected = detectLocaleFromSystem(app.getLocale())
@@ -635,6 +636,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (payload.locale !== undefined && isAppLocale(payload.locale)) {
         setConfigValue(ctx.db, CONFIG_KEYS.locale, payload.locale)
+        rebuildAppMenu(payload.locale)
       }
       stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()

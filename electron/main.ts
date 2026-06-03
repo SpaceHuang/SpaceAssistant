@@ -18,6 +18,7 @@ import { getConfigValue, openDatabase, setConfigValue } from './database'
 import type { AppDatabase } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
+import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent } from './agentLogger/agentLogger'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
@@ -325,7 +326,7 @@ app.whenReady().then(() => {
   })
 
   void createMainWindow()
-  setupAppMenu()
+  setupAppMenu(readAppLocale(db))
 })
 
 app.on('before-quit', (event) => {
