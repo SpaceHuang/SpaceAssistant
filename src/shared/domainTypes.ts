@@ -496,6 +496,8 @@ export interface Session {
   skillsState: SessionSkillsState
   metadata: Record<string, unknown>
   schemaVersion: number
+  /** 所属工作目录 profile；缺省时视为当前激活目录（向后兼容） */
+  workDirProfileId?: string
 }
 
 export interface Message {

@@ -3,6 +3,7 @@ import { useTypedSelector } from '../../hooks'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { FileTreeToolbar } from '../FileTree/FileTreeToolbar'
+import { WorkDirSelector } from './WorkDirSelector'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
 
 type Props = {
@@ -45,7 +46,7 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
   return (
     <>
       <div className="detail-panel-section-header detail-panel-file-header">
-        <span className="detail-panel-section-title">文件</span>
+        <WorkDirSelector />
         <FileTreeToolbar
           onNewDirectory={() => fileTreeRef.current?.startNewDirectory()}
           onRefresh={() => void fileTreeRef.current?.refresh()}

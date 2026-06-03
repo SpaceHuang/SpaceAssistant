@@ -16,6 +16,7 @@
     "build:tray-icons": "node scripts/build-tray-icons.mjs",
     "build:electron": "rimraf dist-electron && tsc -p tsconfig.electron.json",
     "build:electron:incremental": "tsc -p tsconfig.electron.json",
+    "build": "npm run build:tray-icons && npm run build:renderer && npm run build:electron",
     "reinstall:electron": "rimraf node_modules/electron && npm install",
     "pack": "npm run build && electron-builder",
     "pack:win": "npm run build && electron-builder --win",
@@ -31,10 +32,13 @@
     "@xterm/xterm": "^5.5.0",
     "antd": "^5.22.0",
     "axios": "^1.7.0",
+    "i18next": "^26.3.1",
+    "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^0.468.0",
     "playwright": "^1.52.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-i18next": "^17.0.8",
     "react-markdown": "^9.0.1",
     "react-redux": "^9.2.0",
     "react-syntax-highlighter": "^15.6.1",
@@ -67,6 +71,11 @@
   "build": {
     "appId": "com.spaceassistant.app",
     "productName": "SpaceAssistant",
+    "npmRebuild": false,
+    "electronDist": "node_modules/electron/dist",
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
     "directories": {
       "output": "release"
     },
@@ -74,7 +83,8 @@
       "dist/**/*",
       "dist-electron/**/*",
       "resources/tray/**",
-      "package.json"
+      "package.json",
+      "!**/node_modules/bufferutil/**"
     ],
     "extraResources": [
       {
@@ -83,6 +93,7 @@
       }
     ],
     "win": {
+      "signAndEditExecutable": false,
       "target": [
         {
           "target": "nsis",

@@ -4,6 +4,21 @@ import path from 'path'
 import type { IpcMain } from 'electron'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
+import {
+  appendMessage,
+  appendSearchHistory,
+  createSession,
+  deleteSession,
+  getConfigValue,
+  getMessages,
+  getSession,
+  listSearchHistory,
+  listSessions,
+  setConfigValue,
+  deleteConfigValue,
+  updateMessageContent,
+  updateSession
+} from './database'
 import type {
   AppConfig,
   FileInfo,
@@ -38,21 +53,8 @@ import {
   resolveTestConnectionCredentials,
   resolveTestConnectionModel
 } from './llmServiceResolver'
-import {
-  appendMessage,
-  appendSearchHistory,
-  createSession,
-  deleteSession,
-  getConfigValue,
-  getMessages,
-  getSession,
-  listSearchHistory,
-  listSessions,
-  setConfigValue,
-  deleteConfigValue,
-  updateMessageContent,
-  updateSession
-} from './database'
+import type { WorkDirManager } from './workDirManager'
+import { listSessionsForProfile } from './workDirManager'
 import { resolveSafePath } from './pathSecurity'
 import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from './fileReadHelpers'
 import { SessionBackupManager } from './sessionBackupManager'
@@ -97,6 +99,7 @@ const CONFIG_KEYS = {
 export type AppIpcContext = {
   db: AppDatabase
   backup: SessionBackupManager
+  workDirManager: WorkDirManager
   getWorkDir: () => string
   setWorkDir: (dir: string) => void
   getUserDataPath: () => string
@@ -277,7 +280,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     return openTerminalAtCwd(detect.recommendedCwd, ctx.getBrowserDetectContext())
   })
 
-  ipcMain.handle('session:list', (): Session[] => stripAllSessionsAndPersist(ctx.db))
+  ipcMain.handle('session:list', (): Session[] => {
+    const profileId = ctx.workDirManager.getActiveProfileId()
+    return stripAllSessionsAndPersist(ctx.db).filter((s) => {
+      if (!s.workDirProfileId) return false
+      return s.workDirProfileId === profileId
+    })
+  })
 
   ipcMain.handle(
     'session:create',
@@ -285,7 +294,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       _e,
       payload: { name: string; model?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown> }
     ): Promise<Session> => {
-      const s = createSession(ctx.db, payload)
+      const s = createSession(ctx.db, {
+        ...payload,
+        workDirProfileId: ctx.workDirManager.getActiveProfileId()
+      })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
       await ctx.backup.backupSession(s, [])
       return s
@@ -431,7 +443,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       workDirProfiles = [
         {
           id: 'default',
-          name: '默认',
+          name: '工作目录',
           path: wd,
           isDefault: true
         }
@@ -586,9 +598,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         persistFeishuConfig(ctx.db, payload.feishu)
       }
       if (payload.workDirProfiles !== undefined) {
-        setConfigValue(ctx.db, CONFIG_KEYS.workDirProfiles, JSON.stringify(payload.workDirProfiles))
+        const validation = ctx.workDirManager.validateProfilesForSave(payload.workDirProfiles)
+        if (!validation.valid) {
+          throw new Error(validation.error ?? '工作目录配置无效')
+        }
+        const activeId =
+          payload.activeWorkDirProfileId ??
+          payload.workDirProfiles.find((p) => p.isDefault)?.id ??
+          payload.workDirProfiles[0]?.id ??
+          ''
+        ctx.workDirManager.persistProfiles(payload.workDirProfiles, activeId)
       }
-      if (payload.activeWorkDirProfileId !== undefined) {
+      if (payload.activeWorkDirProfileId !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId, payload.activeWorkDirProfileId)
       }
       if (payload.maxParallelChatSessions !== undefined) {
@@ -1108,6 +1129,46 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       return { success: false as const, error: (err as Error).message }
     }
   })
+
+  ipcMain.handle('workdir:list', () => ctx.workDirManager.listProfiles())
+
+  ipcMain.handle(
+    'workdir:add',
+    (_e, profile: { name: string; path: string; aliases?: string[]; isDefault?: boolean }) =>
+      ctx.workDirManager.addProfile(profile)
+  )
+
+  ipcMain.handle(
+    'workdir:update',
+    (_e, payload: { profileId: string; updates: Partial<import('../src/shared/feishuTypes').WorkDirProfile> }) =>
+      ctx.workDirManager.updateProfile(payload.profileId, payload.updates)
+  )
+
+  ipcMain.handle('workdir:remove', (_e, payload: { profileId: string }) =>
+    ctx.workDirManager.removeProfile(payload.profileId)
+  )
+
+  ipcMain.handle('workdir:switch', async (_e, payload: { profileId: string }) => {
+    const fromId = ctx.workDirManager.getActiveProfileId()
+    const profiles = ctx.workDirManager.listProfiles()
+    const from = profiles.find((p) => p.id === fromId)
+    const to = profiles.find((p) => p.id === payload.profileId)
+    logAgentEvent('info', 'workdir.switch.start', {
+      fromProfileId: fromId,
+      fromProfileName: from?.name ?? fromId,
+      toProfileId: payload.profileId,
+      toProfileName: to?.name ?? payload.profileId
+    })
+    const result = await ctx.workDirManager.switchProfile(payload.profileId)
+    if (!result.success) {
+      logAgentEvent('error', 'workdir.switch.error', { error: result.error, profileId: payload.profileId })
+    }
+    return result
+  })
+
+  ipcMain.handle('workdir:check-writable', (_e, payload: { path: string }) =>
+    ctx.workDirManager.checkDirectoryWritable(payload.path)
+  )
 }
 
 async function searchFilesUnder(

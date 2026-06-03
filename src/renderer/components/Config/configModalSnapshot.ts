@@ -7,11 +7,12 @@ import type {
   WikiConfig
 } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import type { WorkDirProfile } from '../../../shared/feishuTypes'
 import type { LlmServiceTabState } from './llmServiceDrafts'
 import type { ToolsSettingsUi } from './ToolsSettingsTab'
 
 export type ConfigModalSnapshotInput = {
-  workDir: string
+  workDirProfiles: WorkDirProfile[]
   thinkingEnabled: boolean
   models: ModelEntry[]
   llmState: LlmServiceTabState
@@ -55,9 +56,21 @@ function normalizeLlmState(state: LlmServiceTabState) {
   }
 }
 
+function normalizeProfiles(profiles: WorkDirProfile[]): WorkDirProfile[] {
+  return [...profiles]
+    .map((p) => ({
+      id: p.id,
+      name: p.name.trim(),
+      path: p.path.trim(),
+      aliases: p.aliases ? [...p.aliases].sort() : undefined,
+      isDefault: Boolean(p.isDefault)
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+}
+
 export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): string {
   const payload = {
-    workDir: input.workDir.trim(),
+    workDirProfiles: normalizeProfiles(input.workDirProfiles),
     thinkingEnabled: input.thinkingEnabled,
     models: normalizeModels(input.models),
     llm: normalizeLlmState(input.llmState),
@@ -90,7 +103,7 @@ export function buildConfigModalSnapshotFromConfig(
     ...new Set([...(browserCfg.trustedDomains ?? []), ...(browserCfg.allowedDomains ?? [])])
   ]
   return buildConfigModalSnapshot({
-    workDir: cfg.workDir,
+    workDirProfiles: cfg.workDirProfiles ?? [],
     thinkingEnabled: cfg.thinkingEnabled,
     models: cfg.models,
     llmState,

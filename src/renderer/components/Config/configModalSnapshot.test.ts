@@ -24,7 +24,7 @@ describe('buildConfigModalSnapshot', () => {
       's1'
     )
     const base = {
-      workDir: '/tmp/work',
+      workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp/work', isDefault: true }],
       thinkingEnabled: true,
       models: [{ id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, enabled: true }],
       llmState,
@@ -49,11 +49,11 @@ describe('buildConfigModalSnapshot', () => {
     expect(configModalSnapshotsEqual(a, b)).toBe(true)
   })
 
-  it('detects workDir changes', () => {
+  it('detects workDirProfiles changes', () => {
     const llmState = initLlmServiceTabState([], '')
-    const mk = (workDir: string) =>
+    const mk = (pathValue: string) =>
       buildConfigModalSnapshot({
-        workDir,
+        workDirProfiles: [{ id: 'd1', name: 'Work', path: pathValue, isDefault: true }],
         thinkingEnabled: false,
         models: [],
         llmState,

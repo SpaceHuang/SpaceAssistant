@@ -19,6 +19,10 @@ vi.mock('../FileTree/FileTreeToolbar', () => ({
   FileTreeToolbar: () => <div data-testid="file-tree-toolbar" />
 }))
 
+vi.mock('./WorkDirSelector', () => ({
+  WorkDirSelector: () => <div data-testid="workdir-selector">Project A</div>
+}))
+
 vi.mock('../FileTree/FileTree', () => ({
   FileTree: React.forwardRef(function MockFileTree(
     { onFileSelect }: { onFileSelect?: (p: string) => void },
@@ -76,7 +80,7 @@ describe('DetailPanelFileList', () => {
 
   it('renders file header and tree', () => {
     renderList()
-    expect(screen.getByText('文件')).toBeDefined()
+    expect(screen.getByTestId('workdir-selector')).toBeDefined()
     expect(screen.getByTestId('file-tree-toolbar')).toBeDefined()
     expect(screen.getByTestId('file-tree')).toBeDefined()
   })

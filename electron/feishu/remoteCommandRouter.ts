@@ -167,12 +167,6 @@ export class RemoteCommandRouter {
       })
     }
 
-    if (profile?.sensitive) {
-      logFeishuCliEvent('warn', 'feishu.inbound.sensitive_workdir', { profileId: profile.id })
-      await replyFeishuText(this.deps.runner, msg.messageId, '该项目标记为敏感，禁止远程执行，请在桌面端操作。')
-      return
-    }
-
     const workDir = profile?.path ?? this.deps.getWorkDir()
     await this.processCommand(msg, config, workDir, profile, accept.userMessage ?? msg.content.trim())
   }

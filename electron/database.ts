@@ -122,6 +122,7 @@ export function createSession(
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
+    workDirProfileId?: string
   }
 ): Session {
   const now = Date.now()
@@ -141,7 +142,8 @@ export function createSession(
     messageCount: 0,
     skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
     metadata: input.metadata ? { ...input.metadata } : {},
-    schemaVersion: CURRENT_SCHEMA_VERSION
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    workDirProfileId: input.workDirProfileId
   }
   db.data.sessions.push(session)
   db.save()

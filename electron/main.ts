@@ -19,7 +19,7 @@ import type { AppDatabase } from './database'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
 import { getMainWindow, setMainWindow } from './windowRef'
-import { getAgentLogDir, initAgentLogger, logAgentEvent } from './agentLogger/agentLogger'
+import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { encryptSecret } from './secureApiKey'
 import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
@@ -33,6 +33,7 @@ import {
 import { destroyTray, initTray, isTrayEnabled, showMainWindow } from './tray'
 import { setupWindowCloseHandler } from './trayLogic'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
+import { createWorkDirManager, type WorkDirManager } from './workDirManager'
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -90,6 +91,7 @@ function getRendererIndexPath(): string {
 }
 
 let workDirState = ''
+let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
 let isQuitting = false
 let quitCleanupDone = false
@@ -163,6 +165,39 @@ app.whenReady().then(() => {
 
   workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
 
+  const applyWorkDirSideEffects = (d: string) => {
+    workDirState = d
+    loadProjectMemory(d).catch((err) => {
+      console.warn('[projectMemory] reload failed:', err.message)
+    })
+    startMemoryWatcher(d, (state) => {
+      const win = getMainWindow()
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('project-memory:state-changed', state)
+      }
+    })
+  }
+
+  workDirManager = createWorkDirManager({
+    db,
+    getWorkDir: () => workDirState,
+    setWorkDir: applyWorkDirSideEffects,
+    onBeforeSwitch: () => flushAgentLogger(),
+    onAfterSwitch: (fromId, toId) => {
+      const profiles = workDirManager!.listProfiles()
+      const from = profiles.find((p) => p.id === fromId)
+      const to = profiles.find((p) => p.id === toId)
+      logAgentEvent('info', 'workdir.switch.done', {
+        fromProfileId: fromId,
+        fromProfileName: from?.name ?? fromId,
+        toProfileId: toId,
+        toProfileName: to?.name ?? toId
+      })
+    }
+  })
+  workDirManager.migrateFromLegacy()
+  workDirState = workDirManager.getActiveWorkDir()
+
   // Initialize project memory
   loadProjectMemory(workDirState).catch((err) => {
     console.warn('[projectMemory] init load failed:', err.message)
@@ -175,7 +210,7 @@ app.whenReady().then(() => {
   })
 
   initAgentLogger({
-    getWorkDir: () => workDirState,
+    getWorkDir: () => workDirManager?.getActiveWorkDir() ?? workDirState,
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
@@ -190,7 +225,7 @@ app.whenReady().then(() => {
   }
 
   initFeishuCliLogger({
-    getWorkDir: () => workDirState,
+    getWorkDir: () => workDirManager?.getActiveWorkDir() ?? workDirState,
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
@@ -250,19 +285,9 @@ app.whenReady().then(() => {
   registerAppIpcHandlers(ipcMain, {
     db,
     backup,
+    workDirManager: workDirManager!,
     getWorkDir: () => workDirState,
-    setWorkDir: (d: string) => {
-      workDirState = d
-      loadProjectMemory(d).catch((err) => {
-        console.warn('[projectMemory] reload failed:', err.message)
-      })
-      startMemoryWatcher(d, (state) => {
-        const win = getMainWindow()
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('project-memory:state-changed', state)
-        }
-      })
-    },
+    setWorkDir: applyWorkDirSideEffects,
     getUserDataPath: () => app.getPath('userData'),
     getApiKey,
     setApiKey,

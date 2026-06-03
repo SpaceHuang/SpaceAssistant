@@ -420,6 +420,128 @@
   margin-bottom: var(--sa-config-gap-stack);
 }
 
+.config-settings-page .config-workdir-field {
+  margin-bottom: var(--sa-config-gap-stack);
+}
+
+.config-settings-page .config-workdir-field__actions {
+  flex-shrink: 0;
+}
+
+.config-settings-page .config-workdir-field__actions .ant-btn.ant-btn-sm.ant-btn-icon-only {
+  width: var(--sa-config-control-min-height);
+  height: var(--sa-config-control-min-height);
+  padding: 0;
+}
+
+.config-settings-page .config-workdir-table.ant-table-wrapper {
+  width: 100%;
+}
+
+.config-settings-page .config-workdir-table .ant-table {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  overflow: hidden;
+  background: var(--sa-bg-elevated);
+}
+
+.config-settings-page .config-workdir-table .ant-table-container table {
+  border-radius: var(--sa-radius-md);
+}
+
+.config-settings-page .config-workdir-table .ant-table-thead > tr > th {
+  padding: 8px 12px;
+  font-weight: 600;
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-subtle);
+  border-bottom: 1px solid var(--sa-border);
+}
+
+.config-settings-page .config-workdir-table .ant-table-thead > tr > th::before {
+  display: none;
+}
+
+.config-settings-page .config-workdir-table .ant-table-tbody > tr > td {
+  padding: 10px 12px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--sa-border);
+}
+
+.config-settings-page .config-workdir-table .ant-table-tbody > tr:last-child > td {
+  border-bottom: none;
+}
+
+.config-settings-page .config-workdir-table .ant-table-tbody > tr:hover > td {
+  background: color-mix(in srgb, var(--sa-text) 3%, var(--sa-bg-elevated));
+}
+
+.config-settings-page .config-workdir-table .ant-table-placeholder .ant-table-cell {
+  padding: 20px 12px;
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-elevated);
+}
+
+.config-settings-page .config-workdir-table .ant-radio-wrapper {
+  margin-inline-end: 0;
+}
+
+.config-settings-page .config-workdir-table-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-tight);
+  min-width: 0;
+  line-height: var(--sa-config-line);
+}
+
+.config-settings-page .config-workdir-table-cell .config-field__hint {
+  margin-top: 0;
+}
+
+.config-settings-page .config-workdir-table-path {
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-config-font-sm);
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+  word-break: break-all;
+}
+
+.config-settings-page .config-workdir-table-actions .ant-btn-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 4px;
+}
+
+.config-workdir-popover {
+  width: 320px;
+}
+
+.config-workdir-popover .config-add-model-hint {
+  margin-top: var(--sa-config-gap-tight);
+}
+
+.config-workdir-path-compact {
+  width: 100%;
+}
+
+.config-workdir-path-compact .ant-input {
+  min-width: 0;
+}
+
+.config-workdir-browse-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--sa-config-control-min-height);
+  padding-inline: 10px;
+}
+
+.config-settings-popover .config-workdir-popover .ant-input,
+.config-settings-popover .config-workdir-popover .ant-btn {
+  font-size: var(--sa-config-font);
+}
+
 .config-settings-page .config-skill-section-header {
   display: flex;
   align-items: center;

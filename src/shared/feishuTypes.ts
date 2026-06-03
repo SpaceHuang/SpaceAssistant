@@ -106,9 +106,9 @@ export interface WorkDirProfile {
   id: string
   name: string
   path: string
+  /** 飞书远程指令匹配用短名，如 SA */
   aliases?: string[]
   isDefault?: boolean
-  sensitive?: boolean
 }
 
 export const DEFAULT_WORK_DIR_PROFILES: WorkDirProfile[] = []

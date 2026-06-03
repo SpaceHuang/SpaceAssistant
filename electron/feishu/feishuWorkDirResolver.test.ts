@@ -4,7 +4,7 @@ import { buildDisambiguationReply, resolveWorkDirFromFeishuCommand } from './fei
 describe('feishuWorkDirResolver', () => {
   const profiles = [
     { id: '1', name: 'SpaceAssistant', path: '/a', aliases: ['SA'] },
-    { id: '2', name: 'SpaceAssistant-Docs', path: '/b' }
+    { id: '2', name: 'SpaceDocs', path: '/b' }
   ]
 
   it('matches alias from prefix', () => {

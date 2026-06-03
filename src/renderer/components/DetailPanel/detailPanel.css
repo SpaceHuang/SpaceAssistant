@@ -404,6 +404,162 @@
   color: var(--sa-pane-header-title);
 }
 
+.workdir-selector {
+  flex: 1;
+  min-width: 0;
+  max-width: min(240px, 100%);
+}
+
+.workdir-selector.ant-select-single.ant-select-sm .ant-select-selector {
+  height: 28px;
+  padding: 0 26px 0 8px !important;
+  border: 1px solid var(--sa-border) !important;
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-surface-inset) !important;
+  box-shadow: none;
+  transition:
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.workdir-selector.ant-select-single.ant-select-sm:not(.ant-select-disabled):hover .ant-select-selector {
+  border-color: var(--sa-border-strong) !important;
+  background: var(--sa-surface-raised) !important;
+}
+
+.workdir-selector.ant-select-focused:not(.ant-select-disabled) .ant-select-selector {
+  border-color: var(--sa-primary) !important;
+  box-shadow: 0 0 0 2px var(--sa-primary-subtle);
+}
+
+.workdir-selector .ant-select-selection-item {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 26px !important;
+  color: var(--sa-text);
+}
+
+.workdir-selector .ant-select-arrow,
+.workdir-selector .ant-select-suffix {
+  color: var(--sa-icon);
+  inset-inline-end: 7px;
+}
+
+.workdir-selector:not(.ant-select-disabled):hover .ant-select-arrow,
+.workdir-selector:not(.ant-select-disabled):hover .ant-select-suffix {
+  color: var(--sa-icon-hover);
+}
+
+.workdir-selector-popup.ant-select-dropdown {
+  padding: 4px;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-elevated);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.workdir-selector-popup .ant-select-item {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: var(--sa-radius-sm);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--sa-text);
+}
+
+.workdir-selector-popup .ant-select-item-option-active:not(.ant-select-item-option-disabled) {
+  background: color-mix(in srgb, var(--sa-text) 6%, transparent);
+}
+
+.workdir-selector-popup .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
+  background: var(--sa-primary-subtle);
+  color: var(--sa-primary);
+  font-weight: 500;
+}
+
+.workdir-selector-popup-footer {
+  border-top: 1px solid var(--sa-border);
+  padding: 4px;
+}
+
+.workdir-selector-settings-action {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.workdir-selector-settings-action:hover {
+  background: color-mix(in srgb, var(--sa-text) 6%, transparent);
+  color: var(--sa-primary);
+}
+
+.workdir-selector-settings-action:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workdir-selector-settings-action {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workdir-selector.ant-select-single.ant-select-sm .ant-select-selector {
+    transition: none;
+  }
+}
+
+.workdir-selector-empty {
+  flex: 1;
+  min-width: 0;
+  max-width: min(240px, 100%);
+  border: 1px dashed var(--sa-border-strong);
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 26px;
+  color: var(--sa-text-secondary);
+  cursor: pointer;
+  padding: 0 8px;
+  text-align: left;
+  transition:
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.workdir-selector-empty:hover {
+  border-color: color-mix(in srgb, var(--sa-primary) 28%, var(--sa-border-strong));
+  background: var(--sa-surface-inset);
+  color: var(--sa-text);
+}
+
+.workdir-selector-empty:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workdir-selector-empty {
+    transition: none;
+  }
+}
+
 .detail-panel-section-badge {
   flex-shrink: 0;
   min-width: 18px;

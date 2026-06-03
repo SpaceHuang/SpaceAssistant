@@ -3,6 +3,7 @@ import { App } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { addMessage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId } from '../../store/chatSlice'
+import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
   clearLiveSession,
@@ -328,7 +329,8 @@ export function ChatView() {
       }
 
       if (!cfg.apiKeyPresent) {
-        message.warning('请先在设置中配置 API Key')
+        message.warning('尚未配置 API Key，请点击左下角 ⚙️ 设置 → 模型 → 填写 API Key 后即可使用')
+        dispatch(openSettings({ tab: 'models' }))
         return
       }
       const wikiConfig = cfg.wiki ?? DEFAULT_WIKI_CONFIG

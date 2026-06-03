@@ -14,7 +14,7 @@ import { DEFAULT_WIKI_CONFIG, DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } fro
 
 import type { BrowserConfig, ShellConfig } from '../../../shared/domainTypes'
 
-import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../../../shared/feishuTypes'
+import { DEFAULT_FEISHU_CONFIG, type FeishuConfig, type WorkDirProfile } from '../../../shared/feishuTypes'
 
 import { DEFAULT_MODELS } from '../../../shared/domainTypes'
 
@@ -71,6 +71,7 @@ import {
   getToolsSettingsSectionLabel,
   TOOLS_SETTINGS_NAV
 } from './toolsSettingsNav'
+import { WorkDirList, validateWorkDirProfiles } from './WorkDirList'
 
 const SETTINGS_SECTIONS = [
   { key: 'general', label: '通用' },
@@ -85,17 +86,6 @@ const SETTINGS_SECTIONS = [
 type SettingsSectionKey = (typeof SETTINGS_SECTIONS)[number]['key']
 
 /** 表单项随 Tab 卸载时 useWatch 会变为 undefined，脏检查须回退到 form / cfg */
-function resolveWorkDirForSnapshot(
-  watch: unknown,
-  form: ReturnType<typeof Form.useForm>[0],
-  cfg: { workDir: string } | null
-): string {
-  if (typeof watch === 'string') return watch
-  const fromForm = form.getFieldValue('workDir')
-  if (typeof fromForm === 'string') return fromForm
-  return cfg?.workDir ?? ''
-}
-
 function resolveThinkingEnabledForSnapshot(
   watch: unknown,
   form: ReturnType<typeof Form.useForm>[0],
@@ -106,28 +96,6 @@ function resolveThinkingEnabledForSnapshot(
   if (typeof fromForm === 'boolean') return fromForm
   return Boolean(cfg?.thinkingEnabled)
 }
-
-function FolderOpenIcon() {
-
-  return (
-
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" aria-hidden>
-
-      <path
-
-        fill="currentColor"
-
-        d="M3.087 9a2 2 0 0 1 .166-.77l.046-.095L4.77 4.97A3 3 0 0 1 7.47 3h9.06a3 3 0 0 1 2.7 1.97l1.47 3.165c.12.252.2.528.227.82a1 1 0 0 1 .073.37v6.695a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V9.37a1 1 0 0 1 .087-.37M7.47 5a1 1 0 0 0-.9.657L5.588 8H9V5zm4 0H11v3h4V5zm3.06 0H15v3h3.412l-.982-2.343A1 1 0 0 0 16.53 5M5 16.695a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V10H5z"
-
-      />
-
-    </svg>
-
-  )
-
-}
-
-
 
 /** @deprecated 使用 ConfigSettingsPage；保留别名以兼容现有 import */
 
@@ -155,8 +123,6 @@ export function ConfigSettingsPage() {
 
   const [form] = Form.useForm()
 
-  const workDirWatch = Form.useWatch('workDir', form)
-
   const thinkingEnabledWatch = Form.useWatch('thinkingEnabled', form)
 
   const llmDrafts = useLlmServiceDrafts(open, cfg)
@@ -165,7 +131,9 @@ export function ConfigSettingsPage() {
 
   const closeBtnRef = useRef<HTMLButtonElement>(null)
 
-  const [workDirError, setWorkDirError] = useState<string | null>(null)
+  const [workDirProfiles, setWorkDirProfiles] = useState<WorkDirProfile[]>([])
+
+  const [workDirSaveError, setWorkDirSaveError] = useState<string | null>(null)
 
   const [models, setModels] = useState<ModelEntry[]>([])
 
@@ -233,15 +201,15 @@ export function ConfigSettingsPage() {
 
       form.setFieldsValue({
 
-        workDir: cfg.workDir,
-
         thinkingEnabled: cfg.thinkingEnabled
 
       })
 
+      setWorkDirProfiles(cfg.workDirProfiles ?? [])
+
       setModels(cfg.models.length > 0 ? cfg.models : DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
 
-      setWorkDirError(null)
+      setWorkDirSaveError(null)
 
       const allBuiltin = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
 
@@ -361,7 +329,7 @@ export function ConfigSettingsPage() {
 
     return buildConfigModalSnapshot({
 
-      workDir: resolveWorkDirForSnapshot(workDirWatch, form, cfg),
+      workDirProfiles,
 
       thinkingEnabled: resolveThinkingEnabledForSnapshot(thinkingEnabledWatch, form, cfg),
 
@@ -393,7 +361,7 @@ export function ConfigSettingsPage() {
 
     form,
 
-    workDirWatch,
+    workDirProfiles,
 
     thinkingEnabledWatch,
 
@@ -449,40 +417,6 @@ export function ConfigSettingsPage() {
 
 
 
-  const selectDirectory = async () => {
-
-    const result = await window.api.dialogSelectDirectory()
-
-    if ('path' in result) {
-
-      form.setFieldValue('workDir', result.path)
-
-      void checkWorkDir(result.path)
-
-    }
-
-  }
-
-
-
-  const checkWorkDir = async (dir: string) => {
-
-    if (!dir) {
-
-      setWorkDirError(null)
-
-      return
-
-    }
-
-    const r = await window.api.configCheckWorkdirWritable(dir)
-
-    setWorkDirError(r.writable ? null : `该目录不可写入：${r.error ?? '权限不足'}，请更换工作目录`)
-
-  }
-
-
-
   const resetModels = () => {
 
     setModels(DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
@@ -495,19 +429,25 @@ export function ConfigSettingsPage() {
 
     const v = await form.validateFields()
 
-    if (v.workDir) {
-
-      const r = await window.api.configCheckWorkdirWritable(v.workDir)
-
-      if (!r.writable) {
-
-        setWorkDirError(`该目录不可写入：${r.error ?? '权限不足'}，请更换工作目录`)
-
-        return false
-
-      }
-
+    const profileErr = validateWorkDirProfiles(workDirProfiles)
+    if (profileErr) {
+      setWorkDirSaveError(profileErr)
+      message.warning(profileErr)
+      return false
     }
+
+    for (const p of workDirProfiles) {
+      const r = await window.api.workdirCheckWritable(p.path)
+      if (!r.ok) {
+        const err = `目录 ${p.name} 不可写入：${r.error ?? '权限不足'}`
+        setWorkDirSaveError(err)
+        message.warning(err)
+        return false
+      }
+    }
+    setWorkDirSaveError(null)
+
+    const activeProfile = workDirProfiles.find((p) => p.isDefault) ?? workDirProfiles[0]
 
     const enabledModels = models.filter((m) => m.enabled)
 
@@ -537,7 +477,11 @@ export function ConfigSettingsPage() {
 
       await window.api.configSet({
 
-        workDir: v.workDir,
+        workDir: activeProfile?.path,
+
+        workDirProfiles,
+
+        activeWorkDirProfileId: activeProfile?.id ?? '',
 
         thinkingEnabled: v.thinkingEnabled,
 
@@ -762,35 +706,11 @@ export function ConfigSettingsPage() {
 
           <>
 
-            <Form.Item label="工作目录（会话明文备份等）" required>
+            <WorkDirList profiles={workDirProfiles} onChange={setWorkDirProfiles} />
 
-              <Space.Compact style={{ width: '100%' }}>
+            {workDirSaveError ? (
 
-                <Form.Item name="workDir" noStyle preserve rules={[{ required: true }]}>
-
-                  <Input onBlur={(e) => void checkWorkDir(e.target.value)} />
-
-                </Form.Item>
-
-                <Button
-
-                  icon={<FolderOpenIcon />}
-
-                  onClick={selectDirectory}
-
-                  title="选择目录"
-
-                  aria-label="选择目录"
-
-                />
-
-              </Space.Compact>
-
-            </Form.Item>
-
-            {workDirError ? (
-
-              <Alert type="error" message={workDirError} showIcon className="config-alert-block--loose" />
+              <Alert type="error" message={workDirSaveError} showIcon className="config-alert-block--loose" />
 
             ) : null}
 

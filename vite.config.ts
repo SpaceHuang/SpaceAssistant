@@ -6,6 +6,7 @@ const devPort = Number(process.env.VITE_DEV_SERVER_PORT) || 9240
 
 export default defineConfig({
   plugins: [react()],
+  base: './',
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src')

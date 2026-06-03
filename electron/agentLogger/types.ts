@@ -35,5 +35,8 @@ export type AgentLogEventName =
   | 'shell.exec.background'
   | 'shell.exec.finish'
   | 'shell.exec.error'
+  | 'workdir.switch.start'
+  | 'workdir.switch.done'
+  | 'workdir.switch.error'
 
 export type AgentLogFields = Record<string, unknown>

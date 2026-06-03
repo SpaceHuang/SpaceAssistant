@@ -198,6 +198,13 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('feishu:agent-done', fn)
     return () => ipcRenderer.removeListener('feishu:agent-done', fn)
   },
+
+  workdirList: () => ipcRenderer.invoke('workdir:list'),
+  workdirAdd: (profile) => ipcRenderer.invoke('workdir:add', profile),
+  workdirUpdate: (profileId, updates) => ipcRenderer.invoke('workdir:update', { profileId, updates }),
+  workdirRemove: (profileId) => ipcRenderer.invoke('workdir:remove', { profileId }),
+  workdirSwitch: (profileId) => ipcRenderer.invoke('workdir:switch', { profileId }),
+  workdirCheckWritable: (path) => ipcRenderer.invoke('workdir:check-writable', { path })
 }
 
 contextBridge.exposeInMainWorld('api', api)

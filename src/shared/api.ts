@@ -297,4 +297,19 @@ export type SpaceAssistantApi = {
     ok: boolean
     summary?: string
   }) => void) => () => void
+
+  workdirList: () => Promise<WorkDirProfile[]>
+  workdirAdd: (profile: {
+    name: string
+    path: string
+    aliases?: string[]
+    isDefault?: boolean
+  }) => Promise<{ success: boolean; profile?: WorkDirProfile; error?: string }>
+  workdirUpdate: (
+    profileId: string,
+    updates: Partial<WorkDirProfile>
+  ) => Promise<{ success: boolean; error?: string }>
+  workdirRemove: (profileId: string) => Promise<{ success: boolean; error?: string }>
+  workdirSwitch: (profileId: string) => Promise<{ success: boolean; sessions: Session[]; error?: string }>
+  workdirCheckWritable: (path: string) => Promise<{ ok: boolean; error?: string }>
 }

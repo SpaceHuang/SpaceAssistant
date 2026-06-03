@@ -64,12 +64,31 @@ const mockIpcMain = () => {
   }
 }
 
+function makeWorkDirManager(): AppIpcContext['workDirManager'] {
+  return {
+    listProfiles: () => [],
+    addProfile: vi.fn().mockReturnValue({ success: true }),
+    updateProfile: vi.fn().mockReturnValue({ success: true }),
+    removeProfile: vi.fn().mockReturnValue({ success: true }),
+    switchProfile: vi.fn().mockResolvedValue({ success: true, sessions: [] }),
+    getActiveProfile: () => undefined,
+    getActiveWorkDir: () => WORK_DIR,
+    getActiveProfileId: () => 'default',
+    validateProfilesForSave: () => ({ valid: true }),
+    validateProfileInput: () => ({ valid: true }),
+    checkDirectoryWritable: () => ({ ok: true }),
+    migrateFromLegacy: vi.fn(),
+    persistProfiles: vi.fn()
+  }
+}
+
 function makeCtx(messages: Message[] = [], sessions: Session[] = []): AppIpcContext {
   return {
     db: {
       data: { messages, sessions, searchHistory: [], config: {}, secrets: {} }
     } as AppIpcContext['db'],
     backup: { backupSession: vi.fn(), deleteBackup: vi.fn() } as unknown as AppIpcContext['backup'],
+    workDirManager: makeWorkDirManager(),
     getWorkDir: () => WORK_DIR,
     setWorkDir: vi.fn(),
     getUserDataPath: () => '/fake/userdata',
