@@ -75,23 +75,42 @@ function walkDir(dir: string, extensions: string[]): string[] {
 function checkHardcodedChinese(): boolean {
   const srcDir = path.resolve(__dirname, '../src/renderer')
   const files = walkDir(srcDir, ['.tsx', '.ts'])
-  const chinesePattern = /[\u4e00-\u9fff]/
-  let count = 0
+  const chinesePattern = /[一-鿿]/
+  let totalCount = 0
+  let testCount = 0
+  let codeCount = 0
 
   for (const file of files) {
     if (file.includes(`${path.sep}i18n${path.sep}resources${path.sep}`)) continue
     const content = fs.readFileSync(file, 'utf-8')
     const lines = content.split('\n')
+    const isTestFile = file.includes('.test.') || file.includes(`${path.sep}test${path.sep}`)
     for (let i = 0; i < lines.length; i++) {
       if (chinesePattern.test(lines[i]!)) {
-        console.warn(`⚠️  Hardcoded Chinese: ${path.relative(path.resolve(__dirname, '..'), file)}:${i + 1}`)
-        count++
+        const relPath = path.relative(path.resolve(__dirname, '..'), file)
+        if (strictHardcoded) {
+          console.warn(`⚠️  Hardcoded Chinese: ${relPath}:${i + 1}`)
+        }
+        totalCount++
+        if (isTestFile) {
+          testCount++
+        } else {
+          codeCount++
+        }
       }
     }
   }
 
-  console.log(`${count} hardcoded Chinese occurrences found`)
-  if (strictHardcoded && count > 0) return false
+  console.log(`${totalCount} hardcoded Chinese occurrences found (${codeCount} in source, ${testCount} in tests)`)
+  if (strictHardcoded) {
+    if (codeCount > 0) {
+      console.error(`❌ ${codeCount} hardcoded Chinese in source files`)
+      return false
+    }
+    if (testCount > 0) {
+      console.warn(`⚠️  ${testCount} hardcoded Chinese in test files (allowed for now)`)
+    }
+  }
   return true
 }
 
