@@ -6,6 +6,7 @@ import {
   buildDiagnosticText
 } from '../../../shared/browserSetupGuideContent'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   detect: BrowserDetectResult | null
@@ -54,6 +55,8 @@ export function BrowserSetupGuide({
   platform = detectPlatform()
 }: Props) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('common')
+  const { t: tf } = useTypedTranslation('feishu')
   const [detailsExpanded, setDetailsExpanded] = useState(false)
   const wasReadyRef = useRef<boolean | null>(null)
 
@@ -78,7 +81,11 @@ export function BrowserSetupGuide({
 
   if (!detect) return null
 
-  const content = buildBrowserSetupGuideContent(detect, platform)
+  const content = buildBrowserSetupGuideContent(detect, platform, (key: string) => {
+    // 移除 'feishu:' 前缀，因为 tf 已经是 feishu namespace 下的
+    const keyWithoutPrefix = key.replace(/^feishu:/, '')
+    return tf(keyWithoutPrefix as any)
+  })
   const ready = isBrowserEnvironmentReady(detect)
   const guideClass =
     mode === 'chat' ? 'browser-setup-guide browser-setup-guide--chat' : 'browser-setup-guide'
@@ -88,7 +95,7 @@ export function BrowserSetupGuide({
     return (
       <div
         className="browser-setup-guide--compact-wrap"
-        title="点击展开详情"
+        title={tf('remote.browser.setup.clickToExpand')}
         role="button"
         tabIndex={0}
         onClick={expand}
@@ -105,7 +112,7 @@ export function BrowserSetupGuide({
           showIcon
           message={
             <span className="browser-setup-guide__compact-row">
-              <span>网络访问功能正常</span>
+              <span>{tf('remote.browser.setup.networkOk')}</span>
               <ExpandChevronIcon />
             </span>
           }
@@ -120,7 +127,7 @@ export function BrowserSetupGuide({
         <Typography.Text strong>{content.title}</Typography.Text>
         {ready ? (
           <Button type="link" size="small" className="browser-setup-guide__collapse" onClick={() => setDetailsExpanded(false)}>
-            收起
+            {t('chat:confirm.collapsible.collapse')}
           </Button>
         ) : null}
       </div>
@@ -134,31 +141,31 @@ export function BrowserSetupGuide({
         <div>
           Stagehand:{' '}
           {detect.stagehand.installed ? (
-            <Typography.Text type="success">已安装 {detect.stagehand.version ?? ''}</Typography.Text>
+            <Typography.Text type="success">{t('status.installed')} {detect.stagehand.version ?? ''}</Typography.Text>
           ) : (
-            <Typography.Text type="danger">未安装</Typography.Text>
+            <Typography.Text type="danger">{t('status.notInstalled')}</Typography.Text>
           )}
         </div>
         <div>
           Playwright:{' '}
           {detect.playwright.installed ? (
-            <Typography.Text type="success">已安装</Typography.Text>
+            <Typography.Text type="success">{t('status.installed')}</Typography.Text>
           ) : (
-            <Typography.Text type="danger">未安装</Typography.Text>
+            <Typography.Text type="danger">{t('status.notInstalled')}</Typography.Text>
           )}
         </div>
         <div>
           Chromium:{' '}
           {detect.chromium.ready ? (
-            <Typography.Text type="success">已就绪</Typography.Text>
+            <Typography.Text type="success">{t('status.ready')}</Typography.Text>
           ) : (
-            <Typography.Text type="danger">未安装</Typography.Text>
+            <Typography.Text type="danger">{t('status.notInstalled')}</Typography.Text>
           )}
         </div>
         <div>
           Node: {detect.node.version}{' '}
           {detect.node.meetsRequirement ? (
-            <Typography.Text type="success">（应用内置）✓</Typography.Text>
+            <Typography.Text type="success">{t('status.builtinNode')} ✓</Typography.Text>
           ) : (
             <Typography.Text type="danger">✗</Typography.Text>
           )}
@@ -167,13 +174,13 @@ export function BrowserSetupGuide({
 
       {ready ? (
         <>
-          <Alert type="success" showIcon message="检测通过，浏览器工具可以初始化。" />
+          <Alert type="success" showIcon message={tf('remote.browser.setup.detectPassed')} />
           <Space wrap style={{ marginTop: 12 }}>
             <Button loading={detecting} onClick={() => void onRefresh(true)}>
-              重新检测
+              {tf('remote.browser.setup.redetect')}
             </Button>
-            <Button onClick={() => void copyText(buildDiagnosticText(detect, platform), '诊断信息')}>
-              复制诊断信息
+            <Button onClick={() => void copyText(buildDiagnosticText(detect, platform), tf('remote.browser.setup.diagnosticInfo'))}>
+              {tf('remote.browser.setup.copyDiagnostic')}
             </Button>
           </Space>
         </>
@@ -183,41 +190,41 @@ export function BrowserSetupGuide({
             <Alert type="error" showIcon message={content.summary} style={{ marginBottom: 12 }} />
           ) : (
             <>
-              <Typography.Text strong>安装步骤</Typography.Text>
+              <Typography.Text strong>{tf('remote.browser.setup.installSteps')}</Typography.Text>
               <ol className="browser-setup-guide__steps" style={{ paddingLeft: 20, marginTop: 8 }}>
                 <li>{content.terminalHint}</li>
                 <li>
                   {content.cwdLabel}
                   <Space style={{ marginTop: 4 }}>
                     <Typography.Text code>{detect.recommendedCwd}</Typography.Text>
-                    <Button size="small" onClick={() => void copyText(detect.recommendedCwd, '目录')}>
-                      复制目录
+                    <Button size="small" onClick={() => void copyText(detect.recommendedCwd, tf('remote.browser.setup.copyDir'))}>
+                      {tf('remote.browser.setup.copyDir')}
                     </Button>
                   </Space>
                 </li>
                 {content.showNpmInstall ? (
                   <li>
-                    安装 npm 依赖后继续执行 Chromium 步骤：
+                    {tf('remote.browser.setup.stepInstall')}
                     <Space style={{ marginTop: 4 }}>
                       <Typography.Text code>{content.npmInstallCmd}</Typography.Text>
-                      <Button size="small" onClick={() => void copyText(content.npmInstallCmd, '命令')}>
-                        复制
+                      <Button size="small" onClick={() => void copyText(content.npmInstallCmd, tf('remote.browser.setup.copy'))}>
+                        {tf('remote.browser.setup.copy')}
                       </Button>
                     </Space>
                   </li>
                 ) : null}
                 {!content.showPackagedDefect ? (
                   <li>
-                    执行安装命令：
+                    {tf('remote.browser.setup.stepRunInstall')}
                     <Space style={{ marginTop: 4 }}>
                       <Typography.Text code>{content.chromiumInstallCmd}</Typography.Text>
-                      <Button size="small" onClick={() => void copyText(content.chromiumInstallCmd, '命令')}>
-                        复制命令
+                      <Button size="small" onClick={() => void copyText(content.chromiumInstallCmd, tf('remote.browser.setup.copyCmd'))}>
+                        {tf('remote.browser.setup.copyCmd')}
                       </Button>
                     </Space>
                   </li>
                 ) : null}
-                <li>完成后点击「重新检测」</li>
+                <li>{tf('remote.browser.setup.stepRedetect')}</li>
               </ol>
             </>
           )}
@@ -231,11 +238,11 @@ export function BrowserSetupGuide({
                   })
                 }}
               >
-                在终端中打开
+                {tf('remote.browser.setup.openInTerminal')}
               </Button>
             ) : null}
             <Button loading={detecting} onClick={() => void onRefresh(true)}>
-              重新检测
+              {tf('remote.browser.setup.redetect')}
             </Button>
             <Button
               onClick={() => {
@@ -247,13 +254,13 @@ export function BrowserSetupGuide({
                 ]
                   .filter(Boolean)
                   .join('\n')
-                void copyText(all, '全部步骤')
+                void copyText(all, tf('remote.browser.setup.allSteps'))
               }}
             >
-              复制全部步骤
+              {tf('remote.browser.setup.copyAllSteps')}
             </Button>
-            <Button onClick={() => void copyText(buildDiagnosticText(detect, platform), '诊断信息')}>
-              复制诊断信息
+            <Button onClick={() => void copyText(buildDiagnosticText(detect, platform), tf('remote.browser.setup.diagnosticInfo'))}>
+              {tf('remote.browser.setup.copyDiagnostic')}
             </Button>
           </Space>
 
@@ -263,12 +270,12 @@ export function BrowserSetupGuide({
               items={[
                 {
                   key: 'force',
-                  label: '覆盖损坏安装（进阶）',
+                  label: tf('remote.browser.setup.forceInstallLabel'),
                   children: (
                     <Space>
                       <Typography.Text code>{content.forceInstallCmd}</Typography.Text>
-                      <Button size="small" onClick={() => void copyText(content.forceInstallCmd, '命令')}>
-                        复制
+                      <Button size="small" onClick={() => void copyText(content.forceInstallCmd, tf('remote.browser.setup.copy'))}>
+                        {tf('remote.browser.setup.copy')}
                       </Button>
                     </Space>
                   )
@@ -282,7 +289,7 @@ export function BrowserSetupGuide({
             items={[
               {
                 key: 'troubleshoot',
-                label: '安装很慢 / 失败？查看故障排除',
+                label: tf('remote.browser.setup.troubleshootLabel'),
                 children: (
                   <Space direction="vertical">
                     {content.troubleshooting.map((item) => (
