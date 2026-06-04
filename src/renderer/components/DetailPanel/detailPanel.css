@@ -993,28 +993,6 @@
   cursor: not-allowed;
 }
 
-.detail-url-entry {
-  padding: 8px 12px 0;
-  flex-shrink: 0;
-}
-
-.detail-url-entry-input {
-  width: 100%;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--sa-split-pane-edge);
-  border-radius: var(--sa-radius-sm);
-  background: var(--sa-split-pane-bg);
-  color: var(--sa-pane-header-title);
-  font-size: 12px;
-  box-sizing: border-box;
-}
-
-.detail-url-entry-input:focus {
-  outline: none;
-  border-color: var(--sa-accent, #1677ff);
-}
-
 .detail-webview-wrap {
   position: relative;
   flex: 1;

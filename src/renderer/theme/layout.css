@@ -2279,6 +2279,23 @@
   word-break: break-all;
 }
 
+.browser-confirm-card__url-link {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--sa-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.browser-confirm-card__url-link:hover {
+  text-decoration: underline;
+}
+
 .shell-confirm-card__description {
   word-break: break-word;
 }
