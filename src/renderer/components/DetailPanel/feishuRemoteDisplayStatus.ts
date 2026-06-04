@@ -2,16 +2,34 @@ import type { FeishuConfig, FeishuEventStatus, FeishuHealthCheck } from '../../.
 
 export type FeishuRemoteDisplayState = 'unconfigured' | 'stopped' | 'listening' | 'error'
 
-export type FeishuRemoteDisplayLabel = '未配置' | '已停止' | '监听中' | '出错'
+export type FeishuSubtextKey =
+  | 'goToSettings'
+  | 'connecting'
+  | 'processedCount'
+  | 'remoteOff'
+  | 'serviceStopped'
+  | 'fetchFailed'
+
+export type FeishuStartDisabledKey = 'completeConfig' | 'enableRemote'
+
+export interface FeishuErrorTooltipData {
+  lastError?: string
+  processedCount: number
+  startedAt?: number
+  lastInboundAt?: number
+  lastReplyAt?: number
+}
 
 export interface FeishuRemoteDisplayStatus {
   displayState: FeishuRemoteDisplayState
-  label: FeishuRemoteDisplayLabel
-  subtext?: string
+  subtextKey?: FeishuSubtextKey
+  subtextParams?: { count: number }
+  tooltipData?: FeishuErrorTooltipData
+  /** Raw tooltip when status fetch fails (not from event error). */
+  tooltipRaw?: string
   startEnabled: boolean
   stopEnabled: boolean
-  tooltip?: string
-  startDisabledReason?: string
+  startDisabledKey?: FeishuStartDisabledKey
   eventStatus: FeishuEventStatus
   health: FeishuHealthCheck | null
 }
@@ -46,33 +64,33 @@ function resolveSubtext(
   displayState: FeishuRemoteDisplayState,
   config: FeishuConfig,
   event: FeishuEventStatus
-): string | undefined {
-  if (displayState === 'unconfigured') return '前往设置完成配置'
-  if (displayState === 'error') return undefined
+): { key?: FeishuSubtextKey; params?: { count: number } } {
+  if (displayState === 'unconfigured') return { key: 'goToSettings' }
+  if (displayState === 'error') return {}
   if (displayState === 'listening') {
-    if (event.state === 'connecting') return '正在连接…'
-    if (event.state === 'connected') return `已处理 ${event.processedCount}`
-    return undefined
+    if (event.state === 'connecting') return { key: 'connecting' }
+    if (event.state === 'connected') return { key: 'processedCount', params: { count: event.processedCount } }
+    return {}
   }
   if (displayState === 'stopped') {
-    if (!config.remoteEnabled) return '远程监听已关闭'
-    return '服务已停止'
+    if (!config.remoteEnabled) return { key: 'remoteOff' }
+    return { key: 'serviceStopped' }
   }
-  return undefined
+  return {}
 }
 
 function resolveButtonState(
   displayState: FeishuRemoteDisplayState,
   config: FeishuConfig
-): { startEnabled: boolean; stopEnabled: boolean; startDisabledReason?: string } {
+): { startEnabled: boolean; stopEnabled: boolean; startDisabledKey?: FeishuStartDisabledKey } {
   if (displayState === 'unconfigured') {
-    return { startEnabled: false, stopEnabled: false, startDisabledReason: '请先完成飞书配置' }
+    return { startEnabled: false, stopEnabled: false, startDisabledKey: 'completeConfig' }
   }
   if (!config.remoteEnabled) {
     return {
       startEnabled: false,
       stopEnabled: false,
-      startDisabledReason: '请先在设置中启用远程指令监听'
+      startDisabledKey: 'enableRemote'
     }
   }
   if (displayState === 'stopped') {
@@ -87,19 +105,29 @@ function resolveButtonState(
   return { startEnabled: false, stopEnabled: false }
 }
 
-function buildErrorTooltip(event: FeishuEventStatus, health: FeishuHealthCheck | null): string {
-  const lines: string[] = [event.lastError?.trim() || '未知错误']
-  lines.push(`已处理：${event.processedCount}`)
-  if (event.startedAt != null) {
-    lines.push(`启动时间：${new Date(event.startedAt).toLocaleString('zh-CN')}`)
+function buildErrorTooltipData(event: FeishuEventStatus, health: FeishuHealthCheck | null): FeishuErrorTooltipData {
+  return {
+    lastError: event.lastError?.trim() || undefined,
+    processedCount: event.processedCount,
+    startedAt: event.startedAt ?? undefined,
+    lastInboundAt: health?.lastInboundAt ?? undefined,
+    lastReplyAt: health?.lastReplyAt ?? undefined
   }
-  if (health?.lastInboundAt != null) {
-    lines.push(`最近入站：${new Date(health.lastInboundAt).toLocaleString('zh-CN')}`)
+}
+
+function applySubtext(
+  base: FeishuRemoteDisplayStatus,
+  displayState: FeishuRemoteDisplayState,
+  config: FeishuConfig,
+  event: FeishuEventStatus
+): FeishuRemoteDisplayStatus {
+  const sub = resolveSubtext(displayState, config, event)
+  if (!sub.key) return base
+  return {
+    ...base,
+    subtextKey: sub.key,
+    subtextParams: sub.params
   }
-  if (health?.lastReplyAt != null) {
-    lines.push(`最近回复：${new Date(health.lastReplyAt).toLocaleString('zh-CN')}`)
-  }
-  return lines.join('\n')
 }
 
 export function resolveFeishuRemoteDisplayStatus(
@@ -112,23 +140,24 @@ export function resolveFeishuRemoteDisplayStatus(
 
   if (!prerequisitesMet(config, health, event, liveUserAuthorized)) {
     const buttons = resolveButtonState('unconfigured', config)
-    return {
-      displayState: 'unconfigured',
-      label: '未配置',
-      subtext: resolveSubtext('unconfigured', config, event),
-      ...buttons,
-      eventStatus: event,
-      health
-    }
+    return applySubtext(
+      {
+        displayState: 'unconfigured',
+        ...buttons,
+        eventStatus: event,
+        health
+      },
+      'unconfigured',
+      config,
+      event
+    )
   }
 
   if (config.remoteEnabled && event.state === 'error') {
     const buttons = resolveButtonState('error', config)
     return {
       displayState: 'error',
-      label: '出错',
-      subtext: resolveSubtext('error', config, event),
-      tooltip: buildErrorTooltip(event, health),
+      tooltipData: buildErrorTooltipData(event, health),
       ...buttons,
       eventStatus: event,
       health
@@ -137,35 +166,44 @@ export function resolveFeishuRemoteDisplayStatus(
 
   if (!config.remoteEnabled || event.state === 'stopped') {
     const buttons = resolveButtonState('stopped', config)
-    return {
-      displayState: 'stopped',
-      label: '已停止',
-      subtext: resolveSubtext('stopped', config, event),
-      ...buttons,
-      eventStatus: event,
-      health
-    }
+    return applySubtext(
+      {
+        displayState: 'stopped',
+        ...buttons,
+        eventStatus: event,
+        health
+      },
+      'stopped',
+      config,
+      event
+    )
   }
 
   if (config.remoteEnabled && (event.state === 'connecting' || event.state === 'connected')) {
     const buttons = resolveButtonState('listening', config)
-    return {
-      displayState: 'listening',
-      label: '监听中',
-      subtext: resolveSubtext('listening', config, event),
-      ...buttons,
-      eventStatus: event,
-      health
-    }
+    return applySubtext(
+      {
+        displayState: 'listening',
+        ...buttons,
+        eventStatus: event,
+        health
+      },
+      'listening',
+      config,
+      event
+    )
   }
 
   const buttons = resolveButtonState('stopped', config)
-  return {
-    displayState: 'stopped',
-    label: '已停止',
-    subtext: resolveSubtext('stopped', config, event),
-    ...buttons,
-    eventStatus: event,
-    health
-  }
+  return applySubtext(
+    {
+      displayState: 'stopped',
+      ...buttons,
+      eventStatus: event,
+      health
+    },
+    'stopped',
+    config,
+    event
+  )
 }

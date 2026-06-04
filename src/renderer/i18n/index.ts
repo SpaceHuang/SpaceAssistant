@@ -8,10 +8,18 @@ import zhCNCommon from './resources/zh-CN/common.json'
 import zhCNConfig from './resources/zh-CN/config.json'
 import zhCNChat from './resources/zh-CN/chat.json'
 import zhCNErrors from './resources/zh-CN/errors.json'
+import zhCNFileTree from './resources/zh-CN/fileTree.json'
+import zhCNSearch from './resources/zh-CN/search.json'
+import zhCNFeishu from './resources/zh-CN/feishu.json'
+import zhCNWiki from './resources/zh-CN/wiki.json'
 import enUSCommon from './resources/en-US/common.json'
 import enUSConfig from './resources/en-US/config.json'
 import enUSChat from './resources/en-US/chat.json'
 import enUSErrors from './resources/en-US/errors.json'
+import enUSFileTree from './resources/en-US/fileTree.json'
+import enUSSearch from './resources/en-US/search.json'
+import enUSFeishu from './resources/en-US/feishu.json'
+import enUSWiki from './resources/en-US/wiki.json'
 
 const initialLocale = detectLocale(
   readStoredLocale(),
@@ -27,19 +35,27 @@ void i18n
         common: zhCNCommon,
         config: zhCNConfig,
         chat: zhCNChat,
-        errors: zhCNErrors
+        errors: zhCNErrors,
+        fileTree: zhCNFileTree,
+        search: zhCNSearch,
+        feishu: zhCNFeishu,
+        wiki: zhCNWiki
       },
       'en-US': {
         common: enUSCommon,
         config: enUSConfig,
         chat: enUSChat,
-        errors: enUSErrors
+        errors: enUSErrors,
+        fileTree: enUSFileTree,
+        search: enUSSearch,
+        feishu: enUSFeishu,
+        wiki: enUSWiki
       }
     },
     lng: initialLocale,
     fallbackLng: 'zh-CN',
     defaultNS: 'common',
-    ns: ['common', 'config', 'chat', 'errors'],
+    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wiki'],
     interpolation: { escapeValue: false },
     debug: import.meta.env.DEV && !import.meta.env.VITEST,
     detection: {

@@ -1,7 +1,8 @@
 import type { ComponentProps } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { App } from 'antd'
+import { changeAppLocale } from '../../i18n/localeSync'
 import { FileTreeContextMenu } from './FileTreeContextMenu'
 
 function renderMenu(props: ComponentProps<typeof FileTreeContextMenu>) {
@@ -24,13 +25,26 @@ describe('FileTreeContextMenu', () => {
     onDelete: vi.fn()
   }
 
-  it('renders all menu items', () => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
+  })
+
+  it('renders all menu items (zh-CN)', () => {
     renderMenu({ ...defaultProps, open: true })
     expect(screen.getByText('添加到对话')).toBeDefined()
     expect(screen.getByText('复制路径')).toBeDefined()
     expect(screen.getByText('复制相对路径')).toBeDefined()
     expect(screen.getByText('重命名...')).toBeDefined()
     expect(screen.getByText('删除')).toBeDefined()
+  })
+
+  it('renders English menu items (en-US)', async () => {
+    await changeAppLocale('en-US')
+    renderMenu({ ...defaultProps, open: true })
+    expect(screen.getByText('Add to chat')).toBeDefined()
+    expect(screen.getByText('Copy path')).toBeDefined()
+    expect(screen.getByText('Rename...')).toBeDefined()
+    expect(screen.getByText('Delete')).toBeDefined()
   })
 
   it('calls onAddToChat', () => {

@@ -1,4 +1,5 @@
 import { Modal } from 'antd'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import '../ui/saConfirmModal.css'
 
 interface DeleteConfirmModalProps {
@@ -10,20 +11,22 @@ interface DeleteConfirmModalProps {
 }
 
 export function DeleteConfirmModal({ open, name, isDirectory, onConfirm, onCancel }: DeleteConfirmModalProps) {
+  const { t } = useTypedTranslation('fileTree')
+  const { t: tc } = useTypedTranslation('common')
   const description = isDirectory
-    ? `确定要删除 "${name}" 吗？该目录下所有内容将被一并删除。`
-    : `确定要删除 "${name}" 吗？此操作不可撤销。`
+    ? t('deleteConfirm.directoryBody', { name })
+    : t('deleteConfirm.fileBody', { name })
 
   return (
     <Modal
       className="sa-confirm-modal"
       open={open}
-      title="确认删除"
+      title={t('deleteConfirm.title')}
       width={400}
       centered
       onCancel={onCancel}
-      okText="删除"
-      cancelText="取消"
+      okText={tc('delete')}
+      cancelText={tc('cancel')}
       okButtonProps={{ danger: true }}
       onOk={onConfirm}
       destroyOnHidden

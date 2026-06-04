@@ -1,5 +1,6 @@
 import React from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { changeAppLocale } from '../../i18n/localeSync'
 import { render, screen, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
@@ -71,17 +72,27 @@ function renderWikiPane(wikiInitialized = true) {
 }
 
 describe('WikiPane', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
     resetFilePaneNavigationForTests()
     selectPath.mockReset()
   })
 
-  it('shows init placeholder when wiki is not initialized', async () => {
+  it('shows init placeholder when wiki is not initialized (zh-CN)', async () => {
     renderWikiPane(false)
     await waitFor(() => {
       expect(screen.getByText('Wiki 尚未初始化')).toBeDefined()
     })
     expect(screen.getByRole('button', { name: '初始化 Wiki' })).toBeDefined()
+  })
+
+  it('shows init placeholder in English (en-US)', async () => {
+    await changeAppLocale('en-US')
+    renderWikiPane(false)
+    await waitFor(() => {
+      expect(screen.getByText('Wiki not initialized')).toBeDefined()
+    })
+    expect(screen.getByRole('button', { name: 'Initialize Wiki' })).toBeDefined()
   })
 
   it('renders wiki tree when initialized', async () => {

@@ -62,8 +62,8 @@ export function useFeishuRemoteDisplayStatus() {
     if (fetchError && base.displayState !== 'error') {
       return {
         ...base,
-        subtext: '状态获取失败',
-        tooltip: fetchError
+        subtextKey: 'fetchFailed',
+        tooltipRaw: fetchError
       }
     }
     return base

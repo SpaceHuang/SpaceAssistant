@@ -1,0 +1,10 @@
+{
+  "detail": {
+    "caseSensitiveTitle": "大小写匹配 (Alt+C)",
+    "closeTitle": "关闭",
+    "placeholder": "查找",
+    "regexInvalid": "正则表达式无效",
+    "regexTitle": "正则表达式 (Alt+R)",
+    "wholeWordTitle": "整词匹配 (Alt+W)"
+  }
+}

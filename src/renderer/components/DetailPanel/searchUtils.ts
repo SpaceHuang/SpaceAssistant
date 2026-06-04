@@ -1,3 +1,5 @@
+import i18n from '../../i18n'
+
 export type SearchOptions = {
   caseSensitive: boolean
   wholeWord: boolean
@@ -24,7 +26,7 @@ export function getSearchRegexError(query: string, options: SearchOptions): stri
     new RegExp(buildPattern(query, options), flags)
     return null
   } catch {
-    return '正则表达式无效'
+    return i18n.t('detail.regexInvalid', { ns: 'search' })
   }
 }
 

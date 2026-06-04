@@ -1,10 +1,12 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useMemo, useState, type KeyboardEvent } from 'react'
 import { Badge, Button, Tooltip } from 'antd'
 import { useAppDispatch } from '../../hooks'
 import { openSettings } from '../../store/configSlice'
 import { FeishuAuditDrawer } from '../Config/FeishuAuditDrawer'
 import { useFeishuRemoteDisplayStatus } from './useFeishuRemoteDisplayStatus'
 import type { FeishuRemoteDisplayState } from './feishuRemoteDisplayStatus'
+import { resolveFeishuDisplayText } from './feishuDisplayText'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 function dotClass(displayState: FeishuRemoteDisplayState, connecting: boolean): string {
   if (displayState === 'listening' && connecting) return 'feishu-remote-status-dot feishu-remote-status-dot--connecting'
@@ -15,15 +17,18 @@ function dotClass(displayState: FeishuRemoteDisplayState, connecting: boolean): 
 
 export function FeishuRemoteStatusBar() {
   const dispatch = useAppDispatch()
+  const { t } = useTypedTranslation('feishu')
   const { status, actionLoading, start, stop } = useFeishuRemoteDisplayStatus()
   const [auditOpen, setAuditOpen] = useState(false)
+
+  const display = useMemo(() => resolveFeishuDisplayText(status), [status])
 
   const connecting = status.eventStatus.state === 'connecting'
   const mainTooltip =
     status.displayState === 'error'
-      ? status.tooltip
-      : status.displayState === 'listening' && status.subtext
-        ? `监听中 · ${status.subtext}`
+      ? display.tooltip
+      : status.displayState === 'listening' && display.subtext
+        ? t('remote.mainTooltipListening', { subtext: display.subtext })
         : undefined
 
   const openFeishuSettings = () => {
@@ -54,28 +59,28 @@ export function FeishuRemoteStatusBar() {
               <span className={dotClass(status.displayState, connecting)} aria-hidden />
             )}
             <span className="feishu-remote-status-label">
-              <span className="feishu-remote-status-label-desc">飞书连接</span>
-              <span className="feishu-remote-status-label-value">{status.label}</span>
+              <span className="feishu-remote-status-label-desc">{t('remote.connectionDesc')}</span>
+              <span className="feishu-remote-status-label-value">{display.label}</span>
             </span>
-            {status.subtext ? <span className="feishu-remote-status-sub">{status.subtext}</span> : null}
+            {display.subtext ? <span className="feishu-remote-status-sub">{display.subtext}</span> : null}
           </div>
         </Tooltip>
         <div className="feishu-remote-status-actions">
           <Button
             size="small"
             type="text"
-            aria-label="打开飞书操作记录"
+            aria-label={t('remote.auditAria')}
             onClick={(e) => {
               e.stopPropagation()
               setAuditOpen(true)
             }}
           >
-            操作记录
+            {t('remote.auditLog')}
           </Button>
           {status.stopEnabled ? (
             <Button
               size="small"
-              aria-label="停止飞书远程指令监听"
+              aria-label={t('remote.stopAria')}
               disabled={actionLoading != null}
               loading={actionLoading === 'stop'}
               onClick={(e) => {
@@ -83,13 +88,13 @@ export function FeishuRemoteStatusBar() {
                 void stop()
               }}
             >
-              停止
+              {t('remote.stop')}
             </Button>
           ) : (
-            <Tooltip title={!status.startEnabled ? status.startDisabledReason : undefined}>
+            <Tooltip title={!status.startEnabled ? display.startDisabledReason : undefined}>
               <Button
                 size="small"
-                aria-label="启动飞书远程指令监听"
+                aria-label={t('remote.startAria')}
                 disabled={!status.startEnabled || actionLoading != null}
                 loading={actionLoading === 'start'}
                 onClick={(e) => {
@@ -97,7 +102,7 @@ export function FeishuRemoteStatusBar() {
                   void start()
                 }}
               >
-                启动
+                {t('remote.start')}
               </Button>
             </Tooltip>
           )}

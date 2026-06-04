@@ -24,30 +24,29 @@ function readyHealth(over: Partial<FeishuHealthCheck> = {}): FeishuHealthCheck {
 
 describe('resolveFeishuRemoteDisplayStatus', () => {
   describe('§4.1 display states', () => {
-    it('shows 未配置 when feishu disabled', () => {
+    it('shows unconfigured when feishu disabled', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig({ enabled: false, remoteEnabled: false }),
         readyHealth()
       )
-      expect(r.label).toBe('未配置')
       expect(r.displayState).toBe('unconfigured')
-      expect(r.subtext).toBe('前往设置完成配置')
+      expect(r.subtextKey).toBe('goToSettings')
     })
 
-    it('shows 未配置 when app not configured', () => {
+    it('shows unconfigured when app not configured', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig({ appConfigured: false }),
         readyHealth()
       )
-      expect(r.label).toBe('未配置')
+      expect(r.displayState).toBe('unconfigured')
     })
 
-    it('shows 未配置 when user not authorized', () => {
+    it('shows unconfigured when user not authorized', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig({ userAuthorized: false }),
         readyHealth()
       )
-      expect(r.label).toBe('未配置')
+      expect(r.displayState).toBe('unconfigured')
     })
 
     it('treats live auth as authorized when config flag is stale', () => {
@@ -57,27 +56,27 @@ describe('resolveFeishuRemoteDisplayStatus', () => {
         null,
         true
       )
-      expect(r.label).toBe('已停止')
+      expect(r.displayState).toBe('stopped')
       expect(r.startEnabled).toBe(true)
     })
 
-    it('shows 未配置 when CLI not installed', () => {
+    it('shows unconfigured when CLI not installed', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),
         readyHealth({ cli: { installed: false, nodeAvailable: true, npmAvailable: true } })
       )
-      expect(r.label).toBe('未配置')
+      expect(r.displayState).toBe('unconfigured')
     })
 
-    it('prefers 未配置 over error when remote off and prerequisites fail', () => {
+    it('prefers unconfigured over error when remote off and prerequisites fail', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig({ enabled: false, remoteEnabled: false }),
         readyHealth({ event: { state: 'error', processedCount: 0, lastError: 'boom' } })
       )
-      expect(r.label).toBe('未配置')
+      expect(r.displayState).toBe('unconfigured')
     })
 
-    it('shows 监听中 when remoteEnabled and connecting even if health cli missing', () => {
+    it('shows listening when remoteEnabled and connecting even if health cli missing', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),
         readyHealth({
@@ -86,69 +85,70 @@ describe('resolveFeishuRemoteDisplayStatus', () => {
         }),
         { state: 'connecting', processedCount: 0 }
       )
-      expect(r.label).toBe('监听中')
-      expect(r.subtext).toBe('正在连接…')
+      expect(r.displayState).toBe('listening')
+      expect(r.subtextKey).toBe('connecting')
     })
 
-    it('shows 监听中 when remoteEnabled and connecting without feishu.enabled', () => {
+    it('shows listening when remoteEnabled and connecting without feishu.enabled', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig({ enabled: false }),
         null,
         { state: 'connecting', processedCount: 0 }
       )
-      expect(r.label).toBe('监听中')
+      expect(r.displayState).toBe('listening')
     })
 
-    it('shows 出错 when remoteEnabled and event error', () => {
+    it('shows error when remoteEnabled and event error', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),
         readyHealth({ event: { state: 'error', processedCount: 3, lastError: '连接失败' } })
       )
-      expect(r.label).toBe('出错')
       expect(r.displayState).toBe('error')
-      expect(r.tooltip).toContain('连接失败')
-      expect(r.subtext).toBeUndefined()
+      expect(r.tooltipData?.lastError).toBe('连接失败')
+      expect(r.tooltipData?.processedCount).toBe(3)
+      expect(r.subtextKey).toBeUndefined()
     })
 
-    it('shows 已停止 when remoteEnabled false', () => {
+    it('shows stopped when remoteEnabled false', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig({ remoteEnabled: false }),
         readyHealth({ event: { state: 'connected', processedCount: 5 } })
       )
-      expect(r.label).toBe('已停止')
-      expect(r.subtext).toBe('远程监听已关闭')
+      expect(r.displayState).toBe('stopped')
+      expect(r.subtextKey).toBe('remoteOff')
     })
 
-    it('shows 已停止 when event stopped', () => {
+    it('shows stopped when event stopped', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),
         readyHealth({ event: { state: 'stopped', processedCount: 0 } })
       )
-      expect(r.label).toBe('已停止')
-      expect(r.subtext).toBe('服务已停止')
+      expect(r.displayState).toBe('stopped')
+      expect(r.subtextKey).toBe('serviceStopped')
     })
 
-    it('shows 已停止 when event override is undefined and remoteEnabled', () => {
+    it('shows stopped when event override is undefined and remoteEnabled', () => {
       const r = resolveFeishuRemoteDisplayStatus(readyConfig(), readyHealth(), null)
-      expect(r.label).toBe('已停止')
+      expect(r.displayState).toBe('stopped')
     })
 
-    it('shows 监听中 when connecting', () => {
+    it('shows listening when connecting', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),
         readyHealth({ event: { state: 'connecting', processedCount: 0 } })
       )
-      expect(r.label).toBe('监听中')
-      expect(r.subtext).toBe('正在连接…')
+      expect(r.displayState).toBe('listening')
+      expect(r.subtextKey).toBe('connecting')
     })
 
-    it('shows 监听中 with processed count when connected', () => {
+    it('shows listening with processed count when connected', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),
         readyHealth({ event: { state: 'connected', processedCount: 12 } })
       )
-      expect(r.label).toBe('监听中')
-      expect(r.subtext).toBe('已处理 12')
+      expect(r.displayState).toBe('listening')
+      expect(r.subtextKey).toBe('processedCount')
+      expect(r.subtextParams?.count).toBe(12)
     })
   })
 
@@ -157,7 +157,7 @@ describe('resolveFeishuRemoteDisplayStatus', () => {
       const r = resolveFeishuRemoteDisplayStatus(DEFAULT_FEISHU_CONFIG, null)
       expect(r.startEnabled).toBe(false)
       expect(r.stopEnabled).toBe(false)
-      expect(r.startDisabledReason).toBe('请先完成飞书配置')
+      expect(r.startDisabledKey).toBe('completeConfig')
     })
 
     it('disables both when remoteEnabled false', () => {
@@ -167,7 +167,7 @@ describe('resolveFeishuRemoteDisplayStatus', () => {
       )
       expect(r.startEnabled).toBe(false)
       expect(r.stopEnabled).toBe(false)
-      expect(r.startDisabledReason).toBe('请先在设置中启用远程指令监听')
+      expect(r.startDisabledKey).toBe('enableRemote')
     })
 
     it('enables start only when stopped with remoteEnabled', () => {
@@ -211,19 +211,20 @@ describe('resolveFeishuRemoteDisplayStatus', () => {
           lastReplyAt
         })
       )
-      expect(r.tooltip).toContain('stderr detail')
-      expect(r.tooltip).toContain('已处理：7')
-      expect(r.tooltip).toContain('启动时间：')
-      expect(r.tooltip).toContain('最近入站：')
-      expect(r.tooltip).toContain('最近回复：')
+      expect(r.tooltipData?.lastError).toBe('stderr detail')
+      expect(r.tooltipData?.processedCount).toBe(7)
+      expect(r.tooltipData?.startedAt).toBe(startedAt)
+      expect(r.tooltipData?.lastInboundAt).toBe(lastInboundAt)
+      expect(r.tooltipData?.lastReplyAt).toBe(lastReplyAt)
     })
 
-    it('uses 未知错误 when lastError missing', () => {
+    it('omits lastError when missing', () => {
       const r = resolveFeishuRemoteDisplayStatus(
         readyConfig(),
         readyHealth({ event: { state: 'error', processedCount: 0 } })
       )
-      expect(r.tooltip).toContain('未知错误')
+      expect(r.tooltipData?.lastError).toBeUndefined()
+      expect(r.tooltipData?.processedCount).toBe(0)
     })
   })
 })

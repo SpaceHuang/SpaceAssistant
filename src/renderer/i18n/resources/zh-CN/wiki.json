@@ -1,0 +1,13 @@
+{
+  "empty": {
+    "desc": "初始化后将创建 Wiki 目录与索引页，便于 Agent 归档与检索。",
+    "initButton": "初始化 Wiki",
+    "title": "Wiki 尚未初始化"
+  },
+  "initSuccess": "Wiki 已初始化",
+  "paneTitle": "Wiki",
+  "toolbar": {
+    "openInExplorer": "在资源管理器中打开",
+    "refresh": "刷新"
+  }
+}

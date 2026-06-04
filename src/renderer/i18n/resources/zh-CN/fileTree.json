@@ -1,0 +1,25 @@
+{
+  "contextMenu": {
+    "addToChat": "添加到对话",
+    "collectToWiki": "收录到 Wiki",
+    "copyPath": "复制路径",
+    "copyRelPath": "复制相对路径",
+    "delete": "删除",
+    "featureInDevelopment": "功能开发中",
+    "rename": "重命名..."
+  },
+  "copyAbsPathOk": "已复制绝对路径",
+  "copyRelPathOk": "已复制相对路径",
+  "defaultNewFolder": "新建文件夹",
+  "deleteConfirm": {
+    "directoryBody": "确定要删除 \"{{name}}\" 吗？该目录下所有内容将被一并删除。",
+    "fileBody": "确定要删除 \"{{name}}\" 吗？此操作不可撤销。",
+    "title": "确认删除"
+  },
+  "moveFailed": "移动失败",
+  "paneTitle": "文件",
+  "toolbar": {
+    "newDirectory": "新建目录",
+    "refresh": "刷新"
+  }
+}
