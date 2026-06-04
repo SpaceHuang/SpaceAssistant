@@ -22,6 +22,11 @@
     "openInDefaultEditor": "用默认编辑器打开",
     "showInFolder": "查看所在目录",
     "refresh": "刷新",
+    "back": "后退",
+    "forward": "前进",
+    "stopLoading": "停止加载",
+    "addressPlaceholder": "输入 http(s):// URL 并回车",
+    "htmlView": "HTML 视图",
     "exportAs": "导出为...",
     "close": "关闭"
   },

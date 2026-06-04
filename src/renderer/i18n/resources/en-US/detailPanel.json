@@ -22,6 +22,11 @@
     "openInDefaultEditor": "Open with default editor",
     "showInFolder": "Show in folder",
     "refresh": "Refresh",
+    "back": "Back",
+    "forward": "Forward",
+    "stopLoading": "Stop loading",
+    "addressPlaceholder": "Enter an http(s):// URL and press Enter",
+    "htmlView": "HTML view",
     "exportAs": "Export as...",
     "close": "Close"
   },

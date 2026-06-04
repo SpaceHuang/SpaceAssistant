@@ -207,4 +207,29 @@ describe('file IPC handlers', () => {
       await expect(handler({}, 'src', '../escape')).rejects.toThrow()
     })
   })
+
+  describe('file:to-viewer-url', () => {
+    it('returns file url for valid relative path', async () => {
+      mockFs.stat.mockResolvedValueOnce({ isFile: () => true } as unknown as import('fs').Stats)
+      const handler = ipc.getHandler('file:to-viewer-url')!
+      const result = await handler({}, 'pages/index.html')
+      expect(result).toEqual({
+        ok: true,
+        url: expect.stringMatching(/^file:\/\//)
+      })
+    })
+
+    it('rejects path traversal', async () => {
+      const handler = ipc.getHandler('file:to-viewer-url')!
+      const result = await handler({}, '../escape.html')
+      expect(result.ok).toBe(false)
+    })
+
+    it('rejects non-file paths', async () => {
+      mockFs.stat.mockResolvedValueOnce({ isFile: () => false } as unknown as import('fs').Stats)
+      const handler = ipc.getHandler('file:to-viewer-url')!
+      const result = await handler({}, 'folder')
+      expect(result).toEqual({ ok: false, error: 'not a file' })
+    })
+  })
 })
