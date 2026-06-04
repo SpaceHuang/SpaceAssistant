@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { List, Typography } from 'antd'
 import { parseWikiIndexMarkdown, type WikiIndexEntry } from '../../../shared/wikiMarkdown'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   content: string
@@ -19,13 +20,14 @@ function groupEntries(entries: WikiIndexEntry[]): Map<string, WikiIndexEntry[]> 
 }
 
 export function WikiIndexView({ content, wikiRootPath, onOpenEntry }: Props) {
+  const { t } = useTypedTranslation('detailPanel')
   const entries = useMemo(() => parseWikiIndexMarkdown(content, wikiRootPath), [content, wikiRootPath])
   const groups = useMemo(() => groupEntries(entries), [entries])
 
   if (entries.length === 0) {
     return (
       <div className="wiki-index-view">
-        <Typography.Text type="secondary">未能解析 index 条目，请使用树视图或渲染预览。</Typography.Text>
+        <Typography.Text type="secondary">{t('wikiIndex.parseFailed')}</Typography.Text>
       </div>
     )
   }

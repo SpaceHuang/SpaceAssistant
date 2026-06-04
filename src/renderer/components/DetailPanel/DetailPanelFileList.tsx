@@ -4,6 +4,7 @@ import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { FileTreeToolbar } from '../FileTree/FileTreeToolbar'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   workDir: string
@@ -12,6 +13,7 @@ type Props = {
 }
 
 export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: Props) {
+  const { t } = useTypedTranslation('detailPanel')
   const cfg = useTypedSelector((s) => s.config.config)
   const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
   const wikiRoot = wiki.rootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
@@ -45,7 +47,7 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
   return (
     <>
       <div className="detail-panel-section-header detail-panel-file-header">
-        <span className="detail-panel-section-title">文件</span>
+        <span className="detail-panel-section-title">{t('fileList.title')}</span>
         <FileTreeToolbar
           onNewDirectory={() => fileTreeRef.current?.startNewDirectory()}
           onRefresh={() => void fileTreeRef.current?.refresh()}

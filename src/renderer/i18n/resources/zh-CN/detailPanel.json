@@ -1,0 +1,38 @@
+{
+  "referencedFiles": {
+    "title": "引用的文件",
+    "filterAll": "全部",
+    "filterWiki": "Wiki",
+    "filterOther": "其他",
+    "empty": "暂无引用的文件"
+  },
+  "fileList": {
+    "title": "文件"
+  },
+  "toolbar": {
+    "markdownView": "Markdown 视图",
+    "indexView": "Index 视图",
+    "renderPreview": "渲染预览",
+    "sourceCode": "源代码",
+    "openFailed": "打开失败",
+    "openDirFailed": "打开目录失败",
+    "exportedTo": "已导出至",
+    "exportFailed": "导出失败",
+    "collectToWiki": "收录到 Wiki",
+    "openInDefaultEditor": "用默认编辑器打开",
+    "showInFolder": "查看所在目录",
+    "refresh": "刷新",
+    "exportAs": "导出为...",
+    "close": "关闭"
+  },
+  "fileView": {
+    "unsupportedExt": "暂不支持预览 {{ext}} 文件",
+    "unsupportedGeneric": "暂不支持预览此文件类型",
+    "fileSize": "文件大小：",
+    "read": "读取",
+    "write": "写入"
+  },
+  "wikiIndex": {
+    "parseFailed": "未能解析 index 条目，请使用树视图或渲染预览。"
+  }
+}

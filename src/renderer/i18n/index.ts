@@ -12,6 +12,7 @@ import zhCNFileTree from './resources/zh-CN/fileTree.json'
 import zhCNSearch from './resources/zh-CN/search.json'
 import zhCNFeishu from './resources/zh-CN/feishu.json'
 import zhCNWiki from './resources/zh-CN/wiki.json'
+import zhCNDetailPanel from './resources/zh-CN/detailPanel.json'
 import enUSCommon from './resources/en-US/common.json'
 import enUSConfig from './resources/en-US/config.json'
 import enUSChat from './resources/en-US/chat.json'
@@ -20,6 +21,7 @@ import enUSFileTree from './resources/en-US/fileTree.json'
 import enUSSearch from './resources/en-US/search.json'
 import enUSFeishu from './resources/en-US/feishu.json'
 import enUSWiki from './resources/en-US/wiki.json'
+import enUSDetailPanel from './resources/en-US/detailPanel.json'
 
 const initialLocale = detectLocale(
   readStoredLocale(),
@@ -39,7 +41,8 @@ void i18n
         fileTree: zhCNFileTree,
         search: zhCNSearch,
         feishu: zhCNFeishu,
-        wiki: zhCNWiki
+        wiki: zhCNWiki,
+        detailPanel: zhCNDetailPanel
       },
       'en-US': {
         common: enUSCommon,
@@ -49,13 +52,14 @@ void i18n
         fileTree: enUSFileTree,
         search: enUSSearch,
         feishu: enUSFeishu,
-        wiki: enUSWiki
+        wiki: enUSWiki,
+        detailPanel: enUSDetailPanel
       }
     },
     lng: initialLocale,
     fallbackLng: 'zh-CN',
     defaultNS: 'common',
-    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wiki'],
+    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wiki', 'detailPanel'],
     interpolation: { escapeValue: false },
     debug: import.meta.env.DEV && !import.meta.env.VITEST,
     detection: {

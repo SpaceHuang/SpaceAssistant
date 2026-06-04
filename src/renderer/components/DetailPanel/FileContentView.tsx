@@ -9,6 +9,7 @@ import { MarkdownRenderView } from './MarkdownRenderView'
 import { WikiIndexView } from './WikiIndexView'
 import { ImageView } from './ImageView'
 import { UnsupportedView } from './UnsupportedView'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { SearchMatch } from './searchUtils'
 
 type Props = {
@@ -34,6 +35,7 @@ export function FileContentView({
     tooLargeSize,
     openFile
   } = useDetailPanel()
+  const { t } = useTypedTranslation('detailPanel')
   const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath)
   const [pendingScrollFragment, setPendingScrollFragment] = useState<string | null>(null)
 
@@ -60,7 +62,7 @@ export function FileContentView({
         <Typography.Text type="danger">{loadError}</Typography.Text>
         {tooLargeSize != null && (
           <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-            文件大小：{(tooLargeSize / 1024 / 1024).toFixed(2)} MB
+            {t('fileView.fileSize')}{(tooLargeSize / 1024 / 1024).toFixed(2)} MB
           </Typography.Text>
         )}
       </div>

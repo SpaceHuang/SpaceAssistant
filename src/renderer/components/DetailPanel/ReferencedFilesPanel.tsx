@@ -7,6 +7,7 @@ import { useDetailPanel } from './DetailPanelContext'
 import { useReferencedFiles } from './useReferencedFiles'
 import { ReferencedFileItem } from './ReferencedFileItem'
 import { isUnderWikiRoot, requestFilePaneSelect } from '../../services/filePaneNavigation'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 interface ReferencedFilesPanelProps {
   sessionId: string | null
@@ -15,6 +16,7 @@ interface ReferencedFilesPanelProps {
 type WikiFilter = 'all' | 'wiki' | 'other'
 
 export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
+  const { t } = useTypedTranslation('detailPanel')
   const files = useReferencedFiles(sessionId)
   const { selectedFile, openFile } = useDetailPanel()
   const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath)
@@ -46,7 +48,7 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
   return (
     <div className="referenced-files-panel">
       <div className="detail-panel-section-header referenced-files-header">
-        <span className="detail-panel-section-title">引用的文件</span>
+        <span className="detail-panel-section-title">{t('referencedFiles.title')}</span>
         {files.length > 0 ? <span className="detail-panel-section-badge">{visible.length}</span> : null}
       </div>
       {wikiEnabled && files.length > 0 ? (
@@ -56,9 +58,9 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
             value={filter}
             onChange={(v) => setFilter(v as WikiFilter)}
             options={[
-              { label: '全部', value: 'all' },
-              { label: 'Wiki', value: 'wiki' },
-              { label: '其他', value: 'other' }
+              { label: t('referencedFiles.filterAll'), value: 'all' },
+              { label: t('referencedFiles.filterWiki'), value: 'wiki' },
+              { label: t('referencedFiles.filterOther'), value: 'other' }
             ]}
           />
         </div>
@@ -66,7 +68,7 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
       <div className="referenced-files-list">
         {visible.length === 0 ? (
           <div className="referenced-files-empty">
-            <Typography.Text type="secondary">暂无引用的文件</Typography.Text>
+            <Typography.Text type="secondary">{t('referencedFiles.empty')}</Typography.Text>
           </div>
         ) : (
           visible.map((file) => (

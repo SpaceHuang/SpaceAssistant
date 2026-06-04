@@ -7,10 +7,12 @@ import { FileContentView } from './FileContentView'
 import { SearchPanel } from './SearchPanel'
 import { useWikiIndexViewState } from './WikiIndexView'
 import { canShowCollectToWiki, collectToWiki } from '../../services/wikiImportService'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { SearchMatch } from './searchUtils'
 
 export function FileOverlay() {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('common')
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
 
   const {
@@ -36,7 +38,7 @@ export function FileOverlay() {
     void collectToWiki(selectedFile, {
       wikiEnabled,
       sessionId,
-      onMissingSession: () => message.warning('请先选择或创建一个会话'),
+      onMissingSession: () => message.warning(t('appShell.selectSessionFirst')),
       onError: (text) => message.error(text),
       onSuccess: (text) => message.success(text)
     })

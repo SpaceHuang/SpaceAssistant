@@ -6,6 +6,7 @@ import type { LucideIcon } from 'lucide-react'
 import type { FileTypeCategory } from '../../../shared/fileTypes'
 import type { ViewMode } from './DetailPanelContext'
 import { MarkdownRenderView } from './MarkdownRenderView'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import eyeLineRaw from '../../assets/eye_line.svg?raw'
 import codeLineRaw from '../../assets/code_line.svg?raw'
 
@@ -62,24 +63,25 @@ export function FileToolbar({
   onCollectToWiki
 }: Props) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('detailPanel')
   const isMarkdown = fileType === 'markdown'
 
   const handleOpenInSystem = async () => {
     const r = await window.api.fileOpenInSystem(filePath)
-    if (!r.ok) message.error(r.error ?? '打开失败')
+    if (!r.ok) message.error(r.error ?? t('toolbar.openFailed'))
   }
 
   const handleShowInExplorer = async () => {
     const r = await window.api.fileShowInExplorer(filePath)
-    if (!r.ok) message.error(r.error ?? '打开目录失败')
+    if (!r.ok) message.error(r.error ?? t('toolbar.openDirFailed'))
   }
 
   const handleExportPdf = async () => {
     if (!previewContent) return
     const html = renderToStaticMarkup(<MarkdownRenderView content={previewContent} />)
     const r = await window.api.fileExportPdf({ htmlContent: html, defaultPath: filePath })
-    if (r.ok) message.success(`已导出至 ${r.path}`)
-    else if (!r.canceled) message.error(r.error ?? '导出失败')
+    if (r.ok) message.success(`${t('toolbar.exportedTo')} ${r.path}`)
+    else if (!r.canceled) message.error(r.error ?? t('toolbar.exportFailed'))
   }
 
   const exportItems: MenuProps['items'] = [{ key: 'pdf', label: 'PDF', onClick: () => void handleExportPdf() }]
@@ -89,14 +91,14 @@ export function FileToolbar({
     <div className="detail-file-toolbar">
       <div className="detail-toolbar-left">
         {isMarkdown ? (
-          <div className="detail-view-segment" role="tablist" aria-label="Markdown 视图">
+          <div className="detail-view-segment" role="tablist" aria-label={t('toolbar.markdownView')}>
             {showWikiIndexToggle ? (
               <button
                 type="button"
                 role="tab"
                 aria-selected={wikiIndexView}
                 className={`detail-view-segment-item detail-view-segment-item--text${wikiIndexView ? ' detail-view-segment-item--active' : ''}`}
-                title="Index 视图"
+                title={t('toolbar.indexView')}
                 onClick={() => onWikiIndexViewChange?.(true)}
               >
                 Index
@@ -107,7 +109,7 @@ export function FileToolbar({
               role="tab"
               aria-selected={!wikiIndexView && viewMode === 'render'}
               className={`detail-view-segment-item${!wikiIndexView && viewMode === 'render' ? ' detail-view-segment-item--active' : ''}`}
-              title="渲染预览"
+              title={t('toolbar.renderPreview')}
               onClick={() => {
                 onWikiIndexViewChange?.(false)
                 onViewModeChange('render')
@@ -119,7 +121,7 @@ export function FileToolbar({
               role="tab"
               aria-selected={!wikiIndexView && viewMode === 'code'}
               className={`detail-view-segment-item${!wikiIndexView && viewMode === 'code' ? ' detail-view-segment-item--active' : ''}`}
-              title="源代码"
+              title={t('toolbar.sourceCode')}
               onClick={() => {
                 onWikiIndexViewChange?.(false)
                 onViewModeChange('code')
@@ -135,19 +137,19 @@ export function FileToolbar({
       </div>
       <div className="detail-toolbar-right">
         {showCollectToWiki && onCollectToWiki ? (
-          <ToolbarBtn title="收录到 Wiki" icon={BookPlus} onClick={onCollectToWiki} />
+          <ToolbarBtn title={t('toolbar.collectToWiki')} icon={BookPlus} onClick={onCollectToWiki} />
         ) : null}
-        <ToolbarBtn title="用默认编辑器打开" icon={ExternalLink} onClick={() => void handleOpenInSystem()} />
-        <ToolbarBtn title="查看所在目录" icon={FolderOpen} onClick={() => void handleShowInExplorer()} />
-        <ToolbarBtn title="刷新" icon={RefreshCw} onClick={() => void onRefresh()} />
+        <ToolbarBtn title={t('toolbar.openInDefaultEditor')} icon={ExternalLink} onClick={() => void handleOpenInSystem()} />
+        <ToolbarBtn title={t('toolbar.showInFolder')} icon={FolderOpen} onClick={() => void handleShowInExplorer()} />
+        <ToolbarBtn title={t('toolbar.refresh')} icon={RefreshCw} onClick={() => void onRefresh()} />
         {isMarkdown && (
           <Dropdown menu={{ items: exportItems }} trigger={['click']}>
-            <button type="button" className="detail-toolbar-btn" title="导出为..." aria-label="导出为 PDF">
+            <button type="button" className="detail-toolbar-btn" title={t('toolbar.exportAs')} aria-label={t('toolbar.exportAs')}>
               <FileDown className="detail-toolbar-icon" size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden />
             </button>
           </Dropdown>
         )}
-        <ToolbarBtn title="关闭" icon={X} onClick={onClose} />
+        <ToolbarBtn title={t('toolbar.close')} icon={X} onClick={onClose} />
       </div>
     </div>
   )
