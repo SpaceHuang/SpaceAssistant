@@ -57,6 +57,7 @@ import type { WorkDirManager } from './workDirManager'
 import { listSessionsForProfile } from './workDirManager'
 import { resolveSafePath } from './pathSecurity'
 import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from './fileReadHelpers'
+import { buildLocalFileViewerUrl } from './fileViewerUrl'
 import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
@@ -723,6 +724,23 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const root = ctx.getWorkDir()
     const target = resolveSafePath(root, rel)
     return getFileMetadata(target)
+  })
+
+  ipcMain.handle('file:to-viewer-url', async (_e, rel: unknown) => {
+    try {
+      if (typeof rel !== 'string' || !rel.trim()) {
+        return { ok: false as const, error: 'invalid path' }
+      }
+      const root = ctx.getWorkDir()
+      const target = resolveSafePath(root, rel)
+      const st = await fs.stat(target)
+      if (!st.isFile()) {
+        return { ok: false as const, error: 'not a file' }
+      }
+      return { ok: true as const, url: buildLocalFileViewerUrl(target) }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
   })
 
   ipcMain.handle('file:open-in-system', async (_e, rel: string) => {

@@ -10,12 +10,14 @@ type Props = {
   workDir: string
   onFileSelect: (relPath: string) => void
   onCollectToWiki?: (relPath: string) => void
+  onOpenUrl?: (url: string) => void
 }
 
-export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: Props) {
+export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki, onOpenUrl }: Props) {
   const cfg = useTypedSelector((s) => s.config.config)
   const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
   const wikiRoot = wiki.rootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  const [urlDraft, setUrlDraft] = useState('')
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const fileTreeRef = useRef<FileTreeHandle>(null)
@@ -43,6 +45,13 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
     onFileSelect(relPath)
   }
 
+  const submitUrl = () => {
+    const trimmed = urlDraft.trim()
+    if (!trimmed || !onOpenUrl) return
+    onOpenUrl(trimmed)
+    setUrlDraft('')
+  }
+
   return (
     <>
       <div className="detail-panel-section-header detail-panel-file-header">
@@ -52,6 +61,24 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
           onRefresh={() => void fileTreeRef.current?.refresh()}
         />
       </div>
+      {onOpenUrl ? (
+        <div className="detail-url-entry">
+          <input
+            type="text"
+            className="detail-url-entry-input"
+            value={urlDraft}
+            placeholder="输入 URL 回车打开网页"
+            spellCheck={false}
+            onChange={(e) => setUrlDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                submitUrl()
+              }
+            }}
+          />
+        </div>
+      ) : null}
       <div className="detail-panel-file-body">
         <FileTree
           ref={fileTreeRef}

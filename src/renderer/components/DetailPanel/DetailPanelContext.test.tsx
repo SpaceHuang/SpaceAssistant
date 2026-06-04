@@ -19,6 +19,7 @@ vi.mock('../../utils/shikiHighlighter', () => ({
 describe('DetailPanelContext', () => {
   let originalApi: unknown
   const fileReadFile = vi.fn()
+  const fileToViewerUrl = vi.fn()
 
   beforeEach(() => {
     originalApi = (window as Record<string, unknown>).api
@@ -27,7 +28,8 @@ describe('DetailPanelContext', () => {
       content: 'hello',
       encoding: 'utf8'
     })
-    ;(window as Record<string, unknown>).api = { fileReadFile }
+    fileToViewerUrl.mockResolvedValue({ ok: true, url: 'file:///tmp/page.html' })
+    ;(window as Record<string, unknown>).api = { fileReadFile, fileToViewerUrl }
   })
 
   afterEach(() => {
@@ -48,6 +50,7 @@ describe('DetailPanelContext', () => {
       expect(result.current.selectedFile).toBe('test.txt')
       expect(result.current.previewContent).toBe('hello')
       expect(result.current.fileType).toBe('text')
+      expect(result.current.contentMode).toBe('file')
     })
   })
 
@@ -72,6 +75,30 @@ describe('DetailPanelContext', () => {
     })
   })
 
+  it('openFile defaults html to render preview and resolves local viewer url', async () => {
+    fileReadFile.mockResolvedValueOnce({
+      kind: 'text',
+      content: '<html></html>',
+      encoding: 'utf8'
+    })
+
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+
+    await act(async () => {
+      await result.current.openFile('pages/index.html')
+    })
+
+    await waitFor(() => {
+      expect(result.current.fileType).toBe('html')
+      expect(result.current.viewMode).toBe('render')
+      expect(result.current.localFileViewerUrl).toBe('file:///tmp/page.html')
+      expect(result.current.isWebViewActive).toBe(true)
+    })
+    expect(fileToViewerUrl).toHaveBeenCalledWith('pages/index.html')
+  })
+
   it('openFile defaults non-markdown to code view', async () => {
     const { result } = renderHook(() => useDetailPanel(), {
       wrapper: DetailPanelTestWrapper
@@ -83,6 +110,72 @@ describe('DetailPanelContext', () => {
 
     await waitFor(() => {
       expect(result.current.viewMode).toBe('code')
+    })
+  })
+
+  it('openUrl normalizes bare domain and switches to url mode', async () => {
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+
+    await act(async () => {
+      await result.current.openUrl('example.com')
+    })
+
+    await waitFor(() => {
+      expect(result.current.contentMode).toBe('url')
+      expect(result.current.selectedUrl).toBe('https://example.com/')
+      expect(result.current.displayUrl).toBe('https://example.com/')
+      expect(result.current.selectedFile).toBeNull()
+    })
+  })
+
+  it('openFile clears previous url mode state', async () => {
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+
+    await act(async () => {
+      await result.current.openUrl('https://example.com/')
+    })
+    await act(async () => {
+      await result.current.openFile('test.txt')
+    })
+
+    await waitFor(() => {
+      expect(result.current.contentMode).toBe('file')
+      expect(result.current.selectedUrl).toBeNull()
+      expect(result.current.selectedFile).toBe('test.txt')
+    })
+  })
+
+  it('navigateBack and navigateForward update selected url', async () => {
+    const { result } = renderHook(() => useDetailPanel(), {
+      wrapper: DetailPanelTestWrapper
+    })
+
+    await act(async () => {
+      await result.current.openUrl('https://a.example/')
+    })
+    await act(async () => {
+      await result.current.openUrl('https://b.example/')
+    })
+
+    act(() => {
+      result.current.navigateBack()
+    })
+
+    await waitFor(() => {
+      expect(result.current.selectedUrl).toBe('https://a.example/')
+      expect(result.current.canNavigateForward).toBe(true)
+    })
+
+    act(() => {
+      result.current.navigateForward()
+    })
+
+    await waitFor(() => {
+      expect(result.current.selectedUrl).toBe('https://b.example/')
     })
   })
 
@@ -100,6 +193,7 @@ describe('DetailPanelContext', () => {
 
     expect(result.current.selectedFile).toBeNull()
     expect(result.current.previewContent).toBeNull()
+    expect(result.current.contentMode).toBe('file')
   })
 
   it('defaults referencedFilesHeight to 0.38', () => {

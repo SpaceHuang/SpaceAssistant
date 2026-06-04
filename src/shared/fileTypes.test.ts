@@ -15,6 +15,16 @@ describe('fileTypes', () => {
     expect(classifyFileType('src/app.tsx')).toBe('code')
   })
 
+  it('classifies html', () => {
+    expect(classifyFileType('pages/index.html')).toBe('html')
+    expect(classifyFileType('pages/index.htm')).toBe('html')
+    expect(classifyFileType('pages/index.xhtml')).toBe('html')
+  })
+
+  it('classifies mhtml as unsupported', () => {
+    expect(classifyFileType('archive.mhtml')).toBe('unsupported')
+  })
+
   it('classifies image', () => {
     expect(classifyFileType('assets/logo.png')).toBe('image')
   })

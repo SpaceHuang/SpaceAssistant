@@ -40,6 +40,8 @@ export type {
   BrowserDependencyToolError
 } from './browserTypes'
 
+export type FileViewerUrlResult = { ok: true; url: string } | { ok: false; error: string }
+
 export type FileReadResult =
   | { kind: 'text'; content: string; encoding: 'utf8' }
   | { kind: 'image'; content: string; encoding: 'base64'; mimeType: string }
@@ -164,6 +166,7 @@ export type SpaceAssistantApi = {
   fileListDirectory: (relPath: string) => Promise<FileInfo[]>
   fileReadFile: (relPath: string) => Promise<FileReadResult>
   fileGetMetadata: (relPath: string) => Promise<FileMetadata>
+  fileToViewerUrl: (relPath: string) => Promise<FileViewerUrlResult>
   fileOpenInSystem: (relPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
   fileShowInExplorer: (relPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
   fileExportPdf: (payload: {

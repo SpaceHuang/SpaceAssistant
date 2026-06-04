@@ -1,6 +1,6 @@
 export const MAX_FILE_READ_SIZE = 2 * 1024 * 1024
 
-export type FileTypeCategory = 'text' | 'markdown' | 'code' | 'image' | 'unsupported'
+export type FileTypeCategory = 'text' | 'markdown' | 'code' | 'html' | 'image' | 'unsupported'
 
 const UNSUPPORTED_EXT = new Set([
   '.pdf',
@@ -21,7 +21,8 @@ const UNSUPPORTED_EXT = new Set([
   '.dylib',
   '.bin',
   '.dat',
-  '.wasm'
+  '.wasm',
+  '.mhtml'
 ])
 
 const IMAGE_EXT: Record<string, string> = {
@@ -39,8 +40,9 @@ const MARKDOWN_EXT = new Set(['.md', '.mdx', '.rst'])
 
 const TEXT_EXT = new Set(['.txt', '.log', '.csv', '.tsv'])
 
+const HTML_EXT = new Set(['.html', '.htm', '.xhtml'])
+
 const CODE_EXT = new Set([
-  '.html',
   '.css',
   '.scss',
   '.js',
@@ -142,6 +144,7 @@ export function classifyFileType(filePath: string): FileTypeCategory {
   if (isUnsupportedExtension(ext)) return 'unsupported'
   if (getImageMimeType(ext)) return 'image'
   if (MARKDOWN_EXT.has(ext)) return 'markdown'
+  if (HTML_EXT.has(ext)) return 'html'
   if (TEXT_EXT.has(ext)) return 'text'
   if (CODE_EXT.has(ext)) return 'code'
   return 'text'

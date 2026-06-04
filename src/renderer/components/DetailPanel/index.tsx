@@ -13,7 +13,8 @@ export { DetailPanelProvider, useDetailPanel } from './DetailPanelContext'
 
 export function DetailPanel() {
   const { message } = App.useApp()
-  const { selectedFile, referencedFilesHeight, setReferencedFilesHeight, resetReferencedFilesHeight, openFile } = useDetailPanel()
+  const { selectedFile, contentMode, referencedFilesHeight, setReferencedFilesHeight, resetReferencedFilesHeight, openFile, openUrl } =
+    useDetailPanel()
   const config = useTypedSelector((s) => s.config.config)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
 
@@ -33,7 +34,7 @@ export function DetailPanel() {
     })
   }
 
-  if (selectedFile) {
+  if (selectedFile || contentMode === 'url') {
     return <FileOverlay />
   }
 
@@ -52,6 +53,11 @@ export function DetailPanel() {
           workDir={config?.workDir ?? ''}
           onFileSelect={handleFileSelect}
           onCollectToWiki={handleCollectToWiki}
+          onOpenUrl={(url) => {
+            void openUrl(url).catch((e) => {
+              message.error(e instanceof Error ? e.message : String(e))
+            })
+          }}
         />
       </div>
       <ResizeHandle

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { App } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { useDetailPanel } from './DetailPanelContext'
@@ -12,15 +12,28 @@ import type { SearchMatch } from './searchUtils'
 export function FileOverlay() {
   const { message } = App.useApp()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
+  const addressInputRef = useRef<HTMLInputElement>(null)
 
   const {
+    contentMode,
     selectedFile,
     fileType,
     viewMode,
     previewContent,
+    displayUrl,
+    canNavigateBack,
+    canNavigateForward,
+    isWebViewLoading,
+    isWebViewActive,
     closeFile,
     refreshFile,
-    setViewMode
+    refreshPage,
+    stopLoading,
+    navigateBack,
+    navigateForward,
+    setViewMode,
+    setDisplayUrl,
+    submitDisplayUrl
   } = useDetailPanel()
 
   const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? 'llm-wiki')
@@ -51,10 +64,47 @@ export function FileOverlay() {
     setCurrentHighlightIndex(index)
   }, [])
 
+  const overlayActive = Boolean(selectedFile) || contentMode === 'url'
+  const showWebChrome = isWebViewActive || contentMode === 'url'
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!selectedFile) return
+      if (!overlayActive) return
       const mod = e.ctrlKey || e.metaKey
+
+      if (showWebChrome && mod && e.key.toLowerCase() === 'l') {
+        e.preventDefault()
+        addressInputRef.current?.focus()
+        addressInputRef.current?.select()
+        return
+      }
+
+      if (showWebChrome && e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault()
+        navigateBack()
+        return
+      }
+
+      if (showWebChrome && e.altKey && e.key === 'ArrowRight') {
+        e.preventDefault()
+        navigateForward()
+        return
+      }
+
+      if (showWebChrome && e.key === 'F5') {
+        e.preventDefault()
+        refreshPage(mod)
+        return
+      }
+
+      if (showWebChrome && isWebViewLoading && e.key === 'Escape') {
+        e.preventDefault()
+        stopLoading()
+        return
+      }
+
+      if (!selectedFile) return
+
       if (mod && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         setSearchOpen(true)
@@ -66,15 +116,26 @@ export function FileOverlay() {
       if (e.key === 'Escape' && searchOpen) {
         e.preventDefault()
         setSearchOpen(false)
-      } else if (e.key === 'Escape' && !searchOpen) {
+      } else if (e.key === 'Escape' && !searchOpen && !isWebViewLoading) {
         closeFile()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [closeFile, searchOpen, selectedFile])
+  }, [
+    closeFile,
+    isWebViewLoading,
+    navigateBack,
+    navigateForward,
+    overlayActive,
+    refreshPage,
+    searchOpen,
+    selectedFile,
+    showWebChrome,
+    stopLoading
+  ])
 
-  if (!selectedFile || !fileType) return null
+  if (!overlayActive) return null
 
   return (
     <div className="detail-file-overlay" tabIndex={0}>
@@ -83,6 +144,18 @@ export function FileOverlay() {
         fileType={fileType}
         viewMode={viewMode}
         previewContent={previewContent}
+        showWebNavigation={showWebChrome}
+        showAddressBar={showWebChrome}
+        addressUrl={displayUrl}
+        addressInputRef={addressInputRef}
+        canGoBack={canNavigateBack}
+        canGoForward={canNavigateForward}
+        isWebViewLoading={isWebViewLoading}
+        onAddressChange={setDisplayUrl}
+        onAddressSubmit={submitDisplayUrl}
+        onNavigateBack={navigateBack}
+        onNavigateForward={navigateForward}
+        onStopLoading={stopLoading}
         onViewModeChange={setViewMode}
         onClose={closeFile}
         onRefresh={() => void refreshFile()}
