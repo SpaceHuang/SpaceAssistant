@@ -18,6 +18,7 @@ import { SaIconButton } from '../ui/SaIconButton'
 import { ConfigModelOptionContent, sortModelsFastFirst } from './ConfigModelOption'
 import { configModalModelSelectPopupClassNames, configModalSelectPopupClassNames } from './configModalUi'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const refreshSvg = patchSvg(refresh2LineRaw)
 
@@ -30,6 +31,7 @@ type Props = {
 }
 
 export function BrowserSettingsTab({ browser, onChange, models = [], active = false }: Props) {
+  const { t } = useTypedTranslation('config')
   const dispatch = useAppDispatch()
   const { detect, detecting, refresh } = useBrowserDetect({ active })
   const [repairLoading, setRepairLoading] = useState(false)
@@ -67,8 +69,8 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
   return (
     <ConfigSettingsStack>
       <ConfigSwitchRow
-        label="允许飞书远程会话使用"
-        hint="开启后，飞书 Bot 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。"
+        label={t('browser.allowRemoteLabel')}
+        hint={t('browser.allowRemoteHint')}
         checked={browser.allowRemoteSessions}
         onChange={(v) => patch({ allowRemoteSessions: v })}
       />
@@ -77,20 +79,20 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
           type="warning"
           showIcon
           className="config-alert--compact"
-          message="浏览器依赖未就绪"
-          description={detect.errors[0] ?? '请点击下方按钮在对话中完成修复。'}
+          message={t('browser.depsNotReadyTitle')}
+          description={detect.errors[0] ?? t('browser.depsNotReadyDescription')}
         />
       ) : null}
 
       <div className="browser-detect-section">
         <div className="browser-detect-section__header">
-          <span className="config-field__label">运行环境检测</span>
-          <Tooltip title={detect ? '重新检测' : '检测依赖'}>
+          <span className="config-field__label">{t('browser.detectSectionLabel')}</span>
+          <Tooltip title={detect ? t('browser.redetect') : t('browser.detectDeps')}>
             <SaIconButton
               size="sm"
               className={detecting ? 'browser-detect-section__refresh--loading' : undefined}
               disabled={detecting}
-              aria-label={detect ? '重新检测' : '检测依赖'}
+              aria-label={detect ? t('browser.redetect') : t('browser.detectDeps')}
               onClick={() => refresh(true)}
             >
               <span dangerouslySetInnerHTML={{ __html: refreshSvg }} />
@@ -101,7 +103,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
           <BrowserDetectStatusSummary detect={detect} detecting={detecting}>
             {!detect.canInitialize ? (
               <Button type="primary" block loading={repairLoading} onClick={() => void handleRepairInChat()}>
-                帮我修复
+                {t('browser.repair')}
               </Button>
             ) : null}
           </BrowserDetectStatusSummary>
@@ -109,13 +111,13 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
       </div>
 
       <section className="browser-engine-section">
-        <h3 className="config-section-title">操作引擎（Stagehand）</h3>
+        <h3 className="config-section-title">{t('browser.stagehandTitle')}</h3>
         <ConfigSettingsStack className="browser-engine-section__body">
-          <ConfigField label="操作引擎使用的大模型">
+          <ConfigField label={t('browser.stagehandModelLabel')}>
             <Select
               className="config-stagehand-model-select"
               allowClear
-              placeholder="留空则复用当前 LLM 模型（自动转为 provider/模型名）"
+              placeholder={t('browser.stagehandModelPlaceholder')}
               value={browser.stagehandModel || undefined}
               onChange={(v) => patch({ stagehandModel: v ?? '' })}
               classNames={configModalModelSelectPopupClassNames}
@@ -130,7 +132,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
               }}
             />
           </ConfigField>
-          <ConfigField label="单次请求最大推理次数">
+          <ConfigField label={t('browser.maxInferencesLabel')}>
             <Select
               value={browser.maxInferencesPerRequest}
               onChange={(v) => patch({ maxInferencesPerRequest: v })}
@@ -141,13 +143,10 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         </ConfigSettingsStack>
       </section>
 
-      <ConfigField
-        label="可信域名"
-        hint="列表内免确认；其余首次聊天确认，同会话不再问。"
-      >
+      <ConfigField label={t('browser.trustedDomainsLabel')} hint={t('browser.trustedDomainsHint')}>
         <Select
           mode="tags"
-          placeholder="例：example.com"
+          placeholder={t('browser.trustedDomainsPlaceholder')}
           value={browser.trustedDomains}
           onChange={(v) => patch({ trustedDomains: v })}
           classNames={configModalSelectPopupClassNames}
@@ -155,20 +154,20 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
       </ConfigField>
 
       <ConfigSwitchRow
-        label="允许 HTTP"
-        hint="关闭后只允许访问 https 链接。"
+        label={t('browser.allowHttpLabel')}
+        hint={t('browser.allowHttpHint')}
         checked={browser.allowHttp}
         onChange={(v) => patch({ allowHttp: v })}
       />
 
       <ConfigSwitchRow
-        label="无头模式"
-        hint="开启不弹窗后台运行，关闭可见浏览器操作。"
+        label={t('browser.headlessLabel')}
+        hint={t('browser.headlessHint')}
         checked={browser.headless}
         onChange={(v) => patch({ headless: v })}
       />
 
-      <ConfigField label="操作超时（秒）">
+      <ConfigField label={t('browser.actionTimeoutLabel')}>
         <Select
           value={browser.actionTimeoutSec}
           onChange={(v) => patch({ actionTimeoutSec: v })}
@@ -177,7 +176,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         />
       </ConfigField>
 
-      <ConfigField label="空闲自动关闭浏览器组件，释放内存（秒）">
+      <ConfigField label={t('browser.idleTimeoutLabel')}>
         <Select
           value={browser.idleTimeoutSec}
           onChange={(v) => patch({ idleTimeoutSec: v })}
@@ -186,10 +185,10 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         />
       </ConfigField>
 
-      <ConfigField label="禁用操作">
+      <ConfigField label={t('browser.deniedActionsLabel')}>
         <Select
           mode="multiple"
-          placeholder="选择要禁用的 browser action"
+          placeholder={t('browser.deniedActionsPlaceholder')}
           value={browser.deniedActions}
           onChange={(v) => patch({ deniedActions: v })}
           classNames={configModalSelectPopupClassNames}

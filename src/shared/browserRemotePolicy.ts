@@ -1,6 +1,10 @@
-/** browser 在飞书远程会话中被 allowRemoteSessions 拦截时的 tool_result 文案 */
-export const BROWSER_FEISHU_REMOTE_DISABLED_ERROR =
-  '飞书远程会话未启用浏览器工具。请在 SpaceAssistant 桌面端打开「设置 → 浏览器」，开启「允许飞书远程会话使用」后重试。'
+import { ErrorCodes } from './errorCodes'
+
+/** browser 在飞书远程会话中被 allowRemoteSessions 拦截时的 tool_result 错误码 */
+export const BROWSER_FEISHU_REMOTE_DISABLED_CODE = ErrorCodes.BROWSER_FEISHU_REMOTE_DISABLED
+
+/** @deprecated 使用 BROWSER_FEISHU_REMOTE_DISABLED_CODE + formatUserFacingError */
+export const BROWSER_FEISHU_REMOTE_DISABLED_ERROR = BROWSER_FEISHU_REMOTE_DISABLED_CODE
 
 export type FeishuBrowserRemoteHint = 'available' | 'blocked' | 'off'
 

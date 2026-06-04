@@ -1,0 +1,83 @@
+{
+  "remote": {
+    "auditLog": "Activity log",
+    "connectionDesc": "Feishu",
+    "label": {
+      "error": "Error",
+      "listening": "Listening",
+      "stopped": "Stopped",
+      "unconfigured": "Not configured"
+    },
+    "mainTooltipListening": "Listening · {{subtext}}",
+    "start": "Start",
+    "startAria": "Start Feishu remote command listener",
+    "startDisabled": {
+      "completeConfig": "Complete Feishu setup first",
+      "enableRemote": "Enable remote command listening in Settings first"
+    },
+    "stop": "Stop",
+    "stopAria": "Stop Feishu remote command listener",
+    "subtext": {
+      "connecting": "Connecting…",
+      "fetchFailed": "Failed to fetch status",
+      "goToSettings": "Open Settings to finish setup",
+      "processedCount": "Processed {{count}}",
+      "remoteOff": "Remote listening is off",
+      "serviceStopped": "Service stopped"
+    },
+    "tooltip": {
+      "lastError": "{{message}}",
+      "lastInbound": "Last inbound: {{time}}",
+      "lastReply": "Last reply: {{time}}",
+      "processed": "Processed: {{count}}",
+      "startedAt": "Started: {{time}}",
+      "unknownError": "Unknown error"
+    },
+    "auditAria": "Open Feishu activity log",
+    "browser": {
+      "setup": {
+        "okTitle": "Browser dependencies ready",
+        "fixTitle": "Browser dependency repair",
+        "okSummary": "Chromium is ready. Browser tools are available.",
+        "depNotReady": "Browser dependencies not ready",
+        "nodeTooLow": "Built-in Node version is too old. Please upgrade SpaceAssistant.",
+        "terminalHintWin": "Open Windows Terminal or PowerShell",
+        "terminalHintMac": "Open Terminal.app",
+        "terminalHintLinux": "Open a terminal",
+        "cwdDescription": "Open a terminal in this directory (the app install location)",
+        "stepInstall": "Install npm dependencies then continue with the Chromium step:",
+        "stepRunInstall": "Run the install command:",
+        "stepRedetect": "Click \"Re-detect\" when done",
+        "clickToExpand": "Click to expand details",
+        "networkOk": "Network access is working",
+        "detectPassed": "All checks passed. Browser tools can be initialized.",
+        "redetect": "Re-detect",
+        "diagnosticInfo": "Diagnostic info",
+        "copyDiagnostic": "Copy diagnostic info",
+        "installSteps": "Installation steps",
+        "copyDir": "Copy directory",
+        "copy": "Copy",
+        "copyCmd": "Copy command",
+        "openInTerminal": "Open in terminal",
+        "allSteps": "All steps",
+        "copyAllSteps": "Copy all steps",
+        "forceInstallLabel": "Overwrite corrupted install (advanced)",
+        "troubleshootLabel": "Installation slow / failed? View troubleshooting",
+        "troubleshootNetworkTitle": "Network",
+        "troubleshootNetworkBody": "Installation downloads ~150–200MB. If using a proxy, make sure the terminal can reach cdn.playwright.dev.",
+        "troubleshootDiskTitle": "Disk space",
+        "troubleshootDiskBody": "Please ensure at least 500MB of free space.",
+        "troubleshootStillFailTitle": "Still failing",
+        "troubleshootStillFailBody": "Click \"Copy diagnostic info\" and share the output for troubleshooting (no API Key included).",
+        "troubleshootDefenderTitle": "Windows Defender",
+        "troubleshootDefenderBody": "Windows Defender may quarantine chrome.exe under %LOCALAPPDATA%\\ms-playwright. Add an exclusion or allow it to run, then retry.",
+        "troubleshootGatekeeperTitle": "macOS Gatekeeper",
+        "troubleshootGatekeeperBody": "The first Chromium launch may be blocked. Go to System Settings → Privacy & Security to allow it, or follow the Playwright docs to remove the quarantine attribute.",
+        "troubleshootCacheMacTitle": "Cache location",
+        "troubleshootCacheMacBody": "Playwright downloads browsers to ~/Library/Caches/ms-playwright/ by default.",
+        "troubleshootCacheLinuxTitle": "Cache location",
+        "troubleshootCacheLinuxBody": "Playwright downloads browsers to ~/.cache/ms-playwright/ by default."
+      }
+    }
+  }
+}

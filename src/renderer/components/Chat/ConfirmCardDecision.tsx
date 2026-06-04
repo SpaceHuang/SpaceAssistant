@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Check, X } from 'lucide-react'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   /** 一句话说明待确认的操作，例如「写入 config.json」 */
@@ -18,8 +19,14 @@ export function ConfirmCardDecision({
   onConfirm,
   badges
 }: Props) {
+  const { t } = useTypedTranslation('chat')
+
   return (
-    <div className="write-confirm-card__decision" role="group" aria-label={`确认：${actionSummary}`}>
+    <div
+      className="write-confirm-card__decision"
+      role="group"
+      aria-label={t('confirm.decisionAriaLabel', { action: actionSummary })}
+    >
       <div className="write-confirm-card__decision-head">
         <p className="write-confirm-card__decision-summary">{actionSummary}</p>
         {badges ? <span className="write-confirm-card__decision-badges">{badges}</span> : null}

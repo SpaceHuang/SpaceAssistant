@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { summarizeLarkCliConfirmInput } from '../../../shared/larkCliDisplay'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
@@ -9,11 +10,11 @@ type Props = {
 }
 
 export function LarkCliConfirmCard({ record, onConfirm }: Props) {
+  const { t } = useTypedTranslation('chat')
   const summary = useMemo(() => summarizeLarkCliConfirmInput(record.input), [record.input])
   const timeout = typeof record.input.timeout === 'number' ? record.input.timeout : undefined
-  const allowLabel = summary.isWriteOperation ? '确认飞书写入' : '确认飞书命令'
-
-  const denyLabel = summary.isWriteOperation ? '拒绝写入' : '拒绝命令'
+  const allowLabel = summary.isWriteOperation ? t('confirm.lark.allowWrite') : t('confirm.lark.allowCommand')
+  const denyLabel = summary.isWriteOperation ? t('confirm.lark.denyWrite') : t('confirm.lark.denyCommand')
 
   return (
     <div className="write-confirm-card lark-cli-confirm-card">
@@ -24,7 +25,7 @@ export function LarkCliConfirmCard({ record, onConfirm }: Props) {
         onConfirm={onConfirm}
         badges={
           summary.isWriteOperation ? (
-            <span className="write-confirm-card__stat write-confirm-card__stat--write">写入</span>
+            <span className="write-confirm-card__stat write-confirm-card__stat--write">{t('confirm.lark.writeBadge')}</span>
           ) : undefined
         }
       />

@@ -1,0 +1,38 @@
+{
+  "referencedFiles": {
+    "title": "Referenced Files",
+    "filterAll": "All",
+    "filterWiki": "Wiki",
+    "filterOther": "Other",
+    "empty": "No referenced files"
+  },
+  "fileList": {
+    "title": "Files"
+  },
+  "toolbar": {
+    "markdownView": "Markdown view",
+    "indexView": "Index view",
+    "renderPreview": "Render preview",
+    "sourceCode": "Source code",
+    "openFailed": "Open failed",
+    "openDirFailed": "Open directory failed",
+    "exportedTo": "Exported to",
+    "exportFailed": "Export failed",
+    "collectToWiki": "Add to Wiki",
+    "openInDefaultEditor": "Open with default editor",
+    "showInFolder": "Show in folder",
+    "refresh": "Refresh",
+    "exportAs": "Export as...",
+    "close": "Close"
+  },
+  "fileView": {
+    "unsupportedExt": "Preview not supported for {{ext}} files",
+    "unsupportedGeneric": "Preview not supported for this file type",
+    "fileSize": "File size: ",
+    "read": "Read",
+    "write": "Write"
+  },
+  "wikiIndex": {
+    "parseFailed": "Could not parse index entries. Use tree view or render preview."
+  }
+}

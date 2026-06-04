@@ -2,29 +2,30 @@ import { ExternalLink, X } from 'lucide-react'
 import { App, Button, Modal } from 'antd'
 import chatFillRaw from '../../assets/chat_3_fill.svg?raw'
 import {
-  APP_DESCRIPTION,
   APP_GITHUB_URL,
   APP_LICENSE,
   APP_PRODUCT_NAME,
-  APP_TAGLINE,
   APP_VERSION
 } from '../../../shared/appMeta'
 import { useAppDispatch, useTypedSelector } from '../../hooks'
 import { openExternalUrl } from '../../services/openExternalUrl'
 import { setAboutOpen } from '../../store/configSlice'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './aboutModal.css'
 
 const appMarkSvg = chatFillRaw.replace(/fill="#09244[bB]"/g, 'fill="currentColor"')
 
-const ABOUT_LINKS = [
-  { label: 'GitHub 仓库', url: APP_GITHUB_URL },
-  { label: '使用文档', url: APP_GITHUB_URL }
-] as const
-
 export function AboutModal() {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('common')
   const open = useTypedSelector((s) => s.config.aboutOpen)
   const dispatch = useAppDispatch()
+
+  const aboutLinks = [
+    { label: t('about.github'), url: APP_GITHUB_URL },
+    { label: t('about.docs'), url: APP_GITHUB_URL }
+  ] as const
 
   const close = () => dispatch(setAboutOpen(false))
 
@@ -33,7 +34,7 @@ export function AboutModal() {
     void (async () => {
       const result = await openExternalUrl(url)
       if (!result.ok) {
-        message.error(result.error || '无法打开链接')
+        message.error(formatUserFacingError(result.error) || formatUserFacingError('CANNOT_OPEN_LINK'))
       }
     })()
   }
@@ -41,7 +42,7 @@ export function AboutModal() {
   return (
     <Modal
       className="about-modal"
-      title="关于"
+      title={t('about.title')}
       open={open}
       width={380}
       centered
@@ -50,7 +51,7 @@ export function AboutModal() {
       footer={
         <div className="about-modal__footer">
           <Button type="primary" onClick={close}>
-            关闭
+            {t('about.close')}
           </Button>
         </div>
       }
@@ -60,15 +61,15 @@ export function AboutModal() {
         <div className="about-modal__identity">
           <div className="about-modal__mark" aria-hidden dangerouslySetInnerHTML={{ __html: appMarkSvg }} />
           <h2 className="about-modal__name">{APP_PRODUCT_NAME}</h2>
-          <p className="about-modal__version">版本 {APP_VERSION}</p>
+          <p className="about-modal__version">{t('about.version', { version: APP_VERSION })}</p>
         </div>
 
         <p className="about-modal__intro">
-          {APP_TAGLINE}。{APP_DESCRIPTION}
+          {t('app.tagline')} {t('app.description')}
         </p>
 
         <div className="about-modal__actions">
-          {ABOUT_LINKS.map((item, index) => (
+          {aboutLinks.map((item, index) => (
             <span key={item.label} className="about-modal__action-item">
               {index > 0 ? <span className="about-modal__action-sep" aria-hidden="true" /> : null}
               <a
@@ -85,7 +86,7 @@ export function AboutModal() {
           ))}
         </div>
 
-        <p className="about-modal__license">{APP_LICENSE} License</p>
+        <p className="about-modal__license">{t('about.license', { license: APP_LICENSE })}</p>
       </div>
     </Modal>
   )

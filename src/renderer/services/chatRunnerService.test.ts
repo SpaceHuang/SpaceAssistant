@@ -23,6 +23,7 @@ describe('getMaxParallelChatSessions', () => {
   it('uses config value when present', () => {
     store.dispatch(
       setConfig({
+        locale: 'zh-CN',
         apiKeyPresent: true,
         baseUrl: '',
         llmServices: [],

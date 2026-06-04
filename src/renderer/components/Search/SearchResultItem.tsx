@@ -4,6 +4,7 @@ import { patchSvg } from '../../utils/patchSvg'
 import { getFileAuxiliaryText, getSessionAuxiliaryText } from './searchResultUtils'
 import chatIconRaw from '../../assets/chat_3_line.svg?raw'
 import fileIconRaw from '../../assets/file_line.svg?raw'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './search.css'
 
 const { Text } = Typography
@@ -17,9 +18,10 @@ type Props = {
 }
 
 export function SearchResultItem({ item, onClick }: Props) {
+  const { t } = useTypedTranslation('common')
   const isSession = item.type === 'session'
   const iconSvg = isSession ? chatIconSvg : fileIconSvg
-  const tagLabel = isSession ? '聊天' : '文件'
+  const tagLabel = isSession ? t('search.tagChat') : t('search.tagFile')
   const tagColor = isSession ? 'blue' : 'green'
   const auxiliaryText = isSession ? getSessionAuxiliaryText(item) : getFileAuxiliaryText(item)
   const auxiliaryPrefix = isSession ? '📁' : '📂'

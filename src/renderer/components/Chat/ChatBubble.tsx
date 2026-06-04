@@ -11,6 +11,7 @@ import { SkillHintRow } from './SkillHintRow'
 import { formatToolLabel, formatToolLabelTitle } from './toolCallDisplay'
 import { SkillHintBubble } from './SkillHintBubble'
 import { ToolRowIcon } from './ToolRowIcon'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 export type ToolsInteractiveProps = {
   requestId: string
@@ -65,14 +66,18 @@ function MessageMeta({
   showArchiveToWiki?: boolean
   onArchiveToWiki?: () => void
 }) {
+  const { t } = useTypedTranslation('chat')
+
   return (
     <div className="chat-bubble-meta">
       <time dateTime={new Date(timestamp).toISOString()}>{formatChatTimestamp(timestamp)}</time>
-      {streaming ? <span className="chat-bubble-status chat-bubble-status--streaming">生成中</span> : null}
-      {failed ? <span className="chat-bubble-status chat-bubble-status--failed">失败</span> : null}
+      {streaming ? (
+        <span className="chat-bubble-status chat-bubble-status--streaming">{t('streaming.inProgress')}</span>
+      ) : null}
+      {failed ? <span className="chat-bubble-status chat-bubble-status--failed">{t('streaming.failed')}</span> : null}
       {showArchiveToWiki && onArchiveToWiki ? (
         <button type="button" className="chat-archive-wiki-btn" onClick={onArchiveToWiki}>
-          归档到 Wiki
+          {t('bubble.archiveToWiki')}
         </button>
       ) : null}
     </div>
@@ -93,6 +98,7 @@ export const ChatBubble = memo(function ChatBubble({
   onArchiveToWiki,
   onRetry
 }: Props) {
+  const { t } = useTypedTranslation('chat')
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
   const failed = message.status === 'failed'
@@ -141,7 +147,7 @@ export const ChatBubble = memo(function ChatBubble({
       <div
         className="chat-bubble-col chat-bubble-col--assistant"
         role="region"
-        aria-label="助手回复"
+        aria-label={t('bubble.assistantReply')}
         aria-live={streaming ? 'polite' : undefined}
         aria-busy={streaming ? true : undefined}
       >
@@ -235,10 +241,10 @@ export const ChatBubble = memo(function ChatBubble({
                 className="tool-row__label"
                 title={
                   formatToolLabelTitle(message.toolUse.toolName, message.toolUse.parameters) ??
-                  formatToolLabel(message.toolUse.toolName, message.toolUse.parameters)
+                  formatToolLabel(message.toolUse.toolName, message.toolUse.parameters, t)
                 }
               >
-                {formatToolLabel(message.toolUse.toolName, message.toolUse.parameters)}
+                {formatToolLabel(message.toolUse.toolName, message.toolUse.parameters, t)}
               </span>
             </div>
           </div>
@@ -246,12 +252,10 @@ export const ChatBubble = memo(function ChatBubble({
 
         {failed ? (
           <div className="chat-message-error" role="alert">
-            <span className="chat-message-error__text">
-              回复未能完成。你可以重试生成，或基于已有上下文继续对话。
-            </span>
+            <span className="chat-message-error__text">{t('bubble.retryFailedMessage')}</span>
             {onRetry ? (
               <button type="button" className="chat-message-error__retry" onClick={onRetry}>
-                重试回复
+                {t('bubble.retry')}
               </button>
             ) : null}
           </div>

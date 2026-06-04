@@ -1,6 +1,7 @@
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { summarizeBrowserConfirmInput } from './browserConfirmDisplay'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
@@ -8,6 +9,7 @@ type Props = {
 }
 
 export function BrowserConfirmCard({ record, onConfirm }: Props) {
+  const { t } = useTypedTranslation('chat')
   const summary = summarizeBrowserConfirmInput(record.input)
   if (!summary) return null
 
@@ -15,8 +17,8 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
     <div className="write-confirm-card browser-confirm-card">
       <ConfirmCardDecision
         actionSummary={summary.headline}
-        allowLabel="确认操作"
-        denyLabel="拒绝操作"
+        allowLabel={t('confirm.browser.allow')}
+        denyLabel={t('confirm.browser.deny')}
         onConfirm={onConfirm}
       />
       <div className="write-confirm-card__detail browser-confirm-card__detail">

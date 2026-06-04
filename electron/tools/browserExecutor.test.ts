@@ -39,7 +39,7 @@ vi.mock('../browser/browserLlmCredentials', () => ({
 }))
 
 import { CHAT_CANCELLED_MESSAGE } from '../../src/shared/chatCancel'
-import { BROWSER_FEISHU_REMOTE_DISABLED_ERROR } from '../../src/shared/browserRemotePolicy'
+import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePolicy'
 import { browserExecutor } from './browserExecutor'
 
 function baseCtx(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
@@ -178,7 +178,7 @@ describe('browserExecutor', () => {
       })
     )
     expect(r.success).toBe(false)
-    expect(r.error).toBe(BROWSER_FEISHU_REMOTE_DISABLED_ERROR)
+    expect(r.error).toBe(BROWSER_FEISHU_REMOTE_DISABLED_CODE)
     expect(mockGetOrCreate).not.toHaveBeenCalled()
   })
 

@@ -150,6 +150,7 @@ export type SpaceAssistantApi = {
       maxParallelChatSessions: number
       browser: Partial<import('./domainTypes').BrowserConfig>
       shell: Partial<ShellConfig>
+      locale: import('./domainTypes').AppLocale
     }>
   ) => Promise<void>
   configTestConnection: (options?: {

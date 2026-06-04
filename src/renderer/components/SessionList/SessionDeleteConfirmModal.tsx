@@ -1,6 +1,7 @@
 import type { Session } from '../../../shared/domainTypes'
 import { sessionDisplayName, truncateSessionTitle } from '../../utils/sessionDisplay'
 import { SaDangerConfirmModal } from '../ui/SaDangerConfirmModal'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   session: Session | null
@@ -17,14 +18,15 @@ export function SessionDeleteConfirmModal({
   onConfirm,
   onCancel
 }: Props) {
+  const { t } = useTypedTranslation('common')
   const label = session ? sessionDisplayName(session.name) : ''
   const short = truncateSessionTitle(label)
 
   return (
     <SaDangerConfirmModal
       open={session != null}
-      title="删除会话"
-      okText="删除会话"
+      title={t('session.deleteTitle')}
+      okText={t('session.deleteOk')}
       confirmLoading={confirmLoading}
       onOk={onConfirm}
       onCancel={onCancel}
@@ -32,13 +34,13 @@ export function SessionDeleteConfirmModal({
       <p className="sa-confirm-modal__name">「{short}」</p>
       {running ? (
         <>
-          <p className="sa-confirm-modal__message">该会话正在执行，删除将中止运行。</p>
+          <p className="sa-confirm-modal__message">{t('session.deleteRunningWarning')}</p>
           <p className="sa-confirm-modal__note sa-confirm-modal__note--warning">
-            全部消息将清除且不可恢复。
+            {t('session.deletePermanentNote')}
           </p>
         </>
       ) : (
-        <p className="sa-confirm-modal__message">全部消息将清除且不可恢复。</p>
+        <p className="sa-confirm-modal__message">{t('session.deletePermanentNote')}</p>
       )}
     </SaDangerConfirmModal>
   )

@@ -1,5 +1,6 @@
 import { App, Dropdown } from 'antd'
 import type { MenuInfo, MenuProps } from 'antd/es/menu/interface'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 /** 阻止菜单点击冒泡到 Tree 节点，避免误触发文件选中/打开 */
 function wrapMenuClick(handler: () => void): (info: MenuInfo) => void {
@@ -43,12 +44,14 @@ export function FileTreeContextMenu({
   open
 }: FileTreeContextMenuProps) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('fileTree')
+  const { t: tc } = useTypedTranslation('common')
   const items: MenuProps['items'] = [
     ...(showCollectToWiki && onCollectToWiki
       ? [
           {
             key: 'collect-wiki',
-            label: '收录到 Wiki',
+            label: t('contextMenu.collectToWiki'),
             onClick: wrapMenuClick(onCollectToWiki)
           },
           { type: 'divider' as const }
@@ -56,21 +59,21 @@ export function FileTreeContextMenu({
       : []),
     {
       key: 'add-to-chat',
-      label: '添加到对话',
+      label: t('contextMenu.addToChat'),
       onClick: wrapMenuClick(() => {
         onAddToChat()
-        message.info('功能开发中')
+        message.info(t('contextMenu.featureInDevelopment'))
       })
     },
     { type: 'divider' },
     {
       key: 'copy-path',
-      label: '复制路径',
+      label: t('contextMenu.copyPath'),
       onClick: wrapMenuClick(onCopyPath)
     },
     {
       key: 'copy-rel-path',
-      label: '复制相对路径',
+      label: t('contextMenu.copyRelPath'),
       onClick: wrapMenuClick(onCopyRelPath)
     },
     ...(readOnly
@@ -79,12 +82,12 @@ export function FileTreeContextMenu({
           { type: 'divider' as const },
           {
             key: 'rename',
-            label: '重命名...',
+            label: t('contextMenu.rename'),
             onClick: wrapMenuClick(onRename)
           },
           {
             key: 'delete',
-            label: '删除',
+            label: tc('delete'),
             danger: true,
             onClick: wrapMenuClick(onDelete)
           }

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { App } from 'antd'
+import { I18nextProvider } from 'react-i18next'
+import i18n from '../../i18n'
 import { BrowserSetupGuide } from './BrowserSetupGuide'
 import type { BrowserDetectResult } from '../../../shared/browserTypes'
 
@@ -31,9 +33,11 @@ const detectReady: BrowserDetectResult = {
 function renderGuide(detect: BrowserDetectResult | null = detectMissing) {
   const onRefresh = vi.fn().mockResolvedValue(undefined)
   return render(
-    <App>
-      <BrowserSetupGuide detect={detect} onRefresh={onRefresh} mode="settings" platform="win32" />
-    </App>
+    <I18nextProvider i18n={i18n}>
+      <App>
+        <BrowserSetupGuide detect={detect} onRefresh={onRefresh} mode="settings" platform="win32" />
+      </App>
+    </I18nextProvider>
   )
 }
 
@@ -60,26 +64,28 @@ describe('BrowserSetupGuide', () => {
   it('calls onRefresh when re-detect clicked', async () => {
     const onRefresh = vi.fn().mockResolvedValue(undefined)
     render(
-      <App>
-        <BrowserSetupGuide detect={detectMissing} onRefresh={onRefresh} mode="settings" platform="win32" />
-      </App>
+      <I18nextProvider i18n={i18n}>
+        <App>
+          <BrowserSetupGuide detect={detectMissing} onRefresh={onRefresh} mode="settings" platform="win32" />
+        </App>
+      </I18nextProvider>
     )
-    fireEvent.click(screen.getByRole('button', { name: '重新检测' }))
+    fireEvent.click(screen.getByRole('button', { name: /重新检测/ }))
     await waitFor(() => expect(onRefresh).toHaveBeenCalledWith(true))
   })
 
   it('collapses to one line when environment is ready', () => {
     renderGuide(detectReady)
-    expect(screen.getByText('网络访问功能正常')).toBeTruthy()
-    expect(screen.getByTitle('点击展开详情')).toBeTruthy()
+    expect(screen.getByText(/网络访问功能正常/)).toBeTruthy()
+    expect(screen.getByTitle(/点击展开详情/)).toBeTruthy()
     expect(screen.queryByText(/Stagehand:/)).toBeNull()
   })
 
   it('expands full guide when compact row clicked', () => {
     renderGuide(detectReady)
-    fireEvent.click(screen.getByText('网络访问功能正常'))
+    fireEvent.click(screen.getByText(/网络访问功能正常/))
     expect(screen.getByText(/Stagehand:/)).toBeTruthy()
-    expect(screen.getByText('检测通过，浏览器工具可以初始化。')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '收起' })).toBeTruthy()
+    expect(screen.getByText(/检测通过/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /收起/ })).toBeTruthy()
   })
 })

@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useImperativeHandle, useState } from 'react'
 import { App, Tree } from 'antd'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { DataNode, EventDataNode } from 'antd/es/tree'
 import { useFileTree, type UseFileTreeOptions } from './useFileTree'
 import type { FileTreeNode as FileTreeNodeData } from './useFileTree'
@@ -45,6 +46,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   ref
 ) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('fileTree')
   const tree = useFileTree(workDir, treeOptions ?? {})
   const [deleteTarget, setDeleteTarget] = useState<{ key: string; name: string; isDirectory: boolean } | null>(null)
 
@@ -114,11 +116,11 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
               onCopyPath={() => {
                 const abs = workDir + (node.relPath ? '/' + node.relPath : '')
                 void navigator.clipboard.writeText(abs)
-                message.success('已复制绝对路径')
+                message.success(t('copyAbsPathOk'))
               }}
               onCopyRelPath={() => {
                 void navigator.clipboard.writeText(node.relPath || '.')
-                message.success('已复制相对路径')
+                message.success(t('copyRelPathOk'))
               }}
               onRename={() => tree.setRenamingKey(node.key)}
               onDelete={() => setDeleteTarget({ key: node.key, name: node.name, isDirectory: node.isDirectory })}
@@ -144,7 +146,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
         }
       })
     },
-    [tree, workDir, message, highlightSet, onCollectToWiki, wikiRootPath, wikiEnabled]
+    [tree, workDir, message, t, highlightSet, onCollectToWiki, wikiRootPath, wikiEnabled]
   )
 
   const antdTreeData = toAntdDataNodesWithInput(tree.treeData)
@@ -175,7 +177,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
 
   const handleNewDirectory = () => {
     const parentKey = selectedKey || tree.rootRelPath || ''
-    tree.setInlineInput({ parentKey, type: 'directory', defaultName: '新建文件夹' })
+    tree.setInlineInput({ parentKey, type: 'directory', defaultName: t('defaultNewFolder') })
     if (!tree.expandedKeys.includes(parentKey)) {
       void tree.toggleExpand(parentKey)
     }
@@ -219,7 +221,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
                 const dragKey = info.dragNode.key as string
                 const dropKey = info.node.key as string
                 void tree.onDrop(dragKey, dropKey).catch((e: unknown) => {
-                  message.error(e instanceof Error ? e.message : '移动失败')
+                  message.error(e instanceof Error ? e.message : t('moveFailed'))
                 })
               }
         }
@@ -251,7 +253,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="app-pane-header sider-content-header">
-        <span className="app-pane-header-title">文件</span>
+        <span className="app-pane-header-title">{t('paneTitle')}</span>
         <FileTreeToolbar onNewDirectory={handleNewDirectory} onRefresh={() => tree.refreshTree()} />
       </div>
       <div className="sider-content-body file-tree-body">{treeBody}</div>

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Button, Drawer, Table } from 'antd'
 import type { FeishuAuditEvent } from '../../../shared/feishuTypes'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import i18n from '../../i18n'
 
 type Props = {
   open: boolean
@@ -8,6 +10,7 @@ type Props = {
 }
 
 export function FeishuAuditDrawer({ open, onClose }: Props) {
+  const { t } = useTypedTranslation('config')
   const [rows, setRows] = useState<FeishuAuditEvent[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -26,7 +29,15 @@ export function FeishuAuditDrawer({ open, onClose }: Props) {
   }, [open])
 
   return (
-    <Drawer title="飞书操作记录" width={720} open={open} onClose={onClose} extra={<Button onClick={() => void load()}>刷新</Button>}>
+    <Drawer
+      title={t('feishuAudit.title')}
+      width={720}
+      open={open}
+      onClose={onClose}
+      extra={
+        <Button onClick={() => void load()}>{t('feishuAudit.refresh')}</Button>
+      }
+    >
       <Table
         size="small"
         loading={loading}
@@ -34,14 +45,18 @@ export function FeishuAuditDrawer({ open, onClose }: Props) {
         dataSource={rows}
         pagination={{ pageSize: 50 }}
         columns={[
-          { title: '时间', dataIndex: 'ts', render: (ts: number) => new Date(ts).toLocaleString('zh-CN') },
-          { title: '类型', dataIndex: 'type' },
           {
-            title: '详情',
+            title: t('feishuAudit.columnTime'),
+            dataIndex: 'ts',
+            render: (ts: number) => new Date(ts).toLocaleString(i18n.language)
+          },
+          { title: t('feishuAudit.columnType'), dataIndex: 'type' },
+          {
+            title: t('feishuAudit.columnDetail'),
             render: (_: unknown, r: FeishuAuditEvent) => {
               if (r.type === 'inbound') return `${r.accepted ? '✓' : '✗'} ${r.reason ?? ''}`
               if (r.type === 'lark_cli') return `${r.success ? '✓' : '✗'} ${r.args.slice(0, 3).join(' ')}`
-              if (r.type === 'confirm_request') return r.decision ?? 'pending'
+              if (r.type === 'confirm_request') return r.decision ?? t('feishuAudit.pending')
               return JSON.stringify(r).slice(0, 80)
             }
           }

@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
@@ -10,45 +11,46 @@ type Props = {
   onConfirm: (approved: boolean) => void
 }
 
-function commandPreviewLines(command: string): string[] {
-  if (!command) return ['(空)']
-  const lines = command.split('\n')
-  return lines.length > 0 ? lines : ['(空)']
-}
-
 export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
+  const { t } = useTypedTranslation('chat')
+  const emptyLabel = t('tool.empty')
+
+  const commandPreviewLines = (command: string): string[] => {
+    if (!command) return [emptyLabel]
+    const lines = command.split('\n')
+    return lines.length > 0 ? lines : [emptyLabel]
+  }
+
   const command = typeof record.input.command === 'string' ? record.input.command : ''
   const description = typeof record.input.description === 'string' ? record.input.description.trim() : ''
   const timeout = typeof record.input.timeout === 'number' ? record.input.timeout : undefined
   const hints = record.shellSecurityHints
   const requiresRiskAck = hints?.requiresRiskAck === true
   const warnings = hints?.warnings ?? []
-  const allowLabel = requiresRiskAck ? '我了解风险，确认执行' : '确认执行'
-  const commandLines = useMemo(() => commandPreviewLines(command), [command])
+  const allowLabel = requiresRiskAck ? t('confirm.shell.allowWithRisk') : t('confirm.shell.allow')
+  const commandLines = useMemo(() => commandPreviewLines(command), [command, emptyLabel])
   const commandHead = commandLines[0]?.trim()
-  const hasCommandHead = Boolean(commandHead && commandHead !== '(空)')
+  const hasCommandHead = Boolean(commandHead && commandHead !== emptyLabel)
   const actionSummary = requiresRiskAck
     ? hasCommandHead
       ? commandHead!
-      : 'Shell 命令'
+      : t('confirm.shell.defaultTitle')
     : description
-      ? '执行 Shell 命令'
+      ? t('confirm.shell.executeTitle')
       : hasCommandHead
         ? commandHead!
-        : '执行 Shell 命令'
+        : t('confirm.shell.executeTitle')
 
   return (
     <div className={`write-confirm-card shell-confirm-card${requiresRiskAck ? ' shell-confirm-card--risk' : ''}`}>
       <ConfirmCardDecision
         actionSummary={actionSummary}
         allowLabel={allowLabel}
-        denyLabel="拒绝执行"
+        denyLabel={t('confirm.shell.deny')}
         onConfirm={onConfirm}
         badges={
           requiresRiskAck ? (
-            <span className="write-confirm-card__stat write-confirm-card__stat--risk">
-              高风险
-            </span>
+            <span className="write-confirm-card__stat write-confirm-card__stat--risk">{t('confirm.shell.highRisk')}</span>
           ) : undefined
         }
       />
@@ -58,7 +60,7 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
           <div className="shell-confirm-card__alert" role="alert">
             <AlertTriangle size={14} strokeWidth={2} className="shell-confirm-card__alert-icon" aria-hidden />
             <div className="shell-confirm-card__alert-content">
-              <span className="shell-confirm-card__alert-title">路径安全警示</span>
+              <span className="shell-confirm-card__alert-title">{t('confirm.shell.pathSecurityWarning')}</span>
               <ul className="shell-confirm-card__warnings">
                 {warnings.map((w) => (
                   <li key={w}>{w}</li>

@@ -2,6 +2,7 @@ import { Tooltip } from 'antd'
 import fileLineRaw from '../../assets/file_line.svg?raw'
 import { patchSvg } from '../../utils/patchSvg'
 import type { ReferencedFile } from './useReferencedFiles'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const fileSvg = patchSvg(fileLineRaw, 14)
 
@@ -19,6 +20,7 @@ const WIKI_BADGE_LABEL: Record<'raw' | 'wiki' | 'schema', string> = {
 }
 
 export function ReferencedFileItem({ file, wikiKind, isActive, onClick }: ReferencedFileItemProps) {
+  const { t } = useTypedTranslation('detailPanel')
   const fileName = file.path.includes('/')
     ? file.path.slice(file.path.lastIndexOf('/') + 1)
     : file.path
@@ -42,7 +44,7 @@ export function ReferencedFileItem({ file, wikiKind, isActive, onClick }: Refere
       </div>
       <span className={`referenced-file-item-op referenced-file-item-op--${file.lastOperation}`}>
         <span className="referenced-file-item-dot" />
-        {file.lastOperation === 'read' ? '读取' : '写入'}
+        {file.lastOperation === 'read' ? t('fileView.read') : t('fileView.write')}
       </span>
     </div>
   )

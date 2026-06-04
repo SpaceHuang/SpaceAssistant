@@ -1,4 +1,5 @@
 import type { ModelEntry } from '../../../shared/domainTypes'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
@@ -15,10 +16,11 @@ function FastBadgeIcon() {
 }
 
 function ConfigModelFastBadge() {
+  const { t } = useTypedTranslation('config')
   return (
     <span className="config-model-badge config-model-badge--fast">
       <FastBadgeIcon />
-      <span>快速</span>
+      <span>{t('models.fastBadge')}</span>
     </span>
   )
 }
@@ -31,6 +33,8 @@ type ConfigModelOptionContentProps = {
 }
 
 export function ConfigModelOptionContent({ m, selected, compact }: ConfigModelOptionContentProps) {
+  const { t } = useTypedTranslation('config')
+
   return (
     <div
       className={[
@@ -47,7 +51,8 @@ export function ConfigModelOptionContent({ m, selected, compact }: ConfigModelOp
       </div>
       {!compact ? (
         <div className="config-model-option__meta">
-          上下文 {formatNumber(m.maximumContext)} · 输出 {formatNumber(m.maxTokens)}
+          {t('models.metaContext')} {formatNumber(m.maximumContext)} · {t('models.metaOutput')}{' '}
+          {formatNumber(m.maxTokens)}
         </div>
       ) : null}
     </div>
@@ -56,6 +61,8 @@ export function ConfigModelOptionContent({ m, selected, compact }: ConfigModelOp
 
 /** Select 收起态：双行信息，与下拉选项区分 */
 export function ConfigModelSelectValue({ m }: { m: ModelEntry }) {
+  const { t } = useTypedTranslation('config')
+
   return (
     <div className="config-model-select-value">
       <div className="config-model-select-value__primary">
@@ -65,7 +72,8 @@ export function ConfigModelSelectValue({ m }: { m: ModelEntry }) {
         {m.isFast ? <ConfigModelFastBadge /> : null}
       </div>
       <span className="config-model-select-value__meta">
-        上下文 {formatNumber(m.maximumContext)} · 输出 {formatNumber(m.maxTokens)}
+        {t('models.metaContext')} {formatNumber(m.maximumContext)} · {t('models.metaOutput')}{' '}
+        {formatNumber(m.maxTokens)}
       </span>
     </div>
   )

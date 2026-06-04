@@ -4,6 +4,7 @@ import { ConfirmCardCollapsible } from './ConfirmCardCollapsible'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { pathBasename } from './toolCallDisplay'
 import { buildUnifiedDiffLines, diffLineStats, type DiffLine } from './writeConfirmDiff'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
@@ -34,35 +35,39 @@ function resolveDiffContent(record: ToolCallRecord, confirmMode: 'diff' | 'direc
   return { path, oldText: '', newText: '' }
 }
 
-function capDiffLines(lines: DiffLine[], max: number): { lines: DiffLine[]; truncated: boolean } {
+function capDiffLines(lines: DiffLine[], max: number, truncatedLine: string): { lines: DiffLine[]; truncated: boolean } {
   if (lines.length <= max) return { lines, truncated: false }
-  return { lines: [...lines.slice(0, max), { type: 'context', text: '…（仅显示前 500 行）' }], truncated: true }
+  return { lines: [...lines.slice(0, max), { type: 'context', text: truncatedLine }], truncated: true }
 }
 
 export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
+  const { t } = useTypedTranslation('chat')
+
   const { oldText, newText, path } = useMemo(
     () => resolveDiffContent(record, confirmMode),
     [record, confirmMode]
   )
-  const fileName = path ? pathBasename(path) : formatToolLabelFallback(record.toolName)
+  const fileName = path ? pathBasename(path) : formatToolLabelFallback(record.toolName, t)
 
   const allDiffLines = useMemo(() => buildUnifiedDiffLines(oldText, newText), [oldText, newText])
   const { lines: diffLines, truncated: diffTruncated } = useMemo(
-    () => capDiffLines(allDiffLines, DISPLAY_MAX_LINES),
-    [allDiffLines]
+    () => capDiffLines(allDiffLines, DISPLAY_MAX_LINES, t('confirm.previewTruncatedLine')),
+    [allDiffLines, t]
   )
   const { add, remove } = useMemo(() => diffLineStats(allDiffLines), [allDiffLines])
   const hasPreview = diffLines.some((l) => l.type !== 'context' || l.text.trim().length > 0)
 
   const actionSummary =
-    record.toolName === 'edit_file' ? `编辑「${fileName}」` : `写入「${fileName}」`
+    record.toolName === 'edit_file'
+      ? t('confirm.write.editAction', { fileName })
+      : t('confirm.write.writeAction', { fileName })
 
   return (
     <div className="write-confirm-card">
       <ConfirmCardDecision
         actionSummary={actionSummary}
-        allowLabel="允许写入"
-        denyLabel="拒绝写入"
+        allowLabel={t('confirm.write.allow')}
+        denyLabel={t('confirm.write.deny')}
         onConfirm={onConfirm}
         badges={
           add > 0 || remove > 0 ? (
@@ -95,17 +100,15 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
               ))}
             </pre>
           </ConfirmCardCollapsible>
-          {diffTruncated ? (
-            <p className="write-confirm-card__preview-cap">变更超过 500 行，预览已截断；请结合文件树查看完整内容。</p>
-          ) : null}
+          {diffTruncated ? <p className="write-confirm-card__preview-cap">{t('confirm.previewCap')}</p> : null}
         </div>
       ) : null}
     </div>
   )
 }
 
-function formatToolLabelFallback(toolName: string): string {
-  if (toolName === 'write_file') return '写入文件'
-  if (toolName === 'edit_file') return '编辑文件'
+function formatToolLabelFallback(toolName: string, t: (key: 'confirm.write.writeFileFallback' | 'confirm.write.editFileFallback') => string): string {
+  if (toolName === 'write_file') return t('confirm.write.writeFileFallback')
+  if (toolName === 'edit_file') return t('confirm.write.editFileFallback')
   return toolName
 }

@@ -1,0 +1,17 @@
+{
+  "API_KEY_NOT_CONFIGURED": "API Key 未配置",
+  "BROWSER_FEISHU_REMOTE_DISABLED": "飞书远程会话未启用浏览器工具。请在 SpaceAssistant 桌面端打开「设置 → 浏览器」，开启「允许飞书远程会话使用」后重试。",
+  "CANNOT_OPEN_LINK": "无法打开链接",
+  "CANNOT_OPEN_TERMINAL": "无法打开终端",
+  "FILE_NOT_FOUND": "文件未找到",
+  "INVALID_PATH": "路径无效",
+  "LLM_EMPTY_RESPONSE": "LLM 未返回有效内容",
+  "NAME_CONTAINS_PATH_SEPARATOR": "新名称不允许包含路径分隔符",
+  "NO_ENABLED_MODEL": "请先在默认大模型设置中启用至少一个模型",
+  "PROJECT_MEMORY_ALREADY_EXISTS": "SPACEASSISTANT.md 已存在，请先删除或编辑现有文件",
+  "SHELL_EXECUTABLE_REQUIRED": "请填写可执行文件路径",
+  "SHELL_PROCESS_EXIT_CODE": "进程退出码 {{code}}",
+  "TARGET_NOT_DIRECTORY": "目标路径不是目录",
+  "WINDOW_NOT_READY": "窗口未就绪",
+  "WORK_DIR_NOT_CONFIGURED": "工作目录未配置，无法打开项目级 Skill 目录"
+}

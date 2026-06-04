@@ -1,0 +1,124 @@
+{
+  "thinking": {
+    "label": "思考",
+    "expandHint": "展开思考过程",
+    "collapseHint": "收起思考过程"
+  },
+  "streaming": {
+    "inProgress": "生成中",
+    "failed": "失败"
+  },
+  "bubble": {
+    "archiveToWiki": "归档到 Wiki",
+    "assistantReply": "助手回复",
+    "retryFailedMessage": "回复未能完成。你可以重试生成，或基于已有上下文继续对话。",
+    "retry": "重试回复"
+  },
+  "tool": {
+    "view": "查看",
+    "cancel": "取消执行",
+    "pending": "仍在运行…",
+    "rejected": "已拒绝",
+    "failed": "失败",
+    "empty": "(空)",
+    "fileFallback": "文件",
+    "completedNoOutput": "已完成（无输出）",
+    "labels": {
+      "grep": {
+        "default": "在工作区搜索",
+        "withPattern": "在工作区搜索 '{{pattern}}'"
+      },
+      "readFile": "读取文件",
+      "listDirectory": "列出目录",
+      "editFile": "编辑文件",
+      "writeFile": "写入文件",
+      "runScript": "运行脚本",
+      "runShellEmpty": "运行命令",
+      "browserDetect": "检测浏览器依赖",
+      "invokeTool": "调用工具：{{toolName}}"
+    },
+    "descriptions": {
+      "grep": "在工作目录下搜索匹配的文件内容",
+      "readFile": "读取指定文件的完整内容",
+      "listDirectory": "列出目录下的文件和子目录",
+      "editFile": "通过字符串替换编辑文件",
+      "writeFile": "将完整内容写入文件",
+      "runScript": "执行 Python 脚本",
+      "runShell": "在会话工作目录下执行 shell 命令",
+      "browser": "在隔离浏览器中访问网页",
+      "browserDetect": "检测 browser 工具依赖是否就绪",
+      "invokeTool": "调用工具：{{toolName}}"
+    }
+  },
+  "input": {
+    "placeholder": "输入消息…",
+    "send": "发送消息",
+    "abort": "中止生成",
+    "hintIdle": "Enter 发送，Shift+Enter 换行",
+    "hintRunning": "执行中，Enter 或点击右侧按钮中止"
+  },
+  "confirm": {
+    "decisionAriaLabel": "确认：{{action}}",
+    "write": {
+      "allow": "允许写入",
+      "deny": "拒绝写入",
+      "editAction": "编辑「{{fileName}}」",
+      "writeAction": "写入「{{fileName}}」",
+      "writeFileFallback": "写入文件",
+      "editFileFallback": "编辑文件"
+    },
+    "shell": {
+      "allow": "确认执行",
+      "allowWithRisk": "我了解风险，确认执行",
+      "deny": "拒绝执行",
+      "defaultTitle": "Shell 命令",
+      "executeTitle": "执行 Shell 命令",
+      "highRisk": "高风险",
+      "pathSecurityWarning": "路径安全警示"
+    },
+    "script": {
+      "actionSummary": "运行 Python 脚本",
+      "allow": "确认运行",
+      "deny": "拒绝运行"
+    },
+    "lark": {
+      "allowWrite": "确认飞书写入",
+      "allowCommand": "确认飞书命令",
+      "denyWrite": "拒绝写入",
+      "denyCommand": "拒绝命令",
+      "writeBadge": "写入"
+    },
+    "browser": {
+      "allow": "确认操作",
+      "deny": "拒绝操作"
+    },
+    "collapsible": {
+      "collapse": "收起预览",
+      "expand": "展开全部（共 {{count}} 行）"
+    },
+    "previewTruncatedLine": "…（仅显示前 500 行）",
+    "previewCap": "变更超过 500 行，预览已截断；请结合文件树查看完整内容。"
+  },
+  "chatView": {
+    "warnings": {
+      "selectSession": "请先选择会话并等待配置加载",
+      "sessionRunning": "当前会话已有任务在执行",
+      "maxParallel": "最多同时执行 {{max}} 个会话，请稍后再试",
+      "apiKeyMissing": "请先在设置中配置 API Key",
+      "retryNoUserMessage": "找不到可重试的上一条用户消息"
+    },
+    "empty": {
+      "noSessionTitle": "选择或创建一个会话",
+      "noSessionDesc": "在左侧会话列表中新建或打开对话",
+      "startTitle": "开始对话",
+      "startDesc": "输入问题开始协作，例如：帮我整理 README 的要点。也可使用 /skill 或 /wiki 命令。"
+    }
+  },
+  "shell": {
+    "tuiTitle": "此命令需要交互式终端",
+    "tuiLine1": "SpaceAssistant 内的 run_shell 为只读输出，无法承载 less、vim、top、交互式 npm init 等全屏或需输入的程序。",
+    "tuiLine2": "请在外部系统终端中于工作目录下自行执行该命令；可使用下方按钮打开终端。",
+    "openTerminal": "在工作目录打开终端",
+    "workDirNotConfigured": "未配置工作目录，请先在设置中指定工作目录"
+  }
+}

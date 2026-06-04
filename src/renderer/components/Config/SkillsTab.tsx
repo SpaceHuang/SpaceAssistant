@@ -13,6 +13,8 @@ import {
   type RecommendedSkillEntry
 } from '../../../shared/recommendedSkills'
 import { configModalSelectPopupClassNames } from './configModalUi'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 function FolderOpenIcon() {
   return (
@@ -96,6 +98,8 @@ type Props = {
 
 export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }: Props) {
   const { message, modal } = App.useApp()
+  const { t } = useTypedTranslation('config')
+  const { t: tCommon } = useTypedTranslation('common')
   const [skills, setSkills] = useState<SkillDefinition[]>([])
   const [loading, setLoading] = useState(false)
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -132,10 +136,10 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
 
   const showInstallSuccess = (skillNames: string[]) => {
     if (skillNames.length === 1) {
-      setAlert({ type: 'success', text: `Skill「${skillNames[0]}」安装成功` })
+      setAlert({ type: 'success', text: t('skills.installSuccessOne', { name: skillNames[0] }) })
       setHighlightName(skillNames[0]!)
     } else {
-      setAlert({ type: 'success', text: `已成功安装 ${skillNames.length} 个 Skill` })
+      setAlert({ type: 'success', text: t('skills.installSuccessMany', { count: skillNames.length }) })
       setHighlightName(skillNames[0] ?? null)
     }
     setTimeout(() => setHighlightName(null), 2000)
@@ -153,6 +157,18 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     })
   }
 
+  const confirmOverwrite = (error: string) =>
+    new Promise<boolean>((resolve) => {
+      modal.confirm({
+        title: t('skills.existsTitle'),
+        content: t('skills.existsContent', { error }),
+        okText: tCommon('confirm'),
+        cancelText: tCommon('cancel'),
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      })
+    })
+
   const onInstall = async () => {
     setAlert(null)
     const picked = await window.api.dialogSelectDirectory()
@@ -163,14 +179,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     }
     let res = await window.api.skillInstall({ sourcePath: picked.path })
     if (!res.ok && res.error.includes('已存在')) {
-      const ok = await new Promise<boolean>((resolve) => {
-        modal.confirm({
-          title: 'Skill 已存在',
-          content: `${res.error}，是否覆盖？`,
-          onOk: () => resolve(true),
-          onCancel: () => resolve(false)
-        })
-      })
+      const ok = await confirmOverwrite(res.error)
       if (!ok) return
       res = await window.api.skillInstall({ sourcePath: picked.path, overwrite: true })
     }
@@ -188,14 +197,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     try {
       let res = await installFromUrl(entry)
       if (!res.ok && res.error.includes('已存在')) {
-        const ok = await new Promise<boolean>((resolve) => {
-          modal.confirm({
-            title: 'Skill 已存在',
-            content: `${res.error}，是否覆盖？`,
-            onOk: () => resolve(true),
-            onCancel: () => resolve(false)
-          })
-        })
+        const ok = await confirmOverwrite(res.error)
         if (!ok) return
         res = await installFromUrl(entry, true)
       }
@@ -214,13 +216,15 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
   const onDelete = (skill: SkillDefinition) => {
     if (skill.scope === 'project') return
     modal.confirm({
-      title: `删除 Skill「${skill.meta.name}」？`,
-      content: '将永久删除用户级 Skill 目录，此操作不可撤销。',
+      title: t('skills.deleteTitle', { name: skill.meta.name }),
+      content: t('skills.deleteContent'),
+      okText: tCommon('delete'),
       okType: 'danger',
+      cancelText: tCommon('cancel'),
       onOk: async () => {
         await window.api.skillDelete({ name: skill.meta.name })
         await loadSkills()
-        message.success('已删除')
+        message.success(t('skills.deleted'))
       }
     })
   }
@@ -229,13 +233,13 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     const picked = await window.api.dialogSelectDirectory()
     if ('canceled' in picked && picked.canceled) return
     if ('error' in picked) {
-      message.error(picked.error)
+      message.error(formatUserFacingError(picked.error))
       return
     }
     const dest = `${picked.path}/${skill.meta.name}`
     const res = await window.api.skillExport({ name: skill.meta.name, destPath: dest })
-    if (!res.ok) message.error(res.error)
-    else message.success(`已导出到 ${dest}`)
+    if (!res.ok) message.error(formatUserFacingError(res.error))
+    else message.success(t('skills.exportedTo', { path: dest }))
   }
 
   const visibleSkills = skills.filter((s) => !isProductBuiltinSkill(s.meta.name))
@@ -269,7 +273,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
 
       <Space direction="vertical" className="config-stack-block" size="middle">
         <Space wrap>
-          <Typography.Text>由 AI 根据 Skill 描述自动选择要加载的 Skill</Typography.Text>
+          <Typography.Text>{t('skills.autoDetect')}</Typography.Text>
           <Switch
             checked={autoDetect}
             onChange={async (checked) => {
@@ -279,12 +283,12 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
           />
         </Space>
         <div>
-          <Typography.Text className="config-field-label-block">始终加载</Typography.Text>
+          <Typography.Text className="config-field-label-block">{t('skills.alwaysLoad')}</Typography.Text>
           <Select
             mode="multiple"
             allowClear
             style={{ width: '100%' }}
-            placeholder="选择每次会话始终加载的 Skill"
+            placeholder={t('skills.alwaysLoadPlaceholder')}
             options={skillOptions}
             value={alwaysLoad.filter((n) => !isProductBuiltinSkill(n))}
             classNames={configModalSelectPopupClassNames}
@@ -297,24 +301,24 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
       </Space>
 
       <div className="config-skill-section-header">
-        <span className="config-section-title">Skill 管理</span>
+        <span className="config-section-title">{t('skills.managementTitle')}</span>
         <Space size={4}>
           {managementTab === 'installed' ? (
-            <Tooltip title="安装本地 Skill">
+            <Tooltip title={t('skills.installLocal')}>
               <Button
                 type="primary"
                 size="small"
                 icon={<DownloadIcon />}
-                aria-label="安装本地 Skill"
+                aria-label={t('skills.installLocalAria')}
                 onClick={() => void onInstall()}
               />
             </Tooltip>
           ) : null}
-          <Tooltip title="打开目录">
+          <Tooltip title={t('skills.openDirectory')}>
             <Button
               size="small"
               icon={<FolderOpenIcon />}
-              aria-label="打开目录"
+              aria-label={t('skills.openDirectoryAria')}
               onClick={() => void window.api.skillOpenDirectory({ scope: 'user' })}
             />
           </Tooltip>
@@ -328,7 +332,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
         items={[
           {
             key: 'installed',
-            label: '已安装',
+            label: t('skills.tabInstalled'),
             children: (
               <Table
                 size="small"
@@ -339,7 +343,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                 rowClassName={(r) => (r.meta.name === highlightName ? 'sa-skill-row-highlight' : '')}
                 columns={[
                   {
-                    title: headerTitle('enable', '启用'),
+                    title: headerTitle('enable', t('skills.columnEnable')),
                     width: widths.enable,
                     onCell: () => ({ style: { verticalAlign: 'middle' } }),
                     render: (_, skill) => {
@@ -357,7 +361,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                     }
                   },
                   {
-                    title: headerTitle('skill', 'Skill'),
+                    title: headerTitle('skill', t('skills.columnSkill')),
                     width: widths.skill,
                     render: (_, skill) => (
                       <div className="config-skill-table-cell">
@@ -369,17 +373,17 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                     )
                   },
                   {
-                    title: headerTitle('actions', '操作', 'center'),
+                    title: headerTitle('actions', t('skills.columnActions'), 'center'),
                     width: widths.actions,
                     onHeaderCell: () => ({ style: { textAlign: 'center' } }),
                     onCell: () => ({ style: { verticalAlign: 'middle' } }),
                     render: (_, skill) => (
                       <Space size={4}>
                         <Button type="link" size="small" onClick={() => void onExport(skill)}>
-                          导出
+                          {t('skills.export')}
                         </Button>
                         <Button type="link" size="small" danger disabled={skill.scope === 'project'} onClick={() => onDelete(skill)}>
-                          删除
+                          {tCommon('delete')}
                         </Button>
                       </Space>
                     )
@@ -390,7 +394,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
           },
           {
             key: 'recommended',
-            label: '推荐',
+            label: t('skills.tabRecommended'),
             children: (
               <Table
                 size="small"
@@ -399,7 +403,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                 dataSource={RECOMMENDED_SKILLS}
                 columns={[
                   {
-                    title: recommendedWidths.headerTitle('skill', 'Skill'),
+                    title: recommendedWidths.headerTitle('skill', t('skills.columnSkill')),
                     width: recommendedWidths.widths.skill,
                     render: (_, entry) => (
                       <div className="config-skill-table-cell">
@@ -411,7 +415,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                     )
                   },
                   {
-                    title: recommendedWidths.headerTitle('source', '来源'),
+                    title: recommendedWidths.headerTitle('source', t('skills.columnSource')),
                     width: recommendedWidths.widths.source,
                     render: (_, entry) => (
                       <div className="config-skill-table-cell">
@@ -423,13 +427,13 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                     )
                   },
                   {
-                    title: recommendedWidths.headerTitle('actions', '操作'),
+                    title: recommendedWidths.headerTitle('actions', t('skills.columnActions')),
                     width: recommendedWidths.widths.actions,
                     onCell: () => ({ style: { verticalAlign: 'middle' } }),
                     render: (_, entry) => {
                       const installed = isRecommendedSkillInstalled(entry, installedSkillNames)
                       return installed ? (
-                        <Tag color="success">已安装</Tag>
+                        <Tag color="success">{t('skills.installed')}</Tag>
                       ) : (
                         <Button
                           type="primary"
@@ -438,7 +442,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                           loading={installingRecommendedId === entry.id}
                           onClick={() => void onInstallRecommended(entry)}
                         >
-                          安装
+                          {t('skills.install')}
                         </Button>
                       )
                     }
@@ -457,7 +461,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
           items={[
             {
               key: 'log',
-              label: '激活审计（当前会话）',
+              label: t('skills.activationAudit'),
               children: (
                 <ul className="config-activation-log">
                   {activationLog.map((e, i) => (

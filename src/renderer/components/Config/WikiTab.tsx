@@ -1,6 +1,8 @@
 import { App, Button, Input, InputNumber, Space, Switch } from 'antd'
 import type { WikiConfig } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   wiki: WikiConfig
@@ -9,42 +11,48 @@ type Props = {
 
 export function WikiTab({ wiki, onChange }: Props) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('config')
 
   const initWiki = async () => {
     const result = await window.api.wikiInit({ installSkill: true })
     if (!result.ok) {
-      message.error(result.error)
+      message.error(formatUserFacingError(result.error))
       return
     }
-    message.success(`Wiki 已初始化：${result.rootPath}${result.skillInstalled ? '（已安装 llm-wiki Skill）' : ''}`)
+    message.success(
+      t('wiki.initSuccess', {
+        path: result.rootPath,
+        skillSuffix: result.skillInstalled ? t('wiki.skillInstalledSuffix') : ''
+      })
+    )
     await window.api.skillInvalidateCache()
   }
 
   return (
     <ConfigSettingsStack>
       <ConfigSwitchRow
-        label="启用 LLM Wiki"
+        label={t('wiki.enableLabel')}
         checked={wiki.enabled}
         onChange={(enabled) => onChange({ ...wiki, enabled })}
       />
-      <ConfigField label="Wiki 根路径（相对工作目录）">
+      <ConfigField label={t('wiki.rootPathLabel')}>
         <Input
           value={wiki.rootPath}
           onChange={(e) => onChange({ ...wiki, rootPath: e.target.value.trim() || 'llm-wiki' })}
-          placeholder="llm-wiki"
+          placeholder={t('wiki.rootPathPlaceholder')}
         />
       </ConfigField>
       <ConfigSwitchRow
-        label="从文件列表隐藏 Wiki 目录"
+        label={t('wiki.hideFromTreeLabel')}
         checked={wiki.hideWikiFromFileTree}
         onChange={(hideWikiFromFileTree) => onChange({ ...wiki, hideWikiFromFileTree })}
       />
       <ConfigSwitchRow
-        label="Ingest 前与用户交互确认要点"
+        label={t('wiki.interactiveIngestLabel')}
         checked={wiki.interactiveIngest}
         onChange={(interactiveIngest) => onChange({ ...wiki, interactiveIngest })}
       />
-      <ConfigField label="批量 Ingest 单批上限">
+      <ConfigField label={t('wiki.maxBatchIngestLabel')}>
         <InputNumber
           min={1}
           max={50}
@@ -54,7 +62,7 @@ export function WikiTab({ wiki, onChange }: Props) {
         />
       </ConfigField>
       <Button type="primary" onClick={() => void initWiki()} disabled={!wiki.enabled}>
-        初始化 Wiki
+        {t('wiki.initButton')}
       </Button>
     </ConfigSettingsStack>
   )

@@ -9,6 +9,7 @@ import {
 } from '../../hooks/useActionablePendingConfirms'
 import { formatToolLabel } from '../Chat/toolCallDisplay'
 import { sessionDisplayName } from '../../utils/sessionDisplay'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 function labelForItem(item: PendingConfirmItem, sessionName: string): string {
   if (item.toolName === 'run_script' || item.toolName === 'run_lark_cli' || item.toolName === 'run_shell') {
@@ -19,6 +20,7 @@ function labelForItem(item: PendingConfirmItem, sessionName: string): string {
 }
 
 export function PendingConfirmBanner() {
+  const { t } = useTypedTranslation('common')
   const dispatch = useAppDispatch()
   const sessions = useTypedSelector((s) => s.session.list)
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
@@ -35,14 +37,14 @@ export function PendingConfirmBanner() {
 
   const sessionName = (id: string) => {
     const s = sessions.find((x) => x.id === id)
-    return s ? sessionDisplayName(s.name) : '会话'
+    return s ? sessionDisplayName(s.name) : t('session.fallbackName')
   }
 
   return (
-    <div className="pending-confirm-banner" role="region" aria-label="待确认工具">
+    <div className="pending-confirm-banner" role="region" aria-label={t('session.pendingConfirm.aria')}>
       <div className="pending-confirm-banner__title">
         <AlertTriangle size={14} strokeWidth={1.75} aria-hidden />
-        <span>{actionable.length} 项待确认</span>
+        <span>{t('session.pendingConfirm.count', { count: actionable.length })}</span>
       </div>
       <div className="pending-confirm-banner__list">
         {actionable.map((item) => {

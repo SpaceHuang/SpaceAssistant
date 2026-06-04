@@ -1,0 +1,25 @@
+{
+  "contextMenu": {
+    "addToChat": "Add to chat",
+    "collectToWiki": "Add to Wiki",
+    "copyPath": "Copy path",
+    "copyRelPath": "Copy relative path",
+    "delete": "Delete",
+    "featureInDevelopment": "Feature in development",
+    "rename": "Rename..."
+  },
+  "copyAbsPathOk": "Absolute path copied",
+  "copyRelPathOk": "Relative path copied",
+  "defaultNewFolder": "New folder",
+  "deleteConfirm": {
+    "directoryBody": "Delete \"{{name}}\"? All contents in this folder will be removed.",
+    "fileBody": "Delete \"{{name}}\"? This cannot be undone.",
+    "title": "Confirm delete"
+  },
+  "moveFailed": "Move failed",
+  "paneTitle": "Files",
+  "toolbar": {
+    "newDirectory": "New folder",
+    "refresh": "Refresh"
+  }
+}

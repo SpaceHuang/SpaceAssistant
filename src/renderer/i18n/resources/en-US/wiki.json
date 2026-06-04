@@ -1,0 +1,13 @@
+{
+  "empty": {
+    "desc": "Initialization creates the Wiki folder and index page for agent archiving and search.",
+    "initButton": "Initialize Wiki",
+    "title": "Wiki not initialized"
+  },
+  "initSuccess": "Wiki initialized",
+  "paneTitle": "Wiki",
+  "toolbar": {
+    "openInExplorer": "Reveal in file explorer",
+    "refresh": "Refresh"
+  }
+}

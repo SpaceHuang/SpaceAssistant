@@ -50,6 +50,7 @@ describe('stripPlanFieldsFromSessionMetadata', () => {
 
 describe('stripPlanFieldsFromAppConfig', () => {
   const baseConfig = {
+    locale: 'zh-CN' as const,
     apiKeyPresent: true,
     baseUrl: 'https://api.example.com',
     llmServices: [],

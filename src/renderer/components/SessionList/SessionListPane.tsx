@@ -11,8 +11,11 @@ import { abortSessionRun } from '../../services/chatRunnerService'
 import { PendingConfirmBanner } from './PendingConfirmBanner'
 import { SessionDeleteConfirmModal } from './SessionDeleteConfirmModal'
 import { SessionListIcon } from './SessionListIcon'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
 
 export function SessionListPane() {
+  const { t } = useTypedTranslation('common')
   const { message } = AntdApp.useApp()
   const dispatch = useAppDispatch()
   const sessions = useTypedSelector((s) => s.session.list)
@@ -30,7 +33,7 @@ export function SessionListPane() {
 
   const stopRun = (id: string) => {
     abortSessionRun(id)
-    message.info('已中止该会话的执行')
+    message.info(t('session.aborted'))
   }
 
   const del = async (id: string): Promise<boolean> => {
@@ -41,10 +44,10 @@ export function SessionListPane() {
       await window.api.sessionDelete(id)
       dispatch(removeSession(id))
       if (currentId === id) dispatch(setSession(null))
-      message.success('已删除')
+      message.success(t('session.deleted'))
       return true
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '删除会话失败，请稍后重试')
+      message.error(formatUserFacingError(e instanceof Error ? e.message : t('session.deleteFailed')))
       return false
     } finally {
       setDeletingId(null)
@@ -61,8 +64,8 @@ export function SessionListPane() {
     <div className="sider-pane">
       <Input
         allowClear
-        placeholder="搜索会话"
-        aria-label="搜索会话"
+        placeholder={t('session.searchPlaceholder')}
+        aria-label={t('session.searchAria')}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         className="session-list-search"
@@ -115,7 +118,7 @@ export function SessionListPane() {
                           <button
                             type="button"
                             className="session-item-stop"
-                            aria-label={`中止「${sessionDisplayName(item.name)}」的执行`}
+                            aria-label={t('session.stopAria', { name: sessionDisplayName(item.name) })}
                             onClick={() => stopRun(item.id)}
                           >
                             <Square size={10} strokeWidth={2} fill="currentColor" aria-hidden />
@@ -124,7 +127,7 @@ export function SessionListPane() {
                         <button
                           type="button"
                           className="session-item-delete"
-                          aria-label={`删除会话「${sessionDisplayName(item.name)}」`}
+                          aria-label={t('session.deleteAria', { name: sessionDisplayName(item.name) })}
                           disabled={deleting}
                           aria-busy={deleting}
                           onClick={() => {

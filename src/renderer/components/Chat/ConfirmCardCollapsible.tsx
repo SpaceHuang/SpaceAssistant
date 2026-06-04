@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const COLLAPSED_LINES = 10
 const EXPANDED_MAX_HEIGHT_PX = 360
@@ -11,6 +12,7 @@ type Props = {
 }
 
 export function ConfirmCardCollapsible({ children, lineCount, className }: Props) {
+  const { t } = useTypedTranslation('chat')
   const [expanded, setExpanded] = useState(false)
   const canExpand = lineCount > COLLAPSED_LINES
 
@@ -39,7 +41,9 @@ export function ConfirmCardCollapsible({ children, lineCount, className }: Props
             aria-expanded={expanded}
             onClick={() => setExpanded((v) => !v)}
           >
-            <span>{expanded ? '收起预览' : `展开全部（共 ${lineCount} 行）`}</span>
+            <span>
+              {expanded ? t('confirm.collapsible.collapse') : t('confirm.collapsible.expand', { count: lineCount })}
+            </span>
             <ChevronDown
               size={14}
               strokeWidth={2.25}

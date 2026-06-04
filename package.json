@@ -9,6 +9,11 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "i18n:generate-types": "tsx scripts/generate-i18n-types.ts",
+    "i18n:check": "tsx scripts/i18n-check.ts",
+    "i18n:check:strict": "tsx scripts/i18n-check.ts --strict-hardcoded",
+    "predev": "npm run i18n:generate-types",
+    "prebuild:renderer": "npm run i18n:generate-types",
     "dev:renderer": "vite --strictPort",
     "dev:electron": "npm run build:electron:incremental && npx --yes electron@33.2.0 dist-electron/electron/main.js",
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
@@ -64,6 +69,7 @@
     "png-to-ico": "^2.1.8",
     "rimraf": "^6.0.1",
     "sharp": "^0.33.5",
+    "tsx": "^4.22.4",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
     "vitest": "^4.1.0"

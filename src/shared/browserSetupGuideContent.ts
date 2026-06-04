@@ -17,37 +17,37 @@ export type BrowserSetupGuideContent = {
 
 const FORCE_INSTALL_CMD = 'npx playwright install --force chromium'
 
-function terminalHint(platform: string): string {
-  if (platform === 'win32') return '打开 Windows Terminal 或 PowerShell'
-  if (platform === 'darwin') return '打开「终端.app」'
-  return '打开终端'
+function terminalHint(platform: string, t: (key: string) => string): string {
+  if (platform === 'win32') return t('feishu:remote.browser.setup.terminalHintWin')
+  if (platform === 'darwin') return t('feishu:remote.browser.setup.terminalHintMac')
+  return t('feishu:remote.browser.setup.terminalHintLinux')
 }
 
-function cwdDescription(_detect: BrowserDetectResult): string {
-  return '请在下方目录打开终端（应用安装位置）'
+function cwdDescription(_detect: BrowserDetectResult, t: (key: string) => string): string {
+  return t('feishu:remote.browser.setup.cwdDescription')
 }
 
-function buildTroubleshooting(platform: string): Array<{ title: string; body: string }> {
+function buildTroubleshooting(platform: string, t: (key: string) => string): Array<{ title: string; body: string }> {
   const common = [
     {
-      title: '网络',
-      body: '安装需联网下载约 150–200MB。若使用代理，请确保终端可访问 cdn.playwright.dev。'
+      title: t('feishu:remote.browser.setup.troubleshootNetworkTitle'),
+      body: t('feishu:remote.browser.setup.troubleshootNetworkBody')
     },
     {
-      title: '磁盘空间',
-      body: '请至少预留 500MB 可用空间。'
+      title: t('feishu:remote.browser.setup.troubleshootDiskTitle'),
+      body: t('feishu:remote.browser.setup.troubleshootDiskBody')
     },
     {
-      title: '仍失败',
-      body: '可点击「复制诊断信息」并将内容用于排查（不含 API Key）。'
+      title: t('feishu:remote.browser.setup.troubleshootStillFailTitle'),
+      body: t('feishu:remote.browser.setup.troubleshootStillFailBody')
     }
   ]
 
   if (platform === 'win32') {
     return [
       {
-        title: 'Windows 杀毒',
-        body: 'Windows Defender 可能隔离 %LOCALAPPDATA%\\ms-playwright 下的 chrome.exe，请添加排除项或允许运行后重试。'
+        title: t('feishu:remote.browser.setup.troubleshootDefenderTitle'),
+        body: t('feishu:remote.browser.setup.troubleshootDefenderBody')
       },
       ...common
     ]
@@ -56,12 +56,12 @@ function buildTroubleshooting(platform: string): Array<{ title: string; body: st
   if (platform === 'darwin') {
     return [
       {
-        title: 'macOS Gatekeeper',
-        body: '首次运行 Chromium 可能提示无法验证开发者。请到「系统设置 → 隐私与安全性」允许，或参考 Playwright 文档移除隔离属性。'
+        title: t('feishu:remote.browser.setup.troubleshootGatekeeperTitle'),
+        body: t('feishu:remote.browser.setup.troubleshootGatekeeperBody')
       },
       {
-        title: '缓存位置',
-        body: 'Playwright 默认将浏览器下载到 ~/Library/Caches/ms-playwright/'
+        title: t('feishu:remote.browser.setup.troubleshootCacheMacTitle'),
+        body: t('feishu:remote.browser.setup.troubleshootCacheMacBody')
       },
       ...common
     ]
@@ -69,8 +69,8 @@ function buildTroubleshooting(platform: string): Array<{ title: string; body: st
 
   return [
     {
-      title: '缓存位置',
-      body: 'Playwright 默认将浏览器下载到 ~/.cache/ms-playwright/'
+      title: t('feishu:remote.browser.setup.troubleshootCacheLinuxTitle'),
+      body: t('feishu:remote.browser.setup.troubleshootCacheLinuxBody')
     },
     ...common
   ]
@@ -78,7 +78,8 @@ function buildTroubleshooting(platform: string): Array<{ title: string; body: st
 
 export function buildBrowserSetupGuideContent(
   detect: BrowserDetectResult,
-  platform: string = typeof process !== 'undefined' ? process.platform : 'win32'
+  platform: string = typeof process !== 'undefined' ? process.platform : 'win32',
+  t: (key: string, options?: Record<string, string>) => string = (key) => key
 ): BrowserSetupGuideContent {
   const failure = detect.primaryFailure
   const showNpmInstall = false
@@ -89,24 +90,24 @@ export function buildBrowserSetupGuideContent(
     failure === 'chromium_path_unresolved' ||
     failure === 'init_probe_failed'
 
-  let summary = detect.errors[0] ?? '浏览器依赖未就绪'
+  let summary = detect.errors[0] ?? t('feishu:remote.browser.setup.depNotReady')
   if (failure === 'ok') {
-    summary = 'Chromium 已就绪，可以使用浏览器工具。'
+    summary = t('feishu:remote.browser.setup.okSummary')
   } else if (failure === 'node_version_low') {
-    summary = detect.errors[0] ?? '应用内置 Node 版本过低，请升级 SpaceAssistant。'
+    summary = detect.errors[0] ?? t('feishu:remote.browser.setup.nodeTooLow')
   }
 
   return {
-    title: failure === 'ok' ? '浏览器依赖已就绪' : '浏览器依赖修复',
+    title: failure === 'ok' ? t('feishu:remote.browser.setup.okTitle') : t('feishu:remote.browser.setup.fixTitle'),
     summary,
-    terminalHint: terminalHint(platform),
-    cwdLabel: cwdDescription(detect),
+    terminalHint: terminalHint(platform, t),
+    cwdLabel: cwdDescription(detect, t),
     showNpmInstall,
     npmInstallCmd: NPM_INSTALL_CMD,
     chromiumInstallCmd: CHROMIUM_INSTALL_CMD,
     showForceInstall,
     forceInstallCmd: FORCE_INSTALL_CMD,
-    troubleshooting: buildTroubleshooting(platform),
+    troubleshooting: buildTroubleshooting(platform, t),
     showPackagedDefect
   }
 }

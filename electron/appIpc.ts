@@ -2,7 +2,7 @@ import fs from 'fs/promises'
 import { existsSync, type Dirent } from 'fs'
 import path from 'path'
 import type { IpcMain } from 'electron'
-import { BrowserWindow, dialog, shell } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
 import {
   appendMessage,
@@ -35,6 +35,7 @@ import type {
   ToolsConfig
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
+import { ErrorCodes } from '../src/shared/errorCodes'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
@@ -42,6 +43,7 @@ import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generatePr
 import { createSkillManager } from './skills/skillManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
+import { rebuildAppMenu } from './menu'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
 import {
   LlmServiceValidationError,
@@ -75,6 +77,7 @@ import { getWikiStatus } from './wiki/wikiStatus'
 import { classifyWikiPath } from './wiki/wikiPaths'
 import { copyFileInWorkDir, importRawFromWorkDir } from './wiki/wikiImport'
 import { openExternalLink } from './externalLink'
+import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
@@ -93,8 +96,17 @@ const CONFIG_KEYS = {
   workDirProfiles: 'config.workDirProfiles',
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
-  browser: 'config.browser'
+  browser: 'config.browser',
+  locale: 'config.locale'
 } as const
+
+export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
+  const stored = getConfigValue(db, CONFIG_KEYS.locale)
+  if (stored && isAppLocale(stored)) return stored
+  const detected = detectLocaleFromSystem(app.getLocale())
+  setConfigValue(db, CONFIG_KEYS.locale, detected)
+  return detected
+}
 
 export type AppIpcContext = {
   db: AppDatabase
@@ -230,7 +242,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         proc.on('close', (code) => {
           const v = out.trim()
           if (code === 0 && v) resolve({ ok: true, version: v })
-          else resolve({ ok: false, error: v || `进程退出码 ${code}` })
+          else resolve({ ok: false, error: v || `${ErrorCodes.SHELL_PROCESS_EXIT_CODE}|${code ?? ''}` })
         })
       })
     }
@@ -244,7 +256,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     ): Promise<{ ok: boolean; error?: string }> => {
       const { testShellExecutable } = await import('./tools/runShellExecutor')
       const exe = typeof payload.executable === 'string' ? payload.executable.trim() : ''
-      if (!exe) return { ok: false, error: '请填写可执行文件路径' }
+      if (!exe) return { ok: false, error: ErrorCodes.SHELL_EXECUTABLE_REQUIRED }
       return testShellExecutable(exe, payload.argsPrefix, ctx.getWorkDir())
     }
   )
@@ -253,7 +265,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     'shell:open-output-path',
     async (_e, absPath: string): Promise<{ ok: true } | { ok: false; error: string }> => {
       const target = typeof absPath === 'string' ? absPath.trim() : ''
-      if (!target) return { ok: false, error: '路径无效' }
+      if (!target) return { ok: false, error: ErrorCodes.INVALID_PATH }
       const err = await shell.openPath(target)
       return err ? { ok: false, error: err } : { ok: true }
     }
@@ -454,8 +466,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
     const browser = readBrowserConfigFromDb(ctx.db)
     const shell = readShellConfigFromDb(ctx.db)
+    const locale = readAppLocale(ctx.db)
     stripPlanConfigFromDbIfNeeded(ctx.db)
     return stripPlanFieldsFromAppConfig({
+      locale,
       apiKeyPresent: activeService?.apiKeyPresent ?? Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc)),
       baseUrl: activeService?.baseUrl ?? getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
       llmServices,
@@ -501,6 +515,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         maxParallelChatSessions: number
         browser: Partial<BrowserConfig>
         shell: Partial<ShellConfig>
+        locale: AppConfig['locale']
       }>
     ): Promise<void> => {
       try {
@@ -640,6 +655,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           JSON.stringify(mergeToolsConfig({ ...curTools, deniedTools }))
         )
       }
+      if (payload.locale !== undefined && isAppLocale(payload.locale)) {
+        setConfigValue(ctx.db, CONFIG_KEYS.locale, payload.locale)
+        rebuildAppMenu(payload.locale)
+      }
       stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()
     }
@@ -654,7 +673,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       try {
         const creds = await resolveTestConnectionCredentials(ctx.db, options)
         if (creds.error || !creds.apiKey) {
-          return { success: false, error: creds.error ?? 'API Key 未配置' }
+          return { success: false, error: creds.error ?? ErrorCodes.API_KEY_NOT_CONFIGURED }
         }
 
         const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
@@ -670,7 +689,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         if (!enabledModel) {
           return {
             success: false,
-            error: '请先在默认大模型设置中启用至少一个模型'
+            error: ErrorCodes.NO_ENABLED_MODEL
           }
         }
 
@@ -755,7 +774,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       payload: { htmlContent: string; defaultPath: string }
     ): Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }> => {
       const win = getMainWindow()
-      if (!win) return { ok: false, error: '窗口未就绪' }
+      if (!win) return { ok: false, error: ErrorCodes.WINDOW_NOT_READY }
 
       const root = ctx.getWorkDir()
       const absFile = path.isAbsolute(payload.defaultPath)
@@ -813,7 +832,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('file:rename', async (_e, rel: string, newName: string): Promise<void> => {
     if (newName.includes('/') || newName.includes('\\')) {
-      throw new Error('新名称不允许包含路径分隔符')
+      throw new Error(ErrorCodes.NAME_CONTAINS_PATH_SEPARATOR)
     }
     const root = ctx.getWorkDir()
     const oldPath = resolveSafePath(root, rel)
@@ -827,7 +846,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const destDirPath = resolveSafePath(root, destDirRel)
     const destStat = await fs.stat(destDirPath)
     if (!destStat.isDirectory()) {
-      throw new Error('目标路径不是目录')
+      throw new Error(ErrorCodes.TARGET_NOT_DIRECTORY)
     }
     const srcName = path.basename(srcPath)
     await fs.rename(srcPath, path.join(destDirPath, srcName))
@@ -866,7 +885,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('dialog:select-directory', async (): Promise<{ path: string } | { canceled: true } | { error: string }> => {
     const win = getMainWindow()
-    if (!win) return { error: '窗口未就绪' }
+    if (!win) return { error: ErrorCodes.WINDOW_NOT_READY }
     const result = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
     return { path: result.filePaths[0] }
@@ -993,7 +1012,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       payload.scope === 'project'
         ? getProjectSkillsDir(ctx.getWorkDir())
         : getUserSkillsDir(ctx.getUserDataPath())
-    if (!dir) throw new Error('工作目录未配置，无法打开项目级 Skill 目录')
+    if (!dir) throw new Error(ErrorCodes.WORK_DIR_NOT_CONFIGURED)
     await shell.openPath(dir)
   })
 
@@ -1096,14 +1115,14 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       // Check if file already exists
       const memoryPath = path.join(workDir, 'SPACEASSISTANT.md')
       if (existsSync(memoryPath)) {
-        return { success: false as const, error: 'SPACEASSISTANT.md 已存在，请先删除或编辑现有文件' }
+        return { success: false as const, error: ErrorCodes.PROJECT_MEMORY_ALREADY_EXISTS }
       }
 
       const prompt = await generateProjectMemory(workDir)
 
       const apiKey = await ctx.getApiKey()
       if (!apiKey) {
-        return { success: false as const, error: 'API Key 未配置，请先在设置中配置 API Key' }
+        return { success: false as const, error: ErrorCodes.API_KEY_NOT_CONFIGURED }
       }
 
       const client = createAnthropicClient(apiKey, undefined)
@@ -1119,7 +1138,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
       const content = res.content[0]?.type === 'text' ? res.content[0].text : ''
       if (!content) {
-        return { success: false as const, error: 'LLM 未返回有效内容' }
+        return { success: false as const, error: ErrorCodes.LLM_EMPTY_RESPONSE }
       }
 
       await writeProjectMemory(workDir, content)

@@ -11,6 +11,7 @@ import {
 import { resolveEffectiveShellOutputMode } from '../../../shared/shellOutputMode'
 import { isInteractiveShellTuiCommand } from '../../../shared/shellInteractiveTui'
 import { patchShellTerminalScrollback } from '../../services/shellScrollbackPatch'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import {
   formatToolLabel,
   formatToolLabelTitle,
@@ -33,6 +34,7 @@ import { ShellTerminalView } from './ShellTerminalView'
 import { ShellScrollbackView } from './ShellScrollbackView'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
 import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
@@ -84,6 +86,7 @@ export function ToolCallCard({
   onCancel,
   onOpenFile
 }: Props) {
+  const { t } = useTypedTranslation('chat')
   const cardRef = useRef<HTMLDivElement>(null)
   const [executingHint, setExecutingHint] = useState(false)
   const [terminalFallbackPlain, setTerminalFallbackPlain] = useState(false)
@@ -205,11 +208,11 @@ export function ToolCallCard({
   const showDetail = (expanded || writeConfirming || browserConfirming || shellConfirming || scriptConfirming || larkCliConfirming) && hasDetail
 
   const label = useMemo(() => {
-    const silent = shellToolCompletedLabel(record)
+    const silent = shellToolCompletedLabel(record, t)
     if (silent) return silent
     if (record.toolName === 'browser') return formatBrowserToolLabel(record.input)
-    return formatToolLabel(record.toolName, record.input)
-  }, [record])
+    return formatToolLabel(record.toolName, record.input, t)
+  }, [record, t])
   const labelTitle = useMemo(() => {
     if (record.toolName === 'browser') return formatBrowserToolLabelTitle(record.input)
     return formatToolLabelTitle(record.toolName, record.input)
@@ -232,7 +235,7 @@ export function ToolCallCard({
       if (record.result.data === undefined) return ''
       return typeof record.result.data === 'string' ? record.result.data : JSON.stringify(record.result.data, null, 2)
     }
-    return record.result.error ?? ''
+    return formatUserFacingError(record.result.error ?? '')
   }, [record.result, record.toolName, shellHasFormattedOutput])
 
   const toggleExpanded = () => {
@@ -393,7 +396,7 @@ export function ToolCallCard({
           !showShellLivePlain &&
           !isInteractiveTui &&
           executingHint ? (
-            <span className="tool-row-detail__message">仍在运行…</span>
+            <span className="tool-row-detail__message">{t('tool.pending')}</span>
           ) : null}
 
           {shellCommand ? <ShellTuiFallbackHint command={shellCommand} workDir={workDir} /> : null}
@@ -405,13 +408,13 @@ export function ToolCallCard({
           record.toolName !== 'grep' &&
           record.toolName !== 'run_shell' ? (
             <Button danger size="small" type="text" className="tool-row-detail__action" onClick={onCancel}>
-              取消执行
+              {t('tool.cancel')}
             </Button>
           ) : null}
 
           {showGenericFailureMessage ? (
             <span className="tool-row-detail__message">
-              {record.result?.error ?? (record.status === 'rejected' ? '已拒绝' : '失败')}
+              {record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
             </span>
           ) : null}
 

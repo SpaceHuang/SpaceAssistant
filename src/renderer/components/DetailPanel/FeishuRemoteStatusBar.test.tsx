@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
 import { App } from 'antd'
+import { changeAppLocale } from '../../i18n/localeSync'
 import configReducer from '../../store/configSlice'
 import { FeishuRemoteStatusBar } from './FeishuRemoteStatusBar'
 import { type FeishuHealthCheck } from '../../../shared/feishuTypes'
@@ -12,7 +13,7 @@ vi.mock('./useFeishuRemoteDisplayStatus', () => ({
 }))
 
 vi.mock('../Config/FeishuAuditDrawer', () => ({
-  FeishuAuditDrawer: ({ open }: { open: boolean }) => (open ? <div>飞书操作记录</div> : null)
+  FeishuAuditDrawer: ({ open }: { open: boolean }) => (open ? <div data-testid="feishu-audit-drawer" /> : null)
 }))
 
 import { useFeishuRemoteDisplayStatus } from './useFeishuRemoteDisplayStatus'
@@ -44,14 +45,14 @@ describe('FeishuRemoteStatusBar', () => {
   const start = vi.fn()
   const stop = vi.fn()
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
     start.mockReset()
     stop.mockReset()
     mockHook.mockReturnValue({
       status: {
         displayState: 'stopped',
-        label: '已停止',
-        subtext: '服务已停止',
+        subtextKey: 'serviceStopped',
         startEnabled: true,
         stopEnabled: false,
         eventStatus: { state: 'stopped', processedCount: 0 },
@@ -68,15 +69,22 @@ describe('FeishuRemoteStatusBar', () => {
     vi.clearAllMocks()
   })
 
-  it('renders main label from status', () => {
+  it('renders main label from status (zh-CN)', () => {
     renderBar()
     expect(screen.getByText('已停止')).toBeDefined()
     expect(screen.getByText('服务已停止')).toBeDefined()
   })
 
+  it('renders main label from status (en-US)', async () => {
+    await changeAppLocale('en-US')
+    renderBar()
+    expect(screen.getByText('Stopped')).toBeDefined()
+    expect(screen.getByText('Service stopped')).toBeDefined()
+  })
+
   it('dispatches openSettings with feishu tab when main area clicked', () => {
     const { store } = renderBar()
-    fireEvent.click(screen.getByRole('button', { name: /已停止/ }).closest('.feishu-remote-status-main')!)
+    fireEvent.click(screen.getByText('已停止').closest('.feishu-remote-status-main')!)
     const state = store.getState()
     expect(state.config.settingsOpen).toBe(true)
     expect(state.config.settingsActiveTab).toBe('feishu')
@@ -94,7 +102,7 @@ describe('FeishuRemoteStatusBar', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开飞书操作记录' }))
     expect(store.getState().config.settingsOpen).toBe(false)
     await waitFor(() => {
-      expect(screen.getByText('飞书操作记录')).toBeDefined()
+      expect(screen.getByTestId('feishu-audit-drawer')).toBeDefined()
     })
   })
 
@@ -108,7 +116,7 @@ describe('FeishuRemoteStatusBar', () => {
     mockHook.mockReturnValue({
       status: {
         displayState: 'listening',
-        label: '监听中',
+        subtextKey: 'connecting',
         startEnabled: false,
         stopEnabled: true,
         eventStatus: { state: 'connected', processedCount: 1 },
@@ -128,7 +136,7 @@ describe('FeishuRemoteStatusBar', () => {
     mockHook.mockReturnValue({
       status: {
         displayState: 'stopped',
-        label: '已停止',
+        subtextKey: 'serviceStopped',
         startEnabled: true,
         stopEnabled: false,
         eventStatus: { state: 'stopped', processedCount: 0 },
@@ -148,10 +156,9 @@ describe('FeishuRemoteStatusBar', () => {
     mockHook.mockReturnValue({
       status: {
         displayState: 'error',
-        label: '出错',
         startEnabled: true,
         stopEnabled: true,
-        tooltip: '连接超时\n已处理：0',
+        tooltipData: { lastError: '连接超时', processedCount: 0 },
         eventStatus: { state: 'error', processedCount: 0, lastError: '连接超时' },
         health: baseHealth
       },

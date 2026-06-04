@@ -1,0 +1,83 @@
+{
+  "remote": {
+    "auditLog": "操作记录",
+    "connectionDesc": "飞书连接",
+    "label": {
+      "error": "出错",
+      "listening": "监听中",
+      "stopped": "已停止",
+      "unconfigured": "未配置"
+    },
+    "mainTooltipListening": "监听中 · {{subtext}}",
+    "start": "启动",
+    "startAria": "启动飞书远程指令监听",
+    "startDisabled": {
+      "completeConfig": "请先完成飞书配置",
+      "enableRemote": "请先在设置中启用远程指令监听"
+    },
+    "stop": "停止",
+    "stopAria": "停止飞书远程指令监听",
+    "subtext": {
+      "connecting": "正在连接…",
+      "fetchFailed": "状态获取失败",
+      "goToSettings": "前往设置完成配置",
+      "processedCount": "已处理 {{count}}",
+      "remoteOff": "远程监听已关闭",
+      "serviceStopped": "服务已停止"
+    },
+    "tooltip": {
+      "lastError": "{{message}}",
+      "lastInbound": "最近入站：{{time}}",
+      "lastReply": "最近回复：{{time}}",
+      "processed": "已处理：{{count}}",
+      "startedAt": "启动时间：{{time}}",
+      "unknownError": "未知错误"
+    },
+    "auditAria": "打开飞书操作记录",
+    "browser": {
+      "setup": {
+        "okTitle": "浏览器依赖已就绪",
+        "fixTitle": "浏览器依赖修复",
+        "okSummary": "Chromium 已就绪，可以使用浏览器工具。",
+        "depNotReady": "浏览器依赖未就绪",
+        "nodeTooLow": "应用内置 Node 版本过低，请升级 SpaceAssistant。",
+        "terminalHintWin": "打开 Windows Terminal 或 PowerShell",
+        "terminalHintMac": "打开「终端.app」",
+        "terminalHintLinux": "打开终端",
+        "cwdDescription": "请在下方目录打开终端（应用安装位置）",
+        "stepInstall": "安装 npm 依赖后继续执行 Chromium 步骤：",
+        "stepRunInstall": "执行安装命令：",
+        "stepRedetect": "完成后点击「重新检测」",
+        "clickToExpand": "点击展开详情",
+        "networkOk": "网络访问功能正常",
+        "detectPassed": "检测通过，浏览器工具可以初始化。",
+        "redetect": "重新检测",
+        "diagnosticInfo": "诊断信息",
+        "copyDiagnostic": "复制诊断信息",
+        "installSteps": "安装步骤",
+        "copyDir": "复制目录",
+        "copy": "复制",
+        "copyCmd": "复制命令",
+        "openInTerminal": "在终端中打开",
+        "allSteps": "全部步骤",
+        "copyAllSteps": "复制全部步骤",
+        "forceInstallLabel": "覆盖损坏安装（进阶）",
+        "troubleshootLabel": "安装很慢 / 失败？查看故障排除",
+        "troubleshootNetworkTitle": "网络",
+        "troubleshootNetworkBody": "安装需联网下载约 150–200MB。若使用代理，请确保终端可访问 cdn.playwright.dev。",
+        "troubleshootDiskTitle": "磁盘空间",
+        "troubleshootDiskBody": "请至少预留 500MB 可用空间。",
+        "troubleshootStillFailTitle": "仍失败",
+        "troubleshootStillFailBody": "可点击「复制诊断信息」并将内容用于排查（不含 API Key）。",
+        "troubleshootDefenderTitle": "Windows 杀毒",
+        "troubleshootDefenderBody": "Windows Defender 可能隔离 %LOCALAPPDATA%\\ms-playwright 下的 chrome.exe，请添加排除项或允许运行后重试。",
+        "troubleshootGatekeeperTitle": "macOS Gatekeeper",
+        "troubleshootGatekeeperBody": "首次运行 Chromium 可能提示无法验证开发者。请到「系统设置 → 隐私与安全性」允许，或参考 Playwright 文档移除隔离属性。",
+        "troubleshootCacheMacTitle": "缓存位置",
+        "troubleshootCacheMacBody": "Playwright 默认将浏览器下载到 ~/Library/Caches/ms-playwright/",
+        "troubleshootCacheLinuxTitle": "缓存位置",
+        "troubleshootCacheLinuxBody": "Playwright 默认将浏览器下载到 ~/.cache/ms-playwright/"
+      }
+    }
+  }
+}

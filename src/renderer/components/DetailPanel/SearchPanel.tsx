@@ -8,6 +8,7 @@ import {
   type SearchMatch,
   type SearchOptions
 } from './searchUtils'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   open: boolean
@@ -16,6 +17,7 @@ type Props = {
 }
 
 export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
+  const { t } = useTypedTranslation('search')
   const { previewContent, fileType, viewMode } = useDetailPanel()
   const [query, setQuery] = useState('')
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -89,7 +91,7 @@ export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
       <div className="detail-search-row">
         <Input
           size="small"
-          placeholder="查找"
+          placeholder={t('detail.placeholder')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           status={regexError ? 'error' : undefined}
@@ -99,7 +101,7 @@ export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
           <button
             type="button"
             className={`detail-search-opt${options.caseSensitive ? ' active' : ''}`}
-            title="大小写匹配 (Alt+C)"
+            title={t('detail.caseSensitiveTitle')}
             onClick={() => setOptions((o) => ({ ...o, caseSensitive: !o.caseSensitive }))}
           >
             Aa
@@ -107,7 +109,7 @@ export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
           <button
             type="button"
             className={`detail-search-opt${options.wholeWord ? ' active' : ''}`}
-            title="整词匹配 (Alt+W)"
+            title={t('detail.wholeWordTitle')}
             onClick={() => setOptions((o) => ({ ...o, wholeWord: !o.wholeWord }))}
           >
             W
@@ -115,7 +117,7 @@ export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
           <button
             type="button"
             className={`detail-search-opt${options.useRegex ? ' active' : ''}`}
-            title="正则表达式 (Alt+R)"
+            title={t('detail.regexTitle')}
             onClick={() => setOptions((o) => ({ ...o, useRegex: !o.useRegex }))}
           >
             .*
@@ -130,7 +132,7 @@ export function SearchPanel({ open, onClose, onHighlightsChange }: Props) {
         <Button size="small" type="text" onClick={goNext} disabled={matches.length === 0}>
           ↓
         </Button>
-        <button type="button" className="detail-toolbar-btn" title="关闭" onClick={onClose}>
+        <button type="button" className="detail-toolbar-btn" title={t('detail.closeTitle')} onClick={onClose}>
           <X className="detail-toolbar-icon" size={16} strokeWidth={2} aria-hidden />
         </button>
       </div>

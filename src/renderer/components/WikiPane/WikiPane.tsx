@@ -5,6 +5,8 @@ import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
 import { WikiPaneToolbar } from './WikiPaneToolbar'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './wikiPane.css'
 
 type Props = {
@@ -16,6 +18,7 @@ type Props = {
 
 export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectToWiki }: Props) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('wiki')
   const cfg = useTypedSelector((s) => s.config.config)
   const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
   const wikiRoot = wiki.rootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
@@ -61,10 +64,10 @@ export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectTo
   const initWiki = async () => {
     const result = await window.api.wikiInit({ installSkill: true })
     if (!result.ok) {
-      message.error(result.error)
+      message.error(formatUserFacingError(result.error))
       return
     }
-    message.success('Wiki 已初始化')
+    message.success(t('initSuccess'))
     await window.api.skillInvalidateCache()
     await refreshWikiStatus()
     void wikiTreeRef.current?.refresh()
@@ -73,7 +76,7 @@ export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectTo
   return (
     <div className="wiki-pane">
       <div className="app-pane-header sider-content-header wiki-pane-header">
-        <span className="app-pane-header-title">Wiki</span>
+        <span className="app-pane-header-title">{t('paneTitle')}</span>
         <WikiPaneToolbar
           showOpen={wikiInitialized === true}
           refreshDisabled={!wikiInitialized}
@@ -84,10 +87,10 @@ export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectTo
       <div className="wiki-pane-body">
         {wikiInitialized === false ? (
           <div className="wiki-pane-empty">
-            <p className="wiki-pane-empty-title">Wiki 尚未初始化</p>
-            <p className="wiki-pane-empty-desc">初始化后将创建 Wiki 目录与索引页，便于 Agent 归档与检索。</p>
+            <p className="wiki-pane-empty-title">{t('empty.title')}</p>
+            <p className="wiki-pane-empty-desc">{t('empty.desc')}</p>
             <Button type="primary" size="small" className="wiki-pane-init-btn" onClick={() => void initWiki()}>
-              初始化 Wiki
+              {t('empty.initButton')}
             </Button>
           </div>
         ) : (

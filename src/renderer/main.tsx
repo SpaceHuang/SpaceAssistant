@@ -4,6 +4,7 @@ import { Provider } from 'react-redux'
 import { store } from './store'
 import App from './App'
 import { ThemeProvider } from './theme/ThemeProvider'
+import './i18n'
 import './styles.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
