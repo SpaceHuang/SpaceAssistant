@@ -17,6 +17,7 @@ describe('WebView', () => {
     const webview = container.querySelector('webview')
     expect(webview).toBeTruthy()
     expect(webview?.getAttribute('src')).toBe('https://example.com/')
+    webview?.dispatchEvent(new Event('dom-ready'))
     expect(onControllerRegister).toHaveBeenCalledWith(
       expect.objectContaining({
         reload: expect.any(Function),
