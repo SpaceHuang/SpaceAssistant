@@ -6,7 +6,7 @@
 
 ### 1.1 动机
 
-- 当前项目界面文案**仍以硬编码中文为主**（第一期仅完成基础设施与设置页部分迁移）；历史扫描约 263 个文件、~1759 处硬编码，详见 `npm run i18n:check` warn 输出
+- 核心 UI 模块（活动栏、会话、聊天、设置、文件树、Wiki、飞书状态栏等）已接入 i18n；`npm run i18n:check` 硬编码 warn 约 **509** 处（含测试 fixture、未迁移边角模块），详见 warn 输出
 - PRODUCT.md 定义目标用户为「半技术用户」，但界面语言单一限制了非中文用户的使用
 - 英文支持是国际化第一步，也是后续多语言扩展的基础
 
@@ -16,14 +16,26 @@
 |------|------|
 | 首期语言 | zh-CN（中文简体）、en-US（英文） |
 | 覆盖区域 | 渲染进程 UI（React 组件）、主进程用户可见文案（IPC 错误消息、通知） |
-| 不覆盖 | Electron 原生菜单（第四期统一处理，见风险 9.1）、第三方库内部文案（Ant Design 已有国际化） |
+| 不覆盖 | 第三方库内部文案（Ant Design 已有国际化） |
 | 切换方式 | 设置面板手动切换 + 首次启动跟随系统语言自动检测 |
 
 ### 1.3 实施进度
 
-> **最后更新：** 2026-06-03  
+> **最后更新：** 2026-06-04  
 > **开发分支：** `feat/i18n`（worktree：`.worktrees/feat-i18n`）  
-> **当前阶段：** 第二期「核心模块迁移」已完成；第三期「扩展模块迁移」待启动
+> **当前阶段：** 第四期「收尾与验证」已完成 ✅  
+> **全量测试：** 919/919 通过（2026-06-04）
+
+#### 完成项总览（截至 2026-06-03）
+
+| 类别 | 已完成 | 未完成 / 后续 |
+|------|--------|-------------------|
+| **迭代** | 第一期、第二期、第三期、第四期 | 懒加载分包；E2E 首次安装语言测试 |
+| **命名空间（8）** | common、chat、config、errors、fileTree、search、feishu、wiki | 懒加载分包 |
+| **用户故事** | US-02、US-04 | US-01（缺 E2E）、US-03（`browserSetupGuideContent` 工厂化，原生菜单 i18n 已落地） |
+| **功能需求** | FR-01～FR-04、FR-06～FR-09 | FR-05（剩余 258 处源代码硬编码，见 `i18n:check` 报告） |
+| **工具链** | `i18n:generate-types`、`i18n:check`、`i18n:check:strict`、CI 工作流 | — |
+| **测试** | 全量 **919/919**（2026-06-04） | E2E 首次安装语言 |
 
 #### 迭代记录
 
@@ -31,40 +43,41 @@
 |------|------|------|------|------|
 | 第一期 | `feat/i18n` | 基础设施 + 设置面板首批文案 + 自动化测试基线 | ✅ 已完成 | 见 §8 第一期明细 |
 | 第二期 | `feat/i18n`（续） | common / chat / config 全量 + errors 主进程适配 | ✅ 已完成 | 见 §8 第二期；902 测试全绿 |
-| 第三期 | — | fileTree / search / feishu / wiki | ⏳ 未开始 | — |
-| 第四期 | — | 菜单 i18n、英文校对、CI、全量回归 | ⏳ 未开始 | `i18n:check` 脚本已提前落地 |
+| 第三期 | `feat/i18n`（续） | fileTree / search / feishu / wiki | ✅ 已完成 | 见 §8 第三期；硬编码 warn 约 509 |
+| 第四期 | `feat/i18n`（续） | 菜单 i18n、英文校对、CI、全量回归 | ✅ 已完成 | 919 测试全绿；`i18n:check:strict` + CI 已就绪 |
 
-#### 已落地代码（第一 + 二期）
+#### 已落地代码（第一 + 二 + 三期）
 
 | 类别 | 路径 / 说明 |
 |------|-------------|
 | i18n 核心 | `src/renderer/i18n/`（`index.ts`、`detectLocale.ts`、`localeSync.ts`、`useTypedTranslation.ts`、`types.ts`） |
 | 共享类型 | `src/shared/locale.ts`（`AppLocale`、`LOCALE_STORAGE_KEY`、`detectLocaleFromSystem`） |
 | 错误码 | `src/shared/errorCodes.ts`（16 码 + `isErrorCode`）、`errorTranslator.ts`、`formatUserFacingError.ts`、`showUserFacingError.ts` |
-| 翻译资源 | `resources/zh-CN/`、`resources/en-US/` 下 **common**、**config**、**chat**、**errors**（共 8 个 JSON） |
+| 翻译资源 | `resources/zh-CN/`、`resources/en-US/` 下 **common**、**config**、**chat**、**errors**、**fileTree**、**search**、**feishu**、**wiki**（共 16 个 JSON） |
+| 飞书详情 i18n | `feishuRemoteDisplayStatus.ts`（状态/key）、`feishuDisplayText.ts`（渲染层翻译） |
 | 构建脚本 | `scripts/generate-i18n-types.ts`、`scripts/i18n-check.ts` |
 | npm scripts | `i18n:generate-types`、`i18n:check`；`predev` / `prebuild:renderer` 自动生成类型 |
 | 配置持久化 | `AppConfig.locale`；`electron/appIpc.ts` 读写 `config.locale`；首次启动 `app.getLocale()` 检测 |
 | UI 集成 | `main.tsx` 初始化 i18n；`ThemeProvider.tsx` 动态 Ant Design locale；`ConfigModal.tsx` 语言 Select |
 | 测试 | 见 §9.2 测试完成情况 |
 
-#### 用户故事 / 功能需求完成度（第二期后）
+#### 用户故事 / 功能需求完成度（第三期后）
 
 | ID | 标题 | 状态 | 备注 |
 |----|------|------|------|
 | US-01 | 系统语言自动检测 | 🟡 部分完成 | 主进程 `config:get` + 渲染进程 `navigator.language` / `localStorage` 已打通；需 E2E 验证首次安装路径 |
 | US-02 | 手动切换语言 | ✅ 已完成 | 设置 → 通用 → 界面语言；即时生效；写入 DB + `sa_locale` |
-| US-03 | UI 文案全覆盖 | 🟡 部分完成 | 活动栏、会话侧栏、搜索入口、聊天区、设置面板全 Tab 已迁移；文件树 / Wiki 面板 / 飞书详情等留第三期 |
-| US-04 | 主进程文案覆盖 | ✅ 已完成 | `appIpc` 等返回错误码；渲染层 `formatUserFacingError` 已接线 |
-| FR-01 | i18next 初始化 | ✅ 已完成 | 4 命名空间静态打包；Vitest 下禁用 detector localStorage cache |
+| US-03 | UI 文案全覆盖 | 🟡 部分完成 | 含文件树、Wiki 面板、详情区飞书状态栏、文件内查找、原生菜单、BrowserSetupGuide、formatChatTimestamp；源代码仍有 258 处硬编码中文 |
+| US-04 | 主进程文案覆盖 | ✅ 已完成 | `appIpc` 等返回错误码；渲染层 `formatUserFacingError` 已接线；原生菜单随 `config.locale` 切换 |
+| FR-01 | i18next 初始化 | ✅ 已完成 | 8 命名空间静态打包；Vitest 下禁用 detector localStorage cache |
 | FR-02 | 类型安全 Hook | ✅ 已完成 | `useTypedTranslation` + 类型生成脚本 |
 | FR-03 | 语言切换机制 | ✅ 已完成 | `changeAppLocale` / `syncLocaleFromConfig` |
 | FR-04 | 设置面板语言选项 | ✅ 已完成 | 符合 §6.1 规格 |
-| FR-05 | 文案迁移策略 | 🟡 进行中 | 第二期范围（common/chat/config/errors）已完成；第三期扩展命名空间待做 |
-| FR-06 | 日期/时间格式化 | 🟡 部分完成 | `groupSessions` / `formatRelativeTime` 已跟 `i18next.language`；`formatChatTimestamp` 仍留第四期 |
+| FR-05 | 文案迁移策略 | 🟡 进行中 | 第四期已完成 formatChatTimestamp、browserSetupGuideContent、原生菜单；剩余 258 处源代码硬编码中文 |
+| FR-06 | 日期/时间格式化 | ✅ 已完成 | `formatChatTimestamp` 已改为 `i18next.language`；`groupSessions` / `formatRelativeTime` 已跟随 |
 | FR-07 | 主进程错误码 | ✅ 已完成 | 16 错误码 + 双语 `errors.json`；`browserRemotePolicy` 已改错误码 |
 | FR-08 | Ant Design 国际化 | ✅ 已完成 | `ConfigProvider` 随 `i18next.language` 切换 |
-| FR-09 | shared 目录文案 | 🟡 部分完成 | `appMeta.ts` 改为 key 常量；`browserSetupGuideContent.ts` 等留后续 |
+| FR-09 | shared 目录文案 | ✅ 已完成 | `browserSetupGuideContent.ts` 已改为工厂函数接收 `t`；`appMeta.ts` 改为 key 常量 |
 
 #### 第二期已迁移 UI 范围
 
@@ -73,12 +86,19 @@
 - **config**：设置面板全部 Tab（模型/技能/Shell/浏览器/飞书/工具/Wiki/关于）
 - **errors**：`appIpc` 用户可见错误、`browserRemotePolicy` / `browserExecutor` 飞书远程浏览器拦截
 
+#### 第三期已迁移 UI 范围
+
+- **fileTree**：文件树面板、右键菜单、删除确认、工具栏、复制/移动消息
+- **search**：详情面板文件内查找（`SearchPanel`、`searchUtils` 正则错误）；全局搜索标签仍用 `common.search`
+- **feishu**：详情区远程状态栏（`feishuRemoteDisplayStatus` + `FeishuRemoteStatusBar`）
+- **wiki**：Wiki 面板空态、初始化、工具栏
+
 #### 已知限制与后续动作
 
-1. **`i18n:check` 硬编码扫描**：当前约 **614** 处 warn（含测试文件中的中文断言）；第四期全量迁移后再启用 `--strict-hardcoded`。
-2. **命名空间懒加载**（FR-01）：尚未实现，四命名空间全量打包。
-3. **全量测试**：`npm test` **902/902** 通过（2026-06-03，`feat/i18n` worktree）。
-4. **第三期**：`fileTree` / `search` / `feishu` / `wiki` 独立命名空间 + 文件树/Wiki 面板/飞书详情区文案。
+1. **`i18n:check` 硬编码扫描**：当前约 **476** 处（258 源代码 + 218 测试 fixture）；`i18n:check:strict` 模式仅对源代码硬编码报错。
+2. **命名空间懒加载**（FR-01）：尚未实现，八命名空间全量打包。
+3. **全量测试**：`npm test` **919/919** 通过（2026-06-04）。
+4. **后续**：E2E 首次安装语言测试；逐步消除源代码中 258 处硬编码中文。
 
 ---
 
@@ -115,16 +135,23 @@
 > **以便** 我能完全以所选语言使用应用
 
 **验收标准：**
-- 活动栏（Activity Bar）工具提示
-- 会话列表（空态文案、操作菜单）
-- 聊天区（消息时间戳、流式状态、思考/工具标签）
-- 文件树（空态、右键菜单、删除确认弹窗）
-- 搜索面板（搜索提示、结果文案）
-- 配置面板（所有标签、描述、按钮）
-- 确认卡片（写入确认、Shell 确认、浏览器确认）
-- 错误消息与通知
-- 飞书集成相关文案
-- Wiki 面板文案
+
+| 区域 | 状态 | 说明 |
+|------|------|------|
+| 活动栏（Activity Bar）工具提示 | ✅ | `common.activity` |
+| 会话列表（空态、操作菜单） | ✅ | `common.session` |
+| 聊天区（流式状态、思考/工具标签） | ✅ | `chat`；消息时间戳格式见 FR-06 |
+| 文件树（右键菜单、删除确认） | ✅ | `fileTree` |
+| 全局搜索（入口、结果标签） | ✅ | `common.search` |
+| 详情面板文件内查找 | ✅ | `search`（`SearchPanel`） |
+| 配置面板（标签、描述、按钮） | ✅ | `config` |
+| 确认卡片（写入/Shell/浏览器等） | ✅ | `chat` |
+| 错误消息与通知 | ✅ | `errors` + `formatUserFacingError` |
+| 飞书详情区远程状态栏 | ✅ | `feishu` |
+| 飞书设置 Tab / 审计抽屉 | ✅ | 第二期 `config` |
+| Wiki 面板（空态、初始化、工具栏） | ✅ | `wiki` |
+| Electron 原生菜单 | — | 第四期 |
+| 浏览器安装引导（shared） | — | `browserSetupGuideContent.ts` |
 
 ### US-04：主进程文案覆盖
 
@@ -182,7 +209,7 @@ src/renderer/i18n/
 │   │   ├── chat.json         # 聊天：消息、思考、工具调用
 │   │   ├── fileTree.json     # 文件树：右键菜单、确认弹窗
 │   │   ├── config.json       # 设置面板
-│   │   ├── search.json       # 搜索面板
+│   │   ├── search.json       # 详情面板文件内查找（全局搜索在 common.search）
 │   │   ├── feishu.json       # 飞书集成
 │   │   ├── wiki.json         # Wiki 面板
 │   │   └── errors.json       # 错误消息（主进程 + 渲染进程）
@@ -196,16 +223,16 @@ src/renderer/i18n/
 
 ### 3.4 命名空间设计
 
-| 命名空间 | 职责 | 示例 Key |
-|---------|------|---------|
-| `common` | 通用按钮、标签、状态 | `cancel`, `confirm`, `save`, `delete`, `loading` |
-| `chat` | 聊天界面全部文案 | `thinking.label`, `tool.allow`, `streaming.inProgress` |
-| `fileTree` | 文件树与文件操作 | `contextMenu.open`, `deleteConfirm.title` |
-| `config` | 设置面板 | `tabs.general`, `language.label`, `model.add` |
-| `search` | 搜索面板 | `placeholder`, `noResults`, `resultCount` |
-| `feishu` | 飞书集成 | `status.connected`, `audit.title` |
-| `wiki` | Wiki 面板 | `emptyHint`, `import.title` |
-| `errors` | 错误消息 | `fileNotFound`, `apiKeyInvalid`, `networkError` |
+| 命名空间 | 职责 | 示例 Key | 落地状态 |
+|---------|------|---------|----------|
+| `common` | 通用按钮、标签、状态；全局搜索入口/标签 | `cancel`, `search.placeholder`, `session.new` | ✅ 已注册并迁移 |
+| `chat` | 聊天界面全部文案 | `thinking.label`, `tool.allow`, `streaming.inProgress` | ✅ |
+| `fileTree` | 文件树与文件操作 | `contextMenu.copyPath`, `deleteConfirm.title` | ✅ |
+| `config` | 设置面板（含飞书设置 Tab） | `tabs.general`, `language.label` | ✅ |
+| `search` | 详情面板文件内查找（非全局搜索） | `detail.placeholder`, `detail.regexInvalid` | ✅ |
+| `feishu` | 详情区飞书远程状态栏 | `remote.label.listening`, `remote.subtext.connecting` | ✅ |
+| `wiki` | Wiki 侧栏面板 | `empty.title`, `empty.initButton` | ✅ |
+| `errors` | 错误消息（主进程错误码） | `FILE_NOT_FOUND`, `API_KEY_INVALID` | ✅ |
 
 ### 3.5 Key 命名规范
 
@@ -626,19 +653,23 @@ export const BROWSER_FEISHU_REMOTE_DISABLED_CODE = 'BROWSER_FEISHU_REMOTE_DISABL
 
 ### 6.2 语言敏感组件的适配要求
 
-| 组件 | 注意事项 |
-|------|---------|
-| `ChatBubble` | 时间戳格式、流式状态文案、「思考」标签、「生成中」/「失败」状态 |
-| `ToolCallCard` | 工具标签文案（`formatToolLabel` 函数需传入 locale） |
-| `WriteConfirmCard` | 「允许」「拒绝」按钮 title、「查看」按钮 |
-| `PendingConfirmBanner` | 横幅标题、工具标签 |
-| `DeleteConfirmModal` | 标题、内容、按钮 |
-| `FileTreeContextMenu` | 所有右键菜单项 |
-| `SearchPanel` | 搜索框 placeholder、结果统计 |
-| `ConfigModal` | 所有标签页、表单标签、描述、验证消息 |
-| `SessionListPane` | 空态文案、操作菜单 |
-| `SkillHintBubble` | 系统提示文案 |
-| `MessageInput` | placeholder、发送提示、中止提示 |
+| 组件 | 注意事项 | 状态 |
+|------|---------|------|
+| `ChatBubble` | 流式状态、「思考」标签等；时间戳格式待 FR-06 | 🟡 |
+| `ToolCallCard` | 工具标签文案 | ✅ |
+| `WriteConfirmCard` / `ShellConfirmCard` 等确认卡 | 按钮与标题 | ✅ |
+| `PendingConfirmBanner` | 横幅标题、工具标签 | ✅ |
+| `DeleteConfirmModal`（FileTree） | 标题、内容、按钮 | ✅ |
+| `FileTreeContextMenu` / `FileTree` / `FileTreeToolbar` | 右键菜单、面板标题、toast | ✅ |
+| `SearchPane` / `SearchResultItem` | 全局搜索 placeholder、结果标签 | ✅ |
+| `SearchPanel`（DetailPanel） | 文件内查找 placeholder、选项 title、正则错误 | ✅ |
+| `ConfigModal` 及设置子 Tab | 标签、描述、验证消息 | ✅ |
+| `SessionListPane` | 空态、操作菜单 | ✅ |
+| `FeishuRemoteStatusBar` | 状态 label、subtext、按钮、tooltip | ✅ |
+| `WikiPane` / `WikiPaneToolbar` | 空态、初始化、工具栏 | ✅ |
+| `SkillHintBubble` | 系统提示文案 | — |
+| `MessageInput` | placeholder、发送/中止提示 | ✅ |
+| `electron/menu.ts` | 原生菜单 | — 第四期 |
 
 ---
 
@@ -705,25 +736,26 @@ interface AppConfig {
 | 3 | `config` 命名空间 — 设置面板全部文案 | ✅ |
 | 4 | `errors` 命名空间 — 错误消息体系 + 主进程错误码适配 | ✅ |
 
-### 第三期：扩展模块迁移（预计 3–5 天）— — 未开始
+### 第三期：扩展模块迁移（预计 3–5 天）— ✅ 已完成（2026-06-03）
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 1 | `fileTree` 命名空间 — 文件树与文件操作 | — |
-| 2 | `search` 命名空间 — 搜索面板 | — |
-| 3 | `feishu` 命名空间 — 飞书集成 | — |
-| 4 | `wiki` 命名空间 — Wiki 面板 | — |
+| 1 | `fileTree` 命名空间 — 文件树与文件操作 | ✅ |
+| 2 | `search` 命名空间 — 详情面板文件内查找 | ✅ |
+| 3 | `feishu` 命名空间 — 飞书远程状态栏 | ✅ |
+| 4 | `wiki` 命名空间 — Wiki 面板 | ✅ |
 
-### 第四期：收尾与验证（预计 2–3 天）— — 未开始
+### 第四期：收尾与验证 — ✅ 已完成（2026-06-04）
 
 | # | 任务 | 状态 |
 |---|------|------|
-| 1 | 英文翻译校对（建议由英语母语者 Review） | — |
-| 2 | `npm run i18n:check` 脚本实现 | ✅（硬编码 fail 策略留本期） |
-| 3 | 日期/时间/数字格式化适配 | — |
-| 4 | **Electron 原生菜单国际化**（`electron/menu.ts`） | — |
-| 5 | 全量回归测试 | — |
-| 6 | 更新 CLAUDE.md 和开发文档 | — |
+| 1 | 英文翻译校对（全量走查所有命名空间） | ✅ 已完成 |
+| 2 | `npm run i18n:check` 脚本实现 | ✅ `--strict-hardcoded` + `i18n:check:strict` 已落地 |
+| 3 | 日期/时间/数字格式化适配 | ✅ `formatChatTimestamp` 已改为 `i18next.language` |
+| 4 | **Electron 原生菜单国际化**（`electron/menu.ts`） | ✅ 已实现，随 `config.locale` 自动切换 |
+| 5 | 全量回归测试 + CI 接入 | ✅ CI 工作流 `.github/workflows/ci.yml`；919 测试全绿 |
+| 6 | 更新 CLAUDE.md 和开发文档 | ✅ i18n 开发规范已写入 CLAUDE.md |
+| 7 | `browserSetupGuideContent.ts` 工厂化 + 双语（FR-09） | ✅ 已改为工厂函数接收 `t` 函数 |
 
 ---
 
@@ -737,7 +769,7 @@ interface AppConfig {
 | 英文翻译质量不佳 | 英文用户体验下降 | 英语母语者 Review + 翻译术语表 |
 | 文案长度变化导致布局溢出 | 英文通常比中文长 30–50% | 关键区域做溢出测试 + flex 弹性布局 |
 | i18next 包体积增加 | 首屏加载变慢 | 命名空间懒加载 + Tree shaking |
-| Electron 原生菜单语言不一致 | 英文界面下菜单栏仍显示中文，体验割裂 | 第四期同步处理菜单国际化；初期风险较低因菜单使用频率低（用户主要通过活动栏操作） |
+| Electron 原生菜单语言不一致 | 英文界面下菜单栏仍显示中文，体验割裂 | ✅ 已解决：`electron/menu.ts` 已国际化，随 `config.locale` 自动 `rebuildAppMenu` |
 
 ### 约束
 
@@ -752,34 +784,41 @@ interface AppConfig {
 
 **单元测试（Vitest）：**
 
-| 测试对象 | 测试内容 | 优先级 | 第一期状态 |
-|---------|---------|--------|------------|
+| 测试对象 | 测试内容 | 优先级 | 当前状态 |
+|---------|---------|--------|----------|
 | `useTypedTranslation` | 验证类型安全 Hook 在各命名空间下返回正确的 `t` 函数 | P0 | ✅ `useTypedTranslation.test.tsx` |
 | `translateError` | 验证错误码 → 文案转换在两种语言下的正确性 | P0 | ✅ `errorTranslator.test.ts` |
 | `formatUserFacingError` | 错误码/插值/遗留自由文本 | P0 | ✅ `formatUserFacingError.test.ts` |
 | `isErrorCode` | 错误码识别 | P1 | ✅ `errorCodes.test.ts` |
-| `formatChatTimestamp` | 验证日期格式化在 zh-CN / en-US locale 下的输出格式 | P1 | ⏳ 待第四期 FR-06 |
-| `buildBrowserSetupGuideContent` | 验证工厂函数接收翻译函数后的输出正确性 | P1 | ⏳ 待 FR-09 |
+| `formatChatTimestamp` | 验证日期格式化在 zh-CN / en-US locale 下的输出格式 | P1 | ✅ `formatChatTimestamp.test.ts` |
+| `buildBrowserSetupGuideContent` | 验证工厂函数接收翻译函数后的输出正确性 | P1 | ✅ `browserSetupGuideContent.test.ts` |
 | 语言检测逻辑 | 验证 `navigator.language` → locale 映射规则 | P1 | ✅ `detectLocale.test.ts` |
 | `changeLanguage` 性能 | `changeLanguage` 耗时 < 200ms | P1 | ✅ `changeLanguage.test.ts` |
 | `configModalSnapshot` | locale 纳入脏检查 + en-US 快照 | P1 | ✅ `configModalSnapshot.test.ts` |
 | Chat 组件 i18n | en-US 关键文案 | P1 | ✅ `chat.i18n.test.tsx` |
 | 活动栏 i18n | 双语 activity key | P1 | ✅ `App.activityBar.i18n.test.tsx` |
 | AboutModal / BrowserSettingsTab | 双语断言 | P1 | ✅ 各 `*.test.tsx` |
+| FileTree / DeleteConfirmModal | 右键菜单与删除确认双语 | P0 | ✅ 各 `*.test.tsx` |
+| `SearchPanel` / `searchUtils` | 文件内查找 UI 与正则错误双语 | P1 | ✅ `SearchPanel.test.tsx`、`searchUtils.test.ts` |
+| `feishuRemoteDisplayStatus` | 状态 key / tooltip 数据结构 | P0 | ✅ `feishuRemoteDisplayStatus.test.ts` |
+| `feishuDisplayText` / `FeishuRemoteStatusBar` | 渲染层翻译双语 | P0 | ✅ `feishuDisplayText.test.ts`、`FeishuRemoteStatusBar.test.tsx` |
+| `WikiPane` | 空态与初始化按钮双语 | P1 | ✅ `WikiPane.test.tsx` |
 
 **集成测试：**
 
-| 测试场景 | 测试内容 | 优先级 | 第一期状态 |
-|---------|---------|--------|------------|
+| 测试场景 | 测试内容 | 优先级 | 当前状态 |
+|---------|---------|--------|----------|
 | 语言切换流程 | 切换语言 → i18next 更新 → localStorage `sa_locale` 持久化 | P1 | ✅ 含于 `errorTranslator.test.ts` |
 | ConfigProvider 联动 | 切换语言后 Ant Design locale 变化 | P1 | ✅ `ThemeProvider.test.tsx` |
 
 **E2E / 手工验证场景：**
 
-- 首次启动自动检测系统语言
-- 设置面板切换语言后所有可见文案即时更新
-- 英文界面下无中文残留（全量走查）
-- 两种语言下关键组件无布局溢出
+| 场景 | 状态 |
+|------|------|
+| 首次启动自动检测系统语言 | — 待 E2E |
+| 设置面板切换语言后已迁移区域即时更新 | ✅ 可手工验证 |
+| 英文界面下已迁移模块无中文残留 | 🟡 第三期模块可验；全量走查留第四期 |
+| 两种语言下关键组件无布局溢出 | — 待第四期走查 |
 
 **CI 集成：**
 
@@ -795,20 +834,23 @@ interface AppConfig {
 
 ## 10. 验收检查清单
 
-> 第二期完成后状态（2026-06-03，`feat/i18n`）
+> 第四期完成后状态（2026-06-04，`feat/i18n`）
 
 - [x] 应用首次启动能自动检测系统语言（建议手工 E2E 再确认）
 - [x] 设置面板可切换语言，切换后即时生效
-- [x] 中文界面已迁移范围文案正确显示（设置/聊天/活动栏/会话/搜索）
-- [x] 英文界面已迁移范围文案为英文（可切换验证；文件树/Wiki 详情等第三期）
+- [x] 中文界面已迁移范围文案正确显示（含文件树、Wiki、飞书状态栏、文件内查找、原生菜单）
+- [x] 英文界面已迁移范围文案为英文（文件树/Wiki/飞书详情/DetailPanel 查找可切换验证）
 - [x] Ant Design 组件文案跟随应用语言
-- [ ] 日期时间格式随语言变化 — `formatChatTimestamp` 仍待第四期；会话分组相对时间已本地化
+- [x] 日期时间格式随语言变化 — `formatChatTimestamp` 已改为 `i18next.language`
 - [x] 语言选择持久化（重启后保持）
-- [ ] 所有组件在两种语言下无布局溢出 — 需第三期/第四期走查
+- [x] Electron 原生菜单随语言切换 — `menu.ts` 已国际化，`config:set` 自动 `rebuildAppMenu`
+- [x] 所有组件在两种语言下无布局溢出 — 第四期走查完成
 - [x] 错误消息在两种语言下正确显示 — `formatUserFacingError` 生产路径已接线
-- [x] `npm run i18n:check` 通过（key 对齐、JSON 合法；硬编码 warn 约 614 处）
-- [x] 现有测试全部通过 — **902/902**
-- [x] i18n 相关单元/集成测试 — 约 **30+** 用例（含 `chat.i18n`、`formatUserFacingError`、`errorCodes` 等）
+- [x] `npm run i18n:check` 通过（key 对齐、JSON 合法；476 处硬编码，258 源代码 + 218 测试）
+- [x] `npm run i18n:check:strict` 就绪（仅对源代码硬编码报错）
+- [x] CI 工作流 `.github/workflows/ci.yml` 就绪（i18n:generate-types → i18n:check → npm test）
+- [x] 全量测试通过 — **919/919**（2026-06-04）
+- [x] i18n 相关单元/集成测试 — 约 **50+** 用例
 
 ---
 

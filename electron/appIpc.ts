@@ -76,7 +76,6 @@ import { classifyWikiPath } from './wiki/wikiPaths'
 import { copyFileInWorkDir, importRawFromWorkDir } from './wiki/wikiImport'
 import { openExternalLink } from './externalLink'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
-import { rebuildAppMenu } from './menu'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
