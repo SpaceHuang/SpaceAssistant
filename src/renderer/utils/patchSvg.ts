@@ -1,6 +1,9 @@
 /** Patch raw SVG assets for inline use: theme color + viewBox for correct scaling. */
 export function patchSvg(raw: string, size: number | string = '1em'): string {
-  let svg = raw.replace(/fill="#09244[bB]"/g, 'fill="currentColor"')
+  let svg = raw
+    .replace(/<title>[\s\S]*?<\/title>/gi, '')
+    .replace(/<desc>[\s\S]*?<\/desc>/gi, '')
+    .replace(/fill="#09244[bB]"/g, 'fill="currentColor"')
   if (!svg.includes('viewBox=')) {
     svg = svg.replace('<svg ', '<svg viewBox="0 0 24 24" ')
   }

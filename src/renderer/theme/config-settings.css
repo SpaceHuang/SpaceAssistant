@@ -416,6 +416,55 @@
   color: var(--sa-text-secondary);
 }
 
+/* 设置页信息提示：暖 tint 底，替代 Ant Design 默认黄底 warning */
+.config-settings-page .config-alert--notice.ant-alert {
+  background: var(--sa-notice-bg);
+  border: 1px solid var(--sa-notice-border);
+  border-radius: var(--sa-radius-sm);
+}
+
+.config-settings-page .config-alert--notice.ant-alert-warning .ant-alert-icon,
+.config-settings-page .config-alert--notice .config-notice-icon {
+  color: var(--sa-notice-icon);
+}
+
+.config-settings-page .config-alert--notice .ant-alert-message {
+  color: var(--sa-text);
+}
+
+/* 设置页操作结果（成功 / 失败）：低饱和 tint，替代 Ant Design 默认绿/红底 */
+.config-settings-page .config-alert--feedback.ant-alert {
+  padding: 8px 12px;
+  align-items: center;
+  border-radius: var(--sa-radius-sm);
+}
+
+.config-settings-page .config-alert--feedback.ant-alert-success {
+  background: var(--sa-feedback-success-bg);
+  border: 1px solid var(--sa-feedback-success-border);
+}
+
+.config-settings-page .config-alert--feedback.ant-alert-error {
+  background: var(--sa-feedback-error-bg);
+  border: 1px solid var(--sa-feedback-error-border);
+}
+
+.config-settings-page .config-alert--feedback.ant-alert-success .ant-alert-icon,
+.config-settings-page .config-alert--feedback .config-feedback-icon--success {
+  color: var(--sa-success);
+}
+
+.config-settings-page .config-alert--feedback.ant-alert-error .ant-alert-icon,
+.config-settings-page .config-alert--feedback .config-feedback-icon--error {
+  color: var(--sa-error);
+}
+
+.config-settings-page .config-alert--feedback .ant-alert-message {
+  color: var(--sa-text);
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+}
+
 .config-settings-page .config-alert-block--loose {
   margin-bottom: var(--sa-config-gap-stack);
 }

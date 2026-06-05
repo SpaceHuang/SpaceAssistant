@@ -22,8 +22,17 @@
 .app-main {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-width: 400px;
+  min-height: 0;
   background: var(--sa-bg-base);
+}
+
+.app-main-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 侧栏 / 主区顶栏共用（高度与底边对齐） */
@@ -41,10 +50,6 @@
   box-sizing: border-box;
 }
 
-.app-main-header.app-pane-header {
-  background: var(--sa-main-pane-header-bg);
-}
-
 .app-pane-header-title {
   font-size: 13px;
   font-weight: 500;
@@ -55,10 +60,6 @@
 
 .sider-new-session-btn {
   font-size: var(--sa-sider-font-size);
-}
-
-.app-main-header {
-  padding: 0 16px;
 }
 
 .app-sider,
@@ -161,6 +162,13 @@
   outline-offset: -2px;
 }
 
+.activity-bar-btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activity-bar-btn-icon svg,
 .activity-bar-btn svg {
   width: 24px;
   height: 24px;

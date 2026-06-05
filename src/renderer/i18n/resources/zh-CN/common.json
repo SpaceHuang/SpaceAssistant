@@ -1,5 +1,6 @@
 {
   "activity": {
+    "bar": "主侧边栏",
     "search": "搜索",
     "sessions": "会话",
     "settings": "设置",
@@ -36,7 +37,10 @@
   "save": "保存",
   "saveAndReturn": "保存并返回",
   "search": {
+    "emptyHint": "输入关键词并搜索聊天与项目文件",
+    "emptyNoResults": "没有匹配的结果",
     "placeholder": "搜索聊天与文本文件",
+    "searchAria": "搜索聊天与文本文件",
     "tagChat": "聊天",
     "tagFile": "文件"
   },

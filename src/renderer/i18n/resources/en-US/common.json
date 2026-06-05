@@ -1,5 +1,6 @@
 {
   "activity": {
+    "bar": "Main sidebar",
     "search": "Search",
     "sessions": "Sessions",
     "settings": "Settings",
@@ -36,7 +37,10 @@
   "save": "Save",
   "saveAndReturn": "Save and return",
   "search": {
+    "emptyHint": "Enter a query to search chats and project files",
+    "emptyNoResults": "No matching results",
     "placeholder": "Search chats and text files",
+    "searchAria": "Search chats and text files",
     "tagChat": "Chat",
     "tagFile": "File"
   },

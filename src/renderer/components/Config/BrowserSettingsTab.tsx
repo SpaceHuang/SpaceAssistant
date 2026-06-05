@@ -1,4 +1,5 @@
 import { Alert, Button, Select, Tooltip } from 'antd'
+import { Info } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { BrowserConfig, ModelEntry } from '../../../shared/domainTypes'
 import {
@@ -78,7 +79,8 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         <Alert
           type="warning"
           showIcon
-          className="config-alert--compact"
+          icon={<Info size={16} strokeWidth={2} className="config-notice-icon" aria-hidden />}
+          className="config-alert--compact config-alert--notice"
           message={t('browser.depsNotReadyTitle')}
           description={detect.errors[0] ?? t('browser.depsNotReadyDescription')}
         />

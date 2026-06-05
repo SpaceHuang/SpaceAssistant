@@ -6,6 +6,16 @@
   display: none;
 }
 
+.search-pane-empty {
+  margin-top: 24px;
+}
+
+.search-pane-empty .ant-empty-description {
+  color: var(--sa-text-secondary);
+  font-size: var(--sa-sider-font-size);
+  line-height: var(--sa-sider-line-height);
+}
+
 .search-result-item {
   display: flex;
   align-items: flex-start;

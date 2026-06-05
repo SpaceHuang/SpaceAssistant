@@ -1,22 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { App, Button } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
-import { WikiPaneToolbar } from './WikiPaneToolbar'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './wikiPane.css'
+
+export type WikiPaneHandle = {
+  refresh: () => void
+  openInExplorer: () => void
+}
 
 type Props = {
   workDir: string
   onFileSelect: (relPath: string) => void
   onSwitchToWikiTab: () => void
   onCollectToWiki?: (relPath: string) => void
+  onInitStateChange?: (initialized: boolean | null) => void
 }
 
-export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectToWiki }: Props) {
+export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
+  { workDir, onFileSelect, onSwitchToWikiTab, onCollectToWiki, onInitStateChange },
+  ref
+) {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('wiki')
   const cfg = useTypedSelector((s) => s.config.config)
@@ -38,6 +46,23 @@ export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectTo
     const status = await window.api.wikiStatus()
     setWikiInitialized(status.initialized)
   }, [wiki.enabled])
+
+  useEffect(() => {
+    onInitStateChange?.(wikiInitialized)
+  }, [wikiInitialized, onInitStateChange])
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      refresh: () => {
+        void wikiTreeRef.current?.refresh()
+      },
+      openInExplorer: () => {
+        void window.api.fileShowInExplorer(wikiRoot)
+      }
+    }),
+    [wikiRoot]
+  )
 
   useEffect(() => {
     void refreshWikiStatus()
@@ -75,15 +100,6 @@ export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectTo
 
   return (
     <div className="wiki-pane">
-      <div className="app-pane-header sider-content-header wiki-pane-header">
-        <span className="app-pane-header-title">{t('paneTitle')}</span>
-        <WikiPaneToolbar
-          showOpen={wikiInitialized === true}
-          refreshDisabled={!wikiInitialized}
-          onOpen={() => void window.api.fileShowInExplorer(wikiRoot)}
-          onRefresh={() => void wikiTreeRef.current?.refresh()}
-        />
-      </div>
       <div className="wiki-pane-body">
         {wikiInitialized === false ? (
           <div className="wiki-pane-empty">
@@ -115,4 +131,4 @@ export function WikiPane({ workDir, onFileSelect, onSwitchToWikiTab, onCollectTo
       </div>
     </div>
   )
-}
+})

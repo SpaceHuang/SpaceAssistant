@@ -172,9 +172,16 @@
 
   --sa-success: #389e0d;
   --sa-success-subtle: rgba(56, 158, 13, 0.12);
+  --sa-feedback-success-bg: color-mix(in srgb, var(--sa-success) 8%, var(--sa-bg-elevated));
+  --sa-feedback-success-border: color-mix(in srgb, var(--sa-success) 14%, var(--sa-border));
   --sa-warning: #d48806;
   --sa-warning-subtle: rgba(250, 173, 20, 0.14);
+  --sa-notice-bg: color-mix(in srgb, var(--sa-primary) 7%, var(--sa-bg-elevated));
+  --sa-notice-border: color-mix(in srgb, var(--sa-primary) 14%, var(--sa-border));
+  --sa-notice-icon: var(--sa-primary);
   --sa-error: #cf1322;
+  --sa-feedback-error-bg: color-mix(in srgb, var(--sa-error) 7%, var(--sa-bg-elevated));
+  --sa-feedback-error-border: color-mix(in srgb, var(--sa-error) 14%, var(--sa-border));
 
   --sa-config-font: 13px;
   --sa-config-font-sm: 12px;

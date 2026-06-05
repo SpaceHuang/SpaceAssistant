@@ -354,6 +354,17 @@
     "appConfigured": "App configured",
     "loginAccount": "Sign in to Feishu",
     "remoteListen": "Enable remote command listener",
+    "eventStatus": {
+      "badge": "{{state}} · {{processed}}",
+      "processed": "Processed {{count}}",
+      "state": {
+        "stopped": "Stopped",
+        "connecting": "Connecting",
+        "connected": "Connected",
+        "error": "Error",
+        "unknown": "Unknown"
+      }
+    },
     "start": "Start",
     "stop": "Stop",
     "notifyOnReceive": "Send system notification when a command is received",

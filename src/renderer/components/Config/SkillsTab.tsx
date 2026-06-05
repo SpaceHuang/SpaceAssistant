@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, App, Button, Collapse, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { App, Button, Collapse, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { ConfigResultAlert } from './ConfigResultAlert'
 import {
   isProductBuiltinSkill,
   type AppConfig,
@@ -261,11 +262,9 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
   return (
     <div>
       {alert ? (
-        <Alert
-          type={alert.type}
+        <ConfigResultAlert
+          ok={alert.type === 'success'}
           message={alert.text}
-          showIcon
-          className="config-alert-block"
           closable
           onClose={() => setAlert(null)}
         />

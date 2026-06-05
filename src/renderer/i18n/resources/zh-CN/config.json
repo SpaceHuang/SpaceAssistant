@@ -354,6 +354,17 @@
     "appConfigured": "应用已配置",
     "loginAccount": "登录飞书账号",
     "remoteListen": "启用远程指令监听",
+    "eventStatus": {
+      "badge": "{{state}} · {{processed}}",
+      "processed": "已处理 {{count}}",
+      "state": {
+        "stopped": "已停止",
+        "connecting": "正在连接",
+        "connected": "已连接",
+        "error": "出错",
+        "unknown": "未知"
+      }
+    },
     "start": "启动",
     "stop": "停止",
     "notifyOnReceive": "收到指令时发送系统通知",

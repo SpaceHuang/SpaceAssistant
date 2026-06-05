@@ -100,9 +100,6 @@ describe('WikiPane', () => {
     await waitFor(() => {
       expect(screen.getByTestId('wiki-tree')).toBeDefined()
     })
-    expect(screen.getByText('Wiki')).toBeDefined()
-    expect(screen.getByTestId('wiki-open-btn')).toBeDefined()
-    expect(screen.getByTestId('wiki-refresh-btn')).toBeDefined()
   })
 
   it('switches wiki tab and selects wiki paths from navigation', async () => {

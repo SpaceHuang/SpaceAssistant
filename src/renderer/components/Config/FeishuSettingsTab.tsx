@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { App, Badge, Button, Checkbox, Input, InputNumber, Radio, Select, Space, Switch } from 'antd'
 import type { FeishuConfig, FeishuEventStatus } from '../../../shared/feishuTypes'
-import { formatFeishuEventStatusText } from '../../../shared/feishuEventLabels'
 import { FeishuAuditDrawer } from './FeishuAuditDrawer'
+import { formatFeishuSettingsEventStatus } from './feishuEventStatusText'
 import type { ModelEntry } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
@@ -220,7 +220,7 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
               status={
                 eventStatus.state === 'connected' ? 'success' : eventStatus.state === 'error' ? 'error' : 'processing'
               }
-              text={formatFeishuEventStatusText(eventStatus)}
+              text={formatFeishuSettingsEventStatus(eventStatus, t)}
             />
           )}
           <Button size="small" onClick={() => void window.api.feishuEventStart().then(setEventStatus)}>

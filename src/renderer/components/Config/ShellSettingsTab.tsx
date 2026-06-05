@@ -1,7 +1,9 @@
 import { Alert, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
+import { Info } from 'lucide-react'
 import type { ShellConfig, ShellRule } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { ConfigResultAlert } from './ConfigResultAlert'
 
 type Props = {
   shell: ShellConfig
@@ -60,7 +62,8 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
       <Alert
         type="warning"
         showIcon
-        className="config-alert--compact"
+        icon={<Info size={16} strokeWidth={2} className="config-notice-icon" aria-hidden />}
+        className="config-alert--compact config-alert--notice"
         message={t('shell.boundaryTitle')}
         description={t('shell.boundaryDescription')}
       />
@@ -143,9 +146,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
             ) : null}
           </Space.Compact>
         </Form.Item>
-        {shellTest ? (
-          <Alert type={shellTest.ok ? 'success' : 'error'} message={shellTest.text} showIcon className="config-alert-block" />
-        ) : null}
+        {shellTest ? <ConfigResultAlert ok={shellTest.ok} message={shellTest.text} /> : null}
       </details>
 
       <div>

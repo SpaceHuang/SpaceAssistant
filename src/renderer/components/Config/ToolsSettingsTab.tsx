@@ -1,9 +1,10 @@
-import { Alert, Button, Form, Input, InputNumber, Radio, Space, Switch } from 'antd'
+import { Button, Form, Input, InputNumber, Radio, Space, Switch } from 'antd'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
+import { ConfigResultAlert } from './ConfigResultAlert'
 import { ShellSettingsTab } from './ShellSettingsTab'
 import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -164,9 +165,7 @@ export function ToolsSettingsTab({
                 </Button>
               </Space.Compact>
             </Form.Item>
-            {pyTest ? (
-              <Alert type={pyTest.ok ? 'success' : 'error'} message={pyTest.text} showIcon className="config-alert-block" />
-            ) : null}
+            {pyTest ? <ConfigResultAlert ok={pyTest.ok} message={pyTest.text} /> : null}
             <Form.Item label={t('tools.script.timeoutLabel')}>
               <InputNumber
                 min={10}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { App as AntdApp, Button } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession } from './store/sessionSlice'
@@ -7,7 +7,8 @@ import { setConfig, setSettingsOpen, setAboutOpen } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
 import { ConfigSettingsPage } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
-import { WikiPane } from './components/WikiPane'
+import { WikiPane, type WikiPaneHandle } from './components/WikiPane'
+import { WikiPaneToolbar } from './components/WikiPane/WikiPaneToolbar'
 import { collectToWiki } from './services/wikiImportService'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
@@ -19,6 +20,7 @@ import { DEFAULT_WIKI_CONFIG } from '../shared/domainTypes'
 import { syncLocaleFromConfig } from './i18n/localeSync'
 import { useTypedTranslation } from './i18n/useTypedTranslation'
 import { formatUserFacingError } from './utils/formatUserFacingError'
+import { patchSvg } from './utils/patchSvg'
 import chatLineRaw from './assets/chat_3_line.svg?raw'
 import chatFillRaw from './assets/chat_3_fill.svg?raw'
 import wikiLineRaw from './assets/book_2_ai_line.svg?raw'
@@ -26,8 +28,6 @@ import wikiFillRaw from './assets/book_2_ai_fill.svg?raw'
 import searchLineRaw from './assets/search_line.svg?raw'
 import searchFillRaw from './assets/search_fill.svg?raw'
 import settingsRaw from './assets/settings_1_line.svg?raw'
-
-const patchSvg = (raw: string) => raw.replace(/fill="#09244[bB]"/g, 'fill="currentColor"')
 
 const chatLineSvg = patchSvg(chatLineRaw)
 const chatFillSvg = patchSvg(chatFillRaw)
@@ -42,23 +42,27 @@ function IconTab({
   fillSvg,
   active,
   onClick,
-  title
+  label
 }: {
   lineSvg: string
   fillSvg: string
   active: boolean
   onClick: () => void
-  title: string
+  label: string
 }) {
   const svg = active ? fillSvg : lineSvg
   return (
     <button
       type="button"
+      role="tab"
       className={`activity-bar-btn${active ? ' active' : ''}`}
       onClick={onClick}
-      title={title}
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+      title={label}
+      aria-label={label}
+      aria-selected={active}
+    >
+      <span className="activity-bar-btn-icon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: svg }} />
+    </button>
   )
 }
 
@@ -70,6 +74,8 @@ function AppShellInner() {
   const sessions = useTypedSelector((s) => s.session.list)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const [siderKey, setSiderKey] = useState<'sessions' | 'wiki' | 'search'>('sessions')
+  const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
+  const wikiPaneRef = useRef<WikiPaneHandle>(null)
   const { openFile } = useDetailPanel()
   const wikiEnabled = Boolean(config?.wiki?.enabled)
 
@@ -119,6 +125,9 @@ function AppShellInner() {
     })
   }
 
+  const siderHeaderTitle =
+    siderKey === 'sessions' ? t('activity.sessions') : siderKey === 'wiki' ? t('activity.wiki') : t('activity.search')
+
   useEffect(() => {
     void window.api
       .sessionList()
@@ -148,16 +157,34 @@ function AppShellInner() {
   }, [dispatch])
 
   return (
-    <div className="app-shell" style={{ display: 'flex', height: '100vh' }}>
+    <div className="app-shell">
       <SplitPane id="leftSider" defaultSize={328} minSize={248} maxSize={520} side="left" className="app-sider">
         <div className="sa-split-pane-inner">
-          <div className="activity-bar">
-            <div className="activity-bar-top">
-              <IconTab lineSvg={chatLineSvg} fillSvg={chatFillSvg} active={siderKey === 'sessions'} onClick={() => setSiderKey('sessions')} title={t('activity.sessions')} />
+          <nav className="activity-bar" aria-label={t('activity.bar')}>
+            <div className="activity-bar-top" role="tablist" aria-orientation="vertical">
+              <IconTab
+                lineSvg={chatLineSvg}
+                fillSvg={chatFillSvg}
+                active={siderKey === 'sessions'}
+                onClick={() => setSiderKey('sessions')}
+                label={t('activity.sessions')}
+              />
               {wikiEnabled ? (
-                <IconTab lineSvg={wikiLineSvg} fillSvg={wikiFillSvg} active={siderKey === 'wiki'} onClick={() => setSiderKey('wiki')} title={t('activity.wiki')} />
+                <IconTab
+                  lineSvg={wikiLineSvg}
+                  fillSvg={wikiFillSvg}
+                  active={siderKey === 'wiki'}
+                  onClick={() => setSiderKey('wiki')}
+                  label={t('activity.wiki')}
+                />
               ) : null}
-              <IconTab lineSvg={searchLineSvg} fillSvg={searchFillSvg} active={siderKey === 'search'} onClick={() => setSiderKey('search')} title={t('activity.search')} />
+              <IconTab
+                lineSvg={searchLineSvg}
+                fillSvg={searchFillSvg}
+                active={siderKey === 'search'}
+                onClick={() => setSiderKey('search')}
+                label={t('activity.search')}
+              />
             </div>
             <div className="activity-bar-bottom">
               <button
@@ -165,54 +192,56 @@ function AppShellInner() {
                 className="activity-bar-btn"
                 onClick={() => dispatch(setSettingsOpen(true))}
                 title={t('activity.settings')}
-                dangerouslySetInnerHTML={{ __html: settingsSvg }}
-              />
+                aria-label={t('activity.settings')}
+              >
+                <span className="activity-bar-btn-icon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: settingsSvg }} />
+              </button>
             </div>
-          </div>
+          </nav>
           <div className="sider-content">
-            {(siderKey === 'sessions' || siderKey === 'search') && (
-              <div className="app-pane-header sider-content-header">
-                <span className="app-pane-header-title">
-                  {siderKey === 'sessions' ? t('activity.sessions') : t('activity.search')}
-                </span>
-                {siderKey === 'sessions' ? (
-                  <Button type="primary" size="small" className="sider-new-session-btn" onClick={() => void createSession()}>
-                    {t('session.new')}
-                  </Button>
-                ) : null}
-              </div>
-            )}
+            <div className="app-pane-header sider-content-header">
+              <span className="app-pane-header-title">{siderHeaderTitle}</span>
+              {siderKey === 'sessions' ? (
+                <Button type="primary" size="small" className="sider-new-session-btn" onClick={() => void createSession()}>
+                  {t('session.new')}
+                </Button>
+              ) : null}
+              {siderKey === 'wiki' && wikiEnabled ? (
+                <WikiPaneToolbar
+                  showOpen={wikiInitialized === true}
+                  refreshDisabled={!wikiInitialized}
+                  onOpen={() => wikiPaneRef.current?.openInExplorer()}
+                  onRefresh={() => wikiPaneRef.current?.refresh()}
+                />
+              ) : null}
+            </div>
             <div className="sider-content-body">
               {siderKey === 'sessions' && <SessionListPane />}
               {siderKey === 'wiki' && wikiEnabled && (
                 <WikiPane
+                  ref={wikiPaneRef}
                   workDir={config?.workDir ?? ''}
                   onFileSelect={handleFileSelect}
                   onSwitchToWikiTab={() => setSiderKey('wiki')}
                   onCollectToWiki={handleCollectToWiki}
+                  onInitStateChange={setWikiInitialized}
                 />
               )}
               <div className={siderKey === 'search' ? 'search-pane-mount' : 'search-pane-mount search-pane-mount--hidden'}>
-                <SearchPane
-                  onSessionResultClick={handleSearchSessionClick}
-                  onFileResultClick={handleSearchFileClick}
-                />
+                <SearchPane onSessionResultClick={handleSearchSessionClick} onFileResultClick={handleSearchFileClick} />
               </div>
             </div>
           </div>
         </div>
       </SplitPane>
 
-      <main className="app-main" style={{ flex: 1, minWidth: 400 }}>
-        <div className="app-pane-header app-main-header">
-          <span className="app-pane-header-title">SpaceAssistant</span>
-        </div>
-        <div style={{ flex: 1, minHeight: 0 }}>
+      <main className="app-main">
+        <div className="app-main-body">
           <ChatView />
         </div>
       </main>
 
-      <SplitPane id="rightSider" defaultSize={240} minSize={180} maxSize={480} side="right" className="app-detail-sider">
+      <SplitPane id="rightSider" defaultSize={280} minSize={180} maxSize={480} side="right" className="app-detail-sider">
         <DetailPanel />
       </SplitPane>
 
