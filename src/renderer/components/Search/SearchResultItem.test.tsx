@@ -37,7 +37,9 @@ describe('SearchResultItem', () => {
   it('renders file result with file tag (zh-CN)', () => {
     render(<SearchResultItem item={fileItem} onClick={vi.fn()} />)
     expect(screen.getByText('文件')).toBeDefined()
-    expect(screen.getByText(/📂 src\/utils/)).toBeDefined()
+    expect(screen.getByText('perf.ts')).toBeDefined()
+    expect(screen.getByText(/memoize/)).toBeDefined()
+    expect(screen.queryByText('src/utils')).toBeNull()
     expect(screen.queryByText('[file]')).toBeNull()
   })
 

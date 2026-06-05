@@ -137,7 +137,7 @@
 }
 
 .activity-bar-btn:hover {
-  background: rgba(128, 128, 128, 0.12);
+  background: var(--sa-primary-subtle);
   color: var(--sa-icon-hover);
 }
 
@@ -272,15 +272,15 @@
 }
 
 .session-item:hover {
-  background: var(--sa-surface-highlight-hover);
+  background: var(--sa-list-hover-bg);
 }
 
 .session-item--active {
-  background: var(--sa-surface-highlight);
+  background: var(--sa-list-selected-bg);
 }
 
 .session-item--active:hover {
-  background: var(--sa-surface-highlight);
+  background: var(--sa-list-selected-bg);
 }
 
 .session-item-select {
@@ -345,7 +345,7 @@
 }
 
 .session-item--active .session-item-icon--idle::before {
-  background: var(--sa-primary);
+  background: var(--sa-list-selected-fg);
 }
 
 .session-item-icon--loading {
@@ -378,8 +378,8 @@
 }
 
 .session-item--active .session-item-name {
-  color: var(--sa-primary);
-  font-weight: 600;
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }
 
 .session-item-stop,
@@ -712,6 +712,7 @@
   border-radius: var(--sa-radius-lg) var(--sa-radius-lg) var(--sa-radius-sm) var(--sa-radius-lg);
   background: var(--sa-bubble-user);
   color: var(--sa-bubble-user-text);
+  border: 1px solid var(--sa-bubble-user-border);
   font-size: var(--sa-chat-font-body);
   line-height: var(--sa-chat-line-body);
   box-shadow: var(--sa-chat-user-shadow);
@@ -1033,6 +1034,7 @@
 .chat-activity-track .tool-row,
 .chat-activity-track .write-confirm-card,
 .chat-activity-track .browser-confirm-card,
+.chat-activity-track .browser-dependency-guide-card,
 .chat-activity-track .script-confirm-card,
 .chat-activity-track .lark-cli-confirm-card,
 .chat-activity-track .write-success-card {
@@ -1059,7 +1061,7 @@
 
 .composer-box:focus-within {
   border-color: var(--sa-primary);
-  box-shadow: 0 0 0 2px var(--sa-primary-subtle);
+  box-shadow: var(--sa-shadow-glow);
 }
 
 .composer-box .ant-input {
@@ -1160,7 +1162,7 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--sa-primary);
+  background: var(--sa-primary-solid);
   transition: background var(--sa-duration-fast);
 }
 
@@ -1282,11 +1284,12 @@
   transform: rotate(90deg);
 }
 
-/* 展开态：标题 + 详情同一卡片，避免「一行 + 缩进小框」的割裂感 */
+/* 展开态：与确认卡共用 card 轮廓 token */
 .tool-row--expanded {
-  border: 1px solid var(--sa-chat-detail-border);
+  border: 1px solid var(--sa-chat-card-border);
   border-radius: var(--sa-radius-md);
-  background: var(--sa-chat-detail-bg);
+  background: var(--sa-chat-inset-bg);
+  box-shadow: var(--sa-chat-card-shadow);
   overflow: hidden;
 }
 
@@ -1337,6 +1340,11 @@
   box-sizing: border-box;
 }
 
+.tool-row--expanded .tool-row-detail__inner {
+  padding: 12px 12px 12px;
+  border-top: 1px solid var(--sa-chat-inset-border);
+}
+
 .tool-row-detail__message {
   display: block;
   margin: 0;
@@ -1349,8 +1357,7 @@
   word-break: break-word;
 }
 
-/* 展开区内嵌块：与确认卡命令块同一 token（--sa-chat-inset-*） */
-.tool-row--expanded .tool-row-detail__inner > .tool-row-detail__message,
+/* 展开区内嵌块：代码/输出用 inset；纯文案错误不再套第二层框 */
 .tool-row--expanded .tool-row-detail__inner > .sa-command-inset,
 .tool-row--expanded .tool-row-detail__inner > .sa-chat-inset-code,
 .tool-row--expanded .tool-row-detail__inner > .sa-chat-code-block,
@@ -1369,6 +1376,21 @@
   color: var(--sa-command-inset-text);
 }
 
+.tool-row--expanded .tool-row-detail__inner > .tool-row-detail__message {
+  width: 100%;
+  max-width: 100%;
+  align-self: stretch;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--sa-text);
+  font-weight: 500;
+  line-height: 1.55;
+}
+
 .tool-row--expanded .tool-row-detail__inner > .sa-command-inset,
 .tool-row--expanded .tool-row-detail__inner > .sa-chat-inset-code,
 .tool-row--expanded .tool-row-detail__inner > .sa-chat-code-block,
@@ -1379,7 +1401,7 @@
 
 /* 交互式 xterm：卡片内唯一深色块，贴底圆角与外框一致 */
 .tool-row-detail__inner:has(> .shell-terminal-wrap) {
-  padding: 4px 8px 8px;
+  padding: 10px 8px 8px;
   gap: 8px;
 }
 
@@ -1471,9 +1493,9 @@
   background: var(--sa-diff-add-bg);
 }
 
-/* 命令/输出 inset：确认卡、tool-row 展开区共用 --sa-chat-inset-*（xterm 终端除外） */
+/* 命令/输出 inset：tool-row 展开区共用 --sa-chat-inset-*（确认卡主体用 subject-value；xterm 终端除外） */
 .sa-command-inset,
-.write-confirm-card__command,
+.write-confirm-card__command:not(.write-confirm-card__subject-value):not(.write-confirm-card__subject-value--code),
 .sa-chat-code-block,
 .tool-code-preview,
 .sa-chat-inset-code,
@@ -1683,32 +1705,84 @@
   margin-top: 0;
 }
 
-.browser-setup-guide--compact.ant-alert {
-  margin-top: 0;
-  padding: 8px 12px;
-}
-
 .browser-setup-guide--compact-wrap {
   margin-top: 8px;
   cursor: pointer;
 }
 
-.browser-setup-guide--compact .ant-alert-message {
+.browser-runtime-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--sa-radius-sm);
+  border: 1px solid var(--sa-command-inset-border);
+  background: var(--sa-command-inset-bg);
   font-size: 13px;
-  flex: 1;
+  line-height: 1.45;
+  color: var(--sa-text);
 }
 
-.browser-setup-guide__compact-row {
+.browser-runtime-check-row--success {
+  background: color-mix(in srgb, var(--sa-success) 8%, var(--sa-bg-elevated));
+  border-color: color-mix(in srgb, var(--sa-success) 16%, var(--sa-border));
+}
+
+.browser-runtime-check-row--warning {
+  background: color-mix(in srgb, var(--sa-warning) 10%, var(--sa-bg-elevated));
+  border-color: color-mix(in srgb, var(--sa-warning) 18%, var(--sa-border));
+}
+
+.browser-runtime-check-row__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.browser-runtime-check-row--success .browser-runtime-check-row__dot {
+  background: var(--sa-success);
+}
+
+.browser-runtime-check-row--warning .browser-runtime-check-row__dot {
+  background: var(--sa-warning);
+}
+
+.browser-runtime-check-row__text {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  width: 100%;
 }
 
-.browser-setup-guide__expand-icon {
+.browser-runtime-check-row__chevron {
   flex-shrink: 0;
   opacity: 0.72;
+  color: var(--sa-text-secondary);
+}
+
+.browser-runtime-check-row--static .browser-runtime-check-row__text {
+  display: block;
+}
+
+.browser-setup-guide__status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--sa-text-secondary);
+}
+
+.browser-detect-detail__ok {
+  color: var(--sa-success);
+  font-weight: 500;
+}
+
+.browser-detect-detail__fail {
+  color: var(--sa-error);
+  font-weight: 500;
 }
 
 .browser-setup-guide__header {
@@ -1728,6 +1802,93 @@
   margin-bottom: 8px;
 }
 
+.browser-dependency-guide-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 16px 14px;
+}
+
+.browser-dependency-guide-card__action {
+  margin: 0;
+}
+
+.browser-dependency-guide-card__status {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--sa-chat-font-body);
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--sa-text);
+}
+
+.browser-dependency-guide-card__status-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-top: 0.5em;
+  border-radius: 50%;
+  background: var(--sa-warning);
+}
+
+.browser-dependency-guide-card__note {
+  text-wrap: pretty;
+  line-height: 1.6;
+}
+
+.browser-dependency-guide-card__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 0;
+  padding: 14px 16px 16px;
+}
+
+.browser-dependency-guide-card__footer .write-confirm-card__actions {
+  justify-content: flex-end;
+}
+
+.browser-dependency-guide-card__footer .write-confirm-card__action--allow {
+  flex: 0 0 auto;
+  max-width: none;
+  margin-left: auto;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: var(--sa-chat-font-body);
+}
+
+.browser-dependency-guide-card__cwd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 8px;
+  margin: 0;
+  min-width: 0;
+}
+
+.browser-dependency-guide-card__cwd-label {
+  flex-shrink: 0;
+  font-size: var(--sa-chat-font-meta);
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  color: var(--sa-text-tertiary);
+}
+
+.browser-dependency-guide-card__cwd-path {
+  min-width: 0;
+  flex: 1 1 12rem;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-meta);
+  line-height: 1.45;
+  color: var(--sa-text-secondary);
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
 .browser-dependency-guide__settings-link {
   padding-inline: 0;
   height: auto;
@@ -1738,81 +1899,164 @@
 .write-confirm-card {
   width: 100%;
   margin: 6px 0;
-  border: 1px solid var(--sa-confirm-border);
-  border-radius: var(--sa-radius-lg);
-  background: var(--sa-bg-elevated);
-  box-shadow: none;
+  border: 1px solid var(--sa-chat-card-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-chat-inset-bg);
+  box-shadow: var(--sa-chat-card-shadow);
   overflow: hidden;
-  transition: border-color var(--sa-duration-fast) var(--sa-ease-out);
+  transition:
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    box-shadow var(--sa-duration-fast) var(--sa-ease-out);
 }
 
 .write-confirm-card:hover {
-  border-color: var(--sa-border-strong);
+  border-color: var(--sa-chat-card-border-hover);
 }
 
-.write-confirm-card__decision {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  padding: 14px 14px 14px;
-  background: var(--sa-bg-elevated);
-  border-bottom: 1px solid var(--sa-border);
-}
-
-.write-confirm-card__decision-head {
+/* 1. 操作说明（ tertiary ） */
+.write-confirm-card__intro {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
+  align-items: baseline;
+  gap: 6px 10px;
   min-width: 0;
-  width: 100%;
+  padding: 12px 12px 0;
 }
 
+.write-confirm-card__intro-label,
 .write-confirm-card__decision-summary {
   margin: 0;
   min-width: 0;
   flex: 1 1 auto;
-  font-size: var(--sa-chat-font-body);
-  font-weight: 600;
-  line-height: 1.35;
-  letter-spacing: -0.01em;
-  color: var(--sa-text);
+  font-size: var(--sa-chat-font-meta);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: var(--sa-text-tertiary);
   text-wrap: balance;
 }
 
+.write-confirm-card__intro-badges,
 .write-confirm-card__decision-badges {
   display: inline-flex;
   flex-shrink: 0;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
-/* 决策区标签：统一小号 chip（写入 / 高风险 / diff 行数） */
+/* 2. 待确认主体（ primary surface ） */
+.write-confirm-card__subject {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px 0;
+}
+
+.write-confirm-card__subject-value {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-bg-elevated);
+  border: 1px solid var(--sa-chat-subject-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-body);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--sa-text);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.write-confirm-card__subject-value--code {
+  padding: 0;
+  overflow: hidden;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.write-confirm-card__subject-value--code .shell-confirm-card__command-line,
+.write-confirm-card__subject-value--code .lark-cli-confirm-card__command-line {
+  display: block;
+  padding: 10px 12px;
+}
+
+.write-confirm-card__subject-note,
+.write-confirm-card__note {
+  margin: 0;
+  padding: 0;
+  font-size: var(--sa-chat-font-meta);
+  line-height: 1.55;
+  color: var(--sa-text-secondary);
+}
+
+.write-confirm-card__subject--diff {
+  padding-top: 6px;
+}
+
+.write-confirm-card__subject--diff .write-confirm-card__body {
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-bg-elevated);
+  border: 1px solid var(--sa-chat-subject-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  overflow: hidden;
+}
+
+/* 3. 底部操作区 */
+.write-confirm-card__footer {
+  padding: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--sa-chat-inset-border);
+}
+
+.write-confirm-card__intro-badges .write-confirm-card__stat,
 .write-confirm-card__decision-badges .write-confirm-card__stat {
-  min-height: 16px;
-  padding: 0 5px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.25;
-  letter-spacing: 0;
+  min-height: auto;
+  padding: 0;
+  border-radius: 0;
+  font-size: var(--sa-chat-font-meta);
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  background: transparent;
+  border: none;
 }
 
 .write-confirm-card__decision-badges .write-confirm-card__stat--add,
 .write-confirm-card__decision-badges .write-confirm-card__stat--remove {
-  padding: 0 5px;
+  padding: 0;
   font-family: var(--sa-font-mono);
-  font-weight: 600;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  border: none;
 }
 
-.shell-confirm-card--risk .write-confirm-card__decision-summary {
+.write-confirm-card__stat--add {
+  color: var(--sa-diff-add-fg);
+}
+
+.write-confirm-card__stat--remove {
+  color: var(--sa-diff-remove-fg);
+}
+
+.write-confirm-card__stat--write {
+  color: var(--sa-text-secondary);
+  background: transparent;
+  border: none;
+  font-weight: 500;
+}
+
+.write-confirm-card__stat--risk {
+  color: color-mix(in srgb, var(--sa-confirm-risk-accent) 78%, var(--sa-text));
+  background: transparent;
+  border: none;
+  font-weight: 500;
+}
+
+.shell-confirm-card--risk .write-confirm-card__intro-label {
   font-family: var(--sa-font-mono);
-  font-size: var(--sa-chat-font-meta);
-  font-weight: 600;
+  font-size: var(--sa-chat-font-mono);
 }
 
 .write-confirm-card__header {
@@ -1863,52 +2107,20 @@
   font-weight: 500;
 }
 
-/* 确认卡片标签基类（决策区由 .decision-badges 覆写为 chip 尺寸） */
+/* 确认卡片标签基类 */
 .write-confirm-card__stat {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  min-height: auto;
+  padding: 0;
+  border-radius: 0;
+  border: none;
   font-family: var(--sa-font-sans);
   font-size: var(--sa-chat-font-meta);
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: 0.02em;
-}
-
-.write-confirm-card__stat--add,
-.write-confirm-card__stat--remove {
-  padding: 2px 7px;
-  font-family: var(--sa-font-mono);
-  font-weight: 700;
+  font-weight: 500;
+  line-height: 1.3;
   letter-spacing: 0.01em;
-  font-variant-numeric: tabular-nums;
-  border: none;
-}
-
-.write-confirm-card__stat--add {
-  color: #389e0d;
-  background: var(--sa-diff-add-bg);
-}
-
-.write-confirm-card__stat--remove {
-  color: #cf1322;
-  background: var(--sa-diff-remove-bg);
-}
-
-.write-confirm-card__stat--write {
-  color: color-mix(in srgb, var(--sa-primary) 78%, #003366);
-  background: var(--sa-primary-subtle);
-  border-color: color-mix(in srgb, var(--sa-primary) 32%, var(--sa-border) 68%);
-}
-
-.write-confirm-card__stat--risk {
-  color: color-mix(in srgb, var(--sa-confirm-risk-accent) 72%, #5c3d00);
-  background: var(--sa-confirm-risk-subtle);
-  border-color: color-mix(in srgb, var(--sa-confirm-risk-accent) 38%, var(--sa-border) 62%);
 }
 
 .write-confirm-card__actions {
@@ -1922,28 +2134,45 @@
   padding: 0;
 }
 
-.write-confirm-card__decision .write-confirm-card__actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  width: 100%;
+.write-confirm-card__footer .write-confirm-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  width: 100%;
   margin-left: 0;
 }
 
-.write-confirm-card__decision .write-confirm-card__action {
+.write-confirm-card__footer .write-confirm-card__action {
   min-height: 32px;
+  padding: 0 12px;
+  font-size: var(--sa-chat-font-body);
+  font-weight: 500;
+}
+
+.write-confirm-card__footer .write-confirm-card__action--deny {
+  flex: 0 0 auto;
+  min-width: 0;
   padding: 0 10px;
   font-size: var(--sa-chat-font-meta);
-  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--sa-text-secondary);
 }
 
-.shell-confirm-card--risk .write-confirm-card__decision .write-confirm-card__action {
-  min-height: 30px;
-  padding: 0 8px;
-  gap: 4px;
+.write-confirm-card__footer .write-confirm-card__action--deny:hover {
+  background: var(--sa-list-hover-bg);
+  border-color: transparent;
+  color: var(--sa-text);
 }
 
-.shell-confirm-card--risk .write-confirm-card__decision .write-confirm-card__action--allow {
+.write-confirm-card__footer .write-confirm-card__action--allow {
+  flex: 1 1 auto;
+  max-width: min(220px, 58%);
+  margin-left: auto;
+}
+
+.shell-confirm-card--risk .write-confirm-card__footer .write-confirm-card__action--allow {
   line-height: 1.25;
 }
 
@@ -1951,14 +2180,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 32px;
+  gap: 0;
+  min-height: 30px;
   padding: 0 12px;
   border: 1px solid transparent;
   border-radius: var(--sa-radius-sm);
   font-family: var(--sa-font-sans);
-  font-size: var(--sa-sider-font-size);
-  font-weight: 600;
+  font-size: var(--sa-chat-font-body);
+  font-weight: 500;
   line-height: 1.2;
   white-space: nowrap;
   cursor: pointer;
@@ -1967,11 +2196,6 @@
     border-color var(--sa-duration-fast) var(--sa-ease-out),
     color var(--sa-duration-fast) var(--sa-ease-out),
     transform var(--sa-duration-fast) var(--sa-ease-out);
-}
-
-.write-confirm-card__action svg {
-  display: block;
-  flex-shrink: 0;
 }
 
 .write-confirm-card__action--allow {
@@ -1991,15 +2215,15 @@
 }
 
 .write-confirm-card__action--deny {
-  background: var(--sa-bg-elevated);
-  border-color: var(--sa-border-strong);
-  color: var(--sa-text);
+  background: var(--sa-write-confirm-deny-bg);
+  border-color: transparent;
+  color: var(--sa-write-confirm-deny-fg);
 }
 
 .write-confirm-card__action--deny:hover {
-  background: var(--sa-write-confirm-deny-bg);
-  border-color: var(--sa-write-confirm-deny-border);
-  color: var(--sa-write-confirm-deny-fg);
+  background: var(--sa-write-confirm-deny-hover-bg);
+  border-color: transparent;
+  color: var(--sa-write-confirm-deny-hover-fg);
 }
 
 .write-confirm-card__action--deny:active {
@@ -2050,6 +2274,16 @@
   overflow: auto;
 }
 
+.write-confirm-card__subject--diff .write-confirm-card__collapsible--clamped:not(.write-confirm-card__collapsible--expanded)
+  .write-confirm-card__collapsible-viewport::after {
+  background: linear-gradient(to bottom, transparent, var(--sa-bg-elevated));
+}
+
+.write-confirm-card__subject--diff .write-confirm-card__collapsible-bar {
+  border-top: 1px solid color-mix(in srgb, var(--sa-border) 70%, var(--sa-bg-elevated));
+  background: var(--sa-bg-elevated);
+}
+
 .write-confirm-card__collapsible--clamped:not(.write-confirm-card__collapsible--expanded)
   .write-confirm-card__collapsible-viewport::after {
   content: '';
@@ -2059,7 +2293,7 @@
   height: 28px;
   margin-top: -28px;
   pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--sa-bg-elevated));
+  background: linear-gradient(to bottom, transparent, var(--sa-chat-inset-bg));
 }
 
 .write-confirm-card__collapsible-bar {
@@ -2067,7 +2301,7 @@
   justify-content: center;
   padding: 6px 12px 10px;
   border-top: 1px solid var(--sa-border);
-  background: var(--sa-bg-elevated);
+  background: var(--sa-chat-inset-bg);
 }
 
 .write-confirm-card__expand-btn {
@@ -2122,19 +2356,19 @@
   color: var(--sa-text-tertiary);
 }
 
-.write-confirm-card__note {
-  margin: 0;
-  padding: 8px 12px 12px;
-  font-size: var(--sa-chat-font-meta);
-  line-height: 1.55;
-  color: var(--sa-text-secondary);
-}
-
 .write-confirm-card__detail {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+.write-confirm-card__note {
+  margin: 0;
+  padding: 0;
+  font-size: var(--sa-chat-font-meta);
+  line-height: 1.55;
+  color: var(--sa-text-secondary);
 }
 
 .write-confirm-card__detail .write-confirm-card__note {
@@ -2159,7 +2393,8 @@
   overflow: hidden;
 }
 
-.write-confirm-card__command--code .script-confirm-card__code--highlighted {
+.write-confirm-card__command--code .script-confirm-card__code--highlighted,
+.write-confirm-card__subject-value--code .script-confirm-card__code--highlighted {
   max-height: 280px;
   overflow: auto;
   border: none;
@@ -2168,8 +2403,9 @@
   scrollbar-color: var(--sa-border-strong) transparent;
 }
 
-.write-confirm-card__command--code .script-confirm-card__code--highlighted::after {
-  background: linear-gradient(to bottom, transparent, var(--sa-bg-subtle));
+.write-confirm-card__command--code .script-confirm-card__code--highlighted::after,
+.write-confirm-card__subject-value--code .script-confirm-card__code--highlighted::after {
+  background: linear-gradient(to bottom, transparent, var(--sa-bg-elevated));
 }
 
 .write-confirm-card__command--code .script-confirm-card__code--highlighted .sa-prose pre,
@@ -2200,6 +2436,9 @@
   padding: 10px 12px;
 }
 
+.write-confirm-card__subject .shell-confirm-card__meta,
+.write-confirm-card__subject .script-confirm-card__meta,
+.write-confirm-card__subject .lark-cli-confirm-card__meta,
 .write-confirm-card__detail .shell-confirm-card__meta,
 .write-confirm-card__detail .script-confirm-card__meta,
 .write-confirm-card__detail .lark-cli-confirm-card__meta {
@@ -2216,7 +2455,7 @@
   height: 24px;
   margin-top: -24px;
   pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--sa-bg-elevated));
+  background: linear-gradient(to bottom, transparent, var(--sa-chat-inset-bg));
 }
 
 .write-confirm-card__code {
@@ -2231,11 +2470,11 @@
 
 .write-confirm-card__body--diff .write-confirm-card__code {
   border-top: none;
-  padding: 8px 0 4px;
+  padding: 4px 0;
 }
 
-.write-confirm-card__decision + .write-confirm-card__body > .write-confirm-card__code:first-child {
-  border-top: none;
+.write-confirm-card__subject--diff .write-confirm-card__body--diff .write-confirm-card__code {
+  padding: 0;
 }
 
 .write-confirm-card__line {
@@ -2262,7 +2501,7 @@
 
 .write-confirm-card__line--add::before {
   content: '+';
-  color: #389e0d;
+  color: var(--sa-diff-add-fg);
 }
 
 .write-confirm-card__line--remove {
@@ -2271,7 +2510,7 @@
 
 .write-confirm-card__line--remove::before {
   content: '−';
-  color: #cf1322;
+  color: var(--sa-diff-remove-fg);
 }
 
 /* ── Browser confirm card ── */
@@ -2424,18 +2663,19 @@
   }
 }
 
-/* ── Write success card ── */
+/* ── Write success card（与 write-confirm-card 共用 chat 卡片壳层 token） ── */
 .write-success-card {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 34px;
-  margin: 4px 0;
-  padding: 0 10px;
-  border: 1px solid var(--sa-border);
+  min-height: 40px;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--sa-chat-card-border);
   border-radius: var(--sa-radius-md);
-  background: var(--sa-bg-elevated);
+  background: var(--sa-chat-inset-bg);
+  box-shadow: var(--sa-chat-card-shadow);
 }
 
 .write-success-card__icon-wrap {
@@ -2464,45 +2704,46 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  min-height: 20px;
-  padding: 2px 7px;
-  border-radius: 999px;
+  min-height: auto;
+  padding: 0;
+  border-radius: 0;
   font-family: var(--sa-font-mono);
   font-size: var(--sa-chat-font-meta);
-  line-height: 1.2;
-  font-weight: 700;
+  line-height: 1.3;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
 .write-success-card__stat--add {
-  color: #52c41a;
+  color: var(--sa-diff-add-fg);
 }
 
 .write-success-card__stat--remove {
-  color: #ff4d4f;
+  color: var(--sa-diff-remove-fg);
 }
 
 .write-success-card__view {
   flex-shrink: 0;
-  margin-left: 4px;
-  height: 26px;
+  margin-left: auto;
+  height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--sa-border-strong);
+  border: 1px solid var(--sa-chat-subject-border);
   border-radius: var(--sa-radius-sm);
-  background: var(--sa-chat-inset-bg);
+  background: var(--sa-bg-elevated);
   font-size: var(--sa-chat-font-meta);
+  font-weight: 500;
   color: var(--sa-text-secondary);
   cursor: pointer;
   transition:
-    background var(--sa-duration-fast),
-    color var(--sa-duration-fast),
-    border-color var(--sa-duration-fast);
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out),
+    border-color var(--sa-duration-fast) var(--sa-ease-out);
 }
 
 .write-success-card__view:hover {
-  background: var(--sa-bg-subtle);
+  background: var(--sa-list-hover-bg);
   color: var(--sa-text);
-  border-color: var(--sa-border-strong);
+  border-color: var(--sa-chat-card-border-hover);
 }
 
 .write-success-card__view:focus-visible {

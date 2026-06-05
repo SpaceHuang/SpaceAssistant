@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { SearchResult } from '../../../shared/domainTypes'
 import {
+  getFileBasename,
   getFileDirname,
+  getFileSearchDisplay,
   shouldShowSessionAuxiliary,
   getSessionAuxiliaryText,
   getFileAuxiliaryText
@@ -31,6 +33,41 @@ describe('searchResultUtils', () => {
       messageId: 'm1'
     }
     expect(getSessionAuxiliaryText(item)).toBeNull()
+  })
+
+  it('getFileBasename returns file name', () => {
+    expect(getFileBasename('src/utils/perf.ts')).toBe('perf.ts')
+    expect(getFileBasename('README.md')).toBe('README.md')
+  })
+
+  it('getFileSearchDisplay prefers preview over directory', () => {
+    const item: SearchResult = {
+      id: 'file:1',
+      type: 'file',
+      title: 'src/utils/perf.ts',
+      preview: 'export function memoize',
+      path: 'src/utils/perf.ts'
+    }
+    expect(getFileSearchDisplay(item)).toEqual({
+      fileName: 'perf.ts',
+      fullPath: 'src/utils/perf.ts',
+      detailLine: 'export function memoize'
+    })
+  })
+
+  it('getFileSearchDisplay falls back to directory without preview', () => {
+    const item: SearchResult = {
+      id: 'file:2',
+      type: 'file',
+      title: 'src/utils/perf.ts',
+      preview: '',
+      path: 'src/utils/perf.ts'
+    }
+    expect(getFileSearchDisplay(item)).toEqual({
+      fileName: 'perf.ts',
+      fullPath: 'src/utils/perf.ts',
+      detailLine: 'src/utils'
+    })
   })
 
   it('getFileAuxiliaryText returns directory path', () => {

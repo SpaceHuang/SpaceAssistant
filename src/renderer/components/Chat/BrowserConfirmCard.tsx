@@ -20,13 +20,16 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
         allowLabel={t('confirm.browser.allow')}
         denyLabel={t('confirm.browser.deny')}
         onConfirm={onConfirm}
-      />
-      <div className="write-confirm-card__detail browser-confirm-card__detail">
-        <p className="write-confirm-card__command browser-confirm-card__url" title={summary.detailValue}>
-          {summary.detailValue}
-        </p>
-        {summary.hint ? <p className="write-confirm-card__note browser-confirm-card__hint">{summary.hint}</p> : null}
-      </div>
+      >
+        <div className="write-confirm-card__subject">
+          <p className="write-confirm-card__subject-value browser-confirm-card__url" title={summary.detailValue}>
+            {summary.detailValue}
+          </p>
+          {summary.hint ? (
+            <p className="write-confirm-card__subject-note browser-confirm-card__hint">{summary.hint}</p>
+          ) : null}
+        </div>
+      </ConfirmCardDecision>
     </div>
   )
 }

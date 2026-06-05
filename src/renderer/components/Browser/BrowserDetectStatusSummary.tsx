@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Typography } from 'antd'
+import { Button, Typography } from 'antd'
 import type { BrowserDetectResult } from '../../../shared/browserTypes'
+import {
+  BrowserDetectDetailValue,
+  BrowserRuntimeCheckCompactRow,
+  ExpandChevronIcon
+} from './BrowserRuntimeCheckUi'
 
 type Props = {
   detect: BrowserDetectResult
@@ -10,21 +15,6 @@ type Props = {
   /** 为 true 时表示正在拉取检测结果；结束后会自动收起详情 */
   detecting?: boolean
   children?: React.ReactNode
-}
-
-function ExpandChevronIcon() {
-  return (
-    <svg
-      className="browser-setup-guide__expand-icon"
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      aria-hidden
-    >
-      <path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
-    </svg>
-  )
 }
 
 export function isBrowserEnvironmentReady(detect: BrowserDetectResult): boolean {
@@ -56,38 +46,30 @@ function detectFingerprint(detect: BrowserDetectResult): string {
 
 export function BrowserDetectStatusRows({ detect }: { detect: BrowserDetectResult }) {
   return (
-    <div className="browser-setup-guide__status" style={{ fontSize: 13 }}>
+    <div className="browser-setup-guide__status">
       <div>
         Stagehand:{' '}
-        {detect.stagehand.installed ? (
-          <Typography.Text type="success">已安装 {detect.stagehand.version ?? ''}</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">未安装</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.stagehand.installed}>
+          {detect.stagehand.installed ? `已安装 ${detect.stagehand.version ?? ''}` : '未安装'}
+        </BrowserDetectDetailValue>
       </div>
       <div>
         Playwright:{' '}
-        {detect.playwright.installed ? (
-          <Typography.Text type="success">已安装</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">未安装</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.playwright.installed}>
+          {detect.playwright.installed ? '已安装' : '未安装'}
+        </BrowserDetectDetailValue>
       </div>
       <div>
         Chromium:{' '}
-        {detect.chromium.ready ? (
-          <Typography.Text type="success">已就绪</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">未安装</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.chromium.ready}>
+          {detect.chromium.ready ? '已就绪' : '未安装'}
+        </BrowserDetectDetailValue>
       </div>
       <div>
         Node: {detect.node.version}{' '}
-        {detect.node.meetsRequirement ? (
-          <Typography.Text type="success">（应用内置）✓</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">✗</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.node.meetsRequirement}>
+          {detect.node.meetsRequirement ? '（应用内置）✓' : '✗'}
+        </BrowserDetectDetailValue>
       </div>
     </div>
   )
@@ -138,17 +120,10 @@ export function BrowserDetectStatusSummary({
             }
           }}
         >
-          <Alert
-            className="browser-setup-guide browser-setup-guide--compact"
-            type={ready ? 'success' : 'warning'}
-            showIcon
-            message={
-              <span className="browser-setup-guide__compact-row">
-                <span>{summaryText}</span>
-                <ExpandChevronIcon />
-              </span>
-            }
-          />
+          <BrowserRuntimeCheckCompactRow tone={ready ? 'success' : 'warning'}>
+            <span>{summaryText}</span>
+            <ExpandChevronIcon />
+          </BrowserRuntimeCheckCompactRow>
         </div>
         {children}
       </>

@@ -79,30 +79,33 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
             </>
           ) : undefined
         }
-      />
-      {hasPreview ? (
-        <div className="write-confirm-card__body write-confirm-card__body--diff">
-          <ConfirmCardCollapsible lineCount={allDiffLines.length}>
-            <pre className="write-confirm-card__code">
-              {diffLines.map((line, i) => (
-                <div
-                  key={`${line.type}-${i}`}
-                  className={[
-                    'write-confirm-card__line',
-                    line.type === 'add' ? 'write-confirm-card__line--add' : '',
-                    line.type === 'remove' ? 'write-confirm-card__line--remove' : ''
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                >
-                  {line.text || ' '}
-                </div>
-              ))}
-            </pre>
-          </ConfirmCardCollapsible>
-          {diffTruncated ? <p className="write-confirm-card__preview-cap">{t('confirm.previewCap')}</p> : null}
-        </div>
-      ) : null}
+      >
+        {hasPreview ? (
+          <div className="write-confirm-card__subject write-confirm-card__subject--diff">
+            <div className="write-confirm-card__body write-confirm-card__body--diff">
+              <ConfirmCardCollapsible lineCount={allDiffLines.length}>
+                <pre className="write-confirm-card__code">
+                  {diffLines.map((line, i) => (
+                    <div
+                      key={`${line.type}-${i}`}
+                      className={[
+                        'write-confirm-card__line',
+                        line.type === 'add' ? 'write-confirm-card__line--add' : '',
+                        line.type === 'remove' ? 'write-confirm-card__line--remove' : ''
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    >
+                      {line.text || ' '}
+                    </div>
+                  ))}
+                </pre>
+              </ConfirmCardCollapsible>
+              {diffTruncated ? <p className="write-confirm-card__subject-note">{t('confirm.previewCap')}</p> : null}
+            </div>
+          </div>
+        ) : null}
+      </ConfirmCardDecision>
     </div>
   )
 }

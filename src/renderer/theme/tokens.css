@@ -2,29 +2,35 @@
   --sa-font-sans: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --sa-font-mono: 'Cascadia Code', 'IBM Plex Mono', Consolas, 'Courier New', monospace;
 
-  --sa-primary: #0a84ff;
-  --sa-primary-hover: #0066d6;
-  --sa-primary-subtle: rgba(10, 132, 255, 0.12);
+  /* 品牌橙（Committed 策略） */
+  --sa-primary: #f06529;
+  --sa-primary-hover: #d94e1a;
+  --sa-primary-solid: #d94e1a;
+  --sa-primary-subtle: #fdf0eb;
+  --sa-primary-muted: #f5e6dc;
   --sa-accent: #fa8c16;
   --sa-accent-subtle: rgba(250, 140, 22, 0.14);
 
-  --sa-bg-base: #fafbfc;
-  --sa-bg-elevated: #ffffff;
-  --sa-bg-subtle: #f5f6f8;
-  --sa-bg-muted: #eef0f3;
-  --sa-border: #e8eaed;
-  --sa-border-strong: #d9dde3;
+  /* 暖调中性面 */
+  --sa-bg-base: #faf9f6;
+  --sa-bg-elevated: #fefdfb;
+  --sa-bg-subtle: #f5f3ef;
+  --sa-bg-muted: #eeebe5;
+  --sa-border: #e5e0d8;
+  --sa-border-strong: #dbd5cc;
 
-  --sa-text: rgba(0, 0, 0, 0.88);
-  --sa-text-secondary: rgba(0, 0, 0, 0.55);
-  --sa-text-tertiary: rgba(0, 0, 0, 0.35);
-  --sa-icon: #8c8c8c;
-  --sa-icon-hover: #434343;
+  --sa-text: #2d2a26;
+  --sa-text-secondary: #6b655e;
+  --sa-text-tertiary: #948e87;
+  --sa-icon: #857e77;
+  --sa-icon-hover: #524b44;
+  --sa-icon-hover-bg: color-mix(in srgb, var(--sa-primary) 10%, var(--sa-bg-subtle));
   --sa-context-ring-track: var(--sa-border-strong);
-  --sa-context-ring-reserved: #737373;
+  --sa-context-ring-reserved: #6b655e;
 
-  --sa-bubble-user: var(--sa-primary);
-  --sa-bubble-user-text: #ffffff;
+  --sa-bubble-user: color-mix(in srgb, var(--sa-primary) 9%, var(--sa-bg-elevated));
+  --sa-bubble-user-text: var(--sa-text);
+  --sa-bubble-user-border: color-mix(in srgb, var(--sa-primary) 14%, var(--sa-border));
   --sa-bubble-assistant: var(--sa-bg-elevated);
   --sa-bubble-assistant-text: var(--sa-text);
   --sa-bubble-assistant-border: var(--sa-border);
@@ -34,8 +40,8 @@
   --sa-chat-row-gap: 20px;
   --sa-chat-user-max-width: min(480px, 88%);
   --sa-chat-assistant-max-width: min(760px, 100%);
-  --sa-chat-assistant-accent: color-mix(in srgb, var(--sa-primary) 18%, var(--sa-border) 82%);
-  --sa-chat-user-shadow: 0 2px 8px color-mix(in srgb, var(--sa-primary) 22%, transparent);
+  --sa-chat-assistant-accent: color-mix(in srgb, var(--sa-primary) 22%, var(--sa-border) 78%);
+  --sa-chat-user-shadow: none;
   --sa-chat-assistant-shadow: var(--sa-shadow-sm);
   --sa-chat-failed-fg: #cf1322;
   --sa-chat-failed-bg: #fff1f0;
@@ -53,22 +59,26 @@
   --sa-confirm-command-font-size: var(--sa-chat-font-mono);
   --sa-confirm-command-font-weight: 500;
   --sa-confirm-command-line-height: var(--sa-chat-line-mono);
-  /* 聊天区内嵌块：命令预览、展开结果、确认卡详情（统一表面，避免按卡片各配一套灰） */
   --sa-chat-inset-bg: color-mix(in srgb, var(--sa-bg-subtle) 42%, var(--sa-bg-elevated));
-  --sa-chat-inset-border: color-mix(in srgb, var(--sa-border) 55%, var(--sa-bg-elevated));
+  /* 卡片外轮廓：比 --sa-border 再深一档，保证暖底上可辨 */
+  --sa-chat-card-border: color-mix(in srgb, var(--sa-text-tertiary) 24%, var(--sa-border-strong) 76%);
+  --sa-chat-card-border-hover: color-mix(in srgb, var(--sa-text-tertiary) 36%, var(--sa-border-strong) 64%);
+  --sa-chat-card-shadow: 0 1px 3px rgba(45, 42, 38, 0.08);
+  /* 卡片内分隔 / 代码块：略弱于外轮廓 */
+  --sa-chat-inset-border: var(--sa-border-strong);
+  --sa-chat-subject-border: color-mix(in srgb, var(--sa-text-tertiary) 16%, var(--sa-border-strong) 84%);
   --sa-command-inset-bg: var(--sa-chat-inset-bg);
   --sa-command-inset-border: var(--sa-chat-inset-border);
   --sa-command-inset-text: var(--sa-text);
   --sa-chat-detail-bg: var(--sa-bg-elevated);
   --sa-chat-detail-border: var(--sa-border);
-  --sa-selection-bg: rgba(10, 132, 255, 0.22);
+  --sa-selection-bg: color-mix(in srgb, var(--sa-primary) 22%, transparent);
 
   --sa-skill-hint-bg: var(--sa-bg-subtle);
   --sa-code-bg: #1e1e1e;
   --sa-code-text: #d4d4d4;
   --sa-code-stderr: #f48771;
   --sa-code-stderr-bg: rgba(244, 135, 113, 0.12);
-  /* plain / inset Shell 输出中的 stderr：与 stdout 同表面，仅用字色略作区分 */
   --sa-shell-stderr-text: color-mix(in srgb, var(--sa-chat-failed-fg) 42%, var(--sa-text));
   --sa-shell-stderr-bg: transparent;
   --sa-code-border: #2d2d2d;
@@ -77,47 +87,55 @@
   --sa-code-scrollbar-thumb-hover: color-mix(in srgb, var(--sa-code-text) 40%, var(--sa-code-bg));
   --sa-code-muted: color-mix(in srgb, var(--sa-code-text) 78%, var(--sa-code-bg));
   --sa-code-accent: #3b9eff;
-  --sa-diff-remove-bg: #fff1f0;
-  --sa-diff-add-bg: #f6ffed;
-
-  /* 确认卡片 */
-  --sa-confirm-accent: var(--sa-primary);
-  --sa-confirm-accent-subtle: var(--sa-primary-subtle);
-  --sa-confirm-border: var(--sa-border);
-  --sa-confirm-shadow: var(--sa-shadow-sm);
-  --sa-confirm-header-bg: var(--sa-bg-subtle);
-  --sa-confirm-risk-accent: #d48806;
-  --sa-confirm-risk-subtle: rgba(250, 173, 20, 0.14);
-  --sa-confirm-browser-accent: var(--sa-confirm-accent);
-  --sa-confirm-browser-subtle: var(--sa-confirm-accent-subtle);
-
-  /* 写入确认卡片：待操作主按钮（与 diff 绿/红语义一致，对比更强） */
-  --sa-write-confirm-allow-bg: #f6ffed;
-  --sa-write-confirm-allow-border: #95de64;
-  --sa-write-confirm-allow-fg: #237804;
-  --sa-write-confirm-allow-hover-bg: #d9f7be;
-  --sa-write-confirm-allow-hover-border: #73d13d;
-  --sa-write-confirm-allow-solid-bg: #389e0d;
-  --sa-write-confirm-allow-solid-fg: #ffffff;
-  --sa-write-confirm-allow-solid-hover-bg: #52c41a;
-  --sa-write-confirm-deny-bg: #fff1f0;
-  --sa-write-confirm-deny-border: #ffa39e;
-  --sa-write-confirm-deny-fg: #a8071a;
-  --sa-write-confirm-deny-hover-bg: #ffccc7;
-  --sa-write-confirm-deny-hover-border: #ff7875;
 
   --sa-search-hit: #fff566;
   --sa-search-current: #ffa940;
 
-  --sa-radius-sm: 6px;
-  --sa-radius-md: 8px;
-  --sa-radius-lg: 12px;
-  --sa-radius-xl: 16px;
+  /* 确认卡片 */
+  --sa-confirm-accent: var(--sa-primary);
+  --sa-confirm-accent-subtle: var(--sa-primary-subtle);
+  --sa-confirm-border: var(--sa-chat-card-border);
+  --sa-confirm-shadow: none;
+  --sa-confirm-header-bg: var(--sa-bg-subtle);
+  --sa-confirm-risk-accent: #d48806;
+  --sa-confirm-risk-subtle: rgba(250, 173, 20, 0.14);
+  --sa-confirm-browser-accent: var(--sa-accent);
+  --sa-confirm-browser-subtle: var(--sa-accent-subtle);
 
-  --sa-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --sa-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --sa-write-confirm-allow-bg: color-mix(in srgb, var(--sa-primary) 10%, var(--sa-bg-elevated));
+  --sa-write-confirm-allow-border: color-mix(in srgb, var(--sa-primary) 22%, var(--sa-border));
+  --sa-write-confirm-allow-fg: color-mix(in srgb, var(--sa-primary) 82%, var(--sa-text));
+  --sa-write-confirm-allow-hover-bg: color-mix(in srgb, var(--sa-primary) 14%, var(--sa-bg-elevated));
+  --sa-write-confirm-allow-hover-border: color-mix(in srgb, var(--sa-primary) 28%, var(--sa-border));
+  --sa-write-confirm-allow-solid-bg: var(--sa-primary);
+  --sa-write-confirm-allow-solid-fg: #ffffff;
+  --sa-write-confirm-allow-solid-hover-bg: var(--sa-primary-hover);
+  --sa-write-confirm-deny-bg: transparent;
+  --sa-write-confirm-deny-border: var(--sa-border);
+  --sa-write-confirm-deny-fg: var(--sa-text-secondary);
+  --sa-write-confirm-deny-hover-bg: var(--sa-list-hover-bg);
+  --sa-write-confirm-deny-hover-border: var(--sa-border-strong);
+  --sa-write-confirm-deny-hover-fg: var(--sa-text);
+
+  --sa-diff-add-bg: color-mix(in srgb, var(--sa-success) 9%, var(--sa-bg-elevated));
+  --sa-diff-remove-bg: color-mix(in srgb, var(--sa-error) 8%, var(--sa-bg-elevated));
+  --sa-diff-add-fg: var(--sa-success);
+  --sa-diff-remove-fg: var(--sa-error);
+
+  --sa-radius-xs: 6px;
+  --sa-radius-sm: 8px;
+  --sa-radius-md: 12px;
+  --sa-radius-lg: 16px;
+  --sa-radius-xl: 20px;
+  --sa-radius-pill: 999px;
+
+  --sa-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.07);
+  --sa-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --sa-shadow-glow: 0 0 0 3px color-mix(in srgb, var(--sa-primary) 20%, transparent);
 
   --sa-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --sa-ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --sa-ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
   --sa-duration-fast: 150ms;
   --sa-duration-normal: 250ms;
 
@@ -129,26 +147,26 @@
   --sa-icon-size-xs: 14px;
   --sa-icon-btn-size-sm: 24px;
 
-  /* 左侧侧栏列表（会话 / Wiki / 搜索）：可读 UI 13px 下限 */
   --sa-sider-font-size: 13px;
   --sa-sider-line-height: 1.5;
   --sa-sider-label-font-size: 12px;
   --sa-sider-label-line-height: 1.45;
 
-  /* 右侧详情栏：密度例外，行高须 ≥1.45 */
   --sa-detail-font-size: 12px;
   --sa-detail-line-height: 1.45;
   --sa-bg-panel: var(--sa-bg-subtle);
 
-  /* 侧栏 / 详情 SplitPane：温和面板底，弱化硬边 */
   --sa-split-pane-bg: var(--sa-bg-panel);
   --sa-split-pane-edge: color-mix(in srgb, var(--sa-border) 58%, transparent);
   --sa-split-pane-header-bg: var(--sa-split-pane-bg);
-  --sa-pane-header-title: color-mix(in srgb, var(--sa-text) 58%, var(--sa-text-secondary));
+  --sa-pane-header-title: color-mix(in srgb, var(--sa-text) 72%, var(--sa-text-secondary));
   --sa-main-pane-header-bg: var(--sa-bg-base);
-  /* 面板内选中 / 抬升：基于 panel 底色混合，避免纯白块 */
-  --sa-surface-highlight: color-mix(in srgb, var(--sa-primary) 14%, var(--sa-split-pane-bg));
-  --sa-surface-highlight-hover: color-mix(in srgb, var(--sa-primary) 10%, var(--sa-split-pane-bg));
+  --sa-surface-highlight: color-mix(in srgb, var(--sa-primary) 16%, var(--sa-split-pane-bg));
+  --sa-surface-highlight-hover: color-mix(in srgb, var(--sa-primary) 12%, var(--sa-split-pane-bg));
+  /* 侧栏列表（会话 / 文件树）：轻量选中，避免与 surface-highlight 同强度 */
+  --sa-list-hover-bg: color-mix(in srgb, var(--sa-text) 5%, var(--sa-split-pane-bg));
+  --sa-list-selected-bg: color-mix(in srgb, var(--sa-primary) 8%, var(--sa-split-pane-bg));
+  --sa-list-selected-fg: color-mix(in srgb, var(--sa-primary) 82%, var(--sa-text));
   --sa-surface-raised: color-mix(in srgb, var(--sa-bg-muted) 36%, var(--sa-split-pane-bg));
   --sa-surface-inset: color-mix(in srgb, var(--sa-bg-muted) 22%, var(--sa-split-pane-bg));
 
@@ -158,7 +176,6 @@
   --sa-warning-subtle: rgba(250, 173, 20, 0.14);
   --sa-error: #cf1322;
 
-  /* 设置弹窗：字号与间距（与侧栏 13px 顶栏对齐，避免 12/11px 混用） */
   --sa-config-font: 13px;
   --sa-config-font-sm: 12px;
   --sa-config-font-meta: 11px;
@@ -181,7 +198,9 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
   font-family: var(--sa-font-sans);
+  font-feature-settings: 'cv01', 'cv02', 'cv03';
   background: var(--sa-bg-base);
   color: var(--sa-text);
 }

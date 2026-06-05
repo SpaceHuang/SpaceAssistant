@@ -309,19 +309,10 @@ export function ToolCallCard({
   if (record.toolName === 'browser' && record.result?.dependencyRecovery) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
-        <div className="tool-row tool-row--failed tool-row--expanded">
-          <div className="tool-row__main">
-            <ToolRowIcon toolName={record.toolName} />
-            <span className="tool-row__label" title={labelTitle ?? label}>
-              {label}
-            </span>
-          </div>
-          <div className="tool-row-detail tool-row-detail--open">
-            <div className="tool-row-detail__inner">
-              <BrowserDependencyGuideCard dependencyRecovery={record.result.dependencyRecovery} />
-            </div>
-          </div>
-        </div>
+        <BrowserDependencyGuideCard
+          dependencyRecovery={record.result.dependencyRecovery}
+          actionLabel={label}
+        />
       </div>
     )
   }

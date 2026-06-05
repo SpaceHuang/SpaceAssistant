@@ -33,25 +33,26 @@ export function ScriptConfirmCard({ record, onConfirm }: Props) {
         allowLabel={t('confirm.script.allow')}
         denyLabel={t('confirm.script.deny')}
         onConfirm={onConfirm}
-      />
-      <div className="write-confirm-card__detail script-confirm-card__detail">
-        <div className="write-confirm-card__command write-confirm-card__command--code">
-          <ShikiHighlightedCode
-            code={displayCode}
-            language="python"
-            surface="light"
-            className="script-confirm-card__code script-confirm-card__code--highlighted"
-          />
-        </div>
-        {timeout !== undefined ? (
-          <div className="script-confirm-card__meta">
-            <span className="script-confirm-card__meta-item">
-              <span className="script-confirm-card__meta-key">timeout</span>
-              <span className="script-confirm-card__meta-value">{timeout}s</span>
-            </span>
+      >
+        <div className="write-confirm-card__subject script-confirm-card__subject">
+          <div className="write-confirm-card__subject-value write-confirm-card__subject-value--code write-confirm-card__command--code">
+            <ShikiHighlightedCode
+              code={displayCode}
+              language="python"
+              surface="light"
+              className="script-confirm-card__code script-confirm-card__code--highlighted"
+            />
           </div>
-        ) : null}
-      </div>
+          {timeout !== undefined ? (
+            <div className="script-confirm-card__meta">
+              <span className="script-confirm-card__meta-item">
+                <span className="script-confirm-card__meta-key">timeout</span>
+                <span className="script-confirm-card__meta-value">{timeout}s</span>
+              </span>
+            </div>
+          ) : null}
+        </div>
+      </ConfirmCardDecision>
     </div>
   )
 }

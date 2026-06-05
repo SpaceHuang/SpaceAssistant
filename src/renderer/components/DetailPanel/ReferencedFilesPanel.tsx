@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Segmented, Typography } from 'antd'
+import { Typography } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { classifyWikiReferencedPath } from '../../../shared/wikiMarkdown'
@@ -38,6 +38,16 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
     return enriched
   }, [enriched, filter])
 
+  const filterOptions = useMemo(
+    () =>
+      [
+        { value: 'all' as const, label: t('referencedFiles.filterAll') },
+        { value: 'wiki' as const, label: t('referencedFiles.filterWiki') },
+        { value: 'other' as const, label: t('referencedFiles.filterOther') }
+      ],
+    [t]
+  )
+
   const handleFileClick = (path: string) => {
     if (path === selectedFile) return
     const preferWiki = wikiEnabled && isUnderWikiRoot(path, wikiRoot)
@@ -53,16 +63,25 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
       </div>
       {wikiEnabled && files.length > 0 ? (
         <div className="referenced-files-filter">
-          <Segmented
-            size="small"
-            value={filter}
-            onChange={(v) => setFilter(v as WikiFilter)}
-            options={[
-              { label: t('referencedFiles.filterAll'), value: 'all' },
-              { label: t('referencedFiles.filterWiki'), value: 'wiki' },
-              { label: t('referencedFiles.filterOther'), value: 'other' }
-            ]}
-          />
+          <div className="referenced-files-segment" role="tablist" aria-label={t('referencedFiles.title')}>
+            {filterOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                role="tab"
+                aria-selected={filter === option.value}
+                className={[
+                  'referenced-files-segment__item',
+                  filter === option.value ? 'referenced-files-segment__item--active' : ''
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onClick={() => setFilter(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
       <div className="referenced-files-list">

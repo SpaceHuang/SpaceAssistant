@@ -51,7 +51,7 @@
 }
 
 .file-tree .ant-tree-treenode:hover .ant-tree-node-content-wrapper {
-  background: rgba(128, 128, 128, 0.08) !important;
+  background: var(--sa-list-hover-bg) !important;
 }
 
 .file-tree .ant-tree-node-content-wrapper {
@@ -68,7 +68,12 @@
 
 .file-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
 .file-tree .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper {
-  background: var(--sa-surface-highlight) !important;
+  background: var(--sa-list-selected-bg) !important;
+}
+
+.file-tree .ant-tree-treenode-selected .file-tree-node-label {
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }
 
 .file-tree .ant-tree-dragging .ant-tree-treenode-dragging {
@@ -76,7 +81,7 @@
 }
 
 .file-tree .ant-tree-treenode-drop-over .ant-tree-node-content-wrapper {
-  background: rgba(10, 132, 255, 0.08) !important;
+  background: var(--sa-primary-subtle) !important;
 }
 
 .file-tree.ant-tree .ant-tree-node-content-wrapper .ant-tree-iconEle {
@@ -120,18 +125,8 @@
 }
 
 .file-tree-node--highlight .file-tree-node-label {
-  font-weight: 600;
-}
-
-.file-tree-node--highlight::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 5px;
-  bottom: 5px;
-  width: 2px;
-  background: var(--sa-primary);
-  border-radius: 1px;
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }
 
 .file-tree-node--highlight {
@@ -163,6 +158,7 @@
   background: transparent;
 }
 
-.file-tree-node--wiki-highlight > .file-tree-node-content-wrapper {
-  font-weight: 600;
+.file-tree-node--wiki-highlight .file-tree-node-label {
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }

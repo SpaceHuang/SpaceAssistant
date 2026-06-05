@@ -1,15 +1,16 @@
 import type { ReactNode } from 'react'
-import { Check, X } from 'lucide-react'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
-  /** 一句话说明待确认的操作，例如「写入 config.json」 */
+  /** 操作类型说明，例如「打开网页」「写入 notes.txt」 */
   actionSummary: string
   allowLabel: string
   denyLabel: string
   onConfirm: (approved: boolean) => void
-  /** 行数、风险、写入等补充标签，显示在标题旁 */
+  /** 行数、风险、写入等补充标签 */
   badges?: ReactNode
+  /** 待确认的主体内容（URL、命令、diff 等），渲染在说明与按钮之间 */
+  children?: ReactNode
 }
 
 export function ConfirmCardDecision({
@@ -17,38 +18,40 @@ export function ConfirmCardDecision({
   allowLabel,
   denyLabel,
   onConfirm,
-  badges
+  badges,
+  children
 }: Props) {
   const { t } = useTypedTranslation('chat')
 
   return (
-    <div
-      className="write-confirm-card__decision"
-      role="group"
-      aria-label={t('confirm.decisionAriaLabel', { action: actionSummary })}
-    >
-      <div className="write-confirm-card__decision-head">
-        <p className="write-confirm-card__decision-summary">{actionSummary}</p>
-        {badges ? <span className="write-confirm-card__decision-badges">{badges}</span> : null}
+    <>
+      <div className="write-confirm-card__intro">
+        <p className="write-confirm-card__intro-label">{actionSummary}</p>
+        {badges ? <span className="write-confirm-card__intro-badges">{badges}</span> : null}
       </div>
-      <div className="write-confirm-card__actions">
-        <button
-          type="button"
-          className="write-confirm-card__action write-confirm-card__action--deny"
-          onClick={() => onConfirm(false)}
-        >
-          <X size={13} strokeWidth={2.25} aria-hidden />
-          <span>{denyLabel}</span>
-        </button>
-        <button
-          type="button"
-          className="write-confirm-card__action write-confirm-card__action--allow"
-          onClick={() => onConfirm(true)}
-        >
-          <Check size={13} strokeWidth={2.25} aria-hidden />
-          <span>{allowLabel}</span>
-        </button>
+      {children}
+      <div
+        className="write-confirm-card__footer"
+        role="group"
+        aria-label={t('confirm.decisionAriaLabel', { action: actionSummary })}
+      >
+        <div className="write-confirm-card__actions">
+          <button
+            type="button"
+            className="write-confirm-card__action write-confirm-card__action--deny"
+            onClick={() => onConfirm(false)}
+          >
+            {denyLabel}
+          </button>
+          <button
+            type="button"
+            className="write-confirm-card__action write-confirm-card__action--allow"
+            onClick={() => onConfirm(true)}
+          >
+            {allowLabel}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   )
 }
