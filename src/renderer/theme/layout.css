@@ -272,15 +272,15 @@
 }
 
 .session-item:hover {
-  background: var(--sa-surface-highlight-hover);
+  background: var(--sa-list-hover-bg);
 }
 
 .session-item--active {
-  background: var(--sa-surface-highlight);
+  background: var(--sa-list-selected-bg);
 }
 
 .session-item--active:hover {
-  background: var(--sa-surface-highlight);
+  background: var(--sa-list-selected-bg);
 }
 
 .session-item-select {
@@ -345,7 +345,7 @@
 }
 
 .session-item--active .session-item-icon--idle::before {
-  background: var(--sa-primary);
+  background: var(--sa-list-selected-fg);
 }
 
 .session-item-icon--loading {
@@ -378,8 +378,8 @@
 }
 
 .session-item--active .session-item-name {
-  color: var(--sa-primary);
-  font-weight: 600;
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }
 
 .session-item-stop,

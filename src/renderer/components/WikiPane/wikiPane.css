@@ -22,11 +22,6 @@
   padding: 2px 4px 6px;
 }
 
-.wiki-pane .file-tree .ant-tree-treenode-selected .file-tree-node-label {
-  color: var(--sa-primary);
-  font-weight: 600;
-}
-
 .wiki-pane-empty {
   flex: 1;
   display: flex;

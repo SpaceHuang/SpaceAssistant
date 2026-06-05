@@ -51,7 +51,7 @@
 }
 
 .file-tree .ant-tree-treenode:hover .ant-tree-node-content-wrapper {
-  background: rgba(128, 128, 128, 0.08) !important;
+  background: var(--sa-list-hover-bg) !important;
 }
 
 .file-tree .ant-tree-node-content-wrapper {
@@ -68,7 +68,12 @@
 
 .file-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
 .file-tree .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper {
-  background: var(--sa-surface-highlight) !important;
+  background: var(--sa-list-selected-bg) !important;
+}
+
+.file-tree .ant-tree-treenode-selected .file-tree-node-label {
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }
 
 .file-tree .ant-tree-dragging .ant-tree-treenode-dragging {
@@ -120,7 +125,8 @@
 }
 
 .file-tree-node--highlight .file-tree-node-label {
-  font-weight: 600;
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }
 
 .file-tree-node--highlight::before {

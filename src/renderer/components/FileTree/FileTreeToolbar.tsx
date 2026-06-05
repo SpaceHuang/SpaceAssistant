@@ -1,4 +1,3 @@
-import { Tooltip } from 'antd'
 import newFolderLineRaw from '../../assets/new_folder_line.svg?raw'
 import refresh2LineRaw from '../../assets/refresh_2_line.svg?raw'
 import { patchSvg } from '../../utils/patchSvg'
@@ -14,14 +13,29 @@ interface FileTreeToolbarProps {
 
 export function FileTreeToolbar({ onNewDirectory, onRefresh }: FileTreeToolbarProps) {
   const { t } = useTypedTranslation('fileTree')
+  const newDirectoryLabel = t('toolbar.newDirectory')
+  const refreshLabel = t('toolbar.refresh')
+
   return (
     <div className="sa-pane-toolbar">
-      <Tooltip title={t('toolbar.newDirectory')}>
-        <button type="button" className="sa-icon-btn sa-icon-btn--xs" onClick={onNewDirectory} dangerouslySetInnerHTML={{ __html: newFolderSvg }} data-testid="new-directory-btn" />
-      </Tooltip>
-      <Tooltip title={t('toolbar.refresh')}>
-        <button type="button" className="sa-icon-btn sa-icon-btn--xs" onClick={onRefresh} dangerouslySetInnerHTML={{ __html: refreshSvg }} data-testid="refresh-btn" />
-      </Tooltip>
+      <button
+        type="button"
+        className="sa-icon-btn sa-icon-btn--xs"
+        onClick={onNewDirectory}
+        title={newDirectoryLabel}
+        aria-label={newDirectoryLabel}
+        dangerouslySetInnerHTML={{ __html: newFolderSvg }}
+        data-testid="new-directory-btn"
+      />
+      <button
+        type="button"
+        className="sa-icon-btn sa-icon-btn--xs"
+        onClick={onRefresh}
+        title={refreshLabel}
+        aria-label={refreshLabel}
+        dangerouslySetInnerHTML={{ __html: refreshSvg }}
+        data-testid="refresh-btn"
+      />
     </div>
   )
 }

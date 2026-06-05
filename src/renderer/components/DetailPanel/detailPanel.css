@@ -392,10 +392,12 @@
   flex: 0 0 auto;
   height: var(--sa-pane-header-height);
   min-height: var(--sa-pane-header-height);
+  min-width: 0;
   padding: 0 12px;
   border-bottom: 1px solid var(--sa-split-pane-edge);
   background: var(--sa-split-pane-bg);
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .detail-panel-section-title {
@@ -590,6 +592,9 @@
   min-height: 0;
   padding: 2px 4px 6px;
   background: transparent;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .app-detail-sider .detail-panel-file-body .file-tree,
@@ -597,20 +602,6 @@
 .app-detail-sider .detail-panel-file-body .file-tree .ant-tree-list-holder,
 .app-detail-sider .detail-panel-file-body .file-tree .ant-tree-list-holder-inner {
   background: transparent;
-}
-
-.app-detail-sider .detail-panel-top .file-tree .ant-tree-treenode:hover .ant-tree-node-content-wrapper {
-  background: rgba(128, 128, 128, 0.08) !important;
-}
-
-.app-detail-sider .detail-panel-top .file-tree .ant-tree-treenode-selected .ant-tree-node-content-wrapper,
-.app-detail-sider .detail-panel-top .file-tree .ant-tree-treenode-selected:hover .ant-tree-node-content-wrapper {
-  background: var(--sa-surface-highlight) !important;
-}
-
-.app-detail-sider .detail-panel-top .file-tree .ant-tree-treenode-selected .file-tree-node-label {
-  color: var(--sa-primary);
-  font-weight: 600;
 }
 
 /* ===== 可拖动分隔条 ===== */
@@ -704,16 +695,16 @@
 }
 
 .referenced-file-item:hover {
-  background: rgba(128, 128, 128, 0.08);
+  background: var(--sa-list-hover-bg);
 }
 
 .referenced-file-item--active {
-  background: var(--sa-surface-highlight);
+  background: var(--sa-list-selected-bg);
 }
 
 .referenced-file-item--active .referenced-file-item-name {
-  color: var(--sa-primary);
-  font-weight: 600;
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }
 
 .referenced-file-item-icon {
@@ -780,36 +771,54 @@
   flex-shrink: 0;
 }
 
-.referenced-files-filter .ant-segmented {
+.referenced-files-segment {
+  display: flex;
+  align-items: stretch;
   width: 100%;
-  background: var(--sa-surface-inset);
-  border-radius: var(--sa-radius-md);
   padding: 2px;
+  gap: 2px;
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-surface-inset);
+  box-sizing: border-box;
 }
 
-.referenced-files-filter .ant-segmented-item {
-  flex: 1;
+.referenced-files-segment__item {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: calc(var(--sa-radius-md) - 2px);
+  background: transparent;
+  font-family: var(--sa-font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 22px;
+  color: var(--sa-text-secondary);
+  cursor: pointer;
   transition:
     background var(--sa-duration-fast) var(--sa-ease-out),
     color var(--sa-duration-fast) var(--sa-ease-out);
 }
 
-.referenced-files-filter .ant-segmented-thumb {
-  background: var(--sa-surface-raised) !important;
-}
-
-.referenced-files-filter .ant-segmented-item-selected {
-  box-shadow: none;
-}
-
-.referenced-files-filter .ant-segmented-item-selected .ant-segmented-item-label {
+.referenced-files-segment__item:hover:not(.referenced-files-segment__item--active) {
   color: var(--sa-text);
 }
 
-.referenced-files-filter .ant-segmented-item-label {
-  min-height: 22px;
-  line-height: 22px;
-  padding: 0 6px;
+.referenced-files-segment__item--active {
+  background: var(--sa-list-selected-bg);
+  color: var(--sa-list-selected-fg);
+}
+
+.referenced-files-segment__item:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .referenced-files-segment__item {
+    transition: none;
+  }
 }
 
 .referenced-file-wiki-badge {

@@ -240,6 +240,7 @@
   margin-left: auto;
   flex-shrink: 0;
   padding-left: 4px;
+  line-height: 0;
 }
 
 /* ── Segmented icon control ── */

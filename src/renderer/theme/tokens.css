@@ -149,6 +149,10 @@
   /* 面板内选中 / 抬升：基于 panel 底色混合，避免纯白块 */
   --sa-surface-highlight: color-mix(in srgb, var(--sa-primary) 14%, var(--sa-split-pane-bg));
   --sa-surface-highlight-hover: color-mix(in srgb, var(--sa-primary) 10%, var(--sa-split-pane-bg));
+  /* 侧栏列表（会话 / 文件树）：轻量选中，不与 surface-highlight 同强度 */
+  --sa-list-hover-bg: color-mix(in srgb, var(--sa-text) 5%, var(--sa-split-pane-bg));
+  --sa-list-selected-bg: color-mix(in srgb, var(--sa-primary) 8%, var(--sa-split-pane-bg));
+  --sa-list-selected-fg: color-mix(in srgb, var(--sa-primary) 82%, var(--sa-text));
   --sa-surface-raised: color-mix(in srgb, var(--sa-bg-muted) 36%, var(--sa-split-pane-bg));
   --sa-surface-inset: color-mix(in srgb, var(--sa-bg-muted) 22%, var(--sa-split-pane-bg));
 
@@ -181,6 +185,7 @@ body,
 #root {
   height: 100%;
   margin: 0;
+  overflow: hidden;
   font-family: var(--sa-font-sans);
   background: var(--sa-bg-base);
   color: var(--sa-text);
