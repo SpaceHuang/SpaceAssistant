@@ -8,6 +8,12 @@ import {
   resolveDevAgentLogDir
 } from './agentLogPaths'
 
+/** 使用绝对路径 fixture，避免 Linux CI 将 `C:/...` 当作相对路径段。 */
+const fixtureProjectRoot = path.resolve('/space-assistant-fixture')
+const fixtureMainDir = path.join(fixtureProjectRoot, 'dist-electron', 'electron')
+const fixtureDevLogsDir = path.join(fixtureProjectRoot, 'logs')
+const fixtureWorkDir = path.resolve('/space-assistant-workdir')
+
 describe('agentLogPaths', () => {
   it('formats date key and file name', () => {
     const date = new Date(2026, 4, 16, 12, 0, 0)
@@ -16,19 +22,17 @@ describe('agentLogPaths', () => {
   })
 
   it('resolves dev log dir relative to main dirname', () => {
-    const mainDir = path.join('C:', 'project', 'dist-electron', 'electron')
-    expect(resolveDevAgentLogDir(mainDir)).toBe(path.join('C:', 'project', 'logs'))
+    expect(resolveDevAgentLogDir(fixtureMainDir)).toBe(fixtureDevLogsDir)
   })
 
   it('resolves packaged log dir under workDir', () => {
-    const workDir = path.join('D:', 'work', 'root')
-    const mainDir = path.join('C:', 'app', 'dist-electron', 'electron')
-    expect(resolveAgentLogDir(true, workDir, mainDir)).toBe(path.join(workDir, '.agent', 'logs'))
+    expect(resolveAgentLogDir(true, fixtureWorkDir, fixtureMainDir)).toBe(
+      path.join(fixtureWorkDir, '.agent', 'logs')
+    )
   })
 
   it('resolves dev log dir when not packaged', () => {
-    const mainDir = path.join('C:', 'project', 'dist-electron', 'electron')
-    expect(resolveAgentLogDir(false, path.join('D:', 'work', 'root'), mainDir)).toBe(path.join('C:', 'project', 'logs'))
+    expect(resolveAgentLogDir(false, fixtureWorkDir, fixtureMainDir)).toBe(fixtureDevLogsDir)
   })
 
   it('production mode flag matches packaged app', () => {
