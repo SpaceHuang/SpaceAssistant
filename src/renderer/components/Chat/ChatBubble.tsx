@@ -1,6 +1,18 @@
-import { memo } from 'react'
-import type { Message, ShellConfig } from '../../../shared/domainTypes'
-import { buildAssistantActivityTimeline } from '../../../shared/assistantActivityTimeline'
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Brain } from 'lucide-react'
+import type { Message, ShellConfig, ToolCallRecord } from '../../../shared/domainTypes'
+import {
+  buildAssistantActivityTimeline,
+  type AssistantActivityItem
+} from '../../../shared/assistantActivityTimeline'
+import {
+  ACTIVITY_BATCH_IDLE_GAP_MS,
+  buildActivityItemTimestampResolver,
+  getLastBatchItemTimestamp,
+  groupActivityTimeline,
+  isActivityBatchInProgress,
+  type ActivityTrackSegment
+} from '../../../shared/activityBatchGrouping'
 import { contentSegmentsForRender } from '../../../shared/contentSegments'
 import { thinkingSegmentsForRender } from '../../../shared/thinkingSegments'
 import { ChatMarkdown } from './ChatMarkdown'
@@ -11,6 +23,7 @@ import { SkillHintRow } from './SkillHintRow'
 import { formatToolLabel, formatToolLabelTitle } from './toolCallDisplay'
 import { SkillHintBubble } from './SkillHintBubble'
 import { ToolRowIcon } from './ToolRowIcon'
+import { ActivityBatch, type ActivityBatchSummary } from './ActivityBatch'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 export type ToolsInteractiveProps = {
@@ -34,6 +47,71 @@ type Props = {
   showArchiveToWiki?: boolean
   onArchiveToWiki?: () => void
   onRetry?: () => void
+}
+
+function useBatchIdleTimedOut(
+  timeline: AssistantActivityItem[],
+  getTimestamp: (item: AssistantActivityItem) => number,
+  streaming: boolean
+): boolean {
+  const [idleTimedOut, setIdleTimedOut] = useState(false)
+  const lastBatchTs = getLastBatchItemTimestamp(timeline, getTimestamp)
+
+  useEffect(() => {
+    if (!streaming || lastBatchTs == null) {
+      setIdleTimedOut(false)
+      return
+    }
+    setIdleTimedOut(false)
+    const elapsed = Date.now() - lastBatchTs
+    const remaining = ACTIVITY_BATCH_IDLE_GAP_MS - elapsed
+    if (remaining <= 0) {
+      setIdleTimedOut(true)
+      return
+    }
+    const timer = setTimeout(() => setIdleTimedOut(true), remaining)
+    return () => clearTimeout(timer)
+  }, [streaming, lastBatchTs, timeline.length])
+
+  return idleTimedOut
+}
+
+function buildBatchSummary(
+  items: AssistantActivityItem[],
+  ctx: {
+    toolById: Map<string, ToolCallRecord>
+    t: ReturnType<typeof useTypedTranslation<'chat'>>['t']
+  }
+): ActivityBatchSummary {
+  const count = items.length
+  const allThinking = items.every((item) => item.kind === 'thinking')
+  const first = items[0]!
+
+  if (allThinking || first.kind === 'thinking') {
+    const base = ctx.t('thinking.label')
+    const label = count > 1 ? ctx.t('batch.thinkingCount', { count }) : base
+    return {
+      icon: <Brain size={14} strokeWidth={1.75} />,
+      label
+    }
+  }
+
+  if (first.kind === 'tool') {
+    const tc = ctx.toolById.get(first.toolId)
+    if (tc) {
+      const base = formatToolLabel(tc.toolName, tc.input, ctx.t)
+      const label = count > 1 ? `${base} ${ctx.t('batch.count', { count })}` : base
+      return {
+        icon: <ToolRowIcon toolName={tc.toolName} />,
+        label
+      }
+    }
+  }
+
+  return {
+    icon: <Brain size={14} strokeWidth={1.75} />,
+    label: ctx.t('thinking.label')
+  }
 }
 
 function AssistantTextBody({
@@ -107,6 +185,24 @@ export const ChatBubble = memo(function ChatBubble({
   const toolById = new Map((message.toolCalls ?? []).map((tc) => [tc.id, tc]))
   const skillById = new Map((message.skillHints ?? []).map((h) => [h.id, h]))
   const activityTimeline = !isUser && message.role !== 'system' ? buildAssistantActivityTimeline(message) : []
+  const getTimestamp = useMemo(() => buildActivityItemTimestampResolver(message), [message])
+  const activitySegments = useMemo(
+    () => groupActivityTimeline(activityTimeline, getTimestamp),
+    [activityTimeline, getTimestamp]
+  )
+  const batchIdleTimedOut = useBatchIdleTimedOut(activityTimeline, getTimestamp, streaming)
+
+  const batchProgressCtx = useMemo(
+    () => ({ streaming, thinkingSegments, toolById }),
+    [streaming, thinkingSegments, toolById]
+  )
+
+  const lastBatchSegmentIndex = useMemo(() => {
+    for (let i = activitySegments.length - 1; i >= 0; i--) {
+      if (activitySegments[i]?.kind === 'batch') return i
+    }
+    return -1
+  }, [activitySegments])
 
   if (message.role === 'system') {
     const hints = message.skillHints ?? []
@@ -132,6 +228,97 @@ export const ChatBubble = memo(function ChatBubble({
     )
   }
 
+  const renderActivityItem = (item: AssistantActivityItem, key: string): ReactNode => {
+    if (item.kind === 'thinking') {
+      const seg = thinkingSegments[item.segmentIndex]
+      if (!seg) return null
+      return (
+        <ThinkingBlock
+          key={key}
+          content={seg.content}
+          active={streaming && seg.endTime === undefined}
+        />
+      )
+    }
+    if (item.kind === 'text') {
+      const seg = textSegments[item.segmentIndex]
+      if (!seg) return null
+      const activeText = streaming && seg.endTime === undefined
+      const body = activeText && !seg.content ? '…' : seg.content
+      return (
+        <div
+          key={key}
+          className={`chat-bubble chat-bubble--assistant${activeText ? ' chat-bubble-streaming' : ''}`}
+        >
+          <AssistantTextBody
+            activeText={activeText}
+            body={body}
+            onOpenFile={onOpenFile}
+            wikiRootPath={wikiRootPath}
+          />
+        </div>
+      )
+    }
+    if (item.kind === 'skill') {
+      const hint = skillById.get(item.hintId)
+      if (!hint) return null
+      return (
+        <div key={key} className="chat-system-track">
+          <SkillHintRow text={hint.text} />
+        </div>
+      )
+    }
+    const tc = toolById.get(item.toolId)
+    if (!tc) return null
+    return (
+      <ToolCallCard
+        key={key}
+        record={tc}
+        messageId={message.id}
+        sessionId={message.sessionId}
+        toolCalls={message.toolCalls}
+        workDir={workDir}
+        shellConfig={shellConfig}
+        sessionMetadata={sessionMetadata}
+        focus={focusToolUseId === tc.id}
+        confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
+        onConfirm={
+          toolsInteractive && tc.status === 'confirming'
+            ? (approved) => toolsInteractive.onToolConfirm(tc.id, approved)
+            : undefined
+        }
+        onCancel={
+          toolsInteractive && tc.status === 'executing'
+            ? () => toolsInteractive.onToolCancel(tc.id)
+            : undefined
+        }
+        onOpenFile={onOpenFile}
+      />
+    )
+  }
+
+  const renderActivitySegment = (segment: ActivityTrackSegment, segmentIndex: number) => {
+    if (segment.kind === 'standalone') {
+      return renderActivityItem(segment.item, `${message.id}-act-${segmentIndex}`)
+    }
+
+    const isLastBatch = segmentIndex === lastBatchSegmentIndex
+    const batchInProgress = isActivityBatchInProgress(segment.items, batchProgressCtx)
+    const isActive = isLastBatch && batchInProgress && !batchIdleTimedOut
+
+    return (
+      <ActivityBatch
+        key={`${message.id}-batch-${segmentIndex}`}
+        items={segment.items}
+        isActive={isActive}
+        summary={buildBatchSummary(segment.items, { toolById, t })}
+        renderItem={(item, itemIndex) =>
+          renderActivityItem(item, `${message.id}-batch-${segmentIndex}-${itemIndex}`)
+        }
+      />
+    )
+  }
+
   const rowClass = [
     'chat-bubble-row',
     'chat-bubble-row--assistant',
@@ -153,74 +340,7 @@ export const ChatBubble = memo(function ChatBubble({
       >
         {activityTimeline.length > 0 ? (
           <div className="chat-activity-track">
-            {activityTimeline.map((item, i) => {
-              if (item.kind === 'thinking') {
-                const seg = thinkingSegments[item.segmentIndex]
-                if (!seg) return null
-                return (
-                  <ThinkingBlock
-                    key={`${message.id}-act-think-${i}`}
-                    content={seg.content}
-                    active={streaming && seg.endTime === undefined}
-                  />
-                )
-              }
-              if (item.kind === 'text') {
-                const seg = textSegments[item.segmentIndex]
-                if (!seg) return null
-                const activeText = streaming && seg.endTime === undefined
-                const body = activeText && !seg.content ? '…' : seg.content
-                return (
-                  <div
-                    key={`${message.id}-act-text-${i}`}
-                    className={`chat-bubble chat-bubble--assistant${activeText ? ' chat-bubble-streaming' : ''}`}
-                  >
-                    <AssistantTextBody
-                      activeText={activeText}
-                      body={body}
-                      onOpenFile={onOpenFile}
-                      wikiRootPath={wikiRootPath}
-                    />
-                  </div>
-                )
-              }
-              if (item.kind === 'skill') {
-                const hint = skillById.get(item.hintId)
-                if (!hint) return null
-                return (
-                  <div key={`${message.id}-act-skill-${hint.id}`} className="chat-system-track">
-                    <SkillHintRow text={hint.text} />
-                  </div>
-                )
-              }
-              const tc = toolById.get(item.toolId)
-              if (!tc) return null
-              return (
-                <ToolCallCard
-                  key={`${message.id}-act-tool-${tc.id}`}
-                  record={tc}
-                  messageId={message.id}
-                  sessionId={message.sessionId}
-                  toolCalls={message.toolCalls}
-                  workDir={workDir}
-                  shellConfig={shellConfig}
-                  sessionMetadata={sessionMetadata}
-                  focus={focusToolUseId === tc.id}
-                  confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
-                  onConfirm={
-                    toolsInteractive && tc.status === 'confirming'
-                      ? (approved) => toolsInteractive.onToolConfirm(tc.id, approved)
-                      : undefined
-                  }
-                  onCancel={
-                    toolsInteractive && tc.status === 'executing'
-                      ? () => toolsInteractive.onToolCancel(tc.id)
-                      : undefined
-                  }
-                  onOpenFile={onOpenFile}
-                />
-              )
-            })}
+            {activitySegments.map((segment, i) => renderActivitySegment(segment, i))}
             {streaming && !message.content && thinkingSegments.every((seg) => seg.endTime !== undefined) ? (
               <div className="chat-bubble chat-bubble--assistant chat-bubble-streaming">
                 <div className="chat-stream-plain chat-md-assistant">…</div>

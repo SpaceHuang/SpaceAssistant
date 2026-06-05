@@ -35,4 +35,38 @@ describe('chat i18n', () => {
     expect(screen.getByText('Thinking')).toBeDefined()
     expect(screen.getByRole('button', { name: 'Expand thinking' })).toBeDefined()
   })
+
+  it('ActivityBatch summary uses English count label', () => {
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'completed',
+          content: '',
+          contentSegments: [],
+          toolCalls: [
+            {
+              id: 't1',
+              toolName: 'read_file',
+              input: { path: 'app.tsx' },
+              status: 'completed',
+              riskLevel: 'low',
+              startedAt: now,
+              completedAt: now + 1
+            },
+            {
+              id: 't2',
+              toolName: 'edit_file',
+              input: { path: 'app.tsx' },
+              status: 'completed',
+              riskLevel: 'low',
+              startedAt: now + 2,
+              completedAt: now + 3
+            }
+          ]
+        })}
+      />
+    )
+    expect(screen.getByText(/app\.tsx and 2 more/)).toBeDefined()
+  })
 })

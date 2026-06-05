@@ -4,6 +4,14 @@
     "expandHint": "展开思考过程",
     "collapseHint": "收起思考过程"
   },
+  "batch": {
+    "count": "等 {{count}} 项",
+    "thinkingCount": "思考中 等 {{count}} 项",
+    "pin": "钉住批次",
+    "unpin": "取消钉住",
+    "expand": "展开批次",
+    "collapse": "收起批次"
+  },
   "streaming": {
     "inProgress": "生成中",
     "failed": "失败"

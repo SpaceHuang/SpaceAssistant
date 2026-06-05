@@ -666,6 +666,8 @@
   .chat-thinking__panel,
   .tool-row__chevron,
   .chat-thinking__chevron,
+  .activity-batch__body-panel,
+  .activity-batch__chevron,
   .tool-row__icon--pending {
     transition: none;
   }
@@ -1038,6 +1040,141 @@
 .chat-activity-track .write-success-card {
   margin-top: 0;
   margin-bottom: 0;
+}
+
+.activity-batch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.activity-batch__header-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+}
+
+.activity-batch__header {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  color: var(--sa-text-tertiary);
+  font: inherit;
+  font-size: var(--sa-chat-font-body);
+  line-height: var(--sa-chat-line-body);
+  cursor: pointer;
+  text-align: left;
+}
+
+.activity-batch__header:hover {
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-subtle);
+}
+
+.activity-batch__header[aria-expanded='true'] {
+  color: var(--sa-text-secondary);
+}
+
+.activity-batch__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: var(--sa-icon);
+}
+
+.activity-batch__header:hover .activity-batch__icon,
+.activity-batch__header[aria-expanded='true'] .activity-batch__icon {
+  color: var(--sa-icon-hover);
+}
+
+.activity-batch__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-batch__chevron {
+  flex-shrink: 0;
+  color: var(--sa-text-tertiary);
+  transition: transform 150ms var(--sa-ease-out);
+}
+
+.activity-batch--expanded .activity-batch__chevron {
+  transform: rotate(90deg);
+}
+
+.activity-batch__pin {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  color: var(--sa-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out),
+    background var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.activity-batch__header-row:hover .activity-batch__pin,
+.activity-batch__pin:focus-visible,
+.activity-batch__pin--active {
+  opacity: 1;
+}
+
+.activity-batch__pin:hover {
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-subtle);
+}
+
+.activity-batch__pin--active {
+  color: var(--sa-primary);
+}
+
+.activity-batch__body-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 150ms var(--sa-ease-out);
+}
+
+.activity-batch--expanded .activity-batch__body-panel {
+  grid-template-rows: 1fr;
+  transition-duration: 200ms;
+}
+
+.activity-batch__body-panel-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.activity-batch__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--sa-chat-assistant-accent);
+}
+
+.activity-batch__item {
+  min-width: 0;
 }
 
 /* ── Composer (message input) ── */

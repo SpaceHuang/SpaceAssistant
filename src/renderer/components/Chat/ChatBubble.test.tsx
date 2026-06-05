@@ -139,3 +139,103 @@ describe('ChatBubble streaming render', () => {
     expect(onRetry).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('ChatBubble activity batch', () => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
+  })
+
+  it('groups multiple tools into activity batch summary row', () => {
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'completed',
+          content: '',
+          contentSegments: [],
+          toolCalls: [
+            {
+              id: 't1',
+              toolName: 'read_file',
+              input: { path: 'app.tsx' },
+              status: 'completed',
+              riskLevel: 'low',
+              startedAt: now,
+              completedAt: now + 1
+            },
+            {
+              id: 't2',
+              toolName: 'edit_file',
+              input: { path: 'app.tsx' },
+              status: 'completed',
+              riskLevel: 'low',
+              startedAt: now + 2,
+              completedAt: now + 3
+            }
+          ]
+        })}
+      />
+    )
+    expect(document.querySelector('.activity-batch')).not.toBeNull()
+    expect(screen.getByText(/app\.tsx 等 2 项/)).toBeDefined()
+  })
+
+  it('splits batches when text item interrupts timeline', () => {
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'completed',
+          content: 'answer',
+          contentSegments: [{ content: 'answer', startTime: now + 50, endTime: now + 60 }],
+          toolCalls: [
+            {
+              id: 't1',
+              toolName: 'read_file',
+              input: { path: 'a.txt' },
+              status: 'completed',
+              riskLevel: 'low',
+              startedAt: now,
+              completedAt: now + 1
+            },
+            {
+              id: 't2',
+              toolName: 'read_file',
+              input: { path: 'b.txt' },
+              status: 'completed',
+              riskLevel: 'low',
+              startedAt: now + 100,
+              completedAt: now + 101
+            }
+          ]
+        })}
+      />
+    )
+    expect(document.querySelectorAll('.activity-batch').length).toBe(2)
+    expect(screen.getByText('answer')).toBeDefined()
+  })
+
+  it('keeps last batch expanded while streaming with in-progress tool', () => {
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'streaming',
+          content: '',
+          contentSegments: [],
+          toolCalls: [
+            {
+              id: 't1',
+              toolName: 'read_file',
+              input: { path: 'app.tsx' },
+              status: 'executing',
+              riskLevel: 'low',
+              startedAt: now
+            }
+          ]
+        })}
+      />
+    )
+    expect(document.querySelector('.activity-batch--expanded')).not.toBeNull()
+  })
+})

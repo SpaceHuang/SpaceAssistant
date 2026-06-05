@@ -4,6 +4,14 @@
     "expandHint": "Expand thinking",
     "collapseHint": "Collapse thinking"
   },
+  "batch": {
+    "count": "and {{count}} more",
+    "thinkingCount": "Thinking and {{count}} more",
+    "pin": "Pin batch",
+    "unpin": "Unpin batch",
+    "expand": "Expand batch",
+    "collapse": "Collapse batch"
+  },
   "streaming": {
     "inProgress": "Generating",
     "failed": "Failed"
