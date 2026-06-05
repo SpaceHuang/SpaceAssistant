@@ -1,8 +1,9 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeExternalLinks from 'rehype-external-links'
+import { remarkSemanticStatusEmoji } from '../../../shared/markdownSemanticStatusEmoji'
 import { ShikiCodeBlock } from './ShikiCodeBlock'
-import { MarkdownAnchor } from '../shared/MarkdownAnchor'
+import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
 
 type Props = {
   content: string
@@ -15,13 +16,13 @@ export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', baseRelPath, 
   return (
     <div className="sa-prose chat-md-assistant">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkSemanticStatusEmoji]}
         rehypePlugins={[[rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }]]}
         components={{
           a(props) {
             const { children, href, ...rest } = props
             return (
-              <MarkdownAnchor
+              <MarkdownLinkOrStatusDot
                 {...rest}
                 href={href}
                 wikiRootPath={wikiRootPath}
@@ -29,7 +30,7 @@ export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', baseRelPath, 
                 onOpenFile={onOpenFile}
               >
                 {children}
-              </MarkdownAnchor>
+              </MarkdownLinkOrStatusDot>
             )
           },
           pre({ children }) {

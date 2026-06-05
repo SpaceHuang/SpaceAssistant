@@ -28,21 +28,22 @@ export function LarkCliConfirmCard({ record, onConfirm }: Props) {
             <span className="write-confirm-card__stat write-confirm-card__stat--write">{t('confirm.lark.writeBadge')}</span>
           ) : undefined
         }
-      />
-      <div className="write-confirm-card__detail lark-cli-confirm-card__detail">
-        <pre className="write-confirm-card__command" title={summary.command}>
-          <code className="lark-cli-confirm-card__command-line">{summary.command}</code>
-        </pre>
-        <p className="write-confirm-card__note lark-cli-confirm-card__hint">{summary.hint}</p>
-        {timeout !== undefined ? (
-          <div className="lark-cli-confirm-card__meta">
-            <span className="lark-cli-confirm-card__meta-item">
-              <span className="lark-cli-confirm-card__meta-key">timeout</span>
-              <span className="lark-cli-confirm-card__meta-value">{timeout}s</span>
-            </span>
-          </div>
-        ) : null}
-      </div>
+      >
+        <div className="write-confirm-card__subject lark-cli-confirm-card__subject">
+          <pre className="write-confirm-card__subject-value write-confirm-card__subject-value--code" title={summary.command}>
+            <code className="lark-cli-confirm-card__command-line">{summary.command}</code>
+          </pre>
+          <p className="write-confirm-card__subject-note lark-cli-confirm-card__hint">{summary.hint}</p>
+          {timeout !== undefined ? (
+            <div className="lark-cli-confirm-card__meta">
+              <span className="lark-cli-confirm-card__meta-item">
+                <span className="lark-cli-confirm-card__meta-key">timeout</span>
+                <span className="lark-cli-confirm-card__meta-value">{timeout}s</span>
+              </span>
+            </div>
+          ) : null}
+        </div>
+      </ConfirmCardDecision>
     </div>
   )
 }

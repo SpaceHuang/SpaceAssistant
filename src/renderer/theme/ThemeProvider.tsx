@@ -23,11 +23,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     () => ({
       algorithm: antTheme.defaultAlgorithm,
       token: {
-        colorPrimary: '#0a84ff',
-        borderRadius: 8,
+        colorPrimary: '#f06529',
+        borderRadius: 10,
         fontFamily: 'var(--sa-font-sans)',
         fontSize: 13,
-        lineHeight: 1.5
+        lineHeight: 1.5,
+        colorBgContainer: '#fefdfb',
+        colorBgLayout: '#faf9f6',
+        colorBorderSecondary: '#e5e0d8'
       }
     }),
     []

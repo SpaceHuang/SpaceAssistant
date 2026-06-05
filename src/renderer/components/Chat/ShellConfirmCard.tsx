@@ -53,47 +53,50 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
             <span className="write-confirm-card__stat write-confirm-card__stat--risk">{t('confirm.shell.highRisk')}</span>
           ) : undefined
         }
-      />
-      <div className="write-confirm-card__detail shell-confirm-card__detail">
-        {description ? <p className="write-confirm-card__note shell-confirm-card__description">{description}</p> : null}
-        {warnings.length > 0 ? (
-          <div className="shell-confirm-card__alert" role="alert">
-            <AlertTriangle size={14} strokeWidth={2} className="shell-confirm-card__alert-icon" aria-hidden />
-            <div className="shell-confirm-card__alert-content">
-              <span className="shell-confirm-card__alert-title">{t('confirm.shell.pathSecurityWarning')}</span>
-              <ul className="shell-confirm-card__warnings">
-                {warnings.map((w) => (
-                  <li key={w}>{w}</li>
-                ))}
-              </ul>
+      >
+        <div className="write-confirm-card__subject shell-confirm-card__subject">
+          {description ? (
+            <p className="write-confirm-card__subject-note shell-confirm-card__description">{description}</p>
+          ) : null}
+          {warnings.length > 0 ? (
+            <div className="shell-confirm-card__alert" role="alert">
+              <AlertTriangle size={14} strokeWidth={2} className="shell-confirm-card__alert-icon" aria-hidden />
+              <div className="shell-confirm-card__alert-content">
+                <span className="shell-confirm-card__alert-title">{t('confirm.shell.pathSecurityWarning')}</span>
+                <ul className="shell-confirm-card__warnings">
+                  {warnings.map((w) => (
+                    <li key={w}>{w}</li>
+                  ))}
+                </ul>
+              </div>
             </div>
-          </div>
-        ) : null}
-        <ShellTuiFallbackHint command={command} workDir={workDir} />
-        <pre className="write-confirm-card__command shell-confirm-card__command">
-          {commandLines.map((line, i) => (
-            <code key={`cmd-${i}`} className="shell-confirm-card__command-line">
-              {line || ' '}
-            </code>
-          ))}
-        </pre>
-        {workDir || timeout !== undefined ? (
-          <div className="shell-confirm-card__meta">
-            {workDir ? (
-              <span className="shell-confirm-card__meta-item">
-                <span className="shell-confirm-card__meta-key">cwd</span>
-                <span className="shell-confirm-card__meta-value">{workDir}</span>
-              </span>
-            ) : null}
-            {timeout !== undefined ? (
-              <span className="shell-confirm-card__meta-item">
-                <span className="shell-confirm-card__meta-key">timeout</span>
-                <span className="shell-confirm-card__meta-value">{timeout}s</span>
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+          ) : null}
+          <ShellTuiFallbackHint command={command} workDir={workDir} />
+          <pre className="write-confirm-card__subject-value write-confirm-card__subject-value--code shell-confirm-card__command">
+            {commandLines.map((line, i) => (
+              <code key={`cmd-${i}`} className="shell-confirm-card__command-line">
+                {line || ' '}
+              </code>
+            ))}
+          </pre>
+          {workDir || timeout !== undefined ? (
+            <div className="shell-confirm-card__meta">
+              {workDir ? (
+                <span className="shell-confirm-card__meta-item">
+                  <span className="shell-confirm-card__meta-key">cwd</span>
+                  <span className="shell-confirm-card__meta-value">{workDir}</span>
+                </span>
+              ) : null}
+              {timeout !== undefined ? (
+                <span className="shell-confirm-card__meta-item">
+                  <span className="shell-confirm-card__meta-key">timeout</span>
+                  <span className="shell-confirm-card__meta-value">{timeout}s</span>
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </ConfirmCardDecision>
     </div>
   )
 }

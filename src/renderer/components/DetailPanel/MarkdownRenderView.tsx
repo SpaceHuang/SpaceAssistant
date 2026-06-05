@@ -3,8 +3,9 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeExternalLinks from 'rehype-external-links'
 import { expandWikilinks } from '../../../shared/wikiMarkdown'
+import { remarkSemanticStatusEmoji } from '../../../shared/markdownSemanticStatusEmoji'
 import { slugifyMarkdownHeading } from '../../../shared/markdownLinkResolve'
-import { MarkdownAnchor } from '../shared/MarkdownAnchor'
+import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
 import { markdownHeadingText } from '../../utils/markdownHeadingText'
 import { scrollToMarkdownFragment } from '../../utils/markdownFragmentScroll'
 import type { ComponentProps } from 'react'
@@ -70,14 +71,14 @@ export function MarkdownRenderView({
   return (
     <div className="detail-md-render" ref={containerRef}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkSemanticStatusEmoji]}
         rehypePlugins={[[rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }]]}
         components={{
           ...headingComponents,
           a(props) {
             const { children, href, ...rest } = props
             return (
-              <MarkdownAnchor
+              <MarkdownLinkOrStatusDot
                 {...rest}
                 href={href}
                 wikiRootPath={wikiRootPath}
@@ -86,7 +87,7 @@ export function MarkdownRenderView({
                 onOpenFile={onOpenFile}
               >
                 {children}
-              </MarkdownAnchor>
+              </MarkdownLinkOrStatusDot>
             )
           }
         }}

@@ -7,6 +7,11 @@ import {
 } from '../../../shared/browserSetupGuideContent'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import {
+  BrowserDetectDetailValue,
+  BrowserRuntimeCheckCompactRow,
+  ExpandChevronIcon
+} from './BrowserRuntimeCheckUi'
 
 type Props = {
   detect: BrowserDetectResult | null
@@ -29,21 +34,6 @@ function isBrowserEnvironmentReady(detect: BrowserDetectResult): boolean {
     detect.playwright.installed &&
     detect.chromium.ready &&
     detect.node.meetsRequirement
-  )
-}
-
-function ExpandChevronIcon() {
-  return (
-    <svg
-      className="browser-setup-guide__expand-icon"
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      aria-hidden
-    >
-      <path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
-    </svg>
   )
 }
 
@@ -106,17 +96,10 @@ export function BrowserSetupGuide({
           }
         }}
       >
-        <Alert
-          className={`${guideClass} browser-setup-guide--compact`}
-          type="success"
-          showIcon
-          message={
-            <span className="browser-setup-guide__compact-row">
-              <span>{tf('remote.browser.setup.networkOk')}</span>
-              <ExpandChevronIcon />
-            </span>
-          }
-        />
+        <BrowserRuntimeCheckCompactRow tone="success" className={guideClass}>
+          <span>{tf('remote.browser.setup.networkOk')}</span>
+          <ExpandChevronIcon />
+        </BrowserRuntimeCheckCompactRow>
       </div>
     )
   }
@@ -137,44 +120,40 @@ export function BrowserSetupGuide({
         </Typography.Paragraph>
       ) : null}
 
-      <div className="browser-setup-guide__status" style={{ fontSize: 13, marginBottom: 12 }}>
+      <div className="browser-setup-guide__status" style={{ marginBottom: 12 }}>
         <div>
           Stagehand:{' '}
-          {detect.stagehand.installed ? (
-            <Typography.Text type="success">{t('status.installed')} {detect.stagehand.version ?? ''}</Typography.Text>
-          ) : (
-            <Typography.Text type="danger">{t('status.notInstalled')}</Typography.Text>
-          )}
+          <BrowserDetectDetailValue ok={detect.stagehand.installed}>
+            {detect.stagehand.installed
+              ? `${t('status.installed')} ${detect.stagehand.version ?? ''}`
+              : t('status.notInstalled')}
+          </BrowserDetectDetailValue>
         </div>
         <div>
           Playwright:{' '}
-          {detect.playwright.installed ? (
-            <Typography.Text type="success">{t('status.installed')}</Typography.Text>
-          ) : (
-            <Typography.Text type="danger">{t('status.notInstalled')}</Typography.Text>
-          )}
+          <BrowserDetectDetailValue ok={detect.playwright.installed}>
+            {detect.playwright.installed ? t('status.installed') : t('status.notInstalled')}
+          </BrowserDetectDetailValue>
         </div>
         <div>
           Chromium:{' '}
-          {detect.chromium.ready ? (
-            <Typography.Text type="success">{t('status.ready')}</Typography.Text>
-          ) : (
-            <Typography.Text type="danger">{t('status.notInstalled')}</Typography.Text>
-          )}
+          <BrowserDetectDetailValue ok={detect.chromium.ready}>
+            {detect.chromium.ready ? t('status.ready') : t('status.notInstalled')}
+          </BrowserDetectDetailValue>
         </div>
         <div>
           Node: {detect.node.version}{' '}
-          {detect.node.meetsRequirement ? (
-            <Typography.Text type="success">{t('status.builtinNode')} ✓</Typography.Text>
-          ) : (
-            <Typography.Text type="danger">✗</Typography.Text>
-          )}
+          <BrowserDetectDetailValue ok={detect.node.meetsRequirement}>
+            {detect.node.meetsRequirement ? `${t('status.builtinNode')} ✓` : '✗'}
+          </BrowserDetectDetailValue>
         </div>
       </div>
 
       {ready ? (
         <>
-          <Alert type="success" showIcon message={tf('remote.browser.setup.detectPassed')} />
+          <BrowserRuntimeCheckCompactRow tone="success" className="browser-runtime-check-row--static">
+            {tf('remote.browser.setup.detectPassed')}
+          </BrowserRuntimeCheckCompactRow>
           <Space wrap style={{ marginTop: 12 }}>
             <Button loading={detecting} onClick={() => void onRefresh(true)}>
               {tf('remote.browser.setup.redetect')}

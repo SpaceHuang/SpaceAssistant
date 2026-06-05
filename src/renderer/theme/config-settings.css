@@ -81,14 +81,14 @@
 }
 
 .config-settings-page__nav-item--active {
-  background: var(--sa-surface-highlight);
-  color: var(--sa-text);
+  background: var(--sa-primary-subtle);
+  color: var(--sa-primary);
   font-weight: 600;
 }
 
 .config-settings-page__nav-item--active:hover {
-  background: var(--sa-surface-highlight-hover);
-  color: var(--sa-text);
+  background: var(--sa-primary-muted);
+  color: var(--sa-primary-hover);
 }
 
 .config-settings-page__main {
@@ -918,7 +918,7 @@
 
 .config-settings-page .config-model-select.ant-select-focused .ant-select-selector {
   border-color: var(--sa-primary) !important;
-  box-shadow: 0 0 0 2px var(--sa-primary-subtle);
+  box-shadow: var(--sa-shadow-glow);
 }
 
 .config-settings-page .config-model-select .ant-select-selection-wrap {

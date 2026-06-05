@@ -81,7 +81,7 @@
 }
 
 .file-tree .ant-tree-treenode-drop-over .ant-tree-node-content-wrapper {
-  background: rgba(10, 132, 255, 0.08) !important;
+  background: var(--sa-primary-subtle) !important;
 }
 
 .file-tree.ant-tree .ant-tree-node-content-wrapper .ant-tree-iconEle {
@@ -129,17 +129,6 @@
   font-weight: 500;
 }
 
-.file-tree-node--highlight::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 5px;
-  bottom: 5px;
-  width: 2px;
-  background: var(--sa-primary);
-  border-radius: 1px;
-}
-
 .file-tree-node--highlight {
   position: relative;
 }
@@ -169,6 +158,7 @@
   background: transparent;
 }
 
-.file-tree-node--wiki-highlight > .file-tree-node-content-wrapper {
-  font-weight: 600;
+.file-tree-node--wiki-highlight .file-tree-node-label {
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
 }

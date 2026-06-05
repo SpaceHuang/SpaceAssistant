@@ -279,9 +279,9 @@
 }
 
 .sa-split-pane .sa-segment-item--active {
-  background: var(--sa-surface-raised);
-  color: var(--sa-text);
-  box-shadow: none;
+  background: var(--sa-bg-elevated);
+  color: var(--sa-primary);
+  box-shadow: var(--sa-shadow-sm);
 }
 
 .sa-segment-item:focus-visible {
@@ -494,6 +494,33 @@
 
 .sa-prose a {
   color: var(--sa-primary);
+}
+
+/* LLM 状态 emoji → 主题语义圆点（见 markdownSemanticStatusEmoji） */
+.sa-prose .sa-md-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  vertical-align: 0.08em;
+  margin-inline: 0.12em;
+  flex-shrink: 0;
+}
+
+.sa-md-status-dot--success {
+  background: var(--sa-success);
+}
+
+.sa-md-status-dot--warning {
+  background: var(--sa-warning);
+}
+
+.sa-md-status-dot--error {
+  background: var(--sa-error);
+}
+
+.sa-md-status-dot--neutral {
+  background: var(--sa-text-tertiary);
 }
 
 .chat-md-assistant .ant-typography {

@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Typography } from 'antd'
+import { Button, Typography } from 'antd'
 import type { BrowserDetectResult } from '../../../shared/browserTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import {
+  BrowserDetectDetailValue,
+  BrowserRuntimeCheckCompactRow,
+  ExpandChevronIcon
+} from './BrowserRuntimeCheckUi'
 
 type Props = {
   detect: BrowserDetectResult
@@ -11,21 +16,6 @@ type Props = {
   /** 为 true 时表示正在拉取检测结果；结束后会自动收起详情 */
   detecting?: boolean
   children?: React.ReactNode
-}
-
-function ExpandChevronIcon() {
-  return (
-    <svg
-      className="browser-setup-guide__expand-icon"
-      xmlns="http://www.w3.org/2000/svg"
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      aria-hidden
-    >
-      <path fill="currentColor" d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
-    </svg>
-  )
 }
 
 export function isBrowserEnvironmentReady(detect: BrowserDetectResult): boolean {
@@ -51,42 +41,35 @@ function detectFingerprint(detect: BrowserDetectResult): string {
 }
 
 export function BrowserDetectStatusRows({ detect }: { detect: BrowserDetectResult }) {
-  const { t: tConfig } = useTypedTranslation('config')
   const { t: tCommon } = useTypedTranslation('common')
 
   return (
-    <div className="browser-setup-guide__status" style={{ fontSize: 13 }}>
+    <div className="browser-setup-guide__status">
       <div>
         Stagehand:{' '}
-        {detect.stagehand.installed ? (
-          <Typography.Text type="success">{tCommon('status.installed')} {detect.stagehand.version ?? ''}</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">{tCommon('status.notInstalled')}</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.stagehand.installed}>
+          {detect.stagehand.installed
+            ? `${tCommon('status.installed')} ${detect.stagehand.version ?? ''}`
+            : tCommon('status.notInstalled')}
+        </BrowserDetectDetailValue>
       </div>
       <div>
         Playwright:{' '}
-        {detect.playwright.installed ? (
-          <Typography.Text type="success">{tCommon('status.installed')}</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">{tCommon('status.notInstalled')}</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.playwright.installed}>
+          {detect.playwright.installed ? tCommon('status.installed') : tCommon('status.notInstalled')}
+        </BrowserDetectDetailValue>
       </div>
       <div>
         Chromium:{' '}
-        {detect.chromium.ready ? (
-          <Typography.Text type="success">{tCommon('status.ready')}</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">{tCommon('status.notInstalled')}</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.chromium.ready}>
+          {detect.chromium.ready ? tCommon('status.ready') : tCommon('status.notInstalled')}
+        </BrowserDetectDetailValue>
       </div>
       <div>
         Node: {detect.node.version}{' '}
-        {detect.node.meetsRequirement ? (
-          <Typography.Text type="success">{tCommon('status.builtinNode')} ✓</Typography.Text>
-        ) : (
-          <Typography.Text type="danger">✗</Typography.Text>
-        )}
+        <BrowserDetectDetailValue ok={detect.node.meetsRequirement}>
+          {detect.node.meetsRequirement ? `${tCommon('status.builtinNode')} ✓` : '✗'}
+        </BrowserDetectDetailValue>
       </div>
     </div>
   )
@@ -142,17 +125,10 @@ export function BrowserDetectStatusSummary({
             }
           }}
         >
-          <Alert
-            className="browser-setup-guide browser-setup-guide--compact"
-            type={ready ? 'success' : 'warning'}
-            showIcon
-            message={
-              <span className="browser-setup-guide__compact-row">
-                <span>{summaryText}</span>
-                <ExpandChevronIcon />
-              </span>
-            }
-          />
+          <BrowserRuntimeCheckCompactRow tone={ready ? 'success' : 'warning'}>
+            <span>{summaryText}</span>
+            <ExpandChevronIcon />
+          </BrowserRuntimeCheckCompactRow>
         </div>
         {children}
       </>
