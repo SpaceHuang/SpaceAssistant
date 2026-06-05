@@ -3,6 +3,10 @@ import { App, Button, Form, Input, Popover, Radio, Space, Table, Tooltip } from 
 import type { ColumnsType } from 'antd/es/table'
 import { FolderOpen, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
+import type { NamespaceKeyMap } from '../../i18n/types'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+
+type ConfigT = (key: NamespaceKeyMap['config'], options?: Record<string, unknown>) => string
 
 type ProfileDraft = {
   name: string
@@ -12,19 +16,19 @@ type ProfileDraft = {
 
 const EMPTY_DRAFT: ProfileDraft = { name: '', path: '', feishuAlias: '' }
 
-export function buildFeishuAliasHint(alias: string): string {
+export function buildFeishuAliasHint(alias: string, t: ConfigT): string {
   const trimmed = alias.trim()
   if (!trimmed) {
-    return '仅用于飞书远程：在消息里用 @别名 或「在名称 项目里…」指定此工作目录。留空则只按名称匹配。'
+    return t('workDir.aliasHint.empty')
   }
-  return `仅用于飞书远程：在消息里用 @别名 或「在 ${trimmed} 项目里…」指定此工作目录。例如别名 ${trimmed} 时，可发 /sa @${trimmed} 跑测试。`
+  return t('workDir.aliasHint.withAlias', { alias: trimmed })
 }
 
-function parseFeishuAlias(raw: string): { aliases?: string[]; error?: string } {
+function parseFeishuAlias(raw: string, t: ConfigT): { aliases?: string[]; error?: string } {
   const trimmed = raw.trim()
   if (!trimmed) return {}
   if (/[,，]/.test(trimmed)) {
-    return { error: '飞书别名只能填写一个' }
+    return { error: t('workDir.validation.aliasSingle') }
   }
   return { aliases: [trimmed] }
 }
@@ -59,42 +63,43 @@ type ProfileFormProps = {
 }
 
 function WorkDirProfileForm({ mode, form, onSelectDirectory, onConfirm }: ProfileFormProps) {
+  const { t } = useTypedTranslation('config')
   const feishuAlias = Form.useWatch('feishuAlias', form) ?? ''
 
   return (
     <Form form={form} component={false}>
       <div className="config-add-model-popover config-workdir-popover">
         <div className="config-add-model-field">
-          <span className="config-add-model-label">路径</span>
+          <span className="config-add-model-label">{t('workDir.form.pathLabel')}</span>
           <Space.Compact block className="config-workdir-path-compact">
-            <Form.Item name="path" noStyle rules={[{ required: true, message: '请选择路径' }]}>
-              <Input placeholder="选择或输入绝对路径" aria-label="工作目录路径" />
+            <Form.Item name="path" noStyle rules={[{ required: true, message: t('workDir.form.pathRequired') }]}>
+              <Input placeholder={t('workDir.form.pathPlaceholder')} aria-label={t('workDir.form.pathAria')} />
             </Form.Item>
             <Button
               className="config-workdir-browse-btn"
               icon={<FolderOpen size={14} aria-hidden />}
               onClick={onSelectDirectory}
-              aria-label="选择目录"
+              aria-label={t('workDir.form.browseAria')}
             >
-              浏览
+              {t('workDir.form.browse')}
             </Button>
           </Space.Compact>
         </div>
         <div className="config-add-model-field">
-          <span className="config-add-model-label">名称</span>
-          <Form.Item name="name" noStyle rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="项目名称" aria-label="工作目录名称" />
+          <span className="config-add-model-label">{t('workDir.form.nameLabel')}</span>
+          <Form.Item name="name" noStyle rules={[{ required: true, message: t('workDir.form.nameRequired') }]}>
+            <Input placeholder={t('workDir.form.namePlaceholder')} aria-label={t('workDir.form.nameAria')} />
           </Form.Item>
         </div>
         <div className="config-add-model-field">
-          <span className="config-add-model-label">飞书别名（可选）</span>
+          <span className="config-add-model-label">{t('workDir.form.feishuAliasLabel')}</span>
           <Form.Item name="feishuAlias" noStyle>
-            <Input placeholder="SX" aria-label="飞书别名" />
+            <Input placeholder={t('workDir.form.feishuAliasPlaceholder')} aria-label={t('workDir.form.feishuAliasAria')} />
           </Form.Item>
-          <p className="config-add-model-hint">{buildFeishuAliasHint(feishuAlias)}</p>
+          <p className="config-add-model-hint">{buildFeishuAliasHint(feishuAlias, t)}</p>
         </div>
         <Button type="primary" size="small" block onClick={onConfirm}>
-          {mode === 'add' ? '添加目录' : '保存更改'}
+          {mode === 'add' ? t('workDir.form.addButton') : t('workDir.form.editButton')}
         </Button>
       </div>
     </Form>
@@ -102,6 +107,7 @@ function WorkDirProfileForm({ mode, form, onSelectDirectory, onConfirm }: Profil
 }
 
 export function WorkDirList({ profiles, onChange }: Props) {
+  const { t } = useTypedTranslation('config')
   const { message } = App.useApp()
   const [addOpen, setAddOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
@@ -127,7 +133,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
     if (!dir.trim()) return true
     const r = await window.api.workdirCheckWritable(dir)
     if (!r.ok) {
-      message.error(`目录不可写入：${r.error ?? '权限不足'}`)
+      message.error(t('workDir.validation.dirNotWritable', { error: r.error ?? t('workDir.validation.dirNotWritableFallback') }))
       return false
     }
     return true
@@ -137,18 +143,18 @@ export function WorkDirList({ profiles, onChange }: Props) {
     (values: ProfileDraft, excludeId?: string): string | null => {
       const name = values.name.trim()
       const dirPath = values.path.trim()
-      if (!name) return '名称不能为空'
-      if (!dirPath) return '路径不能为空'
+      if (!name) return t('workDir.validation.nameRequired')
+      if (!dirPath) return t('workDir.validation.pathRequired')
       if (profiles.some((p) => p.id !== excludeId && p.name === name)) {
-        return '工作目录名称不能重复'
+        return t('workDir.validation.nameDuplicate')
       }
       const norm = normalizePath(dirPath)
       if (profiles.some((p) => p.id !== excludeId && normalizePath(p.path) === norm)) {
-        return '工作目录路径不能重复'
+        return t('workDir.validation.pathDuplicate')
       }
       return null
     },
-    [profiles]
+    [profiles, t]
   )
 
   const handleAdd = async () => {
@@ -163,7 +169,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
       message.error(err)
       return
     }
-    const parsedAlias = parseFeishuAlias(draftValues.feishuAlias)
+    const parsedAlias = parseFeishuAlias(draftValues.feishuAlias, t)
     if (parsedAlias.error) {
       message.error(parsedAlias.error)
       return
@@ -198,7 +204,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
       message.error(err)
       return
     }
-    const parsedAlias = parseFeishuAlias(draftValues.feishuAlias)
+    const parsedAlias = parseFeishuAlias(draftValues.feishuAlias, t)
     if (parsedAlias.error) {
       message.error(parsedAlias.error)
       return
@@ -224,7 +230,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
 
   const handleRemove = (profileId: string) => {
     if (profiles.length <= 1) {
-      message.error('请至少保留一个工作目录')
+      message.error(t('workDir.validation.atLeastOneProfile'))
       return
     }
     const target = profiles.find((p) => p.id === profileId)
@@ -261,7 +267,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
 
   const columns: ColumnsType<WorkDirProfile> = [
     {
-      title: '默认',
+      title: t('workDir.table.columnDefault'),
       width: 56,
       align: 'center',
       onCell: () => ({ style: { verticalAlign: 'middle' } }),
@@ -269,12 +275,12 @@ export function WorkDirList({ profiles, onChange }: Props) {
         <Radio
           checked={profile.id === defaultId}
           onChange={() => handleDefaultChange(profile.id)}
-          aria-label={`设为默认：${profileLabel(profile)}`}
+          aria-label={t('workDir.table.setDefaultAria', { name: profileLabel(profile) })}
         />
       )
     },
     {
-      title: '目录',
+      title: t('workDir.table.columnDir'),
       render: (_, profile) => (
         <div className="config-workdir-table-cell">
           <span className="config-field__label">{profileLabel(profile)}</span>
@@ -282,13 +288,13 @@ export function WorkDirList({ profiles, onChange }: Props) {
             {profile.path}
           </span>
           {profile.aliases?.[0] ? (
-            <span className="config-field__hint">飞书别名：{profile.aliases[0]}</span>
+            <span className="config-field__hint">{t('workDir.table.feishuAliasPrefix')}{profile.aliases[0]}</span>
           ) : null}
         </div>
       )
     },
     {
-      title: '操作',
+      title: t('workDir.table.columnActions'),
       width: 96,
       align: 'center',
       onCell: () => ({ style: { verticalAlign: 'middle' } }),
@@ -316,8 +322,8 @@ export function WorkDirList({ profiles, onChange }: Props) {
               />
             }
           >
-            <Button type="link" size="small" icon={<Pencil size={14} aria-hidden />} aria-label="编辑">
-              编辑
+            <Button type="link" size="small" icon={<Pencil size={14} aria-hidden />} aria-label={t('workDir.actions.editAria')}>
+              {t('workDir.actions.edit')}
             </Button>
           </Popover>
           <Button
@@ -325,10 +331,10 @@ export function WorkDirList({ profiles, onChange }: Props) {
             size="small"
             danger
             icon={<Trash2 size={14} aria-hidden />}
-            aria-label="移除"
+            aria-label={t('workDir.actions.removeAria')}
             onClick={() => handleRemove(profile.id)}
           >
-            移除
+            {t('workDir.actions.remove')}
           </Button>
         </Space>
       )
@@ -338,7 +344,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
   return (
     <div className="config-field config-workdir-field">
       <div className="config-field-row">
-        <span className="config-field__label">工作目录</span>
+        <span className="config-field__label">{t('workDir.fieldLabel')}</span>
         <Space size={6} className="config-workdir-field__actions">
           <Popover
             overlayClassName="config-settings-popover"
@@ -356,19 +362,19 @@ export function WorkDirList({ profiles, onChange }: Props) {
             }}
             content={addPopoverContent}
           >
-            <Tooltip title="添加目录">
+            <Tooltip title={t('workDir.actions.addTooltip')}>
               <Button
                 size="small"
                 type="primary"
                 icon={<Plus size={14} aria-hidden />}
-                aria-label="添加目录"
+                aria-label={t('workDir.actions.addAria')}
               />
             </Tooltip>
           </Popover>
         </Space>
       </div>
       <p className="config-field__hint">
-        为不同目的设置相互独立的工作目录，比如「自媒体创作」、「学习笔记」。随时切换状态，避免相互干扰。
+        {t('workDir.hint')}
       </p>
       <div className="config-field__control">
         <Table
@@ -378,26 +384,26 @@ export function WorkDirList({ profiles, onChange }: Props) {
           pagination={false}
           dataSource={profiles}
           columns={columns}
-          locale={{ emptyText: '请添加工作目录' }}
+          locale={{ emptyText: t('workDir.table.emptyText') }}
         />
       </div>
     </div>
   )
 }
 
-export function validateWorkDirProfiles(profiles: WorkDirProfile[]): string | null {
-  if (profiles.length === 0) return '请至少添加一个工作目录'
+export function validateWorkDirProfiles(profiles: WorkDirProfile[], t: ConfigT): string | null {
+  if (profiles.length === 0) return t('workDir.validation.atLeastOne')
   const defaultCount = profiles.filter((p) => p.isDefault).length
-  if (defaultCount !== 1) return '请指定一个默认工作目录'
+  if (defaultCount !== 1) return t('workDir.validation.specifyDefault')
   const names = new Set<string>()
   const paths = new Set<string>()
   for (const p of profiles) {
     const name = p.name.trim()
-    if (!name) return '工作目录名称不能为空'
-    if (!p.path.trim()) return '工作目录路径不能为空'
-    if (names.has(name)) return '工作目录名称不能重复'
+    if (!name) return t('workDir.validation.nameEmpty')
+    if (!p.path.trim()) return t('workDir.validation.pathEmpty')
+    if (names.has(name)) return t('workDir.validation.nameDuplicate')
     const norm = normalizePath(p.path)
-    if (paths.has(norm)) return '工作目录路径不能重复'
+    if (paths.has(norm)) return t('workDir.validation.pathDuplicate')
     names.add(name)
     paths.add(norm)
   }

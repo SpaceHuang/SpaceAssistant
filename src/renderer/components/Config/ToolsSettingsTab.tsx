@@ -1,6 +1,6 @@
 import { Alert, Button, Form, Input, InputNumber, Radio, Space, Switch } from 'antd'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
-import { getBuiltinToolSettingsCopy } from '../../../shared/builtinToolSettingsCopy'
+import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
@@ -53,7 +53,7 @@ function BuiltinToolSwitchList({
       <div className="config-tool-list">
         {BUILTIN_TOOL_DEFINITIONS.map((def) => {
           const on = !toolUi.deniedTools.includes(def.name)
-          const copy = getBuiltinToolSettingsCopy(def.name)
+          const keys = getBuiltinToolI18nKeys(def.name)
           return (
             <div key={def.name} className={`config-tool-row${on ? '' : ' config-tool-row--off'}`}>
               <Switch
@@ -74,12 +74,12 @@ function BuiltinToolSwitchList({
                 }}
               />
               <div className="config-tool-row__body">
-                <span className="config-tool-row__name">{copy.displayName}</span>
+                <span className="config-tool-row__name">{t(keys.displayName)}</span>
                 <code className="config-tool-row__id">{def.name}</code>
-                <span className="config-tool-row__summary">{copy.summary}</span>
+                <span className="config-tool-row__summary">{t(keys.summary)}</span>
                 <span className="config-tool-row__disabled-hint">
                   {t('tools.disabledHintPrefix')}
-                  {copy.disabledHint}
+                  {t(keys.disabledHint)}
                 </span>
               </div>
             </div>

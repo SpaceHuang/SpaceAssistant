@@ -7,7 +7,60 @@
     "label": "Work directory (session backups, etc.)",
     "selectDir": "Select directory",
     "notWritable": "This directory is not writable: {{error}}. Please choose another work directory.",
-    "permissionDenied": "Permission denied"
+    "permissionDenied": "Permission denied",
+    "form": {
+      "pathLabel": "Path",
+      "pathPlaceholder": "Select or enter an absolute path",
+      "pathAria": "Work directory path",
+      "pathRequired": "Please select a path",
+      "browse": "Browse",
+      "browseAria": "Select directory",
+      "nameLabel": "Name",
+      "namePlaceholder": "Project name",
+      "nameAria": "Work directory name",
+      "nameRequired": "Please enter a name",
+      "feishuAliasLabel": "Feishu alias (optional)",
+      "feishuAliasPlaceholder": "SX",
+      "feishuAliasAria": "Feishu alias",
+      "addButton": "Add directory",
+      "editButton": "Save changes"
+    },
+    "table": {
+      "columnDefault": "Default",
+      "columnDir": "Directory",
+      "columnActions": "Actions",
+      "feishuAliasPrefix": "Feishu alias: ",
+      "emptyText": "Please add a work directory",
+      "setDefaultAria": "Set as default: {{name}}"
+    },
+    "actions": {
+      "edit": "Edit",
+      "editAria": "Edit",
+      "remove": "Remove",
+      "removeAria": "Remove",
+      "addTooltip": "Add directory",
+      "addAria": "Add directory"
+    },
+    "hint": "Set up independent work directories for different purposes, such as \"Content Creation\" or \"Study Notes\". Switch contexts anytime to avoid interference.",
+    "fieldLabel": "Work directory",
+    "aliasHint": {
+      "empty": "Feishu remote only: specify this work directory in messages with @alias or \"in <name> project…\". Leave empty to match by name only.",
+      "withAlias": "Feishu remote only: specify this work directory in messages with @alias or \"in {{alias}} project…\". For example with alias {{alias}}, you can send /sa @{{alias}} run tests."
+    },
+    "validation": {
+      "atLeastOne": "Please add at least one work directory",
+      "specifyDefault": "Please specify a default work directory",
+      "nameEmpty": "Work directory name cannot be empty",
+      "pathEmpty": "Work directory path cannot be empty",
+      "nameDuplicate": "Work directory name must be unique",
+      "pathDuplicate": "Work directory path must be unique",
+      "atLeastOneProfile": "Please keep at least one work directory",
+      "dirNotWritable": "Directory not writable: {{error}}",
+      "dirNotWritableFallback": "Permission denied",
+      "nameRequired": "Name cannot be empty",
+      "pathRequired": "Path cannot be empty",
+      "aliasSingle": "Only one Feishu alias is allowed"
+    }
   },
   "parallelSessions": {
     "label": "Max parallel chat sessions",
@@ -124,6 +177,64 @@
     "defaultSectionLabel": "Tools",
     "listIntro": "When a tool is disabled, the agent cannot call it in chat. Related tasks may fail or fall back to other capabilities.",
     "disabledHintPrefix": "When disabled:",
+    "builtin": {
+      "readFile": {
+        "displayName": "Read file",
+        "summary": "Read file contents within the work directory.",
+        "disabledHint": "When disabled, the agent cannot view files and can only answer from existing conversation context."
+      },
+      "editFile": {
+        "displayName": "Edit file",
+        "summary": "Modify existing files by snippet (find-and-replace editing).",
+        "disabledHint": "When disabled, the agent cannot edit files with diff-style changes; full file rewrites are also limited."
+      },
+      "writeFile": {
+        "displayName": "Write file",
+        "summary": "Create new files or overwrite entire files.",
+        "disabledHint": "When disabled, the agent cannot create new files or rewrite files in full."
+      },
+      "listDirectory": {
+        "displayName": "List directory",
+        "summary": "List files and subdirectories within a directory.",
+        "disabledHint": "When disabled, the agent cannot browse the project directory structure."
+      },
+      "grep": {
+        "displayName": "Search file contents",
+        "summary": "Search file contents by keyword or regex within the work directory.",
+        "disabledHint": "When disabled, the agent cannot perform full-text search on code or text."
+      },
+      "runScript": {
+        "displayName": "Run script",
+        "summary": "Run a Python script (requires your confirmation before execution).",
+        "disabledHint": "When disabled, the agent cannot execute Python scripts."
+      },
+      "runShell": {
+        "displayName": "Shell command",
+        "summary": "Execute shell commands in the session work directory (requires your confirmation before execution).",
+        "disabledHint": "When disabled, the agent cannot run CLI commands like npm, git, etc. on your behalf."
+      },
+      "runLarkCli": {
+        "displayName": "Feishu CLI",
+        "summary": "Call the Feishu lark-cli to operate on messages, docs, calendars, etc.",
+        "disabledHint": "When disabled, the agent cannot read or write Feishu resources via the Feishu CLI."
+      },
+      "readFeishuAttachment": {
+        "displayName": "Read Feishu attachment",
+        "summary": "Read attachment files from Feishu messages (read-only).",
+        "disabledHint": "When disabled, the agent cannot open Feishu attachment contents."
+      },
+      "browser": {
+        "displayName": "Web access",
+        "summary": "Open web pages in an isolated browser, read pages, and perform actions like clicking.",
+        "disabledHint": "When disabled, the agent cannot access web pages or automate the browser."
+      },
+      "browserDetect": {
+        "displayName": "Browser dependency check",
+        "summary": "Check whether the Stagehand, Playwright, and Chromium dependencies required by Web access (browser) are ready.",
+        "disabledHint": "When disabled, the agent cannot auto-detect browser dependency status in chat."
+      },
+      "fallbackDisabledHint": "When disabled, the agent cannot call this tool in chat."
+    },
     "nav": {
       "switches": {
         "label": "Tool toggles",
@@ -203,6 +314,9 @@
     "depsNotReadyTitle": "Browser dependencies not ready",
     "depsNotReadyDescription": "Click the button below to fix this in chat.",
     "detectSectionLabel": "Runtime checks",
+    "detectNetworkOk": "Network access is working",
+    "detectExpandHint": "Click to expand details",
+    "detectCollapse": "Collapse",
     "redetect": "Re-run checks",
     "detectDeps": "Check dependencies",
     "repair": "Help me fix",

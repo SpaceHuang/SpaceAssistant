@@ -7,7 +7,60 @@
     "label": "工作目录（会话明文备份等）",
     "selectDir": "选择目录",
     "notWritable": "该目录不可写入：{{error}}，请更换工作目录",
-    "permissionDenied": "权限不足"
+    "permissionDenied": "权限不足",
+    "form": {
+      "pathLabel": "路径",
+      "pathPlaceholder": "选择或输入绝对路径",
+      "pathAria": "工作目录路径",
+      "pathRequired": "请选择路径",
+      "browse": "浏览",
+      "browseAria": "选择目录",
+      "nameLabel": "名称",
+      "namePlaceholder": "项目名称",
+      "nameAria": "工作目录名称",
+      "nameRequired": "请输入名称",
+      "feishuAliasLabel": "飞书别名（可选）",
+      "feishuAliasPlaceholder": "SX",
+      "feishuAliasAria": "飞书别名",
+      "addButton": "添加目录",
+      "editButton": "保存更改"
+    },
+    "table": {
+      "columnDefault": "默认",
+      "columnDir": "目录",
+      "columnActions": "操作",
+      "feishuAliasPrefix": "飞书别名：",
+      "emptyText": "请添加工作目录",
+      "setDefaultAria": "设为默认：{{name}}"
+    },
+    "actions": {
+      "edit": "编辑",
+      "editAria": "编辑",
+      "remove": "移除",
+      "removeAria": "移除",
+      "addTooltip": "添加目录",
+      "addAria": "添加目录"
+    },
+    "hint": "为不同目的设置相互独立的工作目录，比如「自媒体创作」、「学习笔记」。随时切换状态，避免相互干扰。",
+    "fieldLabel": "工作目录",
+    "aliasHint": {
+      "empty": "仅用于飞书远程：在消息里用 @别名 或「在名称 项目里…」指定此工作目录。留空则只按名称匹配。",
+      "withAlias": "仅用于飞书远程：在消息里用 @别名 或「在 {{alias}} 项目里…」指定此工作目录。例如别名 {{alias}} 时，可发 /sa @{{alias}} 跑测试。"
+    },
+    "validation": {
+      "atLeastOne": "请至少添加一个工作目录",
+      "specifyDefault": "请指定一个默认工作目录",
+      "nameEmpty": "工作目录名称不能为空",
+      "pathEmpty": "工作目录路径不能为空",
+      "nameDuplicate": "工作目录名称不能重复",
+      "pathDuplicate": "工作目录路径不能重复",
+      "atLeastOneProfile": "请至少保留一个工作目录",
+      "dirNotWritable": "目录不可写入：{{error}}",
+      "dirNotWritableFallback": "权限不足",
+      "nameRequired": "名称不能为空",
+      "pathRequired": "路径不能为空",
+      "aliasSingle": "飞书别名只能填写一个"
+    }
   },
   "parallelSessions": {
     "label": "并行会话上限",
@@ -124,6 +177,64 @@
     "defaultSectionLabel": "工具",
     "listIntro": "关闭某工具后，Agent 在对话中将无法调用它，相关任务可能失败或只能改用其它能力。",
     "disabledHintPrefix": "关闭后：",
+    "builtin": {
+      "readFile": {
+        "displayName": "读取文件",
+        "summary": "读取工作目录内的文件内容。",
+        "disabledHint": "关闭后 Agent 无法查看文件，只能根据已有对话内容回答。"
+      },
+      "editFile": {
+        "displayName": "编辑文件",
+        "summary": "按片段修改已有文件（查找替换式编辑）。",
+        "disabledHint": "关闭后 Agent 无法用差异方式改文件，整文件重写也会受限。"
+      },
+      "writeFile": {
+        "displayName": "写入文件",
+        "summary": "创建新文件或整文件覆盖写入。",
+        "disabledHint": "关闭后 Agent 无法新建或完整重写文件。"
+      },
+      "listDirectory": {
+        "displayName": "浏览目录",
+        "summary": "列出目录下的文件和子文件夹。",
+        "disabledHint": "关闭后 Agent 无法浏览项目目录结构。"
+      },
+      "grep": {
+        "displayName": "搜索文件内容",
+        "summary": "在工作目录内按关键词或正则搜索文件内容。",
+        "disabledHint": "关闭后 Agent 无法全文检索代码或文本。"
+      },
+      "runScript": {
+        "displayName": "运行脚本",
+        "summary": "运行 Python 脚本（执行前需你确认）。",
+        "disabledHint": "关闭后 Agent 无法执行 Python 脚本。"
+      },
+      "runShell": {
+        "displayName": "Shell 命令",
+        "summary": "在会话工作目录下执行 shell 命令（执行前需你确认）。",
+        "disabledHint": "关闭后 Agent 无法代为运行 npm、git 等 CLI 命令。"
+      },
+      "runLarkCli": {
+        "displayName": "飞书 CLI",
+        "summary": "调用飞书 lark-cli，操作消息、文档、日历等。",
+        "disabledHint": "关闭后 Agent 无法通过飞书 CLI 读写飞书资源。"
+      },
+      "readFeishuAttachment": {
+        "displayName": "读取飞书附件",
+        "summary": "读取飞书消息中的附件文件（只读）。",
+        "disabledHint": "关闭后 Agent 无法打开飞书附件内容。"
+      },
+      "browser": {
+        "displayName": "网络访问",
+        "summary": "在隔离浏览器中打开网页、读取页面并执行点击等操作。",
+        "disabledHint": "关闭后 Agent 无法访问网页或自动化浏览器。"
+      },
+      "browserDetect": {
+        "displayName": "浏览器依赖检测",
+        "summary": "检测网络访问（browser）所需的 Stagehand、Playwright、Chromium 依赖是否就绪。",
+        "disabledHint": "关闭后 Agent 无法在对话中自动检测浏览器依赖状态。"
+      },
+      "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。"
+    },
     "nav": {
       "switches": {
         "label": "工具开关",
@@ -203,6 +314,9 @@
     "depsNotReadyTitle": "浏览器依赖未就绪",
     "depsNotReadyDescription": "请点击下方按钮在对话中完成修复。",
     "detectSectionLabel": "运行环境检测",
+    "detectNetworkOk": "网络访问功能正常",
+    "detectExpandHint": "点击展开详情",
+    "detectCollapse": "收起",
     "redetect": "重新检测",
     "detectDeps": "检测依赖",
     "repair": "帮我修复",

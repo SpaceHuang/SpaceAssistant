@@ -1,6 +1,6 @@
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { normalizeViewerUrl } from '../../../shared/viewerUrl'
-import { useDetailPanel } from '../DetailPanel'
+import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { summarizeBrowserConfirmInput } from './browserConfirmDisplay'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'

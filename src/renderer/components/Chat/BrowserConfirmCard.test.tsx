@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 const openUrl = vi.fn().mockResolvedValue(undefined)
 
-vi.mock('../DetailPanel', () => ({
+vi.mock('../DetailPanel/DetailPanelContext', () => ({
   useDetailPanel: () => ({ openUrl })
 }))
 

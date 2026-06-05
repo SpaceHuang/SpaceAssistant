@@ -11,6 +11,10 @@ vi.mock('./ShikiHighlightedCode', () => ({
   )
 }))
 
+vi.mock('../DetailPanel/DetailPanelContext', () => ({
+  useDetailPanel: () => ({ openUrl: vi.fn().mockResolvedValue(undefined) })
+}))
+
 function writeRecord(status: ToolCallRecord['status'], extra: Partial<ToolCallRecord> = {}): ToolCallRecord {
   return {
     id: 'tool-1',

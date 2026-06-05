@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Alert, Button, Typography } from 'antd'
 import type { BrowserDetectResult } from '../../../shared/browserTypes'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   detect: BrowserDetectResult
@@ -37,11 +38,6 @@ export function isBrowserEnvironmentReady(detect: BrowserDetectResult): boolean 
   )
 }
 
-function detectSummaryText(detect: BrowserDetectResult, ready: boolean): string {
-  if (ready) return '网络访问功能正常'
-  return detect.errors[0] ?? '浏览器依赖未就绪'
-}
-
 function detectFingerprint(detect: BrowserDetectResult): string {
   return [
     detect.primaryFailure,
@@ -55,36 +51,39 @@ function detectFingerprint(detect: BrowserDetectResult): string {
 }
 
 export function BrowserDetectStatusRows({ detect }: { detect: BrowserDetectResult }) {
+  const { t: tConfig } = useTypedTranslation('config')
+  const { t: tCommon } = useTypedTranslation('common')
+
   return (
     <div className="browser-setup-guide__status" style={{ fontSize: 13 }}>
       <div>
         Stagehand:{' '}
         {detect.stagehand.installed ? (
-          <Typography.Text type="success">已安装 {detect.stagehand.version ?? ''}</Typography.Text>
+          <Typography.Text type="success">{tCommon('status.installed')} {detect.stagehand.version ?? ''}</Typography.Text>
         ) : (
-          <Typography.Text type="danger">未安装</Typography.Text>
+          <Typography.Text type="danger">{tCommon('status.notInstalled')}</Typography.Text>
         )}
       </div>
       <div>
         Playwright:{' '}
         {detect.playwright.installed ? (
-          <Typography.Text type="success">已安装</Typography.Text>
+          <Typography.Text type="success">{tCommon('status.installed')}</Typography.Text>
         ) : (
-          <Typography.Text type="danger">未安装</Typography.Text>
+          <Typography.Text type="danger">{tCommon('status.notInstalled')}</Typography.Text>
         )}
       </div>
       <div>
         Chromium:{' '}
         {detect.chromium.ready ? (
-          <Typography.Text type="success">已就绪</Typography.Text>
+          <Typography.Text type="success">{tCommon('status.ready')}</Typography.Text>
         ) : (
-          <Typography.Text type="danger">未安装</Typography.Text>
+          <Typography.Text type="danger">{tCommon('status.notInstalled')}</Typography.Text>
         )}
       </div>
       <div>
         Node: {detect.node.version}{' '}
         {detect.node.meetsRequirement ? (
-          <Typography.Text type="success">（应用内置）✓</Typography.Text>
+          <Typography.Text type="success">{tCommon('status.builtinNode')} ✓</Typography.Text>
         ) : (
           <Typography.Text type="danger">✗</Typography.Text>
         )}
@@ -100,11 +99,16 @@ export function BrowserDetectStatusSummary({
   detecting = false,
   children
 }: Props) {
+  const { t } = useTypedTranslation('config')
   const [detailsExpanded, setDetailsExpanded] = useState(false)
   const lastFingerprintRef = useRef<string | null>(null)
   const wasDetectingRef = useRef(false)
   const ready = isBrowserEnvironmentReady(detect)
-  const summaryText = detectSummaryText(detect, ready)
+
+  const summaryText = ready
+    ? t('browser.detectNetworkOk')
+    : (detect.errors[0] || t('browser.depsNotReadyTitle'))
+
   const fingerprint = detectFingerprint(detect)
 
   useEffect(() => {
@@ -127,7 +131,7 @@ export function BrowserDetectStatusSummary({
       <>
         <div
           className={`browser-setup-guide--compact-wrap ${className ?? ''}`.trim()}
-          title="点击展开详情"
+          title={t('browser.detectExpandHint')}
           role="button"
           tabIndex={0}
           onClick={expand}
@@ -166,7 +170,7 @@ export function BrowserDetectStatusSummary({
             className="browser-setup-guide__collapse"
             onClick={() => setDetailsExpanded(false)}
           >
-            收起
+            {t('browser.detectCollapse')}
           </Button>
         ) : null}
       </div>

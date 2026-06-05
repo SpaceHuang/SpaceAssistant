@@ -477,7 +477,7 @@ export function ConfigSettingsPage() {
 
     const v = await form.validateFields()
 
-    const profileErr = validateWorkDirProfiles(workDirProfiles)
+    const profileErr = validateWorkDirProfiles(workDirProfiles, tConfig)
     if (profileErr) {
       setWorkDirSaveError(profileErr)
       message.warning(profileErr)
@@ -487,7 +487,7 @@ export function ConfigSettingsPage() {
     for (const p of workDirProfiles) {
       const r = await window.api.workdirCheckWritable(p.path)
       if (!r.ok) {
-        const err = `目录 ${p.name} 不可写入：${r.error ?? '权限不足'}`
+        const err = tConfig('workDir.validation.dirNotWritable', { error: r.error ?? tConfig('workDir.validation.dirNotWritableFallback') })
         setWorkDirSaveError(err)
         message.warning(err)
         return false

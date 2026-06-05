@@ -1,90 +1,77 @@
-import { ALL_BUILTIN_TOOL_NAMES } from './builtinToolDefinitions'
+import type { NamespaceKeyMap } from '../renderer/i18n/types'
 
-export type BuiltinToolSettingsCopy = {
-  /** 设置页展示名（用户向） */
-  displayName: string
-  /** 工具用途（用户向，一行） */
-  summary: string
-  /** 关闭后的影响（用户向，一行） */
-  disabledHint: string
+export type BuiltinToolI18nKeys = {
+  displayName: NamespaceKeyMap['config']
+  summary: NamespaceKeyMap['config']
+  disabledHint: NamespaceKeyMap['config']
 }
 
-export const BUILTIN_TOOL_SETTINGS_COPY: Record<string, BuiltinToolSettingsCopy> = {
+const TOOL_I18N_KEYS: Record<string, BuiltinToolI18nKeys> = {
   read_file: {
-    displayName: '读取文件',
-    summary: '读取工作目录内的文件内容。',
-    disabledHint: '关闭后 Agent 无法查看文件，只能根据已有对话内容回答。'
+    displayName: 'tools.builtin.readFile.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.readFile.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.readFile.disabledHint' as NamespaceKeyMap['config']
   },
   edit_file: {
-    displayName: '编辑文件',
-    summary: '按片段修改已有文件（查找替换式编辑）。',
-    disabledHint: '关闭后 Agent 无法用差异方式改文件，整文件重写也会受限。'
+    displayName: 'tools.builtin.editFile.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.editFile.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.editFile.disabledHint' as NamespaceKeyMap['config']
   },
   write_file: {
-    displayName: '写入文件',
-    summary: '创建新文件或整文件覆盖写入。',
-    disabledHint: '关闭后 Agent 无法新建或完整重写文件。'
+    displayName: 'tools.builtin.writeFile.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.writeFile.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.writeFile.disabledHint' as NamespaceKeyMap['config']
   },
   list_directory: {
-    displayName: '浏览目录',
-    summary: '列出目录下的文件和子文件夹。',
-    disabledHint: '关闭后 Agent 无法浏览项目目录结构。'
+    displayName: 'tools.builtin.listDirectory.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.listDirectory.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.listDirectory.disabledHint' as NamespaceKeyMap['config']
   },
   grep: {
-    displayName: '搜索文件内容',
-    summary: '在工作目录内按关键词或正则搜索文件内容。',
-    disabledHint: '关闭后 Agent 无法全文检索代码或文本。'
+    displayName: 'tools.builtin.grep.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.grep.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.grep.disabledHint' as NamespaceKeyMap['config']
   },
   run_script: {
-    displayName: '运行脚本',
-    summary: '运行 Python 脚本（执行前需你确认）。',
-    disabledHint: '关闭后 Agent 无法执行 Python 脚本。'
+    displayName: 'tools.builtin.runScript.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.runScript.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.runScript.disabledHint' as NamespaceKeyMap['config']
   },
   run_shell: {
-    displayName: 'Shell 命令',
-    summary: '在会话工作目录下执行 shell 命令（执行前需你确认）。',
-    disabledHint: '关闭后 Agent 无法代为运行 npm、git 等 CLI 命令。'
+    displayName: 'tools.builtin.runShell.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.runShell.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.runShell.disabledHint' as NamespaceKeyMap['config']
   },
   run_lark_cli: {
-    displayName: '飞书 CLI',
-    summary: '调用飞书 lark-cli，操作消息、文档、日历等。',
-    disabledHint: '关闭后 Agent 无法通过飞书 CLI 读写飞书资源。'
+    displayName: 'tools.builtin.runLarkCli.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.runLarkCli.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.runLarkCli.disabledHint' as NamespaceKeyMap['config']
   },
   read_feishu_attachment: {
-    displayName: '读取飞书附件',
-    summary: '读取飞书消息中的附件文件（只读）。',
-    disabledHint: '关闭后 Agent 无法打开飞书附件内容。'
+    displayName: 'tools.builtin.readFeishuAttachment.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.readFeishuAttachment.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.readFeishuAttachment.disabledHint' as NamespaceKeyMap['config']
   },
   browser: {
-    displayName: '网络访问',
-    summary: '在隔离浏览器中打开网页、读取页面并执行点击等操作。',
-    disabledHint: '关闭后 Agent 无法访问网页或自动化浏览器。'
+    displayName: 'tools.builtin.browser.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.browser.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.browser.disabledHint' as NamespaceKeyMap['config']
   },
   browser_detect: {
-    displayName: '浏览器依赖检测',
-    summary: '检测网络访问（browser）所需的 Stagehand、Playwright、Chromium 依赖是否就绪。',
-    disabledHint: '关闭后 Agent 无法在对话中自动检测浏览器依赖状态。'
+    displayName: 'tools.builtin.browserDetect.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.browserDetect.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.browserDetect.disabledHint' as NamespaceKeyMap['config']
   }
 }
 
-export function getBuiltinToolSettingsCopy(name: string): BuiltinToolSettingsCopy {
+const FALLBACK_DISABLED_HINT: NamespaceKeyMap['config'] = 'tools.builtin.fallbackDisabledHint'
+
+export function getBuiltinToolI18nKeys(name: string): BuiltinToolI18nKeys {
   return (
-    BUILTIN_TOOL_SETTINGS_COPY[name] ?? {
-      displayName: name,
-      summary: '',
-      disabledHint: '关闭后 Agent 在对话中无法调用此工具。'
+    TOOL_I18N_KEYS[name] ?? {
+      displayName: name as NamespaceKeyMap['config'],
+      summary: '' as NamespaceKeyMap['config'],
+      disabledHint: FALLBACK_DISABLED_HINT
     }
   )
 }
-
-/** 每个内置工具都应有设置页说明文案 */
-export function assertBuiltinToolSettingsCopyComplete(): void {
-  for (const name of ALL_BUILTIN_TOOL_NAMES) {
-    const copy = BUILTIN_TOOL_SETTINGS_COPY[name]
-    if (!copy?.summary || !copy.displayName) {
-      throw new Error(`缺少工具设置说明：${name}`)
-    }
-  }
-}
-
-assertBuiltinToolSettingsCopyComplete()
