@@ -59,7 +59,7 @@ describe('groupActivityTimeline', () => {
         ]
       },
       { kind: 'standalone', item: { kind: 'text', segmentIndex: 0 } },
-      { kind: 'batch', items: [{ kind: 'tool', toolId: 't2' }] },
+      { kind: 'standalone', item: { kind: 'tool', toolId: 't2' } },
       { kind: 'standalone', item: { kind: 'skill', hintId: 'h1' } }
     ])
   })
@@ -71,15 +71,18 @@ describe('groupActivityTimeline', () => {
     ]
     const getTimestamp = (item: AssistantActivityItem) => (item.toolId === 't1' ? 0 : ACTIVITY_BATCH_IDLE_GAP_MS)
     expect(groupActivityTimeline(timeline, getTimestamp)).toEqual([
-      { kind: 'batch', items: [{ kind: 'tool', toolId: 't1' }] },
-      { kind: 'batch', items: [{ kind: 'tool', toolId: 't2' }] }
+      { kind: 'standalone', item: { kind: 'tool', toolId: 't1' } },
+      { kind: 'standalone', item: { kind: 'tool', toolId: 't2' } }
     ])
   })
 
-  it('handles single-item batch and empty timeline', () => {
+  it('renders single thinking or tool as standalone instead of batch', () => {
     expect(groupActivityTimeline([], ts)).toEqual([])
     expect(groupActivityTimeline([{ kind: 'thinking', segmentIndex: 0 }], ts)).toEqual([
-      { kind: 'batch', items: [{ kind: 'thinking', segmentIndex: 0 }] }
+      { kind: 'standalone', item: { kind: 'thinking', segmentIndex: 0 } }
+    ])
+    expect(groupActivityTimeline([{ kind: 'tool', toolId: 't1' }], ts)).toEqual([
+      { kind: 'standalone', item: { kind: 'tool', toolId: 't1' } }
     ])
   })
 })

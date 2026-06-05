@@ -15,10 +15,13 @@ function isBatchItem(item: AssistantActivityItem): boolean {
 }
 
 function flushBatch(batch: AssistantActivityItem[], out: ActivityTrackSegment[]) {
-  if (batch.length > 0) {
+  if (batch.length === 0) return
+  if (batch.length === 1) {
+    out.push({ kind: 'standalone', item: batch[0]! })
+  } else {
     out.push({ kind: 'batch', items: [...batch] })
-    batch.length = 0
   }
+  batch.length = 0
 }
 
 /** 将 activity timeline 切分为批次（thinking+tool）与独立条目（text/skill） */

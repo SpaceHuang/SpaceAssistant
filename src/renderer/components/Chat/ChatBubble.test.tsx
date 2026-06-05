@@ -211,8 +211,31 @@ describe('ChatBubble activity batch', () => {
         })}
       />
     )
-    expect(document.querySelectorAll('.activity-batch').length).toBe(2)
+    expect(document.querySelectorAll('.activity-batch').length).toBe(0)
+    expect(document.querySelectorAll('.tool-row').length).toBe(2)
     expect(screen.getByText('answer')).toBeDefined()
+  })
+
+  it('does not wrap a single activity item in activity batch', () => {
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'streaming',
+          content: '',
+          thinking: {
+            content: 'think',
+            isVisible: true,
+            startTime: now,
+            segments: [{ content: 'think', startTime: now }]
+          },
+          contentSegments: [],
+          toolCalls: []
+        })}
+      />
+    )
+    expect(document.querySelector('.activity-batch')).toBeNull()
+    expect(screen.getByText('思考')).toBeDefined()
   })
 
   it('keeps last batch expanded while streaming with in-progress tool', () => {
@@ -227,10 +250,19 @@ describe('ChatBubble activity batch', () => {
             {
               id: 't1',
               toolName: 'read_file',
+              input: { path: 'a.txt' },
+              status: 'completed',
+              riskLevel: 'low',
+              startedAt: now,
+              completedAt: now + 1
+            },
+            {
+              id: 't2',
+              toolName: 'read_file',
               input: { path: 'app.tsx' },
               status: 'executing',
               riskLevel: 'low',
-              startedAt: now
+              startedAt: now + 2
             }
           ]
         })}

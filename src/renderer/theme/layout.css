@@ -1059,6 +1059,10 @@
   width: 100%;
 }
 
+.activity-batch--expanded {
+  gap: 4px;
+}
+
 .activity-batch__header-row {
   display: flex;
   align-items: center;
@@ -1177,7 +1181,7 @@
 .activity-batch__body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   margin-left: 6px;
   padding-left: 10px;
   border-left: 2px solid var(--sa-chat-assistant-accent);
@@ -1439,7 +1443,7 @@
 }
 
 .tool-row--expanded .tool-row__main {
-  padding: 8px 12px;
+  padding: 6px 10px;
   border-radius: 0;
   background: transparent;
 }
@@ -1486,7 +1490,8 @@
 }
 
 .tool-row--expanded .tool-row-detail__inner {
-  padding: 12px 12px 12px;
+  gap: 6px;
+  padding: 8px 10px 10px;
   border-top: 1px solid var(--sa-chat-inset-border);
 }
 
