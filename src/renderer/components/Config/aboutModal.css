@@ -94,15 +94,13 @@
   justify-content: center;
   width: 48px;
   height: 48px;
-  border-radius: var(--sa-radius-lg);
-  background: var(--sa-primary-subtle);
-  color: var(--sa-primary);
 }
 
-.about-modal__mark svg {
+.about-modal__mark-img {
   display: block;
-  width: 28px;
-  height: 28px;
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
 }
 
 .about-modal__name {

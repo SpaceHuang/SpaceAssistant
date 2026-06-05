@@ -1,6 +1,6 @@
 import { ExternalLink, X } from 'lucide-react'
 import { App, Button, Modal } from 'antd'
-import chatFillRaw from '../../assets/chat_3_fill.svg?raw'
+import appLogoUrl from '../../assets/sa-logo.png'
 import {
   APP_GITHUB_URL,
   APP_LICENSE,
@@ -13,8 +13,6 @@ import { setAboutOpen } from '../../store/configSlice'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './aboutModal.css'
-
-const appMarkSvg = chatFillRaw.replace(/fill="#09244[bB]"/g, 'fill="currentColor"')
 
 export function AboutModal() {
   const { message } = App.useApp()
@@ -59,7 +57,9 @@ export function AboutModal() {
     >
       <div className="about-modal__body">
         <div className="about-modal__identity">
-          <div className="about-modal__mark" aria-hidden dangerouslySetInnerHTML={{ __html: appMarkSvg }} />
+          <div className="about-modal__mark" aria-hidden>
+            <img src={appLogoUrl} alt="" className="about-modal__mark-img" />
+          </div>
           <h2 className="about-modal__name">{APP_PRODUCT_NAME}</h2>
           <p className="about-modal__version">{t('about.version', { version: APP_VERSION })}</p>
         </div>

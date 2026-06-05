@@ -1,7 +1,8 @@
 import fs from 'fs'
-import { app, Menu, nativeImage, Tray } from 'electron'
+import { app, Menu, nativeImage, nativeTheme, Tray } from 'electron'
 import type { BrowserWindow } from 'electron'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { getAppIconTheme } from './appIconPath'
 import {
   buildTrayMenuTemplate,
   handleShowMainWindow,
@@ -18,6 +19,28 @@ export interface TrayDeps {
 let trayInstance: Tray | null = null
 let trayEnabled = false
 let trayDeps: TrayDeps | null = null
+let trayThemeListenerRegistered = false
+
+function resolveActiveTrayIconPath(mainDirname: string): string | null {
+  const theme = getAppIconTheme(nativeTheme.shouldUseDarkColors)
+  return resolveTrayIconPath(process.platform, app.isPackaged, mainDirname, theme)
+}
+
+function applyTrayIcon(): void {
+  if (!trayInstance || trayInstance.isDestroyed() || !trayDeps) return
+  const iconPath = resolveActiveTrayIconPath(trayDeps.mainDirname)
+  if (iconPath && fs.existsSync(iconPath)) {
+    trayInstance.setImage(buildTrayImage(iconPath))
+  }
+}
+
+function setupTrayThemeListener(): void {
+  if (trayThemeListenerRegistered) return
+  trayThemeListenerRegistered = true
+  nativeTheme.on('updated', () => {
+    applyTrayIcon()
+  })
+}
 
 export function isTrayEnabled(): boolean {
   return trayEnabled
@@ -49,7 +72,7 @@ export function initTray(deps: TrayDeps): boolean {
   }
 
   trayDeps = deps
-  const iconPath = resolveTrayIconPath(process.platform, app.isPackaged, deps.mainDirname)
+  const iconPath = resolveActiveTrayIconPath(deps.mainDirname)
 
   if (!iconPath || !fs.existsSync(iconPath)) {
     logAgentEvent('error', 'tray.init_failed', {
@@ -78,6 +101,7 @@ export function initTray(deps: TrayDeps): boolean {
 
     trayInstance = tray
     trayEnabled = true
+    setupTrayThemeListener()
     logAgentEvent('info', 'tray.init_ok', { iconPath })
     return true
   } catch (err) {

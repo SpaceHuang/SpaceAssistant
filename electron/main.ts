@@ -33,6 +33,7 @@ import {
 } from './llmServiceResolver'
 import { destroyTray, initTray, isTrayEnabled, showMainWindow } from './tray'
 import { setupWindowCloseHandler } from './trayLogic'
+import { applyMainWindowIcon, setupWindowIconThemeListener } from './windowIcon'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
 import { createWorkDirManager, type WorkDirManager } from './workDirManager'
 
@@ -127,6 +128,7 @@ export async function createMainWindow(): Promise<void> {
     }
   })
   setMainWindow(win)
+  applyMainWindowIcon(win, __dirname)
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
@@ -351,6 +353,7 @@ app.whenReady().then(() => {
     mainDirname: __dirname
   })
 
+  setupWindowIconThemeListener(__dirname)
   void createMainWindow()
   setupAppMenu(readAppLocale(db))
 })

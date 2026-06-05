@@ -77,6 +77,7 @@
   "build": {
     "appId": "com.spaceassistant.app",
     "productName": "SpaceAssistant",
+    "icon": "res/icons/sa-logo-512.png",
     "npmRebuild": false,
     "electronDist": "node_modules/electron/dist",
     "electronDownload": {
@@ -96,9 +97,18 @@
       {
         "from": "resources/tray",
         "to": "tray"
+      },
+      {
+        "from": "res/icons",
+        "to": "icons",
+        "filter": [
+          "sa-logo-256.png",
+          "dark/sa-logo-dark-256.png"
+        ]
       }
     ],
     "win": {
+      "icon": "res/icons/sa-logo-256.png",
       "signAndEditExecutable": false,
       "target": [
         {
@@ -110,11 +120,13 @@
       ]
     },
     "mac": {
+      "icon": "res/icons/sa-logo.iconset",
       "target": [
         "dmg"
       ]
     },
     "linux": {
+      "icon": "res/icons/sa-logo-512.png",
       "target": [
         "AppImage"
       ]
