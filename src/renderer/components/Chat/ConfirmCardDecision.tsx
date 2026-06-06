@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
@@ -6,7 +7,7 @@ type Props = {
   actionSummary: string
   allowLabel: string
   denyLabel: string
-  onConfirm: (approved: boolean) => void
+  onConfirm: ToolConfirmHandler
   /** 行数、风险、写入等补充标签 */
   badges?: ReactNode
   /** 待确认的主体内容（URL、命令、diff 等），渲染在说明与按钮之间 */

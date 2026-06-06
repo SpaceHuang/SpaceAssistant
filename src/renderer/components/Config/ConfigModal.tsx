@@ -148,7 +148,7 @@ export function ConfigSettingsPage() {
 
   const [toolUi, setToolUi] = useState({
 
-    confirmMode: 'diff' as 'diff' | 'direct',
+    confirmMode: 'diff' as 'diff' | 'direct' | 'auto',
 
     deniedTools: [] as string[],
 

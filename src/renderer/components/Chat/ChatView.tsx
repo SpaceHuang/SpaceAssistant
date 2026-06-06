@@ -32,6 +32,7 @@ import {
   extractAssistantTextFromApiContent,
   type ToolChatController
 } from '../../services/chatToolSessionService'
+import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
@@ -223,16 +224,24 @@ export function ChatView() {
 
   const toolChatControllerRef = useRef<ToolChatController | null>(null)
 
+  const { t: tChat } = useTypedTranslation('chat')
+
   const onToolConfirm = useCallback(
-    (toolUseId: string, approved: boolean) => {
+    (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
       const requestId = pending?.requestId ?? streamingRequestId
       if (!requestId) return
       toolChatControllerRef.current?.applyConfirmOutcome(toolUseId, approved)
-      pendingConfirmStore.respond(requestId, toolUseId, approved)
+      pendingConfirmStore.respond(requestId, toolUseId, approved, options)
+      if (approved && options?.trustCommand) {
+        message.success(tChat('toast.trustCommandSuccess', { command: options.trustCommand }))
+      }
+      if (approved && options?.trustDomain) {
+        message.success(tChat('toast.trustDomainSuccess', { domain: options.trustDomain }))
+      }
       dispatch(setConfirmFocusToolUseId(null))
     },
-    [dispatch, sessionId, streamingRequestId]
+    [dispatch, message, sessionId, streamingRequestId, tChat]
   )
 
   const onToolCancel = useCallback(

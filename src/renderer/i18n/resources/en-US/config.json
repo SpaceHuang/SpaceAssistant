@@ -261,6 +261,19 @@
       "confirmModeLabel": "File write confirmation mode",
       "confirmDiff": "Show file changes",
       "confirmDirect": "Confirm directly",
+      "confirmAuto": "Auto-approve safe writes",
+      "autoApprove": {
+        "description": "Auto-execute without a confirmation card when all conditions are met:",
+        "conditionInWorkDir": "Path is inside the work directory",
+        "conditionNotSensitive": "Not a sensitive path (keys, credentials, config dirs, etc.)",
+        "conditionMaxBytes": "Single write ≤ {{size}}",
+        "fallbackHint": "Otherwise falls back to the \"Show file changes\" card.",
+        "confirmTitle": "Switch to auto-approve safe writes?",
+        "confirmMessage": "When enabled, write_file / edit_file calls that pass safety checks run without a card; oversized or sensitive paths still show confirmation.",
+        "confirmWarning": "⚠️ Path sandboxing and sensitive-directory protection still apply.",
+        "confirmOk": "Enable",
+        "confirmCancel": "Cancel"
+      },
       "checkpointLabel": "File history backup",
       "maxSnapshotsLabel": "Max snapshots per file"
     },
@@ -305,7 +318,28 @@
     "builtinDenyReason": {
       "privilege": "Privilege escalation",
       "destructiveDelete": "Destructive delete",
+      "remoteScript": "Remote script execution",
       "useRunLarkCli": "Use run_lark_cli instead"
+    },
+    "trust": {
+      "title": "Trusted shell commands",
+      "expired": "Expired",
+      "batchDelete": "Delete selected",
+      "cleanExpired": "Clean expired",
+      "cleanExpiredConfirm": "Remove {{count}} expired entries?",
+      "lastUsed": "Last used",
+      "status": "Status",
+      "empty": "No trusted commands yet",
+      "refresh": "Refresh"
+    },
+    "autoAllow": {
+      "title": "Auto-allow model-generated scripts",
+      "description": "When enabled, low-risk shell commands run without confirmation; high-risk patterns are still blocked.",
+      "confirmTitle": "Enable auto-execution?",
+      "confirmMessage": "Model-generated scripts will run without a confirmation card.",
+      "confirmWarning": "⚠️ Only enable when you trust this environment.",
+      "confirmOk": "Enable",
+      "confirmCancel": "Cancel"
     }
   },
   "browser": {
@@ -327,6 +361,11 @@
     "trustedDomainsLabel": "Trusted domains",
     "trustedDomainsHint": "No confirmation inside the list; others ask once per chat session.",
     "trustedDomainsPlaceholder": "e.g. example.com",
+    "trust": {
+      "title": "Trusted domains (no confirmation)",
+      "addDomain": "Add domain",
+      "batchDelete": "Clear all"
+    },
     "allowHttpLabel": "Allow HTTP",
     "allowHttpHint": "When off, only https links are allowed.",
     "headlessLabel": "Headless mode",

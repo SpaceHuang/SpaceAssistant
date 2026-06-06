@@ -215,10 +215,65 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'tool:confirm-response',
-    async (_e, payload: { requestId: string; toolUseId: string; approved: boolean }): Promise<void> => {
+    async (
+      _e,
+      payload: {
+        requestId: string
+        toolUseId: string
+        approved: boolean
+        trustCommand?: string
+        trustDomain?: string
+      }
+    ): Promise<void> => {
+      if (payload.approved && payload.trustCommand?.trim()) {
+        const { addTrustedCommand } = await import('./shell/shellCommandTrust')
+        addTrustedCommand(ctx.db, payload.trustCommand.trim())
+        logAgentEvent('info', 'shell.trust.command', {
+          command: payload.trustCommand.trim(),
+          timestamp: Date.now()
+        })
+      }
+      if (payload.approved && payload.trustDomain?.trim()) {
+        const { addTrustedDomain } = await import('./browser/browserDomainTrust')
+        const browser = readBrowserConfigFromDb(ctx.db)
+        const next = addTrustedDomain(browser, payload.trustDomain.trim())
+        persistBrowserConfig(ctx.db, next)
+        logAgentEvent('info', 'browser.trust.domain', {
+          domain: payload.trustDomain.trim(),
+          timestamp: Date.now()
+        })
+      }
       submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
     }
   )
+
+  ipcMain.handle('shell:manage-trusted-commands', async (_e, payload: unknown) => {
+    const { listTrustedCommands, addTrustedCommand, removeTrustedCommands, cleanExpiredTrustedCommands } =
+      await import('./shell/shellCommandTrust')
+    const action = payload && typeof payload === 'object' ? (payload as { action?: string }).action : ''
+    try {
+      if (action === 'list') {
+        return { ok: true as const, commands: listTrustedCommands(ctx.db) }
+      }
+      if (action === 'add' && typeof (payload as { command?: string }).command === 'string') {
+        addTrustedCommand(ctx.db, (payload as { command: string }).command)
+        return { ok: true as const, commands: listTrustedCommands(ctx.db) }
+      }
+      if (action === 'remove' && Array.isArray((payload as { ids?: string[] }).ids)) {
+        const commands = removeTrustedCommands(ctx.db, (payload as { ids: string[] }).ids)
+        logAgentEvent('info', 'trust.remove', { type: 'shell_command', timestamp: Date.now() })
+        return { ok: true as const, commands }
+      }
+      if (action === 'cleanExpired') {
+        cleanExpiredTrustedCommands(ctx.db)
+        return { ok: true as const, commands: listTrustedCommands(ctx.db) }
+      }
+      return { ok: false as const, error: 'invalid action' }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      return { ok: false as const, error: message }
+    }
+  })
 
   ipcMain.handle('tool:cancel', async (_e, payload: { requestId: string; toolUseId: string }): Promise<void> => {
     signalToolCancel(payload.requestId, payload.toolUseId)

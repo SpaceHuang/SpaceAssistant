@@ -1,9 +1,11 @@
-import { Alert, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
+import { useState } from 'react'
+import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
 import { Info } from 'lucide-react'
 import type { ShellConfig, ShellRule } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigResultAlert } from './ConfigResultAlert'
+import { ConfigSwitchRow } from './ConfigField'
 
 type Props = {
   shell: ShellConfig
@@ -29,18 +31,55 @@ function SensitivePrefixesHelp() {
   )
 }
 
+function formatTrustDate(ts: number | undefined): string {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString()
+}
+
 export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, shellTest }: Props) {
+  const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
   const { t: tCommon } = useTypedTranslation('common')
+  const [selectedTrustIds, setSelectedTrustIds] = useState<string[]>([])
 
   const builtinDenyDisplay = [
     { pattern: 'sudo:*', reason: t('shell.builtinDenyReason.privilege') },
     { pattern: 'doas:*', reason: t('shell.builtinDenyReason.privilege') },
-    { pattern: 'rm -rf:*', reason: t('shell.builtinDenyReason.destructiveDelete') },
+    { pattern: 'curl|sh / pipe_to_shell', reason: t('shell.builtinDenyReason.remoteScript') },
     { pattern: 'lark-cli:*', reason: t('shell.builtinDenyReason.useRunLarkCli') }
   ]
 
   const patch = (partial: Partial<ShellConfig>) => onChange((s) => ({ ...s, ...partial }))
+
+  const syncTrustedCommands = async () => {
+    const res = await window.api.shellManageTrustedCommands({ action: 'list' })
+    if (res.ok) patch({ trustedCommands: res.commands })
+  }
+
+  const removeSelectedTrusted = async () => {
+    if (!selectedTrustIds.length) return
+    const res = await window.api.shellManageTrustedCommands({ action: 'remove', ids: selectedTrustIds })
+    if (res.ok) {
+      patch({ trustedCommands: res.commands })
+      setSelectedTrustIds([])
+    }
+  }
+
+  const cleanExpiredTrusted = async () => {
+    const expiredCount = (shell.trustedCommands ?? []).filter((c) => c.expired).length
+    if (!expiredCount) return
+    modal.confirm({
+      title: t('shell.trust.cleanExpired'),
+      content: t('shell.trust.cleanExpiredConfirm', { count: expiredCount }),
+      onOk: async () => {
+        const res = await window.api.shellManageTrustedCommands({ action: 'cleanExpired' })
+        if (res.ok) {
+          patch({ trustedCommands: res.commands })
+          setSelectedTrustIds([])
+        }
+      }
+    })
+  }
 
   const addRule = () => {
     const id = `rule-${Date.now()}`
@@ -67,6 +106,75 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
         message={t('shell.boundaryTitle')}
         description={t('shell.boundaryDescription')}
       />
+      <ConfigSwitchRow
+        label={t('shell.autoAllow.title')}
+        hint={t('shell.autoAllow.description')}
+        checked={shell.autoAllowScriptExecution ?? false}
+        onChange={(enabled) => {
+          if (enabled) {
+            modal.confirm({
+              title: t('shell.autoAllow.confirmTitle'),
+              content: (
+                <div>
+                  <p>{t('shell.autoAllow.confirmMessage')}</p>
+                  <p>{t('shell.autoAllow.confirmWarning')}</p>
+                </div>
+              ),
+              okText: t('shell.autoAllow.confirmOk'),
+              cancelText: t('shell.autoAllow.confirmCancel'),
+              onOk: () => patch({ autoAllowScriptExecution: true })
+            })
+          } else {
+            patch({ autoAllowScriptExecution: false })
+          }
+        }}
+      />
+
+      <div>
+        <div className="config-skill-section-header">
+          <strong>{t('shell.trust.title')}</strong>
+          <Space size="small">
+            <Button size="small" disabled={!selectedTrustIds.length} onClick={() => void removeSelectedTrusted()}>
+              {t('shell.trust.batchDelete')}
+            </Button>
+            <Button size="small" onClick={() => void cleanExpiredTrusted()}>
+              {t('shell.trust.cleanExpired')}
+            </Button>
+            <Button size="small" onClick={() => void syncTrustedCommands()}>
+              {t('shell.trust.refresh')}
+            </Button>
+          </Space>
+        </div>
+        <Table
+          size="small"
+          pagination={false}
+          rowKey="id"
+          rowSelection={{
+            selectedRowKeys: selectedTrustIds,
+            onChange: (keys) => setSelectedTrustIds(keys as string[])
+          }}
+          dataSource={shell.trustedCommands ?? []}
+          locale={{ emptyText: t('shell.trust.empty') }}
+          columns={[
+            {
+              title: t('shell.columnPattern'),
+              dataIndex: 'command'
+            },
+            {
+              title: t('shell.trust.lastUsed'),
+              dataIndex: 'lastUsedAt',
+              width: 180,
+              render: (_, row) => formatTrustDate(row.lastUsedAt ?? row.createdAt)
+            },
+            {
+              title: t('shell.trust.status'),
+              width: 80,
+              render: (_, row) => (row.expired ? t('shell.trust.expired') : '—')
+            }
+          ]}
+        />
+      </div>
+
       <Form.Item label={t('shell.defaultTimeoutLabel')}>
         <InputNumber
           min={1}

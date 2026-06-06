@@ -25,11 +25,13 @@ import { SkillHintBubble } from './SkillHintBubble'
 import { ToolRowIcon } from './ToolRowIcon'
 import { ActivityBatch, type ActivityBatchSummary } from './ActivityBatch'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import type { FileConfirmMode } from '../../../shared/domainTypes'
+import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 
 export type ToolsInteractiveProps = {
   requestId: string
-  confirmMode: 'diff' | 'direct'
-  onToolConfirm: (toolUseId: string, approved: boolean) => void
+  confirmMode: FileConfirmMode
+  onToolConfirm: (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => void
   onToolCancel: (toolUseId: string) => void
 }
 
@@ -284,7 +286,7 @@ export const ChatBubble = memo(function ChatBubble({
         confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
         onConfirm={
           toolsInteractive && tc.status === 'confirming'
-            ? (approved) => toolsInteractive.onToolConfirm(tc.id, approved)
+            ? (approved, options) => toolsInteractive.onToolConfirm(tc.id, approved, options)
             : undefined
         }
         onCancel={

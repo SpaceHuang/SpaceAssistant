@@ -65,6 +65,20 @@
     "hintIdle": "Enter to send, Shift+Enter for newline",
     "hintRunning": "Running — Enter or click the button to stop"
   },
+  "toolCall": {
+    "confirm": {
+      "trustThisCommand": "Trust this command — don't ask again",
+      "trustThisDomain": "Trust this domain — don't ask again"
+    }
+  },
+  "toast": {
+    "trustCommandSuccess": "Trusted \"{{command}}\". Future runs won't ask for confirmation.",
+    "trustDomainSuccess": "Trusted \"{{domain}}\". Future visits won't ask for confirmation.",
+    "fileAutoApproved": "Auto-wrote {{path}} (+{{added}} / -{{removed}})."
+  },
+  "fileAutoApprove": {
+    "fallbackBanner": "Auto-approve failed: {{reason}}. Please confirm this write manually."
+  },
   "confirm": {
     "decisionAriaLabel": "Confirm: {{action}}",
     "write": {

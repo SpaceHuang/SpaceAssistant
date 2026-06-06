@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
-import type { ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
+import type { FileConfirmMode, ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
+import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import {
   hasShellOutput,
   hasTerminalScrollback,
@@ -38,7 +39,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
-  confirmMode: 'diff' | 'direct'
+  confirmMode: FileConfirmMode
   focus?: boolean
   workDir?: string
   messageId?: string
@@ -46,7 +47,7 @@ type Props = {
   shellConfig?: ShellConfig
   sessionMetadata?: Record<string, unknown>
   toolCalls?: ToolCallRecord[]
-  onConfirm?: (approved: boolean) => void
+  onConfirm?: ToolConfirmHandler
   onCancel?: () => void
   onOpenFile?: (relPath: string) => void
 }

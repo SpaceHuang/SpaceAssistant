@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import type { ToolCallRecord } from '../../../shared/domainTypes'
+import type { FileConfirmMode, ToolCallRecord } from '../../../shared/domainTypes'
+import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { ConfirmCardCollapsible } from './ConfirmCardCollapsible'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { pathBasename } from './toolCallDisplay'
@@ -8,13 +9,13 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
-  confirmMode: 'diff' | 'direct'
-  onConfirm: (approved: boolean) => void
+  confirmMode: FileConfirmMode
+  onConfirm: ToolConfirmHandler
 }
 
 const DISPLAY_MAX_LINES = 500
 
-function resolveDiffContent(record: ToolCallRecord, confirmMode: 'diff' | 'direct'): { oldText: string; newText: string; path: string } {
+function resolveDiffContent(record: ToolCallRecord, confirmMode: FileConfirmMode): { oldText: string; newText: string; path: string } {
   const path =
     record.confirmDiff?.oldPath ??
     (typeof record.input.path === 'string' ? record.input.path : '') ??
@@ -29,7 +30,7 @@ function resolveDiffContent(record: ToolCallRecord, confirmMode: 'diff' | 'direc
   if (record.toolName === 'write_file' && typeof record.input.content === 'string') {
     return { path, oldText: '', newText: record.input.content }
   }
-  if (confirmMode === 'direct' && typeof record.input.path === 'string') {
+  if (confirmMode === 'direct' && !record.confirmDiff && typeof record.input.path === 'string') {
     return { path: record.input.path, oldText: '', newText: '' }
   }
   return { path, oldText: '', newText: '' }
@@ -62,8 +63,15 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
       ? t('confirm.write.editAction', { fileName })
       : t('confirm.write.writeAction', { fileName })
 
+  const fallback = record.autoApproveFallback
+
   return (
     <div className="write-confirm-card">
+      {fallback ? (
+        <div className="write-confirm-card__fallback-banner" role="status">
+          {t('fileAutoApprove.fallbackBanner', { reason: fallback.reason })}
+        </div>
+      ) : null}
       <ConfirmCardDecision
         actionSummary={actionSummary}
         allowLabel={t('confirm.write.allow')}

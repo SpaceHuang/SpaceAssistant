@@ -7,9 +7,30 @@ import type { ShellPathLiteral, ShellPathVerdict } from './shellTypes'
 const READ_CMDS = new Set(['cat', 'type', 'more', 'head', 'tail', 'less', 'dir', 'copy', 'xcopy'])
 const PATH_FLAGS = new Set(['-f', '--file', '-o', '--output', '--git-dir'])
 
+/** Normalize Windows path tokens: strip \\?\ prefix, unify separators. */
+export function normalizeWindowsPath(token: string): string {
+  let s = token
+  if (s.startsWith('\\\\?\\')) {
+    s = s.slice(4)
+  }
+  if (s.startsWith('//?/')) {
+    s = s.slice(4)
+  }
+  return s.replace(/\\/g, '/')
+}
+
 function looksLikePath(token: string): boolean {
   if (!token || token.startsWith('-')) return false
-  if (token.includes(path.sep) || token.startsWith('.') || /^[a-zA-Z]:[/\\]/.test(token) || token.startsWith('/')) {
+  const normalized = normalizeWindowsPath(token)
+  if (
+    normalized.includes('/') ||
+    token.includes(path.sep) ||
+    normalized.startsWith('.') ||
+    /^[a-zA-Z]:\//.test(normalized) ||
+    /^[a-zA-Z]:[/\\]/.test(token) ||
+    normalized.startsWith('//') ||
+    normalized.startsWith('/')
+  ) {
     return true
   }
   return false
@@ -103,11 +124,12 @@ export async function verifyPathsInWorkDir(
 
   for (const lit of literals) {
     let resolved: string
+    const pathToken = normalizeWindowsPath(lit.raw)
     try {
-      if (path.isAbsolute(lit.raw)) {
-        resolved = path.resolve(lit.raw)
+      if (path.isAbsolute(pathToken) || path.isAbsolute(lit.raw)) {
+        resolved = path.resolve(pathToken.startsWith('//') && !pathToken.startsWith('//?') ? lit.raw : pathToken)
       } else {
-        resolved = resolveSafePath(workDir, lit.raw)
+        resolved = resolveSafePath(workDir, pathToken)
       }
       lit.resolved = resolved
     } catch {

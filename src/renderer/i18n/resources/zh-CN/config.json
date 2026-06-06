@@ -261,6 +261,19 @@
       "confirmModeLabel": "文件写入确认模式",
       "confirmDiff": "展示文件修改内容",
       "confirmDirect": "直接确认",
+      "confirmAuto": "自动放行安全写入",
+      "autoApprove": {
+        "description": "满足以下全部条件时自动执行，不弹出确认卡片：",
+        "conditionInWorkDir": "写入路径在工作目录内",
+        "conditionNotSensitive": "未命中敏感路径（密钥、凭据、配置目录等）",
+        "conditionMaxBytes": "单次写入 ≤ {{size}}",
+        "fallbackHint": "不满足时仍会弹出「展示文件修改内容」卡片。",
+        "confirmTitle": "确认切换为自动放行安全写入？",
+        "confirmMessage": "开启后，符合安全条件的 write_file / edit_file 调用将不再弹出确认卡片，仅在体量过大或命中敏感路径时回落为弹卡。",
+        "confirmWarning": "⚠️ 路径越权与敏感目录保护仍然有效。",
+        "confirmOk": "确认开启",
+        "confirmCancel": "取消"
+      },
       "checkpointLabel": "文件历史备份",
       "maxSnapshotsLabel": "每文件最多快照数"
     },
@@ -305,7 +318,28 @@
     "builtinDenyReason": {
       "privilege": "提权",
       "destructiveDelete": "破坏性删除",
+      "remoteScript": "远程脚本执行",
       "useRunLarkCli": "请使用 run_lark_cli"
+    },
+    "trust": {
+      "title": "已信任的 Shell 命令",
+      "expired": "已过期",
+      "batchDelete": "批量删除",
+      "cleanExpired": "清理过期记录",
+      "cleanExpiredConfirm": "确定清理 {{count}} 条过期记录？",
+      "lastUsed": "上次使用",
+      "status": "状态",
+      "empty": "暂无已信任命令",
+      "refresh": "刷新"
+    },
+    "autoAllow": {
+      "title": "大模型生成的脚本自动允许执行",
+      "description": "开启后，低风险 Shell 命令将直接执行，不再弹出确认卡片；高风险仍会被拦截。",
+      "confirmTitle": "确认开启自动执行？",
+      "confirmMessage": "开启后，模型生成的脚本将直接执行，不再弹出确认卡片。",
+      "confirmWarning": "⚠️ 请确保您信任当前工作环境，避免执行恶意命令。",
+      "confirmOk": "确认开启",
+      "confirmCancel": "取消"
     }
   },
   "browser": {
@@ -327,6 +361,11 @@
     "trustedDomainsLabel": "可信域名",
     "trustedDomainsHint": "列表内免确认；其余首次聊天确认，同会话不再问。",
     "trustedDomainsPlaceholder": "例：example.com",
+    "trust": {
+      "title": "可信域名（访问时无需确认）",
+      "addDomain": "添加域名",
+      "batchDelete": "清空全部"
+    },
     "allowHttpLabel": "允许 HTTP",
     "allowHttpHint": "关闭后只允许访问 https 链接。",
     "headlessLabel": "无头模式",

@@ -20,6 +20,20 @@ describe('WriteConfirmCard', () => {
     expect(screen.getByText('hello')).toBeDefined()
   })
 
+  it('shows auto approve fallback banner', () => {
+    render(
+      <WriteConfirmCard
+        record={record({
+          autoApproveFallback: { reason: '目标路径命中敏感目录', reasonCode: 'sensitive_path' }
+        })}
+        confirmMode="auto"
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/自动放行未通过/)).toBeDefined()
+    expect(screen.getByText(/目标路径命中敏感目录/)).toBeDefined()
+  })
+
   it('shows expand control when diff exceeds collapsed line budget', () => {
     const lines = Array.from({ length: 14 }, (_, i) => `line-${i}`).join('\n')
     render(

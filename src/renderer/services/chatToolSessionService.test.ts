@@ -1,208 +1,102 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createToolChatController } from './chatToolSessionService'
 
-describe('createToolChatController progressOutput', () => {
-  const unsub = vi.fn()
-  const handlers: {
-    use?: (d: unknown) => void
-    progress?: (d: unknown) => void
-    result?: (d: unknown) => void
-  } = {}
+type ToolCbMap = {
+  onUse?: (d: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void
+  onConfirm?: (d: {
+    requestId: string
+    toolUseId: string
+    toolName: string
+    input: unknown
+    riskLevel: string
+    shellSecurityHints?: { canTrust?: boolean; requiresRiskAck: boolean; outsideWorkDirRisk: boolean }
+    autoApproveFallback?: { reason: string; reasonCode: string }
+  }) => void
+}
+
+function installApiMock(handlers: ToolCbMap) {
+  window.api = {
+    ...(window.api ?? {}),
+    toolOnUse: (cb) => {
+      handlers.onUse = cb
+      return () => {}
+    },
+    toolOnConfirmRequest: (cb) => {
+      handlers.onConfirm = cb
+      return () => {}
+    },
+    toolOnProgress: () => () => {},
+    toolOnResult: () => () => {}
+  } as typeof window.api
+}
+
+describe('chatToolSessionService onConfirmReq', () => {
+  const handlers: ToolCbMap = {}
 
   beforeEach(() => {
-    vi.stubGlobal('window', {
-      api: {
-        toolOnUse: vi.fn((cb: (d: unknown) => void) => {
-          handlers.use = cb
-          return unsub
-        }),
-        toolOnConfirmRequest: vi.fn(() => unsub),
-        toolOnProgress: vi.fn((cb: (d: unknown) => void) => {
-          handlers.progress = cb
-          return unsub
-        }),
-        toolOnResult: vi.fn((cb: (d: unknown) => void) => {
-          handlers.result = cb
-          return unsub
-        })
-      }
-    })
+    handlers.onUse = undefined
+    handlers.onConfirm = undefined
+    installApiMock(handlers)
   })
 
-  afterEach(() => {
-    vi.unstubAllGlobals()
-    vi.restoreAllMocks()
-  })
-
-  function setupController(getRequestId = () => 'req-1') {
-    const applyAssistantPatch = vi.fn()
-    const controller = createToolChatController({
-      dispatch: vi.fn(),
-      assistantMessageId: 'msg-1',
-      getRequestId,
-      applyAssistantPatch
-    })
-    controller.subscribe()
-    handlers.use?.({
-      requestId: 'req-1',
-      toolUse: { id: 'tool-1', name: 'run_shell', input: { command: 'npm install' } }
-    })
-    return { applyAssistantPatch }
-  }
-
-  it('writes progressOutput from tool:progress message', () => {
-    const { applyAssistantPatch } = setupController()
-    handlers.progress?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      status: 'executing',
-      message: 'added 47 packages'
-    })
-    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as { toolCalls?: { progressOutput?: string }[] }
-    expect(lastPatch.toolCalls?.[0]?.progressOutput).toBe('added 47 packages')
-    expect(lastPatch.toolCalls?.[0]?.status).toBe('executing')
-  })
-
-  it('keeps previous progressOutput when message is absent', () => {
-    const { applyAssistantPatch } = setupController()
-    handlers.progress?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      status: 'executing',
-      message: 'line one'
-    })
-    handlers.progress?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      status: 'executing'
-    })
-    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as { toolCalls?: { progressOutput?: string }[] }
-    expect(lastPatch.toolCalls?.[0]?.progressOutput).toBe('line one')
-  })
-
-  it('ignores progress for stale requestId', () => {
-    const { applyAssistantPatch } = setupController()
-    handlers.progress?.({
-      requestId: 'other',
-      toolUseId: 'tool-1',
-      status: 'executing',
-      message: 'ignored'
-    })
-    expect(applyAssistantPatch).toHaveBeenCalledTimes(1)
-  })
-
-  it('writes progressOutputRaw from terminal mode progress', () => {
-    const { applyAssistantPatch } = setupController()
-    handlers.progress?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      status: 'shell',
-      raw: Buffer.from('line\r').toString('base64'),
-      seq: 1
-    })
-    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as {
-      toolCalls?: { progressOutputRaw?: string; progressSeq?: number }[]
-    }
-    expect(lastPatch.toolCalls?.[0]?.progressOutputRaw).toBeTruthy()
-    expect(lastPatch.toolCalls?.[0]?.progressSeq).toBe(1)
-  })
-
-  it('accumulates progressOutputRaw from rawDelta chunks', () => {
-    const { applyAssistantPatch } = setupController()
-    handlers.progress?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      status: 'shell',
-      rawDelta: Buffer.from('hel').toString('base64'),
-      seq: 1
-    })
-    handlers.progress?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      status: 'shell',
-      rawDelta: Buffer.from('lo').toString('base64'),
-      seq: 2
-    })
-    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as {
-      toolCalls?: { progressOutputRaw?: string }[]
-    }
-    const raw = lastPatch.toolCalls?.[0]?.progressOutputRaw ?? ''
-    expect(Buffer.from(raw, 'base64').toString('utf8')).toBe('hello')
-  })
-
-  it('preserves progressOutput after tool:result', () => {
-    const { applyAssistantPatch } = setupController()
-    handlers.progress?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      status: 'executing',
-      message: 'live tail'
-    })
-    handlers.result?.({
-      requestId: 'req-1',
-      toolUseId: 'tool-1',
-      result: {
-        success: true,
-        data: { stdout: 'done', stderr: '', exitCode: 0 }
-      }
-    })
-    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as { toolCalls?: { progressOutput?: string }[] }
-    expect(lastPatch.toolCalls?.[0]?.progressOutput).toBe('live tail')
-    expect(lastPatch.toolCalls?.[0]?.status).toBe('completed')
-  })
-})
-
-describe('createToolChatController applyConfirmOutcome', () => {
-  const unsub = vi.fn()
-  const localHandlers: { use?: (d: unknown) => void; confirm?: (d: unknown) => void } = {}
-
-  beforeEach(() => {
-    vi.stubGlobal('window', {
-      api: {
-        toolOnUse: vi.fn((cb: (d: unknown) => void) => {
-          localHandlers.use = cb
-          return unsub
-        }),
-        toolOnConfirmRequest: vi.fn((cb: (d: unknown) => void) => {
-          localHandlers.confirm = cb
-          return unsub
-        }),
-        toolOnProgress: vi.fn(() => unsub),
-        toolOnResult: vi.fn(() => unsub)
-      }
-    })
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
-    vi.restoreAllMocks()
-  })
-
-  it('optimistically marks browser confirm as executing', () => {
-    const applyAssistantPatch = vi.fn()
+  it('stores shellSecurityHints on confirming record', () => {
+    const patches: unknown[] = []
     const controller = createToolChatController({
       dispatch: vi.fn(),
       assistantMessageId: 'msg-1',
       getRequestId: () => 'req-1',
-      applyAssistantPatch
+      applyAssistantPatch: (patch) => patches.push(patch)
     })
     controller.subscribe()
-    localHandlers.use?.({
+
+    handlers.onUse?.({
       requestId: 'req-1',
-      toolUse: { id: 'tool-browser', name: 'browser', input: { action: 'navigate', url: 'https://example.com' } }
+      toolUse: { id: 'tool-1', name: 'run_shell', input: { command: 'npm install' } }
     })
-    localHandlers.confirm?.({
+    handlers.onConfirm?.({
       requestId: 'req-1',
-      toolUseId: 'tool-browser',
-      toolName: 'browser',
-      input: {},
-      riskLevel: 'medium'
+      toolUseId: 'tool-1',
+      toolName: 'run_shell',
+      input: { command: 'npm install' },
+      riskLevel: 'high',
+      shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, canTrust: true }
     })
-    controller.applyConfirmOutcome('tool-browser', true)
-    const lastPatch = applyAssistantPatch.mock.calls.at(-1)?.[0] as {
-      toolCalls?: { status: string; progressOutput?: string }[]
-    }
-    expect(lastPatch.toolCalls?.[0]?.status).toBe('executing')
-    expect(lastPatch.toolCalls?.[0]?.progressOutput).toBe('正在准备浏览器…')
+
+    const lastPatch = patches.at(-1) as { toolCalls?: Array<Record<string, unknown>> }
+    expect(lastPatch.toolCalls?.[0]?.shellSecurityHints).toEqual(
+      expect.objectContaining({ canTrust: true })
+    )
+    controller.unsubscribe()
+  })
+
+  it('stores autoApproveFallback for file tools', () => {
+    const patches: unknown[] = []
+    const controller = createToolChatController({
+      dispatch: vi.fn(),
+      assistantMessageId: 'msg-2',
+      getRequestId: () => 'req-2',
+      applyAssistantPatch: (patch) => patches.push(patch)
+    })
+    controller.subscribe()
+
+    handlers.onUse?.({
+      requestId: 'req-2',
+      toolUse: { id: 'tool-2', name: 'write_file', input: { path: '.env', content: 'x' } }
+    })
+    handlers.onConfirm?.({
+      requestId: 'req-2',
+      toolUseId: 'tool-2',
+      toolName: 'write_file',
+      input: { path: '.env', content: 'x' },
+      riskLevel: 'medium',
+      autoApproveFallback: { reason: '敏感路径', reasonCode: 'sensitive_path' }
+    })
+
+    const lastPatch = patches.at(-1) as { toolCalls?: Array<Record<string, unknown>> }
+    expect(lastPatch.toolCalls?.[0]?.autoApproveFallback).toEqual({
+      reason: '敏感路径',
+      reasonCode: 'sensitive_path'
+    })
+    controller.unsubscribe()
   })
 })

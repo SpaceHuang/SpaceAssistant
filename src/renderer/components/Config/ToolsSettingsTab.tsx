@@ -1,4 +1,5 @@
-import { Button, Form, Input, InputNumber, Radio, Space, Switch } from 'antd'
+import { App, Button, Form, Input, InputNumber, Radio, Space, Switch } from 'antd'
+import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
@@ -10,7 +11,7 @@ import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 export type ToolsSettingsUi = {
-  confirmMode: 'diff' | 'direct'
+  confirmMode: FileConfirmMode
   deniedTools: string[]
   pythonPath: string
   scriptTimeout: number
@@ -108,8 +109,28 @@ export function ToolsSettingsTab({
   pyTesting,
   onTestPython
 }: Props) {
+  const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
   const hint = getToolsSettingsSectionHint(section, t)
+
+  const handleConfirmModeChange = (next: FileConfirmMode) => {
+    if (next === 'auto' && toolUi.confirmMode !== 'auto') {
+      modal.confirm({
+        title: t('tools.file.autoApprove.confirmTitle'),
+        content: (
+          <div>
+            <p>{t('tools.file.autoApprove.confirmMessage')}</p>
+            <p>{t('tools.file.autoApprove.confirmWarning')}</p>
+          </div>
+        ),
+        okText: t('tools.file.autoApprove.confirmOk'),
+        cancelText: t('tools.file.autoApprove.confirmCancel'),
+        onOk: () => setToolUi((s) => ({ ...s, confirmMode: 'auto' }))
+      })
+      return
+    }
+    setToolUi((s) => ({ ...s, confirmMode: next }))
+  }
 
   const renderSection = () => {
     switch (section) {
@@ -125,14 +146,25 @@ export function ToolsSettingsTab({
         return (
           <>
             <Form.Item label={t('tools.file.confirmModeLabel')}>
-              <Radio.Group
-                value={toolUi.confirmMode}
-                onChange={(e) => setToolUi((s) => ({ ...s, confirmMode: e.target.value }))}
-              >
-                <Radio value="diff">{t('tools.file.confirmDiff')}</Radio>
-                <Radio value="direct">{t('tools.file.confirmDirect')}</Radio>
+              <Radio.Group value={toolUi.confirmMode} onChange={(e) => handleConfirmModeChange(e.target.value)}>
+                <Space direction="vertical">
+                  <Radio value="diff">{t('tools.file.confirmDiff')}</Radio>
+                  <Radio value="direct">{t('tools.file.confirmDirect')}</Radio>
+                  <Radio value="auto">{t('tools.file.confirmAuto')}</Radio>
+                </Space>
               </Radio.Group>
             </Form.Item>
+            {toolUi.confirmMode === 'auto' ? (
+              <div className="config-field__hint">
+                <p>{t('tools.file.autoApprove.description')}</p>
+                <ul>
+                  <li>{t('tools.file.autoApprove.conditionInWorkDir')}</li>
+                  <li>{t('tools.file.autoApprove.conditionNotSensitive')}</li>
+                  <li>{t('tools.file.autoApprove.conditionMaxBytes', { size: '256 KB' })}</li>
+                </ul>
+                <p>{t('tools.file.autoApprove.fallbackHint')}</p>
+              </div>
+            ) : null}
             <Form.Item label={t('tools.file.checkpointLabel')} className="config-form-item-inline">
               <Switch
                 checked={toolUi.fileCheckpointingEnabled}

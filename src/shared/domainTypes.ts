@@ -13,9 +13,11 @@ export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export type ToolCallStatus = 'calling' | 'confirming' | 'executing' | 'completed' | 'failed' | 'rejected'
 
+export type FileConfirmMode = 'diff' | 'direct' | 'auto'
+
 export interface ToolsConfig {
   enabled: boolean
-  confirmMode: 'diff' | 'direct'
+  confirmMode: FileConfirmMode
   allowedTools: string[]
   deniedTools: string[]
   pythonPath: string
@@ -23,6 +25,8 @@ export interface ToolsConfig {
   fileCheckpointingEnabled: boolean
   maxFileSnapshots: number
   grepTimeoutSec: number
+  autoApproveMaxBytes?: number
+  autoApproveMaxEditChars?: number
 }
 
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
@@ -34,7 +38,9 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   scriptTimeout: 300,
   fileCheckpointingEnabled: true,
   maxFileSnapshots: 100,
-  grepTimeoutSec: 60
+  grepTimeoutSec: 60,
+  autoApproveMaxBytes: 256 * 1024,
+  autoApproveMaxEditChars: 64 * 1024
 }
 
 export function mergeToolsConfig(partial?: Partial<ToolsConfig> | null): ToolsConfig {
@@ -114,6 +120,24 @@ export interface ShellSecurityHints {
   warnings?: string[]
   scannedPaths?: string[]
   violationCodes?: string[]
+  validatorId?: string
+  denyType?: 'strong' | 'weak'
+  securityWarning?: string
+  /** 是否可在确认卡勾选「信任此命令」 */
+  canTrust?: boolean
+}
+
+export interface TrustedShellCommand {
+  id: string
+  command: string
+  createdAt: number
+  lastUsedAt?: number
+  expired?: boolean
+}
+
+export interface AutoApproveFallback {
+  reason: string
+  reasonCode: string
 }
 
 export type ShellOutputMode = 'plain' | 'terminal'
@@ -137,13 +161,16 @@ export interface ShellConfig {
   customSensitivePrefixes?: string[]
   /** plain：v1 纯文本；terminal：xterm + scrollback（默认） */
   outputMode?: ShellOutputMode
+  trustedCommands?: TrustedShellCommand[]
+  autoAllowScriptExecution?: boolean
 }
 
 export const DEFAULT_SHELL_CONFIG: ShellConfig = {
   enabled: false,
   shellDefaultTimeoutSec: 300,
   maxInlineOutputBytes: 102400,
-  outputMode: 'terminal'
+  outputMode: 'terminal',
+  autoAllowScriptExecution: false
 }
 
 export function mergeShellConfig(partial?: Partial<ShellConfig> | null): ShellConfig {
@@ -155,7 +182,10 @@ export function mergeShellConfig(partial?: Partial<ShellConfig> | null): ShellCo
     argsPrefix: Array.isArray(partial.argsPrefix) ? [...partial.argsPrefix] : partial.argsPrefix,
     customSensitivePrefixes: Array.isArray(partial.customSensitivePrefixes)
       ? [...partial.customSensitivePrefixes]
-      : partial.customSensitivePrefixes
+      : partial.customSensitivePrefixes,
+    trustedCommands: Array.isArray(partial.trustedCommands)
+      ? [...partial.trustedCommands]
+      : partial.trustedCommands
   }
 }
 
@@ -429,6 +459,8 @@ export interface ToolCallRecord {
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
   /** run_shell 路径/安全警示（确认卡片展示） */
   shellSecurityHints?: ShellSecurityHints
+  /** 文件 auto 模式回落 diff 时的原因 */
+  autoApproveFallback?: AutoApproveFallback
   confirmedAt?: number
   startedAt?: number
   completedAt?: number

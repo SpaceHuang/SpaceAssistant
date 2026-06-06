@@ -3,7 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { analyzeShellCommand } from './analyzeShellCommand'
-import { extractPathLiterals, verifyPathsInWorkDir } from './shellPathAnalysis'
+import { extractPathLiterals, normalizeWindowsPath, verifyPathsInWorkDir } from './shellPathAnalysis'
 
 describe('shellPathAnalysis', () => {
   let tmpDir: string
@@ -37,6 +37,19 @@ describe('shellPathAnalysis', () => {
     const analysis = await analyzeShellCommand(workDir, 'npm run build', process.platform)
     expect(analysis.shellSecurityHints.outsideWorkDirRisk).toBe(true)
     expect(analysis.shellSecurityHints.requiresRiskAck).toBe(true)
+  })
+
+  it('normalizes Windows extended-length paths', () => {
+    expect(normalizeWindowsPath('\\\\?\\C:\\Users\\test')).toBe('C:/Users/test')
+  })
+
+  it('normalizes backslash paths for detection', () => {
+    expect(normalizeWindowsPath('src\\main.ts')).toBe('src/main.ts')
+  })
+
+  it('detects UNC paths as path-like tokens', () => {
+    const literals = extractPathLiterals('type \\\\server\\share\\file.txt', 0)
+    expect(literals.length).toBeGreaterThan(0)
   })
 
   it('cd outside workdir warns', async () => {

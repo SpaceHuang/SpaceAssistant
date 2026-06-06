@@ -1,5 +1,6 @@
 import type {
   AppConfig,
+  AutoApproveFallback,
   FileInfo,
   Message,
   ProjectMemoryState,
@@ -15,9 +16,24 @@ import type {
   ToolsConfig,
   ShellConfig,
   ShellSecurityHints,
+  TrustedShellCommand,
   WikiConfig,
   WikiStatus
 } from './domainTypes'
+
+export type ToolConfirmResponsePayload = {
+  requestId: string
+  toolUseId: string
+  approved: boolean
+  trustCommand?: string
+  trustDomain?: string
+}
+
+export type ShellManageTrustedCommandsAction =
+  | { action: 'list' }
+  | { action: 'add'; command: string }
+  | { action: 'remove'; ids: string[] }
+  | { action: 'cleanExpired' }
 import type {
   FeishuCliDetectResult,
   FeishuConfig,
@@ -189,7 +205,7 @@ export type SpaceAssistantApi = {
 
   sessionOnTitleGenerated: (cb: (data: { session: Session }) => void) => () => void
 
-  toolConfirmResponse: (payload: { requestId: string; toolUseId: string; approved: boolean }) => Promise<void>
+  toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
   toolOnUse: (cb: (data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void) => () => void
   toolOnConfirmRequest: (
@@ -201,6 +217,7 @@ export type SpaceAssistantApi = {
       riskLevel: ToolRiskLevel
       diff?: { oldContent: string; newContent: string; oldPath: string }
       shellSecurityHints?: ShellSecurityHints
+      autoApproveFallback?: AutoApproveFallback
     }) => void
   ) => () => void
   toolOnProgress: (
@@ -214,6 +231,9 @@ export type SpaceAssistantApi = {
     }) => void
   ) => () => void
   shellOpenTerminal: (payload: { cwd: string }) => Promise<{ ok: true } | { ok: false; error: string }>
+  shellManageTrustedCommands: (
+    payload: ShellManageTrustedCommandsAction
+  ) => Promise<{ ok: true; commands: TrustedShellCommand[] } | { ok: false; error: string }>
   toolOnResult: (
     cb: (data: { requestId: string; toolUseId: string; result: ToolCallResultPersisted }) => void
   ) => () => void

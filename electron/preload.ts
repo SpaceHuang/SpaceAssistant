@@ -85,7 +85,8 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('session:title-generated', fn)
   },
 
-  toolConfirmResponse: (payload) => ipcRenderer.invoke('tool:confirm-response', payload),
+  toolConfirmResponse: (payload: import('../src/shared/api').ToolConfirmResponsePayload) =>
+    ipcRenderer.invoke('tool:confirm-response', payload),
   toolCancel: (payload) => ipcRenderer.invoke('tool:cancel', payload),
   toolOnUse: (cb) => {
     const fn = (_e: unknown, data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => cb(data)
@@ -103,6 +104,7 @@ const api: SpaceAssistantApi = {
         riskLevel: 'low' | 'medium' | 'high'
         diff?: { oldContent: string; newContent: string; oldPath: string }
         shellSecurityHints?: import('../src/shared/domainTypes').ShellSecurityHints
+        autoApproveFallback?: import('../src/shared/domainTypes').AutoApproveFallback
       }
     ) => cb(data)
     ipcRenderer.on('tool:confirm-request', fn)
@@ -124,6 +126,7 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('shell:test-executable', payload),
   shellOpenOutputPath: (absPath: string) => ipcRenderer.invoke('shell:open-output-path', absPath),
   shellOpenTerminal: (payload: { cwd: string }) => ipcRenderer.invoke('shell:open-terminal', payload),
+  shellManageTrustedCommands: (payload) => ipcRenderer.invoke('shell:manage-trusted-commands', payload),
 
   browserDetect: (force?: boolean) => ipcRenderer.invoke('browser:detect', force),
   browserOpenTerminal: () => ipcRenderer.invoke('browser:open-terminal'),

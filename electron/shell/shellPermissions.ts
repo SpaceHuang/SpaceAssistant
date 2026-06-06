@@ -10,8 +10,6 @@ export interface ShellPermissionResult {
 const BUILTIN_DENY: Array<{ pattern: string; reason: string }> = [
   { pattern: 'sudo:*', reason: '提权' },
   { pattern: 'doas:*', reason: '提权' },
-  { pattern: 'rm -rf:*', reason: '破坏性删除' },
-  { pattern: 'rm -r -f:*', reason: '破坏性删除' },
   { pattern: 'lark-cli:*', reason: '请使用 run_lark_cli' }
 ]
 
@@ -66,10 +64,6 @@ export function evaluateShellPermission(
     if (matchGlob(builtin.pattern.replace(':*', '*'), cmd)) {
       return { decision: 'deny', reason: builtin.reason, builtin: true }
     }
-  }
-
-  if (/curl.*\|.*\bsh\b/i.test(cmd) || /wget.*\|.*\bsh\b/i.test(cmd)) {
-    return { decision: 'deny', reason: '远程脚本管道', builtin: true }
   }
 
   const rules = userRules ?? []

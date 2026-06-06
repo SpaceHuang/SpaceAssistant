@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ShellConfirmCard } from './ShellConfirmCard'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
@@ -46,6 +46,75 @@ describe('ShellConfirmCard', () => {
     expect(screen.getByText(/下载 Playwright Chromium/)).toBeTruthy()
     expect(screen.getByText(/npm install/)).toBeTruthy()
     expect(document.querySelector('.shell-tui-fallback')).toBeNull()
+  })
+
+  it('shows security warning for weak deny validators', () => {
+    render(
+      <ShellConfirmCard
+        record={record({
+          input: { command: 'git reset --hard origin/main' },
+          shellSecurityHints: {
+            requiresRiskAck: true,
+            outsideWorkDirRisk: false,
+            validatorId: 'dangerous_git',
+            denyType: 'weak',
+            securityWarning: '警告：此操作可能导致数据丢失\n\ngit reset --hard 会永久删除未提交的修改。\n\n确认执行？'
+          }
+        })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByText('警告：此操作可能导致数据丢失')).toBeTruthy()
+    expect(screen.getByText(/会永久删除未提交的修改/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '我了解风险，确认执行' })).toBeTruthy()
+  })
+
+  it('shows trust checkbox when canTrust', () => {
+    render(
+      <ShellConfirmCard
+        record={record({
+          shellSecurityHints: {
+            requiresRiskAck: false,
+            outsideWorkDirRisk: false,
+            canTrust: true
+          }
+        })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByLabelText(/信任此命令/)).toBeTruthy()
+  })
+
+  it('hides trust checkbox when canTrust is false', () => {
+    render(
+      <ShellConfirmCard
+        record={record({
+          shellSecurityHints: {
+            requiresRiskAck: true,
+            outsideWorkDirRisk: false,
+            canTrust: false
+          }
+        })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.queryByLabelText(/信任此命令/)).toBeNull()
+  })
+
+  it('passes trustCommand when checkbox checked and approved', () => {
+    const onConfirm = vi.fn()
+    render(
+      <ShellConfirmCard
+        record={record({
+          input: { command: 'npm install' },
+          shellSecurityHints: { requiresRiskAck: false, outsideWorkDirRisk: false, canTrust: true }
+        })}
+        onConfirm={onConfirm}
+      />
+    )
+    fireEvent.click(screen.getByLabelText(/信任此命令/))
+    fireEvent.click(screen.getByRole('button', { name: '确认执行' }))
+    expect(onConfirm).toHaveBeenCalledWith(true, { trustCommand: 'npm install' })
   })
 
   it('shows TUI fallback hint for vim', () => {

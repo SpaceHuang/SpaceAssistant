@@ -1,4 +1,5 @@
-import type { ToolCallRecord, ToolRiskLevel } from '../../shared/domainTypes'
+import type { AutoApproveFallback, ShellSecurityHints, ToolCallRecord, ToolRiskLevel } from '../../shared/domainTypes'
+import type { ToolConfirmOptions } from '../../shared/toolConfirm'
 import { resolveSessionIdForRequest } from './runRequestIndex'
 
 export type PendingConfirmItem = {
@@ -9,6 +10,8 @@ export type PendingConfirmItem = {
   input: unknown
   riskLevel: ToolRiskLevel
   diff?: ToolCallRecord['confirmDiff']
+  shellSecurityHints?: ShellSecurityHints
+  autoApproveFallback?: AutoApproveFallback
   createdAt: number
 }
 
@@ -37,6 +40,8 @@ class PendingConfirmStore {
         input: d.input,
         riskLevel: d.riskLevel,
         diff: d.diff,
+        shellSecurityHints: d.shellSecurityHints,
+        autoApproveFallback: d.autoApproveFallback,
         createdAt: Date.now()
       })
       this.notify()
@@ -74,8 +79,14 @@ class PendingConfirmStore {
     return () => this.listeners.delete(listener)
   }
 
-  respond(requestId: string, toolUseId: string, approved: boolean): void {
-    void window.api.toolConfirmResponse({ requestId, toolUseId, approved })
+  respond(requestId: string, toolUseId: string, approved: boolean, options?: ToolConfirmOptions): void {
+    void window.api.toolConfirmResponse({
+      requestId,
+      toolUseId,
+      approved,
+      trustCommand: options?.trustCommand,
+      trustDomain: options?.trustDomain
+    })
     this.remove(requestId, toolUseId)
   }
 

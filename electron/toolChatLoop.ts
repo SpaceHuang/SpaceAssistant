@@ -12,7 +12,15 @@ import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolExecutorResult } from './tools/types'
-import type { BrowserConfig, ShellConfig, ShellSecurityHints, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
+import type {
+  AutoApproveFallback,
+  BrowserConfig,
+  ShellConfig,
+  ShellSecurityHints,
+  ToolsConfig,
+  WikiConfig
+} from '../src/shared/domainTypes'
+import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
 import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
@@ -42,6 +50,7 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import {
   logShellPathConfirm,
   logShellSecurityDeny,
+  logShellWeakDenyOutcome,
   precheckRunShellTool,
   type RunShellPrecheckResult
 } from './shell/shellToolLoopHelpers'
@@ -686,14 +695,17 @@ async function runToolChatSessionInner(
           command,
           workDir,
           userDataDir,
-          shellConfig
+          shellConfig,
+          appDb
         })
         if (!shellPrecheck.ok) {
           logShellSecurityDeny({
             requestId,
             sessionId,
             command,
-            reason: shellPrecheck.auditReason
+            reason: shellPrecheck.auditReason,
+            validatorId: shellPrecheck.validatorId,
+            denyType: shellPrecheck.denyType
           })
           logToolLoopError(
             { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
@@ -726,6 +738,36 @@ async function runToolChatSessionInner(
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
+      let autoApproveFallback: AutoApproveFallback | undefined
+      let fileAutoApproved = false
+      if (
+        (toolName === 'write_file' || toolName === 'edit_file') &&
+        toolsConfig.confirmMode === 'auto'
+      ) {
+        const autoEval = await evaluateFileToolAutoApproval({
+          workDir,
+          userDataDir,
+          toolsConfig,
+          shellConfig,
+          toolName,
+          input: inputObj
+        })
+        if (autoEval.approve) {
+          fileAutoApproved = true
+        } else {
+          autoApproveFallback = { reason: autoEval.reason, reasonCode: autoEval.reasonCode }
+          logAgentEvent('info', 'file.auto_approve.fallback', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            relPath: typeof inputObj.path === 'string' ? inputObj.path : '',
+            reason: autoEval.reason,
+            reasonCode: autoEval.reasonCode
+          })
+        }
+      }
+
       let needsConfirm = toolNeedsUserConfirmation(
         toolName,
         inputObj,
@@ -734,6 +776,9 @@ async function runToolChatSessionInner(
         sessionId
       )
       if (toolName === 'run_shell' && shellPrecheck?.ok && shellPrecheck.skipConfirm) {
+        needsConfirm = false
+      }
+      if (fileAutoApproved) {
         needsConfirm = false
       }
 
@@ -756,8 +801,11 @@ async function runToolChatSessionInner(
           outcome = 'rejected'
         }
       } else if (needsConfirm) {
-        const diff =
-          toolsConfig.confirmMode === 'diff' ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
+        const useDiff =
+          toolsConfig.confirmMode === 'diff' ||
+          toolsConfig.confirmMode === 'auto' ||
+          Boolean(autoApproveFallback)
+        const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
         safeWebContentsSend(sender,'tool:confirm-request', {
           requestId,
           toolUseId,
@@ -766,27 +814,48 @@ async function runToolChatSessionInner(
           riskLevel:
             toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
           ...(diff ? { diff } : {}),
-          ...(shellSecurityHints ? { shellSecurityHints } : {})
+          ...(shellSecurityHints ? { shellSecurityHints } : {}),
+          ...(autoApproveFallback ? { autoApproveFallback } : {})
         })
         outcome = await waitForToolConfirm(requestId, toolUseId)
         if (toolName === 'run_shell' && shellSecurityHints) {
           const command = typeof inputObj.command === 'string' ? inputObj.command : ''
           if (outcome === 'approved' && shellSecurityHints.requiresRiskAck) {
-            logShellPathConfirm({
-              requestId,
-              sessionId,
-              command,
-              outcome: 'confirm',
-              hints: shellSecurityHints
-            })
+            if (shellSecurityHints.securityWarning) {
+              logShellWeakDenyOutcome({
+                requestId,
+                sessionId,
+                command,
+                outcome: 'confirm',
+                hints: shellSecurityHints
+              })
+            } else {
+              logShellPathConfirm({
+                requestId,
+                sessionId,
+                command,
+                outcome: 'confirm',
+                hints: shellSecurityHints
+              })
+            }
           } else if (outcome === 'rejected' && shellSecurityHints.requiresRiskAck) {
-            logShellPathConfirm({
-              requestId,
-              sessionId,
-              command,
-              outcome: 'reject',
-              hints: shellSecurityHints
-            })
+            if (shellSecurityHints.securityWarning) {
+              logShellWeakDenyOutcome({
+                requestId,
+                sessionId,
+                command,
+                outcome: 'reject',
+                hints: shellSecurityHints
+              })
+            } else {
+              logShellPathConfirm({
+                requestId,
+                sessionId,
+                command,
+                outcome: 'reject',
+                hints: shellSecurityHints
+              })
+            }
           }
         }
         logAgentEvent('info', 'tool.confirm', {
@@ -988,6 +1057,17 @@ async function runToolChatSessionInner(
       }
 
       const durationMs = Date.now() - execStartedAt
+      if (execResult.success && fileAutoApproved && (toolName === 'write_file' || toolName === 'edit_file')) {
+        logAgentEvent('info', 'file.auto_approve', {
+          requestId,
+          sessionId,
+          toolUseId,
+          tool: toolName,
+          relPath: typeof inputObj.path === 'string' ? inputObj.path : '',
+          timestamp: Date.now()
+        })
+      }
+
       if (execResult.success) {
         logAgentEvent('info', 'tool.result', {
           requestId,

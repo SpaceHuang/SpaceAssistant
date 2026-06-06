@@ -145,15 +145,31 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         </ConfigSettingsStack>
       </section>
 
-      <ConfigField label={t('browser.trustedDomainsLabel')} hint={t('browser.trustedDomainsHint')}>
-        <Select
-          mode="tags"
-          placeholder={t('browser.trustedDomainsPlaceholder')}
-          value={browser.trustedDomains}
-          onChange={(v) => patch({ trustedDomains: v })}
-          classNames={configModalSelectPopupClassNames}
-        />
-      </ConfigField>
+      <section className="browser-trust-section">
+        <h3 className="config-section-title">{t('browser.trust.title')}</h3>
+        <p className="config-field__hint">{t('browser.trustedDomainsHint')}</p>
+        <ConfigField label={t('browser.trust.addDomain')}>
+          <Select
+            mode="tags"
+            placeholder={t('browser.trustedDomainsPlaceholder')}
+            value={browser.trustedDomains}
+            onChange={(v) => patch({ trustedDomains: v.map((d) => d.trim().toLowerCase()).filter(Boolean) })}
+            classNames={configModalSelectPopupClassNames}
+          />
+        </ConfigField>
+        {browser.trustedDomains.length > 0 ? (
+          <div className="browser-trust-section__actions">
+            <Button
+              size="small"
+              danger
+              disabled={!browser.trustedDomains.length}
+              onClick={() => patch({ trustedDomains: [] })}
+            >
+              {t('browser.trust.batchDelete')}
+            </Button>
+          </div>
+        ) : null}
+      </section>
 
       <ConfigSwitchRow
         label={t('browser.allowHttpLabel')}

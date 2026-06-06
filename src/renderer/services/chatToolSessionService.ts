@@ -1,7 +1,7 @@
 import { patchMessage } from '../store/chatSlice'
 import { appendProgressOutputRaw } from '../../shared/terminalScrollback'
 import type { AppDispatch } from '../store'
-import type { ToolCallRecord, ToolCallResultPersisted, Message } from '../../shared/domainTypes'
+import type { AutoApproveFallback, ShellSecurityHints, ToolCallRecord, ToolCallResultPersisted, Message } from '../../shared/domainTypes'
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
 import { buildClaudeToolChatMessages } from '../../shared/claudeToolHistory'
@@ -65,16 +65,24 @@ export function createToolChatController(args: {
     input: unknown
     riskLevel: ToolCallRecord['riskLevel']
     diff?: ToolCallRecord['confirmDiff']
+    shellSecurityHints?: ShellSecurityHints
+    autoApproveFallback?: AutoApproveFallback
   }) => {
     if (d.requestId !== getRequestId()) return
     const i = records.findIndex((t) => t.id === d.toolUseId)
     if (i >= 0) {
-      records[i] = { ...records[i]!, status: 'confirming', ...(d.diff ? { confirmDiff: d.diff } : {}) }
+      records[i] = {
+        ...records[i]!,
+        status: 'confirming',
+        riskLevel: d.riskLevel ?? records[i]!.riskLevel,
+        ...(d.diff ? { confirmDiff: d.diff } : {}),
+        ...(d.shellSecurityHints ? { shellSecurityHints: d.shellSecurityHints } : {}),
+        ...(d.autoApproveFallback ? { autoApproveFallback: d.autoApproveFallback } : {})
+      }
       flush()
     }
     void d.toolName
     void d.input
-    void d.riskLevel
   }
 
   const onProgress = (d: {
