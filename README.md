@@ -93,4 +93,4 @@ SpaceAssistant 有什么特点？
 
 ## 许可证
 
-本项目基于 [MIT License](LICENSE) 开源。
+本项目基于 [Apache-2.0 License](LICENSE) 开源。
