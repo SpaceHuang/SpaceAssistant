@@ -7,6 +7,7 @@ const mockCloseSession = vi.fn()
 const mockIncrementAndCheck = vi.fn()
 const mockScheduleIdleClose = vi.fn()
 const mockResetInferenceCount = vi.fn()
+const mockAcquire = vi.fn()
 
 vi.mock('../browser/stagehandService', () => ({
   stagehandService: {
@@ -38,8 +39,16 @@ vi.mock('../browser/browserLlmCredentials', () => ({
   })
 }))
 
+vi.mock('../browser/rateLimitService', () => ({
+  rateLimitService: {
+    acquire: (...args: unknown[]) => mockAcquire(...args)
+  }
+}))
+
 import { CHAT_CANCELLED_MESSAGE } from '../../src/shared/chatCancel'
 import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePolicy'
+import { ErrorCodes } from '../../src/shared/errorCodes'
+import { RateLimitRejectedError, RateLimitWaitTimeoutError } from '../browser/rateLimiter'
 import { browserExecutor } from './browserExecutor'
 
 function baseCtx(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
@@ -71,6 +80,7 @@ function baseCtx(overrides?: Partial<ToolExecutionContext>): ToolExecutionContex
 describe('browserExecutor', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockAcquire.mockResolvedValue(undefined)
     mockIncrementAndCheck.mockImplementation(() => {})
     mockGetOrCreate.mockResolvedValue({
       stagehand: {
@@ -84,7 +94,7 @@ describe('browserExecutor', () => {
               reload: vi.fn(),
               goBack: vi.fn(),
               goForward: vi.fn(),
-              screenshot: vi.fn(),
+              screenshot: vi.fn().mockResolvedValue(Buffer.from('')),
               url: () => 'https://example.com',
               title: vi.fn().mockResolvedValue('Title')
             }
@@ -203,7 +213,9 @@ describe('browserExecutor', () => {
     mockGetOrCreate.mockResolvedValueOnce({
       stagehand: {
         extract: vi.fn().mockRejectedValue(new Error('401 Unauthorized')),
-        context: { pages: () => [{}] }
+        context: {
+          pages: () => [{ url: () => 'https://example.com' }]
+        }
       }
     })
     const r = await browserExecutor.execute(
@@ -211,6 +223,56 @@ describe('browserExecutor', () => {
       baseCtx()
     )
     expect(r.error).toContain('凭证无效')
+  })
+
+  it('returns rate limit rejected error', async () => {
+    mockAcquire.mockRejectedValueOnce(new RateLimitRejectedError('minute', 20))
+    const r = await browserExecutor.execute(
+      { action: 'observe' },
+      baseCtx({ toolUserConfirmed: true })
+    )
+    expect(r.success).toBe(false)
+    expect(r.error).toContain(ErrorCodes.BROWSER_RATE_LIMIT_REJECTED)
+  })
+
+  it('calls acquire and succeeds in wait mode', async () => {
+    const r = await browserExecutor.execute(
+      { action: 'observe' },
+      baseCtx()
+    )
+    expect(r.success).toBe(true)
+    expect(mockAcquire).toHaveBeenCalled()
+  })
+
+  it('returns rate limit wait timeout error', async () => {
+    mockAcquire.mockRejectedValueOnce(new RateLimitWaitTimeoutError(30))
+    const r = await browserExecutor.execute(
+      { action: 'extract', instruction: 'get title' },
+      baseCtx()
+    )
+    expect(r.success).toBe(false)
+    expect(r.error).toContain(ErrorCodes.BROWSER_RATE_LIMIT_WAIT_TIMEOUT)
+  })
+
+  it('returns cancelled when rate limit wait is aborted', async () => {
+    mockAcquire.mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'))
+    const r = await browserExecutor.execute(
+      { action: 'act', instruction: 'click' },
+      baseCtx()
+    )
+    expect(r.success).toBe(false)
+    expect(r.error).toBe(CHAT_CANCELLED_MESSAGE)
+  })
+
+  it('does not call acquire for close', async () => {
+    await browserExecutor.execute({ action: 'close' }, baseCtx())
+    expect(mockAcquire).not.toHaveBeenCalled()
+  })
+
+  it('does not call acquire for screenshot', async () => {
+    const r = await browserExecutor.execute({ action: 'screenshot' }, baseCtx())
+    expect(r.success).toBe(true)
+    expect(mockAcquire).not.toHaveBeenCalled()
   })
 
   it('returns dependencyError when chromium missing', async () => {

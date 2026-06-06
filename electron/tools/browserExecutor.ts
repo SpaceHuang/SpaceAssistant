@@ -1,12 +1,16 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { logAgentError, logAgentEvent } from '../agentLogger/agentLogger'
-import type { BrowserConfig } from '../../src/shared/domainTypes'
+import { DEFAULT_BROWSER_CONFIG, type BrowserConfig } from '../../src/shared/domainTypes'
 import { assertSafeInstruction } from '../browser/instructionGuards'
 import {
   browserActionConsumesInference,
+  browserActionNeedsRateLimit,
+  resolveRateLimitDomain,
   type BrowserAction
 } from '../browser/browserActionPolicy'
+import { rateLimitService } from '../browser/rateLimitService'
+import { RateLimitRejectedError, RateLimitWaitTimeoutError } from '../browser/rateLimiter'
 import { browserErrorKindFromAction, mapErrorToFailureCode, shouldAttachDependencyRecovery, toBrowserDependencyToolError, toBrowserUserError } from '../browser/browserUserErrors'
 import { isChromiumRecoveryFailure } from '../browser/browserDependencyDetect'
 import { toToolUserError } from './toolUserErrors'
@@ -137,25 +141,7 @@ export const browserExecutor: ToolExecutor = {
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     throwIfAborted(ctx.signal)
-    const cfg: BrowserConfig = ctx.browserConfig ?? {
-      enabled: false,
-      env: 'LOCAL',
-      allowedDomains: [],
-      trustedDomains: [],
-      allowHttp: true,
-      headless: true,
-      stagehandModel: '',
-      reuseActiveLlmProfile: true,
-      actionTimeoutSec: 90,
-      idleTimeoutSec: 1800,
-      maxOutputChars: 50000,
-      maxInferencesPerRequest: 8,
-      navigateRequiresConfirm: true,
-      actRequiresConfirm: true,
-      deniedActions: [],
-      allowRemoteSessions: false,
-      captureSubdir: 'browser-captures'
-    }
+    const cfg: BrowserConfig = ctx.browserConfig ?? { ...DEFAULT_BROWSER_CONFIG, enabled: false }
 
     if (!cfg.enabled) {
       return { success: false, error: '浏览器工具未启用', duration: Date.now() - started }
@@ -261,6 +247,24 @@ export const browserExecutor: ToolExecutor = {
     const page = pages[0]
     if (!page) {
       return { success: false, error: '浏览器实例未就绪', duration: Date.now() - started }
+    }
+
+    if (cfg.rateLimitEnabled && browserActionNeedsRateLimit(action)) {
+      const host = resolveRateLimitDomain(action, input, sessionState.lastUrl, page.url())
+      try {
+        await rateLimitService.acquire(ctx.sessionId, cfg, host, ctx.signal, (waitMs) => {
+          const waitSec = Math.ceil(waitMs / 1000)
+          ctx.sendProgress('rate_limiting', `等待请求槽位可用...（预计 ${waitSec} 秒）`)
+        })
+      } catch (e) {
+        if (isUserAbortError(e) || ctx.signal.aborted) {
+          return { success: false, error: CHAT_CANCELLED_MESSAGE, duration: Date.now() - started }
+        }
+        if (e instanceof RateLimitRejectedError || e instanceof RateLimitWaitTimeoutError) {
+          return { success: false, error: e.message, duration: Date.now() - started }
+        }
+        throw e
+      }
     }
 
     try {

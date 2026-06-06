@@ -145,6 +145,104 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         </ConfigSettingsStack>
       </section>
 
+      <section className="browser-rate-limit-section">
+        <h3 className="config-section-title">{t('browser.rateLimitTitle')}</h3>
+        <p className="config-section-hint">{t('browser.rateLimitTitleHint')}</p>
+        <ConfigSettingsStack className="browser-rate-limit-section__body">
+          <ConfigSwitchRow
+            label={t('browser.rateLimitEnabledLabel')}
+            hint={t('browser.rateLimitEnabledHint')}
+            checked={browser.rateLimitEnabled}
+            onChange={(v) => patch({ rateLimitEnabled: v })}
+          />
+          {browser.rateLimitEnabled ? (
+            <>
+              <ConfigField
+                label={t('browser.rateLimitMinIntervalLabel')}
+                hint={t('browser.rateLimitMinIntervalHint')}
+              >
+                <Select
+                  value={browser.rateLimitMinIntervalMs}
+                  onChange={(v) => patch({ rateLimitMinIntervalMs: v })}
+                  classNames={configModalSelectPopupClassNames}
+                  options={[500, 1000, 2000, 3000, 5000].map((ms) => ({
+                    value: ms,
+                    label: String(ms / 1000)
+                  }))}
+                />
+              </ConfigField>
+              <ConfigField
+                label={t('browser.rateLimitPerMinuteLabel')}
+                hint={t('browser.rateLimitPerMinuteHint')}
+              >
+                <Select
+                  value={browser.rateLimitPerMinute}
+                  onChange={(v) => patch({ rateLimitPerMinute: v })}
+                  classNames={configModalSelectPopupClassNames}
+                  options={[10, 20, 30, 40, 60].map((n) => ({ value: n, label: String(n) }))}
+                />
+              </ConfigField>
+              <ConfigField
+                label={t('browser.rateLimitPerHourLabel')}
+                hint={t('browser.rateLimitPerHourHint')}
+              >
+                <Select
+                  value={browser.rateLimitPerHour}
+                  onChange={(v) => patch({ rateLimitPerHour: v })}
+                  classNames={configModalSelectPopupClassNames}
+                  options={[100, 200, 300, 500, 1000].map((n) => ({ value: n, label: String(n) }))}
+                />
+              </ConfigField>
+              <ConfigField
+                label={t('browser.rateLimitPerDomainPerMinuteLabel')}
+                hint={t('browser.rateLimitPerDomainPerMinuteHint')}
+              >
+                <Select
+                  value={browser.rateLimitPerDomainPerMinute}
+                  onChange={(v) => patch({ rateLimitPerDomainPerMinute: v })}
+                  classNames={configModalSelectPopupClassNames}
+                  options={[5, 10, 15, 20, 30].map((n) => ({ value: n, label: String(n) }))}
+                />
+              </ConfigField>
+              <ConfigField
+                label={t('browser.rateLimitModeLabel')}
+                hint={t('browser.rateLimitModeHint')}
+              >
+                <Select
+                  value={browser.rateLimitMode}
+                  onChange={(v) => patch({ rateLimitMode: v })}
+                  classNames={configModalSelectPopupClassNames}
+                  options={[
+                    { value: 'wait', label: t('browser.rateLimitModeWait') },
+                    { value: 'reject', label: t('browser.rateLimitModeReject') }
+                  ]}
+                />
+              </ConfigField>
+              {browser.rateLimitMode === 'wait' ? (
+                <ConfigField
+                  label={t('browser.rateLimitMaxWaitSecLabel')}
+                  hint={t('browser.rateLimitMaxWaitSecHint')}
+                >
+                  <Select
+                    value={browser.rateLimitMaxWaitSec}
+                    onChange={(v) => patch({ rateLimitMaxWaitSec: v })}
+                    classNames={configModalSelectPopupClassNames}
+                    options={[10, 30, 60, 120].map((n) => ({ value: n, label: String(n) }))}
+                  />
+                </ConfigField>
+              ) : null}
+            </>
+          ) : (
+            <Alert
+              type="warning"
+              showIcon
+              className="config-alert--compact config-alert--notice"
+              message={t('browser.rateLimitDisabledWarning')}
+            />
+          )}
+        </ConfigSettingsStack>
+      </section>
+
       <section className="browser-trust-section">
         <h3 className="config-section-title">{t('browser.trust.title')}</h3>
         <p className="config-field__hint">{t('browser.trustedDomainsHint')}</p>

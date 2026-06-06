@@ -29,3 +29,30 @@ export function browserActionNeedsConfirmation(
 export function browserActionConsumesInference(action: BrowserAction): boolean {
   return action === 'observe' || action === 'extract' || action === 'act'
 }
+
+export function browserActionNeedsRateLimit(action: BrowserAction): boolean {
+  return (
+    action === 'navigate' ||
+    action === 'observe' ||
+    action === 'extract' ||
+    action === 'act'
+  )
+}
+
+export function resolveRateLimitDomain(
+  action: BrowserAction,
+  input: Record<string, unknown>,
+  sessionLastUrl?: string,
+  pageUrl?: string
+): string | null {
+  if (action === 'navigate') {
+    const mode = typeof input.mode === 'string' ? input.mode : 'open'
+    if (mode === 'open') {
+      const url = typeof input.url === 'string' ? input.url : ''
+      return extractHostname(url)
+    }
+  }
+  const url = sessionLastUrl ?? pageUrl
+  if (!url) return null
+  return extractHostname(url)
+}

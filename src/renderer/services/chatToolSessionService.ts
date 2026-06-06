@@ -221,12 +221,4 @@ export function buildToolChatPayload(args: {
   }
 }
 
-export function extractAssistantTextFromApiContent(content: unknown[]): string {
-  let s = ''
-  for (const b of content) {
-    if (b && typeof b === 'object' && (b as { type?: string }).type === 'text' && typeof (b as { text?: string }).text === 'string') {
-      s += (b as { text: string }).text
-    }
-  }
-  return s
-}
+export { extractAssistantTextFromApiContent } from '../../shared/assistantContentReconcile'

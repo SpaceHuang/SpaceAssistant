@@ -66,6 +66,13 @@ export interface BrowserConfig {
   deniedActions: string[]
   allowRemoteSessions: boolean
   captureSubdir: string
+  rateLimitEnabled: boolean
+  rateLimitMinIntervalMs: number
+  rateLimitPerMinute: number
+  rateLimitPerHour: number
+  rateLimitPerDomainPerMinute: number
+  rateLimitMode: 'wait' | 'reject'
+  rateLimitMaxWaitSec: number
 }
 
 export const DEFAULT_BROWSER_CONFIG: BrowserConfig = {
@@ -85,7 +92,14 @@ export const DEFAULT_BROWSER_CONFIG: BrowserConfig = {
   actRequiresConfirm: true,
   deniedActions: [],
   allowRemoteSessions: false,
-  captureSubdir: 'browser-captures'
+  captureSubdir: 'browser-captures',
+  rateLimitEnabled: true,
+  rateLimitMinIntervalMs: 1000,
+  rateLimitPerMinute: 20,
+  rateLimitPerHour: 200,
+  rateLimitPerDomainPerMinute: 10,
+  rateLimitMode: 'wait',
+  rateLimitMaxWaitSec: 30
 }
 
 export function mergeBrowserConfig(partial?: Partial<BrowserConfig> | null): BrowserConfig {
@@ -101,7 +115,16 @@ export function mergeBrowserConfig(partial?: Partial<BrowserConfig> | null): Bro
       : DEFAULT_BROWSER_CONFIG.trustedDomains,
     deniedActions: Array.isArray(partial.deniedActions)
       ? [...partial.deniedActions]
-      : DEFAULT_BROWSER_CONFIG.deniedActions
+      : DEFAULT_BROWSER_CONFIG.deniedActions,
+    rateLimitEnabled: partial.rateLimitEnabled ?? DEFAULT_BROWSER_CONFIG.rateLimitEnabled,
+    rateLimitMinIntervalMs:
+      partial.rateLimitMinIntervalMs ?? DEFAULT_BROWSER_CONFIG.rateLimitMinIntervalMs,
+    rateLimitPerMinute: partial.rateLimitPerMinute ?? DEFAULT_BROWSER_CONFIG.rateLimitPerMinute,
+    rateLimitPerHour: partial.rateLimitPerHour ?? DEFAULT_BROWSER_CONFIG.rateLimitPerHour,
+    rateLimitPerDomainPerMinute:
+      partial.rateLimitPerDomainPerMinute ?? DEFAULT_BROWSER_CONFIG.rateLimitPerDomainPerMinute,
+    rateLimitMode: partial.rateLimitMode ?? DEFAULT_BROWSER_CONFIG.rateLimitMode,
+    rateLimitMaxWaitSec: partial.rateLimitMaxWaitSec ?? DEFAULT_BROWSER_CONFIG.rateLimitMaxWaitSec
   }
 }
 

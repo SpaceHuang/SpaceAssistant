@@ -24,6 +24,7 @@ export type AgentLogEventName =
   | 'tray.init_failed'
   | 'browser.action'
   | 'browser.error'
+  | 'browser.rate_limit'
   | 'shell.security.deny'
   | 'shell.path.confirm'
   | 'shell.path.reject'

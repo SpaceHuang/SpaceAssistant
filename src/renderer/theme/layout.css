@@ -1057,6 +1057,8 @@
   flex-direction: column;
   gap: 8px;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .activity-batch--expanded {
@@ -1165,6 +1167,8 @@
 .activity-batch__body-panel {
   display: grid;
   grid-template-rows: 0fr;
+  min-width: 0;
+  width: 100%;
   transition: grid-template-rows 150ms var(--sa-ease-out);
 }
 
@@ -1175,20 +1179,39 @@
 
 .activity-batch__body-panel-inner {
   min-height: 0;
-  overflow: hidden;
+  min-width: 0;
+  overflow-x: clip;
+  overflow-y: hidden;
 }
 
 .activity-batch__body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-left: 6px;
-  padding-left: 10px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding-left: 16px;
   border-left: 2px solid var(--sa-chat-assistant-accent);
 }
 
 .activity-batch__item {
   min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.activity-batch__body .tool-row,
+.activity-batch__body .write-confirm-card,
+.activity-batch__body .browser-confirm-card,
+.activity-batch__body .browser-dependency-guide-card,
+.activity-batch__body .script-confirm-card,
+.activity-batch__body .lark-cli-confirm-card,
+.activity-batch__body .write-success-card,
+.activity-batch__body .chat-thinking {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* ── Composer (message input) ── */

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { addMessage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId } from '../../store/chatSlice'
+import { addMessage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
@@ -29,10 +29,10 @@ import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import {
   buildToolChatPayload,
   createToolChatController,
-  extractAssistantTextFromApiContent,
   type ToolChatController
 } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
+import { reconcileAssistantStreamOnComplete } from '../../../shared/assistantContentReconcile'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
@@ -79,6 +79,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type SendInternalOptions = {
   skipUserMessage?: boolean
+  targetSessionId?: string
 }
 
 function buildClaudePayload(history: Message[]) {
@@ -147,7 +148,8 @@ export function ChatView() {
     void window.api.chatGetMessages({ sessionId }).then((rows) => {
       if (cancelled) return
       const live = getLiveMessages(sessionId)
-      dispatch(setMessages(mergeDbAndLive(rows, live)))
+      const pendingInStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
+      dispatch(setMessages(mergeDbAndLive(mergeDbAndLive(rows, live), pendingInStore)))
     })
     return () => {
       cancelled = true
@@ -306,11 +308,14 @@ export function ChatView() {
 
   const sendInternal = useCallback(
     async (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => {
-      if (!sessionId || !cfg) {
+      const runSessionId = options?.targetSessionId ?? sessionId
+      if (!runSessionId || !cfg) {
         message.warning(t('chatView.warnings.selectSession'))
         return
       }
-      const runSessionId = sessionId
+      const runSession =
+        store.getState().session.list.find((x) => x.id === runSessionId) ??
+        (currentSession?.id === runSessionId ? currentSession : undefined)
       if (isSessionRunning(runSessionId)) {
         message.warning(t('chatView.warnings.sessionRunning'))
         return
@@ -347,7 +352,7 @@ export function ChatView() {
       }
       const wikiConfig = cfg.wiki ?? DEFAULT_WIKI_CONFIG
       let sessionSkillsState = normalizeSessionSkillsState(
-        skillsStateOverride ?? currentSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE
+        skillsStateOverride ?? runSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE
       )
       let chatText = text
       let wikiModeRun = false
@@ -356,7 +361,7 @@ export function ChatView() {
       if (wikiCmd.type === 'command') {
         await persistSkillHintSystemMessage(runSessionId, wikiCmd.hint)
         if (wikiCmd.skillsState) {
-          const updated = await window.api.sessionUpdate({ sessionId, skillsState: wikiCmd.skillsState })
+          const updated = await window.api.sessionUpdate({ sessionId: runSessionId, skillsState: wikiCmd.skillsState })
           if (updated) dispatch(upsertSession(updated))
         }
         return
@@ -367,9 +372,9 @@ export function ChatView() {
         sessionSkillsState = wikiCmd.skillsState
         wikiModeRun = true
         const updated = await window.api.sessionUpdate({
-          sessionId,
+          sessionId: runSessionId,
           skillsState: wikiCmd.skillsState,
-          metadata: patchSessionWikiState(currentSession?.metadata, { wikiModeActive: true })
+          metadata: patchSessionWikiState(runSession?.metadata, { wikiModeActive: true })
         })
         if (updated) dispatch(upsertSession(updated))
       }
@@ -378,7 +383,7 @@ export function ChatView() {
       if (cmd.type === 'command') {
         await persistSkillHintSystemMessage(runSessionId, cmd.hint)
         if (cmd.skillsState) {
-          const updated = await window.api.sessionUpdate({ sessionId, skillsState: cmd.skillsState })
+          const updated = await window.api.sessionUpdate({ sessionId: runSessionId, skillsState: cmd.skillsState })
           if (updated) dispatch(upsertSession(updated))
         }
         return
@@ -396,8 +401,15 @@ export function ChatView() {
 
       if (!options?.skipUserMessage) {
         dispatch(addMessage(userMsg))
-        await window.api.chatAppendMessage(userMsg)
         stickToBottomRef.current = true
+      }
+
+      const historyForApi = options?.skipUserMessage
+        ? [...store.getState().chat.messages]
+        : [...store.getState().chat.messages.filter((m) => m.id !== userMsg.id), userMsg]
+
+      if (!options?.skipUserMessage) {
+        await window.api.chatAppendMessage(userMsg)
       }
 
       const requestId = crypto.randomUUID()
@@ -405,7 +417,6 @@ export function ChatView() {
       abortRequestedRef.current = false
       dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
 
-      const historyForApi = [...store.getState().chat.messages]
       const useToolsApi =
         cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
 
@@ -417,7 +428,7 @@ export function ChatView() {
         userInput: chatText,
         sessionSkillsState,
         sessionId: runSessionId,
-        sessionMetadata: currentSession?.metadata,
+        sessionMetadata: runSession?.metadata,
         recentMessages,
         model: cfg.model
       })
@@ -435,7 +446,7 @@ export function ChatView() {
           activeSkills.map((s) => routeResult.meta.sources[s.meta.name]).find((src) => src === 'llm') ??
           routeResult.meta.sources[activeSkills[0]!.meta.name] ??
           'llm'
-        const metadata = appendSkillActivationLog(currentSession?.metadata ?? {}, {
+        const metadata = appendSkillActivationLog(runSession?.metadata ?? {}, {
           skillNames: activeSkills.map((s) => s.meta.name),
           source: logSource,
           userInput: chatText,
@@ -444,7 +455,7 @@ export function ChatView() {
           routingError: routeResult.meta.routingError,
           routingRequestId: routeResult.meta.routingRequestId
         })
-        void window.api.sessionUpdate({ sessionId, metadata }).then((updated) => {
+        void window.api.sessionUpdate({ sessionId: runSessionId, metadata }).then((updated) => {
           if (updated) dispatch(upsertSession(updated))
         })
       }
@@ -634,10 +645,15 @@ export function ChatView() {
             message.error(formatUserFacingError(res.error))
             return
           }
-          const textOut = extractAssistantTextFromApiContent(res.content as unknown[]) || contentState.content
-          if (textOut !== contentState.content) {
-            contentState = { ...contentState, content: textOut }
-          }
+          const reconciled = reconcileAssistantStreamOnComplete({
+            stopReason: res.stopReason,
+            apiContent: res.content as unknown[],
+            contentState,
+            thinkingState
+          })
+          contentState = reconciled.contentState
+          thinkingState = reconciled.thinkingState
+          const textOut = reconciled.textOut
           flushStreamPersist(runSessionId, assistantId)
           flushUiPatch(runSessionId, assistantId)
           if (res.usage) {
@@ -731,12 +747,19 @@ export function ChatView() {
             if (data?.usage) {
               dispatch(setLastUsage(data.usage as LastUsage))
             }
+            const reconciled = reconcileAssistantStreamOnComplete({
+              stopReason: 'end_turn',
+              contentState,
+              thinkingState
+            })
+            contentState = reconciled.contentState
+            thinkingState = reconciled.thinkingState
             flushStreamPersist(runSessionId, assistantId)
             flushUiPatch(runSessionId, assistantId)
             const thinking = finalizeThinking(thinkingState)
             const contentSegments = finalizeContentSegments(contentState)
             routePatchMessage(runSessionId, assistantId, {
-              content: contentState.content,
+              content: reconciled.textOut,
               contentSegments,
               status: 'completed',
               thinking
@@ -745,7 +768,7 @@ export function ChatView() {
               messageId: assistantId,
               sessionId: runSessionId,
               patch: {
-                content: contentState.content,
+                content: reconciled.textOut,
                 contentSegments,
                 status: 'completed',
                 thinking
@@ -782,9 +805,33 @@ export function ChatView() {
 
   const send = useCallback(
     async (text: string) => {
-      await sendInternal(text)
+      if (!text.trim()) return
+
+      let targetSessionId = sessionId
+      if (!targetSessionId) {
+        if (!cfg) {
+          message.warning(t('chatView.warnings.selectSession'))
+          return
+        }
+        try {
+          const newSession = await window.api.sessionCreate({
+            model: cfg.model,
+            temperature: cfg.temperature ?? 1,
+            name: '',
+            metadata: {}
+          })
+          dispatch(upsertSession(newSession))
+          dispatch(setSession(newSession.id))
+          targetSessionId = newSession.id
+        } catch (e) {
+          message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+          return
+        }
+      }
+
+      await sendInternal(text, undefined, { targetSessionId })
     },
-    [sendInternal]
+    [sessionId, cfg, sendInternal, dispatch, message, t]
   )
 
   const retryFailedAssistant = useCallback(
@@ -981,7 +1028,6 @@ export function ChatView() {
       </div>
       <MessageInput
         ref={composerRef}
-        disabled={!sessionId}
         running={running}
         modelLabel={cfg?.model}
         onSend={send}
