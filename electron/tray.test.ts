@@ -1,6 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 const mockTrayInstances: MockTray[] = []
+const mockNativeTheme = vi.hoisted(() => ({
+  shouldUseDarkColors: false,
+  on: vi.fn()
+}))
 const mockQuit = vi.fn()
 const mockBuildFromTemplate = vi.fn((template: unknown[]) => template)
 const mockCreateFromPath = vi.fn(() => ({
@@ -37,6 +41,7 @@ vi.mock('electron', () => ({
   nativeImage: {
     createFromPath: (...args: unknown[]) => mockCreateFromPath(...args)
   },
+  nativeTheme: mockNativeTheme,
   Tray: MockTray
 }))
 
@@ -58,6 +63,8 @@ describe('tray module', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
     mockTrayInstances.length = 0
+    mockNativeTheme.shouldUseDarkColors = false
+    mockNativeTheme.on.mockClear()
     mockExistsSync.mockReturnValue(true)
     deps = {
       createMainWindow: vi.fn().mockResolvedValue(undefined),
