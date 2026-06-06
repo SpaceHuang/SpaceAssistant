@@ -1,4 +1,4 @@
-import { extractHostname, normalizeHostnameForTrust } from './urlSecurity'
+import { extractHostname, hostnameMatchesTrustedEntry, normalizeHostnameForTrust } from './urlSecurity'
 
 /** 单会话内用户已批准的 navigate(open) 主机名（仅内存，删除会话即清除） */
 const trustedHostsBySession = new Map<string, Set<string>>()
@@ -30,9 +30,8 @@ export function rememberBrowserSessionTrustedUrl(sessionId: string, url: string)
 export function isBrowserSessionTrustedHost(sessionId: string, hostname: string): boolean {
   const set = trustedHostsBySession.get(sessionId)
   if (!set || set.size === 0) return false
-  const h = normalizeHostnameForTrust(hostname)
   for (const t of set) {
-    if (h === t || h.endsWith('.' + t)) return true
+    if (hostnameMatchesTrustedEntry(hostname, t)) return true
   }
   return false
 }

@@ -490,6 +490,53 @@ describe('ToolCallCard run_shell output display', () => {
     expect(document.querySelector('.tool-row-detail')).toBeNull()
   })
 
+  it('shows script code and stdout when completed run_script is expanded', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'script-auto',
+          toolName: 'run_script',
+          input: { code: 'print("hello")' },
+          status: 'completed',
+          riskLevel: 'high',
+          result: {
+            success: true,
+            data: { exitCode: 0, stdout: 'hello\n', stderr: '' }
+          }
+        }}
+        confirmMode="direct"
+      />
+    )
+    expect(document.querySelector('.tool-row--clickable')).not.toBeNull()
+    fireEvent.click(document.querySelector('.tool-row__main')!)
+    expect(document.querySelector('.tool-row-detail--open')).not.toBeNull()
+    expect(document.querySelector('.tool-row-detail__script-code .shiki')?.textContent).toContain('print("hello")')
+    expect(screen.getByText('hello')).toBeDefined()
+    expect(document.querySelector('.sa-chat-inset-code')).toBeNull()
+  })
+
+  it('shows script code when completed run_script has no output', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'script-silent',
+          toolName: 'run_script',
+          input: { code: 'import os\nos.makedirs("tmp")' },
+          status: 'completed',
+          riskLevel: 'high',
+          result: {
+            success: true,
+            data: { exitCode: 0, stdout: '', stderr: '' }
+          }
+        }}
+        confirmMode="direct"
+      />
+    )
+    fireEvent.click(document.querySelector('.tool-row__main')!)
+    expect(document.querySelector('.tool-row-detail__script-code .shiki')?.textContent).toContain('os.makedirs')
+    expect(document.querySelector('.shell-output')).toBeNull()
+  })
+
   it('shows LarkCliConfirmCard while run_lark_cli is confirming', () => {
     render(
       <ToolCallCard

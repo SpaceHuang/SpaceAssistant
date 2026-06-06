@@ -32,10 +32,15 @@ export function extractHostname(url: string): string | null {
   }
 }
 
+export function hostnameMatchesTrustedEntry(hostname: string, trusted: string): boolean {
+  const h = normalizeHostnameForTrust(hostname)
+  const t = normalizeHostnameForTrust(trusted)
+  return h === t || h.endsWith('.' + t)
+}
+
 export function isTrustedDomain(hostname: string, trustedDomains: string[]): boolean {
   if (trustedDomains.length === 0) return false
-  const h = normalizeHostname(hostname)
-  return trustedDomains.some((d) => normalizeHostname(d) === h)
+  return trustedDomains.some((d) => hostnameMatchesTrustedEntry(hostname, d))
 }
 
 function hostForIpCheck(hostname: string): string {

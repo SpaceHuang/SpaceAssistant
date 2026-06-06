@@ -143,8 +143,15 @@ describe('isTrustedDomain', () => {
     expect(isTrustedDomain('docs.example.com', ['docs.example.com'])).toBe(true)
   })
 
-  it('no match', () => {
+  it('subdomain match when parent domain trusted', () => {
+    expect(isTrustedDomain('docs.github.com', ['github.com'])).toBe(true)
+    expect(isTrustedDomain('api.github.com', ['github.com'])).toBe(true)
+    expect(isTrustedDomain('github.com', ['github.com'])).toBe(true)
+  })
+
+  it('no match for unrelated domain', () => {
     expect(isTrustedDomain('evil.com', ['example.com'])).toBe(false)
+    expect(isTrustedDomain('notgithub.com', ['github.com'])).toBe(false)
   })
 
   it('empty list', () => {

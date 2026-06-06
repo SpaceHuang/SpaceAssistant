@@ -10,7 +10,9 @@ import {
   markExpiredTrustedCommands,
   matchesTrustedCommand,
   normalizeTrustedCommandPrefix,
+  persistExpiredTrustedCommandMarks,
   removeTrustedCommands,
+  shouldSkipRunScriptConfirmForAutoAllow,
   shouldSkipShellConfirmForTrust
 } from './shellCommandTrust'
 import { persistShellConfig, readShellConfigFromDb } from './shellConfigDb'
@@ -96,6 +98,18 @@ describe('shellCommandTrust', () => {
     expect(next).toHaveLength(0)
   })
 
+  it('persistExpiredTrustedCommandMarks writes expired flag without deleting', () => {
+    const old = Date.now() - 91 * 24 * 60 * 60 * 1000
+    const entry = addTrustedCommand(db, 'stale cmd')
+    persistShellConfig(db, {
+      trustedCommands: [{ ...entry, lastUsedAt: old, createdAt: old, expired: false }]
+    })
+    persistExpiredTrustedCommandMarks(db)
+    const list = readShellConfigFromDb(db).trustedCommands ?? []
+    expect(list).toHaveLength(1)
+    expect(list[0]?.expired).toBe(true)
+  })
+
   it('cleanExpiredTrustedCommands removes expired entries', () => {
     const old = Date.now() - 91 * 24 * 60 * 60 * 1000
     const entry = addTrustedCommand(db, 'old cmd')
@@ -127,7 +141,20 @@ describe('shellCommandTrust', () => {
     expect(shouldSkipShellConfirmForTrust('npm install react', analysis, shellConfig)).toBe(true)
   })
 
-  it('shouldSkipShellConfirmForTrust with autoAllow but not risk ack', () => {
+  it('shouldSkipRunScriptConfirmForAutoAllow when auto allow enabled', () => {
+    expect(shouldSkipRunScriptConfirmForAutoAllow({ enabled: true, shellDefaultTimeoutSec: 300 })).toBe(
+      false
+    )
+    expect(
+      shouldSkipRunScriptConfirmForAutoAllow({
+        enabled: true,
+        shellDefaultTimeoutSec: 300,
+        autoAllowScriptExecution: true
+      })
+    ).toBe(true)
+  })
+
+  it('shouldSkipShellConfirmForTrust ignores autoAllowScriptExecution', () => {
     const analysis = askAnalysis()
     expect(
       shouldSkipShellConfirmForTrust('echo hi', analysis, {
@@ -135,13 +162,6 @@ describe('shellCommandTrust', () => {
         shellDefaultTimeoutSec: 300,
         autoAllowScriptExecution: true
       })
-    ).toBe(true)
-    expect(
-      shouldSkipShellConfirmForTrust(
-        'cat secret',
-        askAnalysis({ requiresRiskAck: true }),
-        { enabled: true, shellDefaultTimeoutSec: 300, autoAllowScriptExecution: true }
-      )
     ).toBe(false)
   })
 })

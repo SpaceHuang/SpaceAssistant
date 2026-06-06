@@ -27,6 +27,7 @@ import { WriteConfirmCard } from './WriteConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
 import { ShellConfirmCard } from './ShellConfirmCard'
 import { ScriptConfirmCard } from './ScriptConfirmCard'
+import { ScriptCodePreview, ScriptTimeoutMeta } from './ScriptCodePreview'
 import { LarkCliConfirmCard } from './LarkCliConfirmCard'
 import { BrowserDependencyGuideCard } from './BrowserDependencyGuideCard'
 import { WriteSuccessCard } from './WriteSuccessCard'
@@ -95,6 +96,10 @@ export function ToolCallCard({
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMetadata)
   const shellCommand =
     record.toolName === 'run_shell' && typeof record.input.command === 'string' ? record.input.command : ''
+  const scriptCode =
+    record.toolName === 'run_script' && typeof record.input.code === 'string' ? record.input.code : ''
+  const scriptTimeout =
+    record.toolName === 'run_script' && typeof record.input.timeout === 'number' ? record.input.timeout : undefined
   const isInteractiveTui = shellCommand ? isInteractiveShellTuiCommand(shellCommand) : false
   const hasPlainProgress = Boolean(record.progressOutput?.trim())
   const hasRawProgress = Boolean(record.progressOutputRaw?.trim())
@@ -116,6 +121,10 @@ export function ToolCallCard({
     () => (record.toolName === 'run_shell' ? parseShellResultData(record.result?.data) : undefined),
     [record.toolName, record.result?.data]
   )
+  const scriptResultData = useMemo(
+    () => (record.toolName === 'run_script' ? parseShellResultData(record.result?.data) : undefined),
+    [record.toolName, record.result?.data]
+  )
   const shellHasFormattedOutput = record.toolName === 'run_shell' && hasShellOutput(shellResultData)
   const silentShellComplete =
     record.toolName === 'run_shell' &&
@@ -134,6 +143,7 @@ export function ToolCallCard({
       Boolean(record.result?.success && record.result.data !== undefined) ||
       Boolean(record.confirmDiff) ||
       Boolean(record.toolName === 'run_shell' && (record.progressOutput || record.progressOutputRaw)) ||
+      Boolean(record.toolName === 'run_script' && scriptCode.trim()) ||
       (!fileTool && record.status === 'completed' && Object.keys(record.input).length > 0))
 
   const [expanded, setExpanded] = useState(() => defaultExpanded(record))
@@ -232,6 +242,7 @@ export function ToolCallCard({
     if (record.toolName === 'run_shell' && (shellHasFormattedOutput || isShellSilentResult(record.result.data))) {
       return ''
     }
+    if (record.toolName === 'run_script') return ''
     if (record.result.success) {
       if (record.result.data === undefined) return ''
       return typeof record.result.data === 'string' ? record.result.data : JSON.stringify(record.result.data, null, 2)
@@ -264,8 +275,17 @@ export function ToolCallCard({
     showShellCompletedOutput && useTerminalUi && hasTerminalScrollback(shellResultData)
   const showShellCompletedPlain =
     showShellCompletedOutput && (!useTerminalUi || !hasTerminalScrollback(shellResultData))
+  const showScriptCode = record.toolName === 'run_script' && Boolean(scriptCode.trim())
+  const showScriptLiveOutput =
+    record.toolName === 'run_script' && record.status === 'executing' && Boolean(record.progressOutput?.trim())
+  const showScriptCompletedOutput =
+    record.toolName === 'run_script' &&
+    (record.status === 'completed' || record.status === 'failed') &&
+    hasShellOutput(scriptResultData)
   const showGenericFailureMessage =
-    (record.status === 'failed' || record.status === 'rejected') && !(record.toolName === 'run_shell' && showShellCompletedOutput)
+    (record.status === 'failed' || record.status === 'rejected') &&
+    !(record.toolName === 'run_shell' && showShellCompletedOutput) &&
+    !(record.toolName === 'run_script' && showScriptCompletedOutput)
 
   if (writeConfirming && onConfirm) {
     return (
@@ -432,11 +452,28 @@ export function ToolCallCard({
             />
           ) : null}
 
+          {showScriptCode ? (
+            <div className="tool-code-preview tool-row-detail__script-code">
+              <ScriptCodePreview code={scriptCode} />
+              {scriptTimeout !== undefined ? <ScriptTimeoutMeta timeout={scriptTimeout} /> : null}
+            </div>
+          ) : null}
+
+          {showScriptLiveOutput ? <ShellOutputView content={record.progressOutput} isLive /> : null}
+
+          {showScriptCompletedOutput && scriptResultData ? (
+            <ShellOutputView
+              stdout={scriptResultData.stdout}
+              stderr={scriptResultData.stderr}
+              exitCode={scriptResultData.exitCode}
+            />
+          ) : null}
+
           {record.status === 'completed' && resultStr ? (
             <pre className="sa-chat-inset-code sa-command-inset">{truncate(resultStr, 4000)}</pre>
           ) : null}
 
-          {record.status === 'completed' && !resultStr && !fileTool && !showShellCompletedOutput && Object.keys(record.input).length > 0 ? (
+          {record.status === 'completed' && !resultStr && !fileTool && !showShellCompletedOutput && record.toolName !== 'run_script' && Object.keys(record.input).length > 0 ? (
             <pre className="sa-chat-inset-code sa-command-inset">{paramPreview}</pre>
           ) : null}
           </div>

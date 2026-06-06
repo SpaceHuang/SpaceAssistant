@@ -48,12 +48,6 @@ export async function precheckRunShellTool(args: {
   if (skipConfirm && args.appDb && matchesTrustedCommand(args.command, args.shellConfig?.trustedCommands)) {
     touchTrustedCommand(args.appDb, args.command)
   }
-  if (skipConfirm && args.shellConfig?.autoAllowScriptExecution) {
-    logShellAgentEvent('info', 'shell.auto_allow.execute', {
-      command: args.command
-    })
-  }
-
   const hints: ShellSecurityHints = {
     requiresRiskAck: analysis.shellSecurityHints.requiresRiskAck,
     outsideWorkDirRisk: analysis.shellSecurityHints.outsideWorkDirRisk,

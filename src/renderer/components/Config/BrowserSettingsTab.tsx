@@ -1,4 +1,4 @@
-import { Alert, Button, Select, Tooltip } from 'antd'
+import { Alert, App, Button, Input, Select, Space, Table, Tooltip } from 'antd'
 import { Info } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { BrowserConfig, ModelEntry } from '../../../shared/domainTypes'
@@ -23,6 +23,15 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const refreshSvg = patchSvg(refresh2LineRaw)
 
+const DOMAIN_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i
+
+function isValidTrustDomain(domain: string): boolean {
+  if (!domain || domain.length > 253) return false
+  if (domain === 'localhost') return true
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(domain)) return true
+  return DOMAIN_HOST_RE.test(domain)
+}
+
 type Props = {
   browser: BrowserConfig
   onChange: (next: BrowserConfig) => void
@@ -32,12 +41,37 @@ type Props = {
 }
 
 export function BrowserSettingsTab({ browser, onChange, models = [], active = false }: Props) {
+  const { message } = App.useApp()
   const { t } = useTypedTranslation('config')
   const dispatch = useAppDispatch()
   const { detect, detecting, refresh } = useBrowserDetect({ active })
   const [repairLoading, setRepairLoading] = useState(false)
+  const [newDomain, setNewDomain] = useState('')
+  const [selectedDomains, setSelectedDomains] = useState<string[]>([])
 
   const patch = (p: Partial<BrowserConfig>) => onChange({ ...browser, ...p })
+
+  const addTrustedDomain = () => {
+    const d = newDomain.trim().toLowerCase()
+    if (!d) return
+    if (!isValidTrustDomain(d)) {
+      message.warning(t('browser.trust.invalidDomain'))
+      return
+    }
+    if (browser.trustedDomains.includes(d)) {
+      setNewDomain('')
+      return
+    }
+    patch({ trustedDomains: [...browser.trustedDomains, d] })
+    setNewDomain('')
+  }
+
+  const removeSelectedDomains = () => {
+    if (!selectedDomains.length) return
+    const remove = new Set(selectedDomains)
+    patch({ trustedDomains: browser.trustedDomains.filter((d) => !remove.has(d)) })
+    setSelectedDomains([])
+  }
   const stagehandModels = useMemo(
     () => sortModelsFastFirst(models.filter((m) => m.enabled)),
     [models]
@@ -244,29 +278,48 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
       </section>
 
       <section className="browser-trust-section">
-        <h3 className="config-section-title">{t('browser.trust.title')}</h3>
-        <p className="config-field__hint">{t('browser.trustedDomainsHint')}</p>
-        <ConfigField label={t('browser.trust.addDomain')}>
-          <Select
-            mode="tags"
-            placeholder={t('browser.trustedDomainsPlaceholder')}
-            value={browser.trustedDomains}
-            onChange={(v) => patch({ trustedDomains: v.map((d) => d.trim().toLowerCase()).filter(Boolean) })}
-            classNames={configModalSelectPopupClassNames}
-          />
-        </ConfigField>
-        {browser.trustedDomains.length > 0 ? (
-          <div className="browser-trust-section__actions">
+        <div className="config-skill-section-header">
+          <h3 className="config-section-title">{t('browser.trust.title')}</h3>
+          <Space size="small">
             <Button
               size="small"
               danger
-              disabled={!browser.trustedDomains.length}
-              onClick={() => patch({ trustedDomains: [] })}
+              disabled={!selectedDomains.length}
+              onClick={removeSelectedDomains}
             >
               {t('browser.trust.batchDelete')}
             </Button>
-          </div>
-        ) : null}
+          </Space>
+        </div>
+        <p className="config-field__hint">{t('browser.trustedDomainsHint')}</p>
+        <ConfigField label={t('browser.trust.addDomain')}>
+          <Space.Compact style={{ width: '100%' }}>
+            <Input
+              value={newDomain}
+              placeholder={t('browser.trustedDomainsPlaceholder')}
+              onChange={(e) => setNewDomain(e.target.value)}
+              onPressEnter={addTrustedDomain}
+            />
+            <Button onClick={addTrustedDomain}>{t('browser.trust.addDomainButton')}</Button>
+          </Space.Compact>
+        </ConfigField>
+        <Table
+          size="small"
+          pagination={false}
+          rowKey="domain"
+          rowSelection={{
+            selectedRowKeys: selectedDomains,
+            onChange: (keys) => setSelectedDomains(keys as string[])
+          }}
+          dataSource={browser.trustedDomains.map((domain) => ({ domain }))}
+          locale={{ emptyText: t('browser.trust.empty') }}
+          columns={[
+            {
+              title: t('browser.trust.columnDomain'),
+              dataIndex: 'domain'
+            }
+          ]}
+        />
       </section>
 
       <ConfigSwitchRow

@@ -166,6 +166,9 @@ app.whenReady().then(() => {
   const dbPath = path.join(app.getPath('userData'), 'spaceassistant-data.json')
   const db = openDatabase(dbPath)
   appDb = db
+  void import('./shell/shellCommandTrust').then(({ persistExpiredTrustedCommandMarks }) => {
+    persistExpiredTrustedCommandMarks(db)
+  })
 
   workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
 

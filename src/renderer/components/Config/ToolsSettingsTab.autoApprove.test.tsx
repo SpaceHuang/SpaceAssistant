@@ -35,6 +35,52 @@ function renderFileSection(confirmMode: 'diff' | 'direct' | 'auto' = 'diff') {
   return { setToolUi }
 }
 
+describe('ToolsSettingsTab script auto allow', () => {
+  function renderScriptSection(autoAllow = false) {
+    const setShellUi = vi.fn()
+    render(
+      <App>
+        <ToolsSettingsTab
+          section="script"
+          toolUi={{
+            confirmMode: 'diff',
+            deniedTools: [],
+            pythonPath: 'python',
+            scriptTimeout: 300,
+            fileCheckpointingEnabled: true,
+            maxFileSnapshots: 100,
+            grepTimeoutSec: 60
+          }}
+          setToolUi={vi.fn()}
+          browserUi={DEFAULT_BROWSER_CONFIG}
+          setBrowserUi={vi.fn()}
+          shellUi={{ ...DEFAULT_SHELL_CONFIG, autoAllowScriptExecution: autoAllow }}
+          setShellUi={setShellUi}
+          onShellEnabledChange={vi.fn()}
+          models={[]}
+          pyTest={null}
+          pyTesting={false}
+          onTestPython={vi.fn()}
+        />
+      </App>
+    )
+    return { setShellUi }
+  }
+
+  it('renders auto allow switch on script section', () => {
+    renderScriptSection()
+    expect(screen.getByText('大模型生成的脚本自动允许执行')).toBeTruthy()
+  })
+
+  it('opens confirm modal when enabling auto allow', () => {
+    const { setShellUi } = renderScriptSection(false)
+    fireEvent.click(screen.getByRole('switch'))
+    expect(screen.getAllByText('确认开启自动执行？').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: '确认开启' }))
+    expect(setShellUi).toHaveBeenCalled()
+  })
+})
+
 describe('ToolsSettingsTab auto approve', () => {
   it('renders three confirmation mode options', () => {
     renderFileSection()

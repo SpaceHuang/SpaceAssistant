@@ -241,7 +241,7 @@ function AppShellInner() {
         </div>
       </main>
 
-      <SplitPane id="rightSider" defaultSize={280} minSize={180} maxSize={480} side="right" className="app-detail-sider">
+      <SplitPane id="rightSider" defaultSize={320} minSize={180} maxSize={960} side="right" className="app-detail-sider">
         <DetailPanel />
       </SplitPane>
 

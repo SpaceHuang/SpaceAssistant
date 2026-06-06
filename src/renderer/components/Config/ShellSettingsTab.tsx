@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
+import { ConfigSettingsStack } from './ConfigField'
 import { Info } from 'lucide-react'
 import type { ShellConfig, ShellRule } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigResultAlert } from './ConfigResultAlert'
-import { ConfigSwitchRow } from './ConfigField'
 
 type Props = {
   shell: ShellConfig
@@ -56,6 +56,10 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
     if (res.ok) patch({ trustedCommands: res.commands })
   }
 
+  useEffect(() => {
+    void syncTrustedCommands()
+  }, [])
+
   const removeSelectedTrusted = async () => {
     if (!selectedTrustIds.length) return
     const res = await window.api.shellManageTrustedCommands({ action: 'remove', ids: selectedTrustIds })
@@ -97,7 +101,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <ConfigSettingsStack>
       <Alert
         type="warning"
         showIcon
@@ -106,31 +110,8 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
         message={t('shell.boundaryTitle')}
         description={t('shell.boundaryDescription')}
       />
-      <ConfigSwitchRow
-        label={t('shell.autoAllow.title')}
-        hint={t('shell.autoAllow.description')}
-        checked={shell.autoAllowScriptExecution ?? false}
-        onChange={(enabled) => {
-          if (enabled) {
-            modal.confirm({
-              title: t('shell.autoAllow.confirmTitle'),
-              content: (
-                <div>
-                  <p>{t('shell.autoAllow.confirmMessage')}</p>
-                  <p>{t('shell.autoAllow.confirmWarning')}</p>
-                </div>
-              ),
-              okText: t('shell.autoAllow.confirmOk'),
-              cancelText: t('shell.autoAllow.confirmCancel'),
-              onOk: () => patch({ autoAllowScriptExecution: true })
-            })
-          } else {
-            patch({ autoAllowScriptExecution: false })
-          }
-        }}
-      />
 
-      <div>
+      <div className="config-shell-section">
         <div className="config-skill-section-header">
           <strong>{t('shell.trust.title')}</strong>
           <Space size="small">
@@ -194,9 +175,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
           ]}
           onChange={(v) => patch({ outputMode: v })}
         />
-        <p className="config-field__hint" style={{ marginTop: 6 }}>
-          {t('shell.outputHint')}
-        </p>
+        <p className="config-field__hint">{t('shell.outputHint')}</p>
       </Form.Item>
       <Form.Item label={t('shell.maxInlineOutputLabel')}>
         <InputNumber
@@ -240,7 +219,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
 
       <details className="config-shell-advanced">
         <summary>{t('shell.advancedSummary')}</summary>
-        <Form.Item label={t('shell.executableLabel')} className="config-block-spacer">
+        <Form.Item label={t('shell.executableLabel')}>
           <Space.Compact style={{ width: '100%' }}>
             <Input
               value={shell.executable ?? ''}
@@ -257,7 +236,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
         {shellTest ? <ConfigResultAlert ok={shellTest.ok} message={shellTest.text} /> : null}
       </details>
 
-      <div>
+      <div className="config-shell-section">
         <div className="config-skill-section-header">
           <strong>{t('shell.rulesTitle')}</strong>
           <Button size="small" onClick={addRule}>
@@ -322,9 +301,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
             }
           ]}
         />
-        <p className="config-field__hint" style={{ marginTop: 8 }}>
-          {t('shell.builtinDenyTitle')}
-        </p>
+        <p className="config-field__hint">{t('shell.builtinDenyTitle')}</p>
         <ul className="config-field__hint">
           {builtinDenyDisplay.map((r) => (
             <li key={r.pattern}>
@@ -333,6 +310,6 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
           ))}
         </ul>
       </div>
-    </Space>
+    </ConfigSettingsStack>
   )
 }

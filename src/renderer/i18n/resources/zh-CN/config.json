@@ -246,7 +246,7 @@
       },
       "script": {
         "label": "脚本执行",
-        "hint": "Python 路径与脚本超时"
+        "hint": "脚本自动执行、Python 路径与超时"
       },
       "shell": {
         "label": "Shell 命令",
@@ -334,7 +334,7 @@
     },
     "autoAllow": {
       "title": "大模型生成的脚本自动允许执行",
-      "description": "开启后，低风险 Shell 命令将直接执行，不再弹出确认卡片；高风险仍会被拦截。",
+      "description": "开启后，模型通过 run_script 生成的 Python 脚本将直接执行，不再弹出确认卡片。run_shell 不受影响，仍按信任命令或确认卡片流程执行。",
       "confirmTitle": "确认开启自动执行？",
       "confirmMessage": "开启后，模型生成的脚本将直接执行，不再弹出确认卡片。",
       "confirmWarning": "⚠️ 请确保您信任当前工作环境，避免执行恶意命令。",
@@ -383,7 +383,11 @@
     "trust": {
       "title": "可信域名（访问时无需确认）",
       "addDomain": "添加域名",
-      "batchDelete": "清空全部"
+      "addDomainButton": "添加",
+      "batchDelete": "批量删除",
+      "columnDomain": "域名",
+      "empty": "暂无可信域名",
+      "invalidDomain": "无效的域名格式"
     },
     "allowHttpLabel": "允许 HTTP",
     "allowHttpHint": "关闭后只允许访问 https 链接。",

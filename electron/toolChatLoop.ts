@@ -14,12 +14,14 @@ import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolExecutorResult } from './tools/types'
 import type {
   AutoApproveFallback,
+  AutoApprovedWriteMeta,
   BrowserConfig,
   ShellConfig,
   ShellSecurityHints,
   ToolsConfig,
   WikiConfig
 } from '../src/shared/domainTypes'
+import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
 import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
@@ -47,6 +49,7 @@ import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../src/shared/browserRemote
 import { SHELL_FEISHU_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
 import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
+import { shouldSkipRunScriptConfirmForAutoAllow } from './shell/shellCommandTrust'
 import {
   logShellPathConfirm,
   logShellSecurityDeny,
@@ -740,6 +743,7 @@ async function runToolChatSessionInner(
       let outcome: ToolConfirmOutcome = 'approved'
       let autoApproveFallback: AutoApproveFallback | undefined
       let fileAutoApproved = false
+      let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
       if (
         (toolName === 'write_file' || toolName === 'edit_file') &&
         toolsConfig.confirmMode === 'auto'
@@ -754,6 +758,25 @@ async function runToolChatSessionInner(
         })
         if (autoEval.approve) {
           fileAutoApproved = true
+          const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
+          const diff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
+          let bytesWritten = 0
+          if (toolName === 'write_file') {
+            const content = typeof inputObj.content === 'string' ? inputObj.content : ''
+            bytesWritten = Buffer.byteLength(content, 'utf8')
+          } else if (diff) {
+            bytesWritten = Buffer.byteLength(diff.newContent, 'utf8')
+          }
+          const stats = diff
+            ? computeDiffLineStats(diff.oldContent, diff.newContent)
+            : { add: 0, remove: 0 }
+          fileAutoApproveMeta = {
+            path: relPath,
+            added: stats.add,
+            removed: stats.remove,
+            bytesWritten,
+            ...(diff ? { diff } : {})
+          }
         } else {
           autoApproveFallback = { reason: autoEval.reason, reasonCode: autoEval.reasonCode }
           logAgentEvent('info', 'file.auto_approve.fallback', {
@@ -777,6 +800,16 @@ async function runToolChatSessionInner(
       )
       if (toolName === 'run_shell' && shellPrecheck?.ok && shellPrecheck.skipConfirm) {
         needsConfirm = false
+      }
+      if (toolName === 'run_script' && shouldSkipRunScriptConfirmForAutoAllow(shellConfig)) {
+        needsConfirm = false
+        logAgentEvent('info', 'script.auto_allow.execute', {
+          requestId,
+          sessionId,
+          toolUseId,
+          tool: 'run_script',
+          timestamp: Date.now()
+        })
       }
       if (fileAutoApproved) {
         needsConfirm = false
@@ -1063,7 +1096,8 @@ async function runToolChatSessionInner(
           sessionId,
           toolUseId,
           tool: toolName,
-          relPath: typeof inputObj.path === 'string' ? inputObj.path : '',
+          relPath: fileAutoApproveMeta?.path ?? (typeof inputObj.path === 'string' ? inputObj.path : ''),
+          bytesWritten: fileAutoApproveMeta?.bytesWritten ?? 0,
           timestamp: Date.now()
         })
       }
@@ -1157,7 +1191,8 @@ async function runToolChatSessionInner(
           success: execResult.success,
           data: execResult.data,
           error: execResult.error,
-          ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {})
+          ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {}),
+          ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
         }
       })
       if (abortRepeatedToolError) break

@@ -73,8 +73,11 @@
   },
   "toast": {
     "trustCommandSuccess": "已信任「{{command}}」，后续执行将不再询问。",
+    "trustCommandManage": "可在设置页管理信任列表。",
     "trustDomainSuccess": "已信任「{{domain}}」，后续访问将不再询问。",
-    "fileAutoApproved": "已自动写入 {{path}}（+{{added}} / -{{removed}}）。"
+    "trustDomainManage": "可在设置页管理可信域名。",
+    "fileAutoApproved": "已自动写入 {{path}}（+{{added}} / -{{removed}}）。",
+    "fileAutoApprovedViewDiff": "查看 diff"
   },
   "fileAutoApprove": {
     "fallbackBanner": "自动放行未通过：{{reason}}。本次写入需要您手动确认。"

@@ -8,6 +8,21 @@ import { changeAppLocale } from '../../i18n/localeSync'
 describe('ShellSettingsTab', () => {
   beforeEach(async () => {
     await changeAppLocale('zh-CN')
+    window.api = {
+      ...window.api,
+      shellManageTrustedCommands: vi.fn().mockResolvedValue({ ok: true, commands: [] })
+    } as typeof window.api
+  })
+
+  it('does not show auto allow switch on shell section', () => {
+    render(
+      <ConfigProvider>
+        <App>
+          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={vi.fn()} />
+        </App>
+      </ConfigProvider>
+    )
+    expect(screen.queryByText('大模型生成的脚本自动允许执行')).toBeNull()
   })
 
   it('shows builtin deny rules', () => {

@@ -73,8 +73,11 @@
   },
   "toast": {
     "trustCommandSuccess": "Trusted \"{{command}}\". Future runs won't ask for confirmation.",
+    "trustCommandManage": "Manage trusted commands in Settings.",
     "trustDomainSuccess": "Trusted \"{{domain}}\". Future visits won't ask for confirmation.",
-    "fileAutoApproved": "Auto-wrote {{path}} (+{{added}} / -{{removed}})."
+    "trustDomainManage": "Manage trusted domains in Settings.",
+    "fileAutoApproved": "Auto-wrote {{path}} (+{{added}} / -{{removed}}).",
+    "fileAutoApprovedViewDiff": "View diff"
   },
   "fileAutoApprove": {
     "fallbackBanner": "Auto-approve failed: {{reason}}. Please confirm this write manually."

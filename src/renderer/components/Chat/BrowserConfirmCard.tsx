@@ -71,12 +71,14 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
           ) : null}
           {canTrustDomain ? (
             <label className="write-confirm-card__trust-option">
-              <input
-                type="checkbox"
-                checked={trustChecked}
-                onChange={(e) => setTrustChecked(e.target.checked)}
-              />
-              <span>{t('toolCall.confirm.trustThisDomain')}</span>
+              <span className="write-confirm-card__trust-control">
+                <input
+                  type="checkbox"
+                  checked={trustChecked}
+                  onChange={(e) => setTrustChecked(e.target.checked)}
+                />
+              </span>
+              <span className="write-confirm-card__trust-label">{t('toolCall.confirm.trustThisDomain')}</span>
             </label>
           ) : null}
         </div>

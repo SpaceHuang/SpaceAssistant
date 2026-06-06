@@ -644,6 +644,110 @@
   width: 100%;
 }
 
+/* Mixed config-field + Form.Item panels: one vertical rhythm via gap, not stacked margins */
+.config-settings-page .ant-form-item-control-input-content > .config-field__hint {
+  margin-top: var(--sa-config-gap-tight);
+}
+
+.config-settings-page .config-form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-stack);
+  width: 100%;
+}
+
+.config-settings-page .config-form-stack > .ant-form-item,
+.config-settings-page .config-form-stack > .config-field,
+.config-settings-page .config-form-stack > .config-alert-block,
+.config-settings-page .config-form-stack > .config-alert-block--loose {
+  margin: 0;
+}
+
+.config-settings-page .config-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-field);
+}
+
+.config-settings-page .config-form-group > .ant-form-item {
+  margin-bottom: 0;
+}
+
+.config-settings-page .config-form-group .config-field__hint {
+  margin-top: 0;
+}
+
+.config-settings-page .config-form-group .config-field__hint p {
+  margin: 0;
+}
+
+.config-settings-page .config-form-group .config-field__hint ul {
+  margin: var(--sa-config-gap-tight) 0 0;
+  padding-left: 1.25rem;
+}
+
+.config-settings-page .config-form-group .config-field__hint p + p,
+.config-settings-page .config-form-group .config-field__hint p + ul {
+  margin-top: var(--sa-config-gap-tight);
+}
+
+/* Ant Space stack: gap already separates siblings; drop Form.Item tail margin */
+.config-settings-page .config-settings-stack.ant-space-vertical > .ant-form-item {
+  margin-bottom: 0;
+}
+
+.config-settings-page .config-section-hint {
+  margin: 0;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.config-settings-page .browser-engine-section,
+.config-settings-page .browser-rate-limit-section,
+.config-settings-page .browser-trust-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-field);
+}
+
+.config-settings-page .browser-trust-section > .config-field__hint {
+  margin-top: 0;
+}
+
+.config-settings-page .config-shell-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-field);
+}
+
+.config-settings-page .config-shell-advanced > summary {
+  cursor: pointer;
+  font-size: var(--sa-config-font);
+  font-weight: 500;
+  color: var(--sa-text-secondary);
+  list-style-position: outside;
+}
+
+.config-settings-page .config-shell-advanced .config-block-spacer.ant-form-item {
+  margin-top: 0;
+}
+
+.config-settings-page .config-shell-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-field);
+}
+
+.config-settings-page .config-shell-section .config-field__hint {
+  margin-top: 0;
+}
+
+.config-settings-page .config-shell-section .config-field__hint ul {
+  margin: var(--sa-config-gap-tight) 0 0;
+  padding-left: 1.125rem;
+}
+
 .config-settings-page .config-tools-subtabs {
   margin-top: 0;
 }

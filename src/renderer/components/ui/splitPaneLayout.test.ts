@@ -40,8 +40,16 @@ function mockShell(opts: { shellW: number; leftW?: number; rightW?: number; main
 describe('splitPaneLayout', () => {
   it('caps right pane when shell narrows', () => {
     const shell = mockShell({ shellW: 1000, leftW: 328, mainMin: 400 })
-    expect(maxSplitPaneSize(shell, 'right', 180, 480)).toBe(272)
-    expect(clampSplitPaneSize(shell, 'right', 480, 180, 480)).toBe(272)
+    expect(maxSplitPaneSize(shell, 'right', 180, 960)).toBe(272)
+    expect(clampSplitPaneSize(shell, 'right', 960, 180, 960)).toBe(272)
+    shell.remove()
+    document.querySelector('.app-main')?.remove()
+  })
+
+  it('allows wide right pane on large shell before hitting maxSize', () => {
+    const shell = mockShell({ shellW: 1600, leftW: 328, mainMin: 400 })
+    expect(maxSplitPaneSize(shell, 'right', 180, 960)).toBe(872)
+    expect(clampSplitPaneSize(shell, 'right', 960, 180, 960)).toBe(872)
     shell.remove()
     document.querySelector('.app-main')?.remove()
   })

@@ -100,4 +100,47 @@ describe('BrowserSettingsTab', () => {
     })
     expect(store.getState().config.settingsOpen).toBe(false)
   })
+
+  it('adds trusted domain via input and supports batch delete', async () => {
+    const onChange = vi.fn()
+    const store = configureStore({
+      reducer: {
+        config: configReducer,
+        chat: chatReducer,
+        session: sessionReducer,
+        chatLaunch: chatLaunchReducer,
+        browserDetect: browserDetectReducer
+      }
+    })
+    window.api = {
+      ...window.api,
+      browserDetect: vi.fn().mockResolvedValue(detectMissing)
+    } as typeof window.api
+
+    render(
+      <Provider store={store}>
+        <ConfigProvider>
+          <App>
+            <BrowserSettingsTab
+              browser={{ ...DEFAULT_BROWSER_CONFIG, trustedDomains: ['github.com', 'example.com'] }}
+              onChange={onChange}
+              active={false}
+            />
+          </App>
+        </ConfigProvider>
+      </Provider>
+    )
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all' }))
+    fireEvent.click(screen.getByRole('button', { name: '批量删除' }))
+    expect(onChange).toHaveBeenCalled()
+    const next = onChange.mock.calls.at(-1)?.[0] as typeof DEFAULT_BROWSER_CONFIG
+    expect(next.trustedDomains).toEqual([])
+
+    fireEvent.change(screen.getByPlaceholderText('例：example.com'), { target: { value: 'docs.github.com' } })
+    fireEvent.click(screen.getByRole('button', { name: /添/ }))
+    expect(onChange).toHaveBeenCalled()
+    const added = onChange.mock.calls.at(-1)?.[0] as typeof DEFAULT_BROWSER_CONFIG
+    expect(added.trustedDomains).toContain('docs.github.com')
+  })
 })

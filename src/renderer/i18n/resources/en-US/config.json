@@ -246,7 +246,7 @@
       },
       "script": {
         "label": "Script execution",
-        "hint": "Python path and script timeout"
+        "hint": "Auto-run scripts, Python path, and timeouts"
       },
       "shell": {
         "label": "Shell commands",
@@ -334,7 +334,7 @@
     },
     "autoAllow": {
       "title": "Auto-allow model-generated scripts",
-      "description": "When enabled, low-risk shell commands run without confirmation; high-risk patterns are still blocked.",
+      "description": "When enabled, model-generated Python scripts (run_script) run without confirmation. run_shell is unchanged and still uses trusted commands or confirmation cards.",
       "confirmTitle": "Enable auto-execution?",
       "confirmMessage": "Model-generated scripts will run without a confirmation card.",
       "confirmWarning": "⚠️ Only enable when you trust this environment.",
@@ -383,7 +383,11 @@
     "trust": {
       "title": "Trusted domains (no confirmation)",
       "addDomain": "Add domain",
-      "batchDelete": "Clear all"
+      "addDomainButton": "Add",
+      "batchDelete": "Delete selected",
+      "columnDomain": "Domain",
+      "empty": "No trusted domains yet",
+      "invalidDomain": "Invalid domain format"
     },
     "allowHttpLabel": "Allow HTTP",
     "allowHttpHint": "When off, only https links are allowed.",

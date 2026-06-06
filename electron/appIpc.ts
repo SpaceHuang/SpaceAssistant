@@ -260,8 +260,17 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         return { ok: true as const, commands: listTrustedCommands(ctx.db) }
       }
       if (action === 'remove' && Array.isArray((payload as { ids?: string[] }).ids)) {
-        const commands = removeTrustedCommands(ctx.db, (payload as { ids: string[] }).ids)
-        logAgentEvent('info', 'trust.remove', { type: 'shell_command', timestamp: Date.now() })
+        const ids = (payload as { ids: string[] }).ids
+        const before = listTrustedCommands(ctx.db)
+        const removed = before.filter((c) => ids.includes(c.id))
+        const commands = removeTrustedCommands(ctx.db, ids)
+        for (const item of removed) {
+          logAgentEvent('info', 'trust.remove', {
+            type: 'shell_command',
+            item: item.command,
+            timestamp: Date.now()
+          })
+        }
         return { ok: true as const, commands }
       }
       if (action === 'cleanExpired') {
@@ -636,6 +645,16 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             /* ignore */
           }
         }
+        if (
+          payload.tools.confirmMode !== undefined &&
+          payload.tools.confirmMode !== cur.confirmMode
+        ) {
+          logAgentEvent('info', 'file.confirm_mode.change', {
+            from: cur.confirmMode,
+            to: payload.tools.confirmMode,
+            timestamp: Date.now()
+          })
+        }
         const next = mergeToolsConfig({ ...cur, ...payload.tools })
         setConfigValue(ctx.db, CONFIG_KEYS.tools, JSON.stringify(next))
       }
@@ -691,6 +710,22 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         )
       }
       if (payload.browser !== undefined) {
+        if (payload.browser.trustedDomains !== undefined) {
+          const prevBrowser = readBrowserConfigFromDb(ctx.db)
+          const prevSet = new Set((prevBrowser.trustedDomains ?? []).map((d) => d.toLowerCase()))
+          const nextSet = new Set(
+            (payload.browser.trustedDomains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean)
+          )
+          for (const domain of prevSet) {
+            if (!nextSet.has(domain)) {
+              logAgentEvent('info', 'trust.remove', {
+                type: 'browser_domain',
+                item: domain,
+                timestamp: Date.now()
+              })
+            }
+          }
+        }
         persistBrowserConfig(ctx.db, payload.browser)
       }
       if (payload.shell !== undefined) {

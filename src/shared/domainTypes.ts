@@ -463,11 +463,20 @@ export function builtinToolNeedsConfirmation(name: string): boolean {
   )
 }
 
+export interface AutoApprovedWriteMeta {
+  path: string
+  added: number
+  removed: number
+  bytesWritten: number
+  diff?: { oldContent: string; newContent: string; oldPath: string }
+}
+
 export interface ToolCallResultPersisted {
   success: boolean
   data?: unknown
   error?: string
   dependencyRecovery?: BrowserDependencyToolError
+  autoApprovedWrite?: AutoApprovedWriteMeta
 }
 
 /** 工具调用记录（持久化到消息中） */

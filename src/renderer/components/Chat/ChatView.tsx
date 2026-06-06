@@ -235,15 +235,9 @@ export function ChatView() {
       if (!requestId) return
       toolChatControllerRef.current?.applyConfirmOutcome(toolUseId, approved)
       pendingConfirmStore.respond(requestId, toolUseId, approved, options)
-      if (approved && options?.trustCommand) {
-        message.success(tChat('toast.trustCommandSuccess', { command: options.trustCommand }))
-      }
-      if (approved && options?.trustDomain) {
-        message.success(tChat('toast.trustDomainSuccess', { domain: options.trustDomain }))
-      }
       dispatch(setConfirmFocusToolUseId(null))
     },
-    [dispatch, message, sessionId, streamingRequestId, tChat]
+    [dispatch, sessionId, streamingRequestId]
   )
 
   const onToolCancel = useCallback(
@@ -548,6 +542,32 @@ export function ChatView() {
               void window.api.sessionGet(runSessionId).then((s) => {
                 if (s) dispatch(upsertSession(s))
               })
+            })
+          },
+          onFileAutoApproved: (toolUseId, meta) => {
+            message.success({
+              content: (
+                <div className="chat-trust-toast">
+                  <div>
+                    {tChat('toast.fileAutoApproved', {
+                      path: meta.path,
+                      added: meta.added,
+                      removed: meta.removed
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    className="chat-trust-toast__link"
+                    onClick={() => {
+                      dispatch(setConfirmFocusToolUseId(toolUseId))
+                      dispatch(setScrollToMessageId(assistantId))
+                    }}
+                  >
+                    {tChat('toast.fileAutoApprovedViewDiff')}
+                  </button>
+                </div>
+              ),
+              duration: 6
             })
           }
         })

@@ -1,7 +1,14 @@
 import { patchMessage } from '../store/chatSlice'
 import { appendProgressOutputRaw } from '../../shared/terminalScrollback'
 import type { AppDispatch } from '../store'
-import type { AutoApproveFallback, ShellSecurityHints, ToolCallRecord, ToolCallResultPersisted, Message } from '../../shared/domainTypes'
+import type {
+  AutoApproveFallback,
+  AutoApprovedWriteMeta,
+  ShellSecurityHints,
+  ToolCallRecord,
+  ToolCallResultPersisted,
+  Message
+} from '../../shared/domainTypes'
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
 import { buildClaudeToolChatMessages } from '../../shared/claudeToolHistory'
@@ -31,8 +38,17 @@ export function createToolChatController(args: {
   /** 多会话并行时由 chatRunner 路由 patch，默认仍写 Redux */
   applyAssistantPatch?: (patch: Partial<Message>) => void
   onDependencyRecovery?: (recovery: BrowserDependencyToolError) => void
+  onFileAutoApproved?: (toolUseId: string, meta: AutoApprovedWriteMeta) => void
 }): ToolChatController {
-  const { dispatch, assistantMessageId, getRequestId, onRecordsChange, applyAssistantPatch, onDependencyRecovery } = args
+  const {
+    dispatch,
+    assistantMessageId,
+    getRequestId,
+    onRecordsChange,
+    applyAssistantPatch,
+    onDependencyRecovery,
+    onFileAutoApproved
+  } = args
   const records: ToolCallRecord[] = []
 
   const flush = () => {
@@ -131,16 +147,20 @@ export function createToolChatController(args: {
     const ok = d.result.success
     const err = d.result.error ?? ''
     const rejected = err.includes('拒绝') || err.includes('超时') || err.includes('取消')
+    const autoMeta = d.result.autoApprovedWrite
     records[i] = {
       ...records[i]!,
       status: ok ? 'completed' : rejected ? 'rejected' : 'failed',
       result: d.result,
       completedAt: Date.now(),
-      confirmDiff: undefined
+      confirmDiff: autoMeta?.diff ?? undefined
     }
     flush()
     if (d.result.dependencyRecovery) {
       onDependencyRecovery?.(d.result.dependencyRecovery)
+    }
+    if (ok && autoMeta) {
+      onFileAutoApproved?.(d.toolUseId, autoMeta)
     }
   }
 

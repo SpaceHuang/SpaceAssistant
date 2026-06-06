@@ -1695,6 +1695,59 @@
   border-radius: var(--sa-radius-sm);
 }
 
+.tool-row-detail__script-code {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.tool-row-detail__script-code .script-confirm-card__meta {
+  padding: 0 12px 10px;
+}
+
+.tool-row-detail__script-code .script-confirm-card__code--highlighted {
+  max-height: 280px;
+  overflow: auto;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-color: var(--sa-border-strong) transparent;
+}
+
+.tool-row-detail__script-code .script-confirm-card__code--highlighted::after {
+  background: linear-gradient(to bottom, transparent, var(--sa-chat-inset-bg));
+}
+
+.tool-row-detail__script-code .script-confirm-card__code--highlighted .sa-prose pre,
+.tool-row-detail__script-code .script-confirm-card__code--highlighted .sa-prose pre.shiki,
+.tool-row-detail__script-code .script-confirm-card__code--highlighted pre.shiki-placeholder,
+.tool-row-detail__script-code .script-confirm-card__code--highlighted .sa-prose pre.shiki code,
+.tool-row-detail__script-code .script-confirm-card__code--highlighted pre.shiki-placeholder code,
+.tool-row-detail__script-code .script-confirm-card__code--highlighted .shiki .line {
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent !important;
+  background-color: transparent !important;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-confirm-command-font-size);
+  font-weight: var(--sa-confirm-command-font-weight);
+  line-height: var(--sa-confirm-command-line-height);
+  font-synthesis: none;
+  letter-spacing: 0;
+  color: var(--sa-command-inset-text);
+}
+
+.tool-row-detail__script-code .script-confirm-card__code--highlighted .sa-prose pre,
+.tool-row-detail__script-code .script-confirm-card__code--highlighted .sa-prose pre.shiki,
+.tool-row-detail__script-code .script-confirm-card__code--highlighted pre.shiki-placeholder {
+  padding: 10px 12px;
+}
+
 .shell-output-block:not(:has(.shell-terminal-wrap)) {
   background: var(--sa-command-inset-bg);
   color: var(--sa-command-inset-text);
@@ -2163,6 +2216,64 @@
   font-size: var(--sa-chat-font-meta);
   line-height: 1.55;
   color: var(--sa-text-secondary);
+}
+
+.write-confirm-card__trust-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+  font-size: var(--sa-chat-font-meta);
+  line-height: var(--sa-chat-line-body);
+  color: var(--sa-text-secondary);
+  user-select: none;
+}
+
+.write-confirm-card__trust-control {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: calc(var(--sa-chat-font-meta) * var(--sa-chat-line-body));
+}
+
+.write-confirm-card__trust-option input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1.5px solid var(--sa-border-strong);
+  border-radius: 3px;
+  background: var(--sa-bg-elevated);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.write-confirm-card__trust-option input[type='checkbox']:checked {
+  background-color: var(--sa-primary);
+  border-color: var(--sa-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6l2.5 2.5 4.5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 10px 10px;
+}
+
+.write-confirm-card__trust-option input[type='checkbox']:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sa-primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.write-confirm-card__trust-label {
+  min-width: 0;
+  flex: 1;
 }
 
 .write-confirm-card__subject--diff {
@@ -2939,6 +3050,27 @@
 .write-success-card__view:focus-visible {
   outline: 2px solid var(--sa-primary);
   outline-offset: 1px;
+}
+
+.chat-trust-toast__manage {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--sa-text-muted);
+}
+
+.chat-trust-toast__link {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--sa-primary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.chat-trust-toast__link:hover {
+  color: var(--sa-primary-hover, var(--sa-primary));
 }
 
 .sa-skill-row-highlight td {

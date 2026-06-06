@@ -93,9 +93,9 @@ export function WorkDirSelector({ disabled }: Props) {
       options={options}
       disabled={disabled}
       popupMatchSelectWidth={false}
-      popupClassName="workdir-selector-popup"
+      classNames={{ popup: { root: 'workdir-selector-popup' } }}
       onChange={handleSwitch}
-      dropdownRender={(menu) => (
+      popupRender={(menu) => (
         <>
           {menu}
           <div className="workdir-selector-popup-footer">

@@ -30,18 +30,17 @@ export function canShowShellTrustOption(analysis: ShellAnalysisResult): boolean 
   return true
 }
 
+/** run_script（Python）在开启自动执行时跳过确认卡片 */
+export function shouldSkipRunScriptConfirmForAutoAllow(shellConfig?: ShellConfig | null): boolean {
+  return shellConfig?.autoAllowScriptExecution === true
+}
+
 export function shouldSkipShellConfirmForTrust(
   command: string,
   analysis: ShellAnalysisResult,
   shellConfig?: ShellConfig | null
 ): boolean {
   if (analysis.verdict === 'deny') return false
-
-  if (shellConfig?.autoAllowScriptExecution) {
-    if (analysis.shellSecurityHints.requiresRiskAck) return false
-    return true
-  }
-
   if (!matchesTrustedCommand(command, shellConfig?.trustedCommands)) return false
   return canShowShellTrustOption(analysis)
 }
@@ -112,4 +111,16 @@ export function cleanExpiredTrustedCommands(db: AppDatabase): number {
 export function listTrustedCommands(db: AppDatabase): TrustedShellCommand[] {
   const shell = readShellConfigFromDb(db)
   return markExpiredTrustedCommands(shell.trustedCommands ?? [])
+}
+
+/** 将超过 90 天未使用的记录标记为过期并持久化（不删除） */
+export function persistExpiredTrustedCommandMarks(db: AppDatabase): TrustedShellCommand[] {
+  const shell = readShellConfigFromDb(db)
+  const prev = shell.trustedCommands ?? []
+  const marked = markExpiredTrustedCommands(prev)
+  const changed = marked.some((t, i) => Boolean(t.expired) !== Boolean(prev[i]?.expired))
+  if (changed) {
+    persistShellConfig(db, { trustedCommands: marked })
+  }
+  return marked
 }
