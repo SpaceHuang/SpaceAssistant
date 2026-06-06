@@ -11,6 +11,8 @@ import { abortSessionRun } from '../../services/chatRunnerService'
 import { PendingConfirmBanner } from './PendingConfirmBanner'
 import { SessionDeleteConfirmModal } from './SessionDeleteConfirmModal'
 import { SessionListIcon } from './SessionListIcon'
+import { SessionItemContextMenu } from './SessionItemContextMenu'
+import { SessionTitleEditor } from './SessionTitleEditor'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 
@@ -24,6 +26,7 @@ export function SessionListPane() {
   const [q, setQ] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
 
   const query = q.trim()
   const filtered = sessions.filter((s) =>
@@ -101,42 +104,63 @@ export function SessionListPane() {
                       .join(' ')
 
                     return (
-                      <div key={item.id} role="listitem" className={rowClass}>
-                        <button
-                          type="button"
-                          className="session-item-select"
-                          aria-current={active ? 'true' : undefined}
-                          disabled={deleting}
-                          onClick={() => dispatch(setSession(item.id))}
-                        >
-                          <SessionListIcon loading={running} />
-                          <span className="session-item-name" title={sessionDisplayName(item.name)}>
-                            {sessionDisplayName(item.name)}
-                          </span>
-                        </button>
-                        {running ? (
+                      <SessionItemContextMenu
+                        key={item.id}
+                        onRename={() => setEditingSessionId(item.id)}
+                      >
+                        <div role="listitem" className={rowClass}>
                           <button
                             type="button"
-                            className="session-item-stop"
-                            aria-label={t('session.stopAria', { name: sessionDisplayName(item.name) })}
-                            onClick={() => stopRun(item.id)}
+                            className="session-item-select"
+                            aria-current={active ? 'true' : undefined}
+                            disabled={deleting}
+                            onClick={() => {
+                              if (editingSessionId === item.id) return
+                              dispatch(setSession(item.id))
+                            }}
                           >
-                            <Square size={10} strokeWidth={2} fill="currentColor" aria-hidden />
+                            <SessionListIcon loading={running} />
+                            {editingSessionId === item.id ? (
+                              <SessionTitleEditor
+                                session={item}
+                                onDone={() => setEditingSessionId(null)}
+                              />
+                            ) : (
+                              <span
+                                className="session-item-name"
+                                title={sessionDisplayName(item.name)}
+                                aria-label={t('session.rename.aria', {
+                                  name: sessionDisplayName(item.name)
+                                })}
+                              >
+                                {sessionDisplayName(item.name)}
+                              </span>
+                            )}
                           </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="session-item-delete"
-                          aria-label={t('session.deleteAria', { name: sessionDisplayName(item.name) })}
-                          disabled={deleting}
-                          aria-busy={deleting}
-                          onClick={() => {
-                            if (!deletingId) setDeleteTarget(item)
-                          }}
-                        >
-                          <Trash2 size={12} strokeWidth={1.75} aria-hidden />
-                        </button>
-                      </div>
+                          {running ? (
+                            <button
+                              type="button"
+                              className="session-item-stop"
+                              aria-label={t('session.stopAria', { name: sessionDisplayName(item.name) })}
+                              onClick={() => stopRun(item.id)}
+                            >
+                              <Square size={10} strokeWidth={2} fill="currentColor" aria-hidden />
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="session-item-delete"
+                            aria-label={t('session.deleteAria', { name: sessionDisplayName(item.name) })}
+                            disabled={deleting}
+                            aria-busy={deleting}
+                            onClick={() => {
+                              if (!deletingId) setDeleteTarget(item)
+                            }}
+                          >
+                            <Trash2 size={12} strokeWidth={1.75} aria-hidden />
+                          </button>
+                        </div>
+                      </SessionItemContextMenu>
                     )
                   })}
                 </div>

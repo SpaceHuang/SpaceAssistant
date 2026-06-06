@@ -425,12 +425,17 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       if (payload.metadata !== undefined) {
         Object.assign(mergedMetadata, payload.metadata)
       }
-      if (payload.name !== undefined) {
+      const trimmedName = payload.name !== undefined ? payload.name.trim() : undefined
+      const nameChanged =
+        payload.name !== undefined &&
+        trimmedName !== '' &&
+        trimmedName !== (cur.name ?? '').trim()
+      if (nameChanged) {
         mergedMetadata[SESSION_META_TITLE_USER_CUSTOM] = true
       }
-      const hasMetaChange = payload.metadata !== undefined || payload.name !== undefined
+      const hasMetaChange = payload.metadata !== undefined || nameChanged
       const next = updateSession(ctx.db, payload.sessionId, {
-        ...(payload.name !== undefined ? { name: payload.name } : {}),
+        ...(nameChanged && trimmedName !== undefined ? { name: trimmedName } : {}),
         ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
         ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),

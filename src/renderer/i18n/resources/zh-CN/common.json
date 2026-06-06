@@ -73,6 +73,14 @@
     },
     "searchAria": "搜索会话",
     "searchPlaceholder": "搜索会话",
+    "rename": {
+      "menuItem": "重命名",
+      "aria": "重命名会话「{{name}}」",
+      "inputAria": "编辑会话标题",
+      "success": "已更新标题",
+      "failed": "更新标题失败，请稍后重试",
+      "tooLong": "标题不能超过 {{max}} 个字符"
+    },
     "stopAria": "中止「{{name}}」的执行",
     "unnamed": "未命名会话"
   },

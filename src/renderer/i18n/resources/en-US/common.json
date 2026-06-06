@@ -73,6 +73,14 @@
     },
     "searchAria": "Search sessions",
     "searchPlaceholder": "Search sessions",
+    "rename": {
+      "menuItem": "Rename",
+      "aria": "Rename session \"{{name}}\"",
+      "inputAria": "Edit session title",
+      "success": "Title updated",
+      "failed": "Could not update title. Try again later.",
+      "tooLong": "Title cannot exceed {{max}} characters"
+    },
     "stopAria": "Stop execution for \"{{name}}\"",
     "unnamed": "Untitled session"
   },

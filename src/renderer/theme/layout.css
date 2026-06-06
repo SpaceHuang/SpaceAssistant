@@ -390,6 +390,36 @@
   font-weight: 500;
 }
 
+.session-item-context-trigger {
+  display: contents;
+}
+
+.session-item-name-input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0 4px;
+  border: 1px solid var(--sa-accent, #1677ff);
+  border-radius: var(--sa-radius-sm, 4px);
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: var(--sa-bg, #fff);
+  outline: none;
+}
+
+.session-item-name-input:focus {
+  border-color: var(--sa-accent, #1677ff);
+  box-shadow: 0 0 0 1px var(--sa-accent, #1677ff);
+}
+
+.session-item--active .session-item-name-input {
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
+}
+
 .session-item-stop,
 .session-item-delete {
   display: inline-flex;
