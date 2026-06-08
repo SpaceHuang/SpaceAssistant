@@ -86,6 +86,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/after-pack-win-icon.cjs",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -108,7 +109,7 @@
       }
     ],
     "win": {
-      "icon": "res/icons/sa-logo-256.png",
+      "icon": "res/icons/sa-logo.ico",
       "signAndEditExecutable": false,
       "target": [
         {
@@ -118,6 +119,12 @@
           ]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true
     },
     "mac": {
       "icon": "res/icons/sa-logo.iconset",

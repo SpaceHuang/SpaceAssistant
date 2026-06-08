@@ -24,6 +24,18 @@ async function writeTrayVariant(srcPng, baseName) {
   console.log('Wrote', icoPath)
 }
 
+async function writeAppIcon(srcPng, icoPath) {
+  // Windows 应用图标要求多尺寸 ICO；electron-builder 用它生成 exe/快捷方式/任务栏图标
+  const sizes = [16, 24, 32, 48, 64, 128, 256]
+  const pngBuffers = await Promise.all(
+    sizes.map((s) => sharp(srcPng).resize(s, s).png().toBuffer()),
+  )
+  const icoBuffer = await pngToIco(pngBuffers)
+  fs.mkdirSync(path.dirname(icoPath), { recursive: true })
+  fs.writeFileSync(icoPath, icoBuffer)
+  console.log('Wrote', icoPath, `(${sizes.join('/')})`)
+}
+
 async function writeFavicon(srcPng) {
   fs.mkdirSync(publicDir, { recursive: true })
 
@@ -44,8 +56,9 @@ async function main() {
   const lightSrc = path.join(iconRoot, 'sa-logo-256.png')
   const darkSrc = path.join(iconRoot, 'dark/sa-logo-dark-256.png')
   const faviconSrc = path.join(iconRoot, 'sa-logo-32.png')
+  const appIconSrc = path.join(iconRoot, 'sa-logo-1024.png')
 
-  for (const src of [lightSrc, darkSrc, faviconSrc]) {
+  for (const src of [lightSrc, darkSrc, faviconSrc, appIconSrc]) {
     if (!fs.existsSync(src)) {
       console.error('Source PNG not found:', src)
       process.exit(1)
@@ -57,6 +70,7 @@ async function main() {
   await writeTrayVariant(lightSrc, 'tray')
   await writeTrayVariant(darkSrc, 'tray-dark')
   await writeFavicon(faviconSrc)
+  await writeAppIcon(appIconSrc, path.join(iconRoot, 'sa-logo.ico'))
 }
 
 main().catch((err) => {
