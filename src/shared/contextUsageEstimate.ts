@@ -16,7 +16,11 @@ export function computeTotalRequestInputTokens(usage: ContextUsageRaw): number {
   if (cacheSum <= 0) return input
 
   // OpenAI 兼容：cached 为 prompt 子集，input 已是总量
-  if (input >= cacheSum) return input
+  // 当非缓存 input 仍明显大于 cache 合计时，更可能是 Anthropic 加性口径（input 不含 cache）
+  if (input >= cacheSum) {
+    if (cacheRead < input * 0.5) return input + cacheSum
+    return input
+  }
 
   // Anthropic 原生：cache 字段与 input_tokens 加性
   return input + cacheSum

@@ -31,6 +31,17 @@ if (typeof window !== 'undefined' && !window.localStorage) {
 import '../renderer/i18n'
 import { beforeEach } from 'vitest'
 import { changeAppLocale } from '../renderer/i18n/localeSync'
+import type { SpaceAssistantApi } from '../shared/api'
+
+if (typeof window !== 'undefined') {
+  const api = (window.api ?? {}) as Partial<SpaceAssistantApi>
+  window.api = {
+    ...api,
+    usageGet: api.usageGet ?? (async () => undefined),
+    usageSet: api.usageSet ?? (async () => {}),
+    usageDelete: api.usageDelete ?? (async () => {})
+  } as SpaceAssistantApi
+}
 
 beforeEach(async () => {
   await changeAppLocale('zh-CN')

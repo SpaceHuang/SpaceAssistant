@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId } from './chatSlice'
+import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
@@ -47,22 +47,28 @@ describe('chatSlice', () => {
 
   it('setLastUsage stores usage data', () => {
     const base = chatReducer(undefined, setSession('s1'))
-    const next = chatReducer(base, setLastUsage({ input_tokens: 5000, output_tokens: 3000 }))
+    const next = chatReducer(base, setLastUsage({ sessionId: 's1', usage: { input_tokens: 5000, output_tokens: 3000 } }))
     expect(next.lastUsage).toEqual({ input_tokens: 5000, output_tokens: 3000 })
   })
 
-  it('setLastUsage(null) clears usage', () => {
+  it('restoreLastUsage(null) clears usage', () => {
     const base = chatReducer(undefined, setSession('s1'))
-    const withData = chatReducer(base, setLastUsage({ input_tokens: 5000 }))
-    const cleared = chatReducer(withData, setLastUsage(null))
+    const withData = chatReducer(base, setLastUsage({ sessionId: 's1', usage: { input_tokens: 5000 } }))
+    const cleared = chatReducer(withData, restoreLastUsage(null))
     expect(cleared.lastUsage).toBeNull()
   })
 
-  it('setSession resets lastUsage', () => {
+  it('setSession does not reset lastUsage', () => {
     const base = chatReducer(undefined, setSession('s1'))
-    const withData = chatReducer(base, setLastUsage({ input_tokens: 5000 }))
+    const withData = chatReducer(base, setLastUsage({ sessionId: 's1', usage: { input_tokens: 5000 } }))
     const switched = chatReducer(withData, setSession('s2'))
-    expect(switched.lastUsage).toBeNull()
+    expect(switched.lastUsage).toEqual({ input_tokens: 5000 })
+  })
+
+  it('restoreLastUsage restores usage from persistence', () => {
+    const base = chatReducer(undefined, setSession('s2'))
+    const restored = chatReducer(base, restoreLastUsage({ input_tokens: 8000, cache_read_input_tokens: 2000 }))
+    expect(restored.lastUsage).toEqual({ input_tokens: 8000, cache_read_input_tokens: 2000 })
   })
 
   it('setScrollToMessageId stores pending scroll target', () => {
@@ -80,7 +86,7 @@ describe('chatSlice', () => {
 
   it('resetChatUi resets lastUsage', () => {
     let state = chatReducer(undefined, setSession('s1'))
-    state = chatReducer(state, setLastUsage({ input_tokens: 5000 }))
+    state = chatReducer(state, setLastUsage({ sessionId: 's1', usage: { input_tokens: 5000 } }))
     state = chatReducer(state, resetChatUi())
     expect(state.lastUsage).toBeNull()
   })

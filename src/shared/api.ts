@@ -49,6 +49,7 @@ import type {
   BrowserDependencyFailureCode,
   BrowserDependencyToolError
 } from './browserTypes'
+import type { SessionUsage } from './sessionUsage'
 
 export type {
   BrowserDetectResult,
@@ -124,6 +125,10 @@ export type SpaceAssistantApi = {
   }) => Promise<Session | undefined>
   sessionBackfillAutoTitleIfNeeded: (payload: { sessionId: string }) => Promise<Session | undefined>
   sessionDelete: (sessionId: string) => Promise<void>
+
+  usageSet: (payload: { sessionId: string; usage: SessionUsage }) => Promise<void>
+  usageGet: (sessionId: string) => Promise<SessionUsage | undefined>
+  usageDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
   chatAppendMessage: (msg: Message) => Promise<Message>

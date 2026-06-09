@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
-import chatReducer, { setLastUsage, setSession } from '../../store/chatSlice'
+import chatReducer, { restoreLastUsage } from '../../store/chatSlice'
+import { changeAppLocale } from '../../i18n/localeSync'
+import type { SessionUsage } from '../../../shared/sessionUsage'
 import configReducer, { setConfig } from '../../store/configSlice'
 import { buildContextRingSegments, ContextUsageRing } from './ContextUsageRing'
 import type { AppConfig } from '../../../shared/domainTypes'
@@ -34,13 +36,13 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   } as AppConfig
 }
 
-function renderRing(lastUsage?: Parameters<typeof setLastUsage>[0], configOverrides?: Partial<AppConfig>) {
+function renderRing(lastUsage?: SessionUsage | null, configOverrides?: Partial<AppConfig>) {
   const store = configureStore({
     reducer: { chat: chatReducer, config: configReducer }
   })
   store.dispatch(setConfig(makeConfig(configOverrides)))
   if (lastUsage !== undefined) {
-    store.dispatch(setLastUsage(lastUsage))
+    store.dispatch(restoreLastUsage(lastUsage))
   }
   return {
     store,
@@ -169,11 +171,11 @@ describe('ContextUsageRing', () => {
     expect(circles[0]?.getAttribute('stroke')).toBe('var(--sa-context-ring-track)')
   })
 
-  it('resets to empty ring when lastUsage becomes null after session switch', () => {
+  it('resets to empty ring when lastUsage is restored to null', () => {
     const { store, rerender } = renderRing({ input_tokens: 5000 })
     expect(document.querySelectorAll('circle').length).toBeGreaterThan(1)
 
-    store.dispatch(setSession('new-session'))
+    store.dispatch(restoreLastUsage(null))
     rerender(
       <Provider store={store}>
         <ContextUsageRing />
@@ -182,5 +184,18 @@ describe('ContextUsageRing', () => {
     const circles = document.querySelectorAll('circle')
     expect(circles).toHaveLength(1)
     expect(circles[0]?.getAttribute('stroke')).toBe('var(--sa-context-ring-track)')
+  })
+
+  it('shows English tooltip labels when locale is en-US', async () => {
+    await changeAppLocale('en-US')
+    renderRing({ input_tokens: 10000, output_tokens: 5000 })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('Estimated occupancy')
+      expect(text).toContain('Last request input')
+      expect(text).toContain('Output reserve')
+    })
   })
 })

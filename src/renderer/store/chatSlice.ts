@@ -1,5 +1,6 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { Message } from '../../shared/domainTypes'
+import type { SessionUsage } from '../../shared/sessionUsage'
 
 export type ChatStatus = 'idle' | 'sending' | 'streaming' | 'completed' | 'error'
 
@@ -9,12 +10,7 @@ export type RunningSessionMeta = {
   updatedAt: number
 }
 
-export type LastUsage = {
-  input_tokens: number
-  output_tokens?: number
-  cache_read_input_tokens?: number
-  cache_creation_input_tokens?: number
-} | null
+export type LastUsage = SessionUsage | null
 
 interface ChatState {
   messages: Message[]
@@ -51,7 +47,6 @@ export const chatSlice = createSlice({
       state.currentSessionId = action.payload
       state.confirmFocusToolUseId = null
       state.scrollToMessageId = null
-      state.lastUsage = null
     },
     setConfirmFocusToolUseId(state, action: PayloadAction<string | null>) {
       state.confirmFocusToolUseId = action.payload
@@ -59,7 +54,10 @@ export const chatSlice = createSlice({
     setScrollToMessageId(state, action: PayloadAction<string | null>) {
       state.scrollToMessageId = action.payload
     },
-    setLastUsage(state, action: PayloadAction<LastUsage>) {
+    setLastUsage(state, action: PayloadAction<{ sessionId: string; usage: SessionUsage }>) {
+      state.lastUsage = action.payload.usage
+    },
+    restoreLastUsage(state, action: PayloadAction<LastUsage>) {
       state.lastUsage = action.payload
     },
     setMessages(state, action: PayloadAction<Message[]>) {
@@ -130,6 +128,7 @@ export const {
   removeRunningSession,
   resetChatUi,
   setLastUsage,
+  restoreLastUsage,
   setProjectMemoryEnabled
 } = chatSlice.actions
 export default chatSlice.reducer

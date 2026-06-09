@@ -265,8 +265,18 @@ export type RunToolChatSessionArgs = {
   getBrowserDetectContext?: () => BrowserDetectContext
 }
 
+export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
+
+/** 工具 loop 最终返回的 usage：优先最后一轮，缺失时回退到最近有效轮次 */
+export function pickToolLoopReturnUsage(
+  currentRound: ToolLoopUsage | undefined,
+  lastValid: ToolLoopUsage | undefined
+): ToolLoopUsage | undefined {
+  return currentRound ?? lastValid
+}
+
 export type RunToolChatSessionResult =
-  | { ok: true; content: unknown[]; stopReason: string; usage?: ReturnType<typeof normalizeAnthropicMessageUsage> }
+  | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage }
   | { ok: false; error: string }
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
@@ -364,6 +374,7 @@ async function runToolChatSessionInner(
     stagehandService.resetInferenceCount(sessionId)
   }
   let loopRound = 0
+  let lastValidUsage: ToolLoopUsage | undefined
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -528,6 +539,9 @@ async function runToolChatSessionInner(
     const content = mergeStreamedToolInputsIntoContent(rawContent, contentBlocks) as Anthropic.ContentBlock[]
     const stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
     const usage = normalizeAnthropicMessageUsage(res)
+    if (usage) {
+      lastValidUsage = usage
+    }
 
     logAgentEvent('info', 'llm.response', {
       requestId,
@@ -562,7 +576,8 @@ async function runToolChatSessionInner(
     }
 
     if (toolUses.length === 0) {
-      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(usage && { usage }) }
+      const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
+      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }) }
     }
 
     const toolResults: Anthropic.ToolResultBlockParam[] = []

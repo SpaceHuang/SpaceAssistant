@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { addMessage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
+import { addMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
@@ -150,6 +150,20 @@ export function ChatView() {
       const live = getLiveMessages(sessionId)
       const pendingInStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
       dispatch(setMessages(mergeDbAndLive(mergeDbAndLive(rows, live), pendingInStore)))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, dispatch])
+
+  useEffect(() => {
+    if (!sessionId) {
+      dispatch(restoreLastUsage(null))
+      return
+    }
+    let cancelled = false
+    void window.api.usageGet(sessionId).then((cached) => {
+      if (!cancelled) dispatch(restoreLastUsage(cached ?? null))
     })
     return () => {
       cancelled = true
@@ -544,31 +558,8 @@ export function ChatView() {
               })
             })
           },
-          onFileAutoApproved: (toolUseId, meta) => {
-            message.success({
-              content: (
-                <div className="chat-trust-toast">
-                  <div>
-                    {tChat('toast.fileAutoApproved', {
-                      path: meta.path,
-                      added: meta.added,
-                      removed: meta.removed
-                    })}
-                  </div>
-                  <button
-                    type="button"
-                    className="chat-trust-toast__link"
-                    onClick={() => {
-                      dispatch(setConfirmFocusToolUseId(toolUseId))
-                      dispatch(setScrollToMessageId(assistantId))
-                    }}
-                  >
-                    {tChat('toast.fileAutoApprovedViewDiff')}
-                  </button>
-                </div>
-              ),
-              duration: 6
-            })
+          onFileAutoApproved: () => {
+            // 自动审批写入后不弹 toast，WriteSuccessCard 已展示 diff 信息
           }
         })
         controller.subscribe()
@@ -677,7 +668,11 @@ export function ChatView() {
           flushStreamPersist(runSessionId, assistantId)
           flushUiPatch(runSessionId, assistantId)
           if (res.usage) {
-            dispatch(setLastUsage(res.usage as LastUsage))
+            const usage = res.usage as LastUsage
+            void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
+            if (store.getState().chat.currentSessionId === runSessionId) {
+              dispatch(setLastUsage({ sessionId: runSessionId, usage }))
+            }
           }
           const assistantRow = findAssistantRow()
           const thinking = finalizeThinking(thinkingState)
@@ -765,7 +760,11 @@ export function ChatView() {
           },
           onDone: async (data) => {
             if (data?.usage) {
-              dispatch(setLastUsage(data.usage as LastUsage))
+              const usage = data.usage as LastUsage
+              void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
+              if (store.getState().chat.currentSessionId === runSessionId) {
+                dispatch(setLastUsage({ sessionId: runSessionId, usage }))
+              }
             }
             const reconciled = reconcileAssistantStreamOnComplete({
               stopReason: 'end_turn',

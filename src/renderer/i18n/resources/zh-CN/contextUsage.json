@@ -1,0 +1,21 @@
+{
+  "tooltip": {
+    "noData": "暂无上下文用量数据",
+    "estimatedOccupancy": "预估占用",
+    "lastRequestInput": "上轮输入",
+    "lastOutput": "上轮输出",
+    "cacheRead": "缓存命中",
+    "cacheWrite": "缓存写入",
+    "outputReserve": "输出预留",
+    "separator": "─────────",
+    "total": "总计",
+    "legend": "图例",
+    "legendUsed": "已用",
+    "legendReserved": "输出预留",
+    "legendFree": "剩余"
+  },
+  "aria": {
+    "noData": "暂无上下文用量数据",
+    "hasData": "上下文用量约 {{percent}}%"
+  }
+}

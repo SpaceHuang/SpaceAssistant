@@ -172,7 +172,10 @@ describe('ChatView auto-create session', () => {
           routingRequestId: undefined
         }
       }),
-      wikiGetSchema: vi.fn().mockResolvedValue(null)
+      wikiGetSchema: vi.fn().mockResolvedValue(null),
+      usageGet: vi.fn().mockResolvedValue(undefined),
+      usageSet: vi.fn().mockResolvedValue(undefined),
+      usageDelete: vi.fn().mockResolvedValue(undefined)
     } as typeof window.api
   })
 

@@ -14,6 +14,10 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('session:backfill-auto-title-if-needed', payload) as Promise<Session | undefined>,
   sessionDelete: (sessionId) => ipcRenderer.invoke('session:delete', sessionId),
 
+  usageSet: (payload) => ipcRenderer.invoke('usage:set', payload),
+  usageGet: (sessionId) => ipcRenderer.invoke('usage:get', sessionId),
+  usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),
+
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
   chatAppendMessage: (msg) => ipcRenderer.invoke('chat:append-message', msg),
   chatPatchMessage: (payload) => ipcRenderer.invoke('chat:patch-message', payload),

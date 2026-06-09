@@ -1,0 +1,21 @@
+{
+  "tooltip": {
+    "noData": "No context usage data",
+    "estimatedOccupancy": "Estimated occupancy",
+    "lastRequestInput": "Last request input",
+    "lastOutput": "Last output",
+    "cacheRead": "Cache read",
+    "cacheWrite": "Cache write",
+    "outputReserve": "Output reserve",
+    "separator": "─────────",
+    "total": "Total",
+    "legend": "Legend",
+    "legendUsed": "Used",
+    "legendReserved": "Output reserve",
+    "legendFree": "Free"
+  },
+  "aria": {
+    "noData": "No context usage data",
+    "hasData": "Context usage about {{percent}}%"
+  }
+}

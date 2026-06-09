@@ -23,6 +23,12 @@ describe('computeTotalRequestInputTokens', () => {
     ).toBe(100_000)
   })
 
+  it('uses Anthropic additive path when non-cached input dominates cache read', () => {
+    expect(
+      computeTotalRequestInputTokens({ input_tokens: 80_000, cache_read_input_tokens: 20_000 })
+    ).toBe(100_000)
+  })
+
   it('handles Anthropic cache read + create additive', () => {
     expect(
       computeTotalRequestInputTokens({

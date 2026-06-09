@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import { Tooltip } from 'antd'
+import { useTranslation } from 'react-i18next'
 import { useTypedSelector } from '../../hooks'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { computeContextUsageDisplay } from '../../../shared/contextUsageEstimate'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 
@@ -9,8 +11,8 @@ const CENTER = RING_SIZE / 2
 const RADIUS = 10
 const STROKE_WIDTH = 3
 
-function formatNum(n: number): string {
-  return n.toLocaleString('zh-CN')
+function formatNum(n: number, locale: string): string {
+  return n.toLocaleString(locale)
 }
 
 type RingSegment = {
@@ -40,6 +42,8 @@ export function buildContextRingSegments(
 }
 
 export function ContextUsageRing() {
+  const { t } = useTypedTranslation('contextUsage')
+  const { i18n } = useTranslation()
   const lastUsage = useTypedSelector((s) => s.chat.lastUsage)
   const config = useTypedSelector((s) => s.config.config)
 
@@ -73,40 +77,48 @@ export function ContextUsageRing() {
   }, [display, circumference])
 
   const tooltipTitle = useMemo(() => {
-    if (!hasData || !lastUsage || !display) return '暂无上下文用量数据'
+    if (!hasData || !lastUsage || !display) return t('tooltip.noData')
 
+    const locale = i18n.language
     const lines: string[] = []
-    lines.push(`预估占用　${formatNum(display.estimatedOccupancy)}`)
-    lines.push(`上轮输入　${formatNum(display.totalRequestInput)}`)
+    lines.push(`${t('tooltip.estimatedOccupancy')}　${formatNum(display.estimatedOccupancy, locale)}`)
+    lines.push(`${t('tooltip.lastRequestInput')}　${formatNum(display.totalRequestInput, locale)}`)
     if (display.lastOutput > 0) {
-      lines.push(`上轮输出　${formatNum(display.lastOutput)}`)
+      lines.push(`${t('tooltip.lastOutput')}　${formatNum(display.lastOutput, locale)}`)
     }
     if (lastUsage.cache_read_input_tokens && lastUsage.cache_read_input_tokens > 0) {
-      lines.push(`缓存命中　${formatNum(lastUsage.cache_read_input_tokens)}`)
+      lines.push(`${t('tooltip.cacheRead')}　${formatNum(lastUsage.cache_read_input_tokens, locale)}`)
     }
     if (lastUsage.cache_creation_input_tokens && lastUsage.cache_creation_input_tokens > 0) {
-      lines.push(`缓存写入　${formatNum(lastUsage.cache_creation_input_tokens)}`)
+      lines.push(`${t('tooltip.cacheWrite')}　${formatNum(lastUsage.cache_creation_input_tokens, locale)}`)
     }
-    lines.push(`输出预留　${formatNum(display.effectiveOutputMax)}`)
-    lines.push(`─────────`)
+    lines.push(`${t('tooltip.outputReserve')}　${formatNum(display.effectiveOutputMax, locale)}`)
+    lines.push(t('tooltip.separator'))
     lines.push(
-      `总计 ${formatNum(display.estimatedOccupancy)} / ${formatNum(display.maximumContext)}（${display.percentUsed.toFixed(1)}%）`
+      `${t('tooltip.total')} ${formatNum(display.estimatedOccupancy, locale)} / ${formatNum(display.maximumContext, locale)}（${display.percentUsed.toFixed(1)}%）`
     )
-    lines.push(`图例　　■ 已用　■ 输出预留　□ 剩余`)
+    lines.push(
+      `${t('tooltip.legend')}　　■ ${t('tooltip.legendUsed')}　■ ${t('tooltip.legendReserved')}　□ ${t('tooltip.legendFree')}`
+    )
 
     return (
       <pre style={{ margin: 0, fontFamily: 'inherit', whiteSpace: 'pre', lineHeight: 1.6 }}>
         {lines.join('\n')}
       </pre>
     )
-  }, [hasData, lastUsage, display])
+  }, [hasData, lastUsage, display, t, i18n.language])
+
+  const ariaLabel =
+    hasData && display
+      ? t('aria.hasData', { percent: display.percentUsed.toFixed(1) })
+      : t('aria.noData')
 
   return (
     <Tooltip title={tooltipTitle} placement="top">
       <span
         className="context-usage-ring"
         style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}
-        aria-label={hasData && display ? `上下文用量约 ${display.percentUsed.toFixed(1)}%` : '暂无上下文用量数据'}
+        aria-label={ariaLabel}
       >
         <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden>
           <circle

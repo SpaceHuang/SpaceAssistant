@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../src/shared/domainTypes'
+import type { SessionUsage } from '../src/shared/sessionUsage'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../src/shared/domainTypes'
 import {
   rowToMessage,
@@ -34,6 +35,7 @@ type DbSnapshot = {
   messages: StoredMessage[]
   configs: Record<string, { value: string; createdAt: number; updatedAt: number }>
   searchHistory: Array<{ id: string; query: string; timestamp: number }>
+  sessionUsages?: Record<string, SessionUsage>
 }
 
 export type AppDatabase = {
@@ -50,8 +52,16 @@ function emptySnapshot(): DbSnapshot {
     sessions: [],
     messages: [],
     configs: {},
-    searchHistory: []
+    searchHistory: [],
+    sessionUsages: {}
   }
+}
+
+function ensureSessionUsages(db: AppDatabase): Record<string, SessionUsage> {
+  if (!db.data.sessionUsages || typeof db.data.sessionUsages !== 'object') {
+    db.data.sessionUsages = {}
+  }
+  return db.data.sessionUsages
 }
 
 function loadSnapshot(filePath: string): DbSnapshot {
@@ -68,7 +78,11 @@ function loadSnapshot(filePath: string): DbSnapshot {
           }))
         : [],
       configs: parsed.configs && typeof parsed.configs === 'object' ? (parsed.configs as DbSnapshot['configs']) : {},
-      searchHistory: Array.isArray(parsed.searchHistory) ? parsed.searchHistory : []
+      searchHistory: Array.isArray(parsed.searchHistory) ? parsed.searchHistory : [],
+      sessionUsages:
+        parsed.sessionUsages && typeof parsed.sessionUsages === 'object'
+          ? (parsed.sessionUsages as Record<string, SessionUsage>)
+          : {}
     }
   } catch {
     return emptySnapshot()
@@ -173,7 +187,30 @@ export function updateSession(
 export function deleteSession(db: AppDatabase, sessionId: string): void {
   db.data.sessions = db.data.sessions.filter((s) => s.id !== sessionId)
   db.data.messages = db.data.messages.filter((m) => m.sessionId !== sessionId)
+  deleteSessionUsage(db, sessionId)
   db.flushSave()
+}
+
+export function getSessionUsage(db: AppDatabase, sessionId: string): SessionUsage | undefined {
+  const usages = ensureSessionUsages(db)
+  return usages[sessionId]
+}
+
+export function setSessionUsage(db: AppDatabase, sessionId: string, usage: SessionUsage): void {
+  const usages = ensureSessionUsages(db)
+  usages[sessionId] = usage
+  db.save()
+}
+
+export function deleteSessionUsage(db: AppDatabase, sessionId: string): void {
+  const usages = ensureSessionUsages(db)
+  if (sessionId in usages) {
+    delete usages[sessionId]
+  }
+}
+
+export function getAllSessionUsages(db: AppDatabase): Record<string, SessionUsage> {
+  return { ...ensureSessionUsages(db) }
 }
 
 export function getMessages(db: AppDatabase, sessionId: string, limit = 500, offset = 0): Message[] {

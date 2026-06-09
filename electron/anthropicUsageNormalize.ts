@@ -36,6 +36,9 @@ export function pickInputTokensFromUsageObject(u: Record<string, unknown>): numb
   const pr = u.prompt
   if (finitePositive(pr)) return pr
 
+  const total = u.total_tokens
+  if (finitePositive(total)) return total
+
   return undefined
 }
 

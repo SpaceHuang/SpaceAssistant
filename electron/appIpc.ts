@@ -9,13 +9,16 @@ import {
   appendSearchHistory,
   createSession,
   deleteSession,
+  deleteSessionUsage,
   getConfigValue,
   getMessages,
   getSession,
+  getSessionUsage,
   listSearchHistory,
   listSessions,
   setConfigValue,
   deleteConfigValue,
+  setSessionUsage,
   updateMessageContent,
   updateSession
 } from './database'
@@ -451,6 +454,24 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     clearSessionToolResources(sessionId)
     deleteSession(ctx.db, sessionId)
     if (s) await ctx.backup.deleteBackup(s)
+  })
+
+  ipcMain.handle(
+    'usage:set',
+    (_e, payload: { sessionId: string; usage: import('../src/shared/sessionUsage').SessionUsage }): void => {
+      setSessionUsage(ctx.db, payload.sessionId, payload.usage)
+    }
+  )
+
+  ipcMain.handle(
+    'usage:get',
+    (_e, sessionId: string): import('../src/shared/sessionUsage').SessionUsage | undefined =>
+      getSessionUsage(ctx.db, sessionId)
+  )
+
+  ipcMain.handle('usage:delete', (_e, sessionId: string): void => {
+    deleteSessionUsage(ctx.db, sessionId)
+    ctx.db.save()
   })
 
   ipcMain.handle(
