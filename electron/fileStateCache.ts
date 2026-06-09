@@ -4,6 +4,8 @@ export interface FileState {
   mtime: number
   readAt: number
   isPartial: boolean
+  /** 分段读取：content 非全文快照，edit/write 用 mtime 校验 */
+  isRangeView?: boolean
 }
 
 /** 会话级：跟踪 read_file 内容，用于 edit/write 前置校验 */

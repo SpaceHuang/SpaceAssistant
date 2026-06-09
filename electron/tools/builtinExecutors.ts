@@ -18,8 +18,69 @@ import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { browserExecutor } from './browserExecutor'
 import { browserDetectExecutor } from './browserDetectExecutor'
 import { runShellExecutor } from './runShellExecutor'
+import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
+import { sliceFileLines } from '../../src/shared/readFileRange'
+import type { FileState } from '../fileStateCache'
 
-const READ_MAX = 2 * 1024 * 1024
+function recordReadFileCache(
+  cache: ToolExecutionContext['fileStateCache'],
+  abs: string,
+  mtimeMs: number,
+  opts: { content: string; truncated: boolean; rangeRequested: boolean }
+): void {
+  const prev = cache.get(abs)
+  if (opts.rangeRequested) {
+    if (prev && !prev.isPartial && !prev.isRangeView) {
+      cache.set(abs, { ...prev, mtime: mtimeMs, readAt: Date.now() })
+      return
+    }
+    cache.set(abs, {
+      path: abs,
+      content: '',
+      mtime: mtimeMs,
+      readAt: Date.now(),
+      isPartial: opts.truncated,
+      isRangeView: true
+    })
+    return
+  }
+  cache.set(abs, {
+    path: abs,
+    content: opts.content,
+    mtime: mtimeMs,
+    readAt: Date.now(),
+    isPartial: opts.truncated,
+    isRangeView: false
+  })
+}
+
+async function assertDiskMatchesReadCache(
+  abs: string,
+  stCache: FileState,
+  cur: string,
+  op: AbortSignal,
+  errorMessage: string
+): Promise<ToolExecutorResult | null> {
+  if (stCache.isRangeView) {
+    throwIfAborted(op)
+    let stNow: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      stNow = await fs.stat(abs)
+    } catch {
+      return null
+    }
+    if (stNow.mtimeMs !== stCache.mtime) {
+      return { success: false, error: errorMessage }
+    }
+    return null
+  }
+  if (cur !== stCache.content) {
+    return { success: false, error: errorMessage }
+  }
+  return null
+}
+
+const READ_MAX = READ_FILE_MAX_CHARS
 const GREP_FILE_MAX = 1024 * 1024
 const SCRIPT_IO_MAX = 100 * 1024
 const GREP_SKIP_DIRS = new Set([
@@ -151,6 +212,37 @@ export const readFileExecutor: ToolExecutor = {
         text = text.slice(0, READ_MAX)
         truncated = true
       }
+
+      const offsetRaw = input.offset
+      const limitRaw = input.limit
+      const rangeRequested =
+        (offsetRaw !== undefined && offsetRaw !== null) || (limitRaw !== undefined && limitRaw !== null)
+      let rangeMeta: {
+        totalLines: number
+        startLine: number
+        endLine: number
+        hasMore: boolean
+      } | undefined
+
+      if (rangeRequested) {
+        const offset =
+          offsetRaw !== undefined && offsetRaw !== null && typeof offsetRaw === 'number' && Number.isFinite(offsetRaw)
+            ? Math.max(1, Math.floor(offsetRaw))
+            : 1
+        const limit =
+          limitRaw !== undefined && limitRaw !== null && typeof limitRaw === 'number' && Number.isFinite(limitRaw)
+            ? Math.max(1, Math.floor(limitRaw))
+            : undefined
+        const sliced = sliceFileLines(text, { offset, limit })
+        rangeMeta = {
+          totalLines: sliced.totalLines,
+          startLine: sliced.startLine,
+          endLine: sliced.endLine,
+          hasMore: sliced.hasMore
+        }
+        text = sliced.content
+      }
+
       let st: Awaited<ReturnType<typeof fs.stat>>
       try {
         st = await fs.stat(abs)
@@ -159,12 +251,10 @@ export const readFileExecutor: ToolExecutor = {
         if (ab) return ab
         throw e
       }
-      ctx.fileStateCache.set(abs, {
-        path: abs,
+      recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
         content: text,
-        mtime: st.mtimeMs,
-        readAt: Date.now(),
-        isPartial: truncated
+        truncated,
+        rangeRequested
       })
       return {
         success: true,
@@ -172,7 +262,18 @@ export const readFileExecutor: ToolExecutor = {
           path: rel,
           content: text,
           encoding: 'utf8',
-          ...(truncated ? { truncated: true, note: `内容超过 ${READ_MAX} 字节已截断` } : {})
+          ...(truncated ? { truncated: true, note: `内容超过 ${READ_MAX} 字符已截断` } : {}),
+          ...(rangeMeta
+            ? {
+                totalLines: rangeMeta.totalLines,
+                startLine: rangeMeta.startLine,
+                endLine: rangeMeta.endLine,
+                hasMore: rangeMeta.hasMore,
+                ...(rangeMeta.hasMore
+                  ? { note: `仅返回第 ${rangeMeta.startLine}–${rangeMeta.endLine} 行，共 ${rangeMeta.totalLines} 行；可增大 offset 继续读取` }
+                  : {})
+              }
+            : {})
         },
         duration: Date.now() - started
       }
@@ -273,6 +374,33 @@ function applyEdit(content: string, oldS: string, newS: string, replaceAll: bool
   return content.slice(0, i) + newS + content.slice(i + oldS.length)
 }
 
+function normalizeLineEndingsForMatch(text: string): string {
+  return text.replace(/\r\n/g, '\n')
+}
+
+function detectFileEol(text: string): '\r\n' | '\n' {
+  return text.includes('\r\n') ? '\r\n' : '\n'
+}
+
+function applyEditWithEolTolerance(
+  cur: string,
+  oldS: string,
+  newS: string,
+  replaceAll: boolean
+): string {
+  const fileEol = detectFileEol(cur)
+  const curNorm = normalizeLineEndingsForMatch(cur)
+  const oldNorm = normalizeLineEndingsForMatch(oldS)
+  const newNorm = normalizeLineEndingsForMatch(newS)
+  const nextNorm = applyEdit(curNorm, oldNorm, newNorm, replaceAll)
+  if (fileEol === '\r\n') return nextNorm.replace(/\n/g, '\r\n')
+  return nextNorm
+}
+
+function countOccurrencesWithEolTolerance(hay: string, needle: string): number {
+  return countOccurrences(normalizeLineEndingsForMatch(hay), normalizeLineEndingsForMatch(needle))
+}
+
 import { toolErrMissingPath } from '../toolInputGuards'
 
 const ERR_FILE_NOT_READ_FOR_EDIT =
@@ -351,19 +479,23 @@ export const editFileExecutor: ToolExecutor = {
         }
       }
       if (existed && stCache) {
-        const same = cur === stCache.content
-        if (!same) {
-          return { success: false, error: '文件已被外部程序修改，请重新读取后再编辑', duration: Date.now() - started }
-        }
+        const mismatch = await assertDiskMatchesReadCache(
+          abs,
+          stCache,
+          cur,
+          op,
+          '文件已被外部程序修改，请重新读取后再编辑'
+        )
+        if (mismatch) return { ...mismatch, duration: Date.now() - started }
       }
-      const occ = countOccurrences(cur, oldS)
+      const occ = countOccurrencesWithEolTolerance(cur, oldS)
       if (occ === 0 && oldS !== '') {
         return { success: false, error: '未找到待替换的字符串', duration: Date.now() - started }
       }
       if (!replaceAll && oldS !== '' && occ > 1) {
         return { success: false, error: '找到多个匹配，请提供更精确的上下文或使用 replace_all', duration: Date.now() - started }
       }
-      const next = applyEdit(cur, oldS, newS, replaceAll)
+      const next = applyEditWithEolTolerance(cur, oldS, newS, replaceAll)
       throwIfAborted(op)
       if (existed && ctx.toolsConfig.fileCheckpointingEnabled) {
         try {
@@ -432,8 +564,15 @@ export const writeFileExecutor: ToolExecutor = {
           if (ab) return ab
           throw e
         }
-        if (stCache && cur !== stCache.content) {
-          return { success: false, error: '文件已被外部程序修改，请重新读取后再写入', duration: Date.now() - started }
+        if (stCache) {
+          const mismatch = await assertDiskMatchesReadCache(
+            abs,
+            stCache,
+            cur,
+            op,
+            '文件已被外部程序修改，请重新读取后再写入'
+          )
+          if (mismatch) return { ...mismatch, duration: Date.now() - started }
         }
         throwIfAborted(op)
         if (ctx.toolsConfig.fileCheckpointingEnabled) {

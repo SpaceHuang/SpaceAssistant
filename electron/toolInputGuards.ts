@@ -2,10 +2,12 @@
  * 工具入参轻量校验（对齐需求 §11 / §15 D-04），避免异常大 payload 或明显畸形输入进入执行器。
  */
 
+import { READ_FILE_MAX_CHARS, READ_FILE_MAX_LINE_LIMIT } from '../src/shared/toolResultLimits'
+
 const PATH_OR_GLOB_MAX = 8192
 const STRING_FIELD_MAX = 8192
 /** 与 read_file 截断上限一致，单字段不应超过该量级 */
-const TOOL_LARGE_TEXT_MAX = 2 * 1024 * 1024
+const TOOL_LARGE_TEXT_MAX = READ_FILE_MAX_CHARS
 const RUN_SCRIPT_CODE_MAX = 512 * 1024
 const RUN_SCRIPT_TIMEOUT_MAX_SEC = 86_400
 
@@ -36,10 +38,19 @@ export function toolErrMissingPath(toolName: string): string {
   return `工具参数无效：${toolName} 缺少必填参数 path`
 }
 
+function optPositiveInt(v: unknown, field: string, max: number): void {
+  if (v === undefined || v === null) return
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 1 || v > max || Math.floor(v) !== v) {
+    throw new Error(`工具参数无效：${field} 须为 1～${max} 的整数`)
+  }
+}
+
 export function assertSafeToolInput(toolName: string, input: Record<string, unknown>): void {
   switch (toolName) {
     case 'read_file':
       optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+      optPositiveInt(input.offset, 'offset', READ_FILE_MAX_LINE_LIMIT * 1000)
+      optPositiveInt(input.limit, 'limit', READ_FILE_MAX_LINE_LIMIT)
       return
     case 'list_directory':
       optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)

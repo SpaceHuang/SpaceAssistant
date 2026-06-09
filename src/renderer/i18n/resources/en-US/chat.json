@@ -52,7 +52,7 @@
     },
     "descriptions": {
       "grep": "Search file contents under the working directory",
-      "readFile": "Read the full contents of a file",
+      "readFile": "Read file contents (use offset/limit for large files)",
       "listDirectory": "List files and subdirectories in a directory",
       "editFile": "Edit a file via string replacement",
       "writeFile": "Write full contents to a file",

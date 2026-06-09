@@ -7,11 +7,19 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'read_file',
     description:
-      '读取指定文件的完整内容。路径相对于工作目录，不可超出工作目录范围。',
+      '读取指定文件内容。路径相对于工作目录，不可超出工作目录范围。大文件请使用 offset（1-based 起始行号）与 limit（读取行数）分段读取，避免一次返回全文。',
     input_schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: '相对于工作目录的文件路径' }
+        path: { type: 'string', description: '相对于工作目录的文件路径' },
+        offset: {
+          type: 'integer',
+          description: '起始行号（从 1 开始，含）。省略时从第 1 行开始'
+        },
+        limit: {
+          type: 'integer',
+          description: '最多读取的行数。省略时读取从 offset 到文件末尾（仍受单文件 2MB 上限约束）'
+        }
       },
       required: ['path']
     }
@@ -57,7 +65,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'grep',
     description:
-      '在工作目录下递归搜索匹配正则表达式的文件内容，支持多种输出模式和文件名过滤。',
+      '在工作目录内按正则搜索文件内容（跨平台，内置实现，不依赖系统 grep/findstr/rg）。需要行号时用 output_mode=content；限制条数用 head_limit（等同 shell 的 head）。文本搜索一律用本工具，不要在 run_shell 中写 grep、findstr、head、find 等命令。',
     input_schema: {
       type: 'object',
       properties: {
@@ -98,7 +106,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'run_shell',
     description:
-      '在会话工作目录下执行 shell 命令（Windows: cmd，Unix: bash）。用于 npm、git、构建/测试等 CLI；Python 片段请用 run_script，飞书请用 run_lark_cli。执行前需用户确认。',
+      '在会话工作目录下执行 shell 命令（Windows: cmd，Unix: bash）。用于 npm、git、构建/测试等 CLI。文本搜索请用 grep 工具，勿在此执行 grep/findstr/head/find/sed/awk；Python 片段请用 run_script，飞书请用 run_lark_cli。执行前需用户确认。',
     input_schema: {
       type: 'object',
       properties: {

@@ -39,7 +39,7 @@ describe('formatToolLabelTitle', () => {
 
 describe('getToolDescription', () => {
   it('returns chinese description for builtin tools', () => {
-    expect(getToolDescription('read_file')).toBe('读取指定文件的完整内容')
+    expect(getToolDescription('read_file')).toBe('读取文件内容（大文件可用 offset/limit 分段）')
     expect(getToolDescription('grep')).toBe('在工作目录下搜索匹配的文件内容')
   })
 })

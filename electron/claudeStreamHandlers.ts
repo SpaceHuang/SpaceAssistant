@@ -12,6 +12,7 @@ import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
 import { runToolChatSession } from './toolChatLoop'
 import { buildSystemPrompt, getCachedMemoryContent } from './projectMemory'
+import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -89,7 +90,7 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
   if (typeof content === 'string') {
     const trimmed = content.trim()
     if (!trimmed) throw new Error(`Invalid content at index ${idx}`)
-    if (trimmed.length > 40000) throw new Error(`Content too long at index ${idx}`)
+    if (trimmed.length > MAX_API_MESSAGE_TEXT_CHARS) throw new Error(`Content too long at index ${idx}`)
     return trimmed
   }
 
@@ -111,7 +112,10 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
     if (type === 'tool_result') {
       if (typeof (b as { tool_use_id?: unknown }).tool_use_id !== 'string') throw new Error('Invalid tool_result tool_use_id')
       if ((b as { content?: unknown }).content === undefined) throw new Error('Invalid tool_result content')
-      if (typeof (b as { content?: unknown }).content === 'string' && (b as { content: string }).content.length > 40000) {
+      if (
+        typeof (b as { content?: unknown }).content === 'string' &&
+        (b as { content: string }).content.length > MAX_TOOL_RESULT_CONTENT_CHARS
+      ) {
         throw new Error('tool_result content too long')
       }
       continue
@@ -119,7 +123,7 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
 
     if (type === 'text') {
       if (typeof (b as { text?: unknown }).text !== 'string') throw new Error('Invalid text block')
-      if ((b as { text: string }).text.length > 40000) throw new Error('text too long')
+      if ((b as { text: string }).text.length > MAX_API_MESSAGE_TEXT_CHARS) throw new Error('text too long')
       continue
     }
 

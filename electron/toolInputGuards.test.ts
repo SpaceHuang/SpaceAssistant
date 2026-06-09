@@ -6,6 +6,15 @@ describe('assertSafeToolInput', () => {
     expect(() => assertSafeToolInput('read_file', { path: 'src/a.ts' })).not.toThrow()
   })
 
+  it('accepts read_file offset and limit', () => {
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', offset: 1, limit: 50 })).not.toThrow()
+  })
+
+  it('rejects read_file limit out of range', () => {
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', limit: 0 })).toThrow(/limit/)
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', limit: 99999 })).toThrow(/limit/)
+  })
+
   it('rejects path with NUL', () => {
     expect(() => assertSafeToolInput('read_file', { path: 'a\0b' })).toThrow(/空字节/)
   })
