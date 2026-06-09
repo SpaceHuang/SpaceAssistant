@@ -3,8 +3,10 @@ import type { AssistantActivityItem } from './assistantActivityTimeline'
 import {
   ACTIVITY_BATCH_IDLE_GAP_MS,
   buildActivityItemTimestampResolver,
+  findBatchHighlightItem,
   groupActivityTimeline
 } from './activityBatchGrouping'
+import { thinkingSegmentsForRender } from './thinkingSegments'
 import type { SkillHintRecord, ThinkingData, ToolCallRecord } from './domainTypes'
 
 const baseTool = (id: string, startedAt?: number): ToolCallRecord => ({
@@ -84,6 +86,45 @@ describe('groupActivityTimeline', () => {
     expect(groupActivityTimeline([{ kind: 'tool', toolId: 't1' }], ts)).toEqual([
       { kind: 'standalone', item: { kind: 'tool', toolId: 't1' } }
     ])
+  })
+})
+
+describe('findBatchHighlightItem', () => {
+  it('prefers in-progress tool over earlier completed items', () => {
+    const tools: ToolCallRecord[] = [
+      baseTool('t1', 1),
+      { ...baseTool('t2', 2), status: 'executing' }
+    ]
+    const items: AssistantActivityItem[] = [
+      { kind: 'tool', toolId: 't1' },
+      { kind: 'tool', toolId: 't2' }
+    ]
+    const highlight = findBatchHighlightItem(items, {
+      thinkingSegments: [],
+      toolById: new Map(tools.map((tc) => [tc.id, tc]))
+    })
+    expect(highlight).toEqual({ kind: 'tool', toolId: 't2' })
+  })
+
+  it('prefers active thinking segment', () => {
+    const thinking = {
+      content: 'a',
+      isVisible: true,
+      startTime: 1,
+      segments: [
+        { content: 'done', startTime: 1, endTime: 2 },
+        { content: 'live', startTime: 3 }
+      ]
+    } satisfies import('./domainTypes').ThinkingData
+    const items: AssistantActivityItem[] = [
+      { kind: 'thinking', segmentIndex: 0 },
+      { kind: 'thinking', segmentIndex: 1 }
+    ]
+    const highlight = findBatchHighlightItem(items, {
+      thinkingSegments: thinkingSegmentsForRender(thinking),
+      toolById: new Map()
+    })
+    expect(highlight).toEqual({ kind: 'thinking', segmentIndex: 1 })
   })
 })
 

@@ -269,6 +269,28 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
   return full
 }
 
+/** 删除排队中的用户消息；仅允许 status=queued 且 role=user */
+export function deleteQueuedUserMessage(
+  db: AppDatabase,
+  messageId: string
+): { ok: true; sessionId: string } | { ok: false; error: string } {
+  const row = db.data.messages.find((m) => m.id === messageId)
+  if (!row) return { ok: false, error: 'message_not_found' }
+  if (row.role !== 'user' || row.status !== 'queued') return { ok: false, error: 'message_not_queued' }
+
+  const sessionId = row.sessionId
+  db.data.messages = db.data.messages.filter((m) => m.id !== messageId)
+  const sessionMessages = db.data.messages
+    .filter((m) => m.sessionId === sessionId)
+    .sort((a, b) => a.sequence - b.sequence)
+  const last = sessionMessages[sessionMessages.length - 1]
+  updateSession(db, sessionId, {
+    messageCount: sessionMessages.length,
+    preview: last ? last.content.slice(0, 120) : ''
+  })
+  return { ok: true, sessionId }
+}
+
 export function updateMessageContent(
   db: AppDatabase,
   messageId: string,

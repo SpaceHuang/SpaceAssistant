@@ -14,6 +14,11 @@
   },
   "streaming": {
     "inProgress": "生成中",
+    "thinking": "思考中",
+    "preparing": "准备中…",
+    "awaitingConfirm": "等待确认：{{action}}",
+    "queued": "排队中",
+    "cancelQueue": "取消排队",
     "failed": "失败"
   },
   "bubble": {
@@ -63,7 +68,10 @@
     "send": "发送消息",
     "abort": "中止生成",
     "hintIdle": "Enter 发送，Shift+Enter 换行",
-    "hintRunning": "执行中，Enter 或点击右侧按钮中止"
+    "hintRunning": "点击停止按钮中止",
+    "hintRunningQueue": "Enter 发送并排队",
+    "queueSend": "发送并排入队列",
+    "queuePending": "还有 {{count}} 条排队"
   },
   "toolCall": {
     "confirm": {
@@ -128,6 +136,8 @@
     "warnings": {
       "selectSession": "请先选择会话并等待配置加载",
       "sessionRunning": "当前会话已有任务在执行",
+      "queueFull": "排队已满（最多 {{max}} 条），请等待当前任务完成",
+      "cancelQueueFailed": "无法取消该排队消息，请刷新后重试",
       "maxParallel": "最多同时执行 {{max}} 个会话，请稍后再试",
       "apiKeyMissing": "请先在设置中配置 API Key",
       "retryNoUserMessage": "找不到可重试的上一条用户消息"

@@ -6,9 +6,8 @@ import {
   type AssistantActivityItem
 } from '../../../shared/assistantActivityTimeline'
 import {
-  ACTIVITY_BATCH_IDLE_GAP_MS,
   buildActivityItemTimestampResolver,
-  getLastBatchItemTimestamp,
+  findBatchHighlightItem,
   groupActivityTimeline,
   isActivityBatchInProgress,
   type ActivityTrackSegment
@@ -21,6 +20,10 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallCard } from './ToolCallCard'
 import { SkillHintRow } from './SkillHintRow'
 import { formatToolLabel, formatToolLabelTitle } from './toolCallDisplay'
+import {
+  formatStreamingElapsed,
+  resolveStreamingActivityStatus
+} from '../../../shared/streamingActivityStatus'
 import { SkillHintBubble } from './SkillHintBubble'
 import { ToolRowIcon } from './ToolRowIcon'
 import { ActivityBatch, type ActivityBatchSummary } from './ActivityBatch'
@@ -49,47 +52,27 @@ type Props = {
   showArchiveToWiki?: boolean
   onArchiveToWiki?: () => void
   onRetry?: () => void
+  onCancelQueued?: () => void
 }
 
-function useBatchIdleTimedOut(
-  timeline: AssistantActivityItem[],
-  getTimestamp: (item: AssistantActivityItem) => number,
-  streaming: boolean
-): boolean {
-  const [idleTimedOut, setIdleTimedOut] = useState(false)
-  const lastBatchTs = getLastBatchItemTimestamp(timeline, getTimestamp)
-
-  useEffect(() => {
-    if (!streaming || lastBatchTs == null) {
-      setIdleTimedOut(false)
-      return
-    }
-    setIdleTimedOut(false)
-    const elapsed = Date.now() - lastBatchTs
-    const remaining = ACTIVITY_BATCH_IDLE_GAP_MS - elapsed
-    if (remaining <= 0) {
-      setIdleTimedOut(true)
-      return
-    }
-    const timer = setTimeout(() => setIdleTimedOut(true), remaining)
-    return () => clearTimeout(timer)
-  }, [streaming, lastBatchTs, timeline.length])
-
-  return idleTimedOut
-}
 
 function buildBatchSummary(
   items: AssistantActivityItem[],
   ctx: {
     toolById: Map<string, ToolCallRecord>
+    thinkingSegments: ReturnType<typeof thinkingSegmentsForRender>
     t: ReturnType<typeof useTypedTranslation<'chat'>>['t']
   }
 ): ActivityBatchSummary {
   const count = items.length
+  const highlight =
+    findBatchHighlightItem(items, {
+      thinkingSegments: ctx.thinkingSegments,
+      toolById: ctx.toolById
+    }) ?? items[0]!
   const allThinking = items.every((item) => item.kind === 'thinking')
-  const first = items[0]!
 
-  if (allThinking || first.kind === 'thinking') {
+  if (allThinking || highlight.kind === 'thinking') {
     const base = ctx.t('thinking.label')
     const label = count > 1 ? ctx.t('batch.thinkingCount', { count }) : base
     return {
@@ -98,13 +81,13 @@ function buildBatchSummary(
     }
   }
 
-  if (first.kind === 'tool') {
-    const tc = ctx.toolById.get(first.toolId)
+  if (highlight.kind === 'tool') {
+    const tc = ctx.toolById.get(highlight.toolId)
     if (tc) {
       const base = formatToolLabel(tc.toolName, tc.input, ctx.t)
       const label = count > 1 ? `${base} ${ctx.t('batch.count', { count })}` : base
       return {
-        icon: <ToolRowIcon toolName={tc.toolName} />,
+        icon: <ToolRowIcon toolName={tc.toolName} pending={tc.status === 'calling' || tc.status === 'executing'} />,
         label
       }
     }
@@ -134,25 +117,61 @@ function AssistantTextBody({
 }
 
 function MessageMeta({
-  timestamp,
+  message,
   streaming,
   failed,
+  queued = false,
+  onCancelQueued,
   showArchiveToWiki,
   onArchiveToWiki
 }: {
-  timestamp: number
+  message: Message
   streaming: boolean
   failed: boolean
+  queued?: boolean
+  onCancelQueued?: () => void
   showArchiveToWiki?: boolean
   onArchiveToWiki?: () => void
 }) {
   const { t } = useTypedTranslation('chat')
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!streaming) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [streaming])
+
+  const activityStatus = useMemo(() => {
+    if (!streaming) return null
+    return resolveStreamingActivityStatus({
+      message,
+      formatToolLabel: (toolName, input) => formatToolLabel(toolName, input, t),
+      t,
+      now
+    })
+  }, [message, streaming, t, now])
+
+  const elapsedLabel =
+    activityStatus?.showElapsed && streaming
+      ? formatStreamingElapsed(now - message.timestamp)
+      : null
 
   return (
     <div className="chat-bubble-meta">
-      <time dateTime={new Date(timestamp).toISOString()}>{formatChatTimestamp(timestamp)}</time>
-      {streaming ? (
-        <span className="chat-bubble-status chat-bubble-status--streaming">{t('streaming.inProgress')}</span>
+      <time dateTime={new Date(message.timestamp).toISOString()}>{formatChatTimestamp(message.timestamp)}</time>
+      {streaming && activityStatus ? (
+        <span className="chat-bubble-status chat-bubble-status--streaming" title={activityStatus.detail}>
+          {activityStatus.label}
+          {elapsedLabel ? <span className="chat-bubble-status__elapsed">{elapsedLabel}</span> : null}
+        </span>
+      ) : null}
+      {queued ? <span className="chat-bubble-status chat-bubble-status--queued">{t('streaming.queued')}</span> : null}
+      {queued && onCancelQueued ? (
+        <button type="button" className="chat-cancel-queue-btn" onClick={onCancelQueued}>
+          {t('streaming.cancelQueue')}
+        </button>
       ) : null}
       {failed ? <span className="chat-bubble-status chat-bubble-status--failed">{t('streaming.failed')}</span> : null}
       {showArchiveToWiki && onArchiveToWiki ? (
@@ -176,7 +195,8 @@ export const ChatBubble = memo(function ChatBubble({
   wikiRootPath,
   showArchiveToWiki = false,
   onArchiveToWiki,
-  onRetry
+  onRetry,
+  onCancelQueued
 }: Props) {
   const { t } = useTypedTranslation('chat')
   const isUser = message.role === 'user'
@@ -192,8 +212,6 @@ export const ChatBubble = memo(function ChatBubble({
     () => groupActivityTimeline(activityTimeline, getTimestamp),
     [activityTimeline, getTimestamp]
   )
-  const batchIdleTimedOut = useBatchIdleTimedOut(activityTimeline, getTimestamp, streaming)
-
   const batchProgressCtx = useMemo(
     () => ({ streaming, thinkingSegments, toolById }),
     [streaming, thinkingSegments, toolById]
@@ -215,7 +233,7 @@ export const ChatBubble = memo(function ChatBubble({
   if (isUser) {
     return (
       <div
-        className={['chat-bubble-row', 'chat-bubble-row--user', enter ? 'chat-bubble-row--enter' : '']
+        className={['chat-bubble-row', 'chat-bubble-row--user', enter ? 'chat-bubble-row--enter' : '', message.status === 'queued' ? 'chat-bubble-row--queued' : '']
           .filter(Boolean)
           .join(' ')}
         data-message-id={message.id}
@@ -224,7 +242,13 @@ export const ChatBubble = memo(function ChatBubble({
           <div className="chat-bubble chat-bubble--user">
             <div className="chat-md-user">{message.content}</div>
           </div>
-          <MessageMeta timestamp={message.timestamp} streaming={false} failed={false} />
+          <MessageMeta
+            message={message}
+            streaming={false}
+            failed={false}
+            queued={message.status === 'queued'}
+            onCancelQueued={onCancelQueued}
+          />
         </div>
       </div>
     )
@@ -306,14 +330,14 @@ export const ChatBubble = memo(function ChatBubble({
 
     const isLastBatch = segmentIndex === lastBatchSegmentIndex
     const batchInProgress = isActivityBatchInProgress(segment.items, batchProgressCtx)
-    const isActive = isLastBatch && batchInProgress && !batchIdleTimedOut
+    const isActive = isLastBatch && batchInProgress
 
     return (
       <ActivityBatch
         key={`${message.id}-batch-${segmentIndex}`}
         items={segment.items}
         isActive={isActive}
-        summary={buildBatchSummary(segment.items, { toolById, t })}
+        summary={buildBatchSummary(segment.items, { toolById, thinkingSegments, t })}
         renderItem={(item, itemIndex) =>
           renderActivityItem(item, `${message.id}-batch-${segmentIndex}-${itemIndex}`)
         }
@@ -384,7 +408,7 @@ export const ChatBubble = memo(function ChatBubble({
         ) : null}
 
         <MessageMeta
-          timestamp={message.timestamp}
+          message={message}
           streaming={streaming}
           failed={failed}
           showArchiveToWiki={showArchiveToWiki}
@@ -402,5 +426,6 @@ export const ChatBubble = memo(function ChatBubble({
   prev.wikiRootPath === next.wikiRootPath &&
   prev.showArchiveToWiki === next.showArchiveToWiki &&
   prev.onArchiveToWiki === next.onArchiveToWiki &&
-  prev.onRetry === next.onRetry
+  prev.onRetry === next.onRetry &&
+  prev.onCancelQueued === next.onCancelQueued
 )

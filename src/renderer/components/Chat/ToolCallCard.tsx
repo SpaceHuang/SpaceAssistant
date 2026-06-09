@@ -58,9 +58,16 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max) + '\n…'
 }
 
-/** 浏览器列表行默认收起；确认态由 BrowserConfirmCard 单独展示 */
+/** 浏览器列表行默认收起；确认态与执行中由 BrowserConfirmCard / 详情区展示 */
 function isBrowserListRowCollapsed(record: ToolCallRecord): boolean {
-  return record.toolName === 'browser' && record.status !== 'confirming'
+  return record.toolName === 'browser' && record.status !== 'confirming' && record.status !== 'executing'
+}
+
+function shouldAutoExpandExecuting(record: ToolCallRecord): boolean {
+  if (record.status !== 'executing') return false
+  if (record.toolName === 'run_shell' || record.toolName === 'run_script') return true
+  if (record.progressOutput?.trim() || record.progressOutputRaw?.trim()) return true
+  return record.toolName === 'browser'
 }
 
 function defaultExpanded(record: ToolCallRecord): boolean {
@@ -70,6 +77,7 @@ function defaultExpanded(record: ToolCallRecord): boolean {
   if (record.status === 'failed' || record.status === 'rejected') return true
   if (isFileTool(record.toolName)) return false
   if (record.status === 'confirming') return true
+  if (shouldAutoExpandExecuting(record)) return true
   if (record.status === 'completed') return false
   return false
 }
@@ -213,8 +221,12 @@ export function ToolCallCard({
     }
     if (record.status === 'confirming' || isFailed) {
       setExpanded(true)
+      return
     }
-  }, [fileTool, fileWriteTool, isFailed, record.status, record.toolName, record.input, record.result?.data])
+    if (shouldAutoExpandExecuting(record)) {
+      setExpanded(true)
+    }
+  }, [fileTool, fileWriteTool, isFailed, record.status, record.toolName, record.input, record.result?.data, record.progressOutput, record.progressOutputRaw])
 
   const showDetail = (expanded || writeConfirming || browserConfirming || shellConfirming || scriptConfirming || larkCliConfirming) && hasDetail
 

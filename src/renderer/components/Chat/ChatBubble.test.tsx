@@ -270,4 +270,24 @@ describe('ChatBubble activity batch', () => {
     )
     expect(document.querySelector('.activity-batch--expanded')).not.toBeNull()
   })
+
+  it('invokes onCancelQueued when cancel button clicked', () => {
+    const onCancelQueued = vi.fn()
+    render(
+      <ChatBubble
+        message={{
+          id: 'u1',
+          sessionId: 's1',
+          role: 'user',
+          content: 'follow up question',
+          timestamp: Date.now(),
+          status: 'queued',
+          schemaVersion: 1
+        }}
+        onCancelQueued={onCancelQueued}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '取消排队' }))
+    expect(onCancelQueued).toHaveBeenCalledTimes(1)
+  })
 })

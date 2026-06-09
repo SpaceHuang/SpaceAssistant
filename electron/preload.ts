@@ -21,6 +21,10 @@ const api: SpaceAssistantApi = {
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
   chatAppendMessage: (msg) => ipcRenderer.invoke('chat:append-message', msg),
   chatPatchMessage: (payload) => ipcRenderer.invoke('chat:patch-message', payload),
+  chatDeleteQueuedMessage: (payload: { messageId: string; sessionId: string }) =>
+    ipcRenderer.invoke('chat:delete-queued-message', payload) as Promise<
+      { ok: true; sessionId: string } | { ok: false; error: string }
+    >,
 
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => ipcRenderer.invoke('claude-chat-send-stream', payload),
   claudeChatCreateWithTools: (payload: ClaudeChatCreateWithToolsPayload) =>

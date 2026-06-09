@@ -8,6 +8,7 @@ import {
   appendMessage,
   appendSearchHistory,
   createSession,
+  deleteQueuedUserMessage,
   deleteSession,
   deleteSessionUsage,
   getConfigValue,
@@ -494,6 +495,17 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     async (_e, payload: { messageId: string; patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>> } & { sessionId: string }) => {
       updateMessageContent(ctx.db, payload.messageId, payload.patch)
       await syncBackup(ctx, payload.sessionId)
+    }
+  )
+
+  ipcMain.handle(
+    'chat:delete-queued-message',
+    async (_e, payload: { messageId: string; sessionId: string }) => {
+      const result = deleteQueuedUserMessage(ctx.db, payload.messageId)
+      if (result.ok) {
+        await syncBackup(ctx, result.sessionId)
+      }
+      return result
     }
   )
 

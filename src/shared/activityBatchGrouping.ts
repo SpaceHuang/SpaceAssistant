@@ -89,7 +89,29 @@ export function buildActivityItemTimestampResolver(message: {
   }
 }
 
-const IN_PROGRESS_TOOL_STATUSES = new Set<ToolCallRecord['status']>(['calling', 'confirming', 'executing'])
+export const IN_PROGRESS_TOOL_STATUSES = new Set<ToolCallRecord['status']>(['calling', 'confirming', 'executing'])
+
+/** 批次摘要优先展示仍在进行中的条目（思考 / 工具），否则取最后一项 */
+export function findBatchHighlightItem(
+  items: AssistantActivityItem[],
+  ctx: {
+    thinkingSegments: ReturnType<typeof thinkingSegmentsForRender>
+    toolById: Map<string, ToolCallRecord>
+  }
+): AssistantActivityItem | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!
+    if (item.kind === 'thinking') {
+      const seg = ctx.thinkingSegments[item.segmentIndex]
+      if (seg?.endTime === undefined) return item
+    }
+    if (item.kind === 'tool') {
+      const tc = ctx.toolById.get(item.toolId)
+      if (tc != null && IN_PROGRESS_TOOL_STATUSES.has(tc.status)) return item
+    }
+  }
+  return items[items.length - 1] ?? items[0] ?? null
+}
 
 /** 批次是否仍在进行中（streaming 且含未结束思考或非终态工具） */
 export function isActivityBatchInProgress(

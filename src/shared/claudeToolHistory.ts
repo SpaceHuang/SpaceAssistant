@@ -17,6 +17,7 @@ export function buildClaudeToolChatMessages(messages: Message[]): ClaudeChatMess
   for (const m of messages) {
     if (m.role !== 'user' && m.role !== 'assistant') continue
     if (m.role === 'assistant' && m.status === 'streaming') continue
+    if (m.role === 'user' && m.status === 'queued') continue
     if (m.role === 'user') {
       out.push({ role: 'user', content: m.content, id: m.id, timestamp: m.timestamp })
       continue

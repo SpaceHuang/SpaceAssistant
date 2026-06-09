@@ -7,7 +7,7 @@ export type { AppLocale }
 
 export type MessageRole = 'user' | 'assistant' | 'system'
 
-export type MessageStatus = 'sending' | 'sent' | 'streaming' | 'completed' | 'failed'
+export type MessageStatus = 'sending' | 'sent' | 'queued' | 'streaming' | 'completed' | 'failed'
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high'
 

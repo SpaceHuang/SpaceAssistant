@@ -14,6 +14,11 @@
   },
   "streaming": {
     "inProgress": "Generating",
+    "thinking": "Thinking",
+    "preparing": "Preparing…",
+    "awaitingConfirm": "Awaiting confirmation: {{action}}",
+    "queued": "Queued",
+    "cancelQueue": "Remove from queue",
     "failed": "Failed"
   },
   "bubble": {
@@ -63,7 +68,10 @@
     "send": "Send message",
     "abort": "Stop generation",
     "hintIdle": "Enter to send, Shift+Enter for newline",
-    "hintRunning": "Running — Enter or click the button to stop"
+    "hintRunning": "Click Stop to abort",
+    "hintRunningQueue": "Enter to send and queue",
+    "queueSend": "Send and queue",
+    "queuePending": "{{count}} queued"
   },
   "toolCall": {
     "confirm": {
@@ -128,6 +136,8 @@
     "warnings": {
       "selectSession": "Select a session and wait for settings to load",
       "sessionRunning": "This session already has a task running",
+      "queueFull": "Queue is full (max {{max}}). Wait for the current task to finish.",
+      "cancelQueueFailed": "Could not remove this queued message. Refresh and try again.",
       "maxParallel": "At most {{max}} sessions can run at once. Try again later.",
       "apiKeyMissing": "Configure an API Key in Settings first",
       "retryNoUserMessage": "Could not find a previous user message to retry"

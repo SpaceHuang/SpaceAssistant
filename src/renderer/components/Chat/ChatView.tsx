@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { addMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
+import { addMessage, patchMessage, removeMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
@@ -17,6 +17,7 @@ import {
   mergeDbAndLive,
   abortSessionRun,
   registerSessionRun,
+  removeLiveMessage,
   routePatchMessage,
   routeStreamPatchMessage,
   isSessionRunning
@@ -76,23 +77,31 @@ import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference
 import { isChatScrollNearBottom, scrollChatToBottom } from '../../utils/chatScroll'
 import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import {
+  countQueuedUserMessages,
+  filterMessagesForChatApi,
+  getNextQueuedUserMessage,
+  MAX_CHAT_MESSAGE_QUEUE_SIZE
+} from '../../../shared/chatMessageQueue'
+import { classifyOutboundMessage } from '../../services/chatOutboundClassifier'
+import { formatToolLabel } from './toolCallDisplay'
+import {
+  formatStreamingElapsed,
+  resolveStreamingActivityStatus
+} from '../../../shared/streamingActivityStatus'
 
 type SendInternalOptions = {
   skipUserMessage?: boolean
   targetSessionId?: string
+  /** 会话执行中仍允许执行的即时命令（/skill list 等） */
+  bypassRunningGuard?: boolean
 }
 
 function buildClaudePayload(history: Message[]) {
-  return history
-    .filter((m) => {
-      if (m.role !== 'user' && m.role !== 'assistant') return false
-      if (m.role === 'assistant' && m.status === 'streaming') return false
-      return true
-    })
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: typeof m.content === 'string' ? m.content : ''
-    }))
+  return filterMessagesForChatApi(history).map((m) => ({
+    role: m.role as 'user' | 'assistant',
+    content: typeof m.content === 'string' ? m.content : ''
+  }))
 }
 
 export function ChatView() {
@@ -113,12 +122,24 @@ export function ChatView() {
   const composerRef = useRef<MessageInputHandle>(null)
   const abortRequestedRef = useRef(false)
   const lastSkillRouteSignatureRef = useRef('')
+  const prevRunningSessionsRef = useRef<Record<string, true>>({})
+  const drainingQueueRef = useRef(false)
+  const sendInternalRef = useRef<
+    (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => Promise<void>
+  >(async () => {})
   const [testPreviewMessageIds, setTestPreviewMessageIds] = useState<Set<string>>(() => new Set())
 
   const streamingAssistantId = useMemo(
     () => messages.find((m) => m.role === 'assistant' && m.status === 'streaming')?.id,
     [messages]
   )
+
+  const streamingAssistant = useMemo(
+    () => messages.find((m) => m.id === streamingAssistantId),
+    [messages, streamingAssistantId]
+  )
+
+  const [runningClock, setRunningClock] = useState(() => Date.now())
 
   const messageIds = useMemo(() => messages.map((m) => m.id), [messages])
   const enterMessageId = useChatMessageEnter(sessionId, messageIds)
@@ -238,6 +259,23 @@ export function ChatView() {
 
   const sessionRunning = Boolean(sessionId && runningSessions[sessionId])
 
+  useEffect(() => {
+    if (!sessionRunning) return
+    setRunningClock(Date.now())
+    const timer = window.setInterval(() => setRunningClock(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [sessionRunning])
+
+  const runningActivity = useMemo(() => {
+    if (!streamingAssistant) return null
+    return resolveStreamingActivityStatus({
+      message: streamingAssistant,
+      formatToolLabel: (toolName, input) => formatToolLabel(toolName, input, t),
+      t,
+      now: runningClock
+    })
+  }, [streamingAssistant, t, runningClock])
+
   const toolChatControllerRef = useRef<ToolChatController | null>(null)
 
   const { t: tChat } = useTypedTranslation('chat')
@@ -314,6 +352,93 @@ export function ChatView() {
     [dispatch, scrollBottom]
   )
 
+  const enqueueChatMessage = useCallback(
+    async (runSessionId: string, text: string) => {
+      const chatText = text.trim()
+      if (!chatText) return
+
+      const queuedCount = countQueuedUserMessages(store.getState().chat.messages, runSessionId)
+      if (queuedCount >= MAX_CHAT_MESSAGE_QUEUE_SIZE) {
+        message.warning(t('chatView.warnings.queueFull', { max: MAX_CHAT_MESSAGE_QUEUE_SIZE }))
+        return
+      }
+
+      const userMsg: Message = {
+        id: crypto.randomUUID(),
+        sessionId: runSessionId,
+        role: 'user',
+        content: chatText,
+        timestamp: Date.now(),
+        status: 'queued',
+        schemaVersion: CURRENT_SCHEMA_VERSION
+      }
+      dispatch(addMessage(userMsg))
+      stickToBottomRef.current = true
+      await window.api.chatAppendMessage(userMsg)
+      scrollBottom(true)
+    },
+    [dispatch, message, scrollBottom, t]
+  )
+
+  const cancelQueuedMessage = useCallback(
+    async (messageId: string) => {
+      const msg = store.getState().chat.messages.find((m) => m.id === messageId)
+      if (!msg || msg.role !== 'user' || msg.status !== 'queued') return
+
+      const result = await window.api.chatDeleteQueuedMessage({
+        messageId,
+        sessionId: msg.sessionId
+      })
+      if (!result.ok) {
+        message.warning(t('chatView.warnings.cancelQueueFailed'))
+        return
+      }
+
+      dispatch(removeMessage(messageId))
+      removeLiveMessage(msg.sessionId, messageId)
+    },
+    [dispatch, message, t]
+  )
+
+  const drainQueueForSession = useCallback(
+    async (runSessionId: string) => {
+      if (drainingQueueRef.current || isSessionRunning(runSessionId)) return
+
+      const next = getNextQueuedUserMessage(store.getState().chat.messages, runSessionId)
+      if (!next) return
+
+      drainingQueueRef.current = true
+      try {
+        dispatch(patchMessage({ id: next.id, patch: { status: 'sent' } }))
+        await window.api.chatPatchMessage({
+          messageId: next.id,
+          sessionId: runSessionId,
+          patch: { status: 'sent' }
+        })
+        await sendInternalRef.current(next.content, undefined, {
+          targetSessionId: runSessionId,
+          skipUserMessage: true
+        })
+      } finally {
+        drainingQueueRef.current = false
+      }
+    },
+    [dispatch]
+  )
+
+  useEffect(() => {
+    const prev = prevRunningSessionsRef.current
+    const currKeys = new Set(Object.keys(runningSessions))
+    for (const sid of new Set([...Object.keys(prev), ...currKeys])) {
+      if (prev[sid] && !currKeys.has(sid)) {
+        void drainQueueForSession(sid)
+      }
+    }
+    const nextPrev: Record<string, true> = {}
+    for (const sid of currKeys) nextPrev[sid] = true
+    prevRunningSessionsRef.current = nextPrev
+  }, [runningSessions, drainQueueForSession])
+
   const sendInternal = useCallback(
     async (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => {
       const runSessionId = options?.targetSessionId ?? sessionId
@@ -324,7 +449,7 @@ export function ChatView() {
       const runSession =
         store.getState().session.list.find((x) => x.id === runSessionId) ??
         (currentSession?.id === runSessionId ? currentSession : undefined)
-      if (isSessionRunning(runSessionId)) {
+      if (isSessionRunning(runSessionId) && !options?.bypassRunningGuard) {
         message.warning(t('chatView.warnings.sessionRunning'))
         return
       }
@@ -412,9 +537,10 @@ export function ChatView() {
         stickToBottomRef.current = true
       }
 
+      const sessionMessages = store.getState().chat.messages.filter((m) => m.sessionId === runSessionId)
       const historyForApi = options?.skipUserMessage
-        ? [...store.getState().chat.messages]
-        : [...store.getState().chat.messages.filter((m) => m.id !== userMsg.id), userMsg]
+        ? filterMessagesForChatApi(sessionMessages)
+        : filterMessagesForChatApi([...sessionMessages.filter((m) => m.id !== userMsg.id), userMsg])
 
       if (!options?.skipUserMessage) {
         await window.api.chatAppendMessage(userMsg)
@@ -428,8 +554,8 @@ export function ChatView() {
       const useToolsApi =
         cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
 
-      const recentMessages: SkillRouteRecentMessage[] = historyForApi
-        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.status !== 'streaming' && m.content.trim())
+      const recentMessages: SkillRouteRecentMessage[] = filterMessagesForChatApi(historyForApi)
+        .filter((m) => m.content.trim())
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
       const routeResult = await window.api.skillRoute({
@@ -822,6 +948,8 @@ export function ChatView() {
     [cfg, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t]
   )
 
+  sendInternalRef.current = sendInternal
+
   const send = useCallback(
     async (text: string) => {
       if (!text.trim()) return
@@ -848,9 +976,26 @@ export function ChatView() {
         }
       }
 
+      if (isSessionRunning(targetSessionId)) {
+        const runSession =
+          store.getState().session.list.find((x) => x.id === targetSessionId) ??
+          (currentSession?.id === targetSessionId ? currentSession : undefined)
+        const sessionSkillsState = normalizeSessionSkillsState(
+          runSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE
+        )
+        const wikiConfig = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
+        const kind = await classifyOutboundMessage(text, { wikiConfig, sessionSkillsState })
+        if (kind === 'immediate-command') {
+          await sendInternal(text, sessionSkillsState, { targetSessionId, bypassRunningGuard: true })
+          return
+        }
+        await enqueueChatMessage(targetSessionId, text)
+        return
+      }
+
       await sendInternal(text, undefined, { targetSessionId })
     },
-    [sessionId, cfg, sendInternal, dispatch, message, t]
+    [sessionId, cfg, sendInternal, dispatch, message, t, currentSession, enqueueChatMessage]
   )
 
   const retryFailedAssistant = useCallback(
@@ -910,6 +1055,7 @@ export function ChatView() {
   }, [chatLaunchIntent, sessionId, cfg, currentSession, dispatch, sendInternal])
 
   const running = sessionRunning
+  const queueCount = sessionId ? countQueuedUserMessages(messages, sessionId) : 0
 
   useEffect(() => {
     const onIngest = (e: Event) => {
@@ -1040,6 +1186,11 @@ export function ChatView() {
                     ? () => void retryFailedAssistant(m.id)
                     : undefined
                 }
+                onCancelQueued={
+                  m.role === 'user' && m.status === 'queued'
+                    ? () => void cancelQueuedMessage(m.id)
+                    : undefined
+                }
               />
             ))}
           </div>
@@ -1048,6 +1199,14 @@ export function ChatView() {
       <MessageInput
         ref={composerRef}
         running={running}
+        queueCount={queueCount}
+        runningStatus={runningActivity?.label}
+        runningDetail={runningActivity?.detail}
+        runningElapsed={
+          runningActivity?.showElapsed && streamingAssistant
+            ? formatStreamingElapsed(runningClock - streamingAssistant.timestamp)
+            : undefined
+        }
         modelLabel={cfg?.model}
         onSend={send}
         onAbort={abort}

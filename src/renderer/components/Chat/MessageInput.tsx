@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Input, Tooltip } from 'antd'
 import { Keyboard, Send, Square } from 'lucide-react'
 import { ContextUsageRing } from './ContextUsageRing'
@@ -12,42 +12,85 @@ export type MessageInputHandle = {
 type Props = {
   disabled?: boolean
   running?: boolean
+  queueCount?: number
+  /** 当前会话执行中的活动摘要（工具名 / 阶段） */
+  runningStatus?: string
+  runningDetail?: string
+  runningElapsed?: string
   modelLabel?: string
   onSend: (text: string) => void
   onAbort?: () => void
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, Props>(function MessageInput(
-  { disabled, running, modelLabel, onSend, onAbort },
+  { disabled, running, queueCount = 0, runningStatus, runningDetail, runningElapsed, modelLabel, onSend, onAbort },
   ref
 ) {
   const { t } = useTypedTranslation('chat')
   const [text, setText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const leftRowRef = useRef<HTMLDivElement>(null)
-  const hintMeasureRef = useRef<HTMLSpanElement>(null)
+  const statusMeasureRef = useRef<HTMLSpanElement>(null)
   const modelChipRef = useRef<HTMLSpanElement>(null)
-  const [hintCollapsed, setHintCollapsed] = useState(false)
+  const [statusCollapsed, setStatusCollapsed] = useState(false)
 
-  const hintText = running ? t('input.hintRunning') : t('input.hintIdle')
-  const primaryActionLabel = running ? t('input.abort') : t('input.send')
+  const canQueueSend = running && Boolean(text.trim())
+  const hintText = running
+    ? canQueueSend
+      ? t('input.hintRunningQueue')
+      : t('input.hintRunning')
+    : t('input.hintIdle')
+
+  const activitySummary = useMemo(() => {
+    if (!running) return ''
+    const parts: string[] = []
+    if (runningStatus) parts.push(runningStatus)
+    if (runningDetail) parts.push(runningDetail)
+    if (runningElapsed) parts.push(runningElapsed)
+    if (queueCount > 0) parts.push(t('input.queuePending', { count: queueCount }))
+    return parts.join(' · ')
+  }, [running, runningStatus, runningDetail, runningElapsed, queueCount, t])
+
+  const showActivity = running && Boolean(activitySummary)
+  /** 已有活动摘要时不再重复「执行中」；无摘要时保留停止说明 */
+  const showHint = !running || canQueueSend || !showActivity
+
+  const footerStatusLabel = useMemo(() => {
+    if (!running) return hintText
+    const parts: string[] = []
+    if (activitySummary) parts.push(activitySummary)
+    if (canQueueSend) parts.push(t('input.hintRunningQueue'))
+    else if (!activitySummary) parts.push(t('input.hintRunning'))
+    return parts.join(' · ')
+  }, [running, hintText, activitySummary, canQueueSend, t])
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus(),
-    setDraft: (t: string) => setText(t)
+    setDraft: (value: string) => setText(value)
   }))
 
-  const send = () => {
-    const t = text.trim()
-    if (!t || disabled || running) return
+  const queueSend = () => {
+    const value = text.trim()
+    if (!value || disabled) return
     setText('')
-    onSend(t)
+    onSend(value)
+  }
+
+  const send = () => {
+    if (running) {
+      queueSend()
+      return
+    }
+    const value = text.trim()
+    if (!value || disabled) return
+    setText('')
+    onSend(value)
   }
 
   const checkOverflow = useCallback(() => {
     const container = leftRowRef.current
-    const hint = hintMeasureRef.current
-    if (!container || !hint) return
+    const measure = statusMeasureRef.current
+    if (!container || !measure) return
 
     const footer = container.parentElement
     if (!footer) return
@@ -59,17 +102,17 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     const availableWidth = footer.clientWidth - rightWidth - footerGap
 
     const chipWidth = modelChipRef.current ? modelChipRef.current.offsetWidth : 0
-    const hintWidth = hint.offsetWidth
+    const statusWidth = measure.offsetWidth
     const triggerWidth = 22
     const gap = 8
 
-    let neededWidth = hintWidth
+    let neededWidth = statusWidth
     if (chipWidth > 0) {
-      neededWidth = chipWidth + gap + hintWidth
+      neededWidth = chipWidth + gap + statusWidth
     }
 
     const neededCollapsedWidth = chipWidth > 0 ? chipWidth + gap + triggerWidth : triggerWidth
-    setHintCollapsed(neededWidth > availableWidth && neededCollapsedWidth <= availableWidth)
+    setStatusCollapsed(neededWidth > availableWidth && neededCollapsedWidth <= availableWidth)
   }, [])
 
   useEffect(() => {
@@ -89,15 +132,18 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   useEffect(() => {
     checkOverflow()
-  }, [modelLabel, running, hintText, checkOverflow])
+  }, [modelLabel, running, canQueueSend, queueCount, footerStatusLabel, checkOverflow])
 
-  const handlePrimaryAction = () => {
+  const handleEnter = () => {
     if (running) {
-      onAbort?.()
+      if (text.trim()) queueSend()
       return
     }
     send()
   }
+
+  const sendLabel = running ? t('input.queueSend') : t('input.send')
+  const stopLabel = t('input.abort')
 
   return (
     <div className="composer">
@@ -112,39 +158,97 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              handlePrimaryAction()
+              handleEnter()
             }
           }}
         />
         <div className="composer-footer">
-          <div ref={leftRowRef} style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
+          <div ref={leftRowRef} className="composer-footer__start">
             {modelLabel ? <span ref={modelChipRef} className="composer-model-chip">{modelLabel}</span> : null}
-            <span ref={hintMeasureRef} className="composer-hint composer-hint--measure" aria-hidden>
-              {hintText}
+            <span ref={statusMeasureRef} className="composer-status composer-status--measure" aria-hidden>
+              {footerStatusLabel}
             </span>
-            {hintCollapsed ? (
-              <Tooltip title={hintText}>
-                <button type="button" className="composer-hint-trigger" aria-label={hintText}>
-                  <Keyboard size={14} strokeWidth={1.75} aria-hidden />
+            {statusCollapsed ? (
+              <Tooltip title={footerStatusLabel}>
+                <button type="button" className="composer-hint-trigger" aria-label={footerStatusLabel}>
+                  {running ? (
+                    <span className="composer-status-trigger-dot" aria-hidden />
+                  ) : (
+                    <Keyboard size={14} strokeWidth={1.75} aria-hidden />
+                  )}
                 </button>
               </Tooltip>
             ) : (
-              <span className="composer-hint">{hintText}</span>
+              <div
+                className={['composer-status', running ? 'composer-status--running' : ''].filter(Boolean).join(' ')}
+                role={running ? 'status' : undefined}
+                aria-live={running ? 'polite' : undefined}
+              >
+                {showActivity ? (
+                  <>
+                    <span className="composer-status__pulse" aria-hidden />
+                    <span className="composer-status__activity">
+                      {runningStatus ? <span className="composer-status__label">{runningStatus}</span> : null}
+                      {runningDetail ? <span className="composer-status__detail">{runningDetail}</span> : null}
+                      {runningElapsed ? <span className="composer-status__elapsed">{runningElapsed}</span> : null}
+                      {queueCount > 0 ? (
+                        <span className="composer-status__queue">{t('input.queuePending', { count: queueCount })}</span>
+                      ) : null}
+                    </span>
+                    {showHint ? (
+                      <>
+                        <span className="composer-status__sep" aria-hidden>
+                          ·
+                        </span>
+                        <span className="composer-status__hint">{hintText}</span>
+                      </>
+                    ) : null}
+                  </>
+                ) : showHint ? (
+                  <span className="composer-status__hint">{hintText}</span>
+                ) : null}
+              </div>
             )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="composer-footer__actions">
             <ContextUsageRing />
-            <button
-              type="button"
-              className={`composer-send${running ? ' composer-send--stop' : ''}`}
-              onClick={handlePrimaryAction}
-              disabled={running ? false : disabled || !text.trim()}
-              aria-label={primaryActionLabel}
-            >
-              <span className="composer-send__visual" aria-hidden>
-                {running ? <Square size={14} fill="currentColor" /> : <Send size={14} />}
-              </span>
-            </button>
+            {running && text.trim() ? (
+              <button
+                type="button"
+                className="composer-send composer-send--queue"
+                onClick={queueSend}
+                disabled={disabled}
+                aria-label={sendLabel}
+              >
+                <span className="composer-send__visual" aria-hidden>
+                  <Send size={14} />
+                </span>
+              </button>
+            ) : null}
+            {running ? (
+              <button
+                type="button"
+                className="composer-send composer-send--stop"
+                onClick={() => onAbort?.()}
+                aria-label={stopLabel}
+              >
+                <span className="composer-send__visual" aria-hidden>
+                  <Square size={14} fill="currentColor" />
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="composer-send"
+                onClick={send}
+                disabled={disabled || !text.trim()}
+                aria-label={sendLabel}
+              >
+                <span className="composer-send__visual" aria-hidden>
+                  <Send size={14} />
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </div>

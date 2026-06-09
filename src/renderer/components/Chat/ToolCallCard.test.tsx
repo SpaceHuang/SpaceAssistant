@@ -281,7 +281,6 @@ describe('ToolCallCard file write expand behavior', () => {
         onCancel={onCancel}
       />
     )
-    fireEvent.click(document.querySelector('.tool-row__main')!)
     fireEvent.click(screen.getByRole('button', { name: '取消执行' }))
     expect(onCancel).toHaveBeenCalled()
   }, 15_000)
@@ -615,10 +614,10 @@ describe('ToolCallCard run_shell terminal collapse', () => {
     )
     expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
     const detail = document.querySelector('.tool-row-detail')
-    expect(detail?.classList.contains('tool-row-detail--collapsed')).toBe(true)
-    expect(detail?.getAttribute('aria-hidden')).toBe('true')
+    expect(detail?.classList.contains('tool-row-detail--open')).toBe(true)
     fireEvent.click(document.querySelector('.tool-row__main')!)
-    expect(document.querySelector('.tool-row-detail')?.classList.contains('tool-row-detail--open')).toBe(true)
+    expect(document.querySelector('.tool-row-detail')?.classList.contains('tool-row-detail--collapsed')).toBe(true)
+    expect(detail?.getAttribute('aria-hidden')).toBe('true')
     expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
   })
 })

@@ -137,6 +137,10 @@ export type SpaceAssistantApi = {
     sessionId: string
     patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>>
   }) => Promise<void>
+  chatDeleteQueuedMessage: (payload: {
+    messageId: string
+    sessionId: string
+  }) => Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>
 
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => Promise<{ ok: true } | { ok: false; error: string }>
   claudeChatCreateWithTools: (

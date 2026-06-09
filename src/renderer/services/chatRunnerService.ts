@@ -76,6 +76,13 @@ export function patchLiveMessage(sessionId: string, messageId: string, patch: Pa
   Object.assign(m, patch)
 }
 
+export function removeLiveMessage(sessionId: string, messageId: string): void {
+  const arr = liveBySession.get(sessionId)
+  if (!arr) return
+  const idx = arr.findIndex((m) => m.id === messageId)
+  if (idx >= 0) arr.splice(idx, 1)
+}
+
 function dispatchPatchToRedux(sessionId: string, messageId: string, patch: Partial<Message>): void {
   if (store.getState().chat.currentSessionId === sessionId) {
     store.dispatch(patchMessage({ id: messageId, patch }))

@@ -70,6 +70,9 @@ export const chatSlice = createSlice({
       const m = state.messages.find((x) => x.id === action.payload.id)
       if (m) Object.assign(m, action.payload.patch)
     },
+    removeMessage(state, action: PayloadAction<string>) {
+      state.messages = state.messages.filter((m) => m.id !== action.payload)
+    },
     setChatStatus(
       state,
       action: PayloadAction<{
@@ -122,6 +125,7 @@ export const {
   setMessages,
   addMessage,
   patchMessage,
+  removeMessage,
   setChatStatus,
   setConfirmFocusToolUseId,
   setScrollToMessageId,

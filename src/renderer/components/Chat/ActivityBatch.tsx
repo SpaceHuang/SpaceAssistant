@@ -48,7 +48,15 @@ export function ActivityBatch({ items, isActive, summary, renderItem }: Props) {
   const toggleLabel = expanded ? t('batch.collapse') : t('batch.expand')
 
   return (
-    <div className={`activity-batch${expanded ? ' activity-batch--expanded' : ''}`}>
+    <div
+      className={[
+        'activity-batch',
+        expanded ? 'activity-batch--expanded' : '',
+        isActive ? 'activity-batch--active' : ''
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
       <div className="activity-batch__header-row">
         <button
           type="button"
