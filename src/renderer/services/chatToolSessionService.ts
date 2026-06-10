@@ -11,7 +11,7 @@ import type {
 } from '../../shared/domainTypes'
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
-import { buildClaudeToolChatMessages } from '../../shared/claudeToolHistory'
+import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../shared/claudeToolHistory'
 import { filterBuiltinToolsForRenderer } from '../../shared/toolsConfigFilter'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from '../../shared/anthropicToolSanitize'
 import type { ClaudeChatCreateWithToolsPayload } from '../../shared/api'
@@ -225,7 +225,7 @@ export function buildToolChatPayload(args: {
     args.shellConfig
   )
   const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
-  const convo = buildClaudeToolChatMessages(args.messages)
+  const convo = trimClaudeToolChatMessages(buildClaudeToolChatMessages(args.messages))
   return {
     requestId: args.requestId,
     sessionId: args.sessionId,

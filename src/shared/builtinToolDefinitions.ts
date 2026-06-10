@@ -7,7 +7,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'read_file',
     description:
-      '读取指定文件内容。路径相对于工作目录，不可超出工作目录范围。大文件请使用 offset（1-based 起始行号）与 limit（读取行数）分段读取，避免一次返回全文。',
+      '读取指定文件内容（仅适用于文件，不可用于目录；查看目录请用 list_directory）。路径相对于工作目录，不可超出工作目录范围。大文件请使用 offset（1-based 起始行号）与 limit（读取行数）分段读取，避免一次返回全文。',
     input_schema: {
       type: 'object',
       properties: {

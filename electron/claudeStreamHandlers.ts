@@ -12,6 +12,8 @@ import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
 import { runToolChatSession } from './toolChatLoop'
 import { buildSystemPrompt, getCachedMemoryContent } from './projectMemory'
+import { MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
+import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
 export type ClaudeStreamDeps = {
@@ -89,7 +91,7 @@ function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessag
 function assertValidClaudeContentBlocks(content: unknown, idx: number): string | Array<unknown> {
   if (typeof content === 'string') {
     const trimmed = content.trim()
-    if (!trimmed) throw new Error(`Invalid content at index ${idx}`)
+    if (!trimmed) return ' '
     if (trimmed.length > MAX_API_MESSAGE_TEXT_CHARS) throw new Error(`Content too long at index ${idx}`)
     return trimmed
   }
@@ -144,9 +146,11 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
 
 function normalizeAndValidateClaudeMessagesWithContentBlocks(messages: unknown): ClaudeChatMessageWithContentBlocks[] {
   if (!Array.isArray(messages)) throw new Error('Invalid messages')
-  if (messages.length > 60) throw new Error('Too many messages')
 
-  return messages.map((m, idx) => {
+  const trimmed = trimClaudeToolChatMessages(messages as ClaudeChatMessageWithContentBlocks[], MAX_CHAT_API_MESSAGES)
+  if (trimmed.length === 0) throw new Error('Too many messages')
+
+  return trimmed.map((m, idx) => {
     const msg = m as Partial<ClaudeChatMessageWithContentBlocks> | null
     if (!msg || typeof msg !== 'object') throw new Error(`Invalid message at index ${idx}`)
     if (msg.role !== 'user' && msg.role !== 'assistant') throw new Error(`Invalid role at index ${idx}`)

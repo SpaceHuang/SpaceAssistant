@@ -51,6 +51,17 @@ describe('read_file offset/limit', () => {
     })
   })
 
+  it('rejects directory path with actionable error', async () => {
+    const rel = 'subdir'
+    await fs.mkdir(path.join(tmpDir, rel))
+    const ctx = makeCtx(tmpDir, cache)
+
+    const res = await readFileExecutor.execute({ path: rel }, ctx)
+    expect(res.success).toBe(false)
+    expect(res.error).toMatch(/目录/)
+    expect(res.error).toMatch(/list_directory/)
+  })
+
   it('returns full file when range params omitted', async () => {
     const rel = 'small.txt'
     const body = 'hello'

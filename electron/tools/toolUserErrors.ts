@@ -42,6 +42,9 @@ function mapGenericToolError(msg: string, toolName?: string): string | null {
   if (/enoent|no such file|not found/i.test(lower) && toolName === 'read_file') {
     return '文件不存在或路径无效'
   }
+  if (/eisdir|illegal operation on a directory/i.test(lower) && toolName === 'read_file') {
+    return '路径是目录而非文件，请使用 list_directory 查看目录内容，或指定具体文件路径'
+  }
   if (/eacces|permission denied/i.test(lower)) {
     return '没有访问权限，请检查文件或目录权限'
   }

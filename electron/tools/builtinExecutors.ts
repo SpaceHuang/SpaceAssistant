@@ -195,6 +195,24 @@ export const readFileExecutor: ToolExecutor = {
       if (!(await pathExists(abs))) {
         return { success: true, data: { path: rel, content: '', encoding: 'utf8', note: '文件不存在' }, duration: Date.now() - started }
       }
+      let st: Awaited<ReturnType<typeof fs.stat>>
+      try {
+        st = await fs.stat(abs)
+      } catch (e) {
+        const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+        if (ab) return ab
+        throw e
+      }
+      if (st.isDirectory()) {
+        return {
+          success: false,
+          error: `路径是目录而非文件: ${rel}。请使用 list_directory 查看目录内容，或指定具体文件路径`,
+          duration: Date.now() - started
+        }
+      }
+      if (!st.isFile()) {
+        return { success: false, error: `无法读取该路径（不是普通文件）: ${rel}`, duration: Date.now() - started }
+      }
       let buf: Buffer
       try {
         buf = await fs.readFile(abs, { signal: op })
@@ -243,14 +261,6 @@ export const readFileExecutor: ToolExecutor = {
         text = sliced.content
       }
 
-      let st: Awaited<ReturnType<typeof fs.stat>>
-      try {
-        st = await fs.stat(abs)
-      } catch (e) {
-        const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
-        if (ab) return ab
-        throw e
-      }
       recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
         content: text,
         truncated,
