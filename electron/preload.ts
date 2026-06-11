@@ -87,6 +87,19 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('app:open-about', fn)
   },
 
+  windowGetPlatform: () => ipcRenderer.invoke('window:get-platform'),
+  windowIsMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  windowMinimize: () => ipcRenderer.invoke('window:minimize'),
+  windowMaximizeToggle: () => ipcRenderer.invoke('window:maximize-toggle'),
+  windowClose: () => ipcRenderer.invoke('window:close'),
+  windowOnMaximizeChanged: (cb) => {
+    const fn = (_e: unknown, isMaximized: boolean) => cb(isMaximized)
+    ipcRenderer.on('window:maximize-changed', fn)
+    return () => ipcRenderer.removeListener('window:maximize-changed', fn)
+  },
+  appQuit: () => ipcRenderer.invoke('app:quit'),
+  appToggleDevTools: () => ipcRenderer.invoke('app:toggle-devtools'),
+
   sessionOnTitleGenerated: (cb) => {
     const fn = (_e: unknown, data: { session: Session }) => cb(data)
     ipcRenderer.on('session:title-generated', fn)

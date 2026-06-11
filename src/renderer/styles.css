@@ -1,4 +1,5 @@
 @import './theme/tokens.css';
 @import './theme/components.css';
+@import './theme/titlebar.css';
 @import './theme/layout.css';
 @import './theme/config-settings.css';

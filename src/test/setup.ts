@@ -39,7 +39,15 @@ if (typeof window !== 'undefined') {
     ...api,
     usageGet: api.usageGet ?? (async () => undefined),
     usageSet: api.usageSet ?? (async () => {}),
-    usageDelete: api.usageDelete ?? (async () => {})
+    usageDelete: api.usageDelete ?? (async () => {}),
+    windowGetPlatform: api.windowGetPlatform ?? (async () => 'win32' as const),
+    windowIsMaximized: api.windowIsMaximized ?? (async () => false),
+    windowMinimize: api.windowMinimize ?? (async () => {}),
+    windowMaximizeToggle: api.windowMaximizeToggle ?? (async () => false),
+    windowClose: api.windowClose ?? (async () => {}),
+    windowOnMaximizeChanged: api.windowOnMaximizeChanged ?? (() => () => {}),
+    appQuit: api.appQuit ?? (async () => {}),
+    appToggleDevTools: api.appToggleDevTools ?? (async () => {})
   } as SpaceAssistantApi
 }
 

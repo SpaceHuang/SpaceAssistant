@@ -212,6 +212,15 @@ export type SpaceAssistantApi = {
   onOpenSettings: (cb: () => void) => () => void
   onOpenAbout: (cb: () => void) => () => void
 
+  windowGetPlatform: () => Promise<NodeJS.Platform>
+  windowIsMaximized: () => Promise<boolean>
+  windowMinimize: () => Promise<void>
+  windowMaximizeToggle: () => Promise<boolean>
+  windowClose: () => Promise<void>
+  windowOnMaximizeChanged: (cb: (isMaximized: boolean) => void) => () => void
+  appQuit: () => Promise<void>
+  appToggleDevTools: () => Promise<void>
+
   sessionOnTitleGenerated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>

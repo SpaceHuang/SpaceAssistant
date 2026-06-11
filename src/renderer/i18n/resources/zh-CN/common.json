@@ -34,6 +34,17 @@
     "zhCN": "中文"
   },
   "loading": "加载中",
+  "menu": {
+    "about": "关于",
+    "closeWindow": "关闭窗口",
+    "devTools": "开发者工具",
+    "docs": "文档",
+    "file": "文件",
+    "help": "帮助",
+    "quit": "退出",
+    "settings": "设置",
+    "view": "查看"
+  },
   "save": "保存",
   "saveAndReturn": "保存并返回",
   "search": {
@@ -97,6 +108,13 @@
     "title": "设置",
     "tools": "工具",
     "wiki": "项目 Wiki"
+  },
+  "titleBar": {
+    "close": "关闭",
+    "maximize": "最大化",
+    "menuBar": "应用菜单",
+    "minimize": "最小化",
+    "restore": "还原"
   },
   "unsavedChanges": "有未保存的更改",
   "status": {

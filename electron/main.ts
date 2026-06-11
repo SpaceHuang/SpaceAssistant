@@ -34,6 +34,8 @@ import {
 import { destroyTray, initTray, isTrayEnabled, showMainWindow } from './tray'
 import { setupWindowCloseHandler } from './trayLogic'
 import { applyMainWindowIcon, setupWindowIconThemeListener } from './windowIcon'
+import { getMainWindowFrameOptions } from './windowFrame'
+import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowControlsIpc'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
 import { createWorkDirManager, type WorkDirManager } from './workDirManager'
 
@@ -119,6 +121,7 @@ export async function createMainWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    ...getMainWindowFrameOptions(),
     // backgroundThrottling 默认为 true；隐藏窗口后 renderer 自动节流（NFR-10）
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -129,6 +132,8 @@ export async function createMainWindow(): Promise<void> {
   })
   setMainWindow(win)
   applyMainWindowIcon(win, __dirname)
+  win.setMenuBarVisibility(false)
+  attachWindowMaximizeEvents(win)
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
@@ -255,6 +260,8 @@ app.whenReady().then(() => {
   }
 
   ipcMain.handle('ping', async () => 'pong')
+
+  registerWindowControlsIpc(ipcMain)
 
   registerClaudeStreamHandlers(ipcMain, {
     getApiKey,

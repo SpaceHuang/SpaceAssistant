@@ -34,6 +34,17 @@
     "zhCN": "中文"
   },
   "loading": "Loading",
+  "menu": {
+    "about": "About",
+    "closeWindow": "Close Window",
+    "devTools": "Developer Tools",
+    "docs": "Documentation",
+    "file": "File",
+    "help": "Help",
+    "quit": "Quit",
+    "settings": "Settings",
+    "view": "View"
+  },
   "save": "Save",
   "saveAndReturn": "Save and return",
   "search": {
@@ -97,6 +108,13 @@
     "title": "Settings",
     "tools": "Tools",
     "wiki": "Project Wiki"
+  },
+  "titleBar": {
+    "close": "Close",
+    "maximize": "Maximize",
+    "menuBar": "Application menu",
+    "minimize": "Minimize",
+    "restore": "Restore"
   },
   "unsavedChanges": "Unsaved changes",
   "status": {

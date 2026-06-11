@@ -30,6 +30,7 @@ import wikiFillRaw from './assets/book_2_ai_fill.svg?raw'
 import searchLineRaw from './assets/search_line.svg?raw'
 import searchFillRaw from './assets/search_fill.svg?raw'
 import settingsRaw from './assets/settings_1_line.svg?raw'
+import { TitleBar } from './components/TitleBar/TitleBar'
 
 const chatLineSvg = patchSvg(chatLineRaw)
 const chatFillSvg = patchSvg(chatFillRaw)
@@ -159,7 +160,9 @@ function AppShellInner() {
   }, [dispatch])
 
   return (
-    <div className="app-shell">
+    <div className="app-root">
+      <TitleBar />
+      <div className="app-shell">
       <SplitPane id="leftSider" defaultSize={328} minSize={248} maxSize={520} side="left" className="app-sider">
         <div className="sa-split-pane-inner">
           <nav className="activity-bar" aria-label={t('activity.bar')}>
@@ -249,6 +252,7 @@ function AppShellInner() {
 
       <ConfigSettingsPage />
       <AboutModal />
+      </div>
     </div>
   )
 }
