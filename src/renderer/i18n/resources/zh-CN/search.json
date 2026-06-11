@@ -6,5 +6,16 @@
     "regexInvalid": "正则表达式无效",
     "regexTitle": "正则表达式 (Alt+R)",
     "wholeWordTitle": "整词匹配 (Alt+W)"
+  },
+  "searchBar": {
+    "ariaLabel": "在当前面板中查找",
+    "matchCount": "{{current}} / {{total}}",
+    "matchCountOverflow": "{{current}} / {{total}}+",
+    "matchCountUpdating": "{{current}} / {{total}}…",
+    "navAnnouncement": "第 {{current}} 项，共 {{total}} 项匹配",
+    "nextTitle": "下一个匹配项",
+    "prevTitle": "上一个匹配项",
+    "unsupportedPanel": "当前面板不支持查找",
+    "wholeWordCjkHint": "全词匹配不适用于中文内容"
   }
 }

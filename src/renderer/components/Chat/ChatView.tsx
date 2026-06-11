@@ -89,6 +89,7 @@ import {
   formatStreamingElapsed,
   resolveStreamingActivityStatus
 } from '../../../shared/streamingActivityStatus'
+import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
 
 type SendInternalOptions = {
   skipUserMessage?: boolean
@@ -1166,7 +1167,7 @@ export function ChatView() {
             <p className="chat-empty-desc">{t('chatView.empty.startDesc')}</p>
           </div>
         ) : (
-          <div className="chat-message-list">
+          <ChatMessageListSearch messageCount={messages.length}>
             {messages.map((m) => (
               <ChatBubble
                 key={m.id}
@@ -1193,7 +1194,7 @@ export function ChatView() {
                 }
               />
             ))}
-          </div>
+          </ChatMessageListSearch>
         )}
       </div>
       <MessageInput

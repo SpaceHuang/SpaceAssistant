@@ -6,5 +6,16 @@
     "regexInvalid": "Invalid regular expression",
     "regexTitle": "Regular expression (Alt+R)",
     "wholeWordTitle": "Whole word (Alt+W)"
+  },
+  "searchBar": {
+    "ariaLabel": "Find in current panel",
+    "matchCount": "{{current}} / {{total}}",
+    "matchCountOverflow": "{{current}} / {{total}}+",
+    "matchCountUpdating": "{{current}} / {{total}}…",
+    "navAnnouncement": "Match {{current}} of {{total}}",
+    "nextTitle": "Next match",
+    "prevTitle": "Previous match",
+    "unsupportedPanel": "Find is not supported in this panel",
+    "wholeWordCjkHint": "Whole word match does not apply to CJK text"
   }
 }

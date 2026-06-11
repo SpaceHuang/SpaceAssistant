@@ -72,6 +72,10 @@ vi.mock('../DetailPanel/DetailPanelContext', () => ({
   useDetailPanel: () => ({ openFile: vi.fn().mockResolvedValue(undefined) })
 }))
 
+vi.mock('../../services/chatSearchAdapter', () => ({
+  useChatSearchAdapter: vi.fn()
+}))
+
 vi.mock('../../services/chatStreamService', () => ({
   runClaudeChatStream: vi.fn(async (_payload, callbacks) => {
     callbacks.onDone({ usage: { input_tokens: 1, output_tokens: 1 } })

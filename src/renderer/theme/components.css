@@ -533,4 +533,18 @@
   line-height: var(--sa-chat-line-body, 1.55);
 }
 
+.sa-search-highlight {
+  background-color: rgba(255, 196, 0, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0;
+}
+
+.sa-search-highlight-current {
+  background-color: rgba(255, 152, 0, 0.55);
+  outline: 1px solid rgba(255, 152, 0, 0.7);
+  outline-offset: 0;
+  border-radius: 2px;
+}
+
 

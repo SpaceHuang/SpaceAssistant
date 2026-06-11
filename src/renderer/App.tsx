@@ -15,6 +15,8 @@ import { SplitPane } from './components/ui/SplitPane'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
 import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
+import { SearchProvider } from './components/Search/SearchProvider'
+import { SearchBar } from './components/Search/SearchBar'
 import { requestFilePaneSelect, isUnderWikiRoot } from './services/filePaneNavigation'
 import { DEFAULT_WIKI_CONFIG } from '../shared/domainTypes'
 import { syncLocaleFromConfig } from './i18n/localeSync'
@@ -254,7 +256,10 @@ function AppShellInner() {
 function AppShell() {
   return (
     <DetailPanelProvider>
-      <AppShellInner />
+      <SearchProvider>
+        <AppShellInner />
+        <SearchBar />
+      </SearchProvider>
     </DetailPanelProvider>
   )
 }

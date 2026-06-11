@@ -23,6 +23,13 @@ describe('searchUtils', () => {
     expect(getSearchRegexError('[', { caseSensitive: false, wholeWord: false, useRegex: true })).toBe('正则表达式无效')
   })
 
+  it('ignores whole word for CJK query via effectiveSearchOptions', async () => {
+    const { effectiveSearchOptions } = await import('../../services/domSearchUtils')
+    const options = effectiveSearchOptions('你好', { caseSensitive: false, wholeWord: true, useRegex: false })
+    const matches = findSearchMatches('你好世界你好', '你好', options)
+    expect(matches.length).toBeGreaterThan(0)
+  })
+
   it('reports invalid regex (en-US)', async () => {
     await changeAppLocale('en-US')
     expect(getSearchRegexError('[', { caseSensitive: false, wholeWord: false, useRegex: true })).toBe(

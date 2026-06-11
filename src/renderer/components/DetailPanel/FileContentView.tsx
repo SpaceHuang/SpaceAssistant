@@ -14,6 +14,7 @@ import { UnsupportedView } from './UnsupportedView'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { WebView } from './WebView'
 import type { SearchMatch } from './searchUtils'
+import { MarkdownSearchScope } from '../Search/MarkdownSearchScope'
 
 type Props = {
   searchHighlights?: SearchMatch[]
@@ -132,24 +133,28 @@ export function FileContentView({
 
   if (fileType === 'markdown' && wikiIndexView) {
     return (
-      <WikiIndexView
-        content={previewContent}
-        wikiRootPath={wikiRoot}
-        onOpenEntry={handleOpenLinkedFile}
-      />
+      <MarkdownSearchScope>
+        <WikiIndexView
+          content={previewContent}
+          wikiRootPath={wikiRoot}
+          onOpenEntry={handleOpenLinkedFile}
+        />
+      </MarkdownSearchScope>
     )
   }
 
   if (fileType === 'markdown' && viewMode === 'render') {
     return (
-      <MarkdownRenderView
-        content={previewContent}
-        wikiRootPath={wikiRoot}
-        baseRelPath={selectedFile}
-        onOpenFile={handleOpenLinkedFile}
-        pendingScrollFragment={pendingScrollFragment}
-        onPendingScrollFragmentHandled={() => setPendingScrollFragment(null)}
-      />
+      <MarkdownSearchScope>
+        <MarkdownRenderView
+          content={previewContent}
+          wikiRootPath={wikiRoot}
+          baseRelPath={selectedFile}
+          onOpenFile={handleOpenLinkedFile}
+          pendingScrollFragment={pendingScrollFragment}
+          onPendingScrollFragmentHandled={() => setPendingScrollFragment(null)}
+        />
+      </MarkdownSearchScope>
     )
   }
 

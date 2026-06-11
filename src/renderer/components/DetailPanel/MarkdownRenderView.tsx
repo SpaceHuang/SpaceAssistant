@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeExternalLinks from 'rehype-external-links'
@@ -35,7 +35,7 @@ function markdownHeading(
   }
 }
 
-export function MarkdownRenderView({
+export const MarkdownRenderView = memo(function MarkdownRenderView({
   content,
   wikiRootPath = 'llm-wiki',
   baseRelPath,
@@ -96,4 +96,4 @@ export function MarkdownRenderView({
       </ReactMarkdown>
     </div>
   )
-}
+})
