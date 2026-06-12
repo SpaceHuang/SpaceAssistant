@@ -89,6 +89,7 @@ import {
   releaseWritePath,
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
+import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -1233,6 +1234,14 @@ async function runToolChatSessionInner(
           ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
         }
       })
+      if (execResult.success) {
+        if (toolName === 'write_file' || toolName === 'edit_file') {
+          const rel = typeof inputObj.path === 'string' ? inputObj.path.trim() : ''
+          if (rel) notifyFileTreeChanged(sender, { kind: 'paths', relPaths: [rel] })
+        } else if (toolName === 'run_shell' || toolName === 'run_script') {
+          notifyFileTreeChanged(sender, { kind: 'refreshExpanded' })
+        }
+      }
       floatingNotificationManager?.onToolResult(requestId, toolUseId)
       if (abortRepeatedToolError) break
     }

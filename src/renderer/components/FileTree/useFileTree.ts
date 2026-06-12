@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileInfo } from '../../../shared/domainTypes'
+import { dirsToRefreshForPath } from '../../../shared/fileTreeSync'
+import { ensureFileTreeSyncIpc, subscribeFileTreeSync } from '../../services/fileTreeSyncBus'
 
 export interface FileTreeNode {
   key: string
@@ -72,7 +74,10 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
 
   const nodeMapRef = useRef(new Map<string, FileTreeNode>())
   const excludeSet = useRef(new Set(excludePaths))
+  const expandedKeysRef = useRef(expandedKeys)
+  const refreshDirectoryRef = useRef<(key: string) => Promise<void>>(async () => {})
   excludeSet.current = new Set(excludePaths)
+  expandedKeysRef.current = expandedKeys
 
   const rebuildNodeMap = useCallback((nodes: FileTreeNode[]) => {
     const map = new Map<string, FileTreeNode>()
@@ -235,6 +240,30 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
     },
     [ensureNodeMap, loadDirectory, rebuildNodeMap, treeData]
   )
+
+  refreshDirectoryRef.current = refreshDirectory
+
+  useEffect(() => {
+    ensureFileTreeSyncIpc()
+    return subscribeFileTreeSync((event) => {
+      void (async () => {
+        const expanded = new Set(expandedKeysRef.current)
+        const dirs =
+          event.kind === 'refreshExpanded'
+            ? [...expanded]
+            : [
+                ...new Set(
+                  event.relPaths.flatMap((relPath) =>
+                    dirsToRefreshForPath(relPath, rootRelPath, expanded)
+                  )
+                )
+              ]
+        for (const dirKey of dirs) {
+          await refreshDirectoryRef.current(dirKey)
+        }
+      })()
+    })
+  }, [rootRelPath])
 
   const refreshTree = useCallback(async () => {
     try {

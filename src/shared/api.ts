@@ -205,6 +205,7 @@ export type SpaceAssistantApi = {
   fileRename: (relPath: string, newName: string) => Promise<void>
   fileMove: (srcRelPath: string, destDirRelPath: string) => Promise<void>
   fileCopy: (payload: { srcRelPath: string; destRelPath: string }) => Promise<void>
+  fileOnTreeChanged: (cb: (event: import('./fileTreeSync').FileTreeChangeEvent) => void) => () => void
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>

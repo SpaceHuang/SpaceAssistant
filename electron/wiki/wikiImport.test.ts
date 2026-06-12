@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { WikiConfig } from '../../src/shared/domainTypes'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { initWikiStructure } from './wikiInit'
-import { importRawFromWorkDir } from './wikiImport'
+import { importRawFromWorkDir, wikiImportFileTreeChange } from './wikiImport'
 
 const tmpDirs: string[] = []
 
@@ -77,5 +77,14 @@ describe('wikiImport', () => {
     const binary = await importRawFromWorkDir(workDir, wikiConfig, 'image.png')
     expect(binary.ok).toBe(false)
     if (!binary.ok) expect(binary.error).toContain('文本')
+  })
+
+  it('wikiImportFileTreeChange only notifies when a new raw file is copied', async () => {
+    expect(wikiImportFileTreeChange({ ok: true, rawRelPath: 'llm-wiki/raw/a.md', copied: true })).toEqual({
+      kind: 'paths',
+      relPaths: ['llm-wiki/raw/a.md']
+    })
+    expect(wikiImportFileTreeChange({ ok: true, rawRelPath: 'llm-wiki/raw/a.md', copied: false })).toBeNull()
+    expect(wikiImportFileTreeChange({ ok: false, error: 'fail' })).toBeNull()
   })
 })

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useFileTree } from './useFileTree'
+import { emitFileTreeSyncForTests, resetFileTreeSyncBusForTests } from '../../services/fileTreeSyncBus'
 
 const mockApi = {
   fileListDirectory: vi.fn(),
@@ -8,12 +9,14 @@ const mockApi = {
   fileCreateDirectory: vi.fn(),
   fileDelete: vi.fn(),
   fileRename: vi.fn(),
-  fileMove: vi.fn()
+  fileMove: vi.fn(),
+  fileOnTreeChanged: vi.fn(() => () => {})
 }
 
 let originalApi: unknown
 
 beforeEach(() => {
+  resetFileTreeSyncBusForTests()
   originalApi = (window as Record<string, unknown>).api
   ;(window as Record<string, unknown>).api = mockApi
   mockApi.fileListDirectory.mockResolvedValue([
@@ -280,5 +283,43 @@ describe('useFileTree', () => {
 
     expect(result.current.expandedKeys).toContain('dir1')
     expect(result.current.selectedKey).toBe('dir1/inner.txt')
+  })
+
+  it('refreshes expanded parent directory on external file tree sync', async () => {
+    vi.useFakeTimers()
+
+    mockApi.fileListDirectory.mockResolvedValueOnce([
+      { name: 'dir1', path: 'dir1', isDirectory: true, size: undefined }
+    ])
+    mockApi.fileListDirectory.mockResolvedValueOnce([
+      { name: 'inner.txt', path: 'dir1/inner.txt', isDirectory: false, size: 50 }
+    ])
+    mockApi.fileListDirectory.mockResolvedValueOnce([
+      { name: 'inner.txt', path: 'dir1/inner.txt', isDirectory: false, size: 50 },
+      { name: 'new.txt', path: 'dir1/new.txt', isDirectory: false, size: 10 }
+    ])
+
+    const { result } = renderHook(() => useFileTree('/project'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      await result.current.toggleExpand('dir1')
+    })
+
+    mockApi.fileListDirectory.mockClear()
+
+    emitFileTreeSyncForTests({ kind: 'paths', relPaths: ['dir1/new.txt'] })
+
+    await act(async () => {
+      vi.advanceTimersByTime(400)
+      await Promise.resolve()
+    })
+
+    expect(mockApi.fileListDirectory).toHaveBeenCalledWith('dir1')
+    expect(result.current.treeData[0].children[0].children.some((c) => c.key === 'dir1/new.txt')).toBe(true)
+
+    vi.useRealTimers()
   })
 })

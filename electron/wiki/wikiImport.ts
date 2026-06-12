@@ -1,3 +1,4 @@
+import type { FileTreeChangeEvent } from '../../src/shared/fileTreeSync'
 import fs from 'fs/promises'
 import path from 'path'
 import type { WikiConfig } from '../../src/shared/domainTypes'
@@ -13,6 +14,13 @@ import { getFileMetadata } from '../fileReadHelpers'
 export type WikiImportRawResult =
   | { ok: true; rawRelPath: string; copied: boolean }
   | { ok: false; error: string }
+
+export function wikiImportFileTreeChange(result: WikiImportRawResult): FileTreeChangeEvent | null {
+  if (result.ok && result.copied) {
+    return { kind: 'paths', relPaths: [result.rawRelPath] }
+  }
+  return null
+}
 
 async function pathExists(absPath: string): Promise<boolean> {
   try {

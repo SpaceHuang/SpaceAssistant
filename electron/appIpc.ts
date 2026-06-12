@@ -80,7 +80,8 @@ import { readFeishuConfigFromDb, persistFeishuConfig } from './feishu/feishuIpc'
 import { initWikiStructure, readWikiSchema } from './wiki/wikiInit'
 import { getWikiStatus } from './wiki/wikiStatus'
 import { classifyWikiPath } from './wiki/wikiPaths'
-import { copyFileInWorkDir, importRawFromWorkDir } from './wiki/wikiImport'
+import { copyFileInWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } from './wiki/wikiImport'
+import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { openExternalLink } from './externalLink'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 
@@ -1177,9 +1178,12 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'wiki:import-raw',
-    async (_e, payload: { srcRelPath: string }) => {
+    async (event, payload: { srcRelPath: string }) => {
       const wikiConfig = readWikiConfig(ctx.db)
-      return importRawFromWorkDir(ctx.getWorkDir(), wikiConfig, payload.srcRelPath)
+      const result = await importRawFromWorkDir(ctx.getWorkDir(), wikiConfig, payload.srcRelPath)
+      const treeChange = wikiImportFileTreeChange(result)
+      if (treeChange) notifyFileTreeChanged(event.sender, treeChange)
+      return result
     }
   )
 
