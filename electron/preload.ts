@@ -229,7 +229,9 @@ const api: SpaceAssistantApi = {
   workdirUpdate: (profileId, updates) => ipcRenderer.invoke('workdir:update', { profileId, updates }),
   workdirRemove: (profileId) => ipcRenderer.invoke('workdir:remove', { profileId }),
   workdirSwitch: (profileId) => ipcRenderer.invoke('workdir:switch', { profileId }),
-  workdirCheckWritable: (path) => ipcRenderer.invoke('workdir:check-writable', { path })
+  workdirCheckWritable: (path) => ipcRenderer.invoke('workdir:check-writable', { path }),
+
+  testPopShow: () => ipcRenderer.invoke('test-pop:show')
 }
 
 contextBridge.exposeInMainWorld('api', api)

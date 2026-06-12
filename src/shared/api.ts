@@ -354,4 +354,32 @@ export type SpaceAssistantApi = {
   workdirRemove: (profileId: string) => Promise<{ success: boolean; error?: string }>
   workdirSwitch: (profileId: string) => Promise<{ success: boolean; sessions: Session[]; error?: string }>
   workdirCheckWritable: (path: string) => Promise<{ ok: boolean; error?: string }>
+
+  // 浮动通知 /test-pop 调试命令（仅主窗口渲染进程）
+  testPopShow: () => Promise<void>
+}
+
+/** 浮动通知窗口数据 */
+export type FloatingNotificationData = {
+  totalSessions: number
+  totalItems: number
+  latestItem: {
+    sessionId: string
+    sessionName: string
+    toolUseId: string
+    toolName: string
+    toolLabel: string
+    createdAt: number
+  } | null
+}
+
+/** 浮动通知窗口专用 API（仅暴露给浮动窗口的预加载脚本） */
+export type FloatingNotificationWindowApi = {
+  notificationReady: () => Promise<void>
+  notificationGetData: () => Promise<FloatingNotificationData>
+  notificationFocusSession: (payload: { sessionId: string; toolUseId?: string }) => Promise<void>
+  notificationShowMain: () => Promise<void>
+  notificationDismiss: () => Promise<void>
+  notificationOnUpdate: (cb: (data: FloatingNotificationData) => void) => () => void
+  notificationOnClose: (cb: () => void) => () => void
 }

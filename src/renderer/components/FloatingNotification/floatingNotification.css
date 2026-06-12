@@ -1,0 +1,132 @@
+.floating-notification {
+  width: 280px;
+  height: 108px;
+  border-radius: 12px;
+  background: var(--bg-primary, #ffffff);
+  border: 1px solid var(--border-color, #e0e0e0);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  user-select: none;
+  -webkit-app-region: no-drag;
+}
+
+.floating-notification-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.floating-notification-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #333);
+}
+
+.floating-notification-warn-icon {
+  color: #faad14;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.floating-notification-close {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 4px;
+  color: var(--text-secondary, #999);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  -webkit-app-region: no-drag;
+}
+
+.floating-notification-close:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+  color: var(--text-primary, #333);
+}
+
+.floating-notification-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 4px 12px;
+  gap: 8px;
+  min-height: 40px;
+}
+
+.floating-notification-body-icon {
+  flex-shrink: 0;
+  color: var(--text-secondary, #999);
+  opacity: 0.65;
+  font-size: 16px;
+}
+
+.floating-notification-body-content {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.floating-notification-body-session {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #333);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.floating-notification-body-tool {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.floating-notification-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  height: 36px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-color, #f0f0f0);
+}
+
+.floating-notification-summary {
+  font-size: 12px;
+  color: var(--text-secondary, #999);
+}
+
+.floating-notification-action {
+  font-size: 12px;
+  color: var(--primary-color, #1677ff);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  padding: 2px 8px;
+  border-radius: 4px;
+  -webkit-app-region: no-drag;
+}
+
+.floating-notification-action:hover {
+  background: var(--primary-bg-hover, rgba(22, 119, 255, 0.06));
+}

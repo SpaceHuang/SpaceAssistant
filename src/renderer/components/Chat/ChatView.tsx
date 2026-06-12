@@ -37,6 +37,7 @@ import { reconcileAssistantStreamOnComplete } from '../../../shared/assistantCon
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
+import { parseTestPopCommand } from '../../services/testPopCommandService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
 import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
@@ -476,6 +477,17 @@ export function ChatView() {
           },
           persistSystemHint: (hint) => persistSkillHintSystemMessage(runSessionId, hint)
         })
+        return
+      }
+
+      const testPopCmd = parseTestPopCommand(text)
+      if (testPopCmd.type === 'command') {
+        await persistSkillHintSystemMessage(runSessionId, testPopCmd.hint)
+        return
+      }
+      if (testPopCmd.type === 'run') {
+        await window.api.testPopShow()
+        message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
         return
       }
 
