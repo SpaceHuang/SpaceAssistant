@@ -1,5 +1,15 @@
 import { useEffect, useState, useCallback } from 'react'
+import { X } from 'lucide-react'
 import type { FloatingNotificationData, FloatingNotificationWindowApi } from '../../../shared/api'
+import { APP_PRODUCT_NAME } from '../../../shared/appMeta'
+import appLogoUrl from '../../assets/sa-logo.png'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import {
+  formatFloatingActionSummary,
+  formatFloatingHoverTitle,
+  formatFloatingMainLabel
+} from './floatingNotificationDisplay'
+import { sessionDisplayName } from '../../utils/sessionDisplay'
 import './floatingNotification.css'
 
 type FloatingApi = FloatingNotificationWindowApi
@@ -11,6 +21,8 @@ declare global {
 }
 
 export function FloatingNotificationApp() {
+  const { t } = useTypedTranslation('notification')
+  const { t: tChat } = useTypedTranslation('chat')
   const [data, setData] = useState<FloatingNotificationData>({
     totalSessions: 0,
     totalItems: 0,
@@ -18,20 +30,16 @@ export function FloatingNotificationApp() {
   })
 
   useEffect(() => {
-    // 初始化：获取当前数据
     window.api.notificationGetData().then(setData).catch(() => undefined)
 
-    // 订阅更新
     const unsubUpdate = window.api.notificationOnUpdate((newData) => {
       setData(newData)
     })
 
-    // 订阅关闭 — 主进程通知关闭，仅做清理（主进程会销毁窗口）
     const unsubClose = window.api.notificationOnClose(() => {
       unsubUpdate()
     })
 
-    // 通知主进程就绪
     window.api.notificationReady().catch(() => undefined)
 
     return () => {
@@ -58,57 +66,76 @@ export function FloatingNotificationApp() {
   }, [])
 
   const hasItems = data.totalItems > 0 && data.latestItem
+  const mainLabel = hasItems
+    ? formatFloatingMainLabel(
+        {
+          toolName: data.latestItem!.toolName,
+          input: data.latestItem!.input,
+          totalItems: data.totalItems
+        },
+        tChat,
+        t
+      )
+    : ''
+  const hoverTitle = hasItems
+    ? formatFloatingHoverTitle(
+        sessionDisplayName(data.latestItem!.sessionName, data.latestItem!.sessionId),
+        data.latestItem!.toolName,
+        data.latestItem!.input,
+        data.totalItems,
+        tChat,
+        t
+      )
+    : undefined
 
   return (
-    <div className="floating-notification" role="alert" aria-label="待确认操作浮动通知">
-      {/* 标题栏 */}
-      <div className="floating-notification-header">
-        <div className="floating-notification-header-left">
-          <span className="floating-notification-warn-icon" aria-hidden>⚠</span>
-          <span>待确认操作</span>
+    <div
+      className="floating-notification"
+      role="alert"
+      aria-label={t('aria.notification', { count: data.totalItems })}
+    >
+      <div className="floating-notification-top">
+        <div className="floating-notification-top-start">
+          <img
+            src={appLogoUrl}
+            alt=""
+            className="floating-notification-mark"
+            width={18}
+            height={18}
+            draggable={false}
+          />
+          <span className="floating-notification-brand">{APP_PRODUCT_NAME}</span>
         </div>
         <button
+          type="button"
           className="floating-notification-close"
           onClick={handleDismiss}
-          aria-label="关闭通知"
+          aria-label={t('aria.closeButton')}
         >
-          ✕
+          <X size={14} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
 
-      {/* 中间内容区 */}
       {hasItems && (
-        <div
-          className="floating-notification-body"
+        <button
+          type="button"
+          className="floating-notification-main"
           onClick={handleItemClick}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleItemClick() }}
-          aria-label="回到主界面确认待确认操作"
+          title={hoverTitle ?? mainLabel}
+          aria-label={t('aria.itemClick')}
         >
-          <span className="floating-notification-body-icon" aria-hidden>💻</span>
-          <div className="floating-notification-body-content">
-            <div className="floating-notification-body-session">
-              {data.latestItem!.sessionName}
-            </div>
-            <div className="floating-notification-body-tool">
-              {data.latestItem!.toolLabel}
-            </div>
-          </div>
-        </div>
+          <span className="floating-notification-main-text">{mainLabel}</span>
+        </button>
       )}
 
-      {/* 底部操作栏 */}
-      <div className="floating-notification-footer">
-        <span className="floating-notification-summary">
-          共 {data.totalSessions} 个会话 · {data.totalItems} 项待确认
-        </span>
+      <div className="floating-notification-bottom">
         <button
+          type="button"
           className="floating-notification-action"
           onClick={handleShowMain}
-          aria-label="回到主界面"
+          aria-label={t('aria.backToMainButton')}
         >
-          回到主界面
+          {t('backToMain')}
         </button>
       </div>
     </div>

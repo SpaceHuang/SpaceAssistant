@@ -14,9 +14,14 @@ vi.mock('./floatingNotification', () => ({
   createFloatingNotificationWindow: vi.fn(() => ({
     isDestroyed: vi.fn(() => false),
     destroy: vi.fn(),
+    isVisible: vi.fn(() => true),
+    show: vi.fn(),
+    moveTop: vi.fn(),
     webContents: {
       send: vi.fn(),
-      isDestroyed: vi.fn(() => false)
+      isDestroyed: vi.fn(() => false),
+      isLoading: vi.fn(() => false),
+      once: vi.fn()
     }
   })),
   destroyFloatingNotificationWindow: vi.fn(),
@@ -31,6 +36,7 @@ vi.mock('./database', () => ({
 import { FloatingNotificationManager } from './floatingNotificationManager'
 import {
   createFloatingNotificationWindow,
+  destroyFloatingNotificationWindow,
   pushDataToFloatingWindow,
   sendCloseToFloatingWindow
 } from './floatingNotification'
@@ -137,6 +143,35 @@ describe('FloatingNotificationManager', () => {
 
       expect(sendCloseToFloatingWindow).toHaveBeenCalled()
     })
+
+    it('should not reopen after user resolved confirm and main window hides', () => {
+      const mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
+      const manager = createManager(mainWin)
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      manager.onReturnToMain()
+      manager.onToolResult('req-1', 'tool-1')
+      vi.clearAllMocks()
+
+      mainWin.isVisible = () => false
+      mainWin.isFocused = () => false
+      manager.onMainWindowHide()
+
+      expect(createFloatingNotificationWindow).not.toHaveBeenCalled()
+    })
+
+    it('should not reopen after chat abort clears all pending for request', () => {
+      const mainWin = createMockMainWindow({ isVisible: false, isFocused: false })
+      const manager = createManager(mainWin)
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      manager.onAllCancelledForRequest('req-1')
+      vi.clearAllMocks()
+
+      manager.onMainWindowHide()
+
+      expect(createFloatingNotificationWindow).not.toHaveBeenCalled()
+    })
   })
 
   describe('debounce', () => {
@@ -177,25 +212,89 @@ describe('FloatingNotificationManager', () => {
       manager.onToolResult('req-1', 'tool-1')
 
       expect(sendCloseToFloatingWindow).not.toHaveBeenCalled()
+      expect(destroyFloatingNotificationWindow).not.toHaveBeenCalled()
 
       vi.advanceTimersByTime(500)
       expect(sendCloseToFloatingWindow).toHaveBeenCalled()
+      expect(destroyFloatingNotificationWindow).toHaveBeenCalled()
+    })
+  })
+
+  describe('dismiss', () => {
+    it('should destroy floating window and suppress re-show until new confirm', () => {
+      const mainWin = createMockMainWindow({ isVisible: false })
+      const manager = createManager(mainWin)
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      expect(createFloatingNotificationWindow).toHaveBeenCalledTimes(1)
+
+      manager.dismiss()
+
+      expect(sendCloseToFloatingWindow).toHaveBeenCalled()
+      expect(destroyFloatingNotificationWindow).toHaveBeenCalled()
+
+      vi.clearAllMocks()
+      manager.onMainWindowBlur()
+      vi.advanceTimersByTime(2000)
+      expect(createFloatingNotificationWindow).not.toHaveBeenCalled()
+    })
+
+    it('should show again after dismiss when a new confirm arrives', () => {
+      const mainWin = createMockMainWindow({ isVisible: false })
+      const manager = createManager(mainWin)
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      manager.dismiss()
+
+      vi.clearAllMocks()
+      manager.onConfirmRequest({
+        ...TEST_ENTRY,
+        toolUseId: 'tool-2',
+        requestId: 'req-2',
+        createdAt: Date.now() + 1
+      })
+
+      expect(createFloatingNotificationWindow).toHaveBeenCalled()
+      expect(pushDataToFloatingWindow).toHaveBeenCalled()
+    })
+  })
+
+  describe('onReturnToMain', () => {
+    it('should destroy floating window without suppressing future show', () => {
+      const mainWin = createMockMainWindow({ isVisible: false })
+      const manager = createManager(mainWin)
+
+      manager.onConfirmRequest(TEST_ENTRY)
+      manager.onReturnToMain()
+
+      expect(sendCloseToFloatingWindow).toHaveBeenCalled()
+      expect(destroyFloatingNotificationWindow).toHaveBeenCalled()
+
+      vi.clearAllMocks()
+      manager.onMainWindowBlur()
+      vi.advanceTimersByTime(2000)
+      expect(createFloatingNotificationWindow).toHaveBeenCalled()
+    })
+
+    it('should close test notification when returning to main', () => {
+      const mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
+      const manager = createManager(mainWin)
+
+      manager.showTestNotification()
+      manager.onReturnToMain()
+
+      expect(destroyFloatingNotificationWindow).toHaveBeenCalled()
     })
   })
 
   describe('showTestNotification', () => {
-    it('should create window and push mock data on ready', () => {
+    it('should create window and push mock data immediately when page is loaded', () => {
       const mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
       const manager = createManager(mainWin)
 
       manager.showTestNotification()
 
-      // testMode: 只创建窗口，不立即推送数据
       expect(createFloatingNotificationWindow).toHaveBeenCalled()
-      expect(pushDataToFloatingWindow).not.toHaveBeenCalled()
-
-      // 渲染进程就绪后才推送
-      manager.onNotificationReady()
       expect(pushDataToFloatingWindow).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -207,6 +306,30 @@ describe('FloatingNotificationManager', () => {
           })
         })
       )
+    })
+
+    it('should keep test window visible when main window is focused', () => {
+      const mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
+      const manager = createManager(mainWin)
+
+      manager.showTestNotification()
+      vi.clearAllMocks()
+
+      manager.onMainWindowFocus()
+
+      expect(sendCloseToFloatingWindow).not.toHaveBeenCalled()
+      expect(destroyFloatingNotificationWindow).not.toHaveBeenCalled()
+    })
+
+    it('should push again on ready when page is still loading', () => {
+      const mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
+      const manager = createManager(mainWin)
+
+      manager.showTestNotification()
+      vi.clearAllMocks()
+
+      manager.onNotificationReady()
+      expect(pushDataToFloatingWindow).toHaveBeenCalled()
     })
   })
 })

@@ -1,9 +1,12 @@
 {
-  "title": "待确认操作",
-  "summary": "共 {sessions} 个会话 · {items} 项待确认",
+  "pendingConfirm": "待你确认：{{action}}",
+  "pendingConfirmShell": "待你确认执行：{{command}}",
+  "morePendingSuffix": "（共 {{count}} 项）",
+  "sessionHint": "会话：{{session}}",
+  "morePendingLine": "共 {{count}} 项待确认",
   "backToMain": "回到主界面",
   "aria": {
-    "notification": "待确认操作浮动通知",
+    "notification": "SpaceAssistant，{{count}} 项待确认",
     "itemClick": "回到主界面确认待确认操作",
     "closeButton": "关闭通知",
     "backToMainButton": "回到主界面"

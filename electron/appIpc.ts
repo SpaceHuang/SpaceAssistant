@@ -1356,6 +1356,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       win.focus()
       win.webContents.send('notification:navigate-session', payload)
     }
+    ctx.floatingNotificationManager?.onReturnToMain()
   })
 
   ipcMain.handle('notification:show-main', async () => {
@@ -1365,6 +1366,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       if (win.isMinimized()) win.restore()
       win.focus()
     }
+    ctx.floatingNotificationManager?.onReturnToMain()
   })
 
   ipcMain.handle('notification:dismiss', async () => {

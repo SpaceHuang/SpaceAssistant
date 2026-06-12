@@ -14,6 +14,7 @@ import zhCNFeishu from './resources/zh-CN/feishu.json'
 import zhCNWiki from './resources/zh-CN/wiki.json'
 import zhCNDetailPanel from './resources/zh-CN/detailPanel.json'
 import zhCNContextUsage from './resources/zh-CN/contextUsage.json'
+import zhCNNotification from './resources/zh-CN/notification.json'
 import enUSCommon from './resources/en-US/common.json'
 import enUSConfig from './resources/en-US/config.json'
 import enUSChat from './resources/en-US/chat.json'
@@ -24,6 +25,7 @@ import enUSFeishu from './resources/en-US/feishu.json'
 import enUSWiki from './resources/en-US/wiki.json'
 import enUSDetailPanel from './resources/en-US/detailPanel.json'
 import enUSContextUsage from './resources/en-US/contextUsage.json'
+import enUSNotification from './resources/en-US/notification.json'
 
 const initialLocale = detectLocale(
   readStoredLocale(),
@@ -45,7 +47,8 @@ void i18n
         feishu: zhCNFeishu,
         wiki: zhCNWiki,
         detailPanel: zhCNDetailPanel,
-        contextUsage: zhCNContextUsage
+        contextUsage: zhCNContextUsage,
+        notification: zhCNNotification
       },
       'en-US': {
         common: enUSCommon,
@@ -57,13 +60,14 @@ void i18n
         feishu: enUSFeishu,
         wiki: enUSWiki,
         detailPanel: enUSDetailPanel,
-        contextUsage: enUSContextUsage
+        contextUsage: enUSContextUsage,
+        notification: enUSNotification
       }
     },
     lng: initialLocale,
     fallbackLng: 'zh-CN',
     defaultNS: 'common',
-    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wiki', 'detailPanel', 'contextUsage'],
+    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wiki', 'detailPanel', 'contextUsage', 'notification'],
     interpolation: { escapeValue: false },
     debug: import.meta.env.DEV && !import.meta.env.VITEST,
     detection: {

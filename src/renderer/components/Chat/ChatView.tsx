@@ -444,20 +444,25 @@ export function ChatView() {
   const sendInternal = useCallback(
     async (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => {
       const runSessionId = options?.targetSessionId ?? sessionId
-      if (!runSessionId || !cfg) {
-        message.warning(t('chatView.warnings.selectSession'))
-        return
-      }
 
-      // /test-pop 无需 API key 也无需会话运行，优先处理
+      // /test-pop 无需 API key、会话或 cfg，优先处理
       const testPopCmd = parseTestPopCommand(text)
       if (testPopCmd.type === 'command') {
-        await persistSkillHintSystemMessage(runSessionId, testPopCmd.hint)
+        if (runSessionId) {
+          await persistSkillHintSystemMessage(runSessionId, testPopCmd.hint)
+        } else {
+          message.info(testPopCmd.hint)
+        }
         return
       }
       if (testPopCmd.type === 'run') {
         await window.api.testPopShow()
         message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
+        return
+      }
+
+      if (!runSessionId || !cfg) {
+        message.warning(t('chatView.warnings.selectSession'))
         return
       }
 

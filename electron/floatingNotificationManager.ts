@@ -8,6 +8,7 @@ import {
 } from './floatingNotification'
 import type { AppDatabase } from './database'
 import { getSession } from './database'
+import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 
 export type PendingConfirmEntry = {
   sessionId: string
@@ -23,24 +24,9 @@ function makeKey(requestId: string, toolUseId: string): string {
   return `${requestId}\0${toolUseId}`
 }
 
-function buildSimpleToolLabel(toolName: string, input: unknown): string {
-  const obj = input as Record<string, unknown> | undefined
-  if (!obj) return toolName
-
-  let detail = ''
-  if (
-    (toolName === 'read_file' || toolName === 'list_directory' ||
-     toolName === 'edit_file' || toolName === 'write_file') &&
-    typeof obj.path === 'string' && obj.path
-  ) {
-    detail = obj.path
-  } else if (toolName === 'run_shell' && typeof obj.command === 'string' && obj.command) {
-    detail = obj.command
-  } else if (toolName === 'grep' && typeof obj.pattern === 'string' && obj.pattern) {
-    detail = obj.pattern
-  }
-
-  return detail ? `${toolName} — ${detail}` : toolName
+function resolveSessionName(db: AppDatabase, sessionId: string, hint?: string): string {
+  const fromDb = getSession(db, sessionId)?.name
+  return sessionDisplayNameRaw(fromDb ?? hint, sessionId)
 }
 
 const TEST_DATA: FloatingNotificationData = {
@@ -51,7 +37,7 @@ const TEST_DATA: FloatingNotificationData = {
     sessionName: '测试会话',
     toolUseId: 'test-tool-1',
     toolName: 'run_shell',
-    toolLabel: 'run_shell — npm install react',
+    input: { command: 'npm install react' },
     createdAt: 0 // will be set at show time
   }
 }
@@ -79,12 +65,7 @@ export class FloatingNotificationManager {
 
   onConfirmRequest(entry: PendingConfirmEntry): void {
     const key = makeKey(entry.requestId, entry.toolUseId)
-    if (!entry.sessionName || entry.sessionName === entry.sessionId) {
-      const session = getSession(this.db, entry.sessionId)
-      if (session) {
-        entry.sessionName = session.name || entry.sessionId
-      }
-    }
+    entry.sessionName = resolveSessionName(this.db, entry.sessionId, entry.sessionName)
     this.pendingItems.set(key, entry)
     this.dismissed = false
     this.testMode = false
@@ -107,13 +88,12 @@ export class FloatingNotificationManager {
 
   /** 浮动窗口渲染进程就绪，推送当前数据 */
   onNotificationReady(): void {
-    if (!this.floatingWin || this.floatingWin.isDestroyed()) return
-    const data = this.buildCurrentData()
-    pushDataToFloatingWindow(this.floatingWin, data)
+    this.syncFloatingWindowContent()
   }
 
   onMainWindowFocus(): void {
     this.clearBlurTimer()
+    if (this.testMode) return
     this.closeFloatingWindow()
   }
 
@@ -150,7 +130,7 @@ export class FloatingNotificationManager {
     this.dismissed = false
     this.clearCloseTimer()
     this.ensureFloatingWindow()
-    // 不立即推送——等渲染进程就绪后通过 onNotificationReady 推送
+    this.syncFloatingWindowContent()
   }
 
   getCurrentData(): FloatingNotificationData {
@@ -159,6 +139,11 @@ export class FloatingNotificationManager {
 
   dismiss(): void {
     this.dismissed = true
+    this.closeFloatingWindow()
+  }
+
+  /** 用户从浮动窗返回主界面：关闭窗口，但不记为 dismissed */
+  onReturnToMain(): void {
     this.closeFloatingWindow()
   }
 
@@ -191,10 +176,10 @@ export class FloatingNotificationManager {
       latestItem: latest
         ? {
             sessionId: latest.sessionId,
-            sessionName: latest.sessionName,
+            sessionName: resolveSessionName(this.db, latest.sessionId, latest.sessionName),
             toolUseId: latest.toolUseId,
             toolName: latest.toolName,
-            toolLabel: buildSimpleToolLabel(latest.toolName, latest.input),
+            input: (latest.input ?? {}) as Record<string, unknown>,
             createdAt: latest.createdAt
           }
         : null
@@ -230,13 +215,36 @@ export class FloatingNotificationManager {
 
   private ensureFloatingWindow(): void {
     if (this.floatingWin && !this.floatingWin.isDestroyed()) return
-    this.floatingWin = createFloatingNotificationWindow(this.mainDirname)
+    this.floatingWin = createFloatingNotificationWindow(this.mainDirname, this.mainWindowGetter())
+  }
+
+  private syncFloatingWindowContent(): void {
+    if (!this.floatingWin || this.floatingWin.isDestroyed()) return
+
+    const win = this.floatingWin
+    win.moveTop()
+
+    const push = () => {
+      if (win.isDestroyed()) return
+      if (!win.isVisible()) win.show()
+      pushDataToFloatingWindow(win, this.buildCurrentData())
+    }
+
+    const wc = win.webContents
+    if (wc.isLoading()) {
+      wc.once('did-finish-load', push)
+      return
+    }
+
+    push()
   }
 
   private closeFloatingWindow(): void {
     this.clearCloseTimer()
     this.testMode = false
     sendCloseToFloatingWindow(this.floatingWin)
+    destroyFloatingNotificationWindow(this.floatingWin)
+    this.floatingWin = null
   }
 
   private scheduleClose(): void {

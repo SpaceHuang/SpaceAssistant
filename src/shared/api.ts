@@ -368,7 +368,7 @@ export type FloatingNotificationData = {
     sessionName: string
     toolUseId: string
     toolName: string
-    toolLabel: string
+    input: Record<string, unknown>
     createdAt: number
   } | null
 }

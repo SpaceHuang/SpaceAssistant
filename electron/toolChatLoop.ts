@@ -22,6 +22,7 @@ import type {
   WikiConfig
 } from '../src/shared/domainTypes'
 import { computeDiffLineStats } from '../src/shared/writeDiffStats'
+import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
 import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
@@ -288,6 +289,9 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     if (e instanceof ChatCancelledError) return { ok: false, error: e.message }
     throw e
   } finally {
+    if (chatSignal.aborted) {
+      args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
+    }
     clearChatCancel(args.requestId)
   }
 }
@@ -872,7 +876,7 @@ async function runToolChatSessionInner(
           const session = appDb ? getSession(appDb, sessionId) : undefined
           floatingNotificationManager.onConfirmRequest({
             sessionId,
-            sessionName: session?.name ?? sessionId,
+            sessionName: sessionDisplayNameRaw(session?.name, sessionId),
             toolUseId,
             toolName,
             input: inputObj,
@@ -881,6 +885,8 @@ async function runToolChatSessionInner(
           })
         }
         outcome = await waitForToolConfirm(requestId, toolUseId)
+        // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
+        floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolName === 'run_shell' && shellSecurityHints) {
           const command = typeof inputObj.command === 'string' ? inputObj.command : ''
           if (outcome === 'approved' && shellSecurityHints.requiresRiskAck) {

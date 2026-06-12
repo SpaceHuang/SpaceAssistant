@@ -26,21 +26,14 @@ describe('FloatingNotificationApp', () => {
     (window as any).api = mockApi
   })
 
-  it('should render title bar with close button', async () => {
+  it('should render brand and close button', async () => {
     render(<FloatingNotificationApp />)
 
     await waitFor(() => {
-      expect(screen.getByText('待确认操作')).toBeTruthy()
+      expect(screen.getByText('SpaceAssistant')).toBeTruthy()
       expect(screen.getByLabelText('关闭通知')).toBeTruthy()
     })
-  })
-
-  it('should render footer summary with zero items', async () => {
-    render(<FloatingNotificationApp />)
-
-    await waitFor(() => {
-      expect(screen.getByText(/共 0 个会话 · 0 项待确认/)).toBeTruthy()
-    })
+    expect(screen.queryByText(/项待确认/)).toBeNull()
   })
 
   it('should render latest item when data is provided', async () => {
@@ -52,7 +45,7 @@ describe('FloatingNotificationApp', () => {
         sessionName: '测试会话',
         toolUseId: 't1',
         toolName: 'run_shell',
-        toolLabel: 'run_shell — npm install',
+        input: { command: 'npm install' },
         createdAt: Date.now()
       }
     })
@@ -60,9 +53,7 @@ describe('FloatingNotificationApp', () => {
     render(<FloatingNotificationApp />)
 
     await waitFor(() => {
-      expect(screen.getByText('测试会话')).toBeTruthy()
-      expect(screen.getByText('run_shell — npm install')).toBeTruthy()
-      expect(screen.getByText(/共 2 个会话 · 3 项待确认/)).toBeTruthy()
+      expect(screen.getByText(/待你确认执行：npm install/)).toBeTruthy()
     })
   })
 
@@ -75,7 +66,7 @@ describe('FloatingNotificationApp', () => {
         sessionName: '测试',
         toolUseId: 't1',
         toolName: 'run_shell',
-        toolLabel: 'run_shell — cmd',
+        input: { command: 'cmd' },
         createdAt: Date.now()
       }
     })
@@ -83,7 +74,7 @@ describe('FloatingNotificationApp', () => {
     render(<FloatingNotificationApp />)
 
     await waitFor(() => {
-      expect(screen.getByText('测试')).toBeTruthy()
+      expect(screen.getByText(/待你确认执行：cmd/)).toBeTruthy()
     })
 
     fireEvent.click(screen.getByRole('button', { name: /回到主界面确认/ }))

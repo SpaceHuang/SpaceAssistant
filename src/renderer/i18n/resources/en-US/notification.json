@@ -1,9 +1,12 @@
 {
-  "title": "Action Required",
-  "summary": "{sessions} sessions · {items} pending",
+  "pendingConfirm": "Needs your confirmation: {{action}}",
+  "pendingConfirmShell": "Needs your confirmation to run: {{command}}",
+  "morePendingSuffix": " ({{count}} total)",
+  "sessionHint": "Session: {{session}}",
+  "morePendingLine": "{{count}} items pending confirmation",
   "backToMain": "Back to Main",
   "aria": {
-    "notification": "Pending confirmation floating notification",
+    "notification": "SpaceAssistant, {{count}} pending",
     "itemClick": "Return to main window to confirm pending action",
     "closeButton": "Close notification",
     "backToMainButton": "Back to main window"

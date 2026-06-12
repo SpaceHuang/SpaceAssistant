@@ -277,7 +277,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
   )
 
   ipcMain.handle('claude-chat-cancel', async (_event, payload: { requestId: string }): Promise<void> => {
-    signalChatCancel(assertValidRequestId(payload.requestId))
+    const requestId = assertValidRequestId(payload.requestId)
+    signalChatCancel(requestId)
+    deps.floatingNotificationManager?.onAllCancelledForRequest(requestId)
   })
 }
 
