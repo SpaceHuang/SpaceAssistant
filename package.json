@@ -1,6 +1,6 @@
 {
   "name": "spaceassistant",
-  "version": "0.1.1",
+  "version": "0.1.5",
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron + React + TypeScript desktop assistant",
@@ -125,13 +125,23 @@
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "allowElevation": true,
-      "installerLanguages": ["zh_CN", "en_US"],
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
       "language": "1033"
     },
     "mac": {
       "icon": "res/icons/sa-logo.iconset",
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64",
+            "universal"
+          ]
+        }
       ]
     },
     "linux": {
