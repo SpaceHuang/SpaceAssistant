@@ -75,6 +75,7 @@
     "vitest": "^4.1.0"
   },
   "build": {
+    "publish": null,
     "appId": "com.spaceassistant.app",
     "productName": "SpaceAssistant",
     "icon": "res/icons/sa-logo-512.png",

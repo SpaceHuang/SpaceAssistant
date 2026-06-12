@@ -72,7 +72,8 @@ jobs:
         run: npm ci
 
       - name: Build & pack
-        run: npm run pack:${{ matrix.pack }}
+        # --publish never：避免 electron-builder 因 tag 存在而尝试发布到 GitHub（由 publish job 负责）
+        run: npm run build && npx electron-builder --${{ matrix.pack }} --publish never
         env:
           CI: true
           CSC_IDENTITY_AUTO_DISCOVERY: false
