@@ -13,7 +13,13 @@ export default defineConfig({
     }
   },
   build: {
-    outDir: 'dist/renderer'
+    outDir: 'dist/renderer',
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        'floating-notification': path.resolve(__dirname, 'floating-notification.html')
+      }
+    }
   },
   server: {
     host: '127.0.0.1',

@@ -27,6 +27,7 @@ export type ClaudeStreamDeps = {
   getAppDatabase: () => AppDatabase
   getProjectMemoryEnabled?: () => boolean
   getBrowserDetectContext: () => import('../src/shared/browserTypes').BrowserDetectContext
+  floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -237,7 +238,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           userDataDir: deps.getUserDataPath(),
           getApiKey: deps.getApiKey,
           appDb: deps.getAppDatabase(),
-          getBrowserDetectContext: deps.getBrowserDetectContext
+          getBrowserDetectContext: deps.getBrowserDetectContext,
+          floatingNotificationManager: deps.floatingNotificationManager
         })
 
         if (!res.ok) {

@@ -37,6 +37,7 @@ import { reconcileAssistantStreamOnComplete } from '../../../shared/assistantCon
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
+import { parseTestPopCommand } from '../../services/testPopCommandService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
 import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
@@ -447,6 +448,19 @@ export function ChatView() {
         message.warning(t('chatView.warnings.selectSession'))
         return
       }
+
+      // /test-pop 无需 API key 也无需会话运行，优先处理
+      const testPopCmd = parseTestPopCommand(text)
+      if (testPopCmd.type === 'command') {
+        await persistSkillHintSystemMessage(runSessionId, testPopCmd.hint)
+        return
+      }
+      if (testPopCmd.type === 'run') {
+        await window.api.testPopShow()
+        message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
+        return
+      }
+
       const runSession =
         store.getState().session.list.find((x) => x.id === runSessionId) ??
         (currentSession?.id === runSessionId ? currentSession : undefined)

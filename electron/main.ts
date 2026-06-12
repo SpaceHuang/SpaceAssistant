@@ -38,6 +38,9 @@ import { getMainWindowFrameOptions } from './windowFrame'
 import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowControlsIpc'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
 import { createWorkDirManager, type WorkDirManager } from './workDirManager'
+import { FloatingNotificationManager } from './floatingNotificationManager'
+
+let floatingManager: FloatingNotificationManager | null = null
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -165,6 +168,14 @@ export async function createMainWindow(): Promise<void> {
   win.on('closed', () => {
     setMainWindow(null)
   })
+
+  // 浮动通知：窗口状态事件
+  win.on('focus', () => floatingManager?.onMainWindowFocus())
+  win.on('blur', () => floatingManager?.onMainWindowBlur())
+  win.on('hide', () => floatingManager?.onMainWindowHide())
+  win.on('show', () => floatingManager?.onMainWindowShow())
+  win.on('minimize', () => floatingManager?.onMainWindowMinimize())
+  win.on('restore', () => floatingManager?.onMainWindowRestore())
 }
 
 app.whenReady().then(() => {
@@ -263,6 +274,12 @@ app.whenReady().then(() => {
 
   registerWindowControlsIpc(ipcMain)
 
+  floatingManager = new FloatingNotificationManager(
+    () => getMainWindow(),
+    __dirname,
+    db
+  )
+
   registerClaudeStreamHandlers(ipcMain, {
     getApiKey,
     getWorkDir: () => workDirState,
@@ -293,7 +310,8 @@ app.whenReady().then(() => {
       isPackaged: app.isPackaged,
       appPath: app.getAppPath(),
       devRoot: path.join(__dirname, '..', '..')
-    })
+    }),
+    floatingNotificationManager: floatingManager
   })
 
   registerAppIpcHandlers(ipcMain, {
@@ -309,7 +327,8 @@ app.whenReady().then(() => {
       isPackaged: app.isPackaged,
       appPath: app.getAppPath(),
       devRoot: path.join(__dirname, '..', '..')
-    })
+    }),
+    floatingNotificationManager: floatingManager
   })
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
@@ -373,6 +392,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   isQuitting = true
   destroyTray()
+  floatingManager?.destroy()
   stopMemoryWatcher()
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.destroy()

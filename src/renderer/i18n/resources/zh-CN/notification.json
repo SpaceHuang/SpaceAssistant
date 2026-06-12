@@ -1,0 +1,11 @@
+{
+  "title": "待确认操作",
+  "summary": "共 {sessions} 个会话 · {items} 项待确认",
+  "backToMain": "回到主界面",
+  "aria": {
+    "notification": "待确认操作浮动通知",
+    "itemClick": "回到主界面确认待确认操作",
+    "closeButton": "关闭通知",
+    "backToMainButton": "回到主界面"
+  }
+}

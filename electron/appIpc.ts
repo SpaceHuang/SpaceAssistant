@@ -123,6 +123,7 @@ export type AppIpcContext = {
   getApiKey: () => Promise<string | null>
   setApiKey: (value: string) => Promise<void>
   getBrowserDetectContext: () => BrowserDetectContext
+  floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
 }
 
 function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Session {
@@ -1334,6 +1335,46 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   ipcMain.handle('workdir:check-writable', (_e, payload: { path: string }) =>
     ctx.workDirManager.checkDirectoryWritable(payload.path)
   )
+
+  // 浮动通知 IPC
+  ipcMain.handle('notification:ready', async () => {
+    ctx.floatingNotificationManager?.onNotificationReady()
+  })
+
+  ipcMain.handle('notification:get-data', async () => {
+    if (ctx.floatingNotificationManager) {
+      return ctx.floatingNotificationManager.getCurrentData()
+    }
+    return { totalSessions: 0, totalItems: 0, latestItem: null }
+  })
+
+  ipcMain.handle('notification:focus-session', async (_e, payload: { sessionId: string; toolUseId?: string }) => {
+    const win = getMainWindow()
+    if (win && !win.isDestroyed()) {
+      if (!win.isVisible()) win.show()
+      if (win.isMinimized()) win.restore()
+      win.focus()
+      win.webContents.send('notification:navigate-session', payload)
+    }
+  })
+
+  ipcMain.handle('notification:show-main', async () => {
+    const win = getMainWindow()
+    if (win && !win.isDestroyed()) {
+      if (!win.isVisible()) win.show()
+      if (win.isMinimized()) win.restore()
+      win.focus()
+    }
+  })
+
+  ipcMain.handle('notification:dismiss', async () => {
+    ctx.floatingNotificationManager?.dismiss()
+  })
+
+  ipcMain.handle('test-pop:show', async () => {
+    if (!ctx.floatingNotificationManager) return
+    ctx.floatingNotificationManager.showTestNotification()
+  })
 }
 
 async function searchFilesUnder(

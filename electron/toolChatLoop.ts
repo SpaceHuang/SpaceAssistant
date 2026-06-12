@@ -263,6 +263,7 @@ export type RunToolChatSessionArgs = {
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
   appDb?: AppDatabase
   getBrowserDetectContext?: () => BrowserDetectContext
+  floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -315,7 +316,8 @@ async function runToolChatSessionInner(
     getApiKey,
     appDb,
     chatSignal,
-    getBrowserDetectContext
+    getBrowserDetectContext,
+    floatingNotificationManager
   } = args
 
   const apiKey = await getApiKey()
@@ -865,6 +867,19 @@ async function runToolChatSessionInner(
           ...(shellSecurityHints ? { shellSecurityHints } : {}),
           ...(autoApproveFallback ? { autoApproveFallback } : {})
         })
+        // 通知浮动通知管理器
+        if (floatingNotificationManager) {
+          const session = appDb ? getSession(appDb, sessionId) : undefined
+          floatingNotificationManager.onConfirmRequest({
+            sessionId,
+            sessionName: session?.name ?? sessionId,
+            toolUseId,
+            toolName,
+            input: inputObj,
+            requestId,
+            createdAt: Date.now()
+          })
+        }
         outcome = await waitForToolConfirm(requestId, toolUseId)
         if (toolName === 'run_shell' && shellSecurityHints) {
           const command = typeof inputObj.command === 'string' ? inputObj.command : ''
@@ -947,6 +962,7 @@ async function runToolChatSessionInner(
           toolUseId,
           result: { success: false, error: timeoutError }
         })
+        floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, timeoutError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${timeoutError}`
           break
@@ -977,6 +993,7 @@ async function runToolChatSessionInner(
           toolUseId,
           result: { success: false, error: rejectedError }
         })
+        floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
           break
@@ -1210,6 +1227,7 @@ async function runToolChatSessionInner(
           ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
         }
       })
+      floatingNotificationManager?.onToolResult(requestId, toolUseId)
       if (abortRepeatedToolError) break
     }
 

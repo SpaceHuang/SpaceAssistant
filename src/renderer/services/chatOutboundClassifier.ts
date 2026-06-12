@@ -1,5 +1,6 @@
 import type { SessionSkillsState, WikiConfig } from '../../shared/domainTypes'
 import { parseTestCardsCommand } from './testCardsCommandService'
+import { parseTestPopCommand } from './testPopCommandService'
 import { parseWikiCommand } from './wikiCommandService'
 import { parseSkillCommand } from './skillCommandService'
 
@@ -19,6 +20,10 @@ export async function classifyOutboundMessage(
   const testCmd = parseTestCardsCommand(trimmed)
   if (testCmd.type === 'command') return 'immediate-command'
   if (testCmd.type === 'run') return 'chat-run'
+
+  const testPopCmd = parseTestPopCommand(trimmed)
+  if (testPopCmd.type === 'command') return 'immediate-command'
+  if (testPopCmd.type === 'run') return 'immediate-command'
 
   const wikiCmd = await parseWikiCommand(trimmed, ctx.wikiConfig, ctx.sessionSkillsState)
   if (wikiCmd.type === 'command') return 'immediate-command'
