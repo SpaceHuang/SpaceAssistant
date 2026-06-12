@@ -1338,7 +1338,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   // 浮动通知 IPC
   ipcMain.handle('notification:ready', async () => {
-    // 浮动窗口渲染进程就绪信号
+    ctx.floatingNotificationManager?.onNotificationReady()
   })
 
   ipcMain.handle('notification:get-data', async () => {

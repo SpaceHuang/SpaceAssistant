@@ -26,9 +26,9 @@ export function FloatingNotificationApp() {
       setData(newData)
     })
 
-    // 订阅关闭
+    // 订阅关闭 — 主进程通知关闭，仅做清理（主进程会销毁窗口）
     const unsubClose = window.api.notificationOnClose(() => {
-      window.close()
+      unsubUpdate()
     })
 
     // 通知主进程就绪

@@ -43,12 +43,26 @@ function buildSimpleToolLabel(toolName: string, input: unknown): string {
   return detail ? `${toolName} — ${detail}` : toolName
 }
 
+const TEST_DATA: FloatingNotificationData = {
+  totalSessions: 2,
+  totalItems: 3,
+  latestItem: {
+    sessionId: 'test-session-1',
+    sessionName: '测试会话',
+    toolUseId: 'test-tool-1',
+    toolName: 'run_shell',
+    toolLabel: 'run_shell — npm install react',
+    createdAt: 0 // will be set at show time
+  }
+}
+
 export class FloatingNotificationManager {
   private pendingItems = new Map<string, PendingConfirmEntry>()
   private floatingWin: BrowserWindow | null = null
   private blurTimer: ReturnType<typeof setTimeout> | null = null
   private closeTimer: ReturnType<typeof setTimeout> | null = null
   private dismissed = false
+  private testMode = false
   private mainWindowGetter: () => BrowserWindow | null
   private mainDirname: string
   private db: AppDatabase
@@ -65,7 +79,6 @@ export class FloatingNotificationManager {
 
   onConfirmRequest(entry: PendingConfirmEntry): void {
     const key = makeKey(entry.requestId, entry.toolUseId)
-    // Resolve session name from DB if not already set
     if (!entry.sessionName || entry.sessionName === entry.sessionId) {
       const session = getSession(this.db, entry.sessionId)
       if (session) {
@@ -74,6 +87,7 @@ export class FloatingNotificationManager {
     }
     this.pendingItems.set(key, entry)
     this.dismissed = false
+    this.testMode = false
     this.evaluate()
   }
 
@@ -89,6 +103,13 @@ export class FloatingNotificationManager {
       if (key.startsWith(prefix)) this.pendingItems.delete(key)
     }
     this.evaluate()
+  }
+
+  /** 浮动窗口渲染进程就绪，推送当前数据 */
+  onNotificationReady(): void {
+    if (!this.floatingWin || this.floatingWin.isDestroyed()) return
+    const data = this.buildCurrentData()
+    pushDataToFloatingWindow(this.floatingWin, data)
   }
 
   onMainWindowFocus(): void {
@@ -125,23 +146,41 @@ export class FloatingNotificationManager {
   }
 
   showTestNotification(): void {
+    this.testMode = true
+    this.dismissed = false
+    this.clearCloseTimer()
     this.ensureFloatingWindow()
-    const testData: FloatingNotificationData = {
-      totalSessions: 2,
-      totalItems: 3,
-      latestItem: {
-        sessionId: 'test-session-1',
-        sessionName: '测试会话',
-        toolUseId: 'test-tool-1',
-        toolName: 'run_shell',
-        toolLabel: 'run_shell — npm install react',
-        createdAt: Date.now()
-      }
-    }
-    pushDataToFloatingWindow(this.floatingWin, testData)
+    // 不立即推送——等渲染进程就绪后通过 onNotificationReady 推送
   }
 
   getCurrentData(): FloatingNotificationData {
+    return this.buildCurrentData()
+  }
+
+  dismiss(): void {
+    this.dismissed = true
+    this.closeFloatingWindow()
+  }
+
+  destroy(): void {
+    this.clearBlurTimer()
+    this.clearCloseTimer()
+    destroyFloatingNotificationWindow(this.floatingWin)
+    this.floatingWin = null
+  }
+
+  // --- private ---
+
+  private buildCurrentData(): FloatingNotificationData {
+    if (this.testMode) {
+      return {
+        ...TEST_DATA,
+        latestItem: TEST_DATA.latestItem
+          ? { ...TEST_DATA.latestItem, createdAt: Date.now() }
+          : null
+      }
+    }
+
     const items = [...this.pendingItems.values()]
     const sessionIds = new Set(items.map((i) => i.sessionId))
     const sorted = items.sort((a, b) => b.createdAt - a.createdAt)
@@ -162,32 +201,18 @@ export class FloatingNotificationManager {
     }
   }
 
-  dismiss(): void {
-    this.dismissed = true
-    this.closeFloatingWindow()
-  }
-
-  destroy(): void {
-    this.clearBlurTimer()
-    this.clearCloseTimer()
-    destroyFloatingNotificationWindow(this.floatingWin)
-    this.floatingWin = null
-  }
-
-  // --- private ---
-
   private evaluate(): void {
     const mainWin = this.mainWindowGetter()
     const hasPending = this.pendingItems.size > 0
     const mainVisible = mainWin && !mainWin.isDestroyed() && mainWin.isVisible() && !mainWin.isMinimized()
     const mainFocused = mainWin && !mainWin.isDestroyed() && mainWin.isFocused()
 
-    if (!hasPending) {
+    if (!hasPending && !this.testMode) {
       this.scheduleClose()
       return
     }
 
-    if (mainVisible && mainFocused) {
+    if (mainVisible && mainFocused && !this.testMode) {
       this.clearCloseTimer()
       this.closeFloatingWindow()
       return
@@ -197,10 +222,10 @@ export class FloatingNotificationManager {
       return
     }
 
-    // Window is hidden/minimized/unfocused → show notification
     this.clearCloseTimer()
     this.ensureFloatingWindow()
-    this.pushCurrentData()
+    const data = this.buildCurrentData()
+    pushDataToFloatingWindow(this.floatingWin, data)
   }
 
   private ensureFloatingWindow(): void {
@@ -210,6 +235,7 @@ export class FloatingNotificationManager {
 
   private closeFloatingWindow(): void {
     this.clearCloseTimer()
+    this.testMode = false
     sendCloseToFloatingWindow(this.floatingWin)
   }
 
@@ -217,33 +243,9 @@ export class FloatingNotificationManager {
     if (this.closeTimer) return
     this.closeTimer = setTimeout(() => {
       this.closeTimer = null
+      this.testMode = false
       this.closeFloatingWindow()
     }, 500)
-  }
-
-  private pushCurrentData(): void {
-    if (!this.floatingWin || this.floatingWin.isDestroyed()) return
-
-    const items = [...this.pendingItems.values()]
-    const sessionIds = new Set(items.map((i) => i.sessionId))
-    const sorted = items.sort((a, b) => b.createdAt - a.createdAt)
-    const latest = sorted[0] ?? null
-
-    const data: FloatingNotificationData = {
-      totalSessions: sessionIds.size,
-      totalItems: items.length,
-      latestItem: latest
-        ? {
-            sessionId: latest.sessionId,
-            sessionName: latest.sessionName,
-            toolUseId: latest.toolUseId,
-            toolName: latest.toolName,
-            toolLabel: buildSimpleToolLabel(latest.toolName, latest.input),
-            createdAt: latest.createdAt
-          }
-        : null
-    }
-    pushDataToFloatingWindow(this.floatingWin, data)
   }
 
   private clearBlurTimer(): void {
