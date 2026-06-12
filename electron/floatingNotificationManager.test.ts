@@ -184,13 +184,18 @@ describe('FloatingNotificationManager', () => {
   })
 
   describe('showTestNotification', () => {
-    it('should create window and push mock data', () => {
+    it('should create window and push mock data on ready', () => {
       const mainWin = createMockMainWindow({ isVisible: true, isFocused: true })
       const manager = createManager(mainWin)
 
       manager.showTestNotification()
 
+      // testMode: 只创建窗口，不立即推送数据
       expect(createFloatingNotificationWindow).toHaveBeenCalled()
+      expect(pushDataToFloatingWindow).not.toHaveBeenCalled()
+
+      // 渲染进程就绪后才推送
+      manager.onNotificationReady()
       expect(pushDataToFloatingWindow).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
