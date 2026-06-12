@@ -141,6 +141,27 @@ export class FloatingNotificationManager {
     pushDataToFloatingWindow(this.floatingWin, testData)
   }
 
+  getCurrentData(): FloatingNotificationData {
+    const items = [...this.pendingItems.values()]
+    const sessionIds = new Set(items.map((i) => i.sessionId))
+    const sorted = items.sort((a, b) => b.createdAt - a.createdAt)
+    const latest = sorted[0] ?? null
+    return {
+      totalSessions: sessionIds.size,
+      totalItems: items.length,
+      latestItem: latest
+        ? {
+            sessionId: latest.sessionId,
+            sessionName: latest.sessionName,
+            toolUseId: latest.toolUseId,
+            toolName: latest.toolName,
+            toolLabel: buildSimpleToolLabel(latest.toolName, latest.input),
+            createdAt: latest.createdAt
+          }
+        : null
+    }
+  }
+
   dismiss(): void {
     this.dismissed = true
     this.closeFloatingWindow()

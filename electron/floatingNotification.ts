@@ -18,10 +18,10 @@ export function calculateFloatingWindowPosition(): { x: number; y: number } {
 
 function getFloatingNotificationUrl(): string {
   if (process.env.ELECTRON_START_URL) {
-    return `${process.env.ELECTRON_START_URL}#/floating-notification`
+    return `${process.env.ELECTRON_START_URL}floating-notification.html`
   }
   const port = process.env.VITE_DEV_SERVER_PORT ?? '9240'
-  return `http://127.0.0.1:${port}#/floating-notification`
+  return `http://127.0.0.1:${port}/floating-notification.html`
 }
 
 function getFloatingNotificationHtmlPath(mainDirname: string): string {

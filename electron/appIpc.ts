@@ -1342,6 +1342,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   })
 
   ipcMain.handle('notification:get-data', async () => {
+    if (ctx.floatingNotificationManager) {
+      return ctx.floatingNotificationManager.getCurrentData()
+    }
     return { totalSessions: 0, totalItems: 0, latestItem: null }
   })
 
