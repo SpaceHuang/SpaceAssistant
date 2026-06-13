@@ -82,7 +82,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: release/**
+          path: |
+            release/*.exe
+            release/*.dmg
           if-no-files-found: error
 
   publish:
@@ -93,7 +95,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: release-assets
           merge-multiple: true
 
       - uses: actions/checkout@v4
@@ -109,10 +111,20 @@ jobs:
             --jq .body > /tmp/release-notes.md
           cat .github/release-appendix.md >> /tmp/release-notes.md
 
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist-release
+          find release-assets -type f \( -name '*.exe' -o -name '*.dmg' \) -exec cp -v {} dist-release/ \;
+          echo "Release assets:"
+          ls -la dist-release
+          test "$(find dist-release -type f | wc -l)" -ge 2
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: /tmp/release-notes.md
-          files: artifacts/**
+          files: dist-release/*
+          fail_on_unmatched_files: true
+          overwrite_assets: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

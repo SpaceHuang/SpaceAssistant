@@ -210,7 +210,7 @@ npm run pack:linux   # Linux AppImage（当前 CI 未纳入自动发版）
 | `npm test` 失败 | 单元测试未通过 | 本地 `npm test` 修复后重新发版 |
 | macOS job 失败 | 图标缺失、依赖问题、runner 异常 | 查看 Actions 日志；本地 `node scripts/dry-run-mac-pack.mjs` 预检 |
 | Windows job `EBUSY` | 本地调试时安装包被占用 | 关闭正在运行的 SpaceAssistant / Electron 进程后重试 |
-| Release 无附件 | `build` job 失败或 artifact 上传失败 | 检查 `build` 两个 matrix 子任务是否均成功 |
+| Release 无附件 | `publish` 未匹配到安装包路径，或 Release 已存在但未覆盖资产 | 确认 workflow 使用 `dist-release/*` 上传；检查 Actions `Prepare release assets` 日志 |
 | 首次 macOS 构建较慢 | 需分别构建 x64、arm64 两套 | 正常，通常 10–20 分钟 |
 
 ---
