@@ -44,17 +44,15 @@ if (!mac) {
     warn('dmg target 未显式声明 arch，将使用 runner 默认架构')
   } else {
     const arches = dmgTarget.arch ?? []
-    const expected = ['x64', 'arm64', 'universal']
+    const expected = ['x64', 'arm64']
     ok(`dmg arch 配置: ${arches.join(', ')}`)
     for (const arch of expected) {
       if (!arches.includes(arch)) {
         fail(`缺少 arch: ${arch}`)
       }
     }
-    if (arches.includes('universal') && !mac.x64ArchFiles) {
-      fail('构建 universal DMG 需配置 mac.x64ArchFiles（arm64 CI runner 上合并 Electron Framework 时需要）')
-    } else if (arches.includes('universal') && mac.x64ArchFiles) {
-      ok(`universal 构建 x64ArchFiles: ${mac.x64ArchFiles}`)
+    if (arches.includes('universal')) {
+      warn('已配置 universal arch；arm64 CI runner 上合并 universal DMG 可能失败，建议仅保留 x64 + arm64')
     }
     if (arches.length !== expected.length) {
       warn(`arch 数量 ${arches.length}，预期 ${expected.length}`)
@@ -68,18 +66,6 @@ try {
   ok(`electron-builder ${builderPkg.version} 已安装`)
 } catch {
   fail('electron-builder 未安装')
-}
-
-// 3. universal 支持（app-builder-lib）
-try {
-  const { Arch } = require('builder-util')
-  if (Arch.universal == null) {
-    fail('builder-util 不支持 Arch.universal')
-  } else {
-    ok(`builder-util 支持 universal (Arch.universal=${Arch.universal})`)
-  }
-} catch (e) {
-  fail(`无法加载 builder-util Arch: ${e.message}`)
 }
 
 // 4. macOS 图标 iconset
@@ -130,7 +116,7 @@ if (process.platform !== 'darwin') {
     `当前系统为 ${process.platform}，无法执行真实 pack:mac（electron-builder 限制）`,
   )
   info.push('→ CI 将在 macos-latest runner 上执行 npm run pack:mac')
-  info.push('→ 预期产出 3 个 DMG：*-x64.dmg、*-arm64.dmg、*-universal.dmg')
+  info.push('→ 预期产出 2 个 DMG：SpaceAssistant-*.dmg（Intel）、SpaceAssistant-*-arm64.dmg（Apple Silicon）')
 }
 
 console.log('\n=== macOS pack dry-run ===\n')

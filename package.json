@@ -134,15 +134,12 @@
     },
     "mac": {
       "icon": "res/icons/sa-logo.iconset",
-      "mergeASARs": true,
-      "x64ArchFiles": "Contents/Frameworks/**",
       "target": [
         {
           "target": "dmg",
           "arch": [
             "x64",
-            "arm64",
-            "universal"
+            "arm64"
           ]
         }
       ]

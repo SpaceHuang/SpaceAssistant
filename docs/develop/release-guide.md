@@ -5,7 +5,7 @@
 SpaceAssistant 通过 **GitHub Actions** 在推送版本 tag 时自动完成质量门禁、双平台打包与 GitHub Release 发布。维护者只需在 `main` 分支上更新版本号、提交代码并推送 tag，无需在本地手动打安装包（除非调试）。
 
 **当前状态**：
-- 支持平台：**Windows**（NSIS x64）、**macOS**（x64 / arm64 / universal 三种 DMG）
+- 支持平台：**Windows**（NSIS x64）、**macOS**（x64 / arm64 两种 DMG）
 - 代码签名：**未启用**（安装说明见 Release Notes）
 - 触发方式：推送 `v*` 格式 tag（如 `v0.1.5`）
 
@@ -134,9 +134,8 @@ on:
 | 平台 | 命令 | 产出（示例） |
 |------|------|-------------|
 | Windows | `npm run pack:win` | `SpaceAssistant Setup 0.1.5.exe` |
-| macOS | `npm run pack:mac` | `SpaceAssistant-0.1.5-x64.dmg` |
-| macOS | | `SpaceAssistant-0.1.5-arm64.dmg` |
-| macOS | | `SpaceAssistant-0.1.5-universal.dmg` |
+| macOS（Intel） | `npm run pack:mac` | `SpaceAssistant-0.1.5.dmg` |
+| macOS（Apple Silicon） | | `SpaceAssistant-0.1.5-arm64.dmg` |
 
 产物目录为 `release/`（已加入 `.gitignore`，不入库）。
 
@@ -145,16 +144,14 @@ macOS 多架构配置（`package.json` → `build.mac`）：
 ```json
 "mac": {
   "icon": "res/icons/sa-logo.iconset",
-  "mergeASARs": true,
-  "x64ArchFiles": "Contents/Frameworks/**",
   "target": [{
     "target": "dmg",
-    "arch": ["x64", "arm64", "universal"]
+    "arch": ["x64", "arm64"]
   }]
 }
 ```
 
-> `x64ArchFiles` 用于 universal 合并：在 arm64 CI runner 上交叉构建 x64 时，Electron Framework 等文件可能在两个架构产物中完全相同，需显式声明以避免 `@electron/universal` 报错。
+> **说明**：CI 使用 `macos-latest`（Apple Silicon）runner 分别构建 x64 与 arm64 DMG，不构建 universal 包。在 arm64 runner 上合并 universal 时，x64 交叉构建产物与 arm64 主程序二进制可能相同，导致 `@electron/universal` 反复失败；分架构 DMG 更可靠，且已覆盖全部用户群。
 
 ### 3.5 Release 说明
 
@@ -197,9 +194,8 @@ npm run pack:linux   # Linux AppImage（当前 CI 未纳入自动发版）
 
 按芯片选择 DMG：
 
-- **Apple Silicon（M 系列）**：文件名含 `arm64`
-- **Intel**：文件名含 `x64`
-- **不确定**：文件名含 `universal`（体积更大，两种芯片均可）
+- **Apple Silicon（M 系列）**：文件名含 `arm64`（如 `SpaceAssistant-*-arm64.dmg`）
+- **Intel**：文件名不含 `arm64`（如 `SpaceAssistant-*.dmg`）
 
 未签名时，首次打开可能被系统拦截，请在「系统设置 → 隐私与安全性」中允许，或对应用右键选择「打开」。
 
@@ -212,11 +208,10 @@ npm run pack:linux   # Linux AppImage（当前 CI 未纳入自动发版）
 | `verify` 报 tag 不在 main | tag 打在 feature 分支提交上 | 合并到 main 后，在 main 最新提交重新打 tag |
 | `i18n:check` 失败 | 翻译 key 未对齐或 JSON 非法 | 本地运行 `npm run i18n:check` 修复后重新发版 |
 | `npm test` 失败 | 单元测试未通过 | 本地 `npm test` 修复后重新发版 |
-| macOS job 失败（universal 合并） | `Electron Framework` 在 x64/arm64 产物中相同 | 确认 `mac.x64ArchFiles` 已配置；见 `package.json` |
 | macOS job 失败 | 图标缺失、依赖问题、runner 异常 | 查看 Actions 日志；本地 `node scripts/dry-run-mac-pack.mjs` 预检 |
 | Windows job `EBUSY` | 本地调试时安装包被占用 | 关闭正在运行的 SpaceAssistant / Electron 进程后重试 |
 | Release 无附件 | `build` job 失败或 artifact 上传失败 | 检查 `build` 两个 matrix 子任务是否均成功 |
-| 首次 macOS 构建较慢 | 需构建 x64、arm64、universal 三套 | 正常，通常 15–30 分钟 |
+| 首次 macOS 构建较慢 | 需分别构建 x64、arm64 两套 | 正常，通常 10–20 分钟 |
 
 ---
 
