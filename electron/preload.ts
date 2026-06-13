@@ -40,9 +40,17 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('claude-chat-thinking-delta', fn)
   },
   claudeChatOnDone: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string }) => cb(data)
+    const fn = (_e: unknown, data: { requestId: string; usage?: unknown }) => cb(data)
     ipcRenderer.on('claude-chat-done', fn)
     return () => ipcRenderer.removeListener('claude-chat-done', fn)
+  },
+  claudeChatOnUsage: (cb) => {
+    const fn = (
+      _e: unknown,
+      data: { requestId: string; sessionId: string; usage: import('../src/shared/sessionUsage').SessionUsage }
+    ) => cb(data)
+    ipcRenderer.on('claude-chat-usage', fn)
+    return () => ipcRenderer.removeListener('claude-chat-usage', fn)
   },
   claudeChatOnError: (cb) => {
     const fn = (_e: unknown, data: { requestId: string; message: string }) => cb(data)

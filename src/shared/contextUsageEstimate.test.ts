@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   computeContextUsageDisplay,
   computeEstimatedOccupancy,
-  computeTotalRequestInputTokens
+  computeTotalRequestInputTokens,
+  resolveEffectiveMaximumContext
 } from './contextUsageEstimate'
 
 describe('computeTotalRequestInputTokens', () => {
@@ -49,6 +50,24 @@ describe('computeEstimatedOccupancy', () => {
     expect(
       computeEstimatedOccupancy({ input_tokens: 50, cache_read_input_tokens: 100_000, output_tokens: 200 })
     ).toBe(100_250)
+  })
+})
+
+describe('resolveEffectiveMaximumContext', () => {
+  it('returns configured value when no provider cap is known', () => {
+    expect(resolveEffectiveMaximumContext('claude-sonnet-4-6', 200_000)).toBe(200_000)
+  })
+
+  it('clamps configured maximum to known provider cap when config is higher', () => {
+    expect(resolveEffectiveMaximumContext('deepseek-v4-pro', 2_000_000)).toBe(1_048_565)
+  })
+
+  it('keeps configured value when it is already below provider cap', () => {
+    expect(resolveEffectiveMaximumContext('deepseek-v4-pro', 1_000_000)).toBe(1_000_000)
+  })
+
+  it('applies deepseek prefix fallback for unknown deepseek model ids', () => {
+    expect(resolveEffectiveMaximumContext('deepseek-v4-custom', 5_000_000)).toBe(1_048_565)
   })
 })
 

@@ -757,6 +757,16 @@ export function ChatView() {
             routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
           })
         )
+        unsubs.push(
+          window.api.claudeChatOnUsage((d) => {
+            if (d.requestId !== requestId || d.sessionId !== runSessionId) return
+            const usage = d.usage as LastUsage
+            void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
+            if (store.getState().chat.currentSessionId === runSessionId) {
+              dispatch(setLastUsage({ sessionId: runSessionId, usage }))
+            }
+          })
+        )
 
         try {
           const payload = buildToolChatPayload({
@@ -784,6 +794,13 @@ export function ChatView() {
                 findAssistantRow()?.toolCalls
               )
               return
+            }
+            if (res.usage) {
+              const usage = res.usage as LastUsage
+              void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
+              if (store.getState().chat.currentSessionId === runSessionId) {
+                dispatch(setLastUsage({ sessionId: runSessionId, usage }))
+              }
             }
             flushStreamPersist(runSessionId, assistantId)
             flushUiPatch(runSessionId, assistantId)

@@ -31,6 +31,30 @@ export function computeEstimatedOccupancy(usage: ContextUsageRaw): number {
   return computeTotalRequestInputTokens(usage) + (usage.output_tokens ?? 0)
 }
 
+/** 已知网关/提供商实际上下文上限（token）；展示分母取 min(模型配置, 此表) */
+const MODEL_PROVIDER_CONTEXT_LIMITS: Readonly<Record<string, number>> = {
+  'deepseek-v4-pro': 1_048_565,
+  'deepseek-v4-flash': 1_048_565
+}
+
+const DEEPSEEK_PROVIDER_CONTEXT_LIMIT = 1_048_565
+
+/** 环形图分母：模型配置与已知网关上限取较小值，避免配置偏大导致占用率失真 */
+export function resolveEffectiveMaximumContext(modelName: string, configuredMaximumContext: number): number {
+  if (!Number.isFinite(configuredMaximumContext) || configuredMaximumContext <= 0) {
+    return configuredMaximumContext
+  }
+  const normalized = modelName.trim().toLowerCase()
+  let providerCap = MODEL_PROVIDER_CONTEXT_LIMITS[normalized]
+  if (providerCap == null && normalized.startsWith('deepseek-')) {
+    providerCap = DEEPSEEK_PROVIDER_CONTEXT_LIMIT
+  }
+  if (providerCap != null && providerCap > 0) {
+    return Math.min(configuredMaximumContext, providerCap)
+  }
+  return configuredMaximumContext
+}
+
 export type ContextUsageDisplay = {
   totalRequestInput: number
   lastOutput: number

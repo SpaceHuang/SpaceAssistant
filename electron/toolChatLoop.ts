@@ -280,7 +280,24 @@ export function pickToolLoopReturnUsage(
 
 export type RunToolChatSessionResult =
   | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage }
-  | { ok: false; error: string }
+  | { ok: false; error: string; usage?: ToolLoopUsage }
+
+function failToolLoopWithLastUsage(
+  sender: WebContents,
+  requestId: string,
+  sessionId: string,
+  error: string,
+  lastValidUsage?: ToolLoopUsage
+): Extract<RunToolChatSessionResult, { ok: false }> {
+  if (lastValidUsage) {
+    safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: lastValidUsage })
+  }
+  return {
+    ok: false,
+    error,
+    ...(lastValidUsage ? { usage: lastValidUsage } : {})
+  }
+}
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
   const chatSignal = registerChatCancel(args.requestId)
@@ -392,7 +409,7 @@ async function runToolChatSessionInner(
     throwIfChatCancelled(chatSignal)
     if (!isWebContentsAlive(sender)) {
       logAgentEvent('warn', 'llm.error', { requestId, sessionId, error: 'Window closed' })
-      return { ok: false, error: 'Window closed' }
+      return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage)
     }
     const memoryContent = getCachedMemoryContent()
     const baseSystemWithRecovery = recoverySkillSystemSuffix
@@ -427,18 +444,23 @@ async function runToolChatSessionInner(
       enableThinking: toolLoopOptions.enableThinking
     })
 
-    const stream = client.messages.stream({
-      ...toolLoopStreamParams,
-      messages: messagesStripped as Anthropic.MessageParam[],
-      tools: tools as Anthropic.Tool[]
-    } as Parameters<typeof client.messages.stream>[0])
+    let content: Anthropic.ContentBlock[]
+    let stopReason: NormalizedStopReason | undefined
+    let usage: ToolLoopUsage | undefined
 
-    const contentBlockTypes = new Map<number, string>()
-    const contentBlocks: Array<unknown> = []
-    const pendingToolUseByIndex = new Map<number, { id: string; name: string; input: unknown; partialJson: string }>()
-    const pendingTextByIndex = new Map<number, string>()
+    try {
+      const stream = client.messages.stream({
+        ...toolLoopStreamParams,
+        messages: messagesStripped as Anthropic.MessageParam[],
+        tools: tools as Anthropic.Tool[]
+      } as Parameters<typeof client.messages.stream>[0])
 
-    for await (const evt of stream) {
+      const contentBlockTypes = new Map<number, string>()
+      const contentBlocks: Array<unknown> = []
+      const pendingToolUseByIndex = new Map<number, { id: string; name: string; input: unknown; partialJson: string }>()
+      const pendingTextByIndex = new Map<number, string>()
+
+      for await (const evt of stream) {
       throwIfChatCancelled(chatSignal)
       if (evt?.type === 'content_block_start') {
         const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
@@ -540,24 +562,38 @@ async function runToolChatSessionInner(
       safeWebContentsSend(sender,'claude-chat-tools-activity', { requestId, at: Date.now() })
     }
 
-    const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
-    const finalContent = Array.isArray(res?.content) ? res.content : []
-    const rawContent = finalContent.length > 0 ? finalContent : contentBlocks
-    const content = mergeStreamedToolInputsIntoContent(rawContent, contentBlocks) as Anthropic.ContentBlock[]
-    const stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
-    const usage = normalizeAnthropicMessageUsage(res)
-    if (usage) {
-      lastValidUsage = usage
-    }
+      const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
+      const finalContent = Array.isArray(res?.content) ? res.content : []
+      const rawContent = finalContent.length > 0 ? finalContent : contentBlocks
+      content = mergeStreamedToolInputsIntoContent(rawContent, contentBlocks) as Anthropic.ContentBlock[]
+      stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
+      usage = normalizeAnthropicMessageUsage(res)
+      if (usage) {
+        lastValidUsage = usage
+        safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
+      }
 
-    logAgentEvent('info', 'llm.response', {
-      requestId,
-      sessionId,
-      loopRound,
-      stopReason,
-      content,
-      usage
-    })
+      logAgentEvent('info', 'llm.response', {
+        requestId,
+        sessionId,
+        loopRound,
+        stopReason,
+        content,
+        usage
+      })
+    } catch (e) {
+      if (e instanceof ChatCancelledError) throw e
+      const error = e instanceof Error ? e.message : String(e)
+      logAgentEvent('error', 'llm.error', {
+        requestId,
+        sessionId,
+        loopRound,
+        model,
+        error,
+        stack: e instanceof Error ? e.stack : undefined
+      })
+      return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage)
+    }
 
     const toolUses = content.filter((b) =>
       Boolean(b && typeof b === 'object' && (b as { type?: string }).type === 'tool_use')
@@ -1248,7 +1284,7 @@ async function runToolChatSessionInner(
 
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]
     if (abortRepeatedToolError) {
-      return { ok: false, error: abortRepeatedToolError }
+      return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage)
     }
   }
 }

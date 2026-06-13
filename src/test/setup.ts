@@ -47,7 +47,8 @@ if (typeof window !== 'undefined') {
     windowClose: api.windowClose ?? (async () => {}),
     windowOnMaximizeChanged: api.windowOnMaximizeChanged ?? (() => () => {}),
     appQuit: api.appQuit ?? (async () => {}),
-    appToggleDevTools: api.appToggleDevTools ?? (async () => {})
+    appToggleDevTools: api.appToggleDevTools ?? (async () => {}),
+    claudeChatOnUsage: api.claudeChatOnUsage ?? (() => () => undefined)
   } as SpaceAssistantApi
 }
 

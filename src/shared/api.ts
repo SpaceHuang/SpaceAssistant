@@ -147,11 +147,14 @@ export type SpaceAssistantApi = {
     payload: ClaudeChatCreateWithToolsPayload
   ) => Promise<
     | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
-    | { ok: false; error: string }
+    | { ok: false; error: string; usage?: unknown }
   >
   claudeChatOnDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
   claudeChatOnThinkingDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
   claudeChatOnDone: (cb: (data: { requestId: string; usage?: unknown }) => void) => () => void
+  claudeChatOnUsage: (
+    cb: (data: { requestId: string; sessionId: string; usage: SessionUsage }) => void
+  ) => () => void
   claudeChatOnError: (cb: (data: { requestId: string; message: string }) => void) => () => void
   claudeChatCancel: (payload: { requestId: string }) => Promise<void>
 

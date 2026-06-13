@@ -3,7 +3,7 @@ import { Tooltip } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useTypedSelector } from '../../hooks'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import { computeContextUsageDisplay } from '../../../shared/contextUsageEstimate'
+import { computeContextUsageDisplay, resolveEffectiveMaximumContext } from '../../../shared/contextUsageEstimate'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 
 const RING_SIZE = 28
@@ -52,7 +52,11 @@ export function ContextUsageRing() {
     return config.models.find((m) => m.name === config.model)
   }, [config])
 
-  const maximumContext = currentModel?.maximumContext
+  const maximumContext = useMemo(() => {
+    if (!config || !currentModel) return undefined
+    return resolveEffectiveMaximumContext(config.model, currentModel.maximumContext)
+  }, [config, currentModel])
+
   const effectiveOutputMax =
     config != null
       ? resolveEffectiveOutputMaxTokens(config.model, config.models)
