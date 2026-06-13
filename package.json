@@ -134,6 +134,8 @@
     },
     "mac": {
       "icon": "res/icons/sa-logo.iconset",
+      "mergeASARs": true,
+      "x64ArchFiles": "Contents/Frameworks/**",
       "target": [
         {
           "target": "dmg",

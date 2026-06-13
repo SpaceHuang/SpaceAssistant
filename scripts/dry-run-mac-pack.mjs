@@ -51,6 +51,11 @@ if (!mac) {
         fail(`缺少 arch: ${arch}`)
       }
     }
+    if (arches.includes('universal') && !mac.x64ArchFiles) {
+      fail('构建 universal DMG 需配置 mac.x64ArchFiles（arm64 CI runner 上合并 Electron Framework 时需要）')
+    } else if (arches.includes('universal') && mac.x64ArchFiles) {
+      ok(`universal 构建 x64ArchFiles: ${mac.x64ArchFiles}`)
+    }
     if (arches.length !== expected.length) {
       warn(`arch 数量 ${arches.length}，预期 ${expected.length}`)
     }
