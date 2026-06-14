@@ -1,7 +1,7 @@
 import type { WebContents } from 'electron'
 import { isWebContentsAlive, safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
-import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/toolApiFunctionName'
+import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'

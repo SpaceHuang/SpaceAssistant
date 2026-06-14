@@ -1,7 +1,7 @@
 import type { Message, ToolCallRecord } from './domainTypes'
 import type { ClaudeChatMessageWithBlocks } from './api'
 import { MAX_CHAT_API_MESSAGES } from './chatApiMessageLimits'
-import { toolIdToOpenAiCompatibleApiToolName } from './toolApiFunctionName'
+import { toolIdToOpenAiCompatibleApiToolName } from './anthropicToolSanitize'
 
 function toolResultContent(tc: ToolCallRecord): string {
   if (!tc.result) return '(无结果)'
