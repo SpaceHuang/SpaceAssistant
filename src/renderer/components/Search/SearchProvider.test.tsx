@@ -51,11 +51,11 @@ describe('SearchProvider', () => {
     expect(result.current.isOpen).toBe(false)
   })
 
-  it('does not intercept Ctrl+F for file source mode', () => {
+  it('opens for file source mode', () => {
     useDetailPanelMock.mockReturnValue({
-      selectedFile: 'app.ts',
+      selectedFile: 'readme.md',
       contentMode: 'file',
-      fileType: 'text',
+      fileType: 'markdown',
       viewMode: 'code',
       isWebViewActive: false
     })
@@ -65,8 +65,9 @@ describe('SearchProvider', () => {
       fireEvent.keyDown(window, { key: 'f', ctrlKey: true })
     })
 
-    expect(result.current.isOpen).toBe(false)
+    expect(result.current.isOpen).toBe(true)
     expect(result.current.activePanel).toBe('file-source')
+    expect(result.current.panelSupported).toBe(true)
   })
 
   it('opens for markdown render mode', () => {

@@ -31,6 +31,56 @@ export function computeEstimatedOccupancy(usage: ContextUsageRaw): number {
   return computeTotalRequestInputTokens(usage) + (usage.output_tokens ?? 0)
 }
 
+/** 粗估 UTF-8 文本 token 数（用于 tool_result 写入后的占用投影） */
+export function estimateTokensFromUtf8Text(text: string): number {
+  if (!text) return 0
+  return Math.ceil(text.length / 3.5)
+}
+
+function estimateTokensFromToolResultContent(content: unknown): number {
+  if (typeof content === 'string') return estimateTokensFromUtf8Text(content)
+  if (Array.isArray(content)) {
+    let total = 0
+    for (const block of content) {
+      if (block && typeof block === 'object' && 'text' in block) {
+        const text = (block as { text?: unknown }).text
+        if (typeof text === 'string') total += estimateTokensFromUtf8Text(text)
+      }
+    }
+    return total
+  }
+  try {
+    return estimateTokensFromUtf8Text(JSON.stringify(content))
+  } catch {
+    return 0
+  }
+}
+
+/** 估算一轮 tool_result 块将新增的 prompt token（下轮请求前尚未有 API usage） */
+export function estimateTokensFromToolResults(toolResults: ReadonlyArray<{ content?: unknown }>): number {
+  let total = 0
+  for (const tr of toolResults) {
+    total += estimateTokensFromToolResultContent(tr.content)
+  }
+  return total
+}
+
+/**
+ * 工具执行完毕、tool_result 已拼入 messages 后，投影下一轮请求的 input 占用。
+ * 在真实 API usage 返回前填补监控器更新空窗。
+ */
+export function projectUsageAfterToolResults(
+  usage: ContextUsageRaw,
+  toolResults: ReadonlyArray<{ content?: unknown }>
+): ContextUsageRaw {
+  const added = estimateTokensFromToolResults(toolResults)
+  if (added <= 0) return usage
+  return {
+    ...usage,
+    input_tokens: (usage.input_tokens ?? 0) + added
+  }
+}
+
 /** 已知网关/提供商实际上下文上限（token）；展示分母取 min(模型配置, 此表) */
 const MODEL_PROVIDER_CONTEXT_LIMITS: Readonly<Record<string, number>> = {
   'deepseek-v4-pro': 1_048_565,

@@ -2,6 +2,7 @@ import type { WebContents } from 'electron'
 import { isWebContentsAlive, safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
+import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'
@@ -511,6 +512,13 @@ async function runToolChatSessionInner(
           pendingTextByIndex.set(index, prev + textDelta)
         }
       }
+      if (evt?.type === 'message_delta') {
+        const evtUsage = (evt as { usage?: unknown }).usage
+        if (evtUsage && typeof evtUsage === 'object') {
+          const partial = normalizeAnthropicMessageUsage({ usage: evtUsage })
+          if (partial) usage = partial
+        }
+      }
       if (evt?.type === 'content_block_stop') {
         const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
         const blockType = contentBlockTypes.get(index)
@@ -567,7 +575,8 @@ async function runToolChatSessionInner(
       const rawContent = finalContent.length > 0 ? finalContent : contentBlocks
       content = mergeStreamedToolInputsIntoContent(rawContent, contentBlocks) as Anthropic.ContentBlock[]
       stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
-      usage = normalizeAnthropicMessageUsage(res)
+      const finalUsage = normalizeAnthropicMessageUsage(res)
+      usage = finalUsage ?? usage
       if (usage) {
         lastValidUsage = usage
         safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
@@ -1283,6 +1292,11 @@ async function runToolChatSessionInner(
     }
 
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]
+    if (lastValidUsage && toolResults.length > 0) {
+      const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
+      lastValidUsage = projected
+      safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: projected })
+    }
     if (abortRepeatedToolError) {
       return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage)
     }

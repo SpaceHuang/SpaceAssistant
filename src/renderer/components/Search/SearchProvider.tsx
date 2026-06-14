@@ -72,7 +72,7 @@ function resolveActivePanel(input: {
   if (fileType === 'markdown' && viewMode === 'render') {
     return { panel: 'file-markdown', supported: true }
   }
-  return { panel: 'file-source', supported: false }
+  return { panel: 'file-source', supported: true }
 }
 
 function isComposerFocused(): boolean {
@@ -211,11 +211,9 @@ export function SearchProvider({ children }: { children: ReactNode }) {
       if (!mod || e.key.toLowerCase() !== 'f') return
       if (isComposerFocused()) return
 
-      if (activePanel === 'file-source') return
-
       if (activePanel === 'unsupported') return
 
-      if (activePanel === 'chat' || activePanel === 'file-markdown') {
+      if (activePanel === 'chat' || activePanel === 'file-markdown' || activePanel === 'file-source') {
         e.preventDefault()
         e.stopPropagation()
         open()

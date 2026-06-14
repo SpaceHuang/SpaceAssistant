@@ -5,6 +5,7 @@ import { useTypedSelector } from '../../hooks'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { isUnderWikiRoot, requestFilePaneSelect } from '../../services/filePaneNavigation'
 import { openExternalUrl } from '../../services/openExternalUrl'
+import { useFileSourceSearch } from '../../services/fileSourceSearchAdapter'
 import { useDetailPanel } from './DetailPanelContext'
 import { CodeView } from './CodeView'
 import { MarkdownRenderView } from './MarkdownRenderView'
@@ -13,20 +14,13 @@ import { ImageView } from './ImageView'
 import { UnsupportedView } from './UnsupportedView'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { WebView } from './WebView'
-import type { SearchMatch } from './searchUtils'
 import { MarkdownSearchScope } from '../Search/MarkdownSearchScope'
 
 type Props = {
-  searchHighlights?: SearchMatch[]
-  currentHighlightIndex?: number
   wikiIndexView?: boolean
 }
 
-export function FileContentView({
-  searchHighlights = [],
-  currentHighlightIndex = -1,
-  wikiIndexView = false
-}: Props) {
+export function FileContentView({ wikiIndexView = false }: Props) {
   const {
     contentMode,
     selectedFile,
@@ -51,6 +45,7 @@ export function FileContentView({
     onWebViewLoadError
   } = useDetailPanel()
   const { t } = useTypedTranslation('detailPanel')
+  const sourceSearch = useFileSourceSearch(previewContent ?? '')
   const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath)
   const [pendingScrollFragment, setPendingScrollFragment] = useState<string | null>(null)
 
@@ -162,8 +157,8 @@ export function FileContentView({
     <CodeView
       content={previewContent}
       filePath={selectedFile}
-      highlights={searchHighlights}
-      currentHighlightIndex={currentHighlightIndex}
+      highlights={sourceSearch.matches}
+      currentHighlightIndex={sourceSearch.currentIndex}
     />
   )
 }

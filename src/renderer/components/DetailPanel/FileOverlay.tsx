@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { App } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileToolbar } from './FileToolbar'
 import { FileContentView } from './FileContentView'
-import { SearchPanel } from './SearchPanel'
 import { useWikiIndexViewState } from './WikiIndexView'
 import { canShowCollectToWiki, collectToWiki } from '../../services/wikiImportService'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { SearchMatch } from './searchUtils'
 
 export function FileOverlay() {
   const { message } = App.useApp()
@@ -57,15 +55,6 @@ export function FileOverlay() {
     })
   }, [message, selectedFile, sessionId, wikiEnabled])
 
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [highlights, setHighlights] = useState<SearchMatch[]>([])
-  const [currentHighlightIndex, setCurrentHighlightIndex] = useState(-1)
-
-  const onHighlightsChange = useCallback((matches: SearchMatch[], index: number) => {
-    setHighlights(matches)
-    setCurrentHighlightIndex(index)
-  }, [])
-
   const overlayActive = Boolean(selectedFile) || contentMode === 'url'
   const showWebChrome = isWebViewActive || contentMode === 'url'
 
@@ -107,18 +96,11 @@ export function FileOverlay() {
 
       if (!selectedFile) return
 
-      if (mod && e.key.toLowerCase() === 'f') {
-        e.preventDefault()
-        setSearchOpen(true)
-      }
       if (mod && e.key.toLowerCase() === 'w') {
         e.preventDefault()
         closeFile()
       }
-      if (e.key === 'Escape' && searchOpen) {
-        e.preventDefault()
-        setSearchOpen(false)
-      } else if (e.key === 'Escape' && !searchOpen && !isWebViewLoading) {
+      if (e.key === 'Escape' && !isWebViewLoading) {
         closeFile()
       }
     }
@@ -131,7 +113,6 @@ export function FileOverlay() {
     navigateForward,
     overlayActive,
     refreshPage,
-    searchOpen,
     selectedFile,
     showWebChrome,
     stopLoading
@@ -167,17 +148,8 @@ export function FileOverlay() {
         showCollectToWiki={showCollectToWiki}
         onCollectToWiki={handleCollectToWiki}
       />
-      <SearchPanel
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onHighlightsChange={onHighlightsChange}
-      />
       <div className="detail-file-body">
-        <FileContentView
-          searchHighlights={highlights}
-          currentHighlightIndex={currentHighlightIndex}
-          wikiIndexView={indexView}
-        />
+        <FileContentView wikiIndexView={indexView} />
       </div>
     </div>
   )

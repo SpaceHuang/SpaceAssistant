@@ -13,6 +13,7 @@ import { collectToWiki } from './services/wikiImportService'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
+import { initContextUsageStreamBridge } from './services/contextUsageStreamService'
 import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
 import { SearchProvider } from './components/Search/SearchProvider'
@@ -151,11 +152,13 @@ function AppShellInner() {
       dispatch(upsertSession(session))
     })
     const offFeishuStream = initFeishuRemoteStreamBridge()
+    const offContextUsage = initContextUsageStreamBridge()
     return () => {
       off1()
       off2()
       offTitle()
       offFeishuStream()
+      offContextUsage()
     }
   }, [dispatch])
 

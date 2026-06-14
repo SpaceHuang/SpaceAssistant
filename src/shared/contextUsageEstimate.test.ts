@@ -3,6 +3,8 @@ import {
   computeContextUsageDisplay,
   computeEstimatedOccupancy,
   computeTotalRequestInputTokens,
+  estimateTokensFromToolResults,
+  projectUsageAfterToolResults,
   resolveEffectiveMaximumContext
 } from './contextUsageEstimate'
 
@@ -90,5 +92,36 @@ describe('computeContextUsageDisplay', () => {
     expect(d.estimatedOccupancy).toBe(200_000)
     expect(d.usedRatio + d.reservedRatio).toBeCloseTo(1)
     expect(d.freeRatio).toBe(0)
+  })
+})
+
+describe('estimateTokensFromToolResults', () => {
+  it('estimates string tool_result content', () => {
+    const text = 'x'.repeat(350)
+    expect(estimateTokensFromToolResults([{ content: text }])).toBe(100)
+  })
+
+  it('sums multiple tool results', () => {
+    expect(
+      estimateTokensFromToolResults([
+        { content: 'a'.repeat(35) },
+        { content: 'b'.repeat(35) }
+      ])
+    ).toBe(20)
+  })
+})
+
+describe('projectUsageAfterToolResults', () => {
+  it('bumps input_tokens by estimated tool_result size', () => {
+    const base = { input_tokens: 10_000, output_tokens: 200 }
+    const projected = projectUsageAfterToolResults(base, [{ content: 'z'.repeat(350) }])
+    expect(projected.input_tokens).toBe(10_100)
+    expect(projected.output_tokens).toBe(200)
+    expect(computeEstimatedOccupancy(projected)).toBeGreaterThan(computeEstimatedOccupancy(base))
+  })
+
+  it('returns same usage when tool results are empty', () => {
+    const base = { input_tokens: 5000 }
+    expect(projectUsageAfterToolResults(base, [])).toEqual(base)
   })
 })

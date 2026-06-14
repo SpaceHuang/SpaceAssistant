@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { addMessage, patchMessage, removeMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setLastUsage, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
+import { addMessage, patchMessage, removeMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
@@ -26,6 +26,7 @@ import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
+import { applyContextUsageUpdate } from '../../services/contextUsageStreamService'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import {
   buildToolChatPayload,
@@ -757,17 +758,6 @@ export function ChatView() {
             routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
           })
         )
-        unsubs.push(
-          window.api.claudeChatOnUsage((d) => {
-            if (d.requestId !== requestId || d.sessionId !== runSessionId) return
-            const usage = d.usage as LastUsage
-            void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
-            if (store.getState().chat.currentSessionId === runSessionId) {
-              dispatch(setLastUsage({ sessionId: runSessionId, usage }))
-            }
-          })
-        )
-
         try {
           const payload = buildToolChatPayload({
             requestId,
@@ -796,11 +786,7 @@ export function ChatView() {
               return
             }
             if (res.usage) {
-              const usage = res.usage as LastUsage
-              void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
-              if (store.getState().chat.currentSessionId === runSessionId) {
-                dispatch(setLastUsage({ sessionId: runSessionId, usage }))
-              }
+              applyContextUsageUpdate(runSessionId, res.usage as NonNullable<LastUsage>)
             }
             flushStreamPersist(runSessionId, assistantId)
             flushUiPatch(runSessionId, assistantId)
@@ -831,11 +817,7 @@ export function ChatView() {
           flushStreamPersist(runSessionId, assistantId)
           flushUiPatch(runSessionId, assistantId)
           if (res.usage) {
-            const usage = res.usage as LastUsage
-            void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
-            if (store.getState().chat.currentSessionId === runSessionId) {
-              dispatch(setLastUsage({ sessionId: runSessionId, usage }))
-            }
+            applyContextUsageUpdate(runSessionId, res.usage as NonNullable<LastUsage>)
           }
           const assistantRow = findAssistantRow()
           const thinking = finalizeThinking(thinkingState)
@@ -923,11 +905,7 @@ export function ChatView() {
           },
           onDone: async (data) => {
             if (data?.usage) {
-              const usage = data.usage as LastUsage
-              void window.api.usageSet({ sessionId: runSessionId, usage }).catch(() => {})
-              if (store.getState().chat.currentSessionId === runSessionId) {
-                dispatch(setLastUsage({ sessionId: runSessionId, usage }))
-              }
+              applyContextUsageUpdate(runSessionId, data.usage as NonNullable<LastUsage>)
             }
             const reconciled = reconcileAssistantStreamOnComplete({
               stopReason: 'end_turn',
