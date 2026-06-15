@@ -33,6 +33,7 @@
   "fileView": {
     "unsupportedExt": "Preview not supported for {{ext}} files",
     "unsupportedGeneric": "Preview not supported for this file type",
+    "fileDeleted": "File has been deleted or moved",
     "fileSize": "File size: ",
     "read": "Read",
     "write": "Write"

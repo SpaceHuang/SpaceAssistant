@@ -33,7 +33,8 @@ export function FileOverlay() {
     navigateForward,
     setViewMode,
     setDisplayUrl,
-    submitDisplayUrl
+    submitDisplayUrl,
+    registerFileBodyElement
   } = useDetailPanel()
 
   const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? 'llm-wiki')
@@ -148,7 +149,7 @@ export function FileOverlay() {
         showCollectToWiki={showCollectToWiki}
         onCollectToWiki={handleCollectToWiki}
       />
-      <div className="detail-file-body">
+      <div className="detail-file-body" ref={registerFileBodyElement}>
         <FileContentView wikiIndexView={indexView} />
       </div>
     </div>

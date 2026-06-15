@@ -46,5 +46,7 @@ export type AgentLogEventName =
   | 'workdir.switch.start'
   | 'workdir.switch.done'
   | 'workdir.switch.error'
+  | 'fileContentWatcher.error'
+  | 'fileContentWatcher.startFailed'
 
 export type AgentLogFields = Record<string, unknown>

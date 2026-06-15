@@ -190,6 +190,7 @@ app.whenReady().then(() => {
 
   const applyWorkDirSideEffects = (d: string) => {
     workDirState = d
+    void import('./fileContentWatcher').then(({ stopAllContentWatches }) => stopAllContentWatches())
     loadProjectMemory(d).catch((err) => {
       console.warn('[projectMemory] reload failed:', err.message)
     })

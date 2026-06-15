@@ -33,6 +33,7 @@
   "fileView": {
     "unsupportedExt": "暂不支持预览 {{ext}} 文件",
     "unsupportedGeneric": "暂不支持预览此文件类型",
+    "fileDeleted": "文件已被删除或移动",
     "fileSize": "文件大小：",
     "read": "读取",
     "write": "写入"

@@ -13,7 +13,19 @@ import type { FileTypeCategory } from '../../../shared/fileTypes'
 import { classifyFileType } from '../../../shared/fileTypes'
 import type { FileReadResult } from '../../../shared/api'
 import { normalizeViewerUrl } from '../../../shared/viewerUrl'
+import { normalizeRelPath } from '../../../shared/fileTreeSync'
 import { preloadShiki } from '../../utils/shikiHighlighter'
+import {
+  captureScrollFromRoot,
+  restoreScrollToRoot,
+  type ScrollSnapshot
+} from '../../utils/contentScrollRestore'
+import {
+  cancelFileContentSync,
+  ensureFileContentSyncIpc,
+  subscribeFileContentSync
+} from '../../services/fileContentSyncBus'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import {
   canGoBack,
   canGoForward,
@@ -38,6 +50,11 @@ function defaultViewModeForFileType(fileType: FileTypeCategory | null): ViewMode
   return 'code'
 }
 
+function isEnoentError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error)
+  return msg.includes('ENOENT') || /no such file/i.test(msg)
+}
+
 export type DetailPanelState = {
   contentMode: ContentMode
   selectedFile: string | null
@@ -60,6 +77,7 @@ export type DetailPanelState = {
   canNavigateBack: boolean
   canNavigateForward: boolean
   isWebViewActive: boolean
+  isBackgroundSyncing: boolean
 }
 
 export type DetailPanelActions = {
@@ -77,6 +95,7 @@ export type DetailPanelActions = {
   setReferencedFilesHeight: (ratio: number) => void
   resetReferencedFilesHeight: () => void
   registerWebViewController: (controller: WebViewController | null) => void
+  registerFileBodyElement: (element: HTMLElement | null) => void
   onWebViewLoadStart: () => void
   onWebViewLoadFinish: (url: string) => void
   onWebViewLoadError: (error: string) => void
@@ -142,7 +161,17 @@ async function resolveLocalViewerUrl(relPath: string): Promise<string | null> {
 
 export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('detailPanel')
   const webViewControllerRef = useRef<WebViewController | null>(null)
+  const fileBodyRef = useRef<HTMLElement | null>(null)
+  const lastLoadedMetaRef = useRef<{ relPath: string; mtime: number; size: number } | null>(null)
+  const isExplicitLoadingRef = useRef(false)
+  const loadingGenerationRef = useRef(0)
+  const selectedFileRef = useRef<string | null>(null)
+  const contentModeRef = useRef<ContentMode>('file')
+  const fileTypeRef = useRef<FileTypeCategory | null>(null)
+  const viewModeRef = useRef<ViewMode>('code')
+
   const [contentMode, setContentMode] = useState<ContentMode>('file')
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const [previewContent, setPreviewContent] = useState<string | null>(null)
@@ -150,6 +179,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const [fileType, setFileType] = useState<FileTypeCategory | null>(null)
   const [viewMode, setViewModeState] = useState<ViewMode>('code')
   const [isLoading, setIsLoading] = useState(false)
+  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [unsupportedExt, setUnsupportedExt] = useState<string | null>(null)
   const [tooLargeSize, setTooLargeSize] = useState<number | null>(null)
@@ -161,8 +191,26 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const [webViewError, setWebViewError] = useState<string | null>(null)
   const [localFileViewerUrl, setLocalFileViewerUrl] = useState<string | null>(null)
 
+  selectedFileRef.current = selectedFile
+  contentModeRef.current = contentMode
+  fileTypeRef.current = fileType
+  viewModeRef.current = viewMode
+
   useEffect(() => {
     void preloadShiki()
+  }, [])
+
+  const updateLastLoadedMeta = useCallback(async (relPath: string) => {
+    try {
+      const meta = await window.api.fileGetMetadata(relPath)
+      lastLoadedMetaRef.current = {
+        relPath: normalizeRelPath(relPath),
+        mtime: meta.mtime,
+        size: meta.size
+      }
+    } catch {
+      lastLoadedMetaRef.current = null
+    }
   }, [])
 
   const resetUrlState = useCallback(() => {
@@ -175,18 +223,26 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     setLocalFileViewerUrl(null)
   }, [])
 
+  const stopContentWatch = useCallback(() => {
+    void window.api.fileWatchContent?.(null)
+  }, [])
+
   const resetState = useCallback(() => {
+    cancelFileContentSync()
+    stopContentWatch()
+    lastLoadedMetaRef.current = null
     setSelectedFile(null)
     setPreviewContent(null)
     setImageDataUrl(null)
     setFileType(null)
     setViewModeState('code')
     setIsLoading(false)
+    setIsBackgroundSyncing(false)
     setLoadError(null)
     setUnsupportedExt(null)
     setTooLargeSize(null)
     resetUrlState()
-  }, [resetUrlState])
+  }, [resetUrlState, stopContentWatch])
 
   const syncLocalHtmlViewerUrl = useCallback(async (relPath: string, nextViewMode: ViewMode, nextFileType: FileTypeCategory | null) => {
     if (nextFileType !== 'html' || nextViewMode !== 'render') {
@@ -203,18 +259,22 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const loadFile = useCallback(async (relPath: string, options?: { preserveViewMode?: boolean }) => {
-    resetUrlState()
-    setIsLoading(true)
-    setLoadError(null)
-    setUnsupportedExt(null)
-    setTooLargeSize(null)
-    try {
-      const result = await window.api.fileReadFile(relPath)
-      const applied = applyReadResult(result, relPath)
-      const nextViewMode = options?.preserveViewMode
-        ? viewMode
-        : defaultViewModeForFileType(applied.fileType)
+  const restoreScrollSnapshot = useCallback((snapshot: ScrollSnapshot | null) => {
+    if (!snapshot || !fileBodyRef.current) return
+    requestAnimationFrame(() => {
+      if (fileBodyRef.current) {
+        restoreScrollToRoot(fileBodyRef.current, snapshot)
+      }
+    })
+  }, [])
+
+  const applyLoadedContent = useCallback(
+    async (
+      relPath: string,
+      applied: ReturnType<typeof applyReadResult>,
+      nextViewMode: ViewMode,
+      preserveViewMode: boolean
+    ) => {
       setSelectedFile(relPath)
       setPreviewContent(applied.previewContent)
       setImageDataUrl(applied.imageDataUrl)
@@ -222,20 +282,154 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       setLoadError(applied.loadError)
       setUnsupportedExt(applied.unsupportedExt)
       setTooLargeSize(applied.tooLargeSize)
-      if (!options?.preserveViewMode) {
+      if (!preserveViewMode) {
         setViewModeState(nextViewMode)
       }
       await syncLocalHtmlViewerUrl(relPath, nextViewMode, applied.fileType)
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setIsLoading(false)
-    }
-  }, [resetUrlState, syncLocalHtmlViewerUrl, viewMode])
+    },
+    [syncLocalHtmlViewerUrl]
+  )
 
   const refreshPage = useCallback((ignoreCache = false) => {
     webViewControllerRef.current?.reload(ignoreCache)
   }, [])
+
+  const reloadFileContent = useCallback(
+    async (relPath: string, options: { silent: boolean; preserveViewMode?: boolean }) => {
+      const generation = ++loadingGenerationRef.current
+      const preserveViewMode = options.preserveViewMode ?? options.silent
+      const currentFileType = fileTypeRef.current
+      const currentViewMode = viewModeRef.current
+
+      let scrollSnapshot: ScrollSnapshot | null = null
+      if (options.silent && fileBodyRef.current) {
+        scrollSnapshot = captureScrollFromRoot(fileBodyRef.current)
+      }
+
+      if (options.silent && currentFileType === 'html' && currentViewMode === 'render') {
+        setIsBackgroundSyncing(true)
+        try {
+          refreshPage()
+          await updateLastLoadedMeta(relPath)
+          restoreScrollSnapshot(scrollSnapshot)
+        } finally {
+          if (generation === loadingGenerationRef.current) {
+            setIsBackgroundSyncing(false)
+          }
+        }
+        return
+      }
+
+      if (!options.silent) {
+        isExplicitLoadingRef.current = true
+        resetUrlState()
+        setIsLoading(true)
+        setLoadError(null)
+        setUnsupportedExt(null)
+        setTooLargeSize(null)
+      } else {
+        setIsBackgroundSyncing(true)
+      }
+
+      try {
+        const result = await window.api.fileReadFile(relPath)
+        if (generation !== loadingGenerationRef.current) return
+
+        const applied = applyReadResult(result, relPath)
+        const nextViewMode = preserveViewMode
+          ? currentViewMode
+          : defaultViewModeForFileType(applied.fileType)
+
+        if (options.silent) {
+          if (applied.loadError && applied.tooLargeSize) {
+            setPreviewContent(null)
+            setImageDataUrl(null)
+            setLoadError(applied.loadError)
+            setTooLargeSize(applied.tooLargeSize)
+            stopContentWatch()
+            return
+          }
+          if (applied.fileType === 'unsupported') {
+            setPreviewContent(null)
+            setImageDataUrl(null)
+            setFileType('unsupported')
+            setUnsupportedExt(applied.unsupportedExt)
+            stopContentWatch()
+            return
+          }
+          if (!applied.loadError) {
+            setLoadError(null)
+            setUnsupportedExt(null)
+            setTooLargeSize(null)
+          }
+        }
+
+        await applyLoadedContent(relPath, applied, nextViewMode, preserveViewMode)
+        await updateLastLoadedMeta(relPath)
+
+        if (applied.fileType === 'unsupported' || applied.tooLargeSize) {
+          stopContentWatch()
+        }
+
+        if (options.silent) {
+          restoreScrollSnapshot(scrollSnapshot)
+        }
+      } catch (e) {
+        if (generation !== loadingGenerationRef.current) return
+        if (options.silent) {
+          if (isEnoentError(e)) {
+            setLoadError(t('fileView.fileDeleted'))
+            stopContentWatch()
+          }
+          return
+        }
+        setLoadError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (!options.silent) {
+          isExplicitLoadingRef.current = false
+          setIsLoading(false)
+        } else if (generation === loadingGenerationRef.current) {
+          setIsBackgroundSyncing(false)
+        }
+      }
+    },
+    [applyLoadedContent, refreshPage, resetUrlState, restoreScrollSnapshot, stopContentWatch, t, updateLastLoadedMeta]
+  )
+
+  const loadFile = useCallback(
+    async (relPath: string, options?: { preserveViewMode?: boolean }) => {
+      await reloadFileContent(relPath, { silent: false, preserveViewMode: options?.preserveViewMode })
+    },
+    [reloadFileContent]
+  )
+
+  const silentReloadFile = useCallback(
+    async (relPath: string) => {
+      if (isExplicitLoadingRef.current) return
+
+      try {
+        const meta = await window.api.fileGetMetadata(relPath)
+        const last = lastLoadedMetaRef.current
+        if (
+          last &&
+          normalizeRelPath(last.relPath) === normalizeRelPath(relPath) &&
+          last.mtime === meta.mtime &&
+          last.size === meta.size
+        ) {
+          return
+        }
+      } catch (e) {
+        if (isEnoentError(e)) {
+          setLoadError(t('fileView.fileDeleted'))
+          stopContentWatch()
+        }
+        return
+      }
+
+      await reloadFileContent(relPath, { silent: true, preserveViewMode: true })
+    },
+    [reloadFileContent, stopContentWatch, t]
+  )
 
   const openFile = useCallback(
     async (relPath: string) => {
@@ -251,6 +445,9 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
         message.error('无效的 URL')
         return
       }
+      cancelFileContentSync()
+      stopContentWatch()
+      lastLoadedMetaRef.current = null
       setSelectedFile(null)
       setPreviewContent(null)
       setImageDataUrl(null)
@@ -267,7 +464,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       setWebViewError(null)
       setIsWebViewLoading(true)
     },
-    [message]
+    [message, stopContentWatch]
   )
 
   const closeFile = useCallback(() => {
@@ -284,6 +481,34 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     await loadFile(selectedFile, { preserveViewMode: true })
     message.success('已刷新')
   }, [contentMode, fileType, loadFile, refreshPage, selectedFile, viewMode, message])
+
+  useEffect(() => {
+    if (contentMode !== 'file' || !selectedFile || fileType === 'unsupported') {
+      stopContentWatch()
+      return
+    }
+    void window.api.fileWatchContent?.(selectedFile)
+    return () => {
+      stopContentWatch()
+    }
+  }, [contentMode, fileType, selectedFile, stopContentWatch])
+
+  useEffect(() => {
+    ensureFileContentSyncIpc()
+    return subscribeFileContentSync((event) => {
+      if (contentModeRef.current !== 'file') return
+      const currentFile = selectedFileRef.current
+      if (!currentFile || isExplicitLoadingRef.current) return
+
+      if (event.kind === 'refreshExpanded') {
+        void silentReloadFile(currentFile)
+        return
+      }
+
+      if (normalizeRelPath(event.relPath) !== normalizeRelPath(currentFile)) return
+      void silentReloadFile(currentFile)
+    })
+  }, [silentReloadFile])
 
   const stopLoading = useCallback(() => {
     webViewControllerRef.current?.stop()
@@ -334,6 +559,10 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
 
   const registerWebViewController = useCallback((controller: WebViewController | null) => {
     webViewControllerRef.current = controller
+  }, [])
+
+  const registerFileBodyElement = useCallback((element: HTMLElement | null) => {
+    fileBodyRef.current = element
   }, [])
 
   const onWebViewLoadStart = useCallback(() => {
@@ -393,6 +622,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       fileType,
       viewMode,
       isLoading,
+      isBackgroundSyncing,
       loadError,
       unsupportedExt,
       tooLargeSize,
@@ -421,6 +651,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       setReferencedFilesHeight,
       resetReferencedFilesHeight,
       registerWebViewController,
+      registerFileBodyElement,
       onWebViewLoadStart,
       onWebViewLoadFinish,
       onWebViewLoadError,
@@ -434,6 +665,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       fileType,
       viewMode,
       isLoading,
+      isBackgroundSyncing,
       loadError,
       unsupportedExt,
       tooLargeSize,
@@ -458,6 +690,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       setReferencedFilesHeight,
       resetReferencedFilesHeight,
       registerWebViewController,
+      registerFileBodyElement,
       onWebViewLoadStart,
       onWebViewLoadFinish,
       onWebViewLoadError,

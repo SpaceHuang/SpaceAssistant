@@ -85,6 +85,12 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('file:tree-changed', fn)
     return () => ipcRenderer.removeListener('file:tree-changed', fn)
   },
+  fileWatchContent: (relPath) => ipcRenderer.invoke('file:watch-content', { relPath }),
+  fileOnContentChanged: (cb) => {
+    const fn = (_e: unknown, data: import('../src/shared/fileContentSync').FileContentChangedEvent) => cb(data)
+    ipcRenderer.on('file:content-changed', fn)
+    return () => ipcRenderer.removeListener('file:content-changed', fn)
+  },
 
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),

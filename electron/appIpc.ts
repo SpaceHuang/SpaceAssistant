@@ -875,6 +875,19 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     return getFileMetadata(target)
   })
 
+  ipcMain.handle('file:watch-content', async (event, payload: { relPath: string | null }) => {
+    const { startContentWatch, stopContentWatch } = await import('./fileContentWatcher')
+    if (payload.relPath === null) {
+      stopContentWatch()
+      return
+    }
+    if (typeof payload.relPath !== 'string' || !payload.relPath.trim()) {
+      stopContentWatch()
+      return
+    }
+    startContentWatch(ctx.getWorkDir(), payload.relPath.trim(), event.sender)
+  })
+
   ipcMain.handle('file:to-viewer-url', async (_e, rel: unknown) => {
     try {
       if (typeof rel !== 'string' || !rel.trim()) {

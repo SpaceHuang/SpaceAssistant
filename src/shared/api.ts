@@ -209,6 +209,8 @@ export type SpaceAssistantApi = {
   fileMove: (srcRelPath: string, destDirRelPath: string) => Promise<void>
   fileCopy: (payload: { srcRelPath: string; destRelPath: string }) => Promise<void>
   fileOnTreeChanged: (cb: (event: import('./fileTreeSync').FileTreeChangeEvent) => void) => () => void
+  fileWatchContent: (relPath: string | null) => Promise<void>
+  fileOnContentChanged: (cb: (event: import('./fileContentSync').FileContentChangedEvent) => void) => () => void
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>
