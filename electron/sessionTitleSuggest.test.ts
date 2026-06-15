@@ -4,6 +4,8 @@ import type { Message } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION } from '../src/shared/domainTypes'
 import {
   buildTitleSuggestDialogueText,
+  formatTitleDialogueLabel,
+  getTitleSystemPrompt,
   reachedCumulativeAssistantTurnsForTitleSuggest,
   countCompletedAssistantMessagesForTitleSuggest
 } from './sessionTitleSuggest'
@@ -11,6 +13,48 @@ import {
 function msg(role: 'user' | 'assistant', content: MessageParam['content']): MessageParam {
   return { role, content }
 }
+
+describe('getTitleSystemPrompt', () => {
+  it('T1: zh-CN matches existing Chinese prompt', () => {
+    const prompt = getTitleSystemPrompt('zh-CN')
+    expect(prompt).toContain('15个汉字')
+    expect(prompt).toContain('只输出主题文字')
+  })
+
+  it('T2: en-US includes in English and 15 Unicode characters limit', () => {
+    const prompt = getTitleSystemPrompt('en-US')
+    expect(prompt).toContain('in English')
+    expect(prompt).toContain('15 Unicode characters')
+  })
+})
+
+describe('buildTitleSuggestDialogueText locale labels', () => {
+  const messages: MessageParam[] = [
+    msg('user', 'hello'),
+    msg('assistant', [{ type: 'text', text: 'hi there' }])
+  ]
+
+  it('T3: en-US uses User: / Assistant: prefixes', () => {
+    const out = buildTitleSuggestDialogueText(messages, 1, 'en-US')
+    expect(out).toContain('User: hello')
+    expect(out).toContain('Assistant: hi there')
+  })
+
+  it('T4: zh-CN uses 用户： / 助手： prefixes', () => {
+    const out = buildTitleSuggestDialogueText(messages, 1, 'zh-CN')
+    expect(out).toContain('用户：hello')
+    expect(out).toContain('助手：hi there')
+  })
+})
+
+describe('formatTitleDialogueLabel', () => {
+  it('returns locale-specific labels', () => {
+    expect(formatTitleDialogueLabel('user', 'en-US')).toBe('User: ')
+    expect(formatTitleDialogueLabel('assistant', 'en-US')).toBe('Assistant: ')
+    expect(formatTitleDialogueLabel('user', 'zh-CN')).toBe('用户：')
+    expect(formatTitleDialogueLabel('assistant', 'zh-CN')).toBe('助手：')
+  })
+})
 
 describe('buildTitleSuggestDialogueText', () => {
   it('strips tool blocks and stops after N assistant turns', () => {

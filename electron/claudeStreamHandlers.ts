@@ -11,7 +11,9 @@ import { logAgentEvent } from './agentLogger/agentLogger'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
 import { runToolChatSession } from './toolChatLoop'
-import { buildSystemPrompt, getCachedMemoryContent } from './projectMemory'
+import { getCachedMemoryContent } from './projectMemory'
+import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
+import { isAppLocale } from '../src/shared/locale'
 import { MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
@@ -47,6 +49,7 @@ type ClaudeChatSendPayload = {
   system?: string
   maxTokens?: number
   projectMemoryEnabled?: boolean
+  locale?: string
 }
 
 type ClaudeChatMessageWithContentBlocks = {
@@ -69,6 +72,7 @@ type ClaudeChatCreateWithToolsPayload = {
     enableThinking?: boolean
   }
   projectMemoryEnabled?: boolean
+  locale?: string
 }
 
 function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessage[] {
@@ -181,7 +185,19 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
 
         const system = typeof payload.system === 'string' ? payload.system : undefined
         const maxTokens = typeof payload.maxTokens === 'number' && Number.isFinite(payload.maxTokens) ? payload.maxTokens : undefined
-        void runSendStream(sender, { requestId, model, baseUrl, messages, system, maxTokens, projectMemoryEnabled: payload.projectMemoryEnabled, deps })
+        const payloadLocale =
+          typeof payload.locale === 'string' && isAppLocale(payload.locale) ? payload.locale : undefined
+        void runSendStream(sender, {
+          requestId,
+          model,
+          baseUrl,
+          messages,
+          system,
+          maxTokens,
+          projectMemoryEnabled: payload.projectMemoryEnabled,
+          locale: payloadLocale,
+          deps
+        })
         return { ok: true }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -217,10 +233,6 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         }
 
-        const memoryContent = getCachedMemoryContent()
-        const memoryEnabled = payload.projectMemoryEnabled ?? true
-        const finalSystem = buildSystemPrompt(payload.system, memoryContent, memoryEnabled)
-
         const res = await runToolChatSession({
           sender,
           requestId,
@@ -228,7 +240,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           model,
           baseUrl,
           messages,
-          system: finalSystem,
+          system: payload.system,
+          locale:
+            typeof payload.locale === 'string' && isAppLocale(payload.locale) ? payload.locale : undefined,
+          projectMemoryEnabled: payload.projectMemoryEnabled,
           options: payload.options,
           toolsConfig: deps.getToolsConfig(),
           browserConfig: deps.getBrowserConfig(),
@@ -293,6 +308,7 @@ async function runSendStream(
     system?: string
     maxTokens?: number
     projectMemoryEnabled?: boolean
+    locale?: import('../src/shared/locale').AppLocale
     deps: ClaudeStreamDeps
   }
 ): Promise<void> {
@@ -321,7 +337,13 @@ async function runSendStream(
 
     const memoryContent = getCachedMemoryContent()
     const memoryEnabled = args.projectMemoryEnabled ?? true
-    const finalSystem = buildSystemPrompt(system, memoryContent, memoryEnabled)
+    const locale = resolveRequestLocale(args.locale, deps.getAppDatabase())
+    const finalSystem = buildFinalSystemPrompt({
+      system,
+      memoryContent,
+      memoryEnabled,
+      locale
+    })
 
     const streamInput = buildClaudeChatSendStreamParams({
       model,
@@ -335,6 +357,7 @@ async function runSendStream(
       requestId,
       model,
       baseUrl,
+      locale,
       system: finalSystem,
       messages: messageParams,
       maxTokens,

@@ -66,7 +66,9 @@ import {
   registerChatCancel,
   throwIfChatCancelled
 } from './chatCancelRegistry'
-import { buildSystemPrompt, getCachedMemoryContent } from './projectMemory'
+import { getCachedMemoryContent } from './projectMemory'
+import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
+import type { AppLocale } from '../src/shared/locale'
 import {
   clearToolCancel,
   registerToolCancel,
@@ -265,6 +267,8 @@ export type RunToolChatSessionArgs = {
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
   appDb?: AppDatabase
+  locale?: AppLocale
+  projectMemoryEnabled?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
 }
@@ -338,6 +342,8 @@ async function runToolChatSessionInner(
     userDataDir,
     getApiKey,
     appDb,
+    locale: payloadLocale,
+    projectMemoryEnabled,
     chatSignal,
     getBrowserDetectContext,
     floatingNotificationManager
@@ -421,7 +427,13 @@ async function runToolChatSessionInner(
         ? system
         : undefined
     const systemWithTools = appendAvailableToolsHint(baseSystemWithRecovery, toolNames)
-    const systemPrompt = buildSystemPrompt(systemWithTools, memoryContent, true)
+    const locale = resolveRequestLocale(payloadLocale, appDb)
+    const systemPrompt = buildFinalSystemPrompt({
+      system: systemWithTools,
+      memoryContent,
+      memoryEnabled: projectMemoryEnabled ?? true,
+      locale
+    })
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,
@@ -438,6 +450,7 @@ async function runToolChatSessionInner(
       loopRound,
       model,
       baseUrl,
+      locale,
       system: systemPrompt,
       messages: messagesStripped,
       toolNames,

@@ -1,9 +1,11 @@
 import type { WebContents } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
 import { createAnthropicClient } from './anthropicClientFactory'
+import { readAppLocale } from './appIpc'
 import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
 import { buildClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import type { Message, Session } from '../src/shared/domainTypes'
+import type { AppLocale } from '../src/shared/locale'
 import { updateSession, getSession, getMessages, type AppDatabase } from './database'
 
 export const SESSION_META_TITLE_GENERATED = 'titleGenerated'
@@ -18,10 +20,24 @@ const TITLE_SUGGEST_MAX_ASSISTANT_TURNS = TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TUR
 const TITLE_SUGGEST_LLM_TIMEOUT_MS = 45_000
 const TITLE_MAX_CHARS = 15
 
-const TITLE_SYSTEM_PROMPT = `你是一个对话主题提炼助手。请根据以下对话内容，用不超过15个汉字概括本次对话的核心主题。
+const TITLE_SYSTEM_PROMPT_ZH = `你是一个对话主题提炼助手。请根据以下对话内容，用不超过15个汉字概括本次对话的核心主题。
 只输出主题文字，不要加任何标点、序号或解释。`
 
+const TITLE_SYSTEM_PROMPT_EN =
+  'Summarize the conversation topic in at most 15 Unicode characters, in English. Output only the title text, no punctuation or explanation.'
+
 const inFlightSessionIds = new Set<string>()
+
+export function getTitleSystemPrompt(locale: AppLocale): string {
+  return locale === 'en-US' ? TITLE_SYSTEM_PROMPT_EN : TITLE_SYSTEM_PROMPT_ZH
+}
+
+export function formatTitleDialogueLabel(role: 'user' | 'assistant', locale: AppLocale): string {
+  if (locale === 'en-US') {
+    return role === 'user' ? 'User: ' : 'Assistant: '
+  }
+  return role === 'user' ? '用户：' : '助手：'
+}
 
 function extractTextFromMessageContent(content: Anthropic.MessageParam['content']): string {
   if (typeof content === 'string') return content.trim()
@@ -38,15 +54,19 @@ function extractTextFromMessageContent(content: Anthropic.MessageParam['content'
 }
 
 /** 仅 user/assistant 的可见文本，跳过 tool 块；从头累计直到包含前 N 条 assistant 文本 */
-export function buildTitleSuggestDialogueText(messages: Anthropic.MessageParam[], maxAssistantTurns: number): string {
+export function buildTitleSuggestDialogueText(
+  messages: Anthropic.MessageParam[],
+  maxAssistantTurns: number,
+  locale: AppLocale = 'zh-CN'
+): string {
   let assistantSeen = 0
   const lines: string[] = []
   outer: for (const msg of messages) {
     if (msg.role !== 'user' && msg.role !== 'assistant') continue
     const text = extractTextFromMessageContent(msg.content)
-    const label = msg.role === 'user' ? '用户' : '助手'
+    const label = formatTitleDialogueLabel(msg.role, locale)
     if (text.length > 0) {
-      lines.push(`${label}：${text}`)
+      lines.push(`${label}${text}`)
     }
     if (msg.role === 'assistant') {
       assistantSeen += 1
@@ -90,6 +110,7 @@ export function scheduleSessionTitleSuggestion(args: {
   getApiKey: () => Promise<string | null>
 }): void {
   const { db, sender, sessionId, model, baseUrl, messagesForApi, getApiKey } = args
+  const locale = readAppLocale(db)
 
   const cur = db.data.sessions.find((s) => s.id === sessionId)
   if (!cur) return
@@ -97,7 +118,7 @@ export function scheduleSessionTitleSuggestion(args: {
   if (cur.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return
   if (inFlightSessionIds.has(sessionId)) return
 
-  const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_ASSISTANT_TURNS)
+  const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_ASSISTANT_TURNS, locale)
   if (!dialogue.trim()) return
 
   inFlightSessionIds.add(sessionId)
@@ -113,7 +134,8 @@ export function scheduleSessionTitleSuggestion(args: {
       if (fresh.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return
 
       const client = createAnthropicClient(apiKey, baseUrl)
-      const userContent = `对话内容：\n${dialogue}`
+      const userContent =
+        locale === 'en-US' ? `Conversation:\n${dialogue}` : `对话内容：\n${dialogue}`
 
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), TITLE_SUGGEST_LLM_TIMEOUT_MS)
@@ -124,7 +146,7 @@ export function scheduleSessionTitleSuggestion(args: {
             model,
             max_tokens: normalizeToolLoopMaxTokens(128),
             temperature: 0,
-            system: TITLE_SYSTEM_PROMPT,
+            system: getTitleSystemPrompt(locale),
             messages: [{ role: 'user', content: userContent }],
             stream: false
           },
@@ -174,6 +196,7 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   getApiKey: () => Promise<string | null>
 }): Session | undefined {
   const { db, sender, sessionId, baseUrl, getApiKey } = args
+  const locale = readAppLocale(db)
 
   const session = getSession(db, sessionId)
   if (!session) return undefined
@@ -193,7 +216,7 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
     content: m.content as Anthropic.MessageParam['content']
   }))
 
-  const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_ASSISTANT_TURNS)
+  const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_ASSISTANT_TURNS, locale)
   const metaNext: Record<string, unknown> = { ...session.metadata, [SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED]: true }
   if (!dialogue.trim()) {
     return updateSession(db, sessionId, { metadata: metaNext })

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createToolChatController } from './chatToolSessionService'
+import { buildToolChatPayload, createToolChatController } from './chatToolSessionService'
+import { DEFAULT_TOOLS_CONFIG, CURRENT_SCHEMA_VERSION } from '../../shared/domainTypes'
+import type { Message } from '../../shared/domainTypes'
 
 type ToolCbMap = {
   onUse?: (d: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void
@@ -98,5 +100,29 @@ describe('chatToolSessionService onConfirmReq', () => {
       reasonCode: 'sensitive_path'
     })
     controller.unsubscribe()
+  })
+})
+
+describe('buildToolChatPayload locale', () => {
+  const stubMessage: Message = {
+    id: '00000000-0000-4000-8000-000000000001',
+    sessionId: 'sess-1',
+    role: 'user',
+    content: 'hello',
+    timestamp: 1,
+    status: 'completed',
+    schemaVersion: CURRENT_SCHEMA_VERSION
+  }
+
+  it('I11: includes locale in payload when provided', () => {
+    const payload = buildToolChatPayload({
+      requestId: '00000000-0000-4000-8000-000000000002',
+      sessionId: 'sess-1',
+      model: 'claude-sonnet-4-20250514',
+      messages: [stubMessage],
+      toolsConfig: DEFAULT_TOOLS_CONFIG,
+      locale: 'en-US'
+    })
+    expect(payload.locale).toBe('en-US')
   })
 })

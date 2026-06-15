@@ -217,6 +217,7 @@ export function buildToolChatPayload(args: {
   maxTokens?: number
   thinkingEnabled?: boolean
   system?: string
+  locale?: import('../../shared/locale').AppLocale
 }): ClaudeChatCreateWithToolsPayload {
   const toolsFiltered = filterBuiltinToolsForRenderer(
     args.toolsConfig,
@@ -234,6 +235,7 @@ export function buildToolChatPayload(args: {
     messages: convo,
     tools: tools as Array<Record<string, unknown>>,
     system: args.system,
+    locale: args.locale,
     options: {
       maxTokens: args.maxTokens,
       enableThinking: args.thinkingEnabled

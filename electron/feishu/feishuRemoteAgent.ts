@@ -6,7 +6,6 @@ import type { BrowserConfig, ToolsConfig, WikiConfig } from '../../src/shared/do
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { resolveFeishuBrowserRemoteHint } from '../../src/shared/browserRemotePolicy'
-import { buildSystemPrompt, getCachedMemoryContent } from '../projectMemory'
 import { registerRunningRemoteAgent, unregisterRunningRemoteAgent } from './runningRemoteAgentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
 import type { FeishuConfirmManager } from './feishuConfirmManager'
@@ -64,8 +63,6 @@ export async function runFeishuRemoteAgent(ctx: {
         browserConfig?.allowRemoteSessions
       )
     })
-    const memoryContent = getCachedMemoryContent()
-    const system = buildSystemPrompt(appendix, memoryContent, true)
 
     const res = await runToolChatSession({
       sender: effectiveSender,
@@ -74,7 +71,7 @@ export async function runFeishuRemoteAgent(ctx: {
       model: ctx.getModel(),
       baseUrl: ctx.getBaseUrl(),
       messages,
-      system,
+      system: appendix,
       options: { maxTokens: 8192 },
       toolsConfig,
       browserConfig: ctx.getBrowserConfig?.(),

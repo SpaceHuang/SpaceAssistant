@@ -28,6 +28,7 @@ import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
 import { applyContextUsageUpdate } from '../../services/contextUsageStreamService'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import {
   buildToolChatPayload,
   createToolChatController,
@@ -770,7 +771,8 @@ export function ChatView() {
             shellConfig: cfg.shell,
             maxTokens: outputMaxTokens,
             thinkingEnabled: cfg.thinkingEnabled,
-            system: systemPrompt || undefined
+            system: systemPrompt || undefined,
+            locale: resolveChatLocale()
           })
           const res = await window.api.claudeChatCreateWithTools(payload)
           if (!res.ok) {
@@ -884,7 +886,8 @@ export function ChatView() {
           baseUrl: cfg.baseUrl || undefined,
           messages: basePayload,
           system: systemPrompt || undefined,
-          maxTokens: outputMaxTokens
+          maxTokens: outputMaxTokens,
+          locale: resolveChatLocale()
         },
         {
           onDelta: (t) => {

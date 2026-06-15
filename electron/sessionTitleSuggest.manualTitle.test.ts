@@ -23,6 +23,10 @@ vi.mock('./anthropicClientFactory', () => ({
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 
+vi.mock('./appIpc', () => ({
+  readAppLocale: vi.fn(() => 'zh-CN' as const)
+}))
+
 function stubSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 'session-1',

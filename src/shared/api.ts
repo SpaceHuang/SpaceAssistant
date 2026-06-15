@@ -1,3 +1,4 @@
+import type { AppLocale } from './locale'
 import type {
   AppConfig,
   AutoApproveFallback,
@@ -80,6 +81,7 @@ export type ClaudeChatSendStreamPayload = {
   /** 未传时主进程使用内置默认；建议传渲染侧解析后的有效值 */
   maxTokens?: number
   projectMemoryEnabled?: boolean
+  locale?: AppLocale
 }
 
 export type ClaudeChatMessageWithBlocks = {
@@ -99,6 +101,7 @@ export type ClaudeChatCreateWithToolsPayload = {
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   projectMemoryEnabled?: boolean
+  locale?: AppLocale
 }
 
 export type SpaceAssistantApi = {
