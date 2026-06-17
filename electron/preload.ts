@@ -61,7 +61,12 @@ const api: SpaceAssistantApi = {
 
   configGet: () => ipcRenderer.invoke('config:get'),
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),
-  configTestConnection: (options?: { serviceId?: string; apiKey?: string; baseUrl?: string }) =>
+  configTestConnection: (options?: {
+    serviceId?: string
+    apiKey?: string
+    baseUrl?: string
+    supportedModelIds?: string[]
+  }) =>
     ipcRenderer.invoke('config:test-connection', options),
 
   dialogSelectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),

@@ -17,13 +17,13 @@ type Props = {
   runningStatus?: string
   runningDetail?: string
   runningElapsed?: string
-  modelLabel?: string
+  modelSlot?: React.ReactNode
   onSend: (text: string) => void
   onAbort?: () => void
 }
 
 export const MessageInput = forwardRef<MessageInputHandle, Props>(function MessageInput(
-  { disabled, running, queueCount = 0, runningStatus, runningDetail, runningElapsed, modelLabel, onSend, onAbort },
+  { disabled, running, queueCount = 0, runningStatus, runningDetail, runningElapsed, modelSlot, onSend, onAbort },
   ref
 ) {
   const { t } = useTypedTranslation('chat')
@@ -132,7 +132,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   useEffect(() => {
     checkOverflow()
-  }, [modelLabel, running, canQueueSend, queueCount, footerStatusLabel, checkOverflow])
+  }, [modelSlot, running, canQueueSend, queueCount, footerStatusLabel, checkOverflow])
 
   const handleEnter = () => {
     if (running) {
@@ -164,7 +164,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
         />
         <div className="composer-footer">
           <div ref={leftRowRef} className="composer-footer__start">
-            {modelLabel ? <span ref={modelChipRef} className="composer-model-chip">{modelLabel}</span> : null}
+            {modelSlot ? <span ref={modelChipRef}>{modelSlot}</span> : null}
             <span ref={statusMeasureRef} className="composer-status composer-status--measure" aria-hidden>
               {footerStatusLabel}
             </span>

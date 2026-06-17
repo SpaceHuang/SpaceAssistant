@@ -1,4 +1,5 @@
 import { App, Button } from 'antd'
+import type { ModelEntry } from '../../../shared/domainTypes'
 import { LlmServiceCard } from './LlmServiceCard'
 import { MAX_LLM_SERVICES } from './llmServiceDrafts'
 import type { useLlmServiceDrafts } from './useLlmServiceDrafts'
@@ -9,20 +10,21 @@ type DraftsApi = ReturnType<typeof useLlmServiceDrafts>
 
 type Props = {
   draftsApi: DraftsApi
+  enabledModels: ModelEntry[]
 }
 
-export function LlmServiceTab({ draftsApi }: Props) {
+export function LlmServiceTab({ draftsApi, enabledModels }: Props) {
   const { message, modal } = App.useApp()
   const { t } = useTypedTranslation('config')
   const { t: tCommon } = useTypedTranslation('common')
-  const { state, cardRefs, selectActive, toggleExpanded, addService, removeService, patchDraft } = draftsApi
+  const { state, cardRefs, toggleActive, toggleExpanded, addService, removeService, patchDraft } = draftsApi
 
   const handleAdd = () => {
     if (state.order.length >= MAX_LLM_SERVICES) {
       message.warning(t('llmService.maxServices', { max: MAX_LLM_SERVICES }))
       return
     }
-    addService()
+    addService(enabledModels.map((m) => m.id))
   }
 
   const handleDelete = (serviceId: string) => {
@@ -49,12 +51,20 @@ export function LlmServiceTab({ draftsApi }: Props) {
             <LlmServiceCard
               key={id}
               draft={draft}
-              isActive={state.activeId === id}
+              isActive={state.activeIds.includes(id)}
+              modelsMissing={draft.supportedModelIds.length === 0}
               canDelete={state.order.length > 1}
+              enabledModels={enabledModels}
               cardRef={(el) => {
                 cardRefs.current[id] = el
               }}
-              onSelectActive={() => selectActive(id)}
+              onToggleActive={() => {
+                const err = toggleActive(id)
+                if (err === 'needModels') {
+                  const name = draft.name.trim() || t('llmService.unnamedService')
+                  message.warning(t('llmService.activateNeedModels', { name }))
+                }
+              }}
               onToggleExpand={() => toggleExpanded(id)}
               onDelete={() => handleDelete(id)}
               onPatch={(patch) => patchDraft(id, patch)}

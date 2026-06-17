@@ -210,6 +210,7 @@ export function buildToolChatPayload(args: {
   sessionId: string
   model: string
   baseUrl?: string
+  llmServiceId?: string
   messages: Message[]
   toolsConfig: import('../../shared/domainTypes').ToolsConfig
   browserConfig?: import('../../shared/domainTypes').BrowserConfig
@@ -232,6 +233,7 @@ export function buildToolChatPayload(args: {
     sessionId: args.sessionId,
     model: args.model,
     baseUrl: args.baseUrl,
+    llmServiceId: args.llmServiceId,
     messages: convo,
     tools: tools as Array<Record<string, unknown>>,
     system: args.system,

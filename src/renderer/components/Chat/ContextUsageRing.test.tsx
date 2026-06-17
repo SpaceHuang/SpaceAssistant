@@ -18,10 +18,14 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     baseUrl: '',
     llmServices: [],
     activeLlmServiceId: '',
+    activeLlmServiceIds: [],
+    preferredLanguageModelId: '1',
+    preferredFastLanguageModelId: '',
+    preferredVisionModelId: '',
     model: 'claude-sonnet-4-6',
     defaultModel: 'claude-sonnet-4-6',
     models: [
-      { id: '1', name: 'claude-sonnet-4-6', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: false, enabled: true }
+      { id: '1', name: 'claude-sonnet-4-6', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: false, isVision: false, enabled: true }
     ],
     thinkingEnabled: false,
     workDir: '',

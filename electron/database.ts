@@ -133,6 +133,7 @@ export function createSession(
   input: {
     name: string
     model?: string
+    llmServiceId?: string
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
@@ -149,6 +150,7 @@ export function createSession(
     name: input.name,
     preview: '',
     model,
+    ...(input.llmServiceId ? { llmServiceId: input.llmServiceId } : {}),
     temperature,
     maxTokens,
     createdAt: now,
@@ -167,7 +169,7 @@ export function createSession(
 export function updateSession(
   db: AppDatabase,
   sessionId: string,
-  patch: Partial<Pick<Session, 'name' | 'preview' | 'model' | 'temperature' | 'maxTokens' | 'metadata' | 'messageCount' | 'skillsState'>>
+  patch: Partial<Pick<Session, 'name' | 'preview' | 'model' | 'llmServiceId' | 'temperature' | 'maxTokens' | 'metadata' | 'messageCount' | 'skillsState'>>
 ): Session | undefined {
   const cur = getSession(db, sessionId)
   if (!cur) return undefined

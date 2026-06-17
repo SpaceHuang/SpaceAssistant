@@ -27,7 +27,8 @@
 .shell-output,
 .write-confirm-card__body,
 .script-confirm-card__code--highlighted,
-.script-confirm-card__code--plain {
+.script-confirm-card__code--plain,
+.composer-model-picker {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--sa-border-strong) transparent;
@@ -48,7 +49,8 @@
 .shell-output::-webkit-scrollbar,
 .write-confirm-card__body::-webkit-scrollbar,
 .script-confirm-card__code--highlighted::-webkit-scrollbar,
-.script-confirm-card__code--plain::-webkit-scrollbar {
+.script-confirm-card__code--plain::-webkit-scrollbar,
+.composer-model-picker::-webkit-scrollbar {
   width: 5px;
   height: 5px;
 }
@@ -68,7 +70,8 @@
 .shell-output::-webkit-scrollbar-track,
 .write-confirm-card__body::-webkit-scrollbar-track,
 .script-confirm-card__code--highlighted::-webkit-scrollbar-track,
-.script-confirm-card__code--plain::-webkit-scrollbar-track {
+.script-confirm-card__code--plain::-webkit-scrollbar-track,
+.composer-model-picker::-webkit-scrollbar-track {
   background: transparent;
   margin: 6px;
 }
@@ -88,7 +91,8 @@
 .shell-output::-webkit-scrollbar-thumb,
 .write-confirm-card__body::-webkit-scrollbar-thumb,
 .script-confirm-card__code--highlighted::-webkit-scrollbar-thumb,
-.script-confirm-card__code--plain::-webkit-scrollbar-thumb {
+.script-confirm-card__code--plain::-webkit-scrollbar-thumb,
+.composer-model-picker::-webkit-scrollbar-thumb {
   background: var(--sa-border-strong);
   border-radius: 999px;
 }
@@ -108,7 +112,8 @@
 .shell-output::-webkit-scrollbar-thumb:hover,
 .write-confirm-card__body::-webkit-scrollbar-thumb:hover,
 .script-confirm-card__code--highlighted::-webkit-scrollbar-thumb:hover,
-.script-confirm-card__code--plain::-webkit-scrollbar-thumb:hover {
+.script-confirm-card__code--plain::-webkit-scrollbar-thumb:hover,
+.composer-model-picker::-webkit-scrollbar-thumb:hover {
   background: var(--sa-text-tertiary);
 }
 
@@ -127,7 +132,8 @@
 .shell-output::-webkit-scrollbar-corner,
 .write-confirm-card__body::-webkit-scrollbar-corner,
 .script-confirm-card__code--highlighted::-webkit-scrollbar-corner,
-.script-confirm-card__code--plain::-webkit-scrollbar-corner {
+.script-confirm-card__code--plain::-webkit-scrollbar-corner,
+.composer-model-picker::-webkit-scrollbar-corner {
   background: transparent;
 }
 

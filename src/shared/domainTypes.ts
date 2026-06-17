@@ -555,6 +555,8 @@ export interface Session {
   name: string
   preview: string
   model: string
+  /** 本次会话使用的 API 服务 id；缺省时按服务列表顺序解析 */
+  llmServiceId?: string
   temperature: number
   maxTokens: number
   createdAt: number
@@ -590,8 +592,10 @@ export interface ModelEntry {
   name: string
   maximumContext: number
   maxTokens: number
+  /** @deprecated 迁移后恒为 false，使用 preferredLanguageModelId */
   isDefault: boolean
   isFast: boolean
+  isVision: boolean
   enabled: boolean
 }
 
@@ -606,6 +610,8 @@ export interface LlmServiceProfile {
   name: string
   baseUrl: string
   apiKeyPresent: boolean
+  /** 该服务支持的模型 id 列表（引用全局 ModelEntry.id） */
+  supportedModelIds?: string[]
   createdAt?: string
   updatedAt?: string
 }
@@ -618,9 +624,15 @@ export interface AppConfig {
   /** Base URL（激活服务的镜像，兼容旧逻辑） */
   baseUrl: string
   llmServices: LlmServiceProfile[]
+  /** @deprecated 迁移自 activeLlmServiceId，只读镜像 */
   activeLlmServiceId: string
+  activeLlmServiceIds: string[]
   model: string
+  /** @deprecated 等于语言优选 model name，只读镜像 */
   defaultModel: string
+  preferredLanguageModelId: string
+  preferredFastLanguageModelId: string
+  preferredVisionModelId: string
   models: ModelEntry[]
   thinkingEnabled: boolean
   workDir: string
@@ -695,15 +707,15 @@ export interface FileInfo {
 }
 
 export const DEFAULT_MODELS: Omit<ModelEntry, 'id'>[] = [
-  { name: 'kimi-k2.6', maximumContext: 262144, maxTokens: 98304, isDefault: false, isFast: false, enabled: true },
-  { name: 'glm-5.1', maximumContext: 200000, maxTokens: 128000, isDefault: false, isFast: false, enabled: true },
-  { name: 'minimax-m2.7', maximumContext: 204800, maxTokens: 204800, isDefault: false, isFast: false, enabled: true },
-  { name: 'deepseek-v4-pro', maximumContext: 1_048_565, maxTokens: 384000, isDefault: true, isFast: false, enabled: true },
-  { name: 'deepseek-v4-flash', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: true, enabled: true },
-  { name: 'claude-sonnet-4-6', maximumContext: 1000000, maxTokens: 64000, isDefault: false, isFast: false, enabled: true },
-  { name: 'claude-opus-4-7', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, enabled: true },
-  { name: 'claude-haiku-4-5', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: true, enabled: true },
-  { name: 'gpt-5.5', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, enabled: true },
-  { name: 'gemini-3.1-pro', maximumContext: 1000000, maxTokens: 65536, isDefault: false, isFast: false, enabled: true },
-  { name: 'gemini-3.1-flash-lite', maximumContext: 1000000, maxTokens: 64000, isDefault: false, isFast: true, enabled: true }
+  { name: 'kimi-k2.6', maximumContext: 262144, maxTokens: 98304, isDefault: false, isFast: false, isVision: true, enabled: true },
+  { name: 'glm-5.1', maximumContext: 200000, maxTokens: 128000, isDefault: false, isFast: false, isVision: true, enabled: true },
+  { name: 'minimax-m2.7', maximumContext: 204800, maxTokens: 204800, isDefault: false, isFast: false, isVision: true, enabled: true },
+  { name: 'deepseek-v4-pro', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: false, isVision: false, enabled: true },
+  { name: 'deepseek-v4-flash', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: true, isVision: false, enabled: true },
+  { name: 'claude-sonnet-4-6', maximumContext: 1000000, maxTokens: 64000, isDefault: false, isFast: false, isVision: true, enabled: true },
+  { name: 'claude-opus-4-7', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, isVision: true, enabled: true },
+  { name: 'claude-haiku-4-5', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: true, isVision: true, enabled: true },
+  { name: 'gpt-5.5', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, isVision: true, enabled: true },
+  { name: 'gemini-3.1-pro', maximumContext: 1000000, maxTokens: 65536, isDefault: false, isFast: false, isVision: true, enabled: true },
+  { name: 'gemini-3.1-flash-lite', maximumContext: 1000000, maxTokens: 64000, isDefault: false, isFast: true, isVision: true, enabled: true }
 ]

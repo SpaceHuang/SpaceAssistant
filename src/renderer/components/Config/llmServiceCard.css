@@ -1,7 +1,7 @@
 /* 模型页 · API 服务卡片（仅在 .config-models-settings 内生效） */
 
 .config-models-settings {
-  --llm-service-content-indent: 92px;
+  --llm-service-content-indent: 88px;
   display: flex;
   flex-direction: column;
   gap: var(--sa-config-gap-block);
@@ -15,23 +15,25 @@
   line-height: var(--sa-config-line);
 }
 
-.config-models-settings .llm-service-list .ant-radio-wrapper,
+.config-models-settings .llm-service-list .ant-checkbox-wrapper,
 .config-models-settings .llm-service-list .ant-input,
 .config-models-settings .llm-service-list .ant-input-affix-wrapper,
 .config-models-settings .llm-service-list .ant-input-affix-wrapper > input.ant-input,
 .config-models-settings .llm-service-list .ant-input-password,
+.config-models-settings .llm-service-list .ant-select,
 .config-models-settings .llm-service-list .ant-btn {
   font-size: var(--sa-config-font);
   line-height: var(--sa-config-line);
 }
 
-.config-models-settings .llm-service-list .ant-radio-wrapper {
+.config-models-settings .llm-service-list .ant-checkbox-wrapper {
   margin-inline-end: 0;
   white-space: nowrap;
   color: var(--sa-text-secondary);
+  align-items: center;
 }
 
-.config-models-settings .llm-service-list .ant-radio-wrapper-checked {
+.config-models-settings .llm-service-list .ant-checkbox-wrapper-checked {
   color: var(--sa-text);
 }
 
@@ -53,6 +55,17 @@
 .config-models-settings .llm-service-card--new {
   border-style: dashed;
   border-color: var(--sa-border-strong);
+}
+
+.config-models-settings .llm-service-card--models-missing:not(.llm-service-card--active) {
+  border-color: color-mix(in srgb, var(--sa-warning, #d48806) 42%, var(--sa-border));
+}
+
+.config-models-settings .llm-service-supported-models__hint {
+  margin: var(--sa-config-gap-tight) 0 0;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-warning, #d48806);
 }
 
 .config-models-settings .llm-service-card-header {
@@ -105,13 +118,38 @@
 }
 
 .config-models-settings .llm-service-key-field,
-.config-models-settings .llm-service-url-field {
+.config-models-settings .llm-service-url-field,
+.config-models-settings .llm-service-supported-models {
   margin-bottom: var(--sa-config-gap-stack);
 }
 
 .config-models-settings .llm-service-key-field:last-child,
-.config-models-settings .llm-service-url-field:last-child {
+.config-models-settings .llm-service-url-field:last-child,
+.config-models-settings .llm-service-supported-models:last-child {
   margin-bottom: 0;
+}
+
+.config-models-settings .llm-service-supported-models__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-tight);
+  margin-bottom: var(--sa-config-gap-tight);
+}
+
+.config-models-settings .llm-service-supported-models__header .ant-btn-link {
+  padding: 0 4px;
+  height: auto;
+  font-size: var(--sa-config-font-sm);
+}
+
+.config-models-settings .llm-service-supported-models .ant-select {
+  width: 100%;
+}
+
+.config-models-settings .llm-service-supported-models .ant-select-selector {
+  min-height: var(--sa-config-control-min-height);
+  align-items: center;
 }
 
 .config-models-settings .llm-service-key-field .ant-input-affix-wrapper {

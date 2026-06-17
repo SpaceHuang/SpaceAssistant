@@ -88,6 +88,8 @@
     "noModelsAvailable": "No models available. Add or enable a model first.",
     "nameExists": "Model name already exists",
     "fastBadge": "Fast",
+    "visionBadge": "Vision",
+    "preferredUnavailableHint": "The selected model is unavailable; a fallback will be used at runtime.",
     "metaContext": "Context",
     "metaOutput": "Output",
     "add": {
@@ -99,16 +101,36 @@
       "maxOutputPlaceholder": "Leave empty for default 64K",
       "hint": "Helps the agent manage the context window. Leave empty if unsure.",
       "fastLabel": "Mark as fast model (for low-cost simple tasks)",
+      "visionLabel": "Mark as vision model (supports image input and understanding)",
       "submit": "Add model"
+    },
+    "list": {
+      "title": "Model catalog",
+      "toggleEnable": "Enable {{name}}",
+      "colModel": "Model",
+      "colCaps": "Capabilities",
+      "colFast": "Fast",
+      "colVision": "Vision",
+      "colContext": "Context",
+      "colOutput": "Output"
     },
     "apiServices": {
       "title": "API services",
-      "intro": "Each service has its own API key and base URL. The service marked as active is used for all chat requests."
+      "intro": "Each service has its own API key and base URL. You may enable multiple services at once; only models supported by enabled services become available."
     },
     "defaults": {
       "title": "Model settings",
-      "intro": "Choose the default model for chat. When Thinking is enabled, supported models show their reasoning process.",
+      "intro": "Configure three preferred default models. When Thinking is enabled, supported models show their reasoning process.",
       "defaultModel": "Default model",
+      "preferredLanguage": "Preferred language model",
+      "preferredFast": "Preferred fast language model",
+      "preferredVision": "Preferred vision model",
+      "preferredGroup": "Default models",
+      "languageGroup": "Language models",
+      "visionGroup": "Vision model",
+      "preferredLanguageShort": "Default",
+      "preferredFastShort": "Fast",
+      "preferredVisionShort": "Vision",
       "resetDefault": "Reset defaults",
       "resetDefaultAria": "Reset default model list",
       "addModel": "Add model",
@@ -142,7 +164,16 @@
     "testConnection": "Test connection",
     "keyConfigured": "Key configured",
     "keyNotConfigured": "No key configured",
-    "officialDefault": "Official default"
+    "officialDefault": "Official default",
+    "supportedModelsLabel": "Supported models",
+    "supportedModelsPlaceholder": "Select models this service supports",
+    "supportedModelsCount": "{{count}} models supported",
+    "selectAllModels": "Select all",
+    "clearAllModels": "Clear",
+    "testConnectionNeedModels": "Select at least one supported model for this service before testing",
+    "supportedModelsRequired": "Select at least one supported model to enable or save this service",
+    "validationNeedModels": "Service \"{{name}}\" must support at least one model",
+    "activateNeedModels": "Service \"{{name}}\" must support at least one model before it can be enabled"
   },
   "skills": {
     "autoDetect": "Let AI choose Skills to load based on their descriptions",

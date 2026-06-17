@@ -40,6 +40,7 @@ import type {
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
 import { ErrorCodes } from '../src/shared/errorCodes'
+import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../src/shared/llmModelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
@@ -53,9 +54,14 @@ import {
   LlmServiceValidationError,
   LLM_SERVICE_CONFIG_KEYS,
   migrateLegacyLlmServicesIfNeeded,
+  migrateMultiServiceModelConfig,
   persistLlmServices,
   readActiveLlmServiceId,
+  readActiveLlmServiceIds,
   readLlmServices,
+  resolveFastPreferredModelName,
+  resolveLanguagePreferredModelName,
+  resolveLlmCredentialsForModel,
   resolveTestConnectionCredentials,
   resolveTestConnectionModel
 } from './llmServiceResolver'
@@ -95,6 +101,10 @@ const CONFIG_KEYS = {
   apiKeyEnc: LLM_SERVICE_CONFIG_KEYS.apiKeyEnc,
   llmServices: LLM_SERVICE_CONFIG_KEYS.llmServices,
   activeLlmServiceId: LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId,
+  activeLlmServiceIds: LLM_SERVICE_CONFIG_KEYS.activeLlmServiceIds,
+  preferredLanguageModelId: LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId,
+  preferredFastLanguageModelId: LLM_SERVICE_CONFIG_KEYS.preferredFastLanguageModelId,
+  preferredVisionModelId: LLM_SERVICE_CONFIG_KEYS.preferredVisionModelId,
   tools: 'config.tools',
   skills: 'config.skills',
   wiki: 'config.wiki',
@@ -375,7 +385,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     'session:create',
     async (
       _e,
-      payload: { name: string; model?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown> }
+      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown> }
     ): Promise<Session> => {
       const s = createSession(ctx.db, {
         ...payload,
@@ -419,6 +429,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       payload: {
         sessionId: string
         name?: string
+        model?: string
+        llmServiceId?: string
         temperature?: number
         maxTokens?: number
         skillsState?: SessionSkillsState
@@ -442,6 +454,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const hasMetaChange = payload.metadata !== undefined || nameChanged
       const next = updateSession(ctx.db, payload.sessionId, {
         ...(nameChanged && trimmedName !== undefined ? { name: trimmedName } : {}),
+        ...(payload.model !== undefined ? { model: payload.model } : {}),
+        ...(payload.llmServiceId !== undefined ? { llmServiceId: payload.llmServiceId } : {}),
         ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
         ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
@@ -513,18 +527,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('config:get', async (): Promise<AppConfig> => {
     migrateLegacyLlmServicesIfNeeded(ctx.db)
-    const llmServices = readLlmServices(ctx.db)
-    const activeLlmServiceId = readActiveLlmServiceId(ctx.db) ?? llmServices[0]?.id ?? ''
-    const activeService = llmServices.find((s) => s.id === activeLlmServiceId) ?? llmServices[0]
 
     const wd = getConfigValue(ctx.db, CONFIG_KEYS.workDir) ?? path.join(ctx.getWorkDir())
-    const defaultModelName = getConfigValue(ctx.db, CONFIG_KEYS.defaultModel) ?? 'claude-sonnet-4-20250514'
-    const modelName = getConfigValue(ctx.db, CONFIG_KEYS.model) ?? 'claude-sonnet-4-20250514'
     let models: ModelEntry[]
     const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
     if (rawModels) {
       try {
-        models = JSON.parse(rawModels)
+        models = JSON.parse(rawModels) as ModelEntry[]
       } catch {
         models = []
       }
@@ -534,7 +543,17 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         ...m
       }))
     }
-    const defaultEntry = models.find((m) => m.isDefault)
+
+    const migrated = migrateMultiServiceModelConfig(ctx.db, models)
+    models = migrated.models
+    const llmServices = migrated.services
+    const activeLlmServiceIds = migrated.activeLlmServiceIds
+    const activeLlmServiceId = activeLlmServiceIds[0] ?? ''
+    const activeService = llmServices.find((s) => s.id === activeLlmServiceId) ?? llmServices[0]
+
+    const languageEntry = models.find((m) => m.id === migrated.preferredLanguageModelId)
+    const defaultModelName = languageEntry?.name ?? getConfigValue(ctx.db, CONFIG_KEYS.defaultModel) ?? 'deepseek-v4-pro'
+    const modelName = languageEntry?.name ?? getConfigValue(ctx.db, CONFIG_KEYS.model) ?? defaultModelName
     let tools: ToolsConfig = mergeToolsConfig(null)
     const toolsRaw = getConfigValue(ctx.db, CONFIG_KEYS.tools)
     if (toolsRaw) {
@@ -579,8 +598,12 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       baseUrl: activeService?.baseUrl ?? getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? '',
       llmServices,
       activeLlmServiceId,
-      model: defaultEntry?.name ?? modelName,
-      defaultModel: defaultEntry?.name ?? defaultModelName,
+      activeLlmServiceIds,
+      model: modelName,
+      defaultModel: defaultModelName,
+      preferredLanguageModelId: migrated.preferredLanguageModelId,
+      preferredFastLanguageModelId: migrated.preferredFastLanguageModelId,
+      preferredVisionModelId: migrated.preferredVisionModelId,
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
       workDir: wd,
@@ -609,7 +632,11 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         workDir: string
         apiKey: string
         llmServices: LlmServiceProfile[]
-        activeLlmServiceId: string
+        activeLlmServiceId?: string
+        activeLlmServiceIds?: string[]
+        preferredLanguageModelId?: string
+        preferredFastLanguageModelId?: string
+        preferredVisionModelId?: string
         llmServiceKeys: Record<string, string>
         tools: Partial<ToolsConfig>
         skills: Partial<SkillsConfig>
@@ -624,15 +651,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }>
     ): Promise<void> => {
       try {
-        if (payload.llmServices !== undefined && payload.activeLlmServiceId !== undefined) {
-          persistLlmServices(ctx.db, payload.llmServices, payload.activeLlmServiceId, payload.llmServiceKeys)
+        if (payload.llmServices !== undefined) {
+          const activeIds =
+            payload.activeLlmServiceIds ??
+            (payload.activeLlmServiceId ? [payload.activeLlmServiceId] : readActiveLlmServiceIds(ctx.db))
+          persistLlmServices(ctx.db, payload.llmServices, activeIds, payload.llmServiceKeys)
         } else if (payload.apiKey !== undefined && payload.apiKey.trim()) {
           migrateLegacyLlmServicesIfNeeded(ctx.db)
           const activeId = readActiveLlmServiceId(ctx.db) ?? readLlmServices(ctx.db)[0]?.id
           if (activeId) {
             const keys: Record<string, string> = { [activeId]: payload.apiKey.trim() }
             const services = readLlmServices(ctx.db)
-            persistLlmServices(ctx.db, services, activeId, keys)
+            persistLlmServices(ctx.db, services, [activeId], keys)
           } else {
             await ctx.setApiKey(payload.apiKey.trim())
           }
@@ -644,7 +674,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             const updated = services.map((s) =>
               s.id === activeId ? { ...s, baseUrl: payload.baseUrl! } : s
             )
-            persistLlmServices(ctx.db, updated, activeId)
+            persistLlmServices(ctx.db, updated, [activeId])
           } else {
             setConfigValue(ctx.db, CONFIG_KEYS.baseUrl, payload.baseUrl)
           }
@@ -659,12 +689,54 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         /* handled above via persist or legacy */
       }
       if (payload.models !== undefined) {
-        setConfigValue(ctx.db, CONFIG_KEYS.models, JSON.stringify(payload.models))
-        const defaultEntry = payload.models.find((m) => m.isDefault)
-        if (defaultEntry) {
-          setConfigValue(ctx.db, CONFIG_KEYS.model, defaultEntry.name)
-          setConfigValue(ctx.db, CONFIG_KEYS.defaultModel, defaultEntry.name)
+        const normalized = payload.models.map((m) => ({ ...m, isDefault: false }))
+        setConfigValue(ctx.db, CONFIG_KEYS.models, JSON.stringify(normalized))
+
+        const enabledIds = new Set(getEnabledModelIds(normalized))
+        let services = readLlmServices(ctx.db)
+        services = pruneDisabledModelsFromServices(services, enabledIds)
+        const activeIds = readActiveLlmServiceIds(ctx.db)
+        for (const id of activeIds) {
+          const svc = services.find((s) => s.id === id)
+          if (svc && (svc.supportedModelIds?.length ?? 0) === 0) {
+            throw new Error(`服务「${svc.name}」须至少支持一个模型`)
+          }
         }
+        if (services.length > 0) {
+          persistLlmServices(ctx.db, services, activeIds.length ? activeIds : [services[0]!.id])
+        }
+
+        const preferredId =
+          payload.preferredLanguageModelId ??
+          getConfigValue(ctx.db, CONFIG_KEYS.preferredLanguageModelId) ??
+          ''
+        const languageEntry = normalized.find((m) => m.id === preferredId)
+        if (languageEntry) {
+          setConfigValue(ctx.db, CONFIG_KEYS.model, languageEntry.name)
+          setConfigValue(ctx.db, CONFIG_KEYS.defaultModel, languageEntry.name)
+        }
+      }
+      if (payload.preferredLanguageModelId !== undefined) {
+        setConfigValue(ctx.db, CONFIG_KEYS.preferredLanguageModelId, payload.preferredLanguageModelId)
+        const modelsRaw = getConfigValue(ctx.db, CONFIG_KEYS.models)
+        if (modelsRaw) {
+          try {
+            const models = JSON.parse(modelsRaw) as ModelEntry[]
+            const entry = models.find((m) => m.id === payload.preferredLanguageModelId)
+            if (entry) {
+              setConfigValue(ctx.db, CONFIG_KEYS.model, entry.name)
+              setConfigValue(ctx.db, CONFIG_KEYS.defaultModel, entry.name)
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      if (payload.preferredFastLanguageModelId !== undefined) {
+        setConfigValue(ctx.db, CONFIG_KEYS.preferredFastLanguageModelId, payload.preferredFastLanguageModelId)
+      }
+      if (payload.preferredVisionModelId !== undefined) {
+        setConfigValue(ctx.db, CONFIG_KEYS.preferredVisionModelId, payload.preferredVisionModelId)
       }
       if (payload.thinkingEnabled !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled, String(payload.thinkingEnabled))
       if (payload.workDir !== undefined) {
@@ -799,9 +871,16 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     'config:test-connection',
     async (
       _e,
-      options?: { serviceId?: string; apiKey?: string; baseUrl?: string }
+      options?: { serviceId?: string; apiKey?: string; baseUrl?: string; supportedModelIds?: string[] }
     ): Promise<{ success: boolean; error?: string }> => {
       try {
+        if (!options?.serviceId) {
+          return { success: false, error: '未指定大模型服务' }
+        }
+        if (options.supportedModelIds !== undefined && options.supportedModelIds.length === 0) {
+          return { success: false, error: '该服务须至少支持一个模型' }
+        }
+
         const creds = await resolveTestConnectionCredentials(ctx.db, options)
         if (creds.error || !creds.apiKey) {
           return { success: false, error: creds.error ?? ErrorCodes.API_KEY_NOT_CONFIGURED }
@@ -816,7 +895,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             models = []
           }
         }
-        const enabledModel = resolveTestConnectionModel(ctx.db, models)
+        const enabledModel = resolveTestConnectionModel(ctx.db, models, options.serviceId, {
+          supportedModelIds: options.supportedModelIds
+        })
         if (!enabledModel) {
           return {
             success: false,
@@ -1092,22 +1173,38 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     ): Promise<SkillRouteResult> => {
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : undefined
       const session = sessionId ? getSession(ctx.db, sessionId) : undefined
-      const modelName =
+
+      let models: ModelEntry[] = []
+      const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
+      if (rawModels) {
+        try {
+          models = JSON.parse(rawModels) as ModelEntry[]
+        } catch {
+          models = []
+        }
+      }
+
+      const routeModelName =
         (typeof payload.model === 'string' && payload.model.trim()) ||
         session?.model ||
-        getConfigValue(ctx.db, CONFIG_KEYS.model) ||
-        'claude-sonnet-4-20250514'
-      const baseUrlRaw = getConfigValue(ctx.db, CONFIG_KEYS.baseUrl) ?? undefined
-      const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
+        resolveFastPreferredModelName(ctx.db, models) ||
+        resolveLanguagePreferredModelName(ctx.db, models)
+
+      const creds = await resolveLlmCredentialsForModel(ctx.db, routeModelName, {
+        serviceId: session?.llmServiceId,
+        models
+      })
+      const baseUrl = creds.baseUrl
+      const getApiKey = creds.getApiKey
 
       const result = await skillManager.route({
         userInput: payload.userInput,
         sessionState: normalizeSessionSkillsState(payload.sessionSkillsState),
         sessionMetadata: payload.sessionMetadata ?? session?.metadata,
         recentMessages: payload.recentMessages,
-        model: modelName,
+        model: routeModelName,
         baseUrl,
-        getApiKey: ctx.getApiKey,
+        getApiKey,
         sessionId
       })
 

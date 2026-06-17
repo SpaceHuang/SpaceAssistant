@@ -38,7 +38,7 @@ import { FeishuSettingsTab } from './FeishuSettingsTab'
 
 import { ToolsSettingsTab } from './ToolsSettingsTab'
 
-import { ModelsSettingsTab } from './ModelsSettingsTab'
+import { ModelsSettingsTab, getDefaultPreferredModelIds } from './ModelsSettingsTab'
 
 import {
 
@@ -58,7 +58,9 @@ import {
 
   useLlmServiceDrafts,
 
-  validateLlmServiceDrafts
+  validateLlmServiceDrafts,
+
+  formatLlmServiceValidationError
 
 } from './useLlmServiceDrafts'
 
@@ -134,7 +136,13 @@ export function ConfigSettingsPage() {
 
   const thinkingEnabledWatch = Form.useWatch('thinkingEnabled', form)
 
-  const llmDrafts = useLlmServiceDrafts(open, cfg)
+  const [models, setModels] = useState<ModelEntry[]>([])
+  const enabledModelIds = useMemo(() => models.filter((m) => m.enabled).map((m) => m.id), [models])
+  const llmDrafts = useLlmServiceDrafts(open, cfg, enabledModelIds)
+
+  const [preferredLanguageModelId, setPreferredLanguageModelId] = useState('')
+  const [preferredFastLanguageModelId, setPreferredFastLanguageModelId] = useState('')
+  const [preferredVisionModelId, setPreferredVisionModelId] = useState('')
 
   const baselineRef = useRef<string | null>(null)
 
@@ -143,8 +151,6 @@ export function ConfigSettingsPage() {
   const [workDirProfiles, setWorkDirProfiles] = useState<WorkDirProfile[]>([])
 
   const [workDirSaveError, setWorkDirSaveError] = useState<string | null>(null)
-
-  const [models, setModels] = useState<ModelEntry[]>([])
 
   const [toolUi, setToolUi] = useState({
 
@@ -234,6 +240,9 @@ export function ConfigSettingsPage() {
       setWorkDirProfiles(cfg.workDirProfiles ?? [])
 
       setModels(cfg.models.length > 0 ? cfg.models : DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
+      setPreferredLanguageModelId(cfg.preferredLanguageModelId ?? '')
+      setPreferredFastLanguageModelId(cfg.preferredFastLanguageModelId ?? '')
+      setPreferredVisionModelId(cfg.preferredVisionModelId ?? '')
 
       setWorkDirSaveError(null)
 
@@ -305,7 +314,12 @@ export function ConfigSettingsPage() {
 
       const shellEnabledInit = !deniedTools.includes('run_shell')
 
-      const llmState = initLlmServiceTabState(cfg.llmServices ?? [], cfg.activeLlmServiceId ?? '')
+      const activeIds = cfg.activeLlmServiceIds?.length
+        ? cfg.activeLlmServiceIds
+        : cfg.activeLlmServiceId
+          ? [cfg.activeLlmServiceId]
+          : []
+      const llmState = initLlmServiceTabState(cfg.llmServices ?? [], activeIds, enabledModelIds)
 
       const timer = window.setTimeout(() => {
 
@@ -466,9 +480,12 @@ export function ConfigSettingsPage() {
   }
 
   const resetModels = () => {
-
-    setModels(DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
-
+    const next = DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m }))
+    setModels(next)
+    const preferred = getDefaultPreferredModelIds(next)
+    setPreferredLanguageModelId(preferred.preferredLanguageModelId)
+    setPreferredFastLanguageModelId(preferred.preferredFastLanguageModelId)
+    setPreferredVisionModelId(preferred.preferredVisionModelId)
   }
 
 
@@ -511,7 +528,7 @@ export function ConfigSettingsPage() {
 
     if (llmErr) {
 
-      message.warning(llmErr)
+      message.warning(formatLlmServiceValidationError(llmErr, tConfig))
 
       return false
 
@@ -536,6 +553,10 @@ export function ConfigSettingsPage() {
         thinkingEnabled: v.thinkingEnabled,
 
         models,
+
+        preferredLanguageModelId,
+        preferredFastLanguageModelId,
+        preferredVisionModelId,
 
         ...llmPayload,
 
@@ -595,7 +616,15 @@ export function ConfigSettingsPage() {
 
       next,
 
-      initLlmServiceTabState(next.llmServices ?? [], next.activeLlmServiceId ?? ''),
+      initLlmServiceTabState(
+        next.llmServices ?? [],
+        next.activeLlmServiceIds?.length
+          ? next.activeLlmServiceIds
+          : next.activeLlmServiceId
+            ? [next.activeLlmServiceId]
+            : [],
+        next.models.filter((m) => m.enabled).map((m) => m.id)
+      ),
 
       toolUi.deniedTools,
 
@@ -808,15 +837,20 @@ export function ConfigSettingsPage() {
         return (
 
           <ModelsSettingsTab
-
             draftsApi={llmDrafts}
-
             models={models}
-
             onModelsChange={setModels}
-
             onResetModels={resetModels}
-
+            preferredLanguageModelId={preferredLanguageModelId}
+            preferredFastLanguageModelId={preferredFastLanguageModelId}
+            preferredVisionModelId={preferredVisionModelId}
+            onPreferredChange={(patch) => {
+              if (patch.preferredLanguageModelId !== undefined) setPreferredLanguageModelId(patch.preferredLanguageModelId)
+              if (patch.preferredFastLanguageModelId !== undefined) {
+                setPreferredFastLanguageModelId(patch.preferredFastLanguageModelId)
+              }
+              if (patch.preferredVisionModelId !== undefined) setPreferredVisionModelId(patch.preferredVisionModelId)
+            }}
           />
 
         )

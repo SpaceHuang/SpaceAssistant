@@ -10,6 +10,7 @@ import { CHAT_CANCELLED_MESSAGE, clearChatCancel, registerChatCancel, signalChat
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
+import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { runToolChatSession } from './toolChatLoop'
 import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
@@ -64,6 +65,7 @@ type ClaudeChatCreateWithToolsPayload = {
   sessionId: string
   model: string
   baseUrl?: string
+  llmServiceId?: string
   messages: ClaudeChatMessageWithContentBlocks[]
   tools: Array<unknown>
   system?: string
@@ -220,7 +222,12 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const sessionId = typeof payload.sessionId === 'string' && payload.sessionId.trim().length > 0 ? payload.sessionId : ''
         if (!sessionId) throw new Error('Invalid sessionId')
         const model = assertValidModel(payload.model)
-        const baseUrl = assertValidOptionalAnthropicBaseUrl(payload.baseUrl)
+        const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(payload.baseUrl)
+        const llmServiceId = typeof payload.llmServiceId === 'string' ? payload.llmServiceId.trim() : undefined
+        const db = deps.getAppDatabase()
+        const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
+        const baseUrl = baseUrlFromPayload ?? creds.baseUrl
+        const getApiKey = creds.error ? deps.getApiKey : creds.getApiKey
         const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(payload.messages)
 
         const toolsRaw = Array.isArray(payload.tools) ? payload.tools : []
@@ -251,7 +258,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           wikiConfig: deps.getWikiConfig(),
           workDir: deps.getWorkDir(),
           userDataDir: deps.getUserDataPath(),
-          getApiKey: deps.getApiKey,
+          getApiKey,
           appDb: deps.getAppDatabase(),
           getBrowserDetectContext: deps.getBrowserDetectContext,
           floatingNotificationManager: deps.floatingNotificationManager

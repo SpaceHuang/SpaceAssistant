@@ -1,5 +1,13 @@
 import { randomUUID } from 'crypto'
 import type { LlmServiceProfile, ModelEntry } from '../src/shared/domainTypes'
+import {
+  getAvailableModels,
+  getDefaultPreferredModelIds,
+  getEnabledModelIds,
+  migrateModelEntries,
+  resolvePreferredModelEntry,
+  resolveServiceForModel
+} from '../src/shared/llmModelConfig'
 import type { AppDatabase } from './database'
 import { getConfigValue, setConfigValue } from './database'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
@@ -8,6 +16,10 @@ import { decryptSecret, encryptSecret, isSecretStorageAvailable } from './secure
 export const LLM_SERVICE_CONFIG_KEYS = {
   llmServices: 'config.llmServices',
   activeLlmServiceId: 'config.activeLlmServiceId',
+  activeLlmServiceIds: 'config.activeLlmServiceIds',
+  preferredLanguageModelId: 'config.preferredLanguageModelId',
+  preferredFastLanguageModelId: 'config.preferredFastLanguageModelId',
+  preferredVisionModelId: 'config.preferredVisionModelId',
   llmServiceKeys: 'secrets.llmServiceKeys',
   baseUrl: 'config.baseUrl',
   apiKeyEnc: 'secrets.apiKeyEnc'
@@ -20,7 +32,7 @@ export type LlmServiceKeysMap = Record<string, string>
 
 export type ValidateLlmServicesInput = {
   services: LlmServiceProfile[]
-  activeLlmServiceId: string
+  activeLlmServiceIds: string[]
   keysPayload?: Record<string, string>
   existingKeys: LlmServiceKeysMap
   /** 已有服务 id 集合（保存前），用于判断新建 */
@@ -101,11 +113,16 @@ function parseStoredServices(raw: string | undefined): LlmServiceProfile[] {
       const id = typeof o.id === 'string' ? o.id : ''
       const name = typeof o.name === 'string' ? o.name : ''
       if (!id) continue
+      const supportedRaw = o.supportedModelIds
+      const supportedModelIds = Array.isArray(supportedRaw)
+        ? supportedRaw.filter((x): x is string => typeof x === 'string')
+        : undefined
       out.push({
         id,
         name,
         baseUrl: typeof o.baseUrl === 'string' ? o.baseUrl : '',
         apiKeyPresent: false,
+        supportedModelIds,
         createdAt: typeof o.createdAt === 'string' ? o.createdAt : undefined,
         updatedAt: typeof o.updatedAt === 'string' ? o.updatedAt : undefined
       })
@@ -131,6 +148,104 @@ export function readLlmServices(db: AppDatabase): LlmServiceProfile[] {
 
 export function readActiveLlmServiceId(db: AppDatabase): string | undefined {
   return getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId)
+}
+
+export function readActiveLlmServiceIds(db: AppDatabase): string[] {
+  const raw = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceIds)
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      if (Array.isArray(parsed)) {
+        return parsed.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  const legacy = readActiveLlmServiceId(db)
+  return legacy ? [legacy] : []
+}
+
+export function readStoredModels(db: AppDatabase): ModelEntry[] {
+  const raw = getConfigValue(db, 'config.models')
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as ModelEntry[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+export function migrateMultiServiceModelConfig(db: AppDatabase, models: ModelEntry[]): {
+  models: ModelEntry[]
+  services: LlmServiceProfile[]
+  activeLlmServiceIds: string[]
+  preferredLanguageModelId: string
+  preferredFastLanguageModelId: string
+  preferredVisionModelId: string
+} {
+  migrateLegacyLlmServicesIfNeeded(db)
+  let nextModels = migrateModelEntries(models)
+  nextModels = nextModels.map((m) => ({ ...m, isDefault: false }))
+
+  let services = readLlmServices(db)
+  const enabledIds = getEnabledModelIds(nextModels)
+
+  services = services.map((s) => ({
+    ...s,
+    supportedModelIds: s.supportedModelIds?.length ? s.supportedModelIds : [...enabledIds]
+  }))
+
+  let activeIds = readActiveLlmServiceIds(db)
+  if (activeIds.length === 0) {
+    activeIds = services[0]?.id ? [services[0].id] : []
+  }
+  activeIds = activeIds.filter((id) => services.some((s) => s.id === id))
+  if (activeIds.length === 0 && services[0]) activeIds = [services[0].id]
+
+  const defaults = getDefaultPreferredModelIds(nextModels)
+  let preferredLanguageModelId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId) ?? ''
+  let preferredFastLanguageModelId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredFastLanguageModelId) ?? ''
+  let preferredVisionModelId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredVisionModelId) ?? ''
+
+  if (!preferredLanguageModelId) {
+    const legacyDefault = nextModels.find((m) => m.isDefault)
+    const legacyName = getConfigValue(db, 'config.defaultModel')
+    preferredLanguageModelId =
+      legacyDefault?.id ??
+      nextModels.find((m) => m.name === legacyName)?.id ??
+      defaults.preferredLanguageModelId
+  }
+  if (!preferredFastLanguageModelId) preferredFastLanguageModelId = defaults.preferredFastLanguageModelId
+  if (!preferredVisionModelId) preferredVisionModelId = defaults.preferredVisionModelId
+
+  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceIds, JSON.stringify(activeIds))
+  if (activeIds[0]) setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId, activeIds[0])
+  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId, preferredLanguageModelId)
+  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredFastLanguageModelId, preferredFastLanguageModelId)
+  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredVisionModelId, preferredVisionModelId)
+  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.llmServices, JSON.stringify(
+    services.map(({ apiKeyPresent: _ap, ...rest }) => rest)
+  ))
+  setConfigValue(db, 'config.models', JSON.stringify(nextModels))
+
+  const languageEntry = nextModels.find((m) => m.id === preferredLanguageModelId)
+  if (languageEntry) {
+    setConfigValue(db, 'config.defaultModel', languageEntry.name)
+    setConfigValue(db, 'config.model', languageEntry.name)
+  }
+
+  syncActiveServiceMirror(db, services, activeIds[0] ?? '')
+
+  return {
+    models: nextModels,
+    services: attachApiKeyPresent(services, readLlmServiceKeysMap(db)),
+    activeLlmServiceIds: activeIds,
+    preferredLanguageModelId,
+    preferredFastLanguageModelId,
+    preferredVisionModelId
+  }
 }
 
 export function migrateLegacyLlmServicesIfNeeded(db: AppDatabase): void {
@@ -160,6 +275,7 @@ export function migrateLegacyLlmServicesIfNeeded(db: AppDatabase): void {
 
   setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.llmServices, JSON.stringify([service]))
   setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId, id)
+  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceIds, JSON.stringify([id]))
 
   const keysMap = readLlmServiceKeysMap(db)
   if (legacyEnc && !keysMap[id]) {
@@ -169,7 +285,7 @@ export function migrateLegacyLlmServicesIfNeeded(db: AppDatabase): void {
 }
 
 export function validateLlmServices(input: ValidateLlmServicesInput): void {
-  const { services, activeLlmServiceId, keysPayload = {}, existingKeys, previousServiceIds } = input
+  const { services, activeLlmServiceIds, keysPayload = {}, existingKeys, previousServiceIds } = input
 
   if (services.length === 0) {
     throw new LlmServiceValidationError('至少保留一套大模型服务')
@@ -178,9 +294,15 @@ export function validateLlmServices(input: ValidateLlmServicesInput): void {
     throw new LlmServiceValidationError(`最多配置 ${MAX_LLM_SERVICES} 套大模型服务`)
   }
 
-  const active = services.find((s) => s.id === activeLlmServiceId)
-  if (!active) {
-    throw new LlmServiceValidationError('请选择当前使用的大模型服务')
+  if (activeLlmServiceIds.length === 0) {
+    throw new LlmServiceValidationError('至少选择一个当前使用的服务')
+  }
+
+  const activeSet = new Set(activeLlmServiceIds)
+  for (const id of activeLlmServiceIds) {
+    if (!services.some((s) => s.id === id)) {
+      throw new LlmServiceValidationError('请选择当前使用的大模型服务')
+    }
   }
 
   const names = new Set<string>()
@@ -207,13 +329,13 @@ export function validateLlmServices(input: ValidateLlmServicesInput): void {
     }
 
     const isNew = previousServiceIds ? !previousServiceIds.has(s.id) : false
-    const hasStoredKey = Boolean(existingKeys[s.id]) || Boolean(keysPayload[s.id]?.trim())
     const hasDraftKey = Boolean(keysPayload[s.id]?.trim())
     if (isNew && !hasDraftKey) {
       throw new LlmServiceValidationError(`新建服务「${name}」须填写 API Key`)
     }
-    if (!isNew && !s.apiKeyPresent && !hasDraftKey) {
-      /* allow services without key only if they had key before - apiKeyPresent tracks stored */
+
+    if ((s.supportedModelIds?.length ?? 0) === 0) {
+      throw new LlmServiceValidationError(`服务「${name}」须至少支持一个模型`)
     }
   }
 }
@@ -243,7 +365,7 @@ export function syncActiveServiceMirror(
 export function persistLlmServices(
   db: AppDatabase,
   services: LlmServiceProfile[],
-  activeLlmServiceId: string,
+  activeLlmServiceIds: string[],
   keysPayload?: Record<string, string>
 ): void {
   const previousIds = new Set(readLlmServices(db).map((s) => s.id))
@@ -251,7 +373,7 @@ export function persistLlmServices(
 
   validateLlmServices({
     services,
-    activeLlmServiceId,
+    activeLlmServiceIds,
     keysPayload,
     existingKeys,
     previousServiceIds: previousIds
@@ -265,13 +387,16 @@ export function persistLlmServices(
       id: s.id,
       name: s.name.trim(),
       baseUrl: s.baseUrl.trim(),
+      supportedModelIds: s.supportedModelIds ?? old?.supportedModelIds ?? [],
       createdAt: old?.createdAt ?? s.createdAt ?? ts,
       updatedAt: ts
     }
   })
 
   setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.llmServices, JSON.stringify(toStore))
-  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId, activeLlmServiceId)
+  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceIds, JSON.stringify(activeLlmServiceIds))
+  const primaryActive = activeLlmServiceIds[0] ?? ''
+  if (primaryActive) setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId, primaryActive)
 
   const keysMap = { ...existingKeys }
   if (keysPayload) {
@@ -291,7 +416,7 @@ export function persistLlmServices(
     toStore.map((s) => ({ ...s, apiKeyPresent: false })),
     keysMap
   )
-  syncActiveServiceMirror(db, withPresent, activeLlmServiceId)
+  syncActiveServiceMirror(db, withPresent, primaryActive)
 }
 
 export function getActiveLlmService(db: AppDatabase): {
@@ -302,7 +427,8 @@ export function getActiveLlmService(db: AppDatabase): {
 } {
   migrateLegacyLlmServicesIfNeeded(db)
   const services = readLlmServices(db)
-  let activeId = readActiveLlmServiceId(db)
+  const activeIds = readActiveLlmServiceIds(db)
+  let activeId = activeIds[0]
   let active = services.find((s) => s.id === activeId)
   if (!active && services.length > 0) {
     active = services[0]
@@ -324,26 +450,105 @@ export function getActiveLlmService(db: AppDatabase): {
   }
 }
 
+export function resolveLlmCredentialsForModel(
+  db: AppDatabase,
+  modelName: string,
+  options?: { serviceId?: string; models?: ModelEntry[] }
+): Promise<{ serviceId: string; baseUrl: string | undefined; getApiKey: () => Promise<string | null>; error?: string }> {
+  migrateLegacyLlmServicesIfNeeded(db)
+  const services = readLlmServices(db)
+  const activeIds = readActiveLlmServiceIds(db)
+  const models = options?.models ?? readStoredModels(db)
+  const modelEntry = models.find((m) => m.name === modelName)
+  if (!modelEntry) {
+    return Promise.resolve({ serviceId: '', baseUrl: undefined, getApiKey: async () => null, error: `未知模型「${modelName}」` })
+  }
+
+  const keysMap = readLlmServiceKeysMap(db)
+  const service = resolveServiceForModel(
+    services,
+    activeIds,
+    modelEntry.id,
+    options?.serviceId,
+    (id) => Boolean(keysMap[id])
+  )
+
+  if (!service) {
+    return Promise.resolve({
+      serviceId: '',
+      baseUrl: undefined,
+      getApiKey: async () => null,
+      error: `当前无可用服务支持模型「${modelName}」`
+    })
+  }
+
+  const baseUrl = assertValidOptionalAnthropicBaseUrl(service.baseUrl || undefined)
+  return Promise.resolve({
+    serviceId: service.id,
+    baseUrl,
+    getApiKey: () => getLlmServiceApiKey(db, service.id)
+  })
+}
+
+export function resolveLanguagePreferredModelName(db: AppDatabase, models: ModelEntry[]): string {
+  const services = readLlmServices(db)
+  const activeIds = readActiveLlmServiceIds(db)
+  const available = getAvailableModels(models, services, activeIds)
+  const configuredId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId) ?? ''
+  const entry = resolvePreferredModelEntry('language', models, available, configuredId)
+  return entry?.name ?? models.find((m) => m.id === configuredId)?.name ?? 'deepseek-v4-pro'
+}
+
+export function resolveFastPreferredModelName(db: AppDatabase, models: ModelEntry[]): string | null {
+  const services = readLlmServices(db)
+  const activeIds = readActiveLlmServiceIds(db)
+  const available = getAvailableModels(models, services, activeIds)
+  const configuredId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredFastLanguageModelId) ?? ''
+  const fast = resolvePreferredModelEntry('fast', models, available, configuredId)
+  if (fast) return fast.name
+  const language = resolvePreferredModelEntry(
+    'language',
+    models,
+    available,
+    getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId) ?? ''
+  )
+  return language?.name ?? null
+}
+
 const CONFIG_DEFAULT_MODEL_KEY = 'config.defaultModel'
 
-/** 测试连接所用模型：优先默认模型，避免误用列表中第一个 enabled 项（如 kimi-k2.6）。 */
+/** 测试连接：被测服务 supportedModelIds ∩ 已启用模型；优先语言优选（§8.4，不受多服务激活影响） */
 export function resolveTestConnectionModel(
   db: AppDatabase,
-  models: ModelEntry[]
+  models: ModelEntry[],
+  serviceId?: string,
+  options?: { supportedModelIds?: string[] }
 ): ModelEntry | undefined {
-  const enabled = models.filter((m) => m.enabled)
-  if (enabled.length === 0) return undefined
+  if (!serviceId) return undefined
 
-  const byDefaultFlag = enabled.find((m) => m.isDefault)
-  if (byDefaultFlag) return byDefaultFlag
+  const services = readLlmServices(db)
+  const service = services.find((s) => s.id === serviceId)
+  if (!service) return undefined
+
+  const supported = new Set(options?.supportedModelIds ?? service.supportedModelIds ?? [])
+  if (supported.size === 0) return undefined
+
+  const candidates = models.filter((m) => m.enabled && supported.has(m.id))
+  if (candidates.length === 0) return undefined
+
+  const preferredId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId)
+  if (preferredId) {
+    const preferred = candidates.find((m) => m.id === preferredId)
+    if (preferred) return preferred
+  }
 
   const defaultModelName = getConfigValue(db, CONFIG_DEFAULT_MODEL_KEY)
   if (defaultModelName) {
-    const byConfig = enabled.find((m) => m.name === defaultModelName)
+    const byConfig = candidates.find((m) => m.name === defaultModelName)
     if (byConfig) return byConfig
   }
 
-  return enabled[0]
+  return candidates[0]
 }
 
 export function resolveTestConnectionCredentials(
@@ -352,8 +557,8 @@ export function resolveTestConnectionCredentials(
 ): Promise<{ apiKey: string | null; baseUrl: string | undefined; error?: string }> {
   migrateLegacyLlmServicesIfNeeded(db)
   const services = readLlmServices(db)
-  const activeId = readActiveLlmServiceId(db)
-  const serviceId = options?.serviceId ?? activeId
+  const activeIds = readActiveLlmServiceIds(db)
+  const serviceId = options?.serviceId ?? activeIds[0] ?? readActiveLlmServiceId(db)
   const service = services.find((s) => s.id === serviceId)
 
   const draftKey = options?.apiKey?.trim()

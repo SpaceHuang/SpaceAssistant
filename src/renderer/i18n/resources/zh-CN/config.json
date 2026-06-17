@@ -88,6 +88,8 @@
     "noModelsAvailable": "暂无可用模型，请先添加或启用模型",
     "nameExists": "模型名称已存在",
     "fastBadge": "快速",
+    "visionBadge": "视觉",
+    "preferredUnavailableHint": "当前所选模型不可用，运行时将自动回退",
     "metaContext": "上下文",
     "metaOutput": "输出",
     "add": {
@@ -99,16 +101,36 @@
       "maxOutputPlaceholder": "留空默认 64K",
       "hint": "用于帮助 Agent 管理上下文窗口。不确定时可留空。",
       "fastLabel": "标注为快速模型（用于低成本简单任务）",
+      "visionLabel": "标注为视觉模型（支持输入并理解图片）",
       "submit": "添加模型"
+    },
+    "list": {
+      "title": "大模型列表",
+      "toggleEnable": "启用 {{name}}",
+      "colModel": "模型",
+      "colCaps": "能力",
+      "colFast": "快速",
+      "colVision": "视觉",
+      "colContext": "上下文",
+      "colOutput": "输出"
     },
     "apiServices": {
       "title": "API 服务",
-      "intro": "每套服务包含独立的 API Key 与 Base URL。勾选「当前使用」的服务将用于所有聊天请求。"
+      "intro": "每套服务包含独立的 API Key 与 Base URL。可勾选多个「当前使用」的服务；仅各服务所支持的模型会进入可用模型池。"
     },
     "defaults": {
       "title": "大模型设置",
-      "intro": "选择对话默认调用的模型；Thinking 开启后，支持该能力的模型会展示推理过程。",
+      "intro": "配置三类优选默认模型；Thinking 开启后，支持该能力的模型会展示推理过程。",
       "defaultModel": "默认大模型",
+      "preferredLanguage": "优选默认语言大模型",
+      "preferredFast": "优选快速语言大模型",
+      "preferredVision": "优选视觉大模型",
+      "preferredGroup": "默认模型",
+      "languageGroup": "语言模型",
+      "visionGroup": "视觉模型",
+      "preferredLanguageShort": "默认",
+      "preferredFastShort": "快速",
+      "preferredVisionShort": "视觉",
       "resetDefault": "恢复默认",
       "resetDefaultAria": "恢复默认模型列表",
       "addModel": "添加模型",
@@ -142,7 +164,16 @@
     "testConnection": "测试连接",
     "keyConfigured": "Key 已配置",
     "keyNotConfigured": "未配置 Key",
-    "officialDefault": "官方默认"
+    "officialDefault": "官方默认",
+    "supportedModelsLabel": "支持模型",
+    "supportedModelsPlaceholder": "选择该服务支持的模型",
+    "supportedModelsCount": "已支持 {{count}} 个模型",
+    "selectAllModels": "全选",
+    "clearAllModels": "清空",
+    "testConnectionNeedModels": "请至少为该服务勾选一个支持模型后再测试连接",
+    "supportedModelsRequired": "须至少选择一个支持模型，否则无法启用或保存该服务",
+    "validationNeedModels": "服务「{{name}}」须至少支持一个模型",
+    "activateNeedModels": "服务「{{name}}」须至少支持一个模型后才能启用"
   },
   "skills": {
     "autoDetect": "由 AI 根据 Skill 描述自动选择要加载的 Skill",

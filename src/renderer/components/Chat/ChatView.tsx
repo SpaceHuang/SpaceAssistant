@@ -36,6 +36,9 @@ import {
 } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { reconcileAssistantStreamOnComplete } from '../../../shared/assistantContentReconcile'
+import { ComposerModelPicker } from './ComposerModelPicker'
+import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
+import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
@@ -120,6 +123,17 @@ export function ChatView() {
   const scrollToMessageId = useTypedSelector((s) => s.chat.scrollToMessageId)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
+  const sessionBinding = useMemo(
+    () => (cfg ? resolveSessionModelBinding(cfg, currentSession) : null),
+    [cfg, currentSession]
+  )
+  const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
+  const chatLlmServiceId = sessionBinding?.llmServiceId
+  const chatBaseUrl = useMemo(() => {
+    if (!cfg) return undefined
+    const svc = cfg.llmServices.find((s) => s.id === chatLlmServiceId)
+    return svc?.baseUrl || cfg.baseUrl || undefined
+  }, [cfg, chatLlmServiceId])
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
@@ -586,7 +600,7 @@ export function ChatView() {
         sessionId: runSessionId,
         sessionMetadata: runSession?.metadata,
         recentMessages,
-        model: cfg.model
+        model: chatModelName
       })
       const activeSkills = routeResult.skills
       let skillHintTimestamp: number | undefined
@@ -616,8 +630,8 @@ export function ChatView() {
         })
       }
 
-      const modelEntry = cfg.models.find((m) => m.name === cfg.model)
-      const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models)
+      const modelEntry = cfg.models.find((m) => m.name === chatModelName)
+      const outputMaxTokens = resolveEffectiveOutputMaxTokens(chatModelName, cfg.models)
       const maxSystemChars = modelEntry ? Math.floor(modelEntry.maximumContext * 0.1) : undefined
       let systemPrompt = buildSystemPromptFromSkills(activeSkills)
       const wikiSchemaActive =
@@ -763,8 +777,9 @@ export function ChatView() {
           const payload = buildToolChatPayload({
             requestId,
             sessionId: runSessionId,
-            model: cfg.model,
-            baseUrl: cfg.baseUrl || undefined,
+            model: chatModelName,
+            baseUrl: chatBaseUrl,
+            llmServiceId: chatLlmServiceId,
             messages: historyForApi,
             toolsConfig: cfg.tools,
             browserConfig: cfg.browser,
@@ -882,8 +897,8 @@ export function ChatView() {
       await runClaudeChatStream(
         {
           requestId,
-          model: cfg.model,
-          baseUrl: cfg.baseUrl || undefined,
+          model: chatModelName,
+          baseUrl: chatBaseUrl,
           messages: basePayload,
           system: systemPrompt || undefined,
           maxTokens: outputMaxTokens,
@@ -963,7 +978,7 @@ export function ChatView() {
         }
       )
     },
-    [cfg, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t]
+    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t]
   )
 
   sendInternalRef.current = sendInternal
@@ -980,7 +995,8 @@ export function ChatView() {
         }
         try {
           const newSession = await window.api.sessionCreate({
-            model: cfg.model,
+            model: chatModelName,
+            llmServiceId: chatLlmServiceId,
             temperature: cfg.temperature ?? 1,
             name: '',
             metadata: {}
@@ -1164,6 +1180,19 @@ export function ChatView() {
     [streamingAssistantId, toolsInteractive, testPreviewMessageIds, testPreviewToolsInteractive]
   )
 
+  const handleModelSelect = useCallback(
+    async (opt: ChatModelOption) => {
+      if (!sessionId) return
+      const updated = await window.api.sessionUpdate({
+        sessionId,
+        model: opt.modelName,
+        llmServiceId: opt.serviceId
+      })
+      if (updated) dispatch(upsertSession(updated))
+    },
+    [sessionId, dispatch]
+  )
+
   return (
     <div className="chat-view">
       <div ref={scrollRef} className="chat-scroll">
@@ -1225,7 +1254,16 @@ export function ChatView() {
             ? formatStreamingElapsed(runningClock - streamingAssistant.timestamp)
             : undefined
         }
-        modelLabel={cfg?.model}
+        modelSlot={
+          cfg ? (
+            <ComposerModelPicker
+              cfg={cfg}
+              displayName={sessionBinding?.displayName ?? chatModelName}
+              unavailable={Boolean(sessionBinding && !sessionBinding.option)}
+              onSelect={(opt) => void handleModelSelect(opt)}
+            />
+          ) : null
+        }
         onSend={send}
         onAbort={abort}
       />

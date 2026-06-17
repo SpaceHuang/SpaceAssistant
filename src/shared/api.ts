@@ -96,6 +96,8 @@ export type ClaudeChatCreateWithToolsPayload = {
   sessionId: string
   model: string
   baseUrl?: string
+  /** 指定 API 服务 id，主进程据此解析 Key */
+  llmServiceId?: string
   messages: ClaudeChatMessageWithBlocks[]
   tools: Array<Record<string, unknown>>
   system?: string
@@ -113,6 +115,7 @@ export type SpaceAssistantApi = {
   sessionCreate: (payload: {
     name: string
     model?: string
+    llmServiceId?: string
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
@@ -121,6 +124,8 @@ export type SpaceAssistantApi = {
   sessionUpdate: (payload: {
     sessionId: string
     name?: string
+    model?: string
+    llmServiceId?: string
     temperature?: number
     maxTokens?: number
     skillsState?: SessionSkillsState
@@ -172,8 +177,12 @@ export type SpaceAssistantApi = {
       workDir: string
       apiKey: string
       llmServices: import('./domainTypes').LlmServiceProfile[]
-      activeLlmServiceId: string
-      llmServiceKeys: Record<string, string>
+        activeLlmServiceId?: string
+        activeLlmServiceIds?: string[]
+        preferredLanguageModelId?: string
+        preferredFastLanguageModelId?: string
+        preferredVisionModelId?: string
+        llmServiceKeys?: Record<string, string>
       tools: Partial<ToolsConfig>
       skills: Partial<SkillsConfig>
       wiki: Partial<WikiConfig>
@@ -190,6 +199,8 @@ export type SpaceAssistantApi = {
     serviceId?: string
     apiKey?: string
     baseUrl?: string
+    /** 设置页草稿中的支持模型 id；未保存时须传入 */
+    supportedModelIds?: string[]
   }) => Promise<{ success: boolean; error?: string }>
 
   dialogSelectDirectory: () => Promise<{ path: string } | { canceled: true } | { error: string }>

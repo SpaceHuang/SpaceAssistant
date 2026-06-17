@@ -73,6 +73,12 @@
     "queueSend": "发送并排入队列",
     "queuePending": "还有 {{count}} 条排队"
   },
+  "modelPicker": {
+    "empty": "暂无可用模型，请前往设置配置 API 服务与模型",
+    "unavailableHint": "当前会话模型不可用，请重新选择",
+    "selectModelAria": "选择模型，当前 {{name}}",
+    "switchModel": "切换模型"
+  },
   "toolCall": {
     "confirm": {
       "trustThisCommand": "信任此命令，后续不再询问",

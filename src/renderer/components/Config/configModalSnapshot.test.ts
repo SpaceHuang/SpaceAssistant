@@ -20,14 +20,15 @@ describe('normalizeSettingsTabKey', () => {
 describe('buildConfigModalSnapshot', () => {
   it('treats identical payloads as equal', () => {
     const llmState = initLlmServiceTabState(
-      [{ id: 's1', name: 'Main', baseUrl: '', apiKeyPresent: true }],
-      's1'
+      [{ id: 's1', name: 'Main', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['1'] }],
+      ['s1'],
+      ['1']
     )
     const base = {
       workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp/work', isDefault: true }],
       locale: 'zh-CN' as const,
       thinkingEnabled: true,
-      models: [{ id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, enabled: true }],
+      models: [{ id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, isVision: false, enabled: true }],
       llmState,
       toolUi: {
         confirmMode: 'diff' as const,
@@ -51,7 +52,7 @@ describe('buildConfigModalSnapshot', () => {
   })
 
   it('detects workDirProfiles changes', () => {
-    const llmState = initLlmServiceTabState([], '')
+    const llmState = initLlmServiceTabState([], [], [])
     const mk = (pathValue: string) =>
       buildConfigModalSnapshot({
         workDirProfiles: [{ id: 'd1', name: 'Work', path: pathValue, isDefault: true }],
@@ -79,7 +80,7 @@ describe('buildConfigModalSnapshot', () => {
   })
 
   it('detects locale changes', () => {
-    const llmState = initLlmServiceTabState([], '')
+    const llmState = initLlmServiceTabState([], [], [])
     const mk = (locale: 'zh-CN' | 'en-US') =>
       buildConfigModalSnapshot({
         workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp', isDefault: true }],
@@ -107,7 +108,7 @@ describe('buildConfigModalSnapshot', () => {
   })
 
   it('treats identical en-US locale payloads as equal', () => {
-    const llmState = initLlmServiceTabState([], '')
+    const llmState = initLlmServiceTabState([], [], [])
     const base = {
       workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp', isDefault: true }],
       locale: 'en-US' as const,
