@@ -11,10 +11,52 @@ import type {
 } from '../../shared/domainTypes'
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
-import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../shared/claudeToolHistory'
 import { filterBuiltinToolsForRenderer } from '../../shared/toolsConfigFilter'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from '../../shared/anthropicToolSanitize'
 import type { ClaudeChatCreateWithToolsPayload } from '../../shared/api'
+
+export function buildToolChatPayload(args: {
+  requestId: string
+  sessionId: string
+  model: string
+  baseUrl?: string
+  llmServiceId?: string
+  messages: Message[]
+  currentUserMessageId: string
+  toolsConfig: import('../../shared/domainTypes').ToolsConfig
+  browserConfig?: import('../../shared/domainTypes').BrowserConfig
+  shellConfig?: import('../../shared/domainTypes').ShellConfig
+  maxTokens?: number
+  thinkingEnabled?: boolean
+  system?: string
+  locale?: import('../../shared/locale').AppLocale
+  effectiveModelForUsage?: string
+}): ClaudeChatCreateWithToolsPayload {
+  const toolsFiltered = filterBuiltinToolsForRenderer(
+    args.toolsConfig,
+    undefined,
+    args.browserConfig,
+    args.shellConfig
+  )
+  const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
+  return {
+    requestId: args.requestId,
+    sessionId: args.sessionId,
+    model: args.model,
+    baseUrl: args.baseUrl,
+    llmServiceId: args.llmServiceId,
+    sourceMessages: args.messages,
+    currentUserMessageId: args.currentUserMessageId,
+    tools: tools as Array<Record<string, unknown>>,
+    system: args.system,
+    locale: args.locale,
+    effectiveModelForUsage: args.effectiveModelForUsage,
+    options: {
+      maxTokens: args.maxTokens,
+      enableThinking: args.thinkingEnabled
+    }
+  }
+}
 
 export type ToolChatController = {
   subscribe: () => void
@@ -203,46 +245,6 @@ export function createToolChatController(args: {
   }
 
   return { subscribe, unsubscribe, applyConfirmOutcome }
-}
-
-export function buildToolChatPayload(args: {
-  requestId: string
-  sessionId: string
-  model: string
-  baseUrl?: string
-  llmServiceId?: string
-  messages: Message[]
-  toolsConfig: import('../../shared/domainTypes').ToolsConfig
-  browserConfig?: import('../../shared/domainTypes').BrowserConfig
-  shellConfig?: import('../../shared/domainTypes').ShellConfig
-  maxTokens?: number
-  thinkingEnabled?: boolean
-  system?: string
-  locale?: import('../../shared/locale').AppLocale
-}): ClaudeChatCreateWithToolsPayload {
-  const toolsFiltered = filterBuiltinToolsForRenderer(
-    args.toolsConfig,
-    undefined,
-    args.browserConfig,
-    args.shellConfig
-  )
-  const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
-  const convo = trimClaudeToolChatMessages(buildClaudeToolChatMessages(args.messages))
-  return {
-    requestId: args.requestId,
-    sessionId: args.sessionId,
-    model: args.model,
-    baseUrl: args.baseUrl,
-    llmServiceId: args.llmServiceId,
-    messages: convo,
-    tools: tools as Array<Record<string, unknown>>,
-    system: args.system,
-    locale: args.locale,
-    options: {
-      maxTokens: args.maxTokens,
-      enableThinking: args.thinkingEnabled
-    }
-  }
 }
 
 export { extractAssistantTextFromApiContent } from '../../shared/assistantContentReconcile'

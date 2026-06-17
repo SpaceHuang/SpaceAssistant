@@ -103,7 +103,7 @@ describe('chatToolSessionService onConfirmReq', () => {
   })
 })
 
-describe('buildToolChatPayload locale', () => {
+describe('buildToolChatPayload', () => {
   const stubMessage: Message = {
     id: '00000000-0000-4000-8000-000000000001',
     sessionId: 'sess-1',
@@ -114,15 +114,40 @@ describe('buildToolChatPayload locale', () => {
     schemaVersion: CURRENT_SCHEMA_VERSION
   }
 
-  it('I11: includes locale in payload when provided', () => {
+  const assistantMessage: Message = {
+    id: '00000000-0000-4000-8000-000000000002',
+    sessionId: 'sess-1',
+    role: 'assistant',
+    content: 'hi there',
+    timestamp: 2,
+    status: 'completed',
+    schemaVersion: CURRENT_SCHEMA_VERSION
+  }
+
+  it('includes locale in payload when provided', () => {
     const payload = buildToolChatPayload({
-      requestId: '00000000-0000-4000-8000-000000000002',
+      requestId: '00000000-0000-4000-8000-000000000003',
       sessionId: 'sess-1',
       model: 'claude-sonnet-4-20250514',
       messages: [stubMessage],
+      currentUserMessageId: stubMessage.id,
       toolsConfig: DEFAULT_TOOLS_CONFIG,
       locale: 'en-US'
     })
     expect(payload.locale).toBe('en-US')
+  })
+
+  it('passes sourceMessages and currentUserMessageId for main-process image hydration', () => {
+    const messages = [stubMessage, assistantMessage]
+    const payload = buildToolChatPayload({
+      requestId: '00000000-0000-4000-8000-000000000004',
+      sessionId: 'sess-1',
+      model: 'claude-sonnet-4-20250514',
+      messages,
+      currentUserMessageId: stubMessage.id,
+      toolsConfig: DEFAULT_TOOLS_CONFIG
+    })
+    expect(payload.sourceMessages).toBe(messages)
+    expect(payload.currentUserMessageId).toBe(stubMessage.id)
   })
 })

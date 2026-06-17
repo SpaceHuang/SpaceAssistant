@@ -569,12 +569,31 @@ export interface Session {
   workDirProfileId?: string
 }
 
+/** 用户消息附带的图片（DB 只存引用，不存 base64） */
+export interface ChatImageAttachment {
+  id: string
+  /** staging 相对 userData 的路径键，如 chat-attachments/{sessionId}/{id}.png */
+  stagingKey: string
+  fileName: string
+  mimeType: string
+  byteLength: number
+  width?: number
+  height?: number
+}
+
 export interface Message {
   id: string
   sessionId: string
   role: MessageRole
   content: string
   timestamp: number
+  /** 用户消息附带的图片元数据（无 base64） */
+  attachments?: ChatImageAttachment[]
+  /**
+   * 该条用户消息的图片 block 已成功送达 API。
+   * 为 true 时后续 build 仅输出文本占位，不再 re-hydrate base64。
+   */
+  imagesDeliveredToApi?: boolean
   toolUse?: ToolUseData
   /** 新版内置工具调用记录；优先于 toolUse 展示 */
   toolCalls?: ToolCallRecord[]

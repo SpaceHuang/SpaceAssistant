@@ -1,7 +1,13 @@
-import type { Message, ToolCallRecord } from './domainTypes'
+import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
 import type { ClaudeChatMessageWithBlocks } from './api'
 import { MAX_CHAT_API_MESSAGES } from './chatApiMessageLimits'
 import { toolIdToOpenAiCompatibleApiToolName } from './anthropicToolSanitize'
+
+export type ClaudeUserContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+
+export type ImageHydrationMode = 'full' | 'text-placeholder-only'
 
 function toolResultContent(tc: ToolCallRecord): string {
   if (!tc.result) return '(无结果)'
@@ -18,15 +24,80 @@ function ensureApiTextContent(content: string | undefined | null): string {
   return trimmed.length > 0 ? trimmed : ' '
 }
 
+export function formatHistoricalImagePlaceholder(attachments: ChatImageAttachment[]): string {
+  const names = attachments.map((a) => a.fileName).join(', ')
+  return `[此前发送的图片: ${names}]`
+}
+
+export function shouldHydrateImagesForMessage(msg: Message, currentUserMessageId: string): boolean {
+  if (!msg.attachments?.length) return false
+  return msg.id === currentUserMessageId
+}
+
+export function buildUserMessageContent(
+  text: string,
+  attachments: ChatImageAttachment[] | undefined,
+  options: {
+    hydrationMode: ImageHydrationMode
+    resolveImage: (a: ChatImageAttachment) => { mimeType: string; data: string } | null
+  }
+): string | ClaudeUserContentBlock[] {
+  const apiText = ensureApiTextContent(text)
+  if (!attachments?.length) return apiText
+
+  if (options.hydrationMode === 'text-placeholder-only') {
+    const placeholder = formatHistoricalImagePlaceholder(attachments)
+    return `${apiText}\n${placeholder}`.trim()
+  }
+
+  const blocks: ClaudeUserContentBlock[] = [{ type: 'text', text: apiText }]
+  for (const a of attachments) {
+    const resolved = options.resolveImage(a)
+    if (resolved) {
+      blocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: resolved.mimeType, data: resolved.data }
+      })
+    } else {
+      blocks.push({
+        type: 'text',
+        text: `[图片附件已失效: ${a.fileName}]`
+      })
+    }
+  }
+  return blocks
+}
+
+export type BuildClaudeToolChatMessagesOptions = {
+  currentUserMessageId?: string
+  resolveImage?: (a: ChatImageAttachment) => { mimeType: string; data: string } | null
+}
+
 /** 将本地消息列表转为带 content blocks 的 API 消息（含历史 tool_use / tool_result） */
-export function buildClaudeToolChatMessages(messages: Message[]): ClaudeChatMessageWithBlocks[] {
+export function buildClaudeToolChatMessages(
+  messages: Message[],
+  options?: BuildClaudeToolChatMessagesOptions
+): ClaudeChatMessageWithBlocks[] {
+  const currentUserMessageId = options?.currentUserMessageId ?? ''
+  const resolveImage = options?.resolveImage ?? (() => null)
   const out: ClaudeChatMessageWithBlocks[] = []
+
   for (const m of messages) {
     if (m.role !== 'user' && m.role !== 'assistant') continue
     if (m.role === 'assistant' && m.status === 'streaming') continue
     if (m.role === 'user' && m.status === 'queued') continue
     if (m.role === 'user') {
-      out.push({ role: 'user', content: ensureApiTextContent(m.content), id: m.id, timestamp: m.timestamp })
+      let content: string | ClaudeUserContentBlock[]
+      if (m.attachments?.length) {
+        const hydrationMode: ImageHydrationMode =
+          shouldHydrateImagesForMessage(m, currentUserMessageId) && !m.imagesDeliveredToApi
+            ? 'full'
+            : 'text-placeholder-only'
+        content = buildUserMessageContent(m.content, m.attachments, { hydrationMode, resolveImage })
+      } else {
+        content = ensureApiTextContent(m.content)
+      }
+      out.push({ role: 'user', content, id: m.id, timestamp: m.timestamp })
       continue
     }
     if (m.toolCalls?.length) {
@@ -89,4 +160,8 @@ export function trimClaudeToolChatMessages(
     break
   }
   return trimmed
+}
+
+export function messageHasImageAttachments(msg: Message): boolean {
+  return msg.role === 'user' && (msg.attachments?.length ?? 0) > 0
 }

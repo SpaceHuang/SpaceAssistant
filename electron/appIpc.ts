@@ -90,6 +90,13 @@ import { copyFileInWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } fro
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { openExternalLink } from './externalLink'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
+import {
+  deleteSessionChatAttachments,
+  discardStagedImage,
+  readStagedImage,
+  stageChatImage
+} from './chatAttachmentManager'
+import type { ChatImageAttachment } from '../src/shared/domainTypes'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
@@ -470,6 +477,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const s = getSession(ctx.db, sessionId)
     clearSessionToolResources(sessionId)
     deleteSession(ctx.db, sessionId)
+    await deleteSessionChatAttachments(ctx.getUserDataPath(), sessionId)
     if (s) await ctx.backup.deleteBackup(s)
   })
 
@@ -508,9 +516,58 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle(
     'chat:patch-message',
-    async (_e, payload: { messageId: string; patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>> } & { sessionId: string }) => {
+    async (_e, payload: {
+      messageId: string
+      patch: Partial<
+        Pick<
+          Message,
+          | 'content'
+          | 'status'
+          | 'toolUse'
+          | 'thinking'
+          | 'toolCalls'
+          | 'contentSegments'
+          | 'skillHints'
+          | 'attachments'
+          | 'imagesDeliveredToApi'
+        >
+      >
+    } & { sessionId: string }) => {
       updateMessageContent(ctx.db, payload.messageId, payload.patch)
       await syncBackup(ctx, payload.sessionId)
+    }
+  )
+
+  ipcMain.handle(
+    'chat:stage-image',
+    async (
+      _e,
+      args: { sessionId: string; fileName: string; mimeType: string; dataBase64: string }
+    ): Promise<ChatImageAttachment | { error: string }> => {
+      return stageChatImage({ userDataDir: ctx.getUserDataPath(), ...args })
+    }
+  )
+
+  ipcMain.handle(
+    'chat:discard-staged-image',
+    async (_e, args: { sessionId: string; stagingKey: string }): Promise<{ ok: true } | { error: string }> => {
+      void args.sessionId
+      return discardStagedImage(ctx.getUserDataPath(), args.stagingKey)
+    }
+  )
+
+  ipcMain.handle(
+    'chat:read-staged-image',
+    async (
+      _e,
+      args: { sessionId: string; stagingKey: string; maxBytes?: number }
+    ): Promise<{ mimeType: string; dataBase64: string } | { error: string }> => {
+      void args.sessionId
+      return readStagedImage({
+        userDataDir: ctx.getUserDataPath(),
+        stagingKey: args.stagingKey,
+        maxBytes: args.maxBytes
+      })
     }
   )
 

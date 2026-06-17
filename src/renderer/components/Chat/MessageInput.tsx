@@ -1,12 +1,21 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Input, Tooltip } from 'antd'
-import { Keyboard, Send, Square } from 'lucide-react'
+import { Keyboard, Plus, Send, Square, X } from 'lucide-react'
 import { ContextUsageRing } from './ContextUsageRing'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import type { ChatImageAttachment } from '../../../shared/domainTypes'
+import { MAX_CHAT_IMAGE_ATTACHMENTS } from '../../../shared/chatAttachmentLimits'
+import { getFileExtension, getImageMimeType } from '../../../shared/fileTypes'
 
 export type MessageInputHandle = {
   focus: () => void
   setDraft: (text: string) => void
+  clearPendingAttachments: () => void
+}
+
+type PendingAttachment = ChatImageAttachment & {
+  previewUrl?: string
+  status: 'staging' | 'ready' | 'error'
 }
 
 type Props = {
@@ -18,21 +27,72 @@ type Props = {
   runningDetail?: string
   runningElapsed?: string
   modelSlot?: React.ReactNode
-  onSend: (text: string) => void
+  sessionId?: string
+  toolsEnabled?: boolean
+  onSend: (text: string, attachments?: ChatImageAttachment[]) => void
   onAbort?: () => void
 }
 
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result !== 'string') {
+        reject(new Error('read_failed'))
+        return
+      }
+      const comma = result.indexOf(',')
+      resolve(comma >= 0 ? result.slice(comma + 1) : result)
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('read_failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function formatByteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function toChatAttachment(item: PendingAttachment): ChatImageAttachment {
+  const { previewUrl: _previewUrl, status: _status, ...attachment } = item
+  return attachment
+}
+
 export const MessageInput = forwardRef<MessageInputHandle, Props>(function MessageInput(
-  { disabled, running, queueCount = 0, runningStatus, runningDetail, runningElapsed, modelSlot, onSend, onAbort },
+  {
+    disabled,
+    running,
+    queueCount = 0,
+    runningStatus,
+    runningDetail,
+    runningElapsed,
+    modelSlot,
+    sessionId,
+    toolsEnabled: _toolsEnabled,
+    onSend,
+    onAbort
+  },
   ref
 ) {
   const { t } = useTypedTranslation('chat')
   const [text, setText] = useState('')
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([])
+  const [tooManyHint, setTooManyHint] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const leftRowRef = useRef<HTMLDivElement>(null)
   const statusMeasureRef = useRef<HTMLSpanElement>(null)
   const modelChipRef = useRef<HTMLSpanElement>(null)
+  const attachButtonRef = useRef<HTMLButtonElement>(null)
   const [statusCollapsed, setStatusCollapsed] = useState(false)
+
+  const readyAttachments = useMemo(
+    () => pendingAttachments.filter((a) => a.status === 'ready').map(toChatAttachment),
+    [pendingAttachments]
+  )
 
   const canQueueSend = running && Boolean(text.trim())
   const hintText = running
@@ -64,16 +124,62 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     return parts.join(' · ')
   }, [running, hintText, activitySummary, canQueueSend, t])
 
-  useImperativeHandle(ref, () => ({
-    focus: () => textareaRef.current?.focus(),
-    setDraft: (value: string) => setText(value)
-  }))
+  const revokePreviewUrls = useCallback((items: PendingAttachment[]) => {
+    for (const item of items) {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+    }
+  }, [])
+
+  const discardAttachment = useCallback(
+    async (item: PendingAttachment) => {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+      if (sessionId && item.stagingKey && item.status === 'ready') {
+        await window.api.chatDiscardStagedImage({ sessionId, stagingKey: item.stagingKey })
+      }
+    },
+    [sessionId]
+  )
+
+  const pendingAttachmentsRef = useRef(pendingAttachments)
+  pendingAttachmentsRef.current = pendingAttachments
+
+  const clearPendingAttachments = useCallback(async () => {
+    const snapshot = pendingAttachmentsRef.current
+    setPendingAttachments([])
+    revokePreviewUrls(snapshot)
+    await Promise.all(snapshot.map((item) => discardAttachment(item)))
+  }, [revokePreviewUrls, discardAttachment])
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus: () => textareaRef.current?.focus(),
+      setDraft: (value: string) => setText(value),
+      clearPendingAttachments: () => {
+        void clearPendingAttachments()
+      }
+    }),
+    [clearPendingAttachments]
+  )
+
+  useEffect(() => {
+    return () => {
+      revokePreviewUrls(pendingAttachmentsRef.current)
+    }
+  }, [revokePreviewUrls])
+
+  const clearComposerAttachments = useCallback(() => {
+    revokePreviewUrls(pendingAttachments)
+    setPendingAttachments([])
+  }, [pendingAttachments, revokePreviewUrls])
 
   const queueSend = () => {
     const value = text.trim()
     if (!value || disabled) return
+    const attachments = readyAttachments.length > 0 ? readyAttachments : undefined
     setText('')
-    onSend(value)
+    clearComposerAttachments()
+    onSend(value, attachments)
   }
 
   const send = () => {
@@ -83,8 +189,111 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     }
     const value = text.trim()
     if (!value || disabled) return
+    const attachments = readyAttachments.length > 0 ? readyAttachments : undefined
     setText('')
-    onSend(value)
+    clearComposerAttachments()
+    onSend(value, attachments)
+  }
+
+  const removeAttachment = useCallback(
+    (id: string) => {
+      setPendingAttachments((prev) => {
+        const target = prev.find((a) => a.id === id)
+        if (target) void discardAttachment(target)
+        return prev.filter((a) => a.id !== id)
+      })
+    },
+    [discardAttachment]
+  )
+
+  const stageFiles = useCallback(
+    async (files: FileList | File[]) => {
+      if (!sessionId || disabled) return
+
+      const fileArray = Array.from(files)
+      if (fileArray.length === 0) return
+
+      let remaining = 0
+      setPendingAttachments((prev) => {
+        const currentCount = prev.filter((a) => a.status !== 'error').length
+        remaining = MAX_CHAT_IMAGE_ATTACHMENTS - currentCount
+        return prev
+      })
+
+      if (remaining <= 0) {
+        setTooManyHint(true)
+        return
+      }
+
+      const batch = fileArray.slice(0, remaining)
+      if (batch.length < fileArray.length) {
+        setTooManyHint(true)
+      }
+
+      for (const file of batch) {
+        const ext = getFileExtension(file.name)
+        const mimeType = getImageMimeType(ext)
+        if (!mimeType) continue
+
+        const tempId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+        const previewUrl = URL.createObjectURL(file)
+        setPendingAttachments((prev) => [
+          ...prev,
+          {
+            id: tempId,
+            stagingKey: '',
+            fileName: file.name,
+            mimeType,
+            byteLength: file.size,
+            previewUrl,
+            status: 'staging'
+          }
+        ])
+
+        try {
+          const dataBase64 = await readFileAsBase64(file)
+          const result = await window.api.chatStageImage({
+            sessionId,
+            fileName: file.name,
+            mimeType,
+            dataBase64
+          })
+
+          if ('error' in result) {
+            URL.revokeObjectURL(previewUrl)
+            setPendingAttachments((prev) => prev.filter((a) => a.id !== tempId))
+            continue
+          }
+
+          setPendingAttachments((prev) =>
+            prev.map((a) =>
+              a.id === tempId
+                ? {
+                    ...result,
+                    previewUrl,
+                    status: 'ready' as const
+                  }
+                : a
+            )
+          )
+        } catch {
+          URL.revokeObjectURL(previewUrl)
+          setPendingAttachments((prev) => prev.filter((a) => a.id !== tempId))
+        }
+      }
+    },
+    [sessionId, disabled]
+  )
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (files?.length) void stageFiles(files)
+    e.target.value = ''
+  }
+
+  const preventDragDefaults = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
   }
 
   const checkOverflow = useCallback(() => {
@@ -101,17 +310,24 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     const footerGap = parseFloat(footerStyle.columnGap) || parseFloat(footerStyle.gap) || 8
     const availableWidth = footer.clientWidth - rightWidth - footerGap
 
+    const attachWidth = attachButtonRef.current ? attachButtonRef.current.offsetWidth : 28
     const chipWidth = modelChipRef.current ? modelChipRef.current.offsetWidth : 0
     const statusWidth = measure.offsetWidth
     const triggerWidth = 22
     const gap = 8
 
-    let neededWidth = statusWidth
+    let neededWidth = attachWidth + statusWidth
     if (chipWidth > 0) {
-      neededWidth = chipWidth + gap + statusWidth
+      neededWidth = attachWidth + gap + chipWidth + gap + statusWidth
+    } else {
+      neededWidth = attachWidth + gap + statusWidth
     }
 
-    const neededCollapsedWidth = chipWidth > 0 ? chipWidth + gap + triggerWidth : triggerWidth
+    let neededCollapsedWidth = attachWidth + gap + triggerWidth
+    if (chipWidth > 0) {
+      neededCollapsedWidth = attachWidth + gap + chipWidth + gap + triggerWidth
+    }
+
     setStatusCollapsed(neededWidth > availableWidth && neededCollapsedWidth <= availableWidth)
   }, [])
 
@@ -132,7 +348,13 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   useEffect(() => {
     checkOverflow()
-  }, [modelSlot, running, canQueueSend, queueCount, footerStatusLabel, checkOverflow])
+  }, [modelSlot, running, canQueueSend, queueCount, footerStatusLabel, pendingAttachments.length, checkOverflow])
+
+  useEffect(() => {
+    if (!tooManyHint) return
+    const timer = window.setTimeout(() => setTooManyHint(false), 4000)
+    return () => window.clearTimeout(timer)
+  }, [tooManyHint])
 
   const handleEnter = () => {
     if (running) {
@@ -144,10 +366,69 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   const sendLabel = running ? t('input.queueSend') : t('input.send')
   const stopLabel = t('input.abort')
+  const hasStaging = pendingAttachments.some((a) => a.status === 'staging')
 
   return (
     <div className="composer">
-      <div className="composer-box">
+      <div
+        className="composer-box"
+        onDragEnter={preventDragDefaults}
+        onDragOver={preventDragDefaults}
+        onDrop={preventDragDefaults}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          hidden
+          onChange={handleFileInputChange}
+        />
+        {pendingAttachments.length > 0 ? (
+          <div className="composer-attachments">
+            {tooManyHint ? (
+              <span className="composer-attachments__hint">{t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS })}</span>
+            ) : null}
+            {pendingAttachments.map((a) => (
+              <div
+                key={a.id}
+                className={[
+                  'composer-attachment-chip',
+                  a.status === 'staging' ? 'composer-attachment-chip--staging' : '',
+                  a.status === 'error' ? 'composer-attachment-chip--error' : ''
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                title={a.fileName}
+              >
+                {a.previewUrl ? (
+                  <img
+                    src={a.previewUrl}
+                    alt={t('attachment.alt', { name: a.fileName })}
+                    className="composer-attachment-chip__thumb"
+                  />
+                ) : (
+                  <span className="composer-attachment-chip__thumb composer-attachment-chip__thumb--empty" aria-hidden />
+                )}
+                <span className="composer-attachment-chip__name">{a.fileName}</span>
+                <span className="composer-attachment-chip__size">{formatByteSize(a.byteLength)}</span>
+                <button
+                  type="button"
+                  className="composer-attachment-chip__remove"
+                  onClick={() => removeAttachment(a.id)}
+                  disabled={a.status === 'staging'}
+                  aria-label={t('attachment.remove', { name: a.fileName })}
+                >
+                  <X size={12} strokeWidth={2} aria-hidden />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : tooManyHint ? (
+          <div className="composer-attachments composer-attachments--hint-only">
+            <span className="composer-attachments__hint">{t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS })}</span>
+          </div>
+        ) : null}
         <Input.TextArea
           ref={textareaRef}
           value={text}
@@ -164,6 +445,18 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
         />
         <div className="composer-footer">
           <div ref={leftRowRef} className="composer-footer__start">
+            <Tooltip title={tooManyHint ? t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS }) : undefined}>
+              <button
+                ref={attachButtonRef}
+                type="button"
+                className="composer-add-attachment"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || !sessionId || hasStaging}
+                aria-label={t('input.addImage')}
+              >
+                <Plus size={16} strokeWidth={1.75} aria-hidden />
+              </button>
+            </Tooltip>
             {modelSlot ? <span ref={modelChipRef}>{modelSlot}</span> : null}
             <span ref={statusMeasureRef} className="composer-status composer-status--measure" aria-hidden>
               {footerStatusLabel}
@@ -211,13 +504,13 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
             )}
           </div>
           <div className="composer-footer__actions">
-            <ContextUsageRing />
+            <ContextUsageRing pendingImageAttachments={readyAttachments} />
             {running && text.trim() ? (
               <button
                 type="button"
                 className="composer-send composer-send--queue"
                 onClick={queueSend}
-                disabled={disabled}
+                disabled={disabled || hasStaging}
                 aria-label={sendLabel}
               >
                 <span className="composer-send__visual" aria-hidden>
@@ -241,7 +534,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
                 type="button"
                 className="composer-send"
                 onClick={send}
-                disabled={disabled || !text.trim()}
+                disabled={disabled || !text.trim() || hasStaging}
                 aria-label={sendLabel}
               >
                 <span className="composer-send__visual" aria-hidden>

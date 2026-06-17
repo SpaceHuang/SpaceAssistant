@@ -54,7 +54,7 @@ import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
 import { buildSystemPromptFromSkills, buildSkillRouteSignature, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
-import type { Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
+import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
@@ -96,12 +96,18 @@ import {
   resolveStreamingActivityStatus
 } from '../../../shared/streamingActivityStatus'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
+import {
+  messageHasImageAttachments,
+  resolveVisionRouteForImageSend
+} from '../../../shared/visionModelRouting'
 
 type SendInternalOptions = {
   skipUserMessage?: boolean
   targetSessionId?: string
   /** 会话执行中仍允许执行的即时命令（/skill list 等） */
   bypassRunningGuard?: boolean
+  attachments?: ChatImageAttachment[]
+  currentUserMessageId?: string
 }
 
 function buildClaudePayload(history: Message[]) {
@@ -114,6 +120,7 @@ function buildClaudePayload(history: Message[]) {
 export function ChatView() {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('chat')
+  const { t: tErrors } = useTypedTranslation('errors')
   const { openFile } = useDetailPanel()
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
@@ -134,6 +141,14 @@ export function ChatView() {
     const svc = cfg.llmServices.find((s) => s.id === chatLlmServiceId)
     return svc?.baseUrl || cfg.baseUrl || undefined
   }, [cfg, chatLlmServiceId])
+  const useToolsApi = useMemo(
+    () =>
+      Boolean(
+        cfg?.tools.enabled &&
+          filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
+      ),
+    [cfg]
+  )
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
@@ -371,7 +386,7 @@ export function ChatView() {
   )
 
   const enqueueChatMessage = useCallback(
-    async (runSessionId: string, text: string) => {
+    async (runSessionId: string, text: string, attachments?: ChatImageAttachment[]) => {
       const chatText = text.trim()
       if (!chatText) return
 
@@ -386,6 +401,7 @@ export function ChatView() {
         sessionId: runSessionId,
         role: 'user',
         content: chatText,
+        attachments: attachments?.length ? attachments : undefined,
         timestamp: Date.now(),
         status: 'queued',
         schemaVersion: CURRENT_SCHEMA_VERSION
@@ -435,7 +451,9 @@ export function ChatView() {
         })
         await sendInternalRef.current(next.content, undefined, {
           targetSessionId: runSessionId,
-          skipUserMessage: true
+          skipUserMessage: true,
+          attachments: next.attachments,
+          currentUserMessageId: next.id
         })
       } finally {
         drainingQueueRef.current = false
@@ -558,11 +576,17 @@ export function ChatView() {
         return
       }
 
+      if ((options?.attachments?.length ?? 0) > 0 && !useToolsApi) {
+        message.error(tErrors('chat.imagesRequireTools'))
+        return
+      }
+
       const userMsg: Message = {
         id: crypto.randomUUID(),
         sessionId: runSessionId,
         role: 'user',
         content: chatText,
+        attachments: options?.attachments?.length ? options.attachments : undefined,
         timestamp: Date.now(),
         status: 'sent',
         schemaVersion: CURRENT_SCHEMA_VERSION
@@ -582,13 +606,48 @@ export function ChatView() {
         await window.api.chatAppendMessage(userMsg)
       }
 
+      const currentUserMessageId = options?.skipUserMessage
+        ? (options.currentUserMessageId ??
+          [...store.getState().chat.messages]
+            .reverse()
+            .find((m) => m.sessionId === runSessionId && m.role === 'user' && m.status !== 'queued')?.id ??
+          '')
+        : userMsg.id
+
+      const modelEntry = cfg.models.find((m) => m.name === chatModelName)
+      let requestModel = chatModelName
+      let requestLlmServiceId = chatLlmServiceId
+      let effectiveModelForUsage: string | undefined
+
+      const userMsgForVision = options?.skipUserMessage
+        ? store.getState().chat.messages.find((m) => m.id === currentUserMessageId)
+        : userMsg
+
+      if (userMsgForVision && messageHasImageAttachments(userMsgForVision)) {
+        const visionRoute = resolveVisionRouteForImageSend(cfg, chatModelName, chatLlmServiceId)
+        if (!visionRoute.ok) {
+          message.error(tErrors('chat.noVisionModel'))
+          return
+        }
+        if (visionRoute.switched) {
+          requestModel = visionRoute.modelName
+          requestLlmServiceId = visionRoute.llmServiceId
+          effectiveModelForUsage = visionRoute.modelName
+        }
+      }
+
+      const requestBaseUrl = (() => {
+        const svc = cfg.llmServices.find((s) => s.id === requestLlmServiceId)
+        return svc?.baseUrl || cfg.baseUrl || undefined
+      })()
+      const requestModelEntry = cfg.models.find((m) => m.name === requestModel) ?? modelEntry
+      const outputMaxTokens = resolveEffectiveOutputMaxTokens(requestModel, cfg.models)
+      const maxSystemChars = requestModelEntry ? Math.floor(requestModelEntry.maximumContext * 0.1) : undefined
+
       const requestId = crypto.randomUUID()
       registerSessionRun(runSessionId, requestId)
       abortRequestedRef.current = false
       dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
-
-      const useToolsApi =
-        cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
 
       const recentMessages: SkillRouteRecentMessage[] = filterMessagesForChatApi(historyForApi)
         .filter((m) => m.content.trim())
@@ -630,9 +689,6 @@ export function ChatView() {
         })
       }
 
-      const modelEntry = cfg.models.find((m) => m.name === chatModelName)
-      const outputMaxTokens = resolveEffectiveOutputMaxTokens(chatModelName, cfg.models)
-      const maxSystemChars = modelEntry ? Math.floor(modelEntry.maximumContext * 0.1) : undefined
       let systemPrompt = buildSystemPromptFromSkills(activeSkills)
       const wikiSchemaActive =
         wikiConfig.enabled &&
@@ -735,6 +791,21 @@ export function ChatView() {
           unsubs.length = 0
         }
 
+        let imagesDeliveredMarked = false
+        const markImagesDeliveredIfNeeded = () => {
+          if (imagesDeliveredMarked || !currentUserMessageId) return
+          const userRow = store.getState().chat.messages.find((m) => m.id === currentUserMessageId)
+          if (!userRow?.attachments?.length || userRow.imagesDeliveredToApi) return
+          imagesDeliveredMarked = true
+          dispatch(patchMessage({ id: currentUserMessageId, patch: { imagesDeliveredToApi: true } }))
+        }
+
+        unsubs.push(
+          window.api.claudeChatOnUsage((d) => {
+            if (d.requestId !== requestId) return
+            markImagesDeliveredIfNeeded()
+          })
+        )
         unsubs.push(
           window.api.claudeChatOnDelta((d) => {
             if (d.requestId !== requestId) return
@@ -777,17 +848,19 @@ export function ChatView() {
           const payload = buildToolChatPayload({
             requestId,
             sessionId: runSessionId,
-            model: chatModelName,
-            baseUrl: chatBaseUrl,
-            llmServiceId: chatLlmServiceId,
+            model: requestModel,
+            baseUrl: requestBaseUrl,
+            llmServiceId: requestLlmServiceId,
             messages: historyForApi,
+            currentUserMessageId,
             toolsConfig: cfg.tools,
             browserConfig: cfg.browser,
             shellConfig: cfg.shell,
             maxTokens: outputMaxTokens,
             thinkingEnabled: cfg.thinkingEnabled,
             system: systemPrompt || undefined,
-            locale: resolveChatLocale()
+            locale: resolveChatLocale(),
+            effectiveModelForUsage
           })
           const res = await window.api.claudeChatCreateWithTools(payload)
           if (!res.ok) {
@@ -835,6 +908,7 @@ export function ChatView() {
           flushUiPatch(runSessionId, assistantId)
           if (res.usage) {
             applyContextUsageUpdate(runSessionId, res.usage as NonNullable<LastUsage>)
+            markImagesDeliveredIfNeeded()
           }
           const assistantRow = findAssistantRow()
           const thinking = finalizeThinking(thinkingState)
@@ -897,8 +971,8 @@ export function ChatView() {
       await runClaudeChatStream(
         {
           requestId,
-          model: chatModelName,
-          baseUrl: chatBaseUrl,
+          model: requestModel,
+          baseUrl: requestBaseUrl,
           messages: basePayload,
           system: systemPrompt || undefined,
           maxTokens: outputMaxTokens,
@@ -978,14 +1052,20 @@ export function ChatView() {
         }
       )
     },
-    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t]
+    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t, tErrors, useToolsApi]
   )
 
   sendInternalRef.current = sendInternal
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments?: ChatImageAttachment[]) => {
       if (!text.trim()) return
+
+      const hasAttachments = (attachments?.length ?? 0) > 0
+      if (hasAttachments && !useToolsApi) {
+        message.error(tErrors('chat.imagesRequireTools'))
+        return
+      }
 
       let targetSessionId = sessionId
       if (!targetSessionId) {
@@ -1023,13 +1103,13 @@ export function ChatView() {
           await sendInternal(text, sessionSkillsState, { targetSessionId, bypassRunningGuard: true })
           return
         }
-        await enqueueChatMessage(targetSessionId, text)
+        await enqueueChatMessage(targetSessionId, text, attachments)
         return
       }
 
-      await sendInternal(text, undefined, { targetSessionId })
+      await sendInternal(text, undefined, { targetSessionId, attachments })
     },
-    [sessionId, cfg, sendInternal, dispatch, message, t, currentSession, enqueueChatMessage]
+    [sessionId, cfg, sendInternal, dispatch, message, t, tErrors, currentSession, enqueueChatMessage, useToolsApi]
   )
 
   const retryFailedAssistant = useCallback(
@@ -1041,10 +1121,12 @@ export function ChatView() {
       if (assistant.role !== 'assistant' || assistant.status !== 'failed') return
 
       let userText = ''
+      let userMsg: Message | undefined
       for (let i = idx - 1; i >= 0; i--) {
         const row = msgs[i]
         if (row.role === 'user' && row.content.trim()) {
           userText = row.content
+          userMsg = row
           break
         }
       }
@@ -1054,7 +1136,11 @@ export function ChatView() {
       }
 
       dispatch(setMessages(msgs.filter((m) => m.id !== assistantMessageId)))
-      await sendInternal(userText, undefined, { skipUserMessage: true })
+      await sendInternal(userText, undefined, {
+        skipUserMessage: true,
+        attachments: userMsg?.attachments,
+        currentUserMessageId: userMsg?.id
+      })
     },
     [dispatch, message, sendInternal, t]
   )
@@ -1245,6 +1331,8 @@ export function ChatView() {
       </div>
       <MessageInput
         ref={composerRef}
+        sessionId={sessionId ?? undefined}
+        toolsEnabled={useToolsApi}
         running={running}
         queueCount={queueCount}
         runningStatus={runningActivity?.label}

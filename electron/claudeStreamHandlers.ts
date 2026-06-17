@@ -15,8 +15,12 @@ import { runToolChatSession } from './toolChatLoop'
 import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import { isAppLocale } from '../src/shared/locale'
+import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
+import { currentUserMessageHasImages } from '../src/shared/visionModelRouting'
+import { buildToolChatMessagesFromSource } from './chatMessageBuild'
+import type { Message } from '../src/shared/domainTypes'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
 export type ClaudeStreamDeps = {
@@ -66,7 +70,9 @@ type ClaudeChatCreateWithToolsPayload = {
   model: string
   baseUrl?: string
   llmServiceId?: string
-  messages: ClaudeChatMessageWithContentBlocks[]
+  sourceMessages?: Message[]
+  currentUserMessageId?: string
+  messages?: ClaudeChatMessageWithContentBlocks[]
   tools: Array<unknown>
   system?: string
   options?: {
@@ -144,6 +150,15 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
     if (type === 'redacted_thinking') {
       if (typeof (b as { data?: unknown }).data !== 'string') throw new Error('Invalid redacted_thinking block')
       if ((b as { data: string }).data.length > 500_000) throw new Error('redacted_thinking too long')
+      continue
+    }
+
+    if (type === 'image') {
+      const source = (b as { source?: { type?: string; media_type?: string; data?: string } }).source
+      if (source?.type !== 'base64') throw new Error('Invalid image source type')
+      if (!/^image\//.test(source.media_type ?? '')) throw new Error('Invalid image media_type')
+      if (typeof source.data !== 'string' || source.data.length === 0) throw new Error('Invalid image data')
+      if (source.data.length > MAX_IMAGE_BASE64_CHARS) throw new Error('image data too long')
       continue
     }
   }
@@ -228,7 +243,25 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
         const baseUrl = baseUrlFromPayload ?? creds.baseUrl
         const getApiKey = creds.error ? deps.getApiKey : creds.getApiKey
-        const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(payload.messages)
+        const userDataDir = deps.getUserDataPath()
+        const currentUserMessageId =
+          typeof payload.currentUserMessageId === 'string' ? payload.currentUserMessageId.trim() : ''
+        let builtMessages: ClaudeChatMessageWithContentBlocks[]
+        if (Array.isArray(payload.sourceMessages) && payload.sourceMessages.length > 0 && currentUserMessageId) {
+          builtMessages = await buildToolChatMessagesFromSource({
+            userDataDir,
+            sourceMessages: payload.sourceMessages,
+            currentUserMessageId
+          })
+        } else if (Array.isArray(payload.messages)) {
+          builtMessages = payload.messages
+        } else {
+          throw new Error('Invalid messages payload')
+        }
+        const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages)
+        const hasImageAttachments = Array.isArray(payload.sourceMessages)
+          ? currentUserMessageHasImages(payload.sourceMessages, currentUserMessageId)
+          : false
 
         const toolsRaw = Array.isArray(payload.tools) ? payload.tools : []
         for (const t of toolsRaw) {
@@ -257,9 +290,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
           workDir: deps.getWorkDir(),
-          userDataDir: deps.getUserDataPath(),
+          userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),
+          currentUserMessageId: currentUserMessageId || undefined,
+          hasImageAttachments,
           getBrowserDetectContext: deps.getBrowserDetectContext,
           floatingNotificationManager: deps.floatingNotificationManager
         })

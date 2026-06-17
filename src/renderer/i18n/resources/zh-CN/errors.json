@@ -1,4 +1,8 @@
 {
+  "chat": {
+    "imagesRequireTools": "发送图片需要先开启工具功能，请在设置中启用",
+    "noVisionModel": "没有可用的视觉模型，请在设置中启用视觉模型"
+  },
   "API_KEY_NOT_CONFIGURED": "API Key 未配置",
   "BROWSER_FEISHU_REMOTE_DISABLED": "飞书远程会话未启用浏览器工具。请在 SpaceAssistant 桌面端打开「设置 → 浏览器」，开启「允许飞书远程会话使用」后重试。",
   "BROWSER_RATE_LIMIT_REJECTED": "请求频率超限，请稍后重试。当前限制：每分钟 {{perMinute}} 次",

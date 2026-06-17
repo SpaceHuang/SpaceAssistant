@@ -8,6 +8,7 @@ import {
   rowToMessage,
   serializeContentSegmentsForDb,
   serializeSkillHintsForDb,
+  serializeAttachmentsForDb,
   serializeThinkingForDb,
   serializeToolCallsForDb,
   serializeToolUseForDb
@@ -24,6 +25,8 @@ export type StoredMessage = {
   thinking: string | null
   contentSegments?: string | null
   skillHints?: string | null
+  attachments?: string | null
+  imagesDeliveredToApi?: boolean | null
   status: string
   schemaVersion: number
   timestamp: number
@@ -231,6 +234,8 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
       thinking: r.thinking,
       contentSegments: r.contentSegments ?? null,
       skillHints: r.skillHints ?? null,
+      attachments: r.attachments ?? null,
+      imagesDeliveredToApi: r.imagesDeliveredToApi ?? null,
       status: r.status,
       schemaVersion: r.schemaVersion,
       timestamp: r.timestamp,
@@ -256,6 +261,8 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
     thinking: serializeThinkingForDb(full.thinking),
     contentSegments: serializeContentSegmentsForDb(full.contentSegments),
     skillHints: serializeSkillHintsForDb(full.skillHints),
+    attachments: serializeAttachmentsForDb(full.attachments),
+    imagesDeliveredToApi: full.imagesDeliveredToApi ?? null,
     status: full.status,
     schemaVersion: full.schemaVersion,
     timestamp: full.timestamp,
@@ -296,7 +303,20 @@ export function deleteQueuedUserMessage(
 export function updateMessageContent(
   db: AppDatabase,
   messageId: string,
-  patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>>
+  patch: Partial<
+    Pick<
+      Message,
+      | 'content'
+      | 'status'
+      | 'toolUse'
+      | 'thinking'
+      | 'toolCalls'
+      | 'contentSegments'
+      | 'skillHints'
+      | 'attachments'
+      | 'imagesDeliveredToApi'
+    >
+  >
 ): void {
   const row = db.data.messages.find((m) => m.id === messageId)
   if (!row) return
@@ -309,6 +329,10 @@ export function updateMessageContent(
     patch.contentSegments !== undefined ? serializeContentSegmentsForDb(patch.contentSegments) : row.contentSegments ?? null
   const skillHints =
     patch.skillHints !== undefined ? serializeSkillHintsForDb(patch.skillHints) : row.skillHints ?? null
+  const attachments =
+    patch.attachments !== undefined ? serializeAttachmentsForDb(patch.attachments) : row.attachments ?? null
+  const imagesDeliveredToApi =
+    patch.imagesDeliveredToApi !== undefined ? patch.imagesDeliveredToApi : row.imagesDeliveredToApi ?? null
   row.content = content
   row.status = status
   row.toolUse = toolUse
@@ -316,6 +340,8 @@ export function updateMessageContent(
   row.thinking = thinking
   row.contentSegments = contentSegments
   row.skillHints = skillHints
+  row.attachments = attachments
+  row.imagesDeliveredToApi = imagesDeliveredToApi
   db.save()
 }
 

@@ -27,6 +27,7 @@ import {
 import { SkillHintBubble } from './SkillHintBubble'
 import { ToolRowIcon } from './ToolRowIcon'
 import { ActivityBatch, type ActivityBatchSummary } from './ActivityBatch'
+import { ChatMessageAttachments } from './ChatMessageAttachments'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { FileConfirmMode } from '../../../shared/domainTypes'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
@@ -240,6 +241,9 @@ export const ChatBubble = memo(function ChatBubble({
       >
         <div className="chat-bubble-col chat-bubble-col--user">
           <div className="chat-bubble chat-bubble--user">
+            {message.attachments?.length ? (
+              <ChatMessageAttachments sessionId={message.sessionId} attachments={message.attachments} />
+            ) : null}
             <div className="chat-md-user">{message.content}</div>
           </div>
           <MessageMeta

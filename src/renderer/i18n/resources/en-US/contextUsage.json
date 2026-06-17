@@ -12,7 +12,8 @@
     "legend": "Legend",
     "legendUsed": "Used",
     "legendReserved": "Output reserve",
-    "legendFree": "Free"
+    "legendFree": "Free",
+    "pendingImages": "Pending images ~{{count}} tokens"
   },
   "aria": {
     "noData": "No context usage data",

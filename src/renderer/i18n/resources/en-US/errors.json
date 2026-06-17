@@ -1,4 +1,8 @@
 {
+  "chat": {
+    "imagesRequireTools": "Sending images requires tools to be enabled. Turn on tools in Settings.",
+    "noVisionModel": "No vision model is available. Enable a vision model in Settings."
+  },
   "API_KEY_NOT_CONFIGURED": "API Key is not configured. Configure it in Settings first.",
   "BROWSER_FEISHU_REMOTE_DISABLED": "Browser tools are disabled for Feishu remote sessions. In SpaceAssistant desktop, open Settings → Browser and enable \"Allow Feishu remote sessions\".",
   "BROWSER_RATE_LIMIT_REJECTED": "Request rate limit exceeded. Please try again later. Current limit: {{perMinute}} requests per minute.",

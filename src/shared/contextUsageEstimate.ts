@@ -1,3 +1,5 @@
+import type { ChatImageAttachment } from './domainTypes'
+
 /** API 返回的原始 usage 字段（与 chatSlice.LastUsage 非 null 形态一致） */
 export type ContextUsageRaw = {
   input_tokens: number
@@ -29,6 +31,21 @@ export function computeTotalRequestInputTokens(usage: ContextUsageRaw): number {
 /** 含 assistant 回复、下轮发送前的预估占用 */
 export function computeEstimatedOccupancy(usage: ContextUsageRaw): number {
   return computeTotalRequestInputTokens(usage) + (usage.output_tokens ?? 0)
+}
+
+/** 保守估计单张图片 prompt token（非精确；Anthropic 按分辨率分块） */
+export function estimateTokensFromImageAttachment(a: ChatImageAttachment): number {
+  if (a.width != null && a.height != null && a.width > 0 && a.height > 0) {
+    const blocks = Math.ceil(a.width / 512) * Math.ceil(a.height / 512)
+    return Math.max(85, blocks * 400)
+  }
+  return Math.max(85, Math.ceil(a.byteLength / 2000))
+}
+
+export function estimateTokensFromImageAttachments(
+  attachments: ReadonlyArray<ChatImageAttachment>
+): number {
+  return attachments.reduce((sum, a) => sum + estimateTokensFromImageAttachment(a), 0)
 }
 
 /** 粗估 UTF-8 文本 token 数（用于 tool_result 写入后的占用投影） */

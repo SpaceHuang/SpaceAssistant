@@ -12,7 +12,8 @@
     "legend": "图例",
     "legendUsed": "已用",
     "legendReserved": "输出预留",
-    "legendFree": "剩余"
+    "legendFree": "剩余",
+    "pendingImages": "待发送图片约 {{count}} tokens"
   },
   "aria": {
     "noData": "暂无上下文用量数据",
