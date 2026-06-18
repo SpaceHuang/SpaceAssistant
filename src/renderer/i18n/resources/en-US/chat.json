@@ -71,7 +71,19 @@
     "hintRunning": "Click Stop to abort",
     "hintRunningQueue": "Enter to send and queue",
     "queueSend": "Send and queue",
-    "queuePending": "{{count}} queued"
+    "queuePending": "{{count}} queued",
+    "addImage": "Add image",
+    "tooManyImages": "You can attach at most {{max}} images"
+  },
+  "attachment": {
+    "alt": "Attachment: {{name}}",
+    "remove": "Remove {{name}}"
+  },
+  "modelPicker": {
+    "empty": "No models available. Configure API services and models in Settings.",
+    "unavailableHint": "Current session model is unavailable. Please select another.",
+    "selectModelAria": "Select model, current {{name}}",
+    "switchModel": "Switch model"
   },
   "toolCall": {
     "confirm": {

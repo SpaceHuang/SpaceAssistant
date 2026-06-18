@@ -269,6 +269,9 @@ export type RunToolChatSessionArgs = {
   appDb?: AppDatabase
   locale?: AppLocale
   projectMemoryEnabled?: boolean
+  /** 当轮 user 消息 id（tool loop 日志等） */
+  currentUserMessageId?: string
+  hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
 }
@@ -346,7 +349,8 @@ async function runToolChatSessionInner(
     projectMemoryEnabled,
     chatSignal,
     getBrowserDetectContext,
-    floatingNotificationManager
+    floatingNotificationManager,
+    hasImageAttachments
   } = args
 
   const apiKey = await getApiKey()
@@ -432,7 +436,8 @@ async function runToolChatSessionInner(
       system: systemWithTools,
       memoryContent,
       memoryEnabled: projectMemoryEnabled ?? true,
-      locale
+      locale,
+      hasImageAttachments: hasImageAttachments ?? false
     })
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({

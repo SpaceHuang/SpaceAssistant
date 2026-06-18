@@ -27,6 +27,12 @@ import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
 import { applyContextUsageUpdate } from '../../services/contextUsageStreamService'
+import {
+  computeEstimatedOccupancy,
+  estimateTokensFromHistoryImages,
+  estimateTokensFromImageAttachments,
+  resolveEffectiveMaximumContext
+} from '../../../shared/contextUsageEstimate'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import {
@@ -36,6 +42,9 @@ import {
 } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { reconcileAssistantStreamOnComplete } from '../../../shared/assistantContentReconcile'
+import { ComposerModelPicker } from './ComposerModelPicker'
+import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
+import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
@@ -51,7 +60,7 @@ import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
 import { buildSystemPromptFromSkills, buildSkillRouteSignature, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
-import type { Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
+import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
@@ -93,12 +102,18 @@ import {
   resolveStreamingActivityStatus
 } from '../../../shared/streamingActivityStatus'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
+import {
+  requestNeedsVisionModel,
+  resolveVisionRouteForImageSend
+} from '../../../shared/visionModelRouting'
 
 type SendInternalOptions = {
   skipUserMessage?: boolean
   targetSessionId?: string
   /** 会话执行中仍允许执行的即时命令（/skill list 等） */
   bypassRunningGuard?: boolean
+  attachments?: ChatImageAttachment[]
+  currentUserMessageId?: string
 }
 
 function buildClaudePayload(history: Message[]) {
@@ -111,15 +126,40 @@ function buildClaudePayload(history: Message[]) {
 export function ChatView() {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('chat')
+  const { t: tErrors } = useTypedTranslation('errors')
+  const { t: tContextUsage } = useTypedTranslation('contextUsage')
   const { openFile } = useDetailPanel()
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
+  const composerHistoryMessages = useMemo(() => {
+    if (!sessionId) return []
+    return filterMessagesForChatApi(messages.filter((m) => m.sessionId === sessionId))
+  }, [messages, sessionId])
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const scrollToMessageId = useTypedSelector((s) => s.chat.scrollToMessageId)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
+  const sessionBinding = useMemo(
+    () => (cfg ? resolveSessionModelBinding(cfg, currentSession) : null),
+    [cfg, currentSession]
+  )
+  const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
+  const chatLlmServiceId = sessionBinding?.llmServiceId
+  const chatBaseUrl = useMemo(() => {
+    if (!cfg) return undefined
+    const svc = cfg.llmServices.find((s) => s.id === chatLlmServiceId)
+    return svc?.baseUrl || cfg.baseUrl || undefined
+  }, [cfg, chatLlmServiceId])
+  const useToolsApi = useMemo(
+    () =>
+      Boolean(
+        cfg?.tools.enabled &&
+          filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
+      ),
+    [cfg]
+  )
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottomRef = useRef(true)
@@ -357,7 +397,7 @@ export function ChatView() {
   )
 
   const enqueueChatMessage = useCallback(
-    async (runSessionId: string, text: string) => {
+    async (runSessionId: string, text: string, attachments?: ChatImageAttachment[]) => {
       const chatText = text.trim()
       if (!chatText) return
 
@@ -372,6 +412,7 @@ export function ChatView() {
         sessionId: runSessionId,
         role: 'user',
         content: chatText,
+        attachments: attachments?.length ? attachments : undefined,
         timestamp: Date.now(),
         status: 'queued',
         schemaVersion: CURRENT_SCHEMA_VERSION
@@ -421,7 +462,9 @@ export function ChatView() {
         })
         await sendInternalRef.current(next.content, undefined, {
           targetSessionId: runSessionId,
-          skipUserMessage: true
+          skipUserMessage: true,
+          attachments: next.attachments,
+          currentUserMessageId: next.id
         })
       } finally {
         drainingQueueRef.current = false
@@ -544,11 +587,17 @@ export function ChatView() {
         return
       }
 
+      if ((options?.attachments?.length ?? 0) > 0 && !useToolsApi) {
+        message.error(tErrors('chat.imagesRequireTools'))
+        return
+      }
+
       const userMsg: Message = {
         id: crypto.randomUUID(),
         sessionId: runSessionId,
         role: 'user',
         content: chatText,
+        attachments: options?.attachments?.length ? options.attachments : undefined,
         timestamp: Date.now(),
         status: 'sent',
         schemaVersion: CURRENT_SCHEMA_VERSION
@@ -568,13 +617,63 @@ export function ChatView() {
         await window.api.chatAppendMessage(userMsg)
       }
 
+      const currentUserMessageId = options?.skipUserMessage
+        ? (options.currentUserMessageId ??
+          [...store.getState().chat.messages]
+            .reverse()
+            .find((m) => m.sessionId === runSessionId && m.role === 'user' && m.status !== 'queued')?.id ??
+          '')
+        : userMsg.id
+
+      const modelEntry = cfg.models.find((m) => m.name === chatModelName)
+      let requestModel = chatModelName
+      let requestLlmServiceId = chatLlmServiceId
+      let effectiveModelForUsage: string | undefined
+
+      if (requestNeedsVisionModel(historyForApi)) {
+        const visionRoute = resolveVisionRouteForImageSend(cfg, chatModelName, chatLlmServiceId)
+        if (!visionRoute.ok) {
+          message.error(tErrors('chat.noVisionModel'))
+          return
+        }
+        if (visionRoute.switched) {
+          requestModel = visionRoute.modelName
+          requestLlmServiceId = visionRoute.llmServiceId
+          effectiveModelForUsage = visionRoute.modelName
+        }
+      }
+
+      const requestBaseUrl = (() => {
+        const svc = cfg.llmServices.find((s) => s.id === requestLlmServiceId)
+        return svc?.baseUrl || cfg.baseUrl || undefined
+      })()
+      const requestModelEntry = cfg.models.find((m) => m.name === requestModel) ?? modelEntry
+      const outputMaxTokens = resolveEffectiveOutputMaxTokens(requestModel, cfg.models)
+      const maxSystemChars = requestModelEntry ? Math.floor(requestModelEntry.maximumContext * 0.1) : undefined
+
+      const lastUsage = store.getState().chat.lastUsage
+      const pendingAttachments = options?.skipUserMessage ? undefined : userMsg.attachments
+      const pendingImageTokens = pendingAttachments?.length
+        ? estimateTokensFromImageAttachments(pendingAttachments)
+        : 0
+      const historyImageTokens = estimateTokensFromHistoryImages(historyForApi)
+      if (requestModelEntry) {
+        const cap = resolveEffectiveMaximumContext(requestModel, requestModelEntry.maximumContext)
+        const occupancy = lastUsage ? computeEstimatedOccupancy(lastUsage) : 0
+        if (cap > 0 && historyImageTokens + pendingImageTokens + occupancy > cap * 0.8) {
+          message.warning(
+            tContextUsage('sendWarning', {
+              imageTokens: historyImageTokens + pendingImageTokens,
+              percent: Math.round(((historyImageTokens + pendingImageTokens + occupancy) / cap) * 100)
+            })
+          )
+        }
+      }
+
       const requestId = crypto.randomUUID()
       registerSessionRun(runSessionId, requestId)
       abortRequestedRef.current = false
       dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
-
-      const useToolsApi =
-        cfg.tools.enabled && filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
 
       const recentMessages: SkillRouteRecentMessage[] = filterMessagesForChatApi(historyForApi)
         .filter((m) => m.content.trim())
@@ -586,7 +685,7 @@ export function ChatView() {
         sessionId: runSessionId,
         sessionMetadata: runSession?.metadata,
         recentMessages,
-        model: cfg.model
+        model: chatModelName
       })
       const activeSkills = routeResult.skills
       let skillHintTimestamp: number | undefined
@@ -616,9 +715,6 @@ export function ChatView() {
         })
       }
 
-      const modelEntry = cfg.models.find((m) => m.name === cfg.model)
-      const outputMaxTokens = resolveEffectiveOutputMaxTokens(cfg.model, cfg.models)
-      const maxSystemChars = modelEntry ? Math.floor(modelEntry.maximumContext * 0.1) : undefined
       let systemPrompt = buildSystemPromptFromSkills(activeSkills)
       const wikiSchemaActive =
         wikiConfig.enabled &&
@@ -763,16 +859,19 @@ export function ChatView() {
           const payload = buildToolChatPayload({
             requestId,
             sessionId: runSessionId,
-            model: cfg.model,
-            baseUrl: cfg.baseUrl || undefined,
+            model: requestModel,
+            baseUrl: requestBaseUrl,
+            llmServiceId: requestLlmServiceId,
             messages: historyForApi,
+            currentUserMessageId,
             toolsConfig: cfg.tools,
             browserConfig: cfg.browser,
             shellConfig: cfg.shell,
             maxTokens: outputMaxTokens,
             thinkingEnabled: cfg.thinkingEnabled,
             system: systemPrompt || undefined,
-            locale: resolveChatLocale()
+            locale: resolveChatLocale(),
+            effectiveModelForUsage
           })
           const res = await window.api.claudeChatCreateWithTools(payload)
           if (!res.ok) {
@@ -882,8 +981,8 @@ export function ChatView() {
       await runClaudeChatStream(
         {
           requestId,
-          model: cfg.model,
-          baseUrl: cfg.baseUrl || undefined,
+          model: requestModel,
+          baseUrl: requestBaseUrl,
           messages: basePayload,
           system: systemPrompt || undefined,
           maxTokens: outputMaxTokens,
@@ -963,14 +1062,20 @@ export function ChatView() {
         }
       )
     },
-    [cfg, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t]
+    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t, tErrors, tContextUsage, useToolsApi]
   )
 
   sendInternalRef.current = sendInternal
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments?: ChatImageAttachment[]) => {
       if (!text.trim()) return
+
+      const hasAttachments = (attachments?.length ?? 0) > 0
+      if (hasAttachments && !useToolsApi) {
+        message.error(tErrors('chat.imagesRequireTools'))
+        return
+      }
 
       let targetSessionId = sessionId
       if (!targetSessionId) {
@@ -980,7 +1085,8 @@ export function ChatView() {
         }
         try {
           const newSession = await window.api.sessionCreate({
-            model: cfg.model,
+            model: chatModelName,
+            llmServiceId: chatLlmServiceId,
             temperature: cfg.temperature ?? 1,
             name: '',
             metadata: {}
@@ -1007,13 +1113,13 @@ export function ChatView() {
           await sendInternal(text, sessionSkillsState, { targetSessionId, bypassRunningGuard: true })
           return
         }
-        await enqueueChatMessage(targetSessionId, text)
+        await enqueueChatMessage(targetSessionId, text, attachments)
         return
       }
 
-      await sendInternal(text, undefined, { targetSessionId })
+      await sendInternal(text, undefined, { targetSessionId, attachments })
     },
-    [sessionId, cfg, sendInternal, dispatch, message, t, currentSession, enqueueChatMessage]
+    [sessionId, cfg, sendInternal, dispatch, message, t, tErrors, currentSession, enqueueChatMessage, useToolsApi]
   )
 
   const retryFailedAssistant = useCallback(
@@ -1025,10 +1131,12 @@ export function ChatView() {
       if (assistant.role !== 'assistant' || assistant.status !== 'failed') return
 
       let userText = ''
+      let userMsg: Message | undefined
       for (let i = idx - 1; i >= 0; i--) {
         const row = msgs[i]
         if (row.role === 'user' && row.content.trim()) {
           userText = row.content
+          userMsg = row
           break
         }
       }
@@ -1038,7 +1146,11 @@ export function ChatView() {
       }
 
       dispatch(setMessages(msgs.filter((m) => m.id !== assistantMessageId)))
-      await sendInternal(userText, undefined, { skipUserMessage: true })
+      await sendInternal(userText, undefined, {
+        skipUserMessage: true,
+        attachments: userMsg?.attachments,
+        currentUserMessageId: userMsg?.id
+      })
     },
     [dispatch, message, sendInternal, t]
   )
@@ -1164,6 +1276,19 @@ export function ChatView() {
     [streamingAssistantId, toolsInteractive, testPreviewMessageIds, testPreviewToolsInteractive]
   )
 
+  const handleModelSelect = useCallback(
+    async (opt: ChatModelOption) => {
+      if (!sessionId) return
+      const updated = await window.api.sessionUpdate({
+        sessionId,
+        model: opt.modelName,
+        llmServiceId: opt.serviceId
+      })
+      if (updated) dispatch(upsertSession(updated))
+    },
+    [sessionId, dispatch]
+  )
+
   return (
     <div className="chat-view">
       <div ref={scrollRef} className="chat-scroll">
@@ -1216,6 +1341,9 @@ export function ChatView() {
       </div>
       <MessageInput
         ref={composerRef}
+        sessionId={sessionId ?? undefined}
+        historyMessages={composerHistoryMessages}
+        toolsEnabled={useToolsApi}
         running={running}
         queueCount={queueCount}
         runningStatus={runningActivity?.label}
@@ -1225,7 +1353,16 @@ export function ChatView() {
             ? formatStreamingElapsed(runningClock - streamingAssistant.timestamp)
             : undefined
         }
-        modelLabel={cfg?.model}
+        modelSlot={
+          cfg ? (
+            <ComposerModelPicker
+              cfg={cfg}
+              displayName={sessionBinding?.displayName ?? chatModelName}
+              unavailable={Boolean(sessionBinding && !sessionBinding.option)}
+              onSelect={(opt) => void handleModelSelect(opt)}
+            />
+          ) : null
+        }
         onSend={send}
         onAbort={abort}
       />

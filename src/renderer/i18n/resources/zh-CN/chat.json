@@ -71,7 +71,19 @@
     "hintRunning": "点击停止按钮中止",
     "hintRunningQueue": "Enter 发送并排队",
     "queueSend": "发送并排入队列",
-    "queuePending": "还有 {{count}} 条排队"
+    "queuePending": "还有 {{count}} 条排队",
+    "addImage": "添加图片",
+    "tooManyImages": "最多只能添加 {{max}} 张图片"
+  },
+  "attachment": {
+    "alt": "附件：{{name}}",
+    "remove": "移除 {{name}}"
+  },
+  "modelPicker": {
+    "empty": "暂无可用模型，请前往设置配置 API 服务与模型",
+    "unavailableHint": "当前会话模型不可用，请重新选择",
+    "selectModelAria": "选择模型，当前 {{name}}",
+    "switchModel": "切换模型"
   },
   "toolCall": {
     "confirm": {

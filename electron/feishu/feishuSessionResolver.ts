@@ -26,9 +26,13 @@ export async function resolveFeishuSession(
   db: AppDatabase,
   msg: FeishuInboundMessage,
   config: FeishuConfig,
-  defaultModel: string
+  defaultModel: string,
+  availableModelNames?: string[]
 ): Promise<{ sessionId: string; isNew: boolean }> {
-  const model = config.remoteDefaultModelId ?? defaultModel
+  let model = config.remoteDefaultModelId ?? defaultModel
+  if (config.remoteDefaultModelId && availableModelNames && !availableModelNames.includes(model)) {
+    model = defaultModel
+  }
   const mergeWindowMs = (config.remoteSessionMergeMinutes ?? 0) * 60_000
   if (mergeWindowMs <= 0) {
     return { sessionId: await createNewFeishuSession(db, msg, model), isNew: true }

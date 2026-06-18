@@ -1468,16 +1468,82 @@
 }
 
 .composer-model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
+  font-weight: 500;
   color: var(--sa-text-secondary);
   background: var(--sa-bg-muted);
   padding: 2px 8px;
   border-radius: 999px;
-  max-width: 200px;
+  max-width: 220px;
+  flex-shrink: 0;
+}
+
+.composer-model-chip__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.composer-model-chip__chevron {
   flex-shrink: 0;
+  opacity: 0.72;
+  transition: transform var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.composer-model-chip--button {
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--sa-border) 88%, transparent);
+  background: var(--sa-bg-elevated);
+  padding: 3px 8px 3px 10px;
+  font: inherit;
+  transition:
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.composer-model-chip--button:hover {
+  background: var(--sa-bg-muted);
+  border-color: var(--sa-border);
+  color: var(--sa-text);
+}
+
+.composer-model-chip--button:hover .composer-model-chip__chevron {
+  opacity: 1;
+}
+
+.composer-model-chip--open {
+  border-color: color-mix(in srgb, var(--sa-primary) 32%, var(--sa-border));
+  background: var(--sa-bg-muted);
+  color: var(--sa-text);
+}
+
+.composer-model-chip--open .composer-model-chip__chevron {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+
+.composer-model-chip--button:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 2px;
+}
+
+.composer-model-chip--warn {
+  color: var(--sa-warning, #d48806);
+}
+
+.composer-model-chip--warn.composer-model-chip--button {
+  border-color: color-mix(in srgb, var(--sa-warning, #d48806) 28%, var(--sa-border));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-model-chip__chevron {
+    transition: none;
+  }
 }
 
 .composer-hint-trigger {

@@ -36,6 +36,7 @@ function normalizeModels(models: ModelEntry[]): ModelEntry[] {
       maxTokens: m.maxTokens,
       isDefault: m.isDefault,
       isFast: m.isFast,
+      isVision: m.isVision,
       enabled: m.enabled
     }))
     .sort((a, b) => a.id.localeCompare(b.id))
@@ -43,7 +44,7 @@ function normalizeModels(models: ModelEntry[]): ModelEntry[] {
 
 function normalizeLlmState(state: LlmServiceTabState) {
   return {
-    activeId: state.activeId,
+    activeIds: [...state.activeIds],
     order: [...state.order],
     drafts: state.order.map((id) => {
       const d = state.drafts[id]!
@@ -52,6 +53,7 @@ function normalizeLlmState(state: LlmServiceTabState) {
         name: d.name,
         baseUrl: d.baseUrl,
         apiKeyDraft: d.apiKeyDraft,
+        supportedModelIds: [...d.supportedModelIds],
         isNew: Boolean(d.isNew)
       }
     })

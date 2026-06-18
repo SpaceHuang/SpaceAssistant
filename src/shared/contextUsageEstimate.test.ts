@@ -1,12 +1,28 @@
 import { describe, expect, it } from 'vitest'
+import type { ChatImageAttachment } from './domainTypes'
 import {
   computeContextUsageDisplay,
   computeEstimatedOccupancy,
   computeTotalRequestInputTokens,
+  estimateTokensFromHistoryImages,
+  estimateTokensFromImageAttachment,
+  estimateTokensFromImageAttachments,
   estimateTokensFromToolResults,
   projectUsageAfterToolResults,
   resolveEffectiveMaximumContext
 } from './contextUsageEstimate'
+import type { Message } from './domainTypes'
+
+function imageAttachment(overrides: Partial<ChatImageAttachment> = {}): ChatImageAttachment {
+  return {
+    id: 'img-1',
+    stagingKey: 'chat-attachments/s1/img.png',
+    fileName: 'img.png',
+    mimeType: 'image/png',
+    byteLength: 1000,
+    ...overrides
+  }
+}
 
 describe('computeTotalRequestInputTokens', () => {
   it('returns input when no cache fields', () => {
@@ -92,6 +108,73 @@ describe('computeContextUsageDisplay', () => {
     expect(d.estimatedOccupancy).toBe(200_000)
     expect(d.usedRatio + d.reservedRatio).toBeCloseTo(1)
     expect(d.freeRatio).toBe(0)
+  })
+})
+
+describe('estimateTokensFromImageAttachment(s)', () => {
+  it('uses dimension-based estimate when width and height are present', () => {
+    const attachment = imageAttachment({ width: 1024, height: 1024, byteLength: 500 })
+    expect(estimateTokensFromImageAttachment(attachment)).toBe(1600)
+  })
+
+  it('falls back to byteLength when dimensions are missing', () => {
+    const attachment = imageAttachment({ byteLength: 4000 })
+    expect(estimateTokensFromImageAttachment(attachment)).toBe(85)
+  })
+
+  it('sums multiple attachments', () => {
+    const attachments = [
+      imageAttachment({ width: 512, height: 512, byteLength: 100 }),
+      imageAttachment({ byteLength: 10_000 })
+    ]
+    expect(estimateTokensFromImageAttachments(attachments)).toBe(
+      estimateTokensFromImageAttachment(attachments[0]!) +
+        estimateTokensFromImageAttachment(attachments[1]!)
+    )
+  })
+})
+
+describe('estimateTokensFromHistoryImages', () => {
+  it('returns zero when no user message has attachments', () => {
+    const messages: Message[] = [
+      {
+        id: 'u1',
+        sessionId: 's1',
+        role: 'user',
+        content: 'text',
+        timestamp: 1,
+        status: 'completed'
+      }
+    ]
+    expect(estimateTokensFromHistoryImages(messages)).toBe(0)
+  })
+
+  it('sums tokens from multiple image user messages', () => {
+    const attachment = imageAttachment({ width: 512, height: 512, byteLength: 100 })
+    const messages: Message[] = [
+      {
+        id: 'u1',
+        sessionId: 's1',
+        role: 'user',
+        content: 'first',
+        timestamp: 1,
+        status: 'completed',
+        attachments: [attachment]
+      },
+      {
+        id: 'u2',
+        sessionId: 's1',
+        role: 'user',
+        content: 'second',
+        timestamp: 2,
+        status: 'completed',
+        attachments: [imageAttachment({ byteLength: 10_000 })]
+      }
+    ]
+    expect(estimateTokensFromHistoryImages(messages)).toBe(
+      estimateTokensFromImageAttachments(messages[0]!.attachments!) +
+        estimateTokensFromImageAttachments(messages[1]!.attachments!)
+    )
   })
 })
 

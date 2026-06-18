@@ -26,6 +26,10 @@ const api: SpaceAssistantApi = {
       { ok: true; sessionId: string } | { ok: false; error: string }
     >,
 
+  chatStageImage: (args) => ipcRenderer.invoke('chat:stage-image', args),
+  chatDiscardStagedImage: (args) => ipcRenderer.invoke('chat:discard-staged-image', args),
+  chatReadStagedImage: (args) => ipcRenderer.invoke('chat:read-staged-image', args),
+
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => ipcRenderer.invoke('claude-chat-send-stream', payload),
   claudeChatCreateWithTools: (payload: ClaudeChatCreateWithToolsPayload) =>
     ipcRenderer.invoke('claude-chat-create-with-tools', payload),
@@ -61,7 +65,12 @@ const api: SpaceAssistantApi = {
 
   configGet: () => ipcRenderer.invoke('config:get'),
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),
-  configTestConnection: (options?: { serviceId?: string; apiKey?: string; baseUrl?: string }) =>
+  configTestConnection: (options?: {
+    serviceId?: string
+    apiKey?: string
+    baseUrl?: string
+    supportedModelIds?: string[]
+  }) =>
     ipcRenderer.invoke('config:test-connection', options),
 
   dialogSelectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),

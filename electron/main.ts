@@ -265,7 +265,7 @@ app.whenReady().then(() => {
     const activeId = readActiveLlmServiceId(db) ?? readLlmServices(db)[0]?.id
     if (activeId) {
       const services = readLlmServices(db)
-      persistLlmServices(db, services, activeId, { [activeId]: value })
+      persistLlmServices(db, services, [activeId], { [activeId]: value })
     } else {
       setConfigValue(db, API_KEY_CONFIG_KEY, encryptSecret(value))
     }

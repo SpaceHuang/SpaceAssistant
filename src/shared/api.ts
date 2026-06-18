@@ -2,6 +2,7 @@ import type { AppLocale } from './locale'
 import type {
   AppConfig,
   AutoApproveFallback,
+  ChatImageAttachment,
   FileInfo,
   Message,
   ProjectMemoryState,
@@ -96,12 +97,21 @@ export type ClaudeChatCreateWithToolsPayload = {
   sessionId: string
   model: string
   baseUrl?: string
-  messages: ClaudeChatMessageWithBlocks[]
+  /** 指定 API 服务 id，主进程据此解析 Key */
+  llmServiceId?: string
+  /** 领域消息（含 attachments 元数据，无 base64）；主进程 build */
+  sourceMessages: Message[]
+  /** 本次 invoke 的当轮 user 消息 id */
+  currentUserMessageId: string
+  /** @deprecated 渲染进程预 build；保留类型兼容，主进程不消费 */
+  messages?: ClaudeChatMessageWithBlocks[]
   tools: Array<Record<string, unknown>>
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   projectMemoryEnabled?: boolean
   locale?: AppLocale
+  /** P1：临时视觉路由时上下文环分母修正 */
+  effectiveModelForUsage?: string
 }
 
 export type SpaceAssistantApi = {
@@ -113,6 +123,7 @@ export type SpaceAssistantApi = {
   sessionCreate: (payload: {
     name: string
     model?: string
+    llmServiceId?: string
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
@@ -121,6 +132,8 @@ export type SpaceAssistantApi = {
   sessionUpdate: (payload: {
     sessionId: string
     name?: string
+    model?: string
+    llmServiceId?: string
     temperature?: number
     maxTokens?: number
     skillsState?: SessionSkillsState
@@ -138,12 +151,41 @@ export type SpaceAssistantApi = {
   chatPatchMessage: (payload: {
     messageId: string
     sessionId: string
-    patch: Partial<Pick<Message, 'content' | 'status' | 'toolUse' | 'thinking' | 'toolCalls' | 'contentSegments' | 'skillHints'>>
+    patch: Partial<
+      Pick<
+        Message,
+        | 'content'
+        | 'status'
+        | 'toolUse'
+        | 'thinking'
+        | 'toolCalls'
+        | 'contentSegments'
+        | 'skillHints'
+        | 'attachments'
+        | 'imagesDeliveredToApi'
+      >
+    >
   }) => Promise<void>
   chatDeleteQueuedMessage: (payload: {
     messageId: string
     sessionId: string
   }) => Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>
+
+  chatStageImage: (args: {
+    sessionId: string
+    fileName: string
+    mimeType: string
+    dataBase64: string
+  }) => Promise<ChatImageAttachment | { error: string }>
+  chatDiscardStagedImage: (args: {
+    sessionId: string
+    stagingKey: string
+  }) => Promise<{ ok: true } | { error: string }>
+  chatReadStagedImage: (args: {
+    sessionId: string
+    stagingKey: string
+    maxBytes?: number
+  }) => Promise<{ mimeType: string; dataBase64: string } | { error: string }>
 
   claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => Promise<{ ok: true } | { ok: false; error: string }>
   claudeChatCreateWithTools: (
@@ -172,8 +214,12 @@ export type SpaceAssistantApi = {
       workDir: string
       apiKey: string
       llmServices: import('./domainTypes').LlmServiceProfile[]
-      activeLlmServiceId: string
-      llmServiceKeys: Record<string, string>
+        activeLlmServiceId?: string
+        activeLlmServiceIds?: string[]
+        preferredLanguageModelId?: string
+        preferredFastLanguageModelId?: string
+        preferredVisionModelId?: string
+        llmServiceKeys?: Record<string, string>
       tools: Partial<ToolsConfig>
       skills: Partial<SkillsConfig>
       wiki: Partial<WikiConfig>
@@ -190,6 +236,8 @@ export type SpaceAssistantApi = {
     serviceId?: string
     apiKey?: string
     baseUrl?: string
+    /** 设置页草稿中的支持模型 id；未保存时须传入 */
+    supportedModelIds?: string[]
   }) => Promise<{ success: boolean; error?: string }>
 
   dialogSelectDirectory: () => Promise<{ path: string } | { canceled: true } | { error: string }>

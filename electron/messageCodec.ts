@@ -1,4 +1,4 @@
-import type { ContentSegment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
+import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -152,6 +152,21 @@ export function deserializeSkillHintsFromDb(raw: string | null | undefined): Ski
   }
 }
 
+export function serializeAttachmentsForDb(attachments: ChatImageAttachment[] | undefined): string | null {
+  if (!attachments?.length) return null
+  return JSON.stringify(attachments)
+}
+
+export function deserializeAttachmentsFromDb(raw: string | null | undefined): ChatImageAttachment[] | undefined {
+  if (!raw) return undefined
+  try {
+    const arr = JSON.parse(raw) as ChatImageAttachment[]
+    return Array.isArray(arr) ? arr : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function rowToMessage(row: {
   id: string
   sessionId: string
@@ -162,6 +177,8 @@ export function rowToMessage(row: {
   thinking: string | null
   contentSegments?: string | null
   skillHints?: string | null
+  attachments?: string | null
+  imagesDeliveredToApi?: boolean | null
   status: string
   schemaVersion: number
   timestamp: number
@@ -178,6 +195,8 @@ export function rowToMessage(row: {
     thinking: deserializeThinkingFromDb(row.thinking),
     contentSegments: deserializeContentSegmentsFromDb(row.contentSegments),
     skillHints: deserializeSkillHintsFromDb(row.skillHints),
+    attachments: deserializeAttachmentsFromDb(row.attachments),
+    imagesDeliveredToApi: row.imagesDeliveredToApi ?? undefined,
     status: row.status as Message['status'],
     schemaVersion: row.schemaVersion
   }

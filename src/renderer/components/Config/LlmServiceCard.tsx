@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { App, Button, Input, Radio } from 'antd'
+import { App, Button, Checkbox, Input, Select, Space } from 'antd'
+import type { ModelEntry } from '../../../shared/domainTypes'
+import { ConfigModelOptionContent } from './ConfigModelOption'
 import type { LlmServiceDraft } from './llmServiceDrafts'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './llmServiceCard.css'
@@ -26,29 +28,34 @@ function DeleteIcon() {
 function buildServiceSummary(draft: LlmServiceDraft, t: ReturnType<typeof useTypedTranslation<'config'>>['t']): string {
   const keyLabel =
     draft.apiKeyPresent || draft.apiKeyDraft.trim() ? t('llmService.keyConfigured') : t('llmService.keyNotConfigured')
+  const modelPart = t('llmService.supportedModelsCount', { count: draft.supportedModelIds.length })
   if (draft.baseUrl.trim()) {
-    return `${draft.baseUrl.trim()} · ${keyLabel}`
+    return `${draft.baseUrl.trim()} · ${keyLabel} · ${modelPart}`
   }
-  return `${t('llmService.officialDefault')} · ${keyLabel}`
+  return `${t('llmService.officialDefault')} · ${keyLabel} · ${modelPart}`
 }
 
 type Props = {
   draft: LlmServiceDraft
   isActive: boolean
+  modelsMissing?: boolean
   canDelete: boolean
+  enabledModels: ModelEntry[]
   cardRef: (el: HTMLDivElement | null) => void
-  onSelectActive: () => void
+  onToggleActive: () => void
   onToggleExpand: () => void
   onDelete: () => void
-  onPatch: (patch: Partial<Pick<LlmServiceDraft, 'name' | 'baseUrl' | 'apiKeyDraft'>>) => void
+  onPatch: (patch: Partial<Pick<LlmServiceDraft, 'name' | 'baseUrl' | 'apiKeyDraft' | 'supportedModelIds'>>) => void
 }
 
 export function LlmServiceCard({
   draft,
   isActive,
+  modelsMissing = false,
   canDelete,
+  enabledModels,
   cardRef,
-  onSelectActive,
+  onToggleActive,
   onToggleExpand,
   onDelete,
   onPatch
@@ -58,15 +65,19 @@ export function LlmServiceCard({
   const { t: tCommon } = useTypedTranslation('common')
   const [testing, setTesting] = useState(false)
   const expanded = draft.expanded
-  const showCollapse = !isActive
 
   const testConnection = async () => {
+    if (draft.supportedModelIds.length === 0) {
+      message.warning(t('llmService.testConnectionNeedModels'))
+      return
+    }
     setTesting(true)
     try {
       const r = await window.api.configTestConnection({
         serviceId: draft.id,
         apiKey: draft.apiKeyDraft.trim() || undefined,
-        baseUrl: draft.baseUrl
+        baseUrl: draft.baseUrl,
+        supportedModelIds: draft.supportedModelIds
       })
       if (r.success) message.success(t('messages.connectionSuccess'))
       else message.error(r.error ?? t('messages.connectionFailed'))
@@ -76,6 +87,10 @@ export function LlmServiceCard({
   }
 
   const displayTitle = draft.name.trim() || (draft.isNew ? t('llmService.newService') : t('llmService.unnamedService'))
+  const selectableIds = enabledModels.map((m) => m.id)
+
+  const selectAll = () => onPatch({ supportedModelIds: [...selectableIds] })
+  const clearAll = () => onPatch({ supportedModelIds: [] })
 
   return (
     <div
@@ -83,15 +98,16 @@ export function LlmServiceCard({
       className={[
         'llm-service-card',
         isActive ? 'llm-service-card--active' : '',
-        draft.isNew ? 'llm-service-card--new' : ''
+        draft.isNew ? 'llm-service-card--new' : '',
+        modelsMissing ? 'llm-service-card--models-missing' : ''
       ]
         .filter(Boolean)
         .join(' ')}
     >
       <div className="llm-service-card-header">
-        <Radio checked={isActive} onChange={onSelectActive}>
+        <Checkbox checked={isActive} onChange={onToggleActive}>
           {t('llmService.active')}
-        </Radio>
+        </Checkbox>
         {expanded ? (
           <Input
             className="llm-service-card-title"
@@ -103,16 +119,14 @@ export function LlmServiceCard({
         ) : (
           <span className="llm-service-card-title">{displayTitle}</span>
         )}
-        {showCollapse && (
-          <Button
-            type="text"
-            size="small"
-            icon={<ChevronIcon down={expanded} />}
-            onClick={onToggleExpand}
-            title={expanded ? t('llmService.collapse') : t('llmService.expand')}
-            aria-label={expanded ? t('llmService.collapseAria') : t('llmService.expandAria')}
-          />
-        )}
+        <Button
+          type="text"
+          size="small"
+          icon={<ChevronIcon down={expanded} />}
+          onClick={onToggleExpand}
+          title={expanded ? t('llmService.collapse') : t('llmService.expand')}
+          aria-label={expanded ? t('llmService.collapseAria') : t('llmService.expandAria')}
+        />
         <Button
           type="text"
           size="small"
@@ -127,6 +141,36 @@ export function LlmServiceCard({
       {!expanded && <div className="llm-service-card-summary">{buildServiceSummary(draft, t)}</div>}
       {expanded && (
         <div className="llm-service-card-body">
+          <div className="llm-service-supported-models">
+            <div className="llm-service-supported-models__header">
+              <span className="llm-service-field-label">{t('llmService.supportedModelsLabel')}</span>
+              <Space size={4}>
+                <Button size="small" type="link" onClick={selectAll}>
+                  {t('llmService.selectAllModels')}
+                </Button>
+                <Button size="small" type="link" onClick={clearAll}>
+                  {t('llmService.clearAllModels')}
+                </Button>
+              </Space>
+            </div>
+            <Select
+              mode="multiple"
+              style={{ width: '100%' }}
+              placeholder={t('llmService.supportedModelsPlaceholder')}
+              value={draft.supportedModelIds}
+              onChange={(ids) => onPatch({ supportedModelIds: ids })}
+              options={enabledModels.map((m) => ({ value: m.id, label: m.name }))}
+              optionRender={(opt) => {
+                const m = enabledModels.find((x) => x.id === opt.value)
+                return m ? <ConfigModelOptionContent m={m} compact /> : opt.label
+              }}
+              maxTagCount="responsive"
+              status={modelsMissing ? 'error' : undefined}
+            />
+            {modelsMissing ? (
+              <p className="llm-service-supported-models__hint">{t('llmService.supportedModelsRequired')}</p>
+            ) : null}
+          </div>
           <div className="llm-service-key-field">
             <div className="llm-service-field-label">{t('llmService.apiKeyLabel')}</div>
             <Input.Password

@@ -4,21 +4,28 @@ import {
   addNewServiceDraft,
   initLlmServiceTabState,
   removeServiceDraft,
-  setActiveService,
+  toggleActiveService,
   toggleCardExpanded,
   updateServiceDraft,
   type LlmServiceTabState
 } from './llmServiceDrafts'
+import { getEnabledModelIds } from '../../../shared/llmModelConfig'
 
-export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null) {
-  const [state, setState] = useState<LlmServiceTabState>({ drafts: {}, activeId: '', order: [] })
+export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, enabledModelIds: string[] = []) {
+  const [state, setState] = useState<LlmServiceTabState>({ drafts: {}, activeIds: [], order: [] })
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   useEffect(() => {
     if (open && cfg) {
-      setState(initLlmServiceTabState(cfg.llmServices ?? [], cfg.activeLlmServiceId ?? ''))
+      const ids = cfg.activeLlmServiceIds?.length
+        ? cfg.activeLlmServiceIds
+        : cfg.activeLlmServiceId
+          ? [cfg.activeLlmServiceId]
+          : []
+      const modelIds = enabledModelIds.length ? enabledModelIds : getEnabledModelIds(cfg.models ?? [])
+      setState(initLlmServiceTabState(cfg.llmServices ?? [], ids, modelIds))
     }
-  }, [open, cfg])
+  }, [open, cfg, enabledModelIds])
 
   const scrollToCard = useCallback((serviceId: string) => {
     requestAnimationFrame(() => {
@@ -26,29 +33,34 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null) {
     })
   }, [])
 
-  const selectActive = useCallback(
-    (serviceId: string) => {
-      setState((s) => {
-        const next = setActiveService(s, serviceId)
-        return next
-      })
-      scrollToCard(serviceId)
-    },
-    [scrollToCard]
-  )
+  const toggleActive = useCallback((serviceId: string): 'needModels' | null => {
+    let issue: 'needModels' | null = null
+    setState((s) => {
+      const result = toggleActiveService(s, serviceId)
+      if ('error' in result) {
+        issue = result.error
+        return s
+      }
+      return result
+    })
+    return issue
+  }, [])
 
   const toggleExpanded = useCallback((serviceId: string) => {
     setState((s) => toggleCardExpanded(s, serviceId))
   }, [])
 
-  const addService = useCallback(() => {
-    setState((s) => {
-      const result = addNewServiceDraft(s)
-      if ('error' in result) return s
-      scrollToCard(result.order[result.order.length - 1]!)
-      return result
-    })
-  }, [scrollToCard])
+  const addService = useCallback(
+    (modelIds: string[]) => {
+      setState((s) => {
+        const result = addNewServiceDraft(s, modelIds)
+        if ('error' in result) return s
+        scrollToCard(result.order[result.order.length - 1]!)
+        return result
+      })
+    },
+    [scrollToCard]
+  )
 
   const removeService = useCallback(
     (serviceId: string): string | null => {
@@ -59,9 +71,7 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null) {
           err = result.error
           return s
         }
-        if (serviceId === s.activeId) {
-          scrollToCard(result.activeId)
-        }
+        scrollToCard(result.activeIds[0] ?? result.order[0] ?? '')
         return result
       })
       return err
@@ -76,14 +86,22 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null) {
     []
   )
 
-  const resetFromConfig = useCallback((config: AppConfig) => {
-    setState(initLlmServiceTabState(config.llmServices ?? [], config.activeLlmServiceId ?? ''))
-  }, [])
+  const resetFromConfig = useCallback(
+    (config: AppConfig) => {
+      const ids = config.activeLlmServiceIds?.length
+        ? config.activeLlmServiceIds
+        : config.activeLlmServiceId
+          ? [config.activeLlmServiceId]
+          : []
+      setState(initLlmServiceTabState(config.llmServices ?? [], ids, getEnabledModelIds(config.models ?? [])))
+    },
+    []
+  )
 
   return {
     state,
     cardRefs,
-    selectActive,
+    toggleActive,
     toggleExpanded,
     addService,
     removeService,
@@ -95,7 +113,9 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null) {
 export type { LlmServiceTabState, LlmServiceDraft } from './llmServiceDrafts'
 export {
   validateLlmServiceDrafts,
+  formatLlmServiceValidationError,
   buildLlmServicesSavePayload,
   buildServiceSummary,
+  setAllSupportedModels,
   MAX_LLM_SERVICES
 } from './llmServiceDrafts'
