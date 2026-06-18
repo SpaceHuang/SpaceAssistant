@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   buildClaudeToolChatMessages,
   buildUserMessageContent,
-  shouldHydrateImagesForMessage,
   trimClaudeToolChatMessages
 } from './claudeToolHistory'
 import type { ChatImageAttachment, Message } from './domainTypes'
@@ -87,22 +86,10 @@ describe('buildUserMessageContent', () => {
   })
 })
 
-describe('shouldHydrateImagesForMessage', () => {
-  it('returns true only for the current user message with attachments', () => {
-    const msg = userMsg('u1', 'hi', { attachments: [imageAttachment('a.png')] })
-    expect(shouldHydrateImagesForMessage(msg, 'u1')).toBe(true)
-    expect(shouldHydrateImagesForMessage(msg, 'u2')).toBe(false)
-  })
-
-  it('returns false when there are no attachments', () => {
-    expect(shouldHydrateImagesForMessage(userMsg('u1', 'hi'), 'u1')).toBe(false)
-  })
-})
-
-describe('buildClaudeToolChatMessages attachments', () => {
-  it('hydrates current turn fully and uses placeholder for history', () => {
+describe('buildClaudeToolChatMessages attachments (strategy A)', () => {
+  it('full-hydrates historical image messages on later turns', () => {
     const history = userMsg('u1', 'earlier', { attachments: [imageAttachment('old.png')] })
-    const current = userMsg('u2', 'now', { attachments: [imageAttachment('new.png')] })
+    const current = userMsg('u2', 'now')
     const resolveImage = (a: ChatImageAttachment) => ({
       mimeType: a.mimeType,
       data: `data-for-${a.fileName}`
@@ -114,32 +101,50 @@ describe('buildClaudeToolChatMessages attachments', () => {
     })
 
     expect(api).toHaveLength(2)
-    expect(typeof api[0]!.content).toBe('string')
-    expect(api[0]!.content).toContain('[此前发送的图片: old.png]')
-    expect(api[1]!.content).toEqual([
-      { type: 'text', text: 'now' },
+    expect(api[0]!.content).toEqual([
+      { type: 'text', text: 'earlier' },
       {
         type: 'image',
-        source: { type: 'base64', media_type: 'image/png', data: 'data-for-new.png' }
+        source: { type: 'base64', media_type: 'image/png', data: 'data-for-old.png' }
+      }
+    ])
+    expect(api[1]!.content).toBe('now')
+  })
+
+  it('ignores imagesDeliveredToApi and still full-hydrates', () => {
+    const history = userMsg('u1', 'earlier', {
+      attachments: [imageAttachment('sent.png')],
+      imagesDeliveredToApi: true
+    })
+    const current = userMsg('u2', 'follow-up')
+
+    const api = buildClaudeToolChatMessages([history, current], {
+      currentUserMessageId: 'u2',
+      resolveImage: () => ({ mimeType: 'image/png', data: 'still-hydrated' })
+    })
+
+    expect(api).toHaveLength(2)
+    expect(api[0]!.content).toEqual([
+      { type: 'text', text: 'earlier' },
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'still-hydrated' }
       }
     ])
   })
 
-  it('uses placeholder when imagesDeliveredToApi prevents re-hydrate', () => {
-    const current = userMsg('u1', 'again', {
-      attachments: [imageAttachment('sent.png')],
-      imagesDeliveredToApi: true
-    })
-
-    const api = buildClaudeToolChatMessages([current], {
+  it('uses stale text when staging is missing', () => {
+    const history = userMsg('u1', 'earlier', { attachments: [imageAttachment('gone.png')] })
+    const api = buildClaudeToolChatMessages([history], {
       currentUserMessageId: 'u1',
-      resolveImage: () => ({ mimeType: 'image/png', data: 'should-not-be-used' })
+      resolveImage: () => null
     })
 
     expect(api).toHaveLength(1)
-    expect(typeof api[0]!.content).toBe('string')
-    expect(api[0]!.content).toContain('[此前发送的图片: sent.png]')
-    expect(api[0]!.content).not.toContain('should-not-be-used')
+    expect(api[0]!.content).toEqual([
+      { type: 'text', text: 'earlier' },
+      { type: 'text', text: '[图片附件已失效: gone.png]' }
+    ])
   })
 })
 

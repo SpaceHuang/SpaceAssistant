@@ -2,8 +2,8 @@
 
 > 版本：v1.0  
 > 设计日期：2026-06-17  
-> 状态：草案  
-> 前置实现：[chat-vision-image-context-design.md](./chat-vision-image-context-design.md) v1.2（策略 B：§3.6 当轮-only + 历史占位符）  
+> 状态：已实现  
+> 前置实现：[chat-vision-image-context-design.md](./chat-vision-image-context-design.md) v1.2（策略 B：§3.6 当轮-only + 历史占位符，已被本方案替代）  
 > 动机：用户反馈「首条带图发送后，隔多轮追问图片细节时模型无法再看图」——根因是 **API payload 历史被占位符替换**，非视觉模型能力缺失。
 
 ---

@@ -3,9 +3,10 @@ import { Tooltip } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useTypedSelector } from '../../hooks'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { ChatImageAttachment } from '../../../shared/domainTypes'
+import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
 import {
   computeContextUsageDisplay,
+  estimateTokensFromHistoryImages,
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../../shared/contextUsageEstimate'
@@ -28,6 +29,7 @@ type RingSegment = {
 
 type Props = {
   pendingImageAttachments?: ChatImageAttachment[]
+  historyMessages?: Message[]
 }
 
 /** 在同一圆环上按顺序拼接：已用 | 输出预留 | 剩余（由底色轨道表示） */
@@ -50,7 +52,7 @@ export function buildContextRingSegments(
   return segments
 }
 
-export function ContextUsageRing({ pendingImageAttachments }: Props) {
+export function ContextUsageRing({ pendingImageAttachments, historyMessages }: Props) {
   const { t } = useTypedTranslation('contextUsage')
   const { i18n } = useTranslation()
   const lastUsage = useTypedSelector((s) => s.chat.lastUsage)
@@ -60,6 +62,11 @@ export function ContextUsageRing({ pendingImageAttachments }: Props) {
     if (!pendingImageAttachments?.length) return 0
     return estimateTokensFromImageAttachments(pendingImageAttachments)
   }, [pendingImageAttachments])
+
+  const historyImageTokens = useMemo(() => {
+    if (!historyMessages?.length) return 0
+    return estimateTokensFromHistoryImages(historyMessages)
+  }, [historyMessages])
 
   const currentModel = useMemo(() => {
     if (!config) return undefined
@@ -96,10 +103,18 @@ export function ContextUsageRing({ pendingImageAttachments }: Props) {
 
   const tooltipTitle = useMemo(() => {
     if (!hasData || !lastUsage || !display) {
-      if (pendingImageTokens > 0) {
+      if (pendingImageTokens > 0 || historyImageTokens > 0) {
+        const lines: string[] = []
+        if (pendingImageTokens > 0) {
+          lines.push(t('tooltip.pendingImages', { count: pendingImageTokens }))
+        }
+        if (historyImageTokens > 0) {
+          lines.push(t('tooltip.historyImages', { count: historyImageTokens }))
+          lines.push(t('tooltip.historyImagesNote'))
+        }
         return (
           <pre style={{ margin: 0, fontFamily: 'inherit', whiteSpace: 'pre', lineHeight: 1.6 }}>
-            {t('tooltip.pendingImages', { count: pendingImageTokens })}
+            {lines.join('\n')}
           </pre>
         )
       }
@@ -123,6 +138,10 @@ export function ContextUsageRing({ pendingImageAttachments }: Props) {
     if (pendingImageTokens > 0) {
       lines.push(t('tooltip.pendingImages', { count: pendingImageTokens }))
     }
+    if (historyImageTokens > 0) {
+      lines.push(t('tooltip.historyImages', { count: historyImageTokens }))
+      lines.push(t('tooltip.historyImagesNote'))
+    }
     lines.push(t('tooltip.separator'))
     lines.push(
       `${t('tooltip.total')} ${formatNum(display.estimatedOccupancy, locale)} / ${formatNum(display.maximumContext, locale)}（${display.percentUsed.toFixed(1)}%）`
@@ -136,7 +155,7 @@ export function ContextUsageRing({ pendingImageAttachments }: Props) {
         {lines.join('\n')}
       </pre>
     )
-  }, [hasData, lastUsage, display, pendingImageTokens, t, i18n.language])
+  }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, t, i18n.language])
 
   const ariaLabel =
     hasData && display

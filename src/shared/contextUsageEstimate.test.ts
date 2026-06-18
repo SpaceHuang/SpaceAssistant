@@ -4,12 +4,14 @@ import {
   computeContextUsageDisplay,
   computeEstimatedOccupancy,
   computeTotalRequestInputTokens,
+  estimateTokensFromHistoryImages,
   estimateTokensFromImageAttachment,
   estimateTokensFromImageAttachments,
   estimateTokensFromToolResults,
   projectUsageAfterToolResults,
   resolveEffectiveMaximumContext
 } from './contextUsageEstimate'
+import type { Message } from './domainTypes'
 
 function imageAttachment(overrides: Partial<ChatImageAttachment> = {}): ChatImageAttachment {
   return {
@@ -128,6 +130,50 @@ describe('estimateTokensFromImageAttachment(s)', () => {
     expect(estimateTokensFromImageAttachments(attachments)).toBe(
       estimateTokensFromImageAttachment(attachments[0]!) +
         estimateTokensFromImageAttachment(attachments[1]!)
+    )
+  })
+})
+
+describe('estimateTokensFromHistoryImages', () => {
+  it('returns zero when no user message has attachments', () => {
+    const messages: Message[] = [
+      {
+        id: 'u1',
+        sessionId: 's1',
+        role: 'user',
+        content: 'text',
+        timestamp: 1,
+        status: 'completed'
+      }
+    ]
+    expect(estimateTokensFromHistoryImages(messages)).toBe(0)
+  })
+
+  it('sums tokens from multiple image user messages', () => {
+    const attachment = imageAttachment({ width: 512, height: 512, byteLength: 100 })
+    const messages: Message[] = [
+      {
+        id: 'u1',
+        sessionId: 's1',
+        role: 'user',
+        content: 'first',
+        timestamp: 1,
+        status: 'completed',
+        attachments: [attachment]
+      },
+      {
+        id: 'u2',
+        sessionId: 's1',
+        role: 'user',
+        content: 'second',
+        timestamp: 2,
+        status: 'completed',
+        attachments: [imageAttachment({ byteLength: 10_000 })]
+      }
+    ]
+    expect(estimateTokensFromHistoryImages(messages)).toBe(
+      estimateTokensFromImageAttachments(messages[0]!.attachments!) +
+        estimateTokensFromImageAttachments(messages[1]!.attachments!)
     )
   })
 })

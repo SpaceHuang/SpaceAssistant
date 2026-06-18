@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { ComponentProps } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
@@ -7,7 +8,7 @@ import { changeAppLocale } from '../../i18n/localeSync'
 import type { SessionUsage } from '../../../shared/sessionUsage'
 import configReducer, { setConfig } from '../../store/configSlice'
 import { buildContextRingSegments, ContextUsageRing } from './ContextUsageRing'
-import type { AppConfig } from '../../../shared/domainTypes'
+import type { AppConfig, Message } from '../../../shared/domainTypes'
 import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_FEISHU_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 
@@ -40,7 +41,11 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   } as AppConfig
 }
 
-function renderRing(lastUsage?: SessionUsage | null, configOverrides?: Partial<AppConfig>) {
+function renderRing(
+  lastUsage?: SessionUsage | null,
+  configOverrides?: Partial<AppConfig>,
+  ringProps?: ComponentProps<typeof ContextUsageRing>
+) {
   const store = configureStore({
     reducer: { chat: chatReducer, config: configReducer }
   })
@@ -52,7 +57,7 @@ function renderRing(lastUsage?: SessionUsage | null, configOverrides?: Partial<A
     store,
     ...render(
       <Provider store={store}>
-        <ContextUsageRing />
+        <ContextUsageRing {...ringProps} />
       </Provider>
     )
   }
@@ -200,6 +205,38 @@ describe('ContextUsageRing', () => {
       expect(text).toContain('Estimated occupancy')
       expect(text).toContain('Last request input')
       expect(text).toContain('Output reserve')
+    })
+  })
+
+  it('shows history image token estimate in tooltip', async () => {
+    const historyMessages: Message[] = [
+      {
+        id: 'u1',
+        sessionId: 's1',
+        role: 'user',
+        content: 'with image',
+        timestamp: 1,
+        status: 'completed',
+        attachments: [
+          {
+            id: 'att-1',
+            stagingKey: 'chat-attachments/s1/a.png',
+            fileName: 'a.png',
+            mimeType: 'image/png',
+            byteLength: 4000,
+            width: 512,
+            height: 512
+          }
+        ]
+      }
+    ]
+    renderRing({ input_tokens: 10000, output_tokens: 5000 }, undefined, { historyMessages })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('历史图片约')
+      expect(text).toContain('后续请求将持续计入视觉输入')
     })
   })
 })

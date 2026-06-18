@@ -28,7 +28,7 @@ import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
 import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
-import { getSession, updateSession, updateMessageContent } from './database'
+import { getSession, updateSession } from './database'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
 import { browserActionNeedsConfirmation, type BrowserAction } from './browser/browserActionPolicy'
 import {
@@ -269,7 +269,7 @@ export type RunToolChatSessionArgs = {
   appDb?: AppDatabase
   locale?: AppLocale
   projectMemoryEnabled?: boolean
-  /** 用于首轮 usage 后标记 imagesDeliveredToApi */
+  /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
@@ -350,11 +350,8 @@ async function runToolChatSessionInner(
     chatSignal,
     getBrowserDetectContext,
     floatingNotificationManager,
-    currentUserMessageId,
     hasImageAttachments
   } = args
-
-  let imagesDeliveredMarked = false
 
   const apiKey = await getApiKey()
   if (!apiKey) {
@@ -440,7 +437,7 @@ async function runToolChatSessionInner(
       memoryContent,
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
-      hasImageAttachments: loopRound === 1 ? hasImageAttachments : false
+      hasImageAttachments: hasImageAttachments ?? false
     })
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
@@ -601,16 +598,6 @@ async function runToolChatSessionInner(
       if (usage) {
         lastValidUsage = usage
         safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
-        if (
-          loopRound === 1 &&
-          !imagesDeliveredMarked &&
-          appDb &&
-          currentUserMessageId &&
-          hasImageAttachments
-        ) {
-          updateMessageContent(appDb, currentUserMessageId, { imagesDeliveredToApi: true })
-          imagesDeliveredMarked = true
-        }
       }
 
       logAgentEvent('info', 'llm.response', {

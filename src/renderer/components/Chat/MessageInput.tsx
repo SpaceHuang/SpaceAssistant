@@ -3,7 +3,7 @@ import { Input, Tooltip } from 'antd'
 import { Keyboard, Plus, Send, Square, X } from 'lucide-react'
 import { ContextUsageRing } from './ContextUsageRing'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { ChatImageAttachment } from '../../../shared/domainTypes'
+import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
 import { MAX_CHAT_IMAGE_ATTACHMENTS } from '../../../shared/chatAttachmentLimits'
 import { getFileExtension, getImageMimeType } from '../../../shared/fileTypes'
 
@@ -29,6 +29,7 @@ type Props = {
   modelSlot?: React.ReactNode
   sessionId?: string
   toolsEnabled?: boolean
+  historyMessages?: Message[]
   onSend: (text: string, attachments?: ChatImageAttachment[]) => void
   onAbort?: () => void
 }
@@ -72,6 +73,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     modelSlot,
     sessionId,
     toolsEnabled: _toolsEnabled,
+    historyMessages,
     onSend,
     onAbort
   },
@@ -504,7 +506,10 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
             )}
           </div>
           <div className="composer-footer__actions">
-            <ContextUsageRing pendingImageAttachments={readyAttachments} />
+            <ContextUsageRing
+              pendingImageAttachments={readyAttachments}
+              historyMessages={historyMessages}
+            />
             {running && text.trim() ? (
               <button
                 type="button"

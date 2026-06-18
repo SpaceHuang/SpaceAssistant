@@ -29,9 +29,10 @@ export function formatHistoricalImagePlaceholder(attachments: ChatImageAttachmen
   return `[此前发送的图片: ${names}]`
 }
 
-export function shouldHydrateImagesForMessage(msg: Message, currentUserMessageId: string): boolean {
-  if (!msg.attachments?.length) return false
-  return msg.id === currentUserMessageId
+/** 策略 A：有 attachments 即 full hydrate；staging 不可读时由 buildUserMessageContent 输出失效文案 */
+function resolveHydrationMode(msg: Message): ImageHydrationMode {
+  if (!msg.attachments?.length) return 'text-placeholder-only'
+  return 'full'
 }
 
 export function buildUserMessageContent(
@@ -78,7 +79,6 @@ export function buildClaudeToolChatMessages(
   messages: Message[],
   options?: BuildClaudeToolChatMessagesOptions
 ): ClaudeChatMessageWithBlocks[] {
-  const currentUserMessageId = options?.currentUserMessageId ?? ''
   const resolveImage = options?.resolveImage ?? (() => null)
   const out: ClaudeChatMessageWithBlocks[] = []
 
@@ -89,10 +89,7 @@ export function buildClaudeToolChatMessages(
     if (m.role === 'user') {
       let content: string | ClaudeUserContentBlock[]
       if (m.attachments?.length) {
-        const hydrationMode: ImageHydrationMode =
-          shouldHydrateImagesForMessage(m, currentUserMessageId) && !m.imagesDeliveredToApi
-            ? 'full'
-            : 'text-placeholder-only'
+        const hydrationMode = resolveHydrationMode(m)
         content = buildUserMessageContent(m.content, m.attachments, { hydrationMode, resolveImage })
       } else {
         content = ensureApiTextContent(m.content)

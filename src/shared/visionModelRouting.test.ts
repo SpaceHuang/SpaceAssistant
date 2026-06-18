@@ -3,9 +3,12 @@ import type { AppConfig, LlmServiceProfile, ModelEntry } from './domainTypes'
 import { buildChatModelOptions } from './llmModelConfig'
 import {
   findVisionModelOption,
+  historyHasImageAttachments,
+  requestNeedsVisionModel,
   resolveVisionModelBinding,
   resolveVisionRouteForImageSend
 } from './visionModelRouting'
+import type { Message } from './domainTypes'
 
 function makeModel(overrides: Partial<ModelEntry> & Pick<ModelEntry, 'id' | 'name'>): ModelEntry {
   return {
@@ -168,5 +171,80 @@ describe('resolveVisionRouteForImageSend', () => {
       activeLlmServiceIds: ['s1']
     })
     expect(resolveVisionRouteForImageSend(cfg, 'deepseek-v4-pro', 's1')).toEqual({ ok: false })
+  })
+})
+
+function userWithImage(id: string, extra: Partial<Message> = {}): Message {
+  return {
+    id,
+    sessionId: 's1',
+    role: 'user',
+    content: 'hi',
+    timestamp: 1,
+    status: 'completed',
+    attachments: [
+      {
+        id: 'att-1',
+        stagingKey: 'chat-attachments/s1/a.png',
+        fileName: 'a.png',
+        mimeType: 'image/png',
+        byteLength: 100
+      }
+    ],
+    ...extra
+  }
+}
+
+describe('historyHasImageAttachments', () => {
+  it('returns true when history contains an image user message', () => {
+    expect(historyHasImageAttachments([userWithImage('u1')])).toBe(true)
+  })
+
+  it('returns false when no user message has attachments', () => {
+    const textOnly: Message = {
+      id: 'u1',
+      sessionId: 's1',
+      role: 'user',
+      content: 'text',
+      timestamp: 1,
+      status: 'completed'
+    }
+    expect(historyHasImageAttachments([textOnly])).toBe(false)
+  })
+})
+
+describe('requestNeedsVisionModel', () => {
+  it('returns true when current turn has no image but history does', () => {
+    const history = userWithImage('u1')
+    const current: Message = {
+      id: 'u2',
+      sessionId: 's1',
+      role: 'user',
+      content: 'follow up',
+      timestamp: 2,
+      status: 'completed'
+    }
+    expect(requestNeedsVisionModel([history, current])).toBe(true)
+  })
+
+  it('ignores queued and streaming messages', () => {
+    const queued = userWithImage('u1', { status: 'queued' })
+    const streaming: Message = {
+      id: 'a1',
+      sessionId: 's1',
+      role: 'assistant',
+      content: '...',
+      timestamp: 2,
+      status: 'streaming'
+    }
+    const current: Message = {
+      id: 'u2',
+      sessionId: 's1',
+      role: 'user',
+      content: 'now',
+      timestamp: 3,
+      status: 'completed'
+    }
+    expect(requestNeedsVisionModel([queued, streaming, current])).toBe(false)
   })
 })

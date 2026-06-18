@@ -4,6 +4,7 @@
 > 设计日期：2026-06-17  
 > 修订：2026-06-17 — v1.1 上下文环 + 当轮-only；v1.2 补充「工作目录路径指图」边界与风险  
 > 状态：草案  
+> **重要：** §3.6「当轮-only + 历史占位符」已被 [chat-vision-history-full-hydrate-design.md](./chat-vision-history-full-hydrate-design.md)（策略 A：历史全量 hydrate）替代；本文其余章节（staging、路由、UI 等）仍有效。  
 > 需求来源：[llm-multi-service-model-config-requirement.md](../requirement/llm-multi-service-model-config-requirement.md) §8.3（含图消息 → `preferredVisionModelId`，标注为后续实现）  
 > 关联文档：[feishu-integration-phase2-design.md](./feishu-integration-phase2-design.md) §5（飞书图片注入，可复用 staging 思路）
 
@@ -260,7 +261,9 @@ if (type === 'image') {
 - 主进程 integration：`hydrateMessageImages` + mock staging 文件。
 - 手工：选 `kimi-k2.6` / `claude-sonnet-4-6` 等 `isVision: true` 模型，发图应直接描述，不应先 `run_script`。
 
-### 3.6 历史图片不重复占上下文（已决）
+### 3.6 历史图片不重复占上下文（**已由策略 A 替代**）
+
+> **替代方案：** [chat-vision-history-full-hydrate-design.md](./chat-vision-history-full-hydrate-design.md) — history 全量 hydrate，多轮追问仍可看图；以下 §3.6.2 为 v1.2 策略 B 存档。
 
 #### 3.6.1 问题
 
@@ -597,11 +600,12 @@ npm test -- src/renderer/components/Chat/MessageInput.test.tsx  # 若新增
 1. 设置 → 模型：配置 `preferredVisionModelId` 为 `kimi-k2.6`（或任一 `isVision`）。
 2. 聊天区添加 PNG/JPEG，文本「请复述图片文字」。
 3. 期望：无 `run_script` 读图；助手直接描述。
-4. 会话模型仍为语言模型时发图：当次走视觉模型，下一条纯文本仍走语言模型。
+4. 会话模型仍为语言模型时发图：当次走视觉模型；**若 history 仍含带图 user 消息，后续纯文本追问也走视觉模型**（策略 A）。
 5. 禁用所有视觉模型后发图：明确错误，不发送。
-6. 重启应用后打开含图历史：UI 缩略图仍在；**续聊纯文本**时 API 不含历史 base64；staging 删后占位「附件已失效」。
-7. **上下文环**：发图一轮后 usage 上升；下一条纯文本发送后 usage 下降（mock 或 DevTools 看 payload 无重复 image block）。
-8. **发送前预警**：超大图 / 多图接近上下文上限时 composer 有警告。
+6. 重启应用后打开含图历史：UI 缩略图仍在；**续聊纯文本**时 API **仍含 history image block**（策略 A）；staging 删后占位「附件已失效」。
+7. **多轮看图追问（策略 A 核心验收）**：首条带图问布局概况 → 第 2、3 轮纯文本追问细节（如 Progress 面板文字）→ 期望基于图片回答，Thinking 不出现「无法看到之前发送的图片」，无 OCR fallback。
+8. **上下文环**：发图一轮后 usage 上升；下一条纯文本发送后 usage **不应断崖下跌**（history 仍计视觉输入）。
+9. **发送前预警**：超大图 / 多图 / history 含图接近上下文上限时 composer 有警告。
 
 ---
 
@@ -610,7 +614,7 @@ npm test -- src/renderer/components/Chat/MessageInput.test.tsx  # 若新增
 | ID | 问题 | 决议 |
 |----|------|------|
 | OQ-1 | 用户手动选非视觉模型 + 带图是否允许发送 | **已决**：强制视觉优选，不回写 session |
-| OQ-2 | 历史多轮图片均 re-hydrate 是否耗 token | **已决**：**仅当轮** full hydrate；历史 `text-placeholder-only` + `imagesDeliveredToApi`（§3.6） |
+| OQ-2 | 历史多轮图片均 re-hydrate 是否耗 token | **已决（策略 A）**：history 全量 hydrate，每轮请求计 1× 图 token；见 [chat-vision-history-full-hydrate-design.md](./chat-vision-history-full-hydrate-design.md) |
 | OQ-3 | OpenAI 兼容网关 image 格式差异 | 首版仅 Claude native；网关适配另开 |
 | OQ-4 | 是否与飞书 Phase 2 共用 staging 模块 | 共用 `chatAttachmentManager` 命名空间，`feishu-media` 保持独立 |
 | OQ-5 | 用户要求「再看刚才那张图」 | 首版提示重新附加；P1 单条「重新注入上下文」 |

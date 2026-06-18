@@ -27,6 +27,12 @@ import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
 import { applyContextUsageUpdate } from '../../services/contextUsageStreamService'
+import {
+  computeEstimatedOccupancy,
+  estimateTokensFromHistoryImages,
+  estimateTokensFromImageAttachments,
+  resolveEffectiveMaximumContext
+} from '../../../shared/contextUsageEstimate'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import {
@@ -97,7 +103,7 @@ import {
 } from '../../../shared/streamingActivityStatus'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
 import {
-  messageHasImageAttachments,
+  requestNeedsVisionModel,
   resolveVisionRouteForImageSend
 } from '../../../shared/visionModelRouting'
 
@@ -121,10 +127,15 @@ export function ChatView() {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('chat')
   const { t: tErrors } = useTypedTranslation('errors')
+  const { t: tContextUsage } = useTypedTranslation('contextUsage')
   const { openFile } = useDetailPanel()
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
+  const composerHistoryMessages = useMemo(() => {
+    if (!sessionId) return []
+    return filterMessagesForChatApi(messages.filter((m) => m.sessionId === sessionId))
+  }, [messages, sessionId])
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const scrollToMessageId = useTypedSelector((s) => s.chat.scrollToMessageId)
@@ -619,11 +630,7 @@ export function ChatView() {
       let requestLlmServiceId = chatLlmServiceId
       let effectiveModelForUsage: string | undefined
 
-      const userMsgForVision = options?.skipUserMessage
-        ? store.getState().chat.messages.find((m) => m.id === currentUserMessageId)
-        : userMsg
-
-      if (userMsgForVision && messageHasImageAttachments(userMsgForVision)) {
+      if (requestNeedsVisionModel(historyForApi)) {
         const visionRoute = resolveVisionRouteForImageSend(cfg, chatModelName, chatLlmServiceId)
         if (!visionRoute.ok) {
           message.error(tErrors('chat.noVisionModel'))
@@ -643,6 +650,25 @@ export function ChatView() {
       const requestModelEntry = cfg.models.find((m) => m.name === requestModel) ?? modelEntry
       const outputMaxTokens = resolveEffectiveOutputMaxTokens(requestModel, cfg.models)
       const maxSystemChars = requestModelEntry ? Math.floor(requestModelEntry.maximumContext * 0.1) : undefined
+
+      const lastUsage = store.getState().chat.lastUsage
+      const pendingAttachments = options?.skipUserMessage ? undefined : userMsg.attachments
+      const pendingImageTokens = pendingAttachments?.length
+        ? estimateTokensFromImageAttachments(pendingAttachments)
+        : 0
+      const historyImageTokens = estimateTokensFromHistoryImages(historyForApi)
+      if (requestModelEntry) {
+        const cap = resolveEffectiveMaximumContext(requestModel, requestModelEntry.maximumContext)
+        const occupancy = lastUsage ? computeEstimatedOccupancy(lastUsage) : 0
+        if (cap > 0 && historyImageTokens + pendingImageTokens + occupancy > cap * 0.8) {
+          message.warning(
+            tContextUsage('sendWarning', {
+              imageTokens: historyImageTokens + pendingImageTokens,
+              percent: Math.round(((historyImageTokens + pendingImageTokens + occupancy) / cap) * 100)
+            })
+          )
+        }
+      }
 
       const requestId = crypto.randomUUID()
       registerSessionRun(runSessionId, requestId)
@@ -791,21 +817,6 @@ export function ChatView() {
           unsubs.length = 0
         }
 
-        let imagesDeliveredMarked = false
-        const markImagesDeliveredIfNeeded = () => {
-          if (imagesDeliveredMarked || !currentUserMessageId) return
-          const userRow = store.getState().chat.messages.find((m) => m.id === currentUserMessageId)
-          if (!userRow?.attachments?.length || userRow.imagesDeliveredToApi) return
-          imagesDeliveredMarked = true
-          dispatch(patchMessage({ id: currentUserMessageId, patch: { imagesDeliveredToApi: true } }))
-        }
-
-        unsubs.push(
-          window.api.claudeChatOnUsage((d) => {
-            if (d.requestId !== requestId) return
-            markImagesDeliveredIfNeeded()
-          })
-        )
         unsubs.push(
           window.api.claudeChatOnDelta((d) => {
             if (d.requestId !== requestId) return
@@ -908,7 +919,6 @@ export function ChatView() {
           flushUiPatch(runSessionId, assistantId)
           if (res.usage) {
             applyContextUsageUpdate(runSessionId, res.usage as NonNullable<LastUsage>)
-            markImagesDeliveredIfNeeded()
           }
           const assistantRow = findAssistantRow()
           const thinking = finalizeThinking(thinkingState)
@@ -1052,7 +1062,7 @@ export function ChatView() {
         }
       )
     },
-    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t, tErrors, useToolsApi]
+    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t, tErrors, tContextUsage, useToolsApi]
   )
 
   sendInternalRef.current = sendInternal
@@ -1332,6 +1342,7 @@ export function ChatView() {
       <MessageInput
         ref={composerRef}
         sessionId={sessionId ?? undefined}
+        historyMessages={composerHistoryMessages}
         toolsEnabled={useToolsApi}
         running={running}
         queueCount={queueCount}

@@ -1,4 +1,5 @@
 {
+  "sendWarning": "This session history includes images (~{{imageTokens}} visual input tokens). Estimated context usage is about {{percent}}%. Watch the context window limit.",
   "tooltip": {
     "noData": "No context usage data",
     "estimatedOccupancy": "Estimated occupancy",
@@ -13,7 +14,9 @@
     "legendUsed": "Used",
     "legendReserved": "Output reserve",
     "legendFree": "Free",
-    "pendingImages": "Pending images ~{{count}} tokens"
+    "pendingImages": "Pending images ~{{count}} tokens",
+    "historyImages": "History images ~{{count}} tokens",
+    "historyImagesNote": "Session history includes images; subsequent requests will keep counting visual input"
   },
   "aria": {
     "noData": "No context usage data",

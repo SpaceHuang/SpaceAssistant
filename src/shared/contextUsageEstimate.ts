@@ -1,4 +1,4 @@
-import type { ChatImageAttachment } from './domainTypes'
+import type { ChatImageAttachment, Message } from './domainTypes'
 
 /** API 返回的原始 usage 字段（与 chatSlice.LastUsage 非 null 形态一致） */
 export type ContextUsageRaw = {
@@ -46,6 +46,17 @@ export function estimateTokensFromImageAttachments(
   attachments: ReadonlyArray<ChatImageAttachment>
 ): number {
   return attachments.reduce((sum, a) => sum + estimateTokensFromImageAttachment(a), 0)
+}
+
+/** 粗估 history 中带图 user 消息的 prompt token（策略 A：每轮请求均计入） */
+export function estimateTokensFromHistoryImages(messages: Message[]): number {
+  let total = 0
+  for (const m of messages) {
+    if (m.role === 'user' && m.attachments?.length) {
+      total += estimateTokensFromImageAttachments(m.attachments)
+    }
+  }
+  return total
 }
 
 /** 粗估 UTF-8 文本 token 数（用于 tool_result 写入后的占用投影） */
