@@ -21,6 +21,7 @@ describe('FileTreeContextMenu', () => {
     onAddToChat: vi.fn(),
     onCopyPath: vi.fn(),
     onCopyRelPath: vi.fn(),
+    onShowInFolder: vi.fn(),
     onRename: vi.fn(),
     onDelete: vi.fn()
   }
@@ -34,6 +35,7 @@ describe('FileTreeContextMenu', () => {
     expect(screen.getByText('添加到对话')).toBeDefined()
     expect(screen.getByText('复制路径')).toBeDefined()
     expect(screen.getByText('复制相对路径')).toBeDefined()
+    expect(screen.getByText('查看所在目录')).toBeDefined()
     expect(screen.getByText('重命名...')).toBeDefined()
     expect(screen.getByText('删除')).toBeDefined()
   })
@@ -63,6 +65,12 @@ describe('FileTreeContextMenu', () => {
     renderMenu({ ...defaultProps, open: true })
     fireEvent.click(screen.getByText('复制相对路径'))
     expect(defaultProps.onCopyRelPath).toHaveBeenCalled()
+  })
+
+  it('calls onShowInFolder', () => {
+    renderMenu({ ...defaultProps, open: true })
+    fireEvent.click(screen.getByText('查看所在目录'))
+    expect(defaultProps.onShowInFolder).toHaveBeenCalled()
   })
 
   it('calls onRename', () => {

@@ -18,6 +18,7 @@ interface FileTreeContextMenuProps {
   onAddToChat: () => void
   onCopyPath: () => void
   onCopyRelPath: () => void
+  onShowInFolder: () => void
   onRename: () => void
   onDelete: () => void
   onCollectToWiki?: () => void
@@ -35,6 +36,7 @@ export function FileTreeContextMenu({
   onAddToChat,
   onCopyPath,
   onCopyRelPath,
+  onShowInFolder,
   onRename,
   onDelete,
   onCollectToWiki,
@@ -75,6 +77,12 @@ export function FileTreeContextMenu({
       key: 'copy-rel-path',
       label: t('contextMenu.copyRelPath'),
       onClick: wrapMenuClick(onCopyRelPath)
+    },
+    { type: 'divider' },
+    {
+      key: 'show-in-folder',
+      label: t('contextMenu.showInFolder'),
+      onClick: wrapMenuClick(onShowInFolder)
     },
     ...(readOnly
       ? []

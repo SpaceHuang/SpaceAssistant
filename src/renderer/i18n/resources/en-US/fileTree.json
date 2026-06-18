@@ -4,12 +4,14 @@
     "collectToWiki": "Add to Wiki",
     "copyPath": "Copy path",
     "copyRelPath": "Copy relative path",
+    "showInFolder": "Show in folder",
     "delete": "Delete",
     "featureInDevelopment": "Feature in development",
     "rename": "Rename..."
   },
   "copyAbsPathOk": "Absolute path copied",
   "copyRelPathOk": "Relative path copied",
+  "openDirFailed": "Open directory failed",
   "defaultNewFolder": "New folder",
   "deleteConfirm": {
     "directoryBody": "Delete \"{{name}}\"? All contents in this folder will be removed.",

@@ -4,12 +4,14 @@
     "collectToWiki": "收录到 Wiki",
     "copyPath": "复制路径",
     "copyRelPath": "复制相对路径",
+    "showInFolder": "查看所在目录",
     "delete": "删除",
     "featureInDevelopment": "功能开发中",
     "rename": "重命名..."
   },
   "copyAbsPathOk": "已复制绝对路径",
   "copyRelPathOk": "已复制相对路径",
+  "openDirFailed": "打开目录失败",
   "defaultNewFolder": "新建文件夹",
   "deleteConfirm": {
     "directoryBody": "确定要删除 \"{{name}}\" 吗？该目录下所有内容将被一并删除。",

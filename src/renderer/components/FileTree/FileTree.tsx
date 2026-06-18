@@ -122,6 +122,11 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
                 void navigator.clipboard.writeText(node.relPath || '.')
                 message.success(t('copyRelPathOk'))
               }}
+              onShowInFolder={() => {
+                void window.api.fileShowInExplorer(node.relPath || '.').then((r) => {
+                  if (!r.ok) message.error(r.error ?? t('openDirFailed'))
+                })
+              }}
               onRename={() => tree.setRenamingKey(node.key)}
               onDelete={() => setDeleteTarget({ key: node.key, name: node.name, isDirectory: node.isDirectory })}
             >
