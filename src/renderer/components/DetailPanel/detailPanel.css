@@ -315,6 +315,33 @@
   font-size: 12px;
 }
 
+.detail-md-table-wrap {
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+
+.detail-md-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.detail-md-table-wrap th,
+.detail-md-table-wrap td {
+  border: 1px solid var(--sa-border);
+  padding: 6px 10px;
+  word-break: break-word;
+}
+
+.detail-md-table-wrap th {
+  background: var(--sa-bg-muted);
+  font-weight: 600;
+  border-color: var(--sa-border-strong);
+}
+
+.detail-md-table-wrap td {
+  background: var(--sa-split-pane-bg);
+}
+
 .detail-image-view {
   display: flex;
   align-items: center;

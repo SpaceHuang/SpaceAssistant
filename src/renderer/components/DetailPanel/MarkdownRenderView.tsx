@@ -2,12 +2,15 @@ import { memo, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeExternalLinks from 'rehype-external-links'
+import type { ExtraProps } from 'react-markdown'
 import { expandWikilinks } from '../../../shared/wikiMarkdown'
+import { normalizeAsciiTables } from '../../../shared/markdownAsciiTableNormalize'
 import { remarkSemanticStatusEmoji } from '../../../shared/markdownSemanticStatusEmoji'
 import { slugifyMarkdownHeading } from '../../../shared/markdownLinkResolve'
 import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
 import { markdownHeadingText } from '../../utils/markdownHeadingText'
 import { scrollToMarkdownFragment } from '../../utils/markdownFragmentScroll'
+import { attachMarkdownRenderCopy, mdSourceAttrs, type MdSourceNode } from '../../utils/markdownRenderCopy'
 import type { ComponentProps } from 'react'
 
 type Props = {
@@ -20,15 +23,29 @@ type Props = {
 }
 
 const HEADING_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const
+const BLOCK_TAGS = ['p', 'ul', 'ol', 'blockquote', 'pre', 'hr'] as const
+
+type BlockTag = (typeof BLOCK_TAGS)[number]
+type HeadingTag = (typeof HEADING_TAGS)[number]
 
 function markdownHeading(
-  Tag: (typeof HEADING_TAGS)[number]
-): (props: ComponentProps<(typeof HEADING_TAGS)[number]>) => JSX.Element {
-  return function MarkdownHeading({ children, ...rest }) {
+  Tag: HeadingTag
+): (props: ComponentProps<HeadingTag> & ExtraProps) => JSX.Element {
+  return function MarkdownHeading({ node, children, ...rest }) {
     const text = markdownHeadingText(children)
     const id = slugifyMarkdownHeading(text)
     return (
-      <Tag {...rest} id={id || undefined}>
+      <Tag {...rest} {...mdSourceAttrs(node as MdSourceNode)} id={id || undefined}>
+        {children}
+      </Tag>
+    )
+  }
+}
+
+function mdBlock(Tag: BlockTag): (props: ComponentProps<BlockTag> & ExtraProps) => JSX.Element {
+  return function MarkdownBlock({ node, children, ...rest }) {
+    return (
+      <Tag {...rest} {...mdSourceAttrs(node as MdSourceNode)}>
         {children}
       </Tag>
     )
@@ -43,17 +60,37 @@ export const MarkdownRenderView = memo(function MarkdownRenderView({
   pendingScrollFragment,
   onPendingScrollFragmentHandled
 }: Props) {
-  const rendered = expandWikilinks(content, wikiRootPath)
+  const rendered = useMemo(
+    () => expandWikilinks(normalizeAsciiTables(content), wikiRootPath),
+    [content, wikiRootPath]
+  )
+  const renderedRef = useRef(rendered)
+  renderedRef.current = rendered
   const containerRef = useRef<HTMLDivElement>(null)
 
   const headingComponents = useMemo(
     () =>
       Object.fromEntries(HEADING_TAGS.map((tag) => [tag, markdownHeading(tag)])) as Record<
-        (typeof HEADING_TAGS)[number],
+        HeadingTag,
         ReturnType<typeof markdownHeading>
       >,
     []
   )
+
+  const blockComponents = useMemo(
+    () =>
+      Object.fromEntries(BLOCK_TAGS.map((tag) => [tag, mdBlock(tag)])) as Record<
+        BlockTag,
+        ReturnType<typeof mdBlock>
+      >,
+    []
+  )
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    return attachMarkdownRenderCopy(el, () => renderedRef.current).dispose
+  }, [])
 
   useEffect(() => {
     if (!pendingScrollFragment || !containerRef.current) return
@@ -75,6 +112,14 @@ export const MarkdownRenderView = memo(function MarkdownRenderView({
         rehypePlugins={[[rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }]]}
         components={{
           ...headingComponents,
+          ...blockComponents,
+          table({ node, children, ...props }) {
+            return (
+              <div className="detail-md-table-wrap" {...mdSourceAttrs(node as MdSourceNode)}>
+                <table {...props}>{children}</table>
+              </div>
+            )
+          },
           a(props) {
             const { children, href, ...rest } = props
             return (
