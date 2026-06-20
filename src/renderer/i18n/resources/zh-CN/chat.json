@@ -154,6 +154,7 @@
     "browserDangerConsequenceGeneric": "该操作存在一定风险，请确认后再执行。",
     "browserDangerFillPreview": "将填入：{{values}}",
     "browserCurrentPage": "当前页面",
+    "browserInstruction": "指令",
     "browserSessionTrustedHint": "本会话已信任该域名的常规操作；本次操作较为敏感，仍需你确认。",
     "browserAnalyzingRisk": "正在检查本次操作…",
     "browserTrustAutoApproved": "已信任「{{domain}}」的常规操作，自动执行（敏感操作仍会询问）。",

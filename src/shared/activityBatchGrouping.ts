@@ -114,6 +114,16 @@ export function findBatchHighlightItem(
 }
 
 /** 批次是否仍在进行中（streaming 且含未结束思考或非终态工具） */
+export function batchContainsConfirmingTool(
+  items: AssistantActivityItem[],
+  toolById: Map<string, ToolCallRecord>
+): boolean {
+  return items.some((item) => {
+    if (item.kind !== 'tool') return false
+    return toolById.get(item.toolId)?.status === 'confirming'
+  })
+}
+
 export function isActivityBatchInProgress(
   items: AssistantActivityItem[],
   ctx: {
@@ -122,6 +132,7 @@ export function isActivityBatchInProgress(
     toolById: Map<string, ToolCallRecord>
   }
 ): boolean {
+  if (batchContainsConfirmingTool(items, ctx.toolById)) return true
   if (!ctx.streaming) return false
   return items.some((item) => {
     if (item.kind === 'thinking') {

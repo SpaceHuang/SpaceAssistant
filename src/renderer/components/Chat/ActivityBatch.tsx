@@ -12,17 +12,23 @@ export type ActivityBatchSummary = {
 type Props = {
   items: AssistantActivityItem[]
   isActive: boolean
+  /** 批次内含待确认工具时保持展开，避免确认卡片被折叠隐藏 */
+  keepExpanded?: boolean
   summary: ActivityBatchSummary
   renderItem: (item: AssistantActivityItem, index: number) => ReactNode
 }
 
-export function ActivityBatch({ items, isActive, summary, renderItem }: Props) {
+export function ActivityBatch({ items, isActive, keepExpanded = false, summary, renderItem }: Props) {
   const { t } = useTypedTranslation('chat')
   const [expanded, setExpanded] = useState(isActive)
   const [pinned, setPinned] = useState(false)
   const wasActiveRef = useRef(isActive)
 
   useEffect(() => {
+    if (keepExpanded) {
+      setExpanded(true)
+      return
+    }
     if (isActive) {
       wasActiveRef.current = true
       setExpanded(true)
@@ -37,7 +43,7 @@ export function ActivityBatch({ items, isActive, summary, renderItem }: Props) {
     }
 
     setExpanded(false)
-  }, [isActive, pinned])
+  }, [isActive, pinned, keepExpanded])
 
   const toggleExpanded = () => setExpanded((v) => !v)
   const togglePin = (event: React.MouseEvent) => {

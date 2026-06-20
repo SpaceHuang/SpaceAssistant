@@ -9,6 +9,7 @@ import {
   buildActivityItemTimestampResolver,
   findBatchHighlightItem,
   groupActivityTimeline,
+  batchContainsConfirmingTool,
   isActivityBatchInProgress,
   type ActivityTrackSegment
 } from '../../../shared/activityBatchGrouping'
@@ -335,12 +336,14 @@ export const ChatBubble = memo(function ChatBubble({
     const isLastBatch = segmentIndex === lastBatchSegmentIndex
     const batchInProgress = isActivityBatchInProgress(segment.items, batchProgressCtx)
     const isActive = isLastBatch && batchInProgress
+    const keepExpanded = batchContainsConfirmingTool(segment.items, toolById)
 
     return (
       <ActivityBatch
         key={`${message.id}-batch-${segmentIndex}`}
         items={segment.items}
         isActive={isActive}
+        keepExpanded={keepExpanded}
         summary={buildBatchSummary(segment.items, { toolById, thinkingSegments, t })}
         renderItem={(item, itemIndex) =>
           renderActivityItem(item, `${message.id}-batch-${segmentIndex}-${itemIndex}`)

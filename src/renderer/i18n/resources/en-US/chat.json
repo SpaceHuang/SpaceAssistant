@@ -154,6 +154,7 @@
     "browserDangerConsequenceGeneric": "This action has some risk; confirm before proceeding.",
     "browserDangerFillPreview": "Will fill: {{values}}",
     "browserCurrentPage": "Current page",
+    "browserInstruction": "Instruction",
     "browserSessionTrustedHint": "This session already trusts routine actions on this domain; this action is sensitive and still needs confirmation.",
     "browserAnalyzingRisk": "Checking this action…",
     "browserTrustAutoApproved": "Trusted routine actions on \"{{domain}}\"; running automatically (sensitive actions still ask).",

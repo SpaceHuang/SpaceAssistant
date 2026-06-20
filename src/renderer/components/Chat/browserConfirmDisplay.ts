@@ -47,9 +47,7 @@ export function summarizeBrowserConfirmInput(
       detailValue: instruction || '(未指定指令)',
       instructionValue: instruction || '(未指定指令)',
       pageUrl: pageUrl || undefined,
-      hint: pageUrl
-        ? '将在当前页面执行单步自然语言操作。确认后，本会话内同域名的常规操作将不再询问。'
-        : '将在当前页面执行单步自然语言操作'
+      hint: '将在当前页面执行单步自然语言操作。'
     }
   }
   return {

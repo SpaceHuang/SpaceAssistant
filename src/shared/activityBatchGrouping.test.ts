@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { AssistantActivityItem } from './assistantActivityTimeline'
 import {
   ACTIVITY_BATCH_IDLE_GAP_MS,
+  batchContainsConfirmingTool,
   buildActivityItemTimestampResolver,
   findBatchHighlightItem,
-  groupActivityTimeline
+  groupActivityTimeline,
+  isActivityBatchInProgress
 } from './activityBatchGrouping'
 import { thinkingSegmentsForRender } from './thinkingSegments'
 import type { SkillHintRecord, ThinkingData, ToolCallRecord } from './domainTypes'
@@ -148,5 +150,38 @@ describe('buildActivityItemTimestampResolver', () => {
     expect(resolve({ kind: 'tool', toolId: 't1' })).toBe(250)
     expect(resolve({ kind: 'text', segmentIndex: 0 })).toBe(300)
     expect(resolve({ kind: 'skill', hintId: 'h1' })).toBe(120)
+  })
+})
+
+describe('batchContainsConfirmingTool', () => {
+  it('returns true when batch includes confirming tool', () => {
+    const tools: ToolCallRecord[] = [
+      baseTool('t1', 1),
+      { ...baseTool('t2', 2), status: 'confirming' }
+    ]
+    const items: AssistantActivityItem[] = [
+      { kind: 'tool', toolId: 't1' },
+      { kind: 'tool', toolId: 't2' }
+    ]
+    expect(
+      batchContainsConfirmingTool(
+        items,
+        new Map(tools.map((tc) => [tc.id, tc]))
+      )
+    ).toBe(true)
+  })
+})
+
+describe('isActivityBatchInProgress', () => {
+  it('stays in progress while a tool is confirming even if streaming ended', () => {
+    const tools: ToolCallRecord[] = [{ ...baseTool('t1', 1), status: 'confirming' }]
+    const items: AssistantActivityItem[] = [{ kind: 'tool', toolId: 't1' }]
+    expect(
+      isActivityBatchInProgress(items, {
+        streaming: false,
+        thinkingSegments: [],
+        toolById: new Map(tools.map((tc) => [tc.id, tc]))
+      })
+    ).toBe(true)
   })
 })

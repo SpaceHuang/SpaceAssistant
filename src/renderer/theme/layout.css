@@ -3163,7 +3163,59 @@
 }
 
 /* ── Browser confirm card ── */
+.browser-confirm-card__subject {
+  gap: 12px;
+}
+
+.browser-confirm-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.browser-confirm-card__field-label {
+  margin: 0;
+  font-size: var(--sa-chat-font-meta, 12px);
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--sa-text-secondary);
+}
+
+.browser-confirm-card__instruction {
+  font-family: var(--sa-font-sans);
+  font-weight: 400;
+  word-break: break-word;
+}
+
+.browser-confirm-card__trust-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 10px 12px;
+  border-radius: var(--sa-radius-sm);
+  background: color-mix(in srgb, var(--sa-primary) 4%, var(--sa-bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--sa-primary) 10%, var(--sa-border));
+}
+
+.browser-confirm-card__trust-block .write-confirm-card__trust-option {
+  color: var(--sa-text);
+}
+
+.browser-confirm-card__trust-safety {
+  margin: 0;
+  padding-left: 22px;
+  font-size: var(--sa-chat-font-meta, 12px);
+  line-height: 1.5;
+  color: var(--sa-text-secondary);
+}
+
 .browser-confirm-card__url {
+  margin: 0;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-body);
+  line-height: 1.45;
   word-break: break-all;
 }
 

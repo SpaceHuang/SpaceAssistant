@@ -43,15 +43,12 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
   const { openUrl } = useDetailPanel()
   const [trustChecked, setTrustChecked] = useState(false)
   const summary = summarizeBrowserConfirmInput(record.input, record.currentPageUrl)
-  if (!summary) return null
 
-  const urlValue = summary.detailLabel === 'URL' ? summary.detailValue : ''
+  const urlValue = summary?.detailLabel === 'URL' ? summary.detailValue : ''
   const pageUrl =
     typeof record.currentPageUrl === 'string' && record.currentPageUrl
       ? record.currentPageUrl
-      : summary.pageUrl ?? ''
-  const canOpenInViewer = Boolean(urlValue && urlValue !== '(未指定 URL)' && normalizeViewerUrl(urlValue))
-  const canOpenPageInViewer = Boolean(pageUrl && normalizeViewerUrl(pageUrl))
+      : summary?.pageUrl ?? ''
   const action = typeof record.input.action === 'string' ? record.input.action : ''
   const mode = typeof record.input.mode === 'string' ? record.input.mode : 'open'
   const trustableDomain = useMemo(() => {
@@ -63,6 +60,11 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
     }
     return null
   }, [action, mode, urlValue, pageUrl])
+
+  if (!summary) return null
+
+  const canOpenInViewer = Boolean(urlValue && urlValue !== '(未指定 URL)' && normalizeViewerUrl(urlValue))
+  const canOpenPageInViewer = Boolean(pageUrl && normalizeViewerUrl(pageUrl))
 
   const dangerInfo = record.dangerInfo
   const isDangerous = action === 'act' && Boolean(dangerInfo)
@@ -120,27 +122,40 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
         denyLabel={t('confirm.browser.deny')}
         onConfirm={handleConfirm}
       >
-        <div className="write-confirm-card__subject">
-          {summary.instructionValue ? (
-            <p className="write-confirm-card__subject-value" title={summary.instructionValue}>
-              {summary.instructionValue}
-            </p>
-          ) : null}
-          {pageUrl && action === 'act' ? (
-            canOpenPageInViewer ? (
-              <button
-                type="button"
-                className="write-confirm-card__subject-value browser-confirm-card__url browser-confirm-card__url-link"
-                title={`${t('confirm.browserCurrentPage')}：${pageUrl}`}
-                onClick={handleOpenPageInViewer}
-              >
-                {pageUrl}
-              </button>
-            ) : (
-              <p className="write-confirm-card__subject-value browser-confirm-card__url" title={pageUrl}>
-                {pageUrl}
-              </p>
-            )
+        <div className="write-confirm-card__subject browser-confirm-card__subject">
+          {action === 'act' ? (
+            <>
+              {summary.instructionValue ? (
+                <div className="browser-confirm-card__field">
+                  <span className="browser-confirm-card__field-label">{t('confirm.browserInstruction')}</span>
+                  <p
+                    className="write-confirm-card__subject-value browser-confirm-card__instruction"
+                    title={summary.instructionValue}
+                  >
+                    {summary.instructionValue}
+                  </p>
+                </div>
+              ) : null}
+              {pageUrl ? (
+                <div className="browser-confirm-card__field">
+                  <span className="browser-confirm-card__field-label">{t('confirm.browserCurrentPage')}</span>
+                  {canOpenPageInViewer ? (
+                    <button
+                      type="button"
+                      className="browser-confirm-card__url browser-confirm-card__url-link"
+                      title={`${t('confirm.browserCurrentPage')}：${pageUrl}`}
+                      onClick={handleOpenPageInViewer}
+                    >
+                      {pageUrl}
+                    </button>
+                  ) : (
+                    <p className="browser-confirm-card__url" title={pageUrl}>
+                      {pageUrl}
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </>
           ) : canOpenInViewer ? (
             <button
               type="button"
@@ -160,7 +175,7 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
               {t('confirm.browserDangerFillPreview', { values: fillPreviewText })}
             </p>
           ) : null}
-          {summary.hint ? (
+          {summary.hint && !canTrustDomain ? (
             <p className="write-confirm-card__subject-note browser-confirm-card__hint">{summary.hint}</p>
           ) : null}
           {sessionTrustedHint ? (
@@ -169,21 +184,26 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
             </p>
           ) : null}
           {canTrustDomain ? (
-            <label className="write-confirm-card__trust-option">
-              <span className="write-confirm-card__trust-control">
-                <input
-                  type="checkbox"
-                  checked={trustChecked}
-                  onChange={(e) => setTrustChecked(e.target.checked)}
-                />
-              </span>
-              <span className="write-confirm-card__trust-label">
-                {action === 'act' ? t('confirm.browserActTrust') : t('toolCall.confirm.trustThisDomain')}
-              </span>
+            <div className="browser-confirm-card__trust-block">
+              <label className="write-confirm-card__trust-option">
+                <span className="write-confirm-card__trust-control">
+                  <input
+                    type="checkbox"
+                    checked={trustChecked}
+                    aria-describedby={action === 'act' ? `browser-trust-safety-${record.id}` : undefined}
+                    onChange={(e) => setTrustChecked(e.target.checked)}
+                  />
+                </span>
+                <span className="write-confirm-card__trust-label">
+                  {action === 'act' ? t('confirm.browserActTrust') : t('toolCall.confirm.trustThisDomain')}
+                </span>
+              </label>
               {action === 'act' ? (
-                <span className="write-confirm-card__trust-safety">{t('confirm.browserActTrustSafety')}</span>
+                <p className="browser-confirm-card__trust-safety" id={`browser-trust-safety-${record.id}`}>
+                  {t('confirm.browserActTrustSafety')}
+                </p>
               ) : null}
-            </label>
+            </div>
           ) : null}
         </div>
       </ConfirmCardDecision>

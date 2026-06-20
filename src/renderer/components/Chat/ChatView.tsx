@@ -23,6 +23,8 @@ import {
   isSessionRunning
 } from '../../services/chatRunnerService'
 import { pendingConfirmStore } from '../../services/pendingConfirmStore'
+import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
+import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
@@ -353,10 +355,12 @@ export function ChatView() {
 
   const onToolCancel = useCallback(
     (toolUseId: string) => {
-      if (!streamingRequestId) return
-      void window.api.toolCancel({ requestId: streamingRequestId, toolUseId })
+      const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
+      const requestId = pending?.requestId ?? streamingRequestId
+      if (!requestId) return
+      void window.api.toolCancel({ requestId, toolUseId })
     },
-    [streamingRequestId]
+    [sessionId, streamingRequestId]
   )
 
   const abort = useCallback(() => {
@@ -1253,6 +1257,8 @@ export function ChatView() {
     [message, openFile, cfg?.wiki?.rootPath]
   )
 
+  const pendingConfirmItems = usePendingConfirmSnapshot()
+
   const testPreviewToolsInteractive = useMemo(
     () =>
       cfg
@@ -1270,33 +1276,37 @@ export function ChatView() {
     [cfg, message]
   )
 
-  const toolsInteractive = useMemo(
-    () =>
-      cfg?.tools.enabled && streamingRequestId && streamingAssistantId
-        ? {
-            requestId: streamingRequestId,
-            confirmMode: cfg.tools.confirmMode,
-            onToolConfirm,
-            onToolCancel
-          }
-        : undefined,
+  const resolveToolsInteractive = useCallback(
+    (messageId: string) => {
+      if (testPreviewMessageIds.has(messageId)) return testPreviewToolsInteractive
+      if (!sessionId || !cfg?.tools.enabled) return undefined
+      const message = messages.find((m) => m.id === messageId)
+      if (!message) return undefined
+      return resolveMessageToolsInteractive({
+        message,
+        sessionId,
+        toolsEnabled: cfg.tools.enabled,
+        confirmMode: cfg.tools.confirmMode,
+        pendingItems: pendingConfirmItems,
+        streamingAssistantId,
+        streamingRequestId,
+        onToolConfirm,
+        onToolCancel
+      })
+    },
     [
+      sessionId,
       cfg?.tools.enabled,
       cfg?.tools.confirmMode,
-      streamingRequestId,
+      messages,
+      pendingConfirmItems,
       streamingAssistantId,
+      streamingRequestId,
+      testPreviewMessageIds,
+      testPreviewToolsInteractive,
       onToolConfirm,
       onToolCancel
     ]
-  )
-
-  const resolveToolsInteractive = useCallback(
-    (messageId: string) => {
-      if (messageId === streamingAssistantId) return toolsInteractive
-      if (testPreviewMessageIds.has(messageId)) return testPreviewToolsInteractive
-      return undefined
-    },
-    [streamingAssistantId, toolsInteractive, testPreviewMessageIds, testPreviewToolsInteractive]
   )
 
   const handleModelSelect = useCallback(
@@ -1342,7 +1352,12 @@ export function ChatView() {
                 message={m}
                 enter={m.id === enterMessageId}
                 toolsInteractive={resolveToolsInteractive(m.id)}
-                focusToolUseId={m.id === streamingAssistantId ? confirmFocusToolUseId : undefined}
+                focusToolUseId={
+                  confirmFocusToolUseId &&
+                  m.toolCalls?.some((tc) => tc.id === confirmFocusToolUseId && tc.status === 'confirming')
+                    ? confirmFocusToolUseId
+                    : undefined
+                }
                 workDir={cfg?.workDir}
                 shellConfig={cfg?.shell}
                 sessionMetadata={currentSession?.metadata}
