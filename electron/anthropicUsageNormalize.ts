@@ -55,10 +55,11 @@ export function normalizeAnthropicMessageUsage(
   const input_tokens = pickInputTokensFromUsageObject(uo)
   if (input_tokens == null) return undefined
   const out: SessionUsage = { input_tokens }
+  const numericExtras = out as unknown as Record<string, number | undefined>
   for (const [k, v] of Object.entries(uo)) {
     if (k === 'input_tokens') continue
     if (typeof v === 'number' && Number.isFinite(v)) {
-      ;(out as Record<string, number | undefined>)[k] = v
+      numericExtras[k] = v
     }
   }
 

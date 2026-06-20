@@ -2671,6 +2671,43 @@
   font-size: var(--sa-chat-font-mono);
 }
 
+.browser-confirm-card__danger {
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+
+.browser-confirm-card__danger--strong {
+  background: color-mix(in srgb, var(--sa-danger, #ff4d4f) 12%, var(--sa-bg-elevated));
+  border-color: color-mix(in srgb, var(--sa-danger, #ff4d4f) 35%, var(--sa-border));
+}
+
+.browser-confirm-card__danger--mild {
+  background: color-mix(in srgb, #fa8c16 12%, var(--sa-bg-elevated));
+  border-color: color-mix(in srgb, #fa8c16 35%, var(--sa-border));
+}
+
+.browser-confirm-card__danger-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.browser-confirm-card__danger-reason,
+.browser-confirm-card__danger-consequence {
+  margin: 0;
+  font-size: var(--sa-chat-font-sm, 12px);
+  line-height: 1.45;
+}
+
+.write-confirm-card__trust-safety {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--sa-chat-font-sm, 12px);
+  color: var(--sa-text-secondary);
+  line-height: 1.45;
+}
+
 .write-confirm-card__header {
   display: flex;
   align-items: center;

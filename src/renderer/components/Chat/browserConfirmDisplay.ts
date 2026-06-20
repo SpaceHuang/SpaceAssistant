@@ -3,6 +3,8 @@ export type BrowserConfirmSummary = {
   detailLabel: string
   detailValue: string
   hint?: string
+  instructionValue?: string
+  pageUrl?: string
 }
 
 const NAV_MODE_LABELS: Record<string, string> = {
@@ -12,7 +14,10 @@ const NAV_MODE_LABELS: Record<string, string> = {
   forward: '前进'
 }
 
-export function summarizeBrowserConfirmInput(input: Record<string, unknown>): BrowserConfirmSummary | null {
+export function summarizeBrowserConfirmInput(
+  input: Record<string, unknown>,
+  currentPageUrl?: string
+): BrowserConfirmSummary | null {
   const action = typeof input.action === 'string' ? input.action : ''
   if (action === 'navigate') {
     const mode = typeof input.mode === 'string' ? input.mode : 'open'
@@ -35,11 +40,16 @@ export function summarizeBrowserConfirmInput(input: Record<string, unknown>): Br
   }
   if (action === 'act') {
     const instruction = typeof input.instruction === 'string' ? input.instruction.trim() : ''
+    const pageUrl = typeof currentPageUrl === 'string' ? currentPageUrl.trim() : ''
     return {
-      headline: '执行浏览器操作',
+      headline: '浏览器操作',
       detailLabel: '指令',
       detailValue: instruction || '(未指定指令)',
-      hint: '将在当前页面执行单步自然语言操作'
+      instructionValue: instruction || '(未指定指令)',
+      pageUrl: pageUrl || undefined,
+      hint: pageUrl
+        ? '将在当前页面执行单步自然语言操作。确认后，本会话内同域名的常规操作将不再询问。'
+        : '将在当前页面执行单步自然语言操作'
     }
   }
   return {

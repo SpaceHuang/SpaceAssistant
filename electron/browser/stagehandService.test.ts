@@ -124,4 +124,21 @@ describe('StagehandService', () => {
     expect(r.recommendedCwd).toBeTruthy()
     expect(r.installContext).toMatch(/development|packaged/)
   })
+
+  it('peekCurrentUrl returns undefined when session missing', () => {
+    expect(svc.peekCurrentUrl('missing')).toBeUndefined()
+  })
+
+  it('peekCurrentUrl returns page url when session exists', async () => {
+    const mockUrl = vi.fn().mockReturnValue('https://github.com/foo')
+    mockPages.mockReturnValue([{ goto: mockGoto, url: mockUrl }])
+    await svc.getOrCreate('peek-s', DEFAULT_BROWSER_CONFIG, creds)
+    expect(svc.peekCurrentUrl('peek-s')).toBe('https://github.com/foo')
+  })
+
+  it('peekCurrentUrl returns undefined when no pages', async () => {
+    mockPages.mockReturnValue([])
+    await svc.getOrCreate('peek-empty', DEFAULT_BROWSER_CONFIG, creds)
+    expect(svc.peekCurrentUrl('peek-empty')).toBeUndefined()
+  })
 })

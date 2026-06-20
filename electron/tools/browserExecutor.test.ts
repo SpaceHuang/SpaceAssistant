@@ -264,6 +264,33 @@ describe('browserExecutor', () => {
     expect(r.error).toBe(CHAT_CANCELLED_MESSAGE)
   })
 
+  it('act captures actions count and navigated flag', async () => {
+    const page = {
+      goto: vi.fn(),
+      reload: vi.fn(),
+      goBack: vi.fn(),
+      goForward: vi.fn(),
+      screenshot: vi.fn(),
+      url: vi
+        .fn()
+        .mockReturnValueOnce('https://example.com/a')
+        .mockReturnValueOnce('https://example.com/b'),
+      title: vi.fn()
+    }
+    mockGetOrCreate.mockResolvedValueOnce({
+      stagehand: {
+        act: vi.fn().mockResolvedValue({
+          success: true,
+          actions: [{ method: 'click', selector: '#btn', description: 'Submit' }]
+        }),
+        context: { pages: () => [page] }
+      }
+    })
+    const r = await browserExecutor.execute({ action: 'act', instruction: 'click submit' }, baseCtx())
+    expect(r.success).toBe(true)
+    expect(r.data).toMatchObject({ acted: true, navigated: true, actions: 1 })
+  })
+
   it('does not call acquire for close', async () => {
     await browserExecutor.execute({ action: 'close' }, baseCtx())
     expect(mockAcquire).not.toHaveBeenCalled()

@@ -246,6 +246,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         approved: boolean
         trustCommand?: string
         trustDomain?: string
+        trustActDomain?: string
       }
     ): Promise<void> => {
       if (payload.approved && payload.trustCommand?.trim()) {
@@ -263,6 +264,16 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         persistBrowserConfig(ctx.db, next)
         logAgentEvent('info', 'browser.trust.domain', {
           domain: payload.trustDomain.trim(),
+          timestamp: Date.now()
+        })
+      }
+      if (payload.approved && payload.trustActDomain?.trim()) {
+        const { addTrustedActDomain } = await import('./browser/browserDomainTrust')
+        const browser = readBrowserConfigFromDb(ctx.db)
+        const next = addTrustedActDomain(browser, payload.trustActDomain.trim())
+        persistBrowserConfig(ctx.db, next)
+        logAgentEvent('info', 'browser.trust.actDomain', {
+          domain: payload.trustActDomain.trim(),
           timestamp: Date.now()
         })
       }

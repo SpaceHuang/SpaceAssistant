@@ -393,20 +393,34 @@ export const browserExecutor: ToolExecutor = {
         }
 
         ctx.sendProgress('acting', instruction.slice(0, 120))
-        await raceWithUserAbort(
+        const urlBefore = page.url()
+        const actResult = (await raceWithUserAbort(
           withTimeout(stagehand.act(instruction), navTimeout, 'act'),
           ctx.signal
-        )
+        )) as { success?: boolean; actions?: Array<{ method?: string; selector?: string; description?: string; arguments?: string }> } | undefined
+        const urlAfter = page.url()
+        const navigated = urlAfter !== urlBefore
         logAgentEvent('info', 'browser.action', {
           requestId: ctx.requestId,
           sessionId: ctx.sessionId,
           toolUseId: ctx.toolUseId,
           action: 'act',
           instruction: instruction.slice(0, 200),
+          actedActions: (actResult?.actions ?? []).map((a) => ({
+            method: a.method,
+            selector: a.selector,
+            description: a.description?.slice(0, 80)
+          })),
+          navigated,
+          ...(navigated ? { urlAfter } : {}),
           result: 'success',
           durationMs: Date.now() - started
         })
-        return { success: true, data: { acted: true }, duration: Date.now() - started }
+        return {
+          success: true,
+          data: { acted: true, navigated, actions: actResult?.actions?.length ?? 0 },
+          duration: Date.now() - started
+        }
       }
 
       if (action === 'screenshot') {

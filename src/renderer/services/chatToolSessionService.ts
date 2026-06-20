@@ -4,6 +4,7 @@ import type { AppDispatch } from '../store'
 import type {
   AutoApproveFallback,
   AutoApprovedWriteMeta,
+  BrowserActDangerInfo,
   ShellSecurityHints,
   ToolCallRecord,
   ToolCallResultPersisted,
@@ -125,6 +126,9 @@ export function createToolChatController(args: {
     diff?: ToolCallRecord['confirmDiff']
     shellSecurityHints?: ShellSecurityHints
     autoApproveFallback?: AutoApproveFallback
+    currentPageUrl?: string
+    dangerInfo?: BrowserActDangerInfo
+    sessionTrustedHint?: true
   }) => {
     if (d.requestId !== getRequestId()) return
     const i = records.findIndex((t) => t.id === d.toolUseId)
@@ -135,7 +139,10 @@ export function createToolChatController(args: {
         riskLevel: d.riskLevel ?? records[i]!.riskLevel,
         ...(d.diff ? { confirmDiff: d.diff } : {}),
         ...(d.shellSecurityHints ? { shellSecurityHints: d.shellSecurityHints } : {}),
-        ...(d.autoApproveFallback ? { autoApproveFallback: d.autoApproveFallback } : {})
+        ...(d.autoApproveFallback ? { autoApproveFallback: d.autoApproveFallback } : {}),
+        ...(d.currentPageUrl ? { currentPageUrl: d.currentPageUrl } : {}),
+        ...(d.dangerInfo ? { dangerInfo: d.dangerInfo } : {}),
+        ...(d.sessionTrustedHint ? { sessionTrustedHint: d.sessionTrustedHint } : {})
       }
       flush()
     }

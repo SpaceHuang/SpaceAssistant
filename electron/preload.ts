@@ -159,6 +159,9 @@ const api: SpaceAssistantApi = {
         diff?: { oldContent: string; newContent: string; oldPath: string }
         shellSecurityHints?: import('../src/shared/domainTypes').ShellSecurityHints
         autoApproveFallback?: import('../src/shared/domainTypes').AutoApproveFallback
+        currentPageUrl?: string
+        dangerInfo?: import('../src/shared/domainTypes').BrowserActDangerInfo
+        sessionTrustedHint?: true
       }
     ) => cb(data)
     ipcRenderer.on('tool:confirm-request', fn)

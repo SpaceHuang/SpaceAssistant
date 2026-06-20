@@ -99,6 +99,8 @@
     "trustCommandManage": "Manage trusted commands in Settings.",
     "trustDomainSuccess": "Trusted \"{{domain}}\". Future visits won't ask for confirmation.",
     "trustDomainManage": "Manage trusted domains in Settings.",
+    "trustActDomainSuccess": "Trusted browser actions on \"{{domain}}\"; future sessions won't ask.",
+    "trustActDomainManage": "Manage the trust list in Settings.",
     "fileAutoApproved": "Auto-wrote {{path}} (+{{added}} / -{{removed}}).",
     "fileAutoApprovedViewDiff": "View diff"
   },
@@ -140,6 +142,21 @@
       "allow": "Confirm action",
       "deny": "Deny action"
     },
+    "browserActTitle": "Browser action",
+    "browserActTrust": "Trust actions on this domain; do not ask again",
+    "browserActTrustSafety": "Only routine actions (clicks, paging, filling) skip confirmation; payments, transfers, and deletes still ask every time.",
+    "browserDangerTitle": "This action needs your confirmation",
+    "browserDangerConsequenceMoney": "May cause an actual payment or order, leading to financial loss.",
+    "browserDangerConsequenceDataLoss": "May delete data, usually irreversibly.",
+    "browserDangerConsequenceAccount": "May sign you in or out and change your login state.",
+    "browserDangerConsequenceFile": "May upload or download files on your device.",
+    "browserDangerConsequenceUnknownSite": "May open an unknown site with phishing or payment risks.",
+    "browserDangerConsequenceGeneric": "This action has some risk; confirm before proceeding.",
+    "browserDangerFillPreview": "Will fill: {{values}}",
+    "browserCurrentPage": "Current page",
+    "browserSessionTrustedHint": "This session already trusts routine actions on this domain; this action is sensitive and still needs confirmation.",
+    "browserAnalyzingRisk": "Checking this action…",
+    "browserTrustAutoApproved": "Trusted routine actions on \"{{domain}}\"; running automatically (sensitive actions still ask).",
     "collapsible": {
       "collapse": "Collapse preview",
       "expand": "Expand all ({{count}} lines)"

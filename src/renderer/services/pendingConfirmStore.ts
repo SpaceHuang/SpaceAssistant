@@ -1,4 +1,4 @@
-import type { AutoApproveFallback, ShellSecurityHints, ToolCallRecord, ToolRiskLevel } from '../../shared/domainTypes'
+import type { AutoApproveFallback, BrowserActDangerInfo, ShellSecurityHints, ToolCallRecord, ToolRiskLevel } from '../../shared/domainTypes'
 import type { ToolConfirmOptions } from '../../shared/toolConfirm'
 import { resolveSessionIdForRequest } from './runRequestIndex'
 
@@ -12,6 +12,9 @@ export type PendingConfirmItem = {
   diff?: ToolCallRecord['confirmDiff']
   shellSecurityHints?: ShellSecurityHints
   autoApproveFallback?: AutoApproveFallback
+  currentPageUrl?: string
+  dangerInfo?: BrowserActDangerInfo
+  sessionTrustedHint?: true
   createdAt: number
 }
 
@@ -42,6 +45,9 @@ class PendingConfirmStore {
         diff: d.diff,
         shellSecurityHints: d.shellSecurityHints,
         autoApproveFallback: d.autoApproveFallback,
+        ...(d.currentPageUrl ? { currentPageUrl: d.currentPageUrl } : {}),
+        ...(d.dangerInfo ? { dangerInfo: d.dangerInfo } : {}),
+        ...(d.sessionTrustedHint ? { sessionTrustedHint: d.sessionTrustedHint } : {}),
         createdAt: Date.now()
       })
       this.notify()
@@ -85,7 +91,8 @@ class PendingConfirmStore {
       toolUseId,
       approved,
       trustCommand: options?.trustCommand,
-      trustDomain: options?.trustDomain
+      trustDomain: options?.trustDomain,
+      trustActDomain: options?.trustActDomain
     })
     this.remove(requestId, toolUseId)
   }

@@ -22,9 +22,17 @@ describe('summarizeBrowserConfirmInput', () => {
       action: 'act',
       instruction: 'Click the Submit button'
     })
-    expect(s?.headline).toBe('执行浏览器操作')
+    expect(s?.headline).toBe('浏览器操作')
     expect(s?.detailLabel).toBe('指令')
     expect(s?.detailValue).toBe('Click the Submit button')
+  })
+
+  it('includes current page url when provided for act', () => {
+    const s = summarizeBrowserConfirmInput(
+      { action: 'act', instruction: 'click' },
+      'https://github.com/foo'
+    )
+    expect(s?.pageUrl).toBe('https://github.com/foo')
   })
 })
 

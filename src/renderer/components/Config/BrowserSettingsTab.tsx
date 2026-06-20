@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react'
 import type { BrowserConfig, ModelEntry } from '../../../shared/domainTypes'
 import {
   BROWSER_SETUP_REPAIR_INITIAL_MESSAGE,
-  BROWSER_SETUP_REPAIR_SESSION_NAME
+  BROWSER_SETUP_REPAIR_SESSION_NAME,
+  DEFAULT_BROWSER_CONFIG
 } from '../../../shared/domainTypes'
 import { BrowserDetectStatusSummary } from '../Browser/BrowserDetectStatusSummary'
 import { useBrowserDetect } from '../../hooks/useBrowserDetect'
@@ -48,6 +49,10 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
   const [repairLoading, setRepairLoading] = useState(false)
   const [newDomain, setNewDomain] = useState('')
   const [selectedDomains, setSelectedDomains] = useState<string[]>([])
+  const [newActDomain, setNewActDomain] = useState('')
+  const [selectedActDomains, setSelectedActDomains] = useState<string[]>([])
+  const [actKeywordsOpen, setActKeywordsOpen] = useState(false)
+  const [actKeywordsDraft, setActKeywordsDraft] = useState('')
 
   const patch = (p: Partial<BrowserConfig>) => onChange({ ...browser, ...p })
 
@@ -71,6 +76,41 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
     const remove = new Set(selectedDomains)
     patch({ trustedDomains: browser.trustedDomains.filter((d) => !remove.has(d)) })
     setSelectedDomains([])
+  }
+
+  const addActTrustedDomain = () => {
+    const d = newActDomain.trim().toLowerCase()
+    if (!d) return
+    if (!isValidTrustDomain(d)) {
+      message.warning(t('browser.trust.invalidDomain'))
+      return
+    }
+    if (browser.actTrustedDomains.includes(d)) {
+      setNewActDomain('')
+      return
+    }
+    patch({ actTrustedDomains: [...browser.actTrustedDomains, d] })
+    setNewActDomain('')
+  }
+
+  const removeSelectedActDomains = () => {
+    if (!selectedActDomains.length) return
+    const remove = new Set(selectedActDomains)
+    patch({ actTrustedDomains: browser.actTrustedDomains.filter((d) => !remove.has(d)) })
+    setSelectedActDomains([])
+  }
+
+  const saveActKeywords = () => {
+    const list = actKeywordsDraft
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    patch({ actHighRiskKeywords: list })
+  }
+
+  const resetActKeywords = () => {
+    patch({ actHighRiskKeywords: [...DEFAULT_BROWSER_CONFIG.actHighRiskKeywords] })
+    setActKeywordsDraft(DEFAULT_BROWSER_CONFIG.actHighRiskKeywords.join(', '))
   }
   const stagehandModels = useMemo(
     () => sortModelsFastFirst(models.filter((m) => m.enabled)),
@@ -321,6 +361,85 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
           ]}
         />
       </section>
+
+      <section className="browser-trust-section">
+        <div className="config-skill-section-header">
+          <h3 className="config-section-title">{t('browser.actTrustTitle')}</h3>
+          <Space size="small">
+            <Button
+              size="small"
+              danger
+              disabled={!selectedActDomains.length}
+              onClick={removeSelectedActDomains}
+            >
+              {t('browser.trust.batchDelete')}
+            </Button>
+          </Space>
+        </div>
+        <p className="config-field__hint">{t('browser.actTrustHelper')}</p>
+        <ConfigField label={t('browser.actTrustAdd')}>
+          <Space.Compact style={{ width: '100%' }}>
+            <Input
+              value={newActDomain}
+              placeholder={t('browser.trustedDomainsPlaceholder')}
+              onChange={(e) => setNewActDomain(e.target.value)}
+              onPressEnter={addActTrustedDomain}
+            />
+            <Button onClick={addActTrustedDomain}>{t('browser.trust.addDomainButton')}</Button>
+          </Space.Compact>
+        </ConfigField>
+        <Table
+          size="small"
+          pagination={false}
+          rowKey="domain"
+          rowSelection={{
+            selectedRowKeys: selectedActDomains,
+            onChange: (keys) => setSelectedActDomains(keys as string[])
+          }}
+          dataSource={browser.actTrustedDomains.map((domain) => ({ domain }))}
+          locale={{ emptyText: t('browser.actTrustEmpty') }}
+          columns={[
+            {
+              title: t('browser.trust.columnDomain'),
+              dataIndex: 'domain'
+            }
+          ]}
+        />
+      </section>
+
+      <ConfigSwitchRow
+        label={t('browser.actSessionTrustEnable')}
+        hint={t('browser.actSessionTrustHelper')}
+        checked={browser.actSessionTrustEnabled}
+        onChange={(v) => patch({ actSessionTrustEnabled: v })}
+      />
+
+      <ConfigField label={t('browser.actHighRiskTitle')} hint={t('browser.actHighRiskHelper')}>
+        <Button type="link" size="small" onClick={() => setActKeywordsOpen((v) => !v)}>
+          {actKeywordsOpen ? t('browser.detectCollapse') : t('browser.detectExpandHint')}
+        </Button>
+        {actKeywordsOpen ? (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Input.TextArea
+              value={
+                actKeywordsDraft ||
+                browser.actHighRiskKeywords.join(', ')
+              }
+              placeholder={t('browser.actHighRiskPlaceholder')}
+              onChange={(e) => setActKeywordsDraft(e.target.value)}
+              autoSize={{ minRows: 2, maxRows: 6 }}
+            />
+            <Space>
+              <Button size="small" onClick={saveActKeywords}>
+                {t('browser.actHighRiskSave')}
+              </Button>
+              <Button size="small" onClick={resetActKeywords}>
+                {t('browser.actHighRiskReset')}
+              </Button>
+            </Space>
+          </Space>
+        ) : null}
+      </ConfigField>
 
       <ConfigSwitchRow
         label={t('browser.allowHttpLabel')}

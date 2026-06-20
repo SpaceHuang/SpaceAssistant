@@ -131,14 +131,16 @@ describe('BrowserSettingsTab', () => {
       </Provider>
     )
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all' }))
-    fireEvent.click(screen.getByRole('button', { name: '批量删除' }))
+    fireEvent.click(screen.getAllByRole('checkbox', { name: 'Select all' })[0]!)
+    fireEvent.click(screen.getAllByRole('button', { name: '批量删除' })[0]!)
     expect(onChange).toHaveBeenCalled()
     const next = onChange.mock.calls.at(-1)?.[0] as typeof DEFAULT_BROWSER_CONFIG
     expect(next.trustedDomains).toEqual([])
 
-    fireEvent.change(screen.getByPlaceholderText('例：example.com'), { target: { value: 'docs.github.com' } })
-    fireEvent.click(screen.getByRole('button', { name: /添/ }))
+    fireEvent.change(screen.getAllByPlaceholderText('例：example.com')[0]!, {
+      target: { value: 'docs.github.com' }
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: /添/ })[0]!)
     expect(onChange).toHaveBeenCalled()
     const added = onChange.mock.calls.at(-1)?.[0] as typeof DEFAULT_BROWSER_CONFIG
     expect(added.trustedDomains).toContain('docs.github.com')

@@ -5,6 +5,14 @@ import type { BrowserConfig } from '../../src/shared/domainTypes'
 import type { BrowserDetectResult } from '../../src/shared/browserTypes'
 import { toBrowserUserError } from './browserUserErrors'
 import {
+  elementEffectToConsequence,
+  elementEffectToUserReason,
+  isDangerousElementEffect,
+  type PageEffectScan
+} from './actDangerAssessor'
+import type { ActDangerConsequence, ActFillPreview } from './browserActionPolicy'
+import { raceWithUserAbort } from '../tools/toolExecutionResource'
+import {
   detectBrowserDependencies,
   type BrowserDetectContext
 } from './browserDependencyDetect'
@@ -36,9 +44,21 @@ type PlaywrightPage = {
   goForward: (opts?: { timeout?: number }) => Promise<unknown>
   screenshot: (opts?: { path?: string; fullPage?: boolean; timeout?: number }) => Promise<unknown>
   /** 中止进行中的导航（用户点击聊天「中止」时） */
-  evaluate: (pageFunction: () => void) => Promise<unknown>
+  evaluate: <T>(pageFunction: () => T | Promise<T>) => Promise<T>
   url: () => string
   title: () => Promise<string>
+  $: (selector: string) => Promise<PlaywrightElement | null>
+}
+
+type PlaywrightElement = {
+  evaluate: <T>(pageFunction: (node: HTMLElement) => T | Promise<T>) => Promise<T>
+}
+
+export type StagehandAction = {
+  selector: string
+  description?: string
+  method?: string
+  arguments?: string
 }
 
 export interface StagehandSessionState {
@@ -229,6 +249,134 @@ export class StagehandService {
   isPlaywrightCrashError(err: unknown): boolean {
     const msg = err instanceof Error ? err.message : String(err)
     return /Target closed|Protocol error|Browser closed|context was destroyed/i.test(msg)
+  }
+
+  /** 同步读取会话当前页面 URL，不创建实例、无副作用；无页面/实例已关闭时返回 undefined */
+  peekCurrentUrl(sessionId: string): string | undefined {
+    try {
+      const internal = this.sessions.get(sessionId)
+      if (!internal) return undefined
+      const pages = internal.state.stagehand.context.pages()
+      const page = pages[0]
+      return page ? page.url() : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  async scanPageEffect(sessionId: string): Promise<PageEffectScan> {
+    const internal = this.sessions.get(sessionId)
+    const page = internal?.state.stagehand.context.pages()[0] as PlaywrightPage | undefined
+    if (!page) return { hasDangerousControl: false, signals: [] }
+    return await page.evaluate(() => {
+      const currentOrigin = location.origin
+      const signals: string[] = []
+      const DANGER_WORDS = [
+        '提交', '支付', '付款', '转账', '结账', '删除', '移除', '清空',
+        '确认订单', '提交订单', '登录', '注销', '上传', '下载', '安装', '卸载',
+        'submit', 'pay', 'payment', 'transfer', 'checkout', 'delete', 'remove', 'clear',
+        'login', 'logout', 'sign in', 'sign out', 'register', 'upload', 'download', 'install', 'uninstall'
+      ]
+      document.querySelectorAll('a[href]').forEach((el) => {
+        const a = el as HTMLAnchorElement
+        try {
+          const u = new URL(a.href, location.href)
+          if (u.origin !== currentOrigin) {
+            signals.push(`跨域链接: ${a.textContent?.trim().slice(0, 40)} → ${u.host}`)
+          }
+        } catch {
+          /* ignore */
+        }
+      })
+      document.querySelectorAll('form').forEach((f) => {
+        const action = f.getAttribute('action') || ''
+        const method = (f.getAttribute('method') || 'get').toLowerCase()
+        try {
+          if (action && new URL(action, location.href).origin !== currentOrigin) {
+            signals.push(`外部表单: method=${method} action=${action}`)
+          }
+        } catch {
+          /* ignore */
+        }
+      })
+      document.querySelectorAll('button,[role=button],input[type=submit],input[type=button]').forEach((el) => {
+        const label = (
+          el.textContent ||
+          el.getAttribute('aria-label') ||
+          el.getAttribute('value') ||
+          ''
+        )
+          .trim()
+          .toLowerCase()
+        if (DANGER_WORDS.some((w) => label.includes(w.toLowerCase()))) {
+          signals.push(`危险按钮: ${label.slice(0, 40)}`)
+        }
+      })
+      document.querySelectorAll('input[type=file],a[download]').forEach(() => {
+        signals.push('文件上传/下载控件')
+      })
+      return { hasDangerousControl: signals.length > 0, signals: signals.slice(0, 20) }
+    })
+  }
+
+  async observeActCandidates(
+    sessionId: string,
+    instruction: string,
+    maxInferences: number,
+    signal?: AbortSignal
+  ): Promise<StagehandAction[]> {
+    const internal = this.sessions.get(sessionId)
+    if (!internal) return []
+    this.incrementAndCheck(sessionId, maxInferences)
+    const observePromise = internal.state.stagehand.observe(instruction)
+    const result = signal
+      ? await raceWithUserAbort(observePromise, signal)
+      : await observePromise
+    return Array.isArray(result) ? (result as StagehandAction[]) : []
+  }
+
+  async resolveCandidateEffect(
+    sessionId: string,
+    candidates: StagehandAction[]
+  ): Promise<{
+    hit: boolean
+    summary: string
+    consequence: ActDangerConsequence
+    fillPreview?: ActFillPreview[]
+  } | null> {
+    const internal = this.sessions.get(sessionId)
+    const page = internal?.state.stagehand.context.pages()[0] as PlaywrightPage | undefined
+    if (!page || candidates.length === 0) return null
+    const pageUrl = page.url()
+    const fillPreview: ActFillPreview[] = []
+    for (const c of candidates.slice(0, 5)) {
+      try {
+        if (c.method === 'fill' && typeof c.arguments === 'string') {
+          fillPreview.push({ selector: c.selector, method: 'fill', value: c.arguments })
+        }
+        const el = await page.$(c.selector)
+        if (!el) continue
+        const eff = await el.evaluate((node) => {
+          const e = node as HTMLElement
+          const href = (e as HTMLAnchorElement).href || ''
+          const formAction = e.closest('form')?.getAttribute('action') || ''
+          const label = (e.textContent || e.getAttribute('aria-label') || '').trim()
+          const type = e.getAttribute('type') || ''
+          return { href, formAction, label: label.slice(0, 60), type }
+        })
+        if (isDangerousElementEffect(eff, pageUrl)) {
+          return {
+            hit: true,
+            summary: elementEffectToUserReason(eff, pageUrl),
+            consequence: elementEffectToConsequence(eff, pageUrl),
+            fillPreview: fillPreview.length ? fillPreview : undefined
+          }
+        }
+      } catch {
+        /* skip candidate */
+      }
+    }
+    return null
   }
 
   async detectDependencies(force = false): Promise<BrowserDetectResult> {

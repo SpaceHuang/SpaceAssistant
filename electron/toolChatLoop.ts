@@ -30,11 +30,16 @@ import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/sh
 import { getSkillByName } from './skills/skillScanner'
 import { getSession, updateSession } from './database'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
-import { browserActionNeedsConfirmation, type BrowserAction } from './browser/browserActionPolicy'
+import { browserActionNeedsConfirmation, type ActDangerAssessment, type BrowserAction } from './browser/browserActionPolicy'
+import { assessActDanger } from './browser/actDangerAssessor'
 import {
+  clearBrowserSessionActTrust,
   clearBrowserSessionTrust,
+  isBrowserSessionActTrustedHost,
+  rememberBrowserSessionActTrust,
   rememberBrowserSessionTrustedUrl
 } from './browser/browserSessionTrust'
+import { extractHostname, isTrustedDomain } from './browser/urlSecurity'
 import { stagehandService } from './browser/stagehandService'
 import {
   formatDependencyRecoveryToolContent,
@@ -109,6 +114,7 @@ export function clearSessionToolResources(sessionId: string): void {
   fileCaches.delete(sessionId)
   releaseAllWritePathsForSession(sessionId)
   clearBrowserSessionTrust(sessionId)
+  clearBrowserSessionActTrust(sessionId)
 }
 
 export type ClaudeContentBlockMessage = {
@@ -887,12 +893,78 @@ async function runToolChatSessionInner(
         }
       }
 
+      const sendProgress = (status: string, payload?: string | import('./tools/types').ToolProgressPayload) => {
+        let message: string | undefined
+        let raw: string | undefined
+        let rawDelta: string | undefined
+        let seq: number | undefined
+        if (typeof payload === 'string') {
+          message = payload
+        } else if (payload) {
+          message = payload.message
+          raw = payload.raw
+          rawDelta = payload.rawDelta
+          seq = payload.seq
+        }
+        if (status === 'error') {
+          logAgentEvent('error', 'tool.progress', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            status,
+            message
+          })
+        }
+        safeWebContentsSend(sender,'tool:progress', { requestId, toolUseId, status, message, raw, rawDelta, seq })
+        if (
+          message?.trim() &&
+          remoteContext?.source === 'feishu' &&
+          remoteContext.larkCliRunner &&
+          remoteContext.messageId
+        ) {
+          void publishFeishuRemoteProgress(
+            remoteContext.larkCliRunner,
+            remoteContext.messageId,
+            sessionId,
+            message
+          ).catch(() => undefined)
+        }
+      }
+
+      let dangerAssessment: ActDangerAssessment | null = null
+      if (
+        toolName === 'browser' &&
+        inputObj.action === 'act' &&
+        browserConfig?.actRequiresConfirm &&
+        sessionId
+      ) {
+        sendProgress('analyzing_risk', '正在检查本次操作…')
+        try {
+          dangerAssessment = await assessActDanger(
+            sessionId,
+            inputObj,
+            browserConfig,
+            stagehandService,
+            undefined
+          )
+        } catch {
+          dangerAssessment = null
+        }
+      }
+
+      const currentPageUrl =
+        toolName === 'browser' && sessionId ? stagehandService.peekCurrentUrl(sessionId) : undefined
+
       let needsConfirm = toolNeedsUserConfirmation(
         toolName,
         inputObj,
         feishuConfig,
         browserConfig,
-        sessionId
+        sessionId,
+        currentPageUrl,
+        dangerAssessment
       )
       if (toolName === 'run_shell' && shellPrecheck?.ok && shellPrecheck.skipConfirm) {
         needsConfirm = false
@@ -935,6 +1007,26 @@ async function runToolChatSessionInner(
           toolsConfig.confirmMode === 'auto' ||
           Boolean(autoApproveFallback)
         const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
+        const actDanger =
+          toolName === 'browser' && inputObj.action === 'act' && dangerAssessment?.dangerous
+            ? dangerAssessment
+            : null
+        const actCurrentHost = currentPageUrl ? extractHostname(currentPageUrl) : null
+        const sessionTrustedHint =
+          !!actCurrentHost &&
+          !!sessionId &&
+          !actDanger &&
+          isBrowserSessionActTrustedHost(sessionId, actCurrentHost)
+            ? true
+            : undefined
+        const dangerInfo = actDanger
+          ? {
+              userReason: actDanger.userReason,
+              consequence: actDanger.consequence ?? 'generic',
+              source: actDanger.source!,
+              ...(actDanger.fillPreview?.length ? { fillPreview: actDanger.fillPreview } : {})
+            }
+          : undefined
         safeWebContentsSend(sender,'tool:confirm-request', {
           requestId,
           toolUseId,
@@ -942,6 +1034,13 @@ async function runToolChatSessionInner(
           input: inputObj,
           riskLevel:
             toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+          ...(toolName === 'browser' && inputObj.action === 'act'
+            ? {
+                ...(currentPageUrl ? { currentPageUrl } : {}),
+                ...(dangerInfo ? { dangerInfo } : {}),
+                ...(sessionTrustedHint ? { sessionTrustedHint } : {})
+              }
+            : {}),
           ...(diff ? { diff } : {}),
           ...(shellSecurityHints ? { shellSecurityHints } : {}),
           ...(autoApproveFallback ? { autoApproveFallback } : {})
@@ -1060,6 +1159,36 @@ async function runToolChatSessionInner(
       ) {
         rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
       }
+      if (
+        outcome === 'approved' &&
+        toolName === 'browser' &&
+        inputObj.action === 'act' &&
+        !dangerAssessment?.dangerous
+      ) {
+        const actUrl = stagehandService.peekCurrentUrl(sessionId)
+        if (actUrl) {
+          rememberBrowserSessionActTrust(sessionId, actUrl)
+          logAgentEvent('info', 'browser.act.sessionTrust.remember', {
+            sessionId,
+            host: extractHostname(actUrl),
+            timestamp: Date.now()
+          })
+        }
+      }
+      if (
+        outcome === 'approved' &&
+        toolName === 'browser' &&
+        inputObj.action === 'act' &&
+        dangerAssessment?.dangerous
+      ) {
+        logAgentEvent('info', 'browser.act.danger.confirmedNoTrust', {
+          sessionId,
+          source: dangerAssessment.source,
+          userReason: dangerAssessment.userReason,
+          consequence: dangerAssessment.consequence,
+          timestamp: Date.now()
+        })
+      }
 
       if (outcome === 'rejected') {
         const rejectedError = '用户拒绝执行此工具'
@@ -1107,43 +1236,28 @@ async function runToolChatSessionInner(
       }
 
       const signal = registerToolCancel(requestId, toolUseId)
-      const sendProgress = (status: string, payload?: string | import('./tools/types').ToolProgressPayload) => {
-        let message: string | undefined
-        let raw: string | undefined
-        let rawDelta: string | undefined
-        let seq: number | undefined
-        if (typeof payload === 'string') {
-          message = payload
-        } else if (payload) {
-          message = payload.message
-          raw = payload.raw
-          rawDelta = payload.rawDelta
-          seq = payload.seq
-        }
-        if (status === 'error') {
-          logAgentEvent('error', 'tool.progress', {
-            requestId,
+      if (
+        !needsConfirm &&
+        toolName === 'browser' &&
+        inputObj.action === 'act' &&
+        !dangerAssessment?.dangerous &&
+        currentPageUrl &&
+        browserConfig?.actRequiresConfirm
+      ) {
+        const host = extractHostname(currentPageUrl)
+        const persistent = host ? isTrustedDomain(host, browserConfig.actTrustedDomains) : false
+        const sessionTrusted = host && sessionId ? isBrowserSessionActTrustedHost(sessionId, host) : false
+        if (host && (persistent || sessionTrusted)) {
+          sendProgress(
+            'trust_auto_approved',
+            `已信任「${host}」的常规操作，自动执行（敏感操作仍会询问）`
+          )
+          logAgentEvent('info', 'browser.act.trustAutoApproved', {
             sessionId,
-            loopRound,
-            toolUseId,
-            toolName,
-            status,
-            message
+            host,
+            layer: persistent ? 'persistent' : 'session',
+            timestamp: Date.now()
           })
-        }
-        safeWebContentsSend(sender,'tool:progress', { requestId, toolUseId, status, message, raw, rawDelta, seq })
-        if (
-          message?.trim() &&
-          remoteContext?.source === 'feishu' &&
-          remoteContext.larkCliRunner &&
-          remoteContext.messageId
-        ) {
-          void publishFeishuRemoteProgress(
-            remoteContext.larkCliRunner,
-            remoteContext.messageId,
-            sessionId,
-            message
-          ).catch(() => undefined)
         }
       }
 
@@ -1336,12 +1450,21 @@ function toolNeedsUserConfirmation(
   inputObj: Record<string, unknown>,
   feishuConfig?: FeishuConfig,
   browserConfig?: BrowserConfig,
-  sessionId?: string
+  sessionId?: string,
+  currentPageUrl?: string,
+  danger?: ActDangerAssessment | null
 ): boolean {
   if (toolName === 'browser' && browserConfig) {
     const action = inputObj.action
     if (typeof action !== 'string') return true
-    return browserActionNeedsConfirmation(action as BrowserAction, inputObj, browserConfig, sessionId)
+    return browserActionNeedsConfirmation(
+      action as BrowserAction,
+      inputObj,
+      browserConfig,
+      sessionId,
+      currentPageUrl,
+      danger
+    )
   }
   if (toolName === 'run_lark_cli') {
     const args = inputObj.args

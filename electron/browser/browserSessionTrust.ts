@@ -3,6 +3,9 @@ import { extractHostname, hostnameMatchesTrustedEntry, normalizeHostnameForTrust
 /** 单会话内用户已批准的 navigate(open) 主机名（仅内存，删除会话即清除） */
 const trustedHostsBySession = new Map<string, Set<string>>()
 
+/** 单会话内用户已批准 act 的主机名（仅内存，删除会话即清除） */
+const trustedActHostsBySession = new Map<string, Set<string>>()
+
 /** 登记用于子域匹配的主机名变体（如 www.sohu.com → 同时登记 sohu.com） */
 export function hostnamesForSessionTrust(hostname: string): string[] {
   const h = normalizeHostnameForTrust(hostname)
@@ -36,11 +39,43 @@ export function isBrowserSessionTrustedHost(sessionId: string, hostname: string)
   return false
 }
 
+export function rememberBrowserSessionActTrust(sessionId: string, url: string): void {
+  const host = extractHostname(url)
+  if (!host || !sessionId) return
+  let set = trustedActHostsBySession.get(sessionId)
+  if (!set) {
+    set = new Set()
+    trustedActHostsBySession.set(sessionId, set)
+  }
+  for (const h of hostnamesForSessionTrust(host)) {
+    set.add(h)
+  }
+}
+
+export function isBrowserSessionActTrustedHost(sessionId: string, hostname: string): boolean {
+  const set = trustedActHostsBySession.get(sessionId)
+  if (!set || set.size === 0) return false
+  for (const t of set) {
+    if (hostnameMatchesTrustedEntry(hostname, t)) return true
+  }
+  return false
+}
+
+export function listBrowserSessionActTrustedHosts(sessionId: string): string[] {
+  const set = trustedActHostsBySession.get(sessionId)
+  return set ? [...set] : []
+}
+
 export function clearBrowserSessionTrust(sessionId: string): void {
   trustedHostsBySession.delete(sessionId)
+}
+
+export function clearBrowserSessionActTrust(sessionId: string): void {
+  trustedActHostsBySession.delete(sessionId)
 }
 
 /** 测试用 */
 export function resetBrowserSessionTrustForTests(): void {
   trustedHostsBySession.clear()
+  trustedActHostsBySession.clear()
 }

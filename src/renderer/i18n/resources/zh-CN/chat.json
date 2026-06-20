@@ -99,6 +99,8 @@
     "trustCommandManage": "可在设置页管理信任列表。",
     "trustDomainSuccess": "已信任「{{domain}}」，后续访问将不再询问。",
     "trustDomainManage": "可在设置页管理可信域名。",
+    "trustActDomainSuccess": "已信任「{{domain}}」的浏览器操作，后续不再询问。",
+    "trustActDomainManage": "可在设置页管理信任列表。",
     "fileAutoApproved": "已自动写入 {{path}}（+{{added}} / -{{removed}}）。",
     "fileAutoApprovedViewDiff": "查看 diff"
   },
@@ -140,6 +142,21 @@
       "allow": "确认操作",
       "deny": "拒绝操作"
     },
+    "browserActTitle": "浏览器操作",
+    "browserActTrust": "信任此域名的操作，后续不再询问",
+    "browserActTrustSafety": "仅对常规操作（点击、翻页、填写）免确认；支付、转账、删除等敏感操作仍会每次询问。",
+    "browserDangerTitle": "本次操作需要你确认",
+    "browserDangerConsequenceMoney": "可能导致实际付款或下单，造成金钱损失。",
+    "browserDangerConsequenceDataLoss": "可能删除数据，且通常无法撤销。",
+    "browserDangerConsequenceAccount": "可能登录或退出账号，改变你的登录状态。",
+    "browserDangerConsequenceFile": "可能上传或下载文件，涉及本地文件。",
+    "browserDangerConsequenceUnknownSite": "可能跳转到一个未知网站，存在钓鱼或被诱导付款的风险。",
+    "browserDangerConsequenceGeneric": "该操作存在一定风险，请确认后再执行。",
+    "browserDangerFillPreview": "将填入：{{values}}",
+    "browserCurrentPage": "当前页面",
+    "browserSessionTrustedHint": "本会话已信任该域名的常规操作；本次操作较为敏感，仍需你确认。",
+    "browserAnalyzingRisk": "正在检查本次操作…",
+    "browserTrustAutoApproved": "已信任「{{domain}}」的常规操作，自动执行（敏感操作仍会询问）。",
     "collapsible": {
       "collapse": "收起预览",
       "expand": "展开全部（共 {{count}} 行）"

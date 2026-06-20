@@ -73,6 +73,12 @@ export interface BrowserConfig {
   rateLimitPerDomainPerMinute: number
   rateLimitMode: 'wait' | 'reject'
   rateLimitMaxWaitSec: number
+  /** act 操作的会话级信任开关（默认 true） */
+  actSessionTrustEnabled: boolean
+  /** act 操作的持久化信任域名列表（跨会话生效） */
+  actTrustedDomains: string[]
+  /** act instruction 高风险关键词（命中则强制确认，不享受信任） */
+  actHighRiskKeywords: string[]
 }
 
 export const DEFAULT_BROWSER_CONFIG: BrowserConfig = {
@@ -99,7 +105,21 @@ export const DEFAULT_BROWSER_CONFIG: BrowserConfig = {
   rateLimitPerHour: 200,
   rateLimitPerDomainPerMinute: 10,
   rateLimitMode: 'wait',
-  rateLimitMaxWaitSec: 30
+  rateLimitMaxWaitSec: 30,
+  actSessionTrustEnabled: true,
+  actTrustedDomains: [],
+  actHighRiskKeywords: [
+    '支付', '付款', '转账', '结账',
+    'checkout', 'pay', 'payment', 'transfer',
+    '提交订单', '确认订单',
+    'place order', 'submit order', 'confirm order',
+    '删除', '移除', '清空',
+    'delete', 'remove', 'clear', 'destroy',
+    '登录', '登出', '注销',
+    'login', 'logout', 'sign in', 'sign out', 'register', '注册',
+    '上传', '下载', 'upload', 'download',
+    '安装', '卸载', 'install', 'uninstall'
+  ]
 }
 
 export function mergeBrowserConfig(partial?: Partial<BrowserConfig> | null): BrowserConfig {
@@ -124,7 +144,15 @@ export function mergeBrowserConfig(partial?: Partial<BrowserConfig> | null): Bro
     rateLimitPerDomainPerMinute:
       partial.rateLimitPerDomainPerMinute ?? DEFAULT_BROWSER_CONFIG.rateLimitPerDomainPerMinute,
     rateLimitMode: partial.rateLimitMode ?? DEFAULT_BROWSER_CONFIG.rateLimitMode,
-    rateLimitMaxWaitSec: partial.rateLimitMaxWaitSec ?? DEFAULT_BROWSER_CONFIG.rateLimitMaxWaitSec
+    rateLimitMaxWaitSec: partial.rateLimitMaxWaitSec ?? DEFAULT_BROWSER_CONFIG.rateLimitMaxWaitSec,
+    actSessionTrustEnabled:
+      partial.actSessionTrustEnabled ?? DEFAULT_BROWSER_CONFIG.actSessionTrustEnabled,
+    actTrustedDomains: Array.isArray(partial.actTrustedDomains)
+      ? [...partial.actTrustedDomains]
+      : DEFAULT_BROWSER_CONFIG.actTrustedDomains,
+    actHighRiskKeywords: Array.isArray(partial.actHighRiskKeywords)
+      ? [...partial.actHighRiskKeywords]
+      : DEFAULT_BROWSER_CONFIG.actHighRiskKeywords
   }
 }
 
@@ -502,6 +530,19 @@ export interface ToolCallRecord {
   /** run_shell terminal 模式 base64 raw 增量（executing 内存，完成后清除） */
   progressOutputRaw?: string
   progressSeq?: number
+  /** browser act 确认：当前页面 URL */
+  currentPageUrl?: string
+  /** browser act 危险信息（确认卡片展示） */
+  dangerInfo?: BrowserActDangerInfo
+  /** 本会话已信任该域名但本次仍需确认 */
+  sessionTrustedHint?: true
+}
+
+export type BrowserActDangerInfo = {
+  userReason: string
+  consequence: 'money' | 'data-loss' | 'account' | 'file' | 'unknown-site' | 'generic'
+  source: 'page-effect' | 'target-effect' | 'keyword'
+  fillPreview?: { selector: string; method: string; value: string }[]
 }
 
 export interface ToolResult {

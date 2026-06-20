@@ -2,6 +2,7 @@ import type { AppLocale } from './locale'
 import type {
   AppConfig,
   AutoApproveFallback,
+  BrowserActDangerInfo,
   ChatImageAttachment,
   FileInfo,
   Message,
@@ -29,6 +30,7 @@ export type ToolConfirmResponsePayload = {
   approved: boolean
   trustCommand?: string
   trustDomain?: string
+  trustActDomain?: string
 }
 
 export type ShellManageTrustedCommandsAction =
@@ -294,6 +296,9 @@ export type SpaceAssistantApi = {
       diff?: { oldContent: string; newContent: string; oldPath: string }
       shellSecurityHints?: ShellSecurityHints
       autoApproveFallback?: AutoApproveFallback
+      currentPageUrl?: string
+      dangerInfo?: BrowserActDangerInfo
+      sessionTrustedHint?: true
     }) => void
   ) => () => void
   toolOnProgress: (
