@@ -15,8 +15,7 @@
     "legendReserved": "Output reserve",
     "legendFree": "Free",
     "pendingImages": "Pending images ~{{count}} tokens",
-    "historyImages": "History images ~{{count}} tokens",
-    "historyImagesNote": "Session history includes images; subsequent requests will keep counting visual input"
+    "historyImages": "Images in chat ~{{count}} tokens"
   },
   "aria": {
     "noData": "No context usage data",

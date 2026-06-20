@@ -217,6 +217,7 @@ describe('ChatView auto-create session', () => {
     const payload = vi.mocked(runClaudeChatStream).mock.calls[0]?.[0]
     expect(payload?.messages?.length).toBeGreaterThan(0)
     expect(payload?.messages?.some((m) => m.content === 'hello world')).toBe(true)
+    expect(payload?.sessionId).toBe('new-session-id')
   })
 
   it('keeps user message in API payload when session message load races with send', async () => {

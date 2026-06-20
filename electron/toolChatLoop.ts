@@ -530,6 +530,17 @@ async function runToolChatSessionInner(
           pendingTextByIndex.set(index, prev + textDelta)
         }
       }
+      if (evt?.type === 'message_start') {
+        const startUsage = (evt as { message?: { usage?: unknown } }).message?.usage
+        if (startUsage && typeof startUsage === 'object') {
+          const partial = normalizeAnthropicMessageUsage({ usage: startUsage })
+          if (partial) {
+            usage = { ...partial, output_tokens: usage?.output_tokens }
+            lastValidUsage = usage
+            safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
+          }
+        }
+      }
       if (evt?.type === 'message_delta') {
         const evtUsage = (evt as { usage?: unknown }).usage
         if (evtUsage && typeof evtUsage === 'object') {

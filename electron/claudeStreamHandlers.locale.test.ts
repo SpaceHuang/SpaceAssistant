@@ -126,6 +126,7 @@ describe('claudeStreamHandlers locale', () => {
 
     await handler!({ sender } as never, {
       requestId: '00000000-0000-4000-8000-000000000001',
+      sessionId: 'sess-locale-1',
       model: 'claude-sonnet-4-20250514',
       messages: [{ role: 'user', content: 'hello' }],
       locale: 'en-US'

@@ -15,8 +15,7 @@
     "legendReserved": "输出预留",
     "legendFree": "剩余",
     "pendingImages": "待发送图片约 {{count}} tokens",
-    "historyImages": "历史图片约 {{count}} tokens",
-    "historyImagesNote": "本会话 history 含图片，后续请求将持续计入视觉输入"
+    "historyImages": "已有图片约 {{count}} tokens"
   },
   "aria": {
     "noData": "暂无上下文用量数据",

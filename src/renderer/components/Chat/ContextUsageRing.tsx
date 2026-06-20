@@ -110,12 +110,13 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
         }
         if (historyImageTokens > 0) {
           lines.push(t('tooltip.historyImages', { count: historyImageTokens }))
-          lines.push(t('tooltip.historyImagesNote'))
         }
         return (
-          <pre style={{ margin: 0, fontFamily: 'inherit', whiteSpace: 'pre', lineHeight: 1.6 }}>
-            {lines.join('\n')}
-          </pre>
+          <div className="context-usage-tooltip">
+            {lines.map((line, index) => (
+              <div key={index}>{line}</div>
+            ))}
+          </div>
         )
       }
       return t('tooltip.noData')
@@ -140,7 +141,6 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
     }
     if (historyImageTokens > 0) {
       lines.push(t('tooltip.historyImages', { count: historyImageTokens }))
-      lines.push(t('tooltip.historyImagesNote'))
     }
     lines.push(t('tooltip.separator'))
     lines.push(
@@ -151,9 +151,11 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
     )
 
     return (
-      <pre style={{ margin: 0, fontFamily: 'inherit', whiteSpace: 'pre', lineHeight: 1.6 }}>
-        {lines.join('\n')}
-      </pre>
+      <div className="context-usage-tooltip">
+        {lines.map((line, index) => (
+          <div key={index}>{line}</div>
+        ))}
+      </div>
     )
   }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, t, i18n.language])
 
@@ -163,7 +165,7 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
       : t('aria.noData')
 
   return (
-    <Tooltip title={tooltipTitle} placement="top">
+    <Tooltip title={tooltipTitle} placement="top" overlayClassName="context-usage-tooltip-overlay">
       <span
         className="context-usage-ring"
         style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}

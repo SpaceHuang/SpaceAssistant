@@ -75,6 +75,7 @@ export type FileMetadata = {
 
 export type ClaudeChatSendStreamPayload = {
   requestId: string
+  sessionId: string
   model: string
   baseUrl?: string
   messages: Array<{ role: 'user' | 'assistant'; content: string }>

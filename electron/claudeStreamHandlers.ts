@@ -48,6 +48,7 @@ type ClaudeChatMessage = {
 
 type ClaudeChatSendPayload = {
   requestId: string
+  sessionId: string
   model: string
   baseUrl?: string
   messages: ClaudeChatMessage[]
@@ -206,6 +207,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           typeof payload.locale === 'string' && isAppLocale(payload.locale) ? payload.locale : undefined
         void runSendStream(sender, {
           requestId,
+          sessionId: payload.sessionId,
           model,
           baseUrl,
           messages,
@@ -344,6 +346,7 @@ async function runSendStream(
   sender: WebContents,
   args: {
     requestId: string
+    sessionId: string
     model: string
     baseUrl: string | undefined
     messages: ClaudeChatMessage[]
@@ -354,7 +357,7 @@ async function runSendStream(
     deps: ClaudeStreamDeps
   }
 ): Promise<void> {
-  const { requestId, model, baseUrl, messages, system, maxTokens: maxTokensRaw, deps } = args
+  const { requestId, sessionId, model, baseUrl, messages, system, maxTokens: maxTokensRaw, deps } = args
   const maxTokens = normalizeToolLoopMaxTokens(maxTokensRaw)
   const chatSignal = registerChatCancel(requestId)
   try {
@@ -414,6 +417,15 @@ async function runSendStream(
         safeWebContentsSend(sender,'claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
         return
       }
+      if (evt?.type === 'message_start') {
+        const startUsage = (evt as { message?: { usage?: unknown } }).message?.usage
+        if (startUsage && typeof startUsage === 'object') {
+          const partial = normalizeAnthropicMessageUsage({ usage: startUsage })
+          if (partial) {
+            safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: partial })
+          }
+        }
+      }
       if (evt?.type === 'content_block_start') {
         const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
         const blockType = (evt as { content_block?: { type?: string } }).content_block?.type
@@ -462,6 +474,9 @@ async function runSendStream(
       usage
     })
 
+    if (usage) {
+      safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
+    }
     safeWebContentsSend(sender,'claude-chat-done', { requestId, usage: usage ?? null })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

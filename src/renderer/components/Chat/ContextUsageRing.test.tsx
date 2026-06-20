@@ -235,8 +235,7 @@ describe('ContextUsageRing', () => {
     fireEvent.mouseEnter(svg)
     await waitFor(() => {
       const text = screen.getByRole('tooltip').textContent ?? ''
-      expect(text).toContain('历史图片约')
-      expect(text).toContain('后续请求将持续计入视觉输入')
+      expect(text).toContain('已有图片约')
     })
   })
 })

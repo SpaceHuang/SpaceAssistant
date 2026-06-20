@@ -187,3 +187,19 @@
 .chat-message-attachment-size {
   color: var(--sa-text-tertiary);
 }
+
+/* ── Context usage ring tooltip ── */
+.context-usage-tooltip-overlay .ant-tooltip-inner {
+  max-width: min(280px, calc(100vw - 32px));
+}
+
+.context-usage-tooltip {
+  max-width: 280px;
+  line-height: 1.6;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.context-usage-tooltip > div + div {
+  margin-top: 2px;
+}

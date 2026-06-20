@@ -995,6 +995,7 @@ export function ChatView() {
       await runClaudeChatStream(
         {
           requestId,
+          sessionId: runSessionId,
           model: requestModel,
           baseUrl: requestBaseUrl,
           messages: basePayload,
@@ -1019,10 +1020,7 @@ export function ChatView() {
             routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
             scrollBottomThrottled()
           },
-          onDone: async (data) => {
-            if (data?.usage) {
-              applyContextUsageUpdate(runSessionId, data.usage as NonNullable<LastUsage>)
-            }
+          onDone: async () => {
             const reconciled = reconcileAssistantStreamOnComplete({
               stopReason: 'end_turn',
               contentState,
