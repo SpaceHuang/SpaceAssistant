@@ -238,4 +238,53 @@ describe('ContextUsageRing', () => {
       expect(text).toContain('已有图片约')
     })
   })
+
+  it('shows high cache additive occupancy near 50% not ~0.25%', () => {
+    renderRing({
+      input_tokens: 500,
+      cache_read_input_tokens: 100_000,
+      cacheSemantics: 'additive'
+    })
+    expect(screen.getByLabelText(/上下文用量约 50\.2%/)).toBeDefined()
+  })
+
+  it('reduces ring occupancy when assistant thinking tokens are excluded', () => {
+    const thinkingText = 'x'.repeat(3500)
+    const usage = { input_tokens: 10_000, output_tokens: 10_000 }
+    const historyMessages: Message[] = [
+      {
+        id: 'a1',
+        sessionId: 's1',
+        role: 'assistant',
+        content: 'answer',
+        timestamp: 2,
+        status: 'completed',
+        thinking: { content: thinkingText, isVisible: true, startTime: 1 }
+      }
+    ]
+
+    renderRing(usage, undefined, { historyMessages })
+    expect(screen.getByLabelText(/上下文用量约 9\.5%/)).toBeDefined()
+  })
+
+  it('shows thinking excluded line in tooltip when assistant has thinking', async () => {
+    const historyMessages: Message[] = [
+      {
+        id: 'a1',
+        sessionId: 's1',
+        role: 'assistant',
+        content: 'answer',
+        timestamp: 2,
+        status: 'completed',
+        thinking: { content: 'x'.repeat(350), isVisible: true, startTime: 1 }
+      }
+    ]
+    renderRing({ input_tokens: 1000, output_tokens: 5000 }, undefined, { historyMessages })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('已扣除思考')
+    })
+  })
 })

@@ -6,6 +6,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
 import {
   computeContextUsageDisplay,
+  estimateThinkingTokensFromMessage,
   estimateTokensFromHistoryImages,
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
@@ -83,6 +84,20 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
       ? resolveEffectiveOutputMaxTokens(config.model, config.models)
       : undefined
 
+  const lastAssistantThinking = useMemo(() => {
+    if (!historyMessages?.length) return undefined
+    for (let i = historyMessages.length - 1; i >= 0; i--) {
+      const m = historyMessages[i]
+      if (m?.role === 'assistant' && m.thinking) return m.thinking
+    }
+    return undefined
+  }, [historyMessages])
+
+  const thinkingTokensToExclude = useMemo(
+    () => estimateThinkingTokensFromMessage(lastAssistantThinking),
+    [lastAssistantThinking]
+  )
+
   const hasData =
     lastUsage != null &&
     maximumContext != null &&
@@ -91,8 +106,10 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
 
   const display = useMemo(() => {
     if (!hasData || !lastUsage || !maximumContext || effectiveOutputMax == null) return null
-    return computeContextUsageDisplay(lastUsage, maximumContext, effectiveOutputMax)
-  }, [hasData, lastUsage, maximumContext, effectiveOutputMax])
+    return computeContextUsageDisplay(lastUsage, maximumContext, effectiveOutputMax, {
+      thinkingTokensToExclude
+    })
+  }, [hasData, lastUsage, maximumContext, effectiveOutputMax, thinkingTokensToExclude])
 
   const circumference = 2 * Math.PI * RADIUS
 
@@ -129,6 +146,11 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
     if (display.lastOutput > 0) {
       lines.push(`${t('tooltip.lastOutput')}　${formatNum(display.lastOutput, locale)}`)
     }
+    if (thinkingTokensToExclude > 0) {
+      lines.push(
+        t('tooltip.thinkingExcluded', { count: formatNum(thinkingTokensToExclude, locale) })
+      )
+    }
     if (lastUsage.cache_read_input_tokens && lastUsage.cache_read_input_tokens > 0) {
       lines.push(`${t('tooltip.cacheRead')}　${formatNum(lastUsage.cache_read_input_tokens, locale)}`)
     }
@@ -157,7 +179,7 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
         ))}
       </div>
     )
-  }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, t, i18n.language])
+  }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, thinkingTokensToExclude, t, i18n.language])
 
   const ariaLabel =
     hasData && display

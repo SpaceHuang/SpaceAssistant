@@ -1,4 +1,5 @@
-import type { ChatImageAttachment, Message } from './domainTypes'
+import type { ChatImageAttachment, Message, ThinkingData } from './domainTypes'
+import type { UsageCacheSemantics } from './usageCacheSemantics'
 
 /** API 返回的原始 usage 字段（与 chatSlice.LastUsage 非 null 形态一致） */
 export type ContextUsageRaw = {
@@ -6,6 +7,15 @@ export type ContextUsageRaw = {
   output_tokens?: number
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
+  cacheSemantics?: UsageCacheSemantics
+}
+
+export type ContextUsageComputeOptions = {
+  thinkingTokensToExclude?: number
+}
+
+function legacyCacheSemantics(input: number, cacheSum: number): UsageCacheSemantics {
+  return input >= cacheSum ? 'subset' : 'additive'
 }
 
 /** 单次 API 请求的完整 prompt token 数（兼容 Anthropic 加性 / OpenAI 子集性） */
@@ -17,20 +27,27 @@ export function computeTotalRequestInputTokens(usage: ContextUsageRaw): number {
 
   if (cacheSum <= 0) return input
 
-  // OpenAI 兼容：cached 为 prompt 子集，input 已是总量
-  // 当非缓存 input 仍明显大于 cache 合计时，更可能是 Anthropic 加性口径（input 不含 cache）
-  if (input >= cacheSum) {
-    if (cacheRead < input * 0.5) return input + cacheSum
-    return input
-  }
+  const semantics =
+    usage.cacheSemantics ?? legacyCacheSemantics(input, cacheSum)
 
-  // Anthropic 原生：cache 字段与 input_tokens 加性
+  if (semantics === 'subset') return input
   return input + cacheSum
 }
 
+/** 从 assistant 消息 thinking 粗估 token，用于从 output 占用中扣除 */
+export function estimateThinkingTokensFromMessage(thinking?: ThinkingData): number {
+  if (!thinking?.content) return 0
+  return estimateTokensFromUtf8Text(thinking.content)
+}
+
 /** 含 assistant 回复、下轮发送前的预估占用 */
-export function computeEstimatedOccupancy(usage: ContextUsageRaw): number {
-  return computeTotalRequestInputTokens(usage) + (usage.output_tokens ?? 0)
+export function computeEstimatedOccupancy(
+  usage: ContextUsageRaw,
+  options?: ContextUsageComputeOptions
+): number {
+  const exclude = options?.thinkingTokensToExclude ?? 0
+  const output = Math.max(0, (usage.output_tokens ?? 0) - exclude)
+  return computeTotalRequestInputTokens(usage) + output
 }
 
 /** 保守估计单张图片 prompt token（非精确；Anthropic 按分辨率分块） */
@@ -148,10 +165,12 @@ export type ContextUsageDisplay = {
 export function computeContextUsageDisplay(
   usage: ContextUsageRaw,
   maximumContext: number,
-  effectiveOutputMax: number
+  effectiveOutputMax: number,
+  options?: ContextUsageComputeOptions
 ): ContextUsageDisplay {
   const totalRequestInput = computeTotalRequestInputTokens(usage)
-  const lastOutput = usage.output_tokens ?? 0
+  const exclude = options?.thinkingTokensToExclude ?? 0
+  const lastOutput = Math.max(0, (usage.output_tokens ?? 0) - exclude)
   const estimatedOccupancy = totalRequestInput + lastOutput
 
   let usedRatio = estimatedOccupancy / maximumContext

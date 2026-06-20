@@ -15,7 +15,8 @@
     "legendReserved": "输出预留",
     "legendFree": "剩余",
     "pendingImages": "待发送图片约 {{count}} tokens",
-    "historyImages": "已有图片约 {{count}} tokens"
+    "historyImages": "已有图片约 {{count}} tokens",
+    "thinkingExcluded": "已扣除思考约 {{count}} tokens（不计入当前上下文）"
   },
   "aria": {
     "noData": "暂无上下文用量数据",

@@ -533,7 +533,7 @@ async function runToolChatSessionInner(
       if (evt?.type === 'message_start') {
         const startUsage = (evt as { message?: { usage?: unknown } }).message?.usage
         if (startUsage && typeof startUsage === 'object') {
-          const partial = normalizeAnthropicMessageUsage({ usage: startUsage })
+          const partial = normalizeAnthropicMessageUsage({ usage: startUsage }, baseUrl)
           if (partial) {
             usage = { ...partial, output_tokens: usage?.output_tokens }
             lastValidUsage = usage
@@ -544,7 +544,7 @@ async function runToolChatSessionInner(
       if (evt?.type === 'message_delta') {
         const evtUsage = (evt as { usage?: unknown }).usage
         if (evtUsage && typeof evtUsage === 'object') {
-          const partial = normalizeAnthropicMessageUsage({ usage: evtUsage })
+          const partial = normalizeAnthropicMessageUsage({ usage: evtUsage }, baseUrl)
           if (partial) usage = partial
         }
       }
@@ -604,7 +604,7 @@ async function runToolChatSessionInner(
       const rawContent = finalContent.length > 0 ? finalContent : contentBlocks
       content = mergeStreamedToolInputsIntoContent(rawContent, contentBlocks) as Anthropic.ContentBlock[]
       stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
-      const finalUsage = normalizeAnthropicMessageUsage(res)
+      const finalUsage = normalizeAnthropicMessageUsage(res, baseUrl)
       usage = finalUsage ?? usage
       if (usage) {
         lastValidUsage = usage
@@ -1323,8 +1323,7 @@ async function runToolChatSessionInner(
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]
     if (lastValidUsage && toolResults.length > 0) {
       const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
-      lastValidUsage = projected
-      safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: projected })
+      safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: projected, projected: true })
     }
     if (abortRepeatedToolError) {
       return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage)

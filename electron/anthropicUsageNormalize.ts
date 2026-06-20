@@ -1,3 +1,6 @@
+import type { SessionUsage } from '../src/shared/sessionUsage'
+import { annotateUsageCacheSemantics } from '../src/shared/usageCacheSemantics'
+
 function finitePositive(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0
 }
@@ -43,18 +46,19 @@ export function pickInputTokensFromUsageObject(u: Record<string, unknown>): numb
 }
 
 export function normalizeAnthropicMessageUsage(
-  res: unknown
-): { input_tokens: number; output_tokens?: number; [extra: string]: number | undefined } | undefined {
+  res: unknown,
+  baseUrl?: string
+): SessionUsage | undefined {
   const u = (res as { usage?: unknown } | null)?.usage
   if (!u || typeof u !== 'object') return undefined
   const uo = u as Record<string, unknown>
   const input_tokens = pickInputTokensFromUsageObject(uo)
   if (input_tokens == null) return undefined
-  const out: { input_tokens: number; output_tokens?: number; [k: string]: number | undefined } = { input_tokens }
+  const out: SessionUsage = { input_tokens }
   for (const [k, v] of Object.entries(uo)) {
     if (k === 'input_tokens') continue
     if (typeof v === 'number' && Number.isFinite(v)) {
-      out[k] = v
+      ;(out as Record<string, number | undefined>)[k] = v
     }
   }
 
@@ -68,5 +72,5 @@ export function normalizeAnthropicMessageUsage(
     out.cache_creation_input_tokens = cacheCreate
   }
 
-  return out
+  return annotateUsageCacheSemantics(out, { baseUrl, rawUsage: uo })
 }

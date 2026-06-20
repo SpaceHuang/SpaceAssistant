@@ -16,7 +16,46 @@ describe('normalizeAnthropicMessageUsage', () => {
     expect(normalizeAnthropicMessageUsage({ usage: { total_tokens: 8000, output_tokens: 500 } })).toEqual({
       input_tokens: 8000,
       output_tokens: 500,
-      total_tokens: 8000
+      total_tokens: 8000,
+      cacheSemantics: 'additive'
+    })
+  })
+
+  it('annotates subset semantics for OpenAI-shaped usage', () => {
+    expect(
+      normalizeAnthropicMessageUsage({
+        usage: {
+          prompt_tokens: 100_000,
+          output_tokens: 500,
+          prompt_tokens_details: { cached_tokens: 80_000 }
+        }
+      })
+    ).toEqual({
+      input_tokens: 100_000,
+      output_tokens: 500,
+      prompt_tokens: 100_000,
+      cache_read_input_tokens: 80_000,
+      cacheSemantics: 'subset'
+    })
+  })
+
+  it('annotates additive semantics for Anthropic native cache fields', () => {
+    expect(
+      normalizeAnthropicMessageUsage(
+        {
+          usage: {
+            input_tokens: 500,
+            output_tokens: 100,
+            cache_read_input_tokens: 100_000
+          }
+        },
+        'https://api.anthropic.com'
+      )
+    ).toEqual({
+      input_tokens: 500,
+      output_tokens: 100,
+      cache_read_input_tokens: 100_000,
+      cacheSemantics: 'additive'
     })
   })
 })

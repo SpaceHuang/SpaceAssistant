@@ -57,4 +57,22 @@ describe('contextUsageStreamService', () => {
     })
     expect(store.getState().chat.lastUsage).toEqual({ input_tokens: 9000, output_tokens: 500 })
   })
+
+  it('projected usage updates Redux but skips persistence', () => {
+    applyContextUsageUpdate('sess-bridge-1', { input_tokens: 8000, output_tokens: 200 }, { projected: true })
+    expect(usageSet).not.toHaveBeenCalled()
+    expect(store.getState().chat.lastUsage).toEqual({ input_tokens: 8000, output_tokens: 200 })
+  })
+
+  it('initContextUsageStreamBridge passes projected flag through', () => {
+    initContextUsageStreamBridge()
+    usageHandler!({
+      requestId: 'req-2',
+      sessionId: 'sess-bridge-1',
+      usage: { input_tokens: 7000 },
+      projected: true
+    })
+    expect(usageSet).not.toHaveBeenCalled()
+    expect(store.getState().chat.lastUsage).toEqual({ input_tokens: 7000 })
+  })
 })

@@ -83,11 +83,23 @@ function makeDb(): AppDatabase {
   } as unknown as AppDatabase
 }
 
-function usagePayloads(sender: WebContents): Array<{ requestId: string; sessionId: string; usage: Record<string, number | undefined> }> {
+function usagePayloads(
+  sender: WebContents
+): Array<{
+  requestId: string
+  sessionId: string
+  usage: Record<string, number | undefined>
+  projected?: boolean
+}> {
   const send = sender.send as ReturnType<typeof vi.fn>
   return send.mock.calls
     .filter(([channel]) => channel === 'claude-chat-usage')
-    .map(([, payload]) => payload as { requestId: string; sessionId: string; usage: Record<string, number | undefined> })
+    .map(([, payload]) => payload as {
+      requestId: string
+      sessionId: string
+      usage: Record<string, number | undefined>
+      projected?: boolean
+    })
 }
 
 describe('runToolChatSession message_start usage', () => {
@@ -222,5 +234,103 @@ describe('runToolChatSession message_start usage', () => {
     const sends = usagePayloads(sender)
     expect(sends).toHaveLength(1)
     expect(sends[0]?.usage.input_tokens).toBe(900)
+  })
+
+  it('emits projected claude-chat-usage after tool results without polluting return usage', async () => {
+    const sender = makeSender()
+    const largeToolResult = 'z'.repeat(350)
+    mockCreateAnthropicClient.mockImplementation(() => ({
+      messages: {
+        stream: vi.fn(() => {
+          streamRound += 1
+          const round = streamRound
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield {
+                type: 'message_start',
+                message: { usage: { input_tokens: 1000 } }
+              }
+            },
+            finalMessage: vi.fn(async () => {
+              if (round === 1) {
+                return {
+                  content: [{ type: 'tool_use', id: 'tu1', name: 'read_file', input: { path: 'a.txt' } }],
+                  stop_reason: 'tool_use',
+                  usage: { input_tokens: 1000, output_tokens: 50 }
+                }
+              }
+              return {
+                content: [{ type: 'text', text: 'done' }],
+                stop_reason: 'end_turn',
+                usage: { input_tokens: 2500, output_tokens: 80 }
+              }
+            })
+          }
+        })
+      }
+    }))
+
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) => {
+      if (name === 'read_file') {
+        return {
+          name: 'read_file',
+          execute: vi.fn(async () => ({ success: true, data: largeToolResult }))
+        }
+      }
+      return undefined
+    })
+
+    const res = await runSession(sender)
+    expect(res.ok).toBe(true)
+
+    const projectedSend = usagePayloads(sender).find((s) => s.projected === true)
+    expect(projectedSend).toBeDefined()
+    expect(projectedSend!.usage.input_tokens).toBe(1100)
+    if (res.ok) {
+      expect(res.usage?.input_tokens).toBe(2500)
+    }
+  })
+
+  it('returns unpolluted lastValidUsage when aborting after projected push', async () => {
+    const sender = makeSender()
+    mockCreateAnthropicClient.mockImplementation(() => ({
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield {
+              type: 'message_start',
+              message: { usage: { input_tokens: 1000 } }
+            }
+          },
+          finalMessage: vi.fn(async () => ({
+            content: [{ type: 'tool_use', id: 'tu1', name: 'read_file', input: { path: 'a.txt' } }],
+            stop_reason: 'tool_use',
+            usage: { input_tokens: 1000, output_tokens: 50 }
+          }))
+        }))
+      }
+    }))
+
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) => {
+      if (name === 'read_file') {
+        return {
+          name: 'read_file',
+          execute: vi.fn(async () => ({ success: false, error: 'boom' }))
+        }
+      }
+      return undefined
+    })
+
+    const res = await runSession(sender)
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.usage?.input_tokens).toBe(1000)
+    }
+
+    const projectedSend = usagePayloads(sender).find((s) => s.projected === true)
+    expect(projectedSend).toBeDefined()
+    expect(projectedSend!.usage.input_tokens).toBeGreaterThan(1000)
   })
 })

@@ -420,7 +420,7 @@ async function runSendStream(
       if (evt?.type === 'message_start') {
         const startUsage = (evt as { message?: { usage?: unknown } }).message?.usage
         if (startUsage && typeof startUsage === 'object') {
-          const partial = normalizeAnthropicMessageUsage({ usage: startUsage })
+          const partial = normalizeAnthropicMessageUsage({ usage: startUsage }, baseUrl)
           if (partial) {
             safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: partial })
           }
@@ -464,7 +464,7 @@ async function runSendStream(
     const res = await stream.finalMessage()
     const content = Array.isArray(res?.content) ? res.content : []
     const stopReason = typeof res?.stop_reason === 'string' ? res.stop_reason : undefined
-    const usage = normalizeAnthropicMessageUsage(res)
+    const usage = normalizeAnthropicMessageUsage(res, baseUrl)
 
     logAgentEvent('info', 'llm.response', {
       requestId,

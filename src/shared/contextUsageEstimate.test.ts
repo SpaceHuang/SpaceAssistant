@@ -36,16 +36,40 @@ describe('computeTotalRequestInputTokens', () => {
     ).toBe(2050)
   })
 
-  it('treats OpenAI-compatible prompt total as already complete', () => {
+  it('treats OpenAI-compatible prompt total as already complete with explicit subset semantics', () => {
+    expect(
+      computeTotalRequestInputTokens({
+        input_tokens: 100_000,
+        cache_read_input_tokens: 80_000,
+        cacheSemantics: 'subset'
+      })
+    ).toBe(100_000)
+  })
+
+  it('treats legacy OpenAI-shaped usage as subset when input covers cache sum', () => {
     expect(
       computeTotalRequestInputTokens({ input_tokens: 100_000, cache_read_input_tokens: 80_000 })
     ).toBe(100_000)
   })
 
-  it('uses Anthropic additive path when non-cached input dominates cache read', () => {
+  it('uses explicit additive semantics when non-cached input dominates cache read', () => {
     expect(
-      computeTotalRequestInputTokens({ input_tokens: 80_000, cache_read_input_tokens: 20_000 })
+      computeTotalRequestInputTokens({
+        input_tokens: 80_000,
+        cache_read_input_tokens: 20_000,
+        cacheSemantics: 'additive'
+      })
     ).toBe(100_000)
+  })
+
+  it('fixes high cache hit underestimate with additive semantics', () => {
+    expect(
+      computeTotalRequestInputTokens({
+        input_tokens: 500,
+        cache_read_input_tokens: 100_000,
+        cacheSemantics: 'additive'
+      })
+    ).toBe(100_500)
   })
 
   it('handles Anthropic cache read + create additive', () => {
@@ -68,6 +92,15 @@ describe('computeEstimatedOccupancy', () => {
     expect(
       computeEstimatedOccupancy({ input_tokens: 50, cache_read_input_tokens: 100_000, output_tokens: 200 })
     ).toBe(100_250)
+  })
+
+  it('excludes thinking tokens from output contribution', () => {
+    expect(
+      computeEstimatedOccupancy(
+        { input_tokens: 10_000, output_tokens: 10_000 },
+        { thinkingTokensToExclude: 3000 }
+      )
+    ).toBe(17_000)
   })
 })
 
@@ -108,6 +141,20 @@ describe('computeContextUsageDisplay', () => {
     expect(d.estimatedOccupancy).toBe(200_000)
     expect(d.usedRatio + d.reservedRatio).toBeCloseTo(1)
     expect(d.freeRatio).toBe(0)
+  })
+
+  it('reflects high cache additive occupancy in percentUsed', () => {
+    const d = computeContextUsageDisplay(
+      {
+        input_tokens: 500,
+        cache_read_input_tokens: 100_000,
+        cacheSemantics: 'additive'
+      },
+      200_000,
+      64_000
+    )
+    expect(d.estimatedOccupancy).toBe(100_500)
+    expect(d.percentUsed).toBe(50.2)
   })
 })
 

@@ -51,7 +51,12 @@ const api: SpaceAssistantApi = {
   claudeChatOnUsage: (cb) => {
     const fn = (
       _e: unknown,
-      data: { requestId: string; sessionId: string; usage: import('../src/shared/sessionUsage').SessionUsage }
+      data: {
+        requestId: string
+        sessionId: string
+        usage: import('../src/shared/sessionUsage').SessionUsage
+        projected?: boolean
+      }
     ) => cb(data)
     ipcRenderer.on('claude-chat-usage', fn)
     return () => ipcRenderer.removeListener('claude-chat-usage', fn)

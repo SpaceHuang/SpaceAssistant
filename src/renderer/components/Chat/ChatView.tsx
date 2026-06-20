@@ -29,6 +29,7 @@ import { runClaudeChatStream } from '../../services/chatStreamService'
 import { applyContextUsageUpdate } from '../../services/contextUsageStreamService'
 import {
   computeEstimatedOccupancy,
+  estimateThinkingTokensFromMessage,
   estimateTokensFromHistoryImages,
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
@@ -671,9 +672,19 @@ export function ChatView() {
         ? estimateTokensFromImageAttachments(pendingAttachments)
         : 0
       const historyImageTokens = estimateTokensFromHistoryImages(historyForApi)
+      const lastAssistantThinking = (() => {
+        for (let i = historyForApi.length - 1; i >= 0; i--) {
+          const m = historyForApi[i]
+          if (m?.role === 'assistant' && m.thinking) return m.thinking
+        }
+        return undefined
+      })()
+      const thinkingTokensToExclude = estimateThinkingTokensFromMessage(lastAssistantThinking)
       if (requestModelEntry) {
         const cap = resolveEffectiveMaximumContext(requestModel, requestModelEntry.maximumContext)
-        const occupancy = lastUsage ? computeEstimatedOccupancy(lastUsage) : 0
+        const occupancy = lastUsage
+          ? computeEstimatedOccupancy(lastUsage, { thinkingTokensToExclude })
+          : 0
         if (cap > 0 && historyImageTokens + pendingImageTokens + occupancy > cap * 0.8) {
           message.warning(
             tContextUsage('sendWarning', {

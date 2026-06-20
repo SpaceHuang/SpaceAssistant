@@ -199,7 +199,7 @@ export type SpaceAssistantApi = {
   claudeChatOnThinkingDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
   claudeChatOnDone: (cb: (data: { requestId: string; usage?: unknown }) => void) => () => void
   claudeChatOnUsage: (
-    cb: (data: { requestId: string; sessionId: string; usage: SessionUsage }) => void
+    cb: (data: { requestId: string; sessionId: string; usage: SessionUsage; projected?: boolean }) => void
   ) => () => void
   claudeChatOnError: (cb: (data: { requestId: string; message: string }) => void) => () => void
   claudeChatCancel: (payload: { requestId: string }) => Promise<void>
