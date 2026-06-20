@@ -27,6 +27,9 @@
     "retryFailedMessage": "The reply could not be completed. You can retry or continue from the existing context.",
     "retry": "Retry reply"
   },
+  "scrollToLatest": {
+    "label": "Jump to latest message"
+  },
   "tool": {
     "view": "View",
     "cancel": "Cancel",

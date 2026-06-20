@@ -575,12 +575,62 @@
   min-height: 0;
 }
 
+.chat-scroll-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .chat-scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: var(--sa-chat-scroll-padding);
   scroll-behavior: smooth;
+}
+
+.chat-scroll-to-latest {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sa-bg-elevated) 88%, var(--sa-text) 12%);
+  box-shadow: var(--sa-shadow-sm);
+  color: var(--sa-text-secondary);
+  cursor: pointer;
+  line-height: 0;
+  opacity: 1;
+  transition: opacity var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.chat-scroll-to-latest:hover {
+  background: color-mix(in srgb, var(--sa-bg-elevated) 78%, var(--sa-text) 22%);
+  color: var(--sa-text);
+}
+
+.chat-scroll-to-latest:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 2px;
+}
+
+.chat-scroll-to-latest--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-scroll-to-latest svg {
+  display: block;
+  flex-shrink: 0;
 }
 
 .chat-scroll:has(.chat-empty) {
@@ -592,6 +642,10 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-scroll {
     scroll-behavior: auto;
+  }
+
+  .chat-scroll-to-latest {
+    transition: none;
   }
 
   .composer-send:hover:not(:disabled) {

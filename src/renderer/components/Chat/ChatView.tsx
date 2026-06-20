@@ -86,7 +86,11 @@ import {
 } from '../../../shared/thinkingSegments'
 import { throttle } from '../../utils/throttle'
 import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
+import arrowDownLineRaw from '../../assets/arrow_down_line.svg?raw'
 import { isChatScrollNearBottom, scrollChatToBottom } from '../../utils/chatScroll'
+import { patchSvg } from '../../utils/patchSvg'
+
+const scrollToLatestIconSvg = patchSvg(arrowDownLineRaw, 16)
 import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import {
@@ -172,6 +176,7 @@ export function ChatView() {
     (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => Promise<void>
   >(async () => {})
   const [testPreviewMessageIds, setTestPreviewMessageIds] = useState<Set<string>>(() => new Set())
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false)
 
   const streamingAssistantId = useMemo(
     () => messages.find((m) => m.role === 'assistant' && m.status === 'streaming')?.id,
@@ -192,17 +197,26 @@ export function ChatView() {
     lastSkillRouteSignatureRef.current = ''
     setTestPreviewMessageIds(new Set())
     stickToBottomRef.current = true
+    setShowScrollToLatest(false)
   }, [sessionId])
 
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    const onScroll = () => {
-      stickToBottomRef.current = isChatScrollNearBottom(el)
+    const syncScrollStickiness = () => {
+      const nearBottom = isChatScrollNearBottom(el)
+      stickToBottomRef.current = nearBottom
+      setShowScrollToLatest(!nearBottom)
     }
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [sessionId])
+    syncScrollStickiness()
+    el.addEventListener('scroll', syncScrollStickiness, { passive: true })
+    return () => el.removeEventListener('scroll', syncScrollStickiness)
+  }, [sessionId, messages.length])
+
+  const handleScrollToLatest = useCallback(() => {
+    const el = scrollRef.current
+    if (el) scrollChatToBottom(el, { force: true, behavior: 'smooth' })
+  }, [])
 
   useEffect(() => {
     if (!sessionId) {
@@ -1289,9 +1303,12 @@ export function ChatView() {
     [sessionId, dispatch]
   )
 
+  const scrollToLatestLabel = t('scrollToLatest.label')
+
   return (
     <div className="chat-view">
-      <div ref={scrollRef} className="chat-scroll">
+      <div className="chat-scroll-wrap">
+        <div ref={scrollRef} className="chat-scroll">
         {!sessionId ? (
           <div className="chat-empty">
             <div className="chat-empty-icon" aria-hidden>
@@ -1338,6 +1355,24 @@ export function ChatView() {
             ))}
           </ChatMessageListSearch>
         )}
+        </div>
+        {sessionId && messages.length > 0 ? (
+          <button
+            type="button"
+            className={`chat-scroll-to-latest${showScrollToLatest ? '' : ' chat-scroll-to-latest--hidden'}`}
+            title={scrollToLatestLabel}
+            aria-label={scrollToLatestLabel}
+            aria-hidden={!showScrollToLatest}
+            tabIndex={showScrollToLatest ? 0 : -1}
+            onClick={handleScrollToLatest}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return
+              event.preventDefault()
+              handleScrollToLatest()
+            }}
+            dangerouslySetInnerHTML={{ __html: scrollToLatestIconSvg }}
+          />
+        ) : null}
       </div>
       <MessageInput
         ref={composerRef}

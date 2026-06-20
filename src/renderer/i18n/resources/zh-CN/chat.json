@@ -27,6 +27,9 @@
     "retryFailedMessage": "回复未能完成。你可以重试生成，或基于已有上下文继续对话。",
     "retry": "重试回复"
   },
+  "scrollToLatest": {
+    "label": "跳到最新消息"
+  },
   "tool": {
     "view": "查看",
     "cancel": "取消执行",
