@@ -74,6 +74,7 @@ import {
 import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import type { AppLocale } from '../src/shared/locale'
+import { stripThinkingBlocksFromAssistantMessages } from '../src/shared/stripThinkingFromApiMessages'
 import {
   clearToolCancel,
   registerToolCancel,
@@ -396,16 +397,10 @@ async function runToolChatSessionInner(
   const historicalAssistantApiMessageCount = initialMessages.filter((m) => m.role === 'assistant').length
 
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
+    // thinking 开启时须保留 assistant 消息中的 thinking/redacted_thinking（含 signature），
+    // 否则多轮 tool loop 会触发 Anthropic 400（final assistant 须以 thinking 块开头）。
     if (toolLoopOptions.enableThinking) return msgs
-    return msgs.map((m) => {
-      if (m.role !== 'assistant' || typeof m.content === 'string' || !Array.isArray(m.content)) return m
-      const filtered = m.content.filter((b: unknown) => {
-        if (!b || typeof b !== 'object') return true
-        const t = (b as { type?: string }).type
-        return t !== 'thinking' && t !== 'redacted_thinking'
-      })
-      return { ...m, content: filtered }
-    })
+    return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
   const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext, shellConfig)

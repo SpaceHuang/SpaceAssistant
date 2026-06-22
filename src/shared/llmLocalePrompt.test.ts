@@ -19,7 +19,13 @@ describe('buildUiLocaleSystemHint', () => {
     for (const locale of ['zh-CN', 'en-US'] as const) {
       const hint = buildUiLocaleSystemHint(locale)
       expect(hint).toMatch(/explicitly asks/)
+      expect(hint).toMatch(/thinking still uses/)
     }
+  })
+
+  it('L6: both locales require thinking to match UI even when user message differs', () => {
+    expect(buildUiLocaleSystemHint('zh-CN')).toMatch(/even when the user's message is in another language/)
+    expect(buildUiLocaleSystemHint('en-US')).toMatch(/even when the user's message is in another language/)
   })
 })
 
