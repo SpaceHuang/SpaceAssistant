@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Popover } from 'antd'
 import { ChevronDown } from 'lucide-react'
 import type { AppConfig } from '../../../shared/domainTypes'
-import { ConfigModelOptionContent } from '../Config/ConfigModelOption'
+import { ConfigModelBadges } from '../Config/ConfigModelOption'
 import { listChatModelOptions } from '../../services/sessionModelBinding'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -35,8 +35,11 @@ export function ComposerModelPicker({ cfg, displayName, unavailable, onSelect }:
                   setOpen(false)
                 }}
               >
-                <span className="composer-model-picker__name">{opt.displayName}</span>
-                <ConfigModelOptionContent m={opt.model} compact />
+                <span className="composer-model-picker__service">{opt.serviceName}</span>
+                <div className="composer-model-picker__detail">
+                  <span className="composer-model-picker__model">{opt.modelName}</span>
+                  <ConfigModelBadges m={opt.model} />
+                </div>
               </button>
             </li>
           ))}

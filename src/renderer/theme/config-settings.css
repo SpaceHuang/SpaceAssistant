@@ -1341,8 +1341,12 @@
   color: var(--sa-warning, #d48806);
 }
 
+.composer-model-picker-popover .ant-popover-inner {
+  padding: 0;
+}
+
 .composer-model-picker {
-  min-width: 240px;
+  min-width: 260px;
   max-width: 360px;
   max-height: 320px;
   overflow: auto;
@@ -1352,16 +1356,19 @@
 .composer-model-picker__list {
   list-style: none;
   margin: 0;
-  padding: 4px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .composer-model-picker__item {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  align-items: stretch;
+  gap: 4px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 12px;
   border: none;
   border-radius: var(--sa-radius-sm);
   background: transparent;
@@ -1383,17 +1390,53 @@
   background: color-mix(in srgb, #7c5cff 22%, var(--sa-bg-elevated));
 }
 
-.composer-model-picker__item .config-model-option {
-  width: 100%;
+.composer-model-picker__service {
+  font-size: var(--sa-config-font-meta);
+  line-height: 1.35;
+  color: var(--sa-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.composer-model-picker__item .config-model-option__row {
-  gap: 8px;
+.composer-model-picker__detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  min-height: 22px;
 }
 
-.composer-model-picker__name {
-  font-size: 13px;
+.composer-model-picker__model {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--sa-config-font);
   font-weight: 500;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-model-picker .config-model-badges {
+  flex-shrink: 0;
+}
+
+.composer-model-picker .config-model-badge {
+  box-sizing: border-box;
+  justify-content: center;
+  min-width: 44px;
+  padding: 2px 7px;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.composer-model-picker .config-model-badge--vision {
+  min-width: 44px;
+  padding: 2px 8px 2px 7px;
 }
 
 .composer-model-picker__empty {
