@@ -36,7 +36,10 @@
     "fileDeleted": "文件已被删除或移动",
     "fileSize": "文件大小：",
     "read": "读取",
-    "write": "写入"
+    "write": "写入",
+    "contextMenu": {
+      "copy": "复制"
+    }
   },
   "wikiIndex": {
     "parseFailed": "未能解析 index 条目，请使用树视图或渲染预览。"

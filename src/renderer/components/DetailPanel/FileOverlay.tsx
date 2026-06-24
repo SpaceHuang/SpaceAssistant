@@ -3,6 +3,7 @@ import { App } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileToolbar } from './FileToolbar'
+import { FileContentBody } from './FileContentBody'
 import { FileContentView } from './FileContentView'
 import { useWikiIndexViewState } from './WikiIndexView'
 import { canShowCollectToWiki, collectToWiki } from '../../services/wikiImportService'
@@ -149,9 +150,9 @@ export function FileOverlay() {
         showCollectToWiki={showCollectToWiki}
         onCollectToWiki={handleCollectToWiki}
       />
-      <div className="detail-file-body" ref={registerFileBodyElement}>
+      <FileContentBody registerFileBodyElement={registerFileBodyElement}>
         <FileContentView wikiIndexView={indexView} />
-      </div>
+      </FileContentBody>
     </div>
   )
 }
