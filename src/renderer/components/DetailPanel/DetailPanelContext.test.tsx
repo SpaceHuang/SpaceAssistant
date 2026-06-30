@@ -85,6 +85,22 @@ describe('DetailPanelContext', () => {
     })
   })
 
+  it('openFile sets selectedFile before load completes and shows error on failure', async () => {
+    apiMock().fileReadFile.mockRejectedValueOnce(new Error('ENOENT: no such file'))
+
+    const { result } = renderDetailPanel()
+
+    await act(async () => {
+      await result.current.openFile('missing.txt')
+    })
+
+    await waitFor(() => {
+      expect(result.current.selectedFile).toBe('missing.txt')
+      expect(result.current.contentMode).toBe('file')
+      expect(result.current.loadError).toContain('ENOENT')
+    })
+  })
+
   it('openFile defaults markdown to render preview', async () => {
     apiMock().fileReadFile.mockResolvedValueOnce({
       kind: 'text',

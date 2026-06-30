@@ -69,6 +69,7 @@ function registerHandlers() {
   registerClaudeStreamHandlers(ipcMain, {
     getApiKey: async () => 'key',
     getWorkDir: () => '/tmp',
+    resolveWorkDirForSession: () => '/tmp',
     getUserDataPath: () => '/tmp',
     getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
     getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),

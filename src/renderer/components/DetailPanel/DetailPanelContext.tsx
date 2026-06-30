@@ -323,6 +323,11 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       if (!options.silent) {
         isExplicitLoadingRef.current = true
         resetUrlState()
+        setContentMode('file')
+        setSelectedFile(relPath)
+        setPreviewContent(null)
+        setImageDataUrl(null)
+        setFileType(null)
         setIsLoading(true)
         setLoadError(null)
         setUnsupportedExt(null)

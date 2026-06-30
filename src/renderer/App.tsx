@@ -10,6 +10,7 @@ import { AboutModal } from './components/Config/AboutModal'
 import { WikiPane, type WikiPaneHandle } from './components/WikiPane'
 import { WikiPaneToolbar } from './components/WikiPane/WikiPaneToolbar'
 import { collectToWiki } from './services/wikiImportService'
+import { ensureWorkDirForSession } from './services/workDirSessionSync'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
@@ -103,8 +104,19 @@ function AppShellInner() {
   }
 
   const handleSearchSessionClick = (sessionId: string, messageId: string) => {
-    dispatch(setSession(sessionId))
-    dispatch(setScrollToMessageId(messageId))
+    void (async () => {
+      const session =
+        sessions.find((s) => s.id === sessionId) ?? (await window.api.sessionGet(sessionId))
+      if (session && config) {
+        const sync = await ensureWorkDirForSession(session, config, dispatch)
+        if (!sync.ok) {
+          message.error(formatUserFacingError(sync.error))
+          return
+        }
+      }
+      dispatch(setSession(sessionId))
+      dispatch(setScrollToMessageId(messageId))
+    })()
   }
 
   const handleSearchFileClick = (relPath: string) => {

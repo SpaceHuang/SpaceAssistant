@@ -1,10 +1,15 @@
 import fs from 'fs/promises'
 import path from 'path'
 
+/** 规范化相对路径参数（统一 `/` 分隔符，去掉 leading slash） */
+export function normalizeRelPathInput(relativePath: string): string {
+  return relativePath.replace(/\\/g, '/').replace(/^\/+/, '')
+}
+
 /** 防止路径穿越：resolved 必须落在 basePath 之下（含 Windows 大小写/分隔符） */
 export function resolveSafePath(basePath: string, relativePath: string): string {
   const base = path.resolve(basePath)
-  const resolved = path.resolve(base, relativePath)
+  const resolved = path.resolve(base, normalizeRelPathInput(relativePath))
   const rel = path.relative(base, resolved)
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new Error('路径超出工作目录范围')

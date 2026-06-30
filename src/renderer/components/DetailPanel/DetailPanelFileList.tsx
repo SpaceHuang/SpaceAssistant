@@ -14,10 +14,16 @@ type Props = {
 
 export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: Props) {
   const cfg = useTypedSelector((s) => s.config.config)
+  const activeProfileId =
+    cfg?.activeWorkDirProfileId ?? cfg?.workDirProfiles?.find((p) => p.isDefault)?.id ?? ''
   const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
   const wikiRoot = wiki.rootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSelectedKey(null)
+  }, [activeProfileId])
   const fileTreeRef = useRef<FileTreeHandle>(null)
 
   const excludePaths = useMemo(
@@ -54,6 +60,7 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
       </div>
       <div className="detail-panel-file-body">
         <FileTree
+          key={activeProfileId || workDir}
           ref={fileTreeRef}
           embedded
           workDir={workDir}

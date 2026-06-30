@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
+import { App } from 'antd'
 import { useAppDispatch, useTypedSelector } from '../../hooks'
 import { setConfirmFocusToolUseId, setSession } from '../../store/chatSlice'
 import { pendingConfirmStore, type PendingConfirmItem } from '../../services/pendingConfirmStore'
+import { ensureWorkDirForSession } from '../../services/workDirSessionSync'
+import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import {
   labelForPendingConfirmItem,
   useActionablePendingConfirms
@@ -21,8 +24,10 @@ function labelForItem(item: PendingConfirmItem, sessionName: string): string {
 
 export function PendingConfirmBanner() {
   const { t } = useTypedTranslation('common')
+  const { message } = App.useApp()
   const dispatch = useAppDispatch()
   const sessions = useTypedSelector((s) => s.session.list)
+  const config = useTypedSelector((s) => s.config.config)
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const [items, setItems] = useState<PendingConfirmItem[]>(() => pendingConfirmStore.getItems())
 
@@ -56,8 +61,20 @@ export function PendingConfirmBanner() {
               className="pending-confirm-banner__item"
               title={label}
               onClick={() => {
-                dispatch(setSession(item.sessionId))
-                dispatch(setConfirmFocusToolUseId(item.toolUseId))
+                void (async () => {
+                  const session =
+                    sessions.find((s) => s.id === item.sessionId) ??
+                    (await window.api.sessionGet(item.sessionId))
+                  if (session && config) {
+                    const sync = await ensureWorkDirForSession(session, config, dispatch)
+                    if (!sync.ok) {
+                      message.error(formatUserFacingError(sync.error))
+                      return
+                    }
+                  }
+                  dispatch(setSession(item.sessionId))
+                  dispatch(setConfirmFocusToolUseId(item.toolUseId))
+                })()
               }}
             >
               {label}

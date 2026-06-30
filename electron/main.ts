@@ -37,7 +37,7 @@ import { applyMainWindowIcon, setupWindowIconThemeListener } from './windowIcon'
 import { getMainWindowFrameOptions } from './windowFrame'
 import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowControlsIpc'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
-import { createWorkDirManager, type WorkDirManager } from './workDirManager'
+import { createWorkDirManager, resolveWorkDirForSession, type WorkDirManager } from './workDirManager'
 import { FloatingNotificationManager } from './floatingNotificationManager'
 
 let floatingManager: FloatingNotificationManager | null = null
@@ -284,6 +284,16 @@ app.whenReady().then(() => {
   registerClaudeStreamHandlers(ipcMain, {
     getApiKey,
     getWorkDir: () => workDirState,
+    resolveWorkDirForSession: (sessionId) => {
+      const resolved = resolveWorkDirForSession(
+        db,
+        sessionId,
+        () => workDirManager!.listProfiles(),
+        () => workDirManager!.getActiveProfileId(),
+        () => workDirManager!.getActiveWorkDir()
+      )
+      return resolved?.workDir ?? workDirState
+    },
     getUserDataPath: () => app.getPath('userData'),
     getToolsConfig: () => {
       const raw = getConfigValue(db, TOOLS_CONFIG_KEY)

@@ -8,6 +8,18 @@ import chatReducer from '../../store/chatSlice'
 import sessionReducer from '../../store/sessionSlice'
 import { WorkDirSelector } from './WorkDirSelector'
 
+vi.mock('./DetailPanelContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./DetailPanelContext')>()
+  return {
+    ...actual,
+    useDetailPanel: () => ({ closeFile: vi.fn() })
+  }
+})
+
+function DetailPanelTestWrapper({ children }: { children: React.ReactNode }) {
+  return <>{children}</>
+}
+
 const profiles = [
   { id: 'p1', name: 'Project A', path: '/a', isDefault: true },
   { id: 'p2', name: 'Project B', path: '/b' }
@@ -42,9 +54,9 @@ function renderSelector(preloaded?: Partial<{ chatStatus: string }>) {
   return { store, ...render(
     <Provider store={store}>
       <ConfigProvider>
-        <App>
+        <DetailPanelTestWrapper>
           <WorkDirSelector />
-        </App>
+        </DetailPanelTestWrapper>
       </ConfigProvider>
     </Provider>
   ) }
@@ -100,9 +112,9 @@ describe('WorkDirSelector', () => {
     render(
       <Provider store={store}>
         <ConfigProvider>
-          <App>
+          <DetailPanelTestWrapper>
             <WorkDirSelector />
-          </App>
+          </DetailPanelTestWrapper>
         </ConfigProvider>
       </Provider>
     )

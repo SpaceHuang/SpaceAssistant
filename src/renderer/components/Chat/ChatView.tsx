@@ -56,6 +56,7 @@ import { parseWikiCommand } from '../../services/wikiCommandService'
 import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
+import { ensureWorkDirForSession } from '../../services/workDirSessionSync'
 import { appendSkillActivationLog } from '../../services/skillActivationLog'
 import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserRecoverySkillService'
 import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
@@ -533,6 +534,15 @@ export function ChatView() {
       const runSession =
         store.getState().session.list.find((x) => x.id === runSessionId) ??
         (currentSession?.id === runSessionId ? currentSession : undefined)
+
+      if (runSession) {
+        const sync = await ensureWorkDirForSession(runSession, cfg, dispatch)
+        if (!sync.ok) {
+          message.error(formatUserFacingError(sync.error))
+          return
+        }
+      }
+
       if (isSessionRunning(runSessionId) && !options?.bypassRunningGuard) {
         message.warning(t('chatView.warnings.sessionRunning'))
         return

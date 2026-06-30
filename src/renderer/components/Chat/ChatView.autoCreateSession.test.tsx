@@ -104,7 +104,9 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       }
     ],
     thinkingEnabled: false,
-    workDir: '',
+    workDir: '/tmp',
+    workDirProfiles: [{ id: 'p1', name: 'Default', path: '/tmp', isDefault: true }],
+    activeWorkDirProfileId: 'p1',
     maxParallelChatSessions: 3,
     tools: { ...DEFAULT_TOOLS_CONFIG, enabled: false },
     skills: { ...DEFAULT_SKILLS_CONFIG },
@@ -157,8 +159,7 @@ describe('ChatView auto-create session', () => {
     vi.clearAllMocks()
     await changeAppLocale('zh-CN')
 
-    window.api = {
-      ...window.api,
+    Object.assign(window.api, {
       sessionCreate: vi.fn().mockResolvedValue(newSession),
       chatGetMessages: vi.fn().mockResolvedValue([]),
       chatAppendMessage: vi.fn().mockResolvedValue(undefined),
@@ -179,8 +180,10 @@ describe('ChatView auto-create session', () => {
       wikiGetSchema: vi.fn().mockResolvedValue(null),
       usageGet: vi.fn().mockResolvedValue(undefined),
       usageSet: vi.fn().mockResolvedValue(undefined),
-      usageDelete: vi.fn().mockResolvedValue(undefined)
-    } as typeof window.api
+      usageDelete: vi.fn().mockResolvedValue(undefined),
+      workdirSwitch: vi.fn().mockResolvedValue({ success: true, sessions: [] }),
+      configGet: vi.fn().mockResolvedValue(makeConfig())
+    })
   })
 
   it('keeps textarea enabled when no session is selected (AC1)', () => {

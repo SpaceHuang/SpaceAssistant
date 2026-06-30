@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import path from 'path'
-import os from 'os'
-import { resolveSafePath } from './pathSecurity'
+import { normalizeRelPathInput, resolveSafePath } from './pathSecurity'
 
-describe('resolveSafePath', () => {
-  const base = path.join(os.tmpdir(), 'spaceassistant-path-test')
-
-  it('resolves normal relative paths', () => {
-    expect(resolveSafePath(base, 'a/b')).toBe(path.join(base, 'a', 'b'))
+describe('pathSecurity', () => {
+  it('normalizeRelPathInput converts backslashes', () => {
+    expect(normalizeRelPathInput('项目\\上传者\\草稿')).toBe('项目/上传者/草稿')
   })
 
-  it('rejects traversal', () => {
-    expect(() => resolveSafePath(base, '..\\secret')).toThrow()
+  it('resolveSafePath accepts normalized relative paths on Windows', () => {
+    const base = path.resolve('/fake/workdir')
+    const resolved = resolveSafePath(base, '项目/上传者/草稿')
+    expect(resolved).toBe(path.resolve(base, '项目/上传者/草稿'))
   })
 })

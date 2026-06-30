@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto'
 import type { Session } from '../src/shared/domainTypes'
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
-import { getConfigValue, listSessions, setConfigValue } from './database'
+import { getConfigValue, listSessions, setConfigValue, getSession } from './database'
 
 const PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_KEY = 'config.activeWorkDirProfileId'
@@ -83,6 +83,35 @@ export function listSessionsForProfile(db: AppDatabase, profileId: string): Sess
     if (!s.workDirProfileId) return false
     return s.workDirProfileId === profileId
   })
+}
+
+export type ResolvedSessionWorkDir = {
+  profileId: string
+  workDir: string
+}
+
+/** 按会话绑定的 Profile 解析 workDir；缺失时回退到当前 active profile */
+export function resolveWorkDirForSession(
+  db: AppDatabase,
+  sessionId: string,
+  listProfiles: () => WorkDirProfile[],
+  getActiveProfileId: () => string,
+  getActiveWorkDir: () => string
+): ResolvedSessionWorkDir | null {
+  const session = getSession(db, sessionId)
+  if (!session) return null
+
+  if (session.workDirProfileId) {
+    const profile = listProfiles().find((p) => p.id === session.workDirProfileId)
+    if (profile?.path) {
+      return { profileId: profile.id, workDir: profile.path }
+    }
+  }
+
+  return {
+    profileId: getActiveProfileId(),
+    workDir: getActiveWorkDir()
+  }
 }
 
 export function createWorkDirManager(ctx: {

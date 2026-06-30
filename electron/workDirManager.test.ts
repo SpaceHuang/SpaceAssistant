@@ -4,7 +4,7 @@ import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openDatabase } from './database'
 import { createSession } from './database'
-import { createWorkDirManager } from './workDirManager'
+import { createWorkDirManager, resolveWorkDirForSession } from './workDirManager'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-workdir-'))
@@ -119,6 +119,46 @@ describe('WorkDirManager', () => {
       const result = await manager.switchProfile(b.id)
       expect(result.success).toBe(true)
       expect(result.sessions).toHaveLength(0)
+    })
+  })
+
+  describe('resolveWorkDirForSession', () => {
+    it('returns profile path bound to session', () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      dirs.push(dirA, dirB)
+      const { db, manager } = setupManager()
+      manager.addProfile({ name: 'A', path: dirA })
+      const b = manager.addProfile({ name: 'B', path: dirB }).profile!
+      const session = createSession(db, { name: 'S1', workDirProfileId: b.id })
+
+      const resolved = resolveWorkDirForSession(
+        db,
+        session.id,
+        () => manager.listProfiles(),
+        () => manager.getActiveProfileId(),
+        () => manager.getActiveWorkDir()
+      )
+
+      expect(resolved).toEqual({ profileId: b.id, workDir: dirB })
+    })
+
+    it('falls back to active profile when session has no profile id', () => {
+      const dirA = tempDir()
+      dirs.push(dirA)
+      const { db, manager, getWorkDir } = setupManager()
+      manager.addProfile({ name: 'A', path: dirA })
+      const session = createSession(db, { name: 'S1' })
+
+      const resolved = resolveWorkDirForSession(
+        db,
+        session.id,
+        () => manager.listProfiles(),
+        () => manager.getActiveProfileId(),
+        () => manager.getActiveWorkDir()
+      )
+
+      expect(resolved?.workDir).toBe(getWorkDir())
     })
   })
 

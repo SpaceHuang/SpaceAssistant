@@ -115,7 +115,9 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       }
     ],
     thinkingEnabled: false,
-    workDir: '',
+    workDir: '/tmp',
+    workDirProfiles: [{ id: 'p1', name: 'Default', path: '/tmp', isDefault: true }],
+    activeWorkDirProfileId: 'p1',
     maxParallelChatSessions: 3,
     tools: { ...DEFAULT_TOOLS_CONFIG, enabled: false },
     skills: { ...DEFAULT_SKILLS_CONFIG },
@@ -243,8 +245,7 @@ describe('ChatView scroll to latest', () => {
       dispatchEvent: () => false
     })) as typeof window.matchMedia
 
-    window.api = {
-      ...window.api,
+    Object.assign(window.api, {
       sessionCreate: vi.fn(),
       chatGetMessages: vi.fn().mockImplementation(async ({ sessionId }: { sessionId: string }) =>
         store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
@@ -267,8 +268,10 @@ describe('ChatView scroll to latest', () => {
       wikiGetSchema: vi.fn().mockResolvedValue(null),
       usageGet: vi.fn().mockResolvedValue(undefined),
       usageSet: vi.fn().mockResolvedValue(undefined),
-      usageDelete: vi.fn().mockResolvedValue(undefined)
-    } as typeof window.api
+      usageDelete: vi.fn().mockResolvedValue(undefined),
+      workdirSwitch: vi.fn().mockResolvedValue({ success: true, sessions: [] }),
+      configGet: vi.fn().mockResolvedValue(makeConfig())
+    })
   })
 
   it('hides the button when scrolled near the bottom', async () => {

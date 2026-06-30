@@ -32,6 +32,7 @@ import '../renderer/i18n'
 import { beforeEach } from 'vitest'
 import { changeAppLocale } from '../renderer/i18n/localeSync'
 import type { SpaceAssistantApi } from '../shared/api'
+import type { AppConfig } from '../shared/domainTypes'
 
 if (typeof window !== 'undefined') {
   const api = (window.api ?? {}) as Partial<SpaceAssistantApi>
@@ -48,7 +49,11 @@ if (typeof window !== 'undefined') {
     windowOnMaximizeChanged: api.windowOnMaximizeChanged ?? (() => () => {}),
     appQuit: api.appQuit ?? (async () => {}),
     appToggleDevTools: api.appToggleDevTools ?? (async () => {}),
-    claudeChatOnUsage: api.claudeChatOnUsage ?? (() => () => undefined)
+    claudeChatOnUsage: api.claudeChatOnUsage ?? (() => () => undefined),
+    toolOnConfirmRequest: api.toolOnConfirmRequest ?? (() => () => {}),
+    toolOnResult: api.toolOnResult ?? (() => () => {}),
+    workdirSwitch: api.workdirSwitch ?? (async () => ({ success: true, sessions: [] })),
+    configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig))
   } as SpaceAssistantApi
 }
 

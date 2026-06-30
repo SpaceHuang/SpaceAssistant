@@ -76,6 +76,7 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
   const excludeSet = useRef(new Set(excludePaths))
   const expandedKeysRef = useRef(expandedKeys)
   const refreshDirectoryRef = useRef<(key: string) => Promise<void>>(async () => {})
+  const prevWorkDirRef = useRef(workDir)
   excludeSet.current = new Set(excludePaths)
   expandedKeysRef.current = expandedKeys
 
@@ -134,11 +135,36 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
   )
 
   useEffect(() => {
+    const workDirChanged = prevWorkDirRef.current !== workDir
+    prevWorkDirRef.current = workDir
+
     let cancelled = false
     void (async () => {
       try {
         const loaded = await loadDirectory(rootRelPath)
         if (cancelled) return
+
+        if (workDirChanged) {
+          setSelectedKey(null)
+          setInlineInput(null)
+          setRenamingKey(null)
+          const newData: FileTreeNode[] = [
+            {
+              key: rootRelPath,
+              name: rootName,
+              relPath: rootRelPath,
+              isDirectory: true,
+              expanded: true,
+              loading: false,
+              children: loaded
+            }
+          ]
+          rebuildNodeMap(newData)
+          setTreeData(newData)
+          setExpandedKeys([rootRelPath])
+          return
+        }
+
         setTreeData((prev) => {
           const prevRoot = prev[0]
           const children = mergePreservedDirectoryChildren(prevRoot?.children ?? [], loaded)
@@ -165,8 +191,7 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootRelPath, rootName, excludePaths.join('|')])
+  }, [rootRelPath, rootName, excludePaths.join('|'), workDir, loadDirectory, rebuildNodeMap])
 
   const toggleExpand = useCallback(
     async (key: string) => {

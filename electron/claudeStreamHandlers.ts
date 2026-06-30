@@ -26,6 +26,7 @@ import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../sr
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
   getWorkDir: () => string
+  resolveWorkDirForSession: (sessionId: string) => string
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
   getBrowserConfig: () => BrowserConfig
@@ -275,6 +276,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         }
 
+        const sessionWorkDir = deps.resolveWorkDirForSession(sessionId)
+
         const res = await runToolChatSession({
           sender,
           requestId,
@@ -291,7 +294,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
-          workDir: deps.getWorkDir(),
+          workDir: sessionWorkDir,
           userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),

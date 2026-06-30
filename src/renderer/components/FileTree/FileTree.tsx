@@ -1,7 +1,8 @@
-import { forwardRef, useCallback, useImperativeHandle, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react'
 import { App, Tree } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { DataNode, EventDataNode } from 'antd/es/tree'
+import { normalizeRelPath } from '../../../shared/fileTreeSync'
 import { useFileTree, type UseFileTreeOptions } from './useFileTree'
 import type { FileTreeNode as FileTreeNodeData } from './useFileTree'
 import { FileTreeNode } from './FileTreeNode'
@@ -157,14 +158,15 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   const antdTreeData = toAntdDataNodesWithInput(tree.treeData)
 
   const handleSelect = (_selectedKeys: React.Key[], info: { node: EventDataNode }) => {
-    const key = info.node.key as string
+    const key = normalizeRelPath(String(info.node.key))
     if (key.startsWith('__inline_input__')) return
     const node = tree.treeData.length > 0 ? findNode(tree.treeData, key) : null
-    if (!node) return
     setSelected(key)
-    if (node.isDirectory) {
+    if (node?.isDirectory) {
       void tree.toggleExpand(key)
-    } else {
+    } else if (node && !node.isDirectory) {
+      onFileSelect?.(key)
+    } else if (info.node.isLeaf) {
       onFileSelect?.(key)
     }
   }

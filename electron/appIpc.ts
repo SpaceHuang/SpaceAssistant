@@ -67,7 +67,7 @@ import {
 } from './llmServiceResolver'
 import type { WorkDirManager } from './workDirManager'
 import { listSessionsForProfile } from './workDirManager'
-import { resolveSafePath } from './pathSecurity'
+import { normalizeRelPathInput, resolveSafePath } from './pathSecurity'
 import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from './fileReadHelpers'
 import { buildLocalFileViewerUrl } from './fileViewerUrl'
 import { SessionBackupManager } from './sessionBackupManager'
@@ -596,7 +596,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   ipcMain.handle('config:get', async (): Promise<AppConfig> => {
     migrateLegacyLlmServicesIfNeeded(ctx.db)
 
-    const wd = getConfigValue(ctx.db, CONFIG_KEYS.workDir) ?? path.join(ctx.getWorkDir())
+    const wd = ctx.workDirManager.getActiveWorkDir()
     let models: ModelEntry[]
     const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
     if (rawModels) {
@@ -988,7 +988,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('file:list-directory', async (_e, rel: string): Promise<FileInfo[]> => {
     const root = ctx.getWorkDir()
-    const target = rel === '' || rel === '.' ? root : resolveSafePath(root, rel)
+    const normalized = normalizeRelPathInput(typeof rel === 'string' ? rel : '')
+    const target = normalized === '' || normalized === '.' ? root : resolveSafePath(root, normalized)
     const entries = await fs.readdir(target, { withFileTypes: true })
     const out: FileInfo[] = []
     for (const ent of entries) {
@@ -1004,7 +1005,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       out.push({
         name: ent.name,
-        path: path.relative(root, p) || '.',
+        path: normalizeRelPathInput(path.relative(root, p) || '.'),
         isDirectory: ent.isDirectory(),
         size
       })
@@ -1014,13 +1015,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('file:read-file', async (_e, rel: string) => {
     const root = ctx.getWorkDir()
-    const target = resolveSafePath(root, rel)
+    const target = resolveSafePath(root, normalizeRelPathInput(typeof rel === 'string' ? rel : ''))
     return readFileForViewer(target)
   })
 
   ipcMain.handle('file:get-metadata', async (_e, rel: string) => {
     const root = ctx.getWorkDir()
-    const target = resolveSafePath(root, rel)
+    const target = resolveSafePath(root, normalizeRelPathInput(typeof rel === 'string' ? rel : ''))
     return getFileMetadata(target)
   })
 
@@ -1172,15 +1173,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     appendSearchHistory(ctx.db, q)
     const results: SearchResult[] = []
     const qLower = q.toLowerCase()
+    const activeProfileId = ctx.workDirManager.getActiveProfileId()
     const sessionsById = new Map(ctx.db.data.sessions.map((s) => [s.id, s]))
     for (const m of ctx.db.data.messages) {
       if (results.length >= 50) break
       if (!m.content.toLowerCase().includes(qLower)) continue
       const s = sessionsById.get(m.sessionId)
+      if (!s) continue
+      if (s.workDirProfileId && s.workDirProfileId !== activeProfileId) continue
       results.push({
         id: `msg:${m.id}`,
         type: 'session',
-        title: s?.name ?? m.sessionId,
+        title: s.name ?? m.sessionId,
         preview: m.content.slice(0, 160),
         sessionId: m.sessionId,
         messageId: m.id

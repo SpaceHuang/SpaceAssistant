@@ -23,7 +23,11 @@ const TOOL_DEFAULT_MESSAGES: Record<string, string> = {
   run_shell: '命令执行失败，请检查命令后重试',
   run_lark_cli: '飞书 CLI 执行失败，请稍后重试',
   read_feishu_attachment: '读取飞书附件失败，请稍后重试',
-  browser: '浏览器操作失败，请稍后重试'
+  browser: '浏览器操作失败，请稍后重试',
+  style_clone_analyze: '样式分析失败，请检查参考图后重试',
+  style_clone_synthesize: '样式合成失败，请稍后重试',
+  style_clone_verify_report: '验证报告生成失败，请稍后重试',
+  style_clone: '样式克隆失败，请稍后重试'
 }
 
 function rawMessage(err: unknown): string {
@@ -39,8 +43,13 @@ function defaultForTool(toolName?: string): string {
 function mapGenericToolError(msg: string, toolName?: string): string | null {
   const lower = msg.toLowerCase()
 
-  if (/enoent|no such file|not found/i.test(lower) && toolName === 'read_file') {
-    return '文件不存在或路径无效'
+  if (/enoent|no such file|not found/i.test(lower)) {
+    if (toolName === 'read_file') {
+      return '文件不存在或路径无效'
+    }
+    if (toolName?.startsWith('style_clone_') || toolName === 'style_clone') {
+      return '示例图读取失败，请检查图片是否已上传或文件是否损坏'
+    }
   }
   if (/eisdir|illegal operation on a directory/i.test(lower) && toolName === 'read_file') {
     return '路径是目录而非文件，请使用 list_directory 查看目录内容，或指定具体文件路径'

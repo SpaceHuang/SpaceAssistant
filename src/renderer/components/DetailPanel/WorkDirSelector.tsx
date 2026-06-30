@@ -6,6 +6,7 @@ import { setConfig, openSettings } from '../../store/configSlice'
 import { setSession, setChatStatus } from '../../store/chatSlice'
 import { setSessions } from '../../store/sessionSlice'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
+import { useDetailPanel } from './DetailPanelContext'
 
 function profileLabel(profile: Pick<WorkDirProfile, 'name' | 'path'>): string {
   const trimmed = profile.name.trim()
@@ -21,6 +22,7 @@ type Props = {
 export function WorkDirSelector({ disabled }: Props) {
   const { message } = App.useApp()
   const dispatch = useAppDispatch()
+  const { closeFile } = useDetailPanel()
   const cfg = useTypedSelector((s) => s.config.config)
   const chatStatus = useTypedSelector((s) => s.chat.chatStatus)
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
@@ -67,10 +69,11 @@ export function WorkDirSelector({ disabled }: Props) {
           dispatch(setSessions(result.sessions))
           dispatch(setSession(null))
           dispatch(setChatStatus({ status: 'idle' }))
+          closeFile()
         })()
       }, 300)
     },
-    [activeId, disabled, dispatch, isStreaming, message]
+    [activeId, closeFile, disabled, dispatch, isStreaming, message]
   )
 
   if (profiles.length === 0) {

@@ -108,6 +108,7 @@ describe('claudeStreamHandlers locale', () => {
     registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key',
       getWorkDir: () => '/tmp',
+      resolveWorkDirForSession: () => '/session-workdir',
       getUserDataPath: () => '/tmp',
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
@@ -154,7 +155,7 @@ describe('claudeStreamHandlers locale', () => {
     })
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
-      expect.objectContaining({ locale: 'en-US' })
+      expect.objectContaining({ locale: 'en-US', workDir: '/session-workdir' })
     )
   })
 })
