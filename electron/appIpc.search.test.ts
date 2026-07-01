@@ -2,8 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
-import { appendSearchHistory } from './database'
-import type { Message, Session } from '../src/shared/domainTypes'
+import { appendSearchHistory, searchMessages } from './database'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -39,7 +38,8 @@ vi.mock('./database', () => ({
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
   appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => [])
+  listSearchHistory: vi.fn(() => []),
+  searchMessages: vi.fn(() => [])
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
@@ -82,12 +82,15 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
   }
 }
 
-function makeCtx(messages: Message[] = [], sessions: Session[] = []): AppIpcContext {
+function makeCtx(): AppIpcContext {
   return {
-    db: {
-      data: { messages, sessions, searchHistory: [], config: {}, secrets: {} }
-    } as AppIpcContext['db'],
-    backup: { backupSession: vi.fn(), deleteBackup: vi.fn() } as unknown as AppIpcContext['backup'],
+    db: { save: vi.fn(), flushSave: vi.fn(), close: vi.fn() } as AppIpcContext['db'],
+    backup: {
+      schedule: vi.fn(),
+      flush: vi.fn(),
+      backupImmediate: vi.fn(),
+      deleteBackup: vi.fn()
+    } as unknown as AppIpcContext['backup'],
     workDirManager: makeWorkDirManager(),
     getWorkDir: () => WORK_DIR,
     setWorkDir: vi.fn(),
@@ -122,27 +125,15 @@ describe('search:execute IPC handler', () => {
   })
 
   it('returns session results with sessionId and messageId', async () => {
-    const sessions: Session[] = [
+    vi.mocked(searchMessages).mockReturnValue([
       {
-        id: 's1',
-        name: '性能讨论',
-        createdAt: 1,
-        updatedAt: 1,
-        schemaVersion: 1
-      }
-    ]
-    const messages: Message[] = [
-      {
-        id: 'm1',
+        messageId: 'm1',
         sessionId: 's1',
-        role: 'user',
         content: '如何优化 React 渲染性能',
-        timestamp: 1,
-        status: 'sent',
-        schemaVersion: 1
+        sessionName: '性能讨论'
       }
-    ]
-    const ctx = makeCtx(messages, sessions)
+    ])
+    const ctx = makeCtx()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const handler = ipc.getHandler('search:execute')!
     const results = await handler({}, 'React')

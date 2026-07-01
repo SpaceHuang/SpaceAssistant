@@ -17,6 +17,7 @@ import {
   getSessionUsage,
   listSearchHistory,
   listSessions,
+  searchMessages,
   setConfigValue,
   deleteConfigValue,
   setSessionUsage,
@@ -70,6 +71,7 @@ import { listSessionsForProfile } from './workDirManager'
 import { normalizeRelPathInput, resolveSafePath } from './pathSecurity'
 import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from './fileReadHelpers'
 import { buildLocalFileViewerUrl } from './fileViewerUrl'
+import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
@@ -133,7 +135,7 @@ export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
 
 export type AppIpcContext = {
   db: AppDatabase
-  backup: SessionBackupManager
+  backup: DebouncedSessionBackupManager
   workDirManager: WorkDirManager
   getWorkDir: () => string
   setWorkDir: (dir: string) => void
@@ -208,11 +210,32 @@ function readWikiConfig(db: AppDatabase): WikiConfig {
   }
 }
 
-async function syncBackup(ctx: AppIpcContext, sessionId: string): Promise<void> {
+function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
   const s = getSession(ctx.db, sessionId)
-  if (!s) return
-  const msgs = getMessages(ctx.db, sessionId, 10_000, 0)
-  await ctx.backup.backupSession(s, msgs)
+  if (!s) return null
+  return { session: s, messages: getMessages(ctx.db, sessionId, 10_000, 0) }
+}
+
+function scheduleBackup(ctx: AppIpcContext, sessionId: string): void {
+  ctx.backup.schedule(sessionId, async () => loadBackupPayload(ctx, sessionId))
+}
+
+async function flushBackup(ctx: AppIpcContext, sessionId: string): Promise<void> {
+  await ctx.backup.flush(sessionId, async () => loadBackupPayload(ctx, sessionId))
+}
+
+const BACKUP_FLUSH_STATUSES = new Set(['completed', 'failed', 'sent'])
+
+async function backupAfterMessagePatch(
+  ctx: AppIpcContext,
+  sessionId: string,
+  patch: Partial<Pick<Message, 'status'>>
+): Promise<void> {
+  if (patch.status && BACKUP_FLUSH_STATUSES.has(patch.status)) {
+    await flushBackup(ctx, sessionId)
+    return
+  }
+  scheduleBackup(ctx, sessionId)
 }
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
@@ -410,7 +433,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
       })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
-      await ctx.backup.backupSession(s, [])
+      await ctx.backup.backupImmediate(s, [])
       return s
     }
   )
@@ -435,7 +458,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         baseUrl,
         getApiKey: ctx.getApiKey
       })
-      if (next) await syncBackup(ctx, next.id)
+      if (next) scheduleBackup(ctx, next.id)
       return next
     }
   )
@@ -479,7 +502,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
         ...(hasMetaChange ? { metadata: mergedMetadata } : {})
       })
-      if (next) await syncBackup(ctx, next.id)
+      if (next) scheduleBackup(ctx, next.id)
       return next
     }
   )
@@ -520,7 +543,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     'chat:append-message',
     async (_e, msg: Message): Promise<Message> => {
       const m = appendMessage(ctx.db, msg)
-      await syncBackup(ctx, m.sessionId)
+      scheduleBackup(ctx, m.sessionId)
       return m
     }
   )
@@ -545,7 +568,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       >
     } & { sessionId: string }) => {
       updateMessageContent(ctx.db, payload.messageId, payload.patch)
-      await syncBackup(ctx, payload.sessionId)
+      await backupAfterMessagePatch(ctx, payload.sessionId, payload.patch)
     }
   )
 
@@ -587,7 +610,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     async (_e, payload: { messageId: string; sessionId: string }) => {
       const result = deleteQueuedUserMessage(ctx.db, payload.messageId)
       if (result.ok) {
-        await syncBackup(ctx, result.sessionId)
+        await flushBackup(ctx, result.sessionId)
       }
       return result
     }
@@ -1172,22 +1195,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     if (!q) return []
     appendSearchHistory(ctx.db, q)
     const results: SearchResult[] = []
-    const qLower = q.toLowerCase()
     const activeProfileId = ctx.workDirManager.getActiveProfileId()
-    const sessionsById = new Map(ctx.db.data.sessions.map((s) => [s.id, s]))
-    for (const m of ctx.db.data.messages) {
-      if (results.length >= 50) break
-      if (!m.content.toLowerCase().includes(qLower)) continue
-      const s = sessionsById.get(m.sessionId)
-      if (!s) continue
-      if (s.workDirProfileId && s.workDirProfileId !== activeProfileId) continue
+    for (const hit of searchMessages(ctx.db, q, activeProfileId, 50)) {
       results.push({
-        id: `msg:${m.id}`,
+        id: `msg:${hit.messageId}`,
         type: 'session',
-        title: s.name ?? m.sessionId,
-        preview: m.content.slice(0, 160),
-        sessionId: m.sessionId,
-        messageId: m.id
+        title: hit.sessionName ?? hit.sessionId,
+        preview: hit.content.slice(0, 160),
+        sessionId: hit.sessionId,
+        messageId: hit.messageId
       })
     }
     const root = ctx.getWorkDir()

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import type { AppDatabase } from './database'
+import { openDatabase, setConfigValue, type AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -60,14 +60,9 @@ function makeSender(): WebContents {
 }
 
 function makeDb(locale: 'zh-CN' | 'en-US' = 'en-US'): AppDatabase {
-  return {
-    data: {
-      configs: { 'config.locale': { value: locale, createdAt: 0, updatedAt: 0 } },
-      sessions: [],
-      messages: []
-    },
-    save: vi.fn()
-  } as unknown as AppDatabase
+  const db = openDatabase(':memory:')
+  setConfigValue(db, 'config.locale', locale)
+  return db
 }
 
 describe('claudeStreamHandlers locale', () => {

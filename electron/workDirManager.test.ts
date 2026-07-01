@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openDatabase } from './database'
+import { openDatabase, setConfigValue } from './database'
 import { createSession } from './database'
 import { createWorkDirManager, resolveWorkDirForSession } from './workDirManager'
 
@@ -21,7 +21,7 @@ describe('WorkDirManager', () => {
   })
 
   function setupManager() {
-    const dbPath = path.join(tempDir(), 'db.json')
+    const dbPath = path.join(tempDir(), 'db.db')
     dirs.push(path.dirname(dbPath))
     const db = openDatabase(dbPath)
     let workDir = '/default'
@@ -32,7 +32,7 @@ describe('WorkDirManager', () => {
         workDir = d
       }
     })
-    return { db, manager, getWorkDir: () => workDir }
+    return { db, manager, getWorkDir: () => workDir, close: () => db.close() }
   }
 
   describe('addProfile', () => {
@@ -166,11 +166,10 @@ describe('WorkDirManager', () => {
     it('仅有 workDir 时自动生成默认 profile', () => {
       const legacyDir = tempDir()
       dirs.push(legacyDir)
-      const dbPath = path.join(tempDir(), 'db.json')
+      const dbPath = path.join(tempDir(), 'db.db')
       dirs.push(path.dirname(dbPath))
       const db = openDatabase(dbPath)
-      db.data.configs['config.workDir'] = { value: legacyDir, createdAt: 1, updatedAt: 1 }
-      db.flushSave()
+      setConfigValue(db, 'config.workDir', legacyDir)
 
       let workDir = legacyDir
       const manager = createWorkDirManager({

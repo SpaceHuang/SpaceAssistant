@@ -86,7 +86,12 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 function makeCtx(dbOverrides: Partial<AppIpcContext['db']> = {}): AppIpcContext {
   return {
     db: { save: vi.fn(), ...dbOverrides } as AppIpcContext['db'],
-    backup: { backupSession: vi.fn(), deleteBackup: vi.fn() } as unknown as AppIpcContext['backup'],
+    backup: {
+      schedule: vi.fn(),
+      flush: vi.fn(),
+      backupImmediate: vi.fn(),
+      deleteBackup: vi.fn()
+    } as unknown as AppIpcContext['backup'],
     workDirManager: makeWorkDirManager(),
     getWorkDir: () => WORK_DIR,
     setWorkDir: vi.fn(),

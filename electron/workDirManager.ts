@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto'
 import type { Session } from '../src/shared/domainTypes'
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
-import { getConfigValue, listSessions, setConfigValue, getSession } from './database'
+import { getConfigValue, getSession, listSessions, listSessionsMissingWorkDirProfile, setConfigValue, updateSession } from './database'
 
 const PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_KEY = 'config.activeWorkDirProfileId'
@@ -347,11 +347,9 @@ export function createWorkDirManager(ctx: {
     setConfigValue(ctx.db, WORK_DIR_KEY, legacyWorkDir)
 
     let changed = false
-    for (const s of ctx.db.data.sessions) {
-      if (!s.workDirProfileId) {
-        s.workDirProfileId = defaultProfile.id
-        changed = true
-      }
+    for (const s of listSessionsMissingWorkDirProfile(ctx.db)) {
+      updateSession(ctx.db, s.id, { workDirProfileId: defaultProfile.id })
+      changed = true
     }
     if (changed) ctx.db.flushSave()
   }

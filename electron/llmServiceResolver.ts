@@ -9,7 +9,7 @@ import {
   resolveServiceForModel
 } from '../src/shared/llmModelConfig'
 import type { AppDatabase } from './database'
-import { getConfigValue, setConfigValue } from './database'
+import { deleteConfigValue, getConfigValue, setConfigValue } from './database'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
 import { decryptSecret, encryptSecret, isSecretStorageAvailable } from './secureApiKey'
 
@@ -355,10 +355,7 @@ export function syncActiveServiceMirror(
   if (enc) {
     setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.apiKeyEnc, enc)
   } else {
-    const row = db.data.configs[LLM_SERVICE_CONFIG_KEYS.apiKeyEnc]
-    if (row) {
-      delete db.data.configs[LLM_SERVICE_CONFIG_KEYS.apiKeyEnc]
-    }
+    deleteConfigValue(db, LLM_SERVICE_CONFIG_KEYS.apiKeyEnc)
   }
 }
 

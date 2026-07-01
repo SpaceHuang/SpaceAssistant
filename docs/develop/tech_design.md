@@ -564,15 +564,15 @@ interface ThinkingData {
 
 采用**双层存储架构**：
 
-1. **SQLite 数据库**（主存储）
-   - 存储会话列表和消息索引
-   - 快速查询和列表展示
-   - 事务保障数据一致性
+1. **SQLite 数据库**（主存储，`{userData}/spaceassistant-data.db`）
+   - 表：`configs`、`sessions`、`messages`、`search_history`、`session_usages`
+   - WAL 模式 + 索引 `(session_id, sequence)`；配置与消息增量写入
+   - 旧版 `spaceassistant-data.json` 首次启动自动迁移并重命名备份
 
-2. **文件系统**（明文备份）
+2. **文件系统**（明文备份，辅助）
    - `sessions/` 目录存储完整的 JSON 格式备份
    - 便于用户查看、编辑和知识复用
-   - 提供数据恢复能力
+   - 流式 patch 防抖备份，消息完成时 flush
 
 #### 6.2.2 文件命名规则
 

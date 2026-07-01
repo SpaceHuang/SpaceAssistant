@@ -16,6 +16,8 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      - name: Install better-sqlite3 native bindings (Node)
+        run: npm run rebuild:native
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
       - run: npm test

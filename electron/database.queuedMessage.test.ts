@@ -1,31 +1,26 @@
-import fs from 'fs'
-import os from 'os'
-import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   appendMessage,
   createSession,
   deleteQueuedUserMessage,
   getMessages,
-  openDatabase,
+  getSession,
   type AppDatabase
 } from './database'
+import { createTempDatabase } from './database/testHelpers'
 
 describe('deleteQueuedUserMessage', () => {
-  let dbPath: string
   let db: AppDatabase
+  let cleanup: () => void
 
   beforeEach(() => {
-    dbPath = path.join(os.tmpdir(), `sa-queue-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
-    db = openDatabase(dbPath)
+    const temp = createTempDatabase('sa-queue-')
+    db = temp.db
+    cleanup = temp.cleanup
   })
 
   afterEach(() => {
-    try {
-      fs.unlinkSync(dbPath)
-    } catch {
-      /* ignore */
-    }
+    cleanup()
   })
 
   it('removes queued user message and updates session preview', () => {
@@ -51,7 +46,7 @@ describe('deleteQueuedUserMessage', () => {
     expect(result).toEqual({ ok: true, sessionId: session.id })
     expect(getMessages(db, session.id).map((m) => m.id)).toEqual(['u-sent'])
 
-    const updated = db.data.sessions.find((s) => s.id === session.id)
+    const updated = getSession(db, session.id)
     expect(updated?.messageCount).toBe(1)
     expect(updated?.preview).toBe('first message')
   })

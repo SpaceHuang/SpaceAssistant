@@ -1,8 +1,6 @@
-import fs from 'fs'
-import os from 'os'
-import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { openDatabase, getConfigValue, setConfigValue, type AppDatabase } from './database'
+import { getConfigValue, setConfigValue, type AppDatabase } from './database'
+import { createTempDatabase } from './database/testHelpers'
 import {
   DEFAULT_LLM_SERVICE_NAME,
   LLM_SERVICE_CONFIG_KEYS,
@@ -33,20 +31,17 @@ function makeModels(): ModelEntry[] {
 }
 
 describe('llmServiceResolver', () => {
-  let dbPath: string
   let db: AppDatabase
+  let cleanup: () => void
 
   beforeEach(() => {
-    dbPath = path.join(os.tmpdir(), `sa-llm-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
-    db = openDatabase(dbPath)
+    const temp = createTempDatabase('sa-llm-')
+    db = temp.db
+    cleanup = temp.cleanup
   })
 
   afterEach(() => {
-    try {
-      fs.unlinkSync(dbPath)
-    } catch {
-      /* ignore */
-    }
+    cleanup()
   })
 
   it('migrates legacy apiKeyEnc and baseUrl into default service', () => {

@@ -112,7 +112,7 @@ export function scheduleSessionTitleSuggestion(args: {
   const { db, sender, sessionId, model, baseUrl, messagesForApi, getApiKey } = args
   const locale = readAppLocale(db)
 
-  const cur = db.data.sessions.find((s) => s.id === sessionId)
+  const cur = getSession(db, sessionId)
   if (!cur) return
   if (cur.metadata?.[SESSION_META_TITLE_GENERATED] === true) return
   if (cur.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return
@@ -128,7 +128,7 @@ export function scheduleSessionTitleSuggestion(args: {
       const apiKey = await getApiKey()
       if (!apiKey) return
 
-      const fresh = db.data.sessions.find((s) => s.id === sessionId)
+      const fresh = getSession(db, sessionId)
       if (!fresh) return
       if (fresh.metadata?.[SESSION_META_TITLE_GENERATED] === true) return
       if (fresh.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return
@@ -163,7 +163,7 @@ export function scheduleSessionTitleSuggestion(args: {
 
       if (!title) return
 
-      const again = db.data.sessions.find((s) => s.id === sessionId)
+      const again = getSession(db, sessionId)
       if (!again) return
       if (again.metadata?.[SESSION_META_TITLE_GENERATED] === true) return
       if (again.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return

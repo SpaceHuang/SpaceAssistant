@@ -14,8 +14,9 @@ import {
   registerFeishuIpcHandlers,
   shutdownFeishuServices
 } from './feishu/feishuIpc'
-import { getConfigValue, openDatabase, setConfigValue } from './database'
+import { getConfigValue, getDefaultDbPath, openDatabase, setConfigValue } from './database'
 import type { AppDatabase } from './database'
+import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
 import { readAppLocale } from './appIpc'
@@ -179,7 +180,7 @@ export async function createMainWindow(): Promise<void> {
 }
 
 app.whenReady().then(() => {
-  const dbPath = path.join(app.getPath('userData'), 'spaceassistant-data.json')
+  const dbPath = getDefaultDbPath(app.getPath('userData'))
   const db = openDatabase(dbPath)
   appDb = db
   void import('./shell/shellCommandTrust').then(({ persistExpiredTrustedCommandMarks }) => {
@@ -254,7 +255,7 @@ app.whenReady().then(() => {
     mainDirname: __dirname
   })
 
-  const backup = new SessionBackupManager(workDirState)
+  const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))
 
   const getApiKey = async (): Promise<string | null> => {
     return getActiveLlmService(db).getApiKey()
@@ -426,6 +427,7 @@ app.on('before-quit', (event) => {
         console.warn('[shutdown] some resources may not have been released cleanly')
       }
       appDb?.flushSave()
+      appDb?.close()
       quitCleanupDone = true
       app.quit()
     }

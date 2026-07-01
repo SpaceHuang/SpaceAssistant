@@ -12,22 +12,20 @@ import {
   createSession,
   type AppDatabase
 } from './database'
+import { createTempDatabase } from './database/testHelpers'
 
 describe('sessionUsages persistence', () => {
-  let dbPath: string
   let db: AppDatabase
+  let cleanup: () => void
 
   beforeEach(() => {
-    dbPath = path.join(os.tmpdir(), `sa-usage-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
-    db = openDatabase(dbPath)
+    const temp = createTempDatabase('sa-usage-')
+    db = temp.db
+    cleanup = temp.cleanup
   })
 
   afterEach(() => {
-    try {
-      fs.unlinkSync(dbPath)
-    } catch {
-      /* ignore */
-    }
+    cleanup()
   })
 
   it('returns undefined when no usage stored', () => {
@@ -65,16 +63,20 @@ describe('sessionUsages persistence', () => {
     expect(getSessionUsage(db, session.id)).toBeUndefined()
   })
 
-  it('loads legacy db without sessionUsages field', () => {
-    const legacyPath = path.join(os.tmpdir(), `sa-legacy-${Date.now()}.json`)
+  it('loads legacy db without sessionUsages field via JSON migration', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-legacy-'))
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
     fs.writeFileSync(
-      legacyPath,
+      jsonPath,
       JSON.stringify({ sessions: [], messages: [], configs: {}, searchHistory: [] }),
       'utf8'
     )
-    const legacyDb = openDatabase(legacyPath)
+
+    const legacyDb = openDatabase(path.join(dir, 'spaceassistant-data.db'))
     setSessionUsage(legacyDb, 's1', { input_tokens: 42 })
     expect(getSessionUsage(legacyDb, 's1')).toEqual({ input_tokens: 42 })
-    fs.unlinkSync(legacyPath)
+    expect(fs.existsSync(jsonPath)).toBe(false)
+    legacyDb.close()
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 })
