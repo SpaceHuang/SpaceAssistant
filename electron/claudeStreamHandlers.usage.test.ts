@@ -49,20 +49,14 @@ vi.mock('./chatCancelRegistry', () => ({
 
 import { ipcMain } from 'electron'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { createMemoryAppDb } from './database/testHelpers'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
 }
 
 function makeDb(): AppDatabase {
-  return {
-    data: {
-      configs: { 'config.locale': { value: 'zh-CN', createdAt: 0, updatedAt: 0 } },
-      sessions: [],
-      messages: []
-    },
-    save: vi.fn()
-  } as unknown as AppDatabase
+  return createMemoryAppDb('zh-CN')
 }
 
 function registerHandlers() {

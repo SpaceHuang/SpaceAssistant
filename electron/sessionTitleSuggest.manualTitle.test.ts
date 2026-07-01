@@ -19,6 +19,8 @@ vi.mock('./database', () => ({
   getMessages: vi.fn(() => [])
 }))
 
+import { getSession } from './database'
+
 vi.mock('./anthropicClientFactory', () => ({
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
@@ -72,6 +74,7 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
     const session = stubSession({
       metadata: { [SESSION_META_TITLE_USER_CUSTOM]: true }
     })
+    vi.mocked(getSession).mockReturnValue(session)
     const db = makeDb(session)
     const sender = makeSender()
 
@@ -99,6 +102,7 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
 
   it('writes generated title when no user custom flag', async () => {
     const session = stubSession({ name: '', metadata: {} })
+    vi.mocked(getSession).mockReturnValue(session)
     const db = makeDb(session)
     const sender = makeSender()
     const updated = stubSession({

@@ -12,7 +12,7 @@ import {
   searchMessages
 } from './database'
 import { migrateFromJsonIfNeeded } from './database/migrateFromJson'
-import { getSchemaMeta } from './database/sqliteStore'
+import { getSchemaMeta, openSqliteDatabase } from './database/sqliteStore'
 import { SCHEMA_META_KEYS } from './database/schema'
 
 describe('migrateFromJson', () => {
@@ -92,7 +92,7 @@ describe('migrateFromJson', () => {
 
     fs.writeFileSync(jsonPath, JSON.stringify({ sessions: [], messages: [], configs: {}, searchHistory: [] }), 'utf8')
 
-    const db = openDatabase(dbPath)
+    const db = openSqliteDatabase(dbPath)
     createSession(db, { name: 'existing' })
     db.close()
 

@@ -97,20 +97,14 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { createMemoryAppDb } from './database/testHelpers'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
 }
 
 function makeDb(locale: 'zh-CN' | 'en-US' = 'zh-CN'): AppDatabase {
-  return {
-    data: {
-      configs: { 'config.locale': { value: locale, createdAt: 0, updatedAt: 0 } },
-      sessions: [],
-      messages: []
-    },
-    save: vi.fn()
-  } as unknown as AppDatabase
+  return createMemoryAppDb(locale)
 }
 
 describe('runToolChatSession locale injection', () => {
