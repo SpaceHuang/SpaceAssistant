@@ -52,4 +52,16 @@ describe('normalizeMarkdownMath', () => {
     const input = String.raw`\begin{equation} E=mc^2 \end{equation}`
     expect(normalizeMarkdownMath(input)).toBe('$$\nE=mc^2\n$$')
   })
+
+  it('unwraps outer \\boxed in inline dollar math', () => {
+    const input = String.raw`$\boxed{E[f(X)] \approx f(\mu) + \frac{1}{2} f''(\mu) \cdot \sigma^2}$`
+    const normalized = normalizeMarkdownMath(input)
+    expect(normalized).not.toContain(String.raw`\boxed{`)
+    expect(normalized).toContain('E[f(X)]')
+    expect(normalized).toMatch(/^\$.*\$$/)
+  })
+
+  it('unwraps outer \\boxed in block dollar math on one line', () => {
+    expect(normalizeMarkdownMath(String.raw`$$\boxed{E=mc^2}$$`)).toBe('$$E=mc^2$$')
+  })
 })

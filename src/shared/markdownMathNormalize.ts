@@ -46,6 +46,25 @@ function toDisplayMath(inner: string): string {
   return `$$\n${trimmed}\n$$`
 }
 
+/** 去掉 $ / $$ 公式中仅作外层标记的 \\boxed / \\fbox */
+function unwrapBoxedInDollarMath(content: string): string {
+  let text = content
+
+  text = text.replace(/\$\$([\s\S]*?)\$\$/g, (match, inner: string) => {
+    const unwrapped = unwrapOuterLatexBox(inner.trim())
+    if (unwrapped === inner.trim()) return match
+    return inner.includes('\n') ? `$$\n${unwrapped}\n$$` : `$$${unwrapped}$$`
+  })
+
+  text = text.replace(/\$((?:\\.|[^$\\])+)\$/g, (match, inner: string) => {
+    const unwrapped = unwrapOuterLatexBox(inner.trim())
+    if (unwrapped === inner.trim()) return match
+    return `$${unwrapped}$`
+  })
+
+  return text
+}
+
 /**
  * 将常见 LaTeX 公式分隔符转为 remark-math 可识别的 $ / $$ 语法。
  * LLM 输出常使用 \[ \]、\( \) 或裸 [ ] 包裹，而非 Markdown 标准的 $$。
@@ -57,12 +76,12 @@ export function normalizeMarkdownMath(content: string): string {
 
   text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_, inner) => toDisplayMath(inner))
 
-  text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${inner.trim()}$`)
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_, inner) => `$${unwrapOuterLatexBox(inner.trim())}$`)
 
   text = text.replace(/^\[\s*\r?\n([\s\S]*?)\r?\n\]\s*$/gm, (match, inner: string) => {
     if (!LATEX_COMMAND.test(inner)) return match
     return toDisplayMath(inner)
   })
 
-  return text
+  return unwrapBoxedInDollarMath(text)
 }

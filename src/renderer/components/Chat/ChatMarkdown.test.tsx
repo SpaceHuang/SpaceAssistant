@@ -25,4 +25,13 @@ describe('ChatMarkdown', () => {
     expect(root.querySelector('.katex-display')).toBeTruthy()
     expect(root.textContent).toContain('P')
   })
+
+  it('renders inline dollar math without redundant \\boxed border', () => {
+    const content = String.raw`$\boxed{E[f(X)] \approx f(\mu) + \frac{1}{2} f''(\mu) \cdot \sigma^2}$`
+    const { container } = render(<ChatMarkdown content={content} />)
+    const root = container.querySelector('.chat-md-assistant') as HTMLElement
+    expect(root.querySelector('.katex')).toBeTruthy()
+    expect(root.querySelector('.stretchy.fbox')).toBeNull()
+    expect(root.textContent).toContain('E')
+  })
 })
