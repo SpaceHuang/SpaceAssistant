@@ -513,6 +513,19 @@
   flex-shrink: 0;
 }
 
+.sa-prose .katex,
+.detail-md-render .katex {
+  color: inherit;
+  font-size: 1em;
+}
+
+.sa-prose .katex-display,
+.detail-md-render .katex-display {
+  margin: 0.75em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .sa-md-status-dot--success {
   background: var(--sa-success);
 }

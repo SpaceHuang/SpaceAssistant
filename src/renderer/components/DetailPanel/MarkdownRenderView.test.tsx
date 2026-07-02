@@ -88,6 +88,15 @@ describe('MarkdownRenderView', () => {
     expect(tableWrap.getAttribute('data-md-start')).toBe(String(tableStart))
   })
 
+  it('renders inline and block LaTeX math', () => {
+    const content = ['Inline $E=mc^2$ and block:', '', '$$', '\\frac{a}{b}', '$$'].join('\n')
+    const { container } = render(<MarkdownRenderView content={content} />)
+    const root = container.querySelector('.detail-md-render') as HTMLElement
+    expect(root.querySelector('.katex')).toBeTruthy()
+    expect(root.querySelector('.katex-display')).toBeTruthy()
+    expect(root.textContent).toContain('E=mc')
+  })
+
   it('expands wikilinks in copied markdown', () => {
     const content = 'See [[My Page]] for details.'
     const rendered = expandWikilinks(content, 'llm-wiki')

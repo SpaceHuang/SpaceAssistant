@@ -1,9 +1,7 @@
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeExternalLinks from 'rehype-external-links'
-import { remarkSemanticStatusEmoji } from '../../../shared/markdownSemanticStatusEmoji'
 import { ShikiCodeBlock } from './ShikiCodeBlock'
 import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
+import { markdownRemarkPlugins, markdownRehypePlugins } from '../../utils/markdownPlugins'
 
 type Props = {
   content: string
@@ -16,8 +14,8 @@ export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', baseRelPath, 
   return (
     <div className="sa-prose chat-md-assistant">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkSemanticStatusEmoji]}
-        rehypePlugins={[[rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }]]}
+        remarkPlugins={markdownRemarkPlugins}
+        rehypePlugins={[...markdownRehypePlugins]}
         components={{
           a(props) {
             const { children, href, ...rest } = props
@@ -38,6 +36,13 @@ export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', baseRelPath, 
           },
           code(props) {
             const { children, className, ...rest } = props
+            if (className?.includes('language-math')) {
+              return (
+                <code className={className} {...rest}>
+                  {children}
+                </code>
+              )
+            }
             const match = /language-(\w+)/.exec(className || '')
             const text = String(children).replace(/\n$/, '')
             const isBlock = Boolean(match) || text.includes('\n')

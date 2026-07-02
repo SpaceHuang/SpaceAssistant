@@ -57,6 +57,7 @@ SpaceAssistant 有什么特点？
 | [@reduxjs/toolkit](https://github.com/reduxjs/redux-toolkit) | MIT |
 | [antd](https://github.com/ant-design/ant-design) | MIT |
 | [axios](https://github.com/axios/axios) | MIT |
+| [katex](https://github.com/KaTeX/KaTeX) | MIT |
 | [lucide-react](https://github.com/lucide-icons/lucide) | ISC |
 | [mingcute_icon](https://github.com/Richard9394/MingCute) | Apache-2.0 |
 | [playwright](https://github.com/microsoft/playwright) | Apache-2.0 |
@@ -66,7 +67,9 @@ SpaceAssistant 有什么特点？
 | [react-redux](https://github.com/reduxjs/react-redux) | MIT |
 | [react-syntax-highlighter](https://github.com/react-syntax-highlighter/react-syntax-highlighter) | MIT |
 | [rehype-external-links](https://github.com/rehypejs/rehype-external-links) | MIT |
+| [rehype-katex](https://github.com/remarkjs/remark-math/tree/main/packages/rehype-katex) | MIT |
 | [remark-gfm](https://github.com/remarkjs/remark-gfm) | MIT |
+| [remark-math](https://github.com/remarkjs/remark-math/tree/main/packages/remark-math) | MIT |
 | [shiki](https://github.com/shikijs/shiki) | MIT |
 | [zod](https://github.com/colinhacks/zod) | MIT |
 

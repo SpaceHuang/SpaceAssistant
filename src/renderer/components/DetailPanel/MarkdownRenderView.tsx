@@ -1,11 +1,9 @@
 import { memo, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeExternalLinks from 'rehype-external-links'
 import type { ExtraProps } from 'react-markdown'
 import { expandWikilinks } from '../../../shared/wikiMarkdown'
 import { normalizeAsciiTables } from '../../../shared/markdownAsciiTableNormalize'
-import { remarkSemanticStatusEmoji } from '../../../shared/markdownSemanticStatusEmoji'
+import { markdownRemarkPlugins, markdownRehypePlugins } from '../../utils/markdownPlugins'
 import { slugifyMarkdownHeading } from '../../../shared/markdownLinkResolve'
 import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
 import { markdownHeadingText } from '../../utils/markdownHeadingText'
@@ -108,8 +106,8 @@ export const MarkdownRenderView = memo(function MarkdownRenderView({
   return (
     <div className="detail-md-render" ref={containerRef}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkSemanticStatusEmoji]}
-        rehypePlugins={[[rehypeExternalLinks, { target: '_blank', rel: ['noopener', 'noreferrer'] }]]}
+        remarkPlugins={markdownRemarkPlugins}
+        rehypePlugins={[...markdownRehypePlugins]}
         components={{
           ...headingComponents,
           ...blockComponents,
