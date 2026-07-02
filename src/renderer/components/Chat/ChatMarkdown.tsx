@@ -1,4 +1,6 @@
 import ReactMarkdown from 'react-markdown'
+import { useMemo } from 'react'
+import { normalizeMarkdownMath } from '../../../shared/markdownMathNormalize'
 import { ShikiCodeBlock } from './ShikiCodeBlock'
 import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
 import { markdownRemarkPlugins, markdownRehypePlugins } from '../../utils/markdownPlugins'
@@ -11,6 +13,8 @@ type Props = {
 }
 
 export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', baseRelPath, onOpenFile }: Props) {
+  const rendered = useMemo(() => normalizeMarkdownMath(content), [content])
+
   return (
     <div className="sa-prose chat-md-assistant">
       <ReactMarkdown
@@ -58,7 +62,7 @@ export function ChatMarkdown({ content, wikiRootPath = 'llm-wiki', baseRelPath, 
           }
         }}
       >
-        {content}
+        {rendered}
       </ReactMarkdown>
     </div>
   )

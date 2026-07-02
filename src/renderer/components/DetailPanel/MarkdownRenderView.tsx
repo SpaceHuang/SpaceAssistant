@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import type { ExtraProps } from 'react-markdown'
 import { expandWikilinks } from '../../../shared/wikiMarkdown'
 import { normalizeAsciiTables } from '../../../shared/markdownAsciiTableNormalize'
+import { normalizeMarkdownMath } from '../../../shared/markdownMathNormalize'
 import { markdownRemarkPlugins, markdownRehypePlugins } from '../../utils/markdownPlugins'
 import { slugifyMarkdownHeading } from '../../../shared/markdownLinkResolve'
 import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
@@ -59,7 +60,7 @@ export const MarkdownRenderView = memo(function MarkdownRenderView({
   onPendingScrollFragmentHandled
 }: Props) {
   const rendered = useMemo(
-    () => expandWikilinks(normalizeAsciiTables(content), wikiRootPath),
+    () => expandWikilinks(normalizeMarkdownMath(normalizeAsciiTables(content)), wikiRootPath),
     [content, wikiRootPath]
   )
   const renderedRef = useRef(rendered)

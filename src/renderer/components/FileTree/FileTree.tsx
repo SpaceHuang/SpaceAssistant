@@ -117,13 +117,30 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     [message, onCollectToWiki, startNewDirectoryIn, t, tc, tree, wikiEnabled, wikiRootPath, workDir]
   )
 
-  const handleTreeContextMenu = useCallback((e: React.MouseEvent) => {
-    const key = resolveFileTreeNodeKeyFromTarget(e.target)
-    if (!key) return
-    e.preventDefault()
-    e.stopPropagation()
-    setContextMenu({ key, x: e.clientX, y: e.clientY })
+  const openContextMenu = useCallback((key: string, x: number, y: number) => {
+    if (key.startsWith('__inline_input__')) return
+    setContextMenu({ key, x, y })
   }, [])
+
+  const handleTreeRightClick = useCallback(
+    ({ event, node }: { event: React.MouseEvent; node: EventDataNode }) => {
+      event.preventDefault()
+      event.stopPropagation()
+      openContextMenu(normalizeRelPath(String(node.key)), event.clientX, event.clientY)
+    },
+    [openContextMenu]
+  )
+
+  const handleTreeContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      const key = resolveFileTreeNodeKeyFromTarget(e.target)
+      if (!key) return
+      e.preventDefault()
+      e.stopPropagation()
+      openContextMenu(key, e.clientX, e.clientY)
+    },
+    [openContextMenu]
+  )
 
   const contextMenuNode = contextMenu ? findNode(tree.treeData, contextMenu.key) : null
   const contextMenuItems = useMemo(
@@ -250,6 +267,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
         showIcon={false}
         onSelect={handleSelect}
         onExpand={handleExpand}
+        onRightClick={handleTreeRightClick}
         draggable={tree.readOnly ? false : { icon: false, nodeDraggable: () => true }}
         allowDrop={
           tree.readOnly

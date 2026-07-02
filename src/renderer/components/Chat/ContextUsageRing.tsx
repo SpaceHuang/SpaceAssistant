@@ -187,7 +187,7 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
       : t('aria.noData')
 
   return (
-    <Tooltip title={tooltipTitle} placement="top" overlayClassName="context-usage-tooltip-overlay">
+    <Tooltip title={tooltipTitle} placement="top" classNames={{ root: 'context-usage-tooltip-overlay' }}>
       <span
         className="context-usage-ring"
         style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}

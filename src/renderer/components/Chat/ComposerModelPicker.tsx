@@ -54,7 +54,7 @@ export function ComposerModelPicker({ cfg, displayName, unavailable, onSelect }:
       onOpenChange={setOpen}
       trigger="click"
       placement="topLeft"
-      overlayClassName="composer-model-picker-popover"
+      classNames={{ root: 'composer-model-picker-popover' }}
       content={content}
     >
       <button

@@ -318,7 +318,7 @@ export function ModelsSettingsTab({
                   title={t('models.defaults.resetDefault')}
                 />
                 <Popover
-                  overlayClassName="config-settings-popover"
+                  classNames={{ root: 'config-settings-popover' }}
                   content={addContent}
                   open={addOpen}
                   onOpenChange={setAddOpen}

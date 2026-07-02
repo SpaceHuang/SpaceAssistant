@@ -301,7 +301,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
       render: (_, profile) => (
         <Space size={4} className="config-workdir-table-actions">
           <Popover
-            overlayClassName="config-settings-popover"
+            classNames={{ root: 'config-settings-popover' }}
             placement="bottomRight"
             trigger="click"
             open={editId === profile.id}
@@ -347,7 +347,7 @@ export function WorkDirList({ profiles, onChange }: Props) {
         <span className="config-field__label">{t('workDir.fieldLabel')}</span>
         <Space size={6} className="config-workdir-field__actions">
           <Popover
-            overlayClassName="config-settings-popover"
+            classNames={{ root: 'config-settings-popover' }}
             placement="bottomRight"
             trigger="click"
             open={addOpen}
