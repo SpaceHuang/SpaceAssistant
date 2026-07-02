@@ -84,4 +84,21 @@ describe('FileTreeContextMenu', () => {
     fireEvent.click(screen.getByText('删除'))
     expect(defaultProps.onDelete).toHaveBeenCalled()
   })
+
+  it('shows new subdirectory for directory nodes', () => {
+    const onNewSubdirectory = vi.fn()
+    renderMenu({
+      ...defaultProps,
+      isDirectory: true,
+      onNewSubdirectory,
+      open: true
+    })
+    fireEvent.click(screen.getByText('新建子目录'))
+    expect(onNewSubdirectory).toHaveBeenCalled()
+  })
+
+  it('hides new subdirectory for file nodes', () => {
+    renderMenu({ ...defaultProps, isDirectory: false, onNewSubdirectory: vi.fn(), open: true })
+    expect(screen.queryByText('新建子目录')).toBeNull()
+  })
 })

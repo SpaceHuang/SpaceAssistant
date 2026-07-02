@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from 'react'
+import { forwardRef, useCallback, useImperativeHandle, useMemo, useState } from 'react'
 import { App, Tree } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { DataNode, EventDataNode } from 'antd/es/tree'
@@ -7,9 +7,11 @@ import { useFileTree, type UseFileTreeOptions } from './useFileTree'
 import type { FileTreeNode as FileTreeNodeData } from './useFileTree'
 import { FileTreeNode } from './FileTreeNode'
 import { FileTreeToolbar } from './FileTreeToolbar'
-import { FileTreeContextMenu } from './FileTreeContextMenu'
 import { DeleteConfirmModal } from './DeleteConfirmModal'
 import { canShowCollectToWiki } from '../../services/wikiImportService'
+import { buildFileTreeContextMenuItems } from './fileTreeContextMenuItems'
+import { resolveFileTreeNodeKeyFromTarget } from './fileTreeContextMenuDom'
+import { FileTreeContextMenuOverlay } from './FileTreeContextMenuOverlay'
 import './fileTree.css'
 
 export type FileTreeHandle = {
@@ -48,8 +50,10 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
 ) {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('fileTree')
+  const { t: tc } = useTypedTranslation('common')
   const tree = useFileTree(workDir, treeOptions ?? {})
   const [deleteTarget, setDeleteTarget] = useState<{ key: string; name: string; isDirectory: boolean } | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ key: string; x: number; y: number } | null>(null)
 
   const selectedKey = controlledSelectedKey !== undefined ? controlledSelectedKey : tree.selectedKey
 
@@ -59,6 +63,72 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       else tree.setSelectedKey(key)
     },
     [onSelectedKeyChange, tree]
+  )
+
+  const startNewDirectoryIn = useCallback(
+    (parentKey: string) => {
+      tree.setInlineInput({ parentKey, type: 'directory', defaultName: t('defaultNewFolder') })
+      setSelected(parentKey)
+      if (!tree.expandedKeys.includes(parentKey)) {
+        void tree.toggleExpand(parentKey)
+      }
+    },
+    [setSelected, t, tree]
+  )
+
+  const buildNodeMenuItems = useCallback(
+    (node: FileTreeNodeData) => {
+      const showCollect = Boolean(
+        onCollectToWiki && canShowCollectToWiki(node.relPath, wikiRootPath, node.isDirectory, wikiEnabled)
+      )
+      return buildFileTreeContextMenuItems({
+        onAddToChat: () => {},
+        onCopyPath: () => {
+          const abs = workDir + (node.relPath ? '/' + node.relPath : '')
+          void navigator.clipboard.writeText(abs)
+          message.success(t('copyAbsPathOk'))
+        },
+        onCopyRelPath: () => {
+          void navigator.clipboard.writeText(node.relPath || '.')
+          message.success(t('copyRelPathOk'))
+        },
+        onShowInFolder: () => {
+          void window.api.fileShowInExplorer(node.relPath || '.').then((r) => {
+            if (!r.ok) message.error(r.error ?? t('openDirFailed'))
+          })
+        },
+        onRename: () => tree.setRenamingKey(node.key),
+        onDelete: () => setDeleteTarget({ key: node.key, name: node.name, isDirectory: node.isDirectory }),
+        onCollectToWiki: showCollect ? () => onCollectToWiki?.(node.relPath) : undefined,
+        onNewSubdirectory: node.isDirectory
+          ? () => {
+              setContextMenu(null)
+              startNewDirectoryIn(node.key)
+            }
+          : undefined,
+        isDirectory: node.isDirectory,
+        showCollectToWiki: showCollect,
+        readOnly: tree.readOnly,
+        onAddToChatPlaceholder: () => message.info(t('contextMenu.featureInDevelopment')),
+        t,
+        tc
+      })
+    },
+    [message, onCollectToWiki, startNewDirectoryIn, t, tc, tree, wikiEnabled, wikiRootPath, workDir]
+  )
+
+  const handleTreeContextMenu = useCallback((e: React.MouseEvent) => {
+    const key = resolveFileTreeNodeKeyFromTarget(e.target)
+    if (!key) return
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ key, x: e.clientX, y: e.clientY })
+  }, [])
+
+  const contextMenuNode = contextMenu ? findNode(tree.treeData, contextMenu.key) : null
+  const contextMenuItems = useMemo(
+    () => (contextMenuNode ? buildNodeMenuItems(contextMenuNode) : []),
+    [buildNodeMenuItems, contextMenuNode]
   )
 
   const highlightSet = new Set(highlightRelPaths.map((p) => p.replace(/\\/g, '/')))
@@ -98,61 +168,32 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
           : null
 
         const highlighted = highlightSet.has(node.relPath.replace(/\\/g, '/'))
-        const showCollect = Boolean(
-          onCollectToWiki && canShowCollectToWiki(node.relPath, wikiRootPath, node.isDirectory, wikiEnabled)
-        )
-
         return {
           key: node.key,
           className: highlighted ? 'file-tree-node--wiki-highlight' : undefined,
           title: (
-            <FileTreeContextMenu
-              relPath={node.relPath}
+            <FileTreeNode
+              nodeKey={node.key}
               name={node.name}
               isDirectory={node.isDirectory}
-              readOnly={tree.readOnly}
-              showCollectToWiki={showCollect}
-              onCollectToWiki={showCollect ? () => onCollectToWiki?.(node.relPath) : undefined}
-              onAddToChat={() => {}}
-              onCopyPath={() => {
-                const abs = workDir + (node.relPath ? '/' + node.relPath : '')
-                void navigator.clipboard.writeText(abs)
-                message.success(t('copyAbsPathOk'))
-              }}
-              onCopyRelPath={() => {
-                void navigator.clipboard.writeText(node.relPath || '.')
-                message.success(t('copyRelPathOk'))
-              }}
-              onShowInFolder={() => {
-                void window.api.fileShowInExplorer(node.relPath || '.').then((r) => {
-                  if (!r.ok) message.error(r.error ?? t('openDirFailed'))
-                })
-              }}
-              onRename={() => tree.setRenamingKey(node.key)}
-              onDelete={() => setDeleteTarget({ key: node.key, name: node.name, isDirectory: node.isDirectory })}
-            >
-              <FileTreeNode
-                name={node.name}
-                isDirectory={node.isDirectory}
-                expanded={node.expanded}
-                isRenaming={tree.renamingKey === node.key}
-                isNewInput={false}
-                newInputType="file"
-                newInputDefaultName=""
-                highlighted={highlighted}
-                onRenameConfirm={(newName) => tree.renameNode(node.key, newName)}
-                onRenameCancel={() => tree.setRenamingKey(null)}
-                onCreateConfirm={() => {}}
-                onCreateCancel={() => {}}
-              />
-            </FileTreeContextMenu>
+              expanded={node.expanded}
+              isRenaming={tree.renamingKey === node.key}
+              isNewInput={false}
+              newInputType="file"
+              newInputDefaultName=""
+              highlighted={highlighted}
+              onRenameConfirm={(newName) => tree.renameNode(node.key, newName)}
+              onRenameCancel={() => tree.setRenamingKey(null)}
+              onCreateConfirm={() => {}}
+              onCreateCancel={() => {}}
+            />
           ),
           children: inputChild && children ? [...children, inputChild] : inputChild ? [inputChild] : children,
           isLeaf: !node.isDirectory
         }
       })
     },
-    [tree, workDir, message, t, highlightSet, onCollectToWiki, wikiRootPath, wikiEnabled]
+    [tree, highlightSet]
   )
 
   const antdTreeData = toAntdDataNodesWithInput(tree.treeData)
@@ -182,13 +223,9 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     }
   }
 
-  const handleNewDirectory = () => {
-    const parentKey = selectedKey || tree.rootRelPath || ''
-    tree.setInlineInput({ parentKey, type: 'directory', defaultName: t('defaultNewFolder') })
-    if (!tree.expandedKeys.includes(parentKey)) {
-      void tree.toggleExpand(parentKey)
-    }
-  }
+  const handleNewDirectory = useCallback(() => {
+    startNewDirectoryIn(selectedKey || tree.rootRelPath || '')
+  }, [selectedKey, tree.rootRelPath, startNewDirectoryIn])
 
   useImperativeHandle(
     ref,
@@ -201,7 +238,10 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   )
 
   const treeBody = (
-    <div className={`file-tree-scroll${embedded ? ' file-tree-scroll--embedded' : ''}`}>
+    <div
+      className={`file-tree-scroll${embedded ? ' file-tree-scroll--embedded' : ''}`}
+      onContextMenuCapture={handleTreeContextMenu}
+    >
       <Tree
         className="file-tree"
         treeData={antdTreeData}
@@ -234,6 +274,15 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
         }
         blockNode
       />
+      {contextMenu && contextMenuNode ? (
+        <FileTreeContextMenuOverlay
+          items={contextMenuItems}
+          open
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+        />
+      ) : null}
     </div>
   )
 

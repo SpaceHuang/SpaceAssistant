@@ -17,6 +17,7 @@ interface FileTreeNodeProps {
   newInputType: 'file' | 'directory'
   newInputDefaultName: string
   highlighted?: boolean
+  nodeKey?: string
   onRenameConfirm: (newName: string) => void
   onRenameCancel: () => void
   onCreateConfirm: (name: string) => void
@@ -25,6 +26,7 @@ interface FileTreeNodeProps {
 
 export function FileTreeNode({
   name, isDirectory, expanded, isRenaming, isNewInput, newInputType, newInputDefaultName, highlighted = false,
+  nodeKey,
   onRenameConfirm, onRenameCancel, onCreateConfirm, onCreateCancel
 }: FileTreeNodeProps) {
   const icon = isDirectory
@@ -33,7 +35,7 @@ export function FileTreeNode({
 
   if (isRenaming) {
     return (
-      <div className="file-tree-node">
+      <div className="file-tree-node" {...(nodeKey ? { 'data-file-tree-key': nodeKey } : {})}>
         <span className="file-tree-node-icon" dangerouslySetInnerHTML={{ __html: icon }} />
         <InlineInput defaultValue={name} onConfirm={onRenameConfirm} onCancel={onRenameCancel} />
       </div>
@@ -51,7 +53,10 @@ export function FileTreeNode({
   }
 
   return (
-    <div className={`file-tree-node${highlighted ? ' file-tree-node--highlight' : ''}`}>
+    <div
+      className={`file-tree-node${highlighted ? ' file-tree-node--highlight' : ''}`}
+      {...(nodeKey ? { 'data-file-tree-key': nodeKey } : {})}
+    >
       <span className="file-tree-node-icon" dangerouslySetInnerHTML={{ __html: icon }} />
       <span className={`file-tree-node-label${highlighted ? ' file-tree-node-label--highlight' : ''}`}>{name}</span>
     </div>

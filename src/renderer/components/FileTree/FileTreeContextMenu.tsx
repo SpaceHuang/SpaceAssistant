@@ -1,15 +1,6 @@
 import { App, Dropdown } from 'antd'
-import type { MenuInfo, MenuProps } from 'antd/es/menu/interface'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-
-/** 阻止菜单点击冒泡到 Tree 节点，避免误触发文件选中/打开 */
-function wrapMenuClick(handler: () => void): (info: MenuInfo) => void {
-  return ({ domEvent }) => {
-    domEvent.stopPropagation()
-    domEvent.preventDefault()
-    handler()
-  }
-}
+import { buildFileTreeContextMenuItems } from './fileTreeContextMenuItems'
 
 interface FileTreeContextMenuProps {
   relPath: string
@@ -22,6 +13,7 @@ interface FileTreeContextMenuProps {
   onRename: () => void
   onDelete: () => void
   onCollectToWiki?: () => void
+  onNewSubdirectory?: () => void
   showCollectToWiki?: boolean
   readOnly?: boolean
   children: React.ReactNode
@@ -40,6 +32,7 @@ export function FileTreeContextMenu({
   onRename,
   onDelete,
   onCollectToWiki,
+  onNewSubdirectory,
   showCollectToWiki = false,
   readOnly = false,
   children,
@@ -48,59 +41,22 @@ export function FileTreeContextMenu({
   const { message } = App.useApp()
   const { t } = useTypedTranslation('fileTree')
   const { t: tc } = useTypedTranslation('common')
-  const items: MenuProps['items'] = [
-    ...(showCollectToWiki && onCollectToWiki
-      ? [
-          {
-            key: 'collect-wiki',
-            label: t('contextMenu.collectToWiki'),
-            onClick: wrapMenuClick(onCollectToWiki)
-          },
-          { type: 'divider' as const }
-        ]
-      : []),
-    {
-      key: 'add-to-chat',
-      label: t('contextMenu.addToChat'),
-      onClick: wrapMenuClick(() => {
-        onAddToChat()
-        message.info(t('contextMenu.featureInDevelopment'))
-      })
-    },
-    { type: 'divider' },
-    {
-      key: 'copy-path',
-      label: t('contextMenu.copyPath'),
-      onClick: wrapMenuClick(onCopyPath)
-    },
-    {
-      key: 'copy-rel-path',
-      label: t('contextMenu.copyRelPath'),
-      onClick: wrapMenuClick(onCopyRelPath)
-    },
-    { type: 'divider' },
-    {
-      key: 'show-in-folder',
-      label: t('contextMenu.showInFolder'),
-      onClick: wrapMenuClick(onShowInFolder)
-    },
-    ...(readOnly
-      ? []
-      : ([
-          { type: 'divider' as const },
-          {
-            key: 'rename',
-            label: t('contextMenu.rename'),
-            onClick: wrapMenuClick(onRename)
-          },
-          {
-            key: 'delete',
-            label: tc('delete'),
-            danger: true,
-            onClick: wrapMenuClick(onDelete)
-          }
-        ] as MenuProps['items']))
-  ]
+  const items = buildFileTreeContextMenuItems({
+    onAddToChat,
+    onCopyPath,
+    onCopyRelPath,
+    onShowInFolder,
+    onRename,
+    onDelete,
+    onCollectToWiki,
+    onNewSubdirectory,
+    isDirectory: _isDirectory,
+    showCollectToWiki,
+    readOnly,
+    onAddToChatPlaceholder: () => message.info(t('contextMenu.featureInDevelopment')),
+    t,
+    tc
+  })
 
   return (
     <Dropdown

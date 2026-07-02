@@ -7,7 +7,8 @@
     "showInFolder": "查看所在目录",
     "delete": "删除",
     "featureInDevelopment": "功能开发中",
-    "rename": "重命名..."
+    "rename": "重命名...",
+    "newSubdirectory": "新建子目录"
   },
   "copyAbsPathOk": "已复制绝对路径",
   "copyRelPathOk": "已复制相对路径",
