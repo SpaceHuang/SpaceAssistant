@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG, DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_WORKSPACE_LAYOUT_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
 import {
   buildConfigModalSnapshot,
@@ -7,6 +7,11 @@ import {
   normalizeSettingsTabKey
 } from './configModalSnapshot'
 import { initLlmServiceTabState } from './llmServiceDrafts'
+
+const defaultWorkspaceLayout = {
+  ...DEFAULT_WORKSPACE_LAYOUT_CONFIG,
+  extensionSubdirMap: [...DEFAULT_WORKSPACE_LAYOUT_CONFIG.extensionSubdirMap]
+}
 
 describe('normalizeSettingsTabKey', () => {
   it('maps legacy tab keys to current IA', () => {
@@ -44,7 +49,8 @@ describe('buildConfigModalSnapshot', () => {
       feishu: { ...DEFAULT_FEISHU_CONFIG },
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG, enabled: true },
-      shellEnabled: true
+      shellEnabled: true,
+      workspaceLayout: defaultWorkspaceLayout
     }
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, toolUi: { ...base.toolUi, deniedTools: ['browser'] } })
@@ -74,7 +80,8 @@ describe('buildConfigModalSnapshot', () => {
         feishu: { ...DEFAULT_FEISHU_CONFIG },
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
-        shellEnabled: true
+        shellEnabled: true,
+        workspaceLayout: defaultWorkspaceLayout
       })
     expect(configModalSnapshotsEqual(mk('/a'), mk('/b'))).toBe(false)
   })
@@ -102,7 +109,8 @@ describe('buildConfigModalSnapshot', () => {
         feishu: { ...DEFAULT_FEISHU_CONFIG },
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
-        shellEnabled: true
+        shellEnabled: true,
+        workspaceLayout: defaultWorkspaceLayout
       })
     expect(configModalSnapshotsEqual(mk('zh-CN'), mk('en-US'))).toBe(false)
   })
@@ -129,7 +137,8 @@ describe('buildConfigModalSnapshot', () => {
       feishu: { ...DEFAULT_FEISHU_CONFIG },
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG },
-      shellEnabled: true
+      shellEnabled: true,
+      workspaceLayout: defaultWorkspaceLayout
     }
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, locale: 'en-US' })

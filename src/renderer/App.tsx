@@ -15,6 +15,7 @@ import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/D
 import { SplitPane } from './components/ui/SplitPane'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
 import { initContextUsageStreamBridge } from './services/contextUsageStreamService'
+import { initConfirmStores } from './services/confirmStoresInit'
 import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
 import { SearchProvider } from './components/Search/SearchProvider'
@@ -145,6 +146,7 @@ function AppShellInner() {
     siderKey === 'sessions' ? t('activity.sessions') : siderKey === 'wiki' ? t('activity.wiki') : t('activity.search')
 
   useEffect(() => {
+    initConfirmStores()
     void window.api
       .sessionList()
       .then((list) => {

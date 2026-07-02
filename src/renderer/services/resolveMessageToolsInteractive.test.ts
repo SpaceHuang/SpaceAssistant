@@ -41,12 +41,24 @@ describe('resolveMessageToolsInteractive', () => {
     expect(messageHasConfirmingTool({ ...confirmingMessage, toolCalls: [] })).toBe(false)
   })
 
-  it('uses streaming request id for active streaming assistant', () => {
+  it('prefers pending store over streaming request id for active assistant', () => {
     expect(
       resolveRequestIdForConfirmingMessage({
         sessionId: 'sess-1',
         message: confirmingMessage,
         pendingItems: [pendingItem],
+        streamingAssistantId: 'msg-1',
+        streamingRequestId: 'req-live'
+      })
+    ).toBe('req-pending')
+  })
+
+  it('uses streaming request id when pending store has no entry', () => {
+    expect(
+      resolveRequestIdForConfirmingMessage({
+        sessionId: 'sess-1',
+        message: confirmingMessage,
+        pendingItems: [],
         streamingAssistantId: 'msg-1',
         streamingRequestId: 'req-live'
       })
@@ -63,6 +75,18 @@ describe('resolveMessageToolsInteractive', () => {
         streamingRequestId: null
       })
     ).toBe('req-pending')
+  })
+
+  it('falls back to streaming request id when pending store missed IPC', () => {
+    expect(
+      resolveRequestIdForConfirmingMessage({
+        sessionId: 'sess-1',
+        message: confirmingMessage,
+        pendingItems: [],
+        streamingAssistantId: 'msg-other',
+        streamingRequestId: 'req-live'
+      })
+    ).toBe('req-live')
   })
 
   it('returns tools interactive props for confirming message', () => {

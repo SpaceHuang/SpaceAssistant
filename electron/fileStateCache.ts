@@ -38,4 +38,9 @@ export class FileStateCache {
       else break
     }
   }
+
+  /** 返回所有已缓存文件的绝对路径（用于目录候选收集） */
+  keys(): string[] {
+    return [...this.cache.keys()]
+  }
 }

@@ -69,6 +69,7 @@ function registerHandlers() {
     getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
     getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
     getWikiConfig: () => ({ enabled: false }),
+    getWorkspaceLayout: () => ({ enabled: false, writeDirConfirmEnabled: true, extensionSubdirMap: [] }),
     getAppDatabase: () => makeDb(),
     getBrowserDetectContext: () => ({ workDir: '/tmp' })
   })

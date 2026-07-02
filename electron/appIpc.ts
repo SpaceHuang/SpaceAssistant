@@ -42,7 +42,7 @@ import type {
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
 import { ErrorCodes } from '../src/shared/errorCodes'
 import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../src/shared/llmModelConfig'
-import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
+import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, mergeWorkspaceLayoutConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
@@ -75,10 +75,24 @@ import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
+import { submitWriteDirConfirm } from './workspaceLayout/writeDirConfirmRegistry'
+import {
+  resolveWriteDirCandidateDir,
+  clearWriteDirCandidateSnapshot
+} from './workspaceLayout/confirmFlow'
+import {
+  clearWriteDirChoice,
+  getWriteDirChoice,
+  setWriteDirChoice
+} from './workspaceLayout/sessionWriteDir'
+import { resolveSafePathReal } from './pathSecurity'
+import { resolveWorkDirForSession } from './workDirManager'
+import type { WriteDirConfirmResponse } from '../src/shared/api'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
 import { mergeWikiConfig, mergeFeishuConfig } from '../src/shared/domainTypes'
+import type { WorkspaceLayoutConfig } from '../src/shared/domainTypes'
 import type { WikiConfig, WikiStatus, FeishuConfig, BrowserConfig, ShellConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb, persistBrowserConfig } from './browser/browserConfigDb'
 import { persistShellConfig, readShellConfigFromDb, syncShellDeniedTools } from './shell/shellConfigDb'
@@ -122,7 +136,8 @@ const CONFIG_KEYS = {
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   browser: 'config.browser',
-  locale: 'config.locale'
+  locale: 'config.locale',
+  workspaceLayout: 'config.workspaceLayout'
 } as const
 
 export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
@@ -207,6 +222,16 @@ function readWikiConfig(db: AppDatabase): WikiConfig {
     return mergeWikiConfig(JSON.parse(raw) as Partial<WikiConfig>)
   } catch {
     return mergeWikiConfig(null)
+  }
+}
+
+export function readWorkspaceLayoutConfig(db: AppDatabase): WorkspaceLayoutConfig {
+  const raw = getConfigValue(db, CONFIG_KEYS.workspaceLayout)
+  if (!raw) return mergeWorkspaceLayoutConfig(null)
+  try {
+    return mergeWorkspaceLayoutConfig(JSON.parse(raw) as Partial<WorkspaceLayoutConfig>)
+  } catch {
+    return mergeWorkspaceLayoutConfig(null)
   }
 }
 
@@ -303,6 +328,56 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
     }
   )
+
+  ipcMain.handle(
+    'file-write-dir:confirm-response',
+    async (_e, payload: WriteDirConfirmResponse) => {
+      let chosenDir: string | null = null
+      if (payload.choice?.type === 'candidate') {
+        chosenDir = resolveWriteDirCandidateDir(payload.requestId, payload.sessionId, payload.choice.key)
+      } else if (payload.choice?.type === 'custom') {
+        chosenDir = payload.choice.dir
+      }
+      const resolved = resolveWorkDirForSession(
+        ctx.db,
+        payload.sessionId,
+        () => ctx.workDirManager.listProfiles(),
+        () => ctx.workDirManager.getActiveProfileId(),
+        () => ctx.getWorkDir()
+      )
+      const sessionWorkDir = resolved?.workDir ?? ctx.getWorkDir()
+      if (chosenDir) {
+        try {
+          chosenDir = await resolveSafePathReal(sessionWorkDir, chosenDir)
+        } catch {
+          clearWriteDirCandidateSnapshot(payload.requestId, payload.sessionId)
+          submitWriteDirConfirm(payload.requestId, payload.sessionId, null)
+          return { ok: false as const, error: '目录超出工作目录范围' }
+        }
+      }
+      if (chosenDir && payload.sessionId) {
+        const session = getSession(ctx.db, payload.sessionId)
+        if (session) {
+          const meta = { ...session.metadata }
+          setWriteDirChoice(meta, { dir: chosenDir, confirmedAt: Date.now() })
+          updateSession(ctx.db, payload.sessionId, { metadata: meta })
+        }
+      }
+      clearWriteDirCandidateSnapshot(payload.requestId, payload.sessionId)
+      submitWriteDirConfirm(payload.requestId, payload.sessionId, chosenDir ? { dir: chosenDir } : null)
+      return { ok: true as const }
+    }
+  )
+
+  ipcMain.handle('file-write-dir:reset', async (_e, payload: { sessionId: string }) => {
+    const session = getSession(ctx.db, payload.sessionId)
+    if (!session) return { ok: false as const, error: '会话不存在' }
+    const meta = { ...session.metadata }
+    if (!getWriteDirChoice(meta)) return { ok: true as const }
+    clearWriteDirChoice(meta)
+    updateSession(ctx.db, payload.sessionId, { metadata: meta })
+    return { ok: true as const }
+  })
 
   ipcMain.handle('shell:manage-trusted-commands', async (_e, payload: unknown) => {
     const { listTrustedCommands, addTrustedCommand, removeTrustedCommands, cleanExpiredTrustedCommands } =
@@ -656,6 +731,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const skills = readSkillsConfig(ctx.db)
     const wiki = readWikiConfig(ctx.db)
+    const workspaceLayout = readWorkspaceLayoutConfig(ctx.db)
     const feishu = readFeishuConfigFromDb(ctx.db)
     let workDirProfiles: AppConfig['workDirProfiles'] = []
     const profilesRaw = getConfigValue(ctx.db, CONFIG_KEYS.workDirProfiles)
@@ -702,6 +778,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       tools,
       skills,
       wiki,
+      workspaceLayout,
       feishu,
       workDirProfiles,
       activeWorkDirProfileId,
@@ -739,6 +816,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         browser: Partial<BrowserConfig>
         shell: Partial<ShellConfig>
         locale: AppConfig['locale']
+        workspaceLayout: Partial<WorkspaceLayoutConfig>
       }>
     ): Promise<void> => {
       try {
@@ -886,6 +964,19 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeWikiConfig({ ...cur, ...payload.wiki })
         setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
+      }
+      if (payload.workspaceLayout !== undefined) {
+        let cur = mergeWorkspaceLayoutConfig(null)
+        const curRaw = getConfigValue(ctx.db, CONFIG_KEYS.workspaceLayout)
+        if (curRaw) {
+          try {
+            cur = mergeWorkspaceLayoutConfig(JSON.parse(curRaw) as Partial<WorkspaceLayoutConfig>)
+          } catch {
+            /* ignore */
+          }
+        }
+        const next = mergeWorkspaceLayoutConfig({ ...cur, ...payload.workspaceLayout })
+        setConfigValue(ctx.db, CONFIG_KEYS.workspaceLayout, JSON.stringify(next))
       }
       if (payload.feishu !== undefined) {
         persistFeishuConfig(ctx.db, payload.feishu)

@@ -286,6 +286,10 @@
       "browser": {
         "label": "网络访问",
         "hint": "浏览器自动化与依赖检测"
+      },
+      "workspaceLayout": {
+        "label": "目录规范",
+        "hint": "Agent 新建文件的写入目录与子目录映射"
       }
     },
     "file": {
@@ -531,6 +535,21 @@
     "initButton": "初始化 Wiki",
     "initSuccess": "Wiki 已初始化：{{path}}{{skillSuffix}}",
     "skillInstalledSuffix": "（已安装 llm-wiki Skill）"
+  },
+  "workspaceLayout": {
+    "enabledLabel": "启用目录规范",
+    "enabledHint": "开启后，Agent 新建文件将按下方映射归入子目录；关闭时行为与以前完全一致。",
+    "writeDirConfirmEnabledLabel": "首次写入前确认写入目录",
+    "writeDirConfirmEnabledHint": "每个会话首次新建文件前弹出候选目录供选择。",
+    "colExtension": "扩展名",
+    "colSubdir": "子目录",
+    "colAction": "操作",
+    "extPlaceholder": "py",
+    "subdirPlaceholder": "Script",
+    "addMapping": "新增映射",
+    "invalidSubdir": "不能包含路径分隔符或 ..",
+    "rulesHint": "取文件最后一个扩展名；未命中映射的文件直接写入所选目录根；仅对新建文件生效，编辑已有文件不重定向。",
+    "securityHint": "LLM 给出的目录部分会被丢弃，实际落点由你选定的目录与映射决定。"
   },
   "feishuAudit": {
     "title": "飞书操作记录",

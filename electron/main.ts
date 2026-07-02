@@ -4,7 +4,7 @@ import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
-import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
+import { mergeWikiConfig, mergeToolsConfig, mergeWorkspaceLayoutConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { stagehandService } from './browser/stagehandService'
@@ -39,6 +39,7 @@ import { getMainWindowFrameOptions } from './windowFrame'
 import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowControlsIpc'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
 import { createWorkDirManager, resolveWorkDirForSession, type WorkDirManager } from './workDirManager'
+import { clearAllSessionsWriteDirChoices } from './workspaceLayout/sessionWriteDir'
 import { FloatingNotificationManager } from './floatingNotificationManager'
 
 let floatingManager: FloatingNotificationManager | null = null
@@ -46,6 +47,7 @@ let floatingManager: FloatingNotificationManager | null = null
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
 const WIKI_CONFIG_KEY = 'config.wiki'
+const WORKSPACE_LAYOUT_CONFIG_KEY = 'config.workspaceLayout'
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -209,6 +211,7 @@ app.whenReady().then(() => {
     setWorkDir: applyWorkDirSideEffects,
     onBeforeSwitch: () => flushAgentLogger(),
     onAfterSwitch: (fromId, toId) => {
+      clearAllSessionsWriteDirChoices(db)
       const profiles = workDirManager!.listProfiles()
       const from = profiles.find((p) => p.id === fromId)
       const to = profiles.find((p) => p.id === toId)
@@ -314,6 +317,15 @@ app.whenReady().then(() => {
         return mergeWikiConfig(null)
       }
     },
+    getWorkspaceLayout: () => {
+      const raw = getConfigValue(db, WORKSPACE_LAYOUT_CONFIG_KEY)
+      if (!raw) return mergeWorkspaceLayoutConfig(null)
+      try {
+        return mergeWorkspaceLayoutConfig(JSON.parse(raw) as Parameters<typeof mergeWorkspaceLayoutConfig>[0])
+      } catch {
+        return mergeWorkspaceLayoutConfig(null)
+      }
+    },
     getAppDatabase: () => db,
     getProjectMemoryEnabled: () => true,
     getBrowserConfig: () => readBrowserConfigFromDb(db),
@@ -397,6 +409,8 @@ app.whenReady().then(() => {
   setupWindowIconThemeListener(__dirname)
   void createMainWindow()
   setupAppMenu(readAppLocale(db))
+}).catch((err) => {
+  console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
 })
 
 app.on('before-quit', (event) => {

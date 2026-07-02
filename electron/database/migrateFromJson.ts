@@ -1,7 +1,10 @@
 import fs from 'fs'
 import path from 'path'
 import type { Session } from '../../src/shared/domainTypes'
-import { DEFAULT_SESSION_SKILLS_STATE, normalizeSessionSkillsState } from '../../src/shared/domainTypes'
+import {
+  DEFAULT_SESSION_SKILLS_STATE,
+  normalizeSessionSkillsState
+} from '../../src/shared/domainTypes'
 import { loadSnapshotFromJson } from './jsonSnapshot'
 import { SCHEMA_META_KEYS } from './schema'
 import { getDbConnection, getSchemaMeta, isDatabaseEmpty, setSchemaMeta, type AppDatabase } from './sqliteStore'
@@ -16,6 +19,74 @@ export type MigrationResult = {
   durationMs: number
   jsonPath: string
   jsonBytes: number
+}
+
+const DEFAULT_RECOVERED_MODEL = 'claude-sonnet-4-20250514'
+
+export type PreparedMigrationSnapshot = {
+  snapshot: DbSnapshot
+  recoveredSessionIds: string[]
+  skippedMessageCount: number
+}
+
+/** Repair inconsistent legacy JSON (orphan messages, duplicate sessions) before SQLite import. */
+export function prepareSnapshotForMigration(snapshot: DbSnapshot): PreparedMigrationSnapshot {
+  const sessionsById = new Map<string, Session>()
+  for (const session of snapshot.sessions) {
+    if (session?.id && typeof session.id === 'string' && !sessionsById.has(session.id)) {
+      sessionsById.set(session.id, session)
+    }
+  }
+
+  const messages: StoredMessage[] = []
+  let skippedMessageCount = 0
+  for (const message of snapshot.messages) {
+    if (!message?.id || !message.sessionId) {
+      skippedMessageCount++
+      continue
+    }
+    messages.push(message)
+  }
+
+  const defaultModel =
+    [...sessionsById.values()].find((s) => typeof s.model === 'string' && s.model)?.model ??
+    DEFAULT_RECOVERED_MODEL
+
+  const referencedSessionIds = new Set<string>()
+  for (const message of messages) referencedSessionIds.add(message.sessionId)
+  for (const sessionId of Object.keys(snapshot.sessionUsages ?? {})) referencedSessionIds.add(sessionId)
+
+  const recoveredSessionIds: string[] = []
+  for (const sessionId of referencedSessionIds) {
+    if (sessionsById.has(sessionId)) continue
+    const related = messages.filter((m) => m.sessionId === sessionId)
+    const ts = related.reduce((min, m) => Math.min(min, m.timestamp), Date.now())
+    sessionsById.set(sessionId, {
+      id: sessionId,
+      name: '(迁移恢复)',
+      preview: related[0]?.content?.slice(0, 80) ?? '',
+      model: defaultModel,
+      temperature: 0.7,
+      maxTokens: 4096,
+      createdAt: ts,
+      updatedAt: ts,
+      messageCount: related.length,
+      skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
+      metadata: { migrationRecovered: true },
+      schemaVersion: 1
+    })
+    recoveredSessionIds.push(sessionId)
+  }
+
+  return {
+    snapshot: {
+      ...snapshot,
+      sessions: [...sessionsById.values()],
+      messages
+    },
+    recoveredSessionIds,
+    skippedMessageCount
+  }
 }
 
 function insertSession(conn: ReturnType<typeof getDbConnection>, session: Session): void {
@@ -166,9 +237,21 @@ export function migrateFromJsonIfNeeded(db: AppDatabase, jsonPath: string): Migr
 
   const started = Date.now()
   const jsonStat = fs.statSync(jsonPath)
-  const snapshot = loadSnapshotFromJson(jsonPath)
+  const rawSnapshot = loadSnapshotFromJson(jsonPath)
+  const { snapshot, recoveredSessionIds, skippedMessageCount } = prepareSnapshotForMigration(rawSnapshot)
+  if (recoveredSessionIds.length > 0 || skippedMessageCount > 0) {
+    console.warn('[database] migration repaired JSON snapshot', {
+      recoveredSessionIds,
+      skippedMessageCount
+    })
+  }
 
-  importSnapshot(conn, snapshot)
+  try {
+    importSnapshot(conn, snapshot)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    throw new Error(`JSON migration failed for ${jsonPath}: ${msg}`)
+  }
   verifyCounts(conn, snapshot)
   sampleVerifyMessages(conn, snapshot)
 

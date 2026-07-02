@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { appendUiLocaleSystemHint } from '../src/shared/llmLocalePrompt'
 import { detectLocaleFromSystem, isAppLocale, type AppLocale } from '../src/shared/locale'
+import type { WorkspaceLayoutConfig } from '../src/shared/domainTypes'
 import { readAppLocale } from './appIpc'
 import type { AppDatabase } from './database'
 import { buildSystemPrompt } from './projectMemory'
@@ -28,14 +29,40 @@ export function buildImageAttachmentsSystemHint(locale: AppLocale): string {
   ].join('\n')
 }
 
+export function buildWorkspaceLayoutHint(
+  layout: WorkspaceLayoutConfig,
+  writeDirChoice: { dir: string } | null
+): string | undefined {
+  if (!layout.enabled || !writeDirChoice?.dir) return undefined
+  const lines = [
+    `当前会话已启用目录规范。新建文件写入目录为：${writeDirChoice.dir}。`,
+    '文件按扩展名归入子目录：'
+  ]
+  for (const e of layout.extensionSubdirMap) {
+    if (e.extension && e.subdir) {
+      lines.push(`- *.${e.extension} → ${e.subdir}`)
+    }
+  }
+  lines.push(`未映射的扩展名直接写入 ${writeDirChoice.dir} 根。`)
+  lines.push('请直接按规范路径写入，不要使用 .. 或绝对路径绕过；目录部分将由系统按规范重定向。')
+  lines.push('若用户要求更换写入目录，请告知用户可在设置中关闭后重新开启确认，或等待下次新建文件时重新选择。')
+  return lines.join('\n')
+}
+
 export function buildFinalSystemPrompt(args: {
   system?: string
   memoryContent: string | null
   memoryEnabled: boolean
   locale: AppLocale
   hasImageAttachments?: boolean
+  workspaceLayoutHint?: string
 }): string | undefined {
   let withMemory = buildSystemPrompt(args.system, args.memoryContent, args.memoryEnabled)
+  if (args.workspaceLayoutHint) {
+    withMemory = withMemory
+      ? `${withMemory}\n\n${args.workspaceLayoutHint}`
+      : args.workspaceLayoutHint
+  }
   if (args.hasImageAttachments) {
     const hint = buildImageAttachmentsSystemHint(args.locale)
     withMemory = withMemory ? `${withMemory}\n\n${hint}` : hint

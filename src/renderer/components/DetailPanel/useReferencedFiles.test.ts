@@ -120,16 +120,17 @@ describe('extractReferencedFiles', () => {
     expect(result).toHaveLength(0)
   })
 
-  it('过滤一次性脚本', () => {
+  it('过滤临时目录下的脚本，保留项目脚本', () => {
     const messages: Message[] = [
       makeMessage([
         makeToolCall({ id: 'tc-1', toolName: 'write_file', input: { path: 'script_fix.py' }, completedAt: 1000 }),
-        makeToolCall({ id: 'tc-2', toolName: 'read_file', input: { path: 'src/index.ts' }, completedAt: 2000 }),
+        makeToolCall({ id: 'tc-2', toolName: 'write_file', input: { path: 'tmp/script_fix.py' }, completedAt: 1500 }),
+        makeToolCall({ id: 'tc-3', toolName: 'read_file', input: { path: 'src/index.ts' }, completedAt: 2000 }),
       ]),
     ]
     const result = extractReferencedFiles(messages)
-    expect(result).toHaveLength(1)
-    expect(result[0].path).toBe('src/index.ts')
+    expect(result).toHaveLength(2)
+    expect(result.map((f) => f.path)).toEqual(['src/index.ts', 'script_fix.py'])
   })
 
   it('处理无 toolCalls 的消息', () => {

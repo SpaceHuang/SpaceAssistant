@@ -404,6 +404,57 @@ export function mergeWikiConfig(partial?: Partial<WikiConfig> | null): WikiConfi
   return { ...DEFAULT_WIKI_CONFIG, ...partial }
 }
 
+export interface ExtensionSubdirMapEntry {
+  /** 不含点，小写，如 "py"、"md" */
+  extension: string
+  /** 单层名，如 "Script"、"Docs"；不含路径分隔符 */
+  subdir: string
+}
+
+export interface WorkspaceLayoutConfig {
+  /** 总开关，默认 false */
+  enabled: boolean
+  /** 首次写入前确认写入目录（仅 enabled 为 true 时生效），默认 true */
+  writeDirConfirmEnabled: boolean
+  /** 扩展名 → 子目录映射 */
+  extensionSubdirMap: ExtensionSubdirMapEntry[]
+}
+
+export const DEFAULT_WORKSPACE_LAYOUT_CONFIG: WorkspaceLayoutConfig = {
+  enabled: false,
+  writeDirConfirmEnabled: true,
+  extensionSubdirMap: [
+    { extension: 'py', subdir: 'Script' },
+    { extension: 'js', subdir: 'Script' },
+    { extension: 'ts', subdir: 'Script' },
+    { extension: 'tsx', subdir: 'Script' },
+    { extension: 'jsx', subdir: 'Script' },
+    { extension: 'sh', subdir: 'Script' },
+    { extension: 'md', subdir: 'Docs' },
+    { extension: 'json', subdir: 'Config' }
+  ]
+}
+
+export function mergeWorkspaceLayoutConfig(
+  partial?: Partial<WorkspaceLayoutConfig> | null
+): WorkspaceLayoutConfig {
+  if (!partial || typeof partial !== 'object') {
+    return {
+      ...DEFAULT_WORKSPACE_LAYOUT_CONFIG,
+      extensionSubdirMap: [...DEFAULT_WORKSPACE_LAYOUT_CONFIG.extensionSubdirMap]
+    }
+  }
+  return {
+    ...DEFAULT_WORKSPACE_LAYOUT_CONFIG,
+    ...partial,
+    extensionSubdirMap: Array.isArray(partial.extensionSubdirMap)
+      ? partial.extensionSubdirMap.map((e) => ({ ...e }))
+      : partial.extensionSubdirMap === null
+        ? []
+        : [...DEFAULT_WORKSPACE_LAYOUT_CONFIG.extensionSubdirMap]
+  }
+}
+
 export interface FilePaneSectionUiState {
   fileListCollapsed: boolean
   llmWikiCollapsed: boolean
@@ -706,6 +757,7 @@ export interface AppConfig {
   feishu: FeishuConfig
   browser: BrowserConfig
   shell: ShellConfig
+  workspaceLayout: WorkspaceLayoutConfig
 }
 
 /** 从 FeishuConfig 移除 Plan 远程字段；幂等 */

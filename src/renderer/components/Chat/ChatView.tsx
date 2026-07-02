@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App } from 'antd'
+import { App, Tag } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import { addMessage, patchMessage, removeMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
@@ -25,6 +25,9 @@ import {
 import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
 import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
+import { usePendingWriteDirConfirmSnapshot } from '../../hooks/usePendingWriteDirConfirmSnapshot'
+import { pendingWriteDirConfirmStore } from '../../services/pendingWriteDirConfirmStore'
+import { WriteDirConfirmPanel } from './WriteDirConfirmPanel'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
@@ -1268,6 +1271,16 @@ export function ChatView() {
   )
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
+  const pendingWriteDirConfirm = usePendingWriteDirConfirmSnapshot(sessionId)
+
+  const writeDirChoiceDir = useMemo(() => {
+    const v = currentSession?.metadata?.writeDirChoice
+    if (v && typeof v === 'object' && v !== null && 'dir' in v) {
+      const dir = (v as { dir: unknown }).dir
+      if (typeof dir === 'string' && dir.trim()) return dir
+    }
+    return null
+  }, [currentSession?.metadata])
 
   const testPreviewToolsInteractive = useMemo(
     () =>
@@ -1408,6 +1421,23 @@ export function ChatView() {
           />
         ) : null}
       </div>
+      {pendingWriteDirConfirm ? (
+        <div className="chat-write-dir-confirm">
+          <div className="chat-write-dir-confirm__track">
+            <WriteDirConfirmPanel
+              requestId={pendingWriteDirConfirm.requestId}
+              sessionId={pendingWriteDirConfirm.sessionId}
+              candidates={pendingWriteDirConfirm.candidates}
+              onRespond={(choice) => pendingWriteDirConfirmStore.respond(pendingWriteDirConfirm, choice)}
+            />
+          </div>
+        </div>
+      ) : null}
+      {cfg?.workspaceLayout?.enabled && writeDirChoiceDir ? (
+        <div className="chat-write-dir-chip">
+          <Tag>{t('writeDirChip.label', { dir: writeDirChoiceDir })}</Tag>
+        </div>
+      ) : null}
       <MessageInput
         ref={composerRef}
         sessionId={sessionId ?? undefined}

@@ -33,6 +33,33 @@ export type ToolConfirmResponsePayload = {
   trustActDomain?: string
 }
 
+export type WriteDirCandidateLabelKind = 'recentSession'
+
+export interface WriteDirCandidatePayload {
+  key: string
+  dir: string
+  /** 相对 workDir 的路径展示（如 `Script` 或 `.`） */
+  label: string
+  labelKind?: WriteDirCandidateLabelKind
+}
+
+export interface WriteDirConfirmRequest {
+  requestId: string
+  sessionId: string
+  candidates: WriteDirCandidatePayload[]
+  customOption: true
+}
+
+export type WriteDirConfirmChoice =
+  | { type: 'candidate'; key: string }
+  | { type: 'custom'; dir: string }
+
+export interface WriteDirConfirmResponse {
+  requestId: string
+  sessionId: string
+  choice: WriteDirConfirmChoice | null
+}
+
 export type ShellManageTrustedCommandsAction =
   | { action: 'list' }
   | { action: 'add'; command: string }
@@ -284,11 +311,17 @@ export type SpaceAssistantApi = {
   sessionOnTitleGenerated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
+  fileWriteDirOnConfirmRequest: (cb: (data: WriteDirConfirmRequest) => void) => () => void
+  fileWriteDirConfirmResponse: (
+    payload: WriteDirConfirmResponse
+  ) => Promise<{ ok: true } | { ok: false; error?: string }>
+  fileWriteDirReset: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error?: string }>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
   toolOnUse: (cb: (data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void) => () => void
   toolOnConfirmRequest: (
     cb: (data: {
       requestId: string
+      sessionId?: string
       toolUseId: string
       toolName: string
       input: unknown

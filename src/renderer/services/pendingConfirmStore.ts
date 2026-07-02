@@ -32,7 +32,7 @@ class PendingConfirmStore {
     this.initialized = true
 
     this.unsubConfirm = window.api.toolOnConfirmRequest((d) => {
-      const sessionId = resolveSessionIdForRequest(d.requestId)
+      const sessionId = d.sessionId ?? resolveSessionIdForRequest(d.requestId)
       if (!sessionId) return
       if (this.items.some((i) => i.requestId === d.requestId && i.toolUseId === d.toolUseId)) return
       this.items.push({

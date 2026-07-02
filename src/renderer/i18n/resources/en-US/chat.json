@@ -188,5 +188,19 @@
     "tuiLine2": "Run this command in an external terminal at the working directory; use the button below to open one.",
     "openTerminal": "Open terminal at working directory",
     "workDirNotConfigured": "Working directory is not configured. Set it in Settings first."
+  },
+  "writeDirConfirm": {
+    "title": "Choose write directory for this session",
+    "description": "The agent is about to create a file. Pick a base directory (new files go there or in mapped subdirs):",
+    "customOption": "Custom directory",
+    "customPlaceholder": "Enter a path relative to the work directory",
+    "customRequired": "Enter a directory path",
+    "selectRequired": "Select a candidate directory",
+    "recentSessionLabel": "Recent session · {{rel}}",
+    "confirm": "Confirm",
+    "cancel": "Cancel"
+  },
+  "writeDirChip": {
+    "label": "Write dir: {{dir}}"
   }
 }

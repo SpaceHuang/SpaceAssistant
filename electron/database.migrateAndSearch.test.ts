@@ -84,6 +84,91 @@ describe('migrateFromJson', () => {
     db.close()
   })
 
+  it('recovers orphan messages by creating placeholder sessions', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-orphan-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [],
+        messages: [
+          {
+            id: 'm-orphan',
+            sessionId: 'sess-missing',
+            role: 'user',
+            content: 'orphan message',
+            toolUse: null,
+            toolCalls: null,
+            thinking: null,
+            status: 'sent',
+            schemaVersion: 1,
+            timestamp: 100,
+            sequence: 0
+          }
+        ],
+        configs: {},
+        searchHistory: []
+      }),
+      'utf8'
+    )
+
+    const db = openDatabase(dbPath)
+    expect(getSession(db, 'sess-missing')?.name).toBe('(迁移恢复)')
+    expect(getMessages(db, 'sess-missing')).toHaveLength(1)
+    db.close()
+  })
+
+  it('accepts legacy session_id field on messages', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-legacy-field-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+
+    const session = {
+      id: 'sess-legacy',
+      name: 'legacy',
+      preview: '',
+      model: 'claude-sonnet-4-20250514',
+      temperature: 0.7,
+      maxTokens: 4096,
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 1,
+      skillsState: { manualActivated: [], manualDisabled: [] },
+      metadata: {},
+      schemaVersion: 1
+    }
+
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [session],
+        messages: [
+          {
+            id: 'm-legacy',
+            session_id: 'sess-legacy',
+            role: 'user',
+            content: 'legacy field',
+            status: 'sent',
+            schemaVersion: 1,
+            timestamp: 1,
+            sequence: 0
+          }
+        ],
+        configs: {},
+        searchHistory: []
+      }),
+      'utf8'
+    )
+
+    const db = openDatabase(dbPath)
+    expect(getMessages(db, 'sess-legacy')).toHaveLength(1)
+    db.close()
+  })
+
   it('does not migrate when SQLite already has data', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-skip-'))
     dirs.push(dir)

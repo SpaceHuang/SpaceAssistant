@@ -17,14 +17,19 @@ export function resolveRequestIdForConfirmingMessage(args: {
   const { sessionId, message, pendingItems, streamingAssistantId, streamingRequestId } = args
   if (!messageHasConfirmingTool(message)) return null
 
-  if (message.id === streamingAssistantId && streamingRequestId) {
-    return streamingRequestId
-  }
-
   for (const tc of message.toolCalls ?? []) {
     if (tc.status !== 'confirming') continue
     const pending = pendingItems.find((item) => item.sessionId === sessionId && item.toolUseId === tc.id)
     if (pending?.requestId) return pending.requestId
+  }
+
+  if (streamingRequestId && message.id === streamingAssistantId) {
+    return streamingRequestId
+  }
+
+  // Active run still waiting on confirm but pending store missed IPC (race / index miss).
+  if (streamingRequestId) {
+    return streamingRequestId
   }
 
   return null

@@ -3,6 +3,7 @@ import { DEFAULT_MAX_PARALLEL_CHAT_SESSIONS, clampMaxParallelChatSessions } from
 import { store } from '../store'
 import { patchMessage, removeRunningSession } from '../store/chatSlice'
 import { pendingConfirmStore } from './pendingConfirmStore'
+import { pendingWriteDirConfirmStore } from './pendingWriteDirConfirmStore'
 import {
   registerRunRequest,
   unregisterRunRequest,
@@ -211,6 +212,7 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
     flushStreamPersist(sessionId, assistantMessageId)
   }
   pendingConfirmStore.removeAllForRequest(requestId)
+  pendingWriteDirConfirmStore.removeAllForRequest(requestId)
   unregisterRunRequest(requestId)
 }
 

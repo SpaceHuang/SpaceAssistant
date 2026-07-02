@@ -8,9 +8,15 @@ import { useTypedSelector, useAppDispatch } from '../../hooks'
 
 import { setConfig, setSettingsActiveTab, setSettingsOpen, setSettingsToolsSubTab } from '../../store/configSlice'
 
-import type { AppLocale, ModelEntry, WikiConfig } from '../../../shared/domainTypes'
+import type { AppLocale, ModelEntry, WikiConfig, WorkspaceLayoutConfig } from '../../../shared/domainTypes'
 
-import { DEFAULT_WIKI_CONFIG, DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import {
+  DEFAULT_WIKI_CONFIG,
+  DEFAULT_BROWSER_CONFIG,
+  DEFAULT_SHELL_CONFIG,
+  DEFAULT_WORKSPACE_LAYOUT_CONFIG,
+  mergeWorkspaceLayoutConfig
+} from '../../../shared/domainTypes'
 
 import type { BrowserConfig, ShellConfig } from '../../../shared/domainTypes'
 
@@ -178,6 +184,11 @@ export function ConfigSettingsPage() {
 
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
 
+  const [workspaceLayoutUi, setWorkspaceLayoutUi] = useState<WorkspaceLayoutConfig>({
+    ...DEFAULT_WORKSPACE_LAYOUT_CONFIG,
+    extensionSubdirMap: [...DEFAULT_WORKSPACE_LAYOUT_CONFIG.extensionSubdirMap]
+  })
+
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
 
   const [browserUi, setBrowserUi] = useState<BrowserConfig>({ ...DEFAULT_BROWSER_CONFIG })
@@ -302,6 +313,8 @@ export function ConfigSettingsPage() {
 
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
 
+      setWorkspaceLayoutUi(mergeWorkspaceLayoutConfig(cfg.workspaceLayout))
+
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
 
       setBrowserUi({ ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] })
@@ -385,6 +398,8 @@ export function ConfigSettingsPage() {
 
       wiki: wikiUi,
 
+      workspaceLayout: workspaceLayoutUi,
+
       feishu: feishuUi,
 
       browser: browserUi,
@@ -418,6 +433,8 @@ export function ConfigSettingsPage() {
     maxParallelChatSessions,
 
     wikiUi,
+
+    workspaceLayoutUi,
 
     feishuUi,
 
@@ -585,6 +602,8 @@ export function ConfigSettingsPage() {
         maxParallelChatSessions,
 
         wiki: wikiUi,
+
+        workspaceLayout: workspaceLayoutUi,
 
         feishu: feishuUi,
 
@@ -874,6 +893,10 @@ export function ConfigSettingsPage() {
             shellUi={shellUi}
 
             setShellUi={setShellUi}
+
+            workspaceLayoutUi={workspaceLayoutUi}
+
+            setWorkspaceLayoutUi={setWorkspaceLayoutUi}
 
             onShellEnabledChange={onShellEnabledChange}
 

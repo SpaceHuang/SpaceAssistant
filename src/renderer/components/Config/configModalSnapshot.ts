@@ -5,9 +5,10 @@ import type {
   FeishuConfig,
   ModelEntry,
   ShellConfig,
-  WikiConfig
+  WikiConfig,
+  WorkspaceLayoutConfig
 } from '../../../shared/domainTypes'
-import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_SHELL_CONFIG, mergeWorkspaceLayoutConfig } from '../../../shared/domainTypes'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
 import type { LlmServiceTabState } from './llmServiceDrafts'
 import type { ToolsSettingsUi } from './ToolsSettingsTab'
@@ -25,6 +26,7 @@ export type ConfigModalSnapshotInput = {
   browser: BrowserConfig
   shell: ShellConfig
   shellEnabled: boolean
+  workspaceLayout: WorkspaceLayoutConfig
 }
 
 function normalizeModels(models: ModelEntry[]): ModelEntry[] {
@@ -92,7 +94,11 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     wiki: input.wiki,
     feishu: input.feishu,
     browser: { ...input.browser, allowedDomains: [] },
-    shell: { ...input.shell, enabled: input.shellEnabled }
+    shell: { ...input.shell, enabled: input.shellEnabled },
+    workspaceLayout: {
+      ...input.workspaceLayout,
+      extensionSubdirMap: input.workspaceLayout.extensionSubdirMap.map((e) => ({ ...e }))
+    }
   }
   return JSON.stringify(payload)
 }
@@ -127,7 +133,8 @@ export function buildConfigModalSnapshotFromConfig(
     feishu: cfg.feishu,
     browser: { ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] },
     shell: cfg.shell ?? { ...DEFAULT_SHELL_CONFIG, enabled: shellEnabled },
-    shellEnabled
+    shellEnabled,
+    workspaceLayout: mergeWorkspaceLayoutConfig(cfg.workspaceLayout)
   })
 }
 

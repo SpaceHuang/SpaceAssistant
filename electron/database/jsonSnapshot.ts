@@ -25,11 +25,14 @@ export function loadSnapshotFromJson(filePath: string): DbSnapshot {
   return {
     sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
     messages: Array.isArray(parsed.messages)
-      ? (parsed.messages as StoredMessage[]).map((m) => ({
-          ...m,
-          toolCalls: m.toolCalls ?? null,
-          skillHints: m.skillHints ?? null
-        }))
+      ? (parsed.messages as Array<StoredMessage & { session_id?: string }>)
+          .map((m) => ({
+            ...m,
+            sessionId: m.sessionId ?? m.session_id ?? '',
+            toolCalls: m.toolCalls ?? null,
+            skillHints: m.skillHints ?? null
+          }))
+          .filter((m) => Boolean(m.id && m.sessionId))
       : [],
     configs: parsed.configs && typeof parsed.configs === 'object' ? (parsed.configs as DbSnapshot['configs']) : {},
     searchHistory: Array.isArray(parsed.searchHistory) ? parsed.searchHistory : [],

@@ -188,5 +188,19 @@
     "tuiLine2": "请在外部系统终端中于工作目录下自行执行该命令；可使用下方按钮打开终端。",
     "openTerminal": "在工作目录打开终端",
     "workDirNotConfigured": "未配置工作目录，请先在设置中指定工作目录"
+  },
+  "writeDirConfirm": {
+    "title": "选择本次会话的写入目录",
+    "description": "Agent 即将新建文件。请选择一个基准目录（新建文件将写入该目录或其映射子目录）：",
+    "customOption": "自定义输入目录",
+    "customPlaceholder": "输入相对工作目录的路径或子目录名",
+    "customRequired": "请输入目录路径",
+    "selectRequired": "请选择一个候选目录",
+    "recentSessionLabel": "最近会话 · {{rel}}",
+    "confirm": "确认",
+    "cancel": "取消"
+  },
+  "writeDirChip": {
+    "label": "写入目录：{{dir}}"
   }
 }

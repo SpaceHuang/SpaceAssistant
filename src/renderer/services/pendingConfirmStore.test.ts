@@ -5,6 +5,7 @@ import { clearRunRequestIndex, registerRunRequest } from './runRequestIndex'
 describe('pendingConfirmStore', () => {
   let confirmCb: ((data: {
     requestId: string
+    sessionId?: string
     toolUseId: string
     toolName: string
     input: unknown
@@ -42,6 +43,19 @@ describe('pendingConfirmStore', () => {
     })
     expect(pendingConfirmStore.getItems()).toHaveLength(1)
     expect(pendingConfirmStore.getItems()[0]?.sessionId).toBe('sess-a')
+  })
+
+  it('queues confirm when sessionId is included in IPC payload', () => {
+    confirmCb?.({
+      requestId: 'req-direct',
+      sessionId: 'sess-direct',
+      toolUseId: 'tool-1',
+      toolName: 'run_shell',
+      input: { command: 'echo hi' },
+      riskLevel: 'high'
+    })
+    expect(pendingConfirmStore.getItems()).toHaveLength(1)
+    expect(pendingConfirmStore.getItems()[0]?.sessionId).toBe('sess-direct')
   })
 
   it('respond sends ipc and removes item', () => {

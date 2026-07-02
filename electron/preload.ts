@@ -141,6 +141,14 @@ const api: SpaceAssistantApi = {
 
   toolConfirmResponse: (payload: import('../src/shared/api').ToolConfirmResponsePayload) =>
     ipcRenderer.invoke('tool:confirm-response', payload),
+  fileWriteDirOnConfirmRequest: (cb) => {
+    const fn = (_e: unknown, data: import('../src/shared/api').WriteDirConfirmRequest) => cb(data)
+    ipcRenderer.on('file-write-dir:confirm-request', fn)
+    return () => ipcRenderer.removeListener('file-write-dir:confirm-request', fn)
+  },
+  fileWriteDirConfirmResponse: (payload: import('../src/shared/api').WriteDirConfirmResponse) =>
+    ipcRenderer.invoke('file-write-dir:confirm-response', payload),
+  fileWriteDirReset: (payload: { sessionId: string }) => ipcRenderer.invoke('file-write-dir:reset', payload),
   toolCancel: (payload) => ipcRenderer.invoke('tool:cancel', payload),
   toolOnUse: (cb) => {
     const fn = (_e: unknown, data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => cb(data)
@@ -152,6 +160,7 @@ const api: SpaceAssistantApi = {
       _e: unknown,
       data: {
         requestId: string
+        sessionId?: string
         toolUseId: string
         toolName: string
         input: unknown

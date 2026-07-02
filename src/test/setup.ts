@@ -51,6 +51,9 @@ if (typeof window !== 'undefined') {
     appToggleDevTools: api.appToggleDevTools ?? (async () => {}),
     claudeChatOnUsage: api.claudeChatOnUsage ?? (() => () => undefined),
     toolOnConfirmRequest: api.toolOnConfirmRequest ?? (() => () => {}),
+    fileWriteDirOnConfirmRequest: api.fileWriteDirOnConfirmRequest ?? (() => () => {}),
+    fileWriteDirConfirmResponse: api.fileWriteDirConfirmResponse ?? (async () => ({ ok: true as const })),
+    fileWriteDirReset: api.fileWriteDirReset ?? (async () => ({ ok: true as const })),
     toolOnResult: api.toolOnResult ?? (() => () => {}),
     workdirSwitch: api.workdirSwitch ?? (async () => ({ success: true, sessions: [] })),
     configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig))

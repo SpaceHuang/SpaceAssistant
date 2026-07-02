@@ -286,6 +286,10 @@
       "browser": {
         "label": "Web access",
         "hint": "Browser automation and dependency checks"
+      },
+      "workspaceLayout": {
+        "label": "Directory layout",
+        "hint": "Write base directory and extension-to-subdir mapping for new files"
       }
     },
     "file": {
@@ -531,6 +535,21 @@
     "initButton": "Initialize Wiki",
     "initSuccess": "Wiki initialized: {{path}}{{skillSuffix}}",
     "skillInstalledSuffix": " (llm-wiki Skill installed)"
+  },
+  "workspaceLayout": {
+    "enabledLabel": "Enable directory layout",
+    "enabledHint": "When on, new agent files are organized by extension mapping; when off, behavior is unchanged.",
+    "writeDirConfirmEnabledLabel": "Confirm write directory before first write",
+    "writeDirConfirmEnabledHint": "Show candidate directories when a session first creates a file.",
+    "colExtension": "Extension",
+    "colSubdir": "Subdirectory",
+    "colAction": "Action",
+    "extPlaceholder": "py",
+    "subdirPlaceholder": "Script",
+    "addMapping": "Add mapping",
+    "invalidSubdir": "Must not contain path separators or ..",
+    "rulesHint": "Uses the last extension; unmapped files go to the write directory root; applies to new files only.",
+    "securityHint": "LLM-provided directory segments are discarded; final path is determined by your choice and mapping."
   },
   "feishuAudit": {
     "title": "Feishu activity log",
