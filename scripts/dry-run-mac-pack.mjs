@@ -2,10 +2,11 @@
  * macOS pack 配置 dry-run（可在 Windows/Linux 上运行）。
  * 不执行真实 mac 打包，只校验 electron-builder 配置与资源。
  */
-import { existsSync, readdirSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { createRequire } from 'module'
+import { spawnSync } from 'child_process'
 
 const require = createRequire(import.meta.url)
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -26,6 +27,14 @@ function warn(msg) {
 
 function fail(msg) {
   errors.push(`✗ ${msg}`)
+}
+
+function readPngDimensions(filePath) {
+  const buf = readFileSync(filePath)
+  if (buf.length < 24 || buf.toString('ascii', 1, 4) !== 'PNG') {
+    return null
+  }
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
 }
 
 // 1. mac 配置结构
@@ -68,36 +77,71 @@ try {
   fail('electron-builder 未安装')
 }
 
-// 4. macOS 图标 iconset
+// 3. macOS 图标：须为 1024 PNG 或 .icns（勿用 .iconset，app-builder 不会写入 1024px 层）
 const iconRel = mac?.icon ?? ''
-const iconsetDir = join(root, iconRel)
-const requiredIconset = [
-  'icon_16x16.png',
-  'icon_16x16@2x.png',
-  'icon_32x32.png',
-  'icon_32x32@2x.png',
-  'icon_128x128.png',
-  'icon_128x128@2x.png',
-  'icon_256x256.png',
-  'icon_256x256@2x.png',
-  'icon_512x512.png',
-  'icon_512x512@2x.png',
-]
+const iconPath = iconRel ? join(root, iconRel) : ''
 
 if (!iconRel) {
   fail('mac.icon 未配置')
-} else if (!existsSync(iconsetDir)) {
-  fail(`iconset 目录不存在: ${iconRel}`)
-} else {
-  const files = new Set(readdirSync(iconsetDir))
-  ok(`iconset 目录存在: ${iconRel}`)
-  for (const name of requiredIconset) {
-    if (!files.has(name)) {
-      fail(`iconset 缺少: ${name}`)
-    }
+} else if (!existsSync(iconPath)) {
+  fail(`mac.icon 文件不存在: ${iconRel}`)
+} else if (iconRel.endsWith('.iconset')) {
+  fail(
+    'mac.icon 不应指向 .iconset 目录；app-builder 转换后 icns 最高仅 512px，Retina 桌面会锯齿。请改用 res/icons/sa-logo-1024.png 或预生成的 .icns',
+  )
+} else if (iconRel.endsWith('.icns')) {
+  ok(`mac.icon 使用 .icns: ${iconRel}`)
+} else if (iconRel.endsWith('.png')) {
+  const dims = readPngDimensions(iconPath)
+  if (!dims) {
+    fail(`mac.icon 不是有效 PNG: ${iconRel}`)
+  } else if (dims.width < 1024 || dims.height < 1024) {
+    fail(`mac.icon PNG 尺寸 ${dims.width}x${dims.height}，macOS 至少需要 1024x1024`)
+  } else if (dims.width !== dims.height) {
+    fail(`mac.icon PNG 须为正方形，当前 ${dims.width}x${dims.height}`)
+  } else {
+    ok(`mac.icon PNG ${dims.width}x${dims.height}: ${iconRel}`)
   }
-  if (requiredIconset.every((n) => files.has(n))) {
-    ok('iconset 包含全部 10 个标准 PNG')
+} else {
+  warn(`mac.icon 扩展名未识别: ${iconRel}，预期 .png 或 .icns`)
+}
+
+// 4. 用 app-builder 预检 icns 是否含 1024px 层
+if (iconRel && existsSync(iconPath) && !iconRel.endsWith('.iconset')) {
+  try {
+    const appBuilderPkg = require('app-builder-bin')
+    const outDir = join(root, 'release', '.icon-icns-dry-run')
+    const result = spawnSync(
+      appBuilderPkg.appBuilderPath,
+      [
+        'icon',
+        '--format',
+        'icns',
+        '--root',
+        root,
+        '--root',
+        root,
+        '--out',
+        outDir,
+        '--input',
+        iconRel,
+      ],
+      { encoding: 'utf8', cwd: root },
+    )
+    const stdout = (result.stdout ?? '').trim()
+    if (result.status !== 0) {
+      fail(`app-builder icns 转换失败: ${result.stderr || stdout || result.status}`)
+    } else {
+      const parsed = JSON.parse(stdout)
+      const maxSize = parsed.icons?.[0]?.size ?? 0
+      if (maxSize < 1024) {
+        fail(`app-builder 生成的 icns 最大尺寸仅 ${maxSize}px，Retina 桌面会锯齿`)
+      } else {
+        ok(`app-builder icns 预检通过（最大 ${maxSize}px）`)
+      }
+    }
+  } catch (err) {
+    warn(`无法运行 app-builder icns 预检: ${err instanceof Error ? err.message : err}`)
   }
 }
 
