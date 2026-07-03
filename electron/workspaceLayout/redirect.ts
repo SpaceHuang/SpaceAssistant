@@ -32,8 +32,13 @@ function sanitizeBasename(basename: string): string | null {
   return b
 }
 
+/** 从 LLM 路径参数提取文件名（统一 `/`，兼容 Windows 反斜杠输入在 POSIX 上解析） */
+function basenameFromInput(rawPath: string): string {
+  return path.posix.basename(normalizeRelPathInput(rawPath))
+}
+
 function extOf(filePath: string): string {
-  return path.extname(filePath).slice(1).toLowerCase()
+  return path.posix.extname(normalizeRelPathInput(filePath)).slice(1).toLowerCase()
 }
 
 function lookupSubdir(map: WorkspaceLayoutConfig['extensionSubdirMap'], ext: string): string {
@@ -79,7 +84,7 @@ export async function applyWorkspaceLayoutRedirect(args: RedirectArgs): Promise<
     // LLM 给的路径解析失败或文件不存在，继续按 basename 重定向
   }
 
-  const basename = path.basename(rawPath)
+  const basename = basenameFromInput(rawPath)
   const safe = sanitizeBasename(basename)
   if (!safe) {
     return {
