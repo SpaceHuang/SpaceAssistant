@@ -195,12 +195,17 @@ export function createWorkDirManager(ctx: {
   }
 
   function persistProfiles(profiles: WorkDirProfile[], activeId: string): void {
+    const prevActiveId = getActiveProfileId()
+    const prevPath = normalizePath(ctx.getWorkDir())
     writeProfiles(ctx.db, profiles)
     writeActiveId(ctx.db, activeId)
     const active = profiles.find((p) => p.id === activeId) ?? profiles.find((p) => p.isDefault)
     if (active?.path) {
-      setConfigValue(ctx.db, WORK_DIR_KEY, active.path)
-      ctx.setWorkDir(active.path)
+      const nextPath = normalizePath(active.path)
+      setConfigValue(ctx.db, WORK_DIR_KEY, nextPath)
+      if (nextPath !== prevPath || activeId !== prevActiveId) {
+        ctx.setWorkDir(nextPath)
+      }
     }
   }
 

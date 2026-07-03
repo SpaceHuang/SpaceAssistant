@@ -908,7 +908,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         setConfigValue(ctx.db, CONFIG_KEYS.preferredVisionModelId, payload.preferredVisionModelId)
       }
       if (payload.thinkingEnabled !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled, String(payload.thinkingEnabled))
-      if (payload.workDir !== undefined) {
+      if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
         ctx.setWorkDir(payload.workDir)
         await fs.mkdir(payload.workDir, { recursive: true })

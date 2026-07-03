@@ -82,6 +82,7 @@ import {
 import { WorkDirList, validateWorkDirProfiles } from './WorkDirList'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
+import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
 
 const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'feishu'] as const
 
@@ -529,7 +530,7 @@ export function ConfigSettingsPage() {
     }
     setWorkDirSaveError(null)
 
-    const activeProfile = workDirProfiles.find((p) => p.isDefault) ?? workDirProfiles[0]
+    const activeProfile = resolveWorkDirProfileForSave(workDirProfiles, cfg?.activeWorkDirProfileId)
 
     const enabledModels = models.filter((m) => m.enabled)
 
@@ -558,8 +559,6 @@ export function ConfigSettingsPage() {
     try {
 
       await window.api.configSet({
-
-        workDir: activeProfile?.path,
 
         workDirProfiles,
 

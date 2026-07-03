@@ -1,7 +1,18 @@
 import type { AppConfig, Session } from '../../shared/domainTypes'
+import type { WorkDirProfile } from '../../shared/feishuTypes'
 import type { AppDispatch } from '../store'
 import { setConfig } from '../store/configSlice'
 import { setSessions } from '../store/sessionSlice'
+
+/** 保存设置时保留当前 active 工作区；仅当 active 已被删除时回退到默认 */
+export function resolveWorkDirProfileForSave(
+  profiles: WorkDirProfile[],
+  currentActiveId: string | undefined
+): WorkDirProfile | undefined {
+  if (profiles.length === 0) return undefined
+  const byActive = currentActiveId ? profiles.find((p) => p.id === currentActiveId) : undefined
+  return byActive ?? profiles.find((p) => p.isDefault) ?? profiles[0]
+}
 
 function activeProfileId(config: AppConfig): string {
   return (

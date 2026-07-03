@@ -162,6 +162,64 @@ describe('WorkDirManager', () => {
     })
   })
 
+  describe('persistProfiles', () => {
+    it('does not call setWorkDir when active profile and path are unchanged', async () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      dirs.push(dirA, dirB)
+      let switchCount = 0
+      const dbPath = path.join(tempDir(), 'db-persist.db')
+      dirs.push(path.dirname(dbPath))
+      const db = openDatabase(dbPath)
+      let workDir = dirA
+      const manager = createWorkDirManager({
+        db,
+        getWorkDir: () => workDir,
+        setWorkDir: (d) => {
+          switchCount++
+          workDir = d
+        }
+      })
+      manager.addProfile({ name: 'A', path: dirA, isDefault: true })
+      const b = manager.addProfile({ name: 'B', path: dirB }).profile!
+      await manager.switchProfile(b.id)
+      switchCount = 0
+
+      manager.persistProfiles(manager.listProfiles(), manager.getActiveProfileId())
+      expect(switchCount).toBe(0)
+      expect(manager.getActiveProfileId()).toBe(b.id)
+      db.close()
+    })
+
+    it('calls setWorkDir when active profile id changes', () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      dirs.push(dirA, dirB)
+      let switchCount = 0
+      const dbPath = path.join(tempDir(), 'db-persist2.db')
+      dirs.push(path.dirname(dbPath))
+      const db = openDatabase(dbPath)
+      let workDir = dirA
+      const manager = createWorkDirManager({
+        db,
+        getWorkDir: () => workDir,
+        setWorkDir: (d) => {
+          switchCount++
+          workDir = d
+        }
+      })
+      manager.addProfile({ name: 'A', path: dirA, isDefault: true })
+      const b = manager.addProfile({ name: 'B', path: dirB }).profile!
+      switchCount = 0
+
+      manager.persistProfiles(manager.listProfiles(), b.id)
+      expect(switchCount).toBe(1)
+      expect(manager.getActiveProfileId()).toBe(b.id)
+      expect(workDir).toBe(dirB)
+      db.close()
+    })
+  })
+
   describe('migrateFromLegacy', () => {
     it('仅有 workDir 时自动生成默认 profile', () => {
       const legacyDir = tempDir()

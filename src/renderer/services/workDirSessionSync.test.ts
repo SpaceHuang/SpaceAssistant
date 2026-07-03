@@ -2,7 +2,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { configureStore } from '@reduxjs/toolkit'
 import configReducer from '../store/configSlice'
 import sessionReducer from '../store/sessionSlice'
-import { ensureWorkDirForSession, sessionNeedsWorkDirSwitch } from './workDirSessionSync'
+import {
+  ensureWorkDirForSession,
+  resolveWorkDirProfileForSave,
+  sessionNeedsWorkDirSwitch
+} from './workDirSessionSync'
 import type { Session } from '../../shared/domainTypes'
 
 const session: Session = {
@@ -33,6 +37,21 @@ describe('workDirSessionSync', () => {
     vi.stubGlobal('api', {
       workdirSwitch: vi.fn().mockResolvedValue({ success: true, sessions: [] }),
       configGet: vi.fn().mockResolvedValue(config)
+    })
+  })
+
+  describe('resolveWorkDirProfileForSave', () => {
+    const profiles = [
+      { id: 'p1', name: 'A', path: '/a', isDefault: true },
+      { id: 'p2', name: 'B', path: '/b' }
+    ] as const
+
+    it('preserves current active profile over default', () => {
+      expect(resolveWorkDirProfileForSave([...profiles], 'p2')?.id).toBe('p2')
+    })
+
+    it('falls back to default when active profile was removed', () => {
+      expect(resolveWorkDirProfileForSave([profiles[0]], 'p2')?.id).toBe('p1')
     })
   })
 
