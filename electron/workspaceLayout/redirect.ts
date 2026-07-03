@@ -49,6 +49,13 @@ function lookupSubdir(map: WorkspaceLayoutConfig['extensionSubdirMap'], ext: str
   return ''
 }
 
+/** 输入路径是否含 `..` 段（规范化后判断，兼容 Windows 反斜杠） */
+function inputHasTraversal(rawPath: string): boolean {
+  return normalizeRelPathInput(rawPath)
+    .split('/')
+    .some((seg) => seg === '..')
+}
+
 /**
  * 决定本次重定向使用的写入目录。
  * - 已有 writeDirChoice：直接用；
@@ -100,8 +107,9 @@ export async function applyWorkspaceLayoutRedirect(args: RedirectArgs): Promise<
   const canonicalAbs = resolveSafePath(writeDirChoice.dir, subdir ? path.join(subdir, safe) : safe)
   const relToWorkDir = path.relative(path.resolve(workDir), canonicalAbs)
   const normalizedNew = normalizeRelPathInput(relToWorkDir)
+  const normalizedRaw = normalizeRelPathInput(rawPath)
 
-  if (normalizedNew === normalizeRelPathInput(rawPath)) {
+  if (!inputHasTraversal(rawPath) && normalizedNew === normalizedRaw) {
     return { redirected: false }
   }
 

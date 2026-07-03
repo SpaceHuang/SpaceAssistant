@@ -3,6 +3,7 @@ import path from 'path'
 import fs from 'fs/promises'
 import os from 'os'
 import { applyWorkspaceLayoutRedirect } from './workspaceLayout/redirect'
+import { normalizeRelPathInput } from './pathSecurity'
 import type { WorkspaceLayoutConfig } from '../src/shared/domainTypes'
 
 const CFG: WorkspaceLayoutConfig = {
@@ -70,7 +71,9 @@ describe('toolChatLoop workspaceLayout integration contract', () => {
           workspaceLayout: CFG,
           writeDirChoice: { dir: workDir }
         })
-        expect(out.newPath).toBe(path.join('Script', path.basename(p)).replace(/\\/g, '/'))
+        expect(out.newPath).toBe(
+          path.join('Script', path.posix.basename(normalizeRelPathInput(p))).replace(/\\/g, '/')
+        )
       }
     })
   })
