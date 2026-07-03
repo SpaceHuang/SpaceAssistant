@@ -2,6 +2,7 @@ export type MenuLocale = 'zh-CN' | 'en-US'
 
 export interface MenuLabels {
   file: string
+  edit: string
   view: string
   help: string
   closeWindow: string
@@ -15,6 +16,7 @@ export interface MenuLabels {
 export const MENU_LABELS: Record<MenuLocale, MenuLabels> = {
   'zh-CN': {
     file: '文件',
+    edit: '编辑',
     view: '查看',
     help: '帮助',
     closeWindow: '关闭窗口',
@@ -26,6 +28,7 @@ export const MENU_LABELS: Record<MenuLocale, MenuLabels> = {
   },
   'en-US': {
     file: 'File',
+    edit: 'Edit',
     view: 'View',
     help: 'Help',
     closeWindow: 'Close Window',

@@ -46,6 +46,10 @@ export function setupAppMenu(locale: string = 'zh-CN'): void {
     submenu: fileSubmenu
   })
 
+  if (isMac) {
+    template.push({ role: 'editMenu', label: labels.edit })
+  }
+
   template.push({
     label: labels.view,
     submenu: [
