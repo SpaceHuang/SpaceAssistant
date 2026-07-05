@@ -8,6 +8,7 @@ import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidReque
 import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
 import { CHAT_CANCELLED_MESSAGE, clearChatCancel, registerChatCancel, signalChatCancel } from './chatCancelRegistry'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import type { AgentLogFields } from './agentLogger/types'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
@@ -18,6 +19,8 @@ import { isAppLocale } from '../src/shared/locale'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
+import { ensureToolResultPairing } from '../src/shared/toolResultPairing'
+import { sanitizeForLog } from './logSanitize'
 import { historyHasImageAttachments } from '../src/shared/visionModelRouting'
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
 import type { Message } from '../src/shared/domainTypes'
@@ -169,13 +172,26 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
   return content
 }
 
-function normalizeAndValidateClaudeMessagesWithContentBlocks(messages: unknown): ClaudeChatMessageWithContentBlocks[] {
+export function normalizeAndValidateClaudeMessagesWithContentBlocks(
+  messages: unknown,
+  logContext?: { sessionId?: string }
+): ClaudeChatMessageWithContentBlocks[] {
   if (!Array.isArray(messages)) throw new Error('Invalid messages')
 
   const trimmed = trimClaudeToolChatMessages(messages as ClaudeChatMessageWithContentBlocks[], MAX_CHAT_API_MESSAGES)
-  if (trimmed.length === 0) throw new Error('Too many messages')
+  const { messages: paired, report } = ensureToolResultPairing(trimmed)
+  if (report.repaired) {
+    logAgentEvent('warn', 'tool.result.pairing.repaired', sanitizeForLog({
+      sessionId: logContext?.sessionId,
+      originalCount: report.originalCount,
+      repairedCount: report.repairedCount,
+      fixes: report.fixes,
+      messageStructure: report.messageStructure.join('; ')
+    }) as AgentLogFields)
+  }
+  if (paired.length === 0) throw new Error('Too many messages')
 
-  return trimmed.map((m, idx) => {
+  return paired.map((m, idx) => {
     const msg = m as Partial<ClaudeChatMessageWithContentBlocks> | null
     if (!msg || typeof msg !== 'object') throw new Error(`Invalid message at index ${idx}`)
     if (msg.role !== 'user' && msg.role !== 'assistant') throw new Error(`Invalid role at index ${idx}`)
@@ -262,7 +278,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         } else {
           throw new Error('Invalid messages payload')
         }
-        const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages)
+        const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, { sessionId })
         const hasImageAttachments = Array.isArray(payload.sourceMessages)
           ? historyHasImageAttachments(payload.sourceMessages)
           : false

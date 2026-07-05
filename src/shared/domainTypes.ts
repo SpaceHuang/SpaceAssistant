@@ -587,6 +587,10 @@ export interface ToolCallRecord {
   dangerInfo?: BrowserActDangerInfo
   /** 本会话已信任该域名但本次仍需确认 */
   sessionTrustedHint?: true
+  /** 反序列化失败等导致的数据损坏标记，重建时生成合成错误占位 */
+  corrupted?: boolean
+  /** 应用崩溃中断后由启动清理降级 */
+  interrupted?: boolean
 }
 
 export type BrowserActDangerInfo = {

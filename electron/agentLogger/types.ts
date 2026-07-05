@@ -59,5 +59,11 @@ export type AgentLogEventName =
   | 'workdir.switch.error'
   | 'fileContentWatcher.error'
   | 'fileContentWatcher.startFailed'
+  | 'tool.result.pairing.repaired'
+  | 'startup.streaming_cleanup'
+  | 'db.tool_calls.deserialize_failed'
+  | 'backup.tool_pairing.anomaly'
+  | 'migration.tool_calls.duplicate_id'
+  | 'migration.tool_calls.missing_result'
 
 export type AgentLogFields = Record<string, unknown>

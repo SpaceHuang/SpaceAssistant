@@ -6,6 +6,9 @@ import type { BrowserConfig, ToolsConfig, WikiConfig } from '../../src/shared/do
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { resolveFeishuBrowserRemoteHint } from '../../src/shared/browserRemotePolicy'
+import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
+import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
+import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import { registerRunningRemoteAgent, unregisterRunningRemoteAgent } from './runningRemoteAgentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
 import type { FeishuConfirmManager } from './feishuConfirmManager'
@@ -49,10 +52,10 @@ export async function runFeishuRemoteAgent(ctx: {
 
   try {
     const toolsConfig = ctx.getToolsConfig()
-    const messages = getMessages(ctx.db, ctx.sessionId).map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content
-    }))
+    const rawMessages = getMessages(ctx.db, ctx.sessionId)
+    const built = buildClaudeToolChatMessages(rawMessages)
+    const trimmed = trimClaudeToolChatMessages(built, MAX_CHAT_API_MESSAGES)
+    const { messages } = ensureToolResultPairing(trimmed)
 
     const browserConfig = ctx.getBrowserConfig?.()
     const appendix = buildFeishuRemoteSystemAppendix({

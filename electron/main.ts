@@ -16,6 +16,7 @@ import {
 } from './feishu/feishuIpc'
 import { getConfigValue, getDefaultDbPath, openDatabase, setConfigValue } from './database'
 import type { AppDatabase } from './database'
+import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
@@ -185,6 +186,7 @@ app.whenReady().then(() => {
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   const db = openDatabase(dbPath)
   appDb = db
+  cleanupStreamingResiduesOnStartup(db)
   void import('./shell/shellCommandTrust').then(({ persistExpiredTrustedCommandMarks }) => {
     persistExpiredTrustedCommandMarks(db)
   })

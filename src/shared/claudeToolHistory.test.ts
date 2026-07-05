@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildClaudeToolChatMessages,
+  buildToolResultBlock,
   buildUserMessageContent,
   trimClaudeToolChatMessages
 } from './claudeToolHistory'
-import type { ChatImageAttachment, Message } from './domainTypes'
+import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
+import { SYNTHETIC_TOOL_RESULT_PLACEHOLDER } from './toolResultPairing'
 
 function userMsg(id: string, content: string, extra: Partial<Message> = {}): Message {
   return {
@@ -188,6 +190,21 @@ describe('trimClaudeToolChatMessages', () => {
     expect(trimmed[0]!.content).toBe('continue')
   })
 
+  it('15: drops orphaned tool_result when slice cuts use/result pair', () => {
+    const api = [
+      { role: 'user' as const, content: 'old' },
+      {
+        role: 'assistant' as const,
+        content: [{ type: 'tool_use', id: 't-cut', name: 'read_file', input: {} }]
+      },
+      { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 't-cut', content: 'ok' }] },
+      { role: 'user' as const, content: 'keep' }
+    ]
+    const trimmed = trimClaudeToolChatMessages(api, 2)
+    expect(trimmed).toHaveLength(1)
+    expect(trimmed[0]!.content).toBe('keep')
+  })
+
   it('uses placeholder for completed assistant with empty content and no tools', () => {
     const messages = [
       userMsg('u1', 'hello'),
@@ -200,5 +217,51 @@ describe('trimClaudeToolChatMessages', () => {
     const api = buildClaudeToolChatMessages(messages)
     expect(api).toHaveLength(2)
     expect(api[1]!.content).toBe(' ')
+  })
+})
+
+function toolCall(overrides: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id'>): ToolCallRecord {
+  return {
+    toolName: 'read_file',
+    input: {},
+    status: 'completed',
+    riskLevel: 'low',
+    ...overrides
+  }
+}
+
+describe('buildToolResultBlock', () => {
+  it('9: marks missing result as synthetic error placeholder', () => {
+    const block = buildToolResultBlock(toolCall({ id: 't1' }))
+    expect(block.content).toBe(SYNTHETIC_TOOL_RESULT_PLACEHOLDER)
+    expect(block.isError).toBe(true)
+  })
+
+  it('10: marks failed result with isError', () => {
+    const block = buildToolResultBlock(
+      toolCall({ id: 't1', result: { success: false, error: 'permission denied' } })
+    )
+    expect(block.content).toBe('permission denied')
+    expect(block.isError).toBe(true)
+  })
+})
+
+describe('buildClaudeToolChatMessages toolCalls pairing', () => {
+  it('emits tool_use and tool_result with matching ids and is_error for missing result', () => {
+    const messages: Message[] = [
+      userMsg('u1', 'read file'),
+      {
+        ...assistantMsg('a1', ''),
+        toolCalls: [toolCall({ id: 'toolu_abc', result: undefined })]
+      }
+    ]
+    const api = buildClaudeToolChatMessages(messages)
+    expect(api).toHaveLength(3)
+    const assistantBlocks = api[1]!.content as Array<{ type: string; id?: string }>
+    const resultBlocks = api[2]!.content as Array<{ type: string; tool_use_id?: string; is_error?: boolean; content: string }>
+    expect(assistantBlocks.some((b) => b.type === 'tool_use' && b.id === 'toolu_abc')).toBe(true)
+    expect(resultBlocks[0]?.tool_use_id).toBe('toolu_abc')
+    expect(resultBlocks[0]?.is_error).toBe(true)
+    expect(resultBlocks[0]?.content).toBe(SYNTHETIC_TOOL_RESULT_PLACEHOLDER)
   })
 })

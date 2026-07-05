@@ -2,6 +2,9 @@ import fs from 'fs/promises'
 import path from 'path'
 import type { Message, Session } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION } from '../src/shared/domainTypes'
+import { buildClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
+import { validateToolResultPairing } from '../src/shared/toolResultPairing'
+import { logAgentEvent } from './agentLogger/agentLogger'
 
 function sessionDirName(sessionId: string, createdAt: number): string {
   const dateStr = new Date(createdAt).toISOString().slice(0, 10).replace(/-/g, '')
@@ -20,6 +23,14 @@ export class SessionBackupManager {
   }
 
   async backupSession(session: Session, messages: Message[]): Promise<void> {
+    const pairingReport = validateToolResultPairing(buildClaudeToolChatMessages(messages))
+    if (pairingReport.repaired) {
+      logAgentEvent('warn', 'backup.tool_pairing.anomaly', {
+        sessionId: session.id,
+        fixes: pairingReport.fixes
+      })
+    }
+
     const sessionDir = this.dirFor(session)
     await fs.mkdir(sessionDir, { recursive: true })
 

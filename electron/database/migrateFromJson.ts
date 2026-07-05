@@ -9,6 +9,8 @@ import { loadSnapshotFromJson } from './jsonSnapshot'
 import { SCHEMA_META_KEYS } from './schema'
 import { getDbConnection, getSchemaMeta, isDatabaseEmpty, setSchemaMeta, type AppDatabase } from './sqliteStore'
 import type { DbSnapshot, StoredMessage } from './types'
+import { deserializeToolCallsFromDb } from '../messageCodec'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 
 export type MigrationResult = {
   sessions: number
@@ -222,6 +224,30 @@ function sampleVerifyMessages(conn: ReturnType<typeof getDbConnection>, snapshot
   }
 }
 
+function verifyToolCallsIntegrity(snapshot: DbSnapshot): void {
+  for (const msg of snapshot.messages) {
+    if (!msg.toolCalls) continue
+    const calls = deserializeToolCallsFromDb(msg.toolCalls)
+    if (!calls?.length) continue
+    const ids = new Set<string>()
+    for (const tc of calls) {
+      if (ids.has(tc.id)) {
+        logAgentEvent('warn', 'migration.tool_calls.duplicate_id', {
+          messageId: msg.id,
+          toolCallId: tc.id
+        })
+      }
+      ids.add(tc.id)
+      if (!tc.result && (tc.status === 'completed' || tc.status === 'failed')) {
+        logAgentEvent('warn', 'migration.tool_calls.missing_result', {
+          messageId: msg.id,
+          toolCallId: tc.id
+        })
+      }
+    }
+  }
+}
+
 function renameJsonBackup(jsonPath: string): string {
   const backupPath = `${jsonPath}.migrated-${Date.now()}`
   fs.renameSync(jsonPath, backupPath)
@@ -254,6 +280,7 @@ export function migrateFromJsonIfNeeded(db: AppDatabase, jsonPath: string): Migr
   }
   verifyCounts(conn, snapshot)
   sampleVerifyMessages(conn, snapshot)
+  verifyToolCallsIntegrity(snapshot)
 
   const migratedAt = String(Date.now())
   setSchemaMeta(conn, SCHEMA_META_KEYS.migratedFromJsonAt, migratedAt)

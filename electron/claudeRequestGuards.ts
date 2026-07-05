@@ -1,5 +1,7 @@
 /** 与 `claudeStreamHandlers` 中 Claude IPC 共用：模型、baseUrl、requestId 校验 */
 
+export { getStrictToolResultPairing } from '../src/shared/toolResultPairingStrict'
+
 export function assertValidRequestId(requestId: string): string {
   const trimmed = requestId.trim()
   if (!trimmed) throw new Error('Invalid requestId')

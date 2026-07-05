@@ -1,4 +1,6 @@
 import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
+import { logAgentEvent } from './agentLogger/agentLogger'
+import { createCorruptedToolCallPlaceholder } from './database/streamingCleanup'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -127,10 +129,13 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
       confirmedAt: c.confirmedAt,
       startedAt: c.startedAt,
       completedAt: c.completedAt,
-      duration: c.duration
+      duration: c.duration,
+      corrupted: c.corrupted,
+      interrupted: c.interrupted
     }))
-  } catch {
-    return undefined
+  } catch (e) {
+    logAgentEvent('warn', 'db.tool_calls.deserialize_failed', { error: String(e) })
+    return [createCorruptedToolCallPlaceholder()]
   }
 }
 
