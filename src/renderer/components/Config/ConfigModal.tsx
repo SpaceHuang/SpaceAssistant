@@ -155,6 +155,8 @@ export function ConfigSettingsPage() {
 
   const closeBtnRef = useRef<HTMLButtonElement>(null)
 
+  const [platform, setPlatform] = useState<NodeJS.Platform>('win32')
+
   const [workDirProfiles, setWorkDirProfiles] = useState<WorkDirProfile[]>([])
 
   const [workDirSaveError, setWorkDirSaveError] = useState<string | null>(null)
@@ -234,6 +236,14 @@ export function ConfigSettingsPage() {
   }, [tCommon])
 
   const toolsSettingsNav = useMemo(() => getToolsSettingsNav(tConfig), [tConfig])
+
+
+
+  useEffect(() => {
+
+    void window.api.windowGetPlatform().then(setPlatform)
+
+  }, [])
 
 
 
@@ -957,7 +967,7 @@ export function ConfigSettingsPage() {
 
     <div
 
-      className="config-settings-page"
+      className={`config-settings-page${platform === 'darwin' ? ' config-settings-page--mac' : ''}`}
 
       role="dialog"
 

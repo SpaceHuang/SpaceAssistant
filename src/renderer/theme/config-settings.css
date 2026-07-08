@@ -28,6 +28,17 @@
   padding: 12px 8px 4px;
 }
 
+/* macOS：左侧导航顶部避让交通灯（trafficLightPosition x:12 y:10），
+   顶部留白同时作为窗口拖动区，返回按钮保持可点击 */
+.config-settings-page--mac .config-settings-page__nav-header {
+  padding-top: 40px;
+  -webkit-app-region: drag;
+}
+
+.config-settings-page--mac .config-settings-page__back {
+  -webkit-app-region: no-drag;
+}
+
 .config-settings-page__nav-brand {
   flex: 0 0 auto;
   display: flex;
