@@ -94,7 +94,6 @@
     "asarUnpack": [
       "**/better-sqlite3/**"
     ],
-    "electronDist": "node_modules/electron/dist",
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
     },
