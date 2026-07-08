@@ -46,7 +46,7 @@ SpaceAssistant 有什么特点？
 
 ## macOS 安装提示
 
-SpaceAssistant 暂未接入 Apple 开发者签名与公证。从 GitHub 下载的 macOS 安装包会被 Gatekeeper 隔离，首次打开会提示「已损坏」或「无法验证开发者」。这是正常现象，执行以下命令去除隔离属性即可运行：
+SpaceAssistant 暂未接入 Apple 开发者签名与公证。因为没有 Apple 官方签名，从 GitHub 下载的安装包首次打开时会被 Mac 拦截，可能提示「已损坏」或「无法验证开发者」。这是正常现象，不是安装包坏了。执行以下命令即可正常运行：
 
 ```bash
 xattr -cr /Applications/SpaceAssistant.app
