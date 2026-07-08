@@ -1,11 +1,45 @@
 const fs = require('fs')
 const path = require('path')
-const { NtExecutable, NtExecutableResource, Data, Resource } = require('resedit')
+const { execFileSync } = require('child_process')
 
 /** @param {import('app-builder-lib').AfterPackContext} context */
 module.exports = async function afterPack(context) {
-  if (context.electronPlatformName !== 'win32') return
+  const platform = context.electronPlatformName
+  if (platform === 'win32') {
+    return patchWindowsIcon(context)
+  }
+  if (platform === 'darwin') {
+    return adHocSignMacApp(context)
+  }
+}
 
+/**
+ * 无 Apple 开发者证书时对 macOS app 做 ad-hoc 签名，使 arm64 可本机启动
+ * （从网络下载的包仍需用户执行 xattr -cr 去除隔离）。
+ */
+function adHocSignMacApp(context) {
+  const appPath = path.join(
+    context.appOutDir,
+    `${context.packager.appInfo.productFilename}.app`,
+  )
+  if (!fs.existsSync(appPath)) {
+    console.warn('[afterPack] macOS .app not found:', appPath)
+    return
+  }
+  // electron-builder 在 afterPack 之后还会跑 sign 步骤：若存在 Developer ID 会重新签名覆盖 ad-hoc；
+  // 若无证书（CI）则跳过，ad-hoc 签名得以保留。
+  try {
+    execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], {
+      stdio: 'inherit',
+    })
+    console.log('[afterPack] Ad-hoc signed macOS app:', appPath)
+  } catch (err) {
+    console.warn('[afterPack] ad-hoc sign failed:', err instanceof Error ? err.message : err)
+  }
+}
+
+function patchWindowsIcon(context) {
+  const { NtExecutable, NtExecutableResource, Data, Resource } = require('resedit')
   const projectDir = context.packager.info.projectDir
   const iconPath = path.join(projectDir, 'res', 'icons', 'sa-logo.ico')
   const exePath = path.join(

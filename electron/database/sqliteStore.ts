@@ -38,15 +38,27 @@ function resolveAsarUnpacked(filePath: string): string {
 }
 
 /**
- * Node 与 Electron ABI 不同，需加载对应预编译 .node。
+ * Node 与 Electron ABI 不同，需加载对应预编译 .node；macOS 同时打包 x64 + arm64，
+ * 故优先按当前 process.arch 选取，回退到无后缀的默认绑定（构建机本机架构）。
  * nativeBinding 路径必须以 .node 结尾，否则 better-sqlite3 会再追加 .node。
  */
 function resolveNativeBinding(): string | undefined {
   const release = path.join(getBetterSqlite3Root(), 'build/Release')
   const isElectron = Boolean(process.versions.electron)
+  const arch = process.arch
   const candidates = isElectron
-    ? ['electron/better_sqlite3.node', 'better_sqlite3.node']
-    : ['node/better_sqlite3.node', 'better_sqlite3.node']
+    ? [
+        `electron/better_sqlite3.${arch}.node`,
+        'electron/better_sqlite3.node',
+        `better_sqlite3.${arch}.node`,
+        'better_sqlite3.node',
+      ]
+    : [
+        `node/better_sqlite3.${arch}.node`,
+        'node/better_sqlite3.node',
+        `better_sqlite3.${arch}.node`,
+        'better_sqlite3.node',
+      ]
 
   for (const rel of candidates) {
     const resolved = resolveAsarUnpacked(path.join(release, rel))

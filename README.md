@@ -44,6 +44,16 @@ SpaceAssistant 有什么特点？
 
 支持 Windows、macOS、Linux。
 
+## macOS 安装提示
+
+SpaceAssistant 暂未接入 Apple 开发者签名与公证。从 GitHub 下载的 macOS 安装包会被 Gatekeeper 隔离，首次打开会提示「已损坏」或「无法验证开发者」。这是正常现象，执行以下命令去除隔离属性即可运行：
+
+```bash
+xattr -cr /Applications/SpaceAssistant.app
+```
+
+（将 app 拖入 `/Applications` 后在终端执行。Intel 与 Apple Silicon 均已包含对应架构的原生模块。）
+
 ## 第三方库许可证
 
 本项目使用了以下开源库，在此对其作者和贡献者表示感谢。

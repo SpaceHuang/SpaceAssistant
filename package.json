@@ -101,7 +101,7 @@
     "directories": {
       "output": "release"
     },
-    "afterPack": "scripts/after-pack-win-icon.cjs",
+    "afterPack": "scripts/after-pack.cjs",
     "files": [
       "dist/**/*",
       "dist-electron/**/*",

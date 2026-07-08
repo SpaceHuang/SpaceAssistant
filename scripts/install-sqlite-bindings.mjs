@@ -33,9 +33,17 @@ function prebuildArch() {
   return process.arch === 'arm64' ? 'arm64' : 'x64'
 }
 
+/**
+ * 需要安装原生模块的目标架构。macOS 同时构建 x64 + arm64 DMG，需两套 electron 绑定；
+ * 其他平台仅本机架构。
+ */
+function targetArches() {
+  if (process.platform === 'darwin') return ['x64', 'arm64']
+  return [prebuildArch()]
+}
+
 /** better-sqlite3 release tarball platform tag, e.g. win32-x64 / darwin-arm64 */
-function prebuildPlatformTag() {
-  const arch = prebuildArch()
+function prebuildPlatformTag(arch) {
   if (process.platform === 'darwin') {
     return arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64'
   }
@@ -73,9 +81,9 @@ function stageBuiltNode(runtime) {
   return staged
 }
 
-function runPrebuild(runtime, target) {
+function runPrebuild(runtime, target, arch) {
   execSync(
-    `npx --yes prebuild-install --runtime ${runtime} --target ${target} --arch ${prebuildArch()}`,
+    `npx --yes prebuild-install --runtime ${runtime} --target ${target} --arch ${arch}`,
     {
       cwd: sqliteDir,
       stdio: 'inherit'
@@ -103,8 +111,8 @@ async function downloadWithRetry(url, dest, retries = 5) {
   throw lastErr
 }
 
-async function installElectronPrebuild() {
-  const platform = prebuildPlatformTag()
+async function installElectronPrebuild(arch) {
+  const platform = prebuildPlatformTag(arch)
   const file = `better-sqlite3-v${sqliteVersion}-electron-v${electronAbi}-${platform}.tar.gz`
   const github = `https://github.com/WiseLibs/better-sqlite3/releases/download/v${sqliteVersion}/${file}`
   const urls = [
@@ -146,23 +154,33 @@ async function installElectronPrebuild() {
 }
 
 async function main() {
+  const hostArch = prebuildArch()
+  const arches = targetArches()
   console.log(
-    `[install-sqlite-bindings] better-sqlite3@${sqliteVersion}, electron@${electronVersion} (abi ${electronAbi}), node@${process.version}, platform=${prebuildPlatformTag()}`
+    `[install-sqlite-bindings] better-sqlite3@${sqliteVersion}, electron@${electronVersion} (abi ${electronAbi}), node@${process.version}, host=${hostArch}, arches=[${arches.join(',')}], platform=${prebuildPlatformTag(hostArch)}`
   )
 
-  const nodeBuilt = runPrebuild('node', process.version.replace(/^v/, ''))
+  // Node 运行时绑定仅用于本机 dev/测试，按本机架构安装
+  const nodeBuilt = runPrebuild('node', process.version.replace(/^v/, ''), hostArch)
+  copy(nodeBuilt, `node/better_sqlite3.${hostArch}.node`)
   copy(nodeBuilt, 'node/better_sqlite3.node')
 
-  let electronBuilt
-  try {
-    electronBuilt = runPrebuild('electron', electronVersion)
-  } catch {
-    console.warn('[install-sqlite-bindings] prebuild-install electron failed, trying direct download...')
-    electronBuilt = await installElectronPrebuild()
-  }
+  // Electron 运行时绑定供打包后 app 使用；macOS 需覆盖所有目标架构
+  for (const arch of arches) {
+    let electronBuilt
+    try {
+      electronBuilt = runPrebuild('electron', electronVersion, arch)
+    } catch {
+      console.warn(`[install-sqlite-bindings] prebuild-install electron (${arch}) failed, trying direct download...`)
+      electronBuilt = await installElectronPrebuild(arch)
+    }
 
-  copy(electronBuilt, 'electron/better_sqlite3.node')
-  copy(electronBuilt, 'better_sqlite3.node')
+    copy(electronBuilt, `electron/better_sqlite3.${arch}.node`)
+    if (arch === hostArch) {
+      copy(electronBuilt, 'electron/better_sqlite3.node')
+      copy(electronBuilt, 'better_sqlite3.node')
+    }
+  }
 
   for (const legacy of ['better_sqlite3.node-node', 'better_sqlite3.node-electron']) {
     fs.rmSync(path.join(releaseDir, legacy), { force: true })

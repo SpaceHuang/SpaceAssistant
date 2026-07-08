@@ -154,7 +154,18 @@ for (const dir of ['dist/renderer', 'dist-electron/electron']) {
   }
 }
 
-// 6. 平台限制说明
+// 6. macOS 双架构原生模块（x64 + arm64 DMG 共用同一 node_modules）
+const sqliteElectronDir = join(root, 'node_modules/better-sqlite3/build/Release/electron')
+for (const arch of ['x64', 'arm64']) {
+  const f = join(sqliteElectronDir, `better_sqlite3.${arch}.node`)
+  if (!existsSync(f)) {
+    warn(`better-sqlite3 electron 绑定缺失: ${arch}（运行 npm run rebuild:native 后重试）`)
+  } else {
+    ok(`better-sqlite3 electron 绑定存在: ${arch}`)
+  }
+}
+
+// 7. 平台限制说明
 if (process.platform !== 'darwin') {
   warn(
     `当前系统为 ${process.platform}，无法执行真实 pack:mac（electron-builder 限制）`,
