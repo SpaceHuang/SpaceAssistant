@@ -14,7 +14,11 @@
 ### 代码签名说明
 当前版本安装包**未进行代码签名**：
 - **Windows**：安装时可能出现 SmartScreen「未知发布者」提示，选择「仍要运行」即可。
-- **macOS**：首次打开时系统可能拦截，请在「系统设置 → 隐私与安全性」中允许，或对应用右键选择「打开」。
+- **macOS**：从 GitHub 下载的安装包会被 Gatekeeper 隔离，首次打开可能提示「已损坏」或「无法验证开发者」。将 app 拖入 `/Applications` 后，在终端执行以下命令去除隔离属性即可运行：
+
+  ```bash
+  xattr -cr /Applications/SpaceAssistant.app
+  ```
 
 ---
 
@@ -31,4 +35,8 @@ Choose the DMG that matches your Mac chip:
 ### Code signing
 Installers in this release are **not code-signed**:
 - **Windows**: SmartScreen may warn about an unknown publisher — choose **Run anyway** to proceed.
-- **macOS**: macOS may block the app on first launch. Allow it under **System Settings → Privacy & Security**, or right-click the app and choose **Open**.
+- **macOS**: Installers downloaded from GitHub are quarantined by Gatekeeper and may appear "damaged" or show an "unidentified developer" warning on first launch. Drag the app into `/Applications`, then run the following command in Terminal to remove the quarantine attribute:
+
+  ```bash
+  xattr -cr /Applications/SpaceAssistant.app
+  ```
