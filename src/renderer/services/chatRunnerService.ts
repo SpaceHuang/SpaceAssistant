@@ -1,13 +1,15 @@
 import type { Message } from '../../shared/domainTypes'
 import { DEFAULT_MAX_PARALLEL_CHAT_SESSIONS, clampMaxParallelChatSessions } from '../../shared/chatParallelConfig'
 import { store } from '../store'
-import { patchMessage, removeRunningSession } from '../store/chatSlice'
+import { addMessage, patchMessage, removeRunningSession } from '../store/chatSlice'
+import type { ToolChatController } from './chatToolSessionService'
 import { pendingConfirmStore } from './pendingConfirmStore'
 import { pendingWriteDirConfirmStore } from './pendingWriteDirConfirmStore'
 import {
   registerRunRequest,
   unregisterRunRequest,
-  unregisterRunRequestsForSession
+  unregisterRunRequestsForSession,
+  resolveSessionIdForRequest
 } from './runRequestIndex'
 
 /** @deprecated 使用 getMaxParallelChatSessions()；保留常量供测试/默认值引用 */
@@ -25,6 +27,8 @@ const persistTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const persistPendingPatch = new Map<string, Partial<Message>>()
 const pendingUiPatches = new Map<string, Partial<Message>>()
 const uiFlushRafIds = new Map<string, number>()
+/** 多会话并行时按 requestId 持有工具控制器，避免后启动会话覆盖先前者导致确认卡片失效 */
+const toolControllersByRequestId = new Map<string, ToolChatController>()
 
 function cloneMessages(msgs: Message[]): Message[] {
   return msgs.map((m) => ({
@@ -56,8 +60,35 @@ export function mergeDbAndLive(db: Message[], live?: Message[] | null): Message[
 }
 
 export function initLiveSessionFromStore(sessionId: string): void {
-  const rows = store.getState().chat.messages
-  liveBySession.set(sessionId, cloneMessages(rows))
+  const fromStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
+  const existing = liveBySession.get(sessionId)
+  liveBySession.set(sessionId, cloneMessages(mergeDbAndLive(fromStore, existing)))
+}
+
+/** 追加 live 快照；仅当用户正在查看该会话时同步 Redux */
+export function routeAddMessage(sessionId: string, message: Message): void {
+  const arr = liveBySession.get(sessionId) ?? []
+  arr.push({
+    ...message,
+    toolCalls: message.toolCalls ? message.toolCalls.map((t) => ({ ...t })) : undefined,
+    skillHints: message.skillHints ? message.skillHints.map((h) => ({ ...h })) : undefined
+  })
+  liveBySession.set(sessionId, arr)
+  if (store.getState().chat.currentSessionId === sessionId) {
+    store.dispatch(addMessage(message))
+  }
+}
+
+export function registerToolChatController(requestId: string, controller: ToolChatController): void {
+  toolControllersByRequestId.set(requestId, controller)
+}
+
+export function unregisterToolChatController(requestId: string): void {
+  toolControllersByRequestId.delete(requestId)
+}
+
+export function getToolChatController(requestId: string): ToolChatController | undefined {
+  return toolControllersByRequestId.get(requestId)
 }
 
 export function resetLiveSessionMessages(sessionId: string, messages: Message[]): void {
@@ -211,6 +242,7 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
     flushUiPatch(sessionId, assistantMessageId)
     flushStreamPersist(sessionId, assistantMessageId)
   }
+  unregisterToolChatController(requestId)
   pendingConfirmStore.removeAllForRequest(requestId)
   pendingWriteDirConfirmStore.removeAllForRequest(requestId)
   unregisterRunRequest(requestId)
@@ -220,8 +252,14 @@ export function abortSessionRun(sessionId: string): void {
   const meta = store.getState().chat.runningSessions[sessionId]
   if (meta) {
     void window.api.claudeChatCancel({ requestId: meta.requestId })
+    unregisterToolChatController(meta.requestId)
     unregisterRunRequest(meta.requestId)
   } else {
+    for (const requestId of toolControllersByRequestId.keys()) {
+      if (resolveSessionIdForRequest(requestId) === sessionId) {
+        unregisterToolChatController(requestId)
+      }
+    }
     unregisterRunRequestsForSession(sessionId)
   }
   pendingConfirmStore.rejectAllForSession(sessionId)

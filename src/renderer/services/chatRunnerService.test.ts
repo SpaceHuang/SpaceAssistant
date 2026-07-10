@@ -1,7 +1,18 @@
-import { describe, expect, it, beforeEach } from 'vitest'
-import { getMaxParallelChatSessions, mergeDbAndLive } from './chatRunnerService'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
+import {
+  getMaxParallelChatSessions,
+  mergeDbAndLive,
+  routeAddMessage,
+  initLiveSessionFromStore,
+  getLiveMessages,
+  clearLiveSession,
+  registerToolChatController,
+  getToolChatController,
+  unregisterToolChatController
+} from './chatRunnerService'
 import { store } from '../store'
 import { setConfig } from '../store/configSlice'
+import { setSession, setMessages } from '../store/chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 const baseMsg = (over: Partial<Message>): Message => ({
@@ -94,5 +105,37 @@ describe('mergeDbAndLive', () => {
     const merged = mergeDbAndLive(db, live)
     expect(merged[0]?.id).toBe('early')
     expect(merged[1]?.id).toBe('late')
+  })
+})
+
+describe('routeAddMessage parallel isolation', () => {
+  beforeEach(() => {
+    clearLiveSession('s1')
+    clearLiveSession('s2')
+    store.dispatch(setSession('s2'))
+    store.dispatch(setMessages([baseMsg({ id: 's2-only', sessionId: 's2' })]))
+  })
+
+  it('background session message does not enter Redux when viewing another session', () => {
+    routeAddMessage('s1', baseMsg({ id: 'bg-user', sessionId: 's1', content: 'bg' }))
+    const redux = store.getState().chat.messages
+    expect(redux.some((m) => m.id === 'bg-user')).toBe(false)
+    expect(getLiveMessages('s1')?.some((m) => m.id === 'bg-user')).toBe(true)
+  })
+
+  it('initLiveSessionFromStore only keeps target session rows', () => {
+    initLiveSessionFromStore('s1')
+    const live = getLiveMessages('s1') ?? []
+    expect(live.every((m) => m.sessionId === 's1')).toBe(true)
+  })
+})
+
+describe('tool chat controller registry', () => {
+  it('register and resolve by requestId', () => {
+    const controller = { subscribe: vi.fn(), unsubscribe: vi.fn(), applyConfirmOutcome: vi.fn() }
+    registerToolChatController('req-a', controller)
+    expect(getToolChatController('req-a')).toBe(controller)
+    unregisterToolChatController('req-a')
+    expect(getToolChatController('req-a')).toBeUndefined()
   })
 })

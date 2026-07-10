@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Tag } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { addMessage, patchMessage, removeMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
+import { patchMessage, removeMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
@@ -12,15 +12,19 @@ import {
   flushStreamPersist,
   flushUiPatch,
   getLiveMessages,
+  getToolChatController,
   initLiveSessionFromStore,
   getMaxParallelChatSessions,
   mergeDbAndLive,
   abortSessionRun,
   registerSessionRun,
+  registerToolChatController,
   removeLiveMessage,
+  routeAddMessage,
   routePatchMessage,
   routeStreamPatchMessage,
-  isSessionRunning
+  isSessionRunning,
+  unregisterToolChatController
 } from '../../services/chatRunnerService'
 import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
@@ -43,8 +47,7 @@ import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import {
   buildToolChatPayload,
-  createToolChatController,
-  type ToolChatController
+  createToolChatController
 } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { reconcileAssistantStreamOnComplete } from '../../../shared/assistantContentReconcile'
@@ -341,16 +344,12 @@ export function ChatView() {
     })
   }, [streamingAssistant, t, runningClock])
 
-  const toolChatControllerRef = useRef<ToolChatController | null>(null)
-
-  const { t: tChat } = useTypedTranslation('chat')
-
   const onToolConfirm = useCallback(
     (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
       const requestId = pending?.requestId ?? streamingRequestId
       if (!requestId) return
-      toolChatControllerRef.current?.applyConfirmOutcome(toolUseId, approved)
+      getToolChatController(requestId)?.applyConfirmOutcome(toolUseId, approved)
       pendingConfirmStore.respond(requestId, toolUseId, approved, options)
       dispatch(setConfirmFocusToolUseId(null))
     },
@@ -409,10 +408,12 @@ export function ChatView() {
     [dispatch, message, scrollBottom]
   )
 
+  const { t: tChat } = useTypedTranslation('chat')
+
   const persistSkillHintSystemMessage = useCallback(
     async (targetSessionId: string, text: string, shownAt = Date.now()) => {
       const msg = createSkillHintSystemMessage(targetSessionId, text, shownAt)
-      dispatch(addMessage(msg))
+      routeAddMessage(targetSessionId, msg)
       await window.api.chatAppendMessage(msg)
       scrollBottom(true)
     },
@@ -440,7 +441,7 @@ export function ChatView() {
         status: 'queued',
         schemaVersion: CURRENT_SCHEMA_VERSION
       }
-      dispatch(addMessage(userMsg))
+      routeAddMessage(runSessionId, userMsg)
       stickToBottomRef.current = true
       await window.api.chatAppendMessage(userMsg)
       scrollBottom(true)
@@ -636,11 +637,13 @@ export function ChatView() {
       }
 
       if (!options?.skipUserMessage) {
-        dispatch(addMessage(userMsg))
+        routeAddMessage(runSessionId, userMsg)
         stickToBottomRef.current = true
       }
 
-      const sessionMessages = store.getState().chat.messages.filter((m) => m.sessionId === runSessionId)
+      const sessionMessages =
+        getLiveMessages(runSessionId) ??
+        store.getState().chat.messages.filter((m) => m.sessionId === runSessionId)
       const historyForApi = options?.skipUserMessage
         ? filterMessagesForChatApi(sessionMessages)
         : filterMessagesForChatApi([...sessionMessages.filter((m) => m.id !== userMsg.id), userMsg])
@@ -651,7 +654,7 @@ export function ChatView() {
 
       const currentUserMessageId = options?.skipUserMessage
         ? (options.currentUserMessageId ??
-          [...store.getState().chat.messages]
+          [...sessionMessages]
             .reverse()
             .find((m) => m.sessionId === runSessionId && m.role === 'user' && m.status !== 'queued')?.id ??
           '')
@@ -794,7 +797,7 @@ export function ChatView() {
         status: 'streaming',
         schemaVersion: CURRENT_SCHEMA_VERSION
       }
-      dispatch(addMessage(assistantMsg))
+      routeAddMessage(runSessionId, assistantMsg)
       initLiveSessionFromStore(runSessionId)
       await window.api.chatAppendMessage(assistantMsg)
       stickToBottomRef.current = true
@@ -849,11 +852,11 @@ export function ChatView() {
           }
         })
         controller.subscribe()
-        toolChatControllerRef.current = controller
+        registerToolChatController(requestId, controller)
 
         const unsubs: Array<() => void> = []
         const cleanup = () => {
-          toolChatControllerRef.current = null
+          unregisterToolChatController(requestId)
           controller.unsubscribe()
           for (const u of unsubs) u()
           unsubs.length = 0
