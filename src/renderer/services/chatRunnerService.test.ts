@@ -8,7 +8,8 @@ import {
   clearLiveSession,
   registerToolChatController,
   getToolChatController,
-  unregisterToolChatController
+  unregisterToolChatController,
+  resolveSessionMessagesForApi
 } from './chatRunnerService'
 import { store } from '../store'
 import { setConfig } from '../store/configSlice'
@@ -127,6 +128,40 @@ describe('routeAddMessage parallel isolation', () => {
     initLiveSessionFromStore('s1')
     const live = getLiveMessages('s1') ?? []
     expect(live.every((m) => m.sessionId === 's1')).toBe(true)
+  })
+
+  it('after clearLiveSession, routeAddMessage retains prior store history in live', () => {
+    store.dispatch(
+      setMessages([
+        baseMsg({ id: 'u1', sessionId: 's1', role: 'user', content: 'first', timestamp: 1 }),
+        baseMsg({ id: 'a1', sessionId: 's1', role: 'assistant', content: 'reply', timestamp: 2 })
+      ])
+    )
+    clearLiveSession('s1')
+    routeAddMessage('s1', baseMsg({ id: 'u2', sessionId: 's1', role: 'user', content: 'second', timestamp: 3 }))
+    expect(getLiveMessages('s1')?.map((m) => m.id)).toEqual(['u1', 'a1', 'u2'])
+  })
+})
+
+describe('resolveSessionMessagesForApi', () => {
+  beforeEach(() => {
+    clearLiveSession('s1')
+    window.api = {
+      ...(window.api ?? {}),
+      chatGetMessages: vi.fn().mockResolvedValue([
+        baseMsg({ id: 'db-u1', sessionId: 's1', role: 'user', content: 'db', timestamp: 1 }),
+        baseMsg({ id: 'db-a1', sessionId: 's1', role: 'assistant', content: 'db-reply', timestamp: 2 })
+      ])
+    } as typeof window.api
+    store.dispatch(setSession('s1'))
+    store.dispatch(setMessages([]))
+  })
+
+  it('merges db, redux and live after clearLiveSession', async () => {
+    clearLiveSession('s1')
+    routeAddMessage('s1', baseMsg({ id: 'live-u2', sessionId: 's1', role: 'user', content: 'live', timestamp: 3 }))
+    const rows = await resolveSessionMessagesForApi('s1')
+    expect(rows.map((m) => m.id)).toEqual(['db-u1', 'db-a1', 'live-u2'])
   })
 })
 

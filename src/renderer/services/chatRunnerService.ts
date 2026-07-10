@@ -65,9 +65,28 @@ export function initLiveSessionFromStore(sessionId: string): void {
   liveBySession.set(sessionId, cloneMessages(mergeDbAndLive(fromStore, existing)))
 }
 
+/** live 快照缺失时从 Redux 当前会话消息种子化，避免 clearLiveSession 后只剩新消息。 */
+function ensureLiveSession(sessionId: string): Message[] {
+  let arr = liveBySession.get(sessionId)
+  if (!arr) {
+    const fromStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
+    arr = cloneMessages(fromStore)
+    liveBySession.set(sessionId, arr)
+  }
+  return arr
+}
+
+/** 合并 DB + Redux + live，供发送 LLM 请求时构建完整上下文。 */
+export async function resolveSessionMessagesForApi(sessionId: string): Promise<Message[]> {
+  const dbRows = await window.api.chatGetMessages({ sessionId })
+  const fromStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
+  const live = getLiveMessages(sessionId)
+  return mergeDbAndLive(mergeDbAndLive(dbRows, fromStore), live)
+}
+
 /** 追加 live 快照；仅当用户正在查看该会话时同步 Redux */
 export function routeAddMessage(sessionId: string, message: Message): void {
-  const arr = liveBySession.get(sessionId) ?? []
+  const arr = ensureLiveSession(sessionId)
   arr.push({
     ...message,
     toolCalls: message.toolCalls ? message.toolCalls.map((t) => ({ ...t })) : undefined,

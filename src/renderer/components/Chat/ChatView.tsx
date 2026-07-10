@@ -20,6 +20,7 @@ import {
   registerSessionRun,
   registerToolChatController,
   removeLiveMessage,
+  resolveSessionMessagesForApi,
   routeAddMessage,
   routePatchMessage,
   routeStreamPatchMessage,
@@ -641,9 +642,7 @@ export function ChatView() {
         stickToBottomRef.current = true
       }
 
-      const sessionMessages =
-        getLiveMessages(runSessionId) ??
-        store.getState().chat.messages.filter((m) => m.sessionId === runSessionId)
+      const sessionMessages = await resolveSessionMessagesForApi(runSessionId)
       const historyForApi = options?.skipUserMessage
         ? filterMessagesForChatApi(sessionMessages)
         : filterMessagesForChatApi([...sessionMessages.filter((m) => m.id !== userMsg.id), userMsg])
