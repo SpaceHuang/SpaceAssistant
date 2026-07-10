@@ -14,9 +14,16 @@ async function writeTrayVariant(srcPng, baseName) {
   const png32 = await sharp(srcPng).resize(32, 32).png().toBuffer()
   const png16 = await sharp(srcPng).resize(16, 16).png().toBuffer()
 
+  // Mac/Linux tray：16x16 @1x + 32x32 @2x。Electron nativeImage.createFromPath 会按
+  // @2x 命名约定自动加载 Retina；Mac 系统菜单栏高度 22px、规范图标 16x16，
+  // 32x32 当作 1x 会偏大、显示不下。
   const pngPath = path.join(outDir, `${baseName}.png`)
-  fs.writeFileSync(pngPath, png32)
+  fs.writeFileSync(pngPath, png16)
   console.log('Wrote', pngPath)
+
+  const png2xPath = path.join(outDir, `${baseName}@2x.png`)
+  fs.writeFileSync(png2xPath, png32)
+  console.log('Wrote', png2xPath)
 
   const icoBuffer = await pngToIco([png16, png32])
   const icoPath = path.join(outDir, `${baseName}.ico`)
