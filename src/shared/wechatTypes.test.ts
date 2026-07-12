@@ -7,9 +7,9 @@ import {
 } from './wechatTypes'
 
 describe('wechatTypes remoteConfirmPolicy', () => {
-  it('defaults to wechat_confirm for new config', () => {
-    expect(mergeWeChatConfig(null).remoteConfirmPolicy).toBe('wechat_confirm')
-    expect(mergeWeChatConfig({}).remoteConfirmPolicy).toBe('wechat_confirm')
+  it('defaults to always for new config', () => {
+    expect(mergeWeChatConfig(null).remoteConfirmPolicy).toBe('always')
+    expect(mergeWeChatConfig({}).remoteConfirmPolicy).toBe('always')
   })
 
   it('migrates phase-1 remote_read_only default to wechat_confirm', () => {
@@ -38,7 +38,7 @@ describe('wechatTypes remoteConfirmPolicy', () => {
   })
 
   it('matches DEFAULT_WECHAT_CONFIG policy', () => {
-    expect(DEFAULT_WECHAT_CONFIG.remoteConfirmPolicy).toBe('wechat_confirm')
+    expect(DEFAULT_WECHAT_CONFIG.remoteConfirmPolicy).toBe('always')
   })
 
   it('supports workdir_switch audit event type', () => {

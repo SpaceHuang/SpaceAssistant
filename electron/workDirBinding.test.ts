@@ -176,8 +176,8 @@ describe('workDirBinding', () => {
       dirs.push(readOnlyParent)
       const readOnlyDir = path.join(readOnlyParent, 'ro')
       fs.mkdirSync(readOnlyDir)
-      fs.chmodSync(readOnlyDir, 0o444)
       manager.updateProfile(added.profile!.id, { path: readOnlyDir })
+      fs.chmodSync(readOnlyDir, 0o444)
 
       const result = await bindSessionWorkDir(db, manager, {
         sessionId: session.id,
