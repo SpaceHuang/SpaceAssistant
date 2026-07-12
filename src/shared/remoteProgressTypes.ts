@@ -29,7 +29,7 @@ export const DEFAULT_REMOTE_PROGRESS_CONFIG: Required<RemoteProgressConfig> = {
 
 export const FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG: Required<RemoteProgressConfig> = {
   ...DEFAULT_REMOTE_PROGRESS_CONFIG,
-  remoteTypingEnabled: false,
+  remoteTypingEnabled: true,
   remoteProgressMinIntervalSec: 5
 }
 
