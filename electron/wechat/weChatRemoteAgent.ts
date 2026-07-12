@@ -48,6 +48,7 @@ import { createWeChatProgressAdapter, pickWeChatProgressConfig } from '../remote
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
 
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
+import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 
 
 
@@ -119,6 +120,10 @@ export async function runWeChatRemoteAgent(ctx: {
 
 
 
+  const getOutboundSessionId = () => resolveRemoteOutboundSessionId(ctx.remoteContext, ctx.sessionId)
+
+
+
   const adapter = createWeChatProgressAdapter({
 
     botService: ctx.botService,
@@ -127,9 +132,11 @@ export async function runWeChatRemoteAgent(ctx: {
 
     inboundRaw: ctx.inboundRaw,
 
-    sessionId: ctx.sessionId,
+    getSessionId: getOutboundSessionId,
 
-    config: ctx.wechatConfig
+    config: ctx.wechatConfig,
+
+    db: ctx.db
 
   })
 

@@ -4,13 +4,18 @@ import { appendMessage, updateMessageContent } from '../database'
 import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { FeishuConfig, FeishuInboundMessage, WorkDirProfile } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
+import { readRemoteSessionIdleMinutes } from '../../src/shared/remoteSessionResolve'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuConfirmManager } from './feishuConfirmManager'
 import { shouldAcceptInbound } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
+import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
+import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
+import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
+import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import {
   releaseRemoteSession,
@@ -28,6 +33,7 @@ import { logFeishuCliEvent } from './feishuCliLogger'
 import { contentHash, inboundSummaryForLog } from './feishuCliLogFields'
 import type { WorkDirManager } from '../workDirManager'
 import { bindSessionWorkDir, SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
+import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import {
   REMOTE_PARALLEL_FULL_MESSAGE,
   REMOTE_SESSION_BUSY_MESSAGE
@@ -200,23 +206,41 @@ export class RemoteCommandRouter {
       sessionId,
       isNew,
       chatId: msg.chatId,
-      mergeWindowMs: (config.remoteSessionMergeMinutes ?? 0) * 60_000
+      mergeWindowMs: readRemoteSessionIdleMinutes(config) * 60_000
     })
 
     if (profile?.sensitive) {
-      await replyFeishuText(this.deps.runner, msg.messageId, '该项目为敏感项目，不允许远程访问')
+      await sendFeishuRemoteOutbound({
+        runner: this.deps.runner,
+        messageId: msg.messageId,
+        body: '该项目为敏感项目，不允许远程访问',
+        sessionId,
+        touch: { db: this.deps.db, sessionId }
+      })
       return
     }
 
     const claim = tryClaimRemoteSession(sessionId, appCfg.maxParallelChatSessions)
     if (claim === 'session_busy') {
       logFeishuCliEvent('warn', 'feishu.inbound.session_busy', { sessionId })
-      await replyFeishuText(this.deps.runner, msg.messageId, REMOTE_SESSION_BUSY_MESSAGE)
+      await sendFeishuRemoteOutbound({
+        runner: this.deps.runner,
+        messageId: msg.messageId,
+        body: REMOTE_SESSION_BUSY_MESSAGE,
+        sessionId,
+        touch: { db: this.deps.db, sessionId }
+      })
       return
     }
     if (claim === 'parallel_full') {
       logFeishuCliEvent('warn', 'feishu.inbound.parallel_full', { maxParallel: appCfg.maxParallelChatSessions })
-      await replyFeishuText(this.deps.runner, msg.messageId, REMOTE_PARALLEL_FULL_MESSAGE)
+      await sendFeishuRemoteOutbound({
+        runner: this.deps.runner,
+        messageId: msg.messageId,
+        body: REMOTE_PARALLEL_FULL_MESSAGE,
+        sessionId,
+        touch: { db: this.deps.db, sessionId }
+      })
       return
     }
 
@@ -235,7 +259,13 @@ export class RemoteCommandRouter {
             this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName })
         })
         if (!bindResult.success) {
-          await replyFeishuText(this.deps.runner, msg.messageId, bindResult.error ?? SENSITIVE_WORKDIR_ERROR)
+          await sendFeishuRemoteOutbound({
+            runner: this.deps.runner,
+            messageId: msg.messageId,
+            body: bindResult.error ?? SENSITIVE_WORKDIR_ERROR,
+            sessionId,
+            touch: { db: this.deps.db, sessionId }
+          })
           return
         }
       }
@@ -248,9 +278,16 @@ export class RemoteCommandRouter {
         timestamp: Date.now(),
         status: 'sent'
       })
+      touchRemoteSessionActivity(this.deps.db, sessionId)
 
       if (isNew || config.remoteNotifyOnReceive) {
-        await replyFeishuText(this.deps.runner, msg.messageId, '已收到，正在处理…')
+        await sendFeishuRemoteOutbound({
+          runner: this.deps.runner,
+          messageId: msg.messageId,
+          body: '已收到，正在处理…',
+          sessionId,
+          touch: { db: this.deps.db, sessionId }
+        })
       }
 
       const wc = this.deps.getMainWebContents()
@@ -282,7 +319,9 @@ export class RemoteCommandRouter {
         chatId: msg.chatId,
         sessionId,
         appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
-          this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName })
+          this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
+        appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>
+          this.deps.auditLogger.append(auditEntryToLoggerPayload(entry))
       }
 
       const result = await runFeishuRemoteAgent({
@@ -309,33 +348,44 @@ export class RemoteCommandRouter {
       })
 
       if (wc) {
+        const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
         wc.send('feishu:agent-done', {
-          sessionId,
+          sessionId: outboundSessionId,
           messageId: assistantMessageId,
           requestId,
           ok: result.ok,
           summary: result.summary
         })
       } else {
+        const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
         updateMessageContent(this.deps.db, assistantMessageId, {
           content: result.summary,
           status: result.ok ? 'completed' : 'failed'
         })
+        touchRemoteSessionActivity(this.deps.db, outboundSessionId)
       }
 
-      await replyFeishuText(this.deps.runner, msg.messageId, result.summary)
+      const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
+      await sendFeishuRemoteOutbound({
+        runner: this.deps.runner,
+        messageId: msg.messageId,
+        body: result.summary,
+        sessionId: outboundSessionId,
+        touch: { db: this.deps.db, sessionId: outboundSessionId }
+      })
       this.lastReplyAt = Date.now()
       clearRemoteProgressSession(sessionId)
       await this.deps.auditLogger.append({
         type: 'agent_done',
-        sessionId,
+        sessionId: outboundSessionId,
         success: !result.pendingConfirm,
         summaryLen: result.summary.length
       })
       await this.deps.auditLogger.append({ type: 'reply', messageId: msg.messageId, len: result.summary.length })
 
       if (result.pendingConfirm && wc) {
-        wc.send('feishu:pending-confirm', { sessionId, pendingConfirm: true })
+        const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
+        wc.send('feishu:pending-confirm', { sessionId: outboundSessionId, pendingConfirm: true })
       }
     } finally {
       releaseRemoteSession(sessionId)

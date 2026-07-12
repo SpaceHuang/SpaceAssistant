@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { App, Badge, Button, Checkbox, Collapse, Input, InputNumber, Select, Space, Tooltip } from 'antd'
 import type { WeChatConfig, WeChatConnectionStatus, WeChatLoginProgress } from '../../../shared/wechatTypes'
+import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
 import { WeChatAuditDrawer } from './WeChatAuditDrawer'
 import type { ModelEntry } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack } from './ConfigField'
@@ -311,14 +312,14 @@ export function WeChatSettingsTab({ wechat, onChange, models = [] }: Props) {
               {t('settings.wechat.notifyOnReceive')}
             </Checkbox>
 
-            <ConfigField label={t('settings.wechat.sessionMergeLabel')}>
+            <ConfigField label={t('settings.wechat.sessionIdleLabel')}>
               <InputNumber
                 min={0}
                 max={120}
-                value={wechat.remoteSessionMergeMinutes ?? 0}
-                onChange={(v) => patch({ remoteSessionMergeMinutes: v ?? 0 })}
+                value={readRemoteSessionIdleMinutes(wechat)}
+                onChange={(v) => patch({ remoteSessionIdleMinutes: v ?? 0 })}
               />
-              <span className="config-inline-label">{t('settings.wechat.sessionMergeUnit')}</span>
+              <span className="config-inline-label">{t('settings.wechat.sessionIdleUnit')}</span>
             </ConfigField>
 
             <ConfigField label={t('settings.wechat.remoteDefaultModelLabel')}>

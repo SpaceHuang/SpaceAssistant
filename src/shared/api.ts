@@ -490,6 +490,15 @@ export type SpaceAssistantApi = {
   workdirSwitch: (profileId: string) => Promise<{ success: boolean; sessions: Session[]; error?: string }>
   workdirCheckWritable: (path: string) => Promise<{ ok: boolean; error?: string }>
 
+  onRemoteSwitchSessionRequest: (
+    cb: (data: { requestId: string; sessionId: string }) => void
+  ) => () => void
+  remoteSwitchSessionComplete: (payload: {
+    requestId: string
+    desktopSwitched: boolean
+    viewChanged: boolean
+  }) => Promise<void>
+
   // 浮动通知 /test-pop 调试命令（仅主窗口渲染进程）
   testPopShow: () => Promise<void>
 }

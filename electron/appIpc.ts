@@ -79,6 +79,7 @@ import { buildLocalFileViewerUrl } from './fileViewerUrl'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
+import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
 import { submitWriteDirConfirm } from './workspaceLayout/writeDirConfirmRegistry'
 import {
@@ -1652,6 +1653,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('workdir:check-writable', (_e, payload: { path: string }) =>
     ctx.workDirManager.checkDirectoryWritable(payload.path)
+  )
+
+  ipcMain.handle(
+    'remote:switch-session-complete',
+    async (_e, payload: { requestId: string; desktopSwitched: boolean; viewChanged: boolean }) => {
+      completeRendererSessionSwitch(payload)
+    }
   )
 
   // 浮动通知 IPC

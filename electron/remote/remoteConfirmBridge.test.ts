@@ -28,7 +28,8 @@ describe('feishuProgressAdapter', () => {
       runner: { run: () => Promise.resolve({ exitCode: 0 }) } as never,
       messageId: 'm1',
       sessionId: 's1',
-      config: { enabled: true } as never
+      config: { enabled: true } as never,
+      db: {} as never
     })
     expect(adapter.channel).toBe('feishu')
     expect(adapter.sendTyping).toBeUndefined()

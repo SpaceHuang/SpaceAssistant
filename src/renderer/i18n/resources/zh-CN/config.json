@@ -284,6 +284,11 @@
         "summary": "切换当前远程会话绑定的工作目录，不影响桌面端与其他会话。",
         "disabledHint": "关闭后远程 Agent 无法在会话中切换工作目录。"
       },
+      "switchSession": {
+        "displayName": "切换会话",
+        "summary": "将桌面端当前视图切换到指定远程会话，并同步工作目录（仅飞书/微信远程可用）。",
+        "disabledHint": "关闭后远程 Agent 无法切换桌面会话视图。"
+      },
       "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。"
     },
     "nav": {
@@ -502,7 +507,7 @@
     "groupTriggerPrefix": "前缀",
     "groupTriggerBoth": "两者",
     "commandPrefixPlaceholder": "命令前缀",
-    "sessionMergeLabel": "会话合并（分钟，0=每条新会话）",
+    "sessionIdleLabel": "会话续接：末条消息发送完成后（分钟，0=每条新会话）",
     "remoteConfirmLabel": "远程写确认策略",
     "remoteConfirmReadOnly": "禁止远程写",
     "remoteConfirmFeishu": "飞书内 Y/N 确认",
@@ -607,8 +612,8 @@
       "statusListening": "监听中",
       "statusStopped": "已停止",
       "notifyOnReceive": "收到消息时弹窗通知",
-      "sessionMergeLabel": "会话合并（分钟，0=每条新会话）",
-      "sessionMergeUnit": "分钟",
+      "sessionIdleLabel": "会话续接：末条消息发送完成后（分钟，0=每条新会话）",
+      "sessionIdleUnit": "分钟",
       "allowLocalWrite": "允许远程指令修改本地文件",
       "rateLimitLabel": "消息频率限制（条/分钟/用户）",
       "senderAllowlistLabel": "发送者白名单",

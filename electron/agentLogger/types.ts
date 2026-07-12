@@ -58,6 +58,8 @@ export type AgentLogEventName =
   | 'workdir.switch.start'
   | 'workdir.switch.done'
   | 'workdir.switch.error'
+  | 'session_switch'
+  | 'session_switch.denied'
   | 'fileContentWatcher.error'
   | 'fileContentWatcher.startFailed'
   | 'tool.result.pairing.repaired'

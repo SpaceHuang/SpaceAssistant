@@ -16,6 +16,7 @@ export interface WeChatConfig {
   remoteEnabled: boolean
   remoteSenderAllowlist?: string[]
   remoteSessionMergeMinutes?: number
+  remoteSessionIdleMinutes?: number
   remoteNotifyOnReceive: boolean
   remoteCommandPrefix?: string
   remoteRateLimitPerMinute: number
@@ -41,7 +42,7 @@ export const DEFAULT_WECHAT_CONFIG: WeChatConfig = {
   remoteNotifyOnReceive: true,
   remoteConfirmPolicy: 'always',
   remoteAllowLocalWrite: true,
-  remoteSessionMergeMinutes: 10,
+  remoteSessionIdleMinutes: 10,
   remoteRateLimitPerMinute: 10,
   remoteTypingEnabled: true,
   remoteProgressHeartbeatSec: 60,

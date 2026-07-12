@@ -1,9 +1,9 @@
 import { createHash } from 'crypto'
-import type { RemoteProgressConfig } from '../../src/shared/remoteProgressTypes'
+import { progressReplyDedupeKey } from '../../src/shared/remoteOutboundFormat'
 import {
   mergeRemoteProgressConfig,
-  progressReplyDedupeKey,
-  resolveHeartbeatProgressText
+  resolveHeartbeatProgressText,
+  type RemoteProgressConfig
 } from '../../src/shared/remoteProgressTypes'
 import {
   getCurrentRemoteProgressSnapshot,

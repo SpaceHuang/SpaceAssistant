@@ -97,6 +97,22 @@ describe('remoteProgressCoordinator', () => {
     stopRemoteProgressSession('s1')
   })
 
+  it('dedupes when second reply only differs by session suffix', async () => {
+    const adapter = makeAdapter()
+    const sessionId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+    startRemoteProgressSession('s1', adapter, {
+      remoteTypingEnabled: false,
+      remoteProgressHeartbeatSec: 0,
+      remoteProgressMinIntervalSec: 0,
+      remoteProgressMode: 'activity_snapshot'
+    })
+
+    await sendInstantRemoteProgressReply('s1', '【进度】grep src')
+    await sendInstantRemoteProgressReply('s1', `【进度】grep src 会话$${sessionId}$`)
+    expect(adapter.replies).toHaveLength(1)
+    stopRemoteProgressSession('s1')
+  })
+
   it('legacy_heartbeat sends fallback only', async () => {
     const adapter = makeAdapter()
     startRemoteProgressSession('s1', adapter, {

@@ -1,3 +1,7 @@
+import type { IncomingMessage } from '@wechatbot/wechatbot'
+import type { AppDatabase } from '../database'
+import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
+
 const SUMMARY_MAX = 2000
 const FOOTER = '\n\n完整过程请查看 SpaceAssistant 桌面会话'
 
@@ -25,9 +29,6 @@ export function formatWeChatSummary(raw: string): string {
   return `${truncated}…${FOOTER}`
 }
 
-import type { IncomingMessage } from '@wechatbot/wechatbot'
-import { logWeChatCliEvent } from './weChatCliLogger'
-
 export interface WeChatReplyBot {
   reply: (msg: IncomingMessage, content: string | { text: string }) => Promise<void>
   sendTyping: (userId: string) => Promise<void>
@@ -37,16 +38,17 @@ export interface WeChatReplyBot {
 export async function replyWeChatSummary(
   bot: WeChatReplyBot,
   inboundMsg: IncomingMessage,
-  summary: string
+  summary: string,
+  opts?: { sessionId?: string; touch?: { db: AppDatabase; sessionId: string } }
 ): Promise<{ chunksSent: number }> {
-  const text = formatWeChatSummary(summary)
-  await bot.reply(inboundMsg, text)
-  const chunks = Math.ceil(text.length / 2000)
-  logWeChatCliEvent('info', 'wechat.reply.send', {
-    textLen: text.length,
-    chunksSent: Math.max(1, chunks)
+  await sendWeChatRemoteOutbound({
+    bot,
+    inbound: inboundMsg,
+    body: summary,
+    sessionId: opts?.sessionId,
+    touch: opts?.touch
   })
-  return { chunksSent: Math.max(1, chunks) }
+  return { chunksSent: 1 }
 }
 
 export async function sendWeChatTyping(bot: WeChatReplyBot, userId: string): Promise<void> {

@@ -15,6 +15,7 @@ describe('filterBuiltinToolsForApi workdir tools', () => {
     const names = list.map((t) => t.name)
     expect(names).not.toContain('list_work_dirs')
     expect(names).not.toContain('switch_work_dir')
+    expect(names).not.toContain('switch_session')
   })
 
   it('includes workdir tools for remote sessions', () => {
@@ -22,6 +23,7 @@ describe('filterBuiltinToolsForApi workdir tools', () => {
     const names = list.map((t) => t.name)
     expect(names).toContain('list_work_dirs')
     expect(names).toContain('switch_work_dir')
+    expect(names).toContain('switch_session')
   })
 
   it('respects deniedTools for remote sessions', () => {

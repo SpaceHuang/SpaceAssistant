@@ -5,7 +5,9 @@ import { logFeishuCliEvent } from './feishuCliLogger'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
+import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
 import { formatFeishuRemoteProgressPrefix } from './feishuRemoteProgress'
+import type { AppDatabase } from '../database'
 
 export interface InboundAcceptResult {
   accept: boolean
@@ -75,11 +77,16 @@ export class FeishuConfirmManager {
 
   constructor(
     private auditLogger?: FeishuAuditLogger,
-    private runner?: LarkCliRunner
+    private runner?: LarkCliRunner,
+    private db?: AppDatabase
   ) {}
 
   listPending(): FeishuPendingConfirm[] {
     return [...this.pending.values()]
+  }
+
+  hasPendingForSession(sessionId: string): boolean {
+    return [...this.pending.values()].some((p) => p.sessionId === sessionId)
   }
 
   countPending(): number {
@@ -195,7 +202,17 @@ export class FeishuConfirmManager {
   private notifyConfirmPrompt(entry: FeishuPendingConfirm): void {
     if (!this.runner) return
     const text = this.buildConfirmPromptText(entry)
-    void replyFeishuText(this.runner, entry.messageId, text).catch((e) => {
+    const send = this.db
+      ? () =>
+          sendFeishuRemoteOutbound({
+            runner: this.runner!,
+            messageId: entry.messageId,
+            body: text,
+            sessionId: entry.sessionId,
+            touch: { db: this.db!, sessionId: entry.sessionId }
+          })
+      : () => replyFeishuText(this.runner!, entry.messageId, text)
+    void send().catch((e) => {
       logFeishuCliEvent('error', 'feishu.confirm.prompt_failed', {
         confirmId: entry.id,
         messageId: entry.messageId,

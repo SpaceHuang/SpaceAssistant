@@ -86,6 +86,4 @@ export function resolveHeartbeatProgressText(args: {
   }
 }
 
-export function progressReplyDedupeKey(text: string): string {
-  return text.trim()
-}
+export { progressReplyDedupeKey } from './remoteOutboundFormat'

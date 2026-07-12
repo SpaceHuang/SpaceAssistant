@@ -2,6 +2,11 @@ import type { AppDatabase } from '../database'
 import { createSession, listSessions, updateSession } from '../database'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import { truncateTitle } from './weChatInboundParser'
+import {
+  pickRemoteSessionCandidate,
+  readRemoteSessionIdleMinutes,
+  resolveActivityAt
+} from '../../src/shared/remoteSessionResolve'
 
 export async function createNewWeChatSession(
   db: AppDatabase,
@@ -43,25 +48,27 @@ export async function resolveWeChatSession(
     model = defaultModel
   }
   const activeProfileId = getActiveWorkDirProfileId?.()
-  const mergeWindowMs = (config.remoteSessionMergeMinutes ?? 0) * 60_000
-  if (mergeWindowMs <= 0) {
+
+  const idleTimeoutMs = readRemoteSessionIdleMinutes(config) * 60_000
+  if (idleTimeoutMs <= 0) {
     return {
       sessionId: await createNewWeChatSession(db, msg, model, activeProfileId),
       isNew: true
     }
   }
 
-  const existing = listSessions(db).find((s) => {
-    const m = s.metadata as Record<string, unknown> | undefined
-    const meta = m?.wechatMeta as { userId?: string; lastReplyAt?: number } | undefined
-    return (
-      m?.source === 'wechat' &&
-      meta?.userId === msg.userId &&
-      Date.now() - (meta?.lastReplyAt ?? s.updatedAt) < mergeWindowMs
-    )
-  })
+  const existing = pickRemoteSessionCandidate(
+    listSessions(db),
+    'wechat',
+    msg.userId,
+    (s) => {
+      const m = s.metadata as Record<string, unknown> | undefined
+      const meta = m?.wechatMeta as { userId?: string } | undefined
+      return meta?.userId
+    }
+  )
 
-  if (existing) {
+  if (existing && Date.now() - resolveActivityAt(existing) < idleTimeoutMs) {
     const patch: Parameters<typeof updateSession>[2] = {
       metadata: {
         ...existing.metadata,
@@ -85,18 +92,4 @@ export async function resolveWeChatSession(
     sessionId: await createNewWeChatSession(db, msg, model, activeProfileId),
     isNew: true
   }
-}
-
-export function touchWeChatSessionReply(db: AppDatabase, sessionId: string): void {
-  const sessions = listSessions(db)
-  const s = sessions.find((x) => x.id === sessionId)
-  if (!s) return
-  const meta = (s.metadata ?? {}) as Record<string, unknown>
-  const wechatMeta = (meta.wechatMeta ?? {}) as Record<string, unknown>
-  updateSession(db, sessionId, {
-    metadata: {
-      ...meta,
-      wechatMeta: { ...wechatMeta, lastReplyAt: Date.now() }
-    }
-  })
 }

@@ -253,6 +253,21 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
       description:
         '至少提供 profile_id、name 或 alias 中的一个。匹配优先级：profile_id > name（精确）> alias（精确）> name（模糊）'
     }
+  },
+  {
+    name: 'switch_session',
+    description:
+      '将桌面端当前视图切换到指定会话，并同步该会话绑定的工作目录。仅远程会话（飞书/微信）可用。通常从 IM 出站末尾「 会话$...$ 」后缀获取 session_id。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        session_id: {
+          type: 'string',
+          description: '目标会话 ID（UUID），通常来自 IM 出站末尾「 会话$...$ 」后缀'
+        }
+      },
+      required: ['session_id']
+    }
   }
 ]
 

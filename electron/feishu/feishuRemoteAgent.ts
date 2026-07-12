@@ -20,6 +20,7 @@ import { startRemoteProgressSession, stopRemoteProgressSession } from '../remote
 import { createFeishuProgressAdapter, pickFeishuProgressConfig } from '../remote/feishuProgressAdapter'
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
 import { FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
+import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 
 export async function runFeishuRemoteAgent(ctx: {
   db: AppDatabase
@@ -57,11 +58,14 @@ export async function runFeishuRemoteAgent(ctx: {
     confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy
   })
 
+  const getOutboundSessionId = () => resolveRemoteOutboundSessionId(ctx.remoteContext, ctx.sessionId)
+
   const adapter = createFeishuProgressAdapter({
     runner: ctx.runner,
     messageId: ctx.replyMessageId,
-    sessionId: ctx.sessionId,
-    config: ctx.feishuConfig
+    getSessionId: getOutboundSessionId,
+    config: ctx.feishuConfig,
+    db: ctx.db
   })
   startRemoteProgressSession(
     ctx.sessionId,

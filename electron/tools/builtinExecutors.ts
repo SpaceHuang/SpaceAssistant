@@ -20,6 +20,7 @@ import { browserExecutor } from './browserExecutor'
 import { browserDetectExecutor } from './browserDetectExecutor'
 import { runShellExecutor } from './runShellExecutor'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
+import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
 import { sliceFileLines } from '../../src/shared/readFileRange'
 import type { FileState } from '../fileStateCache'
@@ -937,7 +938,8 @@ const registry = new Map<string, ToolExecutor>([
   [browserDetectExecutor.name, browserDetectExecutor],
   [runShellExecutor.name, runShellExecutor],
   [listWorkDirsExecutor.name, listWorkDirsExecutor],
-  [switchWorkDirExecutor.name, switchWorkDirExecutor]
+  [switchWorkDirExecutor.name, switchWorkDirExecutor],
+  [switchSessionExecutor.name, switchSessionExecutor]
 ])
 
 export function getToolExecutor(name: string): ToolExecutor | undefined {

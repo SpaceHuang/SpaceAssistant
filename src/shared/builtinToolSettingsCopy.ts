@@ -81,6 +81,11 @@ const TOOL_I18N_KEYS: Record<string, BuiltinToolI18nKeys> = {
     displayName: 'tools.builtin.switchWorkDir.displayName' as NamespaceKeyMap['config'],
     summary: 'tools.builtin.switchWorkDir.summary' as NamespaceKeyMap['config'],
     disabledHint: 'tools.builtin.switchWorkDir.disabledHint' as NamespaceKeyMap['config']
+  },
+  switch_session: {
+    displayName: 'tools.builtin.switchSession.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.switchSession.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.switchSession.disabledHint' as NamespaceKeyMap['config']
   }
 }
 

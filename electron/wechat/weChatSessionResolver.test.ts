@@ -55,7 +55,7 @@ describe('resolveWeChatSession workDirProfileId', () => {
 
   it('writes workDirProfileId on new session', async () => {
     const { db, activeProfileId } = setup()
-    const config = mergeWeChatConfig({ remoteSessionMergeMinutes: 0 })
+    const config = mergeWeChatConfig({ remoteSessionIdleMinutes: 0 })
     const { sessionId } = await resolveWeChatSession(
       db,
       makeMsg(),
@@ -67,9 +67,9 @@ describe('resolveWeChatSession workDirProfileId', () => {
     expect(getSession(db, sessionId)?.workDirProfileId).toBe(activeProfileId)
   })
 
-  it('backfills workDirProfileId when merging session without binding', async () => {
+  it('backfills workDirProfileId when reusing session within idle window', async () => {
     const { db, activeProfileId } = setup()
-    const config = mergeWeChatConfig({ remoteSessionMergeMinutes: 60 })
+    const config = mergeWeChatConfig({ remoteSessionIdleMinutes: 60 })
     const existing = createSession(db, {
       name: '[微信] old',
       metadata: {
@@ -77,7 +77,8 @@ describe('resolveWeChatSession workDirProfileId', () => {
         wechatMeta: {
           userId: 'user-1',
           lastReplyAt: Date.now()
-        }
+        },
+        remoteSessionLastActivityAt: Date.now()
       }
     })
 
@@ -93,5 +94,27 @@ describe('resolveWeChatSession workDirProfileId', () => {
     expect(isNew).toBe(false)
     expect(sessionId).toBe(existing.id)
     expect(getSession(db, sessionId)?.workDirProfileId).toBe(activeProfileId)
+  })
+
+  it('creates new session after idle timeout', async () => {
+    const { db, activeProfileId } = setup()
+    const config = mergeWeChatConfig({ remoteSessionIdleMinutes: 10 })
+    createSession(db, {
+      name: '[微信] old',
+      metadata: {
+        source: 'wechat',
+        wechatMeta: { userId: 'user-1' },
+        remoteSessionLastActivityAt: Date.now() - 11 * 60_000
+      }
+    })
+    const { isNew } = await resolveWeChatSession(
+      db,
+      makeMsg({ messageId: 'm3' }),
+      config,
+      'claude-sonnet-4-20250514',
+      undefined,
+      () => activeProfileId
+    )
+    expect(isNew).toBe(true)
   })
 })

@@ -1,3 +1,4 @@
+import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
@@ -19,6 +20,7 @@ export interface FeishuRemoteContext {
   chatId?: string
   sessionId?: string
   appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
+  appendSessionSwitchAudit?: (entry: SessionSwitchAuditEntry) => void | Promise<void>
 }
 
 export interface WeChatRemoteContext {
@@ -32,6 +34,7 @@ export interface WeChatRemoteContext {
   sessionId?: string
   inboundRaw?: IncomingMessage
   appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
+  appendSessionSwitchAudit?: (entry: SessionSwitchAuditEntry) => void | Promise<void>
 }
 
 export type RemoteContext = FeishuRemoteContext | WeChatRemoteContext

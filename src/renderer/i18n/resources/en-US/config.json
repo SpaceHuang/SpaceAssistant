@@ -284,6 +284,11 @@
         "summary": "Switch the work directory bound to the current remote session without affecting desktop or other sessions.",
         "disabledHint": "When disabled, the remote agent cannot switch work directories in the session."
       },
+      "switchSession": {
+        "displayName": "Switch session",
+        "summary": "Switch the desktop view to a specified remote session and sync its work directory (Feishu/WeChat remote only).",
+        "disabledHint": "When disabled, the remote agent cannot switch the desktop session view."
+      },
       "fallbackDisabledHint": "When disabled, the agent cannot call this tool in chat."
     },
     "nav": {
@@ -502,7 +507,7 @@
     "groupTriggerPrefix": "Prefix",
     "groupTriggerBoth": "Both",
     "commandPrefixPlaceholder": "Command prefix",
-    "sessionMergeLabel": "Session merge (minutes; 0 = new session per message)",
+    "sessionIdleLabel": "Session resume: after last message sent (minutes; 0 = new session per message)",
     "remoteConfirmLabel": "Remote write confirmation policy",
     "remoteConfirmReadOnly": "Block remote writes",
     "remoteConfirmFeishu": "Confirm with Y/N in Feishu",
@@ -607,8 +612,8 @@
       "statusListening": "Listening",
       "statusStopped": "Stopped",
       "notifyOnReceive": "Notify when a message arrives",
-      "sessionMergeLabel": "Session merge (minutes, 0 = new session per message)",
-      "sessionMergeUnit": "min",
+      "sessionIdleLabel": "Session resume: after last message sent (minutes; 0 = new session per message)",
+      "sessionIdleUnit": "min",
       "allowLocalWrite": "Allow remote commands to modify local files",
       "rateLimitLabel": "Rate limit (messages/min/user)",
       "senderAllowlistLabel": "Sender allowlist",

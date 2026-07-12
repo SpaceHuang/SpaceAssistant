@@ -334,6 +334,17 @@ const api: SpaceAssistantApi = {
   workdirSwitch: (profileId) => ipcRenderer.invoke('workdir:switch', { profileId }),
   workdirCheckWritable: (path) => ipcRenderer.invoke('workdir:check-writable', { path }),
 
+  onRemoteSwitchSessionRequest: (cb) => {
+    const fn = (_e: unknown, data: { requestId: string; sessionId: string }) => cb(data)
+    ipcRenderer.on('remote:switch-session-request', fn)
+    return () => ipcRenderer.removeListener('remote:switch-session-request', fn)
+  },
+  remoteSwitchSessionComplete: (payload: {
+    requestId: string
+    desktopSwitched: boolean
+    viewChanged: boolean
+  }) => ipcRenderer.invoke('remote:switch-session-complete', payload),
+
   testPopShow: () => ipcRenderer.invoke('test-pop:show')
 }
 

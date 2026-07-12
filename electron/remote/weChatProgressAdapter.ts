@@ -1,4 +1,5 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
+import type { AppDatabase } from '../database'
 import {
   DEFAULT_REMOTE_PROGRESS_CONFIG,
   mergeRemoteProgressConfig,
@@ -6,6 +7,7 @@ import {
 } from '../../src/shared/remoteProgressTypes'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import { sendWeChatTyping } from '../wechat/weChatReplyService'
+import { sendWeChatRemoteOutbound } from '../wechat/weChatRemoteOutbound'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import { logWeChatCliEvent } from '../wechat/weChatCliLogger'
 import type { RemoteProgressAdapter } from './remoteProgressCoordinator'
@@ -14,8 +16,9 @@ export function createWeChatProgressAdapter(args: {
   botService: WeChatBotService
   userId: string
   inboundRaw: IncomingMessage
-  sessionId: string
+  getSessionId: () => string
   config: WeChatConfig
+  db: AppDatabase
 }): RemoteProgressAdapter {
   const progressConfig = mergeRemoteProgressConfig(
     pickWeChatProgressConfig(args.config),
@@ -37,9 +40,17 @@ export function createWeChatProgressAdapter(args: {
       : undefined,
     reply: (text: string) => {
       if (!bot) return
-      void bot.reply(args.inboundRaw, text).catch(() => undefined)
+      const sessionId = args.getSessionId()
+      void sendWeChatRemoteOutbound({
+        bot,
+        inbound: args.inboundRaw,
+        body: text,
+        sessionId,
+        touch: { db: args.db, sessionId }
+      }).catch(() => undefined)
     },
-    logProgress: ({ sessionId, textLen, textHash }) => {
+    logProgress: ({ textLen, textHash }) => {
+      const sessionId = args.getSessionId()
       logWeChatCliEvent('info', 'wechat.remote.progress', { sessionId, textLen, textHash })
     }
   }

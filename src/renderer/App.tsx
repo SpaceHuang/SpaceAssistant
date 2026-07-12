@@ -16,6 +16,7 @@ import { SplitPane } from './components/ui/SplitPane'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
 import { initWeChatRemoteStreamBridge } from './services/wechatRemoteStreamService'
 import { initContextUsageStreamBridge } from './services/contextUsageStreamService'
+import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchService'
 import { initConfirmStores } from './services/confirmStoresInit'
 import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
@@ -169,6 +170,7 @@ function AppShellInner() {
     const offFeishuStream = initFeishuRemoteStreamBridge()
     const offWeChatStream = initWeChatRemoteStreamBridge()
     const offContextUsage = initContextUsageStreamBridge()
+    const offRemoteSessionSwitch = initRemoteSessionSwitchBridge()
     return () => {
       off1()
       off2()
@@ -176,6 +178,7 @@ function AppShellInner() {
       offFeishuStream()
       offWeChatStream()
       offContextUsage()
+      offRemoteSessionSwitch()
     }
   }, [dispatch])
 

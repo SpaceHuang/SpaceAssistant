@@ -75,6 +75,13 @@ import {
   onRemoteToolStateChange
 } from './remote/remoteProgressHooks'
 import { requestRemoteConfirm, resolveRemoteContextConfirmPolicy } from './remote/remoteConfirmBridge'
+import {
+  beginLlm,
+  beginTool,
+  clearRequest,
+  endLlm,
+  endTool
+} from './remote/remoteSessionSwitchState'
 import { shouldRequestImConfirm } from '../src/shared/remoteConfirmPolicy'
 import {
   ChatCancelledError,
@@ -351,6 +358,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
       args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
     }
     clearChatCancel(args.requestId)
+    clearRequest(args.requestId)
   }
 }
 
@@ -499,6 +507,7 @@ async function runToolChatSessionInner(
       maxTokens: maxTokensEffective,
       enableThinking: toolLoopOptions.enableThinking
     })
+    beginLlm(sessionId, requestId)
 
     let content: Anthropic.ContentBlock[]
     let stopReason: NormalizedStopReason | undefined
@@ -662,6 +671,8 @@ async function runToolChatSessionInner(
         stack: e instanceof Error ? e.stack : undefined
       })
       return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage)
+    } finally {
+      endLlm(sessionId, requestId)
     }
 
     const toolUses = content.filter((b) =>
@@ -1428,6 +1439,10 @@ async function runToolChatSessionInner(
       if (toolUserConfirmed && toolName === 'browser') {
         sendProgress('preparing', '正在准备浏览器…')
       }
+      const trackSwitchToolInFlight = toolName === 'switch_session'
+      if (!trackSwitchToolInFlight) {
+        beginTool(sessionId, requestId, toolName)
+      }
       try {
         execResult = await exec.execute(inputObj, {
           workDir,
@@ -1474,6 +1489,9 @@ async function runToolChatSessionInner(
         )
       }
       clearToolCancel(requestId, toolUseId)
+      if (!trackSwitchToolInFlight) {
+        endTool(sessionId, requestId, toolName)
+      }
       if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
         releaseWritePath(sessionId, relPath)
       }

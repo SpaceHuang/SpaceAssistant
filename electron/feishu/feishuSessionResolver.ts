@@ -2,6 +2,11 @@ import type { AppDatabase } from '../database'
 import { createSession, listSessions, updateSession } from '../database'
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { truncateTitle } from './feishuConfirmManager'
+import {
+  pickRemoteSessionCandidate,
+  readRemoteSessionIdleMinutes,
+  resolveActivityAt
+} from '../../src/shared/remoteSessionResolve'
 
 export async function createNewFeishuSession(
   db: AppDatabase,
@@ -33,17 +38,20 @@ export async function resolveFeishuSession(
   if (config.remoteDefaultModelId && availableModelNames && !availableModelNames.includes(model)) {
     model = defaultModel
   }
-  const mergeWindowMs = (config.remoteSessionMergeMinutes ?? 0) * 60_000
-  if (mergeWindowMs <= 0) {
+
+  const idleTimeoutMs = readRemoteSessionIdleMinutes(config) * 60_000
+  if (idleTimeoutMs <= 0) {
     return { sessionId: await createNewFeishuSession(db, msg, model), isNew: true }
   }
 
-  const existing = listSessions(db).find((s) => {
-    const m = s.metadata as Record<string, unknown>
-    return m?.source === 'feishu' && m?.feishuChatId === msg.chatId && Date.now() - s.updatedAt < mergeWindowMs
-  })
+  const existing = pickRemoteSessionCandidate(
+    listSessions(db),
+    'feishu',
+    msg.chatId,
+    (s) => (s.metadata as { feishuChatId?: string }).feishuChatId
+  )
 
-  if (existing) {
+  if (existing && Date.now() - resolveActivityAt(existing) < idleTimeoutMs) {
     updateSession(db, existing.id, {
       metadata: { ...existing.metadata, feishuMessageId: msg.messageId }
     })

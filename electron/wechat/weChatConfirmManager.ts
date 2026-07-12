@@ -44,6 +44,10 @@ export class WeChatConfirmManager {
     return [...this.pending.values()]
   }
 
+  hasPendingForSession(sessionId: string): boolean {
+    return [...this.pending.values()].some((p) => p.sessionId === sessionId)
+  }
+
   countPending(): number {
     return this.pending.size
   }

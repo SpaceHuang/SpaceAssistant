@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { App, Badge, Button, Checkbox, Collapse, Input, InputNumber, Radio, Select, Space, Switch, Tooltip } from 'antd'
 import type { FeishuConfig, FeishuEventStatus } from '../../../shared/feishuTypes'
+import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
 import { FeishuAuditDrawer } from './FeishuAuditDrawer'
 import { formatFeishuSettingsEventStatus } from './feishuEventStatusText'
 import type { ModelEntry } from '../../../shared/domainTypes'
@@ -249,12 +250,12 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           />
         </ConfigField>
 
-        <ConfigField label={t('feishu.sessionMergeLabel')}>
+        <ConfigField label={t('feishu.sessionIdleLabel')}>
           <InputNumber
             min={0}
             max={120}
-            value={feishu.remoteSessionMergeMinutes ?? 0}
-            onChange={(v) => patch({ remoteSessionMergeMinutes: v ?? 0 })}
+            value={readRemoteSessionIdleMinutes(feishu)}
+            onChange={(v) => patch({ remoteSessionIdleMinutes: v ?? 0 })}
           />
         </ConfigField>
 

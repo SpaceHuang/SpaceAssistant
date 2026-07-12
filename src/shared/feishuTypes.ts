@@ -24,6 +24,7 @@ export interface FeishuConfig {
   remoteCommandPrefix?: string
   remoteSenderAllowlist?: string[]
   remoteSessionMergeMinutes?: number
+  remoteSessionIdleMinutes?: number
   remoteNotifyOnReceive: boolean
   remoteConfirmPolicy: FeishuRemoteConfirmPolicy
   remoteAllowLocalWrite: boolean
@@ -53,7 +54,7 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteNotifyOnReceive: true,
   remoteConfirmPolicy: 'always',
   remoteAllowLocalWrite: true,
-  remoteSessionMergeMinutes: 0,
+  remoteSessionIdleMinutes: 10,
   region: 'feishu',
   wakeWordAutoExecute: false,
   remoteRateLimitPerMinute: 10,

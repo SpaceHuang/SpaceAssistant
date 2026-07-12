@@ -1,5 +1,6 @@
+import type { AppDatabase } from '../database'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
-import { replyFeishuText } from '../feishu/feishuReply'
+import { sendFeishuRemoteOutbound } from '../feishu/feishuRemoteOutbound'
 import { logFeishuCliEvent } from '../feishu/feishuCliLogger'
 import {
   FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG,
@@ -12,16 +13,25 @@ import type { RemoteProgressAdapter } from './remoteProgressCoordinator'
 export function createFeishuProgressAdapter(args: {
   runner: LarkCliRunner
   messageId: string
-  sessionId: string
+  getSessionId: () => string
   config: FeishuConfig
+  db: AppDatabase
 }): RemoteProgressAdapter {
   return {
     channel: 'feishu',
     sendTyping: undefined,
     reply: (text: string) => {
-      void replyFeishuText(args.runner, args.messageId, text).catch(() => undefined)
+      const sessionId = args.getSessionId()
+      void sendFeishuRemoteOutbound({
+        runner: args.runner,
+        messageId: args.messageId,
+        body: text,
+        sessionId,
+        touch: { db: args.db, sessionId }
+      }).catch(() => undefined)
     },
-    logProgress: ({ sessionId, textLen, textHash }) => {
+    logProgress: ({ textLen, textHash }) => {
+      const sessionId = args.getSessionId()
       logFeishuCliEvent('info', 'feishu.remote.progress', { sessionId, textLen, textHash })
     }
   }

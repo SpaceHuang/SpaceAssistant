@@ -26,8 +26,7 @@ vi.mock('./weChatRemoteAgent', () => ({
 }))
 
 vi.mock('./weChatSessionResolver', () => ({
-  resolveWeChatSession: (...args: unknown[]) => mockResolveSession(...args),
-  touchWeChatSessionReply: vi.fn()
+  resolveWeChatSession: (...args: unknown[]) => mockResolveSession(...args)
 }))
 
 vi.mock('../database', async (importOriginal) => {

@@ -1,7 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getSession, openDatabase, createSession } from '../database'
 import { createWorkDirManager } from '../workDirManager'
 import { RemoteCommandRouter } from './remoteCommandRouter'
@@ -21,7 +21,7 @@ import * as workDirBinding from '../workDirBinding'
 
 const mockRunFeishuRemoteAgent = vi.fn()
 const mockResolveFeishuSession = vi.fn()
-const mockReplyFeishuText = vi.fn()
+const mockSendFeishuRemoteOutbound = vi.fn()
 const mockShouldAcceptInbound = vi.fn()
 
 vi.mock('./feishuRemoteAgent', () => ({
@@ -32,8 +32,8 @@ vi.mock('./feishuSessionResolver', () => ({
   resolveFeishuSession: (...args: unknown[]) => mockResolveFeishuSession(...args)
 }))
 
-vi.mock('./feishuReply', () => ({
-  replyFeishuText: (...args: unknown[]) => mockReplyFeishuText(...args)
+vi.mock('./feishuRemoteOutbound', () => ({
+  sendFeishuRemoteOutbound: (...args: unknown[]) => mockSendFeishuRemoteOutbound(...args)
 }))
 
 vi.mock('./feishuInboundParser', () => ({
@@ -66,8 +66,13 @@ describe('RemoteCommandRouter workdir binding', () => {
   const dirs: string[] = []
   const openDbs: Array<{ close: () => void }> = []
 
+  beforeEach(() => {
+    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
+  })
+
   afterEach(() => {
     vi.clearAllMocks()
+    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
     resetRunningRemoteAgentRegistryForTests()
     for (const db of openDbs.splice(0)) {
       db.close()
@@ -167,10 +172,11 @@ describe('RemoteCommandRouter workdir binding', () => {
     const { router } = makeRouter(db, manager)
     await router.handleInbound(makeInbound({ messageId: 'msg-2', content: '/sa @secret hi' }))
 
-    expect(mockReplyFeishuText).toHaveBeenCalledWith(
-      expect.anything(),
-      'msg-2',
-      '该项目为敏感项目，不允许远程访问'
+    expect(mockSendFeishuRemoteOutbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 'msg-2',
+        body: '该项目为敏感项目，不允许远程访问'
+      })
     )
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
   })
@@ -180,8 +186,13 @@ describe('RemoteCommandRouter busy guard', () => {
   const dirs: string[] = []
   const openDbs: Array<{ close: () => void }> = []
 
+  beforeEach(() => {
+    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
+  })
+
   afterEach(() => {
     vi.clearAllMocks()
+    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
     resetRunningRemoteAgentRegistryForTests()
     for (const db of openDbs.splice(0)) {
       db.close()
@@ -254,10 +265,12 @@ describe('RemoteCommandRouter busy guard', () => {
     await router.handleInbound(makeInbound({ messageId: 'm2' }))
 
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
-    expect(mockReplyFeishuText).toHaveBeenCalledWith(
-      expect.anything(),
-      'm2',
-      REMOTE_SESSION_BUSY_MESSAGE
+    expect(mockSendFeishuRemoteOutbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 'm2',
+        body: REMOTE_SESSION_BUSY_MESSAGE,
+        sessionId: session.id
+      })
     )
     releaseRemoteSession(session.id)
   })
@@ -341,10 +354,12 @@ describe('RemoteCommandRouter busy guard', () => {
     await router.handleInbound(makeInbound({ messageId: 'p3' }))
 
     expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(2)
-    expect(mockReplyFeishuText).toHaveBeenCalledWith(
-      expect.anything(),
-      'p3',
-      REMOTE_PARALLEL_FULL_MESSAGE
+    expect(mockSendFeishuRemoteOutbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 'p3',
+        body: REMOTE_PARALLEL_FULL_MESSAGE,
+        sessionId: s3.id
+      })
     )
 
     releases.forEach((r) => r())

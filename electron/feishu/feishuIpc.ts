@@ -72,7 +72,7 @@ export function createFeishuBundle(deps: {
   const runner = new LarkCliRunner(() => readCfg().cliPath ?? '')
   const processedStore = new FeishuProcessedStore(userData)
   const auditLogger = new FeishuAuditLogger(userData)
-  const confirmManager = new FeishuConfirmManager(auditLogger, runner)
+  const confirmManager = new FeishuConfirmManager(auditLogger, runner, deps.db)
 
   const routerDeps: RemoteCommandRouterDeps = {
     db: deps.db,

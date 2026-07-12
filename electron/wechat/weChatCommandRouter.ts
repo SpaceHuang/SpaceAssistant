@@ -12,8 +12,9 @@ import type { WeChatConfirmManager } from './weChatConfirmManager'
 import { shouldAcceptWeChatInbound, parseSdkInboundMessage } from './weChatInboundParser'
 import type { WeChatProcessedStore } from './weChatProcessedStore'
 import { replyWeChatSummary } from './weChatReplyService'
+import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
-import { resolveWeChatSession, touchWeChatSessionReply } from './weChatSessionResolver'
+import { resolveWeChatSession } from './weChatSessionResolver'
 import {
   releaseRemoteSession,
   tryClaimRemoteSession
@@ -22,11 +23,15 @@ import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { buildMediaUserMessage, downloadWeChatInboundMedia } from './weChatMediaInbound'
 import { inboundSummaryForLog } from './weChatCliLogFields'
 import { logWeChatCliEvent } from './weChatCliLogger'
+import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
+import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
+import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import {
   REMOTE_PARALLEL_FULL_MESSAGE,
   REMOTE_SESSION_BUSY_MESSAGE
 } from '../remote/remoteSessionGuardMessages'
+import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 
 const senderRateMap = new Map<string, number[]>()
 
@@ -190,14 +195,30 @@ export class WeChatCommandRouter {
     const claim = tryClaimRemoteSession(sessionId, appCfg.maxParallelChatSessions)
     if (claim === 'session_busy') {
       logWeChatCliEvent('warn', 'wechat.inbound.session_busy', { sessionId })
-      if (bot) await bot.reply(inboundRaw, REMOTE_SESSION_BUSY_MESSAGE)
+      if (bot) {
+        await sendWeChatRemoteOutbound({
+          bot,
+          inbound: inboundRaw,
+          body: REMOTE_SESSION_BUSY_MESSAGE,
+          sessionId,
+          touch: { db: this.deps.db, sessionId }
+        })
+      }
       return
     }
     if (claim === 'parallel_full') {
       logWeChatCliEvent('warn', 'wechat.inbound.parallel_full', {
         maxParallel: appCfg.maxParallelChatSessions
       })
-      if (bot) await bot.reply(inboundRaw, REMOTE_PARALLEL_FULL_MESSAGE)
+      if (bot) {
+        await sendWeChatRemoteOutbound({
+          bot,
+          inbound: inboundRaw,
+          body: REMOTE_PARALLEL_FULL_MESSAGE,
+          sessionId,
+          touch: { db: this.deps.db, sessionId }
+        })
+      }
       return
     }
 
@@ -221,9 +242,16 @@ export class WeChatCommandRouter {
         timestamp: Date.now(),
         status: 'sent'
       })
+      touchRemoteSessionActivity(this.deps.db, sessionId)
 
       if (config.remoteAckOnReceive && (isNew || config.remoteNotifyOnReceive) && bot) {
-        await bot.reply(inboundRaw, '已收到，正在处理…')
+        await sendWeChatRemoteOutbound({
+          bot,
+          inbound: inboundRaw,
+          body: '已收到，正在处理…',
+          sessionId,
+          touch: { db: this.deps.db, sessionId }
+        })
       }
 
       const wc = this.deps.getMainWebContents()
@@ -255,7 +283,9 @@ export class WeChatCommandRouter {
         sessionId,
         inboundRaw,
         appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
-          this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName })
+          this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
+        appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>
+          this.deps.auditLogger.append(auditEntryToLoggerPayload(entry))
       }
 
       let result: { summary: string; pendingConfirm: boolean; ok: boolean }
@@ -289,9 +319,11 @@ export class WeChatCommandRouter {
         result = { summary: `执行失败：${err}\n请打开 SpaceAssistant 查看详情`, pendingConfirm: false, ok: false }
       }
 
+      const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
+
       if (wc) {
         wc.send('wechat:agent-done', {
-          sessionId,
+          sessionId: outboundSessionId,
           messageId: assistantMessageId,
           requestId,
           ok: result.ok,
@@ -302,14 +334,17 @@ export class WeChatCommandRouter {
           content: result.summary,
           status: result.ok ? 'completed' : 'failed'
         })
+        touchRemoteSessionActivity(this.deps.db, outboundSessionId)
       }
 
       if (bot && !result.pendingConfirm) {
-        await replyWeChatSummary(bot, inboundRaw, result.summary)
-        touchWeChatSessionReply(this.deps.db, sessionId)
+        await replyWeChatSummary(bot, inboundRaw, result.summary, {
+          sessionId: outboundSessionId,
+          touch: { db: this.deps.db, sessionId: outboundSessionId }
+        })
         await this.deps.auditLogger.append({
           type: 'reply',
-          sessionId,
+          sessionId: outboundSessionId,
           targetId: msg.userId,
           len: result.summary.length,
           success: result.ok
@@ -318,7 +353,7 @@ export class WeChatCommandRouter {
 
       await this.deps.auditLogger.append({
         type: 'agent_done',
-        sessionId,
+        sessionId: outboundSessionId,
         success: result.ok && !result.pendingConfirm,
         summaryLen: result.summary.length
       })
