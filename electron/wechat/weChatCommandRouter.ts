@@ -251,12 +251,7 @@ export class WeChatCommandRouter {
         userDataDir: this.deps.getUserDataPath(),
         remoteContext,
         inboundRaw,
-        userId: msg.userId,
-        onProgressHeartbeat: bot
-          ? () => {
-              void bot.reply(inboundRaw, '仍在处理中，请稍候…').catch(() => undefined)
-            }
-          : undefined
+        userId: msg.userId
       })
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)
@@ -288,8 +283,6 @@ export class WeChatCommandRouter {
         len: result.summary.length,
         success: result.ok
       })
-    } else if (result.pendingConfirm && bot) {
-      await bot.reply(inboundRaw, '该操作需在桌面端确认，请打开 SpaceAssistant')
     }
 
     await this.deps.auditLogger.append({

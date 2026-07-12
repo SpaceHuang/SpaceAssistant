@@ -5,6 +5,7 @@ import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { WeChatAuditLogger } from './weChatAuditLogger'
 import type { WeChatReplyBot } from './weChatReplyService'
 import { logWeChatCliEvent } from './weChatCliLogger'
+import { buildConfirmInstantPrompt } from '../remote/remoteProgressHooks'
 
 export type WeChatConfirmKind = 'tool_write'
 
@@ -24,6 +25,10 @@ export interface WeChatPendingConfirm {
 
 const CONFIRM_RE = /^[Yy]$|^[Nn]$|^确认$|^取消$/
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5 * 60_000
+
+export type WeChatConfirmRequestOptions = {
+  imPrompt?: string
+}
 
 export class WeChatConfirmManager {
   private pending = new Map<string, WeChatPendingConfirm>()
@@ -79,7 +84,7 @@ export class WeChatConfirmManager {
 
   private resolve(id: string, decision: 'y' | 'n' | 'timeout'): void {
     void this.auditLogger?.append({ type: 'confirm_request', confirmId: id, decision })
-    logWeChatCliEvent('info', 'wechat.confirm.resolved', { confirmId: id, decision })
+    logWeChatCliEvent('info', 'wechat.remote.confirm', { confirmId: id, decision })
     const resolver = this.resolvers.get(id)
     this.resolvers.delete(id)
     this.pending.delete(id)
@@ -89,8 +94,9 @@ export class WeChatConfirmManager {
 
   requestConfirm(
     pending: Omit<WeChatPendingConfirm, 'id' | 'createdAt' | 'expiresAt'>,
-    wechatConfig: WeChatConfig,
-    timeoutMs = DEFAULT_CONFIRM_TIMEOUT_MS
+    _wechatConfig: WeChatConfig,
+    timeoutMs = DEFAULT_CONFIRM_TIMEOUT_MS,
+    options?: WeChatConfirmRequestOptions
   ): Promise<'y' | 'n' | 'timeout'> {
     const existingForSession = [...this.pending.values()].find((p) => p.sessionId === pending.sessionId)
     if (existingForSession) return Promise.resolve('n')
@@ -122,12 +128,10 @@ export class WeChatConfirmManager {
     })
     wc?.send('wechat:pending-confirm', { count: this.pending.size })
 
-    if (wechatConfig.remoteWechatConfirm) {
-      const replyBot = this.getReplyBot?.()
-      if (replyBot) {
-        const prompt = this.buildWeChatYnPrompt(entry)
-        void replyBot.reply(pending.inboundMsg, prompt).catch(() => undefined)
-      }
+    const replyBot = this.getReplyBot?.()
+    const prompt = options?.imPrompt ?? this.buildWeChatYnPrompt(entry)
+    if (replyBot && prompt) {
+      void replyBot.reply(pending.inboundMsg, prompt).catch(() => undefined)
     }
 
     return new Promise((resolve) => {
@@ -135,7 +139,6 @@ export class WeChatConfirmManager {
       const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.resolve(id, 'timeout')
-          const replyBot = this.getReplyBot?.()
           if (replyBot) {
             void replyBot
               .reply(pending.inboundMsg, '操作已取消（确认超时）')
@@ -151,13 +154,21 @@ export class WeChatConfirmManager {
     })
   }
 
+  buildWeChatYnPrompt(pending: WeChatPendingConfirm, progressPrefix = ''): string {
+    const tool = pending.toolName ?? 'unknown'
+    const summary = `该操作需在确认后执行：\n工具：${tool}`
+    const prefix = progressPrefix.trim() || `【进度】等待确认：${tool}`
+    return buildConfirmInstantPrompt({
+      progressPrefix: prefix,
+      toolName: tool,
+      summary,
+      timeoutMinutes: 5
+    })
+  }
+
   private buildDescription(pending: WeChatPendingConfirm): string {
     const tool = pending.toolName ?? 'unknown'
     const input = pending.toolInput ? JSON.stringify(pending.toolInput).slice(0, 200) : ''
     return `微信远程 · ${tool}${input ? `: ${input}` : ''}`
-  }
-
-  private buildWeChatYnPrompt(pending: WeChatPendingConfirm): string {
-    return `该操作需在确认后执行：\n工具：${pending.toolName ?? 'unknown'}\n回复 Y 确认，N 取消（5 分钟内有效）`
   }
 }

@@ -1,6 +1,10 @@
+import type { RemoteProgressConfig } from './remoteProgressTypes'
+import { DEFAULT_REMOTE_PROGRESS_CONFIG } from './remoteProgressTypes'
+import { normalizeWeChatConfirmPolicy } from './remoteConfirmPolicy'
+
 export type WeChatPollState = 'stopped' | 'connecting' | 'polling' | 'logged_out' | 'error'
 
-export type WeChatRemoteConfirmPolicy = 'inherit' | 'always' | 'remote_read_only'
+export type WeChatRemoteConfirmPolicy = 'inherit' | 'always' | 'remote_read_only' | 'wechat_confirm'
 
 export type WeChatLoginProgress = 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'verify_code'
 
@@ -20,9 +24,13 @@ export interface WeChatConfig {
   remoteAllowLocalWrite: boolean
   remoteTypingEnabled: boolean
   remoteProgressHeartbeatSec?: number
+  remoteProgressMode?: RemoteProgressConfig['remoteProgressMode']
+  remoteProgressMinIntervalSec?: number
+  remoteProgressMaxChars?: number
+  remoteProgressFallbackText?: string
   remoteAckOnReceive: boolean
   wechatSendRequiresConfirm: boolean
-  /** Phase 2: 微信内 Y/N 确认写操作 */
+  /** @deprecated 兼容旧配置；true 时等效 wechat_confirm */
   remoteWechatConfirm?: boolean
 }
 
@@ -31,26 +39,44 @@ export const DEFAULT_WECHAT_CONFIG: WeChatConfig = {
   loggedIn: false,
   remoteEnabled: false,
   remoteNotifyOnReceive: true,
-  remoteConfirmPolicy: 'remote_read_only',
+  remoteConfirmPolicy: 'wechat_confirm',
   remoteAllowLocalWrite: false,
   remoteSessionMergeMinutes: 0,
   remoteRateLimitPerMinute: 10,
   remoteTypingEnabled: true,
   remoteProgressHeartbeatSec: 60,
+  remoteProgressMode: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMode,
+  remoteProgressMinIntervalSec: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMinIntervalSec,
+  remoteProgressMaxChars: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMaxChars,
+  remoteProgressFallbackText: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressFallbackText,
   remoteAckOnReceive: true,
   wechatSendRequiresConfirm: true,
   remoteWechatConfirm: false
 }
 
 export function mergeWeChatConfig(partial?: Partial<WeChatConfig> | null): WeChatConfig {
-  if (!partial || typeof partial !== 'object') return { ...DEFAULT_WECHAT_CONFIG }
+  if (!partial || typeof partial !== 'object') {
+    return { ...DEFAULT_WECHAT_CONFIG }
+  }
+
+  let remoteConfirmPolicy = partial.remoteConfirmPolicy ?? DEFAULT_WECHAT_CONFIG.remoteConfirmPolicy
+  if (partial.remoteWechatConfirm && remoteConfirmPolicy !== 'remote_read_only') {
+    remoteConfirmPolicy = 'wechat_confirm'
+  }
+
   return {
     ...DEFAULT_WECHAT_CONFIG,
     ...partial,
+    remoteConfirmPolicy,
     remoteSenderAllowlist: Array.isArray(partial.remoteSenderAllowlist)
       ? [...partial.remoteSenderAllowlist]
-      : DEFAULT_WECHAT_CONFIG.remoteSenderAllowlist
+      : DEFAULT_WECHAT_CONFIG.remoteSenderAllowlist,
+    remoteWechatConfirm: undefined
   }
+}
+
+export function effectiveWeChatConfirmPolicy(config: WeChatConfig): WeChatRemoteConfirmPolicy {
+  return normalizeWeChatConfirmPolicy(config.remoteConfirmPolicy, config.remoteWechatConfirm)
 }
 
 export interface WeChatMediaRef {

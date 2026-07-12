@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { App, Badge, Button, Checkbox, Input, InputNumber, Radio, Select, Space, Switch } from 'antd'
+import { App, Badge, Button, Checkbox, Collapse, Input, InputNumber, Radio, Select, Space, Switch, Tooltip } from 'antd'
 import type { FeishuConfig, FeishuEventStatus } from '../../../shared/feishuTypes'
 import { FeishuAuditDrawer } from './FeishuAuditDrawer'
 import { formatFeishuSettingsEventStatus } from './feishuEventStatusText'
@@ -267,10 +267,65 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
               { value: 'remote_read_only', label: t('feishu.remoteConfirmReadOnly') },
               { value: 'feishu_confirm', label: t('feishu.remoteConfirmFeishu') },
               { value: 'always', label: t('feishu.remoteConfirmAlways') },
-              { value: 'inherit', label: t('feishu.remoteConfirmInherit') }
+              {
+                value: 'inherit',
+                label: (
+                  <Tooltip title={t('feishu.remoteConfirmInheritHint')}>
+                    <span>{t('feishu.remoteConfirmInherit')}</span>
+                  </Tooltip>
+                )
+              }
             ]}
           />
         </ConfigField>
+
+        <Collapse
+          ghost
+          items={[
+            {
+              key: 'remoteProgress',
+              label: t('feishu.remoteProgressTitle'),
+              children: (
+                <Space direction="vertical" size="middle" className="config-settings-stack">
+                  <ConfigField label={t('feishu.remoteProgressModeLabel')}>
+                    <Select
+                      value={feishu.remoteProgressMode ?? 'activity_snapshot'}
+                      onChange={(remoteProgressMode) => patch({ remoteProgressMode })}
+                      classNames={configModalSelectPopupClassNames}
+                      options={[
+                        { value: 'activity_snapshot', label: t('feishu.remoteProgressModeActivity') },
+                        { value: 'legacy_heartbeat', label: t('feishu.remoteProgressModeLegacy') },
+                        { value: 'off', label: t('feishu.remoteProgressModeOff') }
+                      ]}
+                    />
+                  </ConfigField>
+                  <ConfigField label={t('feishu.remoteProgressHeartbeatLabel')}>
+                    <InputNumber
+                      min={0}
+                      max={600}
+                      value={feishu.remoteProgressHeartbeatSec ?? 60}
+                      onChange={(v) => patch({ remoteProgressHeartbeatSec: v ?? 60 })}
+                    />
+                  </ConfigField>
+                  <Checkbox
+                    checked={feishu.remoteTypingEnabled ?? false}
+                    onChange={(e) => patch({ remoteTypingEnabled: e.target.checked })}
+                  >
+                    {t('feishu.remoteTypingEnabled')}
+                  </Checkbox>
+                  <ConfigField label={t('feishu.remoteProgressMinIntervalLabel')}>
+                    <InputNumber
+                      min={0}
+                      max={120}
+                      value={feishu.remoteProgressMinIntervalSec ?? 5}
+                      onChange={(v) => patch({ remoteProgressMinIntervalSec: v ?? 5 })}
+                    />
+                  </ConfigField>
+                </Space>
+              )
+            }
+          ]}
+        />
 
         <Checkbox checked={feishu.remoteAllowLocalWrite} onChange={(e) => patch({ remoteAllowLocalWrite: e.target.checked })}>
           {t('feishu.remoteAllowLocalWrite')}

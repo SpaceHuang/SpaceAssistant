@@ -29,6 +29,15 @@ vi.mock('./runningRemoteAgentRegistry', () => ({
   unregisterRunningRemoteAgent: vi.fn()
 }))
 
+vi.mock('../remote/remoteProgressCoordinator', () => ({
+  startRemoteProgressSession: vi.fn(),
+  stopRemoteProgressSession: vi.fn()
+}))
+
+vi.mock('../remote/remoteProgressStore', () => ({
+  clearRemoteProgressSession: vi.fn()
+}))
+
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 
 function makeDb(): AppDatabase {
@@ -79,7 +88,7 @@ describe('runFeishuRemoteAgent locale', () => {
     mockRunToolChatSession.mockImplementation(async (args: { system?: string; appDb?: unknown; locale?: unknown }) => {
       capturedSystem = args.system
       expect(args.appDb).toBeDefined()
-      expect(args.locale).toBeUndefined()
+      expect(args.locale).toBe('en-US')
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
     })
 

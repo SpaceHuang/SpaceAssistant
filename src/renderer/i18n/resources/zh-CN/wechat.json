@@ -34,5 +34,8 @@
       "unknownError": "未知错误"
     },
     "auditAria": "打开微信操作记录"
+  },
+  "progress": {
+    "fallback": "仍在处理…"
   }
 }

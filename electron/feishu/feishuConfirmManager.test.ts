@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import { FeishuConfirmManager } from './feishuConfirmManager'
-import {
-  clearFeishuRemoteProgress,
-  publishFeishuRemoteProgress
-} from './feishuRemoteProgress'
 
 vi.mock('./feishuReply', () => ({
   replyFeishuText: vi.fn().mockResolvedValue(undefined)
@@ -72,8 +68,12 @@ describe('FeishuConfirmManager', () => {
   })
 
   it('includes progress prefix in confirm text', async () => {
-    const runner = { run: vi.fn().mockResolvedValue({ exitCode: 0 }) } as unknown as import('./larkCliRunner').LarkCliRunner
-    await publishFeishuRemoteProgress(runner, 'm1', 's-progress', '微信直连失败，改用镜像站点')
+    const { updateRemoteProgressSnapshot, clearRemoteProgressSession } = await import('../remote/remoteProgressStore')
+    updateRemoteProgressSnapshot('s-progress', {
+      kind: 'tool',
+      label: '微信直连失败，改用镜像站点',
+      publishable: true
+    })
     const mgr = new FeishuConfirmManager()
     const text = mgr.buildConfirmPromptText({
       id: '2',
@@ -86,9 +86,9 @@ describe('FeishuConfirmManager', () => {
       createdAt: 0,
       expiresAt: 0
     })
-    expect(text).toContain('【进度说明】')
+    expect(text).toContain('【进度】')
     expect(text).toContain('微信直连失败')
-    clearFeishuRemoteProgress('s-progress')
+    clearRemoteProgressSession('s-progress')
   })
 
   it('cancelAllPending resolves every waiter without waiting for timeout', async () => {

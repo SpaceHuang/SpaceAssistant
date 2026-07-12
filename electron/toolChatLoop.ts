@@ -66,7 +66,15 @@ import {
   precheckRunShellTool,
   type RunShellPrecheckResult
 } from './shell/shellToolLoopHelpers'
-import { publishFeishuRemoteProgress } from './feishu/feishuRemoteProgress'
+import { buildRemoteProgressHookContext } from './remote/buildRemoteProgressContext'
+import {
+  onRemoteTextSegmentClosed,
+  onRemoteThinkingActive,
+  onRemoteToolProgress,
+  onRemoteToolStateChange
+} from './remote/remoteProgressHooks'
+import { requestRemoteConfirm, resolveRemoteContextConfirmPolicy } from './remote/remoteConfirmBridge'
+import { shouldRequestImConfirm } from '../src/shared/remoteConfirmPolicy'
 import {
   ChatCancelledError,
   clearChatCancel,
@@ -535,6 +543,9 @@ async function runToolChatSessionInner(
         const thinkingDelta = (evt as { delta?: { thinking?: string } }).delta?.thinking
         if (typeof thinkingDelta === 'string' && thinkingDelta.length > 0) {
           safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text: thinkingDelta })
+          if (remoteContext) {
+            onRemoteThinkingActive(buildRemoteProgressHookContext(sessionId, locale))
+          }
         }
       }
       if (
@@ -580,17 +591,8 @@ async function runToolChatSessionInner(
           pendingTextByIndex.delete(index)
           if (text.length > 0) {
             contentBlocks.push({ type: 'text', text })
-            if (
-              remoteContext?.source === 'feishu' &&
-              remoteContext.larkCliRunner &&
-              remoteContext.messageId
-            ) {
-              void publishFeishuRemoteProgress(
-                remoteContext.larkCliRunner,
-                remoteContext.messageId,
-                sessionId,
-                text
-              ).catch(() => undefined)
+            if (remoteContext) {
+              onRemoteTextSegmentClosed(buildRemoteProgressHookContext(sessionId, locale), text)
             }
           }
         } else if (index >= 0 && blockType === 'tool_use') {
@@ -1039,18 +1041,17 @@ async function runToolChatSessionInner(
           })
         }
         safeWebContentsSend(sender,'tool:progress', { requestId, toolUseId, status, message, raw, rawDelta, seq })
-        if (
-          message?.trim() &&
-          remoteContext?.source === 'feishu' &&
-          remoteContext.larkCliRunner &&
-          remoteContext.messageId
-        ) {
-          void publishFeishuRemoteProgress(
-            remoteContext.larkCliRunner,
-            remoteContext.messageId,
-            sessionId,
+        if (remoteContext && message?.trim()) {
+          onRemoteToolProgress(
+            buildRemoteProgressHookContext(sessionId, locale),
+            {
+              toolName,
+              input: inputObj,
+              status: 'executing',
+              progressOutput: message
+            },
             message
-          ).catch(() => undefined)
+          )
         }
       }
 
@@ -1105,39 +1106,28 @@ async function runToolChatSessionInner(
         needsConfirm = false
       }
 
-      if (needsConfirm && remoteContext?.source === 'feishu') {
-        if (
-          (remoteContext.confirmPolicy === 'feishu_confirm' || remoteContext.confirmPolicy === 'always') &&
-          remoteContext.confirmManager
-        ) {
-          const decision = await remoteContext.confirmManager.requestConfirm({
-            kind: 'tool_write',
-            sessionId,
-            toolCallId: toolUseId,
+      if (needsConfirm && remoteContext) {
+        const resolvedPolicy = resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig)
+        if (shouldRequestImConfirm(resolvedPolicy)) {
+          onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
             toolName,
-            toolInput: inputObj,
-            messageId: remoteContext.messageId,
-            chatId: remoteContext.chatId ?? ''
+            input: inputObj,
+            status: 'confirming',
+            progressOutput: undefined
           })
-          outcome = decision === 'y' ? 'approved' : decision === 'timeout' ? 'timeout' : 'rejected'
-        } else {
-          outcome = 'rejected'
-        }
-      } else if (needsConfirm && remoteContext?.source === 'wechat') {
-        if (remoteContext.confirmManager && wechatConfig?.remoteWechatConfirm && remoteContext.inboundRaw) {
-          const decision = await remoteContext.confirmManager.requestConfirm(
-            {
-              kind: 'tool_write',
+          const decision = await requestRemoteConfirm({
+            remoteContext,
+            payload: {
               sessionId,
               toolCallId: toolUseId,
               toolName,
               toolInput: inputObj,
               messageId: remoteContext.messageId,
-              userId: remoteContext.userId,
-              inboundMsg: remoteContext.inboundRaw
+              chatId: remoteContext.source === 'feishu' ? remoteContext.chatId : undefined,
+              userId: remoteContext.source === 'wechat' ? remoteContext.userId : undefined
             },
             wechatConfig
-          )
+          })
           outcome = decision === 'y' ? 'approved' : decision === 'timeout' ? 'timeout' : 'rejected'
         } else {
           outcome = 'rejected'
@@ -1407,6 +1397,14 @@ async function runToolChatSessionInner(
       let execThrew = false
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
+      if (remoteContext) {
+        onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
+          toolName,
+          input: inputObj,
+          status: 'executing',
+          progressOutput: undefined
+        })
+      }
       if (toolUserConfirmed && toolName === 'browser') {
         sendProgress('preparing', '正在准备浏览器…')
       }
@@ -1641,13 +1639,13 @@ function evaluateRemoteToolBlock(
     const allowLocalWrite = feishuConfig?.remoteAllowLocalWrite ?? false
 
     if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
-      return '远程飞书指令不允许自动执行本地文件写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+      return '远程策略禁止此类写操作。'
     }
 
     if (toolName === 'run_lark_cli' && policy === 'remote_read_only') {
       const args = inputObj.args
       if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
-        return '远程飞书指令不允许自动执行写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+        return '远程策略禁止此类写操作。'
       }
     }
     return null
@@ -1658,11 +1656,11 @@ function evaluateRemoteToolBlock(
     const allowLocalWrite = wechatConfig?.remoteAllowLocalWrite ?? false
 
     if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
-      return '远程微信指令不允许自动执行本地文件写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+      return '远程策略禁止此类写操作。'
     }
 
     if ((toolName === 'wechat_send' || toolName === 'wechat_reply') && policy === 'remote_read_only') {
-      return '远程微信指令不允许自动执行出站消息。请在桌面端 SpaceAssistant 中确认后执行。'
+      return '远程策略禁止此类写操作。'
     }
   }
 

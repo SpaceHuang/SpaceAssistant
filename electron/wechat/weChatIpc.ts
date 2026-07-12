@@ -166,7 +166,7 @@ export function registerWeChatIpcHandlers(
 
   ipcMain.handle('wechat:detect-sdk', async () => {
     const result = await detectWeChatSdk()
-    logWeChatCliEvent('info', 'wechat.ipc.detect_sdk', result)
+    logWeChatCliEvent('info', 'wechat.ipc.detect_sdk', { ...result })
     return result
   })
 

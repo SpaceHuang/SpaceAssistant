@@ -1,17 +1,10 @@
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
 import { logFeishuCliEvent } from './feishuCliLogger'
+import { formatRemoteProgressMessage } from '../../src/shared/remoteProgressTypes'
+import { getLastPublishableSnapshot } from '../remote/remoteProgressStore'
 
-const lastProgressBySession = new Map<string, string>()
-
-export function getFeishuRemoteProgress(sessionId: string): string | undefined {
-  return lastProgressBySession.get(sessionId)
-}
-
-export function clearFeishuRemoteProgress(sessionId: string): void {
-  lastProgressBySession.delete(sessionId)
-}
-
+/** @deprecated 仅 legacy 测试兼容；新代码请使用 RemoteProgressCoordinator */
 export async function publishFeishuRemoteProgress(
   runner: LarkCliRunner,
   messageId: string,
@@ -20,10 +13,7 @@ export async function publishFeishuRemoteProgress(
 ): Promise<void> {
   const trimmed = text.trim()
   if (!trimmed) return
-  const prev = lastProgressBySession.get(sessionId)
-  if (prev === trimmed) return
-  lastProgressBySession.set(sessionId, trimmed)
-  logFeishuCliEvent('info', 'feishu.remote.progress', {
+  logFeishuCliEvent('info', 'feishu.remote.progress.legacy', {
     sessionId,
     messageId,
     textLen: trimmed.length
@@ -32,7 +22,15 @@ export async function publishFeishuRemoteProgress(
 }
 
 export function formatFeishuRemoteProgressPrefix(sessionId: string): string {
-  const progress = getFeishuRemoteProgress(sessionId)
-  if (!progress) return ''
-  return `【进度说明】\n${progress.slice(0, 600)}\n\n`
+  const last = getLastPublishableSnapshot(sessionId)
+  if (!last?.publishable) return ''
+  return `${formatRemoteProgressMessage(last)}\n\n`
+}
+
+export function clearFeishuRemoteProgress(sessionId: string): void {
+  void sessionId
+}
+
+export function getFeishuRemoteProgress(_sessionId: string): string | undefined {
+  return undefined
 }

@@ -11,7 +11,7 @@ describe('WeChatConfirmManager', () => {
     vi.clearAllMocks()
   })
 
-  it('resolves Y/N from inbound when remoteWechatConfirm enabled', async () => {
+  it('sends instant IM prompt with Y/N when imPrompt provided', async () => {
     const mgr = new WeChatConfirmManager(undefined, undefined, getReplyBot)
     const inbound = makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'orig' } })
     const promise = mgr.requestConfirm(
@@ -23,7 +23,9 @@ describe('WeChatConfirmManager', () => {
         userId: 'wx-user@test',
         inboundMsg: inbound
       },
-      { ...DEFAULT_WECHAT_CONFIG, remoteWechatConfirm: true }
+      DEFAULT_WECHAT_CONFIG,
+      undefined,
+      { imPrompt: '【进度】等待确认：写入 a.txt\n回复 Y 确认，N 取消（5 分钟内有效）' }
     )
     const ynMsg = {
       messageId: 'yn-1',
@@ -35,7 +37,27 @@ describe('WeChatConfirmManager', () => {
     }
     expect(mgr.tryResolveFromInbound(ynMsg, makeIncomingMessage())).toBe(true)
     await expect(promise).resolves.toBe('y')
-    expect(reply).toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('回复 Y 确认')
+    )
+  })
+
+  it('heartbeat-style prompt excludes duplicate Y/N when using default builder', () => {
+    const mgr = new WeChatConfirmManager(undefined, undefined, getReplyBot)
+    const prompt = mgr.buildWeChatYnPrompt({
+      id: '1',
+      kind: 'tool_write',
+      sessionId: 's1',
+      toolName: 'write_file',
+      messageId: 'm1',
+      userId: 'u1',
+      inboundMsg: makeIncomingMessage(),
+      createdAt: 1,
+      expiresAt: 2
+    })
+    expect(prompt).toContain('【进度】')
+    expect(prompt).toContain('Y 确认')
   })
 
   it('resolves from desktop approval', () => {

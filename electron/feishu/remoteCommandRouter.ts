@@ -10,7 +10,7 @@ import { FeishuConfirmManager } from './feishuConfirmManager'
 import { shouldAcceptInbound } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
-import { clearFeishuRemoteProgress } from './feishuRemoteProgress'
+import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { countRunningRemoteAgents } from './runningRemoteAgentRegistry'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
@@ -283,7 +283,7 @@ export class RemoteCommandRouter {
 
     await replyFeishuText(this.deps.runner, msg.messageId, result.summary)
     this.lastReplyAt = Date.now()
-    clearFeishuRemoteProgress(sessionId)
+    clearRemoteProgressSession(sessionId)
     await this.deps.auditLogger.append({
       type: 'agent_done',
       sessionId,

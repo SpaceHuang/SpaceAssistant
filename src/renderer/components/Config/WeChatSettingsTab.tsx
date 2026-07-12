@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { App, Badge, Button, Checkbox, Collapse, Input, InputNumber, Select, Space } from 'antd'
+import { App, Badge, Button, Checkbox, Collapse, Input, InputNumber, Select, Space, Tooltip } from 'antd'
 import type { WeChatConfig, WeChatConnectionStatus, WeChatLoginProgress } from '../../../shared/wechatTypes'
 import { WeChatAuditDrawer } from './WeChatAuditDrawer'
 import type { ModelEntry } from '../../../shared/domainTypes'
@@ -336,6 +336,48 @@ export function WeChatSettingsTab({ wechat, onChange, models = [] }: Props) {
               ghost
               items={[
                 {
+                  key: 'remoteProgress',
+                  label: t('settings.wechat.remoteProgressTitle'),
+                  children: (
+                    <Space direction="vertical" size="middle" className="config-settings-stack">
+                      <ConfigField label={t('settings.wechat.remoteProgressModeLabel')}>
+                        <Select
+                          value={wechat.remoteProgressMode ?? 'activity_snapshot'}
+                          onChange={(remoteProgressMode) => patch({ remoteProgressMode })}
+                          classNames={configModalSelectPopupClassNames}
+                          options={[
+                            { value: 'activity_snapshot', label: t('settings.wechat.remoteProgressModeActivity') },
+                            { value: 'legacy_heartbeat', label: t('settings.wechat.remoteProgressModeLegacy') },
+                            { value: 'off', label: t('settings.wechat.remoteProgressModeOff') }
+                          ]}
+                        />
+                      </ConfigField>
+                      <ConfigField label={t('settings.wechat.remoteProgressHeartbeatLabel')}>
+                        <InputNumber
+                          min={0}
+                          max={600}
+                          value={wechat.remoteProgressHeartbeatSec ?? 60}
+                          onChange={(v) => patch({ remoteProgressHeartbeatSec: v ?? 60 })}
+                        />
+                      </ConfigField>
+                      <Checkbox
+                        checked={wechat.remoteTypingEnabled}
+                        onChange={(e) => patch({ remoteTypingEnabled: e.target.checked })}
+                      >
+                        {t('settings.wechat.remoteTypingEnabled')}
+                      </Checkbox>
+                      <ConfigField label={t('settings.wechat.remoteProgressMinIntervalLabel')}>
+                        <InputNumber
+                          min={0}
+                          max={120}
+                          value={wechat.remoteProgressMinIntervalSec ?? 3}
+                          onChange={(v) => patch({ remoteProgressMinIntervalSec: v ?? 3 })}
+                        />
+                      </ConfigField>
+                    </Space>
+                  )
+                },
+                {
                   key: 'security',
                   label: t('settings.wechat.securityTitle'),
                   children: (
@@ -360,9 +402,17 @@ export function WeChatSettingsTab({ wechat, onChange, models = [] }: Props) {
                           onChange={(remoteConfirmPolicy) => patch({ remoteConfirmPolicy })}
                           classNames={configModalSelectPopupClassNames}
                           options={[
+                            { value: 'wechat_confirm', label: t('settings.wechat.policyWechatConfirm') },
                             { value: 'remote_read_only', label: t('settings.wechat.policyReadOnly') },
                             { value: 'always', label: t('settings.wechat.policyAlways') },
-                            { value: 'inherit', label: t('settings.wechat.policyInherit') }
+                            {
+                              value: 'inherit',
+                              label: (
+                                <Tooltip title={t('settings.wechat.policyInheritRemoteHint')}>
+                                  <span>{t('settings.wechat.policyInherit')}</span>
+                                </Tooltip>
+                              )
+                            }
                           ]}
                         />
                       </ConfigField>

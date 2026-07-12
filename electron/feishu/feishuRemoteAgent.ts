@@ -14,6 +14,11 @@ import type { LarkCliRunner } from './larkCliRunner'
 import type { FeishuConfirmManager } from './feishuConfirmManager'
 import type { FeishuRemoteContext } from '../tools/types'
 import { logFeishuCliEvent } from './feishuCliLogger'
+import { readAppLocale } from '../appIpc'
+import { startRemoteProgressSession, stopRemoteProgressSession } from '../remote/remoteProgressCoordinator'
+import { createFeishuProgressAdapter, pickFeishuProgressConfig } from '../remote/feishuProgressAdapter'
+import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
+import { FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 
 export async function runFeishuRemoteAgent(ctx: {
   db: AppDatabase
@@ -50,6 +55,19 @@ export async function runFeishuRemoteAgent(ctx: {
     confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy
   })
 
+  const adapter = createFeishuProgressAdapter({
+    runner: ctx.runner,
+    messageId: ctx.replyMessageId,
+    sessionId: ctx.sessionId,
+    config: ctx.feishuConfig
+  })
+  startRemoteProgressSession(
+    ctx.sessionId,
+    adapter,
+    pickFeishuProgressConfig(ctx.feishuConfig),
+    FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG
+  )
+
   try {
     const toolsConfig = ctx.getToolsConfig()
     const rawMessages = getMessages(ctx.db, ctx.sessionId)
@@ -85,11 +103,12 @@ export async function runFeishuRemoteAgent(ctx: {
       appDb: ctx.db,
       feishuConfig: ctx.feishuConfig,
       larkCliRunner: ctx.runner,
-      remoteContext: ctx.remoteContext
+      remoteContext: ctx.remoteContext,
+      locale: readAppLocale(ctx.db)
     })
 
     if (!res.ok) {
-      const pending = res.error.includes('桌面') || res.error.includes('确认')
+      const pending = res.error.includes('确认')
       return { summary: res.error, pendingConfirm: pending, ok: false }
     }
 
@@ -106,6 +125,8 @@ export async function runFeishuRemoteAgent(ctx: {
     logFeishuCliEvent('error', 'feishu.agent.remote.error', { error, sessionId: ctx.sessionId })
     throw e
   } finally {
+    stopRemoteProgressSession(ctx.sessionId)
+    clearRemoteProgressSession(ctx.sessionId)
     unregisterRunningRemoteAgent(ctx.sessionId)
   }
 }

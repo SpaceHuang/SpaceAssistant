@@ -1,3 +1,6 @@
+import type { RemoteProgressConfig } from './remoteProgressTypes'
+import { FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG } from './remoteProgressTypes'
+
 export type FeishuEventConnectionState = 'stopped' | 'connecting' | 'connected' | 'error'
 
 export type FeishuRemoteConfirmPolicy = 'inherit' | 'always' | 'remote_read_only' | 'feishu_confirm'
@@ -32,6 +35,12 @@ export interface FeishuConfig {
   integrationMode: FeishuIntegrationMode
   larkCliDefaultTimeoutSec: number
   larkCliWriteRequiresConfirm: boolean
+  remoteProgressMode?: RemoteProgressConfig['remoteProgressMode']
+  remoteProgressHeartbeatSec?: number
+  remoteTypingEnabled?: boolean
+  remoteProgressMinIntervalSec?: number
+  remoteProgressMaxChars?: number
+  remoteProgressFallbackText?: string
 }
 
 export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
@@ -50,7 +59,13 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteRateLimitPerMinute: 10,
   integrationMode: 'cli',
   larkCliDefaultTimeoutSec: 120,
-  larkCliWriteRequiresConfirm: true
+  larkCliWriteRequiresConfirm: true,
+  remoteProgressMode: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMode,
+  remoteProgressHeartbeatSec: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressHeartbeatSec,
+  remoteTypingEnabled: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteTypingEnabled,
+  remoteProgressMinIntervalSec: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMinIntervalSec,
+  remoteProgressMaxChars: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMaxChars,
+  remoteProgressFallbackText: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressFallbackText
 }
 
 export function mergeFeishuConfig(partial?: Partial<FeishuConfig> | null): FeishuConfig {

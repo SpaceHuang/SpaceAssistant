@@ -16,6 +16,19 @@ vi.mock('../database', () => ({
   getMessages: (...args: unknown[]) => mockGetMessages(...args)
 }))
 
+vi.mock('../appIpc', () => ({
+  readAppLocale: () => 'zh-CN'
+}))
+
+vi.mock('../remote/remoteProgressCoordinator', () => ({
+  startRemoteProgressSession: vi.fn(),
+  stopRemoteProgressSession: vi.fn()
+}))
+
+vi.mock('../remote/remoteProgressStore', () => ({
+  clearRemoteProgressSession: vi.fn()
+}))
+
 vi.mock('../feishu/runningRemoteAgentRegistry', () => ({
   registerRunningRemoteAgent: vi.fn(),
   unregisterRunningRemoteAgent: vi.fn()
