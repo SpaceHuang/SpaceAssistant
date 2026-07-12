@@ -26,7 +26,8 @@ describe('read_file offset/limit', () => {
   let cache: FileStateCache
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-read-range-'))
+    // macOS 上 os.tmpdir() 是 /private/var 的符号链接，realpath 化以匹配 resolveSafePathReal 的 cache key
+    tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-read-range-')))
     cache = new FileStateCache()
   })
 

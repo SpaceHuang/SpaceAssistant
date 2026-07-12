@@ -26,7 +26,8 @@ describe('edit/write fileStateCache', () => {
   let cache: FileStateCache
 
   beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-file-state-'))
+    // macOS 上 os.tmpdir() 是 /private/var 的符号链接，realpath 化以匹配 resolveSafePathReal 的 cache key
+    tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-file-state-')))
     cache = new FileStateCache()
   })
 

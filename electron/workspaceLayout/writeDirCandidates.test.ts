@@ -13,7 +13,9 @@ import {
 } from './sessionWriteDir'
 
 async function withTempWorkDir<T>(fn: (workDir: string) => Promise<T>): Promise<T> {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'cand-'))
+  // macOS 上 os.tmpdir() 返回 /var/... 是 /private/var/... 的符号链接，
+  // 而 resolveSafePathReal 会 realpath 解析；需规范 tmpDir 使二者一致，否则 cache key 不匹配。
+  const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cand-')))
   try {
     return await fn(tmp)
   } finally {
