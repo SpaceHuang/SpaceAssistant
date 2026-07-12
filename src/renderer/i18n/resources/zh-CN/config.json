@@ -274,6 +274,16 @@
         "summary": "检测网络访问（browser）所需的 Stagehand、Playwright、Chromium 依赖是否就绪。",
         "disabledHint": "关闭后 Agent 无法在对话中自动检测浏览器依赖状态。"
       },
+      "listWorkDirs": {
+        "displayName": "列出工作目录",
+        "summary": "列出已配置的工作目录及当前远程会话绑定状态（仅飞书/微信远程可用）。",
+        "disabledHint": "关闭后远程 Agent 无法查询工作目录列表。"
+      },
+      "switchWorkDir": {
+        "displayName": "切换工作目录",
+        "summary": "切换当前远程会话绑定的工作目录，不影响桌面端与其他会话。",
+        "disabledHint": "关闭后远程 Agent 无法在会话中切换工作目录。"
+      },
       "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。"
     },
     "nav": {

@@ -54,15 +54,39 @@ export const DEFAULT_WECHAT_CONFIG: WeChatConfig = {
   remoteWechatConfirm: false
 }
 
+/** Phase-1 曾以 remote_read_only 为默认；现网须迁移到 wechat_confirm。 */
+export function resolveWeChatRemoteConfirmPolicy(
+  partial: Pick<Partial<WeChatConfig>, 'remoteConfirmPolicy' | 'remoteWechatConfirm'>
+): WeChatRemoteConfirmPolicy {
+  const stored = partial.remoteConfirmPolicy
+
+  if (partial.remoteWechatConfirm && stored !== 'remote_read_only') {
+    return 'wechat_confirm'
+  }
+
+  if (stored === 'remote_read_only') {
+    return 'wechat_confirm'
+  }
+
+  return stored ?? DEFAULT_WECHAT_CONFIG.remoteConfirmPolicy
+}
+
+export function weChatConfigNeedsPolicyMigration(
+  stored: Partial<WeChatConfig>,
+  merged: WeChatConfig
+): boolean {
+  return (
+    stored.remoteConfirmPolicy === 'remote_read_only' &&
+    merged.remoteConfirmPolicy === 'wechat_confirm'
+  )
+}
+
 export function mergeWeChatConfig(partial?: Partial<WeChatConfig> | null): WeChatConfig {
   if (!partial || typeof partial !== 'object') {
     return { ...DEFAULT_WECHAT_CONFIG }
   }
 
-  let remoteConfirmPolicy = partial.remoteConfirmPolicy ?? DEFAULT_WECHAT_CONFIG.remoteConfirmPolicy
-  if (partial.remoteWechatConfirm && remoteConfirmPolicy !== 'remote_read_only') {
-    remoteConfirmPolicy = 'wechat_confirm'
-  }
+  const remoteConfirmPolicy = resolveWeChatRemoteConfirmPolicy(partial)
 
   return {
     ...DEFAULT_WECHAT_CONFIG,
@@ -129,6 +153,7 @@ export type WeChatAuditEvent =
   | { type: 'send'; sessionId?: string; targetId: string; len: number; success: boolean; ts: number }
   | { type: 'reply'; sessionId?: string; targetId: string; len: number; success: boolean; ts: number }
   | { type: 'confirm_request'; confirmId: string; decision?: string; ts: number }
+  | { type: 'workdir_switch'; profileId: string; profileName: string; ts: number }
   | { type: 'rate_limit'; senderId: string; ts: number }
   | { type: 'login'; botIdSuffix?: string; ts: number }
   | { type: 'logout'; ts: number }

@@ -47,5 +47,8 @@ export function filterBuiltinToolsForApi(
   if (!browserConfig?.enabled) {
     list = list.filter((t) => t.name !== 'browser')
   }
+  if (!remoteContext) {
+    list = list.filter((t) => t.name !== 'list_work_dirs' && t.name !== 'switch_work_dir')
+  }
   return list
 }

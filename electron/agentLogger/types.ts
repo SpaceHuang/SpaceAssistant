@@ -8,6 +8,7 @@ export type AgentLogEventName =
   | 'llm.error'
   | 'tool.request'
   | 'tool.confirm'
+  | 'tool.confirm.remote_read_only_reject'
   | 'tool.error'
   | 'tool.result'
   | 'tool.progress'

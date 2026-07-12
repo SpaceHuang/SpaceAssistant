@@ -12,8 +12,12 @@ function tempDir(): string {
 
 describe('WorkDirManager', () => {
   const dirs: string[] = []
+  const openDbs: Array<{ close: () => void }> = []
 
   afterEach(() => {
+    for (const db of openDbs.splice(0)) {
+      db.close()
+    }
     for (const d of dirs) {
       fs.rmSync(d, { recursive: true, force: true })
     }
@@ -24,6 +28,7 @@ describe('WorkDirManager', () => {
     const dbPath = path.join(tempDir(), 'db.db')
     dirs.push(path.dirname(dbPath))
     const db = openDatabase(dbPath)
+    openDbs.push(db)
     let workDir = '/default'
     const manager = createWorkDirManager({
       db,
@@ -140,7 +145,7 @@ describe('WorkDirManager', () => {
         () => manager.getActiveWorkDir()
       )
 
-      expect(resolved).toEqual({ profileId: b.id, workDir: dirB })
+      expect(resolved).toEqual({ profileId: b.id, workDir: dirB, isSensitive: false })
     })
 
     it('falls back to active profile when session has no profile id', () => {
@@ -159,6 +164,25 @@ describe('WorkDirManager', () => {
       )
 
       expect(resolved?.workDir).toBe(getWorkDir())
+      expect(resolved?.isSensitive).toBe(false)
+    })
+
+    it('returns isSensitive when bound profile is sensitive', () => {
+      const dirA = tempDir()
+      dirs.push(dirA)
+      const { db, manager } = setupManager()
+      const a = manager.addProfile({ name: 'Secret', path: dirA, sensitive: true }).profile!
+      const session = createSession(db, { name: 'S1', workDirProfileId: a.id })
+
+      const resolved = resolveWorkDirForSession(
+        db,
+        session.id,
+        () => manager.listProfiles(),
+        () => manager.getActiveProfileId(),
+        () => manager.getActiveWorkDir()
+      )
+
+      expect(resolved?.isSensitive).toBe(true)
     })
   })
 
@@ -171,6 +195,7 @@ describe('WorkDirManager', () => {
       const dbPath = path.join(tempDir(), 'db-persist.db')
       dirs.push(path.dirname(dbPath))
       const db = openDatabase(dbPath)
+      openDbs.push(db)
       let workDir = dirA
       const manager = createWorkDirManager({
         db,
@@ -188,7 +213,6 @@ describe('WorkDirManager', () => {
       manager.persistProfiles(manager.listProfiles(), manager.getActiveProfileId())
       expect(switchCount).toBe(0)
       expect(manager.getActiveProfileId()).toBe(b.id)
-      db.close()
     })
 
     it('calls setWorkDir when active profile id changes', () => {
@@ -199,6 +223,7 @@ describe('WorkDirManager', () => {
       const dbPath = path.join(tempDir(), 'db-persist2.db')
       dirs.push(path.dirname(dbPath))
       const db = openDatabase(dbPath)
+      openDbs.push(db)
       let workDir = dirA
       const manager = createWorkDirManager({
         db,
@@ -216,7 +241,6 @@ describe('WorkDirManager', () => {
       expect(switchCount).toBe(1)
       expect(manager.getActiveProfileId()).toBe(b.id)
       expect(workDir).toBe(dirB)
-      db.close()
     })
   })
 
@@ -227,6 +251,7 @@ describe('WorkDirManager', () => {
       const dbPath = path.join(tempDir(), 'db.db')
       dirs.push(path.dirname(dbPath))
       const db = openDatabase(dbPath)
+      openDbs.push(db)
       setConfigValue(db, 'config.workDir', legacyDir)
 
       let workDir = legacyDir

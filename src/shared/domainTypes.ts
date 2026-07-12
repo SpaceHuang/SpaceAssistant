@@ -519,6 +519,8 @@ export function builtinToolRiskLevel(name: string): ToolRiskLevel {
     case 'read_feishu_attachment':
     case 'browser':
     case 'browser_detect':
+    case 'list_work_dirs':
+    case 'switch_work_dir':
       return 'low'
     case 'edit_file':
     case 'write_file':

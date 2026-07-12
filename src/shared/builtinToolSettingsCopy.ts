@@ -71,6 +71,16 @@ const TOOL_I18N_KEYS: Record<string, BuiltinToolI18nKeys> = {
     displayName: 'tools.builtin.browserDetect.displayName' as NamespaceKeyMap['config'],
     summary: 'tools.builtin.browserDetect.summary' as NamespaceKeyMap['config'],
     disabledHint: 'tools.builtin.browserDetect.disabledHint' as NamespaceKeyMap['config']
+  },
+  list_work_dirs: {
+    displayName: 'tools.builtin.listWorkDirs.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.listWorkDirs.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.listWorkDirs.disabledHint' as NamespaceKeyMap['config']
+  },
+  switch_work_dir: {
+    displayName: 'tools.builtin.switchWorkDir.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.switchWorkDir.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.switchWorkDir.disabledHint' as NamespaceKeyMap['config']
   }
 }
 

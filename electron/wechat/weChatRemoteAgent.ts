@@ -8,7 +8,11 @@ import { getMessages } from '../database'
 
 import { runToolChatSession } from '../toolChatLoop'
 
-import type { BrowserConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
+
+import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
+
+import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 
@@ -21,8 +25,6 @@ import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../s
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
-
-import { registerRunningRemoteAgent, unregisterRunningRemoteAgent } from '../feishu/runningRemoteAgentRegistry'
 
 import type { WeChatConfirmManager } from './weChatConfirmManager'
 
@@ -65,6 +67,8 @@ export async function runWeChatRemoteAgent(ctx: {
 
   workDir: string
 
+  workDirManager: WorkDirManager
+
   userDataDir: string
 
   getMainWebContents: () => WebContents | null
@@ -85,6 +89,8 @@ export async function runWeChatRemoteAgent(ctx: {
 
   getWikiConfig?: () => WikiConfig
 
+  getShellConfig?: () => ShellConfig
+
   remoteContext: WeChatRemoteContext
 
   inboundRaw: IncomingMessage
@@ -100,12 +106,6 @@ export async function runWeChatRemoteAgent(ctx: {
   const noopSender = { send: () => undefined } as unknown as WebContents
 
   const effectiveSender = sender ?? noopSender
-
-
-
-  registerRunningRemoteAgent(ctx.sessionId)
-
-
 
   logWeChatCliEvent('info', 'wechat.agent.remote.start', {
 
@@ -148,6 +148,28 @@ export async function runWeChatRemoteAgent(ctx: {
 
 
   try {
+
+    const resolved = resolveWorkDirForSession(
+
+      ctx.db,
+
+      ctx.sessionId,
+
+      () => ctx.workDirManager.listProfiles(),
+
+      () => ctx.workDirManager.getActiveProfileId(),
+
+      () => ctx.workDirManager.getActiveWorkDir()
+
+    )
+
+    if (resolved?.isSensitive) {
+
+      logWeChatCliEvent('warn', 'wechat.agent.remote.sensitive_blocked', { sessionId: ctx.sessionId })
+
+      return { summary: SENSITIVE_WORKDIR_ERROR, pendingConfirm: false, ok: false }
+
+    }
 
     const toolsConfig = ctx.getToolsConfig()
 
@@ -205,7 +227,13 @@ export async function runWeChatRemoteAgent(ctx: {
 
       wikiConfig: ctx.getWikiConfig?.(),
 
+      shellConfig: ctx.getShellConfig?.(),
+
       workDir: ctx.workDir,
+
+      workDirManager: ctx.workDirManager,
+
+      resolveWorkDir: buildResolveWorkDirCallback(ctx.db, ctx.sessionId, ctx.workDirManager, ctx.workDir),
 
       userDataDir: ctx.userDataDir,
 
@@ -276,8 +304,6 @@ export async function runWeChatRemoteAgent(ctx: {
     const b = ctx.botService.getBot()
 
     if (b?.stopTyping) void b.stopTyping(ctx.userId).catch(() => undefined)
-
-    unregisterRunningRemoteAgent(ctx.sessionId)
 
   }
 

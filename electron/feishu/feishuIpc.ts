@@ -10,10 +10,12 @@ import { FeishuConfirmManager } from './feishuConfirmManager'
 import { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuEventService } from './feishuEventService'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
+import type { WorkDirManager } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
 import { mergeToolsConfig } from '../../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
+import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
@@ -58,6 +60,7 @@ export function createFeishuBundle(deps: {
   db: AppDatabase
   getUserDataPath: () => string
   getWorkDir: () => string
+  workDirManager: WorkDirManager
   getApiKey: () => Promise<string | null>
   getBaseUrl: () => string
   getModel: () => string
@@ -85,13 +88,15 @@ export function createFeishuBundle(deps: {
       activeWorkDirProfileId: getConfigValue(deps.db, ACTIVE_WORKDIR_KEY) ?? ''
     }),
     getWorkDir: deps.getWorkDir,
+    workDirManager: deps.workDirManager,
     getUserDataPath: deps.getUserDataPath,
     getApiKey: deps.getApiKey,
     getBaseUrl: deps.getBaseUrl,
     getMainWebContents: () => getMainWindow()?.webContents ?? null,
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
-    getBrowserConfig: () => readBrowserConfigFromDb(deps.db)
+    getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
+    getShellConfig: () => readShellConfigFromDb(deps.db)
   }
 
   const router = new RemoteCommandRouter(routerDeps)
@@ -143,6 +148,7 @@ export function registerFeishuIpcHandlers(
     db: AppDatabase
     getUserDataPath: () => string
     getWorkDir: () => string
+    workDirManager: WorkDirManager
     getApiKey: () => Promise<string | null>
     getBaseUrl: () => string
     getModel: () => string

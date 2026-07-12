@@ -126,6 +126,8 @@ export interface WorkDirProfile {
   /** 飞书远程指令匹配用短名，如 SA */
   aliases?: string[]
   isDefault?: boolean
+  /** 敏感项目：禁止远程访问与切换 */
+  sensitive?: boolean
 }
 
 export const DEFAULT_WORK_DIR_PROFILES: WorkDirProfile[] = []

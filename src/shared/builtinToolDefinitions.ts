@@ -220,6 +220,39 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
       },
       required: ['userId', 'text']
     }
+  },
+  {
+    name: 'list_work_dirs',
+    description:
+      '列出所有已配置的工作目录，包含当前会话绑定的目录状态。仅在远程会话（飞书/微信）中可用。',
+    input_schema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'switch_work_dir',
+    description:
+      '切换当前会话绑定的工作目录。仅在远程会话（飞书/微信）中可用。切换后当前会话的所有后续操作将在新目录下执行，不影响其他会话。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        profile_id: {
+          type: 'string',
+          description: '工作目录配置的 ID（来自 list_work_dirs 的 id 字段），优先级最高'
+        },
+        name: {
+          type: 'string',
+          description: '工作目录名称，支持精确匹配或模糊匹配'
+        },
+        alias: {
+          type: 'string',
+          description: '工作目录别名，用于远程指令快捷匹配'
+        }
+      },
+      description:
+        '至少提供 profile_id、name 或 alias 中的一个。匹配优先级：profile_id > name（精确）> alias（精确）> name（模糊）'
+    }
   }
 ]
 

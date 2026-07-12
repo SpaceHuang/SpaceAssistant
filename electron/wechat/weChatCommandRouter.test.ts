@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import type { AppDatabase } from '../database'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 import { WeChatCommandRouter } from './weChatCommandRouter'
@@ -7,12 +7,19 @@ import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
 import { WeChatConfirmManager } from './weChatConfirmManager'
 import fs from 'fs/promises'
+import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
+import { openDatabase, createSession } from '../database'
+import {
+  resetRunningRemoteAgentRegistryForTests,
+  tryClaimRemoteSession,
+  releaseRemoteSession
+} from '../feishu/runningRemoteAgentRegistry'
+import { REMOTE_SESSION_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
 
 const mockRunAgent = vi.fn()
 const mockResolveSession = vi.fn()
-const mockCountRunning = vi.fn(() => 0)
 
 vi.mock('./weChatRemoteAgent', () => ({
   runWeChatRemoteAgent: (...args: unknown[]) => mockRunAgent(...args)
@@ -21,10 +28,6 @@ vi.mock('./weChatRemoteAgent', () => ({
 vi.mock('./weChatSessionResolver', () => ({
   resolveWeChatSession: (...args: unknown[]) => mockResolveSession(...args),
   touchWeChatSessionReply: vi.fn()
-}))
-
-vi.mock('../feishu/runningRemoteAgentRegistry', () => ({
-  countRunningRemoteAgents: () => mockCountRunning()
 }))
 
 vi.mock('../database', async (importOriginal) => {
@@ -42,20 +45,32 @@ describe('WeChatCommandRouter', () => {
   let audit: WeChatAuditLogger
   let reply: ReturnType<typeof vi.fn>
   let router: WeChatCommandRouter
+  let db: ReturnType<typeof openDatabase>
+  let sessionId: string
+  let closeDb: () => void
 
   beforeEach(async () => {
     vi.clearAllMocks()
+    resetRunningRemoteAgentRegistryForTests()
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-router-'))
     processed = new WeChatProcessedStore(tmpDir)
     audit = new WeChatAuditLogger(tmpDir)
     reply = vi.fn(async () => undefined)
     mockRunAgent.mockResolvedValue({ summary: 'ok', pendingConfirm: false, ok: true })
-    mockResolveSession.mockResolvedValue({ sessionId: 'sess-1', isNew: true })
 
-    const db = {
-      data: { sessions: [], messages: [], configs: {} },
-      save: vi.fn()
-    } as unknown as AppDatabase
+    const dbPath = path.join(tmpDir, 'test.db')
+    db = openDatabase(dbPath)
+    closeDb = () => db.close()
+    const session = createSession(db, { name: 'WeChat Session' })
+    sessionId = session.id
+    mockResolveSession.mockResolvedValue({ sessionId, isNew: true })
+
+    const mockWorkDirManager = {
+      listProfiles: () => [],
+      getActiveProfileId: () => 'p1',
+      getActiveWorkDir: () => tmpDir,
+      checkDirectoryWritable: () => ({ ok: true })
+    }
 
     router = new WeChatCommandRouter({
       db,
@@ -69,6 +84,7 @@ describe('WeChatCommandRouter', () => {
       getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, remoteEnabled: true, loggedIn: true }),
       getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }),
       getWorkDir: () => tmpDir,
+      workDirManager: mockWorkDirManager as never,
       getUserDataPath: () => tmpDir,
       getApiKey: async () => 'key',
       getBaseUrl: () => 'https://api.example.com',
@@ -76,6 +92,14 @@ describe('WeChatCommandRouter', () => {
       getModel: () => 'm1',
       getToolsConfig: () => ({ confirmMode: 'diff', deniedTools: [] }) as never
     })
+  })
+
+  afterEach(() => {
+    resetRunningRemoteAgentRegistryForTests()
+    closeDb?.()
+    if (tmpDir && fsSync.existsSync(tmpDir)) {
+      fsSync.rmSync(tmpDir, { recursive: true, force: true })
+    }
   })
 
   it('processes accepted text inbound', async () => {
@@ -95,7 +119,7 @@ describe('WeChatCommandRouter', () => {
   it('rejects allowlist sender', async () => {
     const raw = makeIncomingMessage({ userId: 'blocked@test' })
     const r2 = new WeChatCommandRouter({
-      db: (router as unknown as { deps: { db: AppDatabase } }).deps.db,
+      db,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
         getRawBot: () => null
@@ -111,6 +135,12 @@ describe('WeChatCommandRouter', () => {
       }),
       getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }),
       getWorkDir: () => tmpDir,
+      workDirManager: {
+        listProfiles: () => [],
+        getActiveProfileId: () => 'p1',
+        getActiveWorkDir: () => tmpDir,
+        checkDirectoryWritable: () => ({ ok: true })
+      } as never,
       getUserDataPath: () => tmpDir,
       getApiKey: async () => 'key',
       getBaseUrl: () => 'https://api.example.com',
@@ -121,5 +151,15 @@ describe('WeChatCommandRouter', () => {
     await r2.handleSdkInbound(raw)
     expect(mockRunAgent).not.toHaveBeenCalled()
     expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('权限'))
+  })
+
+  it('rejects second inbound when session is busy', async () => {
+    tryClaimRemoteSession(sessionId, 3)
+    const raw2 = makeIncomingMessage({ text: 'second', raw: { ...makeIncomingMessage().raw, client_id: 'busy-2' } })
+    await router.handleSdkInbound(raw2)
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(expect.anything(), REMOTE_SESSION_BUSY_MESSAGE)
+    releaseRemoteSession(sessionId)
   })
 })

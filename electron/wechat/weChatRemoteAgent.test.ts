@@ -29,10 +29,17 @@ vi.mock('../remote/remoteProgressStore', () => ({
   clearRemoteProgressSession: vi.fn()
 }))
 
-vi.mock('../feishu/runningRemoteAgentRegistry', () => ({
-  registerRunningRemoteAgent: vi.fn(),
-  unregisterRunningRemoteAgent: vi.fn()
-}))
+vi.mock('../workDirManager', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workDirManager')>()
+  return {
+    ...actual,
+    resolveWorkDirForSession: vi.fn(() => ({
+      profileId: 'p1',
+      workDir: '/tmp',
+      isSensitive: false
+    }))
+  }
+})
 
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
 
@@ -41,6 +48,15 @@ function makeDb(): AppDatabase {
     data: { configs: {}, sessions: [], messages: [] },
     save: vi.fn()
   } as unknown as AppDatabase
+}
+
+function makeWorkDirManager() {
+  return {
+    listProfiles: () => [],
+    getActiveProfileId: () => 'p1',
+    getActiveWorkDir: () => '/tmp',
+    checkDirectoryWritable: () => ({ ok: true })
+  }
 }
 
 function baseCtx(getMainWebContents: () => WebContents | null) {
@@ -52,6 +68,7 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
     requestId: '00000000-0000-4000-8000-000000000001',
     wechatConfig: { ...DEFAULT_WECHAT_CONFIG, remoteTypingEnabled: false, remoteProgressHeartbeatSec: 0 },
     workDir: '/tmp',
+    workDirManager: makeWorkDirManager(),
     userDataDir: '/tmp',
     getMainWebContents,
     getApiKey: async () => 'key',
@@ -60,6 +77,7 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
     botService: { getBot: () => null } as never,
     confirmManager: {} as never,
     getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+    getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [], autoAllowScriptExecution: true }),
     remoteContext: {
       source: 'wechat' as const,
       messageId: 'msg-1',
@@ -97,10 +115,30 @@ describe('runWeChatRemoteAgent', () => {
     expect(result.summary).toBe('ok')
   })
 
+  it('passes shellConfig into runToolChatSession', async () => {
+    const sender = { send: vi.fn() } as unknown as WebContents
+    await runWeChatRemoteAgent(baseCtx(() => sender))
+    expect(mockRunToolChatSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shellConfig: expect.objectContaining({ autoAllowScriptExecution: true })
+      })
+    )
+  })
+
   it('works when main webContents is null', async () => {
     await runWeChatRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
       expect.objectContaining({ appDb: expect.anything() })
+    )
+  })
+
+  it('passes workDirManager and resolveWorkDir to runToolChatSession', async () => {
+    await runWeChatRemoteAgent(baseCtx(() => null))
+    expect(mockRunToolChatSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workDirManager: expect.anything(),
+        resolveWorkDir: expect.any(Function)
+      })
     )
   })
 })

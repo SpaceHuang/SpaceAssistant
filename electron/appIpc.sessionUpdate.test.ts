@@ -5,6 +5,13 @@ import type { AppIpcContext } from './appIpc'
 import { SESSION_META_TITLE_USER_CUSTOM } from './sessionTitleSuggest'
 import type { Session } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE } from '../src/shared/domainTypes'
+import { ErrorCodes } from '../src/shared/errorCodes'
+import {
+  REMOTE_SESSION_BUSY_MESSAGE,
+  REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE
+} from './remote/remoteSessionGuardMessages'
+
+const mockIsRemoteAgentRunning = vi.fn(() => false)
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -48,6 +55,10 @@ vi.mock('./anthropicClientFactory', () => ({
 
 vi.mock('./claudeRequestGuards', () => ({
   assertValidOptionalAnthropicBaseUrl: vi.fn()
+}))
+
+vi.mock('./feishu/runningRemoteAgentRegistry', () => ({
+  isRemoteAgentRunning: (...args: unknown[]) => mockIsRemoteAgentRunning(...args)
 }))
 
 vi.mock('./windowRef', () => ({
@@ -219,5 +230,56 @@ describe('session:update IPC', () => {
     await handler({}, { sessionId: 'session-1', name: '   ' })
 
     expect(mockUpdateSession).toHaveBeenCalledWith(ctx.db, 'session-1', {})
+  })
+
+  it('rejects workDirProfileId change when session is busy', async () => {
+    const cur = stubSession({ workDirProfileId: 'p1' })
+    mockGetSession.mockReturnValue(cur)
+    mockIsRemoteAgentRunning.mockReturnValue(true)
+
+    const handler = ipc.getHandler('session:update')!
+    await expect(
+      handler({}, { sessionId: 'session-1', workDirProfileId: 'p2' })
+    ).rejects.toThrow(`${ErrorCodes.REMOTE_WORKDIR_SWITCH_BUSY}: ${REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE}`)
+    expect(mockUpdateSession).not.toHaveBeenCalled()
+  })
+
+  it('allows workDirProfileId change when session is not busy', async () => {
+    const cur = stubSession({ workDirProfileId: 'p1' })
+    mockGetSession.mockReturnValue(cur)
+    mockIsRemoteAgentRunning.mockReturnValue(false)
+    mockUpdateSession.mockImplementation((_db, _id, patch) => ({ ...cur, ...patch }))
+
+    const handler = ipc.getHandler('session:update')!
+    await handler({}, { sessionId: 'session-1', workDirProfileId: 'p2' })
+
+    expect(mockUpdateSession).toHaveBeenCalledWith(
+      ctx.db,
+      'session-1',
+      expect.objectContaining({ workDirProfileId: 'p2' })
+    )
+  })
+})
+
+describe('session:delete IPC busy guard', () => {
+  let ipc: ReturnType<typeof mockIpcMain>
+  let ctx: AppIpcContext
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsRemoteAgentRunning.mockReturnValue(false)
+    ipc = mockIpcMain()
+    ctx = makeCtx()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+  })
+
+  it('rejects delete when remote agent is running', async () => {
+    mockGetSession.mockReturnValue(stubSession())
+    mockIsRemoteAgentRunning.mockReturnValue(true)
+
+    const handler = ipc.getHandler('session:delete')!
+    await expect(handler({}, 'session-1')).rejects.toThrow(
+      `${ErrorCodes.REMOTE_SESSION_BUSY}: ${REMOTE_SESSION_BUSY_MESSAGE}`
+    )
   })
 })

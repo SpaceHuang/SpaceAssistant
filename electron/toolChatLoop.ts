@@ -10,6 +10,7 @@ import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
 import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
+import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolExecutorResult } from './tools/types'
@@ -292,6 +293,8 @@ export type RunToolChatSessionArgs = {
   larkCliRunner?: LarkCliRunner
   remoteContext?: RemoteContext
   workDir: string
+  workDirManager?: WorkDirManager
+  resolveWorkDir?: () => string
   userDataDir: string
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
@@ -372,7 +375,9 @@ async function runToolChatSessionInner(
     wechatConfig,
     larkCliRunner,
     remoteContext,
-    workDir,
+    workDir: initialWorkDir,
+    workDirManager,
+    resolveWorkDir,
     userDataDir,
     getApiKey,
     appDb,
@@ -693,6 +698,7 @@ async function runToolChatSessionInner(
 
     for (const tu of toolUses) {
       throwIfChatCancelled(chatSignal)
+      const workDir = resolveWorkDir ? resolveWorkDir() : initialWorkDir
       const toolUseId = tu.id
       const toolName = tu.name
       const inputObj = normalizeToolUseInputRecord(tu.input)
@@ -966,6 +972,7 @@ async function runToolChatSessionInner(
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
+      let rejectReason: 'user' | 'remote_read_only' = 'user'
       let autoApproveFallback: AutoApproveFallback | undefined
       let fileAutoApproved = false
       let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
@@ -1131,6 +1138,16 @@ async function runToolChatSessionInner(
           outcome = decision === 'y' ? 'approved' : decision === 'timeout' ? 'timeout' : 'rejected'
         } else {
           outcome = 'rejected'
+          rejectReason = 'remote_read_only'
+          logAgentEvent('info', 'tool.confirm.remote_read_only_reject', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            remoteSource: remoteContext.source,
+            confirmPolicy: remoteContext.confirmPolicy
+          })
         }
       } else if (needsConfirm) {
         const useDiff =
@@ -1323,7 +1340,10 @@ async function runToolChatSessionInner(
       }
 
       if (outcome === 'rejected') {
-        const rejectedError = '用户拒绝执行此工具'
+        const rejectedError =
+          rejectReason === 'remote_read_only'
+            ? '远程只读策略禁止执行需确认的工具。请在设置中将「远程写确认策略」改为「微信/飞书确认」，或开启「大模型生成的脚本自动允许执行」。'
+            : '用户拒绝执行此工具'
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
@@ -1423,6 +1443,7 @@ async function runToolChatSessionInner(
           shellConfig,
           shellOutputMode,
           appDatabase: appDb,
+          workDirManager,
           wikiConfig,
           feishuConfig,
           wechatConfig,

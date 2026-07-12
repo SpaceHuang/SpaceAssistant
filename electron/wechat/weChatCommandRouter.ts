@@ -14,11 +14,19 @@ import type { WeChatProcessedStore } from './weChatProcessedStore'
 import { replyWeChatSummary } from './weChatReplyService'
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
 import { resolveWeChatSession, touchWeChatSessionReply } from './weChatSessionResolver'
-import { countRunningRemoteAgents } from '../feishu/runningRemoteAgentRegistry'
+import {
+  releaseRemoteSession,
+  tryClaimRemoteSession
+} from '../feishu/runningRemoteAgentRegistry'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { buildMediaUserMessage, downloadWeChatInboundMedia } from './weChatMediaInbound'
 import { inboundSummaryForLog } from './weChatCliLogFields'
 import { logWeChatCliEvent } from './weChatCliLogger'
+import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
+import {
+  REMOTE_PARALLEL_FULL_MESSAGE,
+  REMOTE_SESSION_BUSY_MESSAGE
+} from '../remote/remoteSessionGuardMessages'
 
 const senderRateMap = new Map<string, number[]>()
 
@@ -34,6 +42,7 @@ export type WeChatCommandRouterDeps = {
     maxParallelChatSessions: number
   }
   getWorkDir: () => string
+  workDirManager: WorkDirManager
   getUserDataPath: () => string
   getApiKey: () => Promise<string | null>
   getBaseUrl: () => string
@@ -42,6 +51,7 @@ export type WeChatCommandRouterDeps = {
   getToolsConfig: () => ToolsConfig
   getBrowserConfig?: () => import('../../src/shared/domainTypes').BrowserConfig
   getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
+  getShellConfig?: () => import('../../src/shared/domainTypes').ShellConfig
 }
 
 function checkRateLimit(senderId: string, limit: number): boolean {
@@ -168,128 +178,152 @@ export class WeChatCommandRouter {
     const appCfg = this.deps.getAppConfig()
     const bot = this.deps.botService.getBot()
 
-    if (countRunningRemoteAgents() >= appCfg.maxParallelChatSessions) {
-      logWeChatCliEvent('warn', 'wechat.inbound.parallel_full', {
-        maxParallel: appCfg.maxParallelChatSessions
-      })
-      if (bot) await bot.reply(inboundRaw, '当前会话繁忙，请稍后再试')
-      return
-    }
-
-    const workDir = this.deps.getWorkDir()
     const { sessionId, isNew } = await resolveWeChatSession(
       this.deps.db,
       msg,
       config,
-      this.deps.getModel()
+      this.deps.getModel(),
+      undefined,
+      () => this.deps.workDirManager.getActiveProfileId()
     )
-    logWeChatCliEvent('info', 'wechat.session.resolved', { sessionId, isNew, userId: msg.userId })
-    this.sessionInboundMap.set(sessionId, inboundRaw)
 
-    appendMessage(this.deps.db, {
-      id: randomUUID(),
-      sessionId,
-      role: 'user',
-      content: wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content,
-      timestamp: Date.now(),
-      status: 'sent'
-    })
-
-    if (config.remoteAckOnReceive && (isNew || config.remoteNotifyOnReceive) && bot) {
-      await bot.reply(inboundRaw, '已收到，正在处理…')
+    const claim = tryClaimRemoteSession(sessionId, appCfg.maxParallelChatSessions)
+    if (claim === 'session_busy') {
+      logWeChatCliEvent('warn', 'wechat.inbound.session_busy', { sessionId })
+      if (bot) await bot.reply(inboundRaw, REMOTE_SESSION_BUSY_MESSAGE)
+      return
+    }
+    if (claim === 'parallel_full') {
+      logWeChatCliEvent('warn', 'wechat.inbound.parallel_full', {
+        maxParallel: appCfg.maxParallelChatSessions
+      })
+      if (bot) await bot.reply(inboundRaw, REMOTE_PARALLEL_FULL_MESSAGE)
+      return
     }
 
-    const wc = this.deps.getMainWebContents()
-    wc?.send('wechat:inbound-message', { sessionId, message: msg })
-
-    await this.deps.auditLogger.append({ type: 'agent_start', sessionId, messageId: msg.messageId })
-
-    const requestId = randomUUID()
-    const assistantMessageId = randomUUID()
-    appendMessage(this.deps.db, {
-      id: assistantMessageId,
-      sessionId,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      status: 'streaming',
-      schemaVersion: CURRENT_SCHEMA_VERSION
-    })
-    wc?.send('wechat:remote-agent-start', { sessionId, assistantMessageId, requestId })
-
-    const remoteContext = {
-      source: 'wechat' as const,
-      messageId: msg.messageId,
-      userId: msg.userId,
-      contextToken: msg.contextToken,
-      confirmPolicy: config.remoteConfirmPolicy,
-      wechatConfig: config,
-      confirmManager: this.deps.confirmManager,
-      sessionId,
-      inboundRaw
-    }
-
-    let result: { summary: string; pendingConfirm: boolean; ok: boolean }
     try {
-      result = await runWeChatRemoteAgent({
-        db: this.deps.db,
+      const resolvedWorkDir = resolveWorkDirForSession(
+        this.deps.db,
         sessionId,
-        userMessage: content,
-        replyMessageId: msg.messageId,
-        requestId,
+        () => this.deps.workDirManager.listProfiles(),
+        () => this.deps.workDirManager.getActiveProfileId(),
+        () => this.deps.workDirManager.getActiveWorkDir()
+      )
+      const workDir = resolvedWorkDir?.workDir ?? this.deps.getWorkDir()
+      logWeChatCliEvent('info', 'wechat.session.resolved', { sessionId, isNew, userId: msg.userId })
+      this.sessionInboundMap.set(sessionId, inboundRaw)
+
+      appendMessage(this.deps.db, {
+        id: randomUUID(),
+        sessionId,
+        role: 'user',
+        content: wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content,
+        timestamp: Date.now(),
+        status: 'sent'
+      })
+
+      if (config.remoteAckOnReceive && (isNew || config.remoteNotifyOnReceive) && bot) {
+        await bot.reply(inboundRaw, '已收到，正在处理…')
+      }
+
+      const wc = this.deps.getMainWebContents()
+      wc?.send('wechat:inbound-message', { sessionId, message: msg })
+
+      await this.deps.auditLogger.append({ type: 'agent_start', sessionId, messageId: msg.messageId })
+
+      const requestId = randomUUID()
+      const assistantMessageId = randomUUID()
+      appendMessage(this.deps.db, {
+        id: assistantMessageId,
+        sessionId,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        status: 'streaming',
+        schemaVersion: CURRENT_SCHEMA_VERSION
+      })
+      wc?.send('wechat:remote-agent-start', { sessionId, assistantMessageId, requestId })
+
+      const remoteContext = {
+        source: 'wechat' as const,
+        messageId: msg.messageId,
+        userId: msg.userId,
+        contextToken: msg.contextToken,
+        confirmPolicy: config.remoteConfirmPolicy,
         wechatConfig: config,
-        workDir,
-        getMainWebContents: this.deps.getMainWebContents,
-        getApiKey: this.deps.getApiKey,
-        getBaseUrl: this.deps.getBaseUrl,
-        getModel: this.deps.getModel,
-        botService: this.deps.botService,
         confirmManager: this.deps.confirmManager,
-        getToolsConfig: this.deps.getToolsConfig,
-        getBrowserConfig: this.deps.getBrowserConfig,
-        getWikiConfig: this.deps.getWikiConfig,
-        userDataDir: this.deps.getUserDataPath(),
-        remoteContext,
+        sessionId,
         inboundRaw,
-        userId: msg.userId
-      })
-    } catch (e) {
-      const err = e instanceof Error ? e.message : String(e)
-      result = { summary: `执行失败：${err}\n请打开 SpaceAssistant 查看详情`, pendingConfirm: false, ok: false }
-    }
+        appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
+          this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName })
+      }
 
-    if (wc) {
-      wc.send('wechat:agent-done', {
-        sessionId,
-        messageId: assistantMessageId,
-        requestId,
-        ok: result.ok,
-        summary: result.summary
-      })
-    } else {
-      updateMessageContent(this.deps.db, assistantMessageId, {
-        content: result.summary,
-        status: result.ok ? 'completed' : 'failed'
-      })
-    }
+      let result: { summary: string; pendingConfirm: boolean; ok: boolean }
+      try {
+        result = await runWeChatRemoteAgent({
+          db: this.deps.db,
+          sessionId,
+          userMessage: content,
+          replyMessageId: msg.messageId,
+          requestId,
+          wechatConfig: config,
+          workDir,
+          workDirManager: this.deps.workDirManager,
+          getMainWebContents: this.deps.getMainWebContents,
+          getApiKey: this.deps.getApiKey,
+          getBaseUrl: this.deps.getBaseUrl,
+          getModel: this.deps.getModel,
+          botService: this.deps.botService,
+          confirmManager: this.deps.confirmManager,
+          getToolsConfig: this.deps.getToolsConfig,
+          getBrowserConfig: this.deps.getBrowserConfig,
+          getWikiConfig: this.deps.getWikiConfig,
+          getShellConfig: this.deps.getShellConfig,
+          userDataDir: this.deps.getUserDataPath(),
+          remoteContext,
+          inboundRaw,
+          userId: msg.userId
+        })
+      } catch (e) {
+        const err = e instanceof Error ? e.message : String(e)
+        result = { summary: `执行失败：${err}\n请打开 SpaceAssistant 查看详情`, pendingConfirm: false, ok: false }
+      }
 
-    if (bot && !result.pendingConfirm) {
-      await replyWeChatSummary(bot, inboundRaw, result.summary)
-      touchWeChatSessionReply(this.deps.db, sessionId)
+      if (wc) {
+        wc.send('wechat:agent-done', {
+          sessionId,
+          messageId: assistantMessageId,
+          requestId,
+          ok: result.ok,
+          summary: result.summary
+        })
+      } else {
+        updateMessageContent(this.deps.db, assistantMessageId, {
+          content: result.summary,
+          status: result.ok ? 'completed' : 'failed'
+        })
+      }
+
+      if (bot && !result.pendingConfirm) {
+        await replyWeChatSummary(bot, inboundRaw, result.summary)
+        touchWeChatSessionReply(this.deps.db, sessionId)
+        await this.deps.auditLogger.append({
+          type: 'reply',
+          sessionId,
+          targetId: msg.userId,
+          len: result.summary.length,
+          success: result.ok
+        })
+      }
+
       await this.deps.auditLogger.append({
-        type: 'reply',
+        type: 'agent_done',
         sessionId,
-        targetId: msg.userId,
-        len: result.summary.length,
-        success: result.ok
+        success: result.ok && !result.pendingConfirm,
+        summaryLen: result.summary.length
       })
+    } finally {
+      releaseRemoteSession(sessionId)
     }
-
-    await this.deps.auditLogger.append({
-      type: 'agent_done',
-      sessionId,
-      success: result.ok && !result.pendingConfirm,
-      summaryLen: result.summary.length
-    })
   }
 }

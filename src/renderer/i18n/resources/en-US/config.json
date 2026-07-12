@@ -274,6 +274,16 @@
         "summary": "Check whether the Stagehand, Playwright, and Chromium dependencies required by Web access (browser) are ready.",
         "disabledHint": "When disabled, the agent cannot auto-detect browser dependency status in chat."
       },
+      "listWorkDirs": {
+        "displayName": "List work directories",
+        "summary": "List configured work directories and the current remote session binding (Feishu/WeChat remote only).",
+        "disabledHint": "When disabled, the remote agent cannot query the work directory list."
+      },
+      "switchWorkDir": {
+        "displayName": "Switch work directory",
+        "summary": "Switch the work directory bound to the current remote session without affecting desktop or other sessions.",
+        "disabledHint": "When disabled, the remote agent cannot switch work directories in the session."
+      },
       "fallbackDisabledHint": "When disabled, the agent cannot call this tool in chat."
     },
     "nav": {

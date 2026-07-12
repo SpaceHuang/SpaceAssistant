@@ -6,12 +6,14 @@ import { truncateTitle } from './weChatInboundParser'
 export async function createNewWeChatSession(
   db: AppDatabase,
   msg: WeChatInboundMessage,
-  model: string
+  model: string,
+  activeWorkDirProfileId?: string
 ): Promise<string> {
   const title = `[微信] ${truncateTitle(msg.text)}`
   const session = createSession(db, {
     name: title,
     model,
+    ...(activeWorkDirProfileId ? { workDirProfileId: activeWorkDirProfileId } : {}),
     metadata: {
       source: 'wechat',
       isRemote: true,
@@ -33,15 +35,20 @@ export async function resolveWeChatSession(
   msg: WeChatInboundMessage,
   config: WeChatConfig,
   defaultModel: string,
-  availableModelNames?: string[]
+  availableModelNames?: string[],
+  getActiveWorkDirProfileId?: () => string
 ): Promise<{ sessionId: string; isNew: boolean }> {
   let model = config.remoteDefaultModelId ?? defaultModel
   if (config.remoteDefaultModelId && availableModelNames && !availableModelNames.includes(model)) {
     model = defaultModel
   }
+  const activeProfileId = getActiveWorkDirProfileId?.()
   const mergeWindowMs = (config.remoteSessionMergeMinutes ?? 0) * 60_000
   if (mergeWindowMs <= 0) {
-    return { sessionId: await createNewWeChatSession(db, msg, model), isNew: true }
+    return {
+      sessionId: await createNewWeChatSession(db, msg, model, activeProfileId),
+      isNew: true
+    }
   }
 
   const existing = listSessions(db).find((s) => {
@@ -55,7 +62,7 @@ export async function resolveWeChatSession(
   })
 
   if (existing) {
-    updateSession(db, existing.id, {
+    const patch: Parameters<typeof updateSession>[2] = {
       metadata: {
         ...existing.metadata,
         wechatMessageId: msg.messageId,
@@ -66,11 +73,18 @@ export async function resolveWeChatSession(
           lastContextToken: msg.contextToken
         }
       }
-    })
+    }
+    if (!existing.workDirProfileId && activeProfileId) {
+      patch.workDirProfileId = activeProfileId
+    }
+    updateSession(db, existing.id, patch)
     return { sessionId: existing.id, isNew: false }
   }
 
-  return { sessionId: await createNewWeChatSession(db, msg, model), isNew: true }
+  return {
+    sessionId: await createNewWeChatSession(db, msg, model, activeProfileId),
+    isNew: true
+  }
 }
 
 export function touchWeChatSessionReply(db: AppDatabase, sessionId: string): void {

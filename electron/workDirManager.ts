@@ -88,6 +88,7 @@ export function listSessionsForProfile(db: AppDatabase, profileId: string): Sess
 export type ResolvedSessionWorkDir = {
   profileId: string
   workDir: string
+  isSensitive?: boolean
 }
 
 /** 按会话绑定的 Profile 解析 workDir；缺失时回退到当前 active profile */
@@ -104,13 +105,38 @@ export function resolveWorkDirForSession(
   if (session.workDirProfileId) {
     const profile = listProfiles().find((p) => p.id === session.workDirProfileId)
     if (profile?.path) {
-      return { profileId: profile.id, workDir: profile.path }
+      return {
+        profileId: profile.id,
+        workDir: profile.path,
+        isSensitive: Boolean(profile.sensitive)
+      }
     }
   }
 
+  const activeId = getActiveProfileId()
+  const activeProfile = listProfiles().find((p) => p.id === activeId)
   return {
-    profileId: getActiveProfileId(),
-    workDir: getActiveWorkDir()
+    profileId: activeId,
+    workDir: getActiveWorkDir(),
+    isSensitive: Boolean(activeProfile?.sensitive)
+  }
+}
+
+export function buildResolveWorkDirCallback(
+  db: AppDatabase,
+  sessionId: string,
+  workDirManager: WorkDirManager,
+  fallbackWorkDir: string
+): () => string {
+  return () => {
+    const resolved = resolveWorkDirForSession(
+      db,
+      sessionId,
+      () => workDirManager.listProfiles(),
+      () => workDirManager.getActiveProfileId(),
+      () => workDirManager.getActiveWorkDir()
+    )
+    return resolved?.workDir ?? fallbackWorkDir
   }
 }
 

@@ -41,6 +41,11 @@ import type {
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
 import { ErrorCodes } from '../src/shared/errorCodes'
+import { isRemoteAgentRunning } from './feishu/runningRemoteAgentRegistry'
+import {
+  REMOTE_SESSION_BUSY_MESSAGE,
+  REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE
+} from './remote/remoteSessionGuardMessages'
 import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../src/shared/llmModelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, mergeWorkspaceLayoutConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
@@ -553,10 +558,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         maxTokens?: number
         skillsState?: SessionSkillsState
         metadata?: Record<string, unknown>
+        workDirProfileId?: string
       }
     ): Promise<Session | undefined> => {
       const cur = getSession(ctx.db, payload.sessionId)
       if (!cur) return undefined
+      if (
+        payload.workDirProfileId !== undefined &&
+        payload.workDirProfileId !== cur.workDirProfileId &&
+        isRemoteAgentRunning(payload.sessionId)
+      ) {
+        throw new Error(`${ErrorCodes.REMOTE_WORKDIR_SWITCH_BUSY}: ${REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE}`)
+      }
       const mergedMetadata: Record<string, unknown> = { ...cur.metadata }
       if (payload.metadata !== undefined) {
         Object.assign(mergedMetadata, payload.metadata)
@@ -577,6 +590,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
         ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
+        ...(payload.workDirProfileId !== undefined ? { workDirProfileId: payload.workDirProfileId } : {}),
         ...(hasMetaChange ? { metadata: mergedMetadata } : {})
       })
       if (next) scheduleBackup(ctx, next.id)
@@ -586,6 +600,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('session:delete', async (_e, sessionId: string): Promise<void> => {
     const s = getSession(ctx.db, sessionId)
+    if (isRemoteAgentRunning(sessionId)) {
+      throw new Error(`${ErrorCodes.REMOTE_SESSION_BUSY}: ${REMOTE_SESSION_BUSY_MESSAGE}`)
+    }
     clearSessionToolResources(sessionId)
     deleteSession(ctx.db, sessionId)
     await deleteSessionChatAttachments(ctx.getUserDataPath(), sessionId)

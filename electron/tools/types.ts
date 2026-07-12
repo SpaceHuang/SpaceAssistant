@@ -3,6 +3,7 @@ import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { BrowserDetectContext } from '../../src/shared/browserTypes'
 import type { AppDatabase } from '../database'
+import type { WorkDirManager } from '../workDirManager'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
 import type { WeChatConfirmManager } from '../wechat/weChatConfirmManager'
@@ -17,6 +18,7 @@ export interface FeishuRemoteContext {
   larkCliRunner?: LarkCliRunner
   chatId?: string
   sessionId?: string
+  appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
 }
 
 export interface WeChatRemoteContext {
@@ -29,6 +31,7 @@ export interface WeChatRemoteContext {
   confirmManager?: WeChatConfirmManager
   sessionId?: string
   inboundRaw?: IncomingMessage
+  appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
 }
 
 export type RemoteContext = FeishuRemoteContext | WeChatRemoteContext
@@ -53,6 +56,7 @@ export interface ToolExecutionContext {
   browserConfig?: BrowserConfig
   shellConfig?: ShellConfig | null
   appDatabase?: AppDatabase
+  workDirManager?: WorkDirManager
   larkCliRunner?: LarkCliRunner
   remoteContext?: RemoteContext
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */

@@ -24,11 +24,6 @@ vi.mock('./feishuCliLogger', () => ({
   logFeishuCliEvent: vi.fn()
 }))
 
-vi.mock('./runningRemoteAgentRegistry', () => ({
-  registerRunningRemoteAgent: vi.fn(),
-  unregisterRunningRemoteAgent: vi.fn()
-}))
-
 vi.mock('../remote/remoteProgressCoordinator', () => ({
   startRemoteProgressSession: vi.fn(),
   stopRemoteProgressSession: vi.fn()
@@ -37,6 +32,18 @@ vi.mock('../remote/remoteProgressCoordinator', () => ({
 vi.mock('../remote/remoteProgressStore', () => ({
   clearRemoteProgressSession: vi.fn()
 }))
+
+vi.mock('../workDirManager', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workDirManager')>()
+  return {
+    ...actual,
+    resolveWorkDirForSession: vi.fn(() => ({
+      profileId: 'p1',
+      workDir: '/tmp',
+      isSensitive: false
+    }))
+  }
+})
 
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 
@@ -51,6 +58,15 @@ function makeDb(): AppDatabase {
   } as unknown as AppDatabase
 }
 
+function makeWorkDirManager() {
+  return {
+    listProfiles: () => [],
+    getActiveProfileId: () => 'p1',
+    getActiveWorkDir: () => '/tmp',
+    checkDirectoryWritable: () => ({ ok: true })
+  }
+}
+
 function baseCtx(getMainWebContents: () => WebContents | null) {
   return {
     db: makeDb(),
@@ -60,6 +76,7 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
     requestId: '00000000-0000-4000-8000-000000000001',
     feishuConfig: { remoteConfirmPolicy: 'always' as const, enabled: true },
     workDir: '/tmp',
+    workDirManager: makeWorkDirManager(),
     userDataDir: '/tmp',
     getMainWebContents,
     getApiKey: async () => 'key',
@@ -124,5 +141,15 @@ describe('runFeishuRemoteAgent locale', () => {
 
     await runFeishuRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({ system: appendix }))
+  })
+
+  it('passes workDirManager and resolveWorkDir to runToolChatSession', async () => {
+    await runFeishuRemoteAgent(baseCtx(() => null))
+    expect(mockRunToolChatSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workDirManager: expect.anything(),
+        resolveWorkDir: expect.any(Function)
+      })
+    )
   })
 })

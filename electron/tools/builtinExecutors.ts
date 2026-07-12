@@ -19,6 +19,7 @@ import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
 import { browserExecutor } from './browserExecutor'
 import { browserDetectExecutor } from './browserDetectExecutor'
 import { runShellExecutor } from './runShellExecutor'
+import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
 import { sliceFileLines } from '../../src/shared/readFileRange'
 import type { FileState } from '../fileStateCache'
@@ -934,7 +935,9 @@ const registry = new Map<string, ToolExecutor>([
   [wechatSendExecutor.name, wechatSendExecutor],
   [browserExecutor.name, browserExecutor],
   [browserDetectExecutor.name, browserDetectExecutor],
-  [runShellExecutor.name, runShellExecutor]
+  [runShellExecutor.name, runShellExecutor],
+  [listWorkDirsExecutor.name, listWorkDirsExecutor],
+  [switchWorkDirExecutor.name, switchWorkDirExecutor]
 ])
 
 export function getToolExecutor(name: string): ToolExecutor | undefined {

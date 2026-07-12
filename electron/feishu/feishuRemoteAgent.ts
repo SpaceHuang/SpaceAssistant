@@ -2,14 +2,15 @@ import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import { getMessages } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
-import type { BrowserConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
+import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
+import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { resolveFeishuBrowserRemoteHint } from '../../src/shared/browserRemotePolicy'
 import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
-import { registerRunningRemoteAgent, unregisterRunningRemoteAgent } from './runningRemoteAgentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
 import type { FeishuConfirmManager } from './feishuConfirmManager'
 import type { FeishuRemoteContext } from '../tools/types'
@@ -28,6 +29,7 @@ export async function runFeishuRemoteAgent(ctx: {
   requestId: string
   feishuConfig: FeishuConfig
   workDir: string
+  workDirManager: WorkDirManager
   userDataDir: string
   getMainWebContents: () => WebContents | null
   getApiKey: () => Promise<string | null>
@@ -38,6 +40,7 @@ export async function runFeishuRemoteAgent(ctx: {
   getToolsConfig: () => ToolsConfig
   getBrowserConfig?: () => BrowserConfig
   getWikiConfig?: () => WikiConfig
+  getShellConfig?: () => ShellConfig
   remoteContext: FeishuRemoteContext
 }): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
   const requestId = ctx.requestId
@@ -47,7 +50,6 @@ export async function runFeishuRemoteAgent(ctx: {
   } as unknown as WebContents
 
   const effectiveSender = sender ?? noopSender
-  registerRunningRemoteAgent(ctx.sessionId)
   logFeishuCliEvent('info', 'feishu.agent.remote.start', {
     sessionId: ctx.sessionId,
     requestId,
@@ -69,6 +71,18 @@ export async function runFeishuRemoteAgent(ctx: {
   )
 
   try {
+    const resolved = resolveWorkDirForSession(
+      ctx.db,
+      ctx.sessionId,
+      () => ctx.workDirManager.listProfiles(),
+      () => ctx.workDirManager.getActiveProfileId(),
+      () => ctx.workDirManager.getActiveWorkDir()
+    )
+    if (resolved?.isSensitive) {
+      logFeishuCliEvent('warn', 'feishu.agent.remote.sensitive_blocked', { sessionId: ctx.sessionId })
+      return { summary: SENSITIVE_WORKDIR_ERROR, pendingConfirm: false, ok: false }
+    }
+
     const toolsConfig = ctx.getToolsConfig()
     const rawMessages = getMessages(ctx.db, ctx.sessionId)
     const built = buildClaudeToolChatMessages(rawMessages)
@@ -97,7 +111,10 @@ export async function runFeishuRemoteAgent(ctx: {
       toolsConfig,
       browserConfig: ctx.getBrowserConfig?.(),
       wikiConfig: ctx.getWikiConfig?.(),
+      shellConfig: ctx.getShellConfig?.(),
       workDir: ctx.workDir,
+      workDirManager: ctx.workDirManager,
+      resolveWorkDir: buildResolveWorkDirCallback(ctx.db, ctx.sessionId, ctx.workDirManager, ctx.workDir),
       userDataDir: ctx.userDataDir,
       getApiKey: ctx.getApiKey,
       appDb: ctx.db,
@@ -127,7 +144,6 @@ export async function runFeishuRemoteAgent(ctx: {
   } finally {
     stopRemoteProgressSession(ctx.sessionId)
     clearRemoteProgressSession(ctx.sessionId)
-    unregisterRunningRemoteAgent(ctx.sessionId)
   }
 }
 

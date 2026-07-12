@@ -4,15 +4,21 @@ import path from 'path'
 import { type IpcMain } from 'electron'
 import type { AppDatabase } from '../database'
 import { getConfigValue, setConfigValue } from '../database'
-import { mergeWeChatConfig, type WeChatConfig } from '../../src/shared/wechatTypes'
+import {
+  mergeWeChatConfig,
+  weChatConfigNeedsPolicyMigration,
+  type WeChatConfig
+} from '../../src/shared/wechatTypes'
 import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
 import { WeChatConfirmManager } from './weChatConfirmManager'
 import { WeChatBotService, detectWeChatSdk } from './weChatBotService'
 import { WeChatCommandRouter } from './weChatCommandRouter'
+import type { WorkDirManager } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
 import { mergeToolsConfig } from '../../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
+import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
@@ -33,7 +39,16 @@ export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
   const raw = getConfigValue(db, WECHAT_CONFIG_KEY)
   if (!raw) return mergeWeChatConfig(null)
   try {
-    return mergeWeChatConfig(JSON.parse(raw) as Partial<WeChatConfig>)
+    const stored = JSON.parse(raw) as Partial<WeChatConfig>
+    const merged = mergeWeChatConfig(stored)
+    if (weChatConfigNeedsPolicyMigration(stored, merged)) {
+      setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(merged))
+      logWeChatCliEvent('info', 'wechat.config.migrated', {
+        from: stored.remoteConfirmPolicy,
+        to: merged.remoteConfirmPolicy
+      })
+    }
+    return merged
   } catch {
     return mergeWeChatConfig(null)
   }
@@ -43,6 +58,7 @@ export function createWeChatBundle(deps: {
   db: AppDatabase
   getUserDataPath: () => string
   getWorkDir: () => string
+  workDirManager: WorkDirManager
   getApiKey: () => Promise<string | null>
   getBaseUrl: () => string
   getModel: () => string
@@ -81,13 +97,15 @@ export function createWeChatBundle(deps: {
       maxParallelChatSessions: deps.getMaxParallel()
     }),
     getWorkDir: deps.getWorkDir,
+    workDirManager: deps.workDirManager,
     getUserDataPath: deps.getUserDataPath,
     getApiKey: deps.getApiKey,
     getBaseUrl: deps.getBaseUrl,
     getMainWebContents: getWc,
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
-    getBrowserConfig: () => readBrowserConfigFromDb(deps.db)
+    getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
+    getShellConfig: () => readShellConfigFromDb(deps.db)
   })
 
   const cfg = readCfg()
@@ -153,6 +171,7 @@ export function registerWeChatIpcHandlers(
     db: AppDatabase
     getUserDataPath: () => string
     getWorkDir: () => string
+    workDirManager: WorkDirManager
     getApiKey: () => Promise<string | null>
     getBaseUrl: () => string
     getModel: () => string
