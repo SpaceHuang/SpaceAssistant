@@ -158,7 +158,11 @@ describe('WeChatCommandRouter', () => {
     await router.handleSdkInbound(raw2)
 
     expect(mockRunAgent).not.toHaveBeenCalled()
-    expect(reply).toHaveBeenCalledWith(expect.anything(), REMOTE_SESSION_BUSY_MESSAGE)
+    // busy 拒绝经 sendWeChatRemoteOutbound 发出，会追加桌面会话引用后缀（供桌面端会话跟随解析）
+    expect(reply).toHaveBeenCalledTimes(1)
+    const sent = reply.mock.calls[0]![1] as string
+    expect(sent).toContain(REMOTE_SESSION_BUSY_MESSAGE)
+    expect(sent).toContain(`会话$${sessionId}$`)
     releaseRemoteSession(sessionId)
   })
 })
