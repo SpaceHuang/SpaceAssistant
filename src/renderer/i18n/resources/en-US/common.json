@@ -102,6 +102,7 @@
   },
   "settings": {
     "feishu": "Feishu",
+    "wechat": "WeChat remote",
     "general": "General",
     "models": "Models",
     "skills": "Skills",

@@ -43,5 +43,14 @@
   },
   "wikiIndex": {
     "parseFailed": "Could not parse index entries. Use tree view or render preview."
+  },
+  "remoteStatus": {
+    "idleHint": "Remote listening disabled",
+    "auditLog": "Activity log",
+    "auditAria": "Open remote activity log",
+    "start": "Start",
+    "startAria": "Start remote listening",
+    "stop": "Stop",
+    "stopAria": "Stop remote listening"
   }
 }

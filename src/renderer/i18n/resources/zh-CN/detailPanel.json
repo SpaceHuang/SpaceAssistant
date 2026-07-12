@@ -43,5 +43,14 @@
   },
   "wikiIndex": {
     "parseFailed": "未能解析 index 条目，请使用树视图或渲染预览。"
+  },
+  "remoteStatus": {
+    "idleHint": "远程监听未启用",
+    "auditLog": "操作记录",
+    "auditAria": "打开远程操作记录",
+    "start": "启动",
+    "startAria": "启动远程监听",
+    "stop": "停止",
+    "stopAria": "停止远程监听"
   }
 }

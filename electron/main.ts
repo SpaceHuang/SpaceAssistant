@@ -14,6 +14,13 @@ import {
   registerFeishuIpcHandlers,
   shutdownFeishuServices
 } from './feishu/feishuIpc'
+import {
+  autoStartWeChatPollIfNeeded,
+  createWeChatBundle,
+  pauseWeChatPollIfWindowClosed,
+  registerWeChatIpcHandlers,
+  shutdownWeChatServices
+} from './wechat/weChatIpc'
 import { getConfigValue, getDefaultDbPath, openDatabase, setConfigValue } from './database'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
@@ -24,6 +31,7 @@ import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
+import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
 import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
 import {
@@ -111,6 +119,7 @@ const SHUTDOWN_TIMEOUT_MS = 12_000
 async function runShutdownCleanup(): Promise<void> {
   await stagehandService.closeAll()
   await shutdownFeishuServices()
+  await shutdownWeChatServices()
 }
 
 export function getIsQuitting(): boolean {
@@ -171,6 +180,7 @@ export async function createMainWindow(): Promise<void> {
 
   win.on('closed', () => {
     setMainWindow(null)
+    void pauseWeChatPollIfWindowClosed()
   })
 
   // 浮动通知：窗口状态事件
@@ -183,6 +193,16 @@ export async function createMainWindow(): Promise<void> {
 }
 
 app.whenReady().then(() => {
+  const gotLock = app.requestSingleInstanceLock()
+  if (!gotLock) {
+    app.quit()
+    return
+  }
+
+  app.on('second-instance', () => {
+    void showMainWindow()
+  })
+
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   const db = openDatabase(dbPath)
   appDb = db
@@ -255,6 +275,12 @@ app.whenReady().then(() => {
   }
 
   initFeishuCliLogger({
+    getWorkDir: () => workDirManager?.getActiveWorkDir() ?? workDirState,
+    isPackaged: app.isPackaged,
+    mainDirname: __dirname
+  })
+
+  initWeChatCliLogger({
     getWorkDir: () => workDirManager?.getActiveWorkDir() ?? workDirState,
     isPackaged: app.isPackaged,
     mainDirname: __dirname
@@ -400,6 +426,50 @@ app.whenReady().then(() => {
       }
     }
   })
+  createWeChatBundle({
+    db,
+    getUserDataPath: () => app.getPath('userData'),
+    getWorkDir: () => workDirState,
+    getApiKey,
+    getBaseUrl: () => getConfigValue(db, 'config.baseUrl') ?? '',
+    getModel: modelName,
+    getMaxParallel: () => {
+      const raw = getConfigValue(db, 'config.maxParallelChatSessions')
+      return raw ? Number(raw) : 3
+    },
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    },
+    appVersion: app.getVersion()
+  })
+  registerWeChatIpcHandlers(ipcMain, {
+    db,
+    getUserDataPath: () => app.getPath('userData'),
+    getWorkDir: () => workDirState,
+    getApiKey,
+    getBaseUrl: () => getConfigValue(db, 'config.baseUrl') ?? '',
+    getModel: modelName,
+    getMaxParallel: () => {
+      const raw = getConfigValue(db, 'config.maxParallelChatSessions')
+      return raw ? Number(raw) : 3
+    },
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    },
+    appVersion: app.getVersion()
+  })
   void autoStartFeishuEventIfNeeded(db)
 
   initTray({
@@ -407,6 +477,8 @@ app.whenReady().then(() => {
     getMainWindow,
     mainDirname: __dirname
   })
+
+  void autoStartWeChatPollIfNeeded(db)
 
   setupWindowIconThemeListener(__dirname)
   void createMainWindow()

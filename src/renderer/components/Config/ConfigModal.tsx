@@ -22,6 +22,8 @@ import type { BrowserConfig, ShellConfig } from '../../../shared/domainTypes'
 
 import { DEFAULT_FEISHU_CONFIG, type FeishuConfig, type WorkDirProfile } from '../../../shared/feishuTypes'
 
+import { DEFAULT_WECHAT_CONFIG, type WeChatConfig } from '../../../shared/wechatTypes'
+
 import { DEFAULT_MODELS } from '../../../shared/domainTypes'
 
 import {
@@ -41,6 +43,8 @@ import { SkillsTab } from './SkillsTab'
 import { WikiTab } from './WikiTab'
 
 import { FeishuSettingsTab } from './FeishuSettingsTab'
+
+import { WeChatSettingsTab } from './WeChatSettingsTab'
 
 import { ToolsSettingsTab } from './ToolsSettingsTab'
 
@@ -84,7 +88,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
 
-const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'feishu'] as const
+const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'feishu', 'wechat'] as const
 
 type SettingsSectionKey = (typeof SETTINGS_SECTION_KEYS)[number]
 
@@ -194,6 +198,8 @@ export function ConfigSettingsPage() {
 
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
 
+  const [wechatUi, setWechatUi] = useState<WeChatConfig>({ ...DEFAULT_WECHAT_CONFIG })
+
   const [browserUi, setBrowserUi] = useState<BrowserConfig>({ ...DEFAULT_BROWSER_CONFIG })
 
   const [shellUi, setShellUi] = useState<ShellConfig>({ ...DEFAULT_SHELL_CONFIG })
@@ -230,7 +236,8 @@ export function ConfigSettingsPage() {
       models: tCommon('settings.models'),
       skills: tCommon('settings.skills'),
       wiki: tCommon('settings.wiki'),
-      feishu: tCommon('settings.feishu')
+      feishu: tCommon('settings.feishu'),
+      wechat: tCommon('settings.wechat')
     }
     return SETTINGS_SECTION_KEYS.map((key) => ({ key, label: labels[key] }))
   }, [tCommon])
@@ -328,6 +335,8 @@ export function ConfigSettingsPage() {
 
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
 
+      setWechatUi(cfg.wechat ?? { ...DEFAULT_WECHAT_CONFIG })
+
       setBrowserUi({ ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] })
 
       setShellUi(cfg.shell ?? { ...DEFAULT_SHELL_CONFIG })
@@ -413,6 +422,8 @@ export function ConfigSettingsPage() {
 
       feishu: feishuUi,
 
+      wechat: wechatUi,
+
       browser: browserUi,
 
       shell: shellUi,
@@ -448,6 +459,8 @@ export function ConfigSettingsPage() {
     workspaceLayoutUi,
 
     feishuUi,
+
+    wechatUi,
 
     browserUi,
 
@@ -615,6 +628,8 @@ export function ConfigSettingsPage() {
         workspaceLayout: workspaceLayoutUi,
 
         feishu: feishuUi,
+
+        wechat: wechatUi,
 
         browser: { ...browserUi, enabled: true, allowedDomains: [] },
 
@@ -952,6 +967,10 @@ export function ConfigSettingsPage() {
       case 'feishu':
 
         return <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} models={models} />
+
+      case 'wechat':
+
+        return <WeChatSettingsTab wechat={wechatUi} onChange={setWechatUi} models={models} />
 
       default:
 

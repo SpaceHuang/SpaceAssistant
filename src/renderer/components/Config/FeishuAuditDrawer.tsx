@@ -4,12 +4,14 @@ import type { FeishuAuditEvent } from '../../../shared/feishuTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import i18n from '../../i18n'
 
-type Props = {
-  open: boolean
-  onClose: () => void
+function renderFeishuDetail(event: FeishuAuditEvent, pendingLabel: string): string {
+  if (event.type === 'inbound') return `${event.accepted ? '✓' : '✗'} ${event.reason ?? ''}`
+  if (event.type === 'lark_cli') return `${event.success ? '✓' : '✗'} ${event.args.slice(0, 3).join(' ')}`
+  if (event.type === 'confirm_request') return event.decision ?? pendingLabel
+  return JSON.stringify(event).slice(0, 80)
 }
 
-export function FeishuAuditDrawer({ open, onClose }: Props) {
+export function FeishuAuditTable() {
   const { t } = useTypedTranslation('config')
   const [rows, setRows] = useState<FeishuAuditEvent[]>([])
   const [loading, setLoading] = useState(false)
@@ -25,19 +27,14 @@ export function FeishuAuditDrawer({ open, onClose }: Props) {
   }
 
   useEffect(() => {
-    if (open) void load()
-  }, [open])
+    void load()
+  }, [])
 
   return (
-    <Drawer
-      title={t('feishuAudit.title')}
-      width={720}
-      open={open}
-      onClose={onClose}
-      extra={
+    <>
+      <div style={{ marginBottom: 8 }}>
         <Button onClick={() => void load()}>{t('feishuAudit.refresh')}</Button>
-      }
-    >
+      </div>
       <Table
         size="small"
         loading={loading}
@@ -53,15 +50,30 @@ export function FeishuAuditDrawer({ open, onClose }: Props) {
           { title: t('feishuAudit.columnType'), dataIndex: 'type' },
           {
             title: t('feishuAudit.columnDetail'),
-            render: (_: unknown, r: FeishuAuditEvent) => {
-              if (r.type === 'inbound') return `${r.accepted ? '✓' : '✗'} ${r.reason ?? ''}`
-              if (r.type === 'lark_cli') return `${r.success ? '✓' : '✗'} ${r.args.slice(0, 3).join(' ')}`
-              if (r.type === 'confirm_request') return r.decision ?? t('feishuAudit.pending')
-              return JSON.stringify(r).slice(0, 80)
-            }
+            render: (_: unknown, r: FeishuAuditEvent) => renderFeishuDetail(r, t('feishuAudit.pending'))
           }
         ]}
       />
+    </>
+  )
+}
+
+type Props = {
+  open: boolean
+  onClose: () => void
+}
+
+export function FeishuAuditDrawer({ open, onClose }: Props) {
+  const { t } = useTypedTranslation('config')
+
+  return (
+    <Drawer
+      title={t('feishuAudit.title')}
+      width={720}
+      open={open}
+      onClose={onClose}
+    >
+      <FeishuAuditTable />
     </Drawer>
   )
 }

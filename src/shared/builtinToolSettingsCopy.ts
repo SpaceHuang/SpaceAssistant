@@ -52,6 +52,16 @@ const TOOL_I18N_KEYS: Record<string, BuiltinToolI18nKeys> = {
     summary: 'tools.builtin.readFeishuAttachment.summary' as NamespaceKeyMap['config'],
     disabledHint: 'tools.builtin.readFeishuAttachment.disabledHint' as NamespaceKeyMap['config']
   },
+  wechat_send: {
+    displayName: 'tools.builtin.wechatSend.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.wechatSend.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.wechatSend.disabledHint' as NamespaceKeyMap['config']
+  },
+  wechat_reply: {
+    displayName: 'tools.builtin.wechatReply.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.wechatReply.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.wechatReply.disabledHint' as NamespaceKeyMap['config']
+  },
   browser: {
     displayName: 'tools.builtin.browser.displayName' as NamespaceKeyMap['config'],
     summary: 'tools.builtin.browser.summary' as NamespaceKeyMap['config'],

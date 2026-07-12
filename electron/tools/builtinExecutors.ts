@@ -15,6 +15,7 @@ import {
 import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
+import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
 import { browserExecutor } from './browserExecutor'
 import { browserDetectExecutor } from './browserDetectExecutor'
 import { runShellExecutor } from './runShellExecutor'
@@ -929,6 +930,8 @@ const registry = new Map<string, ToolExecutor>([
   [runScriptExecutor.name, runScriptExecutor],
   [runLarkCliExecutor.name, runLarkCliExecutor],
   [readFeishuAttachmentExecutor.name, readFeishuAttachmentExecutor],
+  [wechatReplyExecutor.name, wechatReplyExecutor],
+  [wechatSendExecutor.name, wechatSendExecutor],
   [browserExecutor.name, browserExecutor],
   [browserDetectExecutor.name, browserDetectExecutor],
   [runShellExecutor.name, runShellExecutor]

@@ -2,7 +2,7 @@ import { App } from 'antd'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileOverlay } from './FileOverlay'
 import { ReferencedFilesPanel } from './ReferencedFilesPanel'
-import { FeishuRemoteStatusBar } from './FeishuRemoteStatusBar'
+import { RemoteStatusBar } from './RemoteStatusBar'
 import { ResizeHandle } from './ResizeHandle'
 import { DetailPanelFileList } from './DetailPanelFileList'
 import { useTypedSelector } from '../../hooks'
@@ -45,7 +45,7 @@ export function DetailPanel() {
     <div
       className="detail-panel-split"
       style={{
-        gridTemplateRows: `minmax(0, ${topFr}fr) var(--detail-resize-handle-height) minmax(0, ${bottomFr}fr) var(--feishu-remote-status-bar-height)`
+        gridTemplateRows: `minmax(0, ${topFr}fr) var(--detail-resize-handle-height) minmax(0, ${bottomFr}fr) var(--remote-status-bar-height)`
       }}
     >
       <div className="detail-panel-top" role="region" aria-label="项目文件">
@@ -63,7 +63,7 @@ export function DetailPanel() {
       <div className="detail-panel-bottom">
         <ReferencedFilesPanel sessionId={currentSessionId} />
       </div>
-      <FeishuRemoteStatusBar />
+      <RemoteStatusBar />
     </div>
   )
 }

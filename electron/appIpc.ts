@@ -93,12 +93,13 @@ import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeede
 import { spawn } from 'child_process'
 import { mergeWikiConfig, mergeFeishuConfig } from '../src/shared/domainTypes'
 import type { WorkspaceLayoutConfig } from '../src/shared/domainTypes'
-import type { WikiConfig, WikiStatus, FeishuConfig, BrowserConfig, ShellConfig } from '../src/shared/domainTypes'
+import type { WikiConfig, WikiStatus, FeishuConfig, WeChatConfig, BrowserConfig, ShellConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb, persistBrowserConfig } from './browser/browserConfigDb'
 import { persistShellConfig, readShellConfigFromDb, syncShellDeniedTools } from './shell/shellConfigDb'
 import { stagehandService } from './browser/stagehandService'
 import type { BrowserDetectContext } from './browser/browserDependencyDetect'
 import { readFeishuConfigFromDb, persistFeishuConfig } from './feishu/feishuIpc'
+import { readWeChatConfigFromDb, persistWeChatConfig } from './wechat/weChatIpc'
 import { initWikiStructure, readWikiSchema } from './wiki/wikiInit'
 import { getWikiStatus } from './wiki/wikiStatus'
 import { classifyWikiPath } from './wiki/wikiPaths'
@@ -132,6 +133,7 @@ const CONFIG_KEYS = {
   skills: 'config.skills',
   wiki: 'config.wiki',
   feishu: 'config.feishu',
+  wechat: 'config.wechat',
   workDirProfiles: 'config.workDirProfiles',
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
@@ -733,6 +735,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const wiki = readWikiConfig(ctx.db)
     const workspaceLayout = readWorkspaceLayoutConfig(ctx.db)
     const feishu = readFeishuConfigFromDb(ctx.db)
+    const wechat = readWeChatConfigFromDb(ctx.db)
     let workDirProfiles: AppConfig['workDirProfiles'] = []
     const profilesRaw = getConfigValue(ctx.db, CONFIG_KEYS.workDirProfiles)
     if (profilesRaw) {
@@ -780,6 +783,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       wiki,
       workspaceLayout,
       feishu,
+      wechat,
       workDirProfiles,
       activeWorkDirProfileId,
       browser,
@@ -810,6 +814,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         skills: Partial<SkillsConfig>
         wiki: Partial<WikiConfig>
         feishu: Partial<FeishuConfig>
+        wechat: Partial<WeChatConfig>
         workDirProfiles: AppConfig['workDirProfiles']
         activeWorkDirProfileId: string
         maxParallelChatSessions: number
@@ -980,6 +985,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (payload.feishu !== undefined) {
         persistFeishuConfig(ctx.db, payload.feishu)
+      }
+      if (payload.wechat !== undefined) {
+        persistWeChatConfig(ctx.db, payload.wechat)
       }
       if (payload.workDirProfiles !== undefined) {
         const validation = ctx.workDirManager.validateProfilesForSave(payload.workDirProfiles)

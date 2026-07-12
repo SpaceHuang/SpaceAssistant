@@ -1,6 +1,7 @@
 {
   "remote": {
     "auditLog": "操作记录",
+    "channelName": "飞书",
     "connectionDesc": "飞书连接",
     "label": {
       "error": "出错",

@@ -1,9 +1,12 @@
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
+import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { BrowserDetectContext } from '../../src/shared/browserTypes'
 import type { AppDatabase } from '../database'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
+import type { WeChatConfirmManager } from '../wechat/weChatConfirmManager'
+import type { IncomingMessage } from '@wechatbot/wechatbot'
 
 export interface FeishuRemoteContext {
   source: 'feishu'
@@ -15,6 +18,20 @@ export interface FeishuRemoteContext {
   chatId?: string
   sessionId?: string
 }
+
+export interface WeChatRemoteContext {
+  source: 'wechat'
+  messageId: string
+  userId: string
+  contextToken: string
+  confirmPolicy: WeChatConfig['remoteConfirmPolicy']
+  wechatConfig?: WeChatConfig
+  confirmManager?: WeChatConfirmManager
+  sessionId?: string
+  inboundRaw?: IncomingMessage
+}
+
+export type RemoteContext = FeishuRemoteContext | WeChatRemoteContext
 
 export type ToolProgressPayload = { message?: string; raw?: string; rawDelta?: string; seq?: number }
 
@@ -32,11 +49,12 @@ export interface ToolExecutionContext {
   toolsConfig: ToolsConfig
   wikiConfig?: WikiConfig
   feishuConfig?: FeishuConfig
+  wechatConfig?: WeChatConfig
   browserConfig?: BrowserConfig
   shellConfig?: ShellConfig | null
   appDatabase?: AppDatabase
   larkCliRunner?: LarkCliRunner
-  remoteContext?: FeishuRemoteContext
+  remoteContext?: RemoteContext
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext

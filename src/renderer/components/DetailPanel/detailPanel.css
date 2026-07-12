@@ -381,6 +381,7 @@
 /* ===== 分栏布局（Grid：拖动手柄占固定行，避免 flex 下总高度超出 100%）===== */
 .detail-panel-split {
   --feishu-remote-status-bar-height: 32px;
+  --remote-status-bar-height: var(--feishu-remote-status-bar-height);
   --detail-resize-handle-height: 4px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -990,6 +991,146 @@
 @container feishu-status (max-width: 300px) {
   .feishu-remote-status-label-desc,
   .feishu-remote-status-sub {
+    display: none;
+  }
+}
+
+/* ===== 双通道远程监听状态栏 ===== */
+.remote-status-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--remote-status-bar-height);
+  min-height: var(--remote-status-bar-height);
+  max-height: var(--remote-status-bar-height);
+  overflow: hidden;
+  padding: 0 8px;
+  gap: 8px;
+  font-size: 12px;
+  background: var(--sa-split-pane-bg);
+  border-top: 1px solid var(--sa-split-pane-edge);
+  box-sizing: border-box;
+  container-type: inline-size;
+  container-name: remote-status;
+}
+
+.remote-status-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.remote-status-channels {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.remote-status-channel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.remote-status-idle {
+  color: var(--sa-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-status-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.remote-status-dot--idle {
+  background: var(--sa-text-tertiary);
+}
+
+.remote-status-dot--listening {
+  background: var(--sa-success);
+}
+
+.remote-status-dot--error {
+  background: var(--sa-error);
+}
+
+.remote-status-badge {
+  flex-shrink: 0;
+}
+
+.remote-status-channel-label {
+  color: var(--sa-text-tertiary);
+  font-weight: 400;
+  flex-shrink: 0;
+}
+
+.remote-status-label-value {
+  font-weight: 600;
+  color: var(--sa-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-status-sub {
+  color: var(--sa-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-status-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+
+.remote-status-actions .ant-btn {
+  font-size: 11px;
+}
+
+.wechat-qr-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.wechat-qr-placeholder {
+  width: 180px;
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px;
+  border: 1px dashed var(--sa-border);
+  color: var(--sa-text-tertiary);
+  font-size: 13px;
+}
+
+@container remote-status (max-width: 239px) {
+  .remote-status-channel-label,
+  .remote-status-label-value,
+  .remote-status-sub,
+  .remote-status-action-audit {
     display: none;
   }
 }

@@ -6,7 +6,8 @@ import type {
   ModelEntry,
   ShellConfig,
   WikiConfig,
-  WorkspaceLayoutConfig
+  WorkspaceLayoutConfig,
+  WeChatConfig
 } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG, mergeWorkspaceLayoutConfig } from '../../../shared/domainTypes'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
@@ -23,6 +24,7 @@ export type ConfigModalSnapshotInput = {
   maxParallelChatSessions: number
   wiki: WikiConfig
   feishu: FeishuConfig
+  wechat: WeChatConfig
   browser: BrowserConfig
   shell: ShellConfig
   shellEnabled: boolean
@@ -93,6 +95,7 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     maxParallelChatSessions: input.maxParallelChatSessions,
     wiki: input.wiki,
     feishu: input.feishu,
+    wechat: input.wechat,
     browser: { ...input.browser, allowedDomains: [] },
     shell: { ...input.shell, enabled: input.shellEnabled },
     workspaceLayout: {
@@ -131,6 +134,7 @@ export function buildConfigModalSnapshotFromConfig(
     maxParallelChatSessions: cfg.maxParallelChatSessions,
     wiki: cfg.wiki,
     feishu: cfg.feishu,
+    wechat: cfg.wechat,
     browser: { ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] },
     shell: cfg.shell ?? { ...DEFAULT_SHELL_CONFIG, enabled: shellEnabled },
     shellEnabled,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_WORKSPACE_LAYOUT_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
+import { DEFAULT_WECHAT_CONFIG } from '../../../shared/wechatTypes'
 import {
   buildConfigModalSnapshot,
   configModalSnapshotsEqual,
@@ -47,6 +48,7 @@ describe('buildConfigModalSnapshot', () => {
       maxParallelChatSessions: 3,
       wiki: { ...DEFAULT_WIKI_CONFIG },
       feishu: { ...DEFAULT_FEISHU_CONFIG },
+      wechat: { ...DEFAULT_WECHAT_CONFIG },
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG, enabled: true },
       shellEnabled: true,
@@ -78,6 +80,7 @@ describe('buildConfigModalSnapshot', () => {
         maxParallelChatSessions: 3,
         wiki: { ...DEFAULT_WIKI_CONFIG },
         feishu: { ...DEFAULT_FEISHU_CONFIG },
+        wechat: { ...DEFAULT_WECHAT_CONFIG },
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
@@ -107,6 +110,7 @@ describe('buildConfigModalSnapshot', () => {
         maxParallelChatSessions: 3,
         wiki: { ...DEFAULT_WIKI_CONFIG },
         feishu: { ...DEFAULT_FEISHU_CONFIG },
+        wechat: { ...DEFAULT_WECHAT_CONFIG },
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
@@ -135,6 +139,7 @@ describe('buildConfigModalSnapshot', () => {
       maxParallelChatSessions: 3,
       wiki: { ...DEFAULT_WIKI_CONFIG },
       feishu: { ...DEFAULT_FEISHU_CONFIG },
+      wechat: { ...DEFAULT_WECHAT_CONFIG },
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG },
       shellEnabled: true,
@@ -144,5 +149,35 @@ describe('buildConfigModalSnapshot', () => {
     const b = buildConfigModalSnapshot({ ...base, locale: 'en-US' })
     expect(configModalSnapshotsEqual(a, b)).toBe(true)
     expect(JSON.parse(a).locale).toBe('en-US')
+  })
+
+  it('detects wechat config changes', () => {
+    const llmState = initLlmServiceTabState([], [], [])
+    const mk = (enabled: boolean) =>
+      buildConfigModalSnapshot({
+        workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp', isDefault: true }],
+        locale: 'zh-CN',
+        thinkingEnabled: false,
+        models: [],
+        llmState,
+        toolUi: {
+          confirmMode: 'diff',
+          deniedTools: [],
+          pythonPath: 'python',
+          scriptTimeout: 300,
+          fileCheckpointingEnabled: true,
+          maxFileSnapshots: 100,
+          grepTimeoutSec: 60
+        },
+        maxParallelChatSessions: 3,
+        wiki: { ...DEFAULT_WIKI_CONFIG },
+        feishu: { ...DEFAULT_FEISHU_CONFIG },
+        wechat: { ...DEFAULT_WECHAT_CONFIG, enabled },
+        browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
+        shell: { ...DEFAULT_SHELL_CONFIG },
+        shellEnabled: true,
+        workspaceLayout: defaultWorkspaceLayout
+      })
+    expect(configModalSnapshotsEqual(mk(false), mk(true))).toBe(false)
   })
 })

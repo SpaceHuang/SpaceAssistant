@@ -191,6 +191,35 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         }
       }
     }
+  },
+  {
+    name: 'wechat_reply',
+    description:
+      '向当前微信对话回复消息。仅在 source=wechat 的会话中使用。自动处理 context_token 与长文本分片。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '回复文本' },
+        imagePath: { type: 'string', description: '相对 workDir 的图片路径' },
+        filePath: { type: 'string', description: '相对 workDir 的文件路径' }
+      },
+      required: ['text']
+    }
+  },
+  {
+    name: 'wechat_send',
+    description:
+      '向指定微信用户 ID 主动发送消息。需要已知 userId（例如历史会话 metadata）。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string' },
+        text: { type: 'string' },
+        imagePath: { type: 'string' },
+        filePath: { type: 'string' }
+      },
+      required: ['userId', 'text']
+    }
   }
 ]
 

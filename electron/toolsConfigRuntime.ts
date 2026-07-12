@@ -1,6 +1,7 @@
 import type { FeishuConfig } from '../src/shared/feishuTypes'
+import type { WeChatConfig } from '../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig } from '../src/shared/domainTypes'
-import type { FeishuRemoteContext } from './tools/types'
+import type { RemoteContext } from './tools/types'
 import { BUILTIN_TOOL_DEFINITIONS } from '../src/shared/builtinToolDefinitions'
 
 export function isShellToolEnabled(shellConfig: ShellConfig | null | undefined, cfg: ToolsConfig): boolean {
@@ -23,8 +24,9 @@ export function filterBuiltinToolsForApi(
   cfg: ToolsConfig,
   feishu?: FeishuConfig | null,
   browserConfig?: BrowserConfig | null,
-  remoteContext?: FeishuRemoteContext | null,
-  shellConfig?: ShellConfig | null
+  remoteContext?: RemoteContext | null,
+  shellConfig?: ShellConfig | null,
+  wechat?: WeChatConfig | null
 ): typeof BUILTIN_TOOL_DEFINITIONS {
   let list = BUILTIN_TOOL_DEFINITIONS.filter((t) => isToolEnabledByConfig(t.name, cfg))
   if (!isShellToolEnabled(shellConfig, cfg)) {
@@ -35,6 +37,12 @@ export function filterBuiltinToolsForApi(
   }
   if (feishu?.integrationMode === 'mcp') {
     list = list.filter((t) => t.name !== 'run_lark_cli')
+  }
+  if (!wechat?.enabled) {
+    list = list.filter((t) => t.name !== 'wechat_send' && t.name !== 'wechat_reply')
+  }
+  if (remoteContext?.source === 'wechat' && wechat?.remoteConfirmPolicy === 'remote_read_only') {
+    list = list.filter((t) => t.name !== 'wechat_send')
   }
   if (!browserConfig?.enabled) {
     list = list.filter((t) => t.name !== 'browser')

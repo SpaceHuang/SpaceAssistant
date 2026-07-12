@@ -111,6 +111,15 @@ API Key 通过 Electron 的 `safeStorage` API 加密（`electron/secureApiKey.ts
 
 初始化后会写入 `feishu.logger.startup`。写入前经 `sanitizeForLog` 与飞书字段规则脱敏（不落用户消息正文、token、secret 等）。设置页「飞书操作记录」仍使用 `{userData}/logs/feishu-audit.log`，二者分工不同。
 
+## 排障：微信 CLI 文件日志
+
+微信 iLink Bot 主进程全链路调试日志写入 **JSON Lines**，文件名 `WeChatCli-{YYYYmmdd}.log`，目录与 Agent / 飞书日志相同：
+
+- 开发模式（`npm run dev`）：`{项目根}/logs/`
+- 打包模式：`{workDir}/.agent/logs/`
+
+初始化后会写入 `wechat.logger.startup`。写入前经 `sanitizeForLog` 与微信字段规则脱敏（不落用户消息正文、token、二维码完整 URL 等）。设置页「微信操作记录」仍使用 `{userData}/logs/wechat-audit.log`；审计写入会镜像到 `wechat.audit.*` 事件。
+
 ## IPC 通道参考
 
 所有通道定义在 `electron/preload.ts` 和 `electron/appIpc.ts`：

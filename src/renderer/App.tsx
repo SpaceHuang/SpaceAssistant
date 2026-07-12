@@ -14,6 +14,7 @@ import { ensureWorkDirForSession } from './services/workDirSessionSync'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
+import { initWeChatRemoteStreamBridge } from './services/wechatRemoteStreamService'
 import { initContextUsageStreamBridge } from './services/contextUsageStreamService'
 import { initConfirmStores } from './services/confirmStoresInit'
 import { SessionListPane } from './components/SessionList/SessionListPane'
@@ -166,12 +167,14 @@ function AppShellInner() {
       dispatch(upsertSession(session))
     })
     const offFeishuStream = initFeishuRemoteStreamBridge()
+    const offWeChatStream = initWeChatRemoteStreamBridge()
     const offContextUsage = initContextUsageStreamBridge()
     return () => {
       off1()
       off2()
       offTitle()
       offFeishuStream()
+      offWeChatStream()
       offContextUsage()
     }
   }, [dispatch])

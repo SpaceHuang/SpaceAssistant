@@ -719,6 +719,11 @@ import { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 export type { FeishuConfig, WorkDirProfile } from './feishuTypes'
 export { DEFAULT_FEISHU_CONFIG, mergeFeishuConfig } from './feishuTypes'
 
+import type { WeChatConfig } from './wechatTypes'
+import { DEFAULT_WECHAT_CONFIG, mergeWeChatConfig } from './wechatTypes'
+export type { WeChatConfig } from './wechatTypes'
+export { DEFAULT_WECHAT_CONFIG, mergeWeChatConfig } from './wechatTypes'
+
 /** 单套大模型 API 接入配置（不含明文 Key） */
 export interface LlmServiceProfile {
   id: string
@@ -759,6 +764,7 @@ export interface AppConfig {
   skills: SkillsConfig
   wiki: WikiConfig
   feishu: FeishuConfig
+  wechat: WeChatConfig
   browser: BrowserConfig
   shell: ShellConfig
   workspaceLayout: WorkspaceLayoutConfig

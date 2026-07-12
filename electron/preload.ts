@@ -269,6 +269,64 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('feishu:agent-done', fn)
   },
 
+  wechatDetectSdk: () => ipcRenderer.invoke('wechat:detect-sdk'),
+  wechatLoginStart: () => ipcRenderer.invoke('wechat:login-start'),
+  wechatLoginStop: () => ipcRenderer.invoke('wechat:login-stop'),
+  wechatLogout: () => ipcRenderer.invoke('wechat:logout'),
+  wechatConnectionStatus: () => ipcRenderer.invoke('wechat:connection-status'),
+  wechatPollStart: () => ipcRenderer.invoke('wechat:poll-start'),
+  wechatPollStop: () => ipcRenderer.invoke('wechat:poll-stop'),
+  wechatPendingConfirms: () => ipcRenderer.invoke('wechat:pending-confirms'),
+  wechatConfirmResponse: (payload) => ipcRenderer.invoke('wechat:confirm-response', payload),
+  wechatAuditTail: (limit) => ipcRenderer.invoke('wechat:audit-tail', limit),
+  wechatAuditQuery: (opts) => ipcRenderer.invoke('wechat:audit-query', opts),
+  wechatSend: (payload) => ipcRenderer.invoke('wechat:send', payload),
+  wechatReply: (payload) => ipcRenderer.invoke('wechat:reply', payload),
+  wechatOnQrUrl: (cb) => {
+    const fn = (_e: unknown, data: { url: string | null; expired?: boolean }) => cb(data)
+    ipcRenderer.on('wechat:qr-url', fn)
+    return () => ipcRenderer.removeListener('wechat:qr-url', fn)
+  },
+  wechatOnLoginProgress: (cb) => {
+    const fn = (_e: unknown, data: { stage: string; code?: string }) =>
+      cb(data as { stage: import('../src/shared/wechatTypes').WeChatLoginProgress; code?: string })
+    ipcRenderer.on('wechat:login-progress', fn)
+    return () => ipcRenderer.removeListener('wechat:login-progress', fn)
+  },
+  wechatOnInboundMessage: (cb) => {
+    const fn = (_e: unknown, data: { sessionId: string; message: unknown }) => cb(data)
+    ipcRenderer.on('wechat:inbound-message', fn)
+    return () => ipcRenderer.removeListener('wechat:inbound-message', fn)
+  },
+  wechatOnRemoteAgentStart: (cb) => {
+    const fn = (_e: unknown, data: { sessionId: string; assistantMessageId: string; requestId: string }) => cb(data)
+    ipcRenderer.on('wechat:remote-agent-start', fn)
+    return () => ipcRenderer.removeListener('wechat:remote-agent-start', fn)
+  },
+  wechatOnConfirmRequest: (cb) => {
+    const fn = (_e: unknown, data: unknown) => cb(data)
+    ipcRenderer.on('wechat:confirm-request', fn)
+    return () => ipcRenderer.removeListener('wechat:confirm-request', fn)
+  },
+  wechatOnPendingConfirm: (cb) => {
+    const fn = (_e: unknown, data: { count: number }) => cb(data)
+    ipcRenderer.on('wechat:pending-confirm', fn)
+    return () => ipcRenderer.removeListener('wechat:pending-confirm', fn)
+  },
+  wechatOnAgentDone: (cb) => {
+    const fn = (
+      _e: unknown,
+      data: { sessionId: string; messageId: string; requestId: string; ok: boolean; summary?: string }
+    ) => cb(data)
+    ipcRenderer.on('wechat:agent-done', fn)
+    return () => ipcRenderer.removeListener('wechat:agent-done', fn)
+  },
+  wechatOnPollingStats: (cb) => {
+    const fn = (_e: unknown, data: unknown) => cb(data)
+    ipcRenderer.on('wechat:polling-stats', fn)
+    return () => ipcRenderer.removeListener('wechat:polling-stats', fn)
+  },
+
   workdirList: () => ipcRenderer.invoke('workdir:list'),
   workdirAdd: (profile) => ipcRenderer.invoke('workdir:add', profile),
   workdirUpdate: (profileId, updates) => ipcRenderer.invoke('workdir:update', { profileId, updates }),

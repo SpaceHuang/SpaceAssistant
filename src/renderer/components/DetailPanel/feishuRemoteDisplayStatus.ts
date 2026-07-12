@@ -207,3 +207,8 @@ export function resolveFeishuRemoteDisplayStatus(
     event
   )
 }
+
+/** 双通道状态栏：监听中 / 连接中 / 出错时展示飞书通道 */
+export function isFeishuChannelVisible(status: FeishuRemoteDisplayStatus): boolean {
+  return status.displayState === 'listening' || status.displayState === 'error'
+}

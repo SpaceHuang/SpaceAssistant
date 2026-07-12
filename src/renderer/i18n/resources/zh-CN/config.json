@@ -254,6 +254,16 @@
         "summary": "读取飞书消息中的附件文件（只读）。",
         "disabledHint": "关闭后 Agent 无法打开飞书附件内容。"
       },
+      "wechatSend": {
+        "displayName": "微信发送",
+        "summary": "向指定微信用户发送文本、图片或文件。",
+        "disabledHint": "关闭后 Agent 无法主动发送微信消息。"
+      },
+      "wechatReply": {
+        "displayName": "微信回复",
+        "summary": "回复当前微信远程会话的入站消息。",
+        "disabledHint": "关闭后 Agent 无法回复微信远程会话。"
+      },
       "browser": {
         "displayName": "网络访问",
         "summary": "在隔离浏览器中打开网页、读取页面并执行点击等操作。",
@@ -558,5 +568,72 @@
     "columnType": "类型",
     "columnDetail": "详情",
     "pending": "pending"
+  },
+  "settings": {
+    "wechat": {
+      "tabTitle": "微信遥控",
+      "description": "通过微信遥控桌面 Agent",
+      "descriptionHint": "外出时发消息就能执行指令，结果自动回传到微信。",
+      "bindButton": "绑定微信",
+      "boundStatus": "已绑定 · {{displayName}}",
+      "rebindButton": "重新绑定",
+      "unbindButton": "解绑",
+      "unbindConfirm": "确定要解绑微信吗？解绑后将停止接收微信消息。",
+      "unbound": "已解绑",
+      "listenStatusLabel": "消息监听",
+      "listenFailed": "消息监听启动失败，请检查网络后重试",
+      "listenFailedDetail": "消息监听启动失败：{{detail}}",
+      "statusError": "监听异常",
+      "receiveMessages": "接收微信消息（手机发指令到桌面）",
+      "statusListening": "监听中",
+      "statusStopped": "已停止",
+      "notifyOnReceive": "收到消息时弹窗通知",
+      "sessionMergeLabel": "会话合并（分钟，0=每条新会话）",
+      "sessionMergeUnit": "分钟",
+      "allowLocalWrite": "允许远程指令修改本地文件",
+      "rateLimitLabel": "消息频率限制（条/分钟/用户）",
+      "senderAllowlistLabel": "发送者白名单",
+      "senderAllowlistPlaceholder": "可选，每行一个 userId",
+      "qrExpired": "二维码已过期，点击重新获取",
+      "networkFailed": "网络连接失败，请检查网络后重试",
+      "waitingScan": "等待扫描",
+      "scannedConfirm": "已扫描，请在手机确认",
+      "boundSuccess": "绑定成功",
+      "loginFailed": "登录失败，请检查网络或重新扫码",
+      "accountError": "账号异常，请稍后重试或更换微信号",
+      "sessionExpired": "微信登录已过期，请重新扫码",
+      "policyReadOnly": "仅读取（不修改文件）",
+      "policyAlways": "一律确认",
+      "policyInherit": "与工具设置一致",
+      "verifyCode": "请在手机微信输入配对数字 {{code}}",
+      "sdkStatusLabel": "SDK 状态",
+      "detecting": "检测中…",
+      "sdkReady": "SDK 已就绪 {{version}}",
+      "sdkMissing": "SDK 不可用：{{error}}",
+      "redetect": "重新检测",
+      "retryQr": "重新获取二维码",
+      "cancelBind": "取消绑定",
+      "start": "启动",
+      "stop": "停止",
+      "remoteDefaultModelLabel": "远程默认模型",
+      "remoteDefaultModelPlaceholder": "与全局默认相同",
+      "remoteConfirmLabel": "远程写确认策略",
+      "securityTitle": "安全设置",
+      "viewAudit": "查看操作记录"
+    }
+  },
+  "wechatAudit": {
+    "title": "微信操作记录",
+    "refresh": "刷新",
+    "columnTime": "时间",
+    "columnType": "类型",
+    "columnDetail": "详情",
+    "pending": "pending"
+  },
+  "remoteAudit": {
+    "title": "远程操作记录",
+    "tabFeishu": "飞书",
+    "tabWechat": "微信",
+    "close": "关闭"
   }
 }

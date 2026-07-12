@@ -435,12 +435,35 @@ interface FeishuInboundMessage {
 | 阶段 | 行为 |
 |------|------|
 | 收到指令 | 可选立即回复「已收到，正在处理…」（`--as bot` reply） |
-| 执行中 | 长任务不流式推送；超过 60s 可发一条进度心跳（可配置） |
+| 执行中 | 层 A 无 Typing；层 B 心跳（默认 60s）携带 **Activity 快照**（§4）；见 [remote-progress-activity-sync-requirement.md](./remote-progress-activity-sync-requirement.md) |
 | 完成 | 回复文本摘要（≤4000 字）；过长则摘要 + 「完整结果已写入桌面会话 {sessionTitle}」 |
 | 失败 | 回复错误原因 + 建议操作 |
-| 需确认 | 回复「该操作需桌面端确认，请打开 SpaceAssistant 处理」；桌面端弹出确认卡片 |
+| 需确认 | **即时** IM reply Y/N；Agent 阻塞等待（见 §8.5.1） |
 
-> **第一期限制**：写操作若配置为必须确认，远程指令**不自动执行写操作**，仅回复提示；读操作与本地工具可自动执行。Phase 2 可支持「飞书内回复 Y/N 确认」。
+> **远程确认：** 与微信 §7.5.1 同一套策略矩阵（[remote-progress-activity-sync-requirement.md](./remote-progress-activity-sync-requirement.md) §6.4.2）。默认 `feishu_confirm`。**不得** sole 提示「请打开桌面」。`remote_read_only` = **禁止远程写**，不是「改去桌面确认」。
+
+### 8.5.1 远程确认端到端流程（与微信对齐）
+
+> 以 [remote-progress-activity-sync-requirement.md](./remote-progress-activity-sync-requirement.md) §6.4 为准。
+
+```
+飞书用户发指令 → 远程 Agent 执行 → 工具调用触发确认请求
+    → 飞书 Bot **即时** reply Y/N 确认提示（feishu_confirm / always / inherit→等效）
+    → 桌面端 **可选** 同步展示确认信息
+        ├─ IM 回复 Y → 工具执行 → 摘要回飞书
+        └─ IM 回复 N / 超时 → 飞书 reply「操作已取消」
+```
+
+**确认策略（与微信拉齐）：**
+
+| 策略 | UI 文案 | 远程会话行为 |
+|------|---------|-------------|
+| `feishu_confirm`（**默认**） | 飞书内 Y/N 确认 | IM Y/N + Agent 阻塞 |
+| `always` | 一律确认 | 同左 |
+| `remote_read_only` | 禁止远程写 | 写操作 **拒绝**；文案不含「请去桌面」 |
+| `inherit` | 与工具设置一致 | 远程会话 **等效** `feishu_confirm` |
+
+**技术方案备注：** Phase B 设计时评估 `RemoteConfirmCoordinator`（remote-progress §附录 C），与微信共用确认层。
 
 ### 8.6 与系统托盘协同
 
@@ -560,7 +583,7 @@ interface FeishuConfig {
   remoteNotifyOnReceive: boolean
 
   // 安全
-  remoteConfirmPolicy: 'inherit' | 'always' | 'remote_read_only'
+  remoteConfirmPolicy: 'inherit' | 'always' | 'remote_read_only' | 'feishu_confirm'
   remoteAllowLocalWrite: boolean      // 默认 false
 
   // 工具
@@ -576,7 +599,7 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteGroupTrigger: 'mention',
   remoteCommandPrefix: '/sa ',
   remoteNotifyOnReceive: true,
-  remoteConfirmPolicy: 'remote_read_only',
+  remoteConfirmPolicy: 'feishu_confirm',
   remoteAllowLocalWrite: false,
   larkCliDefaultTimeoutSec: 120,
   larkCliWriteRequiresConfirm: true,
@@ -667,7 +690,7 @@ interface FeishuProcessedMessageEntry {
 | 未授权用户发远程指令 | 私聊 Bot 需开放平台控制可见范围；可选发送者白名单 |
 | 群聊误触发 | 默认仅 @Bot |
 | 远程恶意写本地文件 | 默认 `remoteAllowLocalWrite=false` |
-| 远程恶意写飞书 | 默认 `remoteConfirmPolicy=remote_read_only` |
+| 远程恶意写飞书 | 默认 `remoteConfirmPolicy=feishu_confirm`（IM Y/N）；严格场景选 `remote_read_only` |
 | 凭据泄露 | 凭据存 lark-cli 配置目录，SpaceAssistant 不复制 App Secret 到自有数据库 |
 | 重放攻击 | message_id 去重 |
 
@@ -706,7 +729,8 @@ interface FeishuProcessedMessageEntry {
 | 飞书 Skill 集成 | 自动激活 |
 | `FeishuEventService` | 私聊 Bot 文本指令 |
 | `RemoteCommandRouter` | 新会话、去重、飞书 reply |
-| 远程只读策略 | 写操作提示桌面确认 |
+| `feishu_confirm`（**默认**） | 远程写操作 IM Y/N + Progress 快照心跳 |
+| `remote_read_only` | 禁止远程写；诚实拒绝 |
 
 **依赖：** 系统托盘（建议并行，非硬阻塞）
 
@@ -717,7 +741,7 @@ interface FeishuProcessedMessageEntry {
 | 群聊 @Bot、前缀触发 | 完整群聊规则 |
 | 会话合并 | 同 chat 续聊 |
 | 发送者白名单 | |
-| 飞书内 Y/N 确认写操作 | |
+| 飞书内 Y/N 确认写操作 | 已纳入 Phase 1 远程栈（与 remote-progress Phase A/B 对齐） |
 | 富文本 / 图片消息 | 下载后作为附件注入 |
 | Wake Word / 妙记待办 | 参考官方场景 1 |
 | Lark 国际版 | 完整测试 |
@@ -747,7 +771,8 @@ interface FeishuProcessedMessageEntry {
 - [ ] 启用远程监听后，手机飞书私聊 Bot 发送「列出工作目录下的文件」可触发 Agent 并回复结果摘要
 - [ ] 桌面自动创建 `[飞书]` 标记会话，可查看完整工具调用过程
 - [ ] 重复 message_id 不重复执行
-- [ ] 远程触发的飞书写操作在 `remote_read_only` 下不自动执行，并回复说明
+- [ ] 远程触发的写操作在 `feishu_confirm` 下收到 IM Y/N，回复 Y 后继续
+- [ ] `remote_read_only` 下写操作被拒绝，文案不引导桌面确认
 - [ ] 主窗口关闭后（托盘后台）仍可接收并处理指令
 
 ### 17.3 安全

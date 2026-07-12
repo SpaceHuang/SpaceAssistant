@@ -2,8 +2,13 @@
 
 **版本：** 1.1  
 **日期：** 2026-05-27  
-**状态：** 待评审  
+**状态：** **已废弃**（请参见替代方案）  
 **关联文档：** [feishu-integration-requirement.md](./feishu-integration-requirement.md)、[referenced-files-requirement.md](./referenced-files-requirement.md)、[plan-detail-panel-requirement.md](./plan-detail-panel-requirement.md)
+
+> **⚠️ 版本迭代声明**  
+> 本文档描述的独立飞书状态栏设计已被 [wechat-integration-requirement.md](./wechat-integration-requirement.md) §13.2 的**双通道合并状态栏（`RemoteStatusBar`）**设计所取代。  
+> **开发人员请注意：** 后续实现应以 **微信集成需求文档 v1.1（2026-07-12）为准**，本文档仅作历史参考。  
+> 双通道状态栏将在 **Phase 2** 交付，同时支持飞书和微信远程监听状态展示；Phase 1 期间飞书状态栏暂按本文档实现，但需预留重构为双通道架构的接口。
 
 ---
 

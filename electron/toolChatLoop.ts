@@ -51,7 +51,8 @@ import type { AppDatabase } from './database'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
-import type { FeishuRemoteContext } from './tools/types'
+import type { FeishuRemoteContext, RemoteContext } from './tools/types'
+import type { WeChatConfig } from '../src/shared/wechatTypes'
 import { isLarkCliWriteOperation } from './feishu/larkCliSecurity'
 import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_FEISHU_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
@@ -279,8 +280,9 @@ export type RunToolChatSessionArgs = {
   wikiConfig?: WikiConfig
   workspaceLayout?: WorkspaceLayoutConfig
   feishuConfig?: FeishuConfig
+  wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
-  remoteContext?: FeishuRemoteContext
+  remoteContext?: RemoteContext
   workDir: string
   userDataDir: string
   getApiKey: () => Promise<string | null>
@@ -359,6 +361,7 @@ async function runToolChatSessionInner(
     wikiConfig,
     workspaceLayout,
     feishuConfig,
+    wechatConfig,
     larkCliRunner,
     remoteContext,
     workDir,
@@ -416,7 +419,7 @@ async function runToolChatSessionInner(
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
-  const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext, shellConfig)
+  const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext, shellConfig, wechatConfig)
   const tools = sanitizeTools(builtinDefs as unknown[])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
   if (toolNames.includes('browser')) {
@@ -744,7 +747,7 @@ async function runToolChatSessionInner(
         continue
       }
 
-      const remoteBlock = evaluateFeishuRemoteToolBlock(toolName, inputObj, remoteContext, feishuConfig)
+      const remoteBlock = evaluateRemoteToolBlock(toolName, inputObj, remoteContext, feishuConfig, wechatConfig)
       if (remoteBlock) {
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
@@ -766,7 +769,7 @@ async function runToolChatSessionInner(
 
       if (
         toolName === 'browser' &&
-        remoteContext?.source === 'feishu' &&
+        (remoteContext?.source === 'feishu' || remoteContext?.source === 'wechat') &&
         browserConfig &&
         !browserConfig.allowRemoteSessions
       ) {
@@ -788,7 +791,7 @@ async function runToolChatSessionInner(
         continue
       }
 
-      if (toolName === 'run_shell' && remoteContext?.source === 'feishu') {
+      if (toolName === 'run_shell' && (remoteContext?.source === 'feishu' || remoteContext?.source === 'wechat')) {
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           SHELL_FEISHU_REMOTE_DISABLED_ERROR,
@@ -1079,6 +1082,7 @@ async function runToolChatSessionInner(
         toolName,
         inputObj,
         feishuConfig,
+        wechatConfig,
         browserConfig,
         sessionId,
         currentPageUrl,
@@ -1115,6 +1119,25 @@ async function runToolChatSessionInner(
             messageId: remoteContext.messageId,
             chatId: remoteContext.chatId ?? ''
           })
+          outcome = decision === 'y' ? 'approved' : decision === 'timeout' ? 'timeout' : 'rejected'
+        } else {
+          outcome = 'rejected'
+        }
+      } else if (needsConfirm && remoteContext?.source === 'wechat') {
+        if (remoteContext.confirmManager && wechatConfig?.remoteWechatConfirm && remoteContext.inboundRaw) {
+          const decision = await remoteContext.confirmManager.requestConfirm(
+            {
+              kind: 'tool_write',
+              sessionId,
+              toolCallId: toolUseId,
+              toolName,
+              toolInput: inputObj,
+              messageId: remoteContext.messageId,
+              userId: remoteContext.userId,
+              inboundMsg: remoteContext.inboundRaw
+            },
+            wechatConfig
+          )
           outcome = decision === 'y' ? 'approved' : decision === 'timeout' ? 'timeout' : 'rejected'
         } else {
           outcome = 'rejected'
@@ -1404,6 +1427,7 @@ async function runToolChatSessionInner(
           appDatabase: appDb,
           wikiConfig,
           feishuConfig,
+          wechatConfig,
           larkCliRunner,
           remoteContext,
           toolUserConfirmed,
@@ -1571,6 +1595,7 @@ function toolNeedsUserConfirmation(
   toolName: string,
   inputObj: Record<string, unknown>,
   feishuConfig?: FeishuConfig,
+  wechatConfig?: WeChatConfig,
   browserConfig?: BrowserConfig,
   sessionId?: string,
   currentPageUrl?: string,
@@ -1596,27 +1621,48 @@ function toolNeedsUserConfirmation(
     }
     return false
   }
+  if (toolName === 'wechat_send' || toolName === 'wechat_reply') {
+    return wechatConfig?.wechatSendRequiresConfirm ?? true
+  }
   return builtinToolNeedsConfirmation(toolName)
 }
 
-function evaluateFeishuRemoteToolBlock(
+function evaluateRemoteToolBlock(
   toolName: string,
   inputObj: Record<string, unknown>,
-  remoteContext: FeishuRemoteContext | undefined,
-  feishuConfig?: FeishuConfig
+  remoteContext: RemoteContext | undefined,
+  feishuConfig?: FeishuConfig,
+  wechatConfig?: WeChatConfig
 ): string | null {
-  if (remoteContext?.source !== 'feishu') return null
-  const policy = remoteContext.confirmPolicy
-  const allowLocalWrite = feishuConfig?.remoteAllowLocalWrite ?? false
+  if (!remoteContext) return null
 
-  if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
-    return '远程飞书指令不允许自动执行本地文件写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+  if (remoteContext.source === 'feishu') {
+    const policy = remoteContext.confirmPolicy
+    const allowLocalWrite = feishuConfig?.remoteAllowLocalWrite ?? false
+
+    if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
+      return '远程飞书指令不允许自动执行本地文件写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+    }
+
+    if (toolName === 'run_lark_cli' && policy === 'remote_read_only') {
+      const args = inputObj.args
+      if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
+        return '远程飞书指令不允许自动执行写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+      }
+    }
+    return null
   }
 
-  if (toolName === 'run_lark_cli' && policy === 'remote_read_only') {
-    const args = inputObj.args
-    if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
-      return '远程飞书指令不允许自动执行写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+  if (remoteContext.source === 'wechat') {
+    const policy = remoteContext.confirmPolicy
+    const allowLocalWrite = wechatConfig?.remoteAllowLocalWrite ?? false
+
+    if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
+      return '远程微信指令不允许自动执行本地文件写操作。请在桌面端 SpaceAssistant 中确认后执行。'
+    }
+
+    if ((toolName === 'wechat_send' || toolName === 'wechat_reply') && policy === 'remote_read_only') {
+      return '远程微信指令不允许自动执行出站消息。请在桌面端 SpaceAssistant 中确认后执行。'
     }
   }
 

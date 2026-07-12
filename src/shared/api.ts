@@ -76,6 +76,13 @@ import type {
   WorkDirProfile
 } from './feishuTypes'
 import type {
+  WeChatAuditEvent,
+  WeChatAuditQueryResult,
+  WeChatConnectionStatus,
+  WeChatLoginProgress,
+  WeChatSdkDetectResult
+} from './wechatTypes'
+import type {
   BrowserDetectResult,
   BrowserDependencyFailureCode,
   BrowserDependencyToolError
@@ -435,6 +442,38 @@ export type SpaceAssistantApi = {
     ok: boolean
     summary?: string
   }) => void) => () => void
+
+  wechatDetectSdk: () => Promise<WeChatSdkDetectResult>
+  wechatLoginStart: () => Promise<{ ok: boolean; error?: string }>
+  wechatLoginStop: () => Promise<{ ok: boolean }>
+  wechatLogout: () => Promise<{ ok: boolean }>
+  wechatConnectionStatus: () => Promise<WeChatConnectionStatus>
+  wechatPollStart: () => Promise<WeChatConnectionStatus>
+  wechatPollStop: () => Promise<WeChatConnectionStatus>
+  wechatPendingConfirms: () => Promise<unknown[]>
+  wechatConfirmResponse: (payload: { requestId: string; approved: boolean }) => Promise<{ ok: boolean }>
+  wechatAuditTail: (limit?: number) => Promise<WeChatAuditEvent[]>
+  wechatAuditQuery: (opts: { since?: number; types?: string[]; limit?: number }) => Promise<WeChatAuditQueryResult>
+  wechatSend: (payload: { userId: string; text: string; imagePath?: string; filePath?: string }) => Promise<{ success: boolean; chunksSent?: number; error?: string }>
+  wechatReply: (payload: { text: string; imagePath?: string; filePath?: string; sessionId?: string }) => Promise<{ success: boolean; chunksSent?: number; error?: string }>
+  wechatOnQrUrl: (cb: (data: { url: string | null; expired?: boolean }) => void) => () => void
+  wechatOnLoginProgress: (cb: (data: { stage: WeChatLoginProgress; code?: string }) => void) => () => void
+  wechatOnInboundMessage: (cb: (data: { sessionId: string; message: unknown }) => void) => () => void
+  wechatOnRemoteAgentStart: (cb: (data: {
+    sessionId: string
+    assistantMessageId: string
+    requestId: string
+  }) => void) => () => void
+  wechatOnConfirmRequest: (cb: (data: unknown) => void) => () => void
+  wechatOnPendingConfirm: (cb: (data: { count: number }) => void) => () => void
+  wechatOnAgentDone: (cb: (data: {
+    sessionId: string
+    messageId: string
+    requestId: string
+    ok: boolean
+    summary?: string
+  }) => void) => () => void
+  wechatOnPollingStats: (cb: (data: unknown) => void) => () => void
 
   workdirList: () => Promise<WorkDirProfile[]>
   workdirAdd: (profile: {

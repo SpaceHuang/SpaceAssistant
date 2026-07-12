@@ -254,6 +254,16 @@
         "summary": "Read attachment files from Feishu messages (read-only).",
         "disabledHint": "When disabled, the agent cannot open Feishu attachment contents."
       },
+      "wechatSend": {
+        "displayName": "WeChat send",
+        "summary": "Send text, images, or files to a WeChat user.",
+        "disabledHint": "When disabled, the agent cannot proactively send WeChat messages."
+      },
+      "wechatReply": {
+        "displayName": "WeChat reply",
+        "summary": "Reply to the inbound message in the current WeChat remote session.",
+        "disabledHint": "When disabled, the agent cannot reply in WeChat remote sessions."
+      },
       "browser": {
         "displayName": "Web access",
         "summary": "Open web pages in an isolated browser, read pages, and perform actions like clicking.",
@@ -558,5 +568,72 @@
     "columnType": "Type",
     "columnDetail": "Details",
     "pending": "pending"
+  },
+  "settings": {
+    "wechat": {
+      "tabTitle": "WeChat remote",
+      "description": "Control the desktop Agent from WeChat",
+      "descriptionHint": "Send commands from your phone while away; results are sent back to WeChat.",
+      "bindButton": "Link WeChat",
+      "boundStatus": "Linked · {{displayName}}",
+      "rebindButton": "Re-link",
+      "unbindButton": "Unlink",
+      "unbindConfirm": "Unlink WeChat? You will stop receiving remote commands.",
+      "unbound": "Unlinked",
+      "listenStatusLabel": "Message listening",
+      "listenFailed": "Failed to start message listening. Check your network and try again.",
+      "listenFailedDetail": "Failed to start message listening: {{detail}}",
+      "statusError": "Listening error",
+      "receiveMessages": "Receive WeChat messages (phone → desktop)",
+      "statusListening": "Listening",
+      "statusStopped": "Stopped",
+      "notifyOnReceive": "Notify when a message arrives",
+      "sessionMergeLabel": "Session merge (minutes, 0 = new session per message)",
+      "sessionMergeUnit": "min",
+      "allowLocalWrite": "Allow remote commands to modify local files",
+      "rateLimitLabel": "Rate limit (messages/min/user)",
+      "senderAllowlistLabel": "Sender allowlist",
+      "senderAllowlistPlaceholder": "Optional, one userId per line",
+      "qrExpired": "QR code expired — tap to refresh",
+      "networkFailed": "Network error — check your connection and retry",
+      "waitingScan": "Waiting for scan",
+      "scannedConfirm": "Scanned — confirm on your phone",
+      "boundSuccess": "Linked successfully",
+      "loginFailed": "Login failed — check network or scan again",
+      "accountError": "Account error — try again or use another WeChat account",
+      "sessionExpired": "WeChat session expired — scan again",
+      "policyReadOnly": "Read-only (no file writes)",
+      "policyAlways": "Always confirm",
+      "policyInherit": "Same as tool settings",
+      "verifyCode": "Enter pairing code {{code}} on your phone",
+      "sdkStatusLabel": "SDK status",
+      "detecting": "Detecting…",
+      "sdkReady": "SDK ready {{version}}",
+      "sdkMissing": "SDK unavailable: {{error}}",
+      "redetect": "Re-detect",
+      "retryQr": "Refresh QR code",
+      "cancelBind": "Cancel linking",
+      "start": "Start",
+      "stop": "Stop",
+      "remoteDefaultModelLabel": "Default remote model",
+      "remoteDefaultModelPlaceholder": "Same as global default",
+      "remoteConfirmLabel": "Remote write confirmation",
+      "securityTitle": "Security",
+      "viewAudit": "View activity log"
+    }
+  },
+  "wechatAudit": {
+    "title": "WeChat activity log",
+    "refresh": "Refresh",
+    "columnTime": "Time",
+    "columnType": "Type",
+    "columnDetail": "Details",
+    "pending": "pending"
+  },
+  "remoteAudit": {
+    "title": "Remote activity log",
+    "tabFeishu": "Feishu",
+    "tabWechat": "WeChat",
+    "close": "Close"
   }
 }

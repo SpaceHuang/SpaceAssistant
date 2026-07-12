@@ -1,0 +1,38 @@
+{
+  "remote": {
+    "auditLog": "Activity log",
+    "channelName": "WeChat",
+    "connectionDesc": "WeChat connection",
+    "label": {
+      "error": "Error",
+      "listening": "Listening",
+      "stopped": "Stopped",
+      "unconfigured": "Not linked"
+    },
+    "mainTooltipListening": "Listening · {{subtext}}",
+    "start": "Start",
+    "startAria": "Start WeChat remote listening",
+    "startDisabled": {
+      "completeConfig": "Complete WeChat setup first",
+      "enableRemote": "Enable receiving WeChat messages in settings",
+      "loginRequired": "Link WeChat first"
+    },
+    "stop": "Stop",
+    "stopAria": "Stop WeChat remote listening",
+    "subtext": {
+      "connecting": "Connecting…",
+      "fetchFailed": "Failed to fetch status",
+      "goToSettings": "Open settings to finish setup",
+      "processedCount": "Processed {{count}}",
+      "remoteOff": "Remote listening off",
+      "serviceStopped": "Service stopped"
+    },
+    "tooltip": {
+      "lastError": "{{message}}",
+      "processed": "Processed: {{count}}",
+      "startedAt": "Started: {{time}}",
+      "unknownError": "Unknown error"
+    },
+    "auditAria": "Open WeChat activity log"
+  }
+}

@@ -1,6 +1,7 @@
 {
   "remote": {
     "auditLog": "Activity log",
+    "channelName": "Feishu",
     "connectionDesc": "Feishu",
     "label": {
       "error": "Error",
