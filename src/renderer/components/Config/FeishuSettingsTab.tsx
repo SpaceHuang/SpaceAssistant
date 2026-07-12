@@ -349,20 +349,6 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           />
         </ConfigField>
 
-        <ConfigField label={t('feishu.integrationModeLabel')}>
-          <Select
-            value={feishu.integrationMode}
-            onChange={(integrationMode) => patch({ integrationMode })}
-            classNames={configModalSelectPopupClassNames}
-            options={[
-              { value: 'cli', label: t('feishu.integrationCli') },
-              { value: 'mcp', label: t('feishu.integrationMcp') },
-              { value: 'both', label: t('feishu.integrationBoth') }
-            ]}
-          />
-          <p className="config-field__hint">{t('feishu.integrationHint')}</p>
-        </ConfigField>
-
         <Button onClick={() => setAuditOpen(true)}>{t('feishu.viewAudit')}</Button>
       </ConfigSettingsStack>
 

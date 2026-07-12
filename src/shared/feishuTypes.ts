@@ -73,6 +73,8 @@ export function mergeFeishuConfig(partial?: Partial<FeishuConfig> | null): Feish
   return {
     ...DEFAULT_FEISHU_CONFIG,
     ...partial,
+    // 集成模式固定为 CLI（UI 选项已隐藏，不再支持 mcp/both）
+    integrationMode: 'cli',
     remoteSenderAllowlist: Array.isArray(partial.remoteSenderAllowlist)
       ? [...partial.remoteSenderAllowlist]
       : DEFAULT_FEISHU_CONFIG.remoteSenderAllowlist,
