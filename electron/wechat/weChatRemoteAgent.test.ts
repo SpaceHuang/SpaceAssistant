@@ -7,6 +7,7 @@ import { makeIncomingMessage } from './__mocks__/wechatBotMock'
 
 const mockRunToolChatSession = vi.fn()
 const mockGetMessages = vi.fn(() => [])
+const mockResolveLlmCredentialsForModel = vi.fn()
 
 vi.mock('../toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
@@ -18,6 +19,10 @@ vi.mock('../database', () => ({
 
 vi.mock('../appIpc', () => ({
   readAppLocale: () => 'zh-CN'
+}))
+
+vi.mock('../llmServiceResolver', () => ({
+  resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args)
 }))
 
 vi.mock('../remote/remoteProgressCoordinator', () => ({
@@ -92,6 +97,11 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
 describe('runWeChatRemoteAgent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockResolveLlmCredentialsForModel.mockResolvedValue({
+      serviceId: 'svc-1',
+      baseUrl: 'https://api.example.com',
+      getApiKey: async () => 'key'
+    })
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
       content: [{ type: 'text', text: 'done' }],
@@ -140,5 +150,46 @@ describe('runWeChatRemoteAgent', () => {
         resolveWorkDir: expect.any(Function)
       })
     )
+  })
+
+  it('resolves LLM credentials via resolveLlmCredentialsForModel aligned with desktop path', async () => {
+    mockResolveLlmCredentialsForModel.mockResolvedValue({
+      serviceId: 'svc-1',
+      baseUrl: 'https://creds.example.com',
+      getApiKey: async () => 'creds-key'
+    })
+    let captured: { baseUrl?: string; getApiKey?: () => Promise<string | null> } = {}
+    mockRunToolChatSession.mockImplementation(async (args: typeof captured) => {
+      captured = args
+      return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
+    })
+
+    await runWeChatRemoteAgent(baseCtx(() => null))
+
+    expect(mockResolveLlmCredentialsForModel).toHaveBeenCalledWith(
+      expect.anything(),
+      'claude-sonnet-4-20250514',
+      {}
+    )
+    expect(captured.baseUrl).toBe('https://creds.example.com')
+    expect(await captured.getApiKey?.()).toBe('creds-key')
+  })
+
+  it('falls back to ctx.getApiKey when resolveLlmCredentialsForModel returns error', async () => {
+    mockResolveLlmCredentialsForModel.mockResolvedValue({
+      serviceId: '',
+      baseUrl: undefined,
+      getApiKey: async () => null,
+      error: '当前无可用服务支持模型「x」'
+    })
+    let captured: { getApiKey?: () => Promise<string | null> } = {}
+    mockRunToolChatSession.mockImplementation(async (args: typeof captured) => {
+      captured = args
+      return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
+    })
+
+    await runWeChatRemoteAgent(baseCtx(() => null))
+
+    expect(await captured.getApiKey?.()).toBe('key')
   })
 })

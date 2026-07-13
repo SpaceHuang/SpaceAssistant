@@ -35,6 +35,8 @@ import { logWeChatCliEvent } from './weChatCliLogger'
 
 import { readAppLocale } from '../appIpc'
 
+import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
+
 import {
 
   startRemoteProgressSession,
@@ -210,6 +212,14 @@ export async function runWeChatRemoteAgent(ctx: {
 
 
 
+    const routeModelName = ctx.getModel()
+
+    const creds = await resolveLlmCredentialsForModel(ctx.db, routeModelName, {})
+
+    const baseUrl = creds.baseUrl ?? ctx.getBaseUrl()
+
+    const getApiKey = creds.error ? ctx.getApiKey : creds.getApiKey
+
     const res = await runToolChatSession({
 
       sender: effectiveSender,
@@ -218,9 +228,9 @@ export async function runWeChatRemoteAgent(ctx: {
 
       sessionId: ctx.sessionId,
 
-      model: ctx.getModel(),
+      model: routeModelName,
 
-      baseUrl: ctx.getBaseUrl(),
+      baseUrl: baseUrl,
 
       messages,
 
@@ -244,7 +254,7 @@ export async function runWeChatRemoteAgent(ctx: {
 
       userDataDir: ctx.userDataDir,
 
-      getApiKey: ctx.getApiKey,
+      getApiKey: getApiKey,
 
       appDb: ctx.db,
 

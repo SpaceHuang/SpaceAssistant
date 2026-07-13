@@ -16,6 +16,7 @@ import type { FeishuConfirmManager } from './feishuConfirmManager'
 import type { FeishuRemoteContext } from '../tools/types'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import { readAppLocale } from '../appIpc'
+import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { startRemoteProgressSession, stopRemoteProgressSession } from '../remote/remoteProgressCoordinator'
 import { createFeishuProgressAdapter, pickFeishuProgressConfig } from '../remote/feishuProgressAdapter'
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
@@ -103,12 +104,17 @@ export async function runFeishuRemoteAgent(ctx: {
       )
     })
 
+    const routeModelName = ctx.getModel()
+    const creds = await resolveLlmCredentialsForModel(ctx.db, routeModelName, {})
+    const baseUrl = creds.baseUrl ?? ctx.getBaseUrl()
+    const getApiKey = creds.error ? ctx.getApiKey : creds.getApiKey
+
     const res = await runToolChatSession({
       sender: effectiveSender,
       requestId,
       sessionId: ctx.sessionId,
-      model: ctx.getModel(),
-      baseUrl: ctx.getBaseUrl(),
+      model: routeModelName,
+      baseUrl: baseUrl,
       messages,
       system: appendix,
       options: { maxTokens: 8192 },
@@ -120,7 +126,7 @@ export async function runFeishuRemoteAgent(ctx: {
       workDirManager: ctx.workDirManager,
       resolveWorkDir: buildResolveWorkDirCallback(ctx.db, ctx.sessionId, ctx.workDirManager, ctx.workDir),
       userDataDir: ctx.userDataDir,
-      getApiKey: ctx.getApiKey,
+      getApiKey: getApiKey,
       appDb: ctx.db,
       feishuConfig: ctx.feishuConfig,
       larkCliRunner: ctx.runner,
