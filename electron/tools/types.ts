@@ -1,5 +1,6 @@
-import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
+import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
+import type { ImConfirmPolicy } from '../../src/shared/imTypes'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { BrowserDetectContext } from '../../src/shared/browserTypes'
@@ -8,36 +9,48 @@ import type { WorkDirManager } from '../workDirManager'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
 import type { WeChatConfirmManager } from '../wechat/weChatConfirmManager'
-import type { IncomingMessage } from '@wechatbot/wechatbot'
+import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 
-export interface FeishuRemoteContext {
-  source: 'feishu'
+export type RemoteConfirmDecision = 'y' | 'n' | 'timeout'
+
+export type RemoteConfirmPayload = {
+  sessionId: string
+  toolCallId: string
+  toolName: string
+  toolInput: Record<string, unknown>
   messageId: string
-  confirmPolicy: FeishuConfig['remoteConfirmPolicy']
-  feishuConfig?: FeishuConfig
-  confirmManager?: FeishuConfirmManager
-  larkCliRunner?: LarkCliRunner
   chatId?: string
-  sessionId?: string
-  appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
-  appendSessionSwitchAudit?: (entry: SessionSwitchAuditEntry) => void | Promise<void>
-}
-
-export interface WeChatRemoteContext {
-  source: 'wechat'
-  messageId: string
-  userId: string
-  contextToken: string
-  confirmPolicy: WeChatConfig['remoteConfirmPolicy']
-  wechatConfig?: WeChatConfig
-  confirmManager?: WeChatConfirmManager
-  sessionId?: string
+  userId?: string
   inboundRaw?: IncomingMessage
+}
+
+/** Shared confirm-manager surface used by remote session tools (pending checks). */
+export type RemoteConfirmManager = FeishuConfirmManager | WeChatConfirmManager
+
+export interface RemoteContext {
+  source: 'feishu' | 'wechat'
+  messageId: string
+  confirmPolicy: ImConfirmPolicy
+  sessionId?: string
+  chatId?: string
+  userId?: string
+  contextToken?: string
+  inboundRaw?: IncomingMessage
+  feishuConfig?: FeishuConfig
+  wechatConfig?: WeChatConfig
+  larkCliRunner?: LarkCliRunner
+  confirmManager?: RemoteConfirmManager
+  /** Platform adapter set when building remoteContext; prefer over source if/else in bridge. */
+  requestToolConfirm?: (payload: RemoteConfirmPayload) => Promise<RemoteConfirmDecision>
+  /** Tool-loop timeout error text; platforms set when building remoteContext. */
+  confirmTimeoutMessage?: string
   appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
   appendSessionSwitchAudit?: (entry: SessionSwitchAuditEntry) => void | Promise<void>
 }
 
-export type RemoteContext = FeishuRemoteContext | WeChatRemoteContext
+/** Gradual-migration aliases — prefer RemoteContext going forward. */
+export type FeishuRemoteContext = RemoteContext & { source: 'feishu' }
+export type WeChatRemoteContext = RemoteContext & { source: 'wechat' }
 
 export type ToolProgressPayload = { message?: string; raw?: string; rawDelta?: string; seq?: number }
 

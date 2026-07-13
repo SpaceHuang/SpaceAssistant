@@ -48,7 +48,7 @@ describe('workDirExecutors', () => {
       remoteContext: {
         source: 'feishu' as const,
         messageId: 'msg-1',
-        confirmPolicy: 'remote_confirm' as const
+        confirmPolicy: 'always' as const
       }
     } satisfies ToolExecutionContext
   }

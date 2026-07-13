@@ -6,23 +6,29 @@ import {
 } from '../../src/shared/remoteConfirmPolicy'
 import { formatRemoteProgressMessage } from '../../src/shared/remoteProgressTypes'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
-import type { RemoteContext } from '../tools/types'
+import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
 import { logFeishuCliEvent } from '../feishu/feishuCliLogger'
+import type {
+  RemoteConfirmDecision,
+  RemoteConfirmPayload,
+  RemoteContext
+} from '../tools/types'
+import type { WeChatConfirmManager } from '../wechat/weChatConfirmManager'
 import { logWeChatCliEvent } from '../wechat/weChatCliLogger'
 import { getLastPublishableSnapshot } from './remoteProgressStore'
 import { buildConfirmInstantPrompt } from './remoteProgressHooks'
 
-export type RemoteConfirmDecision = 'y' | 'n' | 'timeout'
+export type { RemoteConfirmDecision, RemoteConfirmPayload }
 
-export type RemoteConfirmPayload = {
-  sessionId: string
-  toolCallId: string
-  toolName: string
-  toolInput: Record<string, unknown>
-  messageId: string
-  chatId?: string
-  userId?: string
-  inboundRaw?: IncomingMessage
+export const FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE =
+  '飞书确认超时（10分钟），工具调用已取消。请查看 Bot 发出的确认消息后回复 Y，或重新发送指令。'
+
+export const WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE =
+  '用户确认超时（5分钟），工具调用已取消'
+
+export const REMOTE_CONFIRM_TIMEOUT_MESSAGES: Record<'feishu' | 'wechat', string> = {
+  feishu: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
+  wechat: WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE
 }
 
 export function resolveRemoteContextConfirmPolicy(
@@ -58,23 +64,15 @@ function buildWeChatImPrompt(payload: RemoteConfirmPayload, progressPrefix: stri
   })
 }
 
-export async function requestRemoteConfirm(args: {
-  remoteContext: RemoteContext
-  payload: RemoteConfirmPayload
-  wechatConfig?: WeChatConfig
-}): Promise<RemoteConfirmDecision> {
-  const resolved = resolveRemoteContextConfirmPolicy(args.remoteContext, args.wechatConfig)
-  if (!shouldRequestImConfirm(resolved)) return 'n'
-
-  const { remoteContext, payload } = args
-  const progressPrefix = formatLastPublishablePrefix(payload.sessionId)
-
-  if (remoteContext.source === 'feishu' && remoteContext.confirmManager) {
+export function createFeishuRequestToolConfirm(
+  confirmManager: FeishuConfirmManager
+): NonNullable<RemoteContext['requestToolConfirm']> {
+  return async (payload) => {
     logFeishuCliEvent('info', 'feishu.remote.confirm', {
       sessionId: payload.sessionId,
       toolName: payload.toolName
     })
-    const decision = await remoteContext.confirmManager.requestConfirm({
+    const decision = await confirmManager.requestConfirm({
       kind: 'tool_write',
       sessionId: payload.sessionId,
       toolCallId: payload.toolCallId,
@@ -90,19 +88,23 @@ export async function requestRemoteConfirm(args: {
     })
     return decision
   }
+}
 
-  if (
-    remoteContext.source === 'wechat' &&
-    remoteContext.confirmManager &&
-    remoteContext.inboundRaw &&
-    args.wechatConfig
-  ) {
+export function createWeChatRequestToolConfirm(args: {
+  confirmManager: WeChatConfirmManager
+  wechatConfig: WeChatConfig
+  userId: string
+  inboundRaw: IncomingMessage
+}): NonNullable<RemoteContext['requestToolConfirm']> {
+  const { confirmManager, wechatConfig, userId, inboundRaw } = args
+  return async (payload) => {
     logWeChatCliEvent('info', 'wechat.remote.confirm', {
       sessionId: payload.sessionId,
       toolName: payload.toolName
     })
+    const progressPrefix = formatLastPublishablePrefix(payload.sessionId)
     const imPrompt = buildWeChatImPrompt(payload, progressPrefix)
-    const decision = await remoteContext.confirmManager.requestConfirm(
+    const decision = await confirmManager.requestConfirm(
       {
         kind: 'tool_write',
         sessionId: payload.sessionId,
@@ -110,10 +112,10 @@ export async function requestRemoteConfirm(args: {
         toolName: payload.toolName,
         toolInput: payload.toolInput,
         messageId: payload.messageId,
-        userId: payload.userId ?? remoteContext.userId,
-        inboundMsg: remoteContext.inboundRaw
+        userId: payload.userId ?? userId,
+        inboundMsg: inboundRaw
       },
-      args.wechatConfig,
+      wechatConfig,
       undefined,
       { imPrompt }
     )
@@ -124,6 +126,18 @@ export async function requestRemoteConfirm(args: {
     })
     return decision
   }
+}
 
-  return 'n'
+export async function requestRemoteConfirm(args: {
+  remoteContext: RemoteContext
+  payload: RemoteConfirmPayload
+  wechatConfig?: WeChatConfig
+}): Promise<RemoteConfirmDecision> {
+  const resolved = resolveRemoteContextConfirmPolicy(args.remoteContext, args.wechatConfig)
+  if (!shouldRequestImConfirm(resolved)) return 'n'
+
+  const requestToolConfirm = args.remoteContext.requestToolConfirm
+  if (!requestToolConfirm) return 'n'
+
+  return requestToolConfirm(args.payload)
 }

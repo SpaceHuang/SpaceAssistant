@@ -52,7 +52,7 @@ import type { AppDatabase } from './database'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
-import type { FeishuRemoteContext, RemoteContext } from './tools/types'
+import type { RemoteContext } from './tools/types'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
 import { isLarkCliWriteOperation } from './feishu/larkCliSecurity'
 import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
@@ -74,7 +74,11 @@ import {
   onRemoteToolProgress,
   onRemoteToolStateChange
 } from './remote/remoteProgressHooks'
-import { requestRemoteConfirm, resolveRemoteContextConfirmPolicy } from './remote/remoteConfirmBridge'
+import {
+  REMOTE_CONFIRM_TIMEOUT_MESSAGES,
+  requestRemoteConfirm,
+  resolveRemoteContextConfirmPolicy
+} from './remote/remoteConfirmBridge'
 import {
   beginLlm,
   beginTool,
@@ -788,7 +792,7 @@ async function runToolChatSessionInner(
 
       if (
         toolName === 'browser' &&
-        (remoteContext?.source === 'feishu' || remoteContext?.source === 'wechat') &&
+        Boolean(remoteContext) &&
         browserConfig &&
         !browserConfig.allowRemoteSessions
       ) {
@@ -810,7 +814,7 @@ async function runToolChatSessionInner(
         continue
       }
 
-      if (toolName === 'run_shell' && (remoteContext?.source === 'feishu' || remoteContext?.source === 'wechat')) {
+      if (toolName === 'run_shell' && Boolean(remoteContext)) {
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           SHELL_FEISHU_REMOTE_DISABLED_ERROR,
@@ -1141,8 +1145,8 @@ async function runToolChatSessionInner(
               toolName,
               toolInput: inputObj,
               messageId: remoteContext.messageId,
-              chatId: remoteContext.source === 'feishu' ? remoteContext.chatId : undefined,
-              userId: remoteContext.source === 'wechat' ? remoteContext.userId : undefined
+              chatId: remoteContext.chatId,
+              userId: remoteContext.userId
             },
             wechatConfig
           })
@@ -1288,9 +1292,10 @@ async function runToolChatSessionInner(
 
       if (outcome === 'timeout') {
         const timeoutError =
-          remoteContext?.source === 'feishu'
-            ? '飞书确认超时（10分钟），工具调用已取消。请查看 Bot 发出的确认消息后回复 Y，或重新发送指令。'
-            : '用户确认超时（5分钟），工具调用已取消'
+          remoteContext?.confirmTimeoutMessage ??
+          (remoteContext
+            ? REMOTE_CONFIRM_TIMEOUT_MESSAGES[remoteContext.source]
+            : REMOTE_CONFIRM_TIMEOUT_MESSAGES.wechat)
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           timeoutError,
@@ -1673,34 +1678,30 @@ function evaluateRemoteToolBlock(
 ): string | null {
   if (!remoteContext) return null
 
-  if (remoteContext.source === 'feishu') {
-    const policy = remoteContext.confirmPolicy
-    const allowLocalWrite = feishuConfig?.remoteAllowLocalWrite ?? false
+  const allowLocalWrite =
+    (remoteContext.source === 'feishu'
+      ? feishuConfig?.remoteAllowLocalWrite
+      : wechatConfig?.remoteAllowLocalWrite) ?? false
 
-    if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
-      return '远程策略禁止此类写操作。'
-    }
-
-    if (toolName === 'run_lark_cli' && policy === 'remote_read_only') {
-      const args = inputObj.args
-      if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
-        return '远程策略禁止此类写操作。'
-      }
-    }
-    return null
+  if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
+    return '远程策略禁止此类写操作。'
   }
 
-  if (remoteContext.source === 'wechat') {
-    const policy = remoteContext.confirmPolicy
-    const allowLocalWrite = wechatConfig?.remoteAllowLocalWrite ?? false
+  const policy = remoteContext.confirmPolicy
 
-    if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
+  if (remoteContext.source === 'feishu' && toolName === 'run_lark_cli' && policy === 'remote_read_only') {
+    const args = inputObj.args
+    if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
       return '远程策略禁止此类写操作。'
     }
+  }
 
-    if ((toolName === 'wechat_send' || toolName === 'wechat_reply') && policy === 'remote_read_only') {
-      return '远程策略禁止此类写操作。'
-    }
+  if (
+    remoteContext.source === 'wechat' &&
+    (toolName === 'wechat_send' || toolName === 'wechat_reply') &&
+    policy === 'remote_read_only'
+  ) {
+    return '远程策略禁止此类写操作。'
   }
 
   return null

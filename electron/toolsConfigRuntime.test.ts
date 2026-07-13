@@ -7,7 +7,7 @@ describe('filterBuiltinToolsForApi workdir tools', () => {
   const feishuRemoteContext: FeishuRemoteContext = {
     source: 'feishu',
     messageId: 'm1',
-    confirmPolicy: 'remote_confirm'
+    confirmPolicy: 'always'
   }
 
   it('hides workdir tools for desktop sessions', () => {

@@ -100,7 +100,7 @@ describe('workDirBinding', () => {
     const feishuRemoteContext: RemoteContext = {
       source: 'feishu',
       messageId: 'msg-1',
-      confirmPolicy: 'remote_confirm'
+      confirmPolicy: 'always'
     }
 
     it('binds profile and writes audit when changed', async () => {

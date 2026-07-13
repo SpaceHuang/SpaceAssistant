@@ -32,6 +32,10 @@ import type { WorkDirManager } from '../workDirManager'
 import { bindSessionWorkDir, SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
+import {
+  createFeishuRequestToolConfirm,
+  FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE
+} from '../remote/remoteConfirmBridge'
 
 
 const rateLimiter = createRateLimiter()
@@ -291,6 +295,8 @@ export class RemoteCommandRouter {
         confirmPolicy: config.remoteConfirmPolicy,
         feishuConfig: config,
         confirmManager: this.deps.confirmManager,
+        requestToolConfirm: createFeishuRequestToolConfirm(this.deps.confirmManager),
+        confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
         larkCliRunner: this.deps.runner,
         chatId: msg.chatId,
         sessionId,

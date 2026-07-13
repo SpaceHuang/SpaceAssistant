@@ -26,6 +26,10 @@ import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFol
 import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
+import {
+  createWeChatRequestToolConfirm,
+  WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE
+} from '../remote/remoteConfirmBridge'
 
 
 const rateLimiter = createRateLimiter()
@@ -254,6 +258,13 @@ export class WeChatCommandRouter {
         confirmPolicy: config.remoteConfirmPolicy,
         wechatConfig: config,
         confirmManager: this.deps.confirmManager,
+        requestToolConfirm: createWeChatRequestToolConfirm({
+          confirmManager: this.deps.confirmManager,
+          wechatConfig: config,
+          userId: msg.userId,
+          inboundRaw
+        }),
+        confirmTimeoutMessage: WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
         sessionId,
         inboundRaw,
         appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
