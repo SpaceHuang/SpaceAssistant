@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
+import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import type { LarkCliRunner } from './larkCliRunner'
@@ -7,6 +7,10 @@ import { replyFeishuText } from './feishuReply'
 import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
 import { formatFeishuRemoteProgressPrefix } from './feishuRemoteProgress'
 import type { AppDatabase } from '../database'
+import {
+  PendingRequestRegistry,
+  type PendingDecision
+} from '../remote/pendingRequestRegistry'
 
 export type FeishuConfirmKind = 'tool_write'
 
@@ -27,8 +31,7 @@ export interface FeishuPendingConfirm {
 const CONFIRM_RE = /^[Yy]$|^[Nn]$|^确认$|^取消$/
 
 export class FeishuConfirmManager {
-  private pending = new Map<string, FeishuPendingConfirm>()
-  private resolvers = new Map<string, (v: 'y' | 'n' | 'timeout') => void>()
+  private registry = new PendingRequestRegistry<FeishuPendingConfirm>()
 
   constructor(
     private auditLogger?: FeishuAuditLogger,
@@ -37,20 +40,19 @@ export class FeishuConfirmManager {
   ) {}
 
   listPending(): FeishuPendingConfirm[] {
-    return [...this.pending.values()]
+    return this.registry.listPending()
   }
 
   hasPendingForSession(sessionId: string): boolean {
-    return [...this.pending.values()].some((p) => p.sessionId === sessionId)
+    return this.registry.hasPendingForSession(sessionId)
   }
 
   countPending(): number {
-    return this.pending.size
+    return this.registry.countPending()
   }
 
   cancel(id: string): boolean {
-    const p = this.pending.get(id)
-    if (!p) return false
+    if (!this.registry.get(id)) return false
     logFeishuCliEvent('info', 'feishu.confirm.cancel', { confirmId: id })
     this.resolve(id, 'n')
     return true
@@ -58,7 +60,7 @@ export class FeishuConfirmManager {
 
   /** 应用退出时取消全部待确认，避免 10–30 分钟定时器阻止进程结束。 */
   cancelAllPending(): void {
-    for (const id of [...this.pending.keys()]) {
+    for (const { id } of this.registry.listPending()) {
       this.resolve(id, 'n')
     }
   }
@@ -67,7 +69,7 @@ export class FeishuConfirmManager {
     const text = msg.content.trim()
     if (!CONFIRM_RE.test(text)) return false
 
-    const match = [...this.pending.values()].find(
+    const match = this.registry.listPending().find(
       (p) => p.chatId === msg.chatId && (msg.chatType === 'p2p' || p.messageId !== msg.messageId)
     )
     if (!match) return false
@@ -78,21 +80,22 @@ export class FeishuConfirmManager {
     return true
   }
 
-  private resolve(id: string, decision: 'y' | 'n' | 'timeout'): void {
+  private emitResolved(id: string, decision: PendingDecision): void {
     logFeishuCliEvent('info', 'feishu.confirm.resolved', { confirmId: id, decision })
     void this.auditLogger?.append({ type: 'confirm_request', confirmId: id, decision })
-    const resolver = this.resolvers.get(id)
-    this.resolvers.delete(id)
-    this.pending.delete(id)
-    resolver?.(decision)
+  }
+
+  private resolve(id: string, decision: PendingDecision): void {
+    if (!this.registry.get(id)) return
+    this.emitResolved(id, decision)
+    this.registry.resolve(id, decision)
   }
 
   requestConfirm(
     pending: Omit<FeishuPendingConfirm, 'id' | 'createdAt' | 'expiresAt'>,
     timeoutMs = 10 * 60_000
   ): Promise<'y' | 'n' | 'timeout'> {
-    const existingForSession = [...this.pending.values()].find((p) => p.sessionId === pending.sessionId)
-    if (existingForSession) {
+    if (this.registry.hasPendingForSession(pending.sessionId)) {
       return Promise.resolve('n')
     }
 
@@ -104,7 +107,6 @@ export class FeishuConfirmManager {
       createdAt: now,
       expiresAt: now + timeoutMs
     }
-    this.pending.set(id, entry)
     logFeishuCliEvent('info', 'feishu.confirm.request', {
       confirmId: id,
       kind: entry.kind,
@@ -120,16 +122,8 @@ export class FeishuConfirmManager {
     })
     void this.notifyConfirmPrompt(entry)
 
-    return new Promise((resolve) => {
-      this.resolvers.set(id, resolve)
-      const timer = setTimeout(() => {
-        if (this.pending.has(id)) this.resolve(id, 'timeout')
-      }, timeoutMs)
-      const orig = this.resolvers.get(id)
-      this.resolvers.set(id, (v) => {
-        clearTimeout(timer)
-        orig?.(v)
-      })
+    return this.registry.register(entry, timeoutMs, {
+      onTimeout: () => this.emitResolved(id, 'timeout')
     })
   }
 

@@ -3,9 +3,12 @@ import type { WebContents } from 'electron'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { WeChatAuditLogger } from './weChatAuditLogger'
-import type { WeChatReplyBot } from './weChatReplyService'
 import { logWeChatCliEvent } from './weChatCliLogger'
 import { buildConfirmInstantPrompt } from '../remote/remoteProgressHooks'
+import {
+  PendingRequestRegistry,
+  type PendingDecision
+} from '../remote/pendingRequestRegistry'
 
 export type WeChatConfirmKind = 'tool_write'
 
@@ -31,8 +34,7 @@ export type WeChatConfirmRequestOptions = {
 }
 
 export class WeChatConfirmManager {
-  private pending = new Map<string, WeChatPendingConfirm>()
-  private resolvers = new Map<string, (v: 'y' | 'n' | 'timeout') => void>()
+  private registry = new PendingRequestRegistry<WeChatPendingConfirm>()
 
   constructor(
     private auditLogger?: WeChatAuditLogger,
@@ -41,35 +43,34 @@ export class WeChatConfirmManager {
   ) {}
 
   listPending(): WeChatPendingConfirm[] {
-    return [...this.pending.values()]
+    return this.registry.listPending()
   }
 
   hasPendingForSession(sessionId: string): boolean {
-    return [...this.pending.values()].some((p) => p.sessionId === sessionId)
+    return this.registry.hasPendingForSession(sessionId)
   }
 
   countPending(): number {
-    return this.pending.size
+    return this.registry.countPending()
   }
 
   cancel(id: string): boolean {
-    const p = this.pending.get(id)
-    if (!p) return false
+    if (!this.registry.get(id)) return false
     this.resolve(id, 'n')
     return true
   }
 
   cancelAllPending(): void {
-    for (const id of [...this.pending.keys()]) {
+    for (const { id } of this.registry.listPending()) {
       this.resolve(id, 'n')
     }
   }
 
-  tryResolveFromInbound(msg: WeChatInboundMessage, inboundRaw: IncomingMessage): boolean {
+  tryResolveFromInbound(msg: WeChatInboundMessage, _inboundRaw: IncomingMessage): boolean {
     const text = msg.text.trim()
     if (!CONFIRM_RE.test(text)) return false
 
-    const match = [...this.pending.values()].find(
+    const match = this.registry.listPending().find(
       (p) => p.userId === msg.userId && p.messageId !== msg.messageId
     )
     if (!match) return false
@@ -80,20 +81,21 @@ export class WeChatConfirmManager {
   }
 
   resolveFromDesktop(requestId: string, approved: boolean): boolean {
-    const p = this.pending.get(requestId)
-    if (!p) return false
+    if (!this.registry.get(requestId)) return false
     this.resolve(requestId, approved ? 'y' : 'n')
     return true
   }
 
-  private resolve(id: string, decision: 'y' | 'n' | 'timeout'): void {
+  private emitResolved(id: string, decision: PendingDecision): void {
     void this.auditLogger?.append({ type: 'confirm_request', confirmId: id, decision })
     logWeChatCliEvent('info', 'wechat.remote.confirm', { confirmId: id, decision })
-    const resolver = this.resolvers.get(id)
-    this.resolvers.delete(id)
-    this.pending.delete(id)
-    resolver?.(decision)
-    this.getWebContents?.()?.send('wechat:pending-confirm', { count: this.pending.size })
+    this.getWebContents?.()?.send('wechat:pending-confirm', { count: this.registry.countPending() })
+  }
+
+  private resolve(id: string, decision: PendingDecision): void {
+    if (!this.registry.get(id)) return
+    this.registry.resolve(id, decision)
+    this.emitResolved(id, decision)
   }
 
   requestConfirm(
@@ -102,8 +104,7 @@ export class WeChatConfirmManager {
     timeoutMs = DEFAULT_CONFIRM_TIMEOUT_MS,
     options?: WeChatConfirmRequestOptions
   ): Promise<'y' | 'n' | 'timeout'> {
-    const existingForSession = [...this.pending.values()].find((p) => p.sessionId === pending.sessionId)
-    if (existingForSession) return Promise.resolve('n')
+    if (this.registry.hasPendingForSession(pending.sessionId)) return Promise.resolve('n')
 
     const id = randomUUID()
     const now = Date.now()
@@ -113,7 +114,19 @@ export class WeChatConfirmManager {
       createdAt: now,
       expiresAt: now + timeoutMs
     }
-    this.pending.set(id, entry)
+    // Register first so pending count includes this request when notifying desktop.
+    const wait = this.registry.register(entry, timeoutMs, {
+      onTimeout: (item) => {
+        this.emitResolved(id, 'timeout')
+        const replyBot = this.getReplyBot?.()
+        if (replyBot) {
+          void replyBot
+            .reply(item.inboundMsg, '操作已取消（确认超时）')
+            .catch(() => undefined)
+        }
+      }
+    })
+
     void this.auditLogger?.append({ type: 'confirm_request', confirmId: id })
     logWeChatCliEvent('info', 'wechat.confirm.request', {
       confirmId: id,
@@ -130,7 +143,7 @@ export class WeChatConfirmManager {
       timestamp: now,
       source: 'wechat'
     })
-    wc?.send('wechat:pending-confirm', { count: this.pending.size })
+    wc?.send('wechat:pending-confirm', { count: this.registry.countPending() })
 
     const replyBot = this.getReplyBot?.()
     const prompt = options?.imPrompt ?? this.buildWeChatYnPrompt(entry)
@@ -138,24 +151,7 @@ export class WeChatConfirmManager {
       void replyBot.reply(pending.inboundMsg, prompt).catch(() => undefined)
     }
 
-    return new Promise((resolve) => {
-      this.resolvers.set(id, resolve)
-      const timer = setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.resolve(id, 'timeout')
-          if (replyBot) {
-            void replyBot
-              .reply(pending.inboundMsg, '操作已取消（确认超时）')
-              .catch(() => undefined)
-          }
-        }
-      }, timeoutMs)
-      const orig = this.resolvers.get(id)
-      this.resolvers.set(id, (v) => {
-        clearTimeout(timer)
-        orig?.(v)
-      })
-    })
+    return wait
   }
 
   buildWeChatYnPrompt(pending: WeChatPendingConfirm, progressPrefix = ''): string {

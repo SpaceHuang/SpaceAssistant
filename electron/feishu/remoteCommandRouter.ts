@@ -17,10 +17,7 @@ import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import { resolveFeishuSession } from './feishuSessionResolver'
-import {
-  releaseRemoteSession,
-  tryClaimRemoteSession
-} from '../remote/remoteAgentRegistry'
+import { tryClaimOrRelease } from '../remote/imCommandRouterHelpers'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
   buildDisambiguationReply,
@@ -34,10 +31,6 @@ import { contentHash, inboundSummaryForLog } from './feishuCliLogFields'
 import type { WorkDirManager } from '../workDirManager'
 import { bindSessionWorkDir, SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
-import {
-  REMOTE_PARALLEL_FULL_MESSAGE,
-  REMOTE_SESSION_BUSY_MESSAGE
-} from '../remote/remoteSessionGuardMessages'
 import { createRateLimiter } from '../remote/imRateLimit'
 
 
@@ -210,24 +203,17 @@ export class RemoteCommandRouter {
       return
     }
 
-    const claim = tryClaimRemoteSession(sessionId, appCfg.maxParallelChatSessions)
-    if (claim === 'session_busy') {
-      logFeishuCliEvent('warn', 'feishu.inbound.session_busy', { sessionId })
+    const claim = tryClaimOrRelease(sessionId, appCfg.maxParallelChatSessions)
+    if (!claim.ok) {
+      if (claim.reason === 'session_busy') {
+        logFeishuCliEvent('warn', 'feishu.inbound.session_busy', { sessionId })
+      } else {
+        logFeishuCliEvent('warn', 'feishu.inbound.parallel_full', { maxParallel: appCfg.maxParallelChatSessions })
+      }
       await sendFeishuRemoteOutbound({
         runner: this.deps.runner,
         messageId: msg.messageId,
-        body: REMOTE_SESSION_BUSY_MESSAGE,
-        sessionId,
-        touch: { db: this.deps.db, sessionId }
-      })
-      return
-    }
-    if (claim === 'parallel_full') {
-      logFeishuCliEvent('warn', 'feishu.inbound.parallel_full', { maxParallel: appCfg.maxParallelChatSessions })
-      await sendFeishuRemoteOutbound({
-        runner: this.deps.runner,
-        messageId: msg.messageId,
-        body: REMOTE_PARALLEL_FULL_MESSAGE,
+        body: claim.message,
         sessionId,
         touch: { db: this.deps.db, sessionId }
       })
@@ -378,7 +364,7 @@ export class RemoteCommandRouter {
         wc.send('feishu:pending-confirm', { sessionId: outboundSessionId, pendingConfirm: true })
       }
     } finally {
-      releaseRemoteSession(sessionId)
+      claim.release()
     }
   }
 }

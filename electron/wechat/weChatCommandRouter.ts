@@ -15,10 +15,7 @@ import { replyWeChatSummary } from './weChatReplyService'
 import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
 import { resolveWeChatSession } from './weChatSessionResolver'
-import {
-  releaseRemoteSession,
-  tryClaimRemoteSession
-} from '../remote/remoteAgentRegistry'
+import { tryClaimOrRelease } from '../remote/imCommandRouterHelpers'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { buildMediaUserMessage, downloadWeChatInboundMedia } from './weChatMediaInbound'
 import { inboundSummaryForLog } from './weChatCliLogFields'
@@ -27,10 +24,6 @@ import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
-import {
-  REMOTE_PARALLEL_FULL_MESSAGE,
-  REMOTE_SESSION_BUSY_MESSAGE
-} from '../remote/remoteSessionGuardMessages'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
 
@@ -182,29 +175,20 @@ export class WeChatCommandRouter {
       () => this.deps.workDirManager.getActiveProfileId()
     )
 
-    const claim = tryClaimRemoteSession(sessionId, appCfg.maxParallelChatSessions)
-    if (claim === 'session_busy') {
-      logWeChatCliEvent('warn', 'wechat.inbound.session_busy', { sessionId })
-      if (bot) {
-        await sendWeChatRemoteOutbound({
-          bot,
-          inbound: inboundRaw,
-          body: REMOTE_SESSION_BUSY_MESSAGE,
-          sessionId,
-          touch: { db: this.deps.db, sessionId }
+    const claim = tryClaimOrRelease(sessionId, appCfg.maxParallelChatSessions)
+    if (!claim.ok) {
+      if (claim.reason === 'session_busy') {
+        logWeChatCliEvent('warn', 'wechat.inbound.session_busy', { sessionId })
+      } else {
+        logWeChatCliEvent('warn', 'wechat.inbound.parallel_full', {
+          maxParallel: appCfg.maxParallelChatSessions
         })
       }
-      return
-    }
-    if (claim === 'parallel_full') {
-      logWeChatCliEvent('warn', 'wechat.inbound.parallel_full', {
-        maxParallel: appCfg.maxParallelChatSessions
-      })
       if (bot) {
         await sendWeChatRemoteOutbound({
           bot,
           inbound: inboundRaw,
-          body: REMOTE_PARALLEL_FULL_MESSAGE,
+          body: claim.message,
           sessionId,
           touch: { db: this.deps.db, sessionId }
         })
@@ -348,7 +332,7 @@ export class WeChatCommandRouter {
         summaryLen: result.summary.length
       })
     } finally {
-      releaseRemoteSession(sessionId)
+      claim.release()
     }
   }
 }
