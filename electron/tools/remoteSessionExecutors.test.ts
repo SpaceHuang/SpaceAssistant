@@ -10,7 +10,7 @@ import {
   releaseRemoteSession,
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession
-} from '../feishu/runningRemoteAgentRegistry'
+} from '../remote/remoteAgentRegistry'
 import {
   REMOTE_SESSION_SWITCH_BUSY_CALLER,
   REMOTE_SESSION_SWITCH_DENIED_MESSAGE

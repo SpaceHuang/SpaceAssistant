@@ -14,7 +14,7 @@ import {
   releaseRemoteSession,
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession
-} from '../feishu/runningRemoteAgentRegistry'
+} from './remoteAgentRegistry'
 
 const defaultOpts = {
   callerRequestId: 'req-1',

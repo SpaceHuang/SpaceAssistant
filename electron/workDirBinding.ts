@@ -1,7 +1,7 @@
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
 import { getSession, updateSession } from './database'
-import { isRemoteAgentRunning } from './feishu/runningRemoteAgentRegistry'
+import { isRemoteAgentRunning } from './remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from './remote/remoteSessionGuardMessages'
 import type { WorkDirManager } from './workDirManager'
 import type { RemoteContext } from './tools/types'

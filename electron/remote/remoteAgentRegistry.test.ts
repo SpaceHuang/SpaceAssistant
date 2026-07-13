@@ -5,9 +5,9 @@ import {
   releaseRemoteSession,
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession
-} from './runningRemoteAgentRegistry'
+} from './remoteAgentRegistry'
 
-describe('runningRemoteAgentRegistry', () => {
+describe('remoteAgentRegistry', () => {
   afterEach(() => {
     resetRunningRemoteAgentRegistryForTests()
   })

@@ -20,7 +20,7 @@ import { resolveFeishuSession } from './feishuSessionResolver'
 import {
   releaseRemoteSession,
   tryClaimRemoteSession
-} from './runningRemoteAgentRegistry'
+} from '../remote/remoteAgentRegistry'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
   buildDisambiguationReply,

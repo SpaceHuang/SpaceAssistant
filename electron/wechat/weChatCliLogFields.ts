@@ -1,26 +1,11 @@
 import type { WeChatInboundMessage } from '../../src/shared/wechatTypes'
+import { contentHash, previewText, urlHostOnly } from '../remote/imCliLogFields'
 
+export { contentHash, previewText }
 export const WECHAT_CLI_PREVIEW_MAX = 4 * 1024
 
-export function contentHash(text: string): string {
-  let h = 0
-  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) | 0
-  return Math.abs(h).toString(16).padStart(8, '0').slice(0, 8)
-}
-
-export function previewText(text: string, maxLen = WECHAT_CLI_PREVIEW_MAX): string {
-  if (text.length <= maxLen) return text
-  return text.slice(0, maxLen)
-}
-
 export function qrUrlHostOnly(url: string | undefined): string | undefined {
-  if (!url?.trim()) return undefined
-  try {
-    const u = new URL(url)
-    return `${u.origin}${u.pathname}`
-  } catch {
-    return undefined
-  }
+  return urlHostOnly(url)
 }
 
 export function inboundSummaryForLog(msg: WeChatInboundMessage): Record<string, unknown> {

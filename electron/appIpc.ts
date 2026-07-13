@@ -41,7 +41,7 @@ import type {
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
 import { ErrorCodes } from '../src/shared/errorCodes'
-import { isRemoteAgentRunning } from './feishu/runningRemoteAgentRegistry'
+import { isRemoteAgentRunning } from './remote/remoteAgentRegistry'
 import {
   REMOTE_SESSION_BUSY_MESSAGE,
   REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE

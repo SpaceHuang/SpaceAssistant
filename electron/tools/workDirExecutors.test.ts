@@ -10,7 +10,7 @@ import {
   releaseRemoteSession,
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession
-} from '../feishu/runningRemoteAgentRegistry'
+} from '../remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
 
 function tempDir(): string {

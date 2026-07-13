@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto'
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
-import { stripCommandPrefix } from './feishuInboundParser'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import type { LarkCliRunner } from './larkCliRunner'
@@ -8,50 +7,6 @@ import { replyFeishuText } from './feishuReply'
 import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
 import { formatFeishuRemoteProgressPrefix } from './feishuRemoteProgress'
 import type { AppDatabase } from '../database'
-
-export interface InboundAcceptResult {
-  accept: boolean
-  reason?: string
-  userMessage?: string
-}
-
-export function shouldAcceptInbound(msg: FeishuInboundMessage, config: FeishuConfig): InboundAcceptResult {
-  if (!msg.content.trim()) return { accept: false, reason: 'empty' }
-  if (msg.content.length > 4000) return { accept: false, reason: 'too_long' }
-
-  if (msg.chatType === 'p2p') {
-    return { accept: true, userMessage: msg.content.trim() }
-  }
-
-  if (msg.chatType === 'group') {
-    const trigger = config.remoteGroupTrigger ?? 'mention'
-    const prefix = config.remoteCommandPrefix ?? '/sa '
-    const byMention = msg.mentionsBot
-    const byPrefix = msg.content.startsWith(prefix)
-
-    switch (trigger) {
-      case 'mention':
-        return byMention
-          ? { accept: true, userMessage: msg.content.trim() }
-          : { accept: false, reason: 'no_mention' }
-      case 'prefix':
-        return byPrefix
-          ? { accept: true, userMessage: stripCommandPrefix(msg.content, prefix) }
-          : { accept: false, reason: 'no_prefix' }
-      case 'both':
-        if (byMention) return { accept: true, userMessage: msg.content.trim() }
-        if (byPrefix) return { accept: true, userMessage: stripCommandPrefix(msg.content, prefix) }
-        return { accept: false, reason: 'no_trigger' }
-    }
-  }
-
-  return { accept: false, reason: 'unsupported_chat_type' }
-}
-
-export function truncateTitle(content: string, max = 30): string {
-  const t = content.trim()
-  return t.length <= max ? t : `${t.slice(0, max)}…`
-}
 
 export type FeishuConfirmKind = 'tool_write'
 

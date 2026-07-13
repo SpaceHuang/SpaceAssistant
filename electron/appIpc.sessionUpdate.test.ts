@@ -57,7 +57,7 @@ vi.mock('./claudeRequestGuards', () => ({
   assertValidOptionalAnthropicBaseUrl: vi.fn()
 }))
 
-vi.mock('./feishu/runningRemoteAgentRegistry', () => ({
+vi.mock('./remote/remoteAgentRegistry', () => ({
   isRemoteAgentRunning: (...args: unknown[]) => mockIsRemoteAgentRunning(...args)
 }))
 

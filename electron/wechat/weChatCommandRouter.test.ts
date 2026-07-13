@@ -15,7 +15,7 @@ import {
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession,
   releaseRemoteSession
-} from '../feishu/runningRemoteAgentRegistry'
+} from '../remote/remoteAgentRegistry'
 import { REMOTE_SESSION_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
 
 const mockRunAgent = vi.fn()

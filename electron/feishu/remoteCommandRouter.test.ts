@@ -16,7 +16,7 @@ import {
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession,
   releaseRemoteSession
-} from './runningRemoteAgentRegistry'
+} from '../remote/remoteAgentRegistry'
 import * as workDirBinding from '../workDirBinding'
 
 const mockRunFeishuRemoteAgent = vi.fn()

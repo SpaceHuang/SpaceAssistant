@@ -1,7 +1,7 @@
 import type { AppDatabase } from '../database'
 import { createSession, listSessions, updateSession } from '../database'
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
-import { truncateTitle } from './feishuConfirmManager'
+import { truncateTitle } from './feishuInboundParser'
 import {
   pickRemoteSessionCandidate,
   readRemoteSessionIdleMinutes,

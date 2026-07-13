@@ -18,7 +18,7 @@ import { resolveWeChatSession } from './weChatSessionResolver'
 import {
   releaseRemoteSession,
   tryClaimRemoteSession
-} from '../feishu/runningRemoteAgentRegistry'
+} from '../remote/remoteAgentRegistry'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { buildMediaUserMessage, downloadWeChatInboundMedia } from './weChatMediaInbound'
 import { inboundSummaryForLog } from './weChatCliLogFields'
