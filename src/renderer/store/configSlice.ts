@@ -1,5 +1,6 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { AppConfig } from '../../shared/domainTypes'
+import type { RemoteImCommonConfig } from '../../shared/imTypes'
 
 export type ToolsSettingsSubTab = 'switches' | 'file' | 'script' | 'shell' | 'browser' | 'workspaceLayout'
 
@@ -17,6 +18,18 @@ const initialState: ConfigState = {
   settingsActiveTab: undefined,
   settingsToolsSubTab: undefined,
   aboutOpen: false
+}
+
+/** Dual-write shared remote IM fields onto both channel configs. */
+export function applyRemoteImCommonPatch<T extends { feishu: AppConfig['feishu']; wechat: AppConfig['wechat'] }>(
+  config: T,
+  patch: Partial<RemoteImCommonConfig>
+): T {
+  return {
+    ...config,
+    feishu: { ...config.feishu, ...patch },
+    wechat: { ...config.wechat, ...patch }
+  }
 }
 
 export const configSlice = createSlice({
@@ -66,9 +79,24 @@ export const configSlice = createSlice({
     },
     setAboutOpen(state, action: PayloadAction<boolean>) {
       state.aboutOpen = action.payload
+    },
+    /** Dual-write shared remote IM fields into both feishu and wechat. */
+    updateRemoteImCommon(state, action: PayloadAction<Partial<RemoteImCommonConfig>>) {
+      if (!state.config) return
+      const next = applyRemoteImCommonPatch(state.config, action.payload)
+      state.config.feishu = next.feishu
+      state.config.wechat = next.wechat
     }
   }
 })
 
-export const { setConfig, setSettingsOpen, openSettings, setSettingsActiveTab, setSettingsToolsSubTab, setAboutOpen } = configSlice.actions
+export const {
+  setConfig,
+  setSettingsOpen,
+  openSettings,
+  setSettingsActiveTab,
+  setSettingsToolsSubTab,
+  setAboutOpen,
+  updateRemoteImCommon
+} = configSlice.actions
 export default configSlice.reducer

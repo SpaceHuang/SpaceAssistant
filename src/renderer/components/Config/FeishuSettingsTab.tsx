@@ -1,21 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
-import { App, Badge, Button, Checkbox, Collapse, Input, InputNumber, Radio, Select, Space, Switch, Tooltip } from 'antd'
+import { App, Badge, Button, Input, Radio, Space, Switch } from 'antd'
 import type { FeishuConfig, FeishuEventStatus } from '../../../shared/feishuTypes'
-import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
 import { FeishuAuditDrawer } from './FeishuAuditDrawer'
 import { formatFeishuSettingsEventStatus } from './feishuEventStatusText'
-import type { ModelEntry } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
-import { configModalSelectPopupClassNames } from './configModalUi'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   feishu: FeishuConfig
   onChange: (next: FeishuConfig) => void
-  models?: ModelEntry[]
 }
 
-export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
+export function FeishuSettingsTab({ feishu, onChange }: Props) {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('config')
   const [cliStatus, setCliStatus] = useState<string>(t('feishu.detecting'))
@@ -232,10 +228,6 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           </Button>
         </Space>
 
-        <Checkbox checked={feishu.remoteNotifyOnReceive} onChange={(e) => patch({ remoteNotifyOnReceive: e.target.checked })}>
-          {t('feishu.notifyOnReceive')}
-        </Checkbox>
-
         <ConfigField label={t('feishu.groupTriggerLabel')}>
           <Radio.Group value={feishu.remoteGroupTrigger} onChange={(e) => patch({ remoteGroupTrigger: e.target.value })}>
             <Radio value="mention">{t('feishu.groupTriggerMention')}</Radio>
@@ -250,104 +242,11 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
           />
         </ConfigField>
 
-        <ConfigField label={t('feishu.sessionIdleLabel')}>
-          <InputNumber
-            min={0}
-            max={120}
-            value={readRemoteSessionIdleMinutes(feishu)}
-            onChange={(v) => patch({ remoteSessionIdleMinutes: v ?? 0 })}
-          />
-        </ConfigField>
-
-        <ConfigField label={t('feishu.remoteConfirmLabel')}>
-          <Select
-            value={feishu.remoteConfirmPolicy}
-            onChange={(remoteConfirmPolicy) => patch({ remoteConfirmPolicy })}
-            classNames={configModalSelectPopupClassNames}
-            options={[
-              { value: 'remote_read_only', label: t('feishu.remoteConfirmReadOnly') },
-              { value: 'im_confirm', label: t('feishu.remoteConfirmFeishu') },
-              { value: 'always', label: t('feishu.remoteConfirmAlways') },
-              {
-                value: 'inherit',
-                label: (
-                  <Tooltip title={t('feishu.remoteConfirmInheritHint')}>
-                    <span>{t('feishu.remoteConfirmInherit')}</span>
-                  </Tooltip>
-                )
-              }
-            ]}
-          />
-        </ConfigField>
-
-        <Collapse
-          ghost
-          items={[
-            {
-              key: 'remoteProgress',
-              label: t('feishu.remoteProgressTitle'),
-              children: (
-                <Space direction="vertical" size="middle" className="config-settings-stack">
-                  <ConfigField label={t('feishu.remoteProgressModeLabel')}>
-                    <Select
-                      value={feishu.remoteProgressMode ?? 'activity_snapshot'}
-                      onChange={(remoteProgressMode) => patch({ remoteProgressMode })}
-                      classNames={configModalSelectPopupClassNames}
-                      options={[
-                        { value: 'activity_snapshot', label: t('feishu.remoteProgressModeActivity') },
-                        { value: 'legacy_heartbeat', label: t('feishu.remoteProgressModeLegacy') },
-                        { value: 'off', label: t('feishu.remoteProgressModeOff') }
-                      ]}
-                    />
-                  </ConfigField>
-                  <ConfigField label={t('feishu.remoteProgressHeartbeatLabel')}>
-                    <InputNumber
-                      min={0}
-                      max={600}
-                      value={feishu.remoteProgressHeartbeatSec ?? 60}
-                      onChange={(v) => patch({ remoteProgressHeartbeatSec: v ?? 60 })}
-                    />
-                  </ConfigField>
-                  <Checkbox
-                    checked={feishu.remoteTypingEnabled ?? false}
-                    onChange={(e) => patch({ remoteTypingEnabled: e.target.checked })}
-                  >
-                    {t('feishu.remoteTypingEnabled')}
-                  </Checkbox>
-                  <ConfigField label={t('feishu.remoteProgressMinIntervalLabel')}>
-                    <InputNumber
-                      min={0}
-                      max={120}
-                      value={feishu.remoteProgressMinIntervalSec ?? 5}
-                      onChange={(v) => patch({ remoteProgressMinIntervalSec: v ?? 5 })}
-                    />
-                  </ConfigField>
-                </Space>
-              )
-            }
-          ]}
-        />
-
-        <Checkbox checked={feishu.remoteAllowLocalWrite} onChange={(e) => patch({ remoteAllowLocalWrite: e.target.checked })}>
-          {t('feishu.remoteAllowLocalWrite')}
-        </Checkbox>
-
         <ConfigField label={t('feishu.regionLabel')}>
           <Radio.Group value={feishu.region} onChange={(e) => patch({ region: e.target.value })}>
             <Radio value="feishu">{t('feishu.regionFeishu')}</Radio>
             <Radio value="lark">{t('feishu.regionLark')}</Radio>
           </Radio.Group>
-        </ConfigField>
-
-        <ConfigField label={t('feishu.remoteDefaultModelLabel')}>
-          <Select
-            allowClear
-            placeholder={t('feishu.remoteDefaultModelPlaceholder')}
-            value={feishu.remoteDefaultModelId}
-            onChange={(remoteDefaultModelId) => patch({ remoteDefaultModelId })}
-            classNames={configModalSelectPopupClassNames}
-            options={models.filter((m) => m.enabled).map((m) => ({ value: m.name, label: m.name }))}
-          />
         </ConfigField>
 
         <Button onClick={() => setAuditOpen(true)}>{t('feishu.viewAudit')}</Button>

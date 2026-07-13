@@ -46,6 +46,10 @@ import { FeishuSettingsTab } from './FeishuSettingsTab'
 
 import { WeChatSettingsTab } from './WeChatSettingsTab'
 
+import { RemoteImCommonSettings } from './RemoteImCommonSettings'
+
+import type { RemoteImCommonConfig } from '../../../shared/imTypes'
+
 import { ToolsSettingsTab } from './ToolsSettingsTab'
 
 import { ModelsSettingsTab, getDefaultPreferredModelIds } from './ModelsSettingsTab'
@@ -88,7 +92,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
 
-const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'feishu', 'wechat'] as const
+const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat'] as const
 
 type SettingsSectionKey = (typeof SETTINGS_SECTION_KEYS)[number]
 
@@ -236,11 +240,17 @@ export function ConfigSettingsPage() {
       models: tCommon('settings.models'),
       skills: tCommon('settings.skills'),
       wiki: tCommon('settings.wiki'),
+      remoteIm: tCommon('settings.remoteIm'),
       feishu: tCommon('settings.feishu'),
       wechat: tCommon('settings.wechat')
     }
     return SETTINGS_SECTION_KEYS.map((key) => ({ key, label: labels[key] }))
   }, [tCommon])
+
+  const applyRemoteImCommonLocal = (patch: Partial<RemoteImCommonConfig>) => {
+    setFeishuUi((prev) => ({ ...prev, ...patch }))
+    setWechatUi((prev) => ({ ...prev, ...patch }))
+  }
 
   const toolsSettingsNav = useMemo(() => getToolsSettingsNav(tConfig), [tConfig])
 
@@ -964,13 +974,19 @@ export function ConfigSettingsPage() {
 
         return <WikiTab wiki={wikiUi} onChange={setWikiUi} />
 
+      case 'remoteIm':
+
+        return (
+          <RemoteImCommonSettings value={feishuUi} onChange={applyRemoteImCommonLocal} models={models} />
+        )
+
       case 'feishu':
 
-        return <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} models={models} />
+        return <FeishuSettingsTab feishu={feishuUi} onChange={setFeishuUi} />
 
       case 'wechat':
 
-        return <WeChatSettingsTab wechat={wechatUi} onChange={setWechatUi} models={models} />
+        return <WeChatSettingsTab wechat={wechatUi} onChange={setWechatUi} />
 
       default:
 

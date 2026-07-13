@@ -669,5 +669,31 @@
     "tabFeishu": "Feishu",
     "tabWechat": "WeChat",
     "close": "Close"
+  },
+  "remoteImCommon": {
+    "hint": "These options apply to both Feishu and WeChat remote commands and are written to both channel configs.",
+    "notifyOnReceive": "Send a system notification when a remote command is received",
+    "sessionIdleLabel": "Session resume: minutes after last message completes (0 = new session each time)",
+    "sessionIdleUnit": "min",
+    "remoteDefaultModelLabel": "Remote default model",
+    "remoteDefaultModelPlaceholder": "Same as global default",
+    "remoteProgressTitle": "Remote progress sync",
+    "remoteProgressModeLabel": "Progress sync mode",
+    "remoteProgressModeActivity": "Activity snapshot heartbeat",
+    "remoteProgressModeLegacy": "Fixed fallback heartbeat (legacy)",
+    "remoteProgressModeOff": "Disable progress replies",
+    "remoteProgressHeartbeatLabel": "Heartbeat interval (sec, 0 = off)",
+    "remoteTypingEnabled": "Send typing indicator",
+    "remoteProgressMinIntervalLabel": "Minimum reply interval (sec)",
+    "remoteAllowLocalWrite": "Allow remote commands to write local files",
+    "remoteConfirmLabel": "Remote write confirm policy",
+    "remoteConfirmIm": "Confirm with Y/N in IM",
+    "remoteConfirmReadOnly": "Block remote writes",
+    "remoteConfirmAlways": "Always confirm",
+    "remoteConfirmInherit": "Follow tool settings",
+    "remoteConfirmInheritHint": "For remote sessions this is equivalent to 「Confirm with Y/N in IM」.",
+    "rateLimitLabel": "Rate limit (messages/min/user)",
+    "senderAllowlistLabel": "Sender allowlist",
+    "senderAllowlistPlaceholder": "Optional, one userId per line"
   }
 }

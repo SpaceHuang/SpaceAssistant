@@ -108,7 +108,8 @@
     "skills": "Skills",
     "title": "Settings",
     "tools": "Tools",
-    "wiki": "Project Wiki"
+    "wiki": "Project Wiki",
+    "remoteIm": "IM remote common"
   },
   "titleBar": {
     "close": "Close",

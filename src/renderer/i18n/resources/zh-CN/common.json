@@ -108,7 +108,8 @@
     "skills": "技能",
     "title": "设置",
     "tools": "工具",
-    "wiki": "项目 Wiki"
+    "wiki": "项目 Wiki",
+    "remoteIm": "IM 远程通用"
   },
   "titleBar": {
     "close": "关闭",

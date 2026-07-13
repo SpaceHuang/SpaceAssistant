@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { App, Badge, Button, Checkbox, Collapse, Input, InputNumber, Select, Space, Tooltip } from 'antd'
+import { App, Badge, Button, Space } from 'antd'
 import type { WeChatConfig, WeChatConnectionStatus, WeChatLoginProgress } from '../../../shared/wechatTypes'
-import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
 import { WeChatAuditDrawer } from './WeChatAuditDrawer'
-import type { ModelEntry } from '../../../shared/domainTypes'
-import { ConfigField, ConfigSettingsStack } from './ConfigField'
-import { configModalSelectPopupClassNames } from './configModalUi'
+import { ConfigSettingsStack } from './ConfigField'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigResultAlert } from './ConfigResultAlert'
 import {
@@ -20,7 +17,6 @@ import {
 type Props = {
   wechat: WeChatConfig
   onChange: (next: WeChatConfig) => void
-  models?: ModelEntry[]
 }
 
 function loginProgressLabel(stage: WeChatLoginProgress, t: ReturnType<typeof useTypedTranslation<'config'>>['t'], code?: string): string {
@@ -40,7 +36,7 @@ function loginProgressLabel(stage: WeChatLoginProgress, t: ReturnType<typeof use
   }
 }
 
-export function WeChatSettingsTab({ wechat, onChange, models = [] }: Props) {
+export function WeChatSettingsTab({ wechat, onChange }: Props) {
   const { message, modal } = App.useApp()
   const { t } = useTypedTranslation('config')
   const [sdkStatus, setSdkStatus] = useState<string>(t('settings.wechat.detecting'))
@@ -303,142 +299,7 @@ export function WeChatSettingsTab({ wechat, onChange, models = [] }: Props) {
           ) : null}
         </div>
 
-        {bound ? (
-          <>
-            <Checkbox
-              checked={wechat.remoteNotifyOnReceive}
-              onChange={(e) => patch({ remoteNotifyOnReceive: e.target.checked })}
-            >
-              {t('settings.wechat.notifyOnReceive')}
-            </Checkbox>
-
-            <ConfigField label={t('settings.wechat.sessionIdleLabel')}>
-              <InputNumber
-                min={0}
-                max={120}
-                value={readRemoteSessionIdleMinutes(wechat)}
-                onChange={(v) => patch({ remoteSessionIdleMinutes: v ?? 0 })}
-              />
-              <span className="config-inline-label">{t('settings.wechat.sessionIdleUnit')}</span>
-            </ConfigField>
-
-            <ConfigField label={t('settings.wechat.remoteDefaultModelLabel')}>
-              <Select
-                allowClear
-                placeholder={t('settings.wechat.remoteDefaultModelPlaceholder')}
-                value={wechat.remoteDefaultModelId}
-                onChange={(remoteDefaultModelId) => patch({ remoteDefaultModelId })}
-                classNames={configModalSelectPopupClassNames}
-                options={models.filter((m) => m.enabled).map((m) => ({ value: m.name, label: m.name }))}
-              />
-            </ConfigField>
-
-            <Collapse
-              ghost
-              items={[
-                {
-                  key: 'remoteProgress',
-                  label: t('settings.wechat.remoteProgressTitle'),
-                  children: (
-                    <Space direction="vertical" size="middle" className="config-settings-stack">
-                      <ConfigField label={t('settings.wechat.remoteProgressModeLabel')}>
-                        <Select
-                          value={wechat.remoteProgressMode ?? 'activity_snapshot'}
-                          onChange={(remoteProgressMode) => patch({ remoteProgressMode })}
-                          classNames={configModalSelectPopupClassNames}
-                          options={[
-                            { value: 'activity_snapshot', label: t('settings.wechat.remoteProgressModeActivity') },
-                            { value: 'legacy_heartbeat', label: t('settings.wechat.remoteProgressModeLegacy') },
-                            { value: 'off', label: t('settings.wechat.remoteProgressModeOff') }
-                          ]}
-                        />
-                      </ConfigField>
-                      <ConfigField label={t('settings.wechat.remoteProgressHeartbeatLabel')}>
-                        <InputNumber
-                          min={0}
-                          max={600}
-                          value={wechat.remoteProgressHeartbeatSec ?? 60}
-                          onChange={(v) => patch({ remoteProgressHeartbeatSec: v ?? 60 })}
-                        />
-                      </ConfigField>
-                      <Checkbox
-                        checked={wechat.remoteTypingEnabled}
-                        onChange={(e) => patch({ remoteTypingEnabled: e.target.checked })}
-                      >
-                        {t('settings.wechat.remoteTypingEnabled')}
-                      </Checkbox>
-                      <ConfigField label={t('settings.wechat.remoteProgressMinIntervalLabel')}>
-                        <InputNumber
-                          min={0}
-                          max={120}
-                          value={wechat.remoteProgressMinIntervalSec ?? 3}
-                          onChange={(v) => patch({ remoteProgressMinIntervalSec: v ?? 3 })}
-                        />
-                      </ConfigField>
-                    </Space>
-                  )
-                },
-                {
-                  key: 'security',
-                  label: t('settings.wechat.securityTitle'),
-                  children: (
-                    <Space direction="vertical" size="middle" className="config-settings-stack">
-                      <Checkbox
-                        checked={wechat.remoteAllowLocalWrite}
-                        onChange={(e) => patch({ remoteAllowLocalWrite: e.target.checked })}
-                      >
-                        {t('settings.wechat.allowLocalWrite')}
-                      </Checkbox>
-                      <ConfigField label={t('settings.wechat.rateLimitLabel')}>
-                        <InputNumber
-                          min={1}
-                          max={120}
-                          value={wechat.remoteRateLimitPerMinute}
-                          onChange={(v) => patch({ remoteRateLimitPerMinute: v ?? 10 })}
-                        />
-                      </ConfigField>
-                      <ConfigField label={t('settings.wechat.remoteConfirmLabel')}>
-                        <Select
-                          value={wechat.remoteConfirmPolicy}
-                          onChange={(remoteConfirmPolicy) => patch({ remoteConfirmPolicy })}
-                          classNames={configModalSelectPopupClassNames}
-                          options={[
-                            { value: 'im_confirm', label: t('settings.wechat.policyWechatConfirm') },
-                            { value: 'remote_read_only', label: t('settings.wechat.policyReadOnly') },
-                            { value: 'always', label: t('settings.wechat.policyAlways') },
-                            {
-                              value: 'inherit',
-                              label: (
-                                <Tooltip title={t('settings.wechat.policyInheritRemoteHint')}>
-                                  <span>{t('settings.wechat.policyInherit')}</span>
-                                </Tooltip>
-                              )
-                            }
-                          ]}
-                        />
-                      </ConfigField>
-                      <ConfigField label={t('settings.wechat.senderAllowlistLabel')}>
-                        <Input.TextArea
-                          rows={3}
-                          placeholder={t('settings.wechat.senderAllowlistPlaceholder')}
-                          value={(wechat.remoteSenderAllowlist ?? []).join('\n')}
-                          onChange={(e) => {
-                            const list = e.target.value
-                              .split(/[\n,]+/)
-                              .map((s) => s.trim())
-                              .filter(Boolean)
-                            patch({ remoteSenderAllowlist: list.length ? list : undefined })
-                          }}
-                        />
-                      </ConfigField>
-                      <Button onClick={() => setAuditOpen(true)}>{t('settings.wechat.viewAudit')}</Button>
-                    </Space>
-                  )
-                }
-              ]}
-            />
-          </>
-        ) : null}
+        <Button onClick={() => setAuditOpen(true)}>{t('settings.wechat.viewAudit')}</Button>
       </ConfigSettingsStack>
 
       <WeChatAuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} />

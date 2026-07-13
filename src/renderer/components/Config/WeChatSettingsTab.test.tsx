@@ -31,7 +31,7 @@ describe('WeChatSettingsTab', () => {
     expect(screen.getByText('通过微信遥控桌面 Agent')).toBeTruthy()
   })
 
-  it('shows bound status when logged in', async () => {
+  it('shows bound status and audit when logged in', async () => {
     window.api.wechatConnectionStatus = vi.fn().mockResolvedValue({
       loggedIn: true,
       pollState: 'stopped',
@@ -48,5 +48,8 @@ describe('WeChatSettingsTab', () => {
       </ConfigProvider>
     )
     expect(await screen.findByText(/已绑定/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '查看操作记录' })).toBeTruthy()
+    expect(screen.queryByText('收到消息时弹窗通知')).toBeNull()
+    expect(screen.queryByText('安全设置')).toBeNull()
   })
 })

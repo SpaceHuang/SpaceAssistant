@@ -669,5 +669,31 @@
     "tabFeishu": "飞书",
     "tabWechat": "微信",
     "close": "关闭"
+  },
+  "remoteImCommon": {
+    "hint": "以下选项同时作用于飞书与微信远程指令，修改后会写入两个渠道配置。",
+    "notifyOnReceive": "收到远程指令时发送系统通知",
+    "sessionIdleLabel": "会话续接：末条消息发送完成后（分钟，0=每条新会话）",
+    "sessionIdleUnit": "分钟",
+    "remoteDefaultModelLabel": "远程默认模型",
+    "remoteDefaultModelPlaceholder": "与全局默认相同",
+    "remoteProgressTitle": "远程进展同步",
+    "remoteProgressModeLabel": "进展同步模式",
+    "remoteProgressModeActivity": "Activity 快照心跳",
+    "remoteProgressModeLegacy": "固定兜底心跳（迁移）",
+    "remoteProgressModeOff": "关闭进展 reply",
+    "remoteProgressHeartbeatLabel": "心跳间隔（秒，0=关闭）",
+    "remoteTypingEnabled": "发送 Typing 指示",
+    "remoteProgressMinIntervalLabel": "最小 reply 间隔（秒）",
+    "remoteAllowLocalWrite": "允许远程指令执行本地文件写操作",
+    "remoteConfirmLabel": "远程写确认策略",
+    "remoteConfirmIm": "IM 内 Y/N 确认",
+    "remoteConfirmReadOnly": "禁止远程写",
+    "remoteConfirmAlways": "一律确认",
+    "remoteConfirmInherit": "与工具设置一致",
+    "remoteConfirmInheritHint": "远程会话下等效于「IM 内 Y/N 确认」。",
+    "rateLimitLabel": "消息频率限制（条/分钟/用户）",
+    "senderAllowlistLabel": "发送者白名单",
+    "senderAllowlistPlaceholder": "可选，每行一个 userId"
   }
 }
