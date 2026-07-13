@@ -16,6 +16,7 @@ describe('remoteConfirmPolicy', () => {
     expect(resolveRemoteConfirmPolicy({ source: 'wechat', confirmPolicy: 'wechat_confirm' })).toBe('im_confirm')
     expect(resolveRemoteConfirmPolicy({ source: 'feishu', confirmPolicy: 'feishu_confirm' })).toBe('im_confirm')
     expect(resolveRemoteConfirmPolicy({ source: 'wechat', confirmPolicy: 'always' })).toBe('im_confirm')
+    expect(resolveRemoteConfirmPolicy({ source: 'feishu', confirmPolicy: 'im_confirm' })).toBe('im_confirm')
   })
 
   it('remote_read_only blocks IM confirm path', () => {
@@ -30,12 +31,14 @@ describe('remoteConfirmPolicy', () => {
   })
 
   it('normalizeWeChatConfirmPolicy maps legacy remoteWechatConfirm flag', () => {
-    expect(normalizeWeChatConfirmPolicy('inherit', true)).toBe('wechat_confirm')
+    expect(normalizeWeChatConfirmPolicy('inherit', true)).toBe('im_confirm')
     expect(normalizeWeChatConfirmPolicy('remote_read_only', true)).toBe('remote_read_only')
+    expect(normalizeWeChatConfirmPolicy('wechat_confirm')).toBe('im_confirm')
   })
 
   it('isRemoteReadOnlyPolicy detects read-only', () => {
     expect(isRemoteReadOnlyPolicy('remote_read_only')).toBe(true)
     expect(isRemoteReadOnlyPolicy('wechat_confirm')).toBe(false)
+    expect(isRemoteReadOnlyPolicy('im_confirm')).toBe(false)
   })
 })

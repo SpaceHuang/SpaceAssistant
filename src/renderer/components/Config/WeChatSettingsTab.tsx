@@ -403,7 +403,7 @@ export function WeChatSettingsTab({ wechat, onChange, models = [] }: Props) {
                           onChange={(remoteConfirmPolicy) => patch({ remoteConfirmPolicy })}
                           classNames={configModalSelectPopupClassNames}
                           options={[
-                            { value: 'wechat_confirm', label: t('settings.wechat.policyWechatConfirm') },
+                            { value: 'im_confirm', label: t('settings.wechat.policyWechatConfirm') },
                             { value: 'remote_read_only', label: t('settings.wechat.policyReadOnly') },
                             { value: 'always', label: t('settings.wechat.policyAlways') },
                             {

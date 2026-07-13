@@ -266,7 +266,7 @@ export function FeishuSettingsTab({ feishu, onChange, models = [] }: Props) {
             classNames={configModalSelectPopupClassNames}
             options={[
               { value: 'remote_read_only', label: t('feishu.remoteConfirmReadOnly') },
-              { value: 'feishu_confirm', label: t('feishu.remoteConfirmFeishu') },
+              { value: 'im_confirm', label: t('feishu.remoteConfirmFeishu') },
               { value: 'always', label: t('feishu.remoteConfirmAlways') },
               {
                 value: 'inherit',

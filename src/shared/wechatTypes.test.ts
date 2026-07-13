@@ -12,29 +12,30 @@ describe('wechatTypes remoteConfirmPolicy', () => {
     expect(mergeWeChatConfig({}).remoteConfirmPolicy).toBe('always')
   })
 
-  it('migrates phase-1 remote_read_only default to wechat_confirm', () => {
+  it('migrates phase-1 remote_read_only default to im_confirm', () => {
     const merged = mergeWeChatConfig({ remoteConfirmPolicy: 'remote_read_only' })
-    expect(merged.remoteConfirmPolicy).toBe('wechat_confirm')
+    expect(merged.remoteConfirmPolicy).toBe('im_confirm')
     expect(
       weChatConfigNeedsPolicyMigration({ remoteConfirmPolicy: 'remote_read_only' }, merged)
     ).toBe(true)
   })
 
-  it('keeps explicit non-read-only policies', () => {
+  it('keeps explicit non-read-only policies and maps wechat_confirm', () => {
     expect(mergeWeChatConfig({ remoteConfirmPolicy: 'always' }).remoteConfirmPolicy).toBe('always')
     expect(mergeWeChatConfig({ remoteConfirmPolicy: 'inherit' }).remoteConfirmPolicy).toBe('inherit')
     expect(mergeWeChatConfig({ remoteConfirmPolicy: 'wechat_confirm' }).remoteConfirmPolicy).toBe(
-      'wechat_confirm'
+      'im_confirm'
     )
+    expect(mergeWeChatConfig({ remoteConfirmPolicy: 'im_confirm' }).remoteConfirmPolicy).toBe('im_confirm')
   })
 
-  it('maps legacy remoteWechatConfirm flag to wechat_confirm', () => {
+  it('maps legacy remoteWechatConfirm flag to im_confirm', () => {
     expect(resolveWeChatRemoteConfirmPolicy({ remoteConfirmPolicy: 'inherit', remoteWechatConfirm: true })).toBe(
-      'wechat_confirm'
+      'im_confirm'
     )
     expect(
       resolveWeChatRemoteConfirmPolicy({ remoteConfirmPolicy: 'remote_read_only', remoteWechatConfirm: true })
-    ).toBe('wechat_confirm')
+    ).toBe('im_confirm')
   })
 
   it('matches DEFAULT_WECHAT_CONFIG policy', () => {

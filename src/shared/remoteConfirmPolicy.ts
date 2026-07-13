@@ -1,20 +1,18 @@
-import type { FeishuRemoteConfirmPolicy } from './feishuTypes'
-import type { WeChatRemoteConfirmPolicy } from './wechatTypes'
+import type { ImConfirmPolicy, LegacyImConfirmPolicy } from './imTypes'
+import { normalizeImConfirmPolicy } from './imTypes'
 
 export type RemoteChannel = 'feishu' | 'wechat'
 
 export type ResolvedRemoteConfirmPolicy = 'im_confirm' | 'remote_read_only'
 
-export type RemoteConfirmPolicyInput =
-  | FeishuRemoteConfirmPolicy
-  | WeChatRemoteConfirmPolicy
+export type RemoteConfirmPolicyInput = LegacyImConfirmPolicy
 
 export function normalizeWeChatConfirmPolicy(
-  policy: WeChatRemoteConfirmPolicy,
+  policy: LegacyImConfirmPolicy,
   remoteWechatConfirm?: boolean
-): WeChatRemoteConfirmPolicy {
-  if (remoteWechatConfirm && policy !== 'remote_read_only') return 'wechat_confirm'
-  return policy
+): ImConfirmPolicy {
+  if (remoteWechatConfirm && policy !== 'remote_read_only') return 'im_confirm'
+  return normalizeImConfirmPolicy(policy) ?? 'always'
 }
 
 export function resolveRemoteConfirmPolicy(args: {

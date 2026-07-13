@@ -182,7 +182,7 @@ describe('browserExecutor', () => {
         remoteContext: {
           source: 'feishu',
           messageId: 'om_test',
-          confirmPolicy: 'feishu_confirm'
+          confirmPolicy: 'im_confirm'
         },
         browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: false }
       })

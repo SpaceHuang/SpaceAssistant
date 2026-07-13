@@ -1,9 +1,17 @@
 import type { RemoteProgressConfig } from './remoteProgressTypes'
 import { FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG } from './remoteProgressTypes'
+import {
+  mergeRemoteImCommonConfig,
+  normalizeImConfirmPolicy,
+  type ImConfirmPolicy,
+  type LegacyImConfirmPolicy,
+  type RemoteImCommonConfig
+} from './imTypes'
 
 export type FeishuEventConnectionState = 'stopped' | 'connecting' | 'connected' | 'error'
 
-export type FeishuRemoteConfirmPolicy = 'inherit' | 'always' | 'remote_read_only' | 'feishu_confirm'
+/** @deprecated Use ImConfirmPolicy; feishu_confirm migrates to im_confirm. */
+export type FeishuRemoteConfirmPolicy = ImConfirmPolicy | 'feishu_confirm'
 
 export type FeishuGroupTrigger = 'mention' | 'prefix' | 'both'
 
@@ -11,7 +19,7 @@ export type FeishuRegion = 'feishu' | 'lark'
 
 export type FeishuIntegrationMode = 'cli' | 'mcp' | 'both'
 
-export interface FeishuConfig {
+export interface FeishuConfig extends RemoteImCommonConfig {
   enabled: boolean
   cliPath?: string
   useBundledCli?: boolean
@@ -19,29 +27,13 @@ export interface FeishuConfig {
   appIdSuffix?: string
   userAuthorized: boolean
   userDisplay?: string
-  remoteEnabled: boolean
   remoteGroupTrigger: FeishuGroupTrigger
-  remoteCommandPrefix?: string
-  remoteSenderAllowlist?: string[]
-  remoteSessionMergeMinutes?: number
-  remoteSessionIdleMinutes?: number
-  remoteNotifyOnReceive: boolean
-  remoteConfirmPolicy: FeishuRemoteConfirmPolicy
-  remoteAllowLocalWrite: boolean
-  remoteDefaultModelId?: string
   region: FeishuRegion
   wakeWords?: string[]
   wakeWordAutoExecute: boolean
-  remoteRateLimitPerMinute: number
   integrationMode: FeishuIntegrationMode
   larkCliDefaultTimeoutSec: number
   larkCliWriteRequiresConfirm: boolean
-  remoteProgressMode?: RemoteProgressConfig['remoteProgressMode']
-  remoteProgressHeartbeatSec?: number
-  remoteTypingEnabled?: boolean
-  remoteProgressMinIntervalSec?: number
-  remoteProgressMaxChars?: number
-  remoteProgressFallbackText?: string
 }
 
 export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
@@ -69,16 +61,22 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteProgressFallbackText: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressFallbackText
 }
 
-export function mergeFeishuConfig(partial?: Partial<FeishuConfig> | null): FeishuConfig {
+export function mergeFeishuConfig(
+  partial?: (Partial<FeishuConfig> & { remoteConfirmPolicy?: LegacyImConfirmPolicy }) | null
+): FeishuConfig {
   if (!partial || typeof partial !== 'object') return { ...DEFAULT_FEISHU_CONFIG }
+
+  const common = mergeRemoteImCommonConfig(partial, DEFAULT_FEISHU_CONFIG)
+  const policy =
+    normalizeImConfirmPolicy(partial.remoteConfirmPolicy) ?? DEFAULT_FEISHU_CONFIG.remoteConfirmPolicy
+
   return {
     ...DEFAULT_FEISHU_CONFIG,
     ...partial,
-    // 集成模式固定为 CLI（UI 选项已隐藏，不再支持 mcp/both）
+    ...common,
+    remoteConfirmPolicy: policy,
     integrationMode: 'cli',
-    remoteSenderAllowlist: Array.isArray(partial.remoteSenderAllowlist)
-      ? [...partial.remoteSenderAllowlist]
-      : DEFAULT_FEISHU_CONFIG.remoteSenderAllowlist,
+    remoteSenderAllowlist: common.remoteSenderAllowlist,
     wakeWords: Array.isArray(partial.wakeWords) ? [...partial.wakeWords] : DEFAULT_FEISHU_CONFIG.wakeWords
   }
 }
@@ -166,3 +164,5 @@ export interface FeishuHealthCheck {
   lastReplyAt?: number
   pendingConfirms: number
 }
+
+export type { RemoteProgressConfig, ImConfirmPolicy, RemoteImCommonConfig }
