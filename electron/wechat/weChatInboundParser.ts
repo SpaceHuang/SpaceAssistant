@@ -41,11 +41,6 @@ export function shouldAcceptWeChatInbound(msg: WeChatInboundMessage, config: WeC
   return { accept: true, userMessage: text }
 }
 
-export function truncateTitle(content: string, max = 30): string {
-  const t = content.trim()
-  return t.length <= max ? t : `${t.slice(0, max)}…`
-}
-
 export function parseSdkInboundMessage(raw: IncomingMessage): WeChatInboundMessage {
   const messageId = raw.raw.client_id || `${raw.userId}-${raw.timestamp.getTime()}`
   const contextToken = raw._contextToken || raw.raw.context_token || ''

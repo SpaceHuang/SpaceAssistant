@@ -1,12 +1,7 @@
 import type { AppDatabase } from '../database'
-import { createSession, listSessions, updateSession } from '../database'
+import { createSession, updateSession } from '../database'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
-import { truncateTitle } from './weChatInboundParser'
-import {
-  pickRemoteSessionCandidate,
-  readRemoteSessionIdleMinutes,
-  resolveActivityAt
-} from '../../src/shared/remoteSessionResolve'
+import { resolveImSession, truncateTitle } from '../remote/imSessionResolver'
 
 export async function createNewWeChatSession(
   db: AppDatabase,
@@ -43,53 +38,37 @@ export async function resolveWeChatSession(
   availableModelNames?: string[],
   getActiveWorkDirProfileId?: () => string
 ): Promise<{ sessionId: string; isNew: boolean }> {
-  let model = config.remoteDefaultModelId ?? defaultModel
-  if (config.remoteDefaultModelId && availableModelNames && !availableModelNames.includes(model)) {
-    model = defaultModel
-  }
   const activeProfileId = getActiveWorkDirProfileId?.()
-
-  const idleTimeoutMs = readRemoteSessionIdleMinutes(config) * 60_000
-  if (idleTimeoutMs <= 0) {
-    return {
-      sessionId: await createNewWeChatSession(db, msg, model, activeProfileId),
-      isNew: true
-    }
-  }
-
-  const existing = pickRemoteSessionCandidate(
-    listSessions(db),
-    'wechat',
-    msg.userId,
-    (s) => {
+  return resolveImSession({
+    db,
+    config,
+    defaultModel,
+    availableModelNames,
+    channel: 'wechat',
+    identityKey: msg.userId,
+    getIdentityFromSession: (s) => {
       const m = s.metadata as Record<string, unknown> | undefined
       const meta = m?.wechatMeta as { userId?: string } | undefined
       return meta?.userId
-    }
-  )
-
-  if (existing && Date.now() - resolveActivityAt(existing) < idleTimeoutMs) {
-    const patch: Parameters<typeof updateSession>[2] = {
-      metadata: {
-        ...existing.metadata,
-        wechatMessageId: msg.messageId,
-        wechatMeta: {
-          ...(existing.metadata as { wechatMeta?: Record<string, unknown> })?.wechatMeta,
-          userId: msg.userId,
-          lastMessageId: msg.messageId,
-          lastContextToken: msg.contextToken
+    },
+    createNew: (model) => createNewWeChatSession(db, msg, model, activeProfileId),
+    onReuse: (existing) => {
+      const patch: Parameters<typeof updateSession>[2] = {
+        metadata: {
+          ...existing.metadata,
+          wechatMessageId: msg.messageId,
+          wechatMeta: {
+            ...(existing.metadata as { wechatMeta?: Record<string, unknown> })?.wechatMeta,
+            userId: msg.userId,
+            lastMessageId: msg.messageId,
+            lastContextToken: msg.contextToken
+          }
         }
       }
+      if (!existing.workDirProfileId && activeProfileId) {
+        patch.workDirProfileId = activeProfileId
+      }
+      updateSession(db, existing.id, patch)
     }
-    if (!existing.workDirProfileId && activeProfileId) {
-      patch.workDirProfileId = activeProfileId
-    }
-    updateSession(db, existing.id, patch)
-    return { sessionId: existing.id, isNew: false }
-  }
-
-  return {
-    sessionId: await createNewWeChatSession(db, msg, model, activeProfileId),
-    isNew: true
-  }
+  })
 }

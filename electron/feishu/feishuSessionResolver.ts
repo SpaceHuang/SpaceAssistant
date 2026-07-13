@@ -1,12 +1,7 @@
 import type { AppDatabase } from '../database'
-import { createSession, listSessions, updateSession } from '../database'
+import { createSession, updateSession } from '../database'
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
-import { truncateTitle } from './feishuInboundParser'
-import {
-  pickRemoteSessionCandidate,
-  readRemoteSessionIdleMinutes,
-  resolveActivityAt
-} from '../../src/shared/remoteSessionResolve'
+import { resolveImSession, truncateTitle } from '../remote/imSessionResolver'
 
 export async function createNewFeishuSession(
   db: AppDatabase,
@@ -34,29 +29,19 @@ export async function resolveFeishuSession(
   defaultModel: string,
   availableModelNames?: string[]
 ): Promise<{ sessionId: string; isNew: boolean }> {
-  let model = config.remoteDefaultModelId ?? defaultModel
-  if (config.remoteDefaultModelId && availableModelNames && !availableModelNames.includes(model)) {
-    model = defaultModel
-  }
-
-  const idleTimeoutMs = readRemoteSessionIdleMinutes(config) * 60_000
-  if (idleTimeoutMs <= 0) {
-    return { sessionId: await createNewFeishuSession(db, msg, model), isNew: true }
-  }
-
-  const existing = pickRemoteSessionCandidate(
-    listSessions(db),
-    'feishu',
-    msg.chatId,
-    (s) => (s.metadata as { feishuChatId?: string }).feishuChatId
-  )
-
-  if (existing && Date.now() - resolveActivityAt(existing) < idleTimeoutMs) {
-    updateSession(db, existing.id, {
-      metadata: { ...existing.metadata, feishuMessageId: msg.messageId }
-    })
-    return { sessionId: existing.id, isNew: false }
-  }
-
-  return { sessionId: await createNewFeishuSession(db, msg, model), isNew: true }
+  return resolveImSession({
+    db,
+    config,
+    defaultModel,
+    availableModelNames,
+    channel: 'feishu',
+    identityKey: msg.chatId,
+    getIdentityFromSession: (s) => (s.metadata as { feishuChatId?: string }).feishuChatId,
+    createNew: (model) => createNewFeishuSession(db, msg, model),
+    onReuse: (existing) => {
+      updateSession(db, existing.id, {
+        metadata: { ...existing.metadata, feishuMessageId: msg.messageId }
+      })
+    }
+  })
 }

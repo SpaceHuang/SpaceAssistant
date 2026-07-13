@@ -104,7 +104,3 @@ export function shouldAcceptInbound(msg: FeishuInboundMessage, config: FeishuCon
   return { accept: false, reason: 'unsupported_chat_type' }
 }
 
-export function truncateTitle(content: string, max = 30): string {
-  const t = content.trim()
-  return t.length <= max ? t : `${t.slice(0, max)}…`
-}

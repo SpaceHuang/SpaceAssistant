@@ -38,8 +38,10 @@ import {
   REMOTE_PARALLEL_FULL_MESSAGE,
   REMOTE_SESSION_BUSY_MESSAGE
 } from '../remote/remoteSessionGuardMessages'
+import { createRateLimiter } from '../remote/imRateLimit'
 
-const senderRateMap = new Map<string, number[]>()
+
+const rateLimiter = createRateLimiter()
 
 export type RemoteCommandRouterDeps = {
   db: AppDatabase
@@ -69,18 +71,6 @@ export type RemoteCommandRouterDeps = {
 
 const pendingDisambiguation = new Map<string, { profiles: WorkDirProfile[]; originalMsg: FeishuInboundMessage }>()
 
-function checkRateLimit(senderOpenId: string, limit: number): boolean {
-  const now = Date.now()
-  const window = senderRateMap.get(senderOpenId) ?? []
-  const recent = window.filter((t) => now - t < 60_000)
-  if (recent.length >= limit) {
-    senderRateMap.set(senderOpenId, recent)
-    return false
-  }
-  recent.push(now)
-  senderRateMap.set(senderOpenId, recent)
-  return true
-}
 
 export class RemoteCommandRouter {
   private lastInboundAt?: number
@@ -145,7 +135,7 @@ export class RemoteCommandRouter {
       return
     }
 
-    if (!checkRateLimit(msg.senderOpenId, config.remoteRateLimitPerMinute)) {
+    if (!rateLimiter.check(msg.senderOpenId, config.remoteRateLimitPerMinute)) {
       await this.deps.auditLogger.append({ type: 'rate_limit', senderOpenId: msg.senderOpenId })
       logFeishuCliEvent('warn', 'feishu.inbound.rate_limit', { senderOpenId: msg.senderOpenId })
       await replyFeishuText(this.deps.runner, msg.messageId, '指令过于频繁，请稍后再试。')

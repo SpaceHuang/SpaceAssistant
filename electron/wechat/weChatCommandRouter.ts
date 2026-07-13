@@ -32,8 +32,10 @@ import {
   REMOTE_SESSION_BUSY_MESSAGE
 } from '../remote/remoteSessionGuardMessages'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
+import { createRateLimiter } from '../remote/imRateLimit'
 
-const senderRateMap = new Map<string, number[]>()
+
+const rateLimiter = createRateLimiter()
 
 export type WeChatCommandRouterDeps = {
   db: AppDatabase
@@ -59,18 +61,6 @@ export type WeChatCommandRouterDeps = {
   getShellConfig?: () => import('../../src/shared/domainTypes').ShellConfig
 }
 
-function checkRateLimit(senderId: string, limit: number): boolean {
-  const now = Date.now()
-  const window = senderRateMap.get(senderId) ?? []
-  const recent = window.filter((t) => now - t < 60_000)
-  if (recent.length >= limit) {
-    senderRateMap.set(senderId, recent)
-    return false
-  }
-  recent.push(now)
-  senderRateMap.set(senderId, recent)
-  return true
-}
 
 export class WeChatCommandRouter {
   private lastInboundAt?: number
@@ -155,7 +145,7 @@ export class WeChatCommandRouter {
       return
     }
 
-    if (!checkRateLimit(msg.userId, config.remoteRateLimitPerMinute)) {
+    if (!rateLimiter.check(msg.userId, config.remoteRateLimitPerMinute)) {
       logWeChatCliEvent('warn', 'wechat.inbound.rate_limit', { userId: msg.userId })
       await this.deps.auditLogger.append({ type: 'rate_limit', senderId: msg.userId })
       if (bot) await bot.reply(raw, '当前指令过于频繁，请稍后再试')

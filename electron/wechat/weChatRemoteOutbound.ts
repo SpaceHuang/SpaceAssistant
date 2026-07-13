@@ -1,7 +1,7 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { AppDatabase } from '../database'
 import { formatRemoteOutboundMessage, sessionSuffixLength } from '../../src/shared/remoteOutboundFormat'
-import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
+import { maybeTouchOutboundActivity } from '../remote/imRemoteOutbound'
 import { formatWeChatSummary, type WeChatReplyBot } from './weChatReplyService'
 import { logWeChatCliEvent } from './weChatCliLogger'
 
@@ -43,7 +43,5 @@ export async function sendWeChatRemoteOutbound(args: {
     chunksSent: Math.max(1, chunks)
   })
 
-  if (sessionId && touch) {
-    touchRemoteSessionActivity(touch.db, touch.sessionId)
-  }
+  maybeTouchOutboundActivity(sessionId, touch)
 }
