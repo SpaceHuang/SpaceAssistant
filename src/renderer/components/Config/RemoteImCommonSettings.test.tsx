@@ -14,11 +14,17 @@ describe('RemoteImCommonSettings', () => {
     render(
       <ConfigProvider>
         <App>
-          <RemoteImCommonSettings value={DEFAULT_REMOTE_IM_COMMON_CONFIG} onChange={vi.fn()} />
+          <RemoteImCommonSettings
+            value={DEFAULT_REMOTE_IM_COMMON_CONFIG}
+            onChange={vi.fn()}
+            allowRemoteBrowserSessions={false}
+            onAllowRemoteBrowserSessionsChange={vi.fn()}
+          />
         </App>
       </ConfigProvider>
     )
 
+    expect(await screen.findByText('允许远程会话使用浏览器')).toBeTruthy()
     expect(await screen.findByText('收到远程指令时发送系统通知')).toBeTruthy()
     expect(screen.getByText(/会话续接/)).toBeTruthy()
     expect(screen.getByText('远程默认模型')).toBeTruthy()
@@ -37,6 +43,8 @@ describe('RemoteImCommonSettings', () => {
           <RemoteImCommonSettings
             value={{ ...DEFAULT_REMOTE_IM_COMMON_CONFIG, remoteNotifyOnReceive: true }}
             onChange={onChange}
+            allowRemoteBrowserSessions={false}
+            onAllowRemoteBrowserSessionsChange={vi.fn()}
           />
         </App>
       </ConfigProvider>
@@ -54,6 +62,8 @@ describe('RemoteImCommonSettings', () => {
           <RemoteImCommonSettings
             value={{ ...DEFAULT_REMOTE_IM_COMMON_CONFIG, remoteAllowLocalWrite: true }}
             onChange={onChange}
+            allowRemoteBrowserSessions={false}
+            onAllowRemoteBrowserSessionsChange={vi.fn()}
           />
         </App>
       </ConfigProvider>
@@ -61,5 +71,28 @@ describe('RemoteImCommonSettings', () => {
 
     fireEvent.click(await screen.findByText('允许远程指令执行本地文件写操作'))
     expect(onChange).toHaveBeenCalledWith({ remoteAllowLocalWrite: false })
+  })
+
+  it('calls onAllowRemoteBrowserSessionsChange when browser switch is toggled', async () => {
+    const onAllowRemoteBrowserSessionsChange = vi.fn()
+    render(
+      <ConfigProvider>
+        <App>
+          <RemoteImCommonSettings
+            value={DEFAULT_REMOTE_IM_COMMON_CONFIG}
+            onChange={vi.fn()}
+            allowRemoteBrowserSessions={false}
+            onAllowRemoteBrowserSessionsChange={onAllowRemoteBrowserSessionsChange}
+          />
+        </App>
+      </ConfigProvider>
+    )
+
+    const switchEl = (await screen.findByText('允许远程会话使用浏览器')).parentElement?.querySelector(
+      'button'
+    )
+    expect(switchEl).toBeTruthy()
+    fireEvent.click(switchEl!)
+    expect(onAllowRemoteBrowserSessionsChange).toHaveBeenCalledWith(true)
   })
 })

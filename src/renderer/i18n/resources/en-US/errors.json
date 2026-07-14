@@ -4,8 +4,8 @@
     "noVisionModel": "No vision model is available. Enable a vision model in Settings."
   },
   "API_KEY_NOT_CONFIGURED": "API Key is not configured. Configure it in Settings first.",
-  "BROWSER_REMOTE_DISABLED": "Browser tools are disabled for remote sessions. In SpaceAssistant desktop, open Settings → Browser and enable \"Allow remote sessions\".",
-  "BROWSER_FEISHU_REMOTE_DISABLED": "Browser tools are disabled for remote sessions. In SpaceAssistant desktop, open Settings → Browser and enable \"Allow remote sessions\".",
+  "BROWSER_REMOTE_DISABLED": "Browser tools are disabled for remote sessions. In SpaceAssistant desktop, open Settings → IM Remote Common and enable \"Allow remote sessions to use browser\".",
+  "BROWSER_FEISHU_REMOTE_DISABLED": "Browser tools are disabled for remote sessions. In SpaceAssistant desktop, open Settings → IM Remote Common and enable \"Allow remote sessions to use browser\".",
   "BROWSER_RATE_LIMIT_REJECTED": "Request rate limit exceeded. Please try again later. Current limit: {{perMinute}} requests per minute.",
   "BROWSER_RATE_LIMIT_WAIT_TIMEOUT": "Timed out waiting for an available request slot ({{maxWaitSec}} seconds). Please try again later.",
   "CANNOT_OPEN_LINK": "Could not open link",

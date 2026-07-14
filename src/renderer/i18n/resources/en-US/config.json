@@ -403,8 +403,6 @@
     }
   },
   "browser": {
-    "allowRemoteLabel": "Allow remote sessions",
-    "allowRemoteHint": "When enabled, Feishu/WeChat IM remote commands can use the browser to access the web. Off by default to reduce remote abuse risk.",
     "depsNotReadyTitle": "Browser dependencies not ready",
     "depsNotReadyDescription": "Click the button below to fix this in chat.",
     "detectSectionLabel": "Runtime checks",
@@ -694,6 +692,8 @@
     "remoteConfirmInheritHint": "For remote sessions this is equivalent to 「Confirm with Y/N in IM」.",
     "rateLimitLabel": "Rate limit (messages/min/user)",
     "senderAllowlistLabel": "Sender allowlist",
-    "senderAllowlistPlaceholder": "Optional, one userId per line"
+    "senderAllowlistPlaceholder": "Optional, one userId per line",
+    "allowRemoteBrowserLabel": "Allow remote sessions to use browser",
+    "allowRemoteBrowserHint": "When enabled, Feishu/WeChat IM remote commands can use the browser to access the web. Off by default to reduce remote abuse risk."
   }
 }

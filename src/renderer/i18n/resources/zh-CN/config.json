@@ -403,8 +403,6 @@
     }
   },
   "browser": {
-    "allowRemoteLabel": "允许远程会话使用",
-    "allowRemoteHint": "开启后，飞书/微信等 IM 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。",
     "depsNotReadyTitle": "浏览器依赖未就绪",
     "depsNotReadyDescription": "请点击下方按钮在对话中完成修复。",
     "detectSectionLabel": "运行环境检测",
@@ -694,6 +692,8 @@
     "remoteConfirmInheritHint": "远程会话下等效于「IM 内 Y/N 确认」。",
     "rateLimitLabel": "消息频率限制（条/分钟/用户）",
     "senderAllowlistLabel": "发送者白名单",
-    "senderAllowlistPlaceholder": "可选，每行一个 userId"
+    "senderAllowlistPlaceholder": "可选，每行一个 userId",
+    "allowRemoteBrowserLabel": "允许远程会话使用浏览器",
+    "allowRemoteBrowserHint": "开启后，飞书/微信等 IM 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。"
   }
 }

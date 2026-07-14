@@ -143,12 +143,6 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
 
   return (
     <ConfigSettingsStack>
-      <ConfigSwitchRow
-        label={t('browser.allowRemoteLabel')}
-        hint={t('browser.allowRemoteHint')}
-        checked={browser.allowRemoteSessions}
-        onChange={(v) => patch({ allowRemoteSessions: v })}
-      />
       {detect && !detect.canInitialize ? (
         <Alert
           type="warning"

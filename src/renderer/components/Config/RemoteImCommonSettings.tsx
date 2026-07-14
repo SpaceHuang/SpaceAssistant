@@ -4,21 +4,36 @@ import type { ImConfirmPolicy, RemoteImCommonConfig } from '../../../shared/imTy
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../../shared/remoteProgressTypes'
 import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import { ConfigField, ConfigSettingsStack } from './ConfigField'
+import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 
 type Props = {
   value: RemoteImCommonConfig
   onChange: (patch: Partial<RemoteImCommonConfig>) => void
   models?: ModelEntry[]
+  allowRemoteBrowserSessions: boolean
+  onAllowRemoteBrowserSessionsChange: (enabled: boolean) => void
 }
 
-export function RemoteImCommonSettings({ value, onChange, models = [] }: Props) {
+export function RemoteImCommonSettings({
+  value,
+  onChange,
+  models = [],
+  allowRemoteBrowserSessions,
+  onAllowRemoteBrowserSessionsChange
+}: Props) {
   const { t } = useTypedTranslation('config')
 
   return (
     <ConfigSettingsStack>
       <p className="config-field__hint">{t('remoteImCommon.hint')}</p>
+
+      <ConfigSwitchRow
+        label={t('remoteImCommon.allowRemoteBrowserLabel')}
+        hint={t('remoteImCommon.allowRemoteBrowserHint')}
+        checked={allowRemoteBrowserSessions}
+        onChange={(v) => onAllowRemoteBrowserSessionsChange(Boolean(v))}
+      />
 
       <Checkbox
         checked={value.remoteNotifyOnReceive}

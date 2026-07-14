@@ -977,7 +977,15 @@ export function ConfigSettingsPage() {
       case 'remoteIm':
 
         return (
-          <RemoteImCommonSettings value={feishuUi} onChange={applyRemoteImCommonLocal} models={models} />
+          <RemoteImCommonSettings
+            value={feishuUi}
+            onChange={applyRemoteImCommonLocal}
+            models={models}
+            allowRemoteBrowserSessions={browserUi.allowRemoteSessions}
+            onAllowRemoteBrowserSessionsChange={(allowRemoteSessions) =>
+              setBrowserUi((prev) => ({ ...prev, allowRemoteSessions }))
+            }
+          />
         )
 
       case 'feishu':
