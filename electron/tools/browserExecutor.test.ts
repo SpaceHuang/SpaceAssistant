@@ -46,7 +46,7 @@ vi.mock('../browser/rateLimitService', () => ({
 }))
 
 import { CHAT_CANCELLED_MESSAGE } from '../../src/shared/chatCancel'
-import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePolicy'
+import { BROWSER_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePolicy'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { RateLimitRejectedError, RateLimitWaitTimeoutError } from '../browser/rateLimiter'
 import { browserExecutor } from './browserExecutor'
@@ -188,7 +188,26 @@ describe('browserExecutor', () => {
       })
     )
     expect(r.success).toBe(false)
-    expect(r.error).toBe(BROWSER_FEISHU_REMOTE_DISABLED_CODE)
+    expect(r.error).toBe(BROWSER_REMOTE_DISABLED_CODE)
+    expect(mockGetOrCreate).not.toHaveBeenCalled()
+  })
+
+  it('rejects wechat remote when allowRemoteSessions is false', async () => {
+    const r = await browserExecutor.execute(
+      { action: 'navigate', mode: 'open', url: 'https://example.com' },
+      baseCtx({
+        remoteContext: {
+          source: 'wechat',
+          messageId: 'm1',
+          userId: 'u1',
+          contextToken: 'c',
+          confirmPolicy: 'im_confirm'
+        },
+        browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: false }
+      })
+    )
+    expect(r.success).toBe(false)
+    expect(r.error).toBe(BROWSER_REMOTE_DISABLED_CODE)
     expect(mockGetOrCreate).not.toHaveBeenCalled()
   })
 

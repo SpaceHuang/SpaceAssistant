@@ -18,7 +18,7 @@ import { resolveStagehandCredentials } from '../browser/browserLlmCredentials'
 import { stagehandService } from '../browser/stagehandService'
 import { validateUrl } from '../browser/urlSecurity'
 import { CHAT_CANCELLED_MESSAGE } from '../../src/shared/chatCancel'
-import { BROWSER_FEISHU_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePolicy'
+import { BROWSER_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePolicy'
 import { isUserAbortError, raceWithUserAbort, throwIfAborted } from './toolExecutionResource'
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 
@@ -147,10 +147,10 @@ export const browserExecutor: ToolExecutor = {
       return { success: false, error: '浏览器工具未启用', duration: Date.now() - started }
     }
 
-    if (ctx.remoteContext?.source === 'feishu' && !cfg.allowRemoteSessions) {
+    if (ctx.remoteContext && !cfg.allowRemoteSessions) {
       return {
         success: false,
-        error: BROWSER_FEISHU_REMOTE_DISABLED_CODE,
+        error: BROWSER_REMOTE_DISABLED_CODE,
         duration: Date.now() - started
       }
     }

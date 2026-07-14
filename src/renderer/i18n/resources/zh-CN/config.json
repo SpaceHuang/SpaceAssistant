@@ -403,8 +403,8 @@
     }
   },
   "browser": {
-    "allowRemoteLabel": "允许飞书远程会话使用",
-    "allowRemoteHint": "开启后，飞书 Bot 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。",
+    "allowRemoteLabel": "允许远程会话使用",
+    "allowRemoteHint": "开启后，飞书/微信等 IM 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。",
     "depsNotReadyTitle": "浏览器依赖未就绪",
     "depsNotReadyDescription": "请点击下方按钮在对话中完成修复。",
     "detectSectionLabel": "运行环境检测",

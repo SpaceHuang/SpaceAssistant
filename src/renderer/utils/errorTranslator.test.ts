@@ -9,7 +9,8 @@ describe('translateError', () => {
   it('returns zh-CN messages', async () => {
     await changeAppLocale('zh-CN')
     expect(translateError({ code: ErrorCodes.FILE_NOT_FOUND })).toBe('文件未找到')
-    expect(translateError({ code: ErrorCodes.BROWSER_FEISHU_REMOTE_DISABLED })).toContain('飞书远程会话')
+    expect(translateError({ code: ErrorCodes.BROWSER_REMOTE_DISABLED })).toContain('远程会话')
+    expect(translateError({ code: ErrorCodes.BROWSER_FEISHU_REMOTE_DISABLED })).toContain('远程会话')
     expect(translateError({ code: ErrorCodes.API_KEY_NOT_CONFIGURED })).toBe('API Key 未配置')
   })
 
