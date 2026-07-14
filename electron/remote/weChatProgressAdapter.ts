@@ -24,7 +24,8 @@ export function createWeChatProgressAdapter(args: {
     pickWeChatProgressConfig(args.config),
     {
       ...DEFAULT_REMOTE_PROGRESS_CONFIG,
-      remoteTypingEnabled: args.config.remoteTypingEnabled,
+      remoteTypingEnabled:
+        args.config.remoteTypingEnabled ?? DEFAULT_REMOTE_PROGRESS_CONFIG.remoteTypingEnabled,
       remoteProgressHeartbeatSec: args.config.remoteProgressHeartbeatSec ?? 60
     }
   )

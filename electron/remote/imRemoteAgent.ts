@@ -18,7 +18,10 @@ import {
 } from './remoteProgressCoordinator'
 import { clearRemoteProgressSession } from './remoteProgressStore'
 import type { RemoteProgressConfig } from '../../src/shared/remoteProgressTypes'
-import { resolveFeishuBrowserRemoteHint } from '../../src/shared/browserRemotePolicy'
+import {
+  resolveFeishuBrowserRemoteHint,
+  type FeishuBrowserRemoteHint
+} from '../../src/shared/browserRemotePolicy'
 import { resolveRemoteOutboundSessionId } from './remoteSessionSwitchFollow'
 
 export function extractTextFromContent(content: unknown[]): string {
@@ -51,7 +54,7 @@ export async function runImRemoteAgent(args: {
   getWikiConfig?: () => WikiConfig
   getShellConfig?: () => ShellConfig
   createProgressAdapter: (getSessionId: () => string) => RemoteProgressAdapter
-  buildSystemAppendix: (args: { browserRemoteHint?: string }) => string
+  buildSystemAppendix: (args: { browserRemoteHint?: FeishuBrowserRemoteHint }) => string
   progressDefaults: Required<RemoteProgressConfig>
   progressConfig: RemoteProgressConfig
   toolChatExtras?: Pick<RunToolChatSessionArgs, 'feishuConfig' | 'wechatConfig' | 'larkCliRunner'>
