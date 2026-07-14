@@ -22,8 +22,12 @@ export interface WeChatConfig extends RemoteImCommonConfig {
   botIdSuffix?: string
   displayName?: string
   remoteAckOnReceive: boolean
+  /**
+   * @deprecated 出站确认已移除；读取时忽略，视为 false。
+   * 旧配置存在不引发异常。见 wechat-remote-outbound-confirm-removal-requirement。
+   */
   wechatSendRequiresConfirm: boolean
-  /** @deprecated 兼容旧配置；true 时等效 im_confirm */
+  /** @deprecated 兼容旧配置；true 时等效 im_confirm（写工具确认语义，不再管控出站） */
   remoteWechatConfirm?: boolean
 }
 
@@ -32,6 +36,10 @@ export const DEFAULT_WECHAT_CONFIG: WeChatConfig = {
   loggedIn: false,
   remoteEnabled: false,
   remoteNotifyOnReceive: true,
+  /**
+   * always / im_confirm / inherit：写工具确认策略；对 wechat_reply/send 出站不再触发确认。
+   * remote_read_only：仍禁止出站与远程写。
+   */
   remoteConfirmPolicy: 'always',
   remoteAllowLocalWrite: true,
   remoteSessionIdleMinutes: 10,
@@ -43,7 +51,7 @@ export const DEFAULT_WECHAT_CONFIG: WeChatConfig = {
   remoteProgressMaxChars: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMaxChars,
   remoteProgressFallbackText: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressFallbackText,
   remoteAckOnReceive: true,
-  wechatSendRequiresConfirm: true,
+  wechatSendRequiresConfirm: false,
   remoteWechatConfirm: false
 }
 

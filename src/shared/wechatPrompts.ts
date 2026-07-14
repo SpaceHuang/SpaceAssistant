@@ -29,5 +29,5 @@ export const WECHAT_REMOTE_SKILL_HINT = `
 微信远程指令约束：
 - 回复长度建议控制在 2000 字以内
 - 避免 Markdown 表格与复杂格式
-- 出站消息使用 wechat_reply / wechat_send 工具（需用户确认）
+- 出站消息使用 wechat_reply / wechat_send 工具，调用即发送。
 </wechat_remote>`

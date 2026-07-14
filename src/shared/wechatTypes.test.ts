@@ -42,6 +42,13 @@ describe('wechatTypes remoteConfirmPolicy', () => {
     expect(DEFAULT_WECHAT_CONFIG.remoteConfirmPolicy).toBe('always')
   })
 
+  it('defaults wechatSendRequiresConfirm to false and tolerates legacy true', () => {
+    expect(DEFAULT_WECHAT_CONFIG.wechatSendRequiresConfirm).toBe(false)
+    expect(mergeWeChatConfig(null).wechatSendRequiresConfirm).toBe(false)
+    const legacy = mergeWeChatConfig({ wechatSendRequiresConfirm: true })
+    expect(legacy.wechatSendRequiresConfirm).toBe(true)
+  })
+
   it('supports workdir_switch audit event type', () => {
     const event = {
       type: 'workdir_switch' as const,

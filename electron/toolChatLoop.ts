@@ -1663,10 +1663,31 @@ function toolNeedsUserConfirmation(
     }
     return false
   }
-  if (toolName === 'wechat_send' || toolName === 'wechat_reply') {
-    return wechatConfig?.wechatSendRequiresConfirm ?? true
-  }
+  // wechat_reply / wechat_send: 一对一私聊出站发给用户自己，无需前置确认（见 wechat-remote-outbound-confirm-removal-requirement）
   return builtinToolNeedsConfirmation(toolName)
+}
+
+/** @internal exported for unit tests */
+export function toolNeedsUserConfirmationForTests(
+  toolName: string,
+  inputObj: Record<string, unknown>,
+  feishuConfig?: FeishuConfig,
+  wechatConfig?: WeChatConfig,
+  browserConfig?: BrowserConfig,
+  sessionId?: string,
+  currentPageUrl?: string,
+  danger?: ActDangerAssessment | null
+): boolean {
+  return toolNeedsUserConfirmation(
+    toolName,
+    inputObj,
+    feishuConfig,
+    wechatConfig,
+    browserConfig,
+    sessionId,
+    currentPageUrl,
+    danger
+  )
 }
 
 function evaluateRemoteToolBlock(
@@ -1705,4 +1726,15 @@ function evaluateRemoteToolBlock(
   }
 
   return null
+}
+
+/** @internal exported for unit tests */
+export function evaluateRemoteToolBlockForTests(
+  toolName: string,
+  inputObj: Record<string, unknown>,
+  remoteContext: RemoteContext | undefined,
+  feishuConfig?: FeishuConfig,
+  wechatConfig?: WeChatConfig
+): string | null {
+  return evaluateRemoteToolBlock(toolName, inputObj, remoteContext, feishuConfig, wechatConfig)
 }
