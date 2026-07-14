@@ -270,8 +270,9 @@ const api: SpaceAssistantApi = {
   },
 
   wechatDetectSdk: () => ipcRenderer.invoke('wechat:detect-sdk'),
-  wechatLoginStart: () => ipcRenderer.invoke('wechat:login-start'),
+  wechatLoginStart: (opts) => ipcRenderer.invoke('wechat:login-start', opts),
   wechatLoginStop: () => ipcRenderer.invoke('wechat:login-stop'),
+  wechatSubmitVerifyCode: (code) => ipcRenderer.invoke('wechat:submit-verify-code', code),
   wechatLogout: () => ipcRenderer.invoke('wechat:logout'),
   wechatConnectionStatus: () => ipcRenderer.invoke('wechat:connection-status'),
   wechatPollStart: () => ipcRenderer.invoke('wechat:poll-start'),
@@ -288,8 +289,12 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('wechat:qr-url', fn)
   },
   wechatOnLoginProgress: (cb) => {
-    const fn = (_e: unknown, data: { stage: string; code?: string }) =>
-      cb(data as { stage: import('../src/shared/wechatTypes').WeChatLoginProgress; code?: string })
+    const fn = (_e: unknown, data: { stage: string; code?: string; isRetry?: boolean }) =>
+      cb(data as {
+        stage: import('../src/shared/wechatTypes').WeChatLoginProgress
+        code?: string
+        isRetry?: boolean
+      })
     ipcRenderer.on('wechat:login-progress', fn)
     return () => ipcRenderer.removeListener('wechat:login-progress', fn)
   },

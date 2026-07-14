@@ -444,8 +444,9 @@ export type SpaceAssistantApi = {
   }) => void) => () => void
 
   wechatDetectSdk: () => Promise<WeChatSdkDetectResult>
-  wechatLoginStart: () => Promise<{ ok: boolean; error?: string }>
+  wechatLoginStart: (opts?: { force?: boolean }) => Promise<{ ok: boolean; error?: string }>
   wechatLoginStop: () => Promise<{ ok: boolean }>
+  wechatSubmitVerifyCode: (code: string) => Promise<{ ok: boolean }>
   wechatLogout: () => Promise<{ ok: boolean }>
   wechatConnectionStatus: () => Promise<WeChatConnectionStatus>
   wechatPollStart: () => Promise<WeChatConnectionStatus>
@@ -457,7 +458,7 @@ export type SpaceAssistantApi = {
   wechatSend: (payload: { userId: string; text: string; imagePath?: string; filePath?: string }) => Promise<{ success: boolean; chunksSent?: number; error?: string }>
   wechatReply: (payload: { text: string; imagePath?: string; filePath?: string; sessionId?: string }) => Promise<{ success: boolean; chunksSent?: number; error?: string }>
   wechatOnQrUrl: (cb: (data: { url: string | null; expired?: boolean }) => void) => () => void
-  wechatOnLoginProgress: (cb: (data: { stage: WeChatLoginProgress; code?: string }) => void) => () => void
+  wechatOnLoginProgress: (cb: (data: { stage: WeChatLoginProgress; code?: string; isRetry?: boolean }) => void) => () => void
   wechatOnInboundMessage: (cb: (data: { sessionId: string; message: unknown }) => void) => () => void
   wechatOnRemoteAgentStart: (cb: (data: {
     sessionId: string

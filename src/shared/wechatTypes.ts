@@ -14,7 +14,17 @@ export type WeChatPollState = 'stopped' | 'connecting' | 'polling' | 'logged_out
 /** @deprecated Use ImConfirmPolicy; wechat_confirm migrates to im_confirm. */
 export type WeChatRemoteConfirmPolicy = ImConfirmPolicy | 'wechat_confirm'
 
-export type WeChatLoginProgress = 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'verify_code'
+export type WeChatLoginProgress =
+  | 'waiting'
+  | 'scanned'
+  | 'confirmed'
+  /** Intermediate: QR expired and SDK is refreshing — keep showing current QR until next onQrUrl. */
+  | 'refreshing'
+  /** Final: QR flow aborted after max refreshes — user must retry. */
+  | 'expired'
+  /** Session credentials expired while polling — need rebind. */
+  | 'session_expired'
+  | 'verify_code'
 
 export interface WeChatConfig extends RemoteImCommonConfig {
   enabled: boolean

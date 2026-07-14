@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { App, Badge, Button, Space } from 'antd'
+import { App, Badge, Button, Input, Space } from 'antd'
 import type { WeChatConfig, WeChatConnectionStatus, WeChatLoginProgress } from '../../../shared/wechatTypes'
 import { WeChatAuditDrawer } from './WeChatAuditDrawer'
 import { ConfigSettingsStack } from './ConfigField'
@@ -19,7 +19,11 @@ type Props = {
   onChange: (next: WeChatConfig) => void
 }
 
-function loginProgressLabel(stage: WeChatLoginProgress, t: ReturnType<typeof useTypedTranslation<'config'>>['t'], code?: string): string {
+function loginProgressLabel(
+  stage: WeChatLoginProgress,
+  t: ReturnType<typeof useTypedTranslation<'config'>>['t'],
+  opts?: { isRetry?: boolean }
+): string {
   switch (stage) {
     case 'waiting':
       return t('settings.wechat.waitingScan')
@@ -27,10 +31,14 @@ function loginProgressLabel(stage: WeChatLoginProgress, t: ReturnType<typeof use
       return t('settings.wechat.scannedConfirm')
     case 'confirmed':
       return t('settings.wechat.boundSuccess')
+    case 'refreshing':
+      return t('settings.wechat.qrRefreshing')
     case 'expired':
       return t('settings.wechat.qrExpired')
+    case 'session_expired':
+      return t('settings.wechat.sessionExpired')
     case 'verify_code':
-      return t('settings.wechat.verifyCode', { code: code ?? '' })
+      return opts?.isRetry ? t('settings.wechat.verifyCodeRetry') : t('settings.wechat.verifyCode')
     default:
       return ''
   }
@@ -44,7 +52,9 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
   const [qrUrl, setQrUrl] = useState<string | null>(null)
   const [qrExpired, setQrExpired] = useState(false)
   const [loginStage, setLoginStage] = useState<WeChatLoginProgress | null>(null)
-  const [verifyCode, setVerifyCode] = useState<string | undefined>()
+  const [verifyRetry, setVerifyRetry] = useState(false)
+  const [verifyInput, setVerifyInput] = useState('')
+  const [verifySubmitting, setVerifySubmitting] = useState(false)
   const [binding, setBinding] = useState(false)
   const [auditOpen, setAuditOpen] = useState(false)
   const [showQr, setShowQr] = useState(false)
@@ -115,23 +125,37 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
 
   useEffect(() => {
     const offQr = window.api.wechatOnQrUrl(({ url, expired }) => {
-      setQrUrl(url)
-      setQrExpired(Boolean(expired))
-      if (url) setShowQr(true)
+      if (url) {
+        setQrUrl(url)
+        setQrExpired(false)
+        setShowQr(true)
+        return
+      }
+      setQrUrl(null)
+      if (expired) setQrExpired(true)
     })
-    const offProgress = window.api.wechatOnLoginProgress(({ stage, code }) => {
+    const offProgress = window.api.wechatOnLoginProgress(({ stage, isRetry }) => {
       setLoginStage(stage as WeChatLoginProgress)
-      setVerifyCode(code)
+      if (stage === 'verify_code') {
+        setVerifyRetry(Boolean(isRetry))
+        setVerifyInput('')
+      }
       if (stage === 'confirmed') {
         patch({ loggedIn: true, enabled: true, remoteEnabled: true })
         setShowQr(false)
         setQrUrl(null)
+        setQrExpired(false)
         void refreshStatus()
         void startListening()
         message.success(t('settings.wechat.boundSuccess'))
       }
       if (stage === 'expired') {
         setQrExpired(true)
+        setQrUrl(null)
+      }
+      if (stage === 'session_expired') {
+        message.warning(t('settings.wechat.sessionExpired'))
+        void refreshStatus()
       }
     })
     return () => {
@@ -140,17 +164,24 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
     }
   }, [message, patch, refreshStatus, startListening, t])
 
-  const startBind = async () => {
+  const startBind = async (opts?: { force?: boolean }) => {
     setBinding(true)
     setShowQr(true)
     setQrExpired(false)
     setLoginStage('waiting')
+    setVerifyInput('')
+    setVerifyRetry(false)
     patch({ enabled: true })
     try {
-      const r = await window.api.wechatLoginStart()
-      if (!r.ok) {
+      const r = await window.api.wechatLoginStart({ force: Boolean(opts?.force) })
+      if (!r.ok && r.error !== 'aborted') {
         message.error(r.error ?? t('settings.wechat.loginFailed'))
-        setShowQr(false)
+        // Keep QR panel on final expiry so user can tap retry; hide for other failures.
+        if (!/QR code expired|qr.?expired|expired/i.test(r.error ?? '')) {
+          setShowQr(false)
+        } else {
+          setQrExpired(true)
+        }
       }
     } catch (e) {
       message.error(e instanceof Error ? e.message : t('settings.wechat.networkFailed'))
@@ -164,12 +195,28 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
     await window.api.wechatLoginStop()
     setShowQr(false)
     setQrUrl(null)
+    setQrExpired(false)
     setLoginStage(null)
+    setVerifyInput('')
   }
 
   const rebind = async () => {
     await stopBind()
-    await startBind()
+    await startBind({ force: true })
+  }
+
+  const submitVerifyCode = async () => {
+    const code = verifyInput.trim()
+    if (!code) return
+    setVerifySubmitting(true)
+    try {
+      const r = await window.api.wechatSubmitVerifyCode(code)
+      if (!r.ok) message.warning(t('settings.wechat.verifyCodeNotWaiting'))
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : t('settings.wechat.networkFailed'))
+    } finally {
+      setVerifySubmitting(false)
+    }
   }
 
   const unbind = () => {
@@ -200,6 +247,8 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
   const pollText = resolveWeChatPollStatusText(connection, t)
   const listenError =
     connection && isWeChatPollStartFailed(connection) ? formatWeChatPollError(connection, t) : null
+  const showQrImage = Boolean(qrUrl) && !qrExpired
+  const qrRefreshing = loginStage === 'refreshing'
 
   return (
     <>
@@ -233,25 +282,49 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
           ) : (
             <Space direction="vertical" size="middle">
               {!showQr ? (
-                <Button type="primary" loading={binding} onClick={() => void startBind()}>
+                <Button type="primary" loading={binding} onClick={() => void startBind({ force: true })}>
                   {t('settings.wechat.bindButton')}
                 </Button>
               ) : null}
               {showQr ? (
                 <div className="wechat-qr-panel">
-                  {qrUrl && !qrExpired ? (
-                    <QRCodeSVG value={qrUrl} size={180} level="M" />
+                  {showQrImage ? (
+                    <div style={{ opacity: qrRefreshing ? 0.45 : 1 }}>
+                      <QRCodeSVG value={qrUrl!} size={180} level="M" />
+                    </div>
                   ) : (
                     <div className="wechat-qr-placeholder">
                       {qrExpired ? t('settings.wechat.qrExpired') : t('settings.wechat.waitingScan')}
                     </div>
                   )}
                   {loginStage ? (
-                    <div className="config-status-text">{loginProgressLabel(loginStage, t, verifyCode)}</div>
+                    <div className="config-status-text">
+                      {loginProgressLabel(loginStage, t, { isRetry: verifyRetry })}
+                    </div>
+                  ) : null}
+                  {loginStage === 'verify_code' ? (
+                    <Space.Compact style={{ width: '100%', maxWidth: 280 }}>
+                      <Input
+                        value={verifyInput}
+                        onChange={(e) => setVerifyInput(e.target.value)}
+                        placeholder={t('settings.wechat.verifyCodePlaceholder')}
+                        onPressEnter={() => void submitVerifyCode()}
+                      />
+                      <Button
+                        type="primary"
+                        loading={verifySubmitting}
+                        disabled={!verifyInput.trim()}
+                        onClick={() => void submitVerifyCode()}
+                      >
+                        {t('settings.wechat.verifyCodeSubmit')}
+                      </Button>
+                    </Space.Compact>
                   ) : null}
                   <Space wrap>
                     {qrExpired ? (
-                      <Button onClick={() => void startBind()}>{t('settings.wechat.retryQr')}</Button>
+                      <Button loading={binding} onClick={() => void startBind({ force: true })}>
+                        {t('settings.wechat.retryQr')}
+                      </Button>
                     ) : null}
                     <Button onClick={() => void stopBind()}>{t('settings.wechat.cancelBind')}</Button>
                   </Space>

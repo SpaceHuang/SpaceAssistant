@@ -189,9 +189,11 @@ export function registerWeChatIpcHandlers(
     return result
   })
 
-  ipcMain.handle('wechat:login-start', async () => {
+  ipcMain.handle('wechat:login-start', async (_e, opts?: { force?: boolean }) => {
     const cfg = readWeChatConfigFromDb(deps.db)
-    const r = await b.botService.loginStart(cfg.remoteRateLimitPerMinute)
+    const r = await b.botService.loginStart(cfg.remoteRateLimitPerMinute, {
+      force: Boolean(opts?.force)
+    })
     if (r.ok) {
       const status = b.botService.getStatus()
       persistWeChatConfig(deps.db, {
@@ -216,6 +218,10 @@ export function registerWeChatIpcHandlers(
   ipcMain.handle('wechat:login-stop', async () => {
     await b.botService.loginStop()
     return { ok: true }
+  })
+
+  ipcMain.handle('wechat:submit-verify-code', async (_e, code: string) => {
+    return b.botService.submitVerifyCode(typeof code === 'string' ? code : '')
   })
 
   ipcMain.handle('wechat:logout', async () => {

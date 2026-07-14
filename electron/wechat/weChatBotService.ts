@@ -18,9 +18,13 @@ export type WeChatBotServiceDeps = {
   onInbound: IncomingHandler
 }
 
+export type WeChatLoginStartOptions = {
+  force?: boolean
+}
+
 export async function detectWeChatSdk(): Promise<WeChatSdkDetectResult> {
   try {
-    const mod = await import('@wechatbot/wechatbot')
+    await import('@wechatbot/wechatbot')
     return { available: true, version: '2.2.0' }
   } catch (e) {
     return { available: false, error: e instanceof Error ? e.message : String(e) }
@@ -34,10 +38,11 @@ export class WeChatBotService {
   private processedCount = 0
   private startedAt?: number
   private loginInProgress = false
+  private loginAbort = false
   private displayName?: string
   private botIdSuffix?: string
   private loggedIn = false
-  private verifyCodeHint?: string
+  private verifyCodeResolvers: Array<(code: string) => void> = []
 
   constructor(private deps: WeChatBotServiceDeps) {}
 
@@ -70,20 +75,41 @@ export class WeChatBotService {
     this.deps.getWebContents()?.send('wechat:login-progress', { stage, ...extra })
   }
 
+  private resolveVerifyCodeWaiters(code: string): void {
+    const waiters = this.verifyCodeResolvers.splice(0)
+    for (const resolve of waiters) resolve(code)
+  }
+
+  /** Submit pairing digits shown on the phone (WeChat iLink secondary verify). */
+  submitVerifyCode(code: string): { ok: boolean } {
+    if (this.verifyCodeResolvers.length === 0) return { ok: false }
+    this.resolveVerifyCodeWaiters(code.trim())
+    return { ok: true }
+  }
+
   private buildLoginCallbacks() {
     return {
       onQrUrl: (url: string) => {
+        if (this.loginAbort) return
         this.emitProgress('waiting')
-        this.deps.getWebContents()?.send('wechat:qr-url', { url })
+        this.deps.getWebContents()?.send('wechat:qr-url', { url, expired: false })
       },
-      onScanned: () => this.emitProgress('scanned'),
+      onScanned: () => {
+        if (this.loginAbort) return
+        this.emitProgress('scanned')
+      },
       onExpired: () => {
-        this.emitProgress('expired')
-        this.deps.getWebContents()?.send('wechat:qr-url', { url: null, expired: true })
+        if (this.loginAbort) return
+        // SDK will request a new QR; keep current URL until onQrUrl.
+        this.emitProgress('refreshing')
+        logWeChatCliEvent('info', 'wechat.login.qr_refreshing', {})
       },
-      onVerifyCode: async () => {
-        this.emitProgress('verify_code', { code: this.verifyCodeHint })
-        return this.verifyCodeHint ?? ''
+      onVerifyCode: async (isRetry: boolean) => {
+        if (this.loginAbort) return ''
+        this.emitProgress('verify_code', { isRetry })
+        return new Promise<string>((resolve) => {
+          this.verifyCodeResolvers.push(resolve)
+        })
       }
     }
   }
@@ -101,7 +127,7 @@ export class WeChatBotService {
       this.loggedIn = false
       this.pollState = 'logged_out'
       this.lastError = 'session_expired'
-      this.emitProgress('expired')
+      this.emitProgress('session_expired')
       logWeChatCliEvent('warn', 'wechat.poll.session_expired', {})
     })
     bot.on('error', (err: unknown) => {
@@ -122,15 +148,38 @@ export class WeChatBotService {
     return bot
   }
 
-  async loginStart(rateLimitPerMinute = 10): Promise<{ ok: boolean; error?: string }> {
-    if (this.loginInProgress) return { ok: true }
+  async loginStart(
+    rateLimitPerMinute = 10,
+    opts: WeChatLoginStartOptions = {}
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (this.loginInProgress) {
+      // Force restart is not possible while SDK login is awaiting; caller should stop first.
+      return { ok: true }
+    }
+    this.loginAbort = false
     this.loginInProgress = true
     this.pollState = 'connecting'
     try {
       const bot = await this.ensureBot()
       const { rateLimitMiddleware } = await import('@wechatbot/wechatbot')
       bot.use(rateLimitMiddleware({ maxMessages: rateLimitPerMinute, windowMs: 60_000 }))
-      const creds = await bot.login({ callbacks: this.buildLoginCallbacks() })
+      if (opts.force) {
+        try {
+          await bot.storage.clear()
+        } catch {
+          /* ignore */
+        }
+        this.loggedIn = false
+        this.displayName = undefined
+        this.botIdSuffix = undefined
+      }
+      const creds = await bot.login({
+        force: Boolean(opts.force),
+        callbacks: this.buildLoginCallbacks()
+      })
+      if (this.loginAbort) {
+        return { ok: false, error: 'aborted' }
+      }
       this.loggedIn = true
       this.pollState = 'stopped'
       this.lastError = undefined
@@ -146,16 +195,24 @@ export class WeChatBotService {
       const error = e instanceof Error ? e.message : String(e)
       this.lastError = error
       this.pollState = 'error'
+      if (/QR code expired|qr.?expired|expired/i.test(error)) {
+        this.emitProgress('expired')
+        this.deps.getWebContents()?.send('wechat:qr-url', { url: null, expired: true })
+      }
       logWeChatCliEvent('warn', 'wechat.login.failed', { lastError: error })
       return { ok: false, error }
     } finally {
       this.loginInProgress = false
+      this.resolveVerifyCodeWaiters('')
     }
   }
 
   async loginStop(): Promise<void> {
+    this.loginAbort = true
     this.loginInProgress = false
     this.pollState = 'stopped'
+    this.resolveVerifyCodeWaiters('')
+    this.deps.getWebContents()?.send('wechat:qr-url', { url: null })
   }
 
   async startPoll(): Promise<WeChatConnectionStatus> {
@@ -226,9 +283,5 @@ export class WeChatBotService {
     this.loggedIn = opts.loggedIn
     if (opts.displayName !== undefined) this.displayName = opts.displayName
     if (opts.botIdSuffix !== undefined) this.botIdSuffix = opts.botIdSuffix
-  }
-
-  setVerifyCodeHint(code: string): void {
-    this.verifyCodeHint = code
   }
 }
