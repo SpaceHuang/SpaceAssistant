@@ -17,6 +17,7 @@ import { mergeToolsConfig } from '../../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
+import { getRemoteTaskController } from '../remote/remoteTaskController'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
@@ -115,6 +116,8 @@ export function createFeishuBundle(deps: {
       const next = persistFeishuConfig(deps.db, { remoteEnabled: enabled })
       notifyFeishuConfigChanged(next)
       if (!enabled) {
+        // Emergency close: cancel executions / queue / pending confirms BEFORE stop listening.
+        getRemoteTaskController().emergencyClose({ reason: 'emergency-close' })
         bundle?.router?.clearPendingDisambiguation()
         void bundle?.eventService?.stop()
       }

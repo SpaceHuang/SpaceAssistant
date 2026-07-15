@@ -20,6 +20,7 @@ import { mergeToolsConfig } from '../../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
+import { getRemoteTaskController } from '../remote/remoteTaskController'
 import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
 
@@ -233,6 +234,7 @@ export function registerWeChatIpcHandlers(
   })
 
   ipcMain.handle('wechat:logout', async () => {
+    getRemoteTaskController().emergencyClose({ reason: 'emergency-close' })
     await b.botService.logout()
     const storageDir = path.join(deps.getUserDataPath(), 'wechatbot')
     try {
@@ -271,6 +273,7 @@ export function registerWeChatIpcHandlers(
   })
 
   ipcMain.handle('wechat:poll-stop', async () => {
+    getRemoteTaskController().emergencyClose({ reason: 'emergency-close' })
     const status = await b.botService.stopPoll()
     persistWeChatConfig(deps.db, { remoteEnabled: false })
     logWeChatCliEvent('info', 'wechat.ipc.poll_stop', { pollState: status.pollState })

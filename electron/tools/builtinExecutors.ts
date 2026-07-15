@@ -13,6 +13,7 @@ import {
   throwIfAborted
 } from './toolExecutionResource'
 import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
+import { killProcessTree } from '../spawnUtil'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
@@ -873,9 +874,11 @@ export const runScriptExecutor: ToolExecutor = {
       proc.stdout?.on('data', onDataOut)
       proc.stderr?.on('data', onDataErr)
       const killTimer = setTimeout(() => {
-        proc.kill('SIGTERM')
+        void killProcessTree(proc)
       }, timeoutSec * 1000)
-      const onAbort = () => proc.kill('SIGTERM')
+      const onAbort = () => {
+        void killProcessTree(proc)
+      }
       ctx.signal.addEventListener('abort', onAbort)
       proc.on('error', (err) => {
         clearTimeout(killTimer)

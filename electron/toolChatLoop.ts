@@ -62,6 +62,19 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import { analyzeScriptContent } from './shell/scriptContentSecurity'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import {
+  formatScriptDenyUserMessage,
+  getRemoteTaskController
+} from './remote/remoteTaskController'
+import {
+  checkRemoteTaskBudget,
+  createRemoteTaskBudgetState,
+  recordOutboundWrite,
+  recordToolCall,
+  type RemoteTaskBudgetState
+} from './remote/remoteTaskBudget'
+import { DEFAULT_REMOTE_TASK_BUDGET } from '../src/shared/imTypes'
+import { larkCliWriteNeedsConfirm } from './feishu/larkCliImpactPolicy'
+import {
   shouldSkipRemoteBrowserActConfirm,
   shouldSkipRemoteBrowserNavigateConfirm,
   shouldSkipRemoteFileWriteConfirm,
@@ -421,6 +434,24 @@ async function runToolChatSessionInner(
 
   const client = createAnthropicClient(apiKey, baseUrl)
   const sessionMeta = appDb ? getSession(appDb, sessionId)?.metadata : undefined
+  const remoteBudgetState: RemoteTaskBudgetState | null = remoteContext
+    ? createRemoteTaskBudgetState(
+        requestId,
+        (remoteContext.source === 'feishu'
+          ? feishuConfig?.remoteTaskBudget
+          : wechatConfig?.remoteTaskBudget) ?? DEFAULT_REMOTE_TASK_BUDGET
+      )
+    : null
+  if (remoteContext) {
+    getRemoteTaskController().ensureTask(requestId, {
+      sessionId,
+      maxConcurrent:
+        (remoteContext.source === 'feishu'
+          ? feishuConfig?.remoteTaskBudget?.maxConcurrentExecutions
+          : wechatConfig?.remoteTaskBudget?.maxConcurrentExecutions) ??
+        DEFAULT_REMOTE_TASK_BUDGET.maxConcurrentExecutions
+    })
+  }
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
   const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
@@ -797,6 +828,39 @@ async function runToolChatSessionInner(
         continue
       }
 
+      if (remoteBudgetState) {
+        const budgetCheck = checkRemoteTaskBudget(remoteBudgetState, 'tool_call')
+        if (!budgetCheck.ok) {
+          const pauseMsg = `${budgetCheck.message}（继续 / 回桌面 / 停止）`
+          logAgentEvent('info', 'remote.budget.pause', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            reason: budgetCheck.reason
+          })
+          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg))
+          safeWebContentsSend(sender, 'tool:result', {
+            requestId,
+            toolUseId,
+            result: { success: false, error: pauseMsg, blockedReason: 'remote_task_budget' }
+          })
+          abortRepeatedToolError = pauseMsg
+          break
+        }
+        recordToolCall(remoteBudgetState)
+        const isOutboundWrite =
+          toolName === 'run_lark_cli' ||
+          toolName === 'wechat_send' ||
+          toolName === 'wechat_reply'
+        if (isOutboundWrite) {
+          const outboundCheck = checkRemoteTaskBudget(remoteBudgetState, 'outbound_write')
+          if (outboundCheck.ok) {
+            recordOutboundWrite(remoteBudgetState)
+          }
+        }
+      }
+
       if (
         toolName === 'browser' &&
         Boolean(remoteContext) &&
@@ -1085,23 +1149,32 @@ async function runToolChatSessionInner(
       }
 
       let dangerAssessment: ActDangerAssessment | null = null
-      if (
-        toolName === 'browser' &&
-        inputObj.action === 'act' &&
-        browserConfig?.actRequiresConfirm &&
-        sessionId
-      ) {
-        sendProgress('analyzing_risk', '正在检查本次操作…')
-        try {
-          dangerAssessment = await assessActDanger(
-            sessionId,
-            inputObj,
-            browserConfig,
-            stagehandService,
-            undefined
-          )
-        } catch {
-          dangerAssessment = null
+      if (toolName === 'browser' && inputObj.action === 'act' && sessionId && browserConfig) {
+        const remoteActPath = Boolean(remoteContext)
+        const shouldAssess =
+          remoteActPath || browserConfig.actRequiresConfirm === true
+        if (shouldAssess) {
+          sendProgress('analyzing_risk', '正在检查本次操作…')
+          try {
+            dangerAssessment = await assessActDanger(
+              sessionId,
+              inputObj,
+              browserConfig,
+              stagehandService,
+              undefined,
+              remoteActPath ? { failClosedOnUncertainty: true } : undefined
+            )
+          } catch {
+            dangerAssessment = remoteActPath
+              ? {
+                  dangerous: true,
+                  source: 'page-effect',
+                  userReason: '无法可靠判断本次页面操作风险，需确认后继续',
+                  consequence: 'generic',
+                  detail: 'assess_error'
+                }
+              : null
+          }
         }
       }
 
@@ -1143,23 +1216,24 @@ async function runToolChatSessionInner(
       if (
         shouldSkipRemoteBrowserConfirm(remoteContext, toolName, inputObj, feishuConfig, wechatConfig)
       ) {
-        needsConfirm = false
-        logAgentEvent('info', 'tool.confirm.skip_confirm', {
-          requestId,
-          sessionId,
-          toolUseId,
-          toolName,
-          reason: 'remote_browser_no_confirm'
-        })
+        // High-impact / uncertain act must still confirm even when act switch allows skip.
+        if (!(toolName === 'browser' && inputObj.action === 'act' && dangerAssessment?.dangerous)) {
+          needsConfirm = false
+          logAgentEvent('info', 'tool.confirm.skip_confirm', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            reason: 'remote_browser_no_confirm'
+          })
+        }
       }
 
       if (toolName === 'run_script') {
         const code = typeof inputObj.code === 'string' ? inputObj.code : ''
         const scriptAnalysis = analyzeScriptContent(code, { remote: Boolean(remoteContext) })
         if (scriptAnalysis.verdict === 'deny') {
-          const denyMsg = `脚本内容安全检查拒绝执行（${scriptAnalysis.patterns.join(',') || 'deny'}）${
-            scriptAnalysis.reason ? `：${scriptAnalysis.reason}` : ''
-          }`
+          const denyMsg = formatScriptDenyUserMessage(scriptAnalysis.reason)
           logAgentEvent('info', 'script.deny', {
             requestId,
             sessionId,
@@ -1170,7 +1244,7 @@ async function runToolChatSessionInner(
           logToolLoopError(
             { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
             denyMsg,
-            denyMsg
+            `script deny patterns=${scriptAnalysis.patterns.join(',')}`
           )
           toolResults.push(buildToolErrorResult(toolUseId, denyMsg))
           safeWebContentsSend(sender, 'tool:result', {
@@ -1772,9 +1846,10 @@ function toolNeedsUserConfirmation(
   }
   if (toolName === 'run_lark_cli') {
     const args = inputObj.args
-    if (!Array.isArray(args)) return feishuConfig?.larkCliWriteRequiresConfirm ?? false
+    if (!Array.isArray(args)) return true
     if (isLarkCliWriteOperation(args as string[])) {
-      return feishuConfig?.larkCliWriteRequiresConfirm ?? false
+      const requireConfirm = feishuConfig?.larkCliWriteRequiresConfirm ?? true
+      return larkCliWriteNeedsConfirm(args as string[], requireConfirm)
     }
     return false
   }
