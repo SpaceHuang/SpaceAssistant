@@ -245,6 +245,8 @@ const api: SpaceAssistantApi = {
   feishuOwnerRebind: () => ipcRenderer.invoke('feishu:owner-rebind'),
   feishuOwnerBindCancel: () => ipcRenderer.invoke('feishu:owner-bind-cancel'),
   feishuOwnerClear: () => ipcRenderer.invoke('feishu:owner-clear'),
+  remoteSecurityPlan: () => ipcRenderer.invoke('remote-security:plan'),
+  remoteSecurityCommit: (patch) => ipcRenderer.invoke('remote-security:commit', patch),
   feishuOnOwnerBound: (cb) => {
     const fn = (_e: unknown, data: { maskedOwnerOpenId?: string; boundAt?: number }) => cb(data)
     ipcRenderer.on('feishu:owner-bound', fn)

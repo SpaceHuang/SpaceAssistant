@@ -21,6 +21,12 @@ export function getDbConnection(db: AppDatabase): Database.Database {
   return conn
 }
 
+/** Run `fn` inside a single SQLite transaction; any throw rolls back all writes. */
+export function runInTransaction<T>(db: AppDatabase, fn: () => T): T {
+  const conn = getDbConnection(db)
+  return conn.transaction(fn)()
+}
+
 function getBetterSqlite3Root(): string {
   try {
     return path.dirname(require.resolve('better-sqlite3/package.json'))

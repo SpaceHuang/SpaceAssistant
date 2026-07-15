@@ -732,5 +732,27 @@
     "senderAllowlistReadonlyHint": "飞书 Owner / 微信绑定用户只读展示；启用远程时必须已绑定。",
     "allowRemoteBrowserLabel": "允许远程会话使用浏览器",
     "allowRemoteBrowserHint": "开启后，飞书/微信等 IM 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。"
+  },
+  "remoteSecurityUpgrade": {
+    "title": "远程安全设置一次性确认",
+    "intro": "为提升远程私聊安全，需要你确认一次远程指令的默认权限。确认前，敏感操作均按需确认；取消不会更改任何配置。",
+    "currentTitle": "当前生效强度",
+    "itemFileWrite": "本地文件写入",
+    "itemScript": "脚本执行",
+    "itemNavigate": "浏览器导航",
+    "itemAct": "浏览器交互",
+    "itemLarkWrite": "飞书写操作",
+    "verdict": {
+      "skip": "免确认",
+      "confirm": "需确认",
+      "deny": "禁止"
+    },
+    "legacyNotice": "检测到历史设置（只读/浏览器确认），已按更保守方式映射，不会放宽你此前的权限。",
+    "presetTitle": "选择默认方案",
+    "presetRecommended": "推荐（低摩擦）：文件/脚本/导航免确认，交互与飞书写操作需确认",
+    "presetSafer": "更安全：所有敏感操作均需确认",
+    "confirm": "确认并保存",
+    "cancel": "取消",
+    "saveFailed": "保存失败，请重试"
   }
 }

@@ -27,8 +27,18 @@ import {
   type FeishuOwnerBindSnapshot
 } from './feishuOwnerBind'
 import type { FeishuBindWindowResult } from '../../src/shared/feishuTypes'
+import {
+  commitRemoteSecurityConfig,
+  type CommitResult as RemoteSecurityCommitResult
+} from '../remote/remoteSecurityConfigDb'
+import {
+  planRemoteSecurityMigration,
+  type RemoteSecurityMigrationPlan,
+  type RemoteSecurityPatch
+} from '../../src/shared/remoteSecurityMigration'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
+const WECHAT_CONFIG_KEY = 'config.wechat'
 const WORKDIR_PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_WORKDIR_KEY = 'config.activeWorkDirProfileId'
 
@@ -433,6 +443,37 @@ export function registerFeishuIpcHandlers(
     b.ownerBind.clearOwner()
     return b.ownerBind.getSnapshot()
   })
+
+  ipcMain.handle('remote-security:plan', async () => {
+    return buildRemoteSecurityPlanFromDb(deps.db)
+  })
+
+  ipcMain.handle(
+    'remote-security:commit',
+    async (_e, patch: RemoteSecurityPatch): Promise<RemoteSecurityCommitResult> => {
+      const result = commitRemoteSecurityConfig(deps.db, patch)
+      notifyFeishuConfigChanged(result.feishu)
+      getMainWindow()?.webContents?.send('wechat:config-changed', { wechat: result.wechat })
+      return result
+    }
+  )
+}
+
+function buildRemoteSecurityPlanFromDb(db: AppDatabase): RemoteSecurityMigrationPlan {
+  const feishuRaw = getConfigValue(db, FEISHU_CONFIG_KEY)
+  const wechatRaw = getConfigValue(db, WECHAT_CONFIG_KEY)
+  const feishu = feishuRaw ? (safeParse(feishuRaw) as Partial<FeishuConfig>) : undefined
+  const wechat = wechatRaw ? (safeParse(wechatRaw) as Record<string, unknown>) : undefined
+  const isNewInstall = !feishuRaw && !wechatRaw
+  return planRemoteSecurityMigration({ feishu, wechat: wechat as never, isNewInstall })
+}
+
+function safeParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {}
+  }
 }
 
 export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConfig>): FeishuConfig {

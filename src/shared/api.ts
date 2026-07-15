@@ -85,6 +85,11 @@ import type {
   WeChatSdkDetectResult
 } from './wechatTypes'
 import type {
+  RemoteSecurityCommitResult,
+  RemoteSecurityMigrationPlan,
+  RemoteSecurityPatch
+} from './remoteSecurityMigration'
+import type {
   BrowserDetectResult,
   BrowserDependencyFailureCode,
   BrowserDependencyToolError
@@ -434,6 +439,8 @@ export type SpaceAssistantApi = {
   feishuOwnerRebind: () => Promise<FeishuBindWindowResult>
   feishuOwnerBindCancel: () => Promise<FeishuOwnerBindSnapshot>
   feishuOwnerClear: () => Promise<FeishuOwnerBindSnapshot>
+  remoteSecurityPlan: () => Promise<RemoteSecurityMigrationPlan>
+  remoteSecurityCommit: (patch: RemoteSecurityPatch) => Promise<RemoteSecurityCommitResult>
   feishuOnOwnerBound: (cb: (data: { maskedOwnerOpenId?: string; boundAt?: number }) => void) => () => void
   feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => () => void
   feishuOnConfigChanged: (cb: (data: { feishu: FeishuConfig }) => void) => () => void

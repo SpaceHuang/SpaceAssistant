@@ -5,7 +5,7 @@ import { openSqliteDatabase, type AppDatabase } from './sqliteStore'
 
 export type { AppDatabase } from './sqliteStore'
 export type { StoredMessage } from './types'
-export { openSqliteDatabase } from './sqliteStore'
+export { openSqliteDatabase, getDbConnection, runInTransaction } from './sqliteStore'
 
 export {
   appendMessage,

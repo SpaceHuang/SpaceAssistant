@@ -10,9 +10,9 @@
  * until the security migration completes, all confirm-skips below are forced OFF (ask).
  */
 import { commandHasShellMetasyntax } from '../shell/shellCommandTrust'
+import { CURRENT_REMOTE_SECURITY_CONFIG_VERSION } from '../../src/shared/imTypes'
 
-/** Current remote-security config schema version. Advanced only after user confirms summary. */
-export const CURRENT_REMOTE_SECURITY_CONFIG_VERSION = 1
+export { CURRENT_REMOTE_SECURITY_CONFIG_VERSION }
 
 /** Subset of RemoteImCommonConfig (+ feishu larkCli field) the policy reads. */
 export interface RemoteSecurityPolicyConfig {

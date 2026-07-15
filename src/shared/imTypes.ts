@@ -18,6 +18,9 @@ export type LegacyImConfirmPolicy =
   | 'feishu_confirm'
   | 'wechat_confirm'
 
+/** Current remote-security config schema version. Advanced only after the user confirms summary. */
+export const CURRENT_REMOTE_SECURITY_CONFIG_VERSION = 1
+
 /** Provenance of the remote security preset the user last confirmed. */
 export type RemoteSecurityPresetSource =
   | 'new-install'
