@@ -131,7 +131,17 @@ describe('toolChatLoop shell integration helpers', () => {
         enabled: true,
         shellDefaultTimeoutSec: 300,
         maxInlineOutputBytes: 102400,
-        trustedCommands: [{ id: 't1', command: 'npm install', createdAt: Date.now() }]
+        trustedCommands: [
+          {
+            id: 't1',
+            schemaVersion: 2,
+            executable: 'npm',
+            fixedArgvPrefix: ['install'],
+            trailingArgv: 'plain-tokens',
+            source: 'desktop',
+            createdAt: Date.now()
+          }
+        ]
       }
     })
     expect(result.ok).toBe(true)
