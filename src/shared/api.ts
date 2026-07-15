@@ -74,6 +74,7 @@ import type {
   FeishuAuditQueryResult,
   FeishuPendingConfirmSummary,
   FeishuOwnerBindSnapshot,
+  FeishuBindWindowResult,
   WorkDirProfile
 } from './feishuTypes'
 import type {
@@ -429,9 +430,11 @@ export type SpaceAssistantApi = {
   browserOpenTerminal: () => Promise<{ ok: true } | { ok: false; error: string }>
   feishuCheckCliUpdate: () => Promise<{ latest?: string }>
   feishuOwnerBindStatus: () => Promise<FeishuOwnerBindSnapshot>
-  feishuOwnerRebind: () => Promise<FeishuOwnerBindSnapshot>
+  feishuOwnerBeginBind: () => Promise<FeishuBindWindowResult>
+  feishuOwnerRebind: () => Promise<FeishuBindWindowResult>
   feishuOwnerBindCancel: () => Promise<FeishuOwnerBindSnapshot>
   feishuOwnerClear: () => Promise<FeishuOwnerBindSnapshot>
+  feishuOnOwnerBound: (cb: (data: { maskedOwnerOpenId?: string; boundAt?: number }) => void) => () => void
   feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => () => void
   feishuOnConfigChanged: (cb: (data: { feishu: FeishuConfig }) => void) => () => void
   feishuOnBindTimeout: (cb: () => void) => () => void

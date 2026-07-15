@@ -174,9 +174,17 @@ export type FeishuOwnerBindStatus = 'idle' | 'binding' | 'bound'
 
 export interface FeishuOwnerBindSnapshot {
   status: FeishuOwnerBindStatus
-  ownerOpenId?: string
   bindingExpiresAt?: number
-  bindingStartedAt?: number
+  failedAttempts?: number
+  remainingAttempts?: number
+  maskedOwnerOpenId?: string
+  boundAt?: number
+}
+
+/** Result of starting a bind window: the one-time plaintext code plus the (code-free) snapshot. */
+export interface FeishuBindWindowResult {
+  code: string
+  snapshot: FeishuOwnerBindSnapshot
 }
 
 export type { RemoteProgressConfig, ImConfirmPolicy, RemoteImCommonConfig }

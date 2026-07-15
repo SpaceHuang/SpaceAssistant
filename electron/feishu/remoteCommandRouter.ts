@@ -37,6 +37,8 @@ import {
   FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE
 } from '../remote/remoteConfirmBridge'
 import {
+  maskOpenId,
+  parseFeishuBindProtocol,
   readOwnerOpenIdFromAllowlist,
   type FeishuOwnerBindController
 } from './feishuOwnerBind'
@@ -151,11 +153,39 @@ export class RemoteCommandRouter {
       return
     }
 
-    // Bind window: only bind, never treat this message as a business command (closes race Critical #1).
+    // Bind window: only the exact pairing protocol may consume the code. Bind-window messages
+    // are ALWAYS consumed here and never enter the Agent (closes bind-race + hijack gaps).
     if (accept.reason === 'bind_window' || bindingActive) {
-      const bound = Boolean(this.deps.ownerBind?.tryBindFromInbound(msg.senderOpenId))
-      if (bound) {
+      const parsed = parseFeishuBindProtocol(msg.content)
+      if (!parsed) {
+        // Not a bind command. Reply generic usage hint; do not leak pairing state, no attempt spent.
+        logFeishuCliEvent('info', 'feishu.bind.non_protocol', { senderOpenId: msg.senderOpenId })
+        await replyFeishuText(
+          this.deps.runner,
+          msg.messageId,
+          '远程尚未完成身份绑定。请在电脑端查看配对码，并发送「绑定 <配对码>」（英文 bind <code>）完成绑定。'
+        )
+        return
+      }
+
+      const result = this.deps.ownerBind
+        ? this.deps.ownerBind.tryConsumeBindCode(msg.senderOpenId, parsed.code)
+        : 'no_window'
+
+      if (result === 'bound') {
         logFeishuCliEvent('info', 'feishu.bind.success', { senderOpenId: msg.senderOpenId })
+        await this.deps.auditLogger.append({
+          type: 'inbound',
+          messageId: msg.messageId,
+          chatId: msg.chatId,
+          senderOpenId: msg.senderOpenId,
+          accepted: true,
+          reason: 'bind_success'
+        })
+        this.deps.getMainWebContents()?.send('feishu:owner-bound', {
+          maskedOwnerOpenId: msg.senderOpenId ? maskOpenId(msg.senderOpenId) : undefined,
+          boundAt: Date.now()
+        })
         await replyFeishuText(
           this.deps.runner,
           msg.messageId,
@@ -164,30 +194,31 @@ export class RemoteCommandRouter {
         return
       }
 
-      const fresh = mergeFeishuConfig(this.deps.getFeishuConfig())
-      const freshOwner = readOwnerOpenIdFromAllowlist(fresh.remoteSenderAllowlist)
-      if (!fresh.remoteEnabled || !freshOwner) {
-        logFeishuCliEvent('warn', 'feishu.reject.unbound', {
-          senderOpenId: msg.senderOpenId,
-          reason: 'bind_failed_or_expired'
-        })
+      if (result === 'wrong_code') {
+        logFeishuCliEvent('warn', 'feishu.bind.wrong_code', { senderOpenId: msg.senderOpenId })
+        await replyFeishuText(this.deps.runner, msg.messageId, '配对码错误。请核对电脑端显示的配对码后重试。')
+        return
+      }
+
+      if (result === 'exhausted') {
+        logFeishuCliEvent('warn', 'feishu.bind.exhausted', { senderOpenId: msg.senderOpenId })
         await replyFeishuText(
           this.deps.runner,
           msg.messageId,
-          '远程尚未完成身份绑定。请在电脑端开启远程监听并完成绑定。'
+          '配对码尝试次数过多，绑定窗口已关闭，远程已停用。请在电脑端重新发起绑定。'
         )
         return
       }
-      if (msg.senderOpenId !== freshOwner) {
-        logFeishuCliEvent('warn', 'feishu.reject.non_owner', { senderOpenId: msg.senderOpenId })
-        await replyFeishuText(this.deps.runner, msg.messageId, '您不是已绑定的远程使用者，无法发送指令。')
-        return
-      }
-      // Owner already set (e.g. concurrent bind won) — still do not process this bind-window message.
+
+      // already_bound / expired / no_window: another sender won, or window gone.
+      logFeishuCliEvent('warn', 'feishu.reject.unbound', {
+        senderOpenId: msg.senderOpenId,
+        reason: result
+      })
       await replyFeishuText(
         this.deps.runner,
         msg.messageId,
-        '已完成绑定。本条不作为指令执行，请重新发送。'
+        '远程尚未完成身份绑定或配对窗口已失效。请在电脑端重新发起绑定。'
       )
       return
     }

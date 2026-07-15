@@ -26,6 +26,7 @@ import {
   readOwnerOpenIdFromAllowlist,
   type FeishuOwnerBindSnapshot
 } from './feishuOwnerBind'
+import type { FeishuBindWindowResult } from '../../src/shared/feishuTypes'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
 const WORKDIR_PROFILES_KEY = 'config.workDirProfiles'
@@ -48,11 +49,8 @@ function notifyFeishuConfigChanged(cfg: FeishuConfig): void {
 }
 
 function syncOwnerBindWithConfig(cfg: FeishuConfig, ownerBind: FeishuOwnerBindController): void {
-  const hasOwner = Boolean(readOwnerOpenIdFromAllowlist(cfg.remoteSenderAllowlist))
-  if (cfg.remoteEnabled && !hasOwner && !ownerBind.isBindingActive()) {
-    const windowMs = (cfg.remoteOwnerBindWindowMinutes ?? 5) * 60_000
-    ownerBind.startBindingWindow(windowMs)
-  }
+  // A pairing code must be surfaced to the desktop; never auto-start a hidden window.
+  // If remote is enabled without an owner, inbound business messages fail closed (unbound).
   if (!cfg.remoteEnabled) {
     ownerBind.dispose()
   }
@@ -403,15 +401,25 @@ export function registerFeishuIpcHandlers(
     return b.ownerBind.getSnapshot()
   })
 
-  ipcMain.handle('feishu:owner-rebind', async () => {
+  ipcMain.handle('feishu:owner-begin-bind', async (): Promise<FeishuBindWindowResult> => {
+    const cfg = readFeishuConfigFromDb(deps.db)
+    const windowMs = (cfg.remoteOwnerBindWindowMinutes ?? 5) * 60_000
+    b.router?.clearPendingDisambiguation()
+    const next = persistFeishuConfig(deps.db, { remoteEnabled: true })
+    notifyFeishuConfigChanged(next)
+    const code = b.ownerBind.startBindingWindow(windowMs)
+    return { code, snapshot: b.ownerBind.getSnapshot() }
+  })
+
+  ipcMain.handle('feishu:owner-rebind', async (): Promise<FeishuBindWindowResult> => {
     const cfg = readFeishuConfigFromDb(deps.db)
     const windowMs = (cfg.remoteOwnerBindWindowMinutes ?? 5) * 60_000
     b.router?.clearPendingDisambiguation()
     persistFeishuConfig(deps.db, { remoteEnabled: true, remoteSenderAllowlist: undefined })
-    b.ownerBind.startRebind(windowMs)
+    const code = b.ownerBind.startRebind(windowMs)
     const next = readFeishuConfigFromDb(deps.db)
     notifyFeishuConfigChanged(next)
-    return b.ownerBind.getSnapshot()
+    return { code, snapshot: b.ownerBind.getSnapshot() }
   })
 
   ipcMain.handle('feishu:owner-bind-cancel', async () => {
@@ -435,13 +443,7 @@ export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConf
   if (bundle?.ownerBind) {
     const wasRemote = prev.remoteEnabled
     const nowRemote = next.remoteEnabled
-    const hasOwner = Boolean(readOwnerOpenIdFromAllowlist(next.remoteSenderAllowlist))
-    if (nowRemote && !hasOwner && (!wasRemote || !readOwnerOpenIdFromAllowlist(prev.remoteSenderAllowlist))) {
-      const windowMs = (next.remoteOwnerBindWindowMinutes ?? 5) * 60_000
-      if (!bundle.ownerBind.isBindingActive()) {
-        bundle.ownerBind.startBindingWindow(windowMs)
-      }
-    }
+    // Binding windows are only opened via the explicit begin-bind / rebind IPC (code must be shown).
     if (!nowRemote && wasRemote) {
       bundle.ownerBind.dispose()
       bundle.router?.clearPendingDisambiguation()

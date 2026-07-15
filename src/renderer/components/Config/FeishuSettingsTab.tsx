@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { App, Badge, Button, Input, Radio, Space, Switch } from 'antd'
-import type { FeishuConfig, FeishuEventStatus } from '../../../shared/feishuTypes'
+import { App, Badge, Button, Input, Radio, Space, Switch, Typography } from 'antd'
+import type {
+  FeishuConfig,
+  FeishuEventStatus,
+  FeishuOwnerBindSnapshot
+} from '../../../shared/feishuTypes'
 import { FeishuAuditDrawer } from './FeishuAuditDrawer'
 import { formatFeishuSettingsEventStatus } from './feishuEventStatusText'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
@@ -23,8 +27,52 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
   const [configuringApp, setConfiguringApp] = useState(false)
   const [configStatus, setConfigStatus] = useState('')
   const [authLoggingIn, setAuthLoggingIn] = useState(false)
+  const [pairingCode, setPairingCode] = useState<string | null>(null)
+  const [bindSnapshot, setBindSnapshot] = useState<FeishuOwnerBindSnapshot | null>(null)
+  const [countdownSec, setCountdownSec] = useState(0)
 
   const patch = useCallback((p: Partial<FeishuConfig>) => onChange({ ...feishu, ...p }), [feishu, onChange])
+
+  const beginBind = useCallback(async () => {
+    const r = await window.api.feishuOwnerBeginBind()
+    setPairingCode(r.code)
+    setBindSnapshot(r.snapshot)
+  }, [])
+
+  const clearPairing = useCallback(() => {
+    setPairingCode(null)
+    setBindSnapshot(null)
+    setCountdownSec(0)
+  }, [])
+
+  // Countdown for the active pairing window (code is only held in memory).
+  useEffect(() => {
+    if (!pairingCode || !bindSnapshot?.bindingExpiresAt) return
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((bindSnapshot.bindingExpiresAt! - Date.now()) / 1000))
+      setCountdownSec(remaining)
+      if (remaining <= 0) clearPairing()
+    }
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [pairingCode, bindSnapshot, clearPairing])
+
+  // Desktop notification when the private chat completes binding.
+  useEffect(() => {
+    if (typeof window.api.feishuOnOwnerBound !== 'function') return
+    return window.api.feishuOnOwnerBound(() => {
+      clearPairing()
+      message.success(t('feishu.boundNotice'))
+      void window.api.feishuOwnerBindStatus().then((s) => setBindSnapshot(s))
+    })
+  }, [clearPairing, message, t])
+
+  // Clear pairing display if the bind window times out.
+  useEffect(() => {
+    if (typeof window.api.feishuOnBindTimeout !== 'function') return
+    return window.api.feishuOnBindTimeout(() => clearPairing())
+  }, [clearPairing])
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -221,7 +269,9 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
             onChange={(remoteEnabled) => {
               patch({ remoteEnabled })
               if (remoteEnabled && !(feishu.remoteSenderAllowlist?.length)) {
-                message.info(t('feishu.bindWindowHint'))
+                void beginBind().catch(() => message.info(t('feishu.bindWindowHint')))
+              } else if (!remoteEnabled) {
+                clearPairing()
               }
             }}
           />
@@ -250,7 +300,36 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
                 ? t('feishu.ownerBinding', { minutes: feishu.remoteOwnerBindWindowMinutes ?? 5 })
                 : t('feishu.ownerUnbound')}
           </div>
+          {pairingCode ? (
+            <div className="config-status-text">
+              <Typography.Text strong copyable code style={{ fontSize: 18, letterSpacing: 2 }}>
+                {pairingCode}
+              </Typography.Text>
+              <div>
+                {t('feishu.pairingCodeInstruction', {
+                  minutes: feishu.remoteOwnerBindWindowMinutes ?? 5,
+                  code: pairingCode
+                })}
+              </div>
+              <div>{t('feishu.pairingCountdown', { seconds: countdownSec })}</div>
+              {bindSnapshot?.remainingAttempts != null ? (
+                <div>{t('feishu.remainingAttempts', { count: bindSnapshot.remainingAttempts })}</div>
+              ) : null}
+              <p className="config-field__hint">{t('feishu.pairingCodeReminder')}</p>
+            </div>
+          ) : null}
           <Space wrap className="config-field__control">
+            {feishu.remoteEnabled && !feishu.remoteSenderAllowlist?.[0] && !pairingCode ? (
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => {
+                  void beginBind().catch(() => message.error(t('feishu.pairingExpired')))
+                }}
+              >
+                {t('feishu.beginBind')}
+              </Button>
+            ) : null}
             <Button
               size="small"
               onClick={() => {
@@ -262,8 +341,9 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
                   okText: t('feishu.rebindConfirmOk'),
                   cancelText: tCommon('cancel'),
                   onOk: async () => {
-                    await window.api.feishuOwnerRebind()
-                    message.info(t('feishu.bindWindowHint'))
+                    const r = await window.api.feishuOwnerRebind()
+                    setPairingCode(r.code)
+                    setBindSnapshot(r.snapshot)
                     void refreshStatus()
                   }
                 })
@@ -275,6 +355,7 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
               size="small"
               onClick={() => {
                 void window.api.feishuOwnerBindCancel().then(() => {
+                  clearPairing()
                   message.warning(t('feishu.bindCancelled'))
                   void refreshStatus()
                 })
@@ -287,6 +368,7 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
               danger
               onClick={() => {
                 void window.api.feishuOwnerClear().then(() => {
+                  clearPairing()
                   message.warning(t('feishu.ownerCleared'))
                   void refreshStatus()
                 })

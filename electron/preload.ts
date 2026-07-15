@@ -241,9 +241,15 @@ const api: SpaceAssistantApi = {
   feishuHealthCheck: () => ipcRenderer.invoke('feishu:health-check'),
   feishuCheckCliUpdate: () => ipcRenderer.invoke('feishu:check-cli-update'),
   feishuOwnerBindStatus: () => ipcRenderer.invoke('feishu:owner-bind-status'),
+  feishuOwnerBeginBind: () => ipcRenderer.invoke('feishu:owner-begin-bind'),
   feishuOwnerRebind: () => ipcRenderer.invoke('feishu:owner-rebind'),
   feishuOwnerBindCancel: () => ipcRenderer.invoke('feishu:owner-bind-cancel'),
   feishuOwnerClear: () => ipcRenderer.invoke('feishu:owner-clear'),
+  feishuOnOwnerBound: (cb) => {
+    const fn = (_e: unknown, data: { maskedOwnerOpenId?: string; boundAt?: number }) => cb(data)
+    ipcRenderer.on('feishu:owner-bound', fn)
+    return () => ipcRenderer.removeListener('feishu:owner-bound', fn)
+  },
   feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => {
     const fn = (_e: unknown, data: { line: string }) => cb(data)
     ipcRenderer.on('feishu:config-init-progress', fn)

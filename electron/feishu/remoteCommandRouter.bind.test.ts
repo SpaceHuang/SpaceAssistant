@@ -30,20 +30,21 @@ function p2p(overrides: Partial<FeishuInboundMessage> = {}): FeishuInboundMessag
     chatId: 'chat-1',
     chatType: 'p2p',
     senderOpenId: 'ou_a',
-    content: 'bind me',
+    content: 'hello',
     createTime: '1',
     mentionsBot: false,
     ...overrides
   }
 }
 
-describe('RemoteCommandRouter bind-window race', () => {
+describe('RemoteCommandRouter pairing-code bind', () => {
   let owner: string | undefined
   let remoteEnabled: boolean
   let allowlist: string[] | undefined
   let ownerBind: FeishuOwnerBindController
   let auditAppend: ReturnType<typeof vi.fn>
   let processSpy: ReturnType<typeof vi.spyOn> | undefined
+  let bindCode: string
 
   beforeEach(() => {
     owner = undefined
@@ -62,7 +63,7 @@ describe('RemoteCommandRouter bind-window race', () => {
         remoteEnabled = v
       }
     })
-    ownerBind.startBindingWindow(60_000)
+    bindCode = ownerBind.startBindingWindow(60_000)
   })
 
   afterEach(() => {
@@ -107,11 +108,40 @@ describe('RemoteCommandRouter bind-window race', () => {
     return router
   }
 
-  it('concurrent bind: second sender does not enter Agent after first binds', async () => {
+  it('valid pairing code binds and never enters Agent', async () => {
     const router = makeRouter()
-    const first = router.handleInbound(p2p({ messageId: 'm1', senderOpenId: 'ou_first', content: 'hi' }))
+    await router.handleInbound(p2p({ messageId: 'm1', senderOpenId: 'ou_owner', content: `绑定 ${bindCode}` }))
+    expect(owner).toBe('ou_owner')
+    expect(processSpy).not.toHaveBeenCalled()
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
+    expect(replies.some((t) => t.includes('已绑定'))).toBe(true)
+  })
+
+  it('non-protocol message in bind window does not bind and does not enter Agent', async () => {
+    const router = makeRouter()
+    await router.handleInbound(p2p({ messageId: 'm1', senderOpenId: 'ou_x', content: 'do something' }))
+    expect(owner).toBeUndefined()
+    expect(processSpy).not.toHaveBeenCalled()
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+  })
+
+  it('wrong code does not bind and does not enter Agent', async () => {
+    const router = makeRouter()
+    await router.handleInbound(p2p({ messageId: 'm1', senderOpenId: 'ou_x', content: '绑定 WRONGXXX' }))
+    expect(owner).toBeUndefined()
+    expect(processSpy).not.toHaveBeenCalled()
+    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
+    expect(replies.some((t) => t.includes('配对码错误'))).toBe(true)
+  })
+
+  it('concurrent bind: exactly one sender wins, other does not enter Agent', async () => {
+    const router = makeRouter()
+    const first = router.handleInbound(
+      p2p({ messageId: 'm1', senderOpenId: 'ou_first', content: `绑定 ${bindCode}` })
+    )
     const second = router.handleInbound(
-      p2p({ messageId: 'm2', senderOpenId: 'ou_second', content: 'hijack' })
+      p2p({ messageId: 'm2', senderOpenId: 'ou_second', content: `绑定 ${bindCode}` })
     )
     await Promise.all([first, second])
     expect(owner).toBe('ou_first')
@@ -119,27 +149,17 @@ describe('RemoteCommandRouter bind-window race', () => {
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
     const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
     expect(replies.some((t) => t.includes('已绑定'))).toBe(true)
-    expect(replies.some((t) => t.includes('不是已绑定'))).toBe(true)
   })
 
-  it('bind window message never becomes Agent even if sender later is owner', async () => {
-    const router = makeRouter()
-    await router.handleInbound(p2p({ messageId: 'm1', senderOpenId: 'ou_owner', content: 'bind' }))
-    expect(owner).toBe('ou_owner')
-    expect(processSpy).not.toHaveBeenCalled()
-  })
-
-  it('timeout during audit await rejects and does not Agent', async () => {
+  it('bind window expiring during audit await rejects and does not Agent', async () => {
     const router = makeRouter()
     auditAppend.mockImplementation(async () => {
-      // Expire bind window while awaiting audit (Critical #1 timeout race).
       ownerBind.dispose()
       remoteEnabled = false
     })
-    await router.handleInbound(p2p({ messageId: 'm-timeout', senderOpenId: 'ou_late', content: 'late' }))
+    await router.handleInbound(p2p({ messageId: 'm-timeout', senderOpenId: 'ou_late', content: `绑定 ${bindCode}` }))
     expect(processSpy).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
-    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
-    expect(replies.some((t) => t.includes('尚未完成身份绑定'))).toBe(true)
+    expect(owner).toBeUndefined()
   })
 })
