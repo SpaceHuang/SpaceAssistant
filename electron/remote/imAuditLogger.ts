@@ -66,9 +66,43 @@ export class ImAuditLogger<T extends { type: string; ts?: number }> {
     } catch {
       /* new file */
     }
-    const entry = { ...event, ts: event.ts ?? Date.now() } as T
+    const {
+      sanitizeRemoteSecurityAuditFields,
+      sanitizeRemoteSecurityAuditValue,
+      REMOTE_SECURITY_AUDIT_EVENT_TYPES
+    } = await import('../../src/shared/remoteSecurityAudit')
+
+    let payload: Record<string, unknown>
+    if (REMOTE_SECURITY_AUDIT_EVENT_TYPES.has(event.type)) {
+      // Strict allowlist for remote-security events (pairing codes / secrets must never land).
+      payload = sanitizeRemoteSecurityAuditFields(event as Record<string, unknown>)
+    } else {
+      // General IM audit: keep fields but redact secret-like string values.
+      payload = {}
+      for (const [k, v] of Object.entries(event)) {
+        if (/^(code|pairingCode|cookie|password|token|secret|script)$/i.test(k)) continue
+        payload[k] = sanitizeRemoteSecurityAuditValue(v)
+      }
+    }
+    const entry = {
+      ...payload,
+      type: event.type,
+      ts: event.ts ?? Date.now()
+    } as T
     await fs.appendFile(this.logPath, `${JSON.stringify(entry)}\n`, 'utf8')
     this.opts.logMirror(entry as { type: string } & Record<string, unknown>)
+  }
+
+  /** Export sanitized JSON lines (remote-security events still allowlisted). */
+  async exportSanitizedJson(limit = 500): Promise<string> {
+    const entries = await this.tail(limit)
+    return `${entries.map((e) => JSON.stringify(e)).join('\n')}${entries.length ? '\n' : ''}`
+  }
+
+  /** Clear remote activity log only — does not touch config/trust/owner. */
+  async clearRemoteActivity(): Promise<void> {
+    await this.ensureDir()
+    await fs.writeFile(this.logPath, '', 'utf8')
   }
 
   private async rotate(): Promise<void> {
