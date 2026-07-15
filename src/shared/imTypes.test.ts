@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_REMOTE_IM_COMMON_CONFIG,
+  DEFAULT_REMOTE_TASK_BUDGET,
   applyRemoteRestrictWritesAndOutbound,
   isRemoteRestrictWritesAndOutbound,
   mergeRemoteImCommonConfig,
   migrateRemoteReadOnlyPolicy,
-  normalizeImConfirmPolicy
+  normalizeImConfirmPolicy,
+  resolveRemoteTaskBudget
 } from './imTypes'
 
 describe('imTypes', () => {
@@ -64,6 +66,45 @@ describe('imTypes', () => {
     })
     expect(merged.remoteAllowLocalWrite).toBe(false)
     expect(merged.remoteDenyOutbound).toBe(true)
+  })
+
+  it('does NOT fabricate remoteSecurityConfigVersion when fields missing', () => {
+    const merged = mergeRemoteImCommonConfig({ remoteEnabled: true })
+    expect(merged.remoteSecurityConfigVersion).toBeUndefined()
+    expect(merged.remoteScriptRequiresConfirm).toBeUndefined()
+    expect(merged.remoteBrowserNavigateRequiresConfirm).toBeUndefined()
+    expect(merged.remoteBrowserActRequiresConfirm).toBeUndefined()
+    expect(merged.remoteTaskBudget).toBeUndefined()
+  })
+
+  it('carries through explicit new security fields', () => {
+    const merged = mergeRemoteImCommonConfig({
+      remoteSecurityConfigVersion: 1,
+      remoteSecurityPresetSource: 'upgrade-recommended',
+      remoteScriptRequiresConfirm: false,
+      remoteBrowserNavigateRequiresConfirm: false,
+      remoteBrowserActRequiresConfirm: true,
+      remoteTaskBudget: { maxToolCalls: 20 } as never
+    })
+    expect(merged.remoteSecurityConfigVersion).toBe(1)
+    expect(merged.remoteSecurityPresetSource).toBe('upgrade-recommended')
+    expect(merged.remoteScriptRequiresConfirm).toBe(false)
+    expect(merged.remoteBrowserNavigateRequiresConfirm).toBe(false)
+    expect(merged.remoteBrowserActRequiresConfirm).toBe(true)
+    expect(merged.remoteTaskBudget).toEqual({
+      maxToolCalls: 20,
+      maxExecutionWallSec: DEFAULT_REMOTE_TASK_BUDGET.maxExecutionWallSec,
+      maxConcurrentExecutions: DEFAULT_REMOTE_TASK_BUDGET.maxConcurrentExecutions,
+      maxConsecutiveOutboundWrites: DEFAULT_REMOTE_TASK_BUDGET.maxConsecutiveOutboundWrites
+    })
+  })
+
+  it('resolveRemoteTaskBudget fills defaults', () => {
+    expect(resolveRemoteTaskBudget(null)).toEqual(DEFAULT_REMOTE_TASK_BUDGET)
+    expect(resolveRemoteTaskBudget({ maxToolCalls: 5 }).maxToolCalls).toBe(5)
+    expect(resolveRemoteTaskBudget({ maxToolCalls: -1 }).maxToolCalls).toBe(
+      DEFAULT_REMOTE_TASK_BUDGET.maxToolCalls
+    )
   })
 
   it('migrateRemoteReadOnlyPolicy and one-click restrict helpers', () => {

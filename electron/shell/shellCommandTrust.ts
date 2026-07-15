@@ -10,23 +10,57 @@ export function normalizeTrustedCommandPrefix(command: string): string {
   return command.trim()
 }
 
+/**
+ * Detects any shell metasyntax that must NEVER be persisted as trust nor match existing
+ * trust to skip confirmation (P0 guardrail, AC-Trust-Meta-Neg): command substitution `$()`,
+ * backticks, pipes, redirects (`>` `>>` `<`), logical ops `&&`/`||`, `;`, newlines,
+ * background `&`, env-prefix assignments (`VAR=val cmd`), variable expansions (`$FOO` / `${}`)
+ * and globs (`*` / `?`).
+ */
+export function commandHasShellMetasyntax(command: string): boolean {
+  if (typeof command !== 'string') return true
+  const cmd = command
+  if (/[\r\n]/.test(cmd)) return true
+  if (cmd.includes('`')) return true
+  if (cmd.includes('$(')) return true
+  if (/\$\{/.test(cmd)) return true
+  if (/\$[A-Za-z_][A-Za-z0-9_]*/.test(cmd)) return true
+  // pipes, semicolons, redirects, logical/background operators
+  if (/[|;<>&]/.test(cmd)) return true
+  // globs
+  if (/[*?]/.test(cmd)) return true
+  // leading environment-variable assignment: `FOO=bar cmd`
+  const firstToken = cmd.trim().split(/\s+/)[0] ?? ''
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(firstToken)) return true
+  return false
+}
+
 export function matchesTrustedCommand(command: string, trustedCommands?: TrustedShellCommand[]): boolean {
   if (!trustedCommands?.length) return false
   const cmd = command.trim()
+  // Meta commands can never match persisted trust.
+  if (commandHasShellMetasyntax(command)) return false
   return trustedCommands.some((t) => {
     if (t.expired) return false
     const prefix = normalizeTrustedCommandPrefix(t.command)
     if (!prefix) return false
+    // Meta in the trusted prefix itself is never a valid authorization basis.
+    if (commandHasShellMetasyntax(prefix)) return false
     return cmd === prefix || cmd.startsWith(prefix + ' ')
   })
 }
 
-export function canShowShellTrustOption(analysis: ShellAnalysisResult): boolean {
+export function canShowShellTrustOption(
+  analysis: ShellAnalysisResult,
+  command?: string
+): boolean {
   if (analysis.verdict === 'deny') return false
   const hints = analysis.shellSecurityHints
   if (hints.requiresRiskAck) return false
   if (hints.securityWarning) return false
   if (hints.denyType === 'weak') return false
+  // Never offer trust for commands containing shell metasyntax.
+  if (command != null && commandHasShellMetasyntax(command)) return false
   return true
 }
 
@@ -41,8 +75,10 @@ export function shouldSkipShellConfirmForTrust(
   shellConfig?: ShellConfig | null
 ): boolean {
   if (analysis.verdict === 'deny') return false
+  // Meta commands never skip confirm via trust.
+  if (commandHasShellMetasyntax(command)) return false
   if (!matchesTrustedCommand(command, shellConfig?.trustedCommands)) return false
-  return canShowShellTrustOption(analysis)
+  return canShowShellTrustOption(analysis, command)
 }
 
 export function addTrustedCommand(db: AppDatabase, command: string): TrustedShellCommand {

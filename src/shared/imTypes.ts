@@ -18,6 +18,28 @@ export type LegacyImConfirmPolicy =
   | 'feishu_confirm'
   | 'wechat_confirm'
 
+/** Provenance of the remote security preset the user last confirmed. */
+export type RemoteSecurityPresetSource =
+  | 'new-install'
+  | 'upgrade-recommended'
+  | 'upgrade-safer'
+  | 'custom'
+
+/** Per-remote-task damage budget (§2.5). Enforced before confirm/execution. */
+export interface RemoteTaskBudget {
+  maxToolCalls: number
+  maxExecutionWallSec: number
+  maxConcurrentExecutions: number
+  maxConsecutiveOutboundWrites: number
+}
+
+export const DEFAULT_REMOTE_TASK_BUDGET: RemoteTaskBudget = {
+  maxToolCalls: 50,
+  maxExecutionWallSec: 900,
+  maxConcurrentExecutions: 1,
+  maxConsecutiveOutboundWrites: 10
+}
+
 export interface RemoteImCommonConfig extends RemoteProgressConfig {
   remoteEnabled: boolean
   remoteNotifyOnReceive: boolean
@@ -30,10 +52,26 @@ export interface RemoteImCommonConfig extends RemoteProgressConfig {
   /** When true, hard-deny wechat_reply/send and Feishu lark write ops. */
   remoteDenyOutbound: boolean
   /**
-   * When false and remoteContext present, browser navigate/act skip confirm.
-   * Does not change desktop DEFAULT_BROWSER_CONFIG defaults.
+   * @deprecated Combined browser confirm switch. Only used for conservative migration:
+   * `true` maps both navigate/act to require-confirm; `false` must NOT silently make act
+   * skip confirm for stock upgrades. Prefer remoteBrowserNavigate/ActRequiresConfirm.
    */
   remoteBrowserRequiresConfirm: boolean
+  /**
+   * Remote-only: controls whether browser `navigate` needs confirm. When missing (raw legacy),
+   * treated as unmigrated — see remoteToolPolicy conservative overlay.
+   */
+  remoteBrowserNavigateRequiresConfirm?: boolean
+  /**
+   * Remote-only: controls whether browser `act` needs confirm. Default effective is `true`;
+   * high-impact acts always ask regardless.
+   */
+  remoteBrowserActRequiresConfirm?: boolean
+  /**
+   * Remote-only: when analysis verdict is `allow`, whether the script still needs confirm.
+   * Missing / true means confirm (conservative) until the security migration completes.
+   */
+  remoteScriptRequiresConfirm?: boolean
   remoteSessionIdleMinutes: number
   remoteSessionMergeMinutes?: number
   remoteRateLimitPerMinute: number
@@ -46,6 +84,15 @@ export interface RemoteImCommonConfig extends RemoteProgressConfig {
   remoteCommandPrefix?: string
   /** Owner bind window length in minutes (Feishu). Default 5. */
   remoteOwnerBindWindowMinutes?: number
+  /**
+   * Persisted remote-security config schema version. Only advanced after the user
+   * confirms the one-time security summary. Absent = raw legacy / unmigrated.
+   */
+  remoteSecurityConfigVersion?: number
+  /** Where the last-confirmed security preset came from. */
+  remoteSecurityPresetSource?: RemoteSecurityPresetSource
+  /** Per-remote-task damage budget. */
+  remoteTaskBudget?: RemoteTaskBudget
 }
 
 export const DEFAULT_REMOTE_IM_COMMON_CONFIG: RemoteImCommonConfig = {
@@ -99,6 +146,32 @@ export function migrateRemoteReadOnlyPolicy(args: {
   return {
     remoteAllowLocalWrite: args.remoteAllowLocalWrite ?? args.defaults.remoteAllowLocalWrite,
     remoteDenyOutbound: args.remoteDenyOutbound ?? args.defaults.remoteDenyOutbound
+  }
+}
+
+function numOrDefault(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback
+}
+
+/** Fill a (possibly partial / missing) task budget with defaults for runtime use. */
+export function resolveRemoteTaskBudget(
+  budget?: Partial<RemoteTaskBudget> | null
+): RemoteTaskBudget {
+  if (!budget || typeof budget !== 'object') return { ...DEFAULT_REMOTE_TASK_BUDGET }
+  return {
+    maxToolCalls: numOrDefault(budget.maxToolCalls, DEFAULT_REMOTE_TASK_BUDGET.maxToolCalls),
+    maxExecutionWallSec: numOrDefault(
+      budget.maxExecutionWallSec,
+      DEFAULT_REMOTE_TASK_BUDGET.maxExecutionWallSec
+    ),
+    maxConcurrentExecutions: numOrDefault(
+      budget.maxConcurrentExecutions,
+      DEFAULT_REMOTE_TASK_BUDGET.maxConcurrentExecutions
+    ),
+    maxConsecutiveOutboundWrites: numOrDefault(
+      budget.maxConsecutiveOutboundWrites,
+      DEFAULT_REMOTE_TASK_BUDGET.maxConsecutiveOutboundWrites
+    )
   }
 }
 
@@ -160,6 +233,20 @@ export function mergeRemoteImCommonConfig(
     remoteCommandPrefix: partial.remoteCommandPrefix ?? defaults.remoteCommandPrefix,
     remoteOwnerBindWindowMinutes:
       partial.remoteOwnerBindWindowMinutes ?? defaults.remoteOwnerBindWindowMinutes,
+    // Raw vs normalized: never fabricate a config version just because fields are missing.
+    remoteSecurityConfigVersion:
+      partial.remoteSecurityConfigVersion ?? defaults.remoteSecurityConfigVersion,
+    remoteSecurityPresetSource:
+      partial.remoteSecurityPresetSource ?? defaults.remoteSecurityPresetSource,
+    remoteBrowserNavigateRequiresConfirm:
+      partial.remoteBrowserNavigateRequiresConfirm ?? defaults.remoteBrowserNavigateRequiresConfirm,
+    remoteBrowserActRequiresConfirm:
+      partial.remoteBrowserActRequiresConfirm ?? defaults.remoteBrowserActRequiresConfirm,
+    remoteScriptRequiresConfirm:
+      partial.remoteScriptRequiresConfirm ?? defaults.remoteScriptRequiresConfirm,
+    remoteTaskBudget: partial.remoteTaskBudget
+      ? resolveRemoteTaskBudget(partial.remoteTaskBudget)
+      : defaults.remoteTaskBudget,
     ...progress
   }
 }

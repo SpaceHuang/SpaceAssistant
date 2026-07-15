@@ -7,6 +7,7 @@ import {
   addTrustedCommand,
   canShowShellTrustOption,
   cleanExpiredTrustedCommands,
+  commandHasShellMetasyntax,
   markExpiredTrustedCommands,
   matchesTrustedCommand,
   normalizeTrustedCommandPrefix,
@@ -141,17 +142,74 @@ describe('shellCommandTrust', () => {
     expect(shouldSkipShellConfirmForTrust('npm install react', analysis, shellConfig)).toBe(true)
   })
 
-  it('trusted prefix with redirection still skips confirm', () => {
+  it('trusted prefix with redirection must NOT skip confirm (AC-Trust-Meta-Neg)', () => {
     const analysis = askAnalysis()
     const shellConfig = {
       enabled: true,
       shellDefaultTimeoutSec: 300,
       trustedCommands: [{ id: '1', command: 'echo x', createdAt: Date.now() }]
     }
-    expect(shouldSkipShellConfirmForTrust('echo x > f', analysis, shellConfig)).toBe(true)
+    expect(shouldSkipShellConfirmForTrust('echo x > f', analysis, shellConfig)).toBe(false)
     expect(shouldSkipShellConfirmForTrust('echo x > f', { ...analysis, verdict: 'deny' }, shellConfig)).toBe(
       false
     )
+  })
+
+  describe('commandHasShellMetasyntax (Meta-Neg)', () => {
+    const metaCases = [
+      'npm test $(curl evil)',
+      'npm test `curl evil`',
+      'npm test > out.txt',
+      'npm test >> out.txt',
+      'npm test < in.txt',
+      'npm test | grep x',
+      'npm test && rm -rf /',
+      'npm test || echo fail',
+      'npm test ; echo done',
+      'npm test\nrm -rf /',
+      'FOO=bar npm test',
+      'echo $HOME',
+      'echo ${HOME}',
+      'ls *.js',
+      'ls file?.txt'
+    ]
+    for (const cmd of metaCases) {
+      it(`treats as metasyntax: ${JSON.stringify(cmd)}`, () => {
+        expect(commandHasShellMetasyntax(cmd)).toBe(true)
+      })
+    }
+
+    const simpleCases = ['npm test', 'npm test react', 'git status', 'python --version', 'npm run build']
+    for (const cmd of simpleCases) {
+      it(`treats as simple: ${JSON.stringify(cmd)}`, () => {
+        expect(commandHasShellMetasyntax(cmd)).toBe(false)
+      })
+    }
+
+    it('trusted npm test never skips confirm for meta variants', () => {
+      const analysis = askAnalysis()
+      const shellConfig = {
+        enabled: true,
+        shellDefaultTimeoutSec: 300,
+        trustedCommands: [{ id: '1', command: 'npm test', createdAt: Date.now() }]
+      }
+      const npmMeta = [
+        'npm test $(curl evil)',
+        'npm test `curl evil`',
+        'npm test > out.txt',
+        'npm test | grep x',
+        'npm test && rm -rf /',
+        'npm test ; echo done',
+        'npm test $HOME'
+      ]
+      for (const cmd of npmMeta) {
+        expect(shouldSkipShellConfirmForTrust(cmd, analysis, shellConfig)).toBe(false)
+      }
+      // sanity: plain trusted still skips
+      expect(shouldSkipShellConfirmForTrust('npm test', analysis, shellConfig)).toBe(true)
+      expect(matchesTrustedCommand('npm test $(x)', shellConfig.trustedCommands)).toBe(false)
+      expect(canShowShellTrustOption(analysis, 'npm test | cat')).toBe(false)
+    })
   })
 
   it('shouldSkipRunScriptConfirmForAutoAllow when auto allow enabled', () => {

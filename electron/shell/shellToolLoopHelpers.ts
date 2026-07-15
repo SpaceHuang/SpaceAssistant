@@ -57,7 +57,7 @@ export async function precheckRunShellTool(args: {
     validatorId: analysis.shellSecurityHints.validatorId,
     denyType: analysis.shellSecurityHints.denyType,
     securityWarning: analysis.shellSecurityHints.securityWarning,
-    canTrust: canShowShellTrustOption(analysis)
+    canTrust: canShowShellTrustOption(analysis, args.command)
   }
 
   return {

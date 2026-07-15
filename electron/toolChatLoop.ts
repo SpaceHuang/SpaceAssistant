@@ -62,6 +62,12 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import { analyzeScriptContent } from './shell/scriptContentSecurity'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import {
+  shouldSkipRemoteBrowserActConfirm,
+  shouldSkipRemoteBrowserNavigateConfirm,
+  shouldSkipRemoteFileWriteConfirm,
+  shouldSkipRemoteScriptConfirmOnAllow
+} from './remote/remoteToolPolicy'
+import {
   logShellPathConfirm,
   logShellSecurityDeny,
   logShellWeakDenyOutcome,
@@ -1120,11 +1126,9 @@ async function runToolChatSessionInner(
         remoteContext &&
         (toolName === 'write_file' || toolName === 'edit_file')
       ) {
-        const allowLocalWrite =
-          (remoteContext.source === 'feishu'
-            ? feishuConfig?.remoteAllowLocalWrite
-            : wechatConfig?.remoteAllowLocalWrite) ?? true
-        if (allowLocalWrite) {
+        const channelConfig = remoteContext.source === 'feishu' ? feishuConfig : wechatConfig
+        // Conservative overlay: only skip when the security migration has completed.
+        if (shouldSkipRemoteFileWriteConfirm(channelConfig)) {
           needsConfirm = false
           logAgentEvent('info', 'tool.confirm.skip_confirm', {
             requestId,
@@ -1181,8 +1185,16 @@ async function runToolChatSessionInner(
           continue
         }
         if (scriptAnalysis.verdict === 'allow') {
-          needsConfirm = false
-          logAgentEvent('info', 'script.allow.execute', {
+          // Desktop keeps skip-on-allow; remote skip requires completed migration + script switch off.
+          const channelConfig = remoteContext
+            ? remoteContext.source === 'feishu'
+              ? feishuConfig
+              : wechatConfig
+            : undefined
+          const remoteBlocksSkip =
+            Boolean(remoteContext) && !shouldSkipRemoteScriptConfirmOnAllow(channelConfig)
+          needsConfirm = remoteBlocksSkip
+          logAgentEvent('info', remoteBlocksSkip ? 'script.ask' : 'script.allow.execute', {
             requestId,
             sessionId,
             toolUseId,
@@ -1226,7 +1238,10 @@ async function runToolChatSessionInner(
               userId: remoteContext.userId,
               trustEligible:
                 toolName === 'run_shell' && shellPrecheck?.ok
-                  ? canShowShellTrustOption(shellPrecheck.analysis)
+                  ? canShowShellTrustOption(
+                      shellPrecheck.analysis,
+                      typeof inputObj.command === 'string' ? inputObj.command : undefined
+                    )
                   : false
             },
             wechatConfig
@@ -1725,11 +1740,12 @@ export function shouldSkipRemoteBrowserConfirm(
   if (!remoteContext || toolName !== 'browser') return false
   const action = inputObj.action
   if (action !== 'navigate' && action !== 'act') return false
-  const requireBrowserConfirm =
-    (remoteContext.source === 'feishu'
-      ? feishuConfig?.remoteBrowserRequiresConfirm
-      : wechatConfig?.remoteBrowserRequiresConfirm) ?? false
-  return !requireBrowserConfirm
+  const channelConfig = remoteContext.source === 'feishu' ? feishuConfig : wechatConfig
+  if (action === 'navigate') {
+    return shouldSkipRemoteBrowserNavigateConfirm(channelConfig)
+  }
+  // action === 'act': gated by migration completeness (conservative overlay).
+  return shouldSkipRemoteBrowserActConfirm(channelConfig)
 }
 
 function toolNeedsUserConfirmation(

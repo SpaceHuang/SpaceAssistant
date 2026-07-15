@@ -50,8 +50,9 @@ describe('phase2 remote confirm defaults', () => {
     ).toBe(true)
   })
 
-  it('remote browser navigate/act skip confirm when remoteBrowserRequiresConfirm is false', () => {
+  it('pre-migration: navigate may skip but act still confirms (conservative overlay)', () => {
     expect(DEFAULT_FEISHU_CONFIG.remoteBrowserRequiresConfirm).toBe(false)
+    // navigate is not gated by the migration overlay.
     expect(
       shouldSkipRemoteBrowserConfirm(
         feishuRemote,
@@ -60,6 +61,7 @@ describe('phase2 remote confirm defaults', () => {
         DEFAULT_FEISHU_CONFIG
       )
     ).toBe(true)
+    // act must NOT skip until migration completes.
     expect(
       shouldSkipRemoteBrowserConfirm(
         feishuRemote,
@@ -67,13 +69,33 @@ describe('phase2 remote confirm defaults', () => {
         { action: 'act', instruction: 'click' },
         DEFAULT_FEISHU_CONFIG
       )
-    ).toBe(true)
+    ).toBe(false)
     expect(
       shouldSkipRemoteBrowserConfirm(
         feishuRemote,
         'browser',
         { action: 'screenshot' },
         DEFAULT_FEISHU_CONFIG
+      )
+    ).toBe(false)
+  })
+
+  it('migrated: act skips only when remoteBrowserActRequiresConfirm is false', () => {
+    const migrated = {
+      ...DEFAULT_FEISHU_CONFIG,
+      remoteSecurityConfigVersion: 1,
+      remoteBrowserActRequiresConfirm: false,
+      remoteBrowserNavigateRequiresConfirm: false
+    }
+    expect(
+      shouldSkipRemoteBrowserConfirm(feishuRemote, 'browser', { action: 'act', instruction: 'click' }, migrated)
+    ).toBe(true)
+    expect(
+      shouldSkipRemoteBrowserConfirm(
+        feishuRemote,
+        'browser',
+        { action: 'act', instruction: 'click' },
+        { ...migrated, remoteBrowserActRequiresConfirm: true }
       )
     ).toBe(false)
   })
