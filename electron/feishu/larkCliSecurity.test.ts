@@ -16,4 +16,9 @@ describe('larkCliSecurity', () => {
     expect(isLarkCliWriteOperation(['api', 'POST', '/x'])).toBe(true)
     expect(isLarkCliWriteOperation(['api', 'GET', '/x'])).toBe(false)
   })
+
+  it('rejects non-string argv elements with controlled error', () => {
+    expect(() => assertSafeLarkCliArgs(['doc', 1])).toThrow(/string/)
+    expect(() => assertSafeLarkCliArgs([1])).toThrow(/string/)
+  })
 })

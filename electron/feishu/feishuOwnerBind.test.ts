@@ -119,11 +119,23 @@ describe('FeishuOwnerBindController pairing lifecycle', () => {
     expect(owner).toBeUndefined()
   })
 
-  it('expired code cannot bind', () => {
+  it('expired code cannot bind and fail-closes remote (proactive path)', () => {
     const code = ctrl.startBindingWindow(60_000)
     now += 60_001
     expect(ctrl.tryConsumeBindCode('ou_a', code)).toBe('expired')
     expect(owner).toBeUndefined()
+    expect(remoteEnabled).toBe(false)
+    expect(audit).toHaveBeenCalledWith('feishu.bind.timeout', {})
+    expect(ctrl.getSnapshot().status).toBe('idle')
+  })
+
+  it('isBindingActive expiry uses the same fail-closed cleanup', () => {
+    ctrl.startBindingWindow(60_000)
+    expect(remoteEnabled).toBe(true)
+    now += 60_001
+    expect(ctrl.isBindingActive()).toBe(false)
+    expect(remoteEnabled).toBe(false)
+    expect(audit).toHaveBeenCalledWith('feishu.bind.timeout', {})
   })
 
   it('concurrent-style: exactly one success for same code', () => {

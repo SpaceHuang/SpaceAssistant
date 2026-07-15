@@ -136,7 +136,7 @@ export class FeishuOwnerBindController {
     if (!this.binding) return false
     if (this.binding.consumed) return false
     if (this.now() > this.binding.expiresAt) {
-      this.clearTimerOnly()
+      this.finishExpiredBinding()
       return false
     }
     return true
@@ -209,8 +209,7 @@ export class FeishuOwnerBindController {
     if (!this.binding) return 'no_window'
     if (this.binding.consumed) return 'already_bound'
     if (this.now() > this.binding.expiresAt) {
-      this.clearTimerOnly()
-      this.binding = null
+      this.finishExpiredBinding()
       return 'expired'
     }
 
@@ -249,6 +248,12 @@ export class FeishuOwnerBindController {
 
   private handleTimeout(): void {
     this.timer = null
+    this.finishExpiredBinding()
+  }
+
+  /** Shared fail-closed path for timer timeout and proactive expiry (consume / snapshot). */
+  private finishExpiredBinding(): void {
+    this.clearTimerOnly()
     this.binding = null
     this.deps.setRemoteEnabled(false)
     this.deps.onAudit?.('feishu.bind.timeout', {})

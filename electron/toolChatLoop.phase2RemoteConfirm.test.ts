@@ -44,6 +44,50 @@ describe('phase2 remote confirm defaults', () => {
     ).toBe(false)
   })
 
+  it('high-impact ops always confirm even when old write-pair list misses them', () => {
+    const noConfirm = { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }
+    // These are not covered by isLarkCliWriteOperation WRITE_PAIRS; classifier must still ask.
+    expect(
+      toolNeedsUserConfirmationForTests('run_lark_cli', { args: ['doc', 'delete', '--token', 't'] }, noConfirm)
+    ).toBe(true)
+    expect(
+      toolNeedsUserConfirmationForTests(
+        'run_lark_cli',
+        { args: ['doc', 'permission', 'update'] },
+        noConfirm
+      )
+    ).toBe(true)
+    expect(
+      toolNeedsUserConfirmationForTests(
+        'run_lark_cli',
+        { args: ['calendar', 'delete', '--event-id', 'e1'] },
+        noConfirm
+      )
+    ).toBe(true)
+  })
+
+  it('read ops do not confirm when routed solely through impact classifier', () => {
+    expect(
+      toolNeedsUserConfirmationForTests(
+        'run_lark_cli',
+        { args: ['doc', 'get', '--token', 't'] },
+        { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: true }
+      )
+    ).toBe(false)
+  })
+
+  it('non-string args fail closed to confirm without throwing', () => {
+    expect(() =>
+      toolNeedsUserConfirmationForTests('run_lark_cli', { args: ['doc', 1] }, DEFAULT_FEISHU_CONFIG)
+    ).not.toThrow()
+    expect(
+      toolNeedsUserConfirmationForTests('run_lark_cli', { args: ['doc', 1] }, {
+        ...DEFAULT_FEISHU_CONFIG,
+        larkCliWriteRequiresConfirm: false
+      })
+    ).toBe(true)
+  })
+
   it('explicit larkCliWriteRequiresConfirm true still requires confirm for writes', () => {
     expect(
       toolNeedsUserConfirmationForTests(

@@ -54,7 +54,6 @@ import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { RemoteContext } from './tools/types'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
-import { isLarkCliWriteOperation } from './feishu/larkCliSecurity'
 import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
@@ -70,10 +69,14 @@ import {
   createRemoteTaskBudgetState,
   recordOutboundWrite,
   recordToolCall,
+  type BudgetPauseReason,
   type RemoteTaskBudgetState
 } from './remote/remoteTaskBudget'
 import { DEFAULT_REMOTE_TASK_BUDGET } from '../src/shared/imTypes'
-import { larkCliWriteNeedsConfirm } from './feishu/larkCliImpactPolicy'
+import {
+  classifyLarkCliImpact,
+  larkCliWriteNeedsConfirm
+} from './feishu/larkCliImpactPolicy'
 import {
   shouldSkipRemoteBrowserActConfirm,
   shouldSkipRemoteBrowserNavigateConfirm,
@@ -849,15 +852,24 @@ async function runToolChatSessionInner(
           break
         }
         recordToolCall(remoteBudgetState)
-        const isOutboundWrite =
-          toolName === 'run_lark_cli' ||
-          toolName === 'wechat_send' ||
-          toolName === 'wechat_reply'
-        if (isOutboundWrite) {
-          const outboundCheck = checkRemoteTaskBudget(remoteBudgetState, 'outbound_write')
-          if (outboundCheck.ok) {
-            recordOutboundWrite(remoteBudgetState)
-          }
+        const outboundGate = evaluateOutboundWriteBudgetGate(remoteBudgetState, toolName, inputObj)
+        if (!outboundGate.allow) {
+          const pauseMsg = outboundGate.message
+          logAgentEvent('info', 'remote.budget.pause', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            reason: outboundGate.reason
+          })
+          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg))
+          safeWebContentsSend(sender, 'tool:result', {
+            requestId,
+            toolUseId,
+            result: { success: false, error: pauseMsg, blockedReason: 'remote_task_budget' }
+          })
+          abortRepeatedToolError = pauseMsg
+          break
         }
       }
 
@@ -1822,6 +1834,40 @@ export function shouldSkipRemoteBrowserConfirm(
   return shouldSkipRemoteBrowserActConfirm(channelConfig)
 }
 
+function isOutboundWriteTool(toolName: string, inputObj: Record<string, unknown>): boolean {
+  if (toolName === 'wechat_send' || toolName === 'wechat_reply') return true
+  if (toolName !== 'run_lark_cli') return false
+  // unknown / non-string argv → fail closed (count as write); pure reads do not burn budget
+  return classifyLarkCliImpact(inputObj.args).impact !== 'read'
+}
+
+function evaluateOutboundWriteBudgetGate(
+  state: RemoteTaskBudgetState,
+  toolName: string,
+  inputObj: Record<string, unknown>
+): { allow: true } | { allow: false; message: string; reason: BudgetPauseReason } {
+  if (!isOutboundWriteTool(toolName, inputObj)) return { allow: true }
+  const outboundCheck = checkRemoteTaskBudget(state, 'outbound_write')
+  if (!outboundCheck.ok) {
+    return {
+      allow: false,
+      message: `${outboundCheck.message}（继续 / 回桌面 / 停止）`,
+      reason: outboundCheck.reason
+    }
+  }
+  recordOutboundWrite(state)
+  return { allow: true }
+}
+
+/** @internal exported for unit tests */
+export function evaluateOutboundWriteBudgetGateForTests(
+  state: RemoteTaskBudgetState,
+  toolName: string,
+  inputObj: Record<string, unknown> = {}
+): { allow: true } | { allow: false; message: string; reason: BudgetPauseReason } {
+  return evaluateOutboundWriteBudgetGate(state, toolName, inputObj)
+}
+
 function toolNeedsUserConfirmation(
   toolName: string,
   inputObj: Record<string, unknown>,
@@ -1847,11 +1893,8 @@ function toolNeedsUserConfirmation(
   if (toolName === 'run_lark_cli') {
     const args = inputObj.args
     if (!Array.isArray(args)) return true
-    if (isLarkCliWriteOperation(args as string[])) {
-      const requireConfirm = feishuConfig?.larkCliWriteRequiresConfirm ?? true
-      return larkCliWriteNeedsConfirm(args as string[], requireConfirm)
-    }
-    return false
+    const requireConfirm = feishuConfig?.larkCliWriteRequiresConfirm ?? true
+    return larkCliWriteNeedsConfirm(args, requireConfirm)
   }
   // wechat_reply / wechat_send: 一对一私聊出站发给用户自己，无需前置确认（见 wechat-remote-outbound-confirm-removal-requirement）
   return builtinToolNeedsConfirmation(toolName)
@@ -1899,7 +1942,8 @@ function evaluateRemoteToolBlock(
 
   if (remoteContext.source === 'feishu' && toolName === 'run_lark_cli' && denyOutbound) {
     const args = inputObj.args
-    if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
+    if (!Array.isArray(args)) return '远程策略禁止此类写操作。'
+    if (classifyLarkCliImpact(args).impact !== 'read') {
       return '远程策略禁止此类写操作。'
     }
   }

@@ -19,15 +19,26 @@ const DELETE_TOKENS = new Set(['delete', 'remove', 'batch-delete', 'batch_delete
 const PERM_TOKENS = new Set(['permission', 'permissions', 'share', 'acl', 'member', 'members', 'role'])
 const BATCH_TOKENS = new Set(['batch', 'bulk', 'batch-create', 'batch_create', 'batch-update', 'batch_update'])
 
+function asStringArgv(argv: unknown): string[] | null {
+  if (!Array.isArray(argv) || argv.length === 0) return null
+  if (!argv.every((a): a is string => typeof a === 'string')) return null
+  return argv
+}
+
 /**
  * Deterministic classifier on tokenized argv (args[0]=subcommand like message/doc/...).
+ * Accepts untrusted tool input: non-arrays, empty, and non-string elements → unknown (fail closed).
  */
-export function classifyLarkCliImpact(argv: string[]): LarkCliImpactResult {
-  if (!Array.isArray(argv) || argv.length === 0) {
-    return { impact: 'unknown', reason: 'missing_argv', category: 'missing' }
+export function classifyLarkCliImpact(argv: unknown): LarkCliImpactResult {
+  const tokens = asStringArgv(argv)
+  if (!tokens) {
+    if (!Array.isArray(argv) || argv.length === 0) {
+      return { impact: 'unknown', reason: 'missing_argv', category: 'missing' }
+    }
+    return { impact: 'unknown', reason: 'non_string_argv', category: 'invalid' }
   }
-  const sub = argv[0]?.toLowerCase() ?? ''
-  const rest = argv.slice(1).map((a) => a.toLowerCase())
+  const sub = tokens[0]?.toLowerCase() ?? ''
+  const rest = tokens.slice(1).map((a) => a.toLowerCase())
   const joined = rest.join(' ')
 
   // Read-ish verbs early
@@ -121,7 +132,7 @@ export function classifyLarkCliImpact(argv: string[]): LarkCliImpactResult {
  * high_impact / unknown → always ask; low_write follows switch; read → no.
  */
 export function larkCliWriteNeedsConfirm(
-  argv: string[],
+  argv: unknown,
   larkCliWriteRequiresConfirm: boolean
 ): boolean {
   const { impact } = classifyLarkCliImpact(argv)

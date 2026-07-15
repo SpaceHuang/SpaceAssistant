@@ -35,5 +35,15 @@ describe('larkCliImpactPolicy', () => {
     expect(larkCliWriteNeedsConfirm(['message', 'send', '--receive-id', 'ou_1'], false)).toBe(false)
     expect(larkCliWriteNeedsConfirm(['message', 'send', '--receive-id', 'ou_1'], true)).toBe(true)
     expect(larkCliWriteNeedsConfirm(['doc', 'get', '--token', 't'], true)).toBe(false)
+    expect(larkCliWriteNeedsConfirm(['doc', 'delete', '--token', 't'], false)).toBe(true)
+    expect(larkCliWriteNeedsConfirm(['calendar', 'delete', '--event-id', 'e1'], false)).toBe(true)
+  })
+
+  it('non-string argv elements fail closed without throwing', () => {
+    expect(() => classifyLarkCliImpact(['doc', 1])).not.toThrow()
+    expect(classifyLarkCliImpact(['doc', 1]).impact).toBe('unknown')
+    expect(classifyLarkCliImpact([1]).impact).toBe('unknown')
+    expect(classifyLarkCliImpact(['doc', null, 'delete']).impact).toBe('unknown')
+    expect(larkCliWriteNeedsConfirm(['doc', 1], false)).toBe(true)
   })
 })
