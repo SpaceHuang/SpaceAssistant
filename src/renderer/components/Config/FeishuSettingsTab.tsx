@@ -12,8 +12,9 @@ type Props = {
 }
 
 export function FeishuSettingsTab({ feishu, onChange }: Props) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const { t } = useTypedTranslation('config')
+  const { t: tCommon } = useTypedTranslation('common')
   const [cliStatus, setCliStatus] = useState<string>(t('feishu.detecting'))
   const [eventStatus, setEventStatus] = useState<FeishuEventStatus | null>(null)
   const [authStatus, setAuthStatus] = useState<string>('')
@@ -71,6 +72,11 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
       void window.api.feishuEventStatus().then(setEventStatus)
     }, 5000)
     return () => clearInterval(timer)
+  }, [feishu.remoteEnabled])
+
+  useEffect(() => {
+    if (feishu.remoteEnabled) return
+    void window.api.feishuEventStatus().then((es) => setEventStatus(es ?? null))
   }, [feishu.remoteEnabled])
 
   const installCli = async () => {
@@ -210,7 +216,15 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
         </Space>
 
         <Space wrap align="center">
-          <Switch checked={feishu.remoteEnabled} onChange={(remoteEnabled) => patch({ remoteEnabled })} />
+          <Switch
+            checked={feishu.remoteEnabled}
+            onChange={(remoteEnabled) => {
+              patch({ remoteEnabled })
+              if (remoteEnabled && !(feishu.remoteSenderAllowlist?.length)) {
+                message.info(t('feishu.bindWindowHint'))
+              }
+            }}
+          />
           <span className="config-inline-label">{t('feishu.remoteListen')}</span>
           {eventStatus && (
             <Badge
@@ -228,18 +242,60 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
           </Button>
         </Space>
 
-        <ConfigField label={t('feishu.groupTriggerLabel')}>
-          <Radio.Group value={feishu.remoteGroupTrigger} onChange={(e) => patch({ remoteGroupTrigger: e.target.value })}>
-            <Radio value="mention">{t('feishu.groupTriggerMention')}</Radio>
-            <Radio value="prefix">{t('feishu.groupTriggerPrefix')}</Radio>
-            <Radio value="both">{t('feishu.groupTriggerBoth')}</Radio>
-          </Radio.Group>
-          <Input
-            className="config-field__control-nested"
-            value={feishu.remoteCommandPrefix ?? '/sa '}
-            onChange={(e) => patch({ remoteCommandPrefix: e.target.value })}
-            placeholder={t('feishu.commandPrefixPlaceholder')}
-          />
+        <ConfigField label={t('feishu.ownerBindLabel')}>
+          <div className="config-status-text">
+            {feishu.remoteSenderAllowlist?.[0]
+              ? t('feishu.ownerBound', { openId: feishu.remoteSenderAllowlist[0] })
+              : feishu.remoteEnabled
+                ? t('feishu.ownerBinding', { minutes: feishu.remoteOwnerBindWindowMinutes ?? 5 })
+                : t('feishu.ownerUnbound')}
+          </div>
+          <Space wrap className="config-field__control">
+            <Button
+              size="small"
+              onClick={() => {
+                modal.confirm({
+                  title: t('feishu.rebindConfirmTitle'),
+                  content: t('feishu.rebindConfirmContent', {
+                    minutes: feishu.remoteOwnerBindWindowMinutes ?? 5
+                  }),
+                  okText: t('feishu.rebindConfirmOk'),
+                  cancelText: tCommon('cancel'),
+                  onOk: async () => {
+                    await window.api.feishuOwnerRebind()
+                    message.info(t('feishu.bindWindowHint'))
+                    void refreshStatus()
+                  }
+                })
+              }}
+            >
+              {t('feishu.rebind')}
+            </Button>
+            <Button
+              size="small"
+              onClick={() => {
+                void window.api.feishuOwnerBindCancel().then(() => {
+                  message.warning(t('feishu.bindCancelled'))
+                  void refreshStatus()
+                })
+              }}
+            >
+              {t('feishu.cancelBind')}
+            </Button>
+            <Button
+              size="small"
+              danger
+              onClick={() => {
+                void window.api.feishuOwnerClear().then(() => {
+                  message.warning(t('feishu.ownerCleared'))
+                  void refreshStatus()
+                })
+              }}
+            >
+              {t('feishu.clearOwner')}
+            </Button>
+          </Space>
+          <p className="config-field__hint">{t('feishu.ownerReadonlyHint')}</p>
         </ConfigField>
 
         <ConfigField label={t('feishu.regionLabel')}>
@@ -248,6 +304,13 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
             <Radio value="lark">{t('feishu.regionLark')}</Radio>
           </Radio.Group>
         </ConfigField>
+
+        <ConfigSwitchRow
+          label={t('feishu.larkCliWriteRequiresConfirm')}
+          hint={t('feishu.larkCliWriteRequiresConfirmHint')}
+          checked={feishu.larkCliWriteRequiresConfirm}
+          onChange={(larkCliWriteRequiresConfirm) => patch({ larkCliWriteRequiresConfirm })}
+        />
 
         <Button onClick={() => setAuditOpen(true)}>{t('feishu.viewAudit')}</Button>
       </ConfigSettingsStack>

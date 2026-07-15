@@ -80,7 +80,12 @@ describe('WeChatCommandRouter', () => {
       processedStore: processed,
       confirmManager: new WeChatConfirmManager(),
       auditLogger: audit,
-      getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, remoteEnabled: true, loggedIn: true }),
+      getWeChatConfig: () => ({
+        ...DEFAULT_WECHAT_CONFIG,
+        remoteEnabled: true,
+        loggedIn: true,
+        remoteSenderAllowlist: ['wx-user@test']
+      }),
       getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }),
       getWorkDir: () => tmpDir,
       workDirManager: mockWorkDirManager as never,
@@ -149,7 +154,44 @@ describe('WeChatCommandRouter', () => {
     })
     await r2.handleSdkInbound(raw)
     expect(mockRunAgent).not.toHaveBeenCalled()
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('权限'))
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('不是已绑定'))
+  })
+
+  it('rejects when allowlist is empty', async () => {
+    const raw = makeIncomingMessage({ userId: 'anyone@test' })
+    const r2 = new WeChatCommandRouter({
+      db,
+      botService: {
+        getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
+        getRawBot: () => null
+      } as never,
+      processedStore: processed,
+      confirmManager: new WeChatConfirmManager(),
+      auditLogger: audit,
+      getWeChatConfig: () => ({
+        ...DEFAULT_WECHAT_CONFIG,
+        remoteEnabled: true,
+        loggedIn: true,
+        remoteSenderAllowlist: undefined
+      }),
+      getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }),
+      getWorkDir: () => tmpDir,
+      workDirManager: {
+        listProfiles: () => [],
+        getActiveProfileId: () => 'p1',
+        getActiveWorkDir: () => tmpDir,
+        checkDirectoryWritable: () => ({ ok: true })
+      } as never,
+      getUserDataPath: () => tmpDir,
+      getApiKey: async () => 'key',
+      getBaseUrl: () => 'https://api.example.com',
+      getMainWebContents: () => null,
+      getModel: () => 'm1',
+      getToolsConfig: () => ({ confirmMode: 'diff', deniedTools: [] }) as never
+    })
+    await r2.handleSdkInbound(raw)
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('尚未绑定'))
   })
 
   it('rejects second inbound when session is busy', async () => {

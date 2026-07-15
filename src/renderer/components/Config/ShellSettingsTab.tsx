@@ -126,6 +126,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
             </Button>
           </Space>
         </div>
+        <p className="config-field__hint">{t('shell.trust.hint')}</p>
         <Table
           size="small"
           pagination={false}

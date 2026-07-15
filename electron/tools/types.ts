@@ -22,6 +22,8 @@ export type RemoteConfirmPayload = {
   chatId?: string
   userId?: string
   inboundRaw?: IncomingMessage
+  /** When false, IM trust phrases are rejected without approving. */
+  trustEligible?: boolean
 }
 
 /** Shared confirm-manager surface used by remote session tools (pending checks). */

@@ -402,6 +402,22 @@ export function ConfigSettingsPage() {
 
 
 
+  useEffect(() => {
+    if (!open) return
+    const unsubConfig = window.api.feishuOnConfigChanged?.(({ feishu }) => {
+      setFeishuUi(feishu)
+    })
+    const unsubTimeout = window.api.feishuOnBindTimeout?.(() => {
+      message.warning(tConfig('feishu.bindTimeoutOrRemoteOff'))
+    })
+    return () => {
+      unsubConfig?.()
+      unsubTimeout?.()
+    }
+  }, [open, message, tConfig])
+
+
+
   const shellEnabled = !toolUi.deniedTools.includes('run_shell')
 
 

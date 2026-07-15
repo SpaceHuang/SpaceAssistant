@@ -1,4 +1,5 @@
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
+import { readOwnerOpenIdFromAllowlist } from './feishuOwnerBind'
 
 export function extractMentionsBot(raw: Record<string, unknown>): boolean {
   if (raw.mentions_bot === true) return true
@@ -71,36 +72,42 @@ export interface InboundAcceptResult {
   userMessage?: string
 }
 
-export function shouldAcceptInbound(msg: FeishuInboundMessage, config: FeishuConfig): InboundAcceptResult {
+export type ShouldAcceptInboundOptions = {
+  /** True while Feishu owner bind window is open. */
+  bindingActive?: boolean
+}
+
+/**
+ * P2P only. Group chats are always rejected (remoteGroupTrigger ignored).
+ * Owner / bind checks: binding window accepts any p2p for bind; otherwise require owner match.
+ */
+export function shouldAcceptInbound(
+  msg: FeishuInboundMessage,
+  config: FeishuConfig,
+  options?: ShouldAcceptInboundOptions
+): InboundAcceptResult {
   if (!msg.content.trim()) return { accept: false, reason: 'empty' }
   if (msg.content.length > 4000) return { accept: false, reason: 'too_long' }
 
-  if (msg.chatType === 'p2p') {
-    return { accept: true, userMessage: msg.content.trim() }
-  }
-
   if (msg.chatType === 'group') {
-    const trigger = config.remoteGroupTrigger ?? 'mention'
-    const prefix = config.remoteCommandPrefix ?? '/sa '
-    const byMention = msg.mentionsBot
-    const byPrefix = msg.content.startsWith(prefix)
-
-    switch (trigger) {
-      case 'mention':
-        return byMention
-          ? { accept: true, userMessage: msg.content.trim() }
-          : { accept: false, reason: 'no_mention' }
-      case 'prefix':
-        return byPrefix
-          ? { accept: true, userMessage: stripCommandPrefix(msg.content, prefix) }
-          : { accept: false, reason: 'no_prefix' }
-      case 'both':
-        if (byMention) return { accept: true, userMessage: msg.content.trim() }
-        if (byPrefix) return { accept: true, userMessage: stripCommandPrefix(msg.content, prefix) }
-        return { accept: false, reason: 'no_trigger' }
-    }
+    return { accept: false, reason: 'group_disabled' }
   }
 
-  return { accept: false, reason: 'unsupported_chat_type' }
-}
+  if (msg.chatType !== 'p2p') {
+    return { accept: false, reason: 'unsupported_chat_type' }
+  }
 
+  if (options?.bindingActive) {
+    return { accept: true, reason: 'bind_window', userMessage: msg.content.trim() }
+  }
+
+  const owner = readOwnerOpenIdFromAllowlist(config.remoteSenderAllowlist)
+  if (!owner) {
+    return { accept: false, reason: 'unbound' }
+  }
+  if (msg.senderOpenId !== owner) {
+    return { accept: false, reason: 'non_owner' }
+  }
+
+  return { accept: true, userMessage: msg.content.trim() }
+}

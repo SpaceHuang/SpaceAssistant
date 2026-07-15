@@ -42,9 +42,10 @@ describe('wechat outbound confirm removal', () => {
     ).toBe(false)
   })
 
-  it('remote_read_only still blocks wechat_reply and wechat_send', () => {
-    const ctx = wechatCtx('remote_read_only')
-    expect(evaluateRemoteToolBlockForTests('wechat_reply', { text: 'hi' }, ctx, undefined, DEFAULT_WECHAT_CONFIG)).toBe(
+  it('remoteDenyOutbound blocks wechat_reply and wechat_send', () => {
+    const ctx = wechatCtx('always')
+    const cfg = { ...DEFAULT_WECHAT_CONFIG, remoteDenyOutbound: true }
+    expect(evaluateRemoteToolBlockForTests('wechat_reply', { text: 'hi' }, ctx, undefined, cfg)).toBe(
       '远程策略禁止此类写操作。'
     )
     expect(
@@ -53,9 +54,16 @@ describe('wechat outbound confirm removal', () => {
         { userId: 'u1', text: 'hi' },
         ctx,
         undefined,
-        DEFAULT_WECHAT_CONFIG
+        cfg
       )
     ).toBe('远程策略禁止此类写操作。')
+  })
+
+  it('legacy remote_read_only policy alone no longer blocks outbound without deny flag', () => {
+    const ctx = wechatCtx('remote_read_only')
+    expect(
+      evaluateRemoteToolBlockForTests('wechat_reply', { text: 'hi' }, ctx, undefined, DEFAULT_WECHAT_CONFIG)
+    ).toBeNull()
   })
 
   it('always / im_confirm / inherit allow outbound without remote block', () => {
@@ -76,7 +84,7 @@ describe('wechat outbound confirm removal', () => {
     }
   })
 
-  it('write_file still needs confirmation under builtin policy', () => {
+  it('write_file still needs confirmation under builtin policy without remote context', () => {
     expect(toolNeedsUserConfirmationForTests('write_file', { path: 'a.txt', content: 'x' })).toBe(true)
   })
 })

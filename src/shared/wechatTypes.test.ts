@@ -10,14 +10,26 @@ describe('wechatTypes remoteConfirmPolicy', () => {
   it('defaults to always for new config', () => {
     expect(mergeWeChatConfig(null).remoteConfirmPolicy).toBe('always')
     expect(mergeWeChatConfig({}).remoteConfirmPolicy).toBe('always')
+    expect(mergeWeChatConfig(null).remoteDenyOutbound).toBe(false)
   })
 
-  it('migrates phase-1 remote_read_only default to im_confirm', () => {
-    const merged = mergeWeChatConfig({ remoteConfirmPolicy: 'remote_read_only' })
-    expect(merged.remoteConfirmPolicy).toBe('im_confirm')
-    expect(
-      weChatConfigNeedsPolicyMigration({ remoteConfirmPolicy: 'remote_read_only' }, merged)
-    ).toBe(true)
+  it('migrates remote_read_only to access switches and retains policy field', () => {
+    const stored = { remoteConfirmPolicy: 'remote_read_only' as const }
+    const merged = mergeWeChatConfig(stored)
+    expect(merged.remoteConfirmPolicy).toBe('remote_read_only')
+    expect(merged.remoteAllowLocalWrite).toBe(false)
+    expect(merged.remoteDenyOutbound).toBe(true)
+    expect(weChatConfigNeedsPolicyMigration(stored, merged)).toBe(true)
+  })
+
+  it('forces deny write for full legacy remote_read_only stock config', () => {
+    const merged = mergeWeChatConfig({
+      remoteConfirmPolicy: 'remote_read_only',
+      remoteAllowLocalWrite: true,
+      remoteDenyOutbound: false
+    })
+    expect(merged.remoteAllowLocalWrite).toBe(false)
+    expect(merged.remoteDenyOutbound).toBe(true)
   })
 
   it('keeps explicit non-read-only policies and maps wechat_confirm', () => {
@@ -35,11 +47,12 @@ describe('wechatTypes remoteConfirmPolicy', () => {
     )
     expect(
       resolveWeChatRemoteConfirmPolicy({ remoteConfirmPolicy: 'remote_read_only', remoteWechatConfirm: true })
-    ).toBe('im_confirm')
+    ).toBe('remote_read_only')
   })
 
   it('matches DEFAULT_WECHAT_CONFIG policy', () => {
     expect(DEFAULT_WECHAT_CONFIG.remoteConfirmPolicy).toBe('always')
+    expect(DEFAULT_WECHAT_CONFIG.remoteDenyOutbound).toBe(false)
   })
 
   it('defaults wechatSendRequiresConfirm to false and tolerates legacy true', () => {

@@ -141,6 +141,19 @@ describe('shellCommandTrust', () => {
     expect(shouldSkipShellConfirmForTrust('npm install react', analysis, shellConfig)).toBe(true)
   })
 
+  it('trusted prefix with redirection still skips confirm', () => {
+    const analysis = askAnalysis()
+    const shellConfig = {
+      enabled: true,
+      shellDefaultTimeoutSec: 300,
+      trustedCommands: [{ id: '1', command: 'echo x', createdAt: Date.now() }]
+    }
+    expect(shouldSkipShellConfirmForTrust('echo x > f', analysis, shellConfig)).toBe(true)
+    expect(shouldSkipShellConfirmForTrust('echo x > f', { ...analysis, verdict: 'deny' }, shellConfig)).toBe(
+      false
+    )
+  })
+
   it('shouldSkipRunScriptConfirmForAutoAllow when auto allow enabled', () => {
     expect(shouldSkipRunScriptConfirmForAutoAllow({ enabled: true, shellDefaultTimeoutSec: 300 })).toBe(
       false

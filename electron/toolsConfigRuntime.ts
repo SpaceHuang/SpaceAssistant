@@ -41,7 +41,7 @@ export function filterBuiltinToolsForApi(
   if (!wechat?.enabled) {
     list = list.filter((t) => t.name !== 'wechat_send' && t.name !== 'wechat_reply')
   }
-  if (remoteContext?.source === 'wechat' && wechat?.remoteConfirmPolicy === 'remote_read_only') {
+  if (remoteContext?.source === 'wechat' && wechat?.remoteDenyOutbound) {
     list = list.filter((t) => t.name !== 'wechat_send')
   }
   if (!browserConfig?.enabled) {

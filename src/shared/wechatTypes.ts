@@ -47,13 +47,15 @@ export const DEFAULT_WECHAT_CONFIG: WeChatConfig = {
   remoteEnabled: false,
   remoteNotifyOnReceive: true,
   /**
-   * always / im_confirm / inherit：写工具确认策略；对 wechat_reply/send 出站不再触发确认。
-   * remote_read_only：仍禁止出站与远程写。
+   * @deprecated Runtime no longer consumes this for confirm/deny.
+   * Legacy remote_read_only migrates to remoteAllowLocalWrite=false + remoteDenyOutbound=true.
    */
   remoteConfirmPolicy: 'always',
   remoteAllowLocalWrite: true,
+  remoteDenyOutbound: false,
+  remoteBrowserRequiresConfirm: false,
   remoteSessionIdleMinutes: 10,
-  remoteRateLimitPerMinute: 10,
+  remoteRateLimitPerMinute: 60,
   remoteTypingEnabled: true,
   remoteProgressHeartbeatSec: 60,
   remoteProgressMode: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMode,
@@ -65,7 +67,11 @@ export const DEFAULT_WECHAT_CONFIG: WeChatConfig = {
   remoteWechatConfirm: false
 }
 
-/** Phase-1 曾以 remote_read_only 为默认；现网须迁移到 im_confirm。 */
+/**
+ * Resolve stored confirm policy for persistence compat.
+ * Legacy `remote_read_only` is retained on the field (behavior migrates via access switches).
+ * Legacy `remoteWechatConfirm` maps to im_confirm when not read-only.
+ */
 export function resolveWeChatRemoteConfirmPolicy(
   partial: Pick<Partial<WeChatConfig>, 'remoteConfirmPolicy' | 'remoteWechatConfirm'> & {
     remoteConfirmPolicy?: LegacyImConfirmPolicy
@@ -73,11 +79,11 @@ export function resolveWeChatRemoteConfirmPolicy(
 ): ImConfirmPolicy {
   const stored = partial.remoteConfirmPolicy
 
-  if (partial.remoteWechatConfirm && stored !== 'remote_read_only') {
-    return 'im_confirm'
+  if (stored === 'remote_read_only') {
+    return 'remote_read_only'
   }
 
-  if (stored === 'remote_read_only') {
+  if (partial.remoteWechatConfirm) {
     return 'im_confirm'
   }
 
@@ -87,13 +93,15 @@ export function resolveWeChatRemoteConfirmPolicy(
   )
 }
 
+/** True when legacy remote_read_only was present and access switches were derived. */
 export function weChatConfigNeedsPolicyMigration(
   stored: Partial<WeChatConfig> & { remoteConfirmPolicy?: LegacyImConfirmPolicy },
   merged: WeChatConfig
 ): boolean {
   return (
     stored.remoteConfirmPolicy === 'remote_read_only' &&
-    merged.remoteConfirmPolicy === 'im_confirm'
+    merged.remoteAllowLocalWrite === false &&
+    merged.remoteDenyOutbound === true
   )
 }
 
@@ -115,6 +123,8 @@ export function mergeWeChatConfig(
     ...partial,
     ...common,
     remoteConfirmPolicy,
+    remoteAllowLocalWrite: common.remoteAllowLocalWrite,
+    remoteDenyOutbound: common.remoteDenyOutbound,
     remoteSenderAllowlist: common.remoteSenderAllowlist,
     remoteWechatConfirm: undefined
   }
@@ -148,6 +158,8 @@ export interface WeChatConnectionStatus {
   loggedIn: boolean
   botIdSuffix?: string
   displayName?: string
+  /** Bound peer / account userId used for remoteSenderAllowlist. */
+  boundUserId?: string
   pollState: WeChatPollState
   lastError?: string
   processedCount?: number

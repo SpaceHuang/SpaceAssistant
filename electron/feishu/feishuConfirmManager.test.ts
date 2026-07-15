@@ -5,6 +5,27 @@ vi.mock('./feishuReply', () => ({
   replyFeishuText: vi.fn().mockResolvedValue(undefined)
 }))
 
+const owner = 'ou_owner'
+const confirmOpts = { ownerOpenId: owner }
+
+function p2p(overrides: {
+  messageId?: string
+  chatId?: string
+  senderOpenId?: string
+  content?: string
+  chatType?: 'p2p' | 'group'
+} = {}) {
+  return {
+    messageId: overrides.messageId ?? 'm2',
+    chatId: overrides.chatId ?? 'c1',
+    chatType: overrides.chatType ?? ('p2p' as const),
+    senderOpenId: overrides.senderOpenId ?? owner,
+    content: overrides.content ?? 'Y',
+    createTime: '1',
+    mentionsBot: false
+  }
+}
+
 describe('FeishuConfirmManager', () => {
   it('resolves Y from inbound', async () => {
     const mgr = new FeishuConfirmManager()
@@ -16,15 +37,7 @@ describe('FeishuConfirmManager', () => {
       messageId: 'm1',
       chatId: 'c1'
     })
-    const ok = mgr.tryResolveFromInbound({
-      messageId: 'm2',
-      chatId: 'c1',
-      chatType: 'p2p',
-      senderOpenId: 'u',
-      content: 'Y',
-      createTime: '1',
-      mentionsBot: false
-    })
+    const ok = mgr.tryResolveFromInbound(p2p({ content: 'Y' }), confirmOpts)
     expect(ok).toBe(true)
     await expect(p).resolves.toBe('y')
   })
@@ -38,16 +51,72 @@ describe('FeishuConfirmManager', () => {
       messageId: 'm1',
       chatId: 'c1'
     })
-    mgr.tryResolveFromInbound({
-      messageId: 'm2',
-      chatId: 'c1',
-      chatType: 'p2p',
-      senderOpenId: 'u',
-      content: 'N',
-      createTime: '1',
-      mentionsBot: false
-    })
+    mgr.tryResolveFromInbound(p2p({ content: 'N' }), confirmOpts)
     await expect(p).resolves.toBe('n')
+  })
+
+  it('does not resolve confirm from group chat', async () => {
+    const mgr = new FeishuConfirmManager()
+    const p = mgr.requestConfirm({
+      kind: 'tool_write',
+      sessionId: 's-group',
+      toolName: 'write_file',
+      messageId: 'm1',
+      chatId: 'c1'
+    })
+    expect(
+      mgr.tryResolveFromInbound(p2p({ content: 'Y', chatType: 'group' }), confirmOpts)
+    ).toBe(false)
+    expect(mgr.countPending()).toBe(1)
+    mgr.cancelAllPending()
+    await expect(p).resolves.toBe('n')
+  })
+
+  it('does not resolve confirm from non-owner', async () => {
+    const mgr = new FeishuConfirmManager()
+    const p = mgr.requestConfirm({
+      kind: 'tool_write',
+      sessionId: 's-nonowner',
+      toolName: 'write_file',
+      messageId: 'm1',
+      chatId: 'c1'
+    })
+    expect(
+      mgr.tryResolveFromInbound(p2p({ content: 'Y', senderOpenId: 'ou_other' }), confirmOpts)
+    ).toBe(false)
+    expect(mgr.countPending()).toBe(1)
+    mgr.cancelAllPending()
+    await expect(p).resolves.toBe('n')
+  })
+
+  it('does not resolve confirm when owner unbound', async () => {
+    const mgr = new FeishuConfirmManager()
+    const p = mgr.requestConfirm({
+      kind: 'tool_write',
+      sessionId: 's-unbound',
+      toolName: 'write_file',
+      messageId: 'm1',
+      chatId: 'c1'
+    })
+    expect(mgr.tryResolveFromInbound(p2p({ content: 'Y' }), {})).toBe(false)
+    expect(mgr.countPending()).toBe(1)
+    mgr.cancelAllPending()
+    await expect(p).resolves.toBe('n')
+  })
+
+  it('cancelAllPending rejects every waiter', async () => {
+    const mgr = new FeishuConfirmManager()
+    const p1 = mgr.requestConfirm({
+      kind: 'tool_write',
+      sessionId: 's-a',
+      toolName: 'write_file',
+      messageId: 'm1',
+      chatId: 'c1'
+    })
+    expect(mgr.countPending()).toBe(1)
+    mgr.cancelAllPending()
+    await expect(p1).resolves.toBe('n')
+    expect(mgr.countPending()).toBe(0)
   })
 
   it('builds browser navigate confirm text', () => {
@@ -91,17 +160,41 @@ describe('FeishuConfirmManager', () => {
     clearRemoteProgressSession('s-progress')
   })
 
-  it('cancelAllPending resolves every waiter without waiting for timeout', async () => {
+  it('rejects bare 信任 without approving', async () => {
     const mgr = new FeishuConfirmManager()
     const p = mgr.requestConfirm({
       kind: 'tool_write',
-      sessionId: 's3',
-      toolName: 'write_file',
+      sessionId: 's-trust',
+      toolName: 'run_shell',
+      toolInput: { command: 'npm test' },
       messageId: 'm1',
-      chatId: 'c1'
+      chatId: 'c1',
+      trustEligible: true
     })
-    mgr.cancelAllPending()
+    expect(
+      mgr.tryResolveFromInbound(p2p({ content: '信任' }), confirmOpts)
+    ).toBe(true)
+    expect(mgr.countPending()).toBe(1)
+    mgr.tryResolveFromInbound(p2p({ messageId: 'm3', content: 'Y' }), confirmOpts)
+    await expect(p).resolves.toBe('y')
+  })
+
+  it('approve_and_trust without eligibility does not resolve', async () => {
+    const mgr = new FeishuConfirmManager()
+    const p = mgr.requestConfirm({
+      kind: 'tool_write',
+      sessionId: 's-notrust',
+      toolName: 'run_shell',
+      toolInput: { command: 'rm -rf /' },
+      messageId: 'm1',
+      chatId: 'c1',
+      trustEligible: false
+    })
+    expect(
+      mgr.tryResolveFromInbound(p2p({ content: 'Y trust' }), confirmOpts)
+    ).toBe(true)
+    expect(mgr.countPending()).toBe(1)
+    mgr.tryResolveFromInbound(p2p({ messageId: 'm3', content: 'N' }), confirmOpts)
     await expect(p).resolves.toBe('n')
-    expect(mgr.countPending()).toBe(0)
   })
 })

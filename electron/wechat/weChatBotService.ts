@@ -41,6 +41,7 @@ export class WeChatBotService {
   private loginAbort = false
   private displayName?: string
   private botIdSuffix?: string
+  private boundUserId?: string
   private loggedIn = false
   private verifyCodeResolvers: Array<(code: string) => void> = []
 
@@ -51,11 +52,16 @@ export class WeChatBotService {
       loggedIn: this.loggedIn,
       botIdSuffix: this.botIdSuffix,
       displayName: this.displayName,
+      boundUserId: this.boundUserId,
       pollState: this.pollState,
       lastError: this.lastError,
       processedCount: this.processedCount,
       startedAt: this.startedAt
     }
+  }
+
+  getBoundUserId(): string | undefined {
+    return this.boundUserId
   }
 
   getBot(): WeChatReplyBot | null {
@@ -185,6 +191,7 @@ export class WeChatBotService {
       this.lastError = undefined
       this.botIdSuffix = creds.accountId?.slice(-4)
       this.displayName = creds.userId?.split('@')[0] ?? creds.accountId
+      this.boundUserId = typeof creds.userId === 'string' ? creds.userId : undefined
       this.emitProgress('confirmed')
       logWeChatCliEvent('info', 'wechat.login.ok', {
         botIdSuffix: this.botIdSuffix,
@@ -225,6 +232,7 @@ export class WeChatBotService {
       this.loggedIn = true
       this.botIdSuffix = creds.accountId?.slice(-4)
       this.displayName = creds.userId?.split('@')[0] ?? creds.accountId
+      if (typeof creds.userId === 'string') this.boundUserId = creds.userId
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e)
       this.pollState = this.loggedIn ? 'error' : 'logged_out'
@@ -273,6 +281,7 @@ export class WeChatBotService {
     this.loggedIn = false
     this.displayName = undefined
     this.botIdSuffix = undefined
+    this.boundUserId = undefined
     this.pollState = 'logged_out'
     this.processedCount = 0
     this.startedAt = undefined

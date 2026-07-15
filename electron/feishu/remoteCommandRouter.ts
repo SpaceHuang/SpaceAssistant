@@ -36,9 +36,23 @@ import {
   createFeishuRequestToolConfirm,
   FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE
 } from '../remote/remoteConfirmBridge'
-
+import {
+  readOwnerOpenIdFromAllowlist,
+  type FeishuOwnerBindController
+} from './feishuOwnerBind'
 
 const rateLimiter = createRateLimiter()
+
+/** Workdir disambiguation TTL (also cleared on rebind / remote off). */
+const DISAMBIGUATION_TTL_MS = 10 * 60_000
+
+type PendingDisambiguation = {
+  profiles: WorkDirProfile[]
+  originalMsg: FeishuInboundMessage
+  senderOpenId: string
+  createdAt: number
+  expiresAt: number
+}
 
 export type RemoteCommandRouterDeps = {
   db: AppDatabase
@@ -47,6 +61,7 @@ export type RemoteCommandRouterDeps = {
   confirmManager: FeishuConfirmManager
   auditLogger: FeishuAuditLogger
   getFeishuConfig: () => FeishuConfig
+  ownerBind?: FeishuOwnerBindController
   getAppConfig: () => {
     defaultModel: string
     maxParallelChatSessions: number
@@ -66,14 +81,23 @@ export type RemoteCommandRouterDeps = {
   getShellConfig?: () => import('../../src/shared/domainTypes').ShellConfig
 }
 
-const pendingDisambiguation = new Map<string, { profiles: WorkDirProfile[]; originalMsg: FeishuInboundMessage }>()
-
-
 export class RemoteCommandRouter {
   private lastInboundAt?: number
   private lastReplyAt?: number
+  private pendingDisambiguation = new Map<string, PendingDisambiguation>()
 
   constructor(private deps: RemoteCommandRouterDeps) {}
+
+  /** Clear workdir disambiguation pending (rebind / clear owner / remote off). */
+  clearPendingDisambiguation(): void {
+    this.pendingDisambiguation.clear()
+  }
+
+  private purgeExpiredDisambiguation(now = Date.now()): void {
+    for (const [key, pending] of this.pendingDisambiguation) {
+      if (pending.expiresAt <= now) this.pendingDisambiguation.delete(key)
+    }
+  }
 
   getLastInboundAt(): number | undefined {
     return this.lastInboundAt
@@ -88,20 +112,11 @@ export class RemoteCommandRouter {
     const config = mergeFeishuConfig(this.deps.getFeishuConfig())
     logFeishuCliEvent('info', 'feishu.inbound.received', inboundSummaryForLog(msg))
 
-    if (this.deps.confirmManager.tryResolveFromInbound(msg)) return
+    const ownerOpenId = readOwnerOpenIdFromAllowlist(config.remoteSenderAllowlist)
+    if (this.deps.confirmManager.tryResolveFromInbound(msg, { ownerOpenId })) return
 
-    const disambigKey = msg.chatId
-    const pending = pendingDisambiguation.get(disambigKey)
-    if (pending) {
-      const chosen = resolveDisambiguationChoice(msg.content, pending.profiles)
-      if (chosen) {
-        pendingDisambiguation.delete(disambigKey)
-        await this.processCommand(pending.originalMsg, config, chosen.path, chosen, pending.originalMsg.content)
-      }
-      return
-    }
-
-    const accept = shouldAcceptInbound(msg, config)
+    const bindingActive = Boolean(this.deps.ownerBind?.isBindingActive())
+    const accept = shouldAcceptInbound(msg, config, { bindingActive })
     await this.deps.auditLogger.append({
       type: 'inbound',
       messageId: msg.messageId,
@@ -115,6 +130,99 @@ export class RemoteCommandRouter {
       logFeishuCliEvent('info', 'feishu.inbound.reject', { reason: accept.reason })
       if (accept.reason === 'too_long') {
         await replyFeishuText(this.deps.runner, msg.messageId, '消息过长，请控制在 4000 字以内')
+      } else if (accept.reason === 'group_disabled') {
+        logFeishuCliEvent('info', 'feishu.reject.group', { chatId: msg.chatId })
+        await replyFeishuText(
+          this.deps.runner,
+          msg.messageId,
+          '飞书远程仅支持私聊。请向 Bot 发送私聊消息。'
+        )
+      } else if (accept.reason === 'non_owner') {
+        logFeishuCliEvent('warn', 'feishu.reject.non_owner', { senderOpenId: msg.senderOpenId })
+        await replyFeishuText(this.deps.runner, msg.messageId, '您不是已绑定的远程使用者，无法发送指令。')
+      } else if (accept.reason === 'unbound') {
+        logFeishuCliEvent('warn', 'feishu.reject.unbound', { senderOpenId: msg.senderOpenId })
+        await replyFeishuText(
+          this.deps.runner,
+          msg.messageId,
+          '远程尚未完成身份绑定。请在电脑端开启远程监听并完成绑定。'
+        )
+      }
+      return
+    }
+
+    // Bind window: only bind, never treat this message as a business command (closes race Critical #1).
+    if (accept.reason === 'bind_window' || bindingActive) {
+      const bound = Boolean(this.deps.ownerBind?.tryBindFromInbound(msg.senderOpenId))
+      if (bound) {
+        logFeishuCliEvent('info', 'feishu.bind.success', { senderOpenId: msg.senderOpenId })
+        await replyFeishuText(
+          this.deps.runner,
+          msg.messageId,
+          '已绑定为远程控制者。本条仅用于绑定，请重新发送指令。之后仅你可向 Bot 发送指令。'
+        )
+        return
+      }
+
+      const fresh = mergeFeishuConfig(this.deps.getFeishuConfig())
+      const freshOwner = readOwnerOpenIdFromAllowlist(fresh.remoteSenderAllowlist)
+      if (!fresh.remoteEnabled || !freshOwner) {
+        logFeishuCliEvent('warn', 'feishu.reject.unbound', {
+          senderOpenId: msg.senderOpenId,
+          reason: 'bind_failed_or_expired'
+        })
+        await replyFeishuText(
+          this.deps.runner,
+          msg.messageId,
+          '远程尚未完成身份绑定。请在电脑端开启远程监听并完成绑定。'
+        )
+        return
+      }
+      if (msg.senderOpenId !== freshOwner) {
+        logFeishuCliEvent('warn', 'feishu.reject.non_owner', { senderOpenId: msg.senderOpenId })
+        await replyFeishuText(this.deps.runner, msg.messageId, '您不是已绑定的远程使用者，无法发送指令。')
+        return
+      }
+      // Owner already set (e.g. concurrent bind won) — still do not process this bind-window message.
+      await replyFeishuText(
+        this.deps.runner,
+        msg.messageId,
+        '已完成绑定。本条不作为指令执行，请重新发送。'
+      )
+      return
+    }
+
+    // Workdir disambiguation only after current owner + p2p accept (prevents rebind bypass).
+    this.purgeExpiredDisambiguation()
+    const disambigKey = msg.chatId
+    const pending = this.pendingDisambiguation.get(disambigKey)
+    if (pending) {
+      const freshOwner = readOwnerOpenIdFromAllowlist(
+        mergeFeishuConfig(this.deps.getFeishuConfig()).remoteSenderAllowlist
+      )
+      const identityOk =
+        Boolean(freshOwner) &&
+        msg.senderOpenId === freshOwner &&
+        pending.senderOpenId === msg.senderOpenId &&
+        pending.expiresAt > Date.now()
+      if (!identityOk) {
+        this.pendingDisambiguation.delete(disambigKey)
+        logFeishuCliEvent('warn', 'feishu.disambiguation.reject', {
+          senderOpenId: msg.senderOpenId,
+          pendingSender: pending.senderOpenId,
+          reason: 'identity_or_expired'
+        })
+        await replyFeishuText(
+          this.deps.runner,
+          msg.messageId,
+          '工作目录选择已失效（身份变更或超时）。请重新发送指令。'
+        )
+        return
+      }
+      const chosen = resolveDisambiguationChoice(msg.content, pending.profiles)
+      if (chosen) {
+        this.pendingDisambiguation.delete(disambigKey)
+        await this.processCommand(pending.originalMsg, config, chosen.path, chosen, pending.originalMsg.content)
       }
       return
     }
@@ -125,12 +233,6 @@ export class RemoteCommandRouter {
       contentLen: userContent.length,
       contentHash: contentHash(userContent)
     })
-
-    if (config.remoteSenderAllowlist?.length && !config.remoteSenderAllowlist.includes(msg.senderOpenId)) {
-      logFeishuCliEvent('warn', 'feishu.inbound.allowlist_reject', { senderOpenId: msg.senderOpenId })
-      await replyFeishuText(this.deps.runner, msg.messageId, '您暂无权限向此 Bot 发送指令。')
-      return
-    }
 
     if (!rateLimiter.check(msg.senderOpenId, config.remoteRateLimitPerMinute)) {
       await this.deps.auditLogger.append({ type: 'rate_limit', senderOpenId: msg.senderOpenId })
@@ -157,7 +259,14 @@ export class RemoteCommandRouter {
         profileIds: workDirResult.ambiguous.map((p) => p.id),
         chatId: msg.chatId
       })
-      pendingDisambiguation.set(disambigKey, { profiles: workDirResult.ambiguous, originalMsg: msg })
+      const now = Date.now()
+      this.pendingDisambiguation.set(disambigKey, {
+        profiles: workDirResult.ambiguous,
+        originalMsg: msg,
+        senderOpenId: msg.senderOpenId,
+        createdAt: now,
+        expiresAt: now + DISAMBIGUATION_TTL_MS
+      })
       await replyFeishuText(this.deps.runner, msg.messageId, buildDisambiguationReply(workDirResult.ambiguous))
       return
     }

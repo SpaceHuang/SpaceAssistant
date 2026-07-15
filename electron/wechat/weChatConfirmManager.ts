@@ -9,6 +9,14 @@ import {
   PendingRequestRegistry,
   type PendingDecision
 } from '../remote/pendingRequestRegistry'
+import {
+  formatImConfirmPromptFooter,
+  IM_CONFIRM_TRUST_MISCLICK_HINT,
+  IM_CONFIRM_USAGE_HINT,
+  parseImConfirmReply
+} from '../remote/imConfirmReply'
+import { addTrustedCommand } from '../shell/shellCommandTrust'
+import type { AppDatabase } from '../database'
 
 export type WeChatConfirmKind = 'tool_write'
 
@@ -24,9 +32,9 @@ export interface WeChatPendingConfirm {
   inboundMsg: IncomingMessage
   createdAt: number
   expiresAt: number
+  trustEligible?: boolean
 }
 
-const CONFIRM_RE = /^[Yy]$|^[Nn]$|^确认$|^取消$/
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5 * 60_000
 
 export type WeChatConfirmRequestOptions = {
@@ -39,7 +47,8 @@ export class WeChatConfirmManager {
   constructor(
     private auditLogger?: WeChatAuditLogger,
     private getWebContents?: () => WebContents | null,
-    private getReplyBot?: () => import('./weChatReplyService').WeChatReplyBot | undefined
+    private getReplyBot?: () => import('./weChatReplyService').WeChatReplyBot | undefined,
+    private db?: AppDatabase
   ) {}
 
   listPending(): WeChatPendingConfirm[] {
@@ -66,17 +75,53 @@ export class WeChatConfirmManager {
     }
   }
 
-  tryResolveFromInbound(msg: WeChatInboundMessage, _inboundRaw: IncomingMessage): boolean {
-    const text = msg.text.trim()
-    if (!CONFIRM_RE.test(text)) return false
+  tryResolveFromInbound(
+    msg: WeChatInboundMessage,
+    _inboundRaw: IncomingMessage,
+    opts?: { allowedUserIds?: string[] }
+  ): boolean {
+    const parsed = parseImConfirmReply(msg.text)
+    if (parsed.kind === 'not_confirm') return false
+
+    if (!isWeChatConfirmAuthorizedSender(msg, opts?.allowedUserIds)) return false
 
     const match = this.registry.listPending().find(
       (p) => p.userId === msg.userId && p.messageId !== msg.messageId
     )
     if (!match) return false
 
-    const decision: 'y' | 'n' = /^[Yy]$|^确认$/.test(text) ? 'y' : 'n'
+    const replyBot = this.getReplyBot?.()
+
+    if (parsed.kind === 'trust_misclick' || parsed.kind === 'usage_hint') {
+      const hint =
+        parsed.kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : IM_CONFIRM_USAGE_HINT
+      if (replyBot) void replyBot.reply(match.inboundMsg, hint).catch(() => undefined)
+      return true
+    }
+
+    if (parsed.kind === 'approve_and_trust') {
+      if (match.trustEligible === false || !this.tryAddTrust(match)) {
+        if (replyBot) void replyBot.reply(match.inboundMsg, IM_CONFIRM_USAGE_HINT).catch(() => undefined)
+        return true
+      }
+      this.resolve(match.id, 'y')
+      return true
+    }
+
+    const decision: 'y' | 'n' = parsed.kind === 'approve' ? 'y' : 'n'
     this.resolve(match.id, decision)
+    return true
+  }
+
+  private tryAddTrust(pending: WeChatPendingConfirm): boolean {
+    if (pending.toolName !== 'run_shell' || !this.db) return false
+    const command = typeof pending.toolInput?.command === 'string' ? pending.toolInput.command : ''
+    if (!command.trim()) return false
+    addTrustedCommand(this.db, command)
+    logWeChatCliEvent('info', 'wechat.trust.add', {
+      confirmId: pending.id,
+      command: command.slice(0, 120)
+    })
     return true
   }
 
@@ -110,11 +155,11 @@ export class WeChatConfirmManager {
     const now = Date.now()
     const entry: WeChatPendingConfirm = {
       ...pending,
+      trustEligible: pending.trustEligible ?? false,
       id,
       createdAt: now,
       expiresAt: now + timeoutMs
     }
-    // Register first so pending count includes this request when notifying desktop.
     const wait = this.registry.register(entry, timeoutMs, {
       onTimeout: (item) => {
         this.emitResolved(id, 'timeout')
@@ -156,7 +201,8 @@ export class WeChatConfirmManager {
 
   buildWeChatYnPrompt(pending: WeChatPendingConfirm, progressPrefix = ''): string {
     const tool = pending.toolName ?? 'unknown'
-    const summary = `该操作需在确认后执行：\n工具：${tool}`
+    const footer = formatImConfirmPromptFooter({ trustEligible: pending.trustEligible === true })
+    const summary = `该操作需在确认后执行：\n工具：${tool}\n${footer}`
     const prefix = progressPrefix.trim() || `【进度】等待确认：${tool}`
     return buildConfirmInstantPrompt({
       progressPrefix: prefix,
@@ -171,4 +217,13 @@ export class WeChatConfirmManager {
     const input = pending.toolInput ? JSON.stringify(pending.toolInput).slice(0, 200) : ''
     return `微信远程 · ${tool}${input ? `: ${input}` : ''}`
   }
+}
+
+/** Confirm replies only from allowlisted senders (bound WeChat user). */
+export function isWeChatConfirmAuthorizedSender(
+  msg: WeChatInboundMessage,
+  allowedUserIds?: string[]
+): boolean {
+  if (!allowedUserIds?.length) return false
+  return allowedUserIds.includes(msg.userId)
 }

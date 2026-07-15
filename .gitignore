@@ -32,3 +32,7 @@ docs/project/
 
 # Impeccable 代码审查工具输出
 .impeccable/
+
+# 本地分析报告，不纳入版本控制
+docs/analyze/
+docs/review/

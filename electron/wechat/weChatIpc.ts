@@ -83,7 +83,12 @@ export function createWeChatBundle(deps: {
     }
   })
 
-  const confirmManager = new WeChatConfirmManager(auditLogger, getWc, () => botService.getBot() ?? undefined)
+  const confirmManager = new WeChatConfirmManager(
+    auditLogger,
+    getWc,
+    () => botService.getBot() ?? undefined,
+    deps.db
+  )
 
   const router = new WeChatCommandRouter({
     db: deps.db,
@@ -196,18 +201,21 @@ export function registerWeChatIpcHandlers(
     })
     if (r.ok) {
       const status = b.botService.getStatus()
+      const allowlist = status.boundUserId ? [status.boundUserId] : undefined
       persistWeChatConfig(deps.db, {
         enabled: true,
         loggedIn: true,
         remoteEnabled: true,
         displayName: status.displayName,
-        botIdSuffix: status.botIdSuffix
+        botIdSuffix: status.botIdSuffix,
+        ...(allowlist ? { remoteSenderAllowlist: allowlist } : {})
       })
       const pollStatus = await b.botService.startPoll()
       logWeChatCliEvent(pollStatus.pollState === 'polling' ? 'info' : 'error', 'wechat.ipc.login_start', {
         ok: r.ok,
         pollState: pollStatus.pollState,
-        lastError: pollStatus.lastError
+        lastError: pollStatus.lastError,
+        hasAllowlist: Boolean(allowlist)
       })
     } else {
       logWeChatCliEvent('warn', 'wechat.ipc.login_start', { ok: false, error: r.error })
@@ -247,11 +255,18 @@ export function registerWeChatIpcHandlers(
 
   ipcMain.handle('wechat:poll-start', async () => {
     const status = await b.botService.startPoll()
+    const boundUserId = b.botService.getBoundUserId() ?? status.boundUserId
+    const cfg = readWeChatConfigFromDb(deps.db)
+    const patch: Parameters<typeof persistWeChatConfig>[1] = { remoteEnabled: true }
+    if (boundUserId && !cfg.remoteSenderAllowlist?.length) {
+      patch.remoteSenderAllowlist = [boundUserId]
+    }
+    persistWeChatConfig(deps.db, patch)
     logWeChatCliEvent(status.pollState === 'polling' ? 'info' : 'error', 'wechat.poll.start', {
       pollState: status.pollState,
-      lastError: status.lastError
+      lastError: status.lastError,
+      allowlistBackfilled: Boolean(boundUserId && !cfg.remoteSenderAllowlist?.length)
     })
-    persistWeChatConfig(deps.db, { remoteEnabled: true })
     return status
   })
 

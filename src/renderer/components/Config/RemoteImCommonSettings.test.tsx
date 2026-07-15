@@ -29,10 +29,12 @@ describe('RemoteImCommonSettings', () => {
     expect(screen.getByText(/会话续接/)).toBeTruthy()
     expect(screen.getByText('远程默认模型')).toBeTruthy()
     expect(screen.getByText('远程进展同步')).toBeTruthy()
+    expect(screen.getByText('限制远程写入与出站')).toBeTruthy()
     expect(screen.getByText('允许远程指令执行本地文件写操作')).toBeTruthy()
-    expect(screen.getByText('远程写确认策略')).toBeTruthy()
+    expect(screen.getByText('禁止远程出站（微信发送 / 飞书写工具）')).toBeTruthy()
+    expect(screen.getByText('远程浏览器 navigate/act 需确认')).toBeTruthy()
     expect(screen.getByText(/消息频率限制/)).toBeTruthy()
-    expect(screen.getByText('发送者白名单')).toBeTruthy()
+    expect(screen.getByText('已绑定发送者（只读）')).toBeTruthy()
   })
 
   it('calls onChange when notify checkbox is toggled', async () => {
@@ -88,11 +90,8 @@ describe('RemoteImCommonSettings', () => {
       </ConfigProvider>
     )
 
-    const switchEl = (await screen.findByText('允许远程会话使用浏览器')).parentElement?.querySelector(
-      'button'
-    )
-    expect(switchEl).toBeTruthy()
-    fireEvent.click(switchEl!)
+    const switches = screen.getAllByRole('switch')
+    fireEvent.click(switches[0]!)
     expect(onAllowRemoteBrowserSessionsChange).toHaveBeenCalledWith(true)
   })
 })

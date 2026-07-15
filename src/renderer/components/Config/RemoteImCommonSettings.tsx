@@ -1,6 +1,10 @@
-import { Checkbox, Collapse, Input, InputNumber, Select, Space, Tooltip } from 'antd'
+import { Checkbox, Collapse, Input, InputNumber, Select, Space } from 'antd'
 import type { ModelEntry } from '../../../shared/domainTypes'
-import type { ImConfirmPolicy, RemoteImCommonConfig } from '../../../shared/imTypes'
+import {
+  applyRemoteRestrictWritesAndOutbound,
+  isRemoteRestrictWritesAndOutbound,
+  type RemoteImCommonConfig
+} from '../../../shared/imTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../../shared/remoteProgressTypes'
 import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -23,6 +27,7 @@ export function RemoteImCommonSettings({
   onAllowRemoteBrowserSessionsChange
 }: Props) {
   const { t } = useTypedTranslation('config')
+  const restrictOn = isRemoteRestrictWritesAndOutbound(value)
 
   return (
     <ConfigSettingsStack>
@@ -127,6 +132,13 @@ export function RemoteImCommonSettings({
         ]}
       />
 
+      <ConfigSwitchRow
+        label={t('remoteImCommon.restrictWritesAndOutbound')}
+        hint={t('remoteImCommon.restrictWritesAndOutboundHint')}
+        checked={restrictOn}
+        onChange={(enabled) => onChange(applyRemoteRestrictWritesAndOutbound(Boolean(enabled)))}
+      />
+
       <Checkbox
         checked={value.remoteAllowLocalWrite}
         onChange={(e) => onChange({ remoteAllowLocalWrite: e.target.checked })}
@@ -134,49 +146,37 @@ export function RemoteImCommonSettings({
         {t('remoteImCommon.remoteAllowLocalWrite')}
       </Checkbox>
 
-      <ConfigField label={t('remoteImCommon.remoteConfirmLabel')}>
-        <Select
-          value={value.remoteConfirmPolicy}
-          onChange={(remoteConfirmPolicy: ImConfirmPolicy) => onChange({ remoteConfirmPolicy })}
-          classNames={configModalSelectPopupClassNames}
-          options={[
-            { value: 'im_confirm', label: t('remoteImCommon.remoteConfirmIm') },
-            { value: 'remote_read_only', label: t('remoteImCommon.remoteConfirmReadOnly') },
-            { value: 'always', label: t('remoteImCommon.remoteConfirmAlways') },
-            {
-              value: 'inherit',
-              label: (
-                <Tooltip title={t('remoteImCommon.remoteConfirmInheritHint')}>
-                  <span>{t('remoteImCommon.remoteConfirmInherit')}</span>
-                </Tooltip>
-              )
-            }
-          ]}
-        />
-      </ConfigField>
+      <Checkbox
+        checked={value.remoteDenyOutbound}
+        onChange={(e) => onChange({ remoteDenyOutbound: e.target.checked })}
+      >
+        {t('remoteImCommon.remoteDenyOutbound')}
+      </Checkbox>
+
+      <ConfigSwitchRow
+        label={t('remoteImCommon.remoteBrowserRequiresConfirm')}
+        hint={t('remoteImCommon.remoteBrowserRequiresConfirmHint')}
+        checked={value.remoteBrowserRequiresConfirm}
+        onChange={(v) => onChange({ remoteBrowserRequiresConfirm: Boolean(v) })}
+      />
 
       <ConfigField label={t('remoteImCommon.rateLimitLabel')}>
         <InputNumber
           min={1}
           max={120}
           value={value.remoteRateLimitPerMinute}
-          onChange={(v) => onChange({ remoteRateLimitPerMinute: v ?? 10 })}
+          onChange={(v) => onChange({ remoteRateLimitPerMinute: v ?? 60 })}
         />
       </ConfigField>
 
       <ConfigField label={t('remoteImCommon.senderAllowlistLabel')}>
         <Input.TextArea
           rows={3}
+          readOnly
           placeholder={t('remoteImCommon.senderAllowlistPlaceholder')}
           value={(value.remoteSenderAllowlist ?? []).join('\n')}
-          onChange={(e) => {
-            const list = e.target.value
-              .split(/[\n,]+/)
-              .map((s) => s.trim())
-              .filter(Boolean)
-            onChange({ remoteSenderAllowlist: list.length ? list : undefined })
-          }}
         />
+        <p className="config-field__hint">{t('remoteImCommon.senderAllowlistReadonlyHint')}</p>
       </ConfigField>
     </ConfigSettingsStack>
   )

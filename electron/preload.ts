@@ -240,10 +240,24 @@ const api: SpaceAssistantApi = {
   feishuAuditQuery: (opts) => ipcRenderer.invoke('feishu:audit-query', opts),
   feishuHealthCheck: () => ipcRenderer.invoke('feishu:health-check'),
   feishuCheckCliUpdate: () => ipcRenderer.invoke('feishu:check-cli-update'),
+  feishuOwnerBindStatus: () => ipcRenderer.invoke('feishu:owner-bind-status'),
+  feishuOwnerRebind: () => ipcRenderer.invoke('feishu:owner-rebind'),
+  feishuOwnerBindCancel: () => ipcRenderer.invoke('feishu:owner-bind-cancel'),
+  feishuOwnerClear: () => ipcRenderer.invoke('feishu:owner-clear'),
   feishuOnConfigInitProgress: (cb: (data: { line: string }) => void) => {
     const fn = (_e: unknown, data: { line: string }) => cb(data)
     ipcRenderer.on('feishu:config-init-progress', fn)
     return () => ipcRenderer.removeListener('feishu:config-init-progress', fn)
+  },
+  feishuOnConfigChanged: (cb) => {
+    const fn = (_e: unknown, data: { feishu: import('../src/shared/feishuTypes').FeishuConfig }) => cb(data)
+    ipcRenderer.on('feishu:config-changed', fn)
+    return () => ipcRenderer.removeListener('feishu:config-changed', fn)
+  },
+  feishuOnBindTimeout: (cb) => {
+    const fn = () => cb()
+    ipcRenderer.on('feishu:bind-timeout', fn)
+    return () => ipcRenderer.removeListener('feishu:bind-timeout', fn)
   },
   feishuOnInboundMessage: (cb) => {
     const fn = (_e: unknown, data: { sessionId: string; message: unknown }) => cb(data)

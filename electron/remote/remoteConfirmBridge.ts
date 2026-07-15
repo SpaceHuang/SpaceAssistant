@@ -79,7 +79,8 @@ export function createFeishuRequestToolConfirm(
       toolName: payload.toolName,
       toolInput: payload.toolInput,
       messageId: payload.messageId,
-      chatId: payload.chatId ?? ''
+      chatId: payload.chatId ?? '',
+      trustEligible: payload.trustEligible
     })
     logFeishuCliEvent('info', 'feishu.remote.confirm', {
       sessionId: payload.sessionId,
@@ -113,7 +114,8 @@ export function createWeChatRequestToolConfirm(args: {
         toolInput: payload.toolInput,
         messageId: payload.messageId,
         userId: payload.userId ?? userId,
-        inboundMsg: inboundRaw
+        inboundMsg: inboundRaw,
+        trustEligible: payload.trustEligible
       },
       wechatConfig,
       undefined,

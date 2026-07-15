@@ -20,6 +20,12 @@ import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
+import {
+  FeishuOwnerBindController,
+  ownerAllowlistFromOpenId,
+  readOwnerOpenIdFromAllowlist,
+  type FeishuOwnerBindSnapshot
+} from './feishuOwnerBind'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
 const WORKDIR_PROFILES_KEY = 'config.workDirProfiles'
@@ -32,9 +38,25 @@ export type FeishuServiceBundle = {
   auditLogger: FeishuAuditLogger
   eventService: FeishuEventService | null
   router: RemoteCommandRouter | null
+  ownerBind: FeishuOwnerBindController
 }
 
 let bundle: FeishuServiceBundle | null = null
+
+function notifyFeishuConfigChanged(cfg: FeishuConfig): void {
+  getMainWindow()?.webContents?.send('feishu:config-changed', { feishu: cfg })
+}
+
+function syncOwnerBindWithConfig(cfg: FeishuConfig, ownerBind: FeishuOwnerBindController): void {
+  const hasOwner = Boolean(readOwnerOpenIdFromAllowlist(cfg.remoteSenderAllowlist))
+  if (cfg.remoteEnabled && !hasOwner && !ownerBind.isBindingActive()) {
+    const windowMs = (cfg.remoteOwnerBindWindowMinutes ?? 5) * 60_000
+    ownerBind.startBindingWindow(windowMs)
+  }
+  if (!cfg.remoteEnabled) {
+    ownerBind.dispose()
+  }
+}
 
 export function readFeishuConfigFromDb(db: AppDatabase): FeishuConfig {
   const raw = getConfigValue(db, FEISHU_CONFIG_KEY)
@@ -74,6 +96,29 @@ export function createFeishuBundle(deps: {
   const auditLogger = new FeishuAuditLogger(userData)
   const confirmManager = new FeishuConfirmManager(auditLogger, runner, deps.db)
 
+  const ownerBind = new FeishuOwnerBindController({
+    getOwnerOpenId: () => readOwnerOpenIdFromAllowlist(readCfg().remoteSenderAllowlist),
+    setOwnerOpenId: (ownerOpenId) => {
+      persistFeishuConfig(deps.db, {
+        remoteSenderAllowlist: ownerAllowlistFromOpenId(ownerOpenId)
+      })
+    },
+    setRemoteEnabled: (enabled) => {
+      const next = persistFeishuConfig(deps.db, { remoteEnabled: enabled })
+      notifyFeishuConfigChanged(next)
+      if (!enabled) {
+        bundle?.router?.clearPendingDisambiguation()
+        void bundle?.eventService?.stop()
+      }
+    },
+    onAudit: (event, fields) => {
+      logFeishuCliEvent('info', event, fields ?? {})
+      if (event === 'feishu.bind.timeout') {
+        getMainWindow()?.webContents?.send('feishu:bind-timeout', {})
+      }
+    }
+  })
+
   const routerDeps: RemoteCommandRouterDeps = {
     db: deps.db,
     runner,
@@ -81,6 +126,7 @@ export function createFeishuBundle(deps: {
     confirmManager,
     auditLogger,
     getFeishuConfig: readCfg,
+    ownerBind,
     getAppConfig: () => ({
       defaultModel: deps.getModel(),
       maxParallelChatSessions: deps.getMaxParallel(),
@@ -103,7 +149,8 @@ export function createFeishuBundle(deps: {
   const eventService = new FeishuEventService(runner, (msg) => void router.handleInbound(msg), () => {})
 
   const cfg = readCfg()
-  bundle = { runner, processedStore, confirmManager, auditLogger, eventService, router }
+  bundle = { runner, processedStore, confirmManager, auditLogger, eventService, router, ownerBind }
+  syncOwnerBindWithConfig(cfg, ownerBind)
   logFeishuCliEvent('info', 'feishu.service.bundle_created', {
     hasRunner: true,
     remoteEnabled: cfg.remoteEnabled
@@ -351,11 +398,55 @@ export function registerFeishuIpcHandlers(
     logFeishuCliEvent('info', 'feishu.ipc.check_cli_update', { latest })
     return { latest }
   })
+
+  ipcMain.handle('feishu:owner-bind-status', async (): Promise<FeishuOwnerBindSnapshot> => {
+    return b.ownerBind.getSnapshot()
+  })
+
+  ipcMain.handle('feishu:owner-rebind', async () => {
+    const cfg = readFeishuConfigFromDb(deps.db)
+    const windowMs = (cfg.remoteOwnerBindWindowMinutes ?? 5) * 60_000
+    b.router?.clearPendingDisambiguation()
+    persistFeishuConfig(deps.db, { remoteEnabled: true, remoteSenderAllowlist: undefined })
+    b.ownerBind.startRebind(windowMs)
+    const next = readFeishuConfigFromDb(deps.db)
+    notifyFeishuConfigChanged(next)
+    return b.ownerBind.getSnapshot()
+  })
+
+  ipcMain.handle('feishu:owner-bind-cancel', async () => {
+    b.router?.clearPendingDisambiguation()
+    b.ownerBind.cancelBinding()
+    return b.ownerBind.getSnapshot()
+  })
+
+  ipcMain.handle('feishu:owner-clear', async () => {
+    b.router?.clearPendingDisambiguation()
+    b.ownerBind.clearOwner()
+    return b.ownerBind.getSnapshot()
+  })
 }
 
 export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConfig>): FeishuConfig {
-  const next = mergeFeishuConfig({ ...readFeishuConfigFromDb(db), ...partial })
+  const prev = readFeishuConfigFromDb(db)
+  const next = mergeFeishuConfig({ ...prev, ...partial })
   setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next))
   logFeishuCliEvent('info', 'feishu.config.persist', { keys: Object.keys(partial) })
+  if (bundle?.ownerBind) {
+    const wasRemote = prev.remoteEnabled
+    const nowRemote = next.remoteEnabled
+    const hasOwner = Boolean(readOwnerOpenIdFromAllowlist(next.remoteSenderAllowlist))
+    if (nowRemote && !hasOwner && (!wasRemote || !readOwnerOpenIdFromAllowlist(prev.remoteSenderAllowlist))) {
+      const windowMs = (next.remoteOwnerBindWindowMinutes ?? 5) * 60_000
+      if (!bundle.ownerBind.isBindingActive()) {
+        bundle.ownerBind.startBindingWindow(windowMs)
+      }
+    }
+    if (!nowRemote && wasRemote) {
+      bundle.ownerBind.dispose()
+      bundle.router?.clearPendingDisambiguation()
+      void bundle.eventService?.stop()
+    }
+  }
   return next
 }

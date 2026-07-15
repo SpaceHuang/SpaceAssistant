@@ -59,7 +59,8 @@ import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
 import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
-import { shouldSkipRunScriptConfirmForAutoAllow } from './shell/shellCommandTrust'
+import { analyzeScriptContent } from './shell/scriptContentSecurity'
+import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import {
   logShellPathConfirm,
   logShellSecurityDeny,
@@ -1114,15 +1115,91 @@ async function runToolChatSessionInner(
       if (toolName === 'run_shell' && shellPrecheck?.ok && shellPrecheck.skipConfirm) {
         needsConfirm = false
       }
-      if (toolName === 'run_script' && shouldSkipRunScriptConfirmForAutoAllow(shellConfig)) {
+
+      if (
+        remoteContext &&
+        (toolName === 'write_file' || toolName === 'edit_file')
+      ) {
+        const allowLocalWrite =
+          (remoteContext.source === 'feishu'
+            ? feishuConfig?.remoteAllowLocalWrite
+            : wechatConfig?.remoteAllowLocalWrite) ?? true
+        if (allowLocalWrite) {
+          needsConfirm = false
+          logAgentEvent('info', 'tool.confirm.skip_confirm', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            reason: 'remote_allow_local_write'
+          })
+        }
+      }
+
+      if (
+        shouldSkipRemoteBrowserConfirm(remoteContext, toolName, inputObj, feishuConfig, wechatConfig)
+      ) {
         needsConfirm = false
-        logAgentEvent('info', 'script.auto_allow.execute', {
+        logAgentEvent('info', 'tool.confirm.skip_confirm', {
           requestId,
           sessionId,
           toolUseId,
-          tool: 'run_script',
-          timestamp: Date.now()
+          toolName,
+          reason: 'remote_browser_no_confirm'
         })
+      }
+
+      if (toolName === 'run_script') {
+        const code = typeof inputObj.code === 'string' ? inputObj.code : ''
+        const scriptAnalysis = analyzeScriptContent(code, { remote: Boolean(remoteContext) })
+        if (scriptAnalysis.verdict === 'deny') {
+          const denyMsg = `脚本内容安全检查拒绝执行（${scriptAnalysis.patterns.join(',') || 'deny'}）${
+            scriptAnalysis.reason ? `：${scriptAnalysis.reason}` : ''
+          }`
+          logAgentEvent('info', 'script.deny', {
+            requestId,
+            sessionId,
+            toolUseId,
+            patterns: scriptAnalysis.patterns,
+            remote: Boolean(remoteContext)
+          })
+          logToolLoopError(
+            { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+            denyMsg,
+            denyMsg
+          )
+          toolResults.push(buildToolErrorResult(toolUseId, denyMsg))
+          safeWebContentsSend(sender, 'tool:result', {
+            requestId,
+            toolUseId,
+            result: { success: false, error: denyMsg }
+          })
+          if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
+            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
+            break
+          }
+          continue
+        }
+        if (scriptAnalysis.verdict === 'allow') {
+          needsConfirm = false
+          logAgentEvent('info', 'script.allow.execute', {
+            requestId,
+            sessionId,
+            toolUseId,
+            patterns: scriptAnalysis.patterns,
+            remote: Boolean(remoteContext)
+          })
+        } else {
+          needsConfirm = true
+          logAgentEvent('info', 'script.ask', {
+            requestId,
+            sessionId,
+            toolUseId,
+            patterns: scriptAnalysis.patterns,
+            remote: Boolean(remoteContext)
+          })
+        }
+        // Content analysis replaces autoAllowScriptExecution as the gate.
       }
       if (fileAutoApproved) {
         needsConfirm = false
@@ -1146,7 +1223,11 @@ async function runToolChatSessionInner(
               toolInput: inputObj,
               messageId: remoteContext.messageId,
               chatId: remoteContext.chatId,
-              userId: remoteContext.userId
+              userId: remoteContext.userId,
+              trustEligible:
+                toolName === 'run_shell' && shellPrecheck?.ok
+                  ? canShowShellTrustOption(shellPrecheck.analysis)
+                  : false
             },
             wechatConfig
           })
@@ -1633,6 +1714,24 @@ async function runToolChatSessionInner(
   }
 }
 
+/** @internal exported for unit tests */
+export function shouldSkipRemoteBrowserConfirm(
+  remoteContext: RemoteContext | undefined,
+  toolName: string,
+  inputObj: Record<string, unknown>,
+  feishuConfig?: FeishuConfig,
+  wechatConfig?: WeChatConfig
+): boolean {
+  if (!remoteContext || toolName !== 'browser') return false
+  const action = inputObj.action
+  if (action !== 'navigate' && action !== 'act') return false
+  const requireBrowserConfirm =
+    (remoteContext.source === 'feishu'
+      ? feishuConfig?.remoteBrowserRequiresConfirm
+      : wechatConfig?.remoteBrowserRequiresConfirm) ?? false
+  return !requireBrowserConfirm
+}
+
 function toolNeedsUserConfirmation(
   toolName: string,
   inputObj: Record<string, unknown>,
@@ -1657,9 +1756,9 @@ function toolNeedsUserConfirmation(
   }
   if (toolName === 'run_lark_cli') {
     const args = inputObj.args
-    if (!Array.isArray(args)) return feishuConfig?.larkCliWriteRequiresConfirm ?? true
+    if (!Array.isArray(args)) return feishuConfig?.larkCliWriteRequiresConfirm ?? false
     if (isLarkCliWriteOperation(args as string[])) {
-      return feishuConfig?.larkCliWriteRequiresConfirm ?? true
+      return feishuConfig?.larkCliWriteRequiresConfirm ?? false
     }
     return false
   }
@@ -1699,18 +1798,15 @@ function evaluateRemoteToolBlock(
 ): string | null {
   if (!remoteContext) return null
 
-  const allowLocalWrite =
-    (remoteContext.source === 'feishu'
-      ? feishuConfig?.remoteAllowLocalWrite
-      : wechatConfig?.remoteAllowLocalWrite) ?? false
+  const channelConfig = remoteContext.source === 'feishu' ? feishuConfig : wechatConfig
+  const allowLocalWrite = channelConfig?.remoteAllowLocalWrite ?? true
+  const denyOutbound = channelConfig?.remoteDenyOutbound ?? false
 
   if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
     return '远程策略禁止此类写操作。'
   }
 
-  const policy = remoteContext.confirmPolicy
-
-  if (remoteContext.source === 'feishu' && toolName === 'run_lark_cli' && policy === 'remote_read_only') {
+  if (remoteContext.source === 'feishu' && toolName === 'run_lark_cli' && denyOutbound) {
     const args = inputObj.args
     if (Array.isArray(args) && isLarkCliWriteOperation(args as string[])) {
       return '远程策略禁止此类写操作。'
@@ -1720,7 +1816,7 @@ function evaluateRemoteToolBlock(
   if (
     remoteContext.source === 'wechat' &&
     (toolName === 'wechat_send' || toolName === 'wechat_reply') &&
-    policy === 'remote_read_only'
+    denyOutbound
   ) {
     return '远程策略禁止此类写操作。'
   }

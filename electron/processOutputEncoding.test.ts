@@ -41,9 +41,15 @@ describe('processOutputEncoding', () => {
     expect(env.NODE_OPTIONS).toBe('--use-system-ca')
   })
 
-  it('buildPythonScriptEnv forces UTF-8 for Python IO', () => {
-    const env = buildPythonScriptEnv({ PATH: '/bin' })
+  it('buildPythonScriptEnv forces UTF-8 and strips API keys like Shell', () => {
+    const env = buildPythonScriptEnv({
+      PATH: '/bin',
+      ANTHROPIC_API_KEY: 'secret',
+      HOME: '/home/user'
+    })
     expect(env.PYTHONIOENCODING).toBe('utf-8')
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+    expect(env.PATH).toBeTruthy()
     if (process.platform === 'win32') {
       expect(env.PYTHONUTF8).toBe('1')
     }

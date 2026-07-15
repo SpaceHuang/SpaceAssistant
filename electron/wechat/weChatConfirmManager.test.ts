@@ -35,7 +35,9 @@ describe('WeChatConfirmManager', () => {
       timestamp: new Date().toISOString(),
       contextToken: 'ctx'
     }
-    expect(mgr.tryResolveFromInbound(ynMsg, makeIncomingMessage())).toBe(true)
+    expect(mgr.tryResolveFromInbound(ynMsg, makeIncomingMessage(), {
+      allowedUserIds: ['wx-user@test']
+    })).toBe(true)
     await expect(promise).resolves.toBe('y')
     expect(reply).toHaveBeenCalledWith(
       expect.anything(),
@@ -78,5 +80,37 @@ describe('WeChatConfirmManager', () => {
     expect(pending).toHaveLength(1)
     expect(mgr.resolveFromDesktop(pending[0]!.id, true)).toBe(true)
     return expect(promise).resolves.toBe('y')
+  })
+
+  it('does not resolve confirm from non-allowlisted sender', async () => {
+    const mgr = new WeChatConfirmManager()
+    const inbound = makeIncomingMessage()
+    const promise = mgr.requestConfirm(
+      {
+        kind: 'tool_write',
+        sessionId: 'sess-deny',
+        toolName: 'write_file',
+        messageId: 'orig',
+        userId: 'wx-user@test',
+        inboundMsg: inbound
+      },
+      DEFAULT_WECHAT_CONFIG
+    )
+    const ynMsg = {
+      messageId: 'yn-attacker',
+      userId: 'attacker@test',
+      text: 'Y',
+      type: 'text' as const,
+      timestamp: new Date().toISOString(),
+      contextToken: 'ctx'
+    }
+    expect(
+      mgr.tryResolveFromInbound(ynMsg, makeIncomingMessage(), {
+        allowedUserIds: ['wx-user@test']
+      })
+    ).toBe(false)
+    expect(mgr.countPending()).toBe(1)
+    mgr.cancelAllPending()
+    await expect(promise).resolves.toBe('n')
   })
 })

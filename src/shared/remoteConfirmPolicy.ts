@@ -3,6 +3,10 @@ import { normalizeImConfirmPolicy } from './imTypes'
 
 export type RemoteChannel = 'feishu' | 'wechat'
 
+/**
+ * @deprecated Confirm path is no longer gated by policy; always im_confirm.
+ * remote_read_only behavior moved to remoteDenyOutbound / remoteAllowLocalWrite.
+ */
 export type ResolvedRemoteConfirmPolicy = 'im_confirm' | 'remote_read_only'
 
 export type RemoteConfirmPolicyInput = LegacyImConfirmPolicy
@@ -15,12 +19,14 @@ export function normalizeWeChatConfirmPolicy(
   return normalizeImConfirmPolicy(policy) ?? 'always'
 }
 
-export function resolveRemoteConfirmPolicy(args: {
+/**
+ * @deprecated Runtime always allows IM confirm when a tool needs it.
+ * Outbound/write hard-deny is via remoteDenyOutbound / remoteAllowLocalWrite.
+ */
+export function resolveRemoteConfirmPolicy(_args: {
   source: RemoteChannel
   confirmPolicy: RemoteConfirmPolicyInput
 }): ResolvedRemoteConfirmPolicy {
-  const { confirmPolicy } = args
-  if (confirmPolicy === 'remote_read_only') return 'remote_read_only'
   return 'im_confirm'
 }
 
@@ -28,6 +34,7 @@ export function shouldRequestImConfirm(resolved: ResolvedRemoteConfirmPolicy): b
   return resolved === 'im_confirm'
 }
 
+/** @deprecated Use remoteDenyOutbound / remoteAllowLocalWrite instead. */
 export function isRemoteReadOnlyPolicy(confirmPolicy: RemoteConfirmPolicyInput): boolean {
   return confirmPolicy === 'remote_read_only'
 }

@@ -91,7 +91,11 @@ export class WeChatCommandRouter {
     }
     const bot = this.deps.botService.getBot()
 
-    if (this.deps.confirmManager.tryResolveFromInbound(msg, raw)) {
+    if (
+      this.deps.confirmManager.tryResolveFromInbound(msg, raw, {
+        allowedUserIds: config.remoteSenderAllowlist
+      })
+    ) {
       logWeChatCliEvent('info', 'wechat.inbound.confirm_resolved', { userId: msg.userId })
       return
     }
@@ -136,9 +140,14 @@ export class WeChatCommandRouter {
       acceptReason: accept.reason ?? acceptReason
     })
 
-    if (config.remoteSenderAllowlist?.length && !config.remoteSenderAllowlist.includes(msg.userId)) {
-      logWeChatCliEvent('warn', 'wechat.inbound.allowlist_reject', { userId: msg.userId })
-      if (bot) await bot.reply(raw, '您暂无权限向此 Bot 发送指令。')
+    if (!config.remoteSenderAllowlist?.length) {
+      logWeChatCliEvent('warn', 'wechat.reject.non_owner', { userId: msg.userId, reason: 'empty_allowlist' })
+      if (bot) await bot.reply(raw, '远程尚未绑定发送者，请在电脑端重新扫码绑定后再试。')
+      return
+    }
+    if (!config.remoteSenderAllowlist.includes(msg.userId)) {
+      logWeChatCliEvent('warn', 'wechat.reject.non_owner', { userId: msg.userId })
+      if (bot) await bot.reply(raw, '您不是已绑定的远程使用者，无法发送指令。')
       return
     }
 

@@ -69,13 +69,13 @@ describe('ToolsSettingsTab script auto allow', () => {
 
   it('renders auto allow switch on script section', () => {
     renderScriptSection()
-    expect(screen.getByText('大模型生成的脚本自动允许执行')).toBeTruthy()
+    expect(screen.getByText(/大模型生成的脚本自动允许执行/)).toBeTruthy()
   })
 
   it('opens confirm modal when enabling auto allow', () => {
     const { setShellUi } = renderScriptSection(false)
     fireEvent.click(screen.getByRole('switch'))
-    expect(screen.getAllByText('确认开启自动执行？').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('确认开启？').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: '确认开启' }))
     expect(setShellUi).toHaveBeenCalled()
   })

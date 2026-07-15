@@ -29,7 +29,7 @@ describe('remoteConfirmBridge policy', () => {
     ).toBe('im_confirm')
   })
 
-  it('remote_read_only blocks im confirm', () => {
+  it('remote_read_only resolves to im_confirm (policy no longer blocks confirm)', () => {
     expect(
       resolveRemoteContextConfirmPolicy({
         source: 'wechat',
@@ -38,7 +38,7 @@ describe('remoteConfirmBridge policy', () => {
         userId: 'u1',
         contextToken: 'c'
       })
-    ).toBe('remote_read_only')
+    ).toBe('im_confirm')
   })
 
   it('wechat remoteWechatConfirm legacy still normalizes via wechatConfig', () => {
@@ -60,7 +60,7 @@ describe('requestRemoteConfirm unified path', () => {
     messageId: 'm1'
   }
 
-  it('returns n when policy is remote_read_only without calling adapter', async () => {
+  it('delegates to requestToolConfirm even when legacy remote_read_only is set', async () => {
     const requestToolConfirm = vi.fn(async () => 'y' as const)
     const remoteContext: RemoteContext = {
       source: 'feishu',
@@ -68,8 +68,8 @@ describe('requestRemoteConfirm unified path', () => {
       confirmPolicy: 'remote_read_only',
       requestToolConfirm
     }
-    await expect(requestRemoteConfirm({ remoteContext, payload: basePayload })).resolves.toBe('n')
-    expect(requestToolConfirm).not.toHaveBeenCalled()
+    await expect(requestRemoteConfirm({ remoteContext, payload: basePayload })).resolves.toBe('y')
+    expect(requestToolConfirm).toHaveBeenCalledWith(basePayload)
   })
 
   it('returns n when requestToolConfirm is missing', async () => {

@@ -20,14 +20,19 @@ function ctx(command: string, platform: NodeJS.Platform = 'linux') {
 }
 
 describe('shellSecurity', () => {
-  it('denies command substitution', () => {
+  it('does not deny command substitution (relaxed P1)', () => {
     const r = runShellSecurityValidators(ctx('echo $(whoami)'))
-    expect(r.verdict).toBe('deny')
-    expect(getShellSecurityDenyMessage(r.validatorId!)).toMatch(/命令替换/)
+    expect(r.validatorId).not.toBe('command_substitution')
   })
 
-  it('denies redirection', () => {
-    expect(runShellSecurityValidators(ctx('echo x > file')).verdict).toBe('deny')
+  it('does not deny redirection (relaxed P1)', () => {
+    const r = runShellSecurityValidators(ctx('echo x > file'))
+    expect(r.validatorId).not.toBe('redirection')
+  })
+
+  it('does not deny multiline (relaxed P1)', () => {
+    const r = runShellSecurityValidators(ctx('echo a\necho b'))
+    expect(r.validatorId).not.toBe('multiline')
   })
 
   it('denies sudo', () => {

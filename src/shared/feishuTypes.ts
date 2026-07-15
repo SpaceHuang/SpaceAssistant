@@ -13,6 +13,7 @@ export type FeishuEventConnectionState = 'stopped' | 'connecting' | 'connected' 
 /** @deprecated Use ImConfirmPolicy; feishu_confirm migrates to im_confirm. */
 export type FeishuRemoteConfirmPolicy = ImConfirmPolicy | 'feishu_confirm'
 
+/** @deprecated Group chats are always rejected; field ignored when present. */
 export type FeishuGroupTrigger = 'mention' | 'prefix' | 'both'
 
 export type FeishuRegion = 'feishu' | 'lark'
@@ -27,6 +28,7 @@ export interface FeishuConfig extends RemoteImCommonConfig {
   appIdSuffix?: string
   userAuthorized: boolean
   userDisplay?: string
+  /** @deprecated Group chats are always rejected; retained for stored-config compat. */
   remoteGroupTrigger: FeishuGroupTrigger
   region: FeishuRegion
   wakeWords?: string[]
@@ -46,13 +48,16 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteNotifyOnReceive: true,
   remoteConfirmPolicy: 'always',
   remoteAllowLocalWrite: true,
+  remoteDenyOutbound: false,
+  remoteBrowserRequiresConfirm: false,
   remoteSessionIdleMinutes: 10,
+  remoteOwnerBindWindowMinutes: 5,
   region: 'feishu',
   wakeWordAutoExecute: false,
-  remoteRateLimitPerMinute: 10,
+  remoteRateLimitPerMinute: 60,
   integrationMode: 'cli',
   larkCliDefaultTimeoutSec: 120,
-  larkCliWriteRequiresConfirm: true,
+  larkCliWriteRequiresConfirm: false,
   remoteProgressMode: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMode,
   remoteProgressHeartbeatSec: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressHeartbeatSec,
   remoteTypingEnabled: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteTypingEnabled,
@@ -163,6 +168,15 @@ export interface FeishuHealthCheck {
   lastInboundAt?: number
   lastReplyAt?: number
   pendingConfirms: number
+}
+
+export type FeishuOwnerBindStatus = 'idle' | 'binding' | 'bound'
+
+export interface FeishuOwnerBindSnapshot {
+  status: FeishuOwnerBindStatus
+  ownerOpenId?: string
+  bindingExpiresAt?: number
+  bindingStartedAt?: number
 }
 
 export type { RemoteProgressConfig, ImConfirmPolicy, RemoteImCommonConfig }

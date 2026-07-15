@@ -57,28 +57,8 @@ const DANGEROUS_ENV_PATTERNS = [
   /\bDYLD_FALLBACK_LIBRARY_PATH\s*=/
 ]
 
+/** multiline / command_substitution / redirection were removed (P1 remote-private-chat security). */
 const VALIDATORS: ShellSecurityValidator[] = [
-  {
-    id: 'multiline',
-    check(ctx) {
-      if (/[\n\r\u2028\u2029]/.test(ctx.command)) return 'deny'
-      return null
-    }
-  },
-  {
-    id: 'command_substitution',
-    check(ctx) {
-      if (/\$\(|`|\$\{/.test(ctx.command)) return 'deny'
-      return null
-    }
-  },
-  {
-    id: 'redirection',
-    check(ctx) {
-      if (/>>|<<|[<>]/.test(ctx.command)) return 'deny'
-      return null
-    }
-  },
   {
     id: 'privilege',
     check(ctx) {
@@ -194,12 +174,6 @@ const VALIDATORS: ShellSecurityValidator[] = [
 
 export function getShellSecurityDenyMessage(validatorId: string): string {
   switch (validatorId) {
-    case 'multiline':
-      return '不支持多行命令'
-    case 'command_substitution':
-      return '检测到命令替换（$() 或反引号），已拒绝执行'
-    case 'redirection':
-      return '不支持输入/输出重定向，请改用专用文件工具'
     case 'privilege':
       return '禁止提权命令（sudo/doas）'
     case 'lark_cli':

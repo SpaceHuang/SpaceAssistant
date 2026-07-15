@@ -93,19 +93,12 @@ export function buildShellEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   return env
 }
 
-/** 运行 Python 脚本时的子进程环境：Windows 控制台默认 CP936，强制 stdout/stderr 使用 UTF-8。 */
+/** 运行 Python 脚本时的子进程环境：对齐 Shell 密钥过滤，并强制 UTF-8 IO。 */
 export function buildPythonScriptEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
-    ...base,
-    PATH: base.PATH ?? '',
-    PYTHONIOENCODING: 'utf-8',
-    ...(process.platform === 'win32'
-      ? {
-          USERPROFILE: base.USERPROFILE ?? '',
-          PYTHONUTF8: '1'
-        }
-      : {
-          HOME: base.HOME ?? ''
-        })
+  const env = buildShellEnv(base)
+  env.PYTHONIOENCODING = 'utf-8'
+  if (process.platform === 'win32') {
+    env.PYTHONUTF8 = '1'
   }
+  return env
 }

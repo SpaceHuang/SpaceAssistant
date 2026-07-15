@@ -19,11 +19,11 @@ describe('remoteConfirmPolicy', () => {
     expect(resolveRemoteConfirmPolicy({ source: 'feishu', confirmPolicy: 'im_confirm' })).toBe('im_confirm')
   })
 
-  it('remote_read_only blocks IM confirm path', () => {
+  it('remote_read_only no longer blocks IM confirm path (migrated to access switches)', () => {
     expect(resolveRemoteConfirmPolicy({ source: 'wechat', confirmPolicy: 'remote_read_only' })).toBe(
-      'remote_read_only'
+      'im_confirm'
     )
-    expect(shouldRequestImConfirm('remote_read_only')).toBe(false)
+    expect(shouldRequestImConfirm('im_confirm')).toBe(true)
   })
 
   it('shouldRequestImConfirm is true for im_confirm', () => {
