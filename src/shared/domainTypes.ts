@@ -178,12 +178,40 @@ export interface ShellSecurityHints {
   canTrust?: boolean
 }
 
+/** How trailing (post-fixed-prefix) argv tokens are authorized. */
+export type TrustedShellTrailingArgv = 'plain-tokens' | 'exact'
+
+/** Provenance of a trust entry (which channel/UI created it). */
+export type TrustedShellSource = 'desktop' | 'im-feishu' | 'im-wechat' | 'manual'
+
+/**
+ * Status for entries that could not be stored in the structured (v2) form:
+ * - `converted-pending-review`: a legacy prefix that parses to a simple command; kept for the
+ *   user to re-confirm, but MUST NOT authorize skip until reviewed.
+ * - `invalid`: legacy prefix containing metasyntax / not tokenizable; never authorizes.
+ */
+export type TrustedShellLegacyStatus = 'converted-pending-review' | 'invalid'
+
+/**
+ * Structured (schemaVersion 2) trusted shell command. Authorization is token-boundary based
+ * (executable + fixedArgvPrefix), so `npm test` never authorizes `npm testing`.
+ * Legacy v1 entries only carried `command` (a startsWith prefix); those are read but require
+ * conversion + review before they can skip confirmation again.
+ */
 export interface TrustedShellCommand {
   id: string
-  command: string
+  /** 2 = structured. Absent / 1 = legacy prefix entry. */
+  schemaVersion?: number
+  executable?: string
+  fixedArgvPrefix?: string[]
+  trailingArgv?: TrustedShellTrailingArgv
+  source?: TrustedShellSource
   createdAt: number
   lastUsedAt?: number
   expired?: boolean
+  legacyStatus?: TrustedShellLegacyStatus
+  /** Legacy prefix / normalized display string (kept for read + UI rendering). */
+  command?: string
 }
 
 export interface AutoApproveFallback {
@@ -234,6 +262,7 @@ export function mergeShellConfig(partial?: Partial<ShellConfig> | null): ShellCo
     customSensitivePrefixes: Array.isArray(partial.customSensitivePrefixes)
       ? [...partial.customSensitivePrefixes]
       : partial.customSensitivePrefixes,
+    // Keep raw trustedCommands here; runtime normalizes via shellCommandTrust.normalizeTrustedCommandList
     trustedCommands: Array.isArray(partial.trustedCommands)
       ? [...partial.trustedCommands]
       : partial.trustedCommands

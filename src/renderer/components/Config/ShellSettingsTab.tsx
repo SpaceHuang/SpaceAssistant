@@ -140,7 +140,19 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
           columns={[
             {
               title: t('shell.columnPattern'),
-              dataIndex: 'command'
+              render: (_, row) => {
+                const scope =
+                  row.schemaVersion === 2 && row.executable
+                    ? [row.executable, ...(row.fixedArgvPrefix ?? [])].join(' ') +
+                      (row.trailingArgv === 'exact' ? '' : ' …')
+                    : row.command ?? ''
+                return scope
+              }
+            },
+            {
+              title: t('shell.trust.source'),
+              width: 100,
+              render: (_, row) => row.source ?? '—'
             },
             {
               title: t('shell.trust.lastUsed'),
@@ -150,8 +162,13 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
             },
             {
               title: t('shell.trust.status'),
-              width: 80,
-              render: (_, row) => (row.expired ? t('shell.trust.expired') : '—')
+              width: 120,
+              render: (_, row) => {
+                if (row.expired) return t('shell.trust.expired')
+                if (row.legacyStatus === 'converted-pending-review') return t('shell.trust.pendingReview')
+                if (row.legacyStatus === 'invalid') return t('shell.trust.invalid')
+                return '—'
+              }
             }
           ]}
         />

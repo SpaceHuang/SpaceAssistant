@@ -117,10 +117,11 @@ export class WeChatConfirmManager {
     if (pending.toolName !== 'run_shell' || !this.db) return false
     const command = typeof pending.toolInput?.command === 'string' ? pending.toolInput.command : ''
     if (!command.trim()) return false
-    addTrustedCommand(this.db, command)
+    const added = addTrustedCommand(this.db, command, { source: 'im-wechat' })
+    if (!added) return false
     logWeChatCliEvent('info', 'wechat.trust.add', {
       confirmId: pending.id,
-      command: command.slice(0, 120)
+      commandPreview: command.slice(0, 80)
     })
     return true
   }

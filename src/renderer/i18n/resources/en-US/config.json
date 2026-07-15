@@ -383,8 +383,11 @@
     },
     "trust": {
       "title": "Trusted shell commands",
-      "hint": "After trusting a prefix, later matching commands may include redirection or command substitution. Expansion-after-substitution is not AST-analyzed. Only trust prefixes you recognize.",
+      "hint": "Only simple commands can be trusted (matched by executable and argv token boundaries). Commands with pipes, redirects, $() or other metasyntax are never trusted and never skip confirm via trust. Legacy prefix entries need review before they authorize again.",
       "expired": "Expired",
+      "pendingReview": "Pending review",
+      "invalid": "Invalid",
+      "source": "Source",
       "batchDelete": "Delete selected",
       "cleanExpired": "Clean expired",
       "cleanExpiredConfirm": "Remove {{count}} expired entries?",

@@ -307,11 +307,14 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     ): Promise<void> => {
       if (payload.approved && payload.trustCommand?.trim()) {
         const { addTrustedCommand } = await import('./shell/shellCommandTrust')
-        addTrustedCommand(ctx.db, payload.trustCommand.trim())
-        logAgentEvent('info', 'shell.trust.command', {
-          command: payload.trustCommand.trim(),
-          timestamp: Date.now()
-        })
+        const added = addTrustedCommand(ctx.db, payload.trustCommand.trim(), { source: 'desktop' })
+        if (added) {
+          logAgentEvent('info', 'shell.trust.command', {
+            executable: added.executable,
+            fixedArgvPrefix: added.fixedArgvPrefix,
+            timestamp: Date.now()
+          })
+        }
       }
       if (payload.approved && payload.trustDomain?.trim()) {
         const { addTrustedDomain } = await import('./browser/browserDomainTrust')
@@ -407,7 +410,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         for (const item of removed) {
           logAgentEvent('info', 'trust.remove', {
             type: 'shell_command',
-            item: item.command,
+            item: item.command ?? item.executable,
             timestamp: Date.now()
           })
         }

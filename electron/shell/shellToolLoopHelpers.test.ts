@@ -48,7 +48,8 @@ describe('shellToolLoopHelpers', () => {
   })
 
   it('skips confirm for trusted command and touches lastUsedAt', async () => {
-    addTrustedCommand(db, 'echo hello')
+    const entry = addTrustedCommand(db, 'echo hello')
+    expect(entry).not.toBeNull()
     const result = await precheckRunShellTool({
       command: 'echo hello world',
       workDir,
@@ -56,7 +57,7 @@ describe('shellToolLoopHelpers', () => {
       shellConfig: {
         enabled: true,
         shellDefaultTimeoutSec: 300,
-        trustedCommands: [{ id: '1', command: 'echo hello', createdAt: Date.now() }]
+        trustedCommands: [entry!]
       },
       appDb: db
     })

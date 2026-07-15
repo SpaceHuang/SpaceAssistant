@@ -117,8 +117,12 @@ export class FeishuConfirmManager {
     if (pending.toolName !== 'run_shell' || !this.db) return false
     const command = typeof pending.toolInput?.command === 'string' ? pending.toolInput.command : ''
     if (!command.trim()) return false
-    addTrustedCommand(this.db, command)
-    logFeishuCliEvent('info', 'feishu.trust.add', { confirmId: pending.id, command: command.slice(0, 120) })
+    const added = addTrustedCommand(this.db, command, { source: 'im-feishu' })
+    if (!added) return false
+    logFeishuCliEvent('info', 'feishu.trust.add', {
+      confirmId: pending.id,
+      commandPreview: command.slice(0, 80)
+    })
     return true
   }
 
