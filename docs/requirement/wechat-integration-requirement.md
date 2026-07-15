@@ -7,7 +7,8 @@
 > **⚠️ 版本迭代声明（开发人员必读）**  
 > 本文档 §13.2 的**双通道合并状态栏（`RemoteStatusBar`）**设计已取代 [feishu-remote-status-sidebar-requirement.md](./feishu-remote-status-sidebar-requirement.md) 的独立飞书状态栏设计。  
 > **跨需求文档冲突裁决：** 当本文档与飞书状态栏需求文档存在冲突时，**以本文档（v1.2）为准**。  
-> **分期实施：** Phase 1 仅交付微信入站核心能力；双通道状态栏为 **Phase 2** 交付项；Phase 1 期间飞书状态栏暂按原文档实现，但需预留重构接口。
+> **分期实施：** Phase 1 仅交付微信入站核心能力；双通道状态栏为 **Phase 2** 交付项；Phase 1 期间飞书状态栏暂按原文档实现，但需预留重构接口。  
+> **远程安全（2026-07）：** 发送者 allowlist fail-closed、紧急关闭远程先取消任务再停监听、审计脱敏/活动清理、任务预算等以 [remote-private-chat-security-optimization-requirement.md](./remote-private-chat-security-optimization-requirement.md) v1.6 为准。
 
 **参考来源：**
 - [corespeed-io/wechatbot](https://github.com/corespeed-io/wechatbot) — 微信 iLink Bot SDK（Node.js / Python / Go / Rust）
@@ -23,6 +24,7 @@
 - [tools-requirement.md](./tools-requirement.md)
 - [settings-requirement.md](./settings-requirement.md)
 - [system-tray.md](./system-tray.md)
+- [remote-private-chat-security-optimization-requirement.md](./remote-private-chat-security-optimization-requirement.md) — 远程安全收口
 
 ---
 

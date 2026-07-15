@@ -14,6 +14,9 @@
 - [skills-requirement.md](./skills-requirement.md)
 - [settings-requirement.md](./settings-requirement.md)
 - [system-tray.md](./system-tray.md)
+- [remote-private-chat-security-optimization-requirement.md](./remote-private-chat-security-optimization-requirement.md)（v1.6：一次性配对码绑定；废止「窗口内首条 p2p 直接绑定」）
+
+> **跨文档同步（2026-07）：** Owner 绑定改为桌面展示一次性配对码，用户发送精确 `绑定 <code>` / `bind <code>`；绑定消息不进入 Agent。浏览器远程确认拆分 navigate/act。冲突以远程私聊安全需求 v1.6 为准。
 
 ---
 

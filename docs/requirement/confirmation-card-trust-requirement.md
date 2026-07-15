@@ -7,6 +7,9 @@
 - [shell-command-tool-requirement.md](./shell-command-tool-requirement.md)（Shell 命令确认卡片）
 - [web-browser-tools-requirement.md](./web-browser-tools-requirement.md)（网页访问确认卡片、可信域名机制）
 - [tools-requirement.md](./tools-requirement.md)（工具确认框架）
+- [remote-private-chat-security-optimization-requirement.md](./remote-private-chat-security-optimization-requirement.md)（v1.6：结构化 Shell 信任；字符串 `startsWith` 不再满足发布门槛）
+
+> **跨文档同步（2026-07）：** 远程 IM「确认并信任」须写入结构化 argv 范围；含 Shell 元语法的命令不可信任、不可命中免确认。冲突以远程私聊安全需求 v1.6 为准。
 
 ---
 
