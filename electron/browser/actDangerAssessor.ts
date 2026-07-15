@@ -153,14 +153,31 @@ const SAFE: ActDangerAssessment = {
   consequence: undefined
 }
 
+const UNCERTAIN_ASK: ActDangerAssessment = {
+  dangerous: true,
+  source: 'page-effect',
+  userReason: '无法可靠判断本次页面操作风险，需确认后继续',
+  consequence: 'generic',
+  detail: 'assess_uncertain'
+}
+
+export type AssessActDangerOptions = {
+  /** When true (remote low-friction path), scan/target failures ask instead of SAFE. */
+  failClosedOnUncertainty?: boolean
+}
+
 export async function assessActDanger(
   sessionId: string,
   input: Record<string, unknown>,
   cfg: BrowserConfig,
   stagehand: StagehandService,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  opts?: AssessActDangerOptions
 ): Promise<ActDangerAssessment> {
   const instruction = typeof input.instruction === 'string' ? input.instruction : ''
+  if (!instruction.trim() && opts?.failClosedOnUncertainty) {
+    return UNCERTAIN_ASK
+  }
   const keywords = cfg.actHighRiskKeywords ?? []
 
   const kw = matchHighRiskKeyword(instruction, keywords)
@@ -174,11 +191,24 @@ export async function assessActDanger(
     }
   }
 
+  // Instruction-only high-impact always ask (submit/pay/delete/auth/account)
+  const highImpactRe =
+    /提交|发送|购买|支付|付款|删除|授权|账号|权限|结账|转账|submit|send|purchase|pay|delete|auth|account|permission/i
+  if (highImpactRe.test(instruction)) {
+    return {
+      dangerous: true,
+      source: 'keyword',
+      userReason: '高影响操作，需确认后继续',
+      consequence: keywordToConsequence(instruction) ?? 'generic',
+      detail: 'high_impact_instruction'
+    }
+  }
+
   let pageEffect: PageEffectScan
   try {
     pageEffect = await stagehand.scanPageEffect(sessionId)
   } catch {
-    return SAFE
+    return opts?.failClosedOnUncertainty ? UNCERTAIN_ASK : SAFE
   }
   if (!pageEffect.hasDangerousControl) {
     return SAFE
@@ -202,7 +232,7 @@ export async function assessActDanger(
         fillPreview: targetHit.fillPreview
       }
     }
-    return SAFE
+    return opts?.failClosedOnUncertainty ? UNCERTAIN_ASK : SAFE
   } catch {
     return {
       dangerous: true,

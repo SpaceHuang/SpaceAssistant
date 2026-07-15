@@ -57,7 +57,7 @@ export const DEFAULT_FEISHU_CONFIG: FeishuConfig = {
   remoteRateLimitPerMinute: 60,
   integrationMode: 'cli',
   larkCliDefaultTimeoutSec: 120,
-  larkCliWriteRequiresConfirm: false,
+  larkCliWriteRequiresConfirm: true,
   remoteProgressMode: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMode,
   remoteProgressHeartbeatSec: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressHeartbeatSec,
   remoteTypingEnabled: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG.remoteTypingEnabled,

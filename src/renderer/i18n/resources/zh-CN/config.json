@@ -734,7 +734,13 @@
     "senderAllowlistPlaceholder": "由绑定流程写入，不可手填",
     "senderAllowlistReadonlyHint": "飞书 Owner / 微信绑定用户只读展示；启用远程时必须已绑定。",
     "allowRemoteBrowserLabel": "允许远程会话使用浏览器",
-    "allowRemoteBrowserHint": "开启后，飞书/微信等 IM 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。"
+    "allowRemoteBrowserHint": "开启后，飞书/微信等 IM 远程指令可使用 browser 访问网页；默认关闭以降低远程滥用风险。",
+    "remoteScriptRequiresConfirm": "远程「未发现已知高风险模式」的脚本仍需确认",
+    "remoteScriptRequiresConfirmHint": "仅影响分析结果为「未发现已知高风险模式」的脚本；疑似风险/拒绝仍按内容策略处理，不会被本开关放宽。",
+    "remoteBrowserNavigateRequiresConfirm": "远程浏览器导航需确认",
+    "remoteBrowserNavigateRequiresConfirmHint": "仅覆盖远程会话的 navigate；不影响桌面默认。截图/观察/提取不确认。",
+    "remoteBrowserActRequiresConfirm": "远程浏览器页面操作需确认",
+    "remoteBrowserActRequiresConfirmHint": "即使关闭，提交/支付/删除/授权等高影响操作仍会确认；扫描失败时也会确认。"
   },
   "remoteSecurityUpgrade": {
     "title": "远程安全设置一次性确认",

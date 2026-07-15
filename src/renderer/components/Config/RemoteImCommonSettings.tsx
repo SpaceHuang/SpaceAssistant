@@ -204,10 +204,31 @@ export function RemoteImCommonSettings({
       </Checkbox>
 
       <ConfigSwitchRow
-        label={t('remoteImCommon.remoteBrowserRequiresConfirm')}
-        hint={t('remoteImCommon.remoteBrowserRequiresConfirmHint')}
-        checked={value.remoteBrowserRequiresConfirm}
-        onChange={(v) => onChange({ remoteBrowserRequiresConfirm: Boolean(v) })}
+        label={t('remoteImCommon.remoteScriptRequiresConfirm')}
+        hint={t('remoteImCommon.remoteScriptRequiresConfirmHint')}
+        checked={value.remoteScriptRequiresConfirm !== false}
+        onChange={(v) => onChange({ remoteScriptRequiresConfirm: Boolean(v) })}
+      />
+
+      <ConfigSwitchRow
+        label={t('remoteImCommon.remoteBrowserNavigateRequiresConfirm')}
+        hint={t('remoteImCommon.remoteBrowserNavigateRequiresConfirmHint')}
+        checked={
+          value.remoteBrowserNavigateRequiresConfirm ?? value.remoteBrowserRequiresConfirm
+        }
+        onChange={(v) =>
+          onChange({
+            remoteBrowserNavigateRequiresConfirm: Boolean(v),
+            remoteBrowserRequiresConfirm: Boolean(v)
+          })
+        }
+      />
+
+      <ConfigSwitchRow
+        label={t('remoteImCommon.remoteBrowserActRequiresConfirm')}
+        hint={t('remoteImCommon.remoteBrowserActRequiresConfirmHint')}
+        checked={value.remoteBrowserActRequiresConfirm !== false}
+        onChange={(v) => onChange({ remoteBrowserActRequiresConfirm: Boolean(v) })}
       />
 
       <ConfigField label={t('remoteImCommon.rateLimitLabel')}>

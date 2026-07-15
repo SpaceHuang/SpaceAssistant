@@ -734,7 +734,13 @@
     "senderAllowlistPlaceholder": "Written by bind flow; not editable",
     "senderAllowlistReadonlyHint": "Feishu owner / WeChat bound user is read-only; remote requires a bound identity.",
     "allowRemoteBrowserLabel": "Allow remote sessions to use browser",
-    "allowRemoteBrowserHint": "When enabled, Feishu/WeChat IM remote commands can use the browser to access the web. Off by default to reduce remote abuse risk."
+    "allowRemoteBrowserHint": "When enabled, Feishu/WeChat IM remote commands can use the browser to access the web. Off by default to reduce remote abuse risk.",
+    "remoteScriptRequiresConfirm": "Confirm remote scripts with no known high-risk patterns",
+    "remoteScriptRequiresConfirmHint": "Only elevates “no known high-risk patterns” scripts to ask. Ask/deny results are never weakened by this switch.",
+    "remoteBrowserNavigateRequiresConfirm": "Confirm remote browser navigate",
+    "remoteBrowserNavigateRequiresConfirmHint": "Applies only to remote navigate; desktop defaults are unchanged. Screenshot/observe/extract never confirm.",
+    "remoteBrowserActRequiresConfirm": "Confirm remote browser act",
+    "remoteBrowserActRequiresConfirmHint": "Even when off, high-impact acts (submit/pay/delete/auth) still ask; scan or parse failures also ask."
   },
   "remoteSecurityUpgrade": {
     "title": "One-time remote security confirmation",

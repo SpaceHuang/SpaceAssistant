@@ -15,13 +15,31 @@ const feishuRemote: RemoteContext = {
 }
 
 describe('phase2 remote confirm defaults', () => {
-  it('larkCliWriteRequiresConfirm defaults false so write ops skip confirm', () => {
-    expect(DEFAULT_FEISHU_CONFIG.larkCliWriteRequiresConfirm).toBe(false)
+  it('larkCliWriteRequiresConfirm defaults true; high-impact always asks', () => {
+    expect(DEFAULT_FEISHU_CONFIG.larkCliWriteRequiresConfirm).toBe(true)
     expect(
       toolNeedsUserConfirmationForTests(
         'run_lark_cli',
-        { args: ['message', 'send'] },
+        { args: ['message', 'send', '--receive-id', 'ou_1'] },
         DEFAULT_FEISHU_CONFIG
+      )
+    ).toBe(true)
+    // Even when switch is false, group/high-impact still asks.
+    expect(
+      toolNeedsUserConfirmationForTests(
+        'run_lark_cli',
+        { args: ['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_x'] },
+        { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }
+      )
+    ).toBe(true)
+  })
+
+  it('low-impact lark write can skip when switch explicitly false', () => {
+    expect(
+      toolNeedsUserConfirmationForTests(
+        'run_lark_cli',
+        { args: ['message', 'send', '--receive-id', 'ou_1'] },
+        { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }
       )
     ).toBe(false)
   })
@@ -30,7 +48,7 @@ describe('phase2 remote confirm defaults', () => {
     expect(
       toolNeedsUserConfirmationForTests(
         'run_lark_cli',
-        { args: ['message', 'send'] },
+        { args: ['message', 'send', '--receive-id', 'ou_1'] },
         { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: true }
       )
     ).toBe(true)
