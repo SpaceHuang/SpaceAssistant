@@ -10,6 +10,7 @@ import {
   shouldSkipRemoteLarkWriteConfirm,
   shouldSkipRemoteScriptConfirmOnAllow
 } from './remoteToolPolicy'
+import { analyzeScriptContent } from '../shell/scriptContentSecurity'
 
 const migrated = { remoteSecurityConfigVersion: CURRENT_REMOTE_SECURITY_CONFIG_VERSION }
 
@@ -62,8 +63,8 @@ describe('per-tool confirm skip decisions', () => {
   it('file write skip only when migrated and write allowed', () => {
     expect(shouldSkipRemoteFileWriteConfirm({ remoteAllowLocalWrite: true })).toBe(false)
     expect(shouldSkipRemoteFileWriteConfirm({ ...migrated, remoteAllowLocalWrite: false })).toBe(false)
-    expect(shouldSkipRemoteFileWriteConfirm({ ...migrated, remoteAllowLocalWrite: true })).toBe(true)
-    expect(shouldSkipRemoteFileWriteConfirm({ ...migrated })).toBe(true)
+    expect(shouldSkipRemoteFileWriteConfirm({ ...migrated, remoteAllowLocalWrite: true })).toBe(false)
+    expect(shouldSkipRemoteFileWriteConfirm({ ...migrated })).toBe(false)
   })
 
   it('script allow skip only when migrated and script confirm disabled', () => {
@@ -71,6 +72,23 @@ describe('per-tool confirm skip decisions', () => {
     expect(shouldSkipRemoteScriptConfirmOnAllow({ ...migrated })).toBe(false)
     expect(shouldSkipRemoteScriptConfirmOnAllow({ ...migrated, remoteScriptRequiresConfirm: true })).toBe(false)
     expect(shouldSkipRemoteScriptConfirmOnAllow({ ...migrated, remoteScriptRequiresConfirm: false })).toBe(true)
+  })
+
+  it('script confirm skip only ever matters when remote analysis itself returned allow (WP3)', () => {
+    const skipEnabled = { ...migrated, remoteScriptRequiresConfirm: false }
+
+    // A script that fails remote positive-allowlist certification never returns 'allow' from
+    // analyzeScriptContent, so the skip switch has no effect — the caller never even reaches
+    // the shouldSkipRemoteScriptConfirmOnAllow() branch for it.
+    const uncertified = analyzeScriptContent("imp = __import__\nimp('os')", { remote: true })
+    expect(uncertified.verdict).not.toBe('allow')
+
+    // A script that IS certified safe on remote does return 'allow', and only then does the
+    // skip switch decide whether confirmation can be bypassed.
+    const certified = analyzeScriptContent("import os\nos.chdir('src')", { remote: true })
+    expect(certified.verdict).toBe('allow')
+    expect(shouldSkipRemoteScriptConfirmOnAllow(skipEnabled)).toBe(true)
+    expect(shouldSkipRemoteScriptConfirmOnAllow(migrated)).toBe(false)
   })
 
   it('browser navigate skip is not gated by migration', () => {

@@ -21,6 +21,7 @@ import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { getRemoteTaskController } from '../remote/remoteTaskController'
+import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
 
@@ -90,6 +91,12 @@ export function createWeChatBundle(deps: {
     () => botService.getBot() ?? undefined,
     deps.db
   )
+  remoteAuthorizationRegistry.registerPendingCancel({
+    cancelByChannel: (ch) => confirmManager.cancelByChannel(ch)
+  })
+  remoteAuthorizationRegistry.registerAuditAppender((event) => {
+    void auditLogger.append(event as { type: string })
+  })
 
   const router = new WeChatCommandRouter({
     db: deps.db,
@@ -165,6 +172,7 @@ export async function pauseWeChatPollIfWindowClosed(): Promise<void> {
 
 export async function shutdownWeChatServices(): Promise<void> {
   cancelAllActiveChats()
+  remoteAuthorizationRegistry.invalidate('wechat', 'service_stopped')
   bundle?.confirmManager.cancelAllPending()
   await bundle?.botService?.stopPoll()
   logWeChatCliEvent('info', 'wechat.service.shutdown', {})
@@ -321,7 +329,23 @@ export function registerWeChatIpcHandlers(
 }
 
 export function persistWeChatConfig(db: AppDatabase, partial: Partial<WeChatConfig>): WeChatConfig {
-  const next = mergeWeChatConfig({ ...readWeChatConfigFromDb(db), ...partial })
+  const prev = readWeChatConfigFromDb(db)
+  const next = mergeWeChatConfig({ ...prev, ...partial })
+
+  const allowlistChanged =
+    JSON.stringify(prev.remoteSenderAllowlist ?? []) !==
+    JSON.stringify(next.remoteSenderAllowlist ?? [])
+  if ((prev.enabled && !next.enabled) || (prev.remoteEnabled && !next.remoteEnabled)) {
+    remoteAuthorizationRegistry.invalidate(
+      'wechat',
+      !next.enabled ? 'channel_disabled' : 'remote_disabled'
+    )
+  } else if (prev.loggedIn && !next.loggedIn) {
+    remoteAuthorizationRegistry.invalidate('wechat', 'logout')
+  } else if (allowlistChanged) {
+    remoteAuthorizationRegistry.invalidate('wechat', 'allowlist_changed')
+  }
+
   setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(next))
   logWeChatCliEvent('info', 'wechat.config.persist', { keys: Object.keys(partial) })
   return next

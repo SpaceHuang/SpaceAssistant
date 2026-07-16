@@ -91,7 +91,7 @@ export function formatFloatingDetailTitle(
   if (toolName === 'browser') {
     return formatBrowserToolLabelTitle(input)
   }
-  return formatToolLabelTitle(toolName, input, tChat) ?? formatToolLabel(toolName, input, tChat)
+  return formatToolLabelTitle(toolName, input) ?? formatToolLabel(toolName, input, tChat)
 }
 
 export function formatFloatingHoverTitle(

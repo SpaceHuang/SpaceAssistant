@@ -1,6 +1,8 @@
 import { Dropdown } from 'antd'
-import type { MenuInfo, MenuProps } from 'antd/es/menu/interface'
+import type { MenuProps } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+
+type MenuInfo = Parameters<NonNullable<MenuProps['onClick']>>[0]
 
 function wrapMenuClick(handler: () => void): (info: MenuInfo) => void {
   return ({ domEvent }) => {
@@ -28,20 +30,8 @@ export function SessionItemContextMenu({ onRename, children, open }: SessionItem
   ]
 
   return (
-    <Dropdown
-      menu={{ items }}
-      trigger={['contextMenu']}
-      open={open}
-      popupRender={(menu) => (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          {menu}
-        </div>
-      )}
-    >
-      <div className="session-item-context-trigger">{children}</div>
+    <Dropdown menu={{ items }} trigger={['contextMenu']} open={open}>
+      {children}
     </Dropdown>
   )
 }

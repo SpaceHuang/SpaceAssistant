@@ -23,19 +23,17 @@ function adHocSignMacApp(context) {
     `${context.packager.appInfo.productFilename}.app`,
   )
   if (!fs.existsSync(appPath)) {
-    console.warn('[afterPack] macOS .app not found:', appPath)
-    return
+    throw new Error(`[afterPack] macOS .app not found: ${appPath}`)
   }
   // electron-builder 在 afterPack 之后还会跑 sign 步骤：若存在 Developer ID 会重新签名覆盖 ad-hoc；
-  // 若无证书（CI）则跳过，ad-hoc 签名得以保留。
-  try {
-    execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], {
-      stdio: 'inherit',
-    })
-    console.log('[afterPack] Ad-hoc signed macOS app:', appPath)
-  } catch (err) {
-    console.warn('[afterPack] ad-hoc sign failed:', err instanceof Error ? err.message : err)
-  }
+  // 若无证书（CI）则跳过，ad-hoc 签名得以保留。CSC_IDENTITY_AUTO_DISCOVERY=false 时必须仍执行。
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], {
+    stdio: 'inherit',
+  })
+  execFileSync('codesign', ['--verify', '--deep', '--strict', appPath], {
+    stdio: 'inherit',
+  })
+  console.log('[afterPack] Ad-hoc signed and verified macOS app:', appPath)
 }
 
 function patchWindowsIcon(context) {

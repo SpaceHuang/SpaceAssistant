@@ -1,6 +1,15 @@
 export type PendingDecision = 'y' | 'n' | 'timeout'
 
-export class PendingRequestRegistry<T extends { id: string; sessionId: string; expiresAt: number }> {
+export type PendingAuthFields = {
+  channel?: 'feishu' | 'wechat'
+  authOwner?: string
+  authorizationGeneration?: number
+  requestId?: string
+}
+
+export class PendingRequestRegistry<
+  T extends { id: string; sessionId: string; expiresAt: number } & PendingAuthFields
+> {
   private pending = new Map<string, T>()
   private resolvers = new Map<string, (v: PendingDecision) => void>()
   private timers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -34,6 +43,21 @@ export class PendingRequestRegistry<T extends { id: string; sessionId: string; e
     for (const id of [...this.pending.keys()]) {
       this.resolve(id, 'n')
     }
+  }
+
+  /**
+   * Synchronously cancel all pending items for a channel (authorization revoke linearization).
+   * Returns number of cancelled items.
+   */
+  cancelByChannel(channel: 'feishu' | 'wechat'): number {
+    let n = 0
+    for (const item of [...this.pending.values()]) {
+      if (item.channel === channel) {
+        this.resolve(item.id, 'n')
+        n++
+      }
+    }
+    return n
   }
 
   /**

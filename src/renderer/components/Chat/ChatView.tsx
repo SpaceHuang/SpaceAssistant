@@ -72,7 +72,7 @@ import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter
 import { buildSystemPromptFromSkills, buildSkillRouteSignature, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
+import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatBubble } from './ChatBubble'
@@ -1128,8 +1128,8 @@ export function ChatView() {
         try {
           const newSession = await window.api.sessionCreate({
             model: chatModelName,
-            llmServiceId: chatLlmServiceId,
-            temperature: cfg.temperature ?? 1,
+            temperature: DEFAULT_LLM_TEMPERATURE,
+            ...(chatLlmServiceId ? { llmServiceId: chatLlmServiceId } : {}),
             name: '',
             metadata: {}
           })

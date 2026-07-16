@@ -117,7 +117,7 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
   useEffect(() => {
     if (!feishu.remoteEnabled) return
     const timer = setInterval(() => {
-      void window.api.feishuEventStatus().then(setEventStatus)
+      void window.api.feishuEventStatus().then((v) => setEventStatus(v ?? null))
     }, 5000)
     return () => clearInterval(timer)
   }, [feishu.remoteEnabled])
@@ -284,10 +284,10 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
               text={formatFeishuSettingsEventStatus(eventStatus, t)}
             />
           )}
-          <Button size="small" onClick={() => void window.api.feishuEventStart().then(setEventStatus)}>
+          <Button size="small" onClick={() => void window.api.feishuEventStart().then((v) => setEventStatus(v ?? null))}>
             {t('feishu.start')}
           </Button>
-          <Button size="small" onClick={() => void window.api.feishuEventStop().then(setEventStatus)}>
+          <Button size="small" onClick={() => void window.api.feishuEventStop().then((v) => setEventStatus(v ?? null))}>
             {t('feishu.stop')}
           </Button>
         </Space>

@@ -139,6 +139,7 @@ export const DEFAULT_WORK_DIR_PROFILES: WorkDirProfile[] = []
 export type FeishuAuditEvent =
   | { type: 'inbound'; messageId: string; chatId: string; senderOpenId: string; accepted: boolean; reason?: string; ts: number }
   | { type: 'agent_start'; sessionId: string; messageId: string; ts: number }
+  | { type: 'agent_start_rejected'; sessionId: string; messageId: string; reason: string; ts: number }
   | { type: 'agent_done'; sessionId: string; success: boolean; summaryLen: number; ts: number }
   | { type: 'lark_cli'; sessionId?: string; args: string[]; success: boolean; writeOp: boolean; ts: number }
   | { type: 'confirm_request'; confirmId: string; decision?: string; ts: number }

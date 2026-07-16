@@ -135,7 +135,7 @@ export function WebView({
         }}
         className="detail-webview"
         src={url}
-        allowpopups="false"
+        allowpopups={false}
         webpreferences="contextIsolation=yes,javascript=yes"
       />
     </div>

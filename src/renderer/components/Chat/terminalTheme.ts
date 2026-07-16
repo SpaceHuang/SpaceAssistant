@@ -40,7 +40,9 @@ export function buildXtermThemeFromCss(): ITheme {
   }
 }
 
-export function buildShellTerminalOptions(overrides?: Partial<ITerminalOptions>): ITerminalOptions {
+export function buildShellTerminalOptions(
+  overrides?: Partial<ITerminalOptions> & { cols?: number; rows?: number }
+): ITerminalOptions {
   return {
     cols: SHELL_TERMINAL_COLS,
     rows: 24,
@@ -52,5 +54,5 @@ export function buildShellTerminalOptions(overrides?: Partial<ITerminalOptions>)
     lineHeight: 1.2,
     theme: buildXtermThemeFromCss(),
     ...overrides
-  }
+  } as ITerminalOptions
 }

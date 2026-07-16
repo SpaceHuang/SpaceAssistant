@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { Dropdown } from 'antd'
-import type { MenuProps } from 'antd/es/menu/interface'
+import type { MenuProps } from 'antd'
 import { attachSelectionCopy, getSelectionTextInContainer, writeClipboardText } from '../../utils/selectionCopy'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 

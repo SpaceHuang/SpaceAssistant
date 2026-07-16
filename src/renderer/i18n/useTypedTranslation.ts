@@ -9,7 +9,9 @@ export function useTypedTranslation<N extends I18nNamespaces>(
 ) {
   const { t, i18n, ready } = useTranslation(ns, options)
 
-  const typedT = (key: NamespaceKeyMap[N], tOptions?: TranslationOptions) => t(key, tOptions)
+  const typedT = (key: NamespaceKeyMap[N], tOptions?: TranslationOptions) =>
+    // react-i18next overload resolution is wider than our NamespaceKeyMap; cast at the boundary.
+    (t as (k: string, o?: TranslationOptions) => string)(key, tOptions)
 
   return { t: typedT, i18n, ready }
 }

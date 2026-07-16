@@ -20,4 +20,35 @@ jobs:
         run: npm run rebuild:native
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
+      - run: npm run typecheck:shared
+      - run: npm run typecheck:renderer
+      - run: npm run build:electron
       - run: npm test
+
+  sqlite-electron-probe:
+    name: SQLite Electron probe (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+          - os: macos-13
+            label: macos-x64
+          - os: macos-latest
+            label: macos-arm64
+          - os: ubuntu-latest
+            label: linux-x64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run rebuild:native
+      - name: Probe better-sqlite3 under Electron
+        run: npm run probe:sqlite
+        env:
+          ELECTRON_RUN_AS_NODE: '1'

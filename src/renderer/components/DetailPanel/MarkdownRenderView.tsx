@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef, createElement } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { ExtraProps } from 'react-markdown'
 import { expandWikilinks } from '../../../shared/wikiMarkdown'
@@ -43,11 +43,7 @@ function markdownHeading(
 
 function mdBlock(Tag: BlockTag): (props: ComponentProps<BlockTag> & ExtraProps) => JSX.Element {
   return function MarkdownBlock({ node, children, ...rest }) {
-    return (
-      <Tag {...rest} {...mdSourceAttrs(node as MdSourceNode)}>
-        {children}
-      </Tag>
-    )
+    return createElement(Tag, { ...rest, ...mdSourceAttrs(node as MdSourceNode) }, children)
   }
 }
 

@@ -72,7 +72,7 @@ describe('workDirSessionSync', () => {
     })
 
     const result = await ensureWorkDirForSession(session, config as never, store.dispatch)
-    expect(result).toEqual({ ok: true, switched: true })
+    expect(result).toEqual({ ok: true, switched: true, committed: true })
     expect(window.api.workdirSwitch).toHaveBeenCalledWith('p2')
   })
 })

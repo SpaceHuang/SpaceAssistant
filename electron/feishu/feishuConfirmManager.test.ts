@@ -37,7 +37,8 @@ describe('FeishuConfirmManager', () => {
       messageId: 'm1',
       chatId: 'c1'
     })
-    const ok = mgr.tryResolveFromInbound(p2p({ content: 'Y' }), confirmOpts)
+    const cid = mgr.listPending()[0]!.confirmId!
+    const ok = mgr.tryResolveFromInbound(p2p({ content: `Y ${cid}` }), confirmOpts)
     expect(ok).toBe(true)
     await expect(p).resolves.toBe('y')
   })
@@ -51,7 +52,23 @@ describe('FeishuConfirmManager', () => {
       messageId: 'm1',
       chatId: 'c1'
     })
-    mgr.tryResolveFromInbound(p2p({ content: 'N' }), confirmOpts)
+    const cid = mgr.listPending()[0]!.confirmId!
+    mgr.tryResolveFromInbound(p2p({ content: `N ${cid}` }), confirmOpts)
+    await expect(p).resolves.toBe('n')
+  })
+
+  it('bare Y does not approve', async () => {
+    const mgr = new FeishuConfirmManager()
+    const p = mgr.requestConfirm({
+      kind: 'tool_write',
+      sessionId: 's-bare',
+      toolName: 'write_file',
+      messageId: 'm1',
+      chatId: 'c1'
+    })
+    expect(mgr.tryResolveFromInbound(p2p({ content: 'Y' }), confirmOpts)).toBe(true)
+    expect(mgr.countPending()).toBe(1)
+    mgr.cancelAllPending()
     await expect(p).resolves.toBe('n')
   })
 
@@ -171,11 +188,12 @@ describe('FeishuConfirmManager', () => {
       chatId: 'c1',
       trustEligible: true
     })
+    const cid = mgr.listPending()[0]!.confirmId!
     expect(
       mgr.tryResolveFromInbound(p2p({ content: '信任' }), confirmOpts)
     ).toBe(true)
     expect(mgr.countPending()).toBe(1)
-    mgr.tryResolveFromInbound(p2p({ messageId: 'm3', content: 'Y' }), confirmOpts)
+    mgr.tryResolveFromInbound(p2p({ messageId: 'm3', content: `Y ${cid}` }), confirmOpts)
     await expect(p).resolves.toBe('y')
   })
 
@@ -190,11 +208,12 @@ describe('FeishuConfirmManager', () => {
       chatId: 'c1',
       trustEligible: false
     })
+    const cid = mgr.listPending()[0]!.confirmId!
     expect(
-      mgr.tryResolveFromInbound(p2p({ content: 'Y trust' }), confirmOpts)
+      mgr.tryResolveFromInbound(p2p({ content: `Y ${cid} TRUST` }), confirmOpts)
     ).toBe(true)
     expect(mgr.countPending()).toBe(1)
-    mgr.tryResolveFromInbound(p2p({ messageId: 'm3', content: 'N' }), confirmOpts)
+    mgr.tryResolveFromInbound(p2p({ messageId: 'm3', content: `N ${cid}` }), confirmOpts)
     await expect(p).resolves.toBe('n')
   })
 })

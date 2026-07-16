@@ -80,9 +80,12 @@ import {
 import {
   shouldSkipRemoteBrowserActConfirm,
   shouldSkipRemoteBrowserNavigateConfirm,
-  shouldSkipRemoteFileWriteConfirm,
   shouldSkipRemoteScriptConfirmOnAllow
 } from './remote/remoteToolPolicy'
+import {
+  remoteWriteGrantRegistry
+} from './remote/remoteWriteGrantRegistry'
+import { isRequestLeaseOwner } from './remote/remoteAgentRegistry'
 import {
   logShellPathConfirm,
   logShellSecurityDeny,
@@ -102,6 +105,7 @@ import {
   requestRemoteConfirm,
   resolveRemoteContextConfirmPolicy
 } from './remote/remoteConfirmBridge'
+import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
 import {
   beginLlm,
   beginTool,
@@ -1070,11 +1074,13 @@ async function runToolChatSessionInner(
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
-      let rejectReason: 'user' | 'remote_read_only' = 'user'
+      let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
       let autoApproveFallback: AutoApproveFallback | undefined
       let fileAutoApproved = false
       let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
+      // fileAutoApproved is desktop-only — must not cover remote authorization checks.
       if (
+        !remoteContext &&
         (toolName === 'write_file' || toolName === 'edit_file') &&
         toolsConfig.confirmMode === 'auto'
       ) {
@@ -1211,16 +1217,45 @@ async function runToolChatSessionInner(
         remoteContext &&
         (toolName === 'write_file' || toolName === 'edit_file')
       ) {
-        const channelConfig = remoteContext.source === 'feishu' ? feishuConfig : wechatConfig
-        // Conservative overlay: only skip when the security migration has completed.
-        if (shouldSkipRemoteFileWriteConfirm(channelConfig)) {
+        // Remote writes require a session-scoped RemoteWriteGrant — never config-based skip.
+        const originSessionId = remoteContext.originSessionId ?? sessionId
+        const workDirProfileId = remoteContext.workDirProfileId ?? 'default'
+        const authOwner = remoteContext.authOwner ?? remoteContext.userId ?? ''
+        const gen =
+          remoteContext.authorizationGeneration ??
+          remoteAuthorizationRegistry.getGeneration(remoteContext.source)
+        const byteCount = estimateWriteToolBytes(toolName, inputObj)
+        const reserved =
+          authOwner &&
+          remoteContext.requestId &&
+          isRequestLeaseOwner(originSessionId, remoteContext.requestId)
+            ? remoteWriteGrantRegistry.reserve({
+                channel: remoteContext.source,
+                owner: authOwner,
+                originSessionId,
+                workDirProfileId,
+                authorizationGeneration: gen,
+                byteCount
+              })
+            : ({ ok: false as const, reason: 'missing' as const })
+        if (reserved.ok) {
           needsConfirm = false
           logAgentEvent('info', 'tool.confirm.skip_confirm', {
             requestId,
             sessionId,
             toolUseId,
             toolName,
-            reason: 'remote_allow_local_write'
+            reason: 'remote_write_grant',
+            grantId: reserved.grant.grantId
+          })
+        } else {
+          needsConfirm = true
+          logAgentEvent('info', 'tool.confirm.remote_write_grant_required', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            reserveReason: reserved.reason
           })
         }
       }
@@ -1332,7 +1367,64 @@ async function runToolChatSessionInner(
             },
             wechatConfig
           })
-          outcome = decision === 'y' ? 'approved' : decision === 'timeout' ? 'timeout' : 'rejected'
+          // Sync authorization + lease check in the same turn as executor — no await between check and execute.
+          if (decision === 'y') {
+            const originSessionId = remoteContext.originSessionId ?? sessionId
+            const authOwner = remoteContext.authOwner ?? remoteContext.userId ?? ''
+            const currentGen = remoteAuthorizationRegistry.getGeneration(remoteContext.source)
+            const leaseOk =
+              Boolean(remoteContext.requestId) &&
+              isRequestLeaseOwner(originSessionId, remoteContext.requestId!)
+            if (
+              !authOwner ||
+              !leaseOk ||
+              (remoteContext.authorizationGeneration != null &&
+                remoteContext.authorizationGeneration !== currentGen)
+            ) {
+              outcome = 'rejected'
+              rejectReason = 'authorization_revoked'
+              logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
+                requestId,
+                sessionId,
+                toolUseId,
+                toolName,
+                expectedGeneration: remoteContext.authorizationGeneration,
+                currentGeneration: currentGen,
+                leaseOk,
+                hasAuthOwner: Boolean(authOwner)
+              })
+            } else {
+              outcome = 'approved'
+              // First remote write confirm issues a session-scoped write grant, then reserves this op.
+              if (toolName === 'write_file' || toolName === 'edit_file') {
+                const workDirProfileId = remoteContext.workDirProfileId ?? 'default'
+                const gen =
+                  remoteContext.authorizationGeneration ??
+                  remoteAuthorizationRegistry.getGeneration(remoteContext.source)
+                remoteWriteGrantRegistry.issue({
+                  channel: remoteContext.source,
+                  owner: authOwner,
+                  originSessionId,
+                  workDirProfileId,
+                  authorizationGeneration: gen
+                })
+                const reserved = remoteWriteGrantRegistry.reserve({
+                  channel: remoteContext.source,
+                  owner: authOwner,
+                  originSessionId,
+                  workDirProfileId,
+                  authorizationGeneration: gen,
+                  byteCount: estimateWriteToolBytes(toolName, inputObj)
+                })
+                if (!reserved.ok) {
+                  outcome = 'rejected'
+                  rejectReason = 'authorization_revoked'
+                }
+              }
+            }
+          } else {
+            outcome = decision === 'timeout' ? 'timeout' : 'rejected'
+          }
         } else {
           outcome = 'rejected'
           rejectReason = 'remote_read_only'
@@ -1541,7 +1633,9 @@ async function runToolChatSessionInner(
         const rejectedError =
           rejectReason === 'remote_read_only'
             ? '远程只读策略禁止执行需确认的工具。请在设置中将「远程写确认策略」改为「微信/飞书确认」，或开启「大模型生成的脚本自动允许执行」。'
-            : '用户拒绝执行此工具'
+            : rejectReason === 'authorization_revoked'
+              ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
+              : '用户拒绝执行此工具'
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
@@ -1933,12 +2027,9 @@ function evaluateRemoteToolBlock(
   if (!remoteContext) return null
 
   const channelConfig = remoteContext.source === 'feishu' ? feishuConfig : wechatConfig
-  const allowLocalWrite = channelConfig?.remoteAllowLocalWrite ?? true
   const denyOutbound = channelConfig?.remoteDenyOutbound ?? false
 
-  if ((toolName === 'write_file' || toolName === 'edit_file') && !allowLocalWrite) {
-    return '远程策略禁止此类写操作。'
-  }
+  // remoteAllowLocalWrite no longer hard-denies; remote writes go through RemoteWriteGrant.
 
   if (remoteContext.source === 'feishu' && toolName === 'run_lark_cli' && denyOutbound) {
     const args = inputObj.args
@@ -1957,6 +2048,19 @@ function evaluateRemoteToolBlock(
   }
 
   return null
+}
+
+function estimateWriteToolBytes(toolName: string, inputObj: Record<string, unknown>): number {
+  if (toolName === 'write_file') {
+    const content = typeof inputObj.content === 'string' ? inputObj.content : ''
+    return Buffer.byteLength(content, 'utf8')
+  }
+  if (toolName === 'edit_file') {
+    const oldS = typeof inputObj.old_string === 'string' ? inputObj.old_string : ''
+    const newS = typeof inputObj.new_string === 'string' ? inputObj.new_string : ''
+    return Buffer.byteLength(oldS, 'utf8') + Buffer.byteLength(newS, 'utf8')
+  }
+  return 0
 }
 
 /** @internal exported for unit tests */

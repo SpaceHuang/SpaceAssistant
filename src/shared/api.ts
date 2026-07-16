@@ -21,7 +21,8 @@ import type {
   ShellSecurityHints,
   TrustedShellCommand,
   WikiConfig,
-  WikiStatus
+  WikiStatus,
+  WorkspaceLayoutConfig
 } from './domainTypes'
 
 export type ToolConfirmResponsePayload = {
@@ -80,6 +81,7 @@ import type {
 import type {
   WeChatAuditEvent,
   WeChatAuditQueryResult,
+  WeChatConfig,
   WeChatConnectionStatus,
   WeChatLoginProgress,
   WeChatSdkDetectResult
@@ -268,12 +270,14 @@ export type SpaceAssistantApi = {
       skills: Partial<SkillsConfig>
       wiki: Partial<WikiConfig>
       feishu: Partial<FeishuConfig>
+      wechat: Partial<WeChatConfig>
       workDirProfiles: WorkDirProfile[]
       activeWorkDirProfileId: string
       maxParallelChatSessions: number
       browser: Partial<import('./domainTypes').BrowserConfig>
       shell: Partial<ShellConfig>
       locale: import('./domainTypes').AppLocale
+      workspaceLayout: Partial<WorkspaceLayoutConfig>
     }>
   ) => Promise<void>
   configTestConnection: (options?: {

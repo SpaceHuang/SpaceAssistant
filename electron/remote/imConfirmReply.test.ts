@@ -1,23 +1,35 @@
 import { describe, expect, it } from 'vitest'
-import { parseImConfirmReply } from './imConfirmReply'
+import { parseImConfirmReply, formatImConfirmPromptFooter } from './imConfirmReply'
 
 describe('parseImConfirmReply', () => {
-  it('approves once', () => {
-    expect(parseImConfirmReply('Y')).toEqual({ kind: 'approve' })
-    expect(parseImConfirmReply('yes')).toEqual({ kind: 'approve' })
-    expect(parseImConfirmReply('是')).toEqual({ kind: 'approve' })
-    expect(parseImConfirmReply('确认')).toEqual({ kind: 'approve' })
+  it('requires confirmId — bare Y/N is usage_hint', () => {
+    expect(parseImConfirmReply('Y')).toEqual({ kind: 'usage_hint' })
+    expect(parseImConfirmReply('yes')).toEqual({ kind: 'usage_hint' })
+    expect(parseImConfirmReply('是')).toEqual({ kind: 'usage_hint' })
+    expect(parseImConfirmReply('确认')).toEqual({ kind: 'usage_hint' })
+    expect(parseImConfirmReply('N')).toEqual({ kind: 'usage_hint' })
+    expect(parseImConfirmReply('Y trust')).toEqual({ kind: 'usage_hint' })
   })
 
-  it('approves and trusts', () => {
-    expect(parseImConfirmReply('Y trust')).toEqual({ kind: 'approve_and_trust' })
-    expect(parseImConfirmReply('yes trust')).toEqual({ kind: 'approve_and_trust' })
-    expect(parseImConfirmReply('确认并信任')).toEqual({ kind: 'approve_and_trust' })
+  it('approves with confirmId', () => {
+    expect(parseImConfirmReply('Y AB12')).toEqual({ kind: 'approve', confirmId: 'AB12' })
+    expect(parseImConfirmReply('yes ab12')).toEqual({ kind: 'approve', confirmId: 'AB12' })
   })
 
-  it('rejects', () => {
-    expect(parseImConfirmReply('N')).toEqual({ kind: 'reject' })
-    expect(parseImConfirmReply('取消')).toEqual({ kind: 'reject' })
+  it('approves and trusts with confirmId', () => {
+    expect(parseImConfirmReply('Y AB12 TRUST')).toEqual({
+      kind: 'approve_and_trust',
+      confirmId: 'AB12'
+    })
+    expect(parseImConfirmReply('yes ab12 trust')).toEqual({
+      kind: 'approve_and_trust',
+      confirmId: 'AB12'
+    })
+  })
+
+  it('rejects with confirmId', () => {
+    expect(parseImConfirmReply('N AB12')).toEqual({ kind: 'reject', confirmId: 'AB12' })
+    expect(parseImConfirmReply('取消 AB12')).toEqual({ kind: 'reject', confirmId: 'AB12' })
   })
 
   it('treats bare 信任 as misclick', () => {
@@ -26,5 +38,9 @@ describe('parseImConfirmReply', () => {
 
   it('ignores unrelated text', () => {
     expect(parseImConfirmReply('hello')).toEqual({ kind: 'not_confirm' })
+  })
+
+  it('footer includes confirmId', () => {
+    expect(formatImConfirmPromptFooter({ confirmId: 'AB12' })).toContain('AB12')
   })
 })

@@ -17,7 +17,8 @@ import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import { resolveFeishuSession } from './feishuSessionResolver'
-import { tryClaimOrRelease } from '../remote/imCommandRouterHelpers'
+import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
+import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
   buildDisambiguationReply,
@@ -42,11 +43,20 @@ import {
   readOwnerOpenIdFromAllowlist,
   type FeishuOwnerBindController
 } from './feishuOwnerBind'
+import { CLAIM_LEASE_MS } from '../remote/imProcessedStore'
 
 const rateLimiter = createRateLimiter()
 
-/** Workdir disambiguation TTL (also cleared on rebind / remote off). */
-const DISAMBIGUATION_TTL_MS = 10 * 60_000
+/**
+ * Workdir disambiguation TTL must stay under the processed-claim lease so a
+ * timed-out pending cannot outlive a reclaimable `claimed` entry.
+ */
+const DISAMBIGUATION_TTL_MS = CLAIM_LEASE_MS - 15_000
+
+type DisambiguationFinalReason =
+  | 'disambiguation_timeout'
+  | 'disambiguation_cleared'
+  | 'disambiguation_identity_revoked'
 
 type PendingDisambiguation = {
   profiles: WorkDirProfile[]
@@ -54,6 +64,9 @@ type PendingDisambiguation = {
   senderOpenId: string
   createdAt: number
   expiresAt: number
+  processedClaimId: string
+  authSnapshot: ImAuthSnapshot
+  timer?: ReturnType<typeof setTimeout>
 }
 
 export type RemoteCommandRouterDeps = {
@@ -90,15 +103,70 @@ export class RemoteCommandRouter {
 
   constructor(private deps: RemoteCommandRouterDeps) {}
 
-  /** Clear workdir disambiguation pending (rebind / clear owner / remote off). */
-  clearPendingDisambiguation(): void {
+  /**
+   * Clear workdir disambiguation pending (rebind / clear owner / remote off).
+   * Map deletion is synchronous; claim finalization is awaited.
+   */
+  async clearPendingDisambiguation(): Promise<void> {
+    const entries = [...this.pendingDisambiguation.entries()]
     this.pendingDisambiguation.clear()
+    await Promise.all(
+      entries.map(([, pending]) => this.finalizeDisambiguationClaim(pending, 'disambiguation_cleared'))
+    )
+  }
+
+  private clearDisambiguationTimer(pending: PendingDisambiguation): void {
+    if (pending.timer) {
+      clearTimeout(pending.timer)
+      pending.timer = undefined
+    }
+  }
+
+  /** Mark claim terminal and clear timer; does not touch the pending map. */
+  private async finalizeDisambiguationClaim(
+    pending: PendingDisambiguation,
+    reason: DisambiguationFinalReason
+  ): Promise<void> {
+    this.clearDisambiguationTimer(pending)
+    await this.deps.processedStore.markCompleted(
+      pending.originalMsg.messageId,
+      pending.processedClaimId,
+      reason
+    )
+    logFeishuCliEvent('info', 'feishu.disambiguation.finalized', {
+      messageId: pending.originalMsg.messageId,
+      reason
+    })
+  }
+
+  /**
+   * Drop a pending entry (by object identity) and finalize its claim.
+   * Safe if the map already holds a newer pending for the same chat.
+   */
+  private async finalizeDisambiguation(
+    key: string,
+    pending: PendingDisambiguation,
+    reason: DisambiguationFinalReason
+  ): Promise<void> {
+    if (this.pendingDisambiguation.get(key) === pending) {
+      this.pendingDisambiguation.delete(key)
+    }
+    await this.finalizeDisambiguationClaim(pending, reason)
   }
 
   private purgeExpiredDisambiguation(now = Date.now()): void {
     for (const [key, pending] of this.pendingDisambiguation) {
-      if (pending.expiresAt <= now) this.pendingDisambiguation.delete(key)
+      if (pending.expiresAt <= now) {
+        void this.finalizeDisambiguation(key, pending, 'disambiguation_timeout')
+      }
     }
+  }
+
+  private armDisambiguationTimeout(key: string, pending: PendingDisambiguation): void {
+    this.clearDisambiguationTimer(pending)
+    pending.timer = setTimeout(() => {
+      void this.finalizeDisambiguation(key, pending, 'disambiguation_timeout')
+    }, Math.max(0, pending.expiresAt - Date.now()))
   }
 
   getLastInboundAt(): number | undefined {
@@ -155,6 +223,7 @@ export class RemoteCommandRouter {
 
     // Bind window: only the exact pairing protocol may consume the code. Bind-window messages
     // are ALWAYS consumed here and never enter the Agent (closes bind-race + hijack gaps).
+    // Skip shared inbound guard here — owner may not exist yet during pairing.
     if (accept.reason === 'bind_window' || bindingActive) {
       const parsed = parseFeishuBindProtocol(msg.content)
       if (!parsed) {
@@ -237,7 +306,11 @@ export class RemoteCommandRouter {
         pending.senderOpenId === msg.senderOpenId &&
         pending.expiresAt > Date.now()
       if (!identityOk) {
-        this.pendingDisambiguation.delete(disambigKey)
+        const reason: DisambiguationFinalReason =
+          pending.expiresAt <= Date.now()
+            ? 'disambiguation_timeout'
+            : 'disambiguation_identity_revoked'
+        await this.finalizeDisambiguation(disambigKey, pending, reason)
         logFeishuCliEvent('warn', 'feishu.disambiguation.reject', {
           senderOpenId: msg.senderOpenId,
           pendingSender: pending.senderOpenId,
@@ -252,8 +325,17 @@ export class RemoteCommandRouter {
       }
       const chosen = resolveDisambiguationChoice(msg.content, pending.profiles)
       if (chosen) {
+        this.clearDisambiguationTimer(pending)
         this.pendingDisambiguation.delete(disambigKey)
-        await this.processCommand(pending.originalMsg, config, chosen.path, chosen, pending.originalMsg.content)
+        await this.processCommand(
+          pending.originalMsg,
+          config,
+          chosen.path,
+          chosen,
+          pending.originalMsg.content,
+          pending.processedClaimId,
+          pending.authSnapshot
+        )
       }
       return
     }
@@ -272,11 +354,41 @@ export class RemoteCommandRouter {
       return
     }
 
-    if (await this.deps.processedStore.has(msg.messageId)) {
+    const getGuardConfig = () => {
+      const c = mergeFeishuConfig(this.deps.getFeishuConfig())
+      return {
+        enabled: c.enabled,
+        remoteEnabled: c.remoteEnabled,
+        remoteSenderAllowlist: c.remoteSenderAllowlist
+      }
+    }
+    const guard = evaluateImInboundGuard({
+      channel: 'feishu',
+      senderId: msg.senderOpenId,
+      getConfig: getGuardConfig
+    })
+    if (!guard.ok) {
+      logFeishuCliEvent('warn', 'feishu.inbound.guard_reject', { reason: guard.reason })
+      return
+    }
+
+    const re1 = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig })
+    if (!re1.ok) {
+      logFeishuCliEvent('warn', 'feishu.inbound.guard_revalidate_fail', { reason: re1.reason })
+      return
+    }
+
+    const claimResult = await this.deps.processedStore.tryClaim(msg.messageId)
+    if (!claimResult.ok) {
       logFeishuCliEvent('info', 'feishu.inbound.duplicate', { messageId: msg.messageId })
       return
     }
-    await this.deps.processedStore.mark(msg.messageId)
+
+    const re2 = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig })
+    if (!re2.ok) {
+      await this.deps.processedStore.markCompleted(msg.messageId, claimResult.claimId, 'guard_revoked')
+      return
+    }
 
     const appCfg = this.deps.getAppConfig()
     const workDirResult = resolveWorkDirFromFeishuCommand(
@@ -291,13 +403,17 @@ export class RemoteCommandRouter {
         chatId: msg.chatId
       })
       const now = Date.now()
-      this.pendingDisambiguation.set(disambigKey, {
+      const pending: PendingDisambiguation = {
         profiles: workDirResult.ambiguous,
         originalMsg: msg,
         senderOpenId: msg.senderOpenId,
         createdAt: now,
-        expiresAt: now + DISAMBIGUATION_TTL_MS
-      })
+        expiresAt: now + DISAMBIGUATION_TTL_MS,
+        processedClaimId: claimResult.claimId,
+        authSnapshot: guard.snapshot
+      }
+      this.armDisambiguationTimeout(disambigKey, pending)
+      this.pendingDisambiguation.set(disambigKey, pending)
       await replyFeishuText(this.deps.runner, msg.messageId, buildDisambiguationReply(workDirResult.ambiguous))
       return
     }
@@ -310,13 +426,22 @@ export class RemoteCommandRouter {
         ambiguousCount: 0
       })
       if (profile.sensitive) {
+        await this.deps.processedStore.markCompleted(msg.messageId, claimResult.claimId, 'sensitive_blocked')
         await replyFeishuText(this.deps.runner, msg.messageId, '该项目为敏感项目，不允许远程访问')
         return
       }
     }
 
     const workDir = profile?.path ?? this.deps.getWorkDir()
-    await this.processCommand(msg, config, workDir, profile, accept.userMessage ?? msg.content.trim())
+    await this.processCommand(
+      msg,
+      config,
+      workDir,
+      profile,
+      accept.userMessage ?? msg.content.trim(),
+      claimResult.claimId,
+      guard.snapshot
+    )
   }
 
   private async processCommand(
@@ -324,193 +449,335 @@ export class RemoteCommandRouter {
     config: FeishuConfig,
     workDir: string,
     profile?: WorkDirProfile | null,
-    userMessage?: string
+    userMessage?: string,
+    processedClaimId?: string,
+    authSnapshot?: ImAuthSnapshot
   ): Promise<void> {
-    const appCfg = this.deps.getAppConfig()
-    const content = userMessage ?? msg.content.trim()
-    const { sessionId, isNew } = await resolveFeishuSession(this.deps.db, msg, config, this.deps.getModel())
-    logFeishuCliEvent('info', 'feishu.session.resolved', {
-      sessionId,
-      isNew,
-      chatId: msg.chatId,
-      mergeWindowMs: readRemoteSessionIdleMinutes(config) * 60_000
+    const claimFinalizer = createProcessedClaimFinalizer({
+      messageId: msg.messageId,
+      claimId: processedClaimId,
+      markCompleted: (messageId, claimId, resultSummary) =>
+        this.deps.processedStore.markCompleted(messageId, claimId, resultSummary)
     })
 
-    if (profile?.sensitive) {
-      await sendFeishuRemoteOutbound({
-        runner: this.deps.runner,
-        messageId: msg.messageId,
-        body: '该项目为敏感项目，不允许远程访问',
-        sessionId,
-        touch: { db: this.deps.db, sessionId }
-      })
-      return
+    const getGuardConfig = () => {
+      const c = mergeFeishuConfig(this.deps.getFeishuConfig())
+      return {
+        enabled: c.enabled,
+        remoteEnabled: c.remoteEnabled,
+        remoteSenderAllowlist: c.remoteSenderAllowlist
+      }
     }
 
-    const claim = tryClaimOrRelease(sessionId, appCfg.maxParallelChatSessions)
-    if (!claim.ok) {
-      if (claim.reason === 'session_busy') {
-        logFeishuCliEvent('warn', 'feishu.inbound.session_busy', { sessionId })
-      } else {
-        logFeishuCliEvent('warn', 'feishu.inbound.parallel_full', { maxParallel: appCfg.maxParallelChatSessions })
-      }
-      await sendFeishuRemoteOutbound({
-        runner: this.deps.runner,
-        messageId: msg.messageId,
-        body: claim.message,
-        sessionId,
-        touch: { db: this.deps.db, sessionId }
-      })
-      return
+    const failAuth = async (reason: string) => {
+      logFeishuCliEvent('warn', 'feishu.inbound.guard_revalidate_fail', { reason })
+      await claimFinalizer.complete('authorization_revoked')
     }
 
     try {
-      if (profile) {
-        const bindResult = await bindSessionWorkDir(this.deps.db, this.deps.workDirManager, {
-          sessionId,
-          profileId: profile.id,
-          remoteContext: {
-            source: 'feishu',
-            messageId: msg.messageId,
-            confirmPolicy: config.remoteConfirmPolicy
-          },
-          source: 'inbound',
-          appendAudit: (profileId, profileName) =>
-            this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName })
-        })
-        if (!bindResult.success) {
-          await sendFeishuRemoteOutbound({
-            runner: this.deps.runner,
-            messageId: msg.messageId,
-            body: bindResult.error ?? SENSITIVE_WORKDIR_ERROR,
-            sessionId,
-            touch: { db: this.deps.db, sessionId }
-          })
+      if (!authSnapshot) {
+        await failAuth('missing_auth_snapshot')
+        return
+      }
+      {
+        const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
+        if (!re.ok) {
+          await failAuth(re.reason)
           return
         }
       }
 
-      appendMessage(this.deps.db, {
-        id: randomUUID(),
+      const appCfg = this.deps.getAppConfig()
+      const content = userMessage ?? msg.content.trim()
+      const { sessionId, isNew } = await resolveFeishuSession(
+        this.deps.db,
+        msg,
+        config,
+        this.deps.getModel()
+      )
+      {
+        const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
+        if (!re.ok) {
+          await failAuth(re.reason)
+          return
+        }
+      }
+      const requestId = randomUUID()
+      logFeishuCliEvent('info', 'feishu.session.resolved', {
         sessionId,
-        role: 'user',
-        content,
-        timestamp: Date.now(),
-        status: 'sent'
+        isNew,
+        chatId: msg.chatId,
+        mergeWindowMs: readRemoteSessionIdleMinutes(config) * 60_000
       })
-      touchRemoteSessionActivity(this.deps.db, sessionId)
 
-      if (isNew || config.remoteNotifyOnReceive) {
+      if (profile?.sensitive) {
         await sendFeishuRemoteOutbound({
           runner: this.deps.runner,
           messageId: msg.messageId,
-          body: '已收到，正在处理…',
+          body: '该项目为敏感项目，不允许远程访问',
           sessionId,
           touch: { db: this.deps.db, sessionId }
         })
+        await claimFinalizer.complete('sensitive_blocked')
+        return
       }
 
-      const wc = this.deps.getMainWebContents()
-      wc?.send('feishu:inbound-message', { sessionId, message: msg })
-
-      await this.deps.auditLogger.append({ type: 'agent_start', sessionId, messageId: msg.messageId })
-
-      const requestId = randomUUID()
-      const assistantMessageId = randomUUID()
-      const assistantTimestamp = Date.now()
-      appendMessage(this.deps.db, {
-        id: assistantMessageId,
-        sessionId,
-        role: 'assistant',
-        content: '',
-        timestamp: assistantTimestamp,
-        status: 'streaming',
-        schemaVersion: CURRENT_SCHEMA_VERSION
-      })
-      wc?.send('feishu:remote-agent-start', { sessionId, assistantMessageId, requestId })
-
-      const remoteContext = {
-        source: 'feishu' as const,
-        messageId: msg.messageId,
-        confirmPolicy: config.remoteConfirmPolicy,
-        feishuConfig: config,
-        confirmManager: this.deps.confirmManager,
-        requestToolConfirm: createFeishuRequestToolConfirm(this.deps.confirmManager),
-        confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
-        larkCliRunner: this.deps.runner,
-        chatId: msg.chatId,
-        sessionId,
-        appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
-          this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
-        appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>
-          this.deps.auditLogger.append(auditEntryToLoggerPayload(entry))
+      const claim = tryClaimOrRelease(sessionId, requestId, appCfg.maxParallelChatSessions)
+      if (!claim.ok) {
+        if (claim.reason === 'session_busy') {
+          logFeishuCliEvent('warn', 'feishu.inbound.session_busy', { sessionId })
+        } else {
+          logFeishuCliEvent('warn', 'feishu.inbound.parallel_full', {
+            maxParallel: appCfg.maxParallelChatSessions
+          })
+        }
+        await sendFeishuRemoteOutbound({
+          runner: this.deps.runner,
+          messageId: msg.messageId,
+          body: claim.message,
+          sessionId,
+          touch: { db: this.deps.db, sessionId }
+        })
+        await claimFinalizer.complete(claim.reason)
+        return
       }
 
-      const result = await runFeishuRemoteAgent({
-        db: this.deps.db,
-        sessionId,
-        userMessage: content,
-        replyMessageId: msg.messageId,
-        requestId,
-        feishuConfig: config,
-        workDir,
-        workDirManager: this.deps.workDirManager,
-        getMainWebContents: this.deps.getMainWebContents,
-        getApiKey: this.deps.getApiKey,
-        getBaseUrl: this.deps.getBaseUrl,
-        getModel: this.deps.getModel,
-        runner: this.deps.runner,
-        confirmManager: this.deps.confirmManager,
-        getToolsConfig: this.deps.getToolsConfig,
-        getBrowserConfig: this.deps.getBrowserConfig,
-        getWikiConfig: this.deps.getWikiConfig,
-        getShellConfig: this.deps.getShellConfig,
-        userDataDir: this.deps.getUserDataPath(),
-        remoteContext
-      })
+      try {
+        if (profile) {
+          const bindResult = await bindSessionWorkDir(this.deps.db, this.deps.workDirManager, {
+            sessionId,
+            profileId: profile.id,
+            remoteContext: {
+              source: 'feishu',
+              messageId: msg.messageId,
+              confirmPolicy: config.remoteConfirmPolicy
+            },
+            source: 'inbound',
+            appendAudit: (profileId, profileName) =>
+              this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName })
+          })
+          {
+            const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
+            if (!re.ok) {
+              await failAuth(re.reason)
+              return
+            }
+          }
+          if (!bindResult.success) {
+            await sendFeishuRemoteOutbound({
+              runner: this.deps.runner,
+              messageId: msg.messageId,
+              body: bindResult.error ?? SENSITIVE_WORKDIR_ERROR,
+              sessionId,
+              touch: { db: this.deps.db, sessionId }
+            })
+            await claimFinalizer.complete('workdir_bind_failed')
+            return
+          }
+        }
 
-      if (wc) {
-        const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
-        wc.send('feishu:agent-done', {
-          sessionId: outboundSessionId,
-          messageId: assistantMessageId,
+        {
+          const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
+          if (!re.ok) {
+            await failAuth(re.reason)
+            return
+          }
+        }
+
+        appendMessage(this.deps.db, {
+          id: randomUUID(),
+          sessionId,
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+          status: 'sent'
+        })
+        touchRemoteSessionActivity(this.deps.db, sessionId)
+
+        if (isNew || config.remoteNotifyOnReceive) {
+          await sendFeishuRemoteOutbound({
+            runner: this.deps.runner,
+            messageId: msg.messageId,
+            body: '已收到，正在处理…',
+            sessionId,
+            touch: { db: this.deps.db, sessionId }
+          })
+          const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
+          if (!re.ok) {
+            await failAuth(re.reason)
+            return
+          }
+        }
+
+        const wc = this.deps.getMainWebContents()
+        wc?.send('feishu:inbound-message', { sessionId, message: msg })
+
+        {
+          const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
+          if (!re.ok) {
+            await failAuth(re.reason)
+            return
+          }
+        }
+
+        if (processedClaimId) {
+          const executing = await this.deps.processedStore.markExecuting(
+            msg.messageId,
+            processedClaimId
+          )
+          if (!executing) {
+            logFeishuCliEvent('warn', 'feishu.inbound.claim_transition_failed', {
+              messageId: msg.messageId,
+              reason: 'processed_claim_lost'
+            })
+            await this.deps.auditLogger.append({
+              type: 'agent_start_rejected',
+              sessionId,
+              messageId: msg.messageId,
+              reason: 'processed_claim_lost'
+            })
+            await claimFinalizer.complete('processed_claim_lost')
+            return
+          }
+        }
+
+        await this.deps.auditLogger.append({ type: 'agent_start', sessionId, messageId: msg.messageId })
+        {
+          const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
+          if (!re.ok) {
+            await failAuth(re.reason)
+            return
+          }
+        }
+
+        const assistantMessageId = randomUUID()
+        const assistantTimestamp = Date.now()
+        appendMessage(this.deps.db, {
+          id: assistantMessageId,
+          sessionId,
+          role: 'assistant',
+          content: '',
+          timestamp: assistantTimestamp,
+          status: 'streaming',
+          schemaVersion: CURRENT_SCHEMA_VERSION
+        })
+        wc?.send('feishu:remote-agent-start', { sessionId, assistantMessageId, requestId })
+
+        const remoteContext = {
+          source: 'feishu' as const,
+          messageId: msg.messageId,
+          confirmPolicy: config.remoteConfirmPolicy,
+          feishuConfig: config,
+          confirmManager: this.deps.confirmManager,
+          requestToolConfirm: createFeishuRequestToolConfirm(this.deps.confirmManager),
+          confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
+          larkCliRunner: this.deps.runner,
+          chatId: msg.chatId,
+          userId: authSnapshot.owner,
+          authOwner: authSnapshot.owner,
+          originSessionId: sessionId,
+          outboundSessionId: sessionId,
+          workDirProfileId: profile?.id ?? this.deps.workDirManager.getActiveProfileId(),
+          authorizationGeneration: authSnapshot.authorizationGeneration,
           requestId,
-          ok: result.ok,
-          summary: result.summary
-        })
-      } else {
-        const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
-        updateMessageContent(this.deps.db, assistantMessageId, {
-          content: result.summary,
-          status: result.ok ? 'completed' : 'failed'
-        })
-        touchRemoteSessionActivity(this.deps.db, outboundSessionId)
-      }
+          appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
+            this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
+          appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>
+            this.deps.auditLogger.append(auditEntryToLoggerPayload(entry))
+        }
 
-      const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
-      await sendFeishuRemoteOutbound({
-        runner: this.deps.runner,
-        messageId: msg.messageId,
-        body: result.summary,
-        sessionId: outboundSessionId,
-        touch: { db: this.deps.db, sessionId: outboundSessionId }
-      })
-      this.lastReplyAt = Date.now()
-      clearRemoteProgressSession(sessionId)
-      await this.deps.auditLogger.append({
-        type: 'agent_done',
-        sessionId: outboundSessionId,
-        success: !result.pendingConfirm,
-        summaryLen: result.summary.length
-      })
-      await this.deps.auditLogger.append({ type: 'reply', messageId: msg.messageId, len: result.summary.length })
+        let result: Awaited<ReturnType<typeof runFeishuRemoteAgent>>
+        try {
+          result = await runFeishuRemoteAgent({
+            db: this.deps.db,
+            sessionId,
+            userMessage: content,
+            replyMessageId: msg.messageId,
+            requestId,
+            feishuConfig: config,
+            workDir,
+            workDirManager: this.deps.workDirManager,
+            getMainWebContents: this.deps.getMainWebContents,
+            getApiKey: this.deps.getApiKey,
+            getBaseUrl: this.deps.getBaseUrl,
+            getModel: this.deps.getModel,
+            runner: this.deps.runner,
+            confirmManager: this.deps.confirmManager,
+            getToolsConfig: this.deps.getToolsConfig,
+            getBrowserConfig: this.deps.getBrowserConfig,
+            getWikiConfig: this.deps.getWikiConfig,
+            getShellConfig: this.deps.getShellConfig,
+            userDataDir: this.deps.getUserDataPath(),
+            remoteContext
+          })
+        } catch (e) {
+          const err = e instanceof Error ? e.message : String(e)
+          result = {
+            summary: `执行失败：${err}\n请打开 SpaceAssistant 查看详情`,
+            pendingConfirm: false,
+            ok: false
+          }
+        }
 
-      if (result.pendingConfirm && wc) {
+        await claimFinalizer.complete(result.ok ? 'ok' : 'failed')
+
+        // Completion (agent-done payload -> renderer DB patch + backup), progress cleanup, audit
+        // and pending-confirm all key off the *origin* session, which owns the assistant message
+        // and tool-call state for this request. Only IM continuation (outbound reply + activity
+        // touch) follows `outboundSessionId`, which may have moved via switch_session.
         const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
-        wc.send('feishu:pending-confirm', { sessionId: outboundSessionId, pendingConfirm: true })
+        if (wc) {
+          wc.send('feishu:agent-done', {
+            sessionId,
+            messageId: assistantMessageId,
+            requestId,
+            ok: result.ok,
+            summary: result.summary
+          })
+        } else {
+          updateMessageContent(this.deps.db, assistantMessageId, {
+            content: result.summary,
+            status: result.ok ? 'completed' : 'failed'
+          })
+          touchRemoteSessionActivity(this.deps.db, outboundSessionId)
+        }
+
+        await sendFeishuRemoteOutbound({
+          runner: this.deps.runner,
+          messageId: msg.messageId,
+          body: result.summary,
+          sessionId: outboundSessionId,
+          touch: { db: this.deps.db, sessionId: outboundSessionId }
+        })
+        this.lastReplyAt = Date.now()
+        clearRemoteProgressSession(sessionId)
+        await this.deps.auditLogger.append({
+          type: 'agent_done',
+          sessionId,
+          success: !result.pendingConfirm,
+          summaryLen: result.summary.length
+        })
+        await this.deps.auditLogger.append({
+          type: 'reply',
+          messageId: msg.messageId,
+          len: result.summary.length
+        })
+
+        if (result.pendingConfirm && wc) {
+          wc.send('feishu:pending-confirm', { sessionId, pendingConfirm: true })
+        }
+      } finally {
+        claim.release()
       }
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e)
+      logFeishuCliEvent('error', 'feishu.inbound.process_error', { error: err })
+      await claimFinalizer.complete('process_error')
     } finally {
-      claim.release()
+      // Any early return that forgot to finalize still gets a terminal state (not crash recovery).
+      if (!claimFinalizer.done) {
+        await claimFinalizer.complete('aborted')
+      }
     }
   }
 }

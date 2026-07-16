@@ -1,7 +1,7 @@
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
 import { getSession, updateSession } from './database'
-import { isRemoteAgentRunning } from './remote/remoteAgentRegistry'
+import { isRequestLeaseOwner } from './remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from './remote/remoteSessionGuardMessages'
 import type { WorkDirManager } from './workDirManager'
 import type { RemoteContext } from './tools/types'
@@ -13,6 +13,8 @@ export interface BindSessionWorkDirParams {
   profileId: string
   remoteContext: RemoteContext
   source: 'inbound' | 'tool'
+  /** requestId of the caller; only the Agent holding the origin lease may rebind via 'tool'. */
+  requestId?: string
   appendAudit?: (profileId: string, profileName: string) => void | Promise<void>
 }
 
@@ -81,7 +83,8 @@ export function canBindSessionWorkDir(
   db: AppDatabase,
   sessionId: string,
   profileId: string,
-  source: 'inbound' | 'tool'
+  source: 'inbound' | 'tool',
+  requestId?: string
 ): { allowed: boolean; error?: string } {
   if (source === 'inbound') {
     return { allowed: true }
@@ -96,7 +99,9 @@ export function canBindSessionWorkDir(
     return { allowed: true }
   }
 
-  if (isRemoteAgentRunning(sessionId)) {
+  // Only the Agent whose requestId currently holds the origin lease may rebind its own
+  // session's workDir; missing/wrong/expired lease is busy.
+  if (!requestId || !isRequestLeaseOwner(sessionId, requestId)) {
     return { allowed: false, error: REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE }
   }
 
@@ -113,7 +118,7 @@ export async function bindSessionWorkDir(
     return { success: false, error: '会话不存在' }
   }
 
-  const guard = canBindSessionWorkDir(db, params.sessionId, params.profileId, params.source)
+  const guard = canBindSessionWorkDir(db, params.sessionId, params.profileId, params.source, params.requestId)
   if (!guard.allowed) {
     return { success: false, error: guard.error }
   }

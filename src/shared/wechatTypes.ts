@@ -182,6 +182,7 @@ export interface WeChatPollingStats {
 export type WeChatAuditEvent =
   | { type: 'inbound'; messageId: string; chatId: string; senderId: string; accepted: boolean; reason?: string; ts: number }
   | { type: 'agent_start'; sessionId: string; messageId: string; ts: number }
+  | { type: 'agent_start_rejected'; sessionId: string; messageId: string; reason: string; ts: number }
   | { type: 'agent_done'; sessionId: string; success: boolean; summaryLen: number; ts: number }
   | { type: 'send'; sessionId?: string; targetId: string; len: number; success: boolean; ts: number }
   | { type: 'reply'; sessionId?: string; targetId: string; len: number; success: boolean; ts: number }

@@ -111,13 +111,16 @@ describe('workDirBinding', () => {
       const session = createSession(db, { name: 'S1' })
       const appendAudit = vi.fn()
 
+      tryClaimRemoteSession(session.id, 'req-owner', 3)
       const result = await bindSessionWorkDir(db, manager, {
         sessionId: session.id,
         profileId: added.profile!.id,
         remoteContext: feishuRemoteContext,
         source: 'tool',
+        requestId: 'req-owner',
         appendAudit
       })
+      releaseRemoteSession(session.id, 'req-owner')
 
       expect(result.success).toBe(true)
       expect(result.changed).toBe(true)
@@ -152,12 +155,15 @@ describe('workDirBinding', () => {
       const added = manager.addProfile({ name: 'Secret', path: dirA, sensitive: true })
       const session = createSession(db, { name: 'S1' })
 
+      tryClaimRemoteSession(session.id, 'req-owner', 3)
       const result = await bindSessionWorkDir(db, manager, {
         sessionId: session.id,
         profileId: added.profile!.id,
         remoteContext: feishuRemoteContext,
-        source: 'tool'
+        source: 'tool',
+        requestId: 'req-owner'
       })
+      releaseRemoteSession(session.id, 'req-owner')
 
       expect(result.success).toBe(false)
       expect(result.error).toBe(SENSITIVE_WORKDIR_ERROR)
@@ -179,19 +185,22 @@ describe('workDirBinding', () => {
       manager.updateProfile(added.profile!.id, { path: readOnlyDir })
       fs.chmodSync(readOnlyDir, 0o444)
 
+      tryClaimRemoteSession(session.id, 'req-owner', 3)
       const result = await bindSessionWorkDir(db, manager, {
         sessionId: session.id,
         profileId: added.profile!.id,
         remoteContext: feishuRemoteContext,
-        source: 'tool'
+        source: 'tool',
+        requestId: 'req-owner'
       })
+      releaseRemoteSession(session.id, 'req-owner')
 
       fs.chmodSync(readOnlyDir, 0o755)
       expect(result.success).toBe(false)
       expect(result.error).toContain('无法写入该目录')
     })
 
-    it('rejects tool bind when session is busy and profile changes', async () => {
+    it('rejects tool bind when no live lease exists', async () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
@@ -200,14 +209,81 @@ describe('workDirBinding', () => {
       const b = manager.addProfile({ name: 'B', path: dirB })
       const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
-      tryClaimRemoteSession(session.id, 3)
+      const result = await bindSessionWorkDir(db, manager, {
+        sessionId: session.id,
+        profileId: b.profile!.id,
+        remoteContext: feishuRemoteContext,
+        source: 'tool',
+        requestId: 'req-stale'
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.error).toBe(REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE)
+    })
+
+    it('rejects tool bind with wrong requestId even when another lease is live', async () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      dirs.push(dirA, dirB)
+      const { db, manager } = setup()
+      const a = manager.addProfile({ name: 'A', path: dirA })
+      const b = manager.addProfile({ name: 'B', path: dirB })
+      const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
+
+      tryClaimRemoteSession(session.id, 'req-owner', 3)
+      const result = await bindSessionWorkDir(db, manager, {
+        sessionId: session.id,
+        profileId: b.profile!.id,
+        remoteContext: feishuRemoteContext,
+        source: 'tool',
+        requestId: 'req-other'
+      })
+      releaseRemoteSession(session.id, 'req-owner')
+
+      expect(result.success).toBe(false)
+      expect(result.error).toBe(REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE)
+    })
+
+    it('allows tool bind from the Agent currently holding the origin lease', async () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      dirs.push(dirA, dirB)
+      const { db, manager } = setup()
+      const a = manager.addProfile({ name: 'A', path: dirA })
+      const b = manager.addProfile({ name: 'B', path: dirB })
+      const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
+
+      tryClaimRemoteSession(session.id, 'req-owner', 3)
+      const result = await bindSessionWorkDir(db, manager, {
+        sessionId: session.id,
+        profileId: b.profile!.id,
+        remoteContext: feishuRemoteContext,
+        source: 'tool',
+        requestId: 'req-owner'
+      })
+      releaseRemoteSession(session.id, 'req-owner')
+
+      expect(result.success).toBe(true)
+      expect(result.changed).toBe(true)
+    })
+
+    it('rejects tool bind with no requestId while session is claimed by any Agent', async () => {
+      const dirA = tempDir()
+      const dirB = tempDir()
+      dirs.push(dirA, dirB)
+      const { db, manager } = setup()
+      const a = manager.addProfile({ name: 'A', path: dirA })
+      const b = manager.addProfile({ name: 'B', path: dirB })
+      const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
+
+      tryClaimRemoteSession(session.id, 'req-owner', 3)
       const result = await bindSessionWorkDir(db, manager, {
         sessionId: session.id,
         profileId: b.profile!.id,
         remoteContext: feishuRemoteContext,
         source: 'tool'
       })
-      releaseRemoteSession(session.id)
+      releaseRemoteSession(session.id, 'req-owner')
 
       expect(result.success).toBe(false)
       expect(result.error).toBe(REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE)
@@ -222,14 +298,14 @@ describe('workDirBinding', () => {
       const b = manager.addProfile({ name: 'B', path: dirB })
       const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
-      tryClaimRemoteSession(session.id, 3)
+      tryClaimRemoteSession(session.id, 'req-owner', 3)
       const result = await bindSessionWorkDir(db, manager, {
         sessionId: session.id,
         profileId: b.profile!.id,
         remoteContext: feishuRemoteContext,
         source: 'inbound'
       })
-      releaseRemoteSession(session.id)
+      releaseRemoteSession(session.id, 'req-owner')
 
       expect(result.success).toBe(true)
       expect(result.changed).toBe(true)

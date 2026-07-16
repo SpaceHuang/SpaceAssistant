@@ -32,11 +32,11 @@ describe('canSwitchRemoteSession', () => {
   })
 
   it('allows when caller only registry-claimed (no blockers)', () => {
-    tryClaimRemoteSession('a', 4)
+    tryClaimRemoteSession('a', 'req-inbound', 4)
     expect(canSwitchRemoteSession('a', 'b', { ...defaultOpts, callerRequestId: 'req-inbound' })).toEqual({
       allowed: true
     })
-    releaseRemoteSession('a')
+    releaseRemoteSession('a', 'req-inbound')
   })
 
   it('rejects when caller has tool in-flight (T14)', () => {

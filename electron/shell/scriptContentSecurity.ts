@@ -37,7 +37,8 @@ export const DANGEROUS_MODULES = new Set([
   'builtins',
   'shutil',
   'pathlib',
-  'sys'
+  'sys',
+  'asyncio'
 ])
 
 export const NETWORK_MODULES = new Set([
@@ -66,7 +67,56 @@ export const DANGEROUS_ATTRS = new Set([
   'check_output',
   'check_call',
   'CDLL',
-  'WinDLL'
+  'WinDLL',
+  // Process-creation capability table (WP3 item 2): os.spawn*/posix_spawn* family.
+  'spawnl',
+  'spawnle',
+  'spawnlp',
+  'spawnlpe',
+  'spawnv',
+  'spawnve',
+  'spawnvp',
+  'spawnvpe',
+  'posix_spawn',
+  'posix_spawnp',
+  // asyncio.create_subprocess_* family.
+  'create_subprocess_exec',
+  'create_subprocess_shell'
+])
+
+/** os.spawn family / posix_spawn family attrs — merged into the A1 (process creation) ask bucket. */
+const OS_SPAWN_ATTRS = new Set([
+  'spawnl',
+  'spawnle',
+  'spawnlp',
+  'spawnlpe',
+  'spawnv',
+  'spawnve',
+  'spawnvp',
+  'spawnvpe',
+  'posix_spawn',
+  'posix_spawnp'
+])
+
+/** asyncio.create_subprocess_* attrs — merged into the A1 (process creation) ask bucket. */
+const ASYNCIO_PROCESS_ATTRS = new Set(['create_subprocess_exec', 'create_subprocess_shell'])
+
+/** Reflection builtins that must never be certified remote-safe, regardless of args resolved. */
+const REFLECTION_NAMES = new Set(['getattr', 'hasattr', 'setattr', 'delattr', 'vars', 'globals', 'locals'])
+
+/** Bare builtin identifiers whose direct aliasing (`f = eval`) must still be tracked as dangerous. */
+const DANGEROUS_BUILTIN_NAMES = new Set([
+  'eval',
+  'exec',
+  'compile',
+  '__import__',
+  'getattr',
+  'hasattr',
+  'setattr',
+  'delattr',
+  'vars',
+  'globals',
+  'locals'
 ])
 
 const A1_OS_ATTRS = new Set(['system', 'popen'])
@@ -747,6 +797,54 @@ function applyFromImportStmt(stmt: Extract<Stmt, { kind: 'from_import' }>, scope
   }
 }
 
+/**
+ * Track name → dangerous module / callable after simple assignments (closes rebind bypass).
+ * Also tracks direct aliasing of bare dangerous builtins (e.g. `imp = __import__`,
+ * `g = getattr`) which are never registered via import/from-import scope tracking.
+ */
+function applyAssignmentRebind(target: string, value: Expr, scope: Scope): void {
+  if (value.kind === 'name') {
+    if (scope.modules.has(value.id)) {
+      scope.modules.set(target, scope.modules.get(value.id)!)
+      return
+    }
+    const attrBinding = scope.attrs.get(value.id)
+    if (attrBinding) {
+      scope.attrs.set(target, { module: attrBinding.module, attr: attrBinding.attr })
+      return
+    }
+    if (DANGEROUS_BUILTIN_NAMES.has(value.id)) {
+      scope.attrs.set(target, { module: 'builtins', attr: value.id })
+    }
+    return
+  }
+  if (value.kind === 'attr') {
+    const chain = resolveExprChain(value, scope)
+    const lastAttr = chain.attrs[chain.attrs.length - 1]
+    if (chain.module && lastAttr) {
+      scope.attrs.set(target, { module: chain.module, attr: lastAttr })
+    }
+  }
+}
+
+/** Extract a static Path(...) constructor literal path, if resolvable, for write-path checks. */
+function extractPathLiteral(base: Expr, scope: Scope): string | null {
+  if (base.kind === 'call') {
+    const ctor = resolveExprChain(base.callee, scope)
+    const pathBinding = ctor.root ? scope.attrs.get(ctor.root) : undefined
+    const isPath =
+      ctor.root === 'Path' ||
+      ctor.module === 'pathlib' ||
+      pathBinding?.module === 'pathlib' ||
+      (base.callee.kind === 'name' && base.callee.id === 'Path')
+    if (isPath) {
+      const arg = base.args[0]
+      return arg ? foldStringExpr(arg) : null
+    }
+  }
+  return null
+}
+
 function isDecodeCall(expr: Expr): boolean {
   if (expr.kind !== 'call') return false
   const chain = resolveExprChain(expr.callee, createScope())
@@ -820,7 +918,7 @@ class Analyzer {
         }
         // Same-scope rebind: x = os / y = os.system / z = o (alias) / w = y (callable alias)
         if (stmt.targets.length === 1) {
-          this.applyAssignmentRebind(stmt.targets[0]!, stmt.value, scope)
+          applyAssignmentRebind(stmt.targets[0]!, stmt.value, scope)
         }
         if (isDecodeCall(stmt.value) && stmt.targets.length === 1) {
           decodeBindings.push({ name: stmt.targets[0]!, stmtOffset: stmtIndex })
@@ -866,28 +964,6 @@ class Analyzer {
       return foldStringExpr(expr.args[0] ?? { kind: 'none' })
     }
     return null
-  }
-
-  /** Track name → dangerous module / callable after simple assignments (closes rebind bypass). */
-  private applyAssignmentRebind(target: string, value: Expr, scope: Scope): void {
-    if (value.kind === 'name') {
-      if (scope.modules.has(value.id)) {
-        scope.modules.set(target, scope.modules.get(value.id)!)
-        return
-      }
-      const attrBinding = scope.attrs.get(value.id)
-      if (attrBinding) {
-        scope.attrs.set(target, { module: attrBinding.module, attr: attrBinding.attr })
-      }
-      return
-    }
-    if (value.kind === 'attr') {
-      const chain = resolveExprChain(value, scope)
-      const lastAttr = chain.attrs[chain.attrs.length - 1]
-      if (chain.module && lastAttr) {
-        scope.attrs.set(target, { module: chain.module, attr: lastAttr })
-      }
-    }
   }
 
   private analyzeExpr(
@@ -1009,7 +1085,7 @@ class Analyzer {
     if (callee.kind === 'attr') {
       const lastAttr = callee.attr
       if (lastAttr === 'write_text' || lastAttr === 'write_bytes' || lastAttr === 'unlink') {
-        const pathFolded = this.extractPathLiteral(callee.base, scope)
+        const pathFolded = extractPathLiteral(callee.base, scope)
         if (lastAttr === 'unlink') {
           addHit(this.hits, 'A2', 'ask')
         } else if (pathFolded) {
@@ -1036,9 +1112,18 @@ class Analyzer {
       }
     }
 
-    // subprocess.* / pty.*
+    // subprocess.* / pty.* (any attr, including aliased imports)
     if (chain.module === 'subprocess' || chain.module === 'pty') {
       if (chain.root && scope.modules.has(chain.root) && chain.root !== chain.module) {
+        addHit(this.hits, 'B5', 'ask')
+      }
+      addHit(this.hits, 'A1', 'ask')
+      return
+    }
+
+    // asyncio.create_subprocess_exec / create_subprocess_shell (and aliases)
+    if (chain.module === 'asyncio' && lastAttr && ASYNCIO_PROCESS_ATTRS.has(lastAttr)) {
+      if (chain.root && scope.modules.has(chain.root) && chain.root !== 'asyncio') {
         addHit(this.hits, 'B5', 'ask')
       }
       addHit(this.hits, 'A1', 'ask')
@@ -1051,7 +1136,8 @@ class Analyzer {
       return
     }
     if (chain.module === 'os') {
-      if (lastAttr && A1_OS_ATTRS.has(lastAttr)) {
+      // os.system/popen and os.spawn*/posix_spawn* (process-creation table, WP3 item 2)
+      if (lastAttr && (A1_OS_ATTRS.has(lastAttr) || OS_SPAWN_ATTRS.has(lastAttr))) {
         if (chain.root && scope.modules.has(chain.root) && chain.root !== 'os') {
           addHit(this.hits, 'B5', 'ask')
         }
@@ -1109,12 +1195,17 @@ class Analyzer {
         resolved.root !== mod &&
         !!mod &&
         isDangerousModule(mod)
-      if (mod === 'os' && attr && A1_OS_ATTRS.has(attr)) {
+      if (mod === 'os' && attr && (A1_OS_ATTRS.has(attr) || OS_SPAWN_ATTRS.has(attr))) {
         if (viaModuleAlias) addHit(this.hits, 'B5', 'ask')
         addHit(this.hits, 'A1', 'ask')
         return
       }
-      if (mod === 'subprocess' && attr) {
+      if ((mod === 'subprocess' || mod === 'pty') && attr) {
+        if (viaModuleAlias) addHit(this.hits, 'B5', 'ask')
+        addHit(this.hits, 'A1', 'ask')
+        return
+      }
+      if (mod === 'asyncio' && attr && ASYNCIO_PROCESS_ATTRS.has(attr)) {
         if (viaModuleAlias) addHit(this.hits, 'B5', 'ask')
         addHit(this.hits, 'A1', 'ask')
         return
@@ -1128,7 +1219,7 @@ class Analyzer {
         const boundMod = scope.modules.get(resolved.root)
         if (boundMod && isDangerousModule(boundMod)) {
           addHit(this.hits, 'B4', 'ask')
-          if (A1_OS_ATTRS.has(attr)) addHit(this.hits, 'A1', 'ask')
+          if (A1_OS_ATTRS.has(attr) || OS_SPAWN_ATTRS.has(attr)) addHit(this.hits, 'A1', 'ask')
         }
       }
     }
@@ -1144,23 +1235,6 @@ class Analyzer {
         void parent
       }
     }
-  }
-
-  private extractPathLiteral(base: Expr, scope: Scope): string | null {
-    if (base.kind === 'call') {
-      const ctor = resolveExprChain(base.callee, scope)
-      const pathBinding = ctor.root ? scope.attrs.get(ctor.root) : undefined
-      const isPath =
-        ctor.root === 'Path' ||
-        ctor.module === 'pathlib' ||
-        pathBinding?.module === 'pathlib' ||
-        (base.callee.kind === 'name' && base.callee.id === 'Path')
-      if (isPath) {
-        const arg = base.args[0]
-        return arg ? foldStringExpr(arg) : null
-      }
-    }
-    return null
   }
 
   private wouldB11(
@@ -1272,6 +1346,183 @@ export function collectPatternHits(ast: ModuleAst, ctx?: ScriptAnalysisContext):
   return new Analyzer(ctx).analyze(ast)
 }
 
+// --- Remote positive-allowlist certification (WP3) ---
+//
+// The hit-based Analyzer above is a blacklist: it stays silent (no hit → `allow`) for any
+// construct it doesn't explicitly recognize as dangerous. That is acceptable for desktop
+// (where the user is always in the confirm loop for anything flagged) but not for remote
+// auto-allow, where an unrecognized construct must never slip through as `allow`.
+//
+// RemoteCertifier is a positive allowlist walker: it requires every statement/expression it
+// sees to be one of a small set of explicitly-modeled, safe shapes. Any call whose target
+// cannot be statically resolved to a name/attribute chain, any reflection or dynamic-import
+// or eval/exec call, and any call that resolves into a dangerous module without matching an
+// explicit safe-capability entry, marks the whole script as *not* remote-certified. A script
+// that fails certification can still get `ask`/`deny` from the hit-based verdict above; it
+// simply can never be upgraded to remote `allow`.
+function isForcedAskName(name: string | null): boolean {
+  return !!name && (REFLECTION_NAMES.has(name) || EXEC_IMPORT_NAMES.has(name))
+}
+
+/** Explicit remote safe-capability whitelist for calls that touch a DANGEROUS_MODULES root. */
+function isCertifiedSafeDangerousCall(
+  chain: ResolvedChain,
+  callee: Expr,
+  call: Expr & { kind: 'call' },
+  scope: Scope
+): boolean {
+  const lastAttr = chain.attrs[chain.attrs.length - 1]
+  // os.chdir(<static relative literal>) — mirrors A9, but re-validates the path statically
+  // since the hit-based A9 rule allows unconditionally.
+  if (chain.module === 'os' && lastAttr === 'chdir') {
+    const folded = call.args[0] ? foldStringExpr(call.args[0]) : null
+    return folded !== null && classifyPath(folded) === 'relative'
+  }
+  // Constructing a Path(...) object has no side effect by itself; safety is enforced at the
+  // write_text/write_bytes call site below (unlink is never certifiable — mirrors A2 ask).
+  if (chain.module === 'pathlib' && lastAttr === 'Path') {
+    return true
+  }
+  if (chain.module === 'pathlib' && (lastAttr === 'write_text' || lastAttr === 'write_bytes') && callee.kind === 'attr') {
+    const pathFolded = extractPathLiteral(callee.base, scope)
+    return pathFolded !== null && classifyPath(pathFolded) === 'relative'
+  }
+  return false
+}
+
+class RemoteCertifier {
+  private safe = true
+
+  certify(ast: ModuleAst): boolean {
+    this.walkStmts(ast.body, createScope())
+    return this.safe
+  }
+
+  private fail(): void {
+    this.safe = false
+  }
+
+  private walkStmts(stmts: Stmt[], scope: Scope): void {
+    for (const stmt of stmts) {
+      if (!this.safe) return
+      switch (stmt.kind) {
+        case 'import':
+          applyImportStmt(stmt, scope)
+          break
+        case 'from_import':
+          applyFromImportStmt(stmt, scope)
+          break
+        case 'assign':
+          this.walkExpr(stmt.value, scope)
+          if (stmt.targets.length === 1) applyAssignmentRebind(stmt.targets[0]!, stmt.value, scope)
+          break
+        case 'expr':
+          this.walkExpr(stmt.value, scope)
+          break
+        case 'if': {
+          this.walkExpr(stmt.test, scope)
+          const child = createScope(scope)
+          this.walkStmts(stmt.body, child)
+          this.walkStmts(stmt.orelse, child)
+          break
+        }
+        case 'for': {
+          this.walkExpr(stmt.iter, scope)
+          const child = createScope(scope)
+          child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
+          this.walkStmts(stmt.body, child)
+          break
+        }
+        case 'pass':
+          break
+        default:
+          // Unmodeled AST node — never certify.
+          this.fail()
+      }
+    }
+  }
+
+  private walkExpr(expr: Expr, scope: Scope): void {
+    if (!this.safe) return
+    switch (expr.kind) {
+      case 'string':
+      case 'number':
+      case 'name':
+      case 'bool':
+      case 'none':
+        return
+      case 'attr':
+        this.walkExpr(expr.base, scope)
+        return
+      case 'binop':
+        this.walkExpr(expr.left, scope)
+        this.walkExpr(expr.right, scope)
+        return
+      case 'list':
+      case 'tuple':
+        for (const e of expr.elts) this.walkExpr(e, scope)
+        return
+      case 'call':
+        this.walkCall(expr, scope)
+        return
+      default:
+        this.fail()
+    }
+  }
+
+  private walkCall(call: Expr & { kind: 'call' }, scope: Scope): void {
+    const callee = call.callee
+
+    if (callee.kind !== 'name' && callee.kind !== 'attr') {
+      // Call target is itself computed (call-of-call, binop, ...) — variable-borne / unmodeled
+      // call object. Never certify.
+      this.fail()
+      return
+    }
+
+    if (callee.kind === 'attr') this.walkExpr(callee.base, scope)
+    if (!this.safe) return
+    for (const a of call.args) this.walkExpr(a, scope)
+    for (const kw of call.kwargs) this.walkExpr(kw.value, scope)
+    if (!this.safe) return
+
+    const chain = resolveExprChain(callee, scope)
+    const lastAttr = chain.attrs[chain.attrs.length - 1] ?? null
+    const directName = callee.kind === 'name' ? callee.id : null
+
+    // getattr/hasattr/setattr/delattr/vars/globals/locals/eval/exec/compile/__import__ —
+    // always forced ask on remote, regardless of whether args fold to literals.
+    if (isForcedAskName(directName) || isForcedAskName(lastAttr)) {
+      this.fail()
+      return
+    }
+    // importlib.import_module(...) — dynamic import, always forced ask.
+    if (chain.module === 'importlib' && lastAttr === 'import_module') {
+      this.fail()
+      return
+    }
+    // Call chain didn't resolve to any statically-known root — unmodeled/variable-borne call.
+    if (chain.module === null) {
+      this.fail()
+      return
+    }
+    if (isDangerousModule(chain.module) && !isCertifiedSafeDangerousCall(chain, callee, call, scope)) {
+      this.fail()
+      return
+    }
+  }
+}
+
+/**
+ * Positive allowlist certification for remote `allow`. Returns true only when every call in
+ * the script is statically resolvable and either untouched by DANGEROUS_MODULES or explicitly
+ * whitelisted (os.chdir / Path write with static relative path). Used only to *downgrade* an
+ * otherwise-`allow` verdict to `ask` on remote; never used to escalate to `deny`.
+ */
+export function isScriptCertifiedRemoteSafe(ast: ModuleAst): boolean {
+  return new RemoteCertifier().certify(ast)
+}
+
 export function aggregateVerdict(hits: PatternHit[]): ScriptVerdict {
   let verdict: ScriptVerdict = 'allow'
   for (const h of hits) {
@@ -1285,11 +1536,22 @@ export function analyzeScriptContent(code: string, ctx?: ScriptAnalysisContext):
     const ast = parsePythonModule(code)
     const hits = collectPatternHits(ast, ctx)
     const patterns = hits.map((h) => h.pattern)
-    const verdict = aggregateVerdict(hits)
-    if (patterns.length === 0) {
-      return { verdict: 'allow', patterns: ['A0'] }
+    const dedupedPatterns = patterns.length === 0 ? ['A0'] : [...new Set(patterns)]
+    const hitVerdict = patterns.length === 0 ? 'allow' : aggregateVerdict(hits)
+
+    // Desktop keeps the existing blacklist-style verdict unchanged. Remote additionally
+    // requires positive certification before an `allow` verdict may be returned: any
+    // unresolvable/dynamic/reflective construct downgrades `allow` to `ask` (never `deny` —
+    // existing deny rules above are untouched and still dominate via aggregateVerdict).
+    if (ctx?.remote && hitVerdict === 'allow' && !isScriptCertifiedRemoteSafe(ast)) {
+      return {
+        verdict: 'ask',
+        patterns: dedupedPatterns,
+        reason: 'remote_not_certified'
+      }
     }
-    return { verdict, patterns: [...new Set(patterns)] }
+
+    return { verdict: hitVerdict, patterns: dedupedPatterns }
   } catch {
     return {
       verdict: 'ask',

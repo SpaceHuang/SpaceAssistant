@@ -41,7 +41,10 @@ export function filterBuiltinToolsForApi(
   if (!wechat?.enabled) {
     list = list.filter((t) => t.name !== 'wechat_send' && t.name !== 'wechat_reply')
   }
-  if (remoteContext?.source === 'wechat' && wechat?.remoteDenyOutbound) {
+  // wechat_send takes an arbitrary model-chosen userId; remote must only reach the
+  // authenticated inbound sender via wechat_reply. This is unconditional — remote never
+  // gets wechat_send regardless of remoteDenyOutbound. Desktop keeps wechat_send.
+  if (remoteContext) {
     list = list.filter((t) => t.name !== 'wechat_send')
   }
   if (!browserConfig?.enabled) {

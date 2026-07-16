@@ -8,7 +8,10 @@ import i18n from '../../i18n'
 const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_directory'])
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file'])
 
-export type ToolCallDisplayT = (key: string, options?: Record<string, unknown>) => string
+/** Bivariant so typed i18n `t` is assignable (parameter is checked covariantly for callbacks). */
+export type ToolCallDisplayT = {
+  bivarianceHack(key: string, options?: Record<string, unknown>): string
+}['bivarianceHack']
 
 function defaultT(key: string, options?: Record<string, unknown>): string {
   return i18n.t(key, { ns: 'chat', ...options })

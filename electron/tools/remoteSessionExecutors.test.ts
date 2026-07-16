@@ -20,6 +20,7 @@ import {
   beginTool,
   resetRemoteSessionSwitchStateForTests
 } from '../remote/remoteSessionSwitchState'
+import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 
 vi.mock('../remote/requestRendererSessionSwitch', () => ({
   requestRendererSessionSwitch: vi.fn().mockResolvedValue({ desktopSwitched: true, viewChanged: true })
@@ -122,18 +123,25 @@ describe('switchSessionExecutor', () => {
         auditEntries.push(entry)
       }
     }
+    const revoked: Array<[string, string]> = []
+    const unregister = remoteWriteGrantRegistry.onRevokeByOriginSession((originSessionId, reason) => {
+      revoked.push([originSessionId, reason])
+    })
     const result = await switchSessionExecutor.execute(
       { session_id: target.id },
       makeCtx(db, manager, caller.id, remoteContext)
     )
+    unregister()
     expect(result.success).toBe(true)
-    expect(remoteContext.sessionId).toBe(target.id)
+    expect(remoteContext.outboundSessionId).toBe(target.id)
     const data = result.data as { sessionId: string; desktopSwitched: boolean }
     expect(data.sessionId).toBe(target.id)
     expect(data.desktopSwitched).toBe(true)
     expect(auditEntries).toHaveLength(1)
     expect(auditEntries[0]).toMatchObject({ kind: 'success', targetSessionId: target.id })
     expect(feishuCliEvents.some((e) => e.event === 'feishu.session.switch')).toBe(true)
+    // switch_session never migrates the origin lease; any write grant scoped to it is revoked.
+    expect(revoked).toEqual([[caller.id, 'session_switch']])
   })
 
   it('rejects identity mismatch (B3)', async () => {
@@ -179,7 +187,7 @@ describe('switchSessionExecutor', () => {
     const { db, manager } = setup()
     const caller = createSession(db, { name: 'caller', metadata: { source: 'feishu', feishuChatId: 'c1' } })
     const target = createSession(db, { name: 'target', metadata: { source: 'feishu', feishuChatId: 'c1' } })
-    tryClaimRemoteSession(caller.id, 4)
+    tryClaimRemoteSession(caller.id, 'req-inbound', 4)
     beginLlm(caller.id, 'req-inbound')
     const result = await switchSessionExecutor.execute(
       { session_id: target.id },
@@ -197,7 +205,7 @@ describe('switchSessionExecutor', () => {
       )
     )
     expect(result.success).toBe(true)
-    releaseRemoteSession(caller.id)
+    releaseRemoteSession(caller.id, 'req-inbound')
   })
 
   it('rejects when caller has pending confirm via confirmManager', async () => {

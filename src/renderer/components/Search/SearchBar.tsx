@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { Button, Input, Tooltip, Typography } from 'antd'
+import type { InputRef } from 'antd'
 import { X } from 'lucide-react'
 import { useSearch } from './SearchProvider'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -25,7 +26,7 @@ export function SearchBar() {
     goNext,
     goPrev
   } = useSearch()
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<InputRef>(null)
   const disabled = !panelSupported
   const navDisabled = disabled || totalMatches === 0 || Boolean(regexError)
 
@@ -34,7 +35,7 @@ export function SearchBar() {
     const input = inputRef.current
     if (!input) return
     input.focus()
-    input.select()
+    input.select?.()
   }, [focusToken, isOpen])
 
   const countLabel = useMemo(() => {

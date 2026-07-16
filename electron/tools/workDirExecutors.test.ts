@@ -12,6 +12,7 @@ import {
   tryClaimRemoteSession
 } from '../remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
+import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-wde-'))
@@ -102,11 +103,42 @@ describe('workDirExecutors', () => {
     const b = manager.addProfile({ name: 'Beta', path: dirB, aliases: ['beta'] })
     const session = createSession(db, { name: 'S1' })
 
-    const result = await switchWorkDirExecutor.execute({ name: 'beta' }, makeRemoteCtx(db, manager, session.id))
+    tryClaimRemoteSession(session.id, 'req-1', 3)
+    const result = await switchWorkDirExecutor.execute(
+      { name: 'beta' },
+      makeRemoteCtx(db, manager, session.id)
+    )
+    releaseRemoteSession(session.id, 'req-1')
+
     expect(result.success).toBe(true)
     const data = result.data as { profileId: string; workDir: string }
     expect(data.profileId).toBe(b.profile!.id)
     expect(data.workDir).toBe(dirB)
+  })
+
+  it('switch_work_dir rejects when no live lease exists', async () => {
+    const dirA = tempDir()
+    const dirB = tempDir()
+    dirs.push(dirA, dirB)
+    const dbPath = path.join(tempDir(), 'db.db')
+    dirs.push(path.dirname(dbPath))
+    const db = openDatabase(dbPath)
+    openDbs.push(db)
+    const manager = createWorkDirManager({
+      db,
+      getWorkDir: () => dirA,
+      setWorkDir: () => undefined
+    })
+    manager.addProfile({ name: 'Beta', path: dirB, aliases: ['beta'] })
+    const session = createSession(db, { name: 'S1' })
+
+    const result = await switchWorkDirExecutor.execute(
+      { name: 'beta' },
+      makeRemoteCtx(db, manager, session.id)
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe(REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE)
   })
 
   it('switch_work_dir returns ambiguous matches', async () => {
@@ -168,15 +200,15 @@ describe('workDirExecutors', () => {
     })
     manager.addProfile({ name: 'A', path: dirA })
     const session = createSession(db, { name: 'S1' })
-    tryClaimRemoteSession(session.id, 3)
+    tryClaimRemoteSession(session.id, 'req-other', 3)
 
     const result = await listWorkDirsExecutor.execute({}, makeRemoteCtx(db, manager, session.id))
-    releaseRemoteSession(session.id)
+    releaseRemoteSession(session.id, 'req-other')
 
     expect(result.success).toBe(true)
   })
 
-  it('switch_work_dir rejects profile change while busy', async () => {
+  it('switch_work_dir rejects profile change while busy for another requestId', async () => {
     const dirA = tempDir()
     const dirB = tempDir()
     dirs.push(dirA, dirB)
@@ -192,12 +224,45 @@ describe('workDirExecutors', () => {
     const a = manager.addProfile({ name: 'A', path: dirA })
     manager.addProfile({ name: 'B', path: dirB })
     const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
-    tryClaimRemoteSession(session.id, 3)
+    // makeRemoteCtx uses requestId 'req-1'; claim under a different requestId to simulate
+    // another Agent holding the origin lease for this session.
+    tryClaimRemoteSession(session.id, 'req-other', 3)
 
     const result = await switchWorkDirExecutor.execute({ name: 'B' }, makeRemoteCtx(db, manager, session.id))
-    releaseRemoteSession(session.id)
+    releaseRemoteSession(session.id, 'req-other')
 
     expect(result.success).toBe(false)
     expect(result.error).toBe(REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE)
+  })
+
+  it('switch_work_dir allows profile change for the Agent holding its own origin lease', async () => {
+    const dirA = tempDir()
+    const dirB = tempDir()
+    dirs.push(dirA, dirB)
+    const dbPath = path.join(tempDir(), 'db.db')
+    dirs.push(path.dirname(dbPath))
+    const db = openDatabase(dbPath)
+    openDbs.push(db)
+    const manager = createWorkDirManager({
+      db,
+      getWorkDir: () => dirA,
+      setWorkDir: () => undefined
+    })
+    const a = manager.addProfile({ name: 'A', path: dirA })
+    manager.addProfile({ name: 'B', path: dirB })
+    const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
+    // Same requestId as makeRemoteCtx ('req-1'): the current Agent owns the origin lease.
+    tryClaimRemoteSession(session.id, 'req-1', 3)
+
+    const revoked: Array<[string, string]> = []
+    const unregister = remoteWriteGrantRegistry.onRevokeByOriginSession((originSessionId, reason) => {
+      revoked.push([originSessionId, reason])
+    })
+    const result = await switchWorkDirExecutor.execute({ name: 'B' }, makeRemoteCtx(db, manager, session.id))
+    unregister()
+    releaseRemoteSession(session.id, 'req-1')
+
+    expect(result.success).toBe(true)
+    expect(revoked).toEqual([[session.id, 'workdir_switch']])
   })
 })

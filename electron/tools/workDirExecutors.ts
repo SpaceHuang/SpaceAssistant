@@ -5,6 +5,7 @@ import {
   bindSessionWorkDir,
   matchWorkDirProfile
 } from '../workDirBinding'
+import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 import type { ToolExecutionContext, ToolExecutor } from './types'
 
 const REMOTE_ONLY_ERROR = '该工具仅在远程会话中可用'
@@ -60,7 +61,7 @@ export const switchWorkDirExecutor: ToolExecutor = {
       return { success: false, error: REMOTE_ONLY_ERROR }
     }
 
-    const { workDirManager, sessionId, appDatabase, remoteContext } = ctx
+    const { workDirManager, sessionId, appDatabase, remoteContext, requestId } = ctx
     if (!workDirManager || !appDatabase) {
       return { success: false, error: MISSING_CONTEXT_ERROR }
     }
@@ -105,11 +106,17 @@ export const switchWorkDirExecutor: ToolExecutor = {
       sessionId,
       profileId: targetProfile.id,
       remoteContext,
-      source: 'tool'
+      source: 'tool',
+      requestId
     })
 
     if (!bindResult.success) {
       return { success: false, error: bindResult.error }
+    }
+
+    if (bindResult.changed) {
+      const originSessionId = remoteContext.originSessionId ?? sessionId
+      remoteWriteGrantRegistry.revokeByOriginSession(originSessionId, 'workdir_switch')
     }
 
     return {

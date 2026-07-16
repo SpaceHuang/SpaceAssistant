@@ -13,6 +13,7 @@ import {
   deleteSessionUsage,
   getConfigValue,
   getMessages,
+  getMessagesPage,
   getSession,
   getSessionUsage,
   listSearchHistory,
@@ -77,7 +78,7 @@ import { normalizeRelPathInput, resolveSafePath } from './pathSecurity'
 import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from './fileReadHelpers'
 import { buildLocalFileViewerUrl } from './fileViewerUrl'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
-import { SessionBackupManager } from './sessionBackupManager'
+import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
@@ -243,10 +244,15 @@ export function readWorkspaceLayoutConfig(db: AppDatabase): WorkspaceLayoutConfi
   }
 }
 
+/** 按 sequence 游标分页读取，不受固定条数上限约束，避免大会话导出被静默截断 */
+function backupPageReader(ctx: AppIpcContext, sessionId: string): MessagePageReader {
+  return (afterSequence, pageSize) => getMessagesPage(ctx.db, sessionId, afterSequence, pageSize)
+}
+
 function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
   const s = getSession(ctx.db, sessionId)
   if (!s) return null
-  return { session: s, messages: getMessages(ctx.db, sessionId, 10_000, 0) }
+  return { session: s, readPage: backupPageReader(ctx, sessionId) }
 }
 
 function scheduleBackup(ctx: AppIpcContext, sessionId: string): void {
@@ -519,7 +525,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
       })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
-      await ctx.backup.backupImmediate(s, [])
+      await ctx.backup.backupImmediate(s, arrayMessagePageReader([]))
       return s
     }
   )

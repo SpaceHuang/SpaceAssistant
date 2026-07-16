@@ -25,12 +25,13 @@ describe('WeChatConfirmManager', () => {
       },
       DEFAULT_WECHAT_CONFIG,
       undefined,
-      { imPrompt: '【进度】等待确认：写入 a.txt\n回复 Y 确认，N 取消（5 分钟内有效）' }
+      { imPrompt: '【进度】等待确认：写入 a.txt\n回复 Y AB12 确认，N AB12 取消（5 分钟内有效）' }
     )
+    const cid = mgr.listPending()[0]!.confirmId!
     const ynMsg = {
       messageId: 'yn-1',
       userId: 'wx-user@test',
-      text: 'Y',
+      text: `Y ${cid}`,
       type: 'text' as const,
       timestamp: new Date().toISOString(),
       contextToken: 'ctx'
@@ -41,7 +42,7 @@ describe('WeChatConfirmManager', () => {
     await expect(promise).resolves.toBe('y')
     expect(reply).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringContaining('回复 Y 确认')
+      expect.stringContaining('回复 Y')
     )
   })
 
@@ -56,10 +57,12 @@ describe('WeChatConfirmManager', () => {
       userId: 'u1',
       inboundMsg: makeIncomingMessage(),
       createdAt: 1,
-      expiresAt: 2
+      expiresAt: 2,
+      channel: 'wechat',
+      confirmId: 'AB12'
     })
     expect(prompt).toContain('【进度】')
-    expect(prompt).toContain('Y 确认')
+    expect(prompt).toContain('AB12')
   })
 
   it('resolves from desktop approval', () => {

@@ -54,8 +54,8 @@ export function FileTreeContextMenu({
     showCollectToWiki,
     readOnly,
     onAddToChatPlaceholder: () => message.info(t('contextMenu.featureInDevelopment')),
-    t,
-    tc
+    t: (key: string) => t(key as Parameters<typeof t>[0]),
+    tc: (key: string) => tc(key as Parameters<typeof tc>[0])
   })
 
   return (

@@ -47,6 +47,7 @@ export function BrowserSetupGuide({
   const { message } = App.useApp()
   const { t } = useTypedTranslation('common')
   const { t: tf } = useTypedTranslation('feishu')
+  const { t: tChat } = useTypedTranslation('chat')
   const [detailsExpanded, setDetailsExpanded] = useState(false)
   const wasReadyRef = useRef<boolean | null>(null)
 
@@ -110,7 +111,7 @@ export function BrowserSetupGuide({
         <Typography.Text strong>{content.title}</Typography.Text>
         {ready ? (
           <Button type="link" size="small" className="browser-setup-guide__collapse" onClick={() => setDetailsExpanded(false)}>
-            {t('chat:confirm.collapsible.collapse')}
+            {tChat('confirm.collapsible.collapse')}
           </Button>
         ) : null}
       </div>

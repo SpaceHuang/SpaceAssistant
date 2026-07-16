@@ -3,7 +3,13 @@ import { spawn } from 'child_process'
 import fs from 'fs/promises'
 import path from 'path'
 import type { Dirent } from 'fs'
-import { resolveSafePath, resolveSafePathReal } from '../pathSecurity'
+import { resolveSafePath, resolveSafePathReal, resolveSafeWriteTarget } from '../pathSecurity'
+import {
+  captureFileIdentity,
+  identityFromStat,
+  safeAtomicWrite,
+  type FileIdentity
+} from '../safeAtomicWrite'
 import { isUnderWikiRaw } from '../wiki/wikiPaths'
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 import { sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
@@ -146,28 +152,6 @@ async function backupIfEnabled(
   while (samePrefix.length > maxKeep) {
     const rm = samePrefix.shift()
     if (rm) await fs.unlink(path.join(sessionDir, rm)).catch(() => {})
-  }
-}
-
-async function atomicWriteFile(target: string, body: string | Buffer, op?: AbortSignal): Promise<void> {
-  if (op) throwIfAborted(op)
-  const dir = path.dirname(target)
-  await fs.mkdir(dir, { recursive: true })
-  const tmp = `${target}.tmp.${process.pid}.${Date.now()}`
-  try {
-    await fs.writeFile(tmp, body, op ? { signal: op } : undefined)
-    if (op) throwIfAborted(op)
-    const fh = await fs.open(tmp, 'r+')
-    try {
-      await fh.sync()
-    } finally {
-      await fh.close()
-    }
-    if (op) throwIfAborted(op)
-    await fs.rename(tmp, target)
-  } catch (e) {
-    await fs.unlink(tmp).catch(() => {})
-    throw e
   }
 }
 
@@ -447,6 +431,12 @@ async function recordFileStateAfterWrite(
   })
 }
 
+function writePathErrorMessage(e: unknown, rel: string): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (msg.includes('路径超出') || msg.includes('工作目录')) return `路径超出工作目录范围: ${rel}`
+  return msg
+}
+
 export const editFileExecutor: ToolExecutor = {
   name: 'edit_file',
   async execute(input, ctx): Promise<ToolExecutorResult> {
@@ -463,16 +453,17 @@ export const editFileExecutor: ToolExecutor = {
     ctx.sendProgress('editing', '正在编辑文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
-      let abs: string
+      let writeTarget: Awaited<ReturnType<typeof resolveSafeWriteTarget>>
       try {
-        abs = await resolveSafePathReal(ctx.workDir, rel)
-      } catch {
-        return { success: false, error: `路径超出工作目录范围: ${rel}`, duration: Date.now() - started }
+        writeTarget = await resolveSafeWriteTarget(ctx.workDir, rel)
+      } catch (e) {
+        return { success: false, error: writePathErrorMessage(e, rel), duration: Date.now() - started }
       }
+      const abs = writeTarget.targetPath
       if (oldS === newS) {
         return { success: false, error: '新旧字符串相同，无需修改', duration: Date.now() - started }
       }
-      const existed = await pathExists(abs)
+      const existed = writeTarget.existed
       let stCache = existed ? ctx.fileStateCache.get(abs) : undefined
       if (existed) {
         if (!ctx.fileStateCache.hasBeenRead(abs)) {
@@ -483,9 +474,11 @@ export const editFileExecutor: ToolExecutor = {
         }
       }
       let cur = ''
+      let expectedIdentity: FileIdentity | null = null
       if (existed) {
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
+          expectedIdentity = await captureFileIdentity(abs)
         } catch (e) {
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
@@ -522,7 +515,13 @@ export const editFileExecutor: ToolExecutor = {
       }
       throwIfAborted(op)
       try {
-        await atomicWriteFile(abs, next, op)
+        await safeAtomicWrite({
+          targetPath: abs,
+          parentReal: writeTarget.parentReal,
+          body: next,
+          expectedIdentity,
+          signal: op
+        })
       } catch (e) {
         const ab = fileToolAbortResult(op, '编辑超时', started)
         if (ab) return ab
@@ -554,14 +553,16 @@ export const writeFileExecutor: ToolExecutor = {
     ctx.sendProgress('writing', '正在写入文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
-      let abs: string
+      let writeTarget: Awaited<ReturnType<typeof resolveSafeWriteTarget>>
       try {
-        abs = await resolveSafePathReal(ctx.workDir, rel)
-      } catch {
-        return { success: false, error: `路径超出工作目录范围: ${rel}`, duration: Date.now() - started }
+        writeTarget = await resolveSafeWriteTarget(ctx.workDir, rel)
+      } catch (e) {
+        return { success: false, error: writePathErrorMessage(e, rel), duration: Date.now() - started }
       }
-      const existed = await pathExists(abs)
+      const abs = writeTarget.targetPath
+      const existed = writeTarget.existed
       const body = content.replace(/\r\n/g, '\n')
+      let expectedIdentity: FileIdentity | null = null
       if (existed) {
         if (!ctx.fileStateCache.hasBeenRead(abs)) {
           return { success: false, error: ERR_FILE_NOT_READ_FOR_WRITE, duration: Date.now() - started }
@@ -573,6 +574,7 @@ export const writeFileExecutor: ToolExecutor = {
         let cur: string
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
+          expectedIdentity = await captureFileIdentity(abs)
         } catch (e) {
           const ab = fileToolAbortResult(op, '写入超时', started)
           if (ab) return ab
@@ -598,10 +600,18 @@ export const writeFileExecutor: ToolExecutor = {
             throw e
           }
         }
+      } else if (writeTarget.existingStat) {
+        expectedIdentity = identityFromStat(writeTarget.existingStat)
       }
       throwIfAborted(op)
       try {
-        await atomicWriteFile(abs, body, op)
+        await safeAtomicWrite({
+          targetPath: abs,
+          parentReal: writeTarget.parentReal,
+          body,
+          expectedIdentity,
+          signal: op
+        })
       } catch (e) {
         const ab = fileToolAbortResult(op, '写入超时', started)
         if (ab) return ab

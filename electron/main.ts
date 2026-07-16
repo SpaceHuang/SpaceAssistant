@@ -204,7 +204,18 @@ app.whenReady().then(() => {
   })
 
   const dbPath = getDefaultDbPath(app.getPath('userData'))
-  const db = openDatabase(dbPath)
+  let db: ReturnType<typeof openDatabase>
+  try {
+    db = openDatabase(dbPath)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    dialog.showErrorBox(
+      '数据库初始化失败',
+      `无法打开本地数据库，应用即将退出。\n\n路径：${dbPath}\n错误：${msg}`
+    )
+    app.quit()
+    return
+  }
   appDb = db
   cleanupStreamingResiduesOnStartup(db)
   void import('./shell/shellCommandTrust').then(({ persistExpiredTrustedCommandMarks }) => {

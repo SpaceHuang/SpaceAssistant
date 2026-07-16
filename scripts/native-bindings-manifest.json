@@ -1,0 +1,31 @@
+{
+  "betterSqlite3Version": "12.11.1",
+  "electronVersion": "35.7.5",
+  "electronAbi": 133,
+  "bindings": [
+    {
+      "platform": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/WiseLibs/better-sqlite3/releases/download/v12.11.1/better-sqlite3-v12.11.1-electron-v133-darwin-arm64.tar.gz",
+      "sha256": "4035fb9b9d5be3492b3571afa5fa53f86e6e2d0d2677f615a022358423e8c79f"
+    },
+    {
+      "platform": "darwin",
+      "arch": "x64",
+      "url": "https://github.com/WiseLibs/better-sqlite3/releases/download/v12.11.1/better-sqlite3-v12.11.1-electron-v133-darwin-x64.tar.gz",
+      "sha256": "2c6b5a15f7b1a515e1d5446864f9f1bca0e9aa78e285f415fa98493b22cac0a8"
+    },
+    {
+      "platform": "win32",
+      "arch": "x64",
+      "url": "https://github.com/WiseLibs/better-sqlite3/releases/download/v12.11.1/better-sqlite3-v12.11.1-electron-v133-win32-x64.tar.gz",
+      "sha256": "53f6429ae711fd6cee89b8a1c31ffdb62265218c0ee6eb1c12be8fe720e22e38"
+    },
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "url": "https://github.com/WiseLibs/better-sqlite3/releases/download/v12.11.1/better-sqlite3-v12.11.1-electron-v133-linux-x64.tar.gz",
+      "sha256": "f892d7f1ddcbdd4f05b532063d64417a599434bc655e91054b0577c7d8ad26a8"
+    }
+  ]
+}

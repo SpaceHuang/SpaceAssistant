@@ -178,6 +178,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
       setAlert({ type: 'error', text: picked.error })
       return
     }
+    if (!('path' in picked)) return
     let res = await window.api.skillInstall({ sourcePath: picked.path })
     if (!res.ok && res.error.includes('已存在')) {
       const ok = await confirmOverwrite(res.error)
@@ -237,6 +238,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
       message.error(formatUserFacingError(picked.error))
       return
     }
+    if (!('path' in picked)) return
     const dest = `${picked.path}/${skill.meta.name}`
     const res = await window.api.skillExport({ name: skill.meta.name, destPath: dest })
     if (!res.ok) message.error(formatUserFacingError(res.error))

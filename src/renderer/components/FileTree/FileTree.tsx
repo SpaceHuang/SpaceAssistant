@@ -110,8 +110,8 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
         showCollectToWiki: showCollect,
         readOnly: tree.readOnly,
         onAddToChatPlaceholder: () => message.info(t('contextMenu.featureInDevelopment')),
-        t,
-        tc
+        t: (key: string) => t(key as Parameters<typeof t>[0]),
+        tc: (key: string) => tc(key as Parameters<typeof tc>[0])
       })
     },
     [message, onCollectToWiki, startNewDirectoryIn, t, tc, tree, wikiEnabled, wikiRootPath, workDir]
@@ -123,7 +123,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
   }, [])
 
   const handleTreeRightClick = useCallback(
-    ({ event, node }: { event: React.MouseEvent; node: EventDataNode }) => {
+    ({ event, node }: { event: React.MouseEvent; node: EventDataNode<DataNode> }) => {
       event.preventDefault()
       event.stopPropagation()
       openContextMenu(normalizeRelPath(String(node.key)), event.clientX, event.clientY)
@@ -215,7 +215,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
 
   const antdTreeData = toAntdDataNodesWithInput(tree.treeData)
 
-  const handleSelect = (_selectedKeys: React.Key[], info: { node: EventDataNode }) => {
+  const handleSelect = (_selectedKeys: React.Key[], info: { node: EventDataNode<DataNode> }) => {
     const key = normalizeRelPath(String(info.node.key))
     if (key.startsWith('__inline_input__')) return
     const node = tree.treeData.length > 0 ? findNode(tree.treeData, key) : null

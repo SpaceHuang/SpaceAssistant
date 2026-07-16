@@ -33,7 +33,13 @@ export interface RemoteContext {
   source: 'feishu' | 'wechat'
   messageId: string
   confirmPolicy: ImConfirmPolicy
-  sessionId?: string
+  /**
+   * IM outbound target session: reply suffix, idle-touch and follow-up routing. Initialized to
+   * the origin session and reassigned in place by `switch_session`; never used for assistant
+   * message creation, streaming, DB status, progress cleanup or backup — those stay on
+   * `originSessionId` for the lifetime of the request.
+   */
+  outboundSessionId?: string
   chatId?: string
   userId?: string
   contextToken?: string
@@ -48,6 +54,20 @@ export interface RemoteContext {
   confirmTimeoutMessage?: string
   appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
   appendSessionSwitchAudit?: (entry: SessionSwitchAuditEntry) => void | Promise<void>
+  /** Authorization generation captured at inbound guard / agent start. */
+  authorizationGeneration?: number
+  /** Authenticated owner from inbound guard snapshot (OpenId / WeChat userId). */
+  authOwner?: string
+  /** Work-dir profile id bound for this remote request (write-grant key). */
+  workDirProfileId?: string
+  /** Immutable request id for lease ownership. */
+  requestId?: string
+  /**
+   * Origin session that owns assistant messages, streaming/completion state, DB writes,
+   * progress cleanup and backup scheduling. Immutable for the lifetime of the request —
+   * `switch_session` never migrates it.
+   */
+  originSessionId?: string
 }
 
 /** Gradual-migration aliases — prefer RemoteContext going forward. */

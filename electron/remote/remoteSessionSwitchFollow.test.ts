@@ -10,13 +10,13 @@ vi.mock('./remoteSessionActivity', () => ({
 }))
 
 describe('remoteSessionSwitchFollow', () => {
-  it('resolveRemoteOutboundSessionId prefers remoteContext.sessionId', () => {
+  it('resolveRemoteOutboundSessionId prefers remoteContext.outboundSessionId', () => {
     const ctx: FeishuRemoteContext = {
       source: 'feishu',
       messageId: 'm1',
       confirmPolicy: 'always',
       chatId: 'c1',
-      sessionId: 'target-id'
+      outboundSessionId: 'target-id'
     }
     expect(resolveRemoteOutboundSessionId(ctx, 'caller-id')).toBe('target-id')
   })
@@ -25,19 +25,21 @@ describe('remoteSessionSwitchFollow', () => {
     expect(resolveRemoteOutboundSessionId(undefined, 'caller-id')).toBe('caller-id')
   })
 
-  it('adoptRemoteSessionAfterSwitch updates remoteContext.sessionId', () => {
+  it('adoptRemoteSessionAfterSwitch updates remoteContext.outboundSessionId only', () => {
     const ctx: FeishuRemoteContext = {
       source: 'feishu',
       messageId: 'm1',
       confirmPolicy: 'always',
       chatId: 'c1',
-      sessionId: 'caller-id'
+      originSessionId: 'caller-id',
+      outboundSessionId: 'caller-id'
     }
     adoptRemoteSessionAfterSwitch({
       remoteContext: ctx,
       appDatabase: {} as never,
       targetSessionId: 'target-id'
     })
-    expect(ctx.sessionId).toBe('target-id')
+    expect(ctx.outboundSessionId).toBe('target-id')
+    expect(ctx.originSessionId).toBe('caller-id')
   })
 })

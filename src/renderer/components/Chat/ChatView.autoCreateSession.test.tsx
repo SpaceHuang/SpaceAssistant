@@ -91,7 +91,6 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     activeLlmServiceId: '',
     model: 'claude-sonnet-4-6',
     defaultModel: 'claude-sonnet-4-6',
-    temperature: 0.7,
     models: [
       {
         id: '1',

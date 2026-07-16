@@ -19,11 +19,29 @@ types.FunctionType(code, globals())()`
 
 const B_PATTERN_IDS = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11']
 
+/**
+ * WP3: additional known-bypass shapes that must never reach remote `allow`, even though the
+ * desktop hit-based analyzer stays silent (allow) for them. These specifically target the
+ * positive-allowlist gaps called out by the plan: getattr/variable aliasing of `__import__`,
+ * `eval`/`exec`/`getattr` and other reflection builtins.
+ */
+const REMOTE_ONLY_RESIDUAL_FIXTURES = {
+  RM1: "import os\nname = 'system'\ngetattr(os, name)('id')",
+  RM2: "imp = __import__\nimp('os')",
+  RM3: "g = getattr\ng(1, 2)",
+  RM4: "e = eval\ne('1+1')",
+  RM5: "import types\nimport marshal\ncode = marshal.loads(b'...')\ntypes.FunctionType(code, globals())()"
+}
+
 describe('scriptContentSecurity — List R (residual known bypass)', () => {
-  it('R1 — variable attr name getattr(os, name) → allow (known bypass)', () => {
-    const r = analyzeScriptContent(RESIDUAL_FIXTURES.R1, { remote: false })
-    expect(r.verdict).toBe('allow')
-    expect(r.patterns).not.toEqual(expect.arrayContaining(B_PATTERN_IDS))
+  it('R1 — variable attr name getattr(os, name) → desktop allow (known bypass), remote must ask', () => {
+    const desktop = analyzeScriptContent(RESIDUAL_FIXTURES.R1, { remote: false })
+    expect(desktop.verdict).toBe('allow')
+    expect(desktop.patterns).not.toEqual(expect.arrayContaining(B_PATTERN_IDS))
+
+    const remote = analyzeScriptContent(RESIDUAL_FIXTURES.R1, { remote: true })
+    expect(remote.verdict).not.toBe('allow')
+    expect(remote.verdict).toBe('ask')
   })
 
   it('R2 — multi-step decode beyond B11 window: no B11, but direct exec still A3 ask', () => {
@@ -35,13 +53,36 @@ describe('scriptContentSecurity — List R (residual known bypass)', () => {
     for (const b of B_PATTERN_IDS) {
       expect(r.patterns).not.toContain(b)
     }
+
+    const remote = analyzeScriptContent(RESIDUAL_FIXTURES.R2, { remote: true })
+    expect(remote.verdict).toBe('ask')
   })
 
-  it('R3 — marshal / FunctionType bytecode → allow (known bypass)', () => {
-    const r = analyzeScriptContent(RESIDUAL_FIXTURES.R3, { remote: false })
-    expect(r.verdict).toBe('allow')
+  it('R3 — marshal / FunctionType bytecode → desktop allow (known bypass), remote must ask', () => {
+    const desktop = analyzeScriptContent(RESIDUAL_FIXTURES.R3, { remote: false })
+    expect(desktop.verdict).toBe('allow')
     for (const b of B_PATTERN_IDS) {
-      expect(r.patterns).not.toContain(b)
+      expect(desktop.patterns).not.toContain(b)
+    }
+
+    const remote = analyzeScriptContent(RESIDUAL_FIXTURES.R3, { remote: true })
+    expect(remote.verdict).not.toBe('allow')
+    expect(remote.verdict).toBe('ask')
+  })
+
+  it('WP3 — getattr / __import__ / eval variable aliases can never reach remote allow', () => {
+    for (const [key, code] of Object.entries(REMOTE_ONLY_RESIDUAL_FIXTURES)) {
+      const remote = analyzeScriptContent(code, { remote: true })
+      expect(remote.verdict, `${key}: ${code}`).not.toBe('allow')
+    }
+  })
+
+  it('WP3 — remote-skip-confirm switch does not resurrect allow for uncertified scripts', () => {
+    // shouldSkipRemoteScriptConfirmOnAllow is irrelevant here: these scripts must never
+    // produce verdict === 'allow' on remote in the first place, regardless of config.
+    for (const code of Object.values(REMOTE_ONLY_RESIDUAL_FIXTURES)) {
+      const remote = analyzeScriptContent(code, { remote: true })
+      expect(remote.verdict).not.toBe('allow')
     }
   })
 

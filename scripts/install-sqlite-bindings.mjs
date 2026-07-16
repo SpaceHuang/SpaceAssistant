@@ -1,64 +1,59 @@
 /**
  * Install Node + Electron prebuilt better-sqlite3 binaries side by side.
- * Electron and Node cannot share one .node (different NODE_MODULE_VERSION).
+ * Electron bindings come ONLY from scripts/native-bindings-manifest.json
+ * (official GitHub Release URL + SHA-256). No third-party mirrors, no npx.
+ * Node bindings are built from the locked local source tree.
  */
+import { createHash } from 'crypto'
 import { execSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { createRequire } from 'module'
 
+const require = createRequire(import.meta.url)
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const sqliteVersion = pkg.dependencies['better-sqlite3'].replace(/^\^/, '')
 const sqliteDir = path.join(root, 'node_modules/better-sqlite3')
 const releaseDir = path.join(sqliteDir, 'build/Release')
+const manifestPath = path.join(root, 'scripts/native-bindings-manifest.json')
 
 const electronPkg = JSON.parse(
   fs.readFileSync(path.join(root, 'node_modules/electron/package.json'), 'utf8')
 )
 const electronVersion = electronPkg.version
 
-/** Electron 33.x → NODE_MODULE_VERSION 130 */
-function electronModuleAbi(major) {
-  if (major >= 33) return 130
-  if (major >= 32) return 128
-  if (major >= 31) return 125
-  throw new Error(`Unsupported Electron major ${major}; extend electronModuleAbi()`)
-}
+const nodeAbi = require('node-abi')
+const electronAbi = Number(nodeAbi.getAbi(electronVersion, 'electron'))
 
-const electronMajor = parseInt(electronVersion.split('.')[0] ?? '10', 10)
-const electronAbi = electronModuleAbi(electronMajor)
+const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+
+function assertManifestMatch() {
+  if (manifest.betterSqlite3Version !== sqliteVersion) {
+    throw new Error(
+      `manifest betterSqlite3Version ${manifest.betterSqlite3Version} != package ${sqliteVersion}`
+    )
+  }
+  if (Number(manifest.electronAbi) !== electronAbi) {
+    throw new Error(
+      `manifest electronAbi ${manifest.electronAbi} != resolved ABI ${electronAbi} for Electron ${electronVersion}`
+    )
+  }
+}
 
 function prebuildArch() {
   return process.arch === 'arm64' ? 'arm64' : 'x64'
 }
 
-/**
- * 需要安装原生模块的目标架构。macOS 同时构建 x64 + arm64 DMG，需两套 electron 绑定；
- * 其他平台仅本机架构。
- */
 function targetArches() {
   if (process.platform === 'darwin') return ['x64', 'arm64']
   return [prebuildArch()]
 }
 
-/** better-sqlite3 release tarball platform tag, e.g. win32-x64 / darwin-arm64 */
-function prebuildPlatformTag(arch) {
-  if (process.platform === 'darwin') {
-    return arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64'
-  }
-  if (process.platform === 'win32') {
-    return arch === 'arm64' ? 'win32-arm64' : 'win32-x64'
-  }
-  if (process.platform === 'linux') {
-    return arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
-  }
-  throw new Error(`Unsupported platform ${process.platform}`)
-}
-
 if (!fs.existsSync(sqliteDir)) {
-  console.warn('[install-sqlite-bindings] better-sqlite3 missing, skip')
-  process.exit(0)
+  console.error('[install-sqlite-bindings] better-sqlite3 missing')
+  process.exit(1)
 }
 
 fs.mkdirSync(releaseDir, { recursive: true })
@@ -71,25 +66,22 @@ function copy(src, name) {
   console.log(`[install-sqlite-bindings] wrote ${name}`)
 }
 
-function stageBuiltNode(runtime) {
-  const built = path.join(releaseDir, 'better_sqlite3.node')
-  if (!fs.existsSync(built)) {
-    throw new Error(`prebuild-install did not produce ${built}`)
-  }
-  const staged = path.join(releaseDir, `.staged-${runtime}.node`)
-  fs.writeFileSync(staged, fs.readFileSync(built))
-  return staged
+function sha256File(filePath) {
+  const h = createHash('sha256')
+  h.update(fs.readFileSync(filePath))
+  return h.digest('hex')
 }
 
-function runPrebuild(runtime, target, arch) {
-  execSync(
-    `npx --yes prebuild-install --runtime ${runtime} --target ${target} --arch ${arch}`,
-    {
-      cwd: sqliteDir,
-      stdio: 'inherit'
-    }
+function findManifestEntry(arch) {
+  const entry = manifest.bindings.find(
+    (b) => b.platform === process.platform && b.arch === arch
   )
-  return stageBuiltNode(runtime)
+  if (!entry) {
+    throw new Error(
+      `No manifest entry for ${process.platform}/${arch} (Electron ABI ${electronAbi}, better-sqlite3 ${sqliteVersion})`
+    )
+  }
+  return entry
 }
 
 async function downloadWithRetry(url, dest, retries = 5) {
@@ -104,39 +96,28 @@ async function downloadWithRetry(url, dest, retries = 5) {
     } catch (err) {
       lastErr = err
       const waitMs = 2000 * (i + 1)
-      console.warn(`[install-sqlite-bindings] download attempt ${i + 1}/${retries} failed, retry in ${waitMs}ms`)
+      console.warn(
+        `[install-sqlite-bindings] download attempt ${i + 1}/${retries} failed, retry in ${waitMs}ms`
+      )
       await new Promise((r) => setTimeout(r, waitMs))
     }
   }
   throw lastErr
 }
 
-async function installElectronPrebuild(arch) {
-  const platform = prebuildPlatformTag(arch)
-  const file = `better-sqlite3-v${sqliteVersion}-electron-v${electronAbi}-${platform}.tar.gz`
-  const github = `https://github.com/WiseLibs/better-sqlite3/releases/download/v${sqliteVersion}/${file}`
-  const urls = [
-    github,
-    `https://gh-proxy.com/${github}`,
-    `https://mirror.ghproxy.com/${github}`
-  ]
-  const tgz = path.join(releaseDir, 'electron-prebuild.tar.gz')
-
-  let lastErr
-  for (const url of urls) {
-    try {
-      console.log(`[install-sqlite-bindings] downloading ${url}`)
-      await downloadWithRetry(url, tgz, 3)
-      lastErr = undefined
-      break
-    } catch (err) {
-      lastErr = err
-      console.warn(`[install-sqlite-bindings] mirror failed: ${url}`)
-    }
+async function installElectronFromManifest(arch) {
+  const entry = findManifestEntry(arch)
+  const tgz = path.join(releaseDir, `electron-prebuild-${arch}.tar.gz`)
+  console.log(`[install-sqlite-bindings] downloading ${entry.url}`)
+  await downloadWithRetry(entry.url, tgz, 5)
+  const actual = sha256File(tgz)
+  if (actual !== entry.sha256) {
+    fs.unlinkSync(tgz)
+    throw new Error(
+      `SHA-256 mismatch for ${process.platform}/${arch}: expected ${entry.sha256}, got ${actual}`
+    )
   }
-  if (lastErr) throw lastErr
-
-  const tmpExtract = path.join(releaseDir, '.tmp-electron')
+  const tmpExtract = path.join(releaseDir, `.tmp-electron-${arch}`)
   fs.rmSync(tmpExtract, { recursive: true, force: true })
   fs.mkdirSync(tmpExtract, { recursive: true })
   execSync(`tar -xf "${tgz}" -C "${tmpExtract}"`, { stdio: 'inherit' })
@@ -147,34 +128,43 @@ async function installElectronPrebuild(arch) {
     fs.rmSync(tmpExtract, { recursive: true, force: true })
     throw new Error(`electron prebuild missing after extract: ${built}`)
   }
-  const staged = path.join(releaseDir, '.electron-download.node')
+  const staged = path.join(releaseDir, `.electron-download-${arch}.node`)
   fs.copyFileSync(built, staged)
   fs.rmSync(tmpExtract, { recursive: true, force: true })
   return staged
 }
 
+function buildNodeBinding(arch) {
+  // Locked local source build — no npx / no remote prebuild for Node.
+  console.log(`[install-sqlite-bindings] building Node binding from source (arch=${arch})`)
+  execSync(`npm rebuild better-sqlite3 --build-from-source --arch=${arch}`, {
+    cwd: root,
+    stdio: 'inherit',
+    env: { ...process.env, npm_config_build_from_source: 'true' }
+  })
+  const built = path.join(releaseDir, 'better_sqlite3.node')
+  if (!fs.existsSync(built)) {
+    throw new Error(`Node source build did not produce ${built}`)
+  }
+  const staged = path.join(releaseDir, `.staged-node-${arch}.node`)
+  fs.copyFileSync(built, staged)
+  return staged
+}
+
 async function main() {
+  assertManifestMatch()
   const hostArch = prebuildArch()
   const arches = targetArches()
   console.log(
-    `[install-sqlite-bindings] better-sqlite3@${sqliteVersion}, electron@${electronVersion} (abi ${electronAbi}), node@${process.version}, host=${hostArch}, arches=[${arches.join(',')}], platform=${prebuildPlatformTag(hostArch)}`
+    `[install-sqlite-bindings] better-sqlite3@${sqliteVersion}, electron@${electronVersion} (abi ${electronAbi}), node@${process.version}, host=${hostArch}, arches=[${arches.join(',')}]`
   )
 
-  // Node 运行时绑定仅用于本机 dev/测试，按本机架构安装
-  const nodeBuilt = runPrebuild('node', process.version.replace(/^v/, ''), hostArch)
+  const nodeBuilt = buildNodeBinding(hostArch)
   copy(nodeBuilt, `node/better_sqlite3.${hostArch}.node`)
   copy(nodeBuilt, 'node/better_sqlite3.node')
 
-  // Electron 运行时绑定供打包后 app 使用；macOS 需覆盖所有目标架构
   for (const arch of arches) {
-    let electronBuilt
-    try {
-      electronBuilt = runPrebuild('electron', electronVersion, arch)
-    } catch {
-      console.warn(`[install-sqlite-bindings] prebuild-install electron (${arch}) failed, trying direct download...`)
-      electronBuilt = await installElectronPrebuild(arch)
-    }
-
+    const electronBuilt = await installElectronFromManifest(arch)
     copy(electronBuilt, `electron/better_sqlite3.${arch}.node`)
     if (arch === hostArch) {
       copy(electronBuilt, 'electron/better_sqlite3.node')
@@ -184,9 +174,6 @@ async function main() {
 
   for (const legacy of ['better_sqlite3.node-node', 'better_sqlite3.node-electron']) {
     fs.rmSync(path.join(releaseDir, legacy), { force: true })
-  }
-  for (const staged of ['.staged-node.node', '.staged-electron.node']) {
-    fs.rmSync(path.join(releaseDir, staged), { force: true })
   }
   console.log('[install-sqlite-bindings] done')
 }

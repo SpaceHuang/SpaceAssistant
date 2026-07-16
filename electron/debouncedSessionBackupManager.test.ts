@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
+import { arrayMessagePageReader } from './sessionBackupManager'
 import type { SessionBackupManager } from './sessionBackupManager'
-import type { Message, Session } from '../src/shared/domainTypes'
+import type { Session } from '../src/shared/domainTypes'
 
 describe('DebouncedSessionBackupManager', () => {
   beforeEach(() => {
@@ -17,9 +18,9 @@ describe('DebouncedSessionBackupManager', () => {
     const inner = { backupSession, deleteBackup: vi.fn() } as unknown as SessionBackupManager
     const mgr = new DebouncedSessionBackupManager(inner)
     const session = { id: 's1' } as Session
-    const messages = [] as Message[]
+    const readPage = arrayMessagePageReader([])
 
-    mgr.schedule('s1', async () => ({ session, messages }))
+    mgr.schedule('s1', async () => ({ session, readPage }))
     expect(backupSession).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(3000)
@@ -31,9 +32,10 @@ describe('DebouncedSessionBackupManager', () => {
     const inner = { backupSession, deleteBackup: vi.fn() } as unknown as SessionBackupManager
     const mgr = new DebouncedSessionBackupManager(inner)
     const session = { id: 's1' } as Session
+    const readPage = arrayMessagePageReader([])
 
-    mgr.schedule('s1', async () => ({ session, messages: [] }))
-    await mgr.flush('s1', async () => ({ session, messages: [] }))
+    mgr.schedule('s1', async () => ({ session, readPage }))
+    await mgr.flush('s1', async () => ({ session, readPage }))
     expect(backupSession).toHaveBeenCalledTimes(1)
   })
 })

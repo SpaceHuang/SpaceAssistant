@@ -66,15 +66,26 @@ export function applyMigrationConservativeOverlay(
 }
 
 /**
- * write_file / edit_file confirm can be skipped only when migration is complete and local
- * write is allowed. (Hard deny for remoteAllowLocalWrite===false is handled separately.)
+ * @deprecated Remote file writes no longer skip confirm via config.
+ * They require a session-scoped RemoteWriteGrant (always returns false).
  */
-export function shouldSkipRemoteFileWriteConfirm(config?: RemoteSecurityPolicyConfig | null): boolean {
-  if (!isRemoteSecurityMigrationComplete(config)) return false
-  return (config?.remoteAllowLocalWrite ?? true) !== false
+export function shouldSkipRemoteFileWriteConfirm(_config?: RemoteSecurityPolicyConfig | null): boolean {
+  return false
 }
 
-/** run_script `allow` verdict may skip confirm only when migrated and script confirm disabled. */
+/**
+ * run_script `allow` verdict may skip confirm only when migrated and script confirm disabled.
+ *
+ * Callers must only invoke this when `analyzeScriptContent(code, { remote: true })` itself
+ * already returned `verdict === 'allow'` (see `electron/shell/scriptContentSecurity.ts`, WP3).
+ * That remote `allow` is a positive-allowlist certification: the script is fully parseable, all
+ * call chains are statically resolvable, every call is in the explicit safe-capability
+ * whitelist, and any whitelisted file path is static and relative to the working directory. Any
+ * `ask`, `deny`, parse failure, or otherwise-uncertified script never reaches `allow`, so this
+ * switch can never resurrect a skip for dynamic import, reflection (`getattr`/`setattr`),
+ * `eval`/`exec`, variable-borne call objects, or unmodeled syntax — those are forced to `ask`
+ * upstream regardless of this config switch.
+ */
 export function shouldSkipRemoteScriptConfirmOnAllow(config?: RemoteSecurityPolicyConfig | null): boolean {
   if (!isRemoteSecurityMigrationComplete(config)) return false
   return config?.remoteScriptRequiresConfirm === false

@@ -82,6 +82,18 @@ jobs:
           CI: true
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+      - name: Verify macOS app signature
+        if: matrix.pack == 'mac'
+        run: |
+          APP=$(find release -name '*.app' -type d | head -n 1)
+          test -n "$APP"
+          npm run verify:macos-app -- "$APP"
+
+      - name: Probe better-sqlite3 under Electron
+        run: npm run probe:sqlite
+        env:
+          ELECTRON_RUN_AS_NODE: '1'
+
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:

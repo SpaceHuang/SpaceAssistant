@@ -11,6 +11,7 @@ import {
 } from '../remote/remoteSessionSwitchAudit'
 import { beginTool, endTool } from '../remote/remoteSessionSwitchState'
 import { adoptRemoteSessionAfterSwitch } from '../remote/remoteSessionSwitchFollow'
+import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 import type { RemoteContext } from './types'
 import type { ToolExecutionContext, ToolExecutor } from './types'
 
@@ -168,6 +169,11 @@ export const switchSessionExecutor: ToolExecutor = {
         appDatabase,
         targetSessionId
       })
+
+      // switch_session never migrates the origin lease; it only redirects IM outbound. Any
+      // write authorization scoped to the origin session must not survive the switch.
+      const originSessionId = remoteContext.originSessionId ?? sessionId
+      remoteWriteGrantRegistry.revokeByOriginSession(originSessionId, 'session_switch')
 
       return { success: true, data }
     } finally {

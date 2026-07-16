@@ -7,6 +7,7 @@ export type { AppDatabase } from './sqliteStore'
 export type { StoredMessage } from './types'
 export { openSqliteDatabase, getDbConnection, runInTransaction } from './sqliteStore'
 
+export type { MessagesPage } from './operations'
 export {
   appendMessage,
   appendSearchHistory,
@@ -18,6 +19,7 @@ export {
   getAllSessionUsages,
   getConfigValue,
   getMessages,
+  getMessagesPage,
   getSession,
   getSessionUsage,
   listSearchHistory,

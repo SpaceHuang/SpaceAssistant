@@ -9,20 +9,18 @@ import {
   formatFloatingHoverTitle,
   formatFloatingMainLabel
 } from './floatingNotificationDisplay'
+import type { ToolCallDisplayT } from '../Chat/toolCallDisplay'
 import { sessionDisplayName } from '../../utils/sessionDisplay'
 import './floatingNotification.css'
 
 type FloatingApi = FloatingNotificationWindowApi
 
-declare global {
-  interface Window {
-    api: FloatingApi
-  }
-}
-
 export function FloatingNotificationApp() {
+  const api = window.api as unknown as FloatingApi
   const { t } = useTypedTranslation('notification')
-  const { t: tChat } = useTypedTranslation('chat')
+  const { t: tChatRaw } = useTypedTranslation('chat')
+  const tChat = tChatRaw as ToolCallDisplayT
+  const tNotification = t as (key: string, options?: Record<string, unknown>) => string
   const [data, setData] = useState<FloatingNotificationData>({
     totalSessions: 0,
     totalItems: 0,
@@ -30,17 +28,17 @@ export function FloatingNotificationApp() {
   })
 
   useEffect(() => {
-    window.api.notificationGetData().then(setData).catch(() => undefined)
+    api.notificationGetData().then(setData).catch(() => undefined)
 
-    const unsubUpdate = window.api.notificationOnUpdate((newData) => {
+    const unsubUpdate = api.notificationOnUpdate((newData) => {
       setData(newData)
     })
 
-    const unsubClose = window.api.notificationOnClose(() => {
+    const unsubClose = api.notificationOnClose(() => {
       unsubUpdate()
     })
 
-    window.api.notificationReady().catch(() => undefined)
+    api.notificationReady().catch(() => undefined)
 
     return () => {
       unsubUpdate()
@@ -50,7 +48,7 @@ export function FloatingNotificationApp() {
 
   const handleItemClick = useCallback(() => {
     if (data.latestItem) {
-      window.api.notificationFocusSession({
+      api.notificationFocusSession({
         sessionId: data.latestItem.sessionId,
         toolUseId: data.latestItem.toolUseId
       }).catch(() => undefined)
@@ -58,11 +56,11 @@ export function FloatingNotificationApp() {
   }, [data.latestItem])
 
   const handleShowMain = useCallback(() => {
-    window.api.notificationShowMain().catch(() => undefined)
+    api.notificationShowMain().catch(() => undefined)
   }, [])
 
   const handleDismiss = useCallback(() => {
-    window.api.notificationDismiss().catch(() => undefined)
+    api.notificationDismiss().catch(() => undefined)
   }, [])
 
   const hasItems = data.totalItems > 0 && data.latestItem
@@ -74,7 +72,7 @@ export function FloatingNotificationApp() {
           totalItems: data.totalItems
         },
         tChat,
-        t
+        tNotification
       )
     : ''
   const hoverTitle = hasItems
@@ -84,7 +82,7 @@ export function FloatingNotificationApp() {
         data.latestItem!.input,
         data.totalItems,
         tChat,
-        t
+        tNotification
       )
     : undefined
 

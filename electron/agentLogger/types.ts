@@ -49,6 +49,8 @@ export type AgentLogEventName =
   | 'script.ask'
   | 'script.deny'
   | 'tool.confirm.skip_confirm'
+  | 'tool.confirm.remote_write_grant_required'
+  | 'tool.confirm.authorization_revoked'
   | 'remote.budget.pause'
   | 'shell.path.confirm'
   | 'shell.path.reject'

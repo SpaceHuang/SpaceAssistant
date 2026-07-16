@@ -18,6 +18,7 @@ import { readBrowserConfigFromDb } from '../browser/browserConfigDb'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { getRemoteTaskController } from '../remote/remoteTaskController'
+import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
@@ -104,6 +105,12 @@ export function createFeishuBundle(deps: {
   const processedStore = new FeishuProcessedStore(userData)
   const auditLogger = new FeishuAuditLogger(userData)
   const confirmManager = new FeishuConfirmManager(auditLogger, runner, deps.db)
+  remoteAuthorizationRegistry.registerPendingCancel({
+    cancelByChannel: (ch) => confirmManager.cancelByChannel(ch)
+  })
+  remoteAuthorizationRegistry.registerAuditAppender((event) => {
+    void auditLogger.append(event as { type: string })
+  })
 
   const ownerBind = new FeishuOwnerBindController({
     getOwnerOpenId: () => readOwnerOpenIdFromAllowlist(readCfg().remoteSenderAllowlist),
@@ -118,7 +125,7 @@ export function createFeishuBundle(deps: {
       if (!enabled) {
         // Emergency close: cancel executions / queue / pending confirms BEFORE stop listening.
         getRemoteTaskController().emergencyClose({ reason: 'emergency-close' })
-        bundle?.router?.clearPendingDisambiguation()
+        void bundle?.router?.clearPendingDisambiguation()
         void bundle?.eventService?.stop()
       }
     },
@@ -194,6 +201,7 @@ export async function autoStartFeishuEventIfNeeded(db: AppDatabase): Promise<voi
 
 export async function shutdownFeishuServices(): Promise<void> {
   cancelAllActiveChats()
+  remoteAuthorizationRegistry.invalidate('feishu', 'service_stopped')
   bundle?.confirmManager.cancelAllPending()
   await bundle?.eventService?.stop()
   logFeishuCliEvent('info', 'feishu.service.shutdown', {})
@@ -417,7 +425,7 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle('feishu:owner-begin-bind', async (): Promise<FeishuBindWindowResult> => {
     const cfg = readFeishuConfigFromDb(deps.db)
     const windowMs = (cfg.remoteOwnerBindWindowMinutes ?? 5) * 60_000
-    b.router?.clearPendingDisambiguation()
+    await b.router?.clearPendingDisambiguation()
     const next = persistFeishuConfig(deps.db, { remoteEnabled: true })
     notifyFeishuConfigChanged(next)
     const code = b.ownerBind.startBindingWindow(windowMs)
@@ -427,7 +435,7 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle('feishu:owner-rebind', async (): Promise<FeishuBindWindowResult> => {
     const cfg = readFeishuConfigFromDb(deps.db)
     const windowMs = (cfg.remoteOwnerBindWindowMinutes ?? 5) * 60_000
-    b.router?.clearPendingDisambiguation()
+    await b.router?.clearPendingDisambiguation()
     persistFeishuConfig(deps.db, { remoteEnabled: true, remoteSenderAllowlist: undefined })
     const code = b.ownerBind.startRebind(windowMs)
     const next = readFeishuConfigFromDb(deps.db)
@@ -436,13 +444,13 @@ export function registerFeishuIpcHandlers(
   })
 
   ipcMain.handle('feishu:owner-bind-cancel', async () => {
-    b.router?.clearPendingDisambiguation()
+    await b.router?.clearPendingDisambiguation()
     b.ownerBind.cancelBinding()
     return b.ownerBind.getSnapshot()
   })
 
   ipcMain.handle('feishu:owner-clear', async () => {
-    b.router?.clearPendingDisambiguation()
+    await b.router?.clearPendingDisambiguation()
     b.ownerBind.clearOwner()
     return b.ownerBind.getSnapshot()
   })
@@ -482,6 +490,25 @@ function safeParse(raw: string): unknown {
 export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConfig>): FeishuConfig {
   const prev = readFeishuConfigFromDb(db)
   const next = mergeFeishuConfig({ ...prev, ...partial })
+
+  // Authorization revoke linearization BEFORE persistence / async stop.
+  const allowlistChanged =
+    JSON.stringify(prev.remoteSenderAllowlist ?? []) !==
+    JSON.stringify(next.remoteSenderAllowlist ?? [])
+  const ownerCleared =
+    Boolean(readOwnerOpenIdFromAllowlist(prev.remoteSenderAllowlist)) &&
+    !readOwnerOpenIdFromAllowlist(next.remoteSenderAllowlist)
+  if ((prev.enabled && !next.enabled) || (prev.remoteEnabled && !next.remoteEnabled)) {
+    remoteAuthorizationRegistry.invalidate(
+      'feishu',
+      !next.enabled ? 'channel_disabled' : 'remote_disabled'
+    )
+  } else if (ownerCleared) {
+    remoteAuthorizationRegistry.invalidate('feishu', 'owner_cleared')
+  } else if (allowlistChanged) {
+    remoteAuthorizationRegistry.invalidate('feishu', 'allowlist_changed')
+  }
+
   setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next))
   logFeishuCliEvent('info', 'feishu.config.persist', { keys: Object.keys(partial) })
   if (bundle?.ownerBind) {
@@ -490,7 +517,7 @@ export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConf
     // Binding windows are only opened via the explicit begin-bind / rebind IPC (code must be shown).
     if (!nowRemote && wasRemote) {
       bundle.ownerBind.dispose()
-      bundle.router?.clearPendingDisambiguation()
+      void bundle.router?.clearPendingDisambiguation()
       void bundle.eventService?.stop()
     }
   }

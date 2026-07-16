@@ -1,5 +1,6 @@
-import type { MenuProps } from 'antd/es/menu/interface'
-import type { MenuInfo } from 'antd/es/menu/interface'
+import type { MenuProps } from 'antd'
+
+type MenuInfo = Parameters<NonNullable<MenuProps['onClick']>>[0]
 
 /** 阻止菜单点击冒泡到 Tree 节点，避免误触发文件选中/打开 */
 export function wrapFileTreeMenuClick(handler: () => void): (info: MenuInfo) => void {
@@ -106,6 +107,6 @@ export function buildFileTreeContextMenuItems(handlers: FileTreeContextMenuActio
             danger: true,
             onClick: wrapFileTreeMenuClick(onDelete)
           }
-        ] as MenuProps['items']))
+        ]))
   ]
 }

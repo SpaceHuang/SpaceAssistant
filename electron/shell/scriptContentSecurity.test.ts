@@ -172,4 +172,99 @@ describe('scriptContentSecurity — List A (baseline)', () => {
       expect(r.patterns).toContain('A5')
     })
   })
+
+  describe('WP3 — expanded process-creation capability table (at least ask)', () => {
+    it('os.spawn* family → ask', () => {
+      expectAnalysis("import os\nos.spawnv(0, '/bin/ls', ['ls'])", true, { verdict: 'ask', patterns: ['A1'] })
+      expectAnalysis("import os\nos.spawnlp(0, 'ls', 'ls')", false, { verdict: 'ask', patterns: ['A1'] })
+    })
+
+    it('os.posix_spawn* family → ask', () => {
+      expectAnalysis("import os\nos.posix_spawn('/bin/ls', ['ls'], env)", true, {
+        verdict: 'ask',
+        patterns: ['A1']
+      })
+      expectAnalysis("import os\nos.posix_spawnp('ls', ['ls'], env)", true, { verdict: 'ask', patterns: ['A1'] })
+    })
+
+    it('asyncio.create_subprocess_exec / create_subprocess_shell → ask', () => {
+      expectAnalysis("import asyncio\nasyncio.create_subprocess_exec('ls')", true, {
+        verdict: 'ask',
+        patterns: ['A1']
+      })
+      expectAnalysis("import asyncio\nasyncio.create_subprocess_shell('ls')", true, {
+        verdict: 'ask',
+        patterns: ['A1']
+      })
+    })
+
+    it('aliased imports of the process-creation family still ask', () => {
+      const r1 = analyzeScriptContent("import os as o\no.spawnv(0, '/bin/ls', ['ls'])", { remote: true })
+      expect(r1.verdict).toBe('ask')
+      expect(r1.patterns).toContain('A1')
+
+      const r2 = analyzeScriptContent("import asyncio as aio\naio.create_subprocess_exec('ls')", {
+        remote: true
+      })
+      expect(r2.verdict).toBe('ask')
+      expect(r2.patterns).toContain('A1')
+
+      const r3 = analyzeScriptContent("from os import spawnv\nspawnv(0, '/bin/ls', ['ls'])", { remote: true })
+      expect(r3.verdict).not.toBe('allow')
+
+      const r4 = analyzeScriptContent("from os import posix_spawn as ps\nps('/bin/ls', ['ls'], env)", {
+        remote: true
+      })
+      expect(r4.verdict).not.toBe('allow')
+    })
+
+    it('none of the expanded process-creation family ever reaches remote allow', () => {
+      const scripts = [
+        "import os\nos.spawnv(0, '/bin/ls', ['ls'])",
+        "import os\nos.posix_spawn('/bin/ls', ['ls'], env)",
+        "import asyncio\nasyncio.create_subprocess_exec('ls')",
+        "import asyncio\nasyncio.create_subprocess_shell('ls')",
+        "import subprocess\nsubprocess.run(['id'])",
+        "import pty\npty.spawn('/bin/sh')"
+      ]
+      for (const code of scripts) {
+        const r = analyzeScriptContent(code, { remote: true })
+        expect(r.verdict, code).not.toBe('allow')
+      }
+    })
+  })
+
+  describe('WP3 — remote positive allowlist', () => {
+    it('certified-safe scripts (whitelisted relative writes / chdir) get remote allow', () => {
+      expectAnalysis("import os\nos.chdir('src')", true, { verdict: 'allow', patterns: ['A9'] })
+      expectAnalysis("open('out.txt', 'w')", true, { verdict: 'allow', patterns: ['A8'] })
+      expectAnalysis(
+        "from pathlib import Path\nPath('out.txt').write_text('hi')",
+        true,
+        { verdict: 'allow', patterns: ['A8'] }
+      )
+      expectAnalysis('print(1 + 2)', true, { verdict: 'allow', patterns: ['A0'] })
+    })
+
+    it('os.chdir with a non-static / absolute path never reaches remote allow', () => {
+      const dynamic = analyzeScriptContent('import os\ntarget = get_dir()\nos.chdir(target)', { remote: true })
+      expect(dynamic.verdict).not.toBe('allow')
+
+      const absolute = analyzeScriptContent("import os\nos.chdir('/etc')", { remote: true })
+      expect(absolute.verdict).not.toBe('allow')
+    })
+
+    it('unresolvable / computed call targets never reach remote allow', () => {
+      // Callee is itself a computed expression (binop), not a static name/attr chain.
+      const r = analyzeScriptContent('(1 + 1)()', { remote: true })
+      expect(r.verdict).not.toBe('allow')
+    })
+
+    it('remote-skip-confirm switch is irrelevant unless verdict is actually allow', () => {
+      // shouldSkipRemoteScriptConfirmOnAllow only ever matters when analyzeScriptContent
+      // itself returned verdict === 'allow'; ask/deny scripts must keep asking regardless.
+      const r = analyzeScriptContent("import os\nos.system('id')", { remote: true })
+      expect(r.verdict).toBe('ask')
+    })
+  })
 })

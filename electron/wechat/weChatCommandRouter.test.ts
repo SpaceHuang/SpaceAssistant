@@ -82,6 +82,7 @@ describe('WeChatCommandRouter', () => {
       auditLogger: audit,
       getWeChatConfig: () => ({
         ...DEFAULT_WECHAT_CONFIG,
+        enabled: true,
         remoteEnabled: true,
         loggedIn: true,
         remoteSenderAllowlist: ['wx-user@test']
@@ -133,6 +134,7 @@ describe('WeChatCommandRouter', () => {
       auditLogger: audit,
       getWeChatConfig: () => ({
         ...DEFAULT_WECHAT_CONFIG,
+        enabled: true,
         remoteEnabled: true,
         loggedIn: true,
         remoteSenderAllowlist: ['allowed@test']
@@ -170,6 +172,7 @@ describe('WeChatCommandRouter', () => {
       auditLogger: audit,
       getWeChatConfig: () => ({
         ...DEFAULT_WECHAT_CONFIG,
+        enabled: true,
         remoteEnabled: true,
         loggedIn: true,
         remoteSenderAllowlist: undefined
@@ -191,11 +194,11 @@ describe('WeChatCommandRouter', () => {
     })
     await r2.handleSdkInbound(raw)
     expect(mockRunAgent).not.toHaveBeenCalled()
-    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('尚未绑定'))
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('不是已绑定'))
   })
 
   it('rejects second inbound when session is busy', async () => {
-    tryClaimRemoteSession(sessionId, 3)
+    tryClaimRemoteSession(sessionId, 'req-busy', 3)
     const raw2 = makeIncomingMessage({ text: 'second', raw: { ...makeIncomingMessage().raw, client_id: 'busy-2' } })
     await router.handleSdkInbound(raw2)
 
@@ -205,6 +208,67 @@ describe('WeChatCommandRouter', () => {
     const sent = reply.mock.calls[0]![1] as string
     expect(sent).toContain(REMOTE_SESSION_BUSY_MESSAGE)
     expect(sent).toContain(`会话$${sessionId}$`)
-    releaseRemoteSession(sessionId)
+    // Persist terminal claim state — must not leave a sticky `claimed` row.
+    const entry = (
+      processed as unknown as {
+        data: { entries: Array<{ state: string; resultSummary?: string }> }
+      }
+    ).data.entries.find((e) => e.resultSummary === 'session_busy')
+    expect(entry?.state).toBe('completed')
+    expect(entry?.resultSummary).toBe('session_busy')
+    releaseRemoteSession(sessionId, 'req-busy')
+  })
+
+  it('completion/audit stay on the origin session after a mid-run switch_session, while reply follows the switched session', async () => {
+    const target = createSession(db, { name: 'Target' })
+    const wcSend = vi.fn()
+    mockRunAgent.mockImplementation(
+      async ({ remoteContext }: { remoteContext: { outboundSessionId?: string; originSessionId?: string } }) => {
+        expect(remoteContext.originSessionId).toBe(sessionId)
+        remoteContext.outboundSessionId = target.id
+        return { summary: 'done', pendingConfirm: false, ok: true }
+      }
+    )
+
+    const r2 = new WeChatCommandRouter({
+      db,
+      botService: {
+        getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
+        getRawBot: () => null
+      } as never,
+      processedStore: processed,
+      confirmManager: new WeChatConfirmManager(),
+      auditLogger: audit,
+      getWeChatConfig: () => ({
+        ...DEFAULT_WECHAT_CONFIG,
+        enabled: true,
+        remoteEnabled: true,
+        loggedIn: true,
+        remoteSenderAllowlist: ['wx-user@test']
+      }),
+      getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }),
+      getWorkDir: () => tmpDir,
+      workDirManager: {
+        listProfiles: () => [],
+        getActiveProfileId: () => 'p1',
+        getActiveWorkDir: () => tmpDir,
+        checkDirectoryWritable: () => ({ ok: true })
+      } as never,
+      getUserDataPath: () => tmpDir,
+      getApiKey: async () => 'key',
+      getBaseUrl: () => 'https://api.example.com',
+      getMainWebContents: () => ({ send: wcSend }) as never,
+      getModel: () => 'm1',
+      getToolsConfig: () => ({ confirmMode: 'diff', deniedTools: [] }) as never
+    })
+
+    const raw = makeIncomingMessage({ text: 'switch then reply' })
+    await r2.handleSdkInbound(raw)
+
+    expect(wcSend).toHaveBeenCalledWith(
+      'wechat:agent-done',
+      expect.objectContaining({ sessionId })
+    )
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`会话$${target.id}$`))
   })
 })

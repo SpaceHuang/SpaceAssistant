@@ -62,6 +62,17 @@ function makeInbound(overrides: Partial<FeishuInboundMessage> = {}): FeishuInbou
   }
 }
 
+let claimIdSeq = 0
+function makeProcessedStore() {
+  return {
+    has: vi.fn().mockResolvedValue(false),
+    mark: vi.fn().mockResolvedValue(undefined),
+    tryClaim: vi.fn().mockImplementation(async () => ({ ok: true as const, claimId: `claim-${++claimIdSeq}` })),
+    markExecuting: vi.fn().mockResolvedValue(true),
+    markCompleted: vi.fn().mockResolvedValue(true)
+  }
+}
+
 describe('RemoteCommandRouter workdir binding', () => {
   const dirs: string[] = []
   const openDbs: Array<{ close: () => void }> = []
@@ -86,13 +97,10 @@ describe('RemoteCommandRouter workdir binding', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; wc?: { send: (...args: unknown[]) => void } }
   ) {
     const auditAppend = vi.fn().mockResolvedValue(undefined)
-    const processedStore = {
-      has: vi.fn().mockResolvedValue(false),
-      mark: vi.fn().mockResolvedValue(undefined)
-    }
+    const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
       db,
       runner: { run: vi.fn() } as never,
@@ -101,7 +109,13 @@ describe('RemoteCommandRouter workdir binding', () => {
         tryResolveFromInbound: () => options?.tryResolveConfirm ?? false
       } as never,
       auditLogger: { append: auditAppend } as never,
-      getFeishuConfig: () => mergeFeishuConfig({ enabled: true, remoteEnabled: true, appConfigured: true }),
+      getFeishuConfig: () =>
+        mergeFeishuConfig({
+          enabled: true,
+          remoteEnabled: true,
+          appConfigured: true,
+          remoteSenderAllowlist: ['user-1']
+        }),
       getAppConfig: () => ({
         defaultModel: 'claude-sonnet-4-20250514',
         maxParallelChatSessions: options?.maxParallel ?? 3,
@@ -113,7 +127,7 @@ describe('RemoteCommandRouter workdir binding', () => {
       getUserDataPath: () => '/tmp',
       getApiKey: async () => 'key',
       getBaseUrl: () => '',
-      getMainWebContents: () => null,
+      getMainWebContents: () => (options?.wc as never) ?? null,
       getModel: () => 'claude-sonnet-4-20250514',
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG
     })
@@ -163,6 +177,42 @@ describe('RemoteCommandRouter workdir binding', () => {
     )
   })
 
+  it('completion/audit/pending-confirm stay on the origin session after a mid-run switch_session, while outbound reply follows the switched session', async () => {
+    const { db, manager } = setupDbAndManager()
+    const origin = createSession(db, { name: 'Origin' })
+    const target = createSession(db, { name: 'Target' })
+
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'hello' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: origin.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockImplementation(
+      async ({ remoteContext }: { remoteContext: { outboundSessionId?: string; originSessionId?: string } }) => {
+        // Simulate a switch_session tool call: only outbound moves, origin is immutable.
+        expect(remoteContext.originSessionId).toBe(origin.id)
+        remoteContext.outboundSessionId = target.id
+        return { summary: 'done', pendingConfirm: true, ok: true }
+      }
+    )
+
+    const wcSend = vi.fn()
+    const { router, auditAppend } = makeRouter(db, manager, { wc: { send: wcSend } })
+    await router.handleInbound(makeInbound({ messageId: 'switch-1' }))
+
+    expect(wcSend).toHaveBeenCalledWith(
+      'feishu:agent-done',
+      expect.objectContaining({ sessionId: origin.id })
+    )
+    expect(wcSend).toHaveBeenCalledWith(
+      'feishu:pending-confirm',
+      expect.objectContaining({ sessionId: origin.id })
+    )
+    expect(mockSendFeishuRemoteOutbound).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: target.id })
+    )
+    expect(auditAppend).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'agent_done', sessionId: origin.id })
+    )
+  })
+
   it('rejects sensitive profile on inbound', async () => {
     const { db, manager, dirA } = setupDbAndManager()
     manager.addProfile({ name: 'Secret', path: dirA, aliases: ['secret'], sensitive: true })
@@ -208,11 +258,8 @@ describe('RemoteCommandRouter busy guard', () => {
     manager: ReturnType<typeof createWorkDirManager>,
     options?: { maxParallel?: number; tryResolveConfirm?: boolean }
   ) {
-    const processedStore = {
-      has: vi.fn().mockResolvedValue(false),
-      mark: vi.fn().mockResolvedValue(undefined)
-    }
-    return new RemoteCommandRouter({
+    const processedStore = makeProcessedStore()
+    const router = new RemoteCommandRouter({
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
@@ -220,7 +267,13 @@ describe('RemoteCommandRouter busy guard', () => {
         tryResolveFromInbound: () => options?.tryResolveConfirm ?? false
       } as never,
       auditLogger: { append: vi.fn().mockResolvedValue(undefined) } as never,
-      getFeishuConfig: () => mergeFeishuConfig({ enabled: true, remoteEnabled: true, appConfigured: true }),
+      getFeishuConfig: () =>
+        mergeFeishuConfig({
+          enabled: true,
+          remoteEnabled: true,
+          appConfigured: true,
+          remoteSenderAllowlist: ['user-1']
+        }),
       getAppConfig: () => ({
         defaultModel: 'claude-sonnet-4-20250514',
         maxParallelChatSessions: options?.maxParallel ?? 3,
@@ -236,6 +289,7 @@ describe('RemoteCommandRouter busy guard', () => {
       getModel: () => 'claude-sonnet-4-20250514',
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG
     })
+    return { router, processedStore }
   }
 
   function setup() {
@@ -260,8 +314,8 @@ describe('RemoteCommandRouter busy guard', () => {
     mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
     mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'ok', pendingConfirm: false, ok: true })
 
-    tryClaimRemoteSession(session.id, 3)
-    const router = makeRouter(db, manager)
+    tryClaimRemoteSession(session.id, 'req-busy', 3)
+    const { router, processedStore } = makeRouter(db, manager)
     await router.handleInbound(makeInbound({ messageId: 'm2' }))
 
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
@@ -272,7 +326,8 @@ describe('RemoteCommandRouter busy guard', () => {
         sessionId: session.id
       })
     )
-    releaseRemoteSession(session.id)
+    expect(processedStore.markCompleted).toHaveBeenCalledWith('m2', expect.any(String), 'session_busy')
+    releaseRemoteSession(session.id, 'req-busy')
   })
 
   it('TOCTOU: concurrent inbounds for same session start only one agent', async () => {
@@ -282,7 +337,7 @@ describe('RemoteCommandRouter busy guard', () => {
     mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
     mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'ok', pendingConfirm: false, ok: true })
 
-    const router = makeRouter(db, manager)
+    const { router } = makeRouter(db, manager)
     await Promise.all([
       router.handleInbound(makeInbound({ messageId: 'm1' })),
       router.handleInbound(makeInbound({ messageId: 'm2' }))
@@ -294,7 +349,7 @@ describe('RemoteCommandRouter busy guard', () => {
   it('allows confirm resolution without claiming session', async () => {
     const { db, manager } = setup()
     mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'Y' })
-    const router = makeRouter(db, manager, { tryResolveConfirm: true })
+    const { router } = makeRouter(db, manager, { tryResolveConfirm: true })
     await router.handleInbound(makeInbound({ content: 'Y', messageId: 'confirm-1' }))
     expect(mockResolveFeishuSession).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
@@ -318,9 +373,14 @@ describe('RemoteCommandRouter busy guard', () => {
       return workDirBinding.bindSessionWorkDir(...args)
     })
 
-    const router = makeRouter(db, manager)
+    const { router, processedStore } = makeRouter(db, manager)
     await router.handleInbound(makeInbound({ messageId: 'bind-fail', content: '/sa @good hi' }))
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    expect(processedStore.markCompleted).toHaveBeenCalledWith(
+      'bind-fail',
+      expect.any(String),
+      'workdir_bind_failed'
+    )
 
     await router.handleInbound(makeInbound({ messageId: 'bind-ok', content: '/sa @good retry' }))
     expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(1)
@@ -347,7 +407,7 @@ describe('RemoteCommandRouter busy guard', () => {
         })
     )
 
-    const router = makeRouter(db, manager, { maxParallel: 2 })
+    const { router, processedStore } = makeRouter(db, manager, { maxParallel: 2 })
     void router.handleInbound(makeInbound({ messageId: 'p1' }))
     void router.handleInbound(makeInbound({ messageId: 'p2' }))
     await vi.waitFor(() => expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(2))
@@ -361,6 +421,7 @@ describe('RemoteCommandRouter busy guard', () => {
         sessionId: s3.id
       })
     )
+    expect(processedStore.markCompleted).toHaveBeenCalledWith('p3', expect.any(String), 'parallel_full')
 
     releases.forEach((r) => r())
   })

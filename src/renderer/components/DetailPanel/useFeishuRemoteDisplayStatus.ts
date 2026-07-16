@@ -73,7 +73,7 @@ export function useFeishuRemoteDisplayStatus() {
     setActionLoading('start')
     try {
       const es = await window.api.feishuEventStart()
-      setEventOverride(es)
+      setEventOverride(es ?? null)
       setFetchError(null)
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))
@@ -86,7 +86,7 @@ export function useFeishuRemoteDisplayStatus() {
     setActionLoading('stop')
     try {
       const es = await window.api.feishuEventStop()
-      setEventOverride(es)
+      setEventOverride(es ?? null)
       setFetchError(null)
     } catch (e) {
       message.error(e instanceof Error ? e.message : String(e))

@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Menu } from 'antd'
-import type { MenuProps } from 'antd/es/menu/interface'
+import type { MenuProps } from 'antd'
 
 interface Props {
   items: MenuProps['items']

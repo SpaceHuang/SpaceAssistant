@@ -12,7 +12,9 @@ export type StreamingActivityStatus = {
   showElapsed: boolean
 }
 
-export type StreamingActivityT = (key: string, options?: Record<string, unknown>) => string
+export type StreamingActivityT = {
+  bivarianceHack(key: string, options?: Record<string, unknown>): string
+}['bivarianceHack']
 
 export function formatStreamingElapsed(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000))

@@ -1,1 +1,1 @@
-export { WikiPane } from './WikiPane'
+export { WikiPane, type WikiPaneHandle } from './WikiPane'

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { App, Button, Form, Input, Popover, Radio, Space, Table, Tooltip } from 'antd'
+import type { FormInstance } from 'antd/es/form'
 import type { ColumnsType } from 'antd/es/table'
 import { FolderOpen, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
@@ -57,7 +58,7 @@ type Props = {
 type ProfileFormProps = {
   mode: 'add' | 'edit'
   profileId?: string
-  form: ReturnType<typeof Form.useForm>[0]
+  form: FormInstance<ProfileDraft>
   onSelectDirectory: () => void
   onConfirm: () => void
 }
