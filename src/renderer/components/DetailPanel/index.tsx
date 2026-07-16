@@ -34,20 +34,22 @@ export function DetailPanel() {
     })
   }
 
-  if (selectedFile || contentMode === 'url') {
-    return <FileOverlay />
-  }
+  // 文件查看器以覆盖层形式叠加在文件列表之上：文件列表（含目录展开状态、选中态等）
+  // 始终保持挂载，仅在查看文件时通过 display 隐藏，避免关闭查看器后目录树被重置为折叠。
+  const showOverlay = Boolean(selectedFile) || contentMode === 'url'
 
   const topFr = 1 - referencedFilesHeight
   const bottomFr = referencedFilesHeight
 
   return (
-    <div
-      className="detail-panel-split"
-      style={{
-        gridTemplateRows: `minmax(0, ${topFr}fr) var(--detail-resize-handle-height) minmax(0, ${bottomFr}fr) var(--remote-status-bar-height)`
-      }}
-    >
+    <>
+      <div
+        className="detail-panel-split"
+        style={{
+          display: showOverlay ? 'none' : 'grid',
+          gridTemplateRows: `minmax(0, ${topFr}fr) var(--detail-resize-handle-height) minmax(0, ${bottomFr}fr) var(--remote-status-bar-height)`
+        }}
+      >
       <div className="detail-panel-top" role="region" aria-label="项目文件">
         <DetailPanelFileList
           workDir={config?.workDir ?? ''}
@@ -64,6 +66,8 @@ export function DetailPanel() {
         <ReferencedFilesPanel sessionId={currentSessionId} />
       </div>
       <RemoteStatusBar />
-    </div>
+      </div>
+      {showOverlay ? <FileOverlay /> : null}
+    </>
   )
 }
