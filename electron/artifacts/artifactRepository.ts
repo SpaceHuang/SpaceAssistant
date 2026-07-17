@@ -72,6 +72,13 @@ export class ArtifactRepository {
   constructor(private readonly db: AppDatabase) {}
 
   create(input: CreateArtifactInput): ArtifactRecord {
+    if (input.container === 'package' && (input.role === 'supporting' || input.role === 'reference')) {
+      if (!input.packageId) throw new Error('Package supporting/reference artifact requires a package primary')
+      const primary = getDbConnection(this.db)
+        .prepare("SELECT id FROM session_artifacts WHERE id = ? AND session_id = ? AND container = 'package' AND role = 'primary' AND status = 'active'")
+        .get(input.packageId, input.sessionId)
+      if (!primary) throw new Error('Package supporting/reference artifact must reference a same-session package primary')
+    }
     const now = Date.now()
     const record: ArtifactRecord = { ...input, title: input.title ?? '', status: 'active', createdAt: now, updatedAt: now }
     getDbConnection(this.db)

@@ -112,7 +112,8 @@
   - GREEN（2026-07-18）：移动保持 artifactId，旧 path identity 可立即用于新记录；4 条 repository 测试通过。
 - [x] 为 package 关联写 RED 测试：supporting/reference 的 packageId 必须指向同 session 的 package primary。
   - RED（2026-07-18）：repository 尚未校验 package primary，孤立 supporting 记录可被写入。
-- [~] 实现 repository 层 package 关联校验，使测试通过。
+- [x] 实现 repository 层 package 关联校验，使测试通过。
+  - GREEN（2026-07-18）：supporting/reference 必须引用同 session 的 active package primary；5 条 repository 测试通过。
 - [ ] 为 session 删除写 RED 测试：有非终态 operation 时拒绝删除；终态 journal 显式清理后允许删除。
 - [ ] 实现 operation guard 与终态 journal 清理，使删除测试通过。
 - [ ] 实现 repository 的 list、find、create、updatePath、markDeleted、listBySession API，并分别覆盖最小单测。
