@@ -44,7 +44,7 @@
 - [x] 定义 `ArtifactPathProvenance`，使该类型测试通过。
   - GREEN（2026-07-18）：`npm run typecheck:shared` 通过，独立 provenance 联合成员可被 `Extract` 精确筛选。
 - [x] 新增 `typeTests/artifactPathProvenance.typecheck.ts`：合法 `user` 声明必须携带 evidenceId。
-- [~] 在 typecheck fixture 中加入 `@ts-expect-error`：Agent 不能声明 `user-decision` 或 `system-assigned`。
+- [x] 在 typecheck fixture 中加入 `@ts-expect-error`：Agent 不能声明 `user-decision` 或 `system-assigned`。
 - [ ] 在 typecheck fixture 中加入 `@ts-expect-error`：非 user 来源不能携带 provenance ID。
 - [ ] 调整共享 typecheck 配置，确保上述 fixture 被 `npm run typecheck:shared` 编译。
 - [ ] 运行共享 typecheck，确认所有正例通过、所有 `@ts-expect-error` 被消费。
