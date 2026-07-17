@@ -98,7 +98,7 @@
   - GREEN（2026-07-18）：project/package/scratch 三类记录均可写入并读取，专用测试与 shared typecheck 通过。
 - [ ] 为 provenance CHECK 约束写 RED 测试：非法 ID 组合被 SQLite 拒绝。
 - [ ] 实现 CHECK 约束，使非法组合测试通过。
-- [ ] 为 active 路径唯一性写 RED 测试：同 session、同 identity 的两条 active 记录冲突。
+- [~] 为 active 路径唯一性写 RED 测试：同 session、同 identity 的两条 active 记录冲突。
 - [ ] 实现 partial unique index，使冲突测试通过。
 - [ ] 为删除后同路径重建写 RED 测试。
 - [ ] 实现 deleted 状态更新与新记录插入，使重建测试通过。
