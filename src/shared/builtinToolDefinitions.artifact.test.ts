@@ -4,6 +4,8 @@ import { BUILTIN_TOOL_DEFINITIONS } from './builtinToolDefinitions'
 type JsonSchema = {
   properties?: Record<string, JsonSchema>
   enum?: string[]
+  required?: string[]
+  oneOf?: JsonSchema[]
 }
 
 function schemaFor(toolName: 'write_file' | 'edit_file'): JsonSchema {
@@ -19,5 +21,12 @@ describe('artifact write intent schema', () => {
 
     expect(schema.properties?.pathKind).toBeUndefined()
     expect(artifact?.properties?.pathKind?.enum).toEqual(['file', 'directory', 'auto'])
+  })
+
+  it('requires pathEvidenceId when user provenance is declared', () => {
+    const artifact = schemaFor('write_file').properties?.artifact
+    const userBranch = artifact?.oneOf?.find((branch) => branch.properties?.pathSource?.enum?.includes('user'))
+
+    expect(userBranch?.required).toContain('pathEvidenceId')
   })
 })
