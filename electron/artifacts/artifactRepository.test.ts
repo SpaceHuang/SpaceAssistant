@@ -129,4 +129,22 @@ describe('ArtifactRepository', () => {
     expect(repository.list()).toHaveLength(1)
     expect(repository.listBySession(fixture.session.id)).toMatchObject([{ id: 'listed' }])
   })
+
+  it('rejects invalid provenance ID combinations at the SQLite boundary', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+
+    expect(() => repository.create({
+      id: 'invalid-user',
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      container: 'project',
+      role: 'primary',
+      canonicalPath: 'src/a.ts',
+      pathIdentityKey: 'src/a.ts',
+      pathSource: 'user'
+    } as never)).toThrow(/CHECK constraint failed/)
+  })
 })
