@@ -1044,7 +1044,8 @@ async function runToolChatSessionInner(
             workDir,
             sessionId,
             workspaceLayout,
-            writeDirChoice: { dir: base }
+            writeDirChoice: { dir: base },
+            wikiConfig
           })
           if (redirectOutcome.reject) {
             const rejectReason = redirectOutcome.rejectReason ?? '路径规范校验失败'
@@ -1068,6 +1069,13 @@ async function runToolChatSessionInner(
           }
           if (redirectOutcome.redirected && redirectOutcome.newPath) {
             inputObj.path = redirectOutcome.newPath
+            // 回写重定向后的路径到渲染进程的工具调用记录，否则右侧「引用文件」入口仍指向原始路径、点击无法打开
+            safeWebContentsSend(sender, 'tool:redirect', {
+              requestId,
+              toolUseId,
+              originalPath: redirectOutcome.originalPath ?? '',
+              newPath: redirectOutcome.newPath
+            })
             workspaceRedirectNote = `[目录规范] 路径已从 ${redirectOutcome.originalPath} 重定向到 ${redirectOutcome.newPath}（依据扩展名→子目录映射）。`
           }
         }

@@ -1,7 +1,8 @@
 import path from 'path'
 import fs from 'fs/promises'
 import { resolveSafePath, resolveSafePathReal, normalizeRelPathInput } from '../pathSecurity'
-import type { WorkspaceLayoutConfig } from '../../src/shared/domainTypes'
+import { classifyWikiPath } from '../wiki/wikiPaths'
+import type { WikiConfig, WorkspaceLayoutConfig } from '../../src/shared/domainTypes'
 
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i
 
@@ -21,6 +22,8 @@ export interface RedirectArgs {
   sessionId: string
   workspaceLayout: WorkspaceLayoutConfig
   writeDirChoice: { dir: string } | null
+  /** llm-wiki 有自己的路径规范（raw/ 只读、wiki/ 由 LLM 维护），命中时跳过目录规范重定向 */
+  wikiConfig?: WikiConfig
 }
 
 function sanitizeBasename(basename: string): string | null {
@@ -74,13 +77,21 @@ export function resolveWriteDirBase(
  * 调用前须保证 writeDirChoice 非空（writeDirConfirmEnabled=false 时由调用方填 workDir）。
  */
 export async function applyWorkspaceLayoutRedirect(args: RedirectArgs): Promise<RedirectOutcome> {
-  const { toolName, input, workDir, workspaceLayout, writeDirChoice } = args
+  const { toolName, input, workDir, workspaceLayout, writeDirChoice, wikiConfig } = args
   if (!workspaceLayout.enabled) return { redirected: false }
   if (toolName !== 'write_file') return { redirected: false }
   if (!writeDirChoice) return { redirected: false }
 
   const rawPath = typeof input.path === 'string' ? input.path : ''
   if (!rawPath.trim()) return { redirected: false }
+
+  // llm-wiki 有自己的路径规范（raw/ 只读、wiki/ 由 LLM 维护），不应被目录规范挪动
+  if (wikiConfig) {
+    const normForWiki = normalizeRelPathInput(rawPath).replace(/^\.\//, '')
+    if (classifyWikiPath(workDir, wikiConfig, normForWiki) !== 'other') {
+      return { redirected: false }
+    }
+  }
 
   let existingAbs = ''
   try {

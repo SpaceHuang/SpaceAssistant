@@ -117,6 +117,25 @@ export function createToolChatController(args: {
     flush()
   }
 
+  // 目录规范把 write_file 路径重定向后，主进程回写最终路径，避免引用文件入口指向原始路径
+  const onRedirect = (d: {
+    requestId: string
+    toolUseId: string
+    originalPath: string
+    newPath: string
+  }) => {
+    if (d.requestId !== getRequestId()) return
+    const i = records.findIndex((t) => t.id === d.toolUseId)
+    if (i < 0) return
+    const prev = records[i]!
+    const prevInput = (prev.input ?? {}) as Record<string, unknown>
+    records[i] = {
+      ...prev,
+      input: { ...prevInput, path: d.newPath }
+    }
+    flush()
+  }
+
   const onConfirmReq = (d: {
     requestId: string
     toolUseId: string
@@ -217,6 +236,7 @@ export function createToolChatController(args: {
 
   const subscribe = () => {
     unsubs.push(window.api.toolOnUse(onUse))
+    unsubs.push(window.api.toolOnRedirect(onRedirect))
     unsubs.push(window.api.toolOnConfirmRequest(onConfirmReq))
     unsubs.push(window.api.toolOnProgress(onProgress))
     unsubs.push(window.api.toolOnResult(onResult))

@@ -3,7 +3,7 @@ import path from 'path'
 import fs from 'fs/promises'
 import os from 'os'
 import { applyWorkspaceLayoutRedirect, resolveWriteDirBase } from './redirect'
-import type { WorkspaceLayoutConfig } from '../../src/shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG, type WikiConfig, type WorkspaceLayoutConfig } from '../../src/shared/domainTypes'
 
 const ENABLED: WorkspaceLayoutConfig = {
   enabled: true,
@@ -184,6 +184,72 @@ describe('applyWorkspaceLayoutRedirect', () => {
       })
       expect(out.redirected).toBe(false)
       expect(out.reason).toBeUndefined()
+    })
+  })
+
+  it('bypasses llm-wiki wiki/ paths (own layout)', async () => {
+    await withTempWorkDir(async (workDir) => {
+      const wiki: WikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+      const out = await applyWorkspaceLayoutRedirect({
+        toolName: 'write_file',
+        input: { path: 'llm-wiki/wiki/entities/foo.md', content: '' },
+        workDir,
+        sessionId: 's1',
+        workspaceLayout: ENABLED,
+        writeDirChoice: { dir: workDir },
+        wikiConfig: wiki
+      })
+      expect(out.redirected).toBe(false)
+    })
+  })
+
+  it('bypasses llm-wiki raw/ paths (own layout)', async () => {
+    await withTempWorkDir(async (workDir) => {
+      const wiki: WikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+      const out = await applyWorkspaceLayoutRedirect({
+        toolName: 'write_file',
+        input: { path: 'llm-wiki/raw/notes.md', content: '' },
+        workDir,
+        sessionId: 's1',
+        workspaceLayout: ENABLED,
+        writeDirChoice: { dir: workDir },
+        wikiConfig: wiki
+      })
+      expect(out.redirected).toBe(false)
+    })
+  })
+
+  it('still redirects non-wiki py file when wiki enabled', async () => {
+    await withTempWorkDir(async (workDir) => {
+      const wiki: WikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+      const out = await applyWorkspaceLayoutRedirect({
+        toolName: 'write_file',
+        input: { path: 'foo.py', content: '' },
+        workDir,
+        sessionId: 's1',
+        workspaceLayout: ENABLED,
+        writeDirChoice: { dir: workDir },
+        wikiConfig: wiki
+      })
+      expect(out.redirected).toBe(true)
+      expect(out.newPath).toBe(path.join('Script', 'foo.py').replace(/\\/g, '/'))
+    })
+  })
+
+  it('still redirects wiki-rooted md when wiki disabled', async () => {
+    await withTempWorkDir(async (workDir) => {
+      const wiki: WikiConfig = { ...DEFAULT_WIKI_CONFIG, enabled: false }
+      const out = await applyWorkspaceLayoutRedirect({
+        toolName: 'write_file',
+        input: { path: 'llm-wiki/wiki/foo.md', content: '' },
+        workDir,
+        sessionId: 's1',
+        workspaceLayout: ENABLED,
+        writeDirChoice: { dir: workDir },
+        wikiConfig: wiki
+      })
+      expect(out.redirected).toBe(true)
+      expect(out.newPath).toBe(path.join('Docs', 'foo.md').replace(/\\/g, '/'))
     })
   })
 })

@@ -14,6 +14,7 @@ type ToolCbMap = {
     shellSecurityHints?: { canTrust?: boolean; requiresRiskAck: boolean; outsideWorkDirRisk: boolean }
     autoApproveFallback?: { reason: string; reasonCode: string }
   }) => void
+  onRedirect?: (d: { requestId: string; toolUseId: string; originalPath: string; newPath: string }) => void
 }
 
 function installApiMock(handlers: ToolCbMap) {
@@ -21,6 +22,10 @@ function installApiMock(handlers: ToolCbMap) {
     ...(window.api ?? {}),
     toolOnUse: (cb) => {
       handlers.onUse = cb
+      return () => {}
+    },
+    toolOnRedirect: (cb) => {
+      handlers.onRedirect = cb
       return () => {}
     },
     toolOnConfirmRequest: (cb) => {
@@ -38,6 +43,7 @@ describe('chatToolSessionService onConfirmReq', () => {
   beforeEach(() => {
     handlers.onUse = undefined
     handlers.onConfirm = undefined
+    handlers.onRedirect = undefined
     installApiMock(handlers)
   })
 
@@ -99,6 +105,60 @@ describe('chatToolSessionService onConfirmReq', () => {
       reason: '敏感路径',
       reasonCode: 'sensitive_path'
     })
+    controller.unsubscribe()
+  })
+
+  it('rewrites input.path on tool:redirect', () => {
+    const patches: unknown[] = []
+    const controller = createToolChatController({
+      dispatch: vi.fn(),
+      assistantMessageId: 'msg-3',
+      getRequestId: () => 'req-3',
+      applyAssistantPatch: (patch) => patches.push(patch)
+    })
+    controller.subscribe()
+
+    handlers.onUse?.({
+      requestId: 'req-3',
+      toolUse: { id: 'tool-3', name: 'write_file', input: { path: 'foo.py', content: 'x' } }
+    })
+    handlers.onRedirect?.({
+      requestId: 'req-3',
+      toolUseId: 'tool-3',
+      originalPath: 'foo.py',
+      newPath: 'Script/foo.py'
+    })
+
+    const lastPatch = patches.at(-1) as { toolCalls?: Array<{ input: { path: string } }> }
+    expect(lastPatch.toolCalls?.[0]?.input.path).toBe('Script/foo.py')
+    controller.unsubscribe()
+  })
+
+  it('ignores tool:redirect for mismatched requestId', () => {
+    const patches: unknown[] = []
+    const controller = createToolChatController({
+      dispatch: vi.fn(),
+      assistantMessageId: 'msg-4',
+      getRequestId: () => 'req-4',
+      applyAssistantPatch: (patch) => patches.push(patch)
+    })
+    controller.subscribe()
+
+    handlers.onUse?.({
+      requestId: 'req-4',
+      toolUse: { id: 'tool-4', name: 'write_file', input: { path: 'foo.py', content: 'x' } }
+    })
+    const before = patches.length
+    handlers.onRedirect?.({
+      requestId: 'other-req',
+      toolUseId: 'tool-4',
+      originalPath: 'foo.py',
+      newPath: 'Script/foo.py'
+    })
+
+    expect(patches.length).toBe(before)
+    const lastPatch = patches.at(-1) as { toolCalls?: Array<{ input: { path: string } }> }
+    expect(lastPatch.toolCalls?.[0]?.input.path).toBe('foo.py')
     controller.unsubscribe()
   })
 })

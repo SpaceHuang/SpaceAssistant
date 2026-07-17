@@ -155,6 +155,14 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('tool:use', fn)
     return () => ipcRenderer.removeListener('tool:use', fn)
   },
+  toolOnRedirect: (cb) => {
+    const fn = (
+      _e: unknown,
+      data: { requestId: string; toolUseId: string; originalPath: string; newPath: string }
+    ) => cb(data)
+    ipcRenderer.on('tool:redirect', fn)
+    return () => ipcRenderer.removeListener('tool:redirect', fn)
+  },
   toolOnConfirmRequest: (cb) => {
     const fn = (
       _e: unknown,

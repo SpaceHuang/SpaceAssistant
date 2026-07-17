@@ -336,6 +336,9 @@ export type SpaceAssistantApi = {
   fileWriteDirReset: (payload: { sessionId: string }) => Promise<{ ok: true } | { ok: false; error?: string }>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
   toolOnUse: (cb: (data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void) => () => void
+  toolOnRedirect: (
+    cb: (data: { requestId: string; toolUseId: string; originalPath: string; newPath: string }) => void
+  ) => () => void
   toolOnConfirmRequest: (
     cb: (data: {
       requestId: string
