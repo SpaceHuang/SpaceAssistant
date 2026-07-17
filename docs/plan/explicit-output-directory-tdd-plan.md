@@ -75,7 +75,8 @@
 
 ## 2. 数据库迁移与 ArtifactRepository
 
-- [~] 为新数据库写 RED 测试：启动后 schema 版本为 v2 且三张 artifact 表与索引存在。
+- [x] 为新数据库写 RED 测试：启动后 schema 版本为 v2 且三张 artifact 表与索引存在。
+  - RED（2026-07-18）：新库当前 schema 版本为 v1，专用迁移测试按预期失败。
 - [ ] 为 v1 数据库写 RED 测试：启动后在一个升级流程中创建 artifact 表并升级到 v2。
 - [ ] 为重复启动写 RED 测试：第二次启动不重复执行 migration 且版本仍为 v2。
 - [ ] 为 migration 失败写 RED 测试：故意失败时 DDL 与 schema_version 一起回滚。
