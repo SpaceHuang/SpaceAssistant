@@ -50,4 +50,11 @@ describe('artifact write intent schema', () => {
       ['pathDecisionId']
     ])
   })
+
+  it('uses the same artifact provenance contract for edit_file', () => {
+    const write = schemaFor('write_file').properties?.artifact
+    const edit = schemaFor('edit_file').properties?.artifact
+
+    expect(edit).toEqual(write)
+  })
 })
