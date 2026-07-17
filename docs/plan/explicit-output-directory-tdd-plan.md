@@ -22,7 +22,7 @@
   - 基线（2026-07-18）：通过，实际执行 `tsc -p tsconfig.renderer.gate.json --noEmit`。
 - [x] 运行 `npm run typecheck:renderer` 并记录基线结果。
   - 基线（2026-07-18）：通过，`tsc -p tsconfig.renderer.json --noEmit` 无诊断。
-- [ ] 新建 artifact 测试辅助模块，提供临时 workDir、session、profile 和 SQLite 数据库工厂。
+- [~] 新建 artifact 测试辅助模块，提供临时 workDir、session、profile 和 SQLite 数据库工厂。
 - [ ] 为测试辅助模块写一条测试：工厂创建的 workDir 与数据库在 teardown 后均不存在。
 - [ ] 实现测试辅助模块，使该测试通过。
 - [ ] 新建 `electron/artifacts/` 目录并添加仅导出空公共类型的入口文件。
