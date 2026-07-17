@@ -6,6 +6,7 @@ type JsonSchema = {
   enum?: string[]
   required?: string[]
   oneOf?: JsonSchema[]
+  not?: JsonSchema
 }
 
 function schemaFor(toolName: 'write_file' | 'edit_file'): JsonSchema {
@@ -35,5 +36,14 @@ describe('artifact write intent schema', () => {
     const allowedSources = artifact?.oneOf?.flatMap((branch) => branch.properties?.pathSource?.enum ?? [])
 
     expect(allowedSources).toEqual(['user', 'project-convention', 'agent-default'])
+  })
+
+  it('forbids provenance IDs for non-user sources', () => {
+    const artifact = schemaFor('write_file').properties?.artifact
+    const conventionBranch = artifact?.oneOf?.find((branch) =>
+      branch.properties?.pathSource?.enum?.includes('project-convention')
+    )
+
+    expect(conventionBranch?.not?.required).toEqual(['pathEvidenceId'])
   })
 })
