@@ -96,7 +96,7 @@
   - 已在 v1→v2 单事务 migration 中创建，并由新库 bootstrap 测试覆盖。
 - [x] 定义数据库行类型与领域 `ArtifactRecord` 映射，使保存读取测试通过。
   - GREEN（2026-07-18）：project/package/scratch 三类记录均可写入并读取，专用测试与 shared typecheck 通过。
-- [ ] 为 provenance CHECK 约束写 RED 测试：非法 ID 组合被 SQLite 拒绝。
+- [~] 为 provenance CHECK 约束写 RED 测试：非法 ID 组合被 SQLite 拒绝。
 - [ ] 实现 CHECK 约束，使非法组合测试通过。
 - [x] 为 active 路径唯一性写 RED 测试：同 session、同 identity 的两条 active 记录冲突。
   - 验收（2026-07-18）：重复 active identity 被 SQLite `idx_artifacts_active_path` 拒绝。
