@@ -47,7 +47,13 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对于工作目录的文件路径' },
-        content: { type: 'string', description: '要写入的完整文件内容' }
+        content: { type: 'string', description: '要写入的完整文件内容' },
+        artifact: {
+          type: 'object',
+          properties: {
+            pathKind: { type: 'string', enum: ['file', 'directory', 'auto'] }
+          }
+        }
       },
       required: ['path', 'content']
     }

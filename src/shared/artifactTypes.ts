@@ -23,3 +23,18 @@ export type DeclaredArtifactPathProvenance = Extract<
   ArtifactPathProvenance,
   { pathSource: 'user' | 'project-convention' | 'agent-default' }
 >
+
+export interface ArtifactWriteIntentBase {
+  container: ArtifactContainer
+  role: ArtifactRole
+  artifactId?: string
+  packageId?: string
+  title?: string
+  stage?: PrimaryStage
+  requestedPath?: string
+  pathKind?: 'file' | 'directory' | 'auto'
+  materialKind?: 'query' | 'script' | 'note' | 'data' | 'other'
+  temporaryReason?: string
+}
+
+export type ArtifactWriteIntent = ArtifactWriteIntentBase & DeclaredArtifactPathProvenance
