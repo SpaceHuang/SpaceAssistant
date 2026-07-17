@@ -23,7 +23,8 @@
 - [x] 运行 `npm run typecheck:renderer` 并记录基线结果。
   - 基线（2026-07-18）：通过，`tsc -p tsconfig.renderer.json --noEmit` 无诊断。
 - [x] 新建 artifact 测试辅助模块，提供临时 workDir、session、profile 和 SQLite 数据库工厂。
-- [~] 为测试辅助模块写一条测试：工厂创建的 workDir 与数据库在 teardown 后均不存在。
+- [x] 为测试辅助模块写一条测试：工厂创建的 workDir 与数据库在 teardown 后均不存在。
+  - RED（2026-07-18）：`npx vitest run electron/artifacts/testHelpers.test.ts` 按预期失败，报错 `Artifact test fixture is not implemented`。
 - [ ] 实现测试辅助模块，使该测试通过。
 - [ ] 新建 `electron/artifacts/` 目录并添加仅导出空公共类型的入口文件。
 - [ ] 为入口文件写编译测试，断言共享层可导入该入口而不引入 Electron renderer 依赖。
