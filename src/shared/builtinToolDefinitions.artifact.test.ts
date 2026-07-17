@@ -1,0 +1,23 @@
+import { describe, expect, it } from 'vitest'
+import { BUILTIN_TOOL_DEFINITIONS } from './builtinToolDefinitions'
+
+type JsonSchema = {
+  properties?: Record<string, JsonSchema>
+  enum?: string[]
+}
+
+function schemaFor(toolName: 'write_file' | 'edit_file'): JsonSchema {
+  const tool = BUILTIN_TOOL_DEFINITIONS.find((candidate) => candidate.name === toolName)
+  if (!tool) throw new Error(`Missing ${toolName} schema`)
+  return tool.input_schema as JsonSchema
+}
+
+describe('artifact write intent schema', () => {
+  it('allows pathKind only inside write_file artifact metadata', () => {
+    const schema = schemaFor('write_file')
+    const artifact = schema.properties?.artifact
+
+    expect(schema.properties?.pathKind).toBeUndefined()
+    expect(artifact?.properties?.pathKind?.enum).toEqual(['file', 'directory', 'auto'])
+  })
+})
