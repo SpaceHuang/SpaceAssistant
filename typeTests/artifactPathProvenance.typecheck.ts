@@ -15,3 +15,9 @@ export const rejectedUserDecision: DeclaredArtifactPathProvenance = {
 export const rejectedSystemAssigned: DeclaredArtifactPathProvenance = {
   pathSource: 'system-assigned'
 }
+
+// @ts-expect-error Only user provenance can carry an evidence ID.
+export const rejectedNonUserEvidence: DeclaredArtifactPathProvenance = {
+  pathSource: 'project-convention',
+  pathEvidenceId: 'evidence-2'
+}
