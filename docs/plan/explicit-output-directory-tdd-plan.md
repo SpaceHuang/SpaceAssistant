@@ -39,7 +39,8 @@
   - RED（2026-07-18）：`npm run typecheck:shared` 按预期失败，`artifactTypes` 尚不存在。
 - [x] 定义并导出 `ArtifactContainer`、`ArtifactRole`、`PrimaryStage` 与 `ArtifactPathSource`，使类型测试通过。
   - GREEN（2026-07-18）：`npm run typecheck:shared` 通过。
-- [~] 新增类型测试：`ArtifactPathProvenance` 的每种 pathSource 是独立联合成员。
+- [x] 新增类型测试：`ArtifactPathProvenance` 的每种 pathSource 是独立联合成员。
+  - RED（2026-07-18）：`npm run typecheck:shared` 按预期失败，尚未导出 `ArtifactPathProvenance`。
 - [ ] 定义 `ArtifactPathProvenance`，使该类型测试通过。
 - [ ] 新增 `typeTests/artifactPathProvenance.typecheck.ts`：合法 `user` 声明必须携带 evidenceId。
 - [ ] 在 typecheck fixture 中加入 `@ts-expect-error`：Agent 不能声明 `user-decision` 或 `system-assigned`。
