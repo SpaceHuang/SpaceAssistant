@@ -50,7 +50,7 @@
   - 验收（2026-07-18）：`tsconfig.renderer.gate.json` 已包含 `typeTests/**/*.ts`。
 - [x] 运行共享 typecheck，确认所有正例通过、所有 `@ts-expect-error` 被消费。
   - 验收（2026-07-18）：`npm run typecheck:shared` 通过；正例与所有 `@ts-expect-error` 均参与并通过编译。
-- [ ] 为 `ArtifactWriteIntent` 写 schema 单测：`artifact.pathKind` 是唯一允许的路径类型字段。
+- [~] 为 `ArtifactWriteIntent` 写 schema 单测：`artifact.pathKind` 是唯一允许的路径类型字段。
 - [ ] 定义 `ArtifactWriteIntentBase`、`DeclaredArtifactPathProvenance` 与 `ArtifactWriteIntent`，使单测通过。
 - [ ] 为 write_file schema 写 RED 测试：`pathSource=user` 缺少 `pathEvidenceId` 被拒绝。
 - [ ] 为 write_file schema 写 RED 测试：Agent 提交 `user-decision` 或 `system-assigned` 被拒绝。
