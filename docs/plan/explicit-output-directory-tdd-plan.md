@@ -43,7 +43,7 @@
   - RED（2026-07-18）：`npm run typecheck:shared` 按预期失败，尚未导出 `ArtifactPathProvenance`。
 - [x] 定义 `ArtifactPathProvenance`，使该类型测试通过。
   - GREEN（2026-07-18）：`npm run typecheck:shared` 通过，独立 provenance 联合成员可被 `Extract` 精确筛选。
-- [~] 新增 `typeTests/artifactPathProvenance.typecheck.ts`：合法 `user` 声明必须携带 evidenceId。
+- [x] 新增 `typeTests/artifactPathProvenance.typecheck.ts`：合法 `user` 声明必须携带 evidenceId。
 - [ ] 在 typecheck fixture 中加入 `@ts-expect-error`：Agent 不能声明 `user-decision` 或 `system-assigned`。
 - [ ] 在 typecheck fixture 中加入 `@ts-expect-error`：非 user 来源不能携带 provenance ID。
 - [ ] 调整共享 typecheck 配置，确保上述 fixture 被 `npm run typecheck:shared` 编译。
