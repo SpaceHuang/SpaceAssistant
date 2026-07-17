@@ -46,10 +46,6 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-      # windows-latest 自 2026-06 起使用 VS 2026（18.x），需 node-gyp >= 12.1.0（npm >= 11.6.3）才能识别
-      - name: Upgrade npm for VS 2026 support
-        if: runner.os == 'Windows'
-        run: npm install -g npm@latest
       - run: npm ci
       - run: npm run rebuild:native
       - name: Probe better-sqlite3 under Electron

@@ -136,11 +136,13 @@ async function installElectronFromManifest(arch) {
 
 function buildNodeBinding(arch) {
   // Locked local source build — no npx / no remote prebuild for Node.
+  // 直接调用 devDependencies 中锁定的 node-gyp（>= 12.1.0 支持 VS 2026），
+  // 不经过 npm rebuild：npm 12+ 会因未知 CLI 参数（--build-from-source 等）报 EUNKNOWNCONFIG。
   console.log(`[install-sqlite-bindings] building Node binding from source (arch=${arch})`)
-  execSync(`npm rebuild better-sqlite3 --build-from-source --arch=${arch}`, {
-    cwd: root,
-    stdio: 'inherit',
-    env: { ...process.env, npm_config_build_from_source: 'true' }
+  const nodeGypBin = require.resolve('node-gyp/bin/node-gyp.js')
+  execSync(`"${process.execPath}" "${nodeGypBin}" rebuild --release --arch=${arch}`, {
+    cwd: sqliteDir,
+    stdio: 'inherit'
   })
   const built = path.join(releaseDir, 'better_sqlite3.node')
   if (!fs.existsSync(built)) {

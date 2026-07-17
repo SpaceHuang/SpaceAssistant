@@ -83,6 +83,7 @@
     "electron": "^35.7.5",
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
+    "node-gyp": "^12.4.0",
     "png-to-ico": "^2.1.8",
     "rimraf": "^6.0.1",
     "sharp": "^0.33.5",
