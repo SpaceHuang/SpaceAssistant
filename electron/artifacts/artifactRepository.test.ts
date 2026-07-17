@@ -109,4 +109,24 @@ describe('ArtifactRepository', () => {
       pathSource: 'agent-default'
     })).toThrow(/package primary/)
   })
+
+  it('lists records globally and by session', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+    repository.create({
+      id: 'listed',
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      container: 'scratch',
+      role: 'scratch',
+      canonicalPath: '.spaceassistant/runs/a/log.txt',
+      pathIdentityKey: '.spaceassistant/runs/a/log.txt',
+      pathSource: 'system-assigned'
+    })
+
+    expect(repository.list()).toHaveLength(1)
+    expect(repository.listBySession(fixture.session.id)).toMatchObject([{ id: 'listed' }])
+  })
 })

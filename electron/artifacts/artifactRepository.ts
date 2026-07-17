@@ -107,6 +107,18 @@ export class ArtifactRepository {
     return row ? fromRow(row) : undefined
   }
 
+  list(): ArtifactRecord[] {
+    const rows = getDbConnection(this.db).prepare('SELECT * FROM session_artifacts ORDER BY created_at ASC').all() as ArtifactRow[]
+    return rows.map(fromRow)
+  }
+
+  listBySession(sessionId: string): ArtifactRecord[] {
+    const rows = getDbConnection(this.db)
+      .prepare('SELECT * FROM session_artifacts WHERE session_id = ? ORDER BY created_at ASC')
+      .all(sessionId) as ArtifactRow[]
+    return rows.map(fromRow)
+  }
+
   markDeleted(id: string): void {
     getDbConnection(this.db)
       .prepare("UPDATE session_artifacts SET status = 'deleted', updated_at = ? WHERE id = ? AND status = 'active'")
