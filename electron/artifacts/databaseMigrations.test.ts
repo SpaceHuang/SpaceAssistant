@@ -57,4 +57,30 @@ describe('artifact database migrations', () => {
     ).toBeTruthy()
     db.close()
   })
+
+  it('keeps v2 and does not duplicate indexes on a repeated startup', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-artifact-repeat-'))
+    dirs.push(dir)
+    const dbPath = path.join(dir, 'test.db')
+    openSqliteDatabase(dbPath).close()
+    const repeated = openSqliteDatabase(dbPath)
+    const conn = getDbConnection(repeated)
+
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('2')
+    expect(
+      (conn.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_artifacts_active_path'").get() as { count: number }).count
+    ).toBe(1)
+    repeated.close()
+  })
+
+  it('rejects a database created by a newer application version', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-artifact-newer-'))
+    dirs.push(dir)
+    const dbPath = path.join(dir, 'test.db')
+    const older = openSqliteDatabase(dbPath)
+    getDbConnection(older).prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run('3', SCHEMA_META_KEYS.schemaVersion)
+    older.close()
+
+    expect(() => openSqliteDatabase(dbPath)).toThrow(/请升级应用/)
+  })
 })

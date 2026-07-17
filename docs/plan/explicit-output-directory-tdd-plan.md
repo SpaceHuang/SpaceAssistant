@@ -79,9 +79,11 @@
   - RED（2026-07-18）：新库当前 schema 版本为 v1，专用迁移测试按预期失败。
 - [x] 为 v1 数据库写 RED 测试：启动后在一个升级流程中创建 artifact 表并升级到 v2。
   - RED（2026-07-18）：v1 数据库启动后仍为 v1，专用迁移测试按预期失败。
-- [ ] 为重复启动写 RED 测试：第二次启动不重复执行 migration 且版本仍为 v2。
+- [x] 为重复启动写 RED 测试：第二次启动不重复执行 migration 且版本仍为 v2。
+  - 验收（2026-07-18）：重复启动后 schema 仍为 v2，`idx_artifacts_active_path` 恰好一条。
 - [ ] 为 migration 失败写 RED 测试：故意失败时 DDL 与 schema_version 一起回滚。
-- [ ] 为高版本数据库写 RED 测试：应用拒绝打开并给出升级应用错误。
+- [x] 为高版本数据库写 RED 测试：应用拒绝打开并给出升级应用错误。
+  - 验收（2026-07-18）：schema version 3 被拒绝，错误提示要求升级应用。
 - [x] 实现 `schema_meta` 读取、严格版本解析与高版本拒绝，使上述迁移测试通过。
   - 已实现严格数字版本解析与 `DatabaseUpgradeRequiredError`；高版本测试将在迁移边界测试矩阵中覆盖。
 - [x] 实现单 transaction 的 `runMigrations(conn)` 与 v1→v2 migration，使上述迁移测试通过。
