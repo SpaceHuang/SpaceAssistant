@@ -68,7 +68,7 @@
   - GREEN（2026-07-18）：edit_file 复用 write_file 的 artifact provenance/pathKind Schema；5 条专用测试与 shared typecheck 均通过。
 - [x] 为 artifact 专用稳定错误码写测试：路径类型冲突、工作区缺失/漂移、decision 无效/已消费、显式路径未解析均存在。
   - RED（2026-07-18）：artifact 专用错误码尚未定义，专用测试按预期失败。
-- [ ] 在 `src/shared/errorCodes.ts` 定义并导出这些错误码，使测试通过。
+- [~] 在 `src/shared/errorCodes.ts` 定义并导出这些错误码，使测试通过。
 - [ ] 运行 shared 类型与 builtin tool schema 的相关测试。
 
 ## 2. 数据库迁移与 ArtifactRepository
