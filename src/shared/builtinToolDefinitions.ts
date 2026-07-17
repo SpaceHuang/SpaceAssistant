@@ -70,7 +70,8 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         path: { type: 'string', description: '相对于工作目录的文件路径' },
         old_string: { type: 'string', description: '待替换的字符串（必须精确匹配，包括缩进）。空字符串表示创建新文件。' },
         new_string: { type: 'string', description: '替换后的新字符串（需与 old_string 不同）。空字符串表示删除内容。' },
-        replace_all: { type: 'boolean', description: '是否全局替换（替换所有匹配项），默认 false' }
+        replace_all: { type: 'boolean', description: '是否全局替换（替换所有匹配项），默认 false' },
+        artifact: ARTIFACT_WRITE_INTENT_SCHEMA
       },
       required: ['path', 'old_string', 'new_string']
     }
