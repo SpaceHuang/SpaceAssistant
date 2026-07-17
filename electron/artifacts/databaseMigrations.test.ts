@@ -1,9 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { getDbConnection, openSqliteDatabase } from '../database'
 import { getSchemaMeta } from '../database/sqliteStore'
 import { SCHEMA_META_KEYS } from '../database/schema'
 
 describe('artifact database migrations', () => {
+  const dirs: string[] = []
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+  })
+
   it('creates v2 artifact tables and indexes for a new database', () => {
     const db = openSqliteDatabase(':memory:')
     const conn = getDbConnection(db)
@@ -22,6 +31,30 @@ describe('artifact database migrations', () => {
       'idx_artifacts_session_container',
       'idx_artifacts_package'
     ]))
+    db.close()
+  })
+
+  it('upgrades a v1 database to v2 in one startup', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-artifact-v1-'))
+    dirs.push(dir)
+    const dbPath = path.join(dir, 'test.db')
+    const legacy = openSqliteDatabase(dbPath)
+    const legacyConn = getDbConnection(legacy)
+    legacyConn.exec(`
+      DROP TABLE IF EXISTS artifact_references;
+      DROP TABLE IF EXISTS artifact_operations;
+      DROP TABLE IF EXISTS session_artifacts;
+    `)
+    legacyConn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run('1', SCHEMA_META_KEYS.schemaVersion)
+    legacy.close()
+
+    const db = openSqliteDatabase(dbPath)
+    const conn = getDbConnection(db)
+
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('2')
+    expect(
+      conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_artifacts'").get()
+    ).toBeTruthy()
     db.close()
   })
 })
