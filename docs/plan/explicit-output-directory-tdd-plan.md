@@ -35,7 +35,8 @@
 
 ## 1. 共享类型、错误码与工具 Schema
 
-- [~] 新建共享 artifact 类型测试，断言 `ArtifactContainer` 只接受 `project | package | scratch`。
+- [x] 新建共享 artifact 类型测试，断言 `ArtifactContainer` 只接受 `project | package | scratch`。
+  - RED（2026-07-18）：`npm run typecheck:shared` 按预期失败，`artifactTypes` 尚不存在。
 - [ ] 定义并导出 `ArtifactContainer`、`ArtifactRole`、`PrimaryStage` 与 `ArtifactPathSource`，使类型测试通过。
 - [ ] 新增类型测试：`ArtifactPathProvenance` 的每种 pathSource 是独立联合成员。
 - [ ] 定义 `ArtifactPathProvenance`，使该类型测试通过。
