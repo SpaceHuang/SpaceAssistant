@@ -49,4 +49,24 @@ describe('ArtifactRepository', () => {
 
     expect(() => repository.create({ id: 'second', ...base })).toThrow(/UNIQUE constraint failed/)
   })
+
+  it('allows a new artifact after the original path record is marked deleted', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+    const base = {
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      container: 'project' as const,
+      role: 'primary' as const,
+      canonicalPath: 'src/auth.ts',
+      pathIdentityKey: 'src/auth.ts',
+      pathSource: 'agent-default' as const
+    }
+    repository.create({ id: 'deleted', ...base })
+    repository.markDeleted('deleted')
+
+    expect(repository.create({ id: 'replacement', ...base })).toMatchObject({ id: 'replacement', status: 'active' })
+  })
 })

@@ -102,7 +102,8 @@
   - 验收（2026-07-18）：重复 active identity 被 SQLite `idx_artifacts_active_path` 拒绝。
 - [x] 实现 partial unique index，使冲突测试通过。
   - 已在 v2 migration 中创建并由 repository 测试验证。
-- [~] 为删除后同路径重建写 RED 测试。
+- [x] 为删除后同路径重建写 RED 测试。
+  - RED（2026-07-18）：`ArtifactRepository.markDeleted()` 尚不存在，专用测试按预期失败。
 - [ ] 实现 deleted 状态更新与新记录插入，使重建测试通过。
 - [ ] 为移动后原路径可新建写 RED 测试。
 - [ ] 实现同 artifactId 更新 canonical path/identity，使移动测试通过。
