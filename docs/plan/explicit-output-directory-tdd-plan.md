@@ -116,7 +116,7 @@
   - GREEN（2026-07-18）：supporting/reference 必须引用同 session 的 active package primary；5 条 repository 测试通过。
 - [ ] 为 session 删除写 RED 测试：有非终态 operation 时拒绝删除；终态 journal 显式清理后允许删除。
 - [ ] 实现 operation guard 与终态 journal 清理，使删除测试通过。
-- [ ] 实现 repository 的 list、find、create、updatePath、markDeleted、listBySession API，并分别覆盖最小单测。
+- [~] 实现 repository 的 list、find、create、updatePath、markDeleted、listBySession API，并分别覆盖最小单测。
 - [ ] 运行 `databaseMigrations.test.ts`、repository 测试与既有 database 测试。
 
 ## 3. 工作区身份、路径 identity 与安全边界
