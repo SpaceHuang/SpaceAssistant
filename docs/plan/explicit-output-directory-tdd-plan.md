@@ -90,7 +90,7 @@
   - `runMigrations(conn)` 在单一 SQLite transaction 内创建 v2 artifact 表、索引并更新 schema version。
 - [x] 将迁移 runner 接到 SQLite 初始化；保留当前 `CREATE_TABLES_SQL` 仅作新库与结构兜底。
   - GREEN（2026-07-18）：新库与 v1 数据库迁移测试通过，既有 JSON→SQLite 迁移测试同步通过。
-- [ ] 为 `session_artifacts` 写 RED 测试：合法 project、package、scratch 记录可保存和读取。
+- [~] 为 `session_artifacts` 写 RED 测试：合法 project、package、scratch 记录可保存和读取。
 - [ ] 创建 `session_artifacts`、`artifact_references`、`artifact_operations` 表及设计要求的索引。
 - [ ] 定义数据库行类型与领域 `ArtifactRecord` 映射，使保存读取测试通过。
 - [ ] 为 provenance CHECK 约束写 RED 测试：非法 ID 组合被 SQLite 拒绝。
