@@ -16,7 +16,7 @@
 
 - [x] 记录当前 `git status --short`，将既有用户改动列入实施日志，确认后续不覆盖它们。
   - 实施日志（2026-07-18）：基线存在用户未跟踪文件 `docs/develop/explicit-output-directory-candidate-technical-design.md`、`docs/requirement/explicit-output-directory-candidate-requirement.md` 与本计划文件；后续实施保留前两份文档，不覆盖其内容。本计划自首个状态提交起纳入版本控制。
-- [ ] 运行 `npm test -- --runInBand` 的等价现有 Vitest 命令并记录基线结果。
+- [~] 运行 `npm test -- --runInBand` 的等价现有 Vitest 命令并记录基线结果。
 - [ ] 运行 `npm run typecheck:shared` 并记录基线结果。
 - [ ] 运行 `npm run typecheck:renderer` 并记录基线结果。
 - [ ] 新建 artifact 测试辅助模块，提供临时 workDir、session、profile 和 SQLite 数据库工厂。
