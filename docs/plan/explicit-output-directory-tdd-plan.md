@@ -60,7 +60,8 @@
   - RED（2026-07-18）：Schema 尚未限制 Agent 可声明的 provenance 来源，专用测试按预期失败。
 - [x] 为 write_file schema 写 RED 测试：非 user 来源带 evidence/decision ID 被拒绝。
   - RED（2026-07-18）：provenance 分支尚未禁止非 user evidence/decision ID，专用测试按预期失败。
-- [~] 扩展 write_file JSON Schema 的 artifact `oneOf` 分支，使上述 schema 测试通过。
+- [x] 扩展 write_file JSON Schema 的 artifact `oneOf` 分支，使上述 schema 测试通过。
+  - GREEN（2026-07-18）：`user` 强制 evidence ID，Agent 仅可声明 user/project-convention/agent-default，其他来源 ID 被禁止；4 条 Schema 测试与 shared typecheck 均通过。
 - [ ] 为 edit_file schema 写与 write_file 相同的 provenance/`pathKind` 测试。
 - [ ] 扩展 edit_file JSON Schema，使 edit_file 测试通过。
 - [ ] 为 artifact 专用稳定错误码写测试：路径类型冲突、工作区缺失/漂移、decision 无效/已消费、显式路径未解析均存在。

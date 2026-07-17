@@ -7,6 +7,7 @@ type JsonSchema = {
   required?: string[]
   oneOf?: JsonSchema[]
   not?: JsonSchema
+  anyOf?: JsonSchema[]
 }
 
 function schemaFor(toolName: 'write_file' | 'edit_file'): JsonSchema {
@@ -44,6 +45,9 @@ describe('artifact write intent schema', () => {
       branch.properties?.pathSource?.enum?.includes('project-convention')
     )
 
-    expect(conventionBranch?.not?.required).toEqual(['pathEvidenceId'])
+    expect(conventionBranch?.not?.anyOf?.map((schema) => schema.required)).toEqual([
+      ['pathEvidenceId'],
+      ['pathDecisionId']
+    ])
   })
 })

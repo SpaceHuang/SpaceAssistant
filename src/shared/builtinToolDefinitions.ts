@@ -1,3 +1,39 @@
+const ARTIFACT_WRITE_INTENT_SCHEMA = {
+  type: 'object',
+  properties: {
+    container: { type: 'string', enum: ['project', 'package', 'scratch'] },
+    role: { type: 'string', enum: ['primary', 'supporting', 'reference', 'scratch'] },
+    artifactId: { type: 'string' },
+    packageId: { type: 'string' },
+    title: { type: 'string' },
+    stage: { type: 'string', enum: ['working', 'draft', 'final'] },
+    requestedPath: { type: 'string' },
+    pathKind: { type: 'string', enum: ['file', 'directory', 'auto'] },
+    materialKind: { type: 'string', enum: ['query', 'script', 'note', 'data', 'other'] },
+    temporaryReason: { type: 'string' },
+    pathSource: { type: 'string' },
+    pathEvidenceId: { type: 'string' },
+    pathDecisionId: { type: 'string' }
+  },
+  oneOf: [
+    {
+      properties: { pathSource: { enum: ['user'] } },
+      required: ['pathSource', 'pathEvidenceId'],
+      not: { required: ['pathDecisionId'] }
+    },
+    {
+      properties: { pathSource: { enum: ['project-convention'] } },
+      required: ['pathSource'],
+      not: { anyOf: [{ required: ['pathEvidenceId'] }, { required: ['pathDecisionId'] }] }
+    },
+    {
+      properties: { pathSource: { enum: ['agent-default'] } },
+      required: ['pathSource'],
+      not: { anyOf: [{ required: ['pathEvidenceId'] }, { required: ['pathDecisionId'] }] }
+    }
+  ]
+} as const
+
 /** Anthropic tools 定义（与 docs/requirement/tools-requirement.md 对齐） */
 export const BUILTIN_TOOL_DEFINITIONS: Array<{
   name: string
@@ -48,12 +84,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
       properties: {
         path: { type: 'string', description: '相对于工作目录的文件路径' },
         content: { type: 'string', description: '要写入的完整文件内容' },
-        artifact: {
-          type: 'object',
-          properties: {
-            pathKind: { type: 'string', enum: ['file', 'directory', 'auto'] }
-          }
-        }
+        artifact: ARTIFACT_WRITE_INTENT_SCHEMA
       },
       required: ['path', 'content']
     }
