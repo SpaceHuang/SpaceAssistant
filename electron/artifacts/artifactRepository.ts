@@ -105,4 +105,10 @@ export class ArtifactRepository {
       .prepare("UPDATE session_artifacts SET status = 'deleted', updated_at = ? WHERE id = ? AND status = 'active'")
       .run(Date.now(), id)
   }
+
+  updatePath(id: string, canonicalPath: string, pathIdentityKey: string): void {
+    getDbConnection(this.db)
+      .prepare('UPDATE session_artifacts SET canonical_path = ?, path_identity_key = ?, updated_at = ? WHERE id = ? AND status = ?')
+      .run(canonicalPath, pathIdentityKey, Date.now(), id, 'active')
+  }
 }
