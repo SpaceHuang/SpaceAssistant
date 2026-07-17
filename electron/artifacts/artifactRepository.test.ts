@@ -69,4 +69,25 @@ describe('ArtifactRepository', () => {
 
     expect(repository.create({ id: 'replacement', ...base })).toMatchObject({ id: 'replacement', status: 'active' })
   })
+
+  it('keeps artifact identity while moving its canonical path', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+    const base = {
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      container: 'project' as const,
+      role: 'primary' as const,
+      canonicalPath: 'src/auth.ts',
+      pathIdentityKey: 'src/auth.ts',
+      pathSource: 'agent-default' as const
+    }
+    repository.create({ id: 'moved', ...base })
+    repository.updatePath('moved', 'src/security/auth.ts', 'src/security/auth.ts')
+
+    expect(repository.find('moved')).toMatchObject({ canonicalPath: 'src/security/auth.ts' })
+    expect(repository.create({ id: 'old-path', ...base })).toMatchObject({ id: 'old-path' })
+  })
 })

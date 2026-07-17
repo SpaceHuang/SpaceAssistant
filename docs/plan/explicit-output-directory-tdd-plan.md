@@ -106,7 +106,8 @@
   - RED（2026-07-18）：`ArtifactRepository.markDeleted()` 尚不存在，专用测试按预期失败。
 - [x] 实现 deleted 状态更新与新记录插入，使重建测试通过。
   - GREEN（2026-07-18）：标记 deleted 后可使用相同 session/path identity 新建 active artifact，3 条 repository 测试通过。
-- [~] 为移动后原路径可新建写 RED 测试。
+- [x] 为移动后原路径可新建写 RED 测试。
+  - RED（2026-07-18）：`ArtifactRepository.updatePath()` 尚不存在，专用测试按预期失败。
 - [ ] 实现同 artifactId 更新 canonical path/identity，使移动测试通过。
 - [ ] 为 package 关联写 RED 测试：supporting/reference 的 packageId 必须指向同 session 的 package primary。
 - [ ] 实现 repository 层 package 关联校验，使测试通过。
