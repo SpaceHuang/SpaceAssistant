@@ -92,8 +92,9 @@
   - GREEN（2026-07-18）：新库与 v1 数据库迁移测试通过，既有 JSON→SQLite 迁移测试同步通过。
 - [x] 为 `session_artifacts` 写 RED 测试：合法 project、package、scratch 记录可保存和读取。
   - RED（2026-07-18）：`ArtifactRepository` 尚不存在，专用测试按预期失败。
-- [ ] 创建 `session_artifacts`、`artifact_references`、`artifact_operations` 表及设计要求的索引。
-- [ ] 定义数据库行类型与领域 `ArtifactRecord` 映射，使保存读取测试通过。
+- [x] 创建 `session_artifacts`、`artifact_references`、`artifact_operations` 表及设计要求的索引。
+  - 已在 v1→v2 单事务 migration 中创建，并由新库 bootstrap 测试覆盖。
+- [~] 定义数据库行类型与领域 `ArtifactRecord` 映射，使保存读取测试通过。
 - [ ] 为 provenance CHECK 约束写 RED 测试：非法 ID 组合被 SQLite 拒绝。
 - [ ] 实现 CHECK 约束，使非法组合测试通过。
 - [ ] 为 active 路径唯一性写 RED 测试：同 session、同 identity 的两条 active 记录冲突。
