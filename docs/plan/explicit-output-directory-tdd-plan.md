@@ -70,7 +70,8 @@
   - RED（2026-07-18）：artifact 专用错误码尚未定义，专用测试按预期失败。
 - [x] 在 `src/shared/errorCodes.ts` 定义并导出这些错误码，使测试通过。
   - GREEN（2026-07-18）：8 条相关测试及 shared typecheck 均通过。
-- [~] 运行 shared 类型与 builtin tool schema 的相关测试。
+- [x] 运行 shared 类型与 builtin tool schema 的相关测试。
+  - 验收（2026-07-18）：`errorCodes` 与 `builtinToolDefinitions.artifact` 共 8 条测试通过，`npm run typecheck:shared` 通过。
 
 ## 2. 数据库迁移与 ArtifactRepository
 
