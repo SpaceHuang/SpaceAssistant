@@ -99,4 +99,10 @@ export class ArtifactRepository {
     const row = getDbConnection(this.db).prepare('SELECT * FROM session_artifacts WHERE id = ?').get(id) as ArtifactRow | undefined
     return row ? fromRow(row) : undefined
   }
+
+  markDeleted(id: string): void {
+    getDbConnection(this.db)
+      .prepare("UPDATE session_artifacts SET status = 'deleted', updated_at = ? WHERE id = ? AND status = 'active'")
+      .run(Date.now(), id)
+  }
 }
