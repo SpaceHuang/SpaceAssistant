@@ -98,8 +98,10 @@
   - GREEN（2026-07-18）：project/package/scratch 三类记录均可写入并读取，专用测试与 shared typecheck 通过。
 - [ ] 为 provenance CHECK 约束写 RED 测试：非法 ID 组合被 SQLite 拒绝。
 - [ ] 实现 CHECK 约束，使非法组合测试通过。
-- [~] 为 active 路径唯一性写 RED 测试：同 session、同 identity 的两条 active 记录冲突。
-- [ ] 实现 partial unique index，使冲突测试通过。
+- [x] 为 active 路径唯一性写 RED 测试：同 session、同 identity 的两条 active 记录冲突。
+  - 验收（2026-07-18）：重复 active identity 被 SQLite `idx_artifacts_active_path` 拒绝。
+- [x] 实现 partial unique index，使冲突测试通过。
+  - 已在 v2 migration 中创建并由 repository 测试验证。
 - [ ] 为删除后同路径重建写 RED 测试。
 - [ ] 实现 deleted 状态更新与新记录插入，使重建测试通过。
 - [ ] 为移动后原路径可新建写 RED 测试。

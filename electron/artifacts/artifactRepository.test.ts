@@ -30,4 +30,23 @@ describe('ArtifactRepository', () => {
       expect(repository.find(artifact.id)).toMatchObject({ id: artifact.id, container })
     }
   })
+
+  it('rejects a second active artifact with the same session path identity', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+    const base = {
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      container: 'project' as const,
+      role: 'primary' as const,
+      canonicalPath: 'src/auth.ts',
+      pathIdentityKey: 'src/auth.ts',
+      pathSource: 'agent-default' as const
+    }
+    repository.create({ id: 'first', ...base })
+
+    expect(() => repository.create({ id: 'second', ...base })).toThrow(/UNIQUE constraint failed/)
+  })
 })
