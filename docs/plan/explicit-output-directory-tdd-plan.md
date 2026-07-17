@@ -20,7 +20,7 @@
   - 基线（2026-07-18）：`npm test` 在允许本地回环监听的环境中通过，367 个测试文件、2090 条测试全部通过，耗时 144.12 秒。沙箱内首次运行因 `listen EPERM 127.0.0.1` 产生 1 条环境性失败，沙箱外复跑确认非代码失败。
 - [x] 运行 `npm run typecheck:shared` 并记录基线结果。
   - 基线（2026-07-18）：通过，实际执行 `tsc -p tsconfig.renderer.gate.json --noEmit`。
-- [ ] 运行 `npm run typecheck:renderer` 并记录基线结果。
+- [~] 运行 `npm run typecheck:renderer` 并记录基线结果。
 - [ ] 新建 artifact 测试辅助模块，提供临时 workDir、session、profile 和 SQLite 数据库工厂。
 - [ ] 为测试辅助模块写一条测试：工厂创建的 workDir 与数据库在 teardown 后均不存在。
 - [ ] 实现测试辅助模块，使该测试通过。
