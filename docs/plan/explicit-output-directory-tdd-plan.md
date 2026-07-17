@@ -56,7 +56,8 @@
   - GREEN（2026-07-18）：artifact 类型与 write_file 的嵌套 `artifact.pathKind` Schema 已就位；专用单测与 shared typecheck 均通过。
 - [x] 为 write_file schema 写 RED 测试：`pathSource=user` 缺少 `pathEvidenceId` 被拒绝。
   - RED（2026-07-18）：Schema 中尚无 provenance `oneOf` 分支，专用测试按预期失败。
-- [~] 为 write_file schema 写 RED 测试：Agent 提交 `user-decision` 或 `system-assigned` 被拒绝。
+- [x] 为 write_file schema 写 RED 测试：Agent 提交 `user-decision` 或 `system-assigned` 被拒绝。
+  - RED（2026-07-18）：Schema 尚未限制 Agent 可声明的 provenance 来源，专用测试按预期失败。
 - [ ] 为 write_file schema 写 RED 测试：非 user 来源带 evidence/decision ID 被拒绝。
 - [ ] 扩展 write_file JSON Schema 的 artifact `oneOf` 分支，使上述 schema 测试通过。
 - [ ] 为 edit_file schema 写与 write_file 相同的 provenance/`pathKind` 测试。

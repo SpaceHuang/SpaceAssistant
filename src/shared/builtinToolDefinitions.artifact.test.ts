@@ -29,4 +29,11 @@ describe('artifact write intent schema', () => {
 
     expect(userBranch?.required).toContain('pathEvidenceId')
   })
+
+  it('does not expose main-process provenance sources to the agent', () => {
+    const artifact = schemaFor('write_file').properties?.artifact
+    const allowedSources = artifact?.oneOf?.flatMap((branch) => branch.properties?.pathSource?.enum ?? [])
+
+    expect(allowedSources).toEqual(['user', 'project-convention', 'agent-default'])
+  })
 })
