@@ -5,14 +5,15 @@ export const validUserProvenance: DeclaredArtifactPathProvenance = {
   pathEvidenceId: 'evidence-1'
 }
 
-// @ts-expect-error Agent calls cannot claim a main-process decision.
 export const rejectedUserDecision: DeclaredArtifactPathProvenance = {
+  // @ts-expect-error Agent calls cannot claim a main-process decision.
   pathSource: 'user-decision',
+  // @ts-expect-error Agent calls cannot provide a decision ID.
   pathDecisionId: 'decision-1'
 }
 
-// @ts-expect-error Agent calls cannot claim a system-assigned path.
 export const rejectedSystemAssigned: DeclaredArtifactPathProvenance = {
+  // @ts-expect-error Agent calls cannot claim a system-assigned path.
   pathSource: 'system-assigned'
 }
 

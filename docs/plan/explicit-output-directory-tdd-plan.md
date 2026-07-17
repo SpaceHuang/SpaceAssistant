@@ -46,8 +46,10 @@
 - [x] 新增 `typeTests/artifactPathProvenance.typecheck.ts`：合法 `user` 声明必须携带 evidenceId。
 - [x] 在 typecheck fixture 中加入 `@ts-expect-error`：Agent 不能声明 `user-decision` 或 `system-assigned`。
 - [x] 在 typecheck fixture 中加入 `@ts-expect-error`：非 user 来源不能携带 provenance ID。
-- [~] 调整共享 typecheck 配置，确保上述 fixture 被 `npm run typecheck:shared` 编译。
-- [ ] 运行共享 typecheck，确认所有正例通过、所有 `@ts-expect-error` 被消费。
+- [x] 调整共享 typecheck 配置，确保上述 fixture 被 `npm run typecheck:shared` 编译。
+  - 验收（2026-07-18）：`tsconfig.renderer.gate.json` 已包含 `typeTests/**/*.ts`。
+- [x] 运行共享 typecheck，确认所有正例通过、所有 `@ts-expect-error` 被消费。
+  - 验收（2026-07-18）：`npm run typecheck:shared` 通过；正例与所有 `@ts-expect-error` 均参与并通过编译。
 - [ ] 为 `ArtifactWriteIntent` 写 schema 单测：`artifact.pathKind` 是唯一允许的路径类型字段。
 - [ ] 定义 `ArtifactWriteIntentBase`、`DeclaredArtifactPathProvenance` 与 `ArtifactWriteIntent`，使单测通过。
 - [ ] 为 write_file schema 写 RED 测试：`pathSource=user` 缺少 `pathEvidenceId` 被拒绝。
