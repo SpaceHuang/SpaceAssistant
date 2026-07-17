@@ -17,14 +17,14 @@ function msg(role: 'user' | 'assistant', content: MessageParam['content']): Mess
 describe('getTitleSystemPrompt', () => {
   it('T1: zh-CN matches existing Chinese prompt', () => {
     const prompt = getTitleSystemPrompt('zh-CN')
-    expect(prompt).toContain('15个汉字')
+    expect(prompt).toContain('64个汉字')
     expect(prompt).toContain('只输出主题文字')
   })
 
-  it('T2: en-US includes in English and 15 Unicode characters limit', () => {
+  it('T2: en-US includes in English and 64 Unicode characters limit', () => {
     const prompt = getTitleSystemPrompt('en-US')
     expect(prompt).toContain('in English')
-    expect(prompt).toContain('15 Unicode characters')
+    expect(prompt).toContain('64 Unicode characters')
   })
 })
 

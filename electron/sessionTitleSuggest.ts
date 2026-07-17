@@ -6,6 +6,7 @@ import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
 import { buildClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import type { Message, Session } from '../src/shared/domainTypes'
 import type { AppLocale } from '../src/shared/locale'
+import { SESSION_TITLE_MAX_LENGTH } from '../src/shared/sessionDisplay'
 import { updateSession, getSession, getMessages, type AppDatabase } from './database'
 
 export const SESSION_META_TITLE_GENERATED = 'titleGenerated'
@@ -18,13 +19,13 @@ export const TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN = 3
 
 const TITLE_SUGGEST_MAX_ASSISTANT_TURNS = TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN
 const TITLE_SUGGEST_LLM_TIMEOUT_MS = 45_000
-const TITLE_MAX_CHARS = 15
+const TITLE_MAX_CHARS = SESSION_TITLE_MAX_LENGTH
 
-const TITLE_SYSTEM_PROMPT_ZH = `你是一个对话主题提炼助手。请根据以下对话内容，用不超过15个汉字概括本次对话的核心主题。
+const TITLE_SYSTEM_PROMPT_ZH = `你是一个对话主题提炼助手。请根据以下对话内容，用不超过${TITLE_MAX_CHARS}个汉字概括本次对话的核心主题。
 只输出主题文字，不要加任何标点、序号或解释。`
 
 const TITLE_SYSTEM_PROMPT_EN =
-  'Summarize the conversation topic in at most 15 Unicode characters, in English. Output only the title text, no punctuation or explanation.'
+  `Summarize the conversation topic in at most ${TITLE_MAX_CHARS} Unicode characters, in English. Output only the title text, no punctuation or explanation.`
 
 const inFlightSessionIds = new Set<string>()
 
