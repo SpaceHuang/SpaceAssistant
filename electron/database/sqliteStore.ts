@@ -2,7 +2,8 @@ import fs from 'fs'
 import path from 'path'
 import Database from 'better-sqlite3'
 import { createDebouncedDbSave } from '../dbSaveScheduler'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL } from './schema'
+import { runMigrations } from './migrations'
 
 export type AppDatabase = {
   readonly filePath: string
@@ -89,15 +90,7 @@ function configureConnection(conn: Database.Database): void {
 
 function initSchema(conn: Database.Database): void {
   conn.exec(CREATE_TABLES_SQL)
-  const row = conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion) as
-    | { value: string }
-    | undefined
-  if (!row) {
-    conn.prepare('INSERT INTO schema_meta (key, value) VALUES (?, ?)').run(
-      SCHEMA_META_KEYS.schemaVersion,
-      String(DB_SCHEMA_VERSION)
-    )
-  }
+  runMigrations(conn)
 }
 
 function walCheckpoint(conn: Database.Database, truncate = false): void {

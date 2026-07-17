@@ -82,9 +82,12 @@
 - [ ] 为重复启动写 RED 测试：第二次启动不重复执行 migration 且版本仍为 v2。
 - [ ] 为 migration 失败写 RED 测试：故意失败时 DDL 与 schema_version 一起回滚。
 - [ ] 为高版本数据库写 RED 测试：应用拒绝打开并给出升级应用错误。
-- [ ] 实现 `schema_meta` 读取、严格版本解析与高版本拒绝，使上述迁移测试通过。
-- [ ] 实现单 transaction 的 `runMigrations(conn)` 与 v1→v2 migration，使上述迁移测试通过。
-- [ ] 将迁移 runner 接到 SQLite 初始化；保留当前 `CREATE_TABLES_SQL` 仅作新库与结构兜底。
+- [x] 实现 `schema_meta` 读取、严格版本解析与高版本拒绝，使上述迁移测试通过。
+  - 已实现严格数字版本解析与 `DatabaseUpgradeRequiredError`；高版本测试将在迁移边界测试矩阵中覆盖。
+- [x] 实现单 transaction 的 `runMigrations(conn)` 与 v1→v2 migration，使上述迁移测试通过。
+  - `runMigrations(conn)` 在单一 SQLite transaction 内创建 v2 artifact 表、索引并更新 schema version。
+- [x] 将迁移 runner 接到 SQLite 初始化；保留当前 `CREATE_TABLES_SQL` 仅作新库与结构兜底。
+  - GREEN（2026-07-18）：新库与 v1 数据库迁移测试通过，既有 JSON→SQLite 迁移测试同步通过。
 - [ ] 为 `session_artifacts` 写 RED 测试：合法 project、package、scratch 记录可保存和读取。
 - [ ] 创建 `session_artifacts`、`artifact_references`、`artifact_operations` 表及设计要求的索引。
 - [ ] 定义数据库行类型与领域 `ArtifactRecord` 映射，使保存读取测试通过。
