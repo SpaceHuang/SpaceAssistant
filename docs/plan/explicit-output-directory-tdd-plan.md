@@ -58,7 +58,7 @@
   - RED（2026-07-18）：Schema 中尚无 provenance `oneOf` 分支，专用测试按预期失败。
 - [x] 为 write_file schema 写 RED 测试：Agent 提交 `user-decision` 或 `system-assigned` 被拒绝。
   - RED（2026-07-18）：Schema 尚未限制 Agent 可声明的 provenance 来源，专用测试按预期失败。
-- [ ] 为 write_file schema 写 RED 测试：非 user 来源带 evidence/decision ID 被拒绝。
+- [~] 为 write_file schema 写 RED 测试：非 user 来源带 evidence/decision ID 被拒绝。
 - [ ] 扩展 write_file JSON Schema 的 artifact `oneOf` 分支，使上述 schema 测试通过。
 - [ ] 为 edit_file schema 写与 write_file 相同的 provenance/`pathKind` 测试。
 - [ ] 扩展 edit_file JSON Schema，使 edit_file 测试通过。
