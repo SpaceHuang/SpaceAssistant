@@ -90,4 +90,23 @@ describe('ArtifactRepository', () => {
     expect(repository.find('moved')).toMatchObject({ canonicalPath: 'src/security/auth.ts' })
     expect(repository.create({ id: 'old-path', ...base })).toMatchObject({ id: 'old-path' })
   })
+
+  it('requires package supporting artifacts to reference a same-session package primary', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+
+    expect(() => repository.create({
+      id: 'orphan-support',
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      packageId: 'missing-primary',
+      container: 'package',
+      role: 'supporting',
+      canonicalPath: 'report.materials/data.csv',
+      pathIdentityKey: 'report.materials/data.csv',
+      pathSource: 'agent-default'
+    })).toThrow(/package primary/)
+  })
 })

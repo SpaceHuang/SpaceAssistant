@@ -110,7 +110,8 @@
   - RED（2026-07-18）：`ArtifactRepository.updatePath()` 尚不存在，专用测试按预期失败。
 - [x] 实现同 artifactId 更新 canonical path/identity，使移动测试通过。
   - GREEN（2026-07-18）：移动保持 artifactId，旧 path identity 可立即用于新记录；4 条 repository 测试通过。
-- [~] 为 package 关联写 RED 测试：supporting/reference 的 packageId 必须指向同 session 的 package primary。
+- [x] 为 package 关联写 RED 测试：supporting/reference 的 packageId 必须指向同 session 的 package primary。
+  - RED（2026-07-18）：repository 尚未校验 package primary，孤立 supporting 记录可被写入。
 - [ ] 实现 repository 层 package 关联校验，使测试通过。
 - [ ] 为 session 删除写 RED 测试：有非终态 operation 时拒绝删除；终态 journal 显式清理后允许删除。
 - [ ] 实现 operation guard 与终态 journal 清理，使删除测试通过。
