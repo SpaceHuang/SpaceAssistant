@@ -28,8 +28,10 @@
 - [x] 实现测试辅助模块，使该测试通过。
   - GREEN（2026-07-18）：`electron/artifacts/testHelpers.test.ts` 1/1 通过，shared typecheck 同步通过。
 - [x] 新建 `electron/artifacts/` 目录并添加仅导出空公共类型的入口文件。
-- [~] 为入口文件写编译测试，断言共享层可导入该入口而不引入 Electron renderer 依赖。
-- [ ] 实现入口导出，使编译测试通过。
+- [x] 为入口文件写编译测试，断言共享层可导入该入口而不引入 Electron renderer 依赖。
+  - 验收（2026-07-18）：`src/shared/artifactEntrypoint.typecheck.ts` 使用 type-only import，`npm run typecheck:shared` 通过。
+- [x] 实现入口导出，使编译测试通过。
+  - 验收（2026-07-18）：入口仅公开 `ArtifactPublicApi` 空接口；上述共享层编译夹具通过，未引入 renderer 依赖。
 
 ## 1. 共享类型、错误码与工具 Schema
 
