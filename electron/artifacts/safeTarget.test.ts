@@ -25,4 +25,13 @@ describe('resolveArtifactSafeTarget', () => {
       await fs.rm(root, { recursive: true, force: true })
     }
   })
+
+  it('rechecks the workspace identity before resolving a mutation target', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-safe-target-'))
+    try {
+      await expect(resolveArtifactSafeTarget(root, 'report.txt', `${root}-moved`)).rejects.toThrow('ARTIFACT_WORKSPACE_CHANGED')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
 })

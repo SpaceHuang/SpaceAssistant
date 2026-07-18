@@ -156,8 +156,10 @@
   - 验收（2026-07-18）：POSIX symlink 与目录目标均被既有 lstat 安全层拒绝；artifact wrapper 测试 5/5 通过。Windows junction 由相同 reparse/symlink 拒绝路径覆盖，待 Windows 人工验证补入 AC 映射表。
 - [x] 增强 `resolveSafeWriteTarget`（或等价路径安全层），使上述安全测试通过。
   - GREEN（2026-07-18）：artifact wrapper 在委托既有 lstat/symlink 安全层前拒绝 `..`、POSIX/Windows/UNC 绝对路径；4 条测试与 Electron 编译通过。
-- [~] 为实际写入前再次校验 workspace identity 写 RED 测试。
-- [ ] 在 artifact 写入、删除、清理、relocate 的 mutation 前接入二次 strict 校验，使测试通过。
+- [x] 为实际写入前再次校验 workspace identity 写 RED 测试。
+  - RED（2026-07-18）：workspace recheck helper 尚不存在，测试模块无法导入。
+- [~] 在 artifact 写入、删除、清理、relocate 的 mutation 前接入二次 strict 校验，使测试通过。
+  - GREEN（2026-07-18，写入入口）：安全目标解析在生成写入目标前对比 realpath snapshot；删除、清理与 relocate 接入待 resolver mutation 链路建立后完成。
 - [ ] 运行 artifact path security、pathSecurity 既有测试。
 
 ## 4. 用户显式路径证据与路径类型决策
