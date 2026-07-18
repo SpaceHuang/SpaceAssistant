@@ -253,7 +253,7 @@
 
 ## 6. ArtifactResolver：三类容器的纯解析
 
-- [ ] 为 project resolver 写 RED 测试：显式或项目约定 `src/auth.ts` 原样成为 finalPath，不创建重定向目录。
+- [~] 为 project resolver 写 RED 测试：显式或项目约定 `src/auth.ts` 原样成为 finalPath，不创建重定向目录。
 - [ ] 实现 project primary 解析与 project-convention/user provenance，使测试通过。
 - [ ] 为 project resolver 写 RED 测试：既有文件无 artifact 时登记为 project；已有 artifactId 时沿用 canonical path。
 - [ ] 实现 project 的已有文件与 artifactId 分支，使测试通过。
