@@ -56,4 +56,15 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'package', role: 'supporting', title: 'query', pathSource: 'agent-default' }
     })).toEqual(expect.objectContaining({ decision: { kind: 'ownership' } }))
   })
+
+  it('ignores an agent-suggested scratch directory and assigns a safe run path', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      sessionId: 'session-1',
+      intent: { container: 'scratch', role: 'scratch', requestedPath: '../outside/verify.sh', title: 'verify.sh', materialKind: 'script', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({
+      finalPath: '.spaceassistant/runs/session-1/script/verify.sh',
+      provenance: { pathSource: 'system-assigned' }
+    }))
+  })
 })

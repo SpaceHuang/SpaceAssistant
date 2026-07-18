@@ -283,8 +283,10 @@
   - RED（2026-07-18）：初始 resolver 因 requestedPath 缺失直接抛错。
 - [x] 实现无 packageId 拒绝/decision 分支，使测试通过。
   - GREEN（2026-07-18）：supporting/reference 无 packageId 返回 ownership decision，不产生路径或匿名 package；8 条专用测试与 Electron 编译通过。
-- [ ] 为 scratch resolver 写 RED 测试：忽略 Agent 目录建议，仅使用安全文件名并写入 `.spaceassistant/runs/<session>/<kind>/`。
-- [ ] 实现 scratch kind 映射、文件名净化与 system-assigned provenance，使测试通过。
+- [x] 为 scratch resolver 写 RED 测试：忽略 Agent 目录建议，仅使用安全文件名并写入 `.spaceassistant/runs/<session>/<kind>/`。
+  - RED（2026-07-18）：初始 resolver 不支持 scratch container。
+- [x] 实现 scratch kind 映射、文件名净化与 system-assigned provenance，使测试通过。
+  - GREEN（2026-07-18）：materialKind 映射 runs 子目录，basename 过滤后生成系统分配路径；9 条专用测试与 Electron 编译通过。
 - [ ] 为 scratch resolver 写 RED 测试：新同名文件加短 toolUseId 后缀；同 artifactId 保持原路径。
 - [ ] 实现 scratch 冲突命名与持续编辑分支，使测试通过。
 - [ ] 为 resolver 写 RED 测试：首次覆盖无关 artifact 必须产生 overwrite decision。

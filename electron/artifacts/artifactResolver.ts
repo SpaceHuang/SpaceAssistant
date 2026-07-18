@@ -14,7 +14,14 @@ export function resolveArtifactOutput(input: {
   intent: ArtifactWriteIntent
   existingArtifact?: { artifactId: string; canonicalPath: string }
   packagePrimaryPath?: string
+  sessionId?: string
 }): ResolvedArtifactOutput {
+  if (input.intent.container === 'scratch') {
+    if (!input.sessionId) throw new Error('Scratch artifact requires sessionId')
+    const kind = input.intent.materialKind ?? 'other'
+    const finalPath = path.posix.join('.spaceassistant', 'runs', input.sessionId, kind, safeScratchFileName(input.intent.title))
+    return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance: { pathSource: 'system-assigned' } }
+  }
   if (input.intent.container !== 'project' && input.intent.container !== 'package') throw new Error('Artifact resolver branch not implemented for this container')
   const { pathSource, pathEvidenceId } = input.intent
   const provenance = pathSource === 'user'
@@ -57,4 +64,9 @@ function derivePackageMaterialPath(primaryPath: string, title: string | undefine
   const slug = title?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'artifact'
   const extension = materialKind === 'script' ? '.ts' : materialKind === 'query' ? '.sql' : materialKind === 'data' ? '.json' : '.md'
   return path.posix.join(parsed.dir, base, `${slug}${extension}`)
+}
+
+function safeScratchFileName(title?: string): string {
+  const candidate = path.posix.basename(title?.replace(/\\/g, '/') || 'artifact')
+  return candidate.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '') || 'artifact'
 }
