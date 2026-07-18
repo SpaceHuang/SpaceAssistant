@@ -25,4 +25,12 @@ export function appendScratchRunsIgnore(gitignoreContents: string): string {
   if (!isScratchRunsIgnored(updated)) throw new Error('Unable to verify scratch .gitignore rule')
   return updated
 }
+
+export function validateSavedScratchGitPolicy(
+  savedPolicy: 'add-ignore' | 'keep-visible' | undefined,
+  gitignoreContents: string
+): { valid: boolean; savedPolicy?: 'add-ignore' | 'keep-visible' } {
+  if (savedPolicy === 'add-ignore' && !isScratchRunsIgnored(gitignoreContents)) return { valid: false, savedPolicy: undefined }
+  return savedPolicy ? { valid: true, savedPolicy } : { valid: true }
+}
 import path from 'node:path'

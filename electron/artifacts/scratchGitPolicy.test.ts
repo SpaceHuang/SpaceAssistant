@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendScratchRunsIgnore, isScratchRunsIgnored, resolveScratchGitPolicy } from './scratchGitPolicy'
+import { appendScratchRunsIgnore, isScratchRunsIgnored, resolveScratchGitPolicy, validateSavedScratchGitPolicy } from './scratchGitPolicy'
 
 describe('isScratchRunsIgnored', () => {
   it.each(['.spaceassistant/runs/\n', '/.spaceassistant/runs/\n'])('recognizes the exact scratch runs ignore rule: %s', (contents) => {
@@ -20,5 +20,10 @@ describe('isScratchRunsIgnored', () => {
     const updated = appendScratchRunsIgnore('node_modules/\n')
     expect(updated).toBe('node_modules/\n.spaceassistant/runs/\n')
     expect(isScratchRunsIgnored(updated)).toBe(true)
+  })
+
+  it('invalidates a saved add-ignore policy when its external rule disappears', () => {
+    expect(validateSavedScratchGitPolicy('add-ignore', '')).toEqual({ valid: false, savedPolicy: undefined })
+    expect(validateSavedScratchGitPolicy('keep-visible', '')).toEqual({ valid: true, savedPolicy: 'keep-visible' })
   })
 })

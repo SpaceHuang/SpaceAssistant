@@ -322,8 +322,10 @@
   - RED（2026-07-18）：安全更新 helper 尚不存在。
 - [x] 实现安全 `.gitignore` 更新与重检，使测试通过。
   - GREEN（2026-07-18）：仅追加精确规则，已有规则不重复，更新后调用精确 matcher 重检；5 条测试与 Electron 编译通过。
-- [ ] 为 Git policy 写 RED 测试：外部规则失效时清空保存选择并重新询问。
-- [ ] 实现保存选择失效检测，使测试通过。
+- [x] 为 Git policy 写 RED 测试：外部规则失效时清空保存选择并重新询问。
+  - RED（2026-07-18）：已保存 add-ignore 策略没有外部规则复核。
+- [x] 实现保存选择失效检测，使测试通过。
+  - GREEN（2026-07-18）：add-ignore 精确规则消失时返回无保存策略，调用方可重新请求决策；keep-visible 不依赖外部规则；6 条测试与 Electron 编译通过。
 - [x] 为 reference retention 写 RED 测试：普通检索/短摘要不创建文件、artifact 或 Git decision。
   - RED（2026-07-18）：reference retention gate 尚不存在。
 - [x] 保持检索流程不接入 artifact 写入；使测试通过。
