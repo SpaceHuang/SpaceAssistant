@@ -305,8 +305,10 @@
 
 ## 7. Scratch Git 策略与引用资料
 
-- [ ] 为 Git policy 写 RED 测试：已被 `.spaceassistant/runs/` 或 `/.spaceassistant/runs/` 覆盖时不提问。
-- [ ] 实现常用精确 `.gitignore` 规则检查，使测试通过。
+- [x] 为 Git policy 写 RED 测试：已被 `.spaceassistant/runs/` 或 `/.spaceassistant/runs/` 覆盖时不提问。
+  - RED（2026-07-18）：scratch Git policy helper 尚不存在。
+- [x] 实现常用精确 `.gitignore` 规则检查，使测试通过。
+  - GREEN（2026-07-18）：仅识别两种精确 runs 规则，宽泛 `.spaceassistant/` 不会错误消除决策；3 条测试与 Electron 编译通过。
 - [ ] 为 Git policy 写 RED 测试：Git 根在 workDir 外时不修改外部 `.gitignore`，只允许继续或取消。
 - [ ] 实现 Git root 边界检查，使测试通过。
 - [ ] 为 Git policy 写 RED 测试：首次 scratch 创建且未保存选择时请求 add-ignore/keep-visible/cancel。
