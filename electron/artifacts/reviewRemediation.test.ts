@@ -234,4 +234,218 @@ describe('review remediation production wiring', () => {
     write.release()
     getSharedArtifactPathLeaseRegistry().claimDelete(identity).release()
   })
+
+  it('relocates and deletes artifacts registered with relative canonicalPath', async () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const { registerResolvedArtifactWrite } = await import('./writeRegistration')
+    const { relocateArtifact } = await import('./relocateService')
+    const { deleteArtifactFile } = await import('./artifactDeletion')
+    const { artifactPathIdentityForRelative, artifactLeaseKey } = await import('./artifactPathKeys')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+
+    await fs.mkdir(fixture.workDir, { recursive: true })
+    await fs.writeFile(path.join(fixture.workDir, 'draft.md'), 'body')
+    const record = registerResolvedArtifactWrite({
+      repository: new ArtifactRepository(fixture.db),
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workDir: fixture.workDir,
+      intent: {
+        container: 'scratch',
+        role: 'scratch',
+        title: 'draft.md',
+        pathSource: 'system-assigned'
+      },
+      resolved: {
+        finalPath: 'draft.md',
+        canonicalPath: path.join(fixture.workDir, 'draft.md'),
+        provenance: { pathSource: 'system-assigned' }
+      }
+    })
+    expect(record.canonicalPath).toBe('draft.md')
+
+    const relocated = await relocateArtifact(
+      { db: fixture.db, profiles: [fixture.profile], registry: getSharedArtifactPathLeaseRegistry() },
+      { sessionId: fixture.session.id, artifactId: record.id, target: 'reports/final.md', mode: 'move' }
+    )
+    expect(relocated.ok).toBe(true)
+    const after = new ArtifactRepository(fixture.db).find(record.id)
+    expect(after?.canonicalPath).toBe('reports/final.md')
+    await expect(fs.readFile(path.join(fixture.workDir, 'reports/final.md'), 'utf8')).resolves.toBe('body')
+
+    await deleteArtifactFile({
+      registry: getSharedArtifactPathLeaseRegistry(),
+      identity: artifactLeaseKey(after!.workspaceRootReal, after!.pathIdentityKey),
+      targetPath: path.join(fixture.workDir, after!.canonicalPath),
+      workDir: fixture.workDir,
+      expectedWorkspaceRootReal: after!.workspaceRootReal,
+      artifactId: after!.id,
+      repository: new ArtifactRepository(fixture.db)
+    })
+    expect(new ArtifactRepository(fixture.db).find(record.id)?.status).toBe('deleted')
+    expect(artifactPathIdentityForRelative(fixture.workDir, 'reports/final.md')).toBeTruthy()
+  })
+
+  it('rejects relocate while a tool write lease holds the source identity', async () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const { relocateArtifact } = await import('./relocateService')
+    const fs = await import('node:fs/promises')
+    const path = await import('node:path')
+    await fs.writeFile(path.join(fixture.workDir, 'draft.md'), 'body')
+    const artifact = new ArtifactRepository(fixture.db).create({
+      id: 'leased-draft',
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      container: 'scratch',
+      role: 'scratch',
+      title: 'draft',
+      canonicalPath: 'draft.md',
+      pathIdentityKey: (await import('./artifactPathKeys')).artifactPathIdentityForRelative(fixture.workDir, 'draft.md'),
+      pathSource: 'system-assigned'
+    })
+    const write = acquireToolWriteLease(fixture.session.id, 'draft.md', fixture.workDir)
+    const result = await relocateArtifact(
+      { db: fixture.db, profiles: [fixture.profile], registry: getSharedArtifactPathLeaseRegistry() },
+      { sessionId: fixture.session.id, artifactId: artifact.id, target: 'moved.md', mode: 'move' }
+    )
+    write.release()
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatch(/lease/i)
+  })
+
+  it('completes ownership package and project choices through resume', async () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const { resumeArtifactToolWriteAfterDecision } = await import('./toolLoopArtifactFlow')
+    const ownershipArtifact = {
+      container: 'package' as const,
+      role: 'supporting' as const,
+      title: 'notes',
+      pathSource: 'agent-default' as const
+    }
+
+    const prepared = prepareArtifactToolWrite({
+      workDir: fixture.workDir,
+      sessionId: fixture.session.id,
+      requestId: 'own-2',
+      toolUseId: 'tool-own-2',
+      path: '',
+      artifact: ownershipArtifact
+    })
+    expect(prepared.kind).toBe('decision_required')
+    if (prepared.kind !== 'decision_required') return
+    expect(prepared.decisionKind).toBe('ownership')
+
+    const afterPackage = await resumeArtifactToolWriteAfterDecision({
+      workDir: fixture.workDir,
+      sessionId: fixture.session.id,
+      requestId: 'own-2',
+      toolUseId: 'tool-own-2',
+      path: '',
+      decisionId: prepared.decisionId,
+      decisionKind: 'ownership',
+      attempt: prepared.attempt,
+      previousFinalPath: prepared.previousFinalPath,
+      choice: 'package',
+      artifact: ownershipArtifact
+    })
+    expect(afterPackage.kind).toBe('decision_required')
+    if (afterPackage.kind !== 'decision_required') return
+    expect(afterPackage.decisionKind).toBe('output-location')
+
+    const afterLocation = await resumeArtifactToolWriteAfterDecision({
+      workDir: fixture.workDir,
+      sessionId: fixture.session.id,
+      requestId: 'own-2',
+      toolUseId: 'tool-own-2',
+      path: '',
+      decisionId: afterPackage.decisionId,
+      decisionKind: 'output-location',
+      attempt: afterPackage.attempt,
+      previousFinalPath: afterPackage.previousFinalPath,
+      choice: 'change-directory:reports/out',
+      artifact: afterPackage.artifact
+    })
+    expect(afterLocation.kind).toBe('ready')
+    if (afterLocation.kind === 'ready') {
+      expect(afterLocation.prepared.finalPath).toMatch(/^reports\/out\//)
+    }
+
+    const asProject = await resumeArtifactToolWriteAfterDecision({
+      workDir: fixture.workDir,
+      sessionId: fixture.session.id,
+      requestId: 'own-project',
+      toolUseId: 'tool-project',
+      path: '',
+      decisionId: 'dec-project',
+      decisionKind: 'ownership',
+      attempt: 0,
+      previousFinalPath: '',
+      choice: 'project',
+      artifact: ownershipArtifact
+    })
+    expect(asProject.kind).toBe('ready')
+    if (asProject.kind === 'ready') {
+      expect(asProject.prepared.finalPath).toBe('notes.md')
+    }
+  })
+
+  it('consumes user path evidence after overwrite decision reaches ready', async () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const { resumeArtifactToolWriteAfterDecision } = await import('./toolLoopArtifactFlow')
+    const userMessage = '保存为 `occupied.md`'
+    const evidence = extractExplicitPathEvidence(userMessage, { requestId: 'ev-ow' })
+    const consumption = new ArtifactEvidenceConsumption(evidence)
+    const occupied = prepareArtifactToolWrite({
+      workDir: fixture.workDir,
+      sessionId: fixture.session.id,
+      requestId: 'ev-ow',
+      toolUseId: 't-first',
+      path: 'occupied.md',
+      userMessage,
+      evidenceConsumption: consumption,
+      occupiedPaths: ['occupied.md'],
+      artifact: {
+        container: 'project',
+        role: 'primary',
+        requestedPath: 'occupied.md',
+        pathSource: 'user',
+        pathEvidenceId: evidence[0]!.evidenceId
+      }
+    })
+    expect(occupied).toEqual(expect.objectContaining({ kind: 'decision_required' }))
+    expect(consumption.unconsumedOutputEvidence().length).toBeGreaterThan(0)
+
+    if (occupied.kind !== 'decision_required') return
+    const ready = await resumeArtifactToolWriteAfterDecision({
+      workDir: fixture.workDir,
+      sessionId: fixture.session.id,
+      requestId: 'ev-ow',
+      toolUseId: 't-first',
+      path: 'occupied.md',
+      decisionId: occupied.decisionId,
+      decisionKind: 'overwrite',
+      attempt: occupied.attempt,
+      previousFinalPath: occupied.previousFinalPath,
+      choice: 'overwrite',
+      occupiedPaths: ['occupied.md'],
+      userMessage,
+      evidenceConsumption: consumption,
+      artifact: {
+        container: 'project',
+        role: 'primary',
+        requestedPath: 'occupied.md',
+        pathSource: 'user',
+        pathEvidenceId: evidence[0]!.evidenceId
+      }
+    })
+    expect(ready.kind).toBe('ready')
+    expect(consumption.unconsumedOutputEvidence()).toEqual([])
+  })
 })

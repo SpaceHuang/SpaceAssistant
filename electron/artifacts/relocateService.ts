@@ -10,6 +10,7 @@ import { assertRelocateWorkspaceReady } from './relocateMutationGuard'
 import { resolveArtifactSafeTarget } from './safeTarget'
 import { artifactPathIdentity } from './pathIdentity'
 import type { ArtifactPathLeaseRegistry } from './pathLeaseRegistry'
+import { artifactLeaseKey, toAbsoluteArtifactPath, toArtifactRelativePath } from './artifactPathKeys'
 import {
   atomicReplaceWithTemp,
   buildControlledBackupPath,
@@ -78,7 +79,7 @@ async function prepareRelocateContext(
   if (!workspace.ok) return { ok: false, error: workspace.errorCode }
 
   const targetSafe = await resolveArtifactSafeTarget(workspace.workDir, request.target, artifact.workspaceRootReal)
-  const sourcePath = artifact.canonicalPath
+  const sourcePath = toAbsoluteArtifactPath(workspace.workDir, artifact.canonicalPath)
   const targetPath = targetSafe.targetPath
   if (sourcePath === targetPath) return { ok: false, error: 'Relocate target matches source path' }
 
@@ -281,24 +282,33 @@ export async function relocateArtifact(deps: RelocateServiceDeps, request: Reloc
   const backupPath = targetExisted ? buildControlledBackupPath(targetPath, operationId) : undefined
   const tempPath = moveMode === 'same-device-move' ? undefined : buildControlledTempPath(targetPath, operationId)
 
-  const operation = operations.createPrepared({
-    id: operationId,
-    artifactId: artifact.id,
-    moveMode,
-    sourcePath,
-    targetPath,
-    ...(tempPath ? { tempPath } : {}),
-    targetExisted,
-    ...(backupPath ? { targetBackupPath: backupPath } : {}),
-    ...(targetOriginal
-      ? { targetOriginalIdentity: targetOriginal.identity, targetOriginalSize: targetOriginal.size, targetOriginalDigest: targetOriginal.digest }
-      : {}),
-    expectedSize: sourceMeta.size,
-    expectedDigest: sourceMeta.digest
-  })
-
-  const lease = deps.registry.acquireWrites([sourceIdentityKey, targetIdentityKey])
+  let lease
   try {
+    lease = deps.registry.acquireWrites([
+      artifactLeaseKey(artifact.workspaceRootReal, sourceIdentityKey),
+      artifactLeaseKey(artifact.workspaceRootReal, targetIdentityKey)
+    ])
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+
+  try {
+    const operation = operations.createPrepared({
+      id: operationId,
+      artifactId: artifact.id,
+      moveMode,
+      sourcePath,
+      targetPath,
+      ...(tempPath ? { tempPath } : {}),
+      targetExisted,
+      ...(backupPath ? { targetBackupPath: backupPath } : {}),
+      ...(targetOriginal
+        ? { targetOriginalIdentity: targetOriginal.identity, targetOriginalSize: targetOriginal.size, targetOriginalDigest: targetOriginal.digest }
+        : {}),
+      expectedSize: sourceMeta.size,
+      expectedDigest: sourceMeta.digest
+    })
+
     await assertRelocateWorkspaceReady({ workDir: prepared.workspace.workDir, expectedWorkspaceRootReal: artifact.workspaceRootReal })
 
     let current = operations.find(operation.id)!
@@ -336,12 +346,13 @@ export async function relocateArtifact(deps: RelocateServiceDeps, request: Reloc
 
     current = operations.find(operation.id)!
     const newArtifactId = request.mode === 'copy' ? randomUUID() : artifact.id
+    const relativeTarget = toArtifactRelativePath(prepared.workspace.workDir, targetPath)
     try {
       operations.commitArtifactAndPhase({
         operationId: operation.id,
         phase: postCommitPhase(moveMode, request.mode),
         artifactId: artifact.id,
-        canonicalPath: targetPath,
+        canonicalPath: relativeTarget,
         pathIdentityKey: targetIdentityKey,
         ...(request.mode === 'copy'
           ? {
@@ -356,7 +367,7 @@ export async function relocateArtifact(deps: RelocateServiceDeps, request: Reloc
                   role: artifact.role,
                   title: artifact.title,
                   ...(artifact.stage ? { stage: artifact.stage } : {}),
-                  canonicalPath: targetPath,
+                  canonicalPath: relativeTarget,
                   pathIdentityKey: targetIdentityKey,
                   requestedPath: request.target,
                   pathSource: artifact.pathSource,

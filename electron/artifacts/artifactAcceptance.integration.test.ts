@@ -296,7 +296,7 @@ describe('artifact acceptance integration', () => {
       expect(result.prepared.finalPath).toBe('reports/final.materials/analysis.sql')
     })
 
-    it('AC-10: missing package location requests output-location decision with completable options', () => {
+    it('AC-10: missing package location requests output-location and resume completes write', async () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
       const result = prepareArtifactToolWrite({
@@ -317,6 +317,31 @@ describe('artifact acceptance integration', () => {
       if (result.kind !== 'decision_required') return
       expect(result.decisionKind).toBe('output-location')
       expect(buildArtifactDecisionOptions('output-location').map((o) => o.key)).toContain('custom')
+
+      const { resumeArtifactToolWriteAfterDecision } = await import('./toolLoopArtifactFlow')
+      const resumed = await resumeArtifactToolWriteAfterDecision({
+        workDir: fixture.workDir,
+        sessionId: fixture.session.id,
+        requestId: 'ac-10',
+        toolUseId: 'tool-ac-10',
+        path: '',
+        decisionId: result.decisionId,
+        decisionKind: 'output-location',
+        attempt: result.attempt,
+        previousFinalPath: result.previousFinalPath,
+        choice: 'change-directory:reports/ac10',
+        artifact: {
+          container: 'package',
+          role: 'primary',
+          packageId: 'pkg-new',
+          title: 'Report',
+          pathSource: 'agent-default'
+        }
+      })
+      expect(resumed.kind).toBe('ready')
+      if (resumed.kind === 'ready') {
+        expect(resumed.prepared.finalPath).toBe('reports/ac10/report.md')
+      }
     })
 
     it('AC-41: ordinary retrieval does not retain reference artifacts', () => {

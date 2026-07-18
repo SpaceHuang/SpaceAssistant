@@ -131,7 +131,7 @@ describe('relocateService', () => {
     expect(result.ok).toBe(true)
     await expect(fs.readFile(target, 'utf8')).resolves.toBe('moved-body')
     const updated = new ArtifactRepository(fixture.db).find(artifact.id)
-    expect(updated?.canonicalPath).toBe(target)
+    expect(updated?.canonicalPath).toBe(targetRel)
     const op = getDbConnection(fixture.db).prepare('SELECT phase, target_backup_path FROM artifact_operations WHERE artifact_id = ?').get(artifact.id) as {
       phase: string
       target_backup_path: string

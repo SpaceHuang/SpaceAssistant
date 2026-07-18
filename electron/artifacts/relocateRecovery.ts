@@ -6,6 +6,7 @@ import { resolveArtifactMutationWorkspace } from './artifactMutationGuard'
 import { assertRelocateWorkspaceReady } from './relocateMutationGuard'
 import { artifactPathIdentity } from './pathIdentity'
 import type { ArtifactPathLeaseRegistry } from './pathLeaseRegistry'
+import { artifactLeaseKey, toAbsoluteArtifactPath, toArtifactRelativePath } from './artifactPathKeys'
 import {
   atomicReplaceWithTemp,
   deleteIfIdentityMatches,
@@ -74,7 +75,8 @@ async function recoverPreparedOrBackup(
 async function recoverTargetCommitted(
   operations: RelocateOperationRepository,
   operation: ArtifactOperationRecord,
-  artifactRepo: ArtifactRepository
+  artifactRepo: ArtifactRepository,
+  workDir: string
 ): Promise<void> {
   const artifact = artifactRepo.find(operation.artifactId)
   if (!artifact) {
@@ -82,7 +84,8 @@ async function recoverTargetCommitted(
     return
   }
   const targetIdentity = artifactPathIdentity(operation.targetPath)
-  if (artifact.canonicalPath === operation.targetPath || artifact.pathIdentityKey === targetIdentity) {
+  const artifactAbs = toAbsoluteArtifactPath(workDir, artifact.canonicalPath)
+  if (artifactAbs === operation.targetPath || artifact.pathIdentityKey === targetIdentity) {
     operations.updatePhase(operation.id, operation.moveMode === 'cross-device-move' ? 'source_cleanup_pending' : 'cleanup_pending')
     return
   }
@@ -91,7 +94,7 @@ async function recoverTargetCommitted(
       operationId: operation.id,
       phase: operation.moveMode === 'cross-device-move' ? 'source_cleanup_pending' : 'cleanup_pending',
       artifactId: operation.artifactId,
-      canonicalPath: operation.targetPath,
+      canonicalPath: toArtifactRelativePath(workDir, operation.targetPath),
       pathIdentityKey: targetIdentity
     })
   } catch {
@@ -168,7 +171,10 @@ export async function recoverRelocateOperation(
 
   await assertRelocateWorkspaceReady({ workDir: workspace.workDir, expectedWorkspaceRootReal: artifact.workspaceRootReal })
 
-  const lease = deps.registry.acquireWrites([artifact.pathIdentityKey, artifactPathIdentity(operation.targetPath)])
+  const lease = deps.registry.acquireWrites([
+    artifactLeaseKey(artifact.workspaceRootReal, artifact.pathIdentityKey),
+    artifactLeaseKey(artifact.workspaceRootReal, artifactPathIdentity(operation.targetPath))
+  ])
   try {
     let current = operations.find(operation.id)!
     if (current.phase === 'prepared' || current.phase === 'backup_committed') {
@@ -182,7 +188,7 @@ export async function recoverRelocateOperation(
     }
 
     if (current.phase === 'target_committed') {
-      await recoverTargetCommitted(operations, current, artifactRepo)
+      await recoverTargetCommitted(operations, current, artifactRepo, workspace.workDir)
       current = operations.find(operation.id)!
     }
 

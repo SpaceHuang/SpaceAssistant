@@ -30,7 +30,16 @@ export type PreparedArtifactWrite = {
 
 export type PrepareArtifactWriteResult =
   | { kind: 'ready'; prepared: PreparedArtifactWrite }
-  | { kind: 'decision_required'; decisionId: string; decisionKind: string; attempt: number; groupKey: string; previousFinalPath: string }
+  | {
+      kind: 'decision_required'
+      decisionId: string
+      decisionKind: string
+      attempt: number
+      groupKey: string
+      previousFinalPath: string
+      /** Intent to resume with on the next decision (may already incorporate prior choices). */
+      artifact: ArtifactWriteIntent
+    }
   | { kind: 'error'; message: string }
 
 export type ToolLoopArtifactState = {
@@ -131,7 +140,8 @@ export function prepareArtifactToolWrite(input: {
         decisionKind: resolved.decision.kind,
         attempt: pending.attempt,
         groupKey,
-        previousFinalPath: resolved.finalPath || input.path
+        previousFinalPath: resolved.finalPath || input.path,
+        artifact: input.artifact as ArtifactWriteIntent
       }
     }
     const intent = input.artifact as ArtifactWriteIntent
@@ -155,6 +165,13 @@ function parseOverwriteDecisionChoice(choice: string): OverwritePathDecisionResp
   return null
 }
 
+function deriveProjectPathFromTitle(title: string | undefined, previousFinalPath: string): string {
+  const fromPrevious = previousFinalPath.trim().replace(/\\/g, '/')
+  if (fromPrevious && !fromPrevious.endsWith('/')) return fromPrevious
+  const slug = (title ?? 'artifact').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'artifact'
+  return `${slug}.md`
+}
+
 function applyNonOverwriteChoice(input: {
   intent: ArtifactWriteIntent
   decisionKind: string
@@ -166,8 +183,24 @@ function applyNonOverwriteChoice(input: {
     return { ...input.intent, pathKind: trimmed }
   }
   if (input.decisionKind === 'ownership') {
-    if (trimmed === 'project') return { ...input.intent, container: 'project', role: 'primary' }
-    if (trimmed === 'package') return { ...input.intent, container: 'package', role: input.intent.role === 'scratch' ? 'primary' : input.intent.role }
+    if (trimmed === 'project') {
+      return {
+        ...input.intent,
+        container: 'project',
+        role: 'primary',
+        requestedPath: input.intent.requestedPath ?? deriveProjectPathFromTitle(input.intent.title, input.previousFinalPath)
+      }
+    }
+    if (trimmed === 'package') {
+      // Supporting/reference without packageId must become a new primary package so
+      // the next resolve asks for output-location instead of looping on ownership.
+      return {
+        ...input.intent,
+        container: 'package',
+        role: 'primary',
+        packageId: input.intent.packageId ?? randomUUID()
+      }
+    }
     if (trimmed === 'scratch') return { ...input.intent, container: 'scratch', role: 'scratch' }
   }
   if (input.decisionKind === 'output-location') {
@@ -262,8 +295,13 @@ export async function resumeArtifactToolWriteAfterDecision(input: {
           decisionKind: reresolved.decision.kind,
           attempt: pending.attempt,
           groupKey,
-          previousFinalPath: reresolved.finalPath || input.previousFinalPath
+          previousFinalPath: reresolved.finalPath || input.previousFinalPath,
+          artifact: intent
         }
+      }
+      // Overwrite reresolve bypasses resolveToolArtifactPath; consume user evidence on final ready.
+      if (intent.pathSource === 'user' && intent.pathEvidenceId && input.evidenceConsumption) {
+        input.evidenceConsumption.consume(intent.pathEvidenceId)
       }
       return {
         kind: 'ready',
@@ -271,17 +309,31 @@ export async function resumeArtifactToolWriteAfterDecision(input: {
       }
     }
 
+    const previousIntent = input.artifact as ArtifactWriteIntent
     const nextIntent = applyNonOverwriteChoice({
-      intent: input.artifact as ArtifactWriteIntent,
+      intent: previousIntent,
       decisionKind,
       choice: input.choice,
       previousFinalPath: input.previousFinalPath
     })
-    return prepareArtifactToolWrite({
+    if (
+      decisionKind === 'ownership' &&
+      nextIntent.container === previousIntent.container &&
+      nextIntent.role === previousIntent.role &&
+      nextIntent.packageId === previousIntent.packageId &&
+      nextIntent.requestedPath === previousIntent.requestedPath
+    ) {
+      return { kind: 'error', message: 'Ownership decision did not advance artifact intent' }
+    }
+    const prepared = prepareArtifactToolWrite({
       ...input,
       artifact: nextIntent,
       attempt: input.attempt + 1
     })
+    if (prepared.kind === 'decision_required') {
+      return { ...prepared, artifact: nextIntent }
+    }
+    return prepared
   } catch (error) {
     return { kind: 'error', message: error instanceof Error ? error.message : 'Artifact decision resume failed' }
   }
@@ -301,7 +353,8 @@ export async function resolveArtifactToolWriteWithDecision(input: {
   signal?: AbortSignal
   onDecisionRequired?: (pending: Extract<PrepareArtifactWriteResult, { kind: 'decision_required' }>) => void
 }): Promise<PrepareArtifactWriteResult> {
-  let current = prepareArtifactToolWrite(input)
+  let artifact = input.artifact
+  let current = prepareArtifactToolWrite({ ...input, artifact })
   while (current.kind === 'decision_required') {
     const waitPromise = waitForArtifactDecisionResponse(input.requestId, input.toolUseId, input.signal)
     input.onDecisionRequired?.(current)
@@ -315,7 +368,7 @@ export async function resolveArtifactToolWriteWithDecision(input: {
       requestId: input.requestId,
       toolUseId: input.toolUseId,
       path: input.path,
-      artifact: input.artifact,
+      artifact: current.artifact ?? artifact,
       decisionId: current.decisionId,
       decisionKind: current.decisionKind,
       attempt: current.attempt,
@@ -327,6 +380,9 @@ export async function resolveArtifactToolWriteWithDecision(input: {
       evidenceConsumption: input.evidenceConsumption,
       provenance: response.provenance
     })
+    if (current.kind === 'decision_required') {
+      artifact = current.artifact
+    }
   }
   return current
 }

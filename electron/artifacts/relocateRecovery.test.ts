@@ -100,7 +100,29 @@ describe('relocateRecovery', () => {
     await fs.writeFile(target, 'committed')
     await recoverRelocateOperation({ db: fixture.db, profiles: [fixture.profile], registry }, 'operation-recover')
     const artifact = new ArtifactRepository(fixture.db).find('artifact-recover')
-    expect(artifact?.canonicalPath).toBe(target)
+    expect(artifact?.canonicalPath).toBe('dst/target.md')
+  })
+
+  it('recovers backup_committed by completing the target commit forward', async () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const { source, target, digest } = await seedOperation(fixture, 'backup_committed', { sourceContent: 'forward-body' })
+    await fs.writeFile(source, 'forward-body')
+    const backup = path.join(fixture.workDir, 'dst/.target.md.spaceassistant-operation-recover.bak')
+    await fs.writeFile(backup, 'old-target')
+    const backupIdentity = (await import('../safeAtomicWrite')).identityFromStat(await fs.stat(backup))
+    getDbConnection(fixture.db)
+      .prepare(
+        'UPDATE artifact_operations SET expected_digest = ?, expected_size = ?, target_backup_path = ?, target_backup_identity = ?, target_existed = 1 WHERE id = ?'
+      )
+      .run(digest, Buffer.byteLength('forward-body'), backup, JSON.stringify(backupIdentity), 'operation-recover')
+
+    const result = await recoverRelocateOperation({ db: fixture.db, profiles: [fixture.profile], registry }, 'operation-recover')
+    expect(['completed', 'cleanup_pending', 'target_committed', 'source_cleanup_pending']).toContain(result.phase)
+    if (result.phase === 'completed' || result.phase === 'cleanup_pending') {
+      await expect(fs.readFile(target, 'utf8')).resolves.toBe('forward-body')
+      expect(new ArtifactRepository(fixture.db).find('artifact-recover')?.canonicalPath).toBe('dst/target.md')
+    }
   })
 
   it('scans all non-terminal operations on startup recovery', async () => {

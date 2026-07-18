@@ -1,5 +1,11 @@
 import type { ArtifactDecisionRequest } from '../../src/shared/artifactDecisionTypes'
 
+/**
+ * Remote (IM) decision text codec.
+ * Desktop path uses IPC `artifact:decision-request` / `artifact:decision-response`.
+ * Feishu/WeChat inbound reply → parse → submitArtifactDecisionResponse is not wired yet;
+ * keep this module the single codec when that integration lands.
+ */
 export function serializeArtifactDecisionForRemote(request: ArtifactDecisionRequest): string {
   const header = [`决策 ${request.decisionId}`, request.title ?? request.kind, request.message ?? ''].filter(Boolean).join('\n')
   const options = request.options
@@ -12,6 +18,18 @@ export type ParsedArtifactDecisionReply =
   | { kind: 'choice'; decisionId: string; choice: string }
   | { kind: 'usage_hint' }
   | { kind: 'not_decision' }
+
+function encodeChoiceFromOption(
+  option: ArtifactDecisionRequest['options'][number] | undefined,
+  value: string
+): string | undefined {
+  if (!option) return undefined
+  if (option.requiresInput === 'rename' && value) return `rename:${value}`
+  if (option.requiresInput === 'directory' && value) {
+    return `change-directory:${value.replace(/\\/g, '/').replace(/\/+$/, '')}`
+  }
+  return undefined
+}
 
 export function resolveRemoteArtifactDecisionChoice(
   request: ArtifactDecisionRequest,
@@ -30,8 +48,10 @@ export function resolveRemoteArtifactDecisionChoice(
 export function parseArtifactDecisionRemoteReply(
   raw: string,
   decisionId: string,
-  optionCount = 4
+  optionCountOrOptions: number | ArtifactDecisionRequest['options'] = 4
 ): ParsedArtifactDecisionReply {
+  const options = Array.isArray(optionCountOrOptions) ? optionCountOrOptions : undefined
+  const optionCount = options?.length ?? (typeof optionCountOrOptions === 'number' ? optionCountOrOptions : 4)
   const text = raw.trim()
   if (!text) return { kind: 'not_decision' }
   const parts = text.split(/\s+/).filter(Boolean)
@@ -42,9 +62,15 @@ export function parseArtifactDecisionRemoteReply(
   }
   if (index > optionCount) return { kind: 'usage_hint' }
   const value = parts.slice(1).join(' ').trim()
-  if (index === 2 && value) return { kind: 'choice', decisionId, choice: `rename:${value}` }
-  if (index === 3 && value) {
-    return { kind: 'choice', decisionId, choice: `change-directory:${value.replace(/\\/g, '/').replace(/\/+$/, '')}` }
+  if (options) {
+    const encoded = encodeChoiceFromOption(options[index - 1], value)
+    if (encoded) return { kind: 'choice', decisionId, choice: encoded }
+  } else {
+    // Legacy overwrite indices when callers omit options.
+    if (index === 2 && value) return { kind: 'choice', decisionId, choice: `rename:${value}` }
+    if (index === 3 && value) {
+      return { kind: 'choice', decisionId, choice: `change-directory:${value.replace(/\\/g, '/').replace(/\/+$/, '')}` }
+    }
   }
   return { kind: 'choice', decisionId, choice: String(index) }
 }
