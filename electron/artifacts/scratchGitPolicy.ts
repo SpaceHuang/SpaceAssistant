@@ -16,4 +16,13 @@ export function resolveScratchGitPolicy(input: {
   if (!rootInsideWorkDir) return { kind: 'scratch-git-policy', choices: ['keep-visible', 'cancel'] }
   return { kind: 'scratch-git-policy', choices: ['add-ignore', 'keep-visible', 'cancel'] }
 }
+
+/** Produces a minimal .gitignore update for generated run files and verifies the result. */
+export function appendScratchRunsIgnore(gitignoreContents: string): string {
+  if (isScratchRunsIgnored(gitignoreContents)) return gitignoreContents
+  const prefix = gitignoreContents && !gitignoreContents.endsWith('\n') ? `${gitignoreContents}\n` : gitignoreContents
+  const updated = `${prefix}.spaceassistant/runs/\n`
+  if (!isScratchRunsIgnored(updated)) throw new Error('Unable to verify scratch .gitignore rule')
+  return updated
+}
 import path from 'node:path'

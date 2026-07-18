@@ -315,8 +315,10 @@
   - GREEN（2026-07-18）：外部 Git 根只返回 keep-visible/cancel，禁止 add-ignore；4 条测试与 Electron 编译通过。
 - [ ] 为 Git policy 写 RED 测试：首次 scratch 创建且未保存选择时请求 add-ignore/keep-visible/cancel。
 - [ ] 实现 workspace 级 `artifact.scratchGitPolicy.<profileId>` 读取与 decision，使测试通过。
-- [ ] 为 Git policy 写 RED 测试：add-ignore 仅追加精确 `.spaceassistant/runs/`，并重新验证规则。
-- [ ] 实现安全 `.gitignore` 更新与重检，使测试通过。
+- [x] 为 Git policy 写 RED 测试：add-ignore 仅追加精确 `.spaceassistant/runs/`，并重新验证规则。
+  - RED（2026-07-18）：安全更新 helper 尚不存在。
+- [x] 实现安全 `.gitignore` 更新与重检，使测试通过。
+  - GREEN（2026-07-18）：仅追加精确规则，已有规则不重复，更新后调用精确 matcher 重检；5 条测试与 Electron 编译通过。
 - [ ] 为 Git policy 写 RED 测试：外部规则失效时清空保存选择并重新询问。
 - [ ] 实现保存选择失效检测，使测试通过。
 - [ ] 为 reference retention 写 RED 测试：普通检索/短摘要不创建文件、artifact 或 Git decision。

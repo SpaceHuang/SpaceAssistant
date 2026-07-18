@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isScratchRunsIgnored, resolveScratchGitPolicy } from './scratchGitPolicy'
+import { appendScratchRunsIgnore, isScratchRunsIgnored, resolveScratchGitPolicy } from './scratchGitPolicy'
 
 describe('isScratchRunsIgnored', () => {
   it.each(['.spaceassistant/runs/\n', '/.spaceassistant/runs/\n'])('recognizes the exact scratch runs ignore rule: %s', (contents) => {
@@ -14,5 +14,11 @@ describe('isScratchRunsIgnored', () => {
     expect(resolveScratchGitPolicy({ workDir: '/repo/subproject', gitRoot: '/repo', gitignoreContents: '' })).toEqual({
       kind: 'scratch-git-policy', choices: ['keep-visible', 'cancel']
     })
+  })
+
+  it('adds only the exact scratch-runs rule and revalidates it', () => {
+    const updated = appendScratchRunsIgnore('node_modules/\n')
+    expect(updated).toBe('node_modules/\n.spaceassistant/runs/\n')
+    expect(isScratchRunsIgnored(updated)).toBe(true)
   })
 })
