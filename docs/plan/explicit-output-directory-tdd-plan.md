@@ -206,8 +206,10 @@
 
 ## 5. ArtifactDecisionRegistry 与路径租约
 
-- [ ] 为 decision registry 写 RED 测试：同 request 的相同 groupKey 复用一条 ownership decision。
-- [ ] 实现 registry 的 pending/groupKey 复用，使测试通过。
+- [x] 为 decision registry 写 RED 测试：同 request 的相同 groupKey 复用一条 ownership decision。
+  - RED（2026-07-18）：ArtifactDecisionRegistry 尚不存在，测试模块无法导入。
+- [x] 实现 registry 的 pending/groupKey 复用，使测试通过。
+  - GREEN（2026-07-18）：以 requestId 与 groupKey 复用 pending decision；专用测试与 Electron 编译通过。
 - [ ] 为 decision registry 写 RED 测试：取消、会话删除、窗口关闭和五分钟超时均清理 pending decision。
 - [ ] 实现所有清理入口与 timeout，使测试通过。
 - [ ] 为 decision registry 写 RED 测试：response 必须匹配 requestId/sessionId/toolUseId/attempt。
