@@ -182,7 +182,7 @@
   - RED（2026-07-18）：user evidence 校验器尚不存在。
 - [x] 实现 evidence 的 request/message/intent/path 等值校验，使测试通过。
   - GREEN（2026-07-18）：request 前缀、output intent 与原始路径均须匹配；专用测试与 Electron 编译通过。
-- [ ] 为 resolver 写 RED 测试：多个输出路径保留独立 evidence，不能被错误合并。
+- [~] 为 resolver 写 RED 测试：多个输出路径保留独立 evidence，不能被错误合并。
 - [ ] 实现 evidence 列表注入和逐条消费校验，使测试通过。
 - [ ] 为 resolver 写 RED 测试：有未消费强输出证据的新 package/scratch 写入返回 `ARTIFACT_EXPLICIT_PATH_UNRESOLVED`。
 - [ ] 实现未解析强证据阻断逻辑，使测试通过。
