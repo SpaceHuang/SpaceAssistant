@@ -13,4 +13,10 @@ describe('registerAfterSuccessfulWrite', () => {
     registerAfterSuccessfulWrite({ success: true, register: () => { calls += 1 } })
     expect(calls).toBe(1)
   })
+
+  it('reports a recoverable audit error when registration fails after the file write', () => {
+    expect(() => registerAfterSuccessfulWrite({ success: true, register: () => { throw new Error('database unavailable') } })).toThrow(
+      '文件已写入但登记失败'
+    )
+  })
 })
