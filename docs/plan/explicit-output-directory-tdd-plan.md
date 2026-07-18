@@ -160,7 +160,8 @@
   - RED（2026-07-18）：workspace recheck helper 尚不存在，测试模块无法导入。
 - [~] 在 artifact 写入、删除、清理、relocate 的 mutation 前接入二次 strict 校验，使测试通过。
   - GREEN（2026-07-18，写入入口）：安全目标解析在生成写入目标前对比 realpath snapshot；删除、清理与 relocate 接入待 resolver mutation 链路建立后完成。
-- [ ] 运行 artifact path security、pathSecurity 既有测试。
+- [x] 运行 artifact path security、pathSecurity 既有测试。
+  - 验收（2026-07-18）：workspace resolver/recheck、identity、safe target 与既有 pathSecurity 共 5 文件 14 测试通过，Electron 编译通过。
 
 ## 4. 用户显式路径证据与路径类型决策
 
