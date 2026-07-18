@@ -18,4 +18,17 @@ describe('resolveOutputPathKind', () => {
       await fs.rm(root, { recursive: true, force: true })
     }
   })
+
+  it.each(['reports/', 'reports\\'])('treats an absent path with trailing separator as a directory: %s', async (requestedPath) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-path-kind-'))
+    try {
+      await expect(resolveOutputPathKind({
+        targetPath: path.join(root, 'reports'),
+        requestedPath,
+        declaredKind: 'auto'
+      })).resolves.toBe('directory')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
 })

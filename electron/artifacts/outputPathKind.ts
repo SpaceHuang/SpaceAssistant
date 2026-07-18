@@ -6,13 +6,18 @@ export type OutputPathKind = 'file' | 'directory' | 'auto'
 /** Resolves existing targets from the filesystem; a model declaration cannot override lstat. */
 export async function resolveOutputPathKind(input: {
   targetPath: string
+  /** Original path before any normalization, so a user-declared trailing slash is retained. */
+  requestedPath?: string
   declaredKind: OutputPathKind
 }): Promise<OutputPathKind> {
   let stat: Awaited<ReturnType<typeof fs.lstat>>
   try {
     stat = await fs.lstat(input.targetPath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return input.declaredKind
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (input.declaredKind === 'auto' && /[\\/]$/.test(input.requestedPath ?? input.targetPath)) return 'directory'
+      return input.declaredKind
+    }
     throw error
   }
 
