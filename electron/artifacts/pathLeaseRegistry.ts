@@ -2,6 +2,10 @@ export interface ArtifactPathLease {
   release(): void
 }
 
+export interface ArtifactPathMultiLease extends ArtifactPathLease {
+  identities: string[]
+}
+
 type LeaseState = { uses: number; write: boolean; deleting: boolean }
 
 /** In-process lease state for artifact identities; callers must release in finally blocks. */
@@ -27,6 +31,26 @@ export class ArtifactPathLeaseRegistry {
     if (state.uses || state.write || state.deleting) throw new Error('Artifact path lease is unavailable')
     state.deleting = true
     return this.lease(identity, () => undefined)
+  }
+
+  acquireWrites(identities: readonly string[]): ArtifactPathMultiLease {
+    const ordered = [...new Set(identities)].sort()
+    const leases: ArtifactPathLease[] = []
+    try {
+      for (const identity of ordered) leases.push(this.acquireWrite(identity))
+    } catch (error) {
+      for (const lease of leases.reverse()) lease.release()
+      throw error
+    }
+    let released = false
+    return {
+      identities: ordered,
+      release: () => {
+        if (released) return
+        released = true
+        for (const lease of leases.reverse()) lease.release()
+      }
+    }
   }
 
   private state(identity: string): LeaseState {

@@ -234,13 +234,17 @@
   - RED（2026-07-18）：ArtifactPathLeaseRegistry 尚不存在，测试模块无法导入。
 - [x] 实现 acquireUse、acquireWrite、claimDelete 与 release，使测试通过。
   - GREEN（2026-07-18）：多 use 可共享，write/delete 与已有租约排他；专用测试与 Electron 编译通过。
-- [ ] 为 lease registry 写 RED 测试：delete tombstone 阻止之后的 use/write，且 use/write 存在时 delete 原子失败。
-- [ ] 实现原子状态转换，使测试通过。
+- [x] 为 lease registry 写 RED 测试：delete tombstone 阻止之后的 use/write，且 use/write 存在时 delete 原子失败。
+  - GREEN（2026-07-18）：已有 use 时 delete 被拒绝，delete 释放后 tombstone 仍阻断 use/write。
+- [x] 实现原子状态转换，使测试通过。
+  - 以单一同步状态映射完成检查和写入，避免检查/申请之间出现间隙。
 - [x] 为 lease registry 写 RED 测试：finally release 后可重新 acquire。
   - GREEN（2026-07-18）：release 后 write 可重新申请，专用测试覆盖。
 - [ ] 在工具访问路径的 finally 块接入 release，使测试通过。
-- [ ] 为双路径 lease 写 RED 测试：按 identity 排序申请避免死锁。
-- [ ] 实现 ordered multi-path acquire，使测试通过。
+- [x] 为双路径 lease 写 RED 测试：按 identity 排序申请避免死锁。
+  - RED（2026-07-18）：multi-path acquire API 尚不存在。
+- [x] 实现 ordered multi-path acquire，使测试通过。
+  - GREEN（2026-07-18）：去重、排序申请，失败时反向释放已取得租约；4 条专用测试与 Electron 编译通过。
 - [ ] 迁移 artifact 管理路径的旧 `checkWritePathConflict`/`claimWritePath` 调用到新 registry。
 - [ ] 运行 registry、并发 barrier 与既有写冲突测试。
 

@@ -22,4 +22,24 @@ describe('ArtifactPathLeaseRegistry', () => {
     lease.release()
     expect(() => registry.acquireWrite('path-a')).not.toThrow()
   })
+
+  it('keeps a delete tombstone after its claim releases and atomically rejects concurrent use/write', () => {
+    const registry = new ArtifactPathLeaseRegistry()
+    const activeUse = registry.acquireUse('path-a')
+    expect(() => registry.claimDelete('path-a')).toThrow(/lease/i)
+    activeUse.release()
+    registry.claimDelete('path-a').release()
+    expect(() => registry.acquireUse('path-a')).toThrow(/lease/i)
+    expect(() => registry.acquireWrite('path-a')).toThrow(/lease/i)
+  })
+
+  it('acquires multi-path writes in identity order and rolls back if any path is unavailable', () => {
+    const registry = new ArtifactPathLeaseRegistry()
+    expect(registry.acquireWrites(['path-b', 'path-a']).identities).toEqual(['path-a', 'path-b'])
+
+    const blocked = new ArtifactPathLeaseRegistry()
+    blocked.acquireWrite('path-b')
+    expect(() => blocked.acquireWrites(['path-a', 'path-b'])).toThrow(/lease/i)
+    expect(() => blocked.acquireWrite('path-a')).not.toThrow()
+  })
 })
