@@ -85,4 +85,11 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'project', role: 'primary', requestedPath: 'reports/final.md', pathSource: 'agent-default' }
     })).toEqual(expect.objectContaining({ decision: { kind: 'overwrite' } }))
   })
+
+  it('does not let a write with artifactId silently move to a requested path when the artifact is absent', () => {
+    expect(() => resolveArtifactOutput({
+      workDir: '/workspace',
+      intent: { container: 'project', role: 'primary', artifactId: 'missing-artifact', requestedPath: 'moved.ts', pathSource: 'agent-default' }
+    })).toThrow(/canonical/i)
+  })
 })

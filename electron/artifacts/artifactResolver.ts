@@ -27,6 +27,7 @@ export function resolveArtifactOutput(input: {
         provenance: { pathSource: 'system-assigned' }
       }
     }
+    if (input.intent.artifactId) throw new Error('Artifact canonical path is unavailable for supplied artifactId')
     const kind = input.intent.materialKind ?? 'other'
     const directory = path.posix.join('.spaceassistant', 'runs', input.sessionId, kind)
     let filename = safeScratchFileName(input.intent.title)
@@ -55,6 +56,9 @@ export function resolveArtifactOutput(input: {
       return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance }
     }
     throw new Error(`${input.intent.container} artifact requires requestedPath`)
+  }
+  if (input.intent.artifactId && input.existingArtifact?.artifactId !== input.intent.artifactId) {
+    throw new Error('Artifact canonical path is unavailable for supplied artifactId')
   }
   if (input.intent.artifactId && input.existingArtifact?.artifactId === input.intent.artifactId) {
     return {

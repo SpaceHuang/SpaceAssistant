@@ -297,8 +297,10 @@
   - GREEN（2026-07-18）：无 artifactId 且路径被其他 artifact 占用时返回 overwrite decision；11 条专用测试与 Electron 编译通过。
 - [ ] 为 resolver 写 RED 测试：decision 改名/改目录后从路径类型、安全、identity、冲突检查完整重跑。
 - [ ] 实现 decision 后重新解析循环与 attempt 递增，使测试通过。
-- [ ] 为 resolver 写 RED 测试：传入 artifactId 时不得通过普通 write 隐式改址。
-- [ ] 实现既有 artifact canonical path 约束，使测试通过。
+- [x] 为 resolver 写 RED 测试：传入 artifactId 时不得通过普通 write 隐式改址。
+  - RED（2026-07-18）：未知 artifactId 会退回 requestedPath 并形成新路径。
+- [x] 实现既有 artifact canonical path 约束，使测试通过。
+  - GREEN（2026-07-18）：artifactId 必须匹配已加载 artifact，否则拒绝；匹配时始终使用 canonicalPath；12 条专用测试与 Electron 编译通过。
 - [ ] 运行 `artifactResolver.test.ts`、显式路径、路径安全、decision 测试。
 
 ## 7. Scratch Git 策略与引用资料
