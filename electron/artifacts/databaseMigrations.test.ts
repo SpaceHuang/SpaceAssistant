@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { getDbConnection, openSqliteDatabase } from '../database'
 import { getSchemaMeta } from '../database/sqliteStore'
 import { SCHEMA_META_KEYS } from '../database/schema'
+import { runMigrations } from '../database/migrations'
 
 describe('artifact database migrations', () => {
   const dirs: string[] = []
@@ -82,5 +83,17 @@ describe('artifact database migrations', () => {
     older.close()
 
     expect(() => openSqliteDatabase(dbPath)).toThrow(/请升级应用/)
+  })
+
+  it('rolls back DDL and schema version when a migration fails', () => {
+    const db = openSqliteDatabase(':memory:')
+    const conn = getDbConnection(db)
+    conn.exec('DROP TABLE artifact_references; DROP TABLE artifact_operations; DROP TABLE session_artifacts;')
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run('1', SCHEMA_META_KEYS.schemaVersion)
+
+    expect(() => runMigrations(conn, { v2Sql: 'CREATE TABLE rollback_probe (id INTEGER); NOT VALID SQL;' })).toThrow()
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('1')
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'rollback_probe'").get()).toBeUndefined()
+    db.close()
   })
 })

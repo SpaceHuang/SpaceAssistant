@@ -21,7 +21,7 @@ function readSchemaVersion(conn: Database.Database): number | undefined {
   return parseSchemaVersion(row?.value)
 }
 
-export function runMigrations(conn: Database.Database): void {
+export function runMigrations(conn: Database.Database, options: { v2Sql?: string } = {}): void {
   conn.transaction(() => {
     let version = readSchemaVersion(conn)
     if (version === undefined) {
@@ -30,7 +30,7 @@ export function runMigrations(conn: Database.Database): void {
     }
     if (version > DB_SCHEMA_VERSION) throw new DatabaseUpgradeRequiredError(version)
     if (version === 1) {
-      conn.exec(ARTIFACT_V2_SQL)
+      conn.exec(options.v2Sql ?? ARTIFACT_V2_SQL)
       version = 2
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
