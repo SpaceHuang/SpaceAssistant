@@ -34,4 +34,11 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'package', role: 'primary', packageId: 'package-1', requestedPath: 'reports/', pathKind: 'directory', title: 'Final Summary', pathSource: 'agent-default' }
     })).toEqual(expect.objectContaining({ finalPath: 'reports/final-summary.md', canonicalPath: '/workspace/reports/final-summary.md' }))
   })
+
+  it('requests an output-location decision instead of creating a temporary package primary file', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      intent: { container: 'package', role: 'primary', packageId: 'package-1', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({ decision: { kind: 'output-location', packageId: 'package-1' } }))
+  })
 })

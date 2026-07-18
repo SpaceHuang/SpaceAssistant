@@ -5,6 +5,7 @@ export interface ResolvedArtifactOutput {
   finalPath: string
   canonicalPath: string
   provenance: ArtifactPathProvenance
+  decision?: { kind: 'output-location'; packageId?: string }
 }
 
 /** Resolves artifact destinations; project paths are never redirected or renamed. */
@@ -14,11 +15,16 @@ export function resolveArtifactOutput(input: {
   existingArtifact?: { artifactId: string; canonicalPath: string }
 }): ResolvedArtifactOutput {
   if (input.intent.container !== 'project' && input.intent.container !== 'package') throw new Error('Artifact resolver branch not implemented for this container')
-  if (!input.intent.requestedPath) throw new Error(`${input.intent.container} artifact requires requestedPath`)
   const { pathSource, pathEvidenceId } = input.intent
   const provenance = pathSource === 'user'
     ? { pathSource, pathEvidenceId: pathEvidenceId! }
     : { pathSource }
+  if (!input.intent.requestedPath) {
+    if (input.intent.container === 'package' && input.intent.role === 'primary') {
+      return { finalPath: '', canonicalPath: '', provenance, decision: { kind: 'output-location', packageId: input.intent.packageId } }
+    }
+    throw new Error(`${input.intent.container} artifact requires requestedPath`)
+  }
   if (input.intent.artifactId && input.existingArtifact?.artifactId === input.intent.artifactId) {
     return {
       finalPath: path.relative(input.workDir, input.existingArtifact.canonicalPath),

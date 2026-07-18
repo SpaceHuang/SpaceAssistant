@@ -269,8 +269,10 @@
   - RED（2026-07-18）：初始 resolver 将目录本身作为 finalPath。
 - [x] 实现目录主成果命名优先级（用户名、title slug、任务默认名），使测试通过。
   - GREEN（2026-07-18）：目录 primary 追加 title slug（无 title 时 artifact 默认名）；5 条专用测试与 Electron 编译通过。
-- [ ] 为 package primary 写 RED 测试：未指定位置发出 output-location decision，不创建临时文件。
-- [ ] 实现未指定主成果位置的 decision 分支，使测试通过。
+- [x] 为 package primary 写 RED 测试：未指定位置发出 output-location decision，不创建临时文件。
+  - RED（2026-07-18）：初始 resolver 因 requestedPath 缺失直接抛错。
+- [x] 实现未指定主成果位置的 decision 分支，使测试通过。
+  - GREEN（2026-07-18）：package primary 返回 output-location decision 且没有 finalPath；6 条专用测试与 Electron 编译通过。
 - [ ] 为 package supporting/reference 写 RED 测试：有 packageId 且无显式路径时推导 `主成果目录/base.materials/`。
 - [ ] 实现材料推导与默认平铺，使测试通过。
 - [ ] 为材料解析写 RED 测试：同名风险或角色混合时才创建 supporting/references 子目录。
