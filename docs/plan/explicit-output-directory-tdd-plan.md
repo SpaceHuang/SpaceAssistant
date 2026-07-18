@@ -198,8 +198,10 @@
   - RED（2026-07-18）：缺失目标的 auto 声明返回 auto，未保留尾随分隔符语义。
 - [x] 实现在 normalize 前保存尾随分隔符的判定，使测试通过。
   - GREEN（2026-07-18）：以原始 requestedPath 判定 `/` 与 `\\`，3 条专用测试与 Electron 编译通过。
-- [ ] 为路径类型写 RED 测试：无扩展名文件、带点目录不按名称猜测类型；仅真正二义时请求 decision。
-- [ ] 实现 `auto` 二义分支与 `path-type` decision 请求，使测试通过。
+- [x] 为路径类型写 RED 测试：无扩展名文件、带点目录不按名称猜测类型；仅真正二义时请求 decision。
+  - RED（2026-07-18）：path-type decision 请求构造器尚不存在，测试模块无法导入。
+- [x] 实现 `auto` 二义分支与 `path-type` decision 请求，使测试通过。
+  - GREEN（2026-07-18）：README 与 .cache 均保留 auto，并构造 file/directory 的 `path-type` 请求；4 条专用测试与 Electron 编译通过。
 - [ ] 运行 explicit evidence、path type 与安全相关测试。
 
 ## 5. ArtifactDecisionRegistry 与路径租约

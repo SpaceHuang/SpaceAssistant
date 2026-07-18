@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { resolveOutputPathKind } from './outputPathKind'
+import { requestPathTypeDecision } from './pathTypeDecision'
 
 describe('resolveOutputPathKind', () => {
   it('uses lstat for an existing target and rejects a conflicting explicit declaration', async () => {
@@ -27,6 +28,21 @@ describe('resolveOutputPathKind', () => {
         requestedPath,
         declaredKind: 'auto'
       })).resolves.toBe('directory')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not guess a no-extension file or dotted directory, and requests a path-type decision', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-path-kind-'))
+    try {
+      for (const requestedPath of ['README', '.cache']) {
+        await expect(resolveOutputPathKind({ targetPath: path.join(root, requestedPath), declaredKind: 'auto' })).resolves.toBe('auto')
+      }
+
+      expect(requestPathTypeDecision({ requestId: 'req-1', requestedPath: 'README' })).toEqual({
+        kind: 'path-type', requestId: 'req-1', requestedPath: 'README', choices: ['file', 'directory']
+      })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
