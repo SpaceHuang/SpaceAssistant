@@ -384,8 +384,10 @@
   - GREEN（2026-07-18，暴露层）：preload 已暴露上述受限 API，payload 不含 workspace root；主进程 handler/专用 renderer 测试待接入。
 - [~] 在 `preload.ts` 暴露受限 artifact API，使测试通过。
   - Electron 编译已验证 API 实现完整匹配 shared contract。
-- [ ] 为主进程 IPC 写 RED 测试：list 从 repository 按 session 返回，且不信任 renderer 路径。
-- [ ] 实现 `artifact:list` handler，使测试通过。
+- [~] 为主进程 IPC 写 RED 测试：list 从 repository 按 session 返回，且不信任 renderer 路径。
+  - GREEN（2026-07-18，handler 层）：artifact:list 只接受 sessionId，从 repository 读取且校验 active profile；专用 IPC mock 测试待补。
+- [~] 实现 `artifact:list` handler，使测试通过。
+  - Electron 编译通过；待补 IPC 行为测试后验收。
 - [ ] 为 IPC 写 RED 测试：所有 mutation 从 artifact/session/profile 读取路径并执行 strict workspace 校验。
 - [ ] 实现 mutation 的统一 guard，使测试通过。
 - [ ] 为桌面 decision UI 写 RED 测试：path type、output location、ownership、overwrite、reference retention、git ignore 均显示对应选项。

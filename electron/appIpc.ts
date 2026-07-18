@@ -113,6 +113,7 @@ import { classifyWikiPath } from './wiki/wikiPaths'
 import { copyFileInWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } from './wiki/wikiImport'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { openExternalLink } from './externalLink'
+import { ArtifactRepository } from './artifacts/artifactRepository'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 import {
   deleteSessionChatAttachments,
@@ -512,6 +513,22 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       if (!s.workDirProfileId) return false
       return s.workDirProfileId === profileId
     })
+  })
+
+  ipcMain.handle('artifact:list', (_e, payload: { sessionId?: string }) => {
+    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+    if (!sessionId) return []
+    const session = getSession(ctx.db, sessionId)
+    if (!session || session.workDirProfileId !== ctx.workDirManager.getActiveProfileId()) return []
+    return new ArtifactRepository(ctx.db).listBySession(sessionId).map((artifact) => ({
+      id: artifact.id,
+      sessionId: artifact.sessionId,
+      container: artifact.container,
+      role: artifact.role,
+      title: artifact.title,
+      finalPath: artifact.canonicalPath,
+      status: artifact.status
+    }))
   })
 
   ipcMain.handle(
@@ -1757,4 +1774,3 @@ async function searchFilesUnder(
     }
   }
 }
-
