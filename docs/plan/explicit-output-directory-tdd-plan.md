@@ -210,16 +210,26 @@
   - RED（2026-07-18）：ArtifactDecisionRegistry 尚不存在，测试模块无法导入。
 - [x] 实现 registry 的 pending/groupKey 复用，使测试通过。
   - GREEN（2026-07-18）：以 requestId 与 groupKey 复用 pending decision；专用测试与 Electron 编译通过。
-- [ ] 为 decision registry 写 RED 测试：取消、会话删除、窗口关闭和五分钟超时均清理 pending decision。
-- [ ] 实现所有清理入口与 timeout，使测试通过。
-- [ ] 为 decision registry 写 RED 测试：response 必须匹配 requestId/sessionId/toolUseId/attempt。
-- [ ] 实现绑定校验，使测试通过。
-- [ ] 为 decision registry 写 RED 测试：decision 只能消费一次，重复消费返回 `ARTIFACT_DECISION_ALREADY_CONSUMED`。
-- [ ] 实现一次性消费状态机，使测试通过。
-- [ ] 为 decision registry 写 RED 测试：伪造、过期、跨 session/toolUseId 的 ID 返回 `ARTIFACT_DECISION_INVALID`。
-- [ ] 实现 invalid decision 拒绝，使测试通过。
-- [ ] 为 rename/change-directory response 写 RED 测试：仅可构造可信 `user-decision + pathDecisionId` provenance。
-- [ ] 实现 decision 驱动 provenance 构造，使测试通过。
+- [x] 为 decision registry 写 RED 测试：取消、会话删除、窗口关闭和五分钟超时均清理 pending decision。
+  - RED（2026-07-18）：registry 缺少取消、清理和 timeout 生命周期 API。
+- [x] 实现所有清理入口与 timeout，使测试通过。
+  - GREEN（2026-07-18）：request/session/all 清理与可配置的五分钟默认 timeout 均移除 pending state。
+- [x] 为 decision registry 写 RED 测试：response 必须匹配 requestId/sessionId/toolUseId/attempt。
+  - RED（2026-07-18）：registry 尚未提供 response consume API。
+- [x] 实现绑定校验，使测试通过。
+  - GREEN（2026-07-18）：任一绑定字段不匹配均拒绝为 `ARTIFACT_DECISION_INVALID`。
+- [x] 为 decision registry 写 RED 测试：decision 只能消费一次，重复消费返回 `ARTIFACT_DECISION_ALREADY_CONSUMED`。
+  - RED（2026-07-18）：首次 consume API 缺失。
+- [x] 实现一次性消费状态机，使测试通过。
+  - GREEN（2026-07-18）：成功消费后记录已消费 ID，重复提交返回稳定错误码。
+- [x] 为 decision registry 写 RED 测试：伪造、过期、跨 session/toolUseId 的 ID 返回 `ARTIFACT_DECISION_INVALID`。
+  - RED（2026-07-18）：consume API 缺失。
+- [x] 实现 invalid decision 拒绝，使测试通过。
+  - GREEN（2026-07-18）：不存在/过期 ID 和跨绑定请求均被拒绝。
+- [x] 为 rename/change-directory response 写 RED 测试：仅可构造可信 `user-decision + pathDecisionId` provenance。
+  - RED（2026-07-18）：主进程 provenance 构造器尚不存在。
+- [x] 实现 decision 驱动 provenance 构造，使测试通过。
+  - GREEN（2026-07-18）：仅成功 consume 的 decisionId 可生成 user-decision provenance；4 条专用测试与 Electron 编译通过。
 - [ ] 为 `ArtifactPathLeaseRegistry` 写 RED 测试：use 可共享，write/delete 排他。
 - [ ] 实现 acquireUse、acquireWrite、claimDelete 与 release，使测试通过。
 - [ ] 为 lease registry 写 RED 测试：delete tombstone 阻止之后的 use/write，且 use/write 存在时 delete 原子失败。
