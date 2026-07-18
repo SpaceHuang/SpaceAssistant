@@ -12,4 +12,10 @@ describe('shouldRetainReferenceArtifact', () => {
       kind: 'reference-retention', choices: ['long-term', 'pending', 'cancel']
     })
   })
+
+  it('routes a retained reference with packageId to the package-reference branch', () => {
+    expect(resolveReferenceRetention({ mode: 'long-term', packageId: 'package-1' })).toEqual({
+      kind: 'package-reference', packageId: 'package-1'
+    })
+  })
 })

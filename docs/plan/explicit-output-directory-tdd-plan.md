@@ -330,8 +330,10 @@
   - RED（2026-07-18）：reference retention gate 尚不存在。
 - [x] 保持检索流程不接入 artifact 写入；使测试通过。
   - GREEN（2026-07-18）：retrieve 与 short-summary 均明确返回不保留；1 条专用测试与 Electron 编译通过。
-- [ ] 为 reference retention 写 RED 测试：有 packageId 的 reference 无显式路径写入材料目录。
-- [ ] 在 resolver 接入 package/reference 分支，使测试通过。
+- [x] 为 reference retention 写 RED 测试：有 packageId 的 reference 无显式路径写入材料目录。
+  - GREEN（2026-07-18）：package-reference retention 分支与 resolver 均按 package primary 推导 `.materials/source.md`。
+- [x] 在 resolver 接入 package/reference 分支，使测试通过。
+  - 17 条 reference/resolver 专用测试与 Electron 编译通过。
 - [x] 为 reference retention 写 RED 测试：无 package 的本地保存请求 long-term/pending/cancel decision。
   - RED（2026-07-18）：reference retention resolver 尚不存在。
 - [x] 实现 reference-retention decision 分支，使测试通过。

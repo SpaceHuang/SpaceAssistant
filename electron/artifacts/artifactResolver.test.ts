@@ -103,4 +103,11 @@ describe('resolveArtifactOutput', () => {
       expect.objectContaining({ finalPath: 'reports/final.materials/references/source.md' })
     )
   })
+
+  it('derives a package reference without an explicit path into the materials directory', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace', packagePrimaryPath: 'reports/final.md',
+      intent: { container: 'package', role: 'reference', packageId: 'package-1', title: 'source', materialKind: 'note', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({ finalPath: 'reports/final.materials/source.md' }))
+  })
 })
