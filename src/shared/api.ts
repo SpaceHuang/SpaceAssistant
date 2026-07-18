@@ -118,6 +118,25 @@ export type FileMetadata = {
   isText: boolean
 }
 
+export type ArtifactApiItem = {
+  id: string
+  sessionId: string
+  container: 'project' | 'package' | 'scratch'
+  role: 'primary' | 'supporting' | 'reference' | 'scratch'
+  title: string
+  finalPath: string
+  status: 'active' | 'deleted'
+}
+
+export type ArtifactDecisionResponsePayload = {
+  decisionId: string
+  requestId: string
+  sessionId: string
+  toolUseId: string
+  attempt: number
+  choice: string
+}
+
 export type ClaudeChatSendStreamPayload = {
   requestId: string
   sessionId: string
@@ -187,6 +206,14 @@ export type SpaceAssistantApi = {
   }) => Promise<Session | undefined>
   sessionBackfillAutoTitleIfNeeded: (payload: { sessionId: string }) => Promise<Session | undefined>
   sessionDelete: (sessionId: string) => Promise<void>
+
+  artifactList: (payload: { sessionId: string }) => Promise<ArtifactApiItem[]>
+  artifactDecisionResponse: (payload: ArtifactDecisionResponsePayload) => Promise<void>
+  artifactDelete: (payload: { sessionId: string; artifactId: string }) => Promise<{ ok: boolean; error?: string }>
+  artifactCleanSession: (payload: { sessionId: string; includeReferences?: boolean }) => Promise<{ deleted: string[]; skipped: Array<{ artifactId: string; reason: string }> }>
+  artifactRelocate: (payload: { sessionId: string; artifactId: string; target: string; mode: 'move' | 'copy' }) => Promise<{ ok: boolean; error?: string }>
+  artifactSetDefaultDir: (payload: { sessionId: string; dir: string }) => Promise<void>
+  artifactOnChanged: (cb: (event: { sessionId: string; artifactId: string; action: 'created' | 'updated' | 'deleted' }) => void) => () => void
 
   usageSet: (payload: { sessionId: string; usage: SessionUsage }) => Promise<void>
   usageGet: (sessionId: string) => Promise<SessionUsage | undefined>

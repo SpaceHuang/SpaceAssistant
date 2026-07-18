@@ -14,6 +14,18 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('session:backfill-auto-title-if-needed', payload) as Promise<Session | undefined>,
   sessionDelete: (sessionId) => ipcRenderer.invoke('session:delete', sessionId),
 
+  artifactList: (payload) => ipcRenderer.invoke('artifact:list', payload),
+  artifactDecisionResponse: (payload) => ipcRenderer.invoke('artifact:decision-response', payload),
+  artifactDelete: (payload) => ipcRenderer.invoke('artifact:delete', payload),
+  artifactCleanSession: (payload) => ipcRenderer.invoke('artifact:clean-session', payload),
+  artifactRelocate: (payload) => ipcRenderer.invoke('artifact:relocate', payload),
+  artifactSetDefaultDir: (payload) => ipcRenderer.invoke('artifact:set-default-dir', payload),
+  artifactOnChanged: (cb) => {
+    const fn = (_e: unknown, event: { sessionId: string; artifactId: string; action: 'created' | 'updated' | 'deleted' }) => cb(event)
+    ipcRenderer.on('artifact:changed', fn)
+    return () => ipcRenderer.removeListener('artifact:changed', fn)
+  },
+
   usageSet: (payload) => ipcRenderer.invoke('usage:set', payload),
   usageGet: (sessionId) => ipcRenderer.invoke('usage:get', sessionId),
   usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),

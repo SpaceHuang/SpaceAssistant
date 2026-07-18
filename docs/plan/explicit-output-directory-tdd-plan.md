@@ -376,10 +376,14 @@
 
 ## 9. IPC、桌面端与远程决策
 
-- [ ] 为 shared API 写 RED 编译测试：存在 artifact:list、decision-response、delete、clean-session、relocate、set-default-dir 与 changed event 类型。
-- [ ] 在 `src/shared/api.ts` 增加 API 与事件类型，使测试通过。
-- [ ] 为 preload 写 RED 测试：renderer 仅能调用已声明 artifact API，不能传 workspace root。
-- [ ] 在 `preload.ts` 暴露受限 artifact API，使测试通过。
+- [x] 为 shared API 写 RED 编译测试：存在 artifact:list、decision-response、delete、clean-session、relocate、set-default-dir 与 changed event 类型。
+  - RED（2026-07-18）：shared artifact API 类型尚不存在，preload 无法形成受限契约。
+- [x] 在 `src/shared/api.ts` 增加 API 与事件类型，使测试通过。
+  - GREEN（2026-07-18）：声明受 session/artifact ID 限定的 list、decision、delete、clean、relocate、default-dir 与 changed event；Electron 编译通过。
+- [~] 为 preload 写 RED 测试：renderer 仅能调用已声明 artifact API，不能传 workspace root。
+  - GREEN（2026-07-18，暴露层）：preload 已暴露上述受限 API，payload 不含 workspace root；主进程 handler/专用 renderer 测试待接入。
+- [~] 在 `preload.ts` 暴露受限 artifact API，使测试通过。
+  - Electron 编译已验证 API 实现完整匹配 shared contract。
 - [ ] 为主进程 IPC 写 RED 测试：list 从 repository 按 session 返回，且不信任 renderer 路径。
 - [ ] 实现 `artifact:list` handler，使测试通过。
 - [ ] 为 IPC 写 RED 测试：所有 mutation 从 artifact/session/profile 读取路径并执行 strict workspace 校验。
