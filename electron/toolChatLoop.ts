@@ -149,6 +149,7 @@ import {
 } from './toolWriteConflict'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { applyWorkspaceLayoutRedirect, resolveWriteDirBase } from './workspaceLayout/redirect'
+import { shouldUseLegacyWorkspaceRedirect } from './artifacts/featureFlag'
 import {
   getWriteDirChoice,
   setWriteDirChoice
@@ -973,6 +974,7 @@ async function runToolChatSessionInner(
       let workspaceRedirectNote: string | undefined
       if (
         workspaceLayout?.enabled &&
+        shouldUseLegacyWorkspaceRedirect(appDb ? (getSession(appDb, sessionId)?.metadata ?? {}) : {}) &&
         toolName === 'write_file' &&
         typeof inputObj.path === 'string' &&
         inputObj.path.trim()

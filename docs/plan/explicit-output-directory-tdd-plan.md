@@ -349,7 +349,7 @@
 - [~] 为 tool loop 写 RED 集成测试：feature flag 关闭时保留旧行为；新会话 flag 开启时旧扩展名 redirect 不执行。
   - RED（2026-07-18）：artifact feature flag helper 尚不存在，且 createSession 不接受冻结开关；完整 toolChatLoop redirect 集成测试待 resolver 接入。
 - [x] 实现会话创建时冻结的 `artifactManagementEnabled` 开关，使测试通过。
-  - GREEN（2026-07-18）：createSession 将开关固化到 metadata；后续 metadata 更新保留该值，专用测试与 Electron 编译通过。toolChatLoop redirect 接入将在 resolver 主链路接入项完成时验证。
+  - GREEN（2026-07-18）：createSession 将开关固化到 metadata；后续 metadata 更新保留该值。toolChatLoop 仅在 flag 关闭时运行 legacy redirect；feature/workspaceLayout 测试与 Electron 编译通过。
 - [ ] 为 tool loop 写 RED 集成测试：resolver 在写入确认之前运行，确认卡展示 finalPath。
 - [ ] 将 resolver 接入 `toolChatLoop` 的 write_file/edit_file 前置链路，使测试通过。
 - [ ] 为工具循环写 RED 集成测试：path decision 完成后用相同 requestId/toolUseId 恢复同一次调用。
