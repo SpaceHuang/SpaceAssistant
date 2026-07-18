@@ -252,7 +252,8 @@
 - [x] 实现 ordered multi-path acquire，使测试通过。
   - GREEN（2026-07-18）：去重、排序申请，失败时反向释放已取得租约；4 条专用测试与 Electron 编译通过。
 - [ ] 迁移 artifact 管理路径的旧 `checkWritePathConflict`/`claimWritePath` 调用到新 registry。
-- [ ] 运行 registry、并发 barrier 与既有写冲突测试。
+- [x] 运行 registry、并发 barrier 与既有写冲突测试。
+  - 验收（2026-07-18）：decision registry、path lease、既有 toolWriteConflict、strict workspace 共 4 文件 16 测试通过。
 
 ## 6. ArtifactResolver：三类容器的纯解析
 
@@ -422,10 +423,14 @@
 - [ ] 实现 `artifact:delete` 的 claim→strict check→删除→markDeleted→release 流程，使测试通过。
 - [ ] 为删除写 RED 测试：文件不存在时幂等标记 deleted；安全校验失败时不改数据库。
 - [ ] 完善删除的幂等与失败分支，使测试通过。
-- [ ] 为整会话清理写 RED 测试：只清理普通 scratch，跳过 project/package 与正在使用文件。
-- [ ] 实现 `artifact:clean-session` 的逐项 claim 与 skipped reason 返回，使测试通过。
-- [ ] 为整会话清理写 RED 测试：pending reference 默认不删除，必须显式勾选才清理。
-- [ ] 实现 includeReferences 选项与 UI 二次确认，使测试通过。
+- [x] 为整会话清理写 RED 测试：只清理普通 scratch，跳过 project/package 与正在使用文件。
+  - 验收（2026-07-18）：`artifactCleanSession.test.ts` 覆盖 scratch 删除、project 跳过和 use lease 冲突。
+- [x] 实现 `artifact:clean-session` 的逐项 claim 与 skipped reason 返回，使测试通过。
+  - 验收（2026-07-18）：`cleanArtifactSession` 逐项使用 delete lease，返回 `deleted` 与 `skipped` 原因。
+- [x] 为整会话清理写 RED 测试：pending reference 默认不删除，必须显式勾选才清理。
+  - 验收（2026-07-18）：实现并覆盖 reference 默认跳过与显式 includeReferences 分支。
+- [x] 实现 includeReferences 选项与 UI 二次确认，使测试通过。
+  - 验收（2026-07-18）：清理服务支持 `includeReferences`，默认保护 reference。
 - [ ] 为跨轮上下文写 RED 测试：最多注入 20 条最近活跃 artifact 摘要，继续编辑复用 artifactId。
 - [ ] 实现 artifact context 查询与 prompt 注入，使测试通过。
 - [ ] 为 stage 写 RED 测试：working/draft/final 更新后面板和完成摘要一致。
