@@ -141,7 +141,7 @@
   - strict resolver 的 expected realpath 比对已实现；3 条专用测试通过。
 - [ ] 为 strict resolver 写 RED 测试：active workspace 与 artifact workspace 同名文件不会被作为 fallback 操作。
 - [ ] 移除 artifact mutation 对 active-workspace fallback 的调用，使测试通过。
-- [ ] 为 POSIX path identity 写 RED 测试：已存在路径使用 realpath identity，不存在路径使用规范化词法 identity。
+- [~] 为 POSIX path identity 写 RED 测试：已存在路径使用 realpath identity，不存在路径使用规范化词法 identity。
 - [ ] 实现 POSIX identity 生成，使测试通过。
 - [ ] 为 Windows path identity 写 RED 测试：统一分隔符与大小写，并拒绝设备名、尾随点和空格别名。
 - [ ] 实现平台 identity 生成与 Windows 输入校验，使测试通过。
