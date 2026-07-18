@@ -150,7 +150,7 @@
   - RED（2026-07-18）：初始实现未做 Windows 规范化或别名校验。
 - [x] 实现平台 identity 生成与 Windows 输入校验，使测试通过。
   - GREEN（2026-07-18）：Windows identity 统一为小写 `/`，拒绝设备名与尾随点/空格；2 条测试与 Electron 编译通过。
-- [ ] 为安全目标解析写 RED 测试：`..`、工作区外绝对路径、异平台绝对路径均拒绝且不改写路径。
+- [~] 为安全目标解析写 RED 测试：`..`、工作区外绝对路径、异平台绝对路径均拒绝且不改写路径。
 - [ ] 为安全目标解析写 RED 测试：POSIX symlink、Windows junction 和文件/目录目标类型越界均拒绝。
 - [ ] 增强 `resolveSafeWriteTarget`（或等价路径安全层），使上述安全测试通过。
 - [ ] 为实际写入前再次校验 workspace identity 写 RED 测试。
