@@ -10,7 +10,7 @@ export type ExplicitPathEvidence = {
 }
 
 function inferIntent(message: string, start: number): ExplicitPathIntent {
-  const context = message.slice(Math.max(0, start - 20), start)
+  const context = message.slice(Math.max(0, start - 100), start)
   if (/(?:读取|查看|检查|参考)/.test(context)) return 'referenced-input'
   if (/(?:保存为|保存到|写入|输出|生成|创建)/.test(context)) return 'output'
   return 'unknown'
