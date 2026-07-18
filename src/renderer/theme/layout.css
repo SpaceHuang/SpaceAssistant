@@ -3574,6 +3574,27 @@
   color: var(--sa-text);
 }
 
+.write-success-card__badge {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-chat-inset-bg);
+  border: 1px solid var(--sa-chat-card-border);
+  font-size: 11px;
+  color: var(--sa-text-secondary);
+}
+
+.write-success-card__path,
+.write-success-card__reason {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--sa-text-secondary);
+}
+
 .write-success-card__stat {
   flex-shrink: 0;
   display: inline-flex;

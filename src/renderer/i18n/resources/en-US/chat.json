@@ -202,5 +202,38 @@
   },
   "writeDirChip": {
     "label": "Write dir: {{dir}}"
+  },
+  "writeSuccess": {
+    "badgeProject": "Project change",
+    "badgePackage": "Work package",
+    "badgeScratch": "Scratch",
+    "badgeSupporting": "Supporting material",
+    "badgeReference": "Reference"
+  },
+  "artifactDecision": {
+    "defaultTitle": "Your choice is needed",
+    "pathTypeTitle": "Is this a file or a directory?",
+    "outputLocationTitle": "Where should the primary output go?",
+    "ownershipTitle": "Where does this artifact belong?",
+    "overwriteTitle": "Target path is already occupied",
+    "referenceRetentionTitle": "How should this reference be kept?",
+    "gitIgnoreTitle": "Git handling for scratch files",
+    "renamePlaceholder": "New filename (no path segments)",
+    "directoryPlaceholder": "Directory relative to workspace",
+    "cancel": "Cancel",
+    "optionFile": "File",
+    "optionDirectory": "Directory",
+    "optionCustomPath": "Specify output path",
+    "optionProject": "Project change",
+    "optionPackage": "Work package",
+    "optionScratch": "Scratch",
+    "optionOverwrite": "Overwrite",
+    "optionRename": "Rename",
+    "optionChangeDirectory": "Change directory",
+    "optionCancel": "Cancel",
+    "optionLongTerm": "Keep long-term",
+    "optionPending": "Keep pending",
+    "optionAddIgnore": "Add to .gitignore",
+    "optionKeepVisible": "Keep visible"
   }
 }

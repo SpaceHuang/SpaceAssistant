@@ -52,5 +52,14 @@
     "startAria": "Start remote listening",
     "stop": "Stop",
     "stopAria": "Stop remote listening"
+  },
+  "sessionArtifacts": {
+    "title": "Session artifacts",
+    "empty": "No registered artifacts in this session",
+    "groupProject": "Project changes",
+    "groupPackage": "Work packages",
+    "groupScratch": "Scratch",
+    "groupReference": "References",
+    "delete": "Delete"
   }
 }

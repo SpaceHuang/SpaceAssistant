@@ -1,0 +1,78 @@
+import type { ArtifactDecisionRequest } from '../../src/shared/artifactDecisionTypes'
+
+export function serializeArtifactDecisionForRemote(request: ArtifactDecisionRequest): string {
+  const header = [`决策 ${request.decisionId}`, request.title ?? request.kind, request.message ?? ''].filter(Boolean).join('\n')
+  const options = request.options
+    .map((option, index) => `${index + 1}. ${option.label}${option.requiresInput ? '（回复时附带值）' : ''}`)
+    .join('\n')
+  return `${header}\n${options}\n回复编号或「编号 值」，例如：1 或 2 review-v2.md`
+}
+
+export type ParsedArtifactDecisionReply =
+  | { kind: 'choice'; decisionId: string; choice: string }
+  | { kind: 'usage_hint' }
+  | { kind: 'not_decision' }
+
+export function parseArtifactDecisionRemoteReply(
+  raw: string,
+  decisionId: string,
+  optionCount = 4
+): ParsedArtifactDecisionReply {
+  const text = raw.trim()
+  if (!text) return { kind: 'not_decision' }
+  const parts = text.split(/\s+/).filter(Boolean)
+  const index = Number.parseInt(parts[0] ?? '', 10)
+  if (!Number.isFinite(index) || index < 1) {
+    if (/^\d/.test(text)) return { kind: 'usage_hint' }
+    return { kind: 'not_decision' }
+  }
+  if (index > optionCount) return { kind: 'usage_hint' }
+  const value = parts.slice(1).join(' ').trim()
+  if (index === 2 && value) return { kind: 'choice', decisionId, choice: `rename:${value}` }
+  if (index === 3 && value) {
+    return { kind: 'choice', decisionId, choice: `change-directory:${value.replace(/\\/g, '/').replace(/\/+$/, '')}` }
+  }
+  return { kind: 'choice', decisionId, choice: String(index) }
+}
+
+export const ARTIFACT_DECISION_REMOTE_USAGE_HINT =
+  '请回复编号选择。改名示例：2 review-v2.md；改目录示例：3 reports/final/'
+
+export function buildArtifactDecisionOptions(kind: ArtifactDecisionRequest['kind']): ArtifactDecisionRequest['options'] {
+  switch (kind) {
+    case 'path-type':
+      return [
+        { key: 'file', label: '文件' },
+        { key: 'directory', label: '目录' }
+      ]
+    case 'output-location':
+      return [{ key: 'custom', label: '指定输出路径', requiresInput: 'directory' }]
+    case 'ownership':
+      return [
+        { key: 'project', label: '项目变更' },
+        { key: 'package', label: '工作包' },
+        { key: 'scratch', label: '草稿' }
+      ]
+    case 'overwrite':
+      return [
+        { key: 'overwrite', label: '覆盖' },
+        { key: 'rename', label: '改名', requiresInput: 'rename' },
+        { key: 'change-directory', label: '改目录', requiresInput: 'directory' },
+        { key: 'cancel', label: '取消' }
+      ]
+    case 'reference-retention':
+      return [
+        { key: 'long-term', label: '长期保留' },
+        { key: 'pending', label: '暂存' },
+        { key: 'cancel', label: '取消' }
+      ]
+    case 'git-ignore':
+      return [
+        { key: 'add-ignore', label: '加入 .gitignore' },
+        { key: 'keep-visible', label: '保持可见' },
+        { key: 'cancel', label: '取消' }
+      ]
+    default:
+      return []
+  }
+}

@@ -2,6 +2,8 @@ import { App } from 'antd'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileOverlay } from './FileOverlay'
 import { ReferencedFilesPanel } from './ReferencedFilesPanel'
+import { SessionArtifactsPanel } from './SessionArtifactsPanel'
+import { useSessionArtifacts } from './useSessionArtifacts'
 import { RemoteStatusBar } from './RemoteStatusBar'
 import { ResizeHandle } from './ResizeHandle'
 import { DetailPanelFileList } from './DetailPanelFileList'
@@ -17,6 +19,7 @@ export function DetailPanel() {
     useDetailPanel()
   const config = useTypedSelector((s) => s.config.config)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
+  const { artifacts } = useSessionArtifacts(currentSessionId)
 
   const handleFileSelect = (relPath: string) => {
     void openFile(relPath).catch((e) => {
@@ -63,6 +66,16 @@ export function DetailPanel() {
         onDoubleClick={resetReferencedFilesHeight}
       />
       <div className="detail-panel-bottom">
+        <SessionArtifactsPanel
+          sessionId={currentSessionId}
+          workDir={config?.workDir ?? ''}
+          artifacts={artifacts}
+          onOpen={handleFileSelect}
+          onDelete={(artifactId) => {
+            if (!currentSessionId) return
+            void window.api.artifactDelete({ sessionId: currentSessionId, artifactId })
+          }}
+        />
         <ReferencedFilesPanel sessionId={currentSessionId} />
       </div>
       <RemoteStatusBar />

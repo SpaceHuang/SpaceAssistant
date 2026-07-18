@@ -1203,3 +1203,59 @@
   border-radius: var(--sa-radius-sm);
   background: rgba(255, 255, 255, 0.95);
 }
+
+.session-artifacts-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px 8px;
+  border-bottom: 1px solid var(--sa-border-subtle);
+}
+
+.session-artifacts-panel__empty {
+  padding: 4px 0;
+  font-size: 12px;
+  color: var(--sa-text-secondary);
+}
+
+.session-artifacts-group__header {
+  width: 100%;
+  text-align: left;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sa-text);
+  cursor: pointer;
+}
+
+.session-artifacts-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 2px 8px;
+}
+
+.session-artifacts-item__open {
+  border: none;
+  background: transparent;
+  color: var(--sa-link);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.session-artifacts-item__path,
+.session-artifacts-item__stage {
+  font-size: 11px;
+  color: var(--sa-text-secondary);
+}
+
+.session-artifacts-item__delete {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--sa-text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+}

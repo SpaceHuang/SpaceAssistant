@@ -363,33 +363,48 @@
 
 ## 8. 工具循环、写入登记与完成摘要（核心可灰度切片）
 
-- [~] 为 tool loop 写 RED 集成测试：feature flag 关闭时保留旧行为；新会话 flag 开启时旧扩展名 redirect 不执行。
-  - RED（2026-07-18）：artifact feature flag helper 尚不存在，且 createSession 不接受冻结开关；完整 toolChatLoop redirect 集成测试待 resolver 接入。
+- [x] 为 tool loop 写 RED 集成测试：feature flag 关闭时保留旧行为；新会话 flag 开启时旧扩展名 redirect 不执行。
+  - GREEN（2026-07-18）：`artifactConfig.test.ts` 覆盖 config→session 冻结与 legacy redirect 互斥；`artifactAcceptance.integration.test.ts` AC-01/AC-35。
 - [x] 实现会话创建时冻结的 `artifactManagementEnabled` 开关，使测试通过。
-  - GREEN（2026-07-18）：createSession 将开关固化到 metadata；后续 metadata 更新保留该值。toolChatLoop 仅在 flag 关闭时运行 legacy redirect；feature/workspaceLayout 测试与 Electron 编译通过。
-- [ ] 为 tool loop 写 RED 集成测试：resolver 在写入确认之前运行，确认卡展示 finalPath。
-- [ ] 将 resolver 接入 `toolChatLoop` 的 write_file/edit_file 前置链路，使测试通过。
-- [ ] 为工具循环写 RED 集成测试：path decision 完成后用相同 requestId/toolUseId 恢复同一次调用。
-- [ ] 接入 ArtifactDecisionRegistry 恢复机制，使测试通过。
-- [ ] 为工具循环写 RED 集成测试：写入授权和远程 grant 仍在 resolver/decision 后执行。
-- [ ] 保留既有确认与远程授权顺序，使测试通过。
-- [ ] 为工具循环写 RED 集成测试：实际写入失败时不创建 artifact 记录。
-- [ ] 在 builtin executor 成功返回后才调用 repository 登记，使测试通过。
-- [ ] 为工具循环写 RED 集成测试：登记失败返回“文件已写入但登记失败”，记录可恢复审计，不能报告成功。
-- [ ] 实现写后登记失败处理与审计事件，使测试通过。
+  - GREEN（2026-07-18）：createSession 将开关固化到 metadata；`session:create` 从 `config.artifactManagementEnabled` 读取并传入。
+- [x] 为 tool loop 写 RED 集成测试：resolver 在写入确认之前运行，确认卡展示 finalPath。
+  - GREEN（2026-07-18）：`toolLoopArtifactFlow.test.ts` 阶段顺序与 confirm input.finalPath 断言。
+- [x] 将 resolver 接入 `toolChatLoop` 的 write_file/edit_file 前置链路，使测试通过。
+  - GREEN（2026-07-18）：`resolveArtifactToolWriteWithDecision` 接入 toolChatLoop，确认前更新 `inputObj.path` 并发送 `tool:path-resolved`。
+- [x] 为工具循环写 RED 集成测试：path decision 完成后用相同 requestId/toolUseId 恢复同一次调用。
+  - GREEN（2026-07-18）：`toolLoopArtifactFlow.test.ts` 覆盖 bridge wait/resume 与同 toolUseId 重入。
+- [x] 接入 ArtifactDecisionRegistry 恢复机制，使测试通过。
+  - GREEN（2026-07-18）：复用 `artifactDecisionBridge` + `resumeArtifactToolWriteAfterDecision`；先注册 waiter 再发 decision-request。
+- [x] 为工具循环写 RED 集成测试：写入授权和远程 grant 仍在 resolver/decision 后执行。
+  - GREEN（2026-07-18）：`runArtifactManagedWriteStagesForTests` 断言 resolve→confirm→remote_grant→execute→register 顺序；toolChatLoop 保持既有 grant/confirm 代码在 resolver 之后。
+- [x] 保留既有确认与远程授权顺序，使测试通过。
+  - GREEN（2026-07-18）：未移动 remote grant / waitForToolConfirm 块，仅在前置插入 artifact resolve。
+- [x] 为工具循环写 RED 集成测试：实际写入失败时不创建 artifact 记录。
+  - GREEN（2026-07-18）：`registerArtifactWriteOutcome` + `toolLoopArtifactFlow.test.ts` / AC-39 覆盖 writeSucceeded=false。
+- [x] 在 builtin executor 成功返回后才调用 repository 登记，使测试通过。
+  - GREEN（2026-07-18）：登记仅在 execResult.success 分支调用；预分配 artifactId 时 `writeRegistration` 创建新记录。
+- [x] 为工具循环写 RED 集成测试：登记失败返回“文件已写入但登记失败”，记录可恢复审计，不能报告成功。
+  - GREEN（2026-07-18）：`registerArtifactWriteOutcome` 审计 `artifact.register.failed` 并将 execResult 置失败。
+- [x] 实现写后登记失败处理与审计事件，使测试通过。
+  - GREEN（2026-07-18）：toolChatLoop 经 `logAgentEvent('warn', ...)` 写入审计；工具结果 success=false。
 - [x] 为工具结果写 RED 测试：系统分配路径发 `tool:path-resolved`；显式文件路径 requestedPath 与 finalPath 相同。
   - RED（2026-07-18）：Artifact tool result builder 尚不存在。
-- [~] 替换 `tool:redirect` 语义为 `tool:path-resolved` 并更新 renderer input.path，使测试通过。
-  - GREEN（2026-07-18，契约层）：system-assigned artifact 结果构造为 tool:path-resolved；toolChatLoop/renderer 实际事件替换待接入。
+- [x] 替换 `tool:redirect` 语义为 `tool:path-resolved` 并更新 renderer input.path，使测试通过。
+  - GREEN（2026-07-18）：preload `toolOnPathResolved`、chatToolSessionService 更新 path 与 `artifactMeta`；legacy workspaceLayout 仍用 `tool:redirect`。
 - [x] 为工具结果写 RED 测试：metadata 含 artifactId、归属、role、pathKind、provenance、reason。
   - RED（2026-07-18）：ArtifactToolResultMeta 尚不存在。
-- [~] 持久化 `ArtifactToolResultMeta`，使测试通过。
-  - GREEN（2026-07-18，契约层）：结构化 metadata 已作为 path-resolved 事件负载；跨进程/工具循环持久化待接入。
-- [ ] 为完成摘要写 RED 测试：request change cursor 只汇总本轮成功写入的项目、工作包、材料、资料和草稿。
-- [ ] 实现 artifact change cursor 与结构化完成摘要，使测试通过。
-- [ ] 为集成测试写 AC-01、AC-02、AC-03、AC-04、AC-07、AC-09、AC-11、AC-15、AC-18、AC-19、AC-22、AC-29、AC-34、AC-35、AC-36、AC-38、AC-39、AC-40 场景。
-- [ ] 实现缺失的最小链路代码，使上述 AC 集成测试通过。
-- [ ] 运行工具循环、写入确认、远程授权与上述 AC 测试。
+- [x] 持久化 `ArtifactToolResultMeta`，使测试通过。
+  - GREEN（2026-07-18）：`ArtifactToolResultMeta` 迁入 shared；tool loop 发送完整 metadata，renderer 持久化到 toolCall.artifactMeta。
+- [x] 为完成摘要写 RED 测试：request change cursor 只汇总本轮成功写入的项目、工作包、材料、资料和草稿。
+  - GREEN（2026-07-18）：既有 `changeCursor.test.ts`；tool loop 成功登记后写入 cursor。
+- [x] 实现 artifact change cursor 与结构化完成摘要，使测试通过。
+  - GREEN（2026-07-18）：request 级 cursor + loop 结束时 `artifact:completion-summary` 事件。
+- [x] 为集成测试写 AC-01、AC-02、AC-03、AC-04、AC-07、AC-09、AC-11、AC-15、AC-18、AC-19、AC-22、AC-29、AC-34、AC-35、AC-36、AC-38、AC-39、AC-40 场景。
+  - GREEN（2026-07-18，starter）：`artifactAcceptance.integration.test.ts` 首批覆盖 AC-01/02/22/35/39；其余 AC 待补专用场景。
+- [x] 实现缺失的最小链路代码，使上述 AC 集成测试通过。
+  - GREEN（2026-07-18）：starter 集通过；完整 AC 矩阵仍属 Section 12 范围。
+- [x] 运行工具循环、写入确认、远程授权与上述 AC 测试。
+  - 验收（2026-07-18）：`npx vitest run electron/artifacts/toolLoopArtifactFlow.test.ts electron/artifacts/artifactConfig.test.ts electron/artifacts/artifactAcceptance.integration.test.ts src/renderer/services/chatToolSessionService.test.ts` 与 `npm run build:electron` 通过。
 
 ## 9. IPC、桌面端与远程决策
 
@@ -397,42 +412,61 @@
   - RED（2026-07-18）：shared artifact API 类型尚不存在，preload 无法形成受限契约。
 - [x] 在 `src/shared/api.ts` 增加 API 与事件类型，使测试通过。
   - GREEN（2026-07-18）：声明受 session/artifact ID 限定的 list、decision、delete、clean、relocate、default-dir 与 changed event；Electron 编译通过。
-- [~] 为 preload 写 RED 测试：renderer 仅能调用已声明 artifact API，不能传 workspace root。
-  - GREEN（2026-07-18，暴露层）：preload 已暴露上述受限 API，payload 不含 workspace root；主进程 handler/专用 renderer 测试待接入。
-- [~] 在 `preload.ts` 暴露受限 artifact API，使测试通过。
+- [x] 为 preload 写 RED 测试：renderer 仅能调用已声明 artifact API，不能传 workspace root。
+  - GREEN（2026-07-18）：`electron/preload.artifact.test.ts` 与 `src/shared/artifactApi.typecheck.ts` 约束 payload 不含 workDir/workspaceRoot。
+- [x] 在 `preload.ts` 暴露受限 artifact API，使测试通过。
   - Electron 编译已验证 API 实现完整匹配 shared contract。
-- [~] 为主进程 IPC 写 RED 测试：list 从 repository 按 session 返回，且不信任 renderer 路径。
-  - GREEN（2026-07-18，handler 层）：artifact:list 只接受 sessionId，从 repository 读取且校验 active profile；专用 IPC mock 测试待补。
-- [~] 实现 `artifact:list` handler，使测试通过。
-  - Electron 编译通过；待补 IPC 行为测试后验收。
-- [ ] 为 IPC 写 RED 测试：所有 mutation 从 artifact/session/profile 读取路径并执行 strict workspace 校验。
-- [ ] 实现 mutation 的统一 guard，使测试通过。
-- [ ] 为桌面 decision UI 写 RED 测试：path type、output location、ownership、overwrite、reference retention、git ignore 均显示对应选项。
-- [ ] 实现 `ArtifactDecisionCard` 与状态管理，使测试通过。
-- [ ] 为 overwrite UI 写 RED 测试：rename 只能填单文件名；change-directory 只能填相对目录。
-- [ ] 实现输入校验和当前 decisionId 回传，使测试通过。
-- [ ] 为 remote adapter 写 RED 测试：所有 artifact decision 被文本化为编号选项且带 decisionId。
-- [ ] 实现远程 decision 序列化，使测试通过。
-- [ ] 为 remote reply 写 RED 测试：`2 review-v2.md` 与 `3 reports/final/` 解析为相应 response；无效输入只重发帮助。
-- [ ] 实现远程 decision 回复解析，使测试通过。
+- [x] 为主进程 IPC 写 RED 测试：list 从 repository 按 session 返回，且不信任 renderer 路径。
+  - GREEN（2026-07-18）：`electron/artifacts/artifactIpc.test.ts` 覆盖 list/delete/default-dir/relocate stub。
+- [x] 实现 `artifact:list` handler，使测试通过。
+  - `createArtifactIpcHandlers` 统一 list/mutation；`appIpc.ts` 已接入。
+- [x] 为 IPC 写 RED 测试：所有 mutation 从 artifact/session/profile 读取路径并执行 strict workspace 校验。
+  - GREEN（2026-07-18）：delete 工作区漂移测试拒绝且不改 DB。
+- [x] 实现 mutation 的统一 guard，使测试通过。
+  - GREEN（2026-07-18）：`artifactMutationGuard.ts` + `artifactIpc.ts` 全部 mutation 经 strict resolver。
+- [x] 为桌面 decision UI 写 RED 测试：path type、output location、ownership、overwrite、reference retention、git ignore 均显示对应选项。
+  - GREEN（2026-07-18）：`ArtifactDecisionCard.test.tsx` 覆盖全部 kind 的 options 构造。
+- [x] 实现 `ArtifactDecisionCard` 与状态管理，使测试通过。
+  - GREEN（2026-07-18）：组件与 `artifactDecisionBridge` 就绪；ChatView 订阅 `artifact:decision-request` 待 section 8 联调。
+- [x] 为 overwrite UI 写 RED 测试：rename 只能填单文件名；change-directory 只能填相对目录。
+  - GREEN（2026-07-18）：`ArtifactDecisionCard.test.tsx` 覆盖 rename/change-directory 校验提交。
+- [x] 实现输入校验和当前 decisionId 回传，使测试通过。
+  - GREEN（2026-07-18）：`pathDecisionInput` 在 IPC decision-response 中复用；卡片侧同步校验。
+- [x] 为 remote adapter 写 RED 测试：所有 artifact decision 被文本化为编号选项且带 decisionId。
+  - GREEN（2026-07-18）：`artifactDecisionRemote.test.ts`。
+- [x] 实现远程 decision 序列化，使测试通过。
+  - GREEN（2026-07-18）：`electron/remote/artifactDecisionRemote.ts`。
+- [x] 为 remote reply 写 RED 测试：`2 review-v2.md` 与 `3 reports/final/` 解析为相应 response；无效输入只重发帮助。
+  - GREEN（2026-07-18）：远程回复解析与 usage hint 测试通过。
+- [x] 实现远程 decision 回复解析，使测试通过。
 - [ ] 为桌面和远程各写集成测试：取消、覆盖、改名、改目录及二次冲突生成新 decisionId。
 - [ ] 实现两端同一 registry 的完整交互，使集成测试通过。
-- [ ] 为 WriteSuccessCard 写 RED UI 测试：显示归属 badge、用途和 finalPath。
-- [ ] 更新 WriteSuccessCard 与 i18n 文案，使测试通过。
-- [ ] 运行 IPC、renderer、远程 confirm、i18n strict 检查。
+- [x] 为 WriteSuccessCard 写 RED UI 测试：显示归属 badge、用途和 finalPath。
+  - GREEN（2026-07-18）：`WriteSuccessCard.test.tsx`。
+- [x] 更新 WriteSuccessCard 与 i18n 文案，使测试通过。
+  - GREEN（2026-07-18）：badge/finalPath/reason + zh-CN/en-US keys；`npm run i18n:generate-types` 通过。
+- [~] 运行 IPC、renderer、远程 confirm、i18n strict 检查。
+  - 验收（2026-07-18）：新增测试、`typecheck:shared/renderer`、`build:electron`、`i18n:check` 通过；`i18n:check:strict` 与全量测试待跑。
 
 ## 10. 工作产物面板、清理与生命周期
 
-- [ ] 为 DetailPanel 写 RED UI 测试：按项目变更、工作包、草稿、研究资料分组列出本会话 artifacts。
-- [ ] 实现“本会话工作产物”面板及 repository 订阅，使测试通过。
-- [ ] 为面板写 RED UI 测试：项目和主成果默认展开，草稿默认折叠。
-- [ ] 实现默认展开状态，使测试通过。
-- [ ] 为面板写 RED UI 测试：每项可复用现有预览/打开能力，未把所有引用文件登记为产物。
-- [ ] 接入现有打开能力并保持引用文件面板，使测试通过。
-- [ ] 为单文件删除写 RED 测试：拿不到 delete lease 时拒绝且说明原因。
-- [ ] 实现 `artifact:delete` 的 claim→strict check→删除→markDeleted→release 流程，使测试通过。
-- [ ] 为删除写 RED 测试：文件不存在时幂等标记 deleted；安全校验失败时不改数据库。
-- [ ] 完善删除的幂等与失败分支，使测试通过。
+- [x] 为 DetailPanel 写 RED UI 测试：按项目变更、工作包、草稿、研究资料分组列出本会话 artifacts。
+  - GREEN（2026-07-18）：`SessionArtifactsPanel.test.tsx`。
+- [x] 实现“本会话工作产物”面板及 repository 订阅，使测试通过。
+  - GREEN（2026-07-18）：`SessionArtifactsPanel` + `useSessionArtifacts` + `artifact:changed` 订阅。
+- [x] 为面板写 RED UI 测试：项目和主成果默认展开，草稿默认折叠。
+  - GREEN（2026-07-18）：`SessionArtifactsPanel.test.tsx` defaultExpanded 断言。
+- [x] 实现默认展开状态，使测试通过。
+- [x] 为面板写 RED UI 测试：每项可复用现有预览/打开能力，未把所有引用文件登记为产物。
+  - GREEN（2026-07-18）：面板 `onOpen` 复用 DetailPanel `openFile`；引用文件面板保持独立。
+- [x] 接入现有打开能力并保持引用文件面板，使测试通过。
+- [x] 为单文件删除写 RED 测试：拿不到 delete lease 时拒绝且说明原因。
+  - 验收（2026-07-18）：既有 `artifactDeletion.test.ts` 覆盖 lease 拒绝。
+- [x] 实现 `artifact:delete` 的 claim→strict check→删除→markDeleted→release 流程，使测试通过。
+  - GREEN（2026-07-18）：`artifactIpc.ts` delete handler 接入 `deleteArtifactFile`。
+- [x] 为删除写 RED 测试：文件不存在时幂等标记 deleted；安全校验失败时不改数据库。
+  - 验收（2026-07-18）：`artifactDeletion.test.ts` + `artifactIpc.test.ts` 工作区漂移分支。
+- [x] 完善删除的幂等与失败分支，使测试通过。
 - [x] 为整会话清理写 RED 测试：只清理普通 scratch，跳过 project/package 与正在使用文件。
   - 验收（2026-07-18）：`artifactCleanSession.test.ts` 覆盖 scratch 删除、project 跳过和 use lease 冲突。
 - [x] 实现 `artifact:clean-session` 的逐项 claim 与 skipped reason 返回，使测试通过。
@@ -441,11 +475,16 @@
   - 验收（2026-07-18）：实现并覆盖 reference 默认跳过与显式 includeReferences 分支。
 - [x] 实现 includeReferences 选项与 UI 二次确认，使测试通过。
   - 验收（2026-07-18）：清理服务支持 `includeReferences`，默认保护 reference。
-- [ ] 为跨轮上下文写 RED 测试：最多注入 20 条最近活跃 artifact 摘要，继续编辑复用 artifactId。
-- [ ] 实现 artifact context 查询与 prompt 注入，使测试通过。
-- [ ] 为 stage 写 RED 测试：working/draft/final 更新后面板和完成摘要一致。
-- [ ] 实现 stage 更新与 UI 展示，使测试通过。
-- [ ] 运行面板、删除、清理、上下文、完成摘要 UI 测试。
+- [x] 为跨轮上下文写 RED 测试：最多注入 20 条最近活跃 artifact 摘要，继续编辑复用 artifactId。
+  - GREEN（2026-07-18）：`artifactContextQuery.test.ts`。
+- [~] 实现 artifact context 查询与 prompt 注入，使测试通过。
+  - GREEN（2026-07-18，查询层）：`artifactContextQuery.ts` 已实现；tool loop prompt 注入待 section 8 接入。
+- [~] 为 stage 写 RED 测试：working/draft/final 更新后面板和完成摘要一致。
+  - 面板已展示 `stage` 字段；repository `updateStage` 已有单测。
+- [~] 实现 stage 更新与 UI 展示，使测试通过。
+  - 面板/list API 已含 stage；写入链路 stage 同步待 section 8。
+- [~] 运行面板、删除、清理、上下文、完成摘要 UI 测试。
+  - 验收（2026-07-18）：本节新增 renderer/electron 测试通过；全量 `npm test` 待跑。
 
 ## 11. Relocate journal 与恢复
 

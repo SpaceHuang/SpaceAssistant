@@ -126,6 +126,8 @@ export type ArtifactApiItem = {
   title: string
   finalPath: string
   status: 'active' | 'deleted'
+  stage?: 'working' | 'draft' | 'final'
+  packageId?: string
 }
 
 export type ArtifactDecisionResponsePayload = {
@@ -365,6 +367,14 @@ export type SpaceAssistantApi = {
   toolOnUse: (cb: (data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void) => () => void
   toolOnRedirect: (
     cb: (data: { requestId: string; toolUseId: string; originalPath: string; newPath: string }) => void
+  ) => () => void
+  toolOnPathResolved: (
+    cb: (data: {
+      requestId: string
+      toolUseId: string
+      path: string
+      metadata: import('./artifactTypes').ArtifactToolResultMeta
+    }) => void
   ) => () => void
   toolOnConfirmRequest: (
     cb: (data: {

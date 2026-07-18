@@ -52,5 +52,14 @@
     "startAria": "启动远程监听",
     "stop": "停止",
     "stopAria": "停止远程监听"
+  },
+  "sessionArtifacts": {
+    "title": "本会话工作产物",
+    "empty": "暂无已登记的工作产物",
+    "groupProject": "项目变更",
+    "groupPackage": "工作包",
+    "groupScratch": "草稿",
+    "groupReference": "研究资料",
+    "delete": "删除"
   }
 }

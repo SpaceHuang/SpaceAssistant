@@ -113,7 +113,8 @@ import { classifyWikiPath } from './wiki/wikiPaths'
 import { copyFileInWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } from './wiki/wikiImport'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { openExternalLink } from './externalLink'
-import { ArtifactRepository } from './artifacts/artifactRepository'
+import { readArtifactManagementEnabledFromConfig } from './artifacts/artifactConfig'
+import { createArtifactIpcHandlers, emitArtifactChanged } from './artifacts/artifactIpc'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 import {
   deleteSessionChatAttachments,
@@ -147,7 +148,8 @@ const CONFIG_KEYS = {
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   browser: 'config.browser',
   locale: 'config.locale',
-  workspaceLayout: 'config.workspaceLayout'
+  workspaceLayout: 'config.workspaceLayout',
+  artifactManagementEnabled: 'config.artifactManagementEnabled'
 } as const
 
 export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
@@ -279,6 +281,13 @@ async function backupAfterMessagePatch(
 }
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
+  const artifactHandlers = createArtifactIpcHandlers({
+    db: ctx.db,
+    getProfiles: () => ctx.workDirManager.listProfiles(),
+    getActiveProfileId: () => ctx.workDirManager.getActiveProfileId(),
+    notifyChanged: (event) => emitArtifactChanged(getMainWindow(), event)
+  })
+
   const skillManager = createSkillManager({
     getUserDataPath: ctx.getUserDataPath,
     getWorkDir: ctx.getWorkDir,
@@ -516,20 +525,30 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   })
 
   ipcMain.handle('artifact:list', (_e, payload: { sessionId?: string }) => {
-    const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
-    if (!sessionId) return []
-    const session = getSession(ctx.db, sessionId)
-    if (!session || session.workDirProfileId !== ctx.workDirManager.getActiveProfileId()) return []
-    return new ArtifactRepository(ctx.db).listBySession(sessionId).map((artifact) => ({
-      id: artifact.id,
-      sessionId: artifact.sessionId,
-      container: artifact.container,
-      role: artifact.role,
-      title: artifact.title,
-      finalPath: artifact.canonicalPath,
-      status: artifact.status
-    }))
+    return artifactHandlers.list(payload)
   })
+
+  ipcMain.handle('artifact:delete', async (_e, payload: { sessionId?: string; artifactId?: string }) => {
+    return artifactHandlers.delete(payload)
+  })
+
+  ipcMain.handle('artifact:clean-session', async (_e, payload: { sessionId?: string; includeReferences?: boolean }) => {
+    return artifactHandlers.cleanSession(payload)
+  })
+
+  ipcMain.handle('artifact:decision-response', (_e, payload: import('../src/shared/api').ArtifactDecisionResponsePayload) => {
+    artifactHandlers.decisionResponse(payload)
+  })
+
+  ipcMain.handle('artifact:set-default-dir', (_e, payload: { sessionId?: string; dir?: string }) => {
+    artifactHandlers.setDefaultDir(payload)
+  })
+
+  ipcMain.handle(
+    'artifact:relocate',
+    async (_e, payload: { sessionId?: string; artifactId?: string; target?: string; mode?: 'move' | 'copy' }) =>
+      artifactHandlers.relocate(payload)
+  )
 
   ipcMain.handle(
     'session:create',
@@ -539,7 +558,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     ): Promise<Session> => {
       const s = createSession(ctx.db, {
         ...payload,
-        workDirProfileId: ctx.workDirManager.getActiveProfileId()
+        workDirProfileId: ctx.workDirManager.getActiveProfileId(),
+        artifactManagementEnabled: readArtifactManagementEnabledFromConfig(ctx.db)
       })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
       await ctx.backup.backupImmediate(s, arrayMessagePageReader([]))

@@ -56,7 +56,14 @@ if (typeof window !== 'undefined') {
     fileWriteDirReset: api.fileWriteDirReset ?? (async () => ({ ok: true as const })),
     toolOnResult: api.toolOnResult ?? (() => () => {}),
     workdirSwitch: api.workdirSwitch ?? (async () => ({ success: true, sessions: [] })),
-    configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig))
+    configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig)),
+    artifactList: api.artifactList ?? (async () => []),
+    artifactDelete: api.artifactDelete ?? (async () => ({ ok: true })),
+    artifactCleanSession: api.artifactCleanSession ?? (async () => ({ deleted: [], skipped: [] })),
+    artifactDecisionResponse: api.artifactDecisionResponse ?? (async () => {}),
+    artifactRelocate: api.artifactRelocate ?? (async () => ({ ok: false, error: 'stub' })),
+    artifactSetDefaultDir: api.artifactSetDefaultDir ?? (async () => {}),
+    artifactOnChanged: api.artifactOnChanged ?? (() => () => undefined)
   } as SpaceAssistantApi
 }
 

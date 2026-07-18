@@ -202,5 +202,38 @@
   },
   "writeDirChip": {
     "label": "写入目录：{{dir}}"
+  },
+  "writeSuccess": {
+    "badgeProject": "项目变更",
+    "badgePackage": "工作包",
+    "badgeScratch": "草稿",
+    "badgeSupporting": "支撑材料",
+    "badgeReference": "研究资料"
+  },
+  "artifactDecision": {
+    "defaultTitle": "需要您的选择",
+    "pathTypeTitle": "这是文件还是目录？",
+    "outputLocationTitle": "主成果输出到哪里？",
+    "ownershipTitle": "该成果属于哪里？",
+    "overwriteTitle": "目标路径已被占用",
+    "referenceRetentionTitle": "如何保留这份资料？",
+    "gitIgnoreTitle": "草稿文件 Git 处理方式",
+    "renamePlaceholder": "新文件名（不含路径）",
+    "directoryPlaceholder": "相对工作区的目录",
+    "cancel": "取消",
+    "optionFile": "文件",
+    "optionDirectory": "目录",
+    "optionCustomPath": "指定输出路径",
+    "optionProject": "项目变更",
+    "optionPackage": "工作包",
+    "optionScratch": "草稿",
+    "optionOverwrite": "覆盖",
+    "optionRename": "改名",
+    "optionChangeDirectory": "改目录",
+    "optionCancel": "取消",
+    "optionLongTerm": "长期保留",
+    "optionPending": "暂存",
+    "optionAddIgnore": "加入 .gitignore",
+    "optionKeepVisible": "保持可见"
   }
 }

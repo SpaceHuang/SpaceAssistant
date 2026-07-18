@@ -24,7 +24,6 @@ import type {
   WikiConfig,
   WorkspaceLayoutConfig
 } from '../src/shared/domainTypes'
-import type { ArtifactWriteIntent } from '../src/shared/artifactTypes'
 import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
@@ -151,11 +150,14 @@ import {
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { applyWorkspaceLayoutRedirect, resolveWriteDirBase } from './workspaceLayout/redirect'
 import { isArtifactManagementEnabled, shouldUseLegacyWorkspaceRedirect } from './artifacts/featureFlag'
-import { resolveToolArtifactPath } from './artifacts/toolArtifactPath'
-import { registerAfterSuccessfulWrite } from './artifacts/postWriteRegistration'
-import { registerResolvedArtifactWrite } from './artifacts/writeRegistration'
-import type { ResolvedArtifactOutput } from './artifacts/artifactResolver'
-import { ArtifactRepository } from './artifacts/artifactRepository'
+import {
+  createToolLoopArtifactState,
+  listArtifactOccupiedPaths,
+  registerArtifactWriteOutcome,
+  resolveArtifactToolWriteWithDecision,
+  type PreparedArtifactWrite
+} from './artifacts/toolLoopArtifactFlow'
+import { buildArtifactCompletionSummary } from './artifacts/completionSummary'
 import {
   getWriteDirChoice,
   setWriteDirChoice
@@ -504,6 +506,7 @@ async function runToolChatSessionInner(
   }
   let loopRound = 0
   let lastValidUsage: ToolLoopUsage | undefined
+  const artifactState = appDb ? createToolLoopArtifactState(requestId) : undefined
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -755,6 +758,12 @@ async function runToolChatSessionInner(
     }
 
     if (toolUses.length === 0) {
+      if (artifactState) {
+        const summary = buildArtifactCompletionSummary(artifactState.changeCursor.entries())
+        if (summary.project.length + summary.package.length + summary.scratch.length > 0) {
+          safeWebContentsSend(sender, 'artifact:completion-summary', { requestId, sessionId, summary })
+        }
+      }
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }) }
     }
@@ -978,45 +987,54 @@ async function runToolChatSessionInner(
       }
 
       let workspaceRedirectNote: string | undefined
-      let resolvedArtifactWrite: { intent: ArtifactWriteIntent; resolved: ResolvedArtifactOutput } | undefined
+      let resolvedArtifactWrite: PreparedArtifactWrite | undefined
       const artifactManagedSession = appDb ? isArtifactManagementEnabled(getSession(appDb, sessionId)?.metadata ?? {}) : false
       if (
         artifactManagedSession &&
+        artifactState &&
         (toolName === 'write_file' || toolName === 'edit_file') &&
         typeof inputObj.path === 'string' &&
         inputObj.artifact
       ) {
-        try {
-          const resolved = resolveToolArtifactPath({
-            workDir,
-            sessionId,
-            toolUseId,
-            path: inputObj.path,
-            artifact: inputObj.artifact
-          })
-          if (resolved.decision) throw new Error(`Artifact path requires ${resolved.decision.kind} decision`)
-          resolvedArtifactWrite = { intent: inputObj.artifact as ArtifactWriteIntent, resolved }
-          inputObj.path = resolved.finalPath
-          safeWebContentsSend(sender, 'tool:path-resolved', {
-            requestId,
-            toolUseId,
-            requestedPath: typeof inputObj.artifact === 'object' && inputObj.artifact !== null && typeof (inputObj.artifact as Record<string, unknown>).requestedPath === 'string'
-              ? (inputObj.artifact as Record<string, unknown>).requestedPath
-              : inputObj.path,
-            finalPath: resolved.finalPath,
-            provenance: resolved.provenance
-          })
-        } catch (error) {
-          const artifactError = error instanceof Error ? error.message : 'Artifact path resolution failed'
-          toolResults.push(buildToolErrorResult(toolUseId, artifactError))
-          safeWebContentsSend(sender, 'tool:result', { requestId, toolUseId, result: { success: false, error: artifactError } })
+        const occupiedPaths = listArtifactOccupiedPaths(appDb!, sessionId, workDir)
+        const resolveResult = await resolveArtifactToolWriteWithDecision({
+          workDir,
+          sessionId,
+          requestId,
+          toolUseId,
+          path: inputObj.path,
+          artifact: inputObj.artifact,
+          occupiedPaths,
+          onDecisionRequired: (pending) => {
+            safeWebContentsSend(sender, 'artifact:decision-request', {
+              requestId,
+              sessionId,
+              toolUseId,
+              decisionId: pending.decisionId,
+              decisionKind: pending.decisionKind,
+              attempt: pending.attempt
+            })
+          }
+        })
+        if (resolveResult.kind === 'error') {
+          toolResults.push(buildToolErrorResult(toolUseId, resolveResult.message))
+          safeWebContentsSend(sender, 'tool:result', { requestId, toolUseId, result: { success: false, error: resolveResult.message } })
           floatingNotificationManager?.onToolResult(requestId, toolUseId)
-          if (toolErrorRepeat.noteFailure(toolName, artifactError)) {
-            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${artifactError}`
+          if (toolErrorRepeat.noteFailure(toolName, resolveResult.message)) {
+            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${resolveResult.message}`
             break
           }
           continue
         }
+        if (resolveResult.kind !== 'ready') continue
+        resolvedArtifactWrite = resolveResult.prepared
+        inputObj.path = resolveResult.prepared.finalPath
+        safeWebContentsSend(sender, 'tool:path-resolved', {
+          requestId,
+          toolUseId,
+          path: resolveResult.prepared.pathResolvedPayload.path,
+          metadata: resolveResult.prepared.pathResolvedPayload.metadata
+        })
       }
       if (
         workspaceLayout?.enabled &&
@@ -1837,25 +1855,25 @@ async function runToolChatSessionInner(
       }
 
       const durationMs = Date.now() - execStartedAt
-      if (execResult.success && resolvedArtifactWrite && appDb) {
-        try {
-          const session = getSession(appDb, sessionId)
-          if (!session?.workDirProfileId) throw new Error('Artifact session workspace is unavailable')
-          registerAfterSuccessfulWrite({
-            success: true,
-            register: () => {
-              registerResolvedArtifactWrite({
-                repository: new ArtifactRepository(appDb),
-                sessionId,
-                workDirProfileId: session.workDirProfileId!,
-                workspaceRootReal: workDir,
-                intent: resolvedArtifactWrite!.intent,
-                resolved: resolvedArtifactWrite!.resolved
-              })
-            }
+      if (execResult.success && resolvedArtifactWrite && appDb && artifactState) {
+        const session = getSession(appDb, sessionId)
+        if (!session?.workDirProfileId) {
+          execResult = { success: false, error: 'Artifact session workspace is unavailable' }
+        } else {
+          const regOutcome = registerArtifactWriteOutcome({
+            db: appDb,
+            sessionId,
+            workDir,
+            workDirProfileId: session.workDirProfileId,
+            requestId,
+            prepared: resolvedArtifactWrite,
+            writeSucceeded: true,
+            changeCursor: artifactState.changeCursor,
+            audit: (event, detail) => logAgentEvent('warn', 'tool.error', { ...detail, artifactAuditEvent: event })
           })
-        } catch (error) {
-          execResult = { success: false, error: error instanceof Error ? error.message : '文件已写入但登记失败' }
+          if (!regOutcome.ok) {
+            execResult = { success: false, error: regOutcome.error }
+          }
         }
       }
       if (execResult.success && fileAutoApproved && (toolName === 'write_file' || toolName === 'edit_file')) {
