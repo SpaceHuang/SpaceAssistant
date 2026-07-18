@@ -17,6 +17,7 @@ import {
   serializeToolUseForDb
 } from '../messageCodec'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
+import { ARTIFACT_MANAGEMENT_ENABLED_KEY, freezeArtifactManagementFlag } from '../artifacts/featureFlag'
 
 type SessionRow = {
   id: string
@@ -129,6 +130,7 @@ export function createSession(
     maxTokens?: number
     metadata?: Record<string, unknown>
     workDirProfileId?: string
+    artifactManagementEnabled?: boolean
   }
 ): Session {
   const now = Date.now()
@@ -148,7 +150,7 @@ export function createSession(
     updatedAt: now,
     messageCount: 0,
     skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
-    metadata: input.metadata ? { ...input.metadata } : {},
+    metadata: freezeArtifactManagementFlag(input.metadata ? { ...input.metadata } : {}, input.artifactManagementEnabled),
     schemaVersion: CURRENT_SCHEMA_VERSION,
     workDirProfileId: input.workDirProfileId
   }
@@ -208,7 +210,9 @@ export function updateSession(
   const next: Session = {
     ...cur,
     ...patch,
-    metadata: patch.metadata ?? cur.metadata,
+    metadata: patch.metadata
+      ? { ...patch.metadata, ...(ARTIFACT_MANAGEMENT_ENABLED_KEY in cur.metadata ? { [ARTIFACT_MANAGEMENT_ENABLED_KEY]: cur.metadata[ARTIFACT_MANAGEMENT_ENABLED_KEY] } : {}) }
+      : cur.metadata,
     skillsState: patch.skillsState ? normalizeSessionSkillsState(patch.skillsState) : cur.skillsState,
     updatedAt: Date.now()
   }
