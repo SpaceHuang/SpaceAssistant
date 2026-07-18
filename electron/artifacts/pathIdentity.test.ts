@@ -17,4 +17,10 @@ describe('artifactPathIdentity', () => {
     expect(artifactPathIdentity(path.join(root, '.', 'actual.txt'))).toBe(fs.realpathSync(existing))
     expect(artifactPathIdentity(path.join(root, 'nested', '..', 'new.txt'))).toBe(path.normalize(path.join(root, 'new.txt')))
   })
+
+  it('normalizes Windows separators and case while rejecting ambiguous aliases', () => {
+    expect(artifactPathIdentity('C:\\Work\\Reports\\FINAL.TXT', { platform: 'win32' })).toBe('c:/work/reports/final.txt')
+    expect(() => artifactPathIdentity('C:\\Work\\CON.txt', { platform: 'win32' })).toThrow(/device name/i)
+    expect(() => artifactPathIdentity('C:\\Work\\report. ', { platform: 'win32' })).toThrow(/trailing/i)
+  })
 })
