@@ -278,8 +278,10 @@
   - RED（2026-07-18）：无 requestedPath 的 supporting 直接抛错。
 - [x] 实现材料推导与默认平铺，使测试通过。
   - GREEN（2026-07-18）：由 package primary 的 basename 推导 `<base>.materials/`，按 materialKind 生成默认扩展名；7 条专用测试与 Electron 编译通过。
-- [ ] 为材料解析写 RED 测试：同名风险或角色混合时才创建 supporting/references 子目录。
-- [ ] 实现按冲突和 role 的材料子目录规则，使测试通过。
+- [x] 为材料解析写 RED 测试：同名风险或角色混合时才创建 supporting/references 子目录。
+  - RED（2026-07-18）：初始材料 resolver 即使基础文件名冲突也保持平铺路径。
+- [x] 实现按冲突和 role 的材料子目录规则，使测试通过。
+  - GREEN（2026-07-18）：默认平铺；基础文件名被占用时按 reference/supporting 分入对应子目录；13 条专用测试与 Electron 编译通过。
 - [x] 为 supporting 写 RED 测试：无 packageId 时返回 ownership/关联歧义，不创建匿名 package。
   - RED（2026-07-18）：初始 resolver 因 requestedPath 缺失直接抛错。
 - [x] 实现无 packageId 拒绝/decision 分支，使测试通过。

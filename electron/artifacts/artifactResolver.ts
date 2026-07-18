@@ -52,7 +52,11 @@ export function resolveArtifactOutput(input: {
       return { finalPath: '', canonicalPath: '', provenance, decision: { kind: 'ownership' } }
     }
     if (input.intent.container === 'package' && (input.intent.role === 'supporting' || input.intent.role === 'reference') && input.intent.packageId && input.packagePrimaryPath) {
-      const finalPath = derivePackageMaterialPath(input.packagePrimaryPath, input.intent.title, input.intent.materialKind)
+      let finalPath = derivePackageMaterialPath(input.packagePrimaryPath, input.intent.title, input.intent.materialKind)
+      if (input.occupiedPaths?.includes(finalPath)) {
+        const parsed = path.posix.parse(finalPath)
+        finalPath = path.posix.join(parsed.dir, input.intent.role === 'reference' ? 'references' : 'supporting', parsed.base)
+      }
       return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance }
     }
     throw new Error(`${input.intent.container} artifact requires requestedPath`)

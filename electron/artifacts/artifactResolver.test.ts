@@ -92,4 +92,15 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'project', role: 'primary', artifactId: 'missing-artifact', requestedPath: 'moved.ts', pathSource: 'agent-default' }
     })).toThrow(/canonical/i)
   })
+
+  it('creates a role subdirectory for package materials only when a sibling-name collision exists', () => {
+    const common = {
+      workDir: '/workspace', packagePrimaryPath: 'reports/final.md',
+      intent: { container: 'package' as const, role: 'reference' as const, packageId: 'package-1', materialKind: 'note' as const, title: 'source', pathSource: 'agent-default' as const }
+    }
+    expect(resolveArtifactOutput(common)).toEqual(expect.objectContaining({ finalPath: 'reports/final.materials/source.md' }))
+    expect(resolveArtifactOutput({ ...common, occupiedPaths: ['reports/final.materials/source.md'] })).toEqual(
+      expect.objectContaining({ finalPath: 'reports/final.materials/references/source.md' })
+    )
+  })
 })
