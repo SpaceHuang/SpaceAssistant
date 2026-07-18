@@ -147,4 +147,16 @@ describe('ArtifactRepository', () => {
       pathSource: 'user'
     } as never)).toThrow(/CHECK constraint failed/)
   })
+
+  it('updates a primary artifact stage without changing its identity or path', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+    repository.create({
+      id: 'staged', sessionId: fixture.session.id, workDirProfileId: fixture.profile.id, workspaceRootReal: fixture.workDir,
+      container: 'project', role: 'primary', stage: 'working', canonicalPath: 'src/a.ts', pathIdentityKey: 'src/a.ts', pathSource: 'agent-default'
+    })
+    repository.updateStage('staged', 'final')
+    expect(repository.find('staged')).toMatchObject({ id: 'staged', canonicalPath: 'src/a.ts', stage: 'final' })
+  })
 })

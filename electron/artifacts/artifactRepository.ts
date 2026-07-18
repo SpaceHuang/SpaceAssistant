@@ -130,4 +130,10 @@ export class ArtifactRepository {
       .prepare('UPDATE session_artifacts SET canonical_path = ?, path_identity_key = ?, updated_at = ? WHERE id = ? AND status = ?')
       .run(canonicalPath, pathIdentityKey, Date.now(), id, 'active')
   }
+
+  updateStage(id: string, stage: PrimaryStage): void {
+    getDbConnection(this.db)
+      .prepare("UPDATE session_artifacts SET stage = ?, updated_at = ? WHERE id = ? AND role = 'primary' AND status = 'active'")
+      .run(stage, Date.now(), id)
+  }
 }
