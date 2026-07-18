@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileInfo } from '../../../shared/domainTypes'
-import { dirsToRefreshForPath } from '../../../shared/fileTreeSync'
+import { dirsToRefreshForPath, mergeRefreshedChildren } from '../../../shared/fileTreeSync'
 import { ensureFileTreeSyncIpc, subscribeFileTreeSync } from '../../services/fileTreeSyncBus'
 
 export interface FileTreeNode {
@@ -27,19 +27,40 @@ export interface UseFileTreeOptions {
   readOnly?: boolean
 }
 
-/** 重载目录列表时保留已懒加载的子树，避免展开状态丢失 */
-function mergePreservedDirectoryChildren(previous: FileTreeNode[], next: FileTreeNode[]): FileTreeNode[] {
-  const prevByKey = new Map(previous.map((node) => [node.key, node]))
-  return next.map((node) => {
-    const prev = prevByKey.get(node.key)
-    if (!prev || !node.isDirectory) return node
-    return {
-      ...node,
-      expanded: prev.expanded,
-      loading: prev.loading,
-      children: prev.children.length > 0 ? prev.children : node.children
-    }
-  })
+/** 批量刷新多个目录：并发读取后单次合并提交，无变化时返回原引用（P4 / §7.2 / §7.4） */
+function applyBatchRefresh(
+  prev: FileTreeNode[],
+  dirKeys: string[],
+  loaded: (FileTreeNode[] | null)[]
+): FileTreeNode[] {
+  const loadedByKey = new Map<string, FileTreeNode[] | null>()
+  dirKeys.forEach((k, i) => loadedByKey.set(k, loaded[i]))
+  const walk = (nodes: FileTreeNode[]): FileTreeNode[] => {
+    let changed = false
+    const next = nodes.map((node) => {
+      let current = node
+      if (node.isDirectory && loadedByKey.has(node.key)) {
+        const loadedChildren = loadedByKey.get(node.key)
+        if (loadedChildren) {
+          const merged = mergeRefreshedChildren(node.children, loadedChildren)
+          if (merged !== node.children) {
+            current = { ...current, children: merged }
+            changed = true
+          }
+        }
+      }
+      if (node.isDirectory && node.children.length > 0) {
+        const newChildren = walk(node.children)
+        if (newChildren !== node.children) {
+          current = { ...current, children: newChildren }
+          changed = true
+        }
+      }
+      return current
+    })
+    return changed ? next : nodes
+  }
+  return walk(prev)
 }
 
 export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
@@ -75,10 +96,12 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
   const nodeMapRef = useRef(new Map<string, FileTreeNode>())
   const excludeSet = useRef(new Set(excludePaths))
   const expandedKeysRef = useRef(expandedKeys)
+  const inlineInputRef = useRef(inlineInput)
   const refreshDirectoryRef = useRef<(key: string) => Promise<void>>(async () => {})
   const prevWorkDirRef = useRef(workDir)
   excludeSet.current = new Set(excludePaths)
   expandedKeysRef.current = expandedKeys
+  inlineInputRef.current = inlineInput
 
   const rebuildNodeMap = useCallback((nodes: FileTreeNode[]) => {
     const map = new Map<string, FileTreeNode>()
@@ -167,7 +190,7 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
 
         setTreeData((prev) => {
           const prevRoot = prev[0]
-          const children = mergePreservedDirectoryChildren(prevRoot?.children ?? [], loaded)
+          const children = mergeRefreshedChildren(prevRoot?.children ?? [], loaded)
           const newData: FileTreeNode[] = [
             {
               ...prevRoot,
@@ -256,14 +279,17 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
       const node = map.get(key)
       if (!node || !node.isDirectory) return
       try {
-        node.children = await loadDirectory(key)
+        node.children = mergeRefreshedChildren(node.children, await loadDirectory(key))
       } catch {
         node.children = []
       }
-      setTreeData((prev) => [...prev])
-      rebuildNodeMap(treeData)
+      setTreeData((prev) => {
+        const newData = [...prev]
+        rebuildNodeMap(newData)
+        return newData
+      })
     },
-    [ensureNodeMap, loadDirectory, rebuildNodeMap, treeData]
+    [ensureNodeMap, loadDirectory, rebuildNodeMap]
   )
 
   refreshDirectoryRef.current = refreshDirectory
@@ -283,37 +309,39 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
                   )
                 )
               ]
-        for (const dirKey of dirs) {
-          await refreshDirectoryRef.current(dirKey)
-        }
+        if (dirs.length === 0) return
+        // §11.5 内联编辑期间推迟自动刷新，避免节点在输入过程中跳动
+        if (inlineInputRef.current) return
+        // 批量并发读取 + 单次合并提交（P4 / §7.2）
+        const loaded = await Promise.all(
+          dirs.map((key) => loadDirectory(key).catch(() => null))
+        )
+        setTreeData((prev) => {
+          const newData = applyBatchRefresh(prev, dirs, loaded)
+          if (newData !== prev) rebuildNodeMap(newData)
+          return newData
+        })
       })()
     })
-  }, [rootRelPath])
+  }, [rootRelPath, loadDirectory, rebuildNodeMap])
 
   const refreshTree = useCallback(async () => {
     try {
-      const children = await loadDirectory(rootRelPath)
+      // 整树刷新：刷新所有已展开目录，保留展开态与已加载子树（§4.4/§5.4）
+      const dirs = expandedKeysRef.current
+      if (dirs.length === 0) return
+      const loaded = await Promise.all(
+        dirs.map((key) => loadDirectory(key).catch(() => null))
+      )
       setTreeData((prev) => {
-        const newData: FileTreeNode[] = [
-          {
-            ...prev[0],
-            key: rootRelPath,
-            name: rootName,
-            relPath: rootRelPath,
-            isDirectory: true,
-            expanded: true,
-            loading: false,
-            children
-          }
-        ]
-        rebuildNodeMap(newData)
+        const newData = applyBatchRefresh(prev, dirs, loaded)
+        if (newData !== prev) rebuildNodeMap(newData)
         return newData
       })
-      setExpandedKeys([rootRelPath])
     } catch {
       /* ignore */
     }
-  }, [loadDirectory, rebuildNodeMap, rootName, rootRelPath])
+  }, [loadDirectory, rebuildNodeMap])
 
   const createFile = useCallback(
     async (parentKey: string, name: string) => {
