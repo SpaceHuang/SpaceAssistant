@@ -178,7 +178,7 @@
   - 验收（2026-07-18）：读取/参考语境中的 quoted path 全部标为 referenced-input。
 - [x] 实现 output/reference/unknown intent 判定，使测试通过。
   - evidence 提取器已使用相邻语境判定 output/referenced-input/unknown；4 条测试通过。
-- [ ] 为 resolver 写 RED 测试：模型伪造 user source 或 evidenceId 被拒绝。
+- [~] 为 resolver 写 RED 测试：模型伪造 user source 或 evidenceId 被拒绝。
 - [ ] 实现 evidence 的 request/message/intent/path 等值校验，使测试通过。
 - [ ] 为 resolver 写 RED 测试：多个输出路径保留独立 evidence，不能被错误合并。
 - [ ] 实现 evidence 列表注入和逐条消费校验，使测试通过。
