@@ -131,7 +131,7 @@
   - RED（2026-07-18）：strict workspace resolver 尚不存在。
 - [x] 实现历史 session 的一次性显式 profile 回写，使测试通过。
   - GREEN（2026-07-18）：历史 unbound session 可用显式解析结果绑定 profile；专用测试与 Electron 编译通过。
-- [ ] 为 strict resolver 写 RED 测试：profile 不存在返回 `ARTIFACT_WORKSPACE_UNAVAILABLE`。
+- [~] 为 strict resolver 写 RED 测试：profile 不存在返回 `ARTIFACT_WORKSPACE_UNAVAILABLE`。
 - [ ] 实现 profile 存在性校验，使测试通过。
 - [ ] 为 strict resolver 写 RED 测试：profile realpath 与 artifact 快照不同返回 `ARTIFACT_WORKSPACE_CHANGED`。
 - [ ] 实现 workspace root realpath 快照比对，使测试通过。
