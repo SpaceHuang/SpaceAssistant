@@ -309,8 +309,10 @@
   - RED（2026-07-18）：scratch Git policy helper 尚不存在。
 - [x] 实现常用精确 `.gitignore` 规则检查，使测试通过。
   - GREEN（2026-07-18）：仅识别两种精确 runs 规则，宽泛 `.spaceassistant/` 不会错误消除决策；3 条测试与 Electron 编译通过。
-- [ ] 为 Git policy 写 RED 测试：Git 根在 workDir 外时不修改外部 `.gitignore`，只允许继续或取消。
-- [ ] 实现 Git root 边界检查，使测试通过。
+- [x] 为 Git policy 写 RED 测试：Git 根在 workDir 外时不修改外部 `.gitignore`，只允许继续或取消。
+  - RED（2026-07-18）：Git policy 尚未提供 root-boundary resolution。
+- [x] 实现 Git root 边界检查，使测试通过。
+  - GREEN（2026-07-18）：外部 Git 根只返回 keep-visible/cancel，禁止 add-ignore；4 条测试与 Electron 编译通过。
 - [ ] 为 Git policy 写 RED 测试：首次 scratch 创建且未保存选择时请求 add-ignore/keep-visible/cancel。
 - [ ] 实现 workspace 级 `artifact.scratchGitPolicy.<profileId>` 读取与 decision，使测试通过。
 - [ ] 为 Git policy 写 RED 测试：add-ignore 仅追加精确 `.spaceassistant/runs/`，并重新验证规则。
