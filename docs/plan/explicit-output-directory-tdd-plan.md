@@ -328,8 +328,10 @@
   - GREEN（2026-07-18）：retrieve 与 short-summary 均明确返回不保留；1 条专用测试与 Electron 编译通过。
 - [ ] 为 reference retention 写 RED 测试：有 packageId 的 reference 无显式路径写入材料目录。
 - [ ] 在 resolver 接入 package/reference 分支，使测试通过。
-- [ ] 为 reference retention 写 RED 测试：无 package 的本地保存请求 long-term/pending/cancel decision。
-- [ ] 实现 reference-retention decision 分支，使测试通过。
+- [x] 为 reference retention 写 RED 测试：无 package 的本地保存请求 long-term/pending/cancel decision。
+  - RED（2026-07-18）：reference retention resolver 尚不存在。
+- [x] 实现 reference-retention decision 分支，使测试通过。
+  - GREEN（2026-07-18）：save/long-term 无 package 返回 long-term/pending/cancel，普通检索仍为 none；2 条测试与 Electron 编译通过。
 - [ ] 为 reference metadata 写 RED 测试：成功下载后保存 title、URL、fetchedAt、许可说明。
 - [ ] 实现 `registerReferenceMetadata()`，使测试通过。
 - [ ] 为 reference metadata 写 RED 测试：缺 title 或 URL 时文件保留但工具结果报告补登记。
