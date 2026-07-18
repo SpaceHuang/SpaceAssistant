@@ -41,4 +41,12 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'package', role: 'primary', packageId: 'package-1', pathSource: 'agent-default' }
     })).toEqual(expect.objectContaining({ decision: { kind: 'output-location', packageId: 'package-1' } }))
   })
+
+  it('derives an unqualified supporting material beside its package primary artifact', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      packagePrimaryPath: 'reports/final.md',
+      intent: { container: 'package', role: 'supporting', packageId: 'package-1', materialKind: 'script', title: 'query', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({ finalPath: 'reports/final.materials/query.ts' }))
+  })
 })

@@ -13,6 +13,7 @@ export function resolveArtifactOutput(input: {
   workDir: string
   intent: ArtifactWriteIntent
   existingArtifact?: { artifactId: string; canonicalPath: string }
+  packagePrimaryPath?: string
 }): ResolvedArtifactOutput {
   if (input.intent.container !== 'project' && input.intent.container !== 'package') throw new Error('Artifact resolver branch not implemented for this container')
   const { pathSource, pathEvidenceId } = input.intent
@@ -22,6 +23,10 @@ export function resolveArtifactOutput(input: {
   if (!input.intent.requestedPath) {
     if (input.intent.container === 'package' && input.intent.role === 'primary') {
       return { finalPath: '', canonicalPath: '', provenance, decision: { kind: 'output-location', packageId: input.intent.packageId } }
+    }
+    if (input.intent.container === 'package' && (input.intent.role === 'supporting' || input.intent.role === 'reference') && input.intent.packageId && input.packagePrimaryPath) {
+      const finalPath = derivePackageMaterialPath(input.packagePrimaryPath, input.intent.title, input.intent.materialKind)
+      return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance }
     }
     throw new Error(`${input.intent.container} artifact requires requestedPath`)
   }
@@ -41,4 +46,12 @@ export function resolveArtifactOutput(input: {
 function primaryFileName(title?: string): string {
   const slug = title?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
   return `${slug || 'artifact'}.md`
+}
+
+function derivePackageMaterialPath(primaryPath: string, title: string | undefined, materialKind: ArtifactWriteIntent['materialKind']): string {
+  const parsed = path.posix.parse(primaryPath.replace(/\\/g, '/'))
+  const base = `${parsed.name}.materials`
+  const slug = title?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'artifact'
+  const extension = materialKind === 'script' ? '.ts' : materialKind === 'query' ? '.sql' : materialKind === 'data' ? '.json' : '.md'
+  return path.posix.join(parsed.dir, base, `${slug}${extension}`)
 }

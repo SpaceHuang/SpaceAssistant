@@ -273,8 +273,10 @@
   - RED（2026-07-18）：初始 resolver 因 requestedPath 缺失直接抛错。
 - [x] 实现未指定主成果位置的 decision 分支，使测试通过。
   - GREEN（2026-07-18）：package primary 返回 output-location decision 且没有 finalPath；6 条专用测试与 Electron 编译通过。
-- [ ] 为 package supporting/reference 写 RED 测试：有 packageId 且无显式路径时推导 `主成果目录/base.materials/`。
-- [ ] 实现材料推导与默认平铺，使测试通过。
+- [x] 为 package supporting/reference 写 RED 测试：有 packageId 且无显式路径时推导 `主成果目录/base.materials/`。
+  - RED（2026-07-18）：无 requestedPath 的 supporting 直接抛错。
+- [x] 实现材料推导与默认平铺，使测试通过。
+  - GREEN（2026-07-18）：由 package primary 的 basename 推导 `<base>.materials/`，按 materialKind 生成默认扩展名；7 条专用测试与 Electron 编译通过。
 - [ ] 为材料解析写 RED 测试：同名风险或角色混合时才创建 supporting/references 子目录。
 - [ ] 实现按冲突和 role 的材料子目录规则，使测试通过。
 - [ ] 为 supporting 写 RED 测试：无 packageId 时返回 ownership/关联歧义，不创建匿名 package。
