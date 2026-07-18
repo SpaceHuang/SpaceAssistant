@@ -332,10 +332,14 @@
   - RED（2026-07-18）：reference retention resolver 尚不存在。
 - [x] 实现 reference-retention decision 分支，使测试通过。
   - GREEN（2026-07-18）：save/long-term 无 package 返回 long-term/pending/cancel，普通检索仍为 none；2 条测试与 Electron 编译通过。
-- [ ] 为 reference metadata 写 RED 测试：成功下载后保存 title、URL、fetchedAt、许可说明。
-- [ ] 实现 `registerReferenceMetadata()`，使测试通过。
-- [ ] 为 reference metadata 写 RED 测试：缺 title 或 URL 时文件保留但工具结果报告补登记。
-- [ ] 实现不删除文件的未完成 metadata 报告，使测试通过。
+- [x] 为 reference metadata 写 RED 测试：成功下载后保存 title、URL、fetchedAt、许可说明。
+  - RED（2026-07-18）：registerReferenceMetadata 尚不存在，测试模块无法导入。
+- [x] 实现 `registerReferenceMetadata()`，使测试通过。
+  - GREEN（2026-07-18）：artifact_references UPSERT 保存 source title/URL、fetchedAt、access/license note。
+- [x] 为 reference metadata 写 RED 测试：缺 title 或 URL 时文件保留但工具结果报告补登记。
+  - GREEN（2026-07-18）：缺失字段返回 complete=false 与 missing 列表，artifact 状态保持 active。
+- [x] 实现不删除文件的未完成 metadata 报告，使测试通过。
+  - 2 条专用测试与 Electron 编译通过。
 - [ ] 运行 scratch Git、reference 与 resolver 相关测试。
 
 ## 8. 工具循环、写入登记与完成摘要（核心可灰度切片）
