@@ -174,7 +174,7 @@
   - RED（2026-07-18）：初始提取器仅处理引号路径。
 - [x] 实现保守关键词邻近规则，使测试通过。
   - GREEN（2026-07-18）：仅在输出关键词后提取单段名称，3 条 evidence 测试与 Electron 编译通过。
-- [ ] 为提取器写 RED 测试：参考、读取、检查路径标为 `referenced-input`，不得成为 output target。
+- [~] 为提取器写 RED 测试：参考、读取、检查路径标为 `referenced-input`，不得成为 output target。
 - [ ] 实现 output/reference/unknown intent 判定，使测试通过。
 - [ ] 为 resolver 写 RED 测试：模型伪造 user source 或 evidenceId 被拒绝。
 - [ ] 实现 evidence 的 request/message/intent/path 等值校验，使测试通过。
