@@ -20,4 +20,11 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'project', role: 'primary', artifactId: 'artifact-1', requestedPath: 'other.ts', pathSource: 'agent-default' }
     })).toEqual(expect.objectContaining({ finalPath: 'src/auth.ts', canonicalPath: '/workspace/src/auth.ts' }))
   })
+
+  it('uses an explicit package primary file path literally', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      intent: { container: 'package', role: 'primary', packageId: 'package-1', requestedPath: 'reports/final.md', pathSource: 'user', pathEvidenceId: 'request-1:0-16' }
+    })).toEqual(expect.objectContaining({ finalPath: 'reports/final.md', canonicalPath: '/workspace/reports/final.md' }))
+  })
 })

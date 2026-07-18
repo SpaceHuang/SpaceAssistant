@@ -261,8 +261,10 @@
   - RED（2026-07-18）：初始 resolver 忽略 existingArtifact，按新 requestedPath 解析。
 - [x] 实现 project 的已有文件与 artifactId 分支，使测试通过。
   - GREEN（2026-07-18）：匹配 artifactId 时 finalPath 从 canonicalPath 相对 workspace 推导，不再隐式改址；3 条专用测试与 Electron 编译通过。
-- [ ] 为 package primary 写 RED 测试：显式文件路径按字面使用。
-- [ ] 实现 package primary 的显式文件解析，使测试通过。
+- [x] 为 package primary 写 RED 测试：显式文件路径按字面使用。
+  - RED（2026-07-18）：初始 resolver 只支持 project container。
+- [x] 实现 package primary 的显式文件解析，使测试通过。
+  - GREEN（2026-07-18）：package primary 的 requestedPath 不经重写直接成为 finalPath；4 条专用测试与 Electron 编译通过。
 - [ ] 为 package primary 写 RED 测试：显式目录仅追加展示的主成果文件名。
 - [ ] 实现目录主成果命名优先级（用户名、title slug、任务默认名），使测试通过。
 - [ ] 为 package primary 写 RED 测试：未指定位置发出 output-location decision，不创建临时文件。
