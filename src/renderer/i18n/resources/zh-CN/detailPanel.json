@@ -60,6 +60,25 @@
     "groupPackage": "工作包",
     "groupScratch": "草稿",
     "groupReference": "研究资料",
-    "delete": "删除"
+    "delete": "删除",
+    "cleanScratch": "清理草稿",
+    "cleanConfirmTitle": "清理本会话草稿？",
+    "cleanConfirmContent": "将删除普通 scratch 产物，项目变更与工作包不会被清理。",
+    "cleanConfirmOk": "清理",
+    "cleanConfirmCancel": "取消",
+    "cleanDone": "已清理 {{count}} 项",
+    "includeReferences": "同时清理研究资料引用",
+    "includeReferencesConfirmTitle": "确认清理研究资料？",
+    "includeReferencesConfirmContent": "引用文件默认受保护。确认后将一并删除本会话中的 reference 产物。",
+    "relocate": "改址",
+    "relocateTitle": "移动或复制工作产物",
+    "relocateTarget": "目标相对路径",
+    "relocateConfirm": "确认",
+    "relocateCancel": "取消",
+    "relocateCurrentEdit": "当前编辑对象",
+    "relocateChoiceMoveSwitch": "移动并切换",
+    "relocateChoiceCopyContinue": "复制并继续编辑 {{title}}",
+    "relocateChoiceCopySwitch": "复制并切换到副本",
+    "relocateOverwrite": "目标已存在时允许覆盖"
   }
 }

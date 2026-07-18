@@ -213,9 +213,17 @@ export type SpaceAssistantApi = {
   artifactDecisionResponse: (payload: ArtifactDecisionResponsePayload) => Promise<void>
   artifactDelete: (payload: { sessionId: string; artifactId: string }) => Promise<{ ok: boolean; error?: string }>
   artifactCleanSession: (payload: { sessionId: string; includeReferences?: boolean }) => Promise<{ deleted: string[]; skipped: Array<{ artifactId: string; reason: string }> }>
-  artifactRelocate: (payload: { sessionId: string; artifactId: string; target: string; mode: 'move' | 'copy' }) => Promise<{ ok: boolean; error?: string }>
+  artifactRelocate: (payload: {
+    sessionId: string
+    artifactId: string
+    target: string
+    mode: 'move' | 'copy'
+    switchToCopy?: boolean
+    overwriteAuthorized?: boolean
+  }) => Promise<{ ok: boolean; error?: string; artifactId?: string; activeArtifactId?: string }>
   artifactSetDefaultDir: (payload: { sessionId: string; dir: string }) => Promise<void>
   artifactOnChanged: (cb: (event: { sessionId: string; artifactId: string; action: 'created' | 'updated' | 'deleted' }) => void) => () => void
+  artifactOnDecisionRequest: (cb: (request: import('./artifactDecisionTypes').ArtifactDecisionRequest) => void) => () => void
 
   usageSet: (payload: { sessionId: string; usage: SessionUsage }) => Promise<void>
   usageGet: (sessionId: string) => Promise<SessionUsage | undefined>

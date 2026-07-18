@@ -13,6 +13,7 @@ import { resolveArtifactMutationWorkspace } from './artifactMutationGuard'
 import { validateDecisionDirectory, validateDecisionRename } from './pathDecisionInput'
 import { getSharedArtifactPathLeaseRegistry } from './toolPathLease'
 import { buildArtifactContextSummaries, type ArtifactContextSummary } from './artifactContextQuery'
+import { relocateArtifact } from './relocateRecovery'
 
 export type ArtifactIpcDeps = {
   db: AppDatabase
@@ -144,11 +145,43 @@ export function createArtifactIpcHandlers(deps: ArtifactIpcDeps) {
       })
     },
 
-    async relocate(_payload: { sessionId?: string; artifactId?: string; target?: string; mode?: 'move' | 'copy' }): Promise<{
-      ok: boolean
-      error?: string
-    }> {
-      return { ok: false, error: 'RelocateService is not available in this build' }
+    async relocate(payload: {
+      sessionId?: string
+      artifactId?: string
+      target?: string
+      mode?: 'move' | 'copy'
+      switchToCopy?: boolean
+      overwriteAuthorized?: boolean
+    }): Promise<{ ok: boolean; error?: string; artifactId?: string; activeArtifactId?: string }> {
+      const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+      const artifactId = typeof payload?.artifactId === 'string' ? payload.artifactId.trim() : ''
+      const target = typeof payload?.target === 'string' ? validateDecisionDirectory(payload.target).replace(/\\/g, '/') : ''
+      const mode = payload?.mode === 'copy' ? 'copy' : payload?.mode === 'move' ? 'move' : ''
+      if (!sessionId || !artifactId || !target || !mode) return { ok: false, error: ErrorCodes.ARTIFACT_WORKSPACE_UNAVAILABLE }
+      const artifact = repository().find(artifactId)
+      if (!artifact || artifact.sessionId !== sessionId) return { ok: false, error: 'Artifact not found' }
+      const workspace = resolveArtifactMutationWorkspace({
+        db: deps.db,
+        sessionId,
+        profiles: deps.getProfiles(),
+        artifact
+      })
+      if (!workspace.ok) return { ok: false, error: workspace.errorCode }
+      const result = await relocateArtifact(
+        { db: deps.db, profiles: deps.getProfiles(), registry: getSharedArtifactPathLeaseRegistry() },
+        {
+          sessionId,
+          artifactId,
+          target,
+          mode,
+          switchToCopy: payload.switchToCopy === true,
+          overwriteAuthorized: payload.overwriteAuthorized === true
+        }
+      )
+      if (result.ok) {
+        deps.notifyChanged({ sessionId, artifactId: result.artifactId, action: result.artifactId === artifactId ? 'updated' : 'created' })
+      }
+      return result
     },
 
     recentContext(sessionId: string): ArtifactContextSummary[] {

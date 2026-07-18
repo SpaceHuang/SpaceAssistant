@@ -259,6 +259,18 @@ app.whenReady().then(() => {
   workDirManager.migrateFromLegacy()
   workDirState = workDirManager.getActiveWorkDir()
 
+  void import('./artifacts/relocateRecovery').then(({ recoverPendingRelocateOperations }) => {
+    void import('./artifacts/toolPathLease').then(({ getSharedArtifactPathLeaseRegistry }) =>
+      recoverPendingRelocateOperations({
+        db,
+        profiles: workDirManager!.listProfiles(),
+        registry: getSharedArtifactPathLeaseRegistry()
+      }).catch((error) => {
+        console.warn('[artifact-relocate] startup recovery failed:', error instanceof Error ? error.message : String(error))
+      })
+    )
+  })
+
   // Initialize project memory
   loadProjectMemory(workDirState).catch((err) => {
     console.warn('[projectMemory] init load failed:', err.message)

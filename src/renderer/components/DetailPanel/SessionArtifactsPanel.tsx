@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { ArtifactApiItem } from '../../../shared/api'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { SessionArtifactsCleanAction } from './SessionArtifactsCleanAction'
 
 type Props = {
   sessionId: string | null
@@ -8,6 +9,7 @@ type Props = {
   artifacts: ArtifactApiItem[]
   onOpen: (relPath: string) => void
   onDelete?: (artifactId: string) => void
+  onRelocate?: (artifact: ArtifactApiItem) => void
 }
 
 type ArtifactGroup = {
@@ -67,7 +69,7 @@ export function groupSessionArtifacts(
   return groups
 }
 
-export function SessionArtifactsPanel({ sessionId, workDir, artifacts, onOpen, onDelete }: Props) {
+export function SessionArtifactsPanel({ sessionId, workDir, artifacts, onOpen, onDelete, onRelocate }: Props) {
   const { t } = useTypedTranslation('detailPanel')
   const groups = useMemo(() => groupSessionArtifacts(artifacts, t), [artifacts, t])
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -76,11 +78,14 @@ export function SessionArtifactsPanel({ sessionId, workDir, artifacts, onOpen, o
 
   if (!sessionId) return null
 
+  const hasScratch = artifacts.some((item) => item.container === 'scratch' || item.role === 'scratch')
+
   return (
     <div className="session-artifacts-panel">
       <div className="detail-panel-section-header">
         <span className="detail-panel-section-title">{t('sessionArtifacts.title')}</span>
         {artifacts.length > 0 ? <span className="detail-panel-section-badge">{artifacts.length}</span> : null}
+        {hasScratch ? <SessionArtifactsCleanAction sessionId={sessionId} /> : null}
       </div>
       {groups.length === 0 ? <div className="session-artifacts-panel__empty">{t('sessionArtifacts.empty')}</div> : null}
       {groups.map((group) => (
@@ -106,6 +111,11 @@ export function SessionArtifactsPanel({ sessionId, workDir, artifacts, onOpen, o
                     {onDelete && (item.container === 'scratch' || item.role === 'scratch') ? (
                       <button type="button" className="session-artifacts-item__delete" onClick={() => onDelete(item.id)}>
                         {t('sessionArtifacts.delete')}
+                      </button>
+                    ) : null}
+                    {onRelocate && item.status === 'active' ? (
+                      <button type="button" className="session-artifacts-item__relocate" onClick={() => onRelocate(item)}>
+                        {t('sessionArtifacts.relocate')}
                       </button>
                     ) : null}
                   </div>

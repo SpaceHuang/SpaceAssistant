@@ -60,6 +60,25 @@
     "groupPackage": "Work packages",
     "groupScratch": "Scratch",
     "groupReference": "References",
-    "delete": "Delete"
+    "delete": "Delete",
+    "cleanScratch": "Clean scratch",
+    "cleanConfirmTitle": "Clean session scratch artifacts?",
+    "cleanConfirmContent": "Ordinary scratch artifacts will be deleted. Project changes and work packages are kept.",
+    "cleanConfirmOk": "Clean",
+    "cleanConfirmCancel": "Cancel",
+    "cleanDone": "Cleaned {{count}} item(s)",
+    "includeReferences": "Also clean reference artifacts",
+    "includeReferencesConfirmTitle": "Clean reference artifacts too?",
+    "includeReferencesConfirmContent": "Reference files are protected by default. Confirm to delete reference artifacts in this session.",
+    "relocate": "Relocate",
+    "relocateTitle": "Move or copy artifact",
+    "relocateTarget": "Target relative path",
+    "relocateConfirm": "Confirm",
+    "relocateCancel": "Cancel",
+    "relocateCurrentEdit": "Current editing object",
+    "relocateChoiceMoveSwitch": "Move and switch",
+    "relocateChoiceCopyContinue": "Copy and keep editing {{title}}",
+    "relocateChoiceCopySwitch": "Copy and switch to the copy",
+    "relocateOverwrite": "Allow overwrite when target exists"
   }
 }

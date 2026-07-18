@@ -103,13 +103,34 @@ describe('artifact IPC handlers', () => {
     await expect(fs.readFile(target, 'utf8')).rejects.toThrow()
   })
 
-  it('returns relocate stub error when RelocateService is unavailable', async () => {
+  it('relocate moves artifact through RelocateService IPC', async () => {
     const fixture = createArtifactTestFixture()
     fixtures.push(fixture)
-    const { handlers } = makeHandlers(fixture)
-    await expect(
-      handlers.relocate({ sessionId: fixture.session.id, artifactId: 'a1', target: 'out.md', mode: 'move' })
-    ).resolves.toEqual({ ok: false, error: 'RelocateService is not available in this build' })
+    const repository = new ArtifactRepository(fixture.db)
+    const source = path.join(fixture.workDir, 'scratch.md')
+    await fs.writeFile(source, 'payload')
+    repository.create({
+      id: 'artifact-relocate',
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      container: 'scratch',
+      role: 'scratch',
+      title: 'Scratch',
+      canonicalPath: source,
+      pathIdentityKey: 'scratch.md',
+      pathSource: 'system-assigned'
+    })
+    const { handlers, events } = makeHandlers(fixture)
+    const result = await handlers.relocate({
+      sessionId: fixture.session.id,
+      artifactId: 'artifact-relocate',
+      target: 'project/scratch.md',
+      mode: 'move'
+    })
+    expect(result.ok).toBe(true)
+    expect(repository.find('artifact-relocate')?.canonicalPath).toContain('project/scratch.md')
+    expect(events.some((event) => event.artifactId === 'artifact-relocate' && event.action === 'updated')).toBe(true)
   })
 
   it('stores default dir in session metadata after strict workspace validation', () => {

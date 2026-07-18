@@ -488,29 +488,30 @@
 
 ## 11. Relocate journal 与恢复
 
-- [ ] 为 relocate 写 RED 测试：请求未获覆盖授权时不创建 operation journal。
-- [ ] 实现 relocate 解析与覆盖 decision 前置条件，使测试通过。
-- [ ] 为 relocate 写 RED 测试：prepared journal 记录 source/target/mode、预定 temp/backup 路径和目标原始 identity/digest。
-- [ ] 实现 prepared journal 的单 transaction 创建，使测试通过。
-- [ ] 为 relocate 写 RED 测试：source/target leases 以 identity 排序一次性获得。
-- [ ] 在 RelocateService 接入 ordered dual-path lease，使测试通过。
-- [ ] 为 same-device move 写 RED 测试：目标存在时创建并校验同目录备份，再原子提交 target。
-- [ ] 实现 backup_committed 与 same-device-move target_committed 阶段，使测试通过。
-- [ ] 为 copy/cross-device move 写 RED 测试：同目录 temp 文件 fsync/摘要校验后原子替换 target。
-- [ ] 实现 copy/cross-device temp 与 target_committed 阶段，使测试通过。
-- [ ] 为 DB commit 写 RED 测试：move 保持 artifactId；copy 创建新 artifactId；operation 进入正确 pending phase。
-- [ ] 实现 artifact 记录更新与 operation phase 同 transaction 提交，使测试通过。
-- [ ] 为 cross-device cleanup 写 RED 测试：source 删除失败保留 source_cleanup_pending，不回滚已提交 target。
-- [ ] 实现 source cleanup 重试逻辑，使测试通过。
-- [ ] 为 cleanup 写 RED 测试：仅 identity 匹配时删除 backup/temp，之后才 completed。
-- [ ] 实现 cleanup_pending 与 completed 阶段，使测试通过。
-- [ ] 为 pre-commit 失败写 RED 测试：source/target/backup identity 一致时逆向补偿；不一致时 recovery_required。
-- [ ] 实现补偿与 recovery_required 分支，使测试通过。
-- [ ] 为启动恢复写 RED 测试：分别从 prepared、backup_committed、target_committed、source_cleanup_pending、cleanup_pending 恢复且幂等。
-- [ ] 实现启动扫描非终态 operation 与分阶段恢复，使测试通过。
-- [ ] 为 UI 写 RED 测试：移动并切换、复制并继续原文件、复制并切换副本明确显示当前编辑对象。
-- [ ] 实现 relocate UI 与 artifact:relocate IPC，使测试通过。
-- [ ] 运行 `relocateRecovery.test.ts`、deletion guard、文件安全和 IPC 测试。
+- [x] 为 relocate 写 RED 测试：请求未获覆盖授权时不创建 operation journal。
+- [x] 实现 relocate 解析与覆盖 decision 前置条件，使测试通过。
+- [x] 为 relocate 写 RED 测试：prepared journal 记录 source/target/mode、预定 temp/backup 路径和目标原始 identity/digest。
+- [x] 实现 prepared journal 的单 transaction 创建，使测试通过。
+- [x] 为 relocate 写 RED 测试：source/target leases 以 identity 排序一次性获得。
+- [x] 在 RelocateService 接入 ordered dual-path lease，使测试通过。
+- [x] 为 same-device move 写 RED 测试：目标存在时创建并校验同目录备份，再原子提交 target。
+- [x] 实现 backup_committed 与 same-device-move target_committed 阶段，使测试通过。
+- [x] 为 copy/cross-device move 写 RED 测试：同目录 temp 文件 fsync/摘要校验后原子替换 target。
+- [x] 实现 copy/cross-device temp 与 target_committed 阶段，使测试通过。
+- [x] 为 DB commit 写 RED 测试：move 保持 artifactId；copy 创建新 artifactId；operation 进入正确 pending phase。
+- [x] 实现 artifact 记录更新与 operation phase 同 transaction 提交，使测试通过。
+- [x] 为 cross-device cleanup 写 RED 测试：source 删除失败保留 source_cleanup_pending，不回滚已提交 target。
+- [x] 实现 source cleanup 重试逻辑，使测试通过。
+- [x] 为 cleanup 写 RED 测试：仅 identity 匹配时删除 backup/temp，之后才 completed。
+- [x] 实现 cleanup_pending 与 completed 阶段，使测试通过。
+- [x] 为 pre-commit 失败写 RED 测试：source/target/backup identity 一致时逆向补偿；不一致时 recovery_required。
+- [x] 实现补偿与 recovery_required 分支，使测试通过。
+- [x] 为启动恢复写 RED 测试：分别从 prepared、backup_committed、target_committed、source_cleanup_pending、cleanup_pending 恢复且幂等。
+- [x] 实现启动扫描非终态 operation 与分阶段恢复，使测试通过。
+- [x] 为 UI 写 RED 测试：移动并切换、复制并继续原文件、复制并切换副本明确显示当前编辑对象。
+- [x] 实现 relocate UI 与 artifact:relocate IPC，使测试通过。
+- [x] 运行 `relocateRecovery.test.ts`、deletion guard、文件安全和 IPC 测试。
+  - 验收（2026-07-18）：`relocateService.test.ts`、`relocateRecovery.test.ts`、`artifactIpc.test.ts`、`ArtifactRelocateDialog.test.tsx`、`relocateMutationGuard.test.ts`、`artifactDeletion.test.ts` 共 25 条测试通过；`npm run build:electron` 通过。
 
 ## 12. 旧功能迁移、灰度与验收
 
