@@ -170,7 +170,7 @@
   - 验收（2026-07-18）：相对和绝对 quoted path 均保留 rawPath 与 trailingSeparator。
 - [x] 实现相对/绝对路径与尾随分隔符解析，使测试通过。
   - 提取器使用原始 token，不对路径做规范化；2 条 evidence 测试通过。
-- [ ] 为提取器写 RED 测试：紧邻“文件、目录、保存为”等词的单段名称被识别。
+- [~] 为提取器写 RED 测试：紧邻“文件、目录、保存为”等词的单段名称被识别。
 - [ ] 实现保守关键词邻近规则，使测试通过。
 - [ ] 为提取器写 RED 测试：参考、读取、检查路径标为 `referenced-input`，不得成为 output target。
 - [ ] 实现 output/reference/unknown intent 判定，使测试通过。
