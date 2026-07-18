@@ -143,7 +143,8 @@
 - [ ] 移除 artifact mutation 对 active-workspace fallback 的调用，使测试通过。
 - [x] 为 POSIX path identity 写 RED 测试：已存在路径使用 realpath identity，不存在路径使用规范化词法 identity。
   - RED（2026-07-18）：path identity helper 尚不存在。
-- [ ] 实现 POSIX identity 生成，使测试通过。
+- [x] 实现 POSIX identity 生成，使测试通过。
+  - GREEN（2026-07-18）：existing path 使用 realpath，absent path 使用 path.normalize；专用测试与 Electron 编译通过。
 - [ ] 为 Windows path identity 写 RED 测试：统一分隔符与大小写，并拒绝设备名、尾随点和空格别名。
 - [ ] 实现平台 identity 生成与 Windows 输入校验，使测试通过。
 - [ ] 为安全目标解析写 RED 测试：`..`、工作区外绝对路径、异平台绝对路径均拒绝且不改写路径。
