@@ -146,7 +146,7 @@
   - RED（2026-07-18）：path identity helper 尚不存在。
 - [x] 实现 POSIX identity 生成，使测试通过。
   - GREEN（2026-07-18）：existing path 使用 realpath，absent path 使用 path.normalize；专用测试与 Electron 编译通过。
-- [ ] 为 Windows path identity 写 RED 测试：统一分隔符与大小写，并拒绝设备名、尾随点和空格别名。
+- [~] 为 Windows path identity 写 RED 测试：统一分隔符与大小写，并拒绝设备名、尾随点和空格别名。
 - [ ] 实现平台 identity 生成与 Windows 输入校验，使测试通过。
 - [ ] 为安全目标解析写 RED 测试：`..`、工作区外绝对路径、异平台绝对路径均拒绝且不改写路径。
 - [ ] 为安全目标解析写 RED 测试：POSIX symlink、Windows junction 和文件/目录目标类型越界均拒绝。
