@@ -6,9 +6,14 @@ export class ArtifactEvidenceConsumption {
 
   constructor(private readonly evidence: readonly ExplicitPathEvidence[]) {}
 
+  all(): readonly ExplicitPathEvidence[] {
+    return this.evidence
+  }
+
   consume(evidenceId: string): void {
     const item = this.evidence.find((candidate) => candidate.evidenceId === evidenceId)
     if (!item) throw new Error(`Unknown artifact evidence: ${evidenceId}`)
+    if (this.consumed.has(evidenceId)) throw new Error(`Artifact evidence already consumed: ${evidenceId}`)
     this.consumed.add(evidenceId)
   }
 

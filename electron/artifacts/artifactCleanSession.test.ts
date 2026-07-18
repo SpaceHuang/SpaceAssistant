@@ -4,6 +4,7 @@ import { createArtifactTestFixture, type ArtifactTestFixture } from './testHelpe
 import { ArtifactRepository } from './artifactRepository'
 import { ArtifactPathLeaseRegistry } from './pathLeaseRegistry'
 import { cleanArtifactSession } from './artifactCleanSession'
+import { artifactDeleteLeaseIdentity } from './toolPathLease'
 
 describe('cleanArtifactSession', () => {
   const fixtures: ArtifactTestFixture[] = []
@@ -16,7 +17,7 @@ describe('cleanArtifactSession', () => {
     repo.create({ id: 's', sessionId: f.session.id, workDirProfileId: f.profile.id, workspaceRootReal: f.workDir, container: 'scratch', role: 'scratch', canonicalPath: scratchPath, pathIdentityKey: scratchPath, pathSource: 'agent-default' })
     repo.create({ id: 'p', sessionId: f.session.id, workDirProfileId: f.profile.id, workspaceRootReal: f.workDir, container: 'project', role: 'primary', canonicalPath: projectPath, pathIdentityKey: projectPath, pathSource: 'agent-default' })
     repo.create({ id: 'b', sessionId: f.session.id, workDirProfileId: f.profile.id, workspaceRootReal: f.workDir, container: 'scratch', role: 'scratch', canonicalPath: busyPath, pathIdentityKey: busyPath, pathSource: 'agent-default' })
-    const lease = registry.acquireUse(busyPath)
+    const lease = registry.acquireUse(artifactDeleteLeaseIdentity(f.workDir, busyPath))
     const result = await cleanArtifactSession({ repository: repo, registry, sessionId: f.session.id })
     lease.release()
     expect(result.deleted).toEqual(['s']); expect(result.skipped).toEqual(expect.arrayContaining([{ id: 'p', reason: 'not-scratch' }, { id: 'b', reason: 'in-use' }]))

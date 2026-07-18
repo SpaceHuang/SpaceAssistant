@@ -11,11 +11,14 @@ describe('registerResolvedArtifactWrite', () => {
     const fixture = createArtifactTestFixture()
     fixtures.push(fixture)
     const record = registerResolvedArtifactWrite({
-      repository: new ArtifactRepository(fixture.db), sessionId: fixture.session.id, workDirProfileId: fixture.profile.id, workspaceRootReal: fixture.workDir,
+      repository: new ArtifactRepository(fixture.db),
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workDir: fixture.workDir,
       intent: { container: 'project', role: 'primary', title: 'auth', pathSource: 'agent-default' },
       resolved: { finalPath: 'src/auth.ts', canonicalPath: `${fixture.workDir}/src/auth.ts`, provenance: { pathSource: 'agent-default' } }
     })
-    expect(record).toMatchObject({ container: 'project', canonicalPath: `${fixture.workDir}/src/auth.ts` })
+    expect(record).toMatchObject({ container: 'project', canonicalPath: 'src/auth.ts' })
   })
 
   it('creates a new record when intent carries a pre-assigned artifactId', () => {
@@ -25,7 +28,7 @@ describe('registerResolvedArtifactWrite', () => {
       repository: new ArtifactRepository(fixture.db),
       sessionId: fixture.session.id,
       workDirProfileId: fixture.profile.id,
-      workspaceRootReal: fixture.workDir,
+      workDir: fixture.workDir,
       intent: {
         artifactId: 'artifact-preassigned',
         container: 'project',
@@ -50,7 +53,7 @@ describe('registerResolvedArtifactWrite', () => {
       repository,
       sessionId: fixture.session.id,
       workDirProfileId: fixture.profile.id,
-      workspaceRootReal: fixture.workDir,
+      workDir: fixture.workDir,
       intent: {
         artifactId: 'artifact-stage',
         container: 'project',
@@ -69,7 +72,7 @@ describe('registerResolvedArtifactWrite', () => {
       repository,
       sessionId: fixture.session.id,
       workDirProfileId: fixture.profile.id,
-      workspaceRootReal: fixture.workDir,
+      workDir: fixture.workDir,
       intent: {
         artifactId: 'artifact-stage',
         container: 'project',

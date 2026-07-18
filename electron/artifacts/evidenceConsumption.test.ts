@@ -21,4 +21,11 @@ describe('ArtifactEvidenceConsumption', () => {
       'ARTIFACT_EXPLICIT_PATH_UNRESOLVED'
     )
   })
+
+  it('rejects consuming the same evidence id twice', () => {
+    const evidence = extractExplicitPathEvidence('保存为 `reports/a.md`', { requestId: 'request-3' })
+    const consumption = new ArtifactEvidenceConsumption(evidence)
+    consumption.consume(evidence[0]!.evidenceId)
+    expect(() => consumption.consume(evidence[0]!.evidenceId)).toThrow(/already consumed/i)
+  })
 })

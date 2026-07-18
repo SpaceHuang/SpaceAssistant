@@ -11,7 +11,7 @@ import { deleteArtifactFile } from './artifactDeletion'
 import { submitArtifactDecisionResponse } from './artifactDecisionBridge'
 import { resolveArtifactMutationWorkspace } from './artifactMutationGuard'
 import { validateDecisionDirectory, validateDecisionRename } from './pathDecisionInput'
-import { getSharedArtifactPathLeaseRegistry } from './toolPathLease'
+import { getSharedArtifactPathLeaseRegistry, artifactDeleteLeaseIdentity } from './toolPathLease'
 import { buildArtifactContextSummaries, type ArtifactContextSummary } from './artifactContextQuery'
 import { relocateArtifact } from './relocateRecovery'
 
@@ -73,10 +73,13 @@ export function createArtifactIpcHandlers(deps: ArtifactIpcDeps) {
       })
       if (!workspace.ok) return { ok: false, error: workspace.errorCode }
       try {
+        const targetPath = path.isAbsolute(artifact.canonicalPath)
+          ? artifact.canonicalPath
+          : path.resolve(workspace.workDir, artifact.canonicalPath)
         await deleteArtifactFile({
           registry: getSharedArtifactPathLeaseRegistry(),
-          identity: artifact.pathIdentityKey,
-          targetPath: artifact.canonicalPath,
+          identity: artifactDeleteLeaseIdentity(artifact.workspaceRootReal, artifact.pathIdentityKey),
+          targetPath,
           workDir: workspace.workDir,
           expectedWorkspaceRootReal: artifact.workspaceRootReal,
           artifactId: artifact.id,
@@ -198,6 +201,7 @@ export function emitArtifactChanged(
 }
 
 export function artifactCanonicalToDisplayPath(workDir: string, canonicalPath: string): string {
+  if (!path.isAbsolute(canonicalPath)) return canonicalPath.replace(/\\/g, '/')
   const relative = path.relative(workDir, canonicalPath)
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return canonicalPath
   return relative.split(path.sep).join('/')

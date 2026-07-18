@@ -52,3 +52,15 @@
 - `npm run i18n:check` — 通过（新增 `artifactSettings.*` keys）
 - `npm run i18n:check:strict` — **既有 290 处失败，非本特性新增**；本特性新增文案均已 i18n 化
 - `npm run build` — 通过
+
+## 评审修复（2026-07-18）
+
+对照 `docs/review/explicit-output-directory-tdd-implementation-review.md` 已修复 Critical #1–#4 与 Required #5–#12：
+
+- 生产 resolve 接线：evidence 校验/消费、`existingArtifact`、`packagePrimaryPath`
+- 全 kind decision options + cancel 中断 wait + `consumeAsUserDecision`（无 waiter 不消费）
+- 登记 realpath / 相对 canonical / identity；delete tombstone 可释放；lease 统一 key；Windows 默认 `process.platform`
+- relocate `backup_committed` 前进恢复；`deleteSession` 终态含 `rolled_back`
+- AC 映射表区分生产链路 vs helper；核心 AC-07/10/15/18 改为经 `prepareArtifactToolWrite`
+
+灰度 gate：**Critical/Required 代码修复已落地**；Windows/Linux 路径安全人工验证仍为 manual pending。

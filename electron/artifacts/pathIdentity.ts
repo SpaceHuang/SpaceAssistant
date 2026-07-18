@@ -3,7 +3,8 @@ import path from 'node:path'
 
 /** Stable path identity: filesystem identity when present, lexical identity before creation. */
 export function artifactPathIdentity(targetPath: string, options: { platform?: NodeJS.Platform } = {}): string {
-  if (options.platform === 'win32') return windowsPathIdentity(targetPath)
+  const platform = options.platform ?? process.platform
+  if (platform === 'win32') return windowsPathIdentity(targetPath)
   const normalized = path.normalize(targetPath)
   try {
     return fs.realpathSync(normalized)

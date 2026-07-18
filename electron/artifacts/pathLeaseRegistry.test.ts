@@ -23,14 +23,15 @@ describe('ArtifactPathLeaseRegistry', () => {
     expect(() => registry.acquireWrite('path-a')).not.toThrow()
   })
 
-  it('keeps a delete tombstone after its claim releases and atomically rejects concurrent use/write', () => {
+  it('releases a delete tombstone after finally-style release so the path can be rewritten', () => {
     const registry = new ArtifactPathLeaseRegistry()
     const activeUse = registry.acquireUse('path-a')
     expect(() => registry.claimDelete('path-a')).toThrow(/lease/i)
     activeUse.release()
     registry.claimDelete('path-a').release()
-    expect(() => registry.acquireUse('path-a')).toThrow(/lease/i)
-    expect(() => registry.acquireWrite('path-a')).toThrow(/lease/i)
+    const useAgain = registry.acquireUse('path-a')
+    useAgain.release()
+    expect(() => registry.acquireWrite('path-a')).not.toThrow()
   })
 
   it('acquires multi-path writes in identity order and rolls back if any path is unavailable', () => {

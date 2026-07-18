@@ -30,7 +30,7 @@ export class ArtifactPathLeaseRegistry {
     const state = this.state(identity)
     if (state.uses || state.write || state.deleting) throw new Error('Artifact path lease is unavailable')
     state.deleting = true
-    return this.lease(identity, () => undefined)
+    return this.lease(identity, () => { state.deleting = false })
   }
 
   acquireWrites(identities: readonly string[]): ArtifactPathMultiLease {

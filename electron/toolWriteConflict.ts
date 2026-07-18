@@ -11,14 +11,14 @@ export { normalizeToolRelPath }
 
 const sessionLeases = new Map<string, Map<string, ArtifactPathLease>>()
 
-export function checkWritePathConflict(sessionId: string, relPath: string): string | null {
-  return checkToolWriteLeaseConflict(sessionId, relPath)
+export function checkWritePathConflict(sessionId: string, relPath: string, workDir?: string): string | null {
+  return checkToolWriteLeaseConflict(sessionId, relPath, workDir)
 }
 
-export function claimWritePath(sessionId: string, relPath: string): void {
+export function claimWritePath(sessionId: string, relPath: string, workDir?: string): void {
   const identity = normalizeToolRelPath(relPath)
   if (!identity) return
-  const lease = acquireToolWriteLease(sessionId, relPath)
+  const lease = acquireToolWriteLease(sessionId, relPath, workDir)
   let byPath = sessionLeases.get(sessionId)
   if (!byPath) {
     byPath = new Map()

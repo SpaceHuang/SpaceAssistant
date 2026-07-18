@@ -1,12 +1,12 @@
-import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ArtifactWriteIntent } from '../../src/shared/artifactTypes'
+import type { ArtifactPathProvenance } from '../../src/shared/artifactTypes'
 import type { AppDatabase } from '../database'
 import { ArtifactRepository } from './artifactRepository'
 import { resolveArtifactOutputAfterDecision, type OverwritePathDecisionResponse } from './artifactDecisionReresolve'
 import { ArtifactChangeCursor } from './changeCursor'
 import type { ResolvedArtifactOutput } from './artifactResolver'
-import { resolveToolArtifactPath } from './toolArtifactPath'
+import { resolveToolArtifactPath, resolveWorkspaceRootReal } from './toolArtifactPath'
 import { registerAfterSuccessfulWrite } from './postWriteRegistration'
 import { registerResolvedArtifactWrite } from './writeRegistration'
 import type { ArtifactDecisionKind } from '../../src/shared/artifactDecisionTypes'
@@ -15,6 +15,11 @@ import {
   waitForArtifactDecisionResponse
 } from './artifactDecisionBridge'
 import { buildArtifactPathResolvedResult, type ArtifactToolResultMeta } from './toolResultMeta'
+import { buildArtifactDecisionOptions } from '../remote/artifactDecisionRemote'
+import { ArtifactEvidenceConsumption } from './evidenceConsumption'
+import { extractExplicitPathEvidence } from './explicitPathEvidence'
+import { toArtifactRelativePath } from './artifactPathKeys'
+import { writeScratchGitPolicyPreference } from './scratchGitPolicyStore'
 
 export type PreparedArtifactWrite = {
   intent: ArtifactWriteIntent
@@ -30,17 +35,21 @@ export type PrepareArtifactWriteResult =
 
 export type ToolLoopArtifactState = {
   changeCursor: ArtifactChangeCursor
+  evidenceConsumption?: ArtifactEvidenceConsumption
 }
 
 export function listArtifactOccupiedPaths(db: AppDatabase, sessionId: string, workDir: string): string[] {
   return new ArtifactRepository(db)
     .listBySession(sessionId)
     .filter((artifact) => artifact.status === 'active')
-    .map((artifact) => path.relative(workDir, artifact.canonicalPath).replace(/\\/g, '/'))
+    .map((artifact) => toArtifactRelativePath(workDir, artifact.canonicalPath))
 }
 
-export function createToolLoopArtifactState(requestId: string): ToolLoopArtifactState {
-  return { changeCursor: new ArtifactChangeCursor(requestId) }
+export function createToolLoopArtifactState(requestId: string, userMessage = ''): ToolLoopArtifactState {
+  return {
+    changeCursor: new ArtifactChangeCursor(requestId),
+    evidenceConsumption: new ArtifactEvidenceConsumption(extractExplicitPathEvidence(userMessage, { requestId }))
+  }
 }
 
 function decisionGroupKey(resolved: ResolvedArtifactOutput, requestedPath: string): string {
@@ -78,18 +87,6 @@ function buildPreparedWrite(input: {
   }
 }
 
-function decisionOptions(kind: NonNullable<ResolvedArtifactOutput['decision']>['kind']) {
-  if (kind === 'overwrite') {
-    return [
-      { key: 'overwrite', label: 'Overwrite' },
-      { key: 'rename', label: 'Rename', requiresInput: 'rename' as const },
-      { key: 'change-directory', label: 'Change directory', requiresInput: 'directory' as const },
-      { key: 'cancel', label: 'Cancel' }
-    ]
-  }
-  return [{ key: 'cancel', label: 'Cancel' }]
-}
-
 export function prepareArtifactToolWrite(input: {
   workDir: string
   sessionId: string
@@ -99,6 +96,9 @@ export function prepareArtifactToolWrite(input: {
   artifact: unknown
   attempt?: number
   occupiedPaths?: readonly string[]
+  db?: AppDatabase
+  userMessage?: string
+  evidenceConsumption?: ArtifactEvidenceConsumption
 }): PrepareArtifactWriteResult {
   try {
     const resolved = resolveToolArtifactPath({
@@ -107,9 +107,14 @@ export function prepareArtifactToolWrite(input: {
       toolUseId: input.toolUseId,
       path: input.path,
       artifact: input.artifact,
-      occupiedPaths: input.occupiedPaths
+      occupiedPaths: input.occupiedPaths,
+      db: input.db,
+      requestId: input.requestId,
+      userMessage: input.userMessage,
+      evidenceConsumption: input.evidenceConsumption
     })
     if (resolved.decision) {
+      const kind = resolved.decision.kind as ArtifactDecisionKind
       const groupKey = decisionGroupKey(resolved, input.path)
       const pending = registerArtifactDecisionRequest({
         requestId: input.requestId,
@@ -117,8 +122,8 @@ export function prepareArtifactToolWrite(input: {
         toolUseId: input.toolUseId,
         attempt: input.attempt ?? 0,
         groupKey,
-        kind: resolved.decision.kind as ArtifactDecisionKind,
-        options: decisionOptions(resolved.decision.kind)
+        kind,
+        options: buildArtifactDecisionOptions(kind)
       })
       return {
         kind: 'decision_required',
@@ -139,7 +144,7 @@ export function prepareArtifactToolWrite(input: {
   }
 }
 
-function parseOverwriteDecisionChoice(choice: string): OverwritePathDecisionResponse {
+function parseOverwriteDecisionChoice(choice: string): OverwritePathDecisionResponse | null {
   const trimmed = choice.trim()
   if (trimmed === 'overwrite') return { action: 'overwrite' }
   if (trimmed === 'cancel') return { action: 'cancel' }
@@ -147,7 +152,39 @@ function parseOverwriteDecisionChoice(choice: string): OverwritePathDecisionResp
   if (trimmed.startsWith('change-directory:')) {
     return { action: 'change-directory', newDirectory: trimmed.slice('change-directory:'.length) }
   }
-  throw new Error(`Unsupported artifact decision choice: ${choice}`)
+  return null
+}
+
+function applyNonOverwriteChoice(input: {
+  intent: ArtifactWriteIntent
+  decisionKind: string
+  choice: string
+  previousFinalPath: string
+}): ArtifactWriteIntent {
+  const trimmed = input.choice.trim()
+  if (input.decisionKind === 'path-type' && (trimmed === 'file' || trimmed === 'directory')) {
+    return { ...input.intent, pathKind: trimmed }
+  }
+  if (input.decisionKind === 'ownership') {
+    if (trimmed === 'project') return { ...input.intent, container: 'project', role: 'primary' }
+    if (trimmed === 'package') return { ...input.intent, container: 'package', role: input.intent.role === 'scratch' ? 'primary' : input.intent.role }
+    if (trimmed === 'scratch') return { ...input.intent, container: 'scratch', role: 'scratch' }
+  }
+  if (input.decisionKind === 'output-location') {
+    const directory = trimmed.startsWith('change-directory:')
+      ? trimmed.slice('change-directory:'.length)
+      : trimmed === 'custom'
+        ? undefined
+        : trimmed
+    if (directory) {
+      return {
+        ...input.intent,
+        requestedPath: directory.endsWith('/') ? directory : `${directory}/`,
+        pathKind: 'directory'
+      }
+    }
+  }
+  return input.intent
 }
 
 export async function resumeArtifactToolWriteAfterDecision(input: {
@@ -158,49 +195,93 @@ export async function resumeArtifactToolWriteAfterDecision(input: {
   path: string
   artifact: unknown
   decisionId: string
+  decisionKind?: string
   attempt: number
   choice: string
   previousFinalPath: string
   occupiedPaths?: readonly string[]
+  db?: AppDatabase
+  userMessage?: string
+  evidenceConsumption?: ArtifactEvidenceConsumption
+  provenance?: Extract<ArtifactPathProvenance, { pathSource: 'user-decision' }>
 }): Promise<PrepareArtifactWriteResult> {
   try {
-    const intent = input.artifact as ArtifactWriteIntent
-    const response = parseOverwriteDecisionChoice(input.choice)
-    const reresolved = await resolveArtifactOutputAfterDecision({
-      workDir: input.workDir,
-      attempt: input.attempt,
-      decisionId: input.decisionId,
-      previousFinalPath: input.previousFinalPath,
-      intent,
-      occupiedPaths: input.occupiedPaths,
-      sessionId: input.sessionId,
-      toolUseId: input.toolUseId,
-      response
-    })
-    if (reresolved.decision) {
-      const groupKey = decisionGroupKey(reresolved, input.path)
-      const pending = registerArtifactDecisionRequest({
-        requestId: input.requestId,
+    if (input.choice.trim() === 'cancel') {
+      return { kind: 'error', message: 'Artifact decision cancelled' }
+    }
+    const decisionKind = input.decisionKind ?? 'overwrite'
+    if (decisionKind === 'git-ignore') {
+      if (input.choice === 'add-ignore' || input.choice === 'keep-visible') {
+        if (input.db) {
+          const session = new ArtifactRepository(input.db).listBySession(input.sessionId)[0]
+          const profileId = session?.workDirProfileId
+          if (profileId) writeScratchGitPolicyPreference(input.db, profileId, input.choice)
+        }
+        return prepareArtifactToolWrite({ ...input, attempt: input.attempt + 1 })
+      }
+      return { kind: 'error', message: 'Artifact decision cancelled' }
+    }
+    if (decisionKind === 'reference-retention') {
+      if (input.choice === 'cancel') return { kind: 'error', message: 'Artifact decision cancelled' }
+      // Retention choice is recorded via provenance/decision; continue with original intent.
+      return prepareArtifactToolWrite({ ...input, attempt: input.attempt + 1 })
+    }
+
+    const overwrite = decisionKind === 'overwrite' ? parseOverwriteDecisionChoice(input.choice) : null
+    if (overwrite) {
+      const intent = input.artifact as ArtifactWriteIntent
+      const reresolved = await resolveArtifactOutputAfterDecision({
+        workDir: input.workDir,
+        attempt: input.attempt,
+        decisionId: input.decisionId,
+        previousFinalPath: input.previousFinalPath,
+        intent,
+        occupiedPaths: input.occupiedPaths,
         sessionId: input.sessionId,
         toolUseId: input.toolUseId,
-        attempt: reresolved.attempt,
-        groupKey,
-        kind: reresolved.decision.kind as ArtifactDecisionKind,
-        options: decisionOptions(reresolved.decision.kind)
+        response: overwrite
       })
+      if (input.provenance) {
+        reresolved.provenance = input.provenance
+      }
+      if (reresolved.decision) {
+        const kind = reresolved.decision.kind as ArtifactDecisionKind
+        const groupKey = decisionGroupKey(reresolved, input.path)
+        const pending = registerArtifactDecisionRequest({
+          requestId: input.requestId,
+          sessionId: input.sessionId,
+          toolUseId: input.toolUseId,
+          attempt: reresolved.attempt,
+          groupKey,
+          kind,
+          options: buildArtifactDecisionOptions(kind)
+        })
+        return {
+          kind: 'decision_required',
+          decisionId: pending.decisionId,
+          decisionKind: reresolved.decision.kind,
+          attempt: pending.attempt,
+          groupKey,
+          previousFinalPath: reresolved.finalPath || input.previousFinalPath
+        }
+      }
       return {
-        kind: 'decision_required',
-        decisionId: pending.decisionId,
-        decisionKind: reresolved.decision.kind,
-        attempt: pending.attempt,
-        groupKey,
-        previousFinalPath: reresolved.finalPath || input.previousFinalPath
+        kind: 'ready',
+        prepared: buildPreparedWrite({ intent, resolved: reresolved, requestedPath: input.path })
       }
     }
-    return {
-      kind: 'ready',
-      prepared: buildPreparedWrite({ intent, resolved: reresolved, requestedPath: input.path })
-    }
+
+    const nextIntent = applyNonOverwriteChoice({
+      intent: input.artifact as ArtifactWriteIntent,
+      decisionKind,
+      choice: input.choice,
+      previousFinalPath: input.previousFinalPath
+    })
+    return prepareArtifactToolWrite({
+      ...input,
+      artifact: nextIntent,
+      attempt: input.attempt + 1
+    })
   } catch (error) {
     return { kind: 'error', message: error instanceof Error ? error.message : 'Artifact decision resume failed' }
   }
@@ -214,15 +295,19 @@ export async function resolveArtifactToolWriteWithDecision(input: {
   path: string
   artifact: unknown
   occupiedPaths?: readonly string[]
+  db?: AppDatabase
+  userMessage?: string
+  evidenceConsumption?: ArtifactEvidenceConsumption
+  signal?: AbortSignal
   onDecisionRequired?: (pending: Extract<PrepareArtifactWriteResult, { kind: 'decision_required' }>) => void
 }): Promise<PrepareArtifactWriteResult> {
   let current = prepareArtifactToolWrite(input)
   while (current.kind === 'decision_required') {
-    const waitPromise = waitForArtifactDecisionResponse(input.requestId, input.toolUseId)
+    const waitPromise = waitForArtifactDecisionResponse(input.requestId, input.toolUseId, input.signal)
     input.onDecisionRequired?.(current)
-    const choice = await waitPromise
-    if (!choice || choice === 'cancel') {
-      return { kind: 'error', message: choice === 'cancel' ? 'Artifact decision cancelled' : 'Artifact decision timed out' }
+    const response = await waitPromise
+    if (!response || response.choice === 'cancel') {
+      return { kind: 'error', message: response?.choice === 'cancel' ? 'Artifact decision cancelled' : 'Artifact decision timed out' }
     }
     current = await resumeArtifactToolWriteAfterDecision({
       workDir: input.workDir,
@@ -232,10 +317,15 @@ export async function resolveArtifactToolWriteWithDecision(input: {
       path: input.path,
       artifact: input.artifact,
       decisionId: current.decisionId,
+      decisionKind: current.decisionKind,
       attempt: current.attempt,
-      choice,
+      choice: response.choice,
       previousFinalPath: current.previousFinalPath,
-      occupiedPaths: input.occupiedPaths
+      occupiedPaths: input.occupiedPaths,
+      db: input.db,
+      userMessage: input.userMessage,
+      evidenceConsumption: input.evidenceConsumption,
+      provenance: response.provenance
     })
   }
   return current
@@ -257,6 +347,7 @@ export function registerArtifactWriteOutcome(input: RegisterArtifactWriteInput):
   if (!input.writeSucceeded) return { ok: false, error: 'write_not_executed' }
   try {
     let artifactId = input.prepared.intent.artifactId ?? ''
+    const workspaceRootReal = resolveWorkspaceRootReal(input.workDir)
     registerAfterSuccessfulWrite({
       success: true,
       register: () => {
@@ -264,7 +355,8 @@ export function registerArtifactWriteOutcome(input: RegisterArtifactWriteInput):
           repository: new ArtifactRepository(input.db),
           sessionId: input.sessionId,
           workDirProfileId: input.workDirProfileId,
-          workspaceRootReal: input.workDir,
+          workDir: input.workDir,
+          workspaceRootReal,
           intent: input.prepared.intent,
           resolved: input.prepared.resolved
         })

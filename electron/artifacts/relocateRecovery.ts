@@ -38,7 +38,21 @@ async function recoverPreparedOrBackup(
 
   if (operation.phase === 'backup_committed' && input.backupPath && operation.targetBackupIdentity) {
     if (await verifyIdentity(input.backupPath, operation.targetBackupIdentity)) {
-      operations.updatePhase(operation.id, 'backup_committed')
+      // Backup is intact and target is not yet committed — continue forward by
+      // treating this as ready for target commit retry via relocateArtifact callers.
+      // Fall through to rollback only when we cannot safely continue; here we re-mark
+      // and let the outer recover loop advance by replaying target commit below.
+      if (operation.moveMode === 'same-device-move' && (await fileExists(input.sourcePath))) {
+        await sameDeviceRename(input.sourcePath, input.targetPath)
+        operations.updatePhase(operation.id, 'target_committed')
+        return
+      }
+      if (operation.tempPath && operation.tempIdentity && (await fileExists(operation.tempPath))) {
+        await atomicReplaceWithTemp(operation.tempPath, input.targetPath, operation.tempIdentity)
+        operations.updatePhase(operation.id, 'target_committed')
+        return
+      }
+      operations.updatePhase(operation.id, 'recovery_required', { error: 'backup_committed without continuable target commit inputs' })
       return
     }
   }

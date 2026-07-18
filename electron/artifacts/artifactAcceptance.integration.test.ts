@@ -15,6 +15,8 @@ import { resolveArtifactOutput } from './artifactResolver'
 import { resolveReferenceRetention } from './referenceRetention'
 import { buildArtifactCompletionSummary } from './completionSummary'
 import { ArtifactChangeCursor } from './changeCursor'
+import { extractExplicitPathEvidence } from './explicitPathEvidence'
+import { buildArtifactDecisionOptions } from '../remote/artifactDecisionRemote'
 
 describe('artifact acceptance integration', () => {
   const fixtures: ArtifactTestFixture[] = []
@@ -210,12 +212,17 @@ describe('artifact acceptance integration', () => {
     it('AC-07/AC-09/AC-11: package primary uses explicit paths literally', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
+      const userMessage = '请写入 `docs/review/review.md` 和 `docs/review/query.sql`'
+      const evidence = extractExplicitPathEvidence(userMessage, { requestId: 'ac-07' })
+      const reportEvidence = evidence.find((item) => item.rawPath === 'docs/review/review.md')!
+      const sqlEvidence = evidence.find((item) => item.rawPath === 'docs/review/query.sql')!
       const report = prepareArtifactToolWrite({
         workDir: fixture.workDir,
         sessionId: fixture.session.id,
         requestId: 'ac-07',
         toolUseId: 'tool-ac-07',
         path: 'docs/review/review.md',
+        userMessage,
         artifact: {
           container: 'package',
           role: 'primary',
@@ -223,7 +230,7 @@ describe('artifact acceptance integration', () => {
           title: 'Review',
           requestedPath: 'docs/review/review.md',
           pathSource: 'user',
-          pathEvidenceId: 'evidence-review'
+          pathEvidenceId: reportEvidence.evidenceId
         }
       })
       expect(report.kind).toBe('ready')
@@ -233,9 +240,10 @@ describe('artifact acceptance integration', () => {
       const sql = prepareArtifactToolWrite({
         workDir: fixture.workDir,
         sessionId: fixture.session.id,
-        requestId: 'ac-12',
+        requestId: 'ac-07',
         toolUseId: 'tool-ac-12',
         path: 'docs/review/query.sql',
+        userMessage,
         artifact: {
           container: 'package',
           role: 'supporting',
@@ -244,7 +252,7 @@ describe('artifact acceptance integration', () => {
           title: 'query',
           requestedPath: 'docs/review/query.sql',
           pathSource: 'user',
-          pathEvidenceId: 'evidence-sql'
+          pathEvidenceId: sqlEvidence.evidenceId
         }
       })
       expect(sql.kind).toBe('ready')
@@ -252,11 +260,29 @@ describe('artifact acceptance integration', () => {
       expect(sql.prepared.finalPath).toBe('docs/review/query.sql')
     })
 
-    it('AC-15: supporting SQL derives into .materials when path unspecified', () => {
-      const resolved = resolveArtifactOutput({
-        workDir: '/workspace',
-        packagePrimaryPath: 'reports/final.md',
-        intent: {
+    it('AC-15: supporting SQL derives into .materials via repository package primary', () => {
+      const fixture = createArtifactTestFixture()
+      fixtures.push(fixture)
+      new ArtifactRepository(fixture.db).create({
+        id: 'pkg-1',
+        sessionId: fixture.session.id,
+        workDirProfileId: fixture.profile.id,
+        workspaceRootReal: fixture.workDir,
+        container: 'package',
+        role: 'primary',
+        title: 'report',
+        canonicalPath: 'reports/final.md',
+        pathIdentityKey: 'pkg-primary',
+        pathSource: 'agent-default'
+      })
+      const result = prepareArtifactToolWrite({
+        workDir: fixture.workDir,
+        sessionId: fixture.session.id,
+        requestId: 'ac-15',
+        toolUseId: 'tool-ac-15',
+        path: 'ignored.sql',
+        db: fixture.db,
+        artifact: {
           container: 'package',
           role: 'supporting',
           packageId: 'pkg-1',
@@ -265,10 +291,12 @@ describe('artifact acceptance integration', () => {
           pathSource: 'agent-default'
         }
       })
-      expect(resolved.finalPath).toBe('reports/final.materials/analysis.sql')
+      expect(result.kind).toBe('ready')
+      if (result.kind !== 'ready') return
+      expect(result.prepared.finalPath).toBe('reports/final.materials/analysis.sql')
     })
 
-    it('AC-10: missing package location requests output-location decision', () => {
+    it('AC-10: missing package location requests output-location decision with completable options', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
       const result = prepareArtifactToolWrite({
@@ -286,6 +314,9 @@ describe('artifact acceptance integration', () => {
         }
       })
       expect(result.kind).toBe('decision_required')
+      if (result.kind !== 'decision_required') return
+      expect(result.decisionKind).toBe('output-location')
+      expect(buildArtifactDecisionOptions('output-location').map((o) => o.key)).toContain('custom')
     })
 
     it('AC-41: ordinary retrieval does not retain reference artifacts', () => {
@@ -309,12 +340,31 @@ describe('artifact acceptance integration', () => {
   })
 
   describe('research writing scenario (AC-18～21, AC-26～28, AC-44)', () => {
-    it('AC-18/AC-19: continuous draft.md edits reuse artifactId and final path', () => {
+    it('AC-18/AC-19: continuous draft.md edits reuse artifactId via prepareArtifactToolWrite', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
-      const first = resolveArtifactOutput({
+      const repository = new ArtifactRepository(fixture.db)
+      repository.create({
+        id: 'draft-1',
+        sessionId: fixture.session.id,
+        workDirProfileId: fixture.profile.id,
+        workspaceRootReal: fixture.workDir,
+        container: 'package',
+        role: 'primary',
+        packageId: 'pkg-draft',
+        title: 'Draft',
+        canonicalPath: 'draft.md',
+        pathIdentityKey: 'draft-id',
+        pathSource: 'agent-default'
+      })
+      const first = prepareArtifactToolWrite({
         workDir: fixture.workDir,
-        intent: {
+        sessionId: fixture.session.id,
+        requestId: 'ac-18-a',
+        toolUseId: 'tool-a',
+        path: 'draft.md',
+        db: fixture.db,
+        artifact: {
           container: 'package',
           role: 'primary',
           packageId: 'pkg-draft',
@@ -323,22 +373,30 @@ describe('artifact acceptance integration', () => {
           pathSource: 'agent-default'
         }
       })
-      expect(first.finalPath).toBe('draft.md')
+      expect(first.kind).toBe('ready')
+      if (first.kind !== 'ready') return
+      expect(first.prepared.finalPath).toBe('draft.md')
 
-      const second = resolveArtifactOutput({
+      const second = prepareArtifactToolWrite({
         workDir: fixture.workDir,
-        existingArtifact: { artifactId: 'draft-1', canonicalPath: path.join(fixture.workDir, 'draft.md') },
-        intent: {
+        sessionId: fixture.session.id,
+        requestId: 'ac-18-b',
+        toolUseId: 'tool-b',
+        path: 'other.md',
+        db: fixture.db,
+        artifact: {
           container: 'package',
           role: 'primary',
           packageId: 'pkg-draft',
           artifactId: 'draft-1',
           title: 'Draft',
-          requestedPath: 'draft.md',
+          requestedPath: 'other.md',
           pathSource: 'agent-default'
         }
       })
-      expect(second.finalPath).toBe('draft.md')
+      expect(second.kind).toBe('ready')
+      if (second.kind !== 'ready') return
+      expect(second.prepared.finalPath).toBe('draft.md')
     })
 
     it('AC-21/AC-26: session clean skips pending references by default', async () => {

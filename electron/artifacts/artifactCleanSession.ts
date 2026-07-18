@@ -1,6 +1,8 @@
+import path from 'node:path'
 import { ArtifactPathLeaseRegistry } from './pathLeaseRegistry'
 import { deleteArtifactFile } from './artifactDeletion'
 import type { ArtifactRecord, ArtifactRepository } from './artifactRepository'
+import { artifactDeleteLeaseIdentity } from './toolPathLease'
 
 export type CleanSkipReason = 'not-scratch' | 'in-use' | 'unsafe' | 'reference-opt-in-required'
 
@@ -31,10 +33,13 @@ export async function cleanArtifactSession(input: {
       continue
     }
     try {
+      const targetPath = input.workDir && !path.isAbsolute(artifact.canonicalPath)
+        ? path.resolve(input.workDir, artifact.canonicalPath)
+        : artifact.canonicalPath
       await deleteArtifactFile({
         registry: input.registry,
-        identity: artifact.pathIdentityKey,
-        targetPath: artifact.canonicalPath,
+        identity: artifactDeleteLeaseIdentity(artifact.workspaceRootReal, artifact.pathIdentityKey),
+        targetPath,
         workDir: input.workDir,
         expectedWorkspaceRootReal: artifact.workspaceRootReal,
         artifactId: artifact.id,

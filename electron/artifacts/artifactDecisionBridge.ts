@@ -1,12 +1,19 @@
 import type { ArtifactDecisionResponsePayload } from '../../src/shared/api'
 import type { ArtifactDecisionRequest } from '../../src/shared/artifactDecisionTypes'
+import type { ArtifactPathProvenance } from '../../src/shared/artifactTypes'
 import { ArtifactDecisionRegistry } from './decisionRegistry'
 
 const CONFIRM_MS = 5 * 60 * 1000
 
+export type ArtifactDecisionWaitResult = {
+  choice: string
+  provenance: Extract<ArtifactPathProvenance, { pathSource: 'user-decision' }>
+}
+
 type Waiter = {
-  resolve: (choice: string | null) => void
+  resolve: (result: ArtifactDecisionWaitResult | null) => void
   timeoutId: ReturnType<typeof setTimeout>
+  onAbort?: () => void
 }
 
 const registry = new ArtifactDecisionRegistry({ timeoutMs: CONFIRM_MS })
@@ -40,19 +47,41 @@ export function getArtifactDecisionRequest(decisionId: string): ArtifactDecision
   return requestsById.get(decisionId)
 }
 
-export function waitForArtifactDecisionResponse(requestId: string, toolUseId: string): Promise<string | null> {
+export function waitForArtifactDecisionResponse(
+  requestId: string,
+  toolUseId: string,
+  signal?: AbortSignal
+): Promise<ArtifactDecisionWaitResult | null> {
   const key = waiterKey(requestId, toolUseId)
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(null)
+      return
+    }
     const timeoutId = setTimeout(() => {
       waiters.delete(key)
       resolve(null)
     }, CONFIRM_MS)
-    waiters.set(key, { resolve, timeoutId })
+    const onAbort = () => {
+      const waiter = waiters.get(key)
+      if (!waiter) return
+      clearTimeout(waiter.timeoutId)
+      waiters.delete(key)
+      resolve(null)
+    }
+    if (signal) signal.addEventListener('abort', onAbort, { once: true })
+    waiters.set(key, { resolve, timeoutId, onAbort })
   })
 }
 
 export function submitArtifactDecisionResponse(payload: ArtifactDecisionResponsePayload): void {
-  registry.consume({
+  const key = waiterKey(payload.requestId, payload.toolUseId)
+  const waiter = waiters.get(key)
+  if (!waiter) {
+    // No active waiter: do not consume — choice would be silently discarded.
+    return
+  }
+  const provenance = registry.consumeAsUserDecision({
     decisionId: payload.decisionId,
     requestId: payload.requestId,
     sessionId: payload.sessionId,
@@ -60,12 +89,9 @@ export function submitArtifactDecisionResponse(payload: ArtifactDecisionResponse
     attempt: payload.attempt
   })
   requestsById.delete(payload.decisionId)
-  const key = waiterKey(payload.requestId, payload.toolUseId)
-  const waiter = waiters.get(key)
-  if (!waiter) return
   clearTimeout(waiter.timeoutId)
   waiters.delete(key)
-  setImmediate(() => waiter.resolve(payload.choice))
+  setImmediate(() => waiter.resolve({ choice: payload.choice, provenance }))
 }
 
 export function cancelArtifactDecisionsForRequest(requestId: string): void {

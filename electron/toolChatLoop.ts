@@ -509,7 +509,22 @@ async function runToolChatSessionInner(
   }
   let loopRound = 0
   let lastValidUsage: ToolLoopUsage | undefined
-  const artifactState = appDb ? createToolLoopArtifactState(requestId) : undefined
+  const lastUserMessage = [...initialMessages].reverse().find((m) => m.role === 'user')
+  const lastUserText =
+    typeof lastUserMessage?.content === 'string'
+      ? lastUserMessage.content
+      : Array.isArray(lastUserMessage?.content)
+        ? lastUserMessage.content
+            .map((part: unknown) =>
+              typeof part === 'string'
+                ? part
+                : part && typeof part === 'object' && 'text' in part
+                  ? String((part as { text?: unknown }).text ?? '')
+                  : ''
+            )
+            .join('')
+        : ''
+  const artifactState = appDb ? createToolLoopArtifactState(requestId, lastUserText) : undefined
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -1018,6 +1033,10 @@ async function runToolChatSessionInner(
           path: inputObj.path,
           artifact: inputObj.artifact,
           occupiedPaths,
+          db: appDb,
+          userMessage: lastUserText,
+          evidenceConsumption: artifactState.evidenceConsumption,
+          signal: chatSignal,
           onDecisionRequired: (pending) => {
             const request = getArtifactDecisionRequest(pending.decisionId)
             if (!request) return
@@ -1739,7 +1758,7 @@ async function runToolChatSessionInner(
 
       const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
       if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
-        const conflict = checkWritePathConflict(sessionId, relPath)
+        const conflict = checkWritePathConflict(sessionId, relPath, workDir)
         if (conflict) {
           logToolLoopError(
             { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
@@ -1758,7 +1777,7 @@ async function runToolChatSessionInner(
           }
           continue
         }
-        claimWritePath(sessionId, relPath)
+        claimWritePath(sessionId, relPath, workDir)
       }
 
       const signal = registerToolCancel(requestId, toolUseId)
