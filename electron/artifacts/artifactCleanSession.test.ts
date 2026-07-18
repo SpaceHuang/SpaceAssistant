@@ -26,7 +26,7 @@ describe('cleanArtifactSession', () => {
     const f = createArtifactTestFixture(); fixtures.push(f)
     const repo = new ArtifactRepository(f.db); const registry = new ArtifactPathLeaseRegistry()
     const path = `${f.workDir}/reference.txt`; await fs.writeFile(path, 'x')
-    repo.create({ id: 'r', sessionId: f.session.id, workDirProfileId: f.profile.id, workspaceRootReal: f.workDir, container: 'reference', role: 'reference', canonicalPath: path, pathIdentityKey: path, pathSource: 'agent-default' })
+    repo.create({ id: 'r', sessionId: f.session.id, workDirProfileId: f.profile.id, workspaceRootReal: f.workDir, container: 'project', role: 'reference', canonicalPath: path, pathIdentityKey: path, pathSource: 'agent-default' })
     expect((await cleanArtifactSession({ repository: repo, registry, sessionId: f.session.id })).skipped).toEqual([{ id: 'r', reason: 'reference-opt-in-required' }])
     expect((await cleanArtifactSession({ repository: repo, registry, sessionId: f.session.id, includeReferences: true })).deleted).toEqual(['r'])
   })

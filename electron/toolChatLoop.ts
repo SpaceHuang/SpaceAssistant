@@ -1781,56 +1781,59 @@ async function runToolChatSessionInner(
         beginTool(sessionId, requestId, toolName)
       }
       try {
-        execResult = await exec.execute(inputObj, {
-          workDir,
-          userDataDir,
-          requestId,
-          toolUseId,
-          sessionId,
-          sendProgress,
-          signal,
-          fileStateCache: fileCache,
-          toolsConfig,
-          browserConfig,
-          shellConfig,
-          shellOutputMode,
-          appDatabase: appDb,
-          workDirManager,
-          wikiConfig,
-          feishuConfig,
-          wechatConfig,
-          larkCliRunner,
-          remoteContext,
-          toolUserConfirmed,
-          getBrowserDetectContext
-        })
-        if (toolName === 'browser' && browserConfig) {
-          stagehandService.scheduleIdleClose(sessionId, browserConfig.idleTimeoutSec)
-        }
-      } catch (e) {
-        execThrew = true
-        const userErr = toToolUserError(e, { toolName })
-        execResult = { success: false, error: userErr }
-        logToolLoopError(
-          {
+        try {
+          execResult = await exec.execute(inputObj, {
+            workDir,
+            userDataDir,
             requestId,
-            sessionId,
-            loopRound,
             toolUseId,
-            toolName,
-            input: inputObj,
-            phase: 'execute_throw'
-          },
-          e,
-          userErr
-        )
-      }
-      clearToolCancel(requestId, toolUseId)
-      if (!trackSwitchToolInFlight) {
-        endTool(sessionId, requestId, toolName)
-      }
-      if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
-        releaseWritePath(sessionId, relPath)
+            sessionId,
+            sendProgress,
+            signal,
+            fileStateCache: fileCache,
+            toolsConfig,
+            browserConfig,
+            shellConfig,
+            shellOutputMode,
+            appDatabase: appDb,
+            workDirManager,
+            wikiConfig,
+            feishuConfig,
+            wechatConfig,
+            larkCliRunner,
+            remoteContext,
+            toolUserConfirmed,
+            getBrowserDetectContext
+          })
+          if (toolName === 'browser' && browserConfig) {
+            stagehandService.scheduleIdleClose(sessionId, browserConfig.idleTimeoutSec)
+          }
+        } catch (e) {
+          execThrew = true
+          const userErr = toToolUserError(e, { toolName })
+          execResult = { success: false, error: userErr }
+          logToolLoopError(
+            {
+              requestId,
+              sessionId,
+              loopRound,
+              toolUseId,
+              toolName,
+              input: inputObj,
+              phase: 'execute_throw'
+            },
+            e,
+            userErr
+          )
+        }
+      } finally {
+        clearToolCancel(requestId, toolUseId)
+        if (!trackSwitchToolInFlight) {
+          endTool(sessionId, requestId, toolName)
+        }
+        if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) {
+          releaseWritePath(sessionId, relPath)
+        }
       }
 
       const durationMs = Date.now() - execStartedAt

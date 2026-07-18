@@ -15,14 +15,20 @@ export async function cleanArtifactSession(input: {
   const deleted: string[] = []
   const skipped: Array<{ id: string; reason: CleanSkipReason }> = []
   for (const artifact of input.repository.listBySession(input.sessionId)) {
-    if (artifact.status !== 'active' || (artifact.container !== 'scratch' && artifact.container !== 'reference')) {
-      skipped.push({ id: artifact.id, reason: 'not-scratch' }); continue
+    if (artifact.status !== 'active') continue
+    const isScratch = artifact.container === 'scratch'
+    const isReference = artifact.role === 'reference'
+    if (!isScratch && !isReference) {
+      skipped.push({ id: artifact.id, reason: 'not-scratch' })
+      continue
     }
-    if (artifact.container === 'reference' && !input.includeReferences) {
-      skipped.push({ id: artifact.id, reason: 'reference-opt-in-required' }); continue
+    if (isReference && !input.includeReferences) {
+      skipped.push({ id: artifact.id, reason: 'reference-opt-in-required' })
+      continue
     }
     if (input.isSafePath && !input.isSafePath(artifact)) {
-      skipped.push({ id: artifact.id, reason: 'unsafe' }); continue
+      skipped.push({ id: artifact.id, reason: 'unsafe' })
+      continue
     }
     try {
       await deleteArtifactFile({

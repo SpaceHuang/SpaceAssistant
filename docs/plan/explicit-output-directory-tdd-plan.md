@@ -247,14 +247,17 @@
   - 以单一同步状态映射完成检查和写入，避免检查/申请之间出现间隙。
 - [x] 为 lease registry 写 RED 测试：finally release 后可重新 acquire。
   - GREEN（2026-07-18）：release 后 write 可重新申请，专用测试覆盖。
-- [ ] 在工具访问路径的 finally 块接入 release，使测试通过。
+- [x] 在工具访问路径的 finally 块接入 release，使测试通过。
+  - GREEN（2026-07-18）：`toolPathLease` 基于 `ArtifactPathLeaseRegistry`；`toolWriteConflict` 委托新 registry；`toolChatLoop` 在 finally 中 release。
 - [x] 为双路径 lease 写 RED 测试：按 identity 排序申请避免死锁。
   - RED（2026-07-18）：multi-path acquire API 尚不存在。
 - [x] 实现 ordered multi-path acquire，使测试通过。
   - GREEN（2026-07-18）：去重、排序申请，失败时反向释放已取得租约；4 条专用测试与 Electron 编译通过。
-- [ ] 迁移 artifact 管理路径的旧 `checkWritePathConflict`/`claimWritePath` 调用到新 registry。
+- [x] 迁移 artifact 管理路径的旧 `checkWritePathConflict`/`claimWritePath` 调用到新 registry。
+  - GREEN（2026-07-18）：旧 API 成为 `toolPathLease` 适配层，底层互斥由共享 `ArtifactPathLeaseRegistry` 承担；既有写冲突测试仍通过。
 - [x] 运行 registry、并发 barrier 与既有写冲突测试。
   - 验收（2026-07-18）：decision registry、path lease、既有 toolWriteConflict、strict workspace 共 4 文件 16 测试通过。
+  - 复验（2026-07-18）：toolPathLease、pathLease、toolWriteConflict 与清理/删除共 5 文件 17 测试通过，Electron 编译通过。
 
 ## 6. ArtifactResolver：三类容器的纯解析
 
