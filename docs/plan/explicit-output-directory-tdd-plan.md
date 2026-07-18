@@ -205,7 +205,8 @@
   - RED（2026-07-18）：path-type decision 请求构造器尚不存在，测试模块无法导入。
 - [x] 实现 `auto` 二义分支与 `path-type` decision 请求，使测试通过。
   - GREEN（2026-07-18）：README 与 .cache 均保留 auto，并构造 file/directory 的 `path-type` 请求；4 条专用测试与 Electron 编译通过。
-- [ ] 运行 explicit evidence、path type 与安全相关测试。
+- [x] 运行 explicit evidence、path type 与安全相关测试。
+  - 验收（2026-07-18）：evidence、path type、identity、safe target、workspace recheck、resolver、decision 与 lease 共 10 文件 41 测试通过，Electron 编译通过。
 
 ## 5. ArtifactDecisionRegistry 与路径租约
 
