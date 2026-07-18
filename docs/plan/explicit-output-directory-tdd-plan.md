@@ -253,8 +253,10 @@
 
 ## 6. ArtifactResolver：三类容器的纯解析
 
-- [~] 为 project resolver 写 RED 测试：显式或项目约定 `src/auth.ts` 原样成为 finalPath，不创建重定向目录。
-- [ ] 实现 project primary 解析与 project-convention/user provenance，使测试通过。
+- [x] 为 project resolver 写 RED 测试：显式或项目约定 `src/auth.ts` 原样成为 finalPath，不创建重定向目录。
+  - RED（2026-07-18）：ArtifactResolver 尚不存在，测试模块无法导入。
+- [x] 实现 project primary 解析与 project-convention/user provenance，使测试通过。
+  - GREEN（2026-07-18）：显式与项目约定路径均直接作为 finalPath，canonicalPath 只在 workspace 内解析；2 条专用测试与 Electron 编译通过。
 - [ ] 为 project resolver 写 RED 测试：既有文件无 artifact 时登记为 project；已有 artifactId 时沿用 canonical path。
 - [ ] 实现 project 的已有文件与 artifactId 分支，使测试通过。
 - [ ] 为 package primary 写 RED 测试：显式文件路径按字面使用。
