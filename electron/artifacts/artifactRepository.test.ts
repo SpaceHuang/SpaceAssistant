@@ -159,4 +159,17 @@ describe('ArtifactRepository', () => {
     repository.updateStage('staged', 'final')
     expect(repository.find('staged')).toMatchObject({ id: 'staged', canonicalPath: 'src/a.ts', stage: 'final' })
   })
+
+  it('returns at most the requested number of active recent artifacts for context', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+    for (let index = 0; index < 3; index++) {
+      repository.create({
+        id: `recent-${index}`, sessionId: fixture.session.id, workDirProfileId: fixture.profile.id, workspaceRootReal: fixture.workDir,
+        container: 'scratch', role: 'scratch', canonicalPath: `run/${index}.txt`, pathIdentityKey: `run/${index}.txt`, pathSource: 'system-assigned'
+      })
+    }
+    expect(repository.listRecentActiveBySession(fixture.session.id, 2)).toHaveLength(2)
+  })
 })

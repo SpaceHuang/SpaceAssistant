@@ -119,6 +119,13 @@ export class ArtifactRepository {
     return rows.map(fromRow)
   }
 
+  listRecentActiveBySession(sessionId: string, limit = 20): ArtifactRecord[] {
+    const rows = getDbConnection(this.db)
+      .prepare("SELECT * FROM session_artifacts WHERE session_id = ? AND status = 'active' ORDER BY updated_at DESC, created_at DESC LIMIT ?")
+      .all(sessionId, Math.max(0, Math.min(limit, 20))) as ArtifactRow[]
+    return rows.map(fromRow)
+  }
+
   markDeleted(id: string): void {
     getDbConnection(this.db)
       .prepare("UPDATE session_artifacts SET status = 'deleted', updated_at = ? WHERE id = ? AND status = 'active'")
