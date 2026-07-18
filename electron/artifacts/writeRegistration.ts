@@ -14,11 +14,10 @@ export function registerResolvedArtifactWrite(input: {
 }): ArtifactRecord {
   if (input.intent.artifactId) {
     const existing = input.repository.find(input.intent.artifactId)
-    if (!existing) throw new Error('Artifact registration cannot find supplied artifactId')
-    return existing
+    if (existing) return existing
   }
   return input.repository.create({
-    id: randomUUID(),
+    id: input.intent.artifactId ?? randomUUID(),
     sessionId: input.sessionId,
     workDirProfileId: input.workDirProfileId,
     workspaceRootReal: input.workspaceRootReal,

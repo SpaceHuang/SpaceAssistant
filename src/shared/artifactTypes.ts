@@ -38,3 +38,14 @@ export interface ArtifactWriteIntentBase {
 }
 
 export type ArtifactWriteIntent = ArtifactWriteIntentBase & DeclaredArtifactPathProvenance
+
+export interface ArtifactToolResultMeta {
+  artifactId: string
+  container: ArtifactContainer
+  role: ArtifactRole
+  pathKind: 'file' | 'directory'
+  requestedPath?: string
+  finalPath: string
+  provenance: ArtifactPathProvenance
+  reason?: string
+}

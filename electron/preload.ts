@@ -175,6 +175,19 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('tool:redirect', fn)
     return () => ipcRenderer.removeListener('tool:redirect', fn)
   },
+  toolOnPathResolved: (cb) => {
+    const fn = (
+      _e: unknown,
+      data: {
+        requestId: string
+        toolUseId: string
+        path: string
+        metadata: import('../src/shared/artifactTypes').ArtifactToolResultMeta
+      }
+    ) => cb(data)
+    ipcRenderer.on('tool:path-resolved', fn)
+    return () => ipcRenderer.removeListener('tool:path-resolved', fn)
+  },
   toolOnConfirmRequest: (cb) => {
     const fn = (
       _e: unknown,

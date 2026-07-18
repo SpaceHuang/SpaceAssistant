@@ -7,6 +7,7 @@ export function resolveToolArtifactPath(input: {
   toolUseId: string
   path: string
   artifact: unknown
+  occupiedPaths?: readonly string[]
 }): ResolvedArtifactOutput {
   if (!input.artifact || typeof input.artifact !== 'object') throw new Error('Missing artifact write intent')
   const intent = input.artifact as ArtifactWriteIntent
@@ -15,6 +16,7 @@ export function resolveToolArtifactPath(input: {
     workDir: input.workDir,
     sessionId: input.sessionId,
     toolUseId: input.toolUseId,
+    occupiedPaths: input.occupiedPaths,
     intent: { ...intent, requestedPath: intent.requestedPath ?? input.path }
   })
 }

@@ -15,6 +15,12 @@ type ToolCbMap = {
     autoApproveFallback?: { reason: string; reasonCode: string }
   }) => void
   onRedirect?: (d: { requestId: string; toolUseId: string; originalPath: string; newPath: string }) => void
+  onPathResolved?: (d: {
+    requestId: string
+    toolUseId: string
+    path: string
+    metadata: import('../../shared/artifactTypes').ArtifactToolResultMeta
+  }) => void
 }
 
 function installApiMock(handlers: ToolCbMap) {
@@ -26,6 +32,10 @@ function installApiMock(handlers: ToolCbMap) {
     },
     toolOnRedirect: (cb) => {
       handlers.onRedirect = cb
+      return () => {}
+    },
+    toolOnPathResolved: (cb) => {
+      handlers.onPathResolved = cb
       return () => {}
     },
     toolOnConfirmRequest: (cb) => {
@@ -44,6 +54,7 @@ describe('chatToolSessionService onConfirmReq', () => {
     handlers.onUse = undefined
     handlers.onConfirm = undefined
     handlers.onRedirect = undefined
+    handlers.onPathResolved = undefined
     installApiMock(handlers)
   })
 
@@ -105,6 +116,41 @@ describe('chatToolSessionService onConfirmReq', () => {
       reason: '敏感路径',
       reasonCode: 'sensitive_path'
     })
+    controller.unsubscribe()
+  })
+
+  it('rewrites input.path on tool:path-resolved with artifact metadata', () => {
+    const patches: unknown[] = []
+    const controller = createToolChatController({
+      dispatch: vi.fn(),
+      assistantMessageId: 'msg-path',
+      getRequestId: () => 'req-path',
+      applyAssistantPatch: (patch) => patches.push(patch)
+    })
+    controller.subscribe()
+
+    handlers.onUse?.({
+      requestId: 'req-path',
+      toolUse: { id: 'tool-path', name: 'write_file', input: { path: 'agent/scratch.sh', content: 'x' } }
+    })
+    handlers.onPathResolved?.({
+      requestId: 'req-path',
+      toolUseId: 'tool-path',
+      path: '.spaceassistant/runs/s1/script/scratch.sh',
+      metadata: {
+        artifactId: 'artifact-1',
+        container: 'scratch',
+        role: 'scratch',
+        pathKind: 'file',
+        requestedPath: 'agent/scratch.sh',
+        finalPath: '.spaceassistant/runs/s1/script/scratch.sh',
+        provenance: { pathSource: 'system-assigned' }
+      }
+    })
+
+    const lastPatch = patches.at(-1) as { toolCalls?: Array<{ input: { path: string }; artifactMeta?: unknown }> }
+    expect(lastPatch.toolCalls?.[0]?.input.path).toBe('.spaceassistant/runs/s1/script/scratch.sh')
+    expect(lastPatch.toolCalls?.[0]?.artifactMeta).toEqual(expect.objectContaining({ artifactId: 'artifact-1' }))
     controller.unsubscribe()
   })
 

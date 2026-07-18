@@ -621,6 +621,8 @@ export interface ToolCallRecord {
   sessionTrustedHint?: true
   /** 反序列化失败等导致的数据损坏标记，重建时生成合成错误占位 */
   corrupted?: boolean
+  /** artifact 管理路径解析后的结构化元数据 */
+  artifactMeta?: import('./artifactTypes').ArtifactToolResultMeta
   /** 应用崩溃中断后由启动清理降级 */
   interrupted?: boolean
 }

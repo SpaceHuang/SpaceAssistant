@@ -1,15 +1,6 @@
-import type { ArtifactContainer, ArtifactPathProvenance, ArtifactRole } from '../../src/shared/artifactTypes'
+import type { ArtifactToolResultMeta } from '../../src/shared/artifactTypes'
 
-export interface ArtifactToolResultMeta {
-  artifactId: string
-  container: ArtifactContainer
-  role: ArtifactRole
-  pathKind: 'file' | 'directory'
-  requestedPath?: string
-  finalPath: string
-  provenance: ArtifactPathProvenance
-  reason?: string
-}
+export type { ArtifactToolResultMeta }
 
 export function buildArtifactPathResolvedResult(input: ArtifactToolResultMeta): {
   type: 'tool:path-resolved'
