@@ -360,10 +360,14 @@
 - [ ] 在 builtin executor 成功返回后才调用 repository 登记，使测试通过。
 - [ ] 为工具循环写 RED 集成测试：登记失败返回“文件已写入但登记失败”，记录可恢复审计，不能报告成功。
 - [ ] 实现写后登记失败处理与审计事件，使测试通过。
-- [ ] 为工具结果写 RED 测试：系统分配路径发 `tool:path-resolved`；显式文件路径 requestedPath 与 finalPath 相同。
-- [ ] 替换 `tool:redirect` 语义为 `tool:path-resolved` 并更新 renderer input.path，使测试通过。
-- [ ] 为工具结果写 RED 测试：metadata 含 artifactId、归属、role、pathKind、provenance、reason。
-- [ ] 持久化 `ArtifactToolResultMeta`，使测试通过。
+- [x] 为工具结果写 RED 测试：系统分配路径发 `tool:path-resolved`；显式文件路径 requestedPath 与 finalPath 相同。
+  - RED（2026-07-18）：Artifact tool result builder 尚不存在。
+- [~] 替换 `tool:redirect` 语义为 `tool:path-resolved` 并更新 renderer input.path，使测试通过。
+  - GREEN（2026-07-18，契约层）：system-assigned artifact 结果构造为 tool:path-resolved；toolChatLoop/renderer 实际事件替换待接入。
+- [x] 为工具结果写 RED 测试：metadata 含 artifactId、归属、role、pathKind、provenance、reason。
+  - RED（2026-07-18）：ArtifactToolResultMeta 尚不存在。
+- [~] 持久化 `ArtifactToolResultMeta`，使测试通过。
+  - GREEN（2026-07-18，契约层）：结构化 metadata 已作为 path-resolved 事件负载；跨进程/工具循环持久化待接入。
 - [ ] 为完成摘要写 RED 测试：request change cursor 只汇总本轮成功写入的项目、工作包、材料、资料和草稿。
 - [ ] 实现 artifact change cursor 与结构化完成摘要，使测试通过。
 - [ ] 为集成测试写 AC-01、AC-02、AC-03、AC-04、AC-07、AC-09、AC-11、AC-15、AC-18、AC-19、AC-22、AC-29、AC-34、AC-35、AC-36、AC-38、AC-39、AC-40 场景。
