@@ -127,7 +127,8 @@
 
 ## 3. 工作区身份、路径 identity 与安全边界
 
-- [~] 为 `resolveArtifactWorkspaceStrict()` 写 RED 测试：未绑定 profile 的历史 session 首次可显式绑定现有解析结果。
+- [x] 为 `resolveArtifactWorkspaceStrict()` 写 RED 测试：未绑定 profile 的历史 session 首次可显式绑定现有解析结果。
+  - RED（2026-07-18）：strict workspace resolver 尚不存在。
 - [ ] 实现历史 session 的一次性显式 profile 回写，使测试通过。
 - [ ] 为 strict resolver 写 RED 测试：profile 不存在返回 `ARTIFACT_WORKSPACE_UNAVAILABLE`。
 - [ ] 实现 profile 存在性校验，使测试通过。
