@@ -322,8 +322,10 @@
   - GREEN（2026-07-18）：仅追加精确规则，已有规则不重复，更新后调用精确 matcher 重检；5 条测试与 Electron 编译通过。
 - [ ] 为 Git policy 写 RED 测试：外部规则失效时清空保存选择并重新询问。
 - [ ] 实现保存选择失效检测，使测试通过。
-- [ ] 为 reference retention 写 RED 测试：普通检索/短摘要不创建文件、artifact 或 Git decision。
-- [ ] 保持检索流程不接入 artifact 写入；使测试通过。
+- [x] 为 reference retention 写 RED 测试：普通检索/短摘要不创建文件、artifact 或 Git decision。
+  - RED（2026-07-18）：reference retention gate 尚不存在。
+- [x] 保持检索流程不接入 artifact 写入；使测试通过。
+  - GREEN（2026-07-18）：retrieve 与 short-summary 均明确返回不保留；1 条专用测试与 Electron 编译通过。
 - [ ] 为 reference retention 写 RED 测试：有 packageId 的 reference 无显式路径写入材料目录。
 - [ ] 在 resolver 接入 package/reference 分支，使测试通过。
 - [ ] 为 reference retention 写 RED 测试：无 package 的本地保存请求 long-term/pending/cancel decision。
