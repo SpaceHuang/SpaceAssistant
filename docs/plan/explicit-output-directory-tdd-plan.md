@@ -190,8 +190,10 @@
   - RED（2026-07-18）：显式路径 resolution guard 尚不存在，测试模块无法导入。
 - [x] 实现未解析强证据阻断逻辑，使测试通过。
   - GREEN（2026-07-18）：新 package/scratch 在存在未消费 output evidence 时均会稳定拒绝；3 条专用测试与 Electron 编译通过。
-- [ ] 为 `resolveOutputPathKind()` 写 RED 测试：已存在路径以 lstat 类型为准，显式声明冲突返回 `ARTIFACT_PATH_TYPE_CONFLICT`。
-- [ ] 实现已存在目标类型比对，使测试通过。
+- [x] 为 `resolveOutputPathKind()` 写 RED 测试：已存在路径以 lstat 类型为准，显式声明冲突返回 `ARTIFACT_PATH_TYPE_CONFLICT`。
+  - RED（2026-07-18）：路径类型 resolver 尚不存在，测试模块无法导入。
+- [x] 实现已存在目标类型比对，使测试通过。
+  - GREEN（2026-07-18）：已有目录的 file 声明被拒绝，auto 返回 lstat directory；专用测试与 Electron 编译通过。
 - [ ] 为路径类型写 RED 测试：不存在且尾随 `/` 或 `\\` 时判为 directory。
 - [ ] 实现在 normalize 前保存尾随分隔符的判定，使测试通过。
 - [ ] 为路径类型写 RED 测试：无扩展名文件、带点目录不按名称猜测类型；仅真正二义时请求 decision。
