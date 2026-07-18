@@ -1,13 +1,17 @@
 import { App } from 'antd'
+import { useState } from 'react'
+import type { ArtifactApiItem } from '../../../shared/api'
 import { useDetailPanel } from './DetailPanelContext'
 import { FileOverlay } from './FileOverlay'
 import { ReferencedFilesPanel } from './ReferencedFilesPanel'
 import { SessionArtifactsPanel } from './SessionArtifactsPanel'
+import { ArtifactRelocateDialog, choiceToRelocatePayload } from './ArtifactRelocateDialog'
 import { useSessionArtifacts } from './useSessionArtifacts'
 import { RemoteStatusBar } from './RemoteStatusBar'
 import { ResizeHandle } from './ResizeHandle'
 import { DetailPanelFileList } from './DetailPanelFileList'
 import { useTypedSelector } from '../../hooks'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { collectToWiki } from '../../services/wikiImportService'
 import './detailPanel.css'
 
@@ -15,11 +19,14 @@ export { DetailPanelProvider, useDetailPanel } from './DetailPanelContext'
 
 export function DetailPanel() {
   const { message } = App.useApp()
+  const { t } = useTypedTranslation('detailPanel')
   const { selectedFile, contentMode, referencedFilesHeight, setReferencedFilesHeight, resetReferencedFilesHeight, openFile } =
     useDetailPanel()
   const config = useTypedSelector((s) => s.config.config)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const { artifacts } = useSessionArtifacts(currentSessionId)
+  const [relocateArtifact, setRelocateArtifact] = useState<ArtifactApiItem | null>(null)
+  const [relocateSubmitting, setRelocateSubmitting] = useState(false)
 
   const handleFileSelect = (relPath: string) => {
     void openFile(relPath).catch((e) => {
@@ -74,6 +81,39 @@ export function DetailPanel() {
           onDelete={(artifactId) => {
             if (!currentSessionId) return
             void window.api.artifactDelete({ sessionId: currentSessionId, artifactId })
+          }}
+          onRelocate={setRelocateArtifact}
+        />
+        <ArtifactRelocateDialog
+          open={relocateArtifact != null}
+          artifact={relocateArtifact}
+          submitting={relocateSubmitting}
+          onCancel={() => setRelocateArtifact(null)}
+          onSubmit={({ target, choice, overwriteAuthorized }) => {
+            if (!currentSessionId || !relocateArtifact) return
+            setRelocateSubmitting(true)
+            const payload = choiceToRelocatePayload(choice)
+            void window.api
+              .artifactRelocate({
+                sessionId: currentSessionId,
+                artifactId: relocateArtifact.id,
+                target,
+                ...payload,
+                overwriteAuthorized
+              })
+              .then((result) => {
+                if (!result.ok) {
+                  message.error(result.error ?? 'Relocate failed')
+                  return
+                }
+                message.success(
+                  result.activeArtifactId === relocateArtifact.id
+                    ? t('sessionArtifacts.relocateSuccessMove')
+                    : t('sessionArtifacts.relocateSuccessCopySwitch')
+                )
+                setRelocateArtifact(null)
+              })
+              .finally(() => setRelocateSubmitting(false))
           }}
         />
         <ReferencedFilesPanel sessionId={currentSessionId} />

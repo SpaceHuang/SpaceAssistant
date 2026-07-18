@@ -79,6 +79,8 @@
     "relocateChoiceMoveSwitch": "Move and switch",
     "relocateChoiceCopyContinue": "Copy and keep editing {{title}}",
     "relocateChoiceCopySwitch": "Copy and switch to the copy",
-    "relocateOverwrite": "Allow overwrite when target exists"
+    "relocateOverwrite": "Allow overwrite when target exists",
+    "relocateSuccessMove": "Artifact relocated",
+    "relocateSuccessCopySwitch": "Copied and switched to the copy"
   }
 }

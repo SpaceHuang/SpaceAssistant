@@ -79,6 +79,8 @@
     "relocateChoiceMoveSwitch": "移动并切换",
     "relocateChoiceCopyContinue": "复制并继续编辑 {{title}}",
     "relocateChoiceCopySwitch": "复制并切换到副本",
-    "relocateOverwrite": "目标已存在时允许覆盖"
+    "relocateOverwrite": "目标已存在时允许覆盖",
+    "relocateSuccessMove": "已改址",
+    "relocateSuccessCopySwitch": "已复制并切换副本"
   }
 }
