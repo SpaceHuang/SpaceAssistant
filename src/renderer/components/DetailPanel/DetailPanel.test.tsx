@@ -61,7 +61,9 @@ function createMockApi() {
     fileGetMetadata: vi.fn().mockResolvedValue({ mtime: 1000, size: 5, isText: true }),
     fileWatchContent: vi.fn().mockResolvedValue(undefined),
     fileOnTreeChanged: vi.fn(() => () => {}),
-    fileOnContentChanged: vi.fn(() => () => {})
+    fileOnContentChanged: vi.fn(() => () => {}),
+    artifactList: vi.fn().mockResolvedValue([]),
+    artifactOnChanged: vi.fn(() => () => undefined)
   }
 }
 

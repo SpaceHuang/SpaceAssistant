@@ -6,13 +6,13 @@ import type {
   ModelEntry,
   ShellConfig,
   WikiConfig,
-  WorkspaceLayoutConfig,
   WeChatConfig
 } from '../../../shared/domainTypes'
-import { DEFAULT_SHELL_CONFIG, mergeWorkspaceLayoutConfig } from '../../../shared/domainTypes'
+import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
 import type { LlmServiceTabState } from './llmServiceDrafts'
 import type { ToolsSettingsUi } from './ToolsSettingsTab'
+import type { ArtifactSettingsUi } from './ArtifactSettingsTab'
 
 export type ConfigModalSnapshotInput = {
   workDirProfiles: WorkDirProfile[]
@@ -28,7 +28,7 @@ export type ConfigModalSnapshotInput = {
   browser: BrowserConfig
   shell: ShellConfig
   shellEnabled: boolean
-  workspaceLayout: WorkspaceLayoutConfig
+  artifactSettings: ArtifactSettingsUi
 }
 
 function normalizeModels(models: ModelEntry[]): ModelEntry[] {
@@ -98,10 +98,7 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     wechat: input.wechat,
     browser: { ...input.browser, allowedDomains: [] },
     shell: { ...input.shell, enabled: input.shellEnabled },
-    workspaceLayout: {
-      ...input.workspaceLayout,
-      extensionSubdirMap: input.workspaceLayout.extensionSubdirMap.map((e) => ({ ...e }))
-    }
+    artifactSettings: { ...input.artifactSettings }
   }
   return JSON.stringify(payload)
 }
@@ -138,7 +135,10 @@ export function buildConfigModalSnapshotFromConfig(
     browser: { ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] },
     shell: cfg.shell ?? { ...DEFAULT_SHELL_CONFIG, enabled: shellEnabled },
     shellEnabled,
-    workspaceLayout: mergeWorkspaceLayoutConfig(cfg.workspaceLayout)
+    artifactSettings: {
+      artifactManagementEnabled: Boolean(cfg.artifactManagementEnabled),
+      scratchGitPolicy: cfg.scratchGitPolicy ?? 'ask'
+    }
   })
 }
 

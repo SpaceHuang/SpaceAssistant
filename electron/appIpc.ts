@@ -114,6 +114,7 @@ import { copyFileInWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } fro
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { openExternalLink } from './externalLink'
 import { readArtifactManagementEnabledFromConfig } from './artifacts/artifactConfig'
+import { readScratchGitPolicyPreference, writeScratchGitPolicyPreference } from './artifacts/scratchGitPolicyStore'
 import { createArtifactIpcHandlers, emitArtifactChanged } from './artifacts/artifactIpc'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 import {
@@ -821,6 +822,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const activeWorkDirProfileId =
       getConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId) ?? workDirProfiles.find((p) => p.isDefault)?.id ?? 'default'
+    const scratchGitPolicy = readScratchGitPolicyPreference(ctx.db, activeWorkDirProfileId)
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
     const browser = readBrowserConfigFromDb(ctx.db)
     const shell = readShellConfigFromDb(ctx.db)
@@ -846,6 +848,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       skills,
       wiki,
       workspaceLayout,
+      artifactManagementEnabled: readArtifactManagementEnabledFromConfig(ctx.db),
+      ...(scratchGitPolicy ? { scratchGitPolicy } : {}),
       feishu,
       wechat,
       workDirProfiles,
@@ -886,6 +890,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         shell: Partial<ShellConfig>
         locale: AppConfig['locale']
         workspaceLayout: Partial<WorkspaceLayoutConfig>
+        artifactManagementEnabled?: boolean
+        scratchGitPolicy?: 'add-ignore' | 'keep-visible' | null
       }>
     ): Promise<void> => {
       try {
@@ -1046,6 +1052,24 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeWorkspaceLayoutConfig({ ...cur, ...payload.workspaceLayout })
         setConfigValue(ctx.db, CONFIG_KEYS.workspaceLayout, JSON.stringify(next))
+      }
+      if (payload.artifactManagementEnabled !== undefined) {
+        setConfigValue(
+          ctx.db,
+          CONFIG_KEYS.artifactManagementEnabled,
+          payload.artifactManagementEnabled ? 'true' : 'false'
+        )
+      }
+      if (payload.scratchGitPolicy !== undefined) {
+        const profileId =
+          payload.activeWorkDirProfileId ??
+          getConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId) ??
+          'default'
+        if (payload.scratchGitPolicy === null) {
+          writeScratchGitPolicyPreference(ctx.db, profileId, undefined)
+        } else {
+          writeScratchGitPolicyPreference(ctx.db, profileId, payload.scratchGitPolicy)
+        }
       }
       if (payload.feishu !== undefined) {
         persistFeishuConfig(ctx.db, payload.feishu)

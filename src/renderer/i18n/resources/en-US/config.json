@@ -313,8 +313,8 @@
         "hint": "Browser automation and dependency checks"
       },
       "workspaceLayout": {
-        "label": "Directory layout",
-        "hint": "Write base directory and extension-to-subdir mapping for new files"
+        "label": "Artifacts",
+        "hint": "Explicit output paths and artifact management (gray release)"
       }
     },
     "file": {
@@ -596,6 +596,16 @@
     "initButton": "Initialize Wiki",
     "initSuccess": "Wiki initialized: {{path}}{{skillSuffix}}",
     "skillInstalledSuffix": " (llm-wiki Skill installed)"
+  },
+  "artifactSettings": {
+    "enabledLabel": "Enable artifact management",
+    "enabledHint": "New sessions use explicit output paths and artifact management; legacy extension redirects no longer apply. Existing sessions keep the flag frozen at creation.",
+    "scratchGitPolicyLabel": "Scratch Git policy",
+    "scratchGitPolicyAddIgnore": "Add to .gitignore (.spaceassistant/runs/ only)",
+    "scratchGitPolicyKeepVisible": "Continue without ignoring",
+    "scratchGitPolicyAsk": "Ask each time",
+    "scratchGitPolicyHint": "Default when scratch files are first created in this workspace; change anytime here.",
+    "overviewHint": "Artifacts are grouped as project changes, packages, scratch files, and research materials; paths come from write intents and user decisions, not extension redirects."
   },
   "workspaceLayout": {
     "enabledLabel": "Enable directory layout",

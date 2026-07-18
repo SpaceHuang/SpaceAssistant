@@ -313,8 +313,8 @@
         "hint": "浏览器自动化与依赖检测"
       },
       "workspaceLayout": {
-        "label": "目录规范",
-        "hint": "Agent 新建文件的写入目录与子目录映射"
+        "label": "工作产物",
+        "hint": "显式输出目录与工作产物管理（灰度）"
       }
     },
     "file": {
@@ -596,6 +596,16 @@
     "initButton": "初始化 Wiki",
     "initSuccess": "Wiki 已初始化：{{path}}{{skillSuffix}}",
     "skillInstalledSuffix": "（已安装 llm-wiki Skill）"
+  },
+  "artifactSettings": {
+    "enabledLabel": "启用工作产物管理",
+    "enabledHint": "开启后，新建会话将使用显式输出目录与工作产物管理；旧「目录规范」扩展名重定向不再生效。已有会话保持创建时的开关状态。",
+    "scratchGitPolicyLabel": "草稿 Git 策略",
+    "scratchGitPolicyAddIgnore": "加入 .gitignore（仅 .spaceassistant/runs/）",
+    "scratchGitPolicyKeepVisible": "继续但不忽略",
+    "scratchGitPolicyAsk": "每次询问",
+    "scratchGitPolicyHint": "首次在本工作区创建会话草稿文件时的默认选择；可随时在此修改。",
+    "overviewHint": "工作产物按项目变更、工作包、草稿与研究资料分组管理；位置由写入声明与用户决策决定，不再按扩展名自动重定向。"
   },
   "workspaceLayout": {
     "enabledLabel": "启用目录规范",

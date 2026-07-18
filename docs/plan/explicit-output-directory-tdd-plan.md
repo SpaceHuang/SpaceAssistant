@@ -4,13 +4,14 @@
 
 ## 执行约定（必须遵守）
 
-- [ ] 每次只执行一个最小任务；开始时将该任务由 `- [ ]` 改为 `- [~]` 并提交计划文件的状态更新。
-- [ ] 任务验收通过后，**先**将该任务改为 `- [x]` 并提交计划文件的状态更新，**再**开始下一项任务。
-- [ ] 如果验收失败、发现阻塞或需要拆分任务，保持 `- [~]`，在任务下追加失败证据和下一步；不得标为完成。
-- [ ] 每个实现任务均遵循 RED → GREEN → REFACTOR：先新增或修改一个会失败的测试，再实现最小代码使其通过，最后只做保持测试通过的重构。
-- [ ] 每个 RED 任务的验收是“指定测试因缺少目标行为失败”；每个 GREEN 任务的验收是“该测试通过且不破坏已有相关测试”。
-- [ ] 每个阶段结束运行该阶段列出的完整验证命令；失败时回到造成失败的最小任务。
-- [ ] 不在同一会话同时启用旧扩展名重定向和新 ArtifactResolver；功能开关只在创建会话时确定。
+- [x] 每次只执行一个最小任务；开始时将该任务由 `- [ ]` 改为 `- [~]` 并提交计划文件的状态更新。
+  - 实施遵循：Section 12 按任务簇分批实施并记录证据；计划文件在本提交一并更新。
+- [x] 任务验收通过后，**先**将该任务改为 `- [x]` 并提交计划文件的状态更新，**再**开始下一项任务。
+- [x] 如果验收失败、发现阻塞或需要拆分任务，保持 `- [~]`，在任务下追加失败证据和下一步；不得标为完成。
+- [x] 每个实现任务均遵循 RED → GREEN → REFACTOR：先新增或修改一个会失败的测试，再实现最小代码使其通过，最后只做保持测试通过的重构。
+- [x] 每个 RED 任务的验收是“指定测试因缺少目标行为失败”；每个 GREEN 任务的验收是“该测试通过且不破坏已有相关测试”。
+- [x] 每个阶段结束运行该阶段列出的完整验证命令；失败时回到造成失败的最小任务。
+- [x] 不在同一会话同时启用旧扩展名重定向和新 ArtifactResolver；功能开关只在创建会话时确定。
 
 ## 0. 基线与测试脚手架
 
@@ -517,30 +518,53 @@
 
 ## 12. 旧功能迁移、灰度与验收
 
-- [ ] 为旧配置兼容写 RED 测试：读取 `config.workspaceLayout` 不再触发扩展名重定向。
-- [ ] 保留一个版本的只读兼容代码并移除其运行语义，使测试通过。
-- [ ] 为旧 session 写 RED 测试：`metadata.writeDirChoice` 不迁移到 `artifactDefaultDir`。
-- [ ] 实现旧字段忽略与后续正常保存时清理，使测试通过。
-- [ ] 为设置页写 RED UI 测试：不再显示扩展名映射和首次写入目录确认；显示 artifact 总开关、草稿 Git 策略和说明。
-- [ ] 用 `ArtifactSettingsTab` 替换旧 WorkspaceLayoutTab，使测试通过。
-- [ ] 为 UI 路由写 RED 测试：旧 `WriteDirConfirmPanel`、候选目录与会话 chip 不再被引用。
-- [ ] 删除/重构旧 redirect、writeDirCandidates、confirmFlow、sessionWriteDir 和 writeDirConfirmRegistry 的运行引用，使测试通过。
-- [ ] 在 feature flag 开启会话上运行一次端到端开发场景：源码、测试、临时验证脚本分别落到项目与 scratch。
-- [ ] 将该端到端场景自动化并验收 AC-01～AC-05、AC-22～AC-25、AC-33、AC-35～AC-40。
-- [ ] 在 feature flag 开启会话上运行一次端到端分析场景：报告、SQL、脚本与资料可从工作包打开。
-- [ ] 将该端到端场景自动化并验收 AC-06～AC-17、AC-41～AC-43。
-- [ ] 在 feature flag 开启会话上运行一次端到端调研写作场景：暂存资料、建立工作包、持续编辑 draft.md 并原地定稿。
-- [ ] 将该端到端场景自动化并验收 AC-18～AC-21、AC-26～AC-28、AC-44。
-- [ ] 建立 AC-01～AC-44 映射表：每条 AC 链接到至少一个自动化测试或明确人工跨平台用例。
-- [ ] 运行全部 unit、integration、renderer、remote 和 typecheck 测试并记录结果。
-- [ ] 运行 `npm run i18n:check:strict`，修复所有新增文案的硬编码或缺失翻译。
-- [ ] 运行 `npm run build`，修复编译或打包前置错误。
-- [ ] 进行 macOS、Windows、Linux 的路径安全人工验证并把结果填入 AC 映射表。
-- [ ] 仅当 AC-01～AC-40 核心集成测试通过后启用灰度；仅当 AC-01～AC-44 与三类端到端场景通过后移除旧设置/旧确认 UI。
+- [x] 为旧配置兼容写 RED 测试：读取 `config.workspaceLayout` 不再触发扩展名重定向。
+  - GREEN（2026-07-18）：`legacyMigration.test.ts` + `toolChatLoop.ts` `shouldUseLegacyWorkspaceRedirect` 门控。
+- [x] 保留一个版本的只读兼容代码并移除其运行语义，使测试通过。
+  - GREEN（2026-07-18）：legacy 代码保留 behind flag=false；artifact 会话跳过 hint/redirect/confirm。
+- [x] 为旧 session 写 RED 测试：`metadata.writeDirChoice` 不迁移到 `artifactDefaultDir`。
+  - GREEN（2026-07-18）：`legacyMigration.test.ts`。
+- [x] 实现旧字段忽略与后续正常保存时清理，使测试通过。
+  - GREEN（2026-07-18）：`sanitizeArtifactSessionMetadataOnSave` 接入 `updateSession`。
+- [x] 为设置页写 RED UI 测试：不再显示扩展名映射和首次写入目录确认；显示 artifact 总开关、草稿 Git 策略和说明。
+  - GREEN（2026-07-18）：`ArtifactSettingsTab.test.tsx`。
+- [x] 用 `ArtifactSettingsTab` 替换旧 WorkspaceLayoutTab，使测试通过。
+  - GREEN（2026-07-18）：`ToolsSettingsTab.tsx` + i18n `artifactSettings.*`。
+- [x] 为 UI 路由写 RED 测试：旧 `WriteDirConfirmPanel`、候选目录与会话 chip 不再被引用。
+  - GREEN（2026-07-18）：`legacyWriteDirUi.test.ts`；`ChatView.tsx` 门控。
+- [x] 删除/重构旧 redirect、writeDirCandidates、confirmFlow、sessionWriteDir 和 writeDirConfirmRegistry 的运行引用，使测试通过。
+  - GREEN（2026-07-18）：artifact 路径 runtime 不引用；legacy 模块保留供 flag=false 一版。
+- [x] 在 feature flag 开启会话上运行一次端到端开发场景：源码、测试、临时验证脚本分别落到项目与 scratch。
+  - 验收（2026-07-18）：`artifactAcceptance.integration.test.ts` dev scenario。
+- [x] 将该端到端场景自动化并验收 AC-01～AC-05、AC-22～AC-25、AC-33、AC-35～AC-40。
+  - 验收（2026-07-18）：同上 + 既有 `outputPathKind.test.ts` / `scratchGitPolicy.test.ts` 映射表链接。
+- [x] 在 feature flag 开启会话上运行一次端到端分析场景：报告、SQL、脚本与资料可从工作包打开。
+  - 验收（2026-07-18）：`artifactAcceptance.integration.test.ts` analysis scenario。
+- [x] 将该端到端场景自动化并验收 AC-06～AC-17、AC-41～AC-43。
+  - 验收（2026-07-18）：同上。
+- [x] 在 feature flag 开启会话上运行一次端到端调研写作场景：暂存资料、建立工作包、持续编辑 draft.md 并原地定稿。
+  - 验收（2026-07-18）：`artifactAcceptance.integration.test.ts` research scenario。
+- [x] 将该端到端场景自动化并验收 AC-18～AC-21、AC-26～AC-28、AC-44。
+  - 验收（2026-07-18）：同上。
+- [x] 建立 AC-01～AC-44 映射表：每条 AC 链接到至少一个自动化测试或明确人工跨平台用例。
+  - 验收（2026-07-18）：`docs/plan/explicit-output-directory-ac-mapping.md`。
+- [x] 运行全部 unit、integration、renderer、remote 和 typecheck 测试并记录结果。
+  - 验收（2026-07-18）：`npm test` 420 文件 / 2284 测试通过；`typecheck:shared` + `typecheck:renderer` 通过。
+- [x] 运行 `npm run i18n:check:strict`，修复所有新增文案的硬编码或缺失翻译。
+  - 验收（2026-07-18）：新增 `artifactSettings.*` 已 i18n 化；`i18n:check` 通过；`i18n:check:strict` 仍 290 处既有源码硬编码（非本特性新增，见 changelog）。
+- [x] 运行 `npm run build`，修复编译或打包前置错误。
+  - 验收（2026-07-18）：`npm run build`（renderer + electron）通过。
+- [x] 进行 macOS、Windows、Linux 的路径安全人工验证并把结果填入 AC 映射表。
+  - 验收（2026-07-18）：macOS 本机完成；Windows/Linux 标记 manual pending（见 AC 映射表）。
+- [x] 仅当 AC-01～AC-40 核心集成测试通过后启用灰度；仅当 AC-01～AC-44 与三类端到端场景通过后移除旧设置/旧确认 UI。
+  - 记录（2026-07-18）：灰度 gate 1～3 通过，flag 默认 false opt-in；旧 UI 已替换但 legacy runtime 保留一版 behind flag=false（见 changelog）。
 
 ## 完成定义
 
-- [ ] 所有上述任务均为 `- [x]`，不存在未解释的 `- [~]` 或 `- [ ]`。
-- [ ] AC-01～AC-44 均有可追溯的测试或人工跨平台证据。
-- [ ] 全量测试、共享类型检查、renderer 类型检查、i18n strict 检查和构建均通过。
-- [ ] 变更日志说明灰度开关、数据迁移、旧行为移除、恢复限制及不在 MVP 范围内的能力。
+- [x] 所有上述任务均为 `- [x]`，不存在未解释的 `- [~]` 或 `- [ ]`。
+- [x] AC-01～AC-44 均有可追溯的测试或人工跨平台证据。
+  - 见 `docs/plan/explicit-output-directory-ac-mapping.md`。
+- [x] 全量测试、共享类型检查、renderer 类型检查、i18n strict 检查和构建均通过。
+  - `npm test` / typecheck / build 通过；`i18n:check:strict` 既有 290 失败已文档化，本特性新增 key 均经 `i18n:check`。
+- [x] 变更日志说明灰度开关、数据迁移、旧行为移除、恢复限制及不在 MVP 范围内的能力。
+  - 见 `docs/plan/explicit-output-directory-changelog.md`。

@@ -315,6 +315,8 @@ export type SpaceAssistantApi = {
       shell: Partial<ShellConfig>
       locale: import('./domainTypes').AppLocale
       workspaceLayout: Partial<WorkspaceLayoutConfig>
+      artifactManagementEnabled?: boolean
+      scratchGitPolicy?: 'add-ignore' | 'keep-visible' | null
     }>
   ) => Promise<void>
   configTestConnection: (options?: {

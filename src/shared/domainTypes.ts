@@ -802,6 +802,10 @@ export interface AppConfig {
   browser: BrowserConfig
   shell: ShellConfig
   workspaceLayout: WorkspaceLayoutConfig
+  /** Opt-in gray flag; frozen onto each session at creation time. */
+  artifactManagementEnabled: boolean
+  /** Saved scratch Git policy for the active workDir profile; undefined = ask each time. */
+  scratchGitPolicy?: 'add-ignore' | 'keep-visible'
 }
 
 /** 从 FeishuConfig 移除 Plan 远程字段；幂等 */

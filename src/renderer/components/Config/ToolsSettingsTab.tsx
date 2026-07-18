@@ -2,13 +2,13 @@ import { App, Button, Form, Input, InputNumber, Radio, Space, Switch } from 'ant
 import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
-import type { BrowserConfig, ModelEntry, ShellConfig, WorkspaceLayoutConfig } from '../../../shared/domainTypes'
+import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ConfigResultAlert } from './ConfigResultAlert'
 import { ConfigSwitchRow } from './ConfigField'
 import { ShellSettingsTab } from './ShellSettingsTab'
-import { WorkspaceLayoutTab } from './WorkspaceLayoutTab'
+import { ArtifactSettingsTab, type ArtifactSettingsUi } from './ArtifactSettingsTab'
 import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
@@ -30,8 +30,8 @@ type Props = {
   setBrowserUi: React.Dispatch<React.SetStateAction<BrowserConfig>>
   shellUi: ShellConfig
   setShellUi: React.Dispatch<React.SetStateAction<ShellConfig>>
-  workspaceLayoutUi: WorkspaceLayoutConfig
-  setWorkspaceLayoutUi: React.Dispatch<React.SetStateAction<WorkspaceLayoutConfig>>
+  artifactSettingsUi: ArtifactSettingsUi
+  setArtifactSettingsUi: React.Dispatch<React.SetStateAction<ArtifactSettingsUi>>
   onShellEnabledChange: (enabled: boolean) => void
   onTestShell?: () => void
   shellTesting?: boolean
@@ -104,8 +104,8 @@ export function ToolsSettingsTab({
   setBrowserUi,
   shellUi,
   setShellUi,
-  workspaceLayoutUi,
-  setWorkspaceLayoutUi,
+  artifactSettingsUi,
+  setArtifactSettingsUi,
   onShellEnabledChange,
   onTestShell,
   shellTesting,
@@ -266,7 +266,7 @@ export function ToolsSettingsTab({
       case 'browser':
         return <BrowserSettingsTab active browser={browserUi} onChange={setBrowserUi} models={models} />
       case 'workspaceLayout':
-        return <WorkspaceLayoutTab value={workspaceLayoutUi} onChange={setWorkspaceLayoutUi} />
+        return <ArtifactSettingsTab value={artifactSettingsUi} onChange={setArtifactSettingsUi} />
       default:
         return null
     }

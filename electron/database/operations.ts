@@ -18,6 +18,7 @@ import {
 } from '../messageCodec'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { ARTIFACT_MANAGEMENT_ENABLED_KEY, freezeArtifactManagementFlag } from '../artifacts/featureFlag'
+import { sanitizeArtifactSessionMetadataOnSave } from '../artifacts/legacyMigration'
 
 type SessionRow = {
   id: string
@@ -207,12 +208,21 @@ export function updateSession(
 ): Session | undefined {
   const cur = getSession(db, sessionId)
   if (!cur) return undefined
+  let metadata = patch.metadata
+    ? {
+        ...patch.metadata,
+        ...(ARTIFACT_MANAGEMENT_ENABLED_KEY in cur.metadata
+          ? { [ARTIFACT_MANAGEMENT_ENABLED_KEY]: cur.metadata[ARTIFACT_MANAGEMENT_ENABLED_KEY] }
+          : {})
+      }
+    : cur.metadata
+  if (patch.metadata) {
+    metadata = sanitizeArtifactSessionMetadataOnSave(metadata).metadata
+  }
   const next: Session = {
     ...cur,
     ...patch,
-    metadata: patch.metadata
-      ? { ...patch.metadata, ...(ARTIFACT_MANAGEMENT_ENABLED_KEY in cur.metadata ? { [ARTIFACT_MANAGEMENT_ENABLED_KEY]: cur.metadata[ARTIFACT_MANAGEMENT_ENABLED_KEY] } : {}) }
-      : cur.metadata,
+    metadata,
     skillsState: patch.skillsState ? normalizeSessionSkillsState(patch.skillsState) : cur.skillsState,
     updatedAt: Date.now()
   }

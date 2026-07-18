@@ -67,7 +67,7 @@ describe('ToolCallCard file write expand behavior', () => {
     )
     expect(screen.queryByRole('button', { name: '允许写入' })).toBeNull()
     expect(document.querySelector('.write-success-card')).not.toBeNull()
-    expect(screen.getByText('notes.txt')).toBeDefined()
+    expect(document.querySelector('.write-success-card__name')?.textContent).toBe('notes.txt')
     fireEvent.click(screen.getByRole('button', { name: '查看' }))
     expect(onOpenFile).toHaveBeenCalledWith('notes.txt')
   })

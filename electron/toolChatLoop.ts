@@ -534,12 +534,14 @@ async function runToolChatSessionInner(
     const locale = resolveRequestLocale(payloadLocale, appDb)
     const sessionForLayout = appDb ? getSession(appDb, sessionId) : undefined
     const layoutMeta = (sessionForLayout?.metadata ?? {}) as Record<string, unknown>
-    const writeDirChoiceForHint = workspaceLayout?.enabled ? getWriteDirChoice(layoutMeta) : null
-    const workspaceLayoutHint = workspaceLayout
-      ? buildWorkspaceLayoutHint(workspaceLayout, writeDirChoiceForHint)
-      : undefined
-    const workDirForContext = resolveWorkDir ? resolveWorkDir() : initialWorkDir
     const artifactManagedForContext = appDb ? isArtifactManagementEnabled(sessionForLayout?.metadata ?? {}) : false
+    const writeDirChoiceForHint =
+      workspaceLayout?.enabled && !artifactManagedForContext ? getWriteDirChoice(layoutMeta) : null
+    const workspaceLayoutHint =
+      workspaceLayout && !artifactManagedForContext
+        ? buildWorkspaceLayoutHint(workspaceLayout, writeDirChoiceForHint)
+        : undefined
+    const workDirForContext = resolveWorkDir ? resolveWorkDir() : initialWorkDir
     const artifactContextHint =
       artifactManagedForContext && appDb
         ? formatArtifactContextBlock(buildArtifactContextSummaries(new ArtifactRepository(appDb), sessionId), workDirForContext) ||

@@ -8,14 +8,12 @@ import { useTypedSelector, useAppDispatch } from '../../hooks'
 
 import { setConfig, setSettingsActiveTab, setSettingsOpen, setSettingsToolsSubTab } from '../../store/configSlice'
 
-import type { AppLocale, ModelEntry, WikiConfig, WorkspaceLayoutConfig } from '../../../shared/domainTypes'
+import type { AppLocale, ModelEntry, WikiConfig } from '../../../shared/domainTypes'
 
 import {
   DEFAULT_WIKI_CONFIG,
   DEFAULT_BROWSER_CONFIG,
-  DEFAULT_SHELL_CONFIG,
-  DEFAULT_WORKSPACE_LAYOUT_CONFIG,
-  mergeWorkspaceLayoutConfig
+  DEFAULT_SHELL_CONFIG
 } from '../../../shared/domainTypes'
 
 import type { BrowserConfig, ShellConfig } from '../../../shared/domainTypes'
@@ -91,6 +89,7 @@ import { WorkDirList, validateWorkDirProfiles } from './WorkDirList'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
+import type { ArtifactSettingsUi } from './ArtifactSettingsTab'
 
 const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat'] as const
 
@@ -195,9 +194,9 @@ export function ConfigSettingsPage() {
 
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
 
-  const [workspaceLayoutUi, setWorkspaceLayoutUi] = useState<WorkspaceLayoutConfig>({
-    ...DEFAULT_WORKSPACE_LAYOUT_CONFIG,
-    extensionSubdirMap: [...DEFAULT_WORKSPACE_LAYOUT_CONFIG.extensionSubdirMap]
+  const [artifactSettingsUi, setArtifactSettingsUi] = useState<ArtifactSettingsUi>({
+    artifactManagementEnabled: false,
+    scratchGitPolicy: 'ask'
   })
 
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
@@ -341,7 +340,10 @@ export function ConfigSettingsPage() {
 
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
 
-      setWorkspaceLayoutUi(mergeWorkspaceLayoutConfig(cfg.workspaceLayout))
+      setArtifactSettingsUi({
+        artifactManagementEnabled: Boolean(cfg.artifactManagementEnabled),
+        scratchGitPolicy: cfg.scratchGitPolicy ?? 'ask'
+      })
 
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
 
@@ -444,7 +446,7 @@ export function ConfigSettingsPage() {
 
       wiki: wikiUi,
 
-      workspaceLayout: workspaceLayoutUi,
+      artifactSettings: artifactSettingsUi,
 
       feishu: feishuUi,
 
@@ -482,7 +484,7 @@ export function ConfigSettingsPage() {
 
     wikiUi,
 
-    workspaceLayoutUi,
+    artifactSettingsUi,
 
     feishuUi,
 
@@ -651,7 +653,9 @@ export function ConfigSettingsPage() {
 
         wiki: wikiUi,
 
-        workspaceLayout: workspaceLayoutUi,
+        artifactManagementEnabled: artifactSettingsUi.artifactManagementEnabled,
+        scratchGitPolicy:
+          artifactSettingsUi.scratchGitPolicy === 'ask' ? null : artifactSettingsUi.scratchGitPolicy,
 
         feishu: feishuUi,
 
@@ -944,9 +948,9 @@ export function ConfigSettingsPage() {
 
             setShellUi={setShellUi}
 
-            workspaceLayoutUi={workspaceLayoutUi}
+            artifactSettingsUi={artifactSettingsUi}
 
-            setWorkspaceLayoutUi={setWorkspaceLayoutUi}
+            setArtifactSettingsUi={setArtifactSettingsUi}
 
             onShellEnabledChange={onShellEnabledChange}
 

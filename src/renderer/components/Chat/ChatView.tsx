@@ -36,6 +36,7 @@ import { WriteDirConfirmPanel } from './WriteDirConfirmPanel'
 import { usePendingArtifactDecisionSnapshot } from '../../hooks/usePendingArtifactDecisionSnapshot'
 import { pendingArtifactDecisionStore } from '../../services/pendingArtifactDecisionStore'
 import { ArtifactDecisionCard } from './ArtifactDecisionCard'
+import { shouldShowLegacyWriteDirUi } from './legacyWriteDirUi'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
@@ -1288,6 +1289,11 @@ export function ChatView() {
     return null
   }, [currentSession?.metadata])
 
+  const showLegacyWriteDirUi = shouldShowLegacyWriteDirUi(
+    cfg?.workspaceLayout?.enabled,
+    currentSession?.metadata?.artifactManagementEnabled === true
+  )
+
   const testPreviewToolsInteractive = useMemo(
     () =>
       cfg
@@ -1427,7 +1433,7 @@ export function ChatView() {
           />
         ) : null}
       </div>
-      {pendingWriteDirConfirm ? (
+      {showLegacyWriteDirUi && pendingWriteDirConfirm ? (
         <div className="chat-write-dir-confirm">
           <div className="chat-write-dir-confirm__track">
             <WriteDirConfirmPanel
@@ -1450,7 +1456,7 @@ export function ChatView() {
           </div>
         </div>
       ) : null}
-      {cfg?.workspaceLayout?.enabled && writeDirChoiceDir ? (
+      {showLegacyWriteDirUi && writeDirChoiceDir ? (
         <div className="chat-write-dir-chip">
           <Tag>{t('writeDirChip.label', { dir: writeDirChoiceDir })}</Tag>
         </div>
