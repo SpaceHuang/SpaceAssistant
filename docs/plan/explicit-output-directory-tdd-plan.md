@@ -119,7 +119,8 @@
   - GREEN（2026-07-18）：supporting/reference 必须引用同 session 的 active package primary；5 条 repository 测试通过。
 - [x] 为 session 删除写 RED 测试：有非终态 operation 时拒绝删除；终态 journal 显式清理后允许删除。
   - RED（2026-07-18）：当前直接触发外键错误，未给出可恢复的 operation guard，也未清理终态 journal。
-- [ ] 实现 operation guard 与终态 journal 清理，使删除测试通过。
+- [x] 实现 operation guard 与终态 journal 清理，使删除测试通过。
+  - GREEN（2026-07-18）：pending operation 返回明确拒绝；终态 journal 在删除 session 前清理。专用测试、既有 operations 测试和 Electron 编译通过。
 - [x] 实现 repository 的 list、find、create、updatePath、markDeleted、listBySession API，并分别覆盖最小单测。
   - GREEN（2026-07-18）：所有 API 均已实现；repository 专用测试 6/6 通过，shared typecheck 通过。
 - [ ] 运行 `databaseMigrations.test.ts`、repository 测试与既有 database 测试。

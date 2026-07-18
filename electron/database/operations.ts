@@ -250,7 +250,18 @@ export function updateSession(
 
 export function deleteSession(db: AppDatabase, sessionId: string): void {
   const conn = getDbConnection(db)
-  conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
+  const pending = conn
+    .prepare(`SELECT 1 FROM artifact_operations op
+      JOIN session_artifacts artifact ON artifact.id = op.artifact_id
+      WHERE artifact.session_id = ? AND op.phase NOT IN ('completed', 'failed', 'recovery_required') LIMIT 1`)
+    .get(sessionId)
+  if (pending) throw new Error('Cannot delete session while an artifact operation is pending')
+  conn.transaction(() => {
+    conn
+      .prepare('DELETE FROM artifact_operations WHERE artifact_id IN (SELECT id FROM session_artifacts WHERE session_id = ?)')
+      .run(sessionId)
+    conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
+  })()
   deleteSessionUsage(db, sessionId)
   db.flushSave()
 }
