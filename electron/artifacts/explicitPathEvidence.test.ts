@@ -40,4 +40,10 @@ describe('extractExplicitPathEvidence', () => {
     expect(evidence.map((item) => item.rawPath)).toEqual(['draft.md', 'summary.txt'])
     expect(evidence.every((item) => item.intent === 'output')).toBe(true)
   })
+
+  it('marks read and reference paths as referenced-input rather than output targets', () => {
+    const evidence = extractExplicitPathEvidence('读取 `docs/spec.md` 并参考 "data/input.csv" 后生成报告。', { requestId: 'request-4' })
+
+    expect(evidence.map((item) => item.intent)).toEqual(['referenced-input', 'referenced-input'])
+  })
 })
