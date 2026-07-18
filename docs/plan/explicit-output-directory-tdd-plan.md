@@ -135,7 +135,7 @@
   - 验收（2026-07-18）：缺失绑定 profile 返回稳定 unavailable 错误码。
 - [x] 实现 profile 存在性校验，使测试通过。
   - strict resolver 已在解析前校验 profile；2 条专用测试通过。
-- [ ] 为 strict resolver 写 RED 测试：profile realpath 与 artifact 快照不同返回 `ARTIFACT_WORKSPACE_CHANGED`。
+- [~] 为 strict resolver 写 RED 测试：profile realpath 与 artifact 快照不同返回 `ARTIFACT_WORKSPACE_CHANGED`。
 - [ ] 实现 workspace root realpath 快照比对，使测试通过。
 - [ ] 为 strict resolver 写 RED 测试：active workspace 与 artifact workspace 同名文件不会被作为 fallback 操作。
 - [ ] 移除 artifact mutation 对 active-workspace fallback 的调用，使测试通过。
