@@ -140,8 +140,10 @@
   - 验收（2026-07-18）：realpath 与 artifact 快照不一致时返回 stable changed 错误码。
 - [x] 实现 workspace root realpath 快照比对，使测试通过。
   - strict resolver 的 expected realpath 比对已实现；3 条专用测试通过。
-- [ ] 为 strict resolver 写 RED 测试：active workspace 与 artifact workspace 同名文件不会被作为 fallback 操作。
-- [ ] 移除 artifact mutation 对 active-workspace fallback 的调用，使测试通过。
+- [x] 为 strict resolver 写 RED 测试：active workspace 与 artifact workspace 同名文件不会被作为 fallback 操作。
+  - 验收（2026-07-18）：artifact binding 缺失时即使提供 activeWorkDir 仍返回 ARTIFACT_WORKSPACE_UNAVAILABLE；strict resolver 4 条测试与 Electron 编译通过。
+- [x] 移除 artifact mutation 对 active-workspace fallback 的调用，使测试通过。
+  - strict resolver 接口仅将 activeWorkDir 作为不可使用的调用方信息保留，不将其纳入 fallback。
 - [x] 为 POSIX path identity 写 RED 测试：已存在路径使用 realpath identity，不存在路径使用规范化词法 identity。
   - RED（2026-07-18）：path identity helper 尚不存在。
 - [x] 实现 POSIX identity 生成，使测试通过。

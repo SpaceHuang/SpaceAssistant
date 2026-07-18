@@ -13,6 +13,8 @@ export function resolveArtifactWorkspaceStrict(input: {
   profiles: WorkDirProfile[]
   legacyResolved?: { profileId: string; workDir: string }
   expectedWorkspaceRootReal?: string
+  /** Present for callers that also know the active workspace; it is intentionally never used as a fallback. */
+  activeWorkDir?: string
 }): StrictWorkspaceResult {
   const session = getSession(input.db, input.sessionId)
   if (!session) return { ok: false, errorCode: ErrorCodes.ARTIFACT_WORKSPACE_UNAVAILABLE }

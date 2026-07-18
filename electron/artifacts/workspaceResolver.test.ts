@@ -44,4 +44,16 @@ describe('resolveArtifactWorkspaceStrict', () => {
       expectedWorkspaceRootReal: `${fixture.workDir}-moved`
     })).toEqual({ ok: false, errorCode: 'ARTIFACT_WORKSPACE_CHANGED' })
   })
+
+  it('does not fall back to an active workspace when the artifact binding is unavailable', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    expect(resolveArtifactWorkspaceStrict({
+      db: fixture.db,
+      sessionId: fixture.session.id,
+      profiles: [],
+      activeWorkDir: fixture.workDir
+    })).toEqual({ ok: false, errorCode: 'ARTIFACT_WORKSPACE_UNAVAILABLE' })
+  })
+
 })
