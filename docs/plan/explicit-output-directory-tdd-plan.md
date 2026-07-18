@@ -257,8 +257,10 @@
   - RED（2026-07-18）：ArtifactResolver 尚不存在，测试模块无法导入。
 - [x] 实现 project primary 解析与 project-convention/user provenance，使测试通过。
   - GREEN（2026-07-18）：显式与项目约定路径均直接作为 finalPath，canonicalPath 只在 workspace 内解析；2 条专用测试与 Electron 编译通过。
-- [ ] 为 project resolver 写 RED 测试：既有文件无 artifact 时登记为 project；已有 artifactId 时沿用 canonical path。
-- [ ] 实现 project 的已有文件与 artifactId 分支，使测试通过。
+- [x] 为 project resolver 写 RED 测试：既有文件无 artifact 时登记为 project；已有 artifactId 时沿用 canonical path。
+  - RED（2026-07-18）：初始 resolver 忽略 existingArtifact，按新 requestedPath 解析。
+- [x] 实现 project 的已有文件与 artifactId 分支，使测试通过。
+  - GREEN（2026-07-18）：匹配 artifactId 时 finalPath 从 canonicalPath 相对 workspace 推导，不再隐式改址；3 条专用测试与 Electron 编译通过。
 - [ ] 为 package primary 写 RED 测试：显式文件路径按字面使用。
 - [ ] 实现 package primary 的显式文件解析，使测试通过。
 - [ ] 为 package primary 写 RED 测试：显式目录仅追加展示的主成果文件名。

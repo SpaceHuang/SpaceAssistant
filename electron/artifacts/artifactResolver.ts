@@ -11,6 +11,7 @@ export interface ResolvedArtifactOutput {
 export function resolveArtifactOutput(input: {
   workDir: string
   intent: ArtifactWriteIntent
+  existingArtifact?: { artifactId: string; canonicalPath: string }
 }): ResolvedArtifactOutput {
   if (input.intent.container !== 'project') throw new Error('Artifact resolver branch not implemented for this container')
   if (!input.intent.requestedPath) throw new Error('Project artifact requires requestedPath')
@@ -18,9 +19,12 @@ export function resolveArtifactOutput(input: {
   const provenance = pathSource === 'user'
     ? { pathSource, pathEvidenceId: pathEvidenceId! }
     : { pathSource }
-  return {
-    finalPath: input.intent.requestedPath,
-    canonicalPath: path.resolve(input.workDir, input.intent.requestedPath),
-    provenance
+  if (input.intent.artifactId && input.existingArtifact?.artifactId === input.intent.artifactId) {
+    return {
+      finalPath: path.relative(input.workDir, input.existingArtifact.canonicalPath),
+      canonicalPath: input.existingArtifact.canonicalPath,
+      provenance
+    }
   }
+  return { finalPath: input.intent.requestedPath, canonicalPath: path.resolve(input.workDir, input.intent.requestedPath), provenance }
 }

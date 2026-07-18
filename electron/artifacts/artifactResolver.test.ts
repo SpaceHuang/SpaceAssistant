@@ -12,4 +12,12 @@ describe('resolveArtifactOutput', () => {
       provenance: pathSource === 'user' ? { pathSource, pathEvidenceId: 'request-1:0-11' } : { pathSource }
     }))
   })
+
+  it('uses the canonical path of an existing project artifact when an artifactId is supplied', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      existingArtifact: { artifactId: 'artifact-1', canonicalPath: '/workspace/src/auth.ts' },
+      intent: { container: 'project', role: 'primary', artifactId: 'artifact-1', requestedPath: 'other.ts', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({ finalPath: 'src/auth.ts', canonicalPath: '/workspace/src/auth.ts' }))
+  })
 })
