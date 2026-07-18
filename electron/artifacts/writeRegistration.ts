@@ -14,7 +14,15 @@ export function registerResolvedArtifactWrite(input: {
 }): ArtifactRecord {
   if (input.intent.artifactId) {
     const existing = input.repository.find(input.intent.artifactId)
-    if (existing) return existing
+    if (existing) {
+      if (input.intent.stage && input.intent.stage !== existing.stage) {
+        input.repository.updateStage(existing.id, input.intent.stage)
+      }
+      return {
+        ...existing,
+        ...(input.intent.stage ? { stage: input.intent.stage } : {})
+      }
+    }
   }
   return input.repository.create({
     id: input.intent.artifactId ?? randomUUID(),

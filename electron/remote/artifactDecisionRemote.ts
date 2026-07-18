@@ -13,6 +13,20 @@ export type ParsedArtifactDecisionReply =
   | { kind: 'usage_hint' }
   | { kind: 'not_decision' }
 
+export function resolveRemoteArtifactDecisionChoice(
+  request: ArtifactDecisionRequest,
+  parsed: Extract<ParsedArtifactDecisionReply, { kind: 'choice' }>
+): string {
+  if (parsed.choice.startsWith('rename:') || parsed.choice.startsWith('change-directory:')) {
+    return parsed.choice
+  }
+  const index = Number.parseInt(parsed.choice, 10)
+  if (Number.isFinite(index) && index >= 1 && index <= request.options.length) {
+    return request.options[index - 1]!.key
+  }
+  return parsed.choice
+}
+
 export function parseArtifactDecisionRemoteReply(
   raw: string,
   decisionId: string,

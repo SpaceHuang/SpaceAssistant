@@ -63,7 +63,8 @@ if (typeof window !== 'undefined') {
     artifactDecisionResponse: api.artifactDecisionResponse ?? (async () => {}),
     artifactRelocate: api.artifactRelocate ?? (async () => ({ ok: false, error: 'stub' })),
     artifactSetDefaultDir: api.artifactSetDefaultDir ?? (async () => {}),
-    artifactOnChanged: api.artifactOnChanged ?? (() => () => undefined)
+    artifactOnChanged: api.artifactOnChanged ?? (() => () => undefined),
+    artifactOnDecisionRequest: api.artifactOnDecisionRequest ?? (() => () => undefined)
   } as SpaceAssistantApi
 }
 

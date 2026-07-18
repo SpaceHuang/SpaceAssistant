@@ -33,6 +33,9 @@ import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot
 import { usePendingWriteDirConfirmSnapshot } from '../../hooks/usePendingWriteDirConfirmSnapshot'
 import { pendingWriteDirConfirmStore } from '../../services/pendingWriteDirConfirmStore'
 import { WriteDirConfirmPanel } from './WriteDirConfirmPanel'
+import { usePendingArtifactDecisionSnapshot } from '../../hooks/usePendingArtifactDecisionSnapshot'
+import { pendingArtifactDecisionStore } from '../../services/pendingArtifactDecisionStore'
+import { ArtifactDecisionCard } from './ArtifactDecisionCard'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
@@ -1274,6 +1277,7 @@ export function ChatView() {
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
   const pendingWriteDirConfirm = usePendingWriteDirConfirmSnapshot(sessionId)
+  const pendingArtifactDecision = usePendingArtifactDecisionSnapshot(sessionId)
 
   const writeDirChoiceDir = useMemo(() => {
     const v = currentSession?.metadata?.writeDirChoice
@@ -1431,6 +1435,17 @@ export function ChatView() {
               sessionId={pendingWriteDirConfirm.sessionId}
               candidates={pendingWriteDirConfirm.candidates}
               onRespond={(choice) => pendingWriteDirConfirmStore.respond(pendingWriteDirConfirm, choice)}
+            />
+          </div>
+        </div>
+      ) : null}
+      {pendingArtifactDecision ? (
+        <div className="chat-artifact-decision">
+          <div className="chat-artifact-decision__track">
+            <ArtifactDecisionCard
+              request={pendingArtifactDecision}
+              onRespond={(choice) => pendingArtifactDecisionStore.respond(pendingArtifactDecision, choice)}
+              onCancel={() => pendingArtifactDecisionStore.cancel(pendingArtifactDecision)}
             />
           </div>
         </div>

@@ -25,6 +25,11 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('artifact:changed', fn)
     return () => ipcRenderer.removeListener('artifact:changed', fn)
   },
+  artifactOnDecisionRequest: (cb) => {
+    const fn = (_e: unknown, request: import('../src/shared/artifactDecisionTypes').ArtifactDecisionRequest) => cb(request)
+    ipcRenderer.on('artifact:decision-request', fn)
+    return () => ipcRenderer.removeListener('artifact:decision-request', fn)
+  },
 
   usageSet: (payload) => ipcRenderer.invoke('usage:set', payload),
   usageGet: (sessionId) => ipcRenderer.invoke('usage:get', sessionId),

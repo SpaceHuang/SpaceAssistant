@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ARTIFACT_DECISION_REMOTE_USAGE_HINT,
   parseArtifactDecisionRemoteReply,
+  resolveRemoteArtifactDecisionChoice,
   serializeArtifactDecisionForRemote
 } from './artifactDecisionRemote'
 
@@ -45,5 +46,10 @@ describe('artifactDecisionRemote', () => {
   it('returns usage hint for invalid numbered replies', () => {
     expect(parseArtifactDecisionRemoteReply('9 missing', 'dec-1')).toEqual({ kind: 'usage_hint' })
     expect(ARTIFACT_DECISION_REMOTE_USAGE_HINT).toContain('review-v2.md')
+  })
+
+  it('maps numbered overwrite replies to option keys', () => {
+    expect(resolveRemoteArtifactDecisionChoice(request, { kind: 'choice', decisionId: 'dec-1', choice: '1' })).toBe('overwrite')
+    expect(resolveRemoteArtifactDecisionChoice(request, { kind: 'choice', decisionId: 'dec-1', choice: '4' })).toBe('cancel')
   })
 })

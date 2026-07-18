@@ -56,8 +56,12 @@ export function buildFinalSystemPrompt(args: {
   locale: AppLocale
   hasImageAttachments?: boolean
   workspaceLayoutHint?: string
+  artifactContextHint?: string
 }): string | undefined {
   let withMemory = buildSystemPrompt(args.system, args.memoryContent, args.memoryEnabled)
+  if (args.artifactContextHint) {
+    withMemory = withMemory ? `${withMemory}\n\n${args.artifactContextHint}` : args.artifactContextHint
+  }
   if (args.workspaceLayoutHint) {
     withMemory = withMemory
       ? `${withMemory}\n\n${args.workspaceLayoutHint}`

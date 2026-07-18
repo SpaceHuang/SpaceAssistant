@@ -277,6 +277,7 @@ export function registerArtifactWriteOutcome(input: RegisterArtifactWriteInput):
       container: input.prepared.intent.container,
       role: input.prepared.intent.role,
       finalPath: input.prepared.finalPath,
+      ...(input.prepared.intent.stage ? { stage: input.prepared.intent.stage } : {}),
       success: true
     })
     return { ok: true, artifactId }

@@ -25,4 +25,20 @@ describe('SessionArtifactsPanel', () => {
     expect(groups.find((group) => group.key === 'project')?.defaultExpanded).toBe(true)
     expect(groups.find((group) => group.key === 'scratch')?.defaultExpanded).toBe(false)
   })
+
+  it('keeps stage on grouped artifacts for panel rendering', () => {
+    const artifacts: ArtifactApiItem[] = [
+      {
+        id: 'p1',
+        sessionId: 's1',
+        container: 'project',
+        role: 'primary',
+        title: 'Draft',
+        finalPath: 'report.md',
+        status: 'active',
+        stage: 'draft'
+      }
+    ]
+    expect(groupSessionArtifacts(artifacts, t)[0]?.items[0]?.stage).toBe('draft')
+  })
 })

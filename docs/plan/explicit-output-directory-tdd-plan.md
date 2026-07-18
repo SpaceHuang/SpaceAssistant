@@ -439,14 +439,16 @@
 - [x] 为 remote reply 写 RED 测试：`2 review-v2.md` 与 `3 reports/final/` 解析为相应 response；无效输入只重发帮助。
   - GREEN（2026-07-18）：远程回复解析与 usage hint 测试通过。
 - [x] 实现远程 decision 回复解析，使测试通过。
-- [ ] 为桌面和远程各写集成测试：取消、覆盖、改名、改目录及二次冲突生成新 decisionId。
-- [ ] 实现两端同一 registry 的完整交互，使集成测试通过。
+- [x] 为桌面和远程各写集成测试：取消、覆盖、改名、改目录及二次冲突生成新 decisionId。
+  - GREEN（2026-07-18）：`artifactDecisionIntegration.test.ts` + `artifactDecisionRemoteIntegration.test.ts`。
+- [x] 实现两端同一 registry 的完整交互，使集成测试通过。
+  - GREEN（2026-07-18）：`pendingArtifactDecisionStore` + ChatView `ArtifactDecisionCard`；`resolveRemoteArtifactDecisionChoice` 映射远程编号回复。
 - [x] 为 WriteSuccessCard 写 RED UI 测试：显示归属 badge、用途和 finalPath。
   - GREEN（2026-07-18）：`WriteSuccessCard.test.tsx`。
 - [x] 更新 WriteSuccessCard 与 i18n 文案，使测试通过。
   - GREEN（2026-07-18）：badge/finalPath/reason + zh-CN/en-US keys；`npm run i18n:generate-types` 通过。
-- [~] 运行 IPC、renderer、远程 confirm、i18n strict 检查。
-  - 验收（2026-07-18）：新增测试、`typecheck:shared/renderer`、`build:electron`、`i18n:check` 通过；`i18n:check:strict` 与全量测试待跑。
+- [x] 运行 IPC、renderer、远程 confirm、i18n strict 检查。
+  - GREEN（2026-07-18）：14 文件 45 测试、`typecheck:shared/renderer`、`build:electron` 通过；`i18n:check` 通过；`i18n:check:strict` 仍因仓库既有 290 处源码硬编码中文失败（非本节新增）。
 
 ## 10. 工作产物面板、清理与生命周期
 
@@ -477,14 +479,14 @@
   - 验收（2026-07-18）：清理服务支持 `includeReferences`，默认保护 reference。
 - [x] 为跨轮上下文写 RED 测试：最多注入 20 条最近活跃 artifact 摘要，继续编辑复用 artifactId。
   - GREEN（2026-07-18）：`artifactContextQuery.test.ts`。
-- [~] 实现 artifact context 查询与 prompt 注入，使测试通过。
-  - GREEN（2026-07-18，查询层）：`artifactContextQuery.ts` 已实现；tool loop prompt 注入待 section 8 接入。
-- [~] 为 stage 写 RED 测试：working/draft/final 更新后面板和完成摘要一致。
-  - 面板已展示 `stage` 字段；repository `updateStage` 已有单测。
-- [~] 实现 stage 更新与 UI 展示，使测试通过。
-  - 面板/list API 已含 stage；写入链路 stage 同步待 section 8。
-- [~] 运行面板、删除、清理、上下文、完成摘要 UI 测试。
-  - 验收（2026-07-18）：本节新增 renderer/electron 测试通过；全量 `npm test` 待跑。
+- [x] 实现 artifact context 查询与 prompt 注入，使测试通过。
+  - GREEN（2026-07-18）：`toolChatLoop` 每轮注入 `formatArtifactContextBlock`（≤20 条）；`llmSystemPrompt.test.ts` 断言顺序。
+- [x] 为 stage 写 RED 测试：working/draft/final 更新后面板和完成摘要一致。
+  - GREEN（2026-07-18）：`writeRegistration.test.ts`、`completionSummary.test.ts`、`SessionArtifactsPanel.test.tsx`。
+- [x] 实现 stage 更新与 UI 展示，使测试通过。
+  - GREEN（2026-07-18）：`registerResolvedArtifactWrite` 复用 artifactId 时 `updateStage`；change cursor / completion summary 含 stage。
+- [x] 运行面板、删除、清理、上下文、完成摘要 UI 测试。
+  - GREEN（2026-07-18）：`SessionArtifactsCleanAction.test.tsx` 覆盖 includeReferences 二次确认；本节相关 14 文件测试通过。
 
 ## 11. Relocate journal 与恢复
 

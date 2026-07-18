@@ -41,4 +41,50 @@ describe('registerResolvedArtifactWrite', () => {
     })
     expect(record.id).toBe('artifact-preassigned')
   })
+
+  it('updates stage when continuing an existing artifactId write', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+    const repository = new ArtifactRepository(fixture.db)
+    registerResolvedArtifactWrite({
+      repository,
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      intent: {
+        artifactId: 'artifact-stage',
+        container: 'project',
+        role: 'primary',
+        title: 'report',
+        stage: 'working',
+        pathSource: 'agent-default'
+      },
+      resolved: {
+        finalPath: 'report.md',
+        canonicalPath: `${fixture.workDir}/report.md`,
+        provenance: { pathSource: 'agent-default' }
+      }
+    })
+    const updated = registerResolvedArtifactWrite({
+      repository,
+      sessionId: fixture.session.id,
+      workDirProfileId: fixture.profile.id,
+      workspaceRootReal: fixture.workDir,
+      intent: {
+        artifactId: 'artifact-stage',
+        container: 'project',
+        role: 'primary',
+        title: 'report',
+        stage: 'final',
+        pathSource: 'agent-default'
+      },
+      resolved: {
+        finalPath: 'report.md',
+        canonicalPath: `${fixture.workDir}/report.md`,
+        provenance: { pathSource: 'agent-default' }
+      }
+    })
+    expect(updated.stage).toBe('final')
+    expect(repository.find('artifact-stage')?.stage).toBe('final')
+  })
 })

@@ -158,6 +158,9 @@ import {
   type PreparedArtifactWrite
 } from './artifacts/toolLoopArtifactFlow'
 import { buildArtifactCompletionSummary } from './artifacts/completionSummary'
+import { buildArtifactContextSummaries, formatArtifactContextBlock } from './artifacts/artifactContextQuery'
+import { ArtifactRepository } from './artifacts/artifactRepository'
+import { getArtifactDecisionRequest } from './artifacts/artifactDecisionBridge'
 import {
   getWriteDirChoice,
   setWriteDirChoice
@@ -535,13 +538,21 @@ async function runToolChatSessionInner(
     const workspaceLayoutHint = workspaceLayout
       ? buildWorkspaceLayoutHint(workspaceLayout, writeDirChoiceForHint)
       : undefined
+    const workDirForContext = resolveWorkDir ? resolveWorkDir() : initialWorkDir
+    const artifactManagedForContext = appDb ? isArtifactManagementEnabled(sessionForLayout?.metadata ?? {}) : false
+    const artifactContextHint =
+      artifactManagedForContext && appDb
+        ? formatArtifactContextBlock(buildArtifactContextSummaries(new ArtifactRepository(appDb), sessionId), workDirForContext) ||
+          undefined
+        : undefined
     const systemPrompt = buildFinalSystemPrompt({
       system: systemWithTools,
       memoryContent,
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
-      workspaceLayoutHint
+      workspaceLayoutHint,
+      artifactContextHint
     })
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
@@ -1006,14 +1017,9 @@ async function runToolChatSessionInner(
           artifact: inputObj.artifact,
           occupiedPaths,
           onDecisionRequired: (pending) => {
-            safeWebContentsSend(sender, 'artifact:decision-request', {
-              requestId,
-              sessionId,
-              toolUseId,
-              decisionId: pending.decisionId,
-              decisionKind: pending.decisionKind,
-              attempt: pending.attempt
-            })
+            const request = getArtifactDecisionRequest(pending.decisionId)
+            if (!request) return
+            safeWebContentsSend(sender, 'artifact:decision-request', request)
           }
         })
         if (resolveResult.kind === 'error') {
