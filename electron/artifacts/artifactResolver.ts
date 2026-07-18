@@ -15,11 +15,27 @@ export function resolveArtifactOutput(input: {
   existingArtifact?: { artifactId: string; canonicalPath: string }
   packagePrimaryPath?: string
   sessionId?: string
+  toolUseId?: string
+  occupiedPaths?: readonly string[]
 }): ResolvedArtifactOutput {
   if (input.intent.container === 'scratch') {
     if (!input.sessionId) throw new Error('Scratch artifact requires sessionId')
+    if (input.intent.artifactId && input.existingArtifact?.artifactId === input.intent.artifactId) {
+      return {
+        finalPath: path.relative(input.workDir, input.existingArtifact.canonicalPath),
+        canonicalPath: input.existingArtifact.canonicalPath,
+        provenance: { pathSource: 'system-assigned' }
+      }
+    }
     const kind = input.intent.materialKind ?? 'other'
-    const finalPath = path.posix.join('.spaceassistant', 'runs', input.sessionId, kind, safeScratchFileName(input.intent.title))
+    const directory = path.posix.join('.spaceassistant', 'runs', input.sessionId, kind)
+    let filename = safeScratchFileName(input.intent.title)
+    let finalPath = path.posix.join(directory, filename)
+    if (input.occupiedPaths?.includes(finalPath)) {
+      const parsed = path.posix.parse(filename)
+      filename = `${parsed.name}-${(input.toolUseId ?? 'tool').slice(0, 9)}${parsed.ext}`
+      finalPath = path.posix.join(directory, filename)
+    }
     return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance: { pathSource: 'system-assigned' } }
   }
   if (input.intent.container !== 'project' && input.intent.container !== 'package') throw new Error('Artifact resolver branch not implemented for this container')

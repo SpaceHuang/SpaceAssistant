@@ -287,8 +287,10 @@
   - RED（2026-07-18）：初始 resolver 不支持 scratch container。
 - [x] 实现 scratch kind 映射、文件名净化与 system-assigned provenance，使测试通过。
   - GREEN（2026-07-18）：materialKind 映射 runs 子目录，basename 过滤后生成系统分配路径；9 条专用测试与 Electron 编译通过。
-- [ ] 为 scratch resolver 写 RED 测试：新同名文件加短 toolUseId 后缀；同 artifactId 保持原路径。
-- [ ] 实现 scratch 冲突命名与持续编辑分支，使测试通过。
+- [x] 为 scratch resolver 写 RED 测试：新同名文件加短 toolUseId 后缀；同 artifactId 保持原路径。
+  - RED（2026-07-18）：初始 scratch resolver 总是使用基础文件名。
+- [x] 实现 scratch 冲突命名与持续编辑分支，使测试通过。
+  - GREEN（2026-07-18）：占用路径的新文件追加短 toolUseId；匹配 artifactId 时返回既有 canonical path；10 条专用测试与 Electron 编译通过。
 - [ ] 为 resolver 写 RED 测试：首次覆盖无关 artifact 必须产生 overwrite decision。
 - [ ] 实现覆盖检测和 overwrite decision，使测试通过。
 - [ ] 为 resolver 写 RED 测试：decision 改名/改目录后从路径类型、安全、identity、冲突检查完整重跑。

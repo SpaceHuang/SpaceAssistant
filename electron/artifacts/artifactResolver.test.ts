@@ -67,4 +67,14 @@ describe('resolveArtifactOutput', () => {
       provenance: { pathSource: 'system-assigned' }
     }))
   })
+
+  it('suffixes a new colliding scratch file with toolUseId but preserves an existing artifact path', () => {
+    const common = { workDir: '/workspace', sessionId: 'session-1', intent: { container: 'scratch' as const, role: 'scratch' as const, title: 'verify.sh', materialKind: 'script' as const, pathSource: 'agent-default' as const } }
+    expect(resolveArtifactOutput({ ...common, toolUseId: 'tool-123456' , occupiedPaths: ['.spaceassistant/runs/session-1/script/verify.sh'] })).toEqual(
+      expect.objectContaining({ finalPath: '.spaceassistant/runs/session-1/script/verify-tool-1234.sh' })
+    )
+    expect(resolveArtifactOutput({ ...common, existingArtifact: { artifactId: 'artifact-1', canonicalPath: '/workspace/.spaceassistant/runs/session-1/script/verify.sh' }, intent: { ...common.intent, artifactId: 'artifact-1' } })).toEqual(
+      expect.objectContaining({ finalPath: '.spaceassistant/runs/session-1/script/verify.sh' })
+    )
+  })
 })
