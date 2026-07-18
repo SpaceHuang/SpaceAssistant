@@ -24,4 +24,13 @@ describe('extractExplicitPathEvidence', () => {
       }
     ])
   })
+
+  it('retains relative and absolute paths with trailing separators', () => {
+    const evidence = extractExplicitPathEvidence('输出到 `./reports/`，也保存到 "/tmp/archive/"。', { requestId: 'request-2' })
+
+    expect(evidence.map((item) => ({ rawPath: item.rawPath, trailingSeparator: item.trailingSeparator }))).toEqual([
+      { rawPath: './reports/', trailingSeparator: true },
+      { rawPath: '/tmp/archive/', trailingSeparator: true }
+    ])
+  })
 })
