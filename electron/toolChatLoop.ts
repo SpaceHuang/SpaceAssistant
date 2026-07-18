@@ -149,7 +149,8 @@ import {
 } from './toolWriteConflict'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { applyWorkspaceLayoutRedirect, resolveWriteDirBase } from './workspaceLayout/redirect'
-import { shouldUseLegacyWorkspaceRedirect } from './artifacts/featureFlag'
+import { isArtifactManagementEnabled, shouldUseLegacyWorkspaceRedirect } from './artifacts/featureFlag'
+import { resolveToolArtifactPath } from './artifacts/toolArtifactPath'
 import {
   getWriteDirChoice,
   setWriteDirChoice
@@ -972,6 +973,44 @@ async function runToolChatSessionInner(
       }
 
       let workspaceRedirectNote: string | undefined
+      const artifactManagedSession = appDb ? isArtifactManagementEnabled(getSession(appDb, sessionId)?.metadata ?? {}) : false
+      if (
+        artifactManagedSession &&
+        (toolName === 'write_file' || toolName === 'edit_file') &&
+        typeof inputObj.path === 'string' &&
+        inputObj.artifact
+      ) {
+        try {
+          const resolved = resolveToolArtifactPath({
+            workDir,
+            sessionId,
+            toolUseId,
+            path: inputObj.path,
+            artifact: inputObj.artifact
+          })
+          if (resolved.decision) throw new Error(`Artifact path requires ${resolved.decision.kind} decision`)
+          inputObj.path = resolved.finalPath
+          safeWebContentsSend(sender, 'tool:path-resolved', {
+            requestId,
+            toolUseId,
+            requestedPath: typeof inputObj.artifact === 'object' && inputObj.artifact !== null && typeof (inputObj.artifact as Record<string, unknown>).requestedPath === 'string'
+              ? (inputObj.artifact as Record<string, unknown>).requestedPath
+              : inputObj.path,
+            finalPath: resolved.finalPath,
+            provenance: resolved.provenance
+          })
+        } catch (error) {
+          const artifactError = error instanceof Error ? error.message : 'Artifact path resolution failed'
+          toolResults.push(buildToolErrorResult(toolUseId, artifactError))
+          safeWebContentsSend(sender, 'tool:result', { requestId, toolUseId, result: { success: false, error: artifactError } })
+          floatingNotificationManager?.onToolResult(requestId, toolUseId)
+          if (toolErrorRepeat.noteFailure(toolName, artifactError)) {
+            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${artifactError}`
+            break
+          }
+          continue
+        }
+      }
       if (
         workspaceLayout?.enabled &&
         shouldUseLegacyWorkspaceRedirect(appDb ? (getSession(appDb, sessionId)?.metadata ?? {}) : {}) &&
