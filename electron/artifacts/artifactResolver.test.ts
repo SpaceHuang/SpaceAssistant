@@ -77,4 +77,12 @@ describe('resolveArtifactOutput', () => {
       expect.objectContaining({ finalPath: '.spaceassistant/runs/session-1/script/verify.sh' })
     )
   })
+
+  it('requires an overwrite decision before replacing an unrelated artifact', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      occupiedPaths: ['reports/final.md'],
+      intent: { container: 'project', role: 'primary', requestedPath: 'reports/final.md', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({ decision: { kind: 'overwrite' } }))
+  })
 })

@@ -291,8 +291,10 @@
   - RED（2026-07-18）：初始 scratch resolver 总是使用基础文件名。
 - [x] 实现 scratch 冲突命名与持续编辑分支，使测试通过。
   - GREEN（2026-07-18）：占用路径的新文件追加短 toolUseId；匹配 artifactId 时返回既有 canonical path；10 条专用测试与 Electron 编译通过。
-- [ ] 为 resolver 写 RED 测试：首次覆盖无关 artifact 必须产生 overwrite decision。
-- [ ] 实现覆盖检测和 overwrite decision，使测试通过。
+- [x] 为 resolver 写 RED 测试：首次覆盖无关 artifact 必须产生 overwrite decision。
+  - RED（2026-07-18）：初始 resolver 忽略 occupiedPaths 并直接返回写入路径。
+- [x] 实现覆盖检测和 overwrite decision，使测试通过。
+  - GREEN（2026-07-18）：无 artifactId 且路径被其他 artifact 占用时返回 overwrite decision；11 条专用测试与 Electron 编译通过。
 - [ ] 为 resolver 写 RED 测试：decision 改名/改目录后从路径类型、安全、identity、冲突检查完整重跑。
 - [ ] 实现 decision 后重新解析循环与 attempt 递增，使测试通过。
 - [ ] 为 resolver 写 RED 测试：传入 artifactId 时不得通过普通 write 隐式改址。

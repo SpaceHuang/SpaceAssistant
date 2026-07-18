@@ -5,7 +5,7 @@ export interface ResolvedArtifactOutput {
   finalPath: string
   canonicalPath: string
   provenance: ArtifactPathProvenance
-  decision?: { kind: 'output-location'; packageId?: string } | { kind: 'ownership' }
+  decision?: { kind: 'output-location'; packageId?: string } | { kind: 'ownership' } | { kind: 'overwrite' }
 }
 
 /** Resolves artifact destinations; project paths are never redirected or renamed. */
@@ -66,6 +66,9 @@ export function resolveArtifactOutput(input: {
   const finalPath = input.intent.container === 'package' && input.intent.role === 'primary' && input.intent.pathKind === 'directory'
     ? path.join(input.intent.requestedPath, primaryFileName(input.intent.title))
     : input.intent.requestedPath
+  if (!input.intent.artifactId && input.occupiedPaths?.includes(finalPath)) {
+    return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance, decision: { kind: 'overwrite' } }
+  }
   return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance }
 }
 
