@@ -33,4 +33,11 @@ describe('extractExplicitPathEvidence', () => {
       { rawPath: '/tmp/archive/', trailingSeparator: true }
     ])
   })
+
+  it('recognizes a single-segment name only in a nearby output keyword context', () => {
+    const evidence = extractExplicitPathEvidence('请保存为 draft.md；文件 summary.txt 也要生成。', { requestId: 'request-3' })
+
+    expect(evidence.map((item) => item.rawPath)).toEqual(['draft.md', 'summary.txt'])
+    expect(evidence.every((item) => item.intent === 'output')).toBe(true)
+  })
 })

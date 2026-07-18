@@ -34,5 +34,22 @@ export function extractExplicitPathEvidence(message: string, input: { requestId:
       trailingSeparator: /[\\/]$/.test(rawPath)
     })
   }
+  const keywordMatches = message.matchAll(/(?:保存为|保存到|文件|目录|写入|输出|生成)\s+([A-Za-z0-9][A-Za-z0-9._-]*)/g)
+  for (const match of keywordMatches) {
+    const rawPath = match[1]!
+    if (match.index === undefined) continue
+    const start = match.index + match[0].lastIndexOf(rawPath)
+    const end = start + rawPath.length
+    if (evidence.some((item) => item.start === start && item.end === end)) continue
+    evidence.push({
+      evidenceId: `${input.requestId}:${start}:${end}`,
+      rawPath,
+      start,
+      end,
+      intent: 'output',
+      trailingSeparator: false
+    })
+  }
+  evidence.sort((left, right) => left.start - right.start)
   return evidence
 }
