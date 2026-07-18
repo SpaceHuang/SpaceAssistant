@@ -24,6 +24,7 @@ import type {
   WikiConfig,
   WorkspaceLayoutConfig
 } from '../src/shared/domainTypes'
+import type { ArtifactWriteIntent } from '../src/shared/artifactTypes'
 import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
@@ -151,6 +152,10 @@ import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { applyWorkspaceLayoutRedirect, resolveWriteDirBase } from './workspaceLayout/redirect'
 import { isArtifactManagementEnabled, shouldUseLegacyWorkspaceRedirect } from './artifacts/featureFlag'
 import { resolveToolArtifactPath } from './artifacts/toolArtifactPath'
+import { registerAfterSuccessfulWrite } from './artifacts/postWriteRegistration'
+import { registerResolvedArtifactWrite } from './artifacts/writeRegistration'
+import type { ResolvedArtifactOutput } from './artifacts/artifactResolver'
+import { ArtifactRepository } from './artifacts/artifactRepository'
 import {
   getWriteDirChoice,
   setWriteDirChoice
@@ -973,6 +978,7 @@ async function runToolChatSessionInner(
       }
 
       let workspaceRedirectNote: string | undefined
+      let resolvedArtifactWrite: { intent: ArtifactWriteIntent; resolved: ResolvedArtifactOutput } | undefined
       const artifactManagedSession = appDb ? isArtifactManagementEnabled(getSession(appDb, sessionId)?.metadata ?? {}) : false
       if (
         artifactManagedSession &&
@@ -989,6 +995,7 @@ async function runToolChatSessionInner(
             artifact: inputObj.artifact
           })
           if (resolved.decision) throw new Error(`Artifact path requires ${resolved.decision.kind} decision`)
+          resolvedArtifactWrite = { intent: inputObj.artifact as ArtifactWriteIntent, resolved }
           inputObj.path = resolved.finalPath
           safeWebContentsSend(sender, 'tool:path-resolved', {
             requestId,
@@ -1827,6 +1834,27 @@ async function runToolChatSessionInner(
       }
 
       const durationMs = Date.now() - execStartedAt
+      if (execResult.success && resolvedArtifactWrite && appDb) {
+        try {
+          const session = getSession(appDb, sessionId)
+          if (!session?.workDirProfileId) throw new Error('Artifact session workspace is unavailable')
+          registerAfterSuccessfulWrite({
+            success: true,
+            register: () => {
+              registerResolvedArtifactWrite({
+                repository: new ArtifactRepository(appDb),
+                sessionId,
+                workDirProfileId: session.workDirProfileId!,
+                workspaceRootReal: workDir,
+                intent: resolvedArtifactWrite!.intent,
+                resolved: resolvedArtifactWrite!.resolved
+              })
+            }
+          })
+        } catch (error) {
+          execResult = { success: false, error: error instanceof Error ? error.message : '文件已写入但登记失败' }
+        }
+      }
       if (execResult.success && fileAutoApproved && (toolName === 'write_file' || toolName === 'edit_file')) {
         logAgentEvent('info', 'file.auto_approve', {
           requestId,
