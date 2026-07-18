@@ -32,4 +32,16 @@ describe('resolveArtifactWorkspaceStrict', () => {
       errorCode: 'ARTIFACT_WORKSPACE_UNAVAILABLE'
     })
   })
+
+  it('rejects a workspace whose realpath differs from the artifact snapshot', () => {
+    const fixture = createArtifactTestFixture()
+    fixtures.push(fixture)
+
+    expect(resolveArtifactWorkspaceStrict({
+      db: fixture.db,
+      sessionId: fixture.session.id,
+      profiles: [fixture.profile],
+      expectedWorkspaceRootReal: `${fixture.workDir}-moved`
+    })).toEqual({ ok: false, errorCode: 'ARTIFACT_WORKSPACE_CHANGED' })
+  })
 })
