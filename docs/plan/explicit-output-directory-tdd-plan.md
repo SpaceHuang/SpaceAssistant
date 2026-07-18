@@ -123,7 +123,7 @@
   - GREEN（2026-07-18）：pending operation 返回明确拒绝；终态 journal 在删除 session 前清理。专用测试、既有 operations 测试和 Electron 编译通过。
 - [x] 实现 repository 的 list、find、create、updatePath、markDeleted、listBySession API，并分别覆盖最小单测。
   - GREEN（2026-07-18）：所有 API 均已实现；repository 专用测试 6/6 通过，shared typecheck 通过。
-- [ ] 运行 `databaseMigrations.test.ts`、repository 测试与既有 database 测试。
+- [~] 运行 `databaseMigrations.test.ts`、repository 测试与既有 database 测试。
 
 ## 3. 工作区身份、路径 identity 与安全边界
 
