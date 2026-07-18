@@ -6,14 +6,20 @@ export async function deleteArtifactFile(input: {
   registry: ArtifactPathLeaseRegistry
   identity: string
   targetPath: string
+  artifactId?: string
+  repository?: { markDeleted(id: string): void }
 }): Promise<{ deleted: boolean }> {
   const lease = input.registry.claimDelete(input.identity)
   try {
     try {
       await fs.unlink(input.targetPath)
+      if (input.repository && input.artifactId) input.repository.markDeleted(input.artifactId)
       return { deleted: true }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { deleted: false }
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (input.repository && input.artifactId) input.repository.markDeleted(input.artifactId)
+        return { deleted: false }
+      }
       throw error
     }
   } finally {

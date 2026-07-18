@@ -24,4 +24,13 @@ describe('deleteArtifactFile', () => {
     const registry = new ArtifactPathLeaseRegistry()
     await expect(deleteArtifactFile({ registry, identity: 'missing', targetPath: '/tmp/does-not-exist-spaceassistant' })).resolves.toEqual({ deleted: false })
   })
+
+  it('marks the artifact deleted after a successful or idempotent file deletion', async () => {
+    const marked: string[] = []
+    await expect(deleteArtifactFile({
+      registry: new ArtifactPathLeaseRegistry(), identity: 'missing-marked', targetPath: '/tmp/does-not-exist-spaceassistant-marked',
+      artifactId: 'artifact-1', repository: { markDeleted: (id: string) => marked.push(id) }
+    })).resolves.toEqual({ deleted: false })
+    expect(marked).toEqual(['artifact-1'])
+  })
 })
