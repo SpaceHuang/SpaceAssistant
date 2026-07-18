@@ -1,3 +1,12 @@
+import path from 'node:path'
+
+export type ScratchGitSavedPolicy = 'add-ignore' | 'keep-visible'
+
+/** Config key for a workspace profile's remembered scratch Git policy. */
+export function scratchGitPolicyConfigKey(profileId: string): string {
+  return `artifact.scratchGitPolicy.${profileId}`
+}
+
 /** Whether .gitignore contains an exact, portable rule for generated scratch runs. */
 export function isScratchRunsIgnored(gitignoreContents: string): boolean {
   return gitignoreContents.split(/\r?\n/).some((line) => {
@@ -10,9 +19,13 @@ export function resolveScratchGitPolicy(input: {
   workDir: string
   gitRoot: string
   gitignoreContents: string
+  savedPolicy?: ScratchGitSavedPolicy
 }): { kind: 'none' } | { kind: 'scratch-git-policy'; choices: ['add-ignore', 'keep-visible', 'cancel'] | ['keep-visible', 'cancel'] } {
   if (isScratchRunsIgnored(input.gitignoreContents)) return { kind: 'none' }
-  const rootInsideWorkDir = !path.relative(input.workDir, input.gitRoot).startsWith('..') && !path.isAbsolute(path.relative(input.workDir, input.gitRoot))
+  const validated = validateSavedScratchGitPolicy(input.savedPolicy, input.gitignoreContents)
+  if (validated.valid && validated.savedPolicy) return { kind: 'none' }
+  const relative = path.relative(input.workDir, input.gitRoot)
+  const rootInsideWorkDir = !relative.startsWith('..') && !path.isAbsolute(relative)
   if (!rootInsideWorkDir) return { kind: 'scratch-git-policy', choices: ['keep-visible', 'cancel'] }
   return { kind: 'scratch-git-policy', choices: ['add-ignore', 'keep-visible', 'cancel'] }
 }
@@ -27,10 +40,9 @@ export function appendScratchRunsIgnore(gitignoreContents: string): string {
 }
 
 export function validateSavedScratchGitPolicy(
-  savedPolicy: 'add-ignore' | 'keep-visible' | undefined,
+  savedPolicy: ScratchGitSavedPolicy | undefined,
   gitignoreContents: string
-): { valid: boolean; savedPolicy?: 'add-ignore' | 'keep-visible' } {
+): { valid: boolean; savedPolicy?: ScratchGitSavedPolicy } {
   if (savedPolicy === 'add-ignore' && !isScratchRunsIgnored(gitignoreContents)) return { valid: false, savedPolicy: undefined }
   return savedPolicy ? { valid: true, savedPolicy } : { valid: true }
 }
-import path from 'node:path'

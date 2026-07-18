@@ -305,13 +305,16 @@
   - RED（2026-07-18）：初始 resolver 忽略 occupiedPaths 并直接返回写入路径。
 - [x] 实现覆盖检测和 overwrite decision，使测试通过。
   - GREEN（2026-07-18）：无 artifactId 且路径被其他 artifact 占用时返回 overwrite decision；11 条专用测试与 Electron 编译通过。
-- [ ] 为 resolver 写 RED 测试：decision 改名/改目录后从路径类型、安全、identity、冲突检查完整重跑。
-- [ ] 实现 decision 后重新解析循环与 attempt 递增，使测试通过。
+- [x] 为 resolver 写 RED 测试：decision 改名/改目录后从路径类型、安全、identity、冲突检查完整重跑。
+  - RED（2026-07-18）：重解析 API 尚不存在时导入失败；补齐后覆盖 rename/change-directory 与 unsafe 拒绝。
+- [x] 实现 decision 后重新解析循环与 attempt 递增，使测试通过。
+  - GREEN（2026-07-18）：`resolveArtifactOutputAfterDecision` 校验决策输入、安全目标、identity，覆盖后完整重跑并递增 attempt；16 条 resolver 测试通过。
 - [x] 为 resolver 写 RED 测试：传入 artifactId 时不得通过普通 write 隐式改址。
   - RED（2026-07-18）：未知 artifactId 会退回 requestedPath 并形成新路径。
 - [x] 实现既有 artifact canonical path 约束，使测试通过。
   - GREEN（2026-07-18）：artifactId 必须匹配已加载 artifact，否则拒绝；匹配时始终使用 canonicalPath；12 条专用测试与 Electron 编译通过。
-- [ ] 运行 `artifactResolver.test.ts`、显式路径、路径安全、decision 测试。
+- [x] 运行 `artifactResolver.test.ts`、显式路径、路径安全、decision 测试。
+  - 验收（2026-07-18）：resolver/evidence/path type/security/decision 共 9 文件 42 测试通过。
 
 ## 7. Scratch Git 策略与引用资料
 
@@ -323,8 +326,10 @@
   - RED（2026-07-18）：Git policy 尚未提供 root-boundary resolution。
 - [x] 实现 Git root 边界检查，使测试通过。
   - GREEN（2026-07-18）：外部 Git 根只返回 keep-visible/cancel，禁止 add-ignore；4 条测试与 Electron 编译通过。
-- [ ] 为 Git policy 写 RED 测试：首次 scratch 创建且未保存选择时请求 add-ignore/keep-visible/cancel。
-- [ ] 实现 workspace 级 `artifact.scratchGitPolicy.<profileId>` 读取与 decision，使测试通过。
+- [x] 为 Git policy 写 RED 测试：首次 scratch 创建且未保存选择时请求 add-ignore/keep-visible/cancel。
+  - GREEN（2026-07-18）：无保存策略时返回完整三选项；有有效 keep-visible/add-ignore 时跳过。
+- [x] 实现 workspace 级 `artifact.scratchGitPolicy.<profileId>` 读取与 decision，使测试通过。
+  - GREEN（2026-07-18）：`scratchGitPolicyStore` 读写配置键；`resolveScratchGitPolicy` 消费 savedPolicy。
 - [x] 为 Git policy 写 RED 测试：add-ignore 仅追加精确 `.spaceassistant/runs/`，并重新验证规则。
   - RED（2026-07-18）：安全更新 helper 尚不存在。
 - [x] 实现安全 `.gitignore` 更新与重检，使测试通过。
@@ -353,7 +358,8 @@
   - GREEN（2026-07-18）：缺失字段返回 complete=false 与 missing 列表，artifact 状态保持 active。
 - [x] 实现不删除文件的未完成 metadata 报告，使测试通过。
   - 2 条专用测试与 Electron 编译通过。
-- [ ] 运行 scratch Git、reference 与 resolver 相关测试。
+- [x] 运行 scratch Git、reference 与 resolver 相关测试。
+  - 验收（2026-07-18）：scratch Git/store、reference、resolver 共 5 文件 30 测试通过，Electron 编译通过。
 
 ## 8. 工具循环、写入登记与完成摘要（核心可灰度切片）
 

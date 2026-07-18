@@ -26,4 +26,30 @@ describe('isScratchRunsIgnored', () => {
     expect(validateSavedScratchGitPolicy('add-ignore', '')).toEqual({ valid: false, savedPolicy: undefined })
     expect(validateSavedScratchGitPolicy('keep-visible', '')).toEqual({ valid: true, savedPolicy: 'keep-visible' })
   })
+
+  it('requests add-ignore/keep-visible/cancel on the first scratch create without a saved policy', () => {
+    expect(resolveScratchGitPolicy({
+      workDir: '/workspace',
+      gitRoot: '/workspace',
+      gitignoreContents: 'node_modules/\n'
+    })).toEqual({
+      kind: 'scratch-git-policy',
+      choices: ['add-ignore', 'keep-visible', 'cancel']
+    })
+  })
+
+  it('skips the decision when a valid workspace-level saved policy exists', () => {
+    expect(resolveScratchGitPolicy({
+      workDir: '/workspace',
+      gitRoot: '/workspace',
+      gitignoreContents: 'node_modules/\n',
+      savedPolicy: 'keep-visible'
+    })).toEqual({ kind: 'none' })
+    expect(resolveScratchGitPolicy({
+      workDir: '/workspace',
+      gitRoot: '/workspace',
+      gitignoreContents: '.spaceassistant/runs/\n',
+      savedPolicy: 'add-ignore'
+    })).toEqual({ kind: 'none' })
+  })
 })

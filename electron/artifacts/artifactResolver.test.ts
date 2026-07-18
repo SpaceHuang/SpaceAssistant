@@ -110,4 +110,61 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'package', role: 'reference', packageId: 'package-1', title: 'source', materialKind: 'note', pathSource: 'agent-default' }
     })).toEqual(expect.objectContaining({ finalPath: 'reports/final.materials/source.md' }))
   })
+
+  it('re-resolves rename and change-directory decisions with user-decision provenance and incremented attempt', async () => {
+    const { resolveArtifactOutputAfterDecision } = await import('./artifactDecisionReresolve')
+    const fs = await import('node:fs/promises')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-reresolve-'))
+    try {
+      await fs.mkdir(path.join(root, 'reports'), { recursive: true })
+      await fs.mkdir(path.join(root, 'drafts'), { recursive: true })
+      const renamed = await resolveArtifactOutputAfterDecision({
+        workDir: root,
+        attempt: 0,
+        decisionId: 'decision-1',
+        previousFinalPath: 'reports/final.md',
+        occupiedPaths: ['reports/final.md', 'reports/review-v2.md'],
+        intent: { container: 'project', role: 'primary', requestedPath: 'reports/final.md', pathSource: 'agent-default' },
+        response: { action: 'rename', newName: 'review-v2.md' }
+      })
+      expect(renamed).toEqual(expect.objectContaining({
+        attempt: 1,
+        finalPath: 'reports/review-v2.md',
+        provenance: { pathSource: 'user-decision', pathDecisionId: 'decision-1' },
+        decision: { kind: 'overwrite' }
+      }))
+
+      const relocated = await resolveArtifactOutputAfterDecision({
+        workDir: root,
+        attempt: 1,
+        decisionId: 'decision-2',
+        previousFinalPath: 'reports/review-v2.md',
+        occupiedPaths: ['reports/final.md', 'reports/review-v2.md'],
+        intent: { container: 'project', role: 'primary', requestedPath: 'reports/review-v2.md', pathSource: 'agent-default' },
+        response: { action: 'change-directory', newDirectory: 'drafts' }
+      })
+      expect(relocated).toEqual(expect.objectContaining({
+        attempt: 2,
+        finalPath: 'drafts/review-v2.md',
+        provenance: { pathSource: 'user-decision', pathDecisionId: 'decision-2' }
+      }))
+      expect(relocated.decision).toBeUndefined()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects unsafe rename/change-directory targets without rewriting them into the workspace', async () => {
+    const { resolveArtifactOutputAfterDecision } = await import('./artifactDecisionReresolve')
+    await expect(resolveArtifactOutputAfterDecision({
+      workDir: '/tmp',
+      attempt: 0,
+      decisionId: 'decision-bad',
+      previousFinalPath: 'reports/final.md',
+      intent: { container: 'project', role: 'primary', requestedPath: 'reports/final.md', pathSource: 'agent-default' },
+      response: { action: 'change-directory', newDirectory: '../outside' }
+    })).rejects.toThrow(/directory|artifact path/i)
+  })
 })
