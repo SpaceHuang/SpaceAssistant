@@ -1,0 +1,35 @@
+import { randomUUID } from 'node:crypto'
+import type { ArtifactWriteIntent } from '../../src/shared/artifactTypes'
+import type { ResolvedArtifactOutput } from './artifactResolver'
+import { ArtifactRepository, type ArtifactRecord } from './artifactRepository'
+
+/** Persists a resolved artifact only after the caller has completed a successful file write. */
+export function registerResolvedArtifactWrite(input: {
+  repository: ArtifactRepository
+  sessionId: string
+  workDirProfileId: string
+  workspaceRootReal: string
+  intent: ArtifactWriteIntent
+  resolved: Pick<ResolvedArtifactOutput, 'finalPath' | 'canonicalPath' | 'provenance'>
+}): ArtifactRecord {
+  if (input.intent.artifactId) {
+    const existing = input.repository.find(input.intent.artifactId)
+    if (!existing) throw new Error('Artifact registration cannot find supplied artifactId')
+    return existing
+  }
+  return input.repository.create({
+    id: randomUUID(),
+    sessionId: input.sessionId,
+    workDirProfileId: input.workDirProfileId,
+    workspaceRootReal: input.workspaceRootReal,
+    packageId: input.intent.packageId,
+    container: input.intent.container,
+    role: input.intent.role,
+    title: input.intent.title ?? '',
+    stage: input.intent.stage,
+    canonicalPath: input.resolved.canonicalPath,
+    pathIdentityKey: input.resolved.canonicalPath,
+    requestedPath: input.intent.requestedPath,
+    ...input.resolved.provenance
+  })
+}
