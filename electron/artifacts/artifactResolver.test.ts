@@ -27,4 +27,11 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'package', role: 'primary', packageId: 'package-1', requestedPath: 'reports/final.md', pathSource: 'user', pathEvidenceId: 'request-1:0-16' }
     })).toEqual(expect.objectContaining({ finalPath: 'reports/final.md', canonicalPath: '/workspace/reports/final.md' }))
   })
+
+  it('appends the primary artifact display filename to an explicit package directory', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      intent: { container: 'package', role: 'primary', packageId: 'package-1', requestedPath: 'reports/', pathKind: 'directory', title: 'Final Summary', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({ finalPath: 'reports/final-summary.md', canonicalPath: '/workspace/reports/final-summary.md' }))
+  })
 })

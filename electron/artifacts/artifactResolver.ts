@@ -26,5 +26,13 @@ export function resolveArtifactOutput(input: {
       provenance
     }
   }
-  return { finalPath: input.intent.requestedPath, canonicalPath: path.resolve(input.workDir, input.intent.requestedPath), provenance }
+  const finalPath = input.intent.container === 'package' && input.intent.role === 'primary' && input.intent.pathKind === 'directory'
+    ? path.join(input.intent.requestedPath, primaryFileName(input.intent.title))
+    : input.intent.requestedPath
+  return { finalPath, canonicalPath: path.resolve(input.workDir, finalPath), provenance }
+}
+
+function primaryFileName(title?: string): string {
+  const slug = title?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  return `${slug || 'artifact'}.md`
 }
