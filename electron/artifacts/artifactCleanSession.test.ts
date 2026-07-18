@@ -30,4 +30,21 @@ describe('cleanArtifactSession', () => {
     expect((await cleanArtifactSession({ repository: repo, registry, sessionId: f.session.id })).skipped).toEqual([{ id: 'r', reason: 'reference-opt-in-required' }])
     expect((await cleanArtifactSession({ repository: repo, registry, sessionId: f.session.id, includeReferences: true })).deleted).toEqual(['r'])
   })
+
+  it('skips scratch deletion when workspace identity drifted before mutation', async () => {
+    const f = createArtifactTestFixture(); fixtures.push(f)
+    const repo = new ArtifactRepository(f.db); const registry = new ArtifactPathLeaseRegistry()
+    const scratchPath = `${f.workDir}/scratch.txt`
+    await fs.writeFile(scratchPath, 'x')
+    repo.create({
+      id: 's', sessionId: f.session.id, workDirProfileId: f.profile.id, workspaceRootReal: `${f.workDir}-moved`,
+      container: 'scratch', role: 'scratch', canonicalPath: scratchPath, pathIdentityKey: scratchPath, pathSource: 'agent-default'
+    })
+    const result = await cleanArtifactSession({
+      repository: repo, registry, sessionId: f.session.id, workDir: f.workDir
+    })
+    expect(result.deleted).toEqual([])
+    expect(result.skipped).toEqual([{ id: 's', reason: 'unsafe' }])
+    expect(repo.find('s')?.status).toBe('active')
+  })
 })

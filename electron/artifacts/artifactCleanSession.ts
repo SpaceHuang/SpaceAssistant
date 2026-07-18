@@ -8,6 +8,7 @@ export async function cleanArtifactSession(input: {
   repository: Pick<ArtifactRepository, 'listBySession' | 'markDeleted'>
   registry: ArtifactPathLeaseRegistry
   sessionId: string
+  workDir?: string
   includeReferences?: boolean
   isSafePath?: (artifact: ArtifactRecord) => boolean
 }): Promise<{ deleted: string[]; skipped: Array<{ id: string; reason: CleanSkipReason }> }> {
@@ -24,11 +25,24 @@ export async function cleanArtifactSession(input: {
       skipped.push({ id: artifact.id, reason: 'unsafe' }); continue
     }
     try {
-      await deleteArtifactFile({ registry: input.registry, identity: artifact.pathIdentityKey, targetPath: artifact.canonicalPath, artifactId: artifact.id, repository: input.repository })
+      await deleteArtifactFile({
+        registry: input.registry,
+        identity: artifact.pathIdentityKey,
+        targetPath: artifact.canonicalPath,
+        workDir: input.workDir,
+        expectedWorkspaceRootReal: artifact.workspaceRootReal,
+        artifactId: artifact.id,
+        repository: input.repository
+      })
       deleted.push(artifact.id)
     } catch (error) {
-      if (error instanceof Error && error.message.includes('lease')) skipped.push({ id: artifact.id, reason: 'in-use' })
-      else throw error
+      if (error instanceof Error && error.message.includes('lease')) {
+        skipped.push({ id: artifact.id, reason: 'in-use' })
+      } else if (error instanceof Error && /ARTIFACT_WORKSPACE_(CHANGED|UNAVAILABLE)/.test(error.message)) {
+        skipped.push({ id: artifact.id, reason: 'unsafe' })
+      } else {
+        throw error
+      }
     }
   }
   return { deleted, skipped }

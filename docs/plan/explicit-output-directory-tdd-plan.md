@@ -160,10 +160,11 @@
   - GREEN（2026-07-18）：artifact wrapper 在委托既有 lstat/symlink 安全层前拒绝 `..`、POSIX/Windows/UNC 绝对路径；4 条测试与 Electron 编译通过。
 - [x] 为实际写入前再次校验 workspace identity 写 RED 测试。
   - RED（2026-07-18）：workspace recheck helper 尚不存在，测试模块无法导入。
-- [~] 在 artifact 写入、删除、清理、relocate 的 mutation 前接入二次 strict 校验，使测试通过。
-  - GREEN（2026-07-18，写入入口）：安全目标解析在生成写入目标前对比 realpath snapshot；删除、清理与 relocate 接入待 resolver mutation 链路建立后完成。
+- [x] 在 artifact 写入、删除、清理、relocate 的 mutation 前接入二次 strict 校验，使测试通过。
+  - GREEN（2026-07-18）：写入经 `resolveArtifactSafeTarget`；删除/清理在 mutation 前调用 `assertArtifactWorkspaceIdentity`；relocate 经 `assertRelocateWorkspaceReady` 预检。专用测试 15/15 通过。
 - [x] 运行 artifact path security、pathSecurity 既有测试。
   - 验收（2026-07-18）：workspace resolver/recheck、identity、safe target 与既有 pathSecurity 共 5 文件 14 测试通过，Electron 编译通过。
+  - 复验（2026-07-18）：删除/清理/relocate guard 与 safe target/recheck 共 5 文件 15 测试通过。
 
 ## 4. 用户显式路径证据与路径类型决策
 

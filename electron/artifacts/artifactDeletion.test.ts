@@ -33,4 +33,23 @@ describe('deleteArtifactFile', () => {
     })).resolves.toEqual({ deleted: false })
     expect(marked).toEqual(['artifact-1'])
   })
+
+  it('rechecks workspace identity before deleting and does not change the database on failure', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-delete-recheck-'))
+    roots.push(root)
+    const target = path.join(root, 'report.md')
+    await fs.writeFile(target, 'x')
+    const marked: string[] = []
+    await expect(deleteArtifactFile({
+      registry: new ArtifactPathLeaseRegistry(),
+      identity: 'report',
+      targetPath: target,
+      workDir: root,
+      expectedWorkspaceRootReal: `${root}-moved`,
+      artifactId: 'artifact-1',
+      repository: { markDeleted: (id: string) => marked.push(id) }
+    })).rejects.toThrow('ARTIFACT_WORKSPACE_CHANGED')
+    expect(marked).toEqual([])
+    await expect(fs.readFile(target, 'utf8')).resolves.toBe('x')
+  })
 })
