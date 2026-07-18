@@ -49,4 +49,11 @@ describe('resolveArtifactOutput', () => {
       intent: { container: 'package', role: 'supporting', packageId: 'package-1', materialKind: 'script', title: 'query', pathSource: 'agent-default' }
     })).toEqual(expect.objectContaining({ finalPath: 'reports/final.materials/query.ts' }))
   })
+
+  it('returns an ownership decision rather than creating an anonymous package for unqualified supporting content', () => {
+    expect(resolveArtifactOutput({
+      workDir: '/workspace',
+      intent: { container: 'package', role: 'supporting', title: 'query', pathSource: 'agent-default' }
+    })).toEqual(expect.objectContaining({ decision: { kind: 'ownership' } }))
+  })
 })

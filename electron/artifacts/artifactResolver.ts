@@ -5,7 +5,7 @@ export interface ResolvedArtifactOutput {
   finalPath: string
   canonicalPath: string
   provenance: ArtifactPathProvenance
-  decision?: { kind: 'output-location'; packageId?: string }
+  decision?: { kind: 'output-location'; packageId?: string } | { kind: 'ownership' }
 }
 
 /** Resolves artifact destinations; project paths are never redirected or renamed. */
@@ -23,6 +23,9 @@ export function resolveArtifactOutput(input: {
   if (!input.intent.requestedPath) {
     if (input.intent.container === 'package' && input.intent.role === 'primary') {
       return { finalPath: '', canonicalPath: '', provenance, decision: { kind: 'output-location', packageId: input.intent.packageId } }
+    }
+    if (input.intent.container === 'package' && (input.intent.role === 'supporting' || input.intent.role === 'reference') && !input.intent.packageId) {
+      return { finalPath: '', canonicalPath: '', provenance, decision: { kind: 'ownership' } }
     }
     if (input.intent.container === 'package' && (input.intent.role === 'supporting' || input.intent.role === 'reference') && input.intent.packageId && input.packagePrimaryPath) {
       const finalPath = derivePackageMaterialPath(input.packagePrimaryPath, input.intent.title, input.intent.materialKind)

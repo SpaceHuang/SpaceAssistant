@@ -279,8 +279,10 @@
   - GREEN（2026-07-18）：由 package primary 的 basename 推导 `<base>.materials/`，按 materialKind 生成默认扩展名；7 条专用测试与 Electron 编译通过。
 - [ ] 为材料解析写 RED 测试：同名风险或角色混合时才创建 supporting/references 子目录。
 - [ ] 实现按冲突和 role 的材料子目录规则，使测试通过。
-- [ ] 为 supporting 写 RED 测试：无 packageId 时返回 ownership/关联歧义，不创建匿名 package。
-- [ ] 实现无 packageId 拒绝/decision 分支，使测试通过。
+- [x] 为 supporting 写 RED 测试：无 packageId 时返回 ownership/关联歧义，不创建匿名 package。
+  - RED（2026-07-18）：初始 resolver 因 requestedPath 缺失直接抛错。
+- [x] 实现无 packageId 拒绝/decision 分支，使测试通过。
+  - GREEN（2026-07-18）：supporting/reference 无 packageId 返回 ownership decision，不产生路径或匿名 package；8 条专用测试与 Electron 编译通过。
 - [ ] 为 scratch resolver 写 RED 测试：忽略 Agent 目录建议，仅使用安全文件名并写入 `.spaceassistant/runs/<session>/<kind>/`。
 - [ ] 实现 scratch kind 映射、文件名净化与 system-assigned provenance，使测试通过。
 - [ ] 为 scratch resolver 写 RED 测试：新同名文件加短 toolUseId 后缀；同 artifactId 保持原路径。
