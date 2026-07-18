@@ -16,10 +16,10 @@ describe('extractExplicitPathEvidence', () => {
         intent: 'output'
       },
       {
-        evidenceId: 'request-1:30:43',
+        evidenceId: 'request-1:29:42',
         rawPath: 'src/auth.ts',
-        start: 30,
-        end: 43,
+        start: 29,
+        end: 42,
         intent: 'output'
       }
     ])

@@ -164,7 +164,8 @@
 
 - [x] 为显式路径提取写 RED 测试：反引号或引号包裹的输出路径产出稳定 evidenceId 和原始 span。
   - RED（2026-07-18）：显式路径 evidence 提取器尚不存在。
-- [ ] 实现 `explicitPathEvidence.ts` 的基本 span 提取，使测试通过。
+- [x] 实现 `explicitPathEvidence.ts` 的基本 span 提取，使测试通过。
+  - GREEN（2026-07-18）：反引号/单引号/双引号路径生成 request+span 稳定 evidenceId，专用测试与 Electron 编译通过。
 - [ ] 为提取器写 RED 测试：带分隔符的相对/绝对路径可被识别，保留尾随分隔符。
 - [ ] 实现相对/绝对路径与尾随分隔符解析，使测试通过。
 - [ ] 为提取器写 RED 测试：紧邻“文件、目录、保存为”等词的单段名称被识别。
