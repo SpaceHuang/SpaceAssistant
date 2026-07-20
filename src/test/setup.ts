@@ -60,11 +60,12 @@ if (typeof window !== 'undefined') {
     artifactList: api.artifactList ?? (async () => []),
     artifactDelete: api.artifactDelete ?? (async () => ({ ok: true })),
     artifactCleanSession: api.artifactCleanSession ?? (async () => ({ deleted: [], skipped: [] })),
-    artifactDecisionResponse: api.artifactDecisionResponse ?? (async () => {}),
+    artifactDecisionResponse: api.artifactDecisionResponse ?? (async () => 'resolved' as const),
     artifactRelocate: api.artifactRelocate ?? (async () => ({ ok: false, error: 'stub' })),
     artifactSetDefaultDir: api.artifactSetDefaultDir ?? (async () => {}),
     artifactOnChanged: api.artifactOnChanged ?? (() => () => undefined),
-    artifactOnDecisionRequest: api.artifactOnDecisionRequest ?? (() => () => undefined)
+    artifactOnDecisionRequest: api.artifactOnDecisionRequest ?? (() => () => undefined),
+    artifactOnDecisionSettled: api.artifactOnDecisionSettled ?? (() => () => undefined)
   } as SpaceAssistantApi
 }
 

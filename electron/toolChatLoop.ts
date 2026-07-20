@@ -161,6 +161,8 @@ import { buildArtifactCompletionSummary } from './artifacts/completionSummary'
 import { buildArtifactContextSummaries, formatArtifactContextBlock } from './artifacts/artifactContextQuery'
 import { ArtifactRepository } from './artifacts/artifactRepository'
 import { getArtifactDecisionRequest } from './artifacts/artifactDecisionBridge'
+import { serializeArtifactDecisionForRemote } from './remote/artifactDecisionRemote'
+import { sendRemoteArtifactDecisionPrompt } from './remote/remoteDecisionOutbound'
 import {
   getWriteDirChoice,
   setWriteDirChoice
@@ -1025,6 +1027,19 @@ async function runToolChatSessionInner(
         inputObj.artifact
       ) {
         const occupiedPaths = listArtifactOccupiedPaths(appDb!, sessionId, workDir)
+        const remoteDecisionOwner =
+          remoteContext && artifactManagedSession
+            ? {
+                source: remoteContext.source,
+                authOwner: remoteContext.authOwner ?? remoteContext.userId ?? '',
+                privateChatTarget:
+                  remoteContext.source === 'feishu'
+                    ? (remoteContext.chatId ?? '')
+                    : (remoteContext.userId ?? ''),
+                originSessionId: remoteContext.originSessionId ?? sessionId,
+                requestId: remoteContext.requestId ?? requestId
+              }
+            : undefined
         const resolveResult = await resolveArtifactToolWriteWithDecision({
           workDir,
           sessionId,
@@ -1037,10 +1052,30 @@ async function runToolChatSessionInner(
           userMessage: lastUserText,
           evidenceConsumption: artifactState.evidenceConsumption,
           signal: chatSignal,
-          onDecisionRequired: (pending) => {
+          remoteDecisionOwner,
+          onDecisionRequired: async (pending) => {
             const request = getArtifactDecisionRequest(pending.decisionId)
-            if (!request) return
+            if (!request) {
+              if (remoteContext && artifactManagedSession) {
+                throw new Error('artifact_decision_request_missing')
+              }
+              return
+            }
             safeWebContentsSend(sender, 'artifact:decision-request', request)
+            if (!remoteContext || !artifactManagedSession) return
+            if (!remoteContext.sendDecisionText) {
+              throw new Error('sendDecisionText_missing')
+            }
+            const text = serializeArtifactDecisionForRemote(request)
+            await sendRemoteArtifactDecisionPrompt({
+              sendDecisionText: remoteContext.sendDecisionText,
+              appendAudit: remoteContext.appendArtifactDecisionAudit,
+              text,
+              decisionId: request.decisionId,
+              kind: request.kind,
+              originSessionId: remoteContext.originSessionId ?? sessionId,
+              requestId
+            })
           }
         })
         if (resolveResult.kind === 'error') {

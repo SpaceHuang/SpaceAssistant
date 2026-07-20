@@ -121,13 +121,17 @@ export function createArtifactIpcHandlers(deps: ArtifactIpcDeps) {
       }
     },
 
-    decisionResponse(payload: ArtifactDecisionResponsePayload): void {
-      if (payload.choice.startsWith('rename:')) {
-        validateDecisionRename(payload.choice.slice('rename:'.length))
-      } else if (payload.choice.startsWith('change-directory:')) {
-        validateDecisionDirectory(payload.choice.slice('change-directory:'.length))
+    decisionResponse(payload: ArtifactDecisionResponsePayload): import('../../src/shared/artifactDecisionTypes').ArtifactDecisionSubmitResult {
+      try {
+        if (payload.choice.startsWith('rename:')) {
+          validateDecisionRename(payload.choice.slice('rename:'.length))
+        } else if (payload.choice.startsWith('change-directory:')) {
+          validateDecisionDirectory(payload.choice.slice('change-directory:'.length))
+        }
+      } catch {
+        return 'invalid'
       }
-      submitArtifactDecisionResponse(payload)
+      return submitArtifactDecisionResponse(payload)
     },
 
     setDefaultDir(payload: { sessionId?: string; dir?: string }): void {

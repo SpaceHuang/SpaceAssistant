@@ -116,6 +116,7 @@ import { openExternalLink } from './externalLink'
 import { readArtifactManagementEnabledFromConfig } from './artifacts/artifactConfig'
 import { readScratchGitPolicyPreference, writeScratchGitPolicyPreference } from './artifacts/scratchGitPolicyStore'
 import { createArtifactIpcHandlers, emitArtifactChanged } from './artifacts/artifactIpc'
+import { setArtifactDecisionSettledNotify } from './artifacts/artifactDecisionBridge'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 import {
   deleteSessionChatAttachments,
@@ -287,6 +288,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     getProfiles: () => ctx.workDirManager.listProfiles(),
     getActiveProfileId: () => ctx.workDirManager.getActiveProfileId(),
     notifyChanged: (event) => emitArtifactChanged(getMainWindow(), event)
+  })
+  setArtifactDecisionSettledNotify((event) => {
+    getMainWindow()?.webContents.send('artifact:decision-settled', event)
   })
 
   const skillManager = createSkillManager({
@@ -538,7 +542,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   })
 
   ipcMain.handle('artifact:decision-response', (_e, payload: import('../src/shared/api').ArtifactDecisionResponsePayload) => {
-    artifactHandlers.decisionResponse(payload)
+    return artifactHandlers.decisionResponse(payload)
   })
 
   ipcMain.handle('artifact:set-default-dir', (_e, payload: { sessionId?: string; dir?: string }) => {

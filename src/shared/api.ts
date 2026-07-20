@@ -139,6 +139,8 @@ export type ArtifactDecisionResponsePayload = {
   choice: string
 }
 
+export type { ArtifactDecisionSubmitResult } from './artifactDecisionTypes'
+
 export type ClaudeChatSendStreamPayload = {
   requestId: string
   sessionId: string
@@ -210,7 +212,9 @@ export type SpaceAssistantApi = {
   sessionDelete: (sessionId: string) => Promise<void>
 
   artifactList: (payload: { sessionId: string }) => Promise<ArtifactApiItem[]>
-  artifactDecisionResponse: (payload: ArtifactDecisionResponsePayload) => Promise<void>
+  artifactDecisionResponse: (
+    payload: ArtifactDecisionResponsePayload
+  ) => Promise<import('./artifactDecisionTypes').ArtifactDecisionSubmitResult>
   artifactDelete: (payload: { sessionId: string; artifactId: string }) => Promise<{ ok: boolean; error?: string }>
   artifactCleanSession: (payload: { sessionId: string; includeReferences?: boolean }) => Promise<{ deleted: string[]; skipped: Array<{ artifactId: string; reason: string }> }>
   artifactRelocate: (payload: {
@@ -224,6 +228,9 @@ export type SpaceAssistantApi = {
   artifactSetDefaultDir: (payload: { sessionId: string; dir: string }) => Promise<void>
   artifactOnChanged: (cb: (event: { sessionId: string; artifactId: string; action: 'created' | 'updated' | 'deleted' }) => void) => () => void
   artifactOnDecisionRequest: (cb: (request: import('./artifactDecisionTypes').ArtifactDecisionRequest) => void) => () => void
+  artifactOnDecisionSettled: (
+    cb: (event: { decisionId: string; reason: string }) => void
+  ) => () => void
 
   usageSet: (payload: { sessionId: string; usage: SessionUsage }) => Promise<void>
   usageGet: (sessionId: string) => Promise<SessionUsage | undefined>

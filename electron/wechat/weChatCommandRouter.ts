@@ -13,6 +13,11 @@ import { shouldAcceptWeChatInbound, parseSdkInboundMessage } from './weChatInbou
 import type { WeChatProcessedStore } from './weChatProcessedStore'
 import { replyWeChatSummary } from './weChatReplyService'
 import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
+import {
+  createArtifactDecisionAuditAppender,
+  createWeChatSendDecisionText
+} from '../remote/remoteDecisionOutbound'
+import { handleArtifactDecisionInbound } from '../remote/artifactDecisionImBridge'
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
 import { resolveWeChatSession } from './weChatSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
@@ -161,7 +166,9 @@ export class WeChatCommandRouter {
       return
     }
 
-    const re1 = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig })
+    const isLoggedIn = () => Boolean(mergeWeChatConfig(this.deps.getWeChatConfig()).loggedIn)
+
+    const re1 = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig, isLoggedIn })
     if (!re1.ok) {
       logWeChatCliEvent('warn', 'wechat.inbound.guard_revalidate_fail', { reason: re1.reason })
       return
@@ -173,9 +180,39 @@ export class WeChatCommandRouter {
       return
     }
 
-    const re2 = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig })
+    const re2 = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig, isLoggedIn })
     if (!re2.ok) {
       await this.deps.processedStore.markCompleted(msg.messageId, claimResult.claimId, 'guard_revoked')
+      return
+    }
+
+    const decisionRaw = accept.userMessage ?? msg.text.trim()
+    const decisionResult = await handleArtifactDecisionInbound({
+      raw: decisionRaw,
+      identity: {
+        source: 'wechat',
+        authOwner: guard.snapshot.owner,
+        privateChatTarget: msg.userId
+      },
+      authorizeBeforeSubmit: () => {
+        const re = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig, isLoggedIn })
+        if (!re.ok) return { ok: false, reason: 'authorization_revoked' }
+        return { ok: true }
+      },
+      replyText: async (text) => {
+        if (bot) await bot.reply(raw, text)
+      },
+      audit: createArtifactDecisionAuditAppender({
+        source: 'wechat',
+        append: (entry) => this.deps.auditLogger.append(entry as never)
+      })
+    })
+    if (decisionResult.handled) {
+      await this.deps.processedStore.markCompleted(
+        msg.messageId,
+        claimResult.claimId,
+        `artifact_decision_${decisionResult.reason}`
+      )
       return
     }
 
@@ -400,6 +437,18 @@ export class WeChatCommandRouter {
           inboundRaw,
           authorizationGeneration: authSnapshot.authorizationGeneration,
           requestId,
+          sendDecisionText: bot
+            ? createWeChatSendDecisionText({
+                bot,
+                inbound: inboundRaw,
+                userId: msg.userId,
+                sessionId
+              })
+            : undefined,
+          appendArtifactDecisionAudit: createArtifactDecisionAuditAppender({
+            source: 'wechat',
+            append: (entry) => this.deps.auditLogger.append(entry as never)
+          }),
           appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
             this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
           appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>

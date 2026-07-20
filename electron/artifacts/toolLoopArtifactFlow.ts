@@ -11,9 +11,11 @@ import { registerAfterSuccessfulWrite } from './postWriteRegistration'
 import { registerResolvedArtifactWrite } from './writeRegistration'
 import type { ArtifactDecisionKind } from '../../src/shared/artifactDecisionTypes'
 import {
+  cancelArtifactDecision,
   registerArtifactDecisionRequest,
   waitForArtifactDecisionResponse
 } from './artifactDecisionBridge'
+import type { RemoteArtifactDecisionOwnerInput } from './artifactDecisionBridge'
 import { buildArtifactPathResolvedResult, type ArtifactToolResultMeta } from './toolResultMeta'
 import { buildArtifactDecisionOptions } from '../remote/artifactDecisionRemote'
 import { ArtifactEvidenceConsumption } from './evidenceConsumption'
@@ -108,6 +110,10 @@ export function prepareArtifactToolWrite(input: {
   db?: AppDatabase
   userMessage?: string
   evidenceConsumption?: ArtifactEvidenceConsumption
+  remoteDecisionOwner?: Omit<RemoteArtifactDecisionOwnerInput, 'requestId' | 'originSessionId'> & {
+    originSessionId?: string
+    requestId?: string
+  }
 }): PrepareArtifactWriteResult {
   try {
     const resolved = resolveToolArtifactPath({
@@ -125,15 +131,27 @@ export function prepareArtifactToolWrite(input: {
     if (resolved.decision) {
       const kind = resolved.decision.kind as ArtifactDecisionKind
       const groupKey = decisionGroupKey(resolved, input.path)
-      const pending = registerArtifactDecisionRequest({
-        requestId: input.requestId,
-        sessionId: input.sessionId,
-        toolUseId: input.toolUseId,
-        attempt: input.attempt ?? 0,
-        groupKey,
-        kind,
-        options: buildArtifactDecisionOptions(kind)
-      })
+      const ownerInput = input.remoteDecisionOwner
+        ? {
+            source: input.remoteDecisionOwner.source,
+            authOwner: input.remoteDecisionOwner.authOwner,
+            privateChatTarget: input.remoteDecisionOwner.privateChatTarget,
+            originSessionId: input.remoteDecisionOwner.originSessionId ?? input.sessionId,
+            requestId: input.remoteDecisionOwner.requestId ?? input.requestId
+          }
+        : undefined
+      const pending = registerArtifactDecisionRequest(
+        {
+          requestId: input.requestId,
+          sessionId: input.sessionId,
+          toolUseId: input.toolUseId,
+          attempt: input.attempt ?? 0,
+          groupKey,
+          kind,
+          options: buildArtifactDecisionOptions(kind)
+        },
+        ownerInput
+      )
       return {
         kind: 'decision_required',
         decisionId: pending.decisionId,
@@ -237,6 +255,7 @@ export async function resumeArtifactToolWriteAfterDecision(input: {
   userMessage?: string
   evidenceConsumption?: ArtifactEvidenceConsumption
   provenance?: Extract<ArtifactPathProvenance, { pathSource: 'user-decision' }>
+  remoteDecisionOwner?: Parameters<typeof prepareArtifactToolWrite>[0]['remoteDecisionOwner']
 }): Promise<PrepareArtifactWriteResult> {
   try {
     if (input.choice.trim() === 'cancel') {
@@ -280,15 +299,27 @@ export async function resumeArtifactToolWriteAfterDecision(input: {
       if (reresolved.decision) {
         const kind = reresolved.decision.kind as ArtifactDecisionKind
         const groupKey = decisionGroupKey(reresolved, input.path)
-        const pending = registerArtifactDecisionRequest({
-          requestId: input.requestId,
-          sessionId: input.sessionId,
-          toolUseId: input.toolUseId,
-          attempt: reresolved.attempt,
-          groupKey,
-          kind,
-          options: buildArtifactDecisionOptions(kind)
-        })
+        const ownerInput = input.remoteDecisionOwner
+          ? {
+              source: input.remoteDecisionOwner.source,
+              authOwner: input.remoteDecisionOwner.authOwner,
+              privateChatTarget: input.remoteDecisionOwner.privateChatTarget,
+              originSessionId: input.remoteDecisionOwner.originSessionId ?? input.sessionId,
+              requestId: input.remoteDecisionOwner.requestId ?? input.requestId
+            }
+          : undefined
+        const pending = registerArtifactDecisionRequest(
+          {
+            requestId: input.requestId,
+            sessionId: input.sessionId,
+            toolUseId: input.toolUseId,
+            attempt: reresolved.attempt,
+            groupKey,
+            kind,
+            options: buildArtifactDecisionOptions(kind)
+          },
+          ownerInput
+        )
         return {
           kind: 'decision_required',
           decisionId: pending.decisionId,
@@ -339,6 +370,9 @@ export async function resumeArtifactToolWriteAfterDecision(input: {
   }
 }
 
+export const ARTIFACT_DECISION_OUTBOUND_FAILED_MESSAGE =
+  '产物决策发送失败，本次写入已取消，请稍后重试'
+
 export async function resolveArtifactToolWriteWithDecision(input: {
   workDir: string
   sessionId: string
@@ -351,16 +385,28 @@ export async function resolveArtifactToolWriteWithDecision(input: {
   userMessage?: string
   evidenceConsumption?: ArtifactEvidenceConsumption
   signal?: AbortSignal
-  onDecisionRequired?: (pending: Extract<PrepareArtifactWriteResult, { kind: 'decision_required' }>) => void
+  remoteDecisionOwner?: Parameters<typeof prepareArtifactToolWrite>[0]['remoteDecisionOwner']
+  onDecisionRequired?: (
+    pending: Extract<PrepareArtifactWriteResult, { kind: 'decision_required' }>
+  ) => void | Promise<void>
 }): Promise<PrepareArtifactWriteResult> {
   let artifact = input.artifact
   let current = prepareArtifactToolWrite({ ...input, artifact })
   while (current.kind === 'decision_required') {
     const waitPromise = waitForArtifactDecisionResponse(input.requestId, input.toolUseId, input.signal)
-    input.onDecisionRequired?.(current)
+    try {
+      await input.onDecisionRequired?.(current)
+    } catch {
+      cancelArtifactDecision(current.decisionId, 'outbound_failed')
+      return { kind: 'error', message: ARTIFACT_DECISION_OUTBOUND_FAILED_MESSAGE }
+    }
     const response = await waitPromise
     if (!response || response.choice === 'cancel') {
-      return { kind: 'error', message: response?.choice === 'cancel' ? 'Artifact decision cancelled' : 'Artifact decision timed out' }
+      cancelArtifactDecision(current.decisionId, response?.choice === 'cancel' ? 'cancelled' : 'timeout')
+      return {
+        kind: 'error',
+        message: response?.choice === 'cancel' ? 'Artifact decision cancelled' : 'Artifact decision timed out'
+      }
     }
     current = await resumeArtifactToolWriteAfterDecision({
       workDir: input.workDir,
@@ -378,7 +424,8 @@ export async function resolveArtifactToolWriteWithDecision(input: {
       db: input.db,
       userMessage: input.userMessage,
       evidenceConsumption: input.evidenceConsumption,
-      provenance: response.provenance
+      provenance: response.provenance,
+      remoteDecisionOwner: input.remoteDecisionOwner
     })
     if (current.kind === 'decision_required') {
       artifact = current.artifact

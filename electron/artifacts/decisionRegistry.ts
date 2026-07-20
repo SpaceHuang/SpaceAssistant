@@ -27,7 +27,13 @@ export class ArtifactDecisionRegistry {
     const decision = { ...input, decisionId: randomUUID() }
     this.pendingByGroup.set(key, decision)
     this.pendingById.set(decision.decisionId, decision)
-    this.timeoutById.set(decision.decisionId, setTimeout(() => this.remove(decision.decisionId), this.options.timeoutMs ?? 5 * 60 * 1000))
+    const timeoutMs = this.options.timeoutMs
+    if (timeoutMs !== 0) {
+      this.timeoutById.set(
+        decision.decisionId,
+        setTimeout(() => this.remove(decision.decisionId), timeoutMs ?? 5 * 60 * 1000)
+      )
+    }
     return decision
   }
 
@@ -64,6 +70,29 @@ export class ArtifactDecisionRegistry {
   consumeAsUserDecision(input: Pick<PendingArtifactDecision, 'decisionId' | 'requestId' | 'sessionId' | 'toolUseId' | 'attempt'>): Extract<ArtifactPathProvenance, { pathSource: 'user-decision' }> {
     const decision = this.consume(input)
     return { pathSource: 'user-decision', pathDecisionId: decision.decisionId }
+  }
+
+  tryConsumeAsUserDecision(
+    input: Pick<PendingArtifactDecision, 'decisionId' | 'requestId' | 'sessionId' | 'toolUseId' | 'attempt'>
+  ):
+    | { ok: true; provenance: Extract<ArtifactPathProvenance, { pathSource: 'user-decision' }> }
+    | { ok: false; reason: 'stale' | 'binding_mismatch' | 'invalid' } {
+    const decision = this.pendingById.get(input.decisionId)
+    if (!decision) {
+      // Missing pending is always stale to callers (already consumed, timed out, or never existed).
+      return { ok: false, reason: 'stale' }
+    }
+    if (
+      decision.requestId !== input.requestId ||
+      decision.sessionId !== input.sessionId ||
+      decision.toolUseId !== input.toolUseId ||
+      decision.attempt !== input.attempt
+    ) {
+      return { ok: false, reason: 'binding_mismatch' }
+    }
+    this.consumed.add(decision.decisionId)
+    this.remove(decision.decisionId)
+    return { ok: true, provenance: { pathSource: 'user-decision', pathDecisionId: decision.decisionId } }
   }
 
   private removeWhere(predicate: (decision: PendingArtifactDecision) => boolean): void {

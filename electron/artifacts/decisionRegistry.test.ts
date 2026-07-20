@@ -52,4 +52,36 @@ describe('ArtifactDecisionRegistry', () => {
       pathSource: 'user-decision', pathDecisionId: pending.decisionId
     })
   })
+
+  it('maps missing pending to stale for tryConsumeAsUserDecision', () => {
+    const registry = new ArtifactDecisionRegistry()
+    expect(
+      registry.tryConsumeAsUserDecision({
+        decisionId: 'missing',
+        requestId: 'r',
+        sessionId: 's',
+        toolUseId: 't',
+        attempt: 1
+      })
+    ).toEqual({ ok: false, reason: 'stale' })
+  })
+
+  it('skips auto-timeout when timeoutMs is 0', () => {
+    vi.useFakeTimers()
+    try {
+      const registry = new ArtifactDecisionRegistry({ timeoutMs: 0 })
+      const pending = registry.createPending({
+        requestId: 'req-1',
+        sessionId: 'session-1',
+        toolUseId: 'tool-1',
+        attempt: 1,
+        groupKey: 'g'
+      })
+      vi.advanceTimersByTime(10 * 60 * 1000)
+      expect(registry.get(pending.decisionId)).toBeDefined()
+      registry.clearAll()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

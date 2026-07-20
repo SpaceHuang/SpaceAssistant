@@ -234,6 +234,7 @@
     "optionLongTerm": "长期保留",
     "optionPending": "暂存",
     "optionAddIgnore": "加入 .gitignore",
-    "optionKeepVisible": "保持可见"
+    "optionKeepVisible": "保持可见",
+    "staleOrHandled": "该决策已处理或已失效"
   }
 }
