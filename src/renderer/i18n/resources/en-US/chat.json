@@ -234,6 +234,7 @@
     "optionLongTerm": "Keep long-term",
     "optionPending": "Keep pending",
     "optionAddIgnore": "Add to .gitignore",
-    "optionKeepVisible": "Keep visible"
+    "optionKeepVisible": "Keep visible",
+    "staleOrHandled": "This decision was already handled or is no longer valid"
   }
 }

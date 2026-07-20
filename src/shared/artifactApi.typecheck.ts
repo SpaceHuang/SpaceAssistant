@@ -12,8 +12,12 @@ type ArtifactListPayload = Parameters<SpaceAssistantApi['artifactList']>[0]
 type ArtifactDeletePayload = Parameters<SpaceAssistantApi['artifactDelete']>[0]
 type ArtifactCleanPayload = Parameters<SpaceAssistantApi['artifactCleanSession']>[0]
 type ArtifactDecisionPayload = Parameters<SpaceAssistantApi['artifactDecisionResponse']>[0]
+type ArtifactDecisionResult = Awaited<ReturnType<SpaceAssistantApi['artifactDecisionResponse']>>
 type ArtifactRelocatePayload = Parameters<SpaceAssistantApi['artifactRelocate']>[0]
 type ArtifactDefaultDirPayload = Parameters<SpaceAssistantApi['artifactSetDefaultDir']>[0]
+
+type AllowedDecisionResult = 'resolved' | 'stale' | 'binding_mismatch' | 'invalid'
+type ArtifactDecisionResultGuard = Expect<Equal<ArtifactDecisionResult, AllowedDecisionResult>>
 
 type ArtifactApiGuard = Expect<
   PayloadHasForbiddenKey<ArtifactListPayload> extends true
@@ -22,7 +26,9 @@ type ArtifactApiGuard = Expect<
         ? PayloadHasForbiddenKey<ArtifactDecisionPayload> extends true
           ? PayloadHasForbiddenKey<ArtifactRelocatePayload> extends true
             ? PayloadHasForbiddenKey<ArtifactDefaultDirPayload> extends true
-              ? true
+              ? ArtifactDecisionResultGuard extends true
+                ? true
+                : false
               : false
             : false
           : false

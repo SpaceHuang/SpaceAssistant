@@ -29,6 +29,18 @@ export type RemoteConfirmPayload = {
 /** Shared confirm-manager surface used by remote session tools (pending checks). */
 export type RemoteConfirmManager = FeishuConfirmManager | WeChatConfirmManager
 
+export type RemoteArtifactDecisionAuditEvent =
+  | 'prompt'
+  | 'prompt_failed'
+  | 'resolved'
+  | 'hint'
+  | 'stale'
+  | 'binding_mismatch'
+  | 'invalid'
+  | 'ambiguous'
+  | 'unknown_id'
+  | 'authorization_revoked'
+
 export interface RemoteContext {
   source: 'feishu' | 'wechat'
   messageId: string
@@ -54,6 +66,16 @@ export interface RemoteContext {
   confirmTimeoutMessage?: string
   appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>
   appendSessionSwitchAudit?: (entry: SessionSwitchAuditEntry) => void | Promise<void>
+  /**
+   * Fixed-target artifact decision prompt sender. Bound to the current private chat when
+   * RemoteContext is built; must not accept a target argument.
+   */
+  sendDecisionText?: (text: string) => Promise<void>
+  /** Optional safe audit sink for artifact decision lifecycle events. */
+  appendArtifactDecisionAudit?: (
+    event: RemoteArtifactDecisionAuditEvent,
+    fields: Record<string, unknown>
+  ) => void | Promise<void>
   /** Authorization generation captured at inbound guard / agent start. */
   authorizationGeneration?: number
   /** Authenticated owner from inbound guard snapshot (OpenId / WeChat userId). */

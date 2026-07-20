@@ -4,6 +4,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   request: ArtifactDecisionRequest
+  uiStatus?: 'active' | 'stale'
   onRespond: (choice: string) => void
   onCancel: () => void
 }
@@ -66,10 +67,11 @@ export function buildArtifactDecisionOptions(
   }
 }
 
-export function ArtifactDecisionCard({ request, onRespond, onCancel }: Props) {
+export function ArtifactDecisionCard({ request, uiStatus = 'active', onRespond, onCancel }: Props) {
   const { t } = useTypedTranslation('chat')
   const [renameValue, setRenameValue] = useState('')
   const [directoryValue, setDirectoryValue] = useState('')
+  const isStale = uiStatus === 'stale'
 
   const title = useMemo(() => {
     switch (request.kind) {
@@ -91,6 +93,7 @@ export function ArtifactDecisionCard({ request, onRespond, onCancel }: Props) {
   }, [request.kind, t])
 
   const handleOption = (option: ArtifactDecisionRequest['options'][number]) => {
+    if (isStale) return
     if (option.requiresInput === 'rename') {
       const name = renameValue.trim()
       if (!name || /[\\/]/.test(name)) return
@@ -107,37 +110,46 @@ export function ArtifactDecisionCard({ request, onRespond, onCancel }: Props) {
   }
 
   return (
-    <div className="artifact-decision-card">
+    <div className="artifact-decision-card" data-status={uiStatus}>
       <div className="artifact-decision-card__title">{title}</div>
+      {isStale ? (
+        <div className="artifact-decision-card__message" role="status">
+          {t('artifactDecision.staleOrHandled')}
+        </div>
+      ) : null}
       {request.message ? <div className="artifact-decision-card__message">{request.message}</div> : null}
-      <div className="artifact-decision-card__options">
-        {request.options.map((option) => (
-          <div key={option.key} className="artifact-decision-card__option">
-            <button type="button" className="artifact-decision-card__button" onClick={() => handleOption(option)}>
-              {option.label}
-            </button>
-            {option.requiresInput === 'rename' ? (
-              <input
-                className="artifact-decision-card__input"
-                value={renameValue}
-                placeholder={t('artifactDecision.renamePlaceholder')}
-                onChange={(event) => setRenameValue(event.target.value)}
-              />
-            ) : null}
-            {option.requiresInput === 'directory' ? (
-              <input
-                className="artifact-decision-card__input"
-                value={directoryValue}
-                placeholder={t('artifactDecision.directoryPlaceholder')}
-                onChange={(event) => setDirectoryValue(event.target.value)}
-              />
-            ) : null}
+      {!isStale ? (
+        <>
+          <div className="artifact-decision-card__options">
+            {request.options.map((option) => (
+              <div key={option.key} className="artifact-decision-card__option">
+                <button type="button" className="artifact-decision-card__button" onClick={() => handleOption(option)}>
+                  {option.label}
+                </button>
+                {option.requiresInput === 'rename' ? (
+                  <input
+                    className="artifact-decision-card__input"
+                    value={renameValue}
+                    placeholder={t('artifactDecision.renamePlaceholder')}
+                    onChange={(event) => setRenameValue(event.target.value)}
+                  />
+                ) : null}
+                {option.requiresInput === 'directory' ? (
+                  <input
+                    className="artifact-decision-card__input"
+                    value={directoryValue}
+                    placeholder={t('artifactDecision.directoryPlaceholder')}
+                    onChange={(event) => setDirectoryValue(event.target.value)}
+                  />
+                ) : null}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      <button type="button" className="artifact-decision-card__cancel" onClick={onCancel}>
-        {t('artifactDecision.cancel')}
-      </button>
+          <button type="button" className="artifact-decision-card__cancel" onClick={onCancel}>
+            {t('artifactDecision.cancel')}
+          </button>
+        </>
+      ) : null}
     </div>
   )
 }

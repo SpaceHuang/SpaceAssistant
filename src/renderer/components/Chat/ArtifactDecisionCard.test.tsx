@@ -46,4 +46,30 @@ describe('ArtifactDecisionCard', () => {
     fireEvent.click(screen.getByRole('button', { name: '改目录' }))
     expect(onRespond).toHaveBeenCalledWith('change-directory:reports/final')
   })
+
+  it('shows stale message and hides actions when uiStatus is stale', () => {
+    const onRespond = vi.fn()
+    render(
+      <ArtifactDecisionCard
+        request={{
+          decisionId: 'd1',
+          requestId: 'r1',
+          sessionId: 's1',
+          toolUseId: 't1',
+          attempt: 1,
+          kind: 'overwrite',
+          options: [
+            { key: 'overwrite', label: '覆盖' },
+            { key: 'cancel', label: '取消' }
+          ]
+        }}
+        uiStatus="stale"
+        onRespond={onRespond}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByRole('status').textContent).toContain('该决策已处理或已失效')
+    expect(screen.queryByRole('button', { name: '覆盖' })).toBeNull()
+    expect(onRespond).not.toHaveBeenCalled()
+  })
 })

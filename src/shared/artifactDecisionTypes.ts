@@ -19,3 +19,19 @@ export type ArtifactDecisionRequest = {
   options: Array<{ key: string; label: string; requiresInput?: 'rename' | 'directory' }>
   context?: Record<string, string>
 }
+
+export type RemoteArtifactDecisionOwner = {
+  source: 'feishu' | 'wechat'
+  authOwner: string
+  privateChatTarget: string
+  originSessionId: string
+  requestId: string
+  decisionId: string
+}
+
+/** Atomic submit outcome shared by desktop IPC and IM inbound. */
+export type ArtifactDecisionSubmitResult =
+  | 'resolved'
+  | 'stale'
+  | 'binding_mismatch'
+  | 'invalid'

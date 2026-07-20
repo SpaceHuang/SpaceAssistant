@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react'
-import type { ArtifactDecisionRequest } from '../../shared/artifactDecisionTypes'
-import { pendingArtifactDecisionStore } from '../services/pendingArtifactDecisionStore'
+import {
+  pendingArtifactDecisionStore,
+  type PendingArtifactDecisionItem
+} from '../services/pendingArtifactDecisionStore'
 
-export function usePendingArtifactDecisionSnapshot(sessionId: string | null): ArtifactDecisionRequest | undefined {
-  const [item, setItem] = useState<ArtifactDecisionRequest | undefined>(() =>
+export function usePendingArtifactDecisionSnapshot(
+  sessionId: string | null
+): PendingArtifactDecisionItem | undefined {
+  const [item, setItem] = useState<PendingArtifactDecisionItem | undefined>(() =>
     sessionId ? pendingArtifactDecisionStore.findForSession(sessionId) : undefined
   )
 

@@ -12,6 +12,11 @@ import { shouldAcceptInbound } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
 import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
+import {
+  createArtifactDecisionAuditAppender,
+  createFeishuSendDecisionText
+} from '../remote/remoteDecisionOutbound'
+import { handleArtifactDecisionInbound } from '../remote/artifactDecisionImBridge'
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
 import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
@@ -292,54 +297,6 @@ export class RemoteCommandRouter {
       return
     }
 
-    // Workdir disambiguation only after current owner + p2p accept (prevents rebind bypass).
-    this.purgeExpiredDisambiguation()
-    const disambigKey = msg.chatId
-    const pending = this.pendingDisambiguation.get(disambigKey)
-    if (pending) {
-      const freshOwner = readOwnerOpenIdFromAllowlist(
-        mergeFeishuConfig(this.deps.getFeishuConfig()).remoteSenderAllowlist
-      )
-      const identityOk =
-        Boolean(freshOwner) &&
-        msg.senderOpenId === freshOwner &&
-        pending.senderOpenId === msg.senderOpenId &&
-        pending.expiresAt > Date.now()
-      if (!identityOk) {
-        const reason: DisambiguationFinalReason =
-          pending.expiresAt <= Date.now()
-            ? 'disambiguation_timeout'
-            : 'disambiguation_identity_revoked'
-        await this.finalizeDisambiguation(disambigKey, pending, reason)
-        logFeishuCliEvent('warn', 'feishu.disambiguation.reject', {
-          senderOpenId: msg.senderOpenId,
-          pendingSender: pending.senderOpenId,
-          reason: 'identity_or_expired'
-        })
-        await replyFeishuText(
-          this.deps.runner,
-          msg.messageId,
-          '工作目录选择已失效（身份变更或超时）。请重新发送指令。'
-        )
-        return
-      }
-      const chosen = resolveDisambiguationChoice(msg.content, pending.profiles)
-      if (chosen) {
-        this.clearDisambiguationTimer(pending)
-        this.pendingDisambiguation.delete(disambigKey)
-        await this.processCommand(
-          pending.originalMsg,
-          config,
-          chosen.path,
-          chosen,
-          pending.originalMsg.content,
-          pending.processedClaimId,
-          pending.authSnapshot
-        )
-      }
-      return
-    }
-
     const userContent = accept.userMessage ?? msg.content
     logFeishuCliEvent('info', 'feishu.inbound.accept', {
       reason: accept.reason,
@@ -390,6 +347,98 @@ export class RemoteCommandRouter {
       return
     }
 
+    const decisionRaw = accept.userMessage ?? msg.content
+    const decisionResult = await handleArtifactDecisionInbound({
+      raw: decisionRaw,
+      identity: {
+        source: 'feishu',
+        authOwner: guard.snapshot.owner,
+        privateChatTarget: msg.chatId
+      },
+      authorizeBeforeSubmit: () => {
+        const re = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig })
+        if (!re.ok) return { ok: false, reason: 'authorization_revoked' }
+        return { ok: true }
+      },
+      replyText: (text) => replyFeishuText(this.deps.runner, msg.messageId, text),
+      audit: createArtifactDecisionAuditAppender({
+        source: 'feishu',
+        append: (entry) => this.deps.auditLogger.append(entry as never)
+      })
+    })
+    if (decisionResult.handled) {
+      await this.deps.processedStore.markCompleted(
+        msg.messageId,
+        claimResult.claimId,
+        `artifact_decision_${decisionResult.reason}`
+      )
+      return
+    }
+
+    // Workdir disambiguation only after guard/claim/artifact decision (prevents rebind bypass).
+    this.purgeExpiredDisambiguation()
+    const disambigKey = msg.chatId
+    const pending = this.pendingDisambiguation.get(disambigKey)
+    if (pending) {
+      const freshOwner = readOwnerOpenIdFromAllowlist(
+        mergeFeishuConfig(this.deps.getFeishuConfig()).remoteSenderAllowlist
+      )
+      const identityOk =
+        Boolean(freshOwner) &&
+        msg.senderOpenId === freshOwner &&
+        pending.senderOpenId === msg.senderOpenId &&
+        pending.expiresAt > Date.now()
+      if (!identityOk) {
+        const reason: DisambiguationFinalReason =
+          pending.expiresAt <= Date.now()
+            ? 'disambiguation_timeout'
+            : 'disambiguation_identity_revoked'
+        await this.deps.processedStore.markCompleted(
+          msg.messageId,
+          claimResult.claimId,
+          'disambiguation_rejected'
+        )
+        await this.finalizeDisambiguation(disambigKey, pending, reason)
+        logFeishuCliEvent('warn', 'feishu.disambiguation.reject', {
+          senderOpenId: msg.senderOpenId,
+          pendingSender: pending.senderOpenId,
+          reason: 'identity_or_expired'
+        })
+        await replyFeishuText(
+          this.deps.runner,
+          msg.messageId,
+          '工作目录选择已失效（身份变更或超时）。请重新发送指令。'
+        )
+        return
+      }
+      const chosen = resolveDisambiguationChoice(msg.content, pending.profiles)
+      if (chosen) {
+        this.clearDisambiguationTimer(pending)
+        this.pendingDisambiguation.delete(disambigKey)
+        await this.deps.processedStore.markCompleted(
+          msg.messageId,
+          claimResult.claimId,
+          'disambiguation_choice'
+        )
+        await this.processCommand(
+          pending.originalMsg,
+          config,
+          chosen.path,
+          chosen,
+          pending.originalMsg.content,
+          pending.processedClaimId,
+          pending.authSnapshot
+        )
+        return
+      }
+      await this.deps.processedStore.markCompleted(
+        msg.messageId,
+        claimResult.claimId,
+        'disambiguation_no_match'
+      )
+      return
+    }
+
     const appCfg = this.deps.getAppConfig()
     const workDirResult = resolveWorkDirFromFeishuCommand(
       accept.userMessage ?? msg.content,
@@ -403,7 +452,7 @@ export class RemoteCommandRouter {
         chatId: msg.chatId
       })
       const now = Date.now()
-      const pending: PendingDisambiguation = {
+      const nextPending: PendingDisambiguation = {
         profiles: workDirResult.ambiguous,
         originalMsg: msg,
         senderOpenId: msg.senderOpenId,
@@ -412,8 +461,8 @@ export class RemoteCommandRouter {
         processedClaimId: claimResult.claimId,
         authSnapshot: guard.snapshot
       }
-      this.armDisambiguationTimeout(disambigKey, pending)
-      this.pendingDisambiguation.set(disambigKey, pending)
+      this.armDisambiguationTimeout(disambigKey, nextPending)
+      this.pendingDisambiguation.set(disambigKey, nextPending)
       await replyFeishuText(this.deps.runner, msg.messageId, buildDisambiguationReply(workDirResult.ambiguous))
       return
     }
@@ -680,6 +729,16 @@ export class RemoteCommandRouter {
           workDirProfileId: profile?.id ?? this.deps.workDirManager.getActiveProfileId(),
           authorizationGeneration: authSnapshot.authorizationGeneration,
           requestId,
+          sendDecisionText: createFeishuSendDecisionText({
+            runner: this.deps.runner,
+            messageId: msg.messageId,
+            chatId: msg.chatId,
+            sessionId
+          }),
+          appendArtifactDecisionAudit: createArtifactDecisionAuditAppender({
+            source: 'feishu',
+            append: (entry) => this.deps.auditLogger.append(entry as never)
+          }),
           appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
             this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
           appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>

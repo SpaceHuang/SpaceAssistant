@@ -1,23 +1,42 @@
 import type { ArtifactDecisionRequest } from '../../src/shared/artifactDecisionTypes'
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
  * Remote (IM) decision text codec.
  * Desktop path uses IPC `artifact:decision-request` / `artifact:decision-response`.
- * Feishu/WeChat inbound reply → parse → submitArtifactDecisionResponse is not wired yet;
- * keep this module the single codec when that integration lands.
+ * Keep this module the single codec for Feishu/WeChat inbound/outbound.
  */
-export function serializeArtifactDecisionForRemote(request: ArtifactDecisionRequest): string {
-  const header = [`决策 ${request.decisionId}`, request.title ?? request.kind, request.message ?? ''].filter(Boolean).join('\n')
-  const options = request.options
-    .map((option, index) => `${index + 1}. ${option.label}${option.requiresInput ? '（回复时附带值）' : ''}`)
-    .join('\n')
-  return `${header}\n${options}\n回复编号或「编号 值」，例如：1 或 2 review-v2.md`
+export type ExtractedRemoteDecisionReply = {
+  replyDecisionId?: string
+  body: string
+  hadUuidPrefix: boolean
 }
+
+export type ParsedArtifactDecisionBody =
+  | { kind: 'choice'; choice: string }
+  | { kind: 'usage_hint' }
+  | { kind: 'not_decision' }
 
 export type ParsedArtifactDecisionReply =
   | { kind: 'choice'; decisionId: string; choice: string }
   | { kind: 'usage_hint' }
   | { kind: 'not_decision' }
+
+export function extractArtifactDecisionReplyPrefix(raw: string): ExtractedRemoteDecisionReply {
+  const text = raw.trim()
+  if (!text) return { body: '', hadUuidPrefix: false }
+  const parts = text.split(/\s+/).filter(Boolean)
+  const first = parts[0] ?? ''
+  if (!UUID_RE.test(first)) {
+    return { body: text, hadUuidPrefix: false }
+  }
+  return {
+    replyDecisionId: first.toLowerCase(),
+    body: parts.slice(1).join(' '),
+    hadUuidPrefix: true
+  }
+}
 
 function encodeChoiceFromOption(
   option: ArtifactDecisionRequest['options'][number] | undefined,
@@ -29,6 +48,44 @@ function encodeChoiceFromOption(
     return `change-directory:${value.replace(/\\/g, '/').replace(/\/+$/, '')}`
   }
   return undefined
+}
+
+function valueHasUuidPollution(value: string): boolean {
+  if (!value) return false
+  const tokens = value.split(/\s+/).filter(Boolean)
+  const first = tokens[0] ?? ''
+  if (UUID_RE.test(first)) return true
+  const hashMatch = value.match(/#([0-9a-fA-F-]{36})\s*$/)
+  if (hashMatch?.[1] && UUID_RE.test(hashMatch[1])) return true
+  return false
+}
+
+export function parseArtifactDecisionReplyBody(
+  body: string,
+  options: ArtifactDecisionRequest['options'],
+  hadUuidPrefix: boolean
+): ParsedArtifactDecisionBody {
+  const text = body.trim()
+  if (!text) return hadUuidPrefix ? { kind: 'usage_hint' } : { kind: 'not_decision' }
+  const parts = text.split(/\s+/).filter(Boolean)
+  const index = Number.parseInt(parts[0] ?? '', 10)
+  if (!Number.isFinite(index) || index < 1 || String(index) !== (parts[0] ?? '')) {
+    if (hadUuidPrefix) return { kind: 'usage_hint' }
+    if (/^\d/.test(text)) return { kind: 'usage_hint' }
+    return { kind: 'not_decision' }
+  }
+  if (index > options.length) return { kind: 'usage_hint' }
+  const option = options[index - 1]
+  const value = parts.slice(1).join(' ').trim()
+  if (valueHasUuidPollution(value)) return { kind: 'usage_hint' }
+  if (option?.requiresInput) {
+    if (!value) return { kind: 'usage_hint' }
+    const encoded = encodeChoiceFromOption(option, value)
+    if (!encoded) return { kind: 'usage_hint' }
+    return { kind: 'choice', choice: encoded }
+  }
+  if (value) return { kind: 'usage_hint' }
+  return { kind: 'choice', choice: String(index) }
 }
 
 export function resolveRemoteArtifactDecisionChoice(
@@ -50,33 +107,81 @@ export function parseArtifactDecisionRemoteReply(
   decisionId: string,
   optionCountOrOptions: number | ArtifactDecisionRequest['options'] = 4
 ): ParsedArtifactDecisionReply {
-  const options = Array.isArray(optionCountOrOptions) ? optionCountOrOptions : undefined
-  const optionCount = options?.length ?? (typeof optionCountOrOptions === 'number' ? optionCountOrOptions : 4)
-  const text = raw.trim()
-  if (!text) return { kind: 'not_decision' }
-  const parts = text.split(/\s+/).filter(Boolean)
-  const index = Number.parseInt(parts[0] ?? '', 10)
-  if (!Number.isFinite(index) || index < 1) {
-    if (/^\d/.test(text)) return { kind: 'usage_hint' }
-    return { kind: 'not_decision' }
+  const extracted = extractArtifactDecisionReplyPrefix(raw)
+  const options = Array.isArray(optionCountOrOptions)
+    ? optionCountOrOptions
+    : Array.from({ length: typeof optionCountOrOptions === 'number' ? optionCountOrOptions : 4 }, (_, i) => {
+        // Legacy overwrite shape when callers pass only a count.
+        if (i === 1) return { key: 'rename', label: '改名', requiresInput: 'rename' as const }
+        if (i === 2) return { key: 'change-directory', label: '改目录', requiresInput: 'directory' as const }
+        if (i === 3) return { key: 'cancel', label: '取消' }
+        return { key: 'overwrite', label: '覆盖' }
+      })
+
+  const parsed = parseArtifactDecisionReplyBody(extracted.body, options, extracted.hadUuidPrefix)
+  if (parsed.kind !== 'choice') return parsed
+  return {
+    kind: 'choice',
+    decisionId: extracted.replyDecisionId ?? decisionId,
+    choice: parsed.choice
   }
-  if (index > optionCount) return { kind: 'usage_hint' }
-  const value = parts.slice(1).join(' ').trim()
-  if (options) {
-    const encoded = encodeChoiceFromOption(options[index - 1], value)
-    if (encoded) return { kind: 'choice', decisionId, choice: encoded }
-  } else {
-    // Legacy overwrite indices when callers omit options.
-    if (index === 2 && value) return { kind: 'choice', decisionId, choice: `rename:${value}` }
-    if (index === 3 && value) {
-      return { kind: 'choice', decisionId, choice: `change-directory:${value.replace(/\\/g, '/').replace(/\/+$/, '')}` }
-    }
-  }
-  return { kind: 'choice', decisionId, choice: String(index) }
 }
 
-export const ARTIFACT_DECISION_REMOTE_USAGE_HINT =
-  '请回复编号选择。改名示例：2 review-v2.md；改目录示例：3 reports/final/'
+function firstRequiresInputExample(options: ArtifactDecisionRequest['options']): {
+  index: number
+  placeholder: string
+} | undefined {
+  const index = options.findIndex((option) => option.requiresInput)
+  if (index < 0) return undefined
+  const option = options[index]!
+  const placeholder = option.requiresInput === 'rename' ? 'review-v2.md' : 'reports/final'
+  return { index: index + 1, placeholder }
+}
+
+export function serializeArtifactDecisionForRemote(request: ArtifactDecisionRequest): string {
+  const lines = [
+    `产物决策：${request.title ?? request.kind}`,
+    `决策 ID：${request.decisionId}`,
+    ...request.options.map(
+      (option, index) =>
+        `${index + 1}. ${option.label}${
+          option.requiresInput === 'rename'
+            ? '（需附带名称）'
+            : option.requiresInput === 'directory'
+              ? '（需附带目录）'
+              : ''
+        }`
+    ),
+    ''
+  ]
+  const valued = firstRequiresInputExample(request.options)
+  if (valued) {
+    lines.push(`单条待决时可回复：1 或 ${valued.index} ${valued.placeholder}`)
+    lines.push(`若本私聊有多条待决，请回复：${request.decisionId} 1`)
+    lines.push(`带值示例：${request.decisionId} ${valued.index} ${valued.placeholder}`)
+  } else {
+    lines.push('单条待决时可回复：1')
+    lines.push(`若本私聊有多条待决，请回复：${request.decisionId} 1`)
+  }
+  return lines.join('\n')
+}
+
+export function buildArtifactDecisionUsageHint(
+  options: ArtifactDecisionRequest['options']
+): string {
+  const valued = firstRequiresInputExample(options)
+  if (!valued) {
+    return '请回复编号选择，例如：1'
+  }
+  return `请回复编号选择。带值示例：${valued.index} ${valued.placeholder}`
+}
+
+export const ARTIFACT_DECISION_REMOTE_USAGE_HINT = buildArtifactDecisionUsageHint([
+  { key: 'overwrite', label: '覆盖' },
+  { key: 'rename', label: '改名', requiresInput: 'rename' },
+  { key: 'change-directory', label: '改目录', requiresInput: 'directory' },
+  { key: 'cancel', label: '取消' }
+])
 
 export function buildArtifactDecisionOptions(kind: ArtifactDecisionRequest['kind']): ArtifactDecisionRequest['options'] {
   switch (kind) {

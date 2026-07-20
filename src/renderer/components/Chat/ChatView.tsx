@@ -1450,6 +1450,7 @@ export function ChatView() {
           <div className="chat-artifact-decision__track">
             <ArtifactDecisionCard
               request={pendingArtifactDecision}
+              uiStatus={pendingArtifactDecision.uiStatus ?? 'active'}
               onRespond={(choice) => pendingArtifactDecisionStore.respond(pendingArtifactDecision, choice)}
               onCancel={() => pendingArtifactDecisionStore.cancel(pendingArtifactDecision)}
             />
