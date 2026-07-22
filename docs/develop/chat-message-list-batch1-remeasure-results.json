@@ -1,0 +1,74 @@
+{
+  "collectedAt": "2026-07-22T16:53:43.064Z",
+  "environment": "vitest+jsdom+React.Profiler",
+  "note": "commit 时长来自 React Profiler actualDuration；Long Task 以单次 commit >50ms 近似。非浏览器 Performance 面板，但可在本机复现对比。",
+  "machine": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.4.0",
+    "cpu": "Apple M2",
+    "memoryGb": 16,
+    "os": "macOS 26.5.2"
+  },
+  "scenarios": {
+    "small": {
+      "messageCount": 20,
+      "mountMs": 17.312415999999985,
+      "domNodes": 201,
+      "heapUsedMb": 4.8334503173828125,
+      "streamCommits": {
+        "count": 100,
+        "p50": 0.14575000000036198,
+        "p95": 0.22070600000051854,
+        "max": 1.4025429999992411,
+        "longTaskCount": 0,
+        "longTaskShare": 0
+      },
+      "mountCommits": {
+        "count": 1,
+        "p50": 12.793664999998782,
+        "p95": 12.793664999998782,
+        "max": 12.793664999998782,
+        "longTaskCount": 0,
+        "longTaskShare": 0
+      }
+    },
+    "large": {
+      "messageCount": 500,
+      "mountMs": 180.58375,
+      "domNodes": 4682,
+      "heapUsedMb": 75.544189453125,
+      "streamCommits": {
+        "count": 100,
+        "p50": 0.9867850000014187,
+        "p95": 1.2886520000045039,
+        "max": 2.337581999997383,
+        "longTaskCount": 0,
+        "longTaskShare": 0
+      },
+      "mountCommits": {
+        "count": 1,
+        "p50": 144.9153359999816,
+        "p95": 144.9153359999816,
+        "max": 144.9153359999816,
+        "longTaskCount": 1,
+        "longTaskShare": 1
+      }
+    }
+  },
+  "ratios": {
+    "mountMs": 10.430880935393429,
+    "domNodes": 23.29353233830846,
+    "streamCommitP95": 5.838771940959812
+  },
+  "gate": {
+    "triggersBatch2": {
+      "streamCommitP95Over8ms": false,
+      "longTasksCommon": false,
+      "interactiveOver2x": true,
+      "domLinearWithMessageCount": true
+    },
+    "decision": "enter-batch-2",
+    "rationale": "命中设计 §6.1 中至少一项：commit p95、长任务或首次可交互相对 20 条超过 2×。"
+  }
+}

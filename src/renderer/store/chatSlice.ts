@@ -1,6 +1,13 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { Message } from '../../shared/domainTypes'
+import type { DisplayMessageEntry, DisplayOrder } from '../../shared/displayOrder'
 import type { SessionUsage } from '../../shared/sessionUsage'
+import {
+  ackDisplayEntryPersisted,
+  appendOptimisticDisplayEntry,
+  mergeDisplayEntries,
+  patchDisplayEntryMessage
+} from '../services/displayMessageMerge'
 
 export type ChatStatus = 'idle' | 'sending' | 'streaming' | 'completed' | 'error'
 
@@ -13,7 +20,14 @@ export type RunningSessionMeta = {
 export type LastUsage = SessionUsage | null
 
 interface ChatState {
+  /** @deprecated 由 displayEntries 派生；过渡期双写 */
   messages: Message[]
+  displayEntries: DisplayMessageEntry[]
+  oldestSequence: number | null
+  hasMoreBefore: boolean
+  loadingBefore: boolean
+  displayGeneration: number
+  nextOptimisticOrdinal: number
   currentSessionId: string | null
   chatStatus: ChatStatus
   error: string | null
@@ -27,8 +41,18 @@ interface ChatState {
   projectMemoryEnabled: boolean
 }
 
+function syncMessagesFromEntries(state: ChatState): void {
+  state.messages = state.displayEntries.map((e) => e.message)
+}
+
 const initialState: ChatState = {
   messages: [],
+  displayEntries: [],
+  oldestSequence: null,
+  hasMoreBefore: false,
+  loadingBefore: false,
+  displayGeneration: 0,
+  nextOptimisticOrdinal: 0,
   currentSessionId: null,
   chatStatus: 'idle',
   error: null,
@@ -62,16 +86,96 @@ export const chatSlice = createSlice({
     },
     setMessages(state, action: PayloadAction<Message[]>) {
       state.messages = action.payload
+      // 兼容旧路径：无 sequence 时用乐观序
+      state.displayEntries = action.payload.map((message, i) => ({
+        message,
+        order: { kind: 'optimistic' as const, ordinal: i }
+      }))
+      state.nextOptimisticOrdinal = action.payload.length
+      state.oldestSequence = null
+      state.hasMoreBefore = false
+    },
+    setDisplayPage(
+      state,
+      action: PayloadAction<{
+        entries: Array<{ message: Message; sequence: number }>
+        oldestSequence: number | null
+        hasMoreBefore: boolean
+        generation: number
+      }>
+    ) {
+      const { entries, oldestSequence, hasMoreBefore, generation } = action.payload
+      state.displayGeneration = generation
+      state.displayEntries = mergeDisplayEntries([], entries)
+      state.oldestSequence = oldestSequence
+      state.hasMoreBefore = hasMoreBefore
+      state.loadingBefore = false
+      state.nextOptimisticOrdinal = 0
+      syncMessagesFromEntries(state)
+    },
+    prependDisplayPage(
+      state,
+      action: PayloadAction<{
+        entries: Array<{ message: Message; sequence: number }>
+        oldestSequence: number | null
+        hasMoreBefore: boolean
+        generation: number
+      }>
+    ) {
+      if (action.payload.generation !== state.displayGeneration) return
+      state.displayEntries = mergeDisplayEntries(state.displayEntries, action.payload.entries)
+      state.oldestSequence = action.payload.oldestSequence
+      state.hasMoreBefore = action.payload.hasMoreBefore
+      state.loadingBefore = false
+      syncMessagesFromEntries(state)
+    },
+    setLoadingBefore(state, action: PayloadAction<boolean>) {
+      state.loadingBefore = action.payload
     },
     addMessage(state, action: PayloadAction<Message>) {
-      state.messages.push(action.payload)
+      const ordinal = state.nextOptimisticOrdinal++
+      state.displayEntries = appendOptimisticDisplayEntry(state.displayEntries, action.payload, ordinal)
+      syncMessagesFromEntries(state)
+    },
+    ackDisplayMessagePersisted(
+      state,
+      action: PayloadAction<{ messageId: string; sequence: number }>
+    ) {
+      state.displayEntries = ackDisplayEntryPersisted(
+        state.displayEntries,
+        action.payload.messageId,
+        action.payload.sequence
+      )
+      syncMessagesFromEntries(state)
+    },
+    patchDisplayMessage(
+      state,
+      action: PayloadAction<{ id: string; patch: Partial<Message>; order?: DisplayOrder }>
+    ) {
+      let next = patchDisplayEntryMessage(state.displayEntries, action.payload.id, action.payload.patch)
+      if (action.payload.order) {
+        next = next.map((e) =>
+          e.message.id === action.payload.id ? { ...e, order: action.payload.order! } : e
+        )
+      }
+      state.displayEntries = next
+      syncMessagesFromEntries(state)
+    },
+    removeDisplayMessage(state, action: PayloadAction<string>) {
+      state.displayEntries = state.displayEntries.filter((e) => e.message.id !== action.payload)
+      syncMessagesFromEntries(state)
     },
     patchMessage(state, action: PayloadAction<{ id: string; patch: Partial<Message> }>) {
-      const m = state.messages.find((x) => x.id === action.payload.id)
-      if (m) Object.assign(m, action.payload.patch)
+      state.displayEntries = patchDisplayEntryMessage(
+        state.displayEntries,
+        action.payload.id,
+        action.payload.patch
+      )
+      syncMessagesFromEntries(state)
     },
     removeMessage(state, action: PayloadAction<string>) {
-      state.messages = state.messages.filter((m) => m.id !== action.payload)
+      state.displayEntries = state.displayEntries.filter((m) => m.message.id !== action.payload)
+      syncMessagesFromEntries(state)
     },
     setChatStatus(
       state,
@@ -106,6 +210,12 @@ export const chatSlice = createSlice({
     },
     resetChatUi(state) {
       state.messages = []
+      state.displayEntries = []
+      state.oldestSequence = null
+      state.hasMoreBefore = false
+      state.loadingBefore = false
+      state.displayGeneration = 0
+      state.nextOptimisticOrdinal = 0
       state.chatStatus = 'idle'
       state.error = null
       state.runningSessions = {}
@@ -123,7 +233,13 @@ export const chatSlice = createSlice({
 export const {
   setSession,
   setMessages,
+  setDisplayPage,
+  prependDisplayPage,
+  setLoadingBefore,
   addMessage,
+  ackDisplayMessagePersisted,
+  patchDisplayMessage,
+  removeDisplayMessage,
   patchMessage,
   removeMessage,
   setChatStatus,
