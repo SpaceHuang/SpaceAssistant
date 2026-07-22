@@ -7,7 +7,16 @@ export type { AppDatabase } from './sqliteStore'
 export type { StoredMessage } from './types'
 export { openSqliteDatabase, getDbConnection, runInTransaction } from './sqliteStore'
 
-export type { MessagesPage } from './operations'
+export type {
+  MessagesPage,
+  ApiContextBaselineResult,
+  ChatMessagePage,
+  QueuedMessageEntry,
+  RetryContextTarget,
+  PersistedMessageEntry,
+  ContextHistoryDbBaseline,
+  SearchCorpusPage
+} from './operations'
 export {
   appendMessage,
   appendSearchHistory,
@@ -17,14 +26,21 @@ export {
   deleteSession,
   deleteSessionUsage,
   getAllSessionUsages,
+  getApiContextBaseline,
+  getChatMessagePage,
+  getContextHistorySummaryBaseline,
+  getSearchCorpusPage,
   getConfigValue,
+  getMessageSequence,
   getMessages,
   getMessagesPage,
+  getNextQueuedMessage,
   getSession,
   getSessionUsage,
   listSearchHistory,
   listSessions,
   listSessionsMissingWorkDirProfile,
+  resolveRetryContext,
   searchMessages,
   setConfigValue,
   setSessionUsage,

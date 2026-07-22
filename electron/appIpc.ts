@@ -11,13 +11,20 @@ import {
   deleteQueuedUserMessage,
   deleteSession,
   deleteSessionUsage,
+  getApiContextBaseline,
+  getChatMessagePage,
+  getContextHistorySummaryBaseline,
+  getSearchCorpusPage,
   getConfigValue,
+  getMessageSequence,
   getMessages,
   getMessagesPage,
+  getNextQueuedMessage,
   getSession,
   getSessionUsage,
   listSearchHistory,
   listSessions,
+  resolveRetryContext,
   searchMessages,
   setConfigValue,
   deleteConfigValue,
@@ -686,11 +693,56 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   )
 
   ipcMain.handle(
+    'chat:get-api-context-baseline',
+    (_e, payload: { sessionId: string }) => getApiContextBaseline(ctx.db, payload.sessionId)
+  )
+
+  ipcMain.handle(
+    'chat:get-message-page',
+    (
+      _e,
+      payload: { sessionId: string; beforeSequence?: number; limit?: number }
+    ) =>
+      getChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
+  )
+
+  ipcMain.handle(
+    'chat:get-context-history-summary-baseline',
+    (_e, payload: { sessionId: string }) =>
+      getContextHistorySummaryBaseline(ctx.db, payload.sessionId)
+  )
+
+  ipcMain.handle(
+    'chat:get-search-corpus-page',
+    (
+      _e,
+      payload: { sessionId: string; fromSequence?: number; limit?: number }
+    ) =>
+      getSearchCorpusPage(ctx.db, payload.sessionId, payload.fromSequence ?? 0, payload.limit)
+  )
+
+  ipcMain.handle('chat:get-next-queued-message', (_e, payload: { sessionId: string }) =>
+    getNextQueuedMessage(ctx.db, payload.sessionId)
+  )
+
+  ipcMain.handle(
+    'chat:resolve-retry-context',
+    (_e, payload: { sessionId: string; failedAssistantMessageId: string }) =>
+      resolveRetryContext(ctx.db, payload.sessionId, payload.failedAssistantMessageId)
+  )
+
+  ipcMain.handle(
+    'chat:get-message-sequence',
+    (_e, payload: { sessionId: string; messageId: string }) =>
+      getMessageSequence(ctx.db, payload.sessionId, payload.messageId)
+  )
+
+  ipcMain.handle(
     'chat:append-message',
-    async (_e, msg: Message): Promise<Message> => {
-      const m = appendMessage(ctx.db, msg)
-      scheduleBackup(ctx, m.sessionId)
-      return m
+    async (_e, msg: Message): Promise<{ messageId: string; sequence: number }> => {
+      const { message, sequence } = appendMessage(ctx.db, msg)
+      scheduleBackup(ctx, message.sessionId)
+      return { messageId: message.id, sequence }
     }
   )
 
@@ -712,9 +764,11 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           | 'imagesDeliveredToApi'
         >
       >
-    } & { sessionId: string }) => {
-      updateMessageContent(ctx.db, payload.messageId, payload.patch)
+    } & { sessionId: string }): Promise<{ message: Message; sequence: number } | null> => {
+      const entry = updateMessageContent(ctx.db, payload.messageId, payload.patch)
+      if (!entry) return null
       await backupAfterMessagePatch(ctx, payload.sessionId, payload.patch)
+      return entry
     }
   )
 

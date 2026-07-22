@@ -237,7 +237,47 @@ export type SpaceAssistantApi = {
   usageDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
-  chatAppendMessage: (msg: Message) => Promise<Message>
+  chatGetApiContextBaseline: (payload: {
+    sessionId: string
+  }) => Promise<import('./displayOrder').ApiContextBaseline>
+  chatGetMessagePage: (payload: {
+    sessionId: string
+    beforeSequence?: number
+    limit?: number
+  }) => Promise<import('./displayOrder').ChatMessagePage>
+  chatGetContextHistorySummaryBaseline: (payload: {
+    sessionId: string
+  }) => Promise<{
+    sessionId: string
+    entries: Array<{
+      messageId: string
+      role: Message['role']
+      imageTokens: number
+      thinkingTokens: number
+      sequence: number
+    }>
+  }>
+  chatGetSearchCorpusPage: (payload: {
+    sessionId: string
+    fromSequence?: number
+    limit?: number
+  }) => Promise<{
+    entries: Array<{ message: Message; sequence: number }>
+    nextSequence: number
+    hasMore: boolean
+  }>
+  chatGetNextQueuedMessage: (payload: {
+    sessionId: string
+  }) => Promise<import('./displayOrder').QueuedMessageEntry | null>
+  chatResolveRetryContext: (payload: {
+    sessionId: string
+    failedAssistantMessageId: string
+  }) => Promise<import('./displayOrder').RetryContextTarget | null>
+  chatGetMessageSequence: (payload: {
+    sessionId: string
+    messageId: string
+  }) => Promise<number | null>
+  chatAppendMessage: (msg: Message) => Promise<import('./displayOrder').PersistedMessageAck>
   chatPatchMessage: (payload: {
     messageId: string
     sessionId: string
@@ -255,7 +295,7 @@ export type SpaceAssistantApi = {
         | 'imagesDeliveredToApi'
       >
     >
-  }) => Promise<void>
+  }) => Promise<{ message: Message; sequence: number } | null>
   chatDeleteQueuedMessage: (payload: {
     messageId: string
     sessionId: string

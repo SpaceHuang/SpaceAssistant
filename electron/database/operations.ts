@@ -19,6 +19,11 @@ import {
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { ARTIFACT_MANAGEMENT_ENABLED_KEY, freezeArtifactManagementFlag } from '../artifacts/featureFlag'
 import { sanitizeArtifactSessionMetadataOnSave } from '../artifacts/legacyMigration'
+import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
+import {
+  estimateThinkingTokensFromMessage,
+  estimateTokensFromHistoryImages
+} from '../../src/shared/contextUsageEstimate'
 
 type SessionRow = {
   id: string
@@ -360,7 +365,10 @@ export function getMessagesPage(
   }
 }
 
-export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }): Message {
+export function appendMessage(
+  db: AppDatabase,
+  msg: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
+): { message: Message; sequence: number } {
   const conn = getDbConnection(db)
   const seqRow = conn
     .prepare('SELECT COALESCE(MAX(sequence), -1) AS maxSeq FROM messages WHERE session_id = ?')
@@ -409,7 +417,242 @@ export function appendMessage(db: AppDatabase, msg: Omit<Message, 'schemaVersion
     preview: full.content.slice(0, 120),
     messageCount: countRow.c
   })
-  return full
+  return { message: full, sequence: maxSeq }
+}
+
+export type ApiContextBaselineRow = {
+  message: Message
+  sequence: number
+}
+
+export type ApiContextBaselineResult = {
+  sessionId: string
+  entries: ApiContextBaselineRow[]
+}
+
+/** API 上下文 DB 基线：最早 500 条（sequence ASC），逐条携带 sequence。 */
+export function getApiContextBaseline(db: AppDatabase, sessionId: string, limit = 500): ApiContextBaselineResult {
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare(
+      `SELECT * FROM messages
+       WHERE session_id = ?
+       ORDER BY sequence ASC
+       LIMIT ?`
+    )
+    .all(sessionId, limit) as MessageRow[]
+  return {
+    sessionId,
+    entries: rows.map((row) => ({
+      message: rowToStoredMessage(row),
+      sequence: row.sequence
+    }))
+  }
+}
+
+export type ChatMessagePageEntry = {
+  message: Message
+  sequence: number
+}
+
+export type ChatMessagePage = {
+  entries: ChatMessagePageEntry[]
+  oldestSequence: number | null
+  hasMoreBefore: boolean
+}
+
+/**
+ * UI 最新页：按 sequence DESC 取 limit(+1 探测)，再反转为 ASC。
+ * `beforeSequence` 为排他上界；缺省表示从最新消息开始。
+ */
+export function getChatMessagePage(
+  db: AppDatabase,
+  sessionId: string,
+  beforeSequence: number | null | undefined,
+  limitInput?: number
+): ChatMessagePage {
+  const limit = Math.min(100, Math.max(20, limitInput ?? 60))
+  const conn = getDbConnection(db)
+  const rows = (
+    beforeSequence == null
+      ? conn
+          .prepare(
+            `SELECT * FROM messages
+             WHERE session_id = ?
+             ORDER BY sequence DESC
+             LIMIT ?`
+          )
+          .all(sessionId, limit + 1)
+      : conn
+          .prepare(
+            `SELECT * FROM messages
+             WHERE session_id = ? AND sequence < ?
+             ORDER BY sequence DESC
+             LIMIT ?`
+          )
+          .all(sessionId, beforeSequence, limit + 1)
+  ) as MessageRow[]
+
+  const hasMoreBefore = rows.length > limit
+  const pageRows = hasMoreBefore ? rows.slice(0, limit) : rows
+  const asc = [...pageRows].reverse()
+  return {
+    entries: asc.map((row) => ({
+      message: rowToStoredMessage(row),
+      sequence: row.sequence
+    })),
+    oldestSequence: asc.length > 0 ? asc[0]!.sequence : null,
+    hasMoreBefore
+  }
+}
+
+export type ContextHistoryDbRow = {
+  messageId: string
+  role: Message['role']
+  imageTokens: number
+  thinkingTokens: number
+  sequence: number
+}
+
+export type ContextHistoryDbBaseline = {
+  sessionId: string
+  entries: ContextHistoryDbRow[]
+}
+
+/**
+ * 上下文环 DB 基线：扫描全会话，仅返回 imageTokens>0 或 thinkingTokens>0 的轻量行。
+ * 不得复用 API context「最早 500 条」范围。
+ */
+export function getContextHistorySummaryBaseline(
+  db: AppDatabase,
+  sessionId: string
+): ContextHistoryDbBaseline {
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare(
+      `SELECT * FROM messages
+       WHERE session_id = ?
+       ORDER BY sequence ASC`
+    )
+    .all(sessionId) as MessageRow[]
+
+  const entries: ContextHistoryDbRow[] = []
+  for (const row of rows) {
+    const message = rowToStoredMessage(row)
+    const imageTokens = estimateTokensFromHistoryImages([message])
+    const thinkingTokens = estimateThinkingTokensFromMessage(message.thinking)
+    if (imageTokens <= 0 && thinkingTokens <= 0) continue
+    entries.push({
+      messageId: message.id,
+      role: message.role,
+      imageTokens,
+      thinkingTokens,
+      sequence: row.sequence
+    })
+  }
+  return { sessionId, entries }
+}
+
+export type SearchCorpusPage = {
+  entries: Array<{ message: Message; sequence: number }>
+  nextSequence: number
+  hasMore: boolean
+}
+
+/** 搜索语料 ASC 游标页：不受 UI 最新页 / API 500 限制。 */
+export function getSearchCorpusPage(
+  db: AppDatabase,
+  sessionId: string,
+  fromSequence: number,
+  limitInput?: number
+): SearchCorpusPage {
+  const limit = Math.min(500, Math.max(50, limitInput ?? 200))
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare(
+      `SELECT * FROM messages
+       WHERE session_id = ? AND sequence >= ?
+       ORDER BY sequence ASC
+       LIMIT ?`
+    )
+    .all(sessionId, fromSequence, limit + 1) as MessageRow[]
+  const hasMore = rows.length > limit
+  const pageRows = hasMore ? rows.slice(0, limit) : rows
+  return {
+    entries: pageRows.map((row) => ({
+      message: rowToStoredMessage(row),
+      sequence: row.sequence
+    })),
+    nextSequence:
+      pageRows.length > 0 ? pageRows[pageRows.length - 1]!.sequence + 1 : fromSequence,
+    hasMore
+  }
+}
+
+export type QueuedMessageEntry = {
+  message: Message
+  sequence: number
+}
+
+export function getNextQueuedMessage(db: AppDatabase, sessionId: string): QueuedMessageEntry | null {
+  const conn = getDbConnection(db)
+  const row = conn
+    .prepare(
+      `SELECT * FROM messages
+       WHERE session_id = ? AND status = 'queued' AND role = 'user'
+       ORDER BY sequence ASC
+       LIMIT 1`
+    )
+    .get(sessionId) as MessageRow | undefined
+  if (!row) return null
+  return { message: rowToStoredMessage(row), sequence: row.sequence }
+}
+
+export type RetryContextTarget = {
+  failedAssistant: { message: Message; sequence: number }
+  currentUser: { message: Message; sequence: number }
+}
+
+export function resolveRetryContext(
+  db: AppDatabase,
+  sessionId: string,
+  failedAssistantMessageId: string
+): RetryContextTarget | null {
+  const conn = getDbConnection(db)
+  const failedRow = conn
+    .prepare(`SELECT * FROM messages WHERE session_id = ? AND id = ?`)
+    .get(sessionId, failedAssistantMessageId) as MessageRow | undefined
+  if (!failedRow) return null
+  const failedMessage = rowToStoredMessage(failedRow)
+  if (failedMessage.role !== 'assistant' || failedMessage.status !== 'failed') return null
+
+  const priorRows = conn
+    .prepare(
+      `SELECT * FROM messages
+       WHERE session_id = ? AND sequence < ?
+       ORDER BY sequence DESC`
+    )
+    .all(sessionId, failedRow.sequence) as MessageRow[]
+
+  for (const row of priorRows) {
+    const message = rowToStoredMessage(row)
+    if (!isMessageEligibleForChatApi(message)) continue
+    if (message.role !== 'user') continue
+    if (!message.content.trim()) continue
+    return {
+      failedAssistant: { message: failedMessage, sequence: failedRow.sequence },
+      currentUser: { message, sequence: row.sequence }
+    }
+  }
+  return null
+}
+
+export function getMessageSequence(db: AppDatabase, sessionId: string, messageId: string): number | null {
+  const conn = getDbConnection(db)
+  const row = conn
+    .prepare(`SELECT sequence FROM messages WHERE session_id = ? AND id = ?`)
+    .get(sessionId, messageId) as { sequence: number } | undefined
+  return row?.sequence ?? null
 }
 
 export function deleteQueuedUserMessage(
@@ -438,6 +681,11 @@ export function deleteQueuedUserMessage(
   return { ok: true, sessionId }
 }
 
+export type PersistedMessageEntry = {
+  message: Message
+  sequence: number
+}
+
 export function updateMessageContent(
   db: AppDatabase,
   messageId: string,
@@ -455,10 +703,10 @@ export function updateMessageContent(
       | 'imagesDeliveredToApi'
     >
   >
-): void {
+): PersistedMessageEntry | null {
   const conn = getDbConnection(db)
   const row = conn.prepare('SELECT * FROM messages WHERE id = ?').get(messageId) as MessageRow | undefined
-  if (!row) return
+  if (!row) return null
 
   const content = patch.content ?? row.content
   const status = patch.status ?? (row.status as MessageStatus)
@@ -505,6 +753,8 @@ export function updateMessageContent(
       imagesDeliveredToApi
     })
   db.save()
+  const updated = conn.prepare('SELECT * FROM messages WHERE id = ?').get(messageId) as MessageRow
+  return { message: rowToStoredMessage(updated), sequence: updated.sequence }
 }
 
 export function getConfigValue(db: AppDatabase, key: string): string | undefined {

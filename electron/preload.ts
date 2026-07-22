@@ -41,6 +41,14 @@ const api: SpaceAssistantApi = {
   usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),
 
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
+  chatGetApiContextBaseline: (payload) => ipcRenderer.invoke('chat:get-api-context-baseline', payload),
+  chatGetMessagePage: (payload) => ipcRenderer.invoke('chat:get-message-page', payload),
+  chatGetContextHistorySummaryBaseline: (payload) =>
+    ipcRenderer.invoke('chat:get-context-history-summary-baseline', payload),
+  chatGetSearchCorpusPage: (payload) => ipcRenderer.invoke('chat:get-search-corpus-page', payload),
+  chatGetNextQueuedMessage: (payload) => ipcRenderer.invoke('chat:get-next-queued-message', payload),
+  chatResolveRetryContext: (payload) => ipcRenderer.invoke('chat:resolve-retry-context', payload),
+  chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
   chatAppendMessage: (msg) => ipcRenderer.invoke('chat:append-message', msg),
   chatPatchMessage: (payload) => ipcRenderer.invoke('chat:patch-message', payload),
   chatDeleteQueuedMessage: (payload: { messageId: string; sessionId: string }) =>
