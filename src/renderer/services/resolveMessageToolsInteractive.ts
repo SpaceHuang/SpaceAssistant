@@ -1,10 +1,17 @@
 import type { FileConfirmMode, Message } from '../../shared/domainTypes'
-import type { ToolConfirmOptions } from '../../shared/toolConfirm'
 import type { PendingConfirmItem } from './pendingConfirmStore'
-import type { ToolsInteractiveProps } from '../components/Chat/ChatBubble'
+
+export type ToolsInteractiveScalars = {
+  requestId: string
+  confirmMode: FileConfirmMode
+}
 
 export function messageHasConfirmingTool(message: Message | undefined): boolean {
   return Boolean(message?.toolCalls?.some((tc) => tc.status === 'confirming'))
+}
+
+export function messageHasExecutingTool(message: Message | undefined): boolean {
+  return Boolean(message?.toolCalls?.some((tc) => tc.status === 'executing'))
 }
 
 export function resolveRequestIdForConfirmingMessage(args: {
@@ -35,6 +42,10 @@ export function resolveRequestIdForConfirmingMessage(args: {
   return null
 }
 
+/**
+ * 返回工具交互标量（无回调）。confirm/cancel 由 ChatMessageActions 提供。
+ * confirming 或（当前流式助手上的）executing 消息可获得标量。
+ */
 export function resolveMessageToolsInteractive(args: {
   message: Message
   sessionId: string | null
@@ -43,9 +54,7 @@ export function resolveMessageToolsInteractive(args: {
   pendingItems: PendingConfirmItem[]
   streamingAssistantId?: string
   streamingRequestId?: string | null
-  onToolConfirm: (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => void
-  onToolCancel: (toolUseId: string) => void
-}): ToolsInteractiveProps | undefined {
+}): ToolsInteractiveScalars | undefined {
   const {
     message,
     sessionId,
@@ -53,26 +62,30 @@ export function resolveMessageToolsInteractive(args: {
     confirmMode,
     pendingItems,
     streamingAssistantId,
-    streamingRequestId,
-    onToolConfirm,
-    onToolCancel
+    streamingRequestId
   } = args
 
-  if (!sessionId || !toolsEnabled || !messageHasConfirmingTool(message)) return undefined
+  if (!sessionId || !toolsEnabled) return undefined
 
-  const requestId = resolveRequestIdForConfirmingMessage({
-    sessionId,
-    message,
-    pendingItems,
-    streamingAssistantId,
-    streamingRequestId
-  })
-  if (!requestId) return undefined
-
-  return {
-    requestId,
-    confirmMode,
-    onToolConfirm,
-    onToolCancel
+  if (messageHasConfirmingTool(message)) {
+    const requestId = resolveRequestIdForConfirmingMessage({
+      sessionId,
+      message,
+      pendingItems,
+      streamingAssistantId,
+      streamingRequestId
+    })
+    if (!requestId) return undefined
+    return { requestId, confirmMode }
   }
+
+  if (
+    messageHasExecutingTool(message) &&
+    streamingRequestId &&
+    message.id === streamingAssistantId
+  ) {
+    return { requestId: streamingRequestId, confirmMode }
+  }
+
+  return undefined
 }

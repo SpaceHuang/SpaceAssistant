@@ -12,6 +12,11 @@ import {
   unregisterRunRequestsForSession,
   resolveSessionIdForRequest
 } from './runRequestIndex'
+import {
+  getApiContextOverlaySnapshot,
+  routeAddApiContextMessageOptimistic,
+  routePatchApiContextMessage
+} from './apiContextService'
 
 /** @deprecated 使用 getMaxParallelChatSessions()；保留常量供测试/默认值引用 */
 export const MAX_PARALLEL_CHAT_SESSIONS = DEFAULT_MAX_PARALLEL_CHAT_SESSIONS
@@ -43,10 +48,13 @@ function persistKey(sessionId: string, messageId: string): string {
   return `${sessionId}:${messageId}`
 }
 
-/**
- * 将 DB 历史与内存中的 live 快照合并（同 id 以 live 为准），按时间戳排序。
- */
+/** @deprecated timestamp 合并；展示/API 路径禁止使用。保留给测试兼容。 */
 export function mergeDbAndLive(db: Message[], live?: Message[] | null): Message[] {
+  return mergeMessagesByTimestamp(db, live)
+}
+
+/** timestamp 语义合并（非 DisplayOrder）。 */
+export function mergeMessagesByTimestamp(db: Message[], live?: Message[] | null): Message[] {
   if (!live?.length) return db
   const map = new Map<string, Message>()
   for (const m of db) map.set(m.id, m)
@@ -85,7 +93,7 @@ export async function resolveSessionMessagesForApi(sessionId: string): Promise<M
   return mergeDbAndLive(mergeDbAndLive(dbRows, fromStore), live)
 }
 
-/** 追加 live 快照；仅当用户正在查看该会话时同步 Redux */
+/** 追加 live 快照；仅当用户正在查看该会话时同步 Redux；同步 API overlay。 */
 export function routeAddMessage(sessionId: string, message: Message): void {
   const arr = ensureLiveSession(sessionId)
   arr.push({
@@ -97,6 +105,8 @@ export function routeAddMessage(sessionId: string, message: Message): void {
   if (store.getState().chat.currentSessionId === sessionId) {
     store.dispatch(addMessage(message))
   }
+  const existing = getApiContextOverlaySnapshot(sessionId).find((e) => e.message.id === message.id)
+  if (!existing) routeAddApiContextMessageOptimistic(message)
 }
 
 export function registerToolChatController(requestId: string, controller: ToolChatController): void {
@@ -175,15 +185,25 @@ function scheduleUiFlush(sessionId: string, messageId: string): void {
   uiFlushRafIds.set(key, rafId)
 }
 
-/** 更新 live；若当前正在查看该会话，则同步到 Redux messages */
+/** 更新 live；若当前正在查看该会话，则同步到 Redux messages；同步 API overlay。 */
 export function routePatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
   patchLiveMessage(sessionId, messageId, patch)
   dispatchPatchToRedux(sessionId, messageId, patch)
+  try {
+    routePatchApiContextMessage(sessionId, messageId, patch)
+  } catch {
+    // overlay 可能尚未建立（历史消息仅存在于 DB）；忽略
+  }
 }
 
-/** 流式增量：live 立即更新，Redux rAF 合并，DB 2s 节流 */
+/** 流式增量：live 立即更新，Redux rAF 合并，DB 2s 节流；同步 API overlay。 */
 export function routeStreamPatchMessage(sessionId: string, messageId: string, patch: Partial<Message>): void {
   patchLiveMessage(sessionId, messageId, patch)
+  try {
+    routePatchApiContextMessage(sessionId, messageId, patch)
+  } catch {
+    // ignore
+  }
   const key = persistKey(sessionId, messageId)
   const prev = pendingUiPatches.get(key) ?? {}
   pendingUiPatches.set(key, { ...prev, ...patch })
@@ -214,7 +234,15 @@ function scheduleThrottledPersist(sessionId: string, messageId: string, patch: P
   persistTimers.set(key, timer)
 }
 
+export function hasPendingPersistPatch(sessionId: string, messageId: string): boolean {
+  return persistPendingPatch.has(persistKey(sessionId, messageId))
+}
+
 export function flushStreamPersist(sessionId: string, messageId: string): void {
+  void flushStreamPersistAndWait(sessionId, messageId)
+}
+
+export async function flushStreamPersistAndWait(sessionId: string, messageId: string): Promise<void> {
   const key = persistKey(sessionId, messageId)
   const timer = persistTimers.get(key)
   if (timer) clearTimeout(timer)
@@ -222,7 +250,7 @@ export function flushStreamPersist(sessionId: string, messageId: string): void {
   const merged = persistPendingPatch.get(key)
   persistPendingPatch.delete(key)
   if (merged) {
-    void window.api.chatPatchMessage({ messageId, sessionId, patch: merged })
+    await window.api.chatPatchMessage({ messageId, sessionId, patch: merged })
   }
 }
 
@@ -260,7 +288,9 @@ export function registerSessionRun(sessionId: string, requestId: string): void {
 export function finishSessionRun(sessionId: string, requestId: string, assistantMessageId?: string): void {
   if (assistantMessageId) {
     flushUiPatch(sessionId, assistantMessageId)
-    flushStreamPersist(sessionId, assistantMessageId)
+    void (async () => {
+      await flushStreamPersistAndWait(sessionId, assistantMessageId)
+    })()
   }
   unregisterToolChatController(requestId)
   pendingConfirmStore.removeAllForRequest(requestId)

@@ -12,8 +12,10 @@ vi.mock('shiki', () => ({
 }))
 
 describe('shikiHighlighter', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     codeToHtml.mockClear()
+    const { clearHighlightCacheForTest } = await import('./shikiHighlighter')
+    clearHighlightCacheForTest()
   })
 
   it('strips inline pre styles from shiki output', async () => {
@@ -42,5 +44,41 @@ describe('shikiHighlighter', () => {
     const { highlightCode } = await import('./shikiHighlighter')
     await highlightCode('x', 'plaintext', 'light')
     expect(codeToHtml).toHaveBeenCalledWith('x', expect.objectContaining({ theme: 'light-plus' }))
+  })
+
+  it('keeps entry count within MAX_HIGHLIGHT_CACHE_ENTRIES after many unique blocks', async () => {
+    const {
+      highlightCode,
+      getHighlightCacheStats,
+      MAX_HIGHLIGHT_CACHE_ENTRIES
+    } = await import('./shikiHighlighter')
+
+    for (let i = 0; i < 1000; i++) {
+      await highlightCode(`const n = ${i}`, 'typescript')
+    }
+    const stats = getHighlightCacheStats()
+    expect(stats.entries).toBeLessThanOrEqual(MAX_HIGHLIGHT_CACHE_ENTRIES)
+    expect(stats.entries).toBeGreaterThan(0)
+  })
+
+  it('does not cache oversized code blocks but still returns highlight', async () => {
+    const {
+      highlightCode,
+      getHighlightCacheStats,
+      MAX_CACHEABLE_CODE_BYTES
+    } = await import('./shikiHighlighter')
+
+    const huge = 'x'.repeat(MAX_CACHEABLE_CODE_BYTES / 2 + 1)
+    const html = await highlightCode(huge, 'plaintext')
+    expect(html).toContain('plaintext')
+    expect(getHighlightCacheStats().entries).toBe(0)
+  })
+
+  it('reuses cached highlight without calling shiki again', async () => {
+    const { highlightCode } = await import('./shikiHighlighter')
+    await highlightCode('same', 'plaintext')
+    const calls = codeToHtml.mock.calls.length
+    await highlightCode('same', 'plaintext')
+    expect(codeToHtml.mock.calls.length).toBe(calls)
   })
 })

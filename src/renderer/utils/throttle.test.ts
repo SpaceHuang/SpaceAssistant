@@ -20,4 +20,13 @@ describe('throttle', () => {
     vi.advanceTimersByTime(100)
     expect(fn).toHaveBeenCalledTimes(1)
   })
+
+  it('cancel prevents pending trailing call', () => {
+    const fn = vi.fn()
+    const t = throttle(fn, 100)
+    t()
+    t.cancel()
+    vi.advanceTimersByTime(100)
+    expect(fn).not.toHaveBeenCalled()
+  })
 })

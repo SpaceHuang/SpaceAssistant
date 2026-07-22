@@ -43,3 +43,10 @@ export function formatShellStderrDisplay(stderr: string, exitCode?: number | nul
   const tag = `退出码 ${exitCode}`
   return err.trim() ? `${tag}\n${err}` : tag
 }
+
+/** shell/script 完成结果的可见文本投影，搜索索引与 plain 输出共用。 */
+export function projectShellOutput(stdout: string, stderr: string, exitCode?: number | null): string {
+  const out = normalizeTerminalOutput(stdout)
+  const err = formatShellStderrDisplay(stderr, exitCode)
+  return [out, err].filter((part) => part.length > 0).join('\n')
+}

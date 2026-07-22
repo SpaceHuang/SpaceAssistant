@@ -1,4 +1,6 @@
 import type { RefObject } from 'react'
+import type { Message } from '../../../shared/domainTypes'
+import type { DisplayMessageEntry } from '../../../shared/displayOrder'
 import { useChatSearchAdapter } from '../../services/chatSearchAdapter'
 import { useFileMarkdownSearchAdapter } from '../../services/fileMarkdownSearchAdapter'
 
@@ -14,11 +16,19 @@ export function FileMarkdownSearchDriver({
 
 export function ChatSearchDriver({
   containerRef,
-  messageCount
+  sessionId,
+  messages,
+  displayEntries
 }: {
   containerRef: RefObject<HTMLElement | null>
-  messageCount: number
+  sessionId?: string | null
+  messages: Message[]
+  displayEntries?: DisplayMessageEntry[]
 }) {
-  useChatSearchAdapter(containerRef, messageCount)
+  useChatSearchAdapter(containerRef, {
+    sessionId,
+    messages,
+    displayEntries: displayEntries ?? []
+  })
   return null
 }

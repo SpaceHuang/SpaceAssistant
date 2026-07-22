@@ -17,6 +17,7 @@ import {
   getSearchRegexError,
   type SearchOptions
 } from '../DetailPanel/searchUtils'
+import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
 
 export type ActivePanel = 'chat' | 'file-markdown' | 'file-source' | 'unsupported'
 
@@ -47,9 +48,11 @@ type SearchContextValue = {
   setSearchResults: (results: SearchResults) => void
   setUpdating: (updating: boolean) => void
   registerClearHighlights: (fn: (() => void) | null) => void
+  setActiveTarget: (target: ChatSearchActiveTarget | null) => void
 }
 
 const SearchContext = createContext<SearchContextValue | null>(null)
+const ChatSearchActiveTargetContext = createContext<ChatSearchActiveTarget | null>(null)
 
 function resolveActivePanel(input: {
   selectedFile: string | null
@@ -102,6 +105,7 @@ export function SearchProvider({ children }: { children: ReactNode }) {
   const [matchOverflow, setMatchOverflow] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [focusToken, setFocusToken] = useState(0)
+  const [activeTarget, setActiveTargetState] = useState<ChatSearchActiveTarget | null>(null)
   const clearHighlightsRef = useRef<(() => void) | null>(null)
 
   const { panel: activePanel, supported: panelSupported } = useMemo(
@@ -127,14 +131,32 @@ export function SearchProvider({ children }: { children: ReactNode }) {
     clearHighlightsRef.current?.()
   }, [])
 
+  const setActiveTarget = useCallback((target: ChatSearchActiveTarget | null) => {
+    setActiveTargetState((prev) => {
+      if (prev === target) return prev
+      if (
+        prev &&
+        target &&
+        prev.fragmentId === target.fragmentId &&
+        prev.start === target.start &&
+        prev.end === target.end &&
+        prev.messageId === target.messageId
+      ) {
+        return prev
+      }
+      return target
+    })
+  }, [])
+
   const close = useCallback(() => {
     clearHighlights()
+    setActiveTarget(null)
     setIsOpen(false)
     setMatchIndex(-1)
     setTotalMatches(0)
     setMatchOverflow(false)
     setIsUpdating(false)
-  }, [clearHighlights])
+  }, [clearHighlights, setActiveTarget])
 
   const open = useCallback(() => {
     const selection = window.getSelection()?.toString() ?? ''
@@ -190,12 +212,13 @@ export function SearchProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!panelSupported) {
       clearHighlights()
+      setActiveTarget(null)
       setMatchIndex(-1)
       setTotalMatches(0)
       setMatchOverflow(false)
       setIsUpdating(false)
     }
-  }, [panelSupported, activePanel, clearHighlights])
+  }, [panelSupported, activePanel, clearHighlights, setActiveTarget])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -246,7 +269,8 @@ export function SearchProvider({ children }: { children: ReactNode }) {
       goPrev,
       setSearchResults,
       setUpdating,
-      registerClearHighlights
+      registerClearHighlights,
+      setActiveTarget
     }),
     [
       isOpen,
@@ -269,11 +293,16 @@ export function SearchProvider({ children }: { children: ReactNode }) {
       goPrev,
       setSearchResults,
       setUpdating,
-      registerClearHighlights
+      registerClearHighlights,
+      setActiveTarget
     ]
   )
 
-  return <SearchContext.Provider value={value}>{children}</SearchContext.Provider>
+  return (
+    <ChatSearchActiveTargetContext.Provider value={activeTarget}>
+      <SearchContext.Provider value={value}>{children}</SearchContext.Provider>
+    </ChatSearchActiveTargetContext.Provider>
+  )
 }
 
 export function useSearch(): SearchContextValue {
@@ -282,4 +311,9 @@ export function useSearch(): SearchContextValue {
     throw new Error('useSearch must be used within SearchProvider')
   }
   return ctx
+}
+
+/** 仅订阅当前搜索目标，避免匹配计数变化导致整表重渲染。 */
+export function useChatSearchActiveTarget(): ChatSearchActiveTarget | null {
+  return useContext(ChatSearchActiveTargetContext)
 }

@@ -17,7 +17,7 @@ import {
   type ThinkingState
 } from '../../shared/thinkingSegments'
 import { store } from '../store'
-import { setChatStatus, setMessages } from '../store/chatSlice'
+import { setChatStatus, setDisplayPage } from '../store/chatSlice'
 import { upsertSession } from '../store/sessionSlice'
 import {
   clearLiveSession,
@@ -25,7 +25,6 @@ import {
   flushStreamPersist,
   flushUiPatch,
   getLiveMessages,
-  mergeDbAndLive,
   registerSessionRun,
   resetLiveSessionMessages,
   routePatchMessage,
@@ -51,10 +50,18 @@ function findAssistantRow(sessionId: string, assistantMessageId: string): Messag
 }
 
 async function syncSessionMessages(sessionId: string): Promise<Message[]> {
-  const rows = await window.api.chatGetMessages({ sessionId })
+  const page = await window.api.chatGetMessagePage({ sessionId, limit: 60 })
+  const rows = page.entries.map((e) => e.message)
   resetLiveSessionMessages(sessionId, rows)
   if (store.getState().chat.currentSessionId === sessionId) {
-    store.dispatch(setMessages(mergeDbAndLive(rows, getLiveMessages(sessionId))))
+    store.dispatch(
+      setDisplayPage({
+        entries: page.entries,
+        oldestSequence: page.oldestSequence,
+        hasMoreBefore: page.hasMoreBefore,
+        generation: store.getState().chat.displayGeneration + 1
+      })
+    )
   }
   return rows
 }

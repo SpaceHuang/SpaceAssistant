@@ -89,9 +89,7 @@ describe('resolveMessageToolsInteractive', () => {
     ).toBe('req-live')
   })
 
-  it('returns tools interactive props for confirming message', () => {
-    const onToolConfirm = () => {}
-    const onToolCancel = () => {}
+  it('returns tools interactive scalars for confirming message', () => {
     const interactive = resolveMessageToolsInteractive({
       message: confirmingMessage,
       sessionId: 'sess-1',
@@ -99,11 +97,35 @@ describe('resolveMessageToolsInteractive', () => {
       confirmMode: 'diff',
       pendingItems: [pendingItem],
       streamingAssistantId: 'msg-2',
-      streamingRequestId: null,
-      onToolConfirm,
-      onToolCancel
+      streamingRequestId: null
     })
-    expect(interactive?.requestId).toBe('req-pending')
-    expect(interactive?.onToolConfirm).toBe(onToolConfirm)
+    expect(interactive).toEqual({ requestId: 'req-pending', confirmMode: 'diff' })
+  })
+
+  it('returns scalars for executing tool on streaming assistant', () => {
+    const executing: Message = {
+      ...confirmingMessage,
+      id: 'msg-exec',
+      toolCalls: [
+        {
+          id: 'tool-2',
+          toolName: 'run_shell',
+          input: { command: 'ls' },
+          status: 'executing',
+          riskLevel: 'medium'
+        }
+      ]
+    }
+    expect(
+      resolveMessageToolsInteractive({
+        message: executing,
+        sessionId: 'sess-1',
+        toolsEnabled: true,
+        confirmMode: 'diff',
+        pendingItems: [],
+        streamingAssistantId: 'msg-exec',
+        streamingRequestId: 'req-live'
+      })
+    ).toEqual({ requestId: 'req-live', confirmMode: 'diff' })
   })
 })
