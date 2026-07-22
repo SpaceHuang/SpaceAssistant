@@ -2,7 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Tag } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
-import { patchMessage, removeMessage, restoreLastUsage, setChatStatus, setConfirmFocusToolUseId, setMessages, setScrollToMessageId, setSession } from '../../store/chatSlice'
+import {
+  ackDisplayMessagePersisted,
+  prependDisplayPage,
+  removeMessage,
+  restoreLastUsage,
+  setChatStatus,
+  setConfirmFocusToolUseId,
+  setDisplayPage,
+  setLoadingBefore,
+  setMessages,
+  setScrollToMessageId,
+  setSession
+} from '../../store/chatSlice'
 import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
@@ -10,23 +22,37 @@ import {
   countRunningSessions,
   finishSessionRun,
   flushStreamPersist,
+  flushStreamPersistAndWait,
   flushUiPatch,
   getLiveMessages,
   getToolChatController,
   initLiveSessionFromStore,
   getMaxParallelChatSessions,
-  mergeDbAndLive,
   abortSessionRun,
   registerSessionRun,
   registerToolChatController,
-  removeLiveMessage,
-  resolveSessionMessagesForApi,
   routeAddMessage,
   routePatchMessage,
   routeStreamPatchMessage,
   isSessionRunning,
   unregisterToolChatController
 } from '../../services/chatRunnerService'
+import { resolveSessionContextForApi, ackApiContextMessagePersisted } from '../../services/apiContextService'
+import {
+  commitMessageDelete,
+  commitMessagePatch,
+  prepareSendContext,
+  type SendContextIntent
+} from '../../services/messageMutationGateway'
+import {
+  applyContextSummaryDbBaseline,
+  beginContextSummarySession,
+  selectContextSummaryScalars
+} from '../../services/contextHistorySummaryService'
+import {
+  ensureDisplayContainsMessage,
+  loadPreviousDisplayPage
+} from '../../services/displayPageLoader'
 import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
 import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
@@ -79,7 +105,10 @@ import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRec
 import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
 import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
-import { ChatBubble } from './ChatBubble'
+import { ChatMessageList } from './ChatMessageList'
+import type { ChatMessageActions } from './ChatMessageActions'
+import { ChatMessageViewport, type ChatMessageViewportHandle } from './ChatMessageViewport'
+import { ChatRunningElapsed, resolveChatRunningLabels } from './ChatRunningStatus'
 import { MessageInput, type MessageInputHandle } from './MessageInput'
 import { CHAT_CANCELLED_MESSAGE, isChatCancelledError } from '../../../shared/chatCancel'
 import { buildAssistantStreamPatch } from '../../../shared/assistantStreamPatch'
@@ -100,9 +129,7 @@ import {
   type ThinkingState
 } from '../../../shared/thinkingSegments'
 import { throttle } from '../../utils/throttle'
-import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
 import arrowDownLineRaw from '../../assets/arrow_down_line.svg?raw'
-import { isChatScrollNearBottom, scrollChatToBottom } from '../../utils/chatScroll'
 import { patchSvg } from '../../utils/patchSvg'
 
 const scrollToLatestIconSvg = patchSvg(arrowDownLineRaw, 16)
@@ -111,15 +138,9 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import {
   countQueuedUserMessages,
   filterMessagesForChatApi,
-  getNextQueuedUserMessage,
   MAX_CHAT_MESSAGE_QUEUE_SIZE
 } from '../../../shared/chatMessageQueue'
 import { classifyOutboundMessage } from '../../services/chatOutboundClassifier'
-import { formatToolLabel } from './toolCallDisplay'
-import {
-  formatStreamingElapsed,
-  resolveStreamingActivityStatus
-} from '../../../shared/streamingActivityStatus'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
 import {
   requestNeedsVisionModel,
@@ -127,12 +148,11 @@ import {
 } from '../../../shared/visionModelRouting'
 
 type SendInternalOptions = {
-  skipUserMessage?: boolean
   targetSessionId?: string
   /** 会话执行中仍允许执行的即时命令（/skill list 等） */
   bypassRunningGuard?: boolean
-  attachments?: ChatImageAttachment[]
-  currentUserMessageId?: string
+  /** 显式发送上下文意图；缺省为 create-user */
+  contextIntent?: SendContextIntent
 }
 
 function buildClaudePayload(history: Message[]) {
@@ -151,10 +171,14 @@ export function ChatView() {
   const dispatch = useAppDispatch()
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
-  const composerHistoryMessages = useMemo(() => {
-    if (!sessionId) return []
-    return filterMessagesForChatApi(messages.filter((m) => m.sessionId === sessionId))
-  }, [messages, sessionId])
+  const displayEntries = useTypedSelector((s) => s.chat.displayEntries)
+  const [contextSummaryTick, setContextSummaryTick] = useState(0)
+  const contextScalars = useMemo(() => {
+    void contextSummaryTick
+    if (!sessionId) return { historyImageTokens: 0, thinkingTokensToExclude: 0 }
+    return selectContextSummaryScalars(sessionId)
+  }, [sessionId, contextSummaryTick, messages])
+  const bumpContextSummary = useCallback(() => setContextSummaryTick((n) => n + 1), [])
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const scrollToMessageId = useTypedSelector((s) => s.chat.scrollToMessageId)
@@ -180,7 +204,7 @@ export function ChatView() {
     [cfg]
   )
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
   const composerRef = useRef<MessageInputHandle>(null)
   const abortRequestedRef = useRef(false)
@@ -203,8 +227,6 @@ export function ChatView() {
     [messages, streamingAssistantId]
   )
 
-  const [runningClock, setRunningClock] = useState(() => Date.now())
-
   const messageIds = useMemo(() => messages.map((m) => m.id), [messages])
   const enterMessageId = useChatMessageEnter(sessionId, messageIds)
 
@@ -215,22 +237,15 @@ export function ChatView() {
     setShowScrollToLatest(false)
   }, [sessionId])
 
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const syncScrollStickiness = () => {
-      const nearBottom = isChatScrollNearBottom(el)
-      stickToBottomRef.current = nearBottom
-      setShowScrollToLatest(!nearBottom)
-    }
-    syncScrollStickiness()
-    el.addEventListener('scroll', syncScrollStickiness, { passive: true })
-    return () => el.removeEventListener('scroll', syncScrollStickiness)
-  }, [sessionId, messages.length])
+  const handleStickToBottomChange = useCallback((nearBottom: boolean) => {
+    stickToBottomRef.current = nearBottom
+    setShowScrollToLatest(!nearBottom)
+  }, [])
 
   const handleScrollToLatest = useCallback(() => {
-    const el = scrollRef.current
-    if (el) scrollChatToBottom(el, { force: true, behavior: 'smooth' })
+    stickToBottomRef.current = true
+    setShowScrollToLatest(false)
+    viewportRef.current?.scrollToBottom('smooth')
   }, [])
 
   useEffect(() => {
@@ -239,15 +254,51 @@ export function ChatView() {
       return
     }
     let cancelled = false
-    void window.api.chatGetMessages({ sessionId }).then((rows) => {
+    const generation = beginContextSummarySession(sessionId)
+    void (async () => {
+      const page = await window.api.chatGetMessagePage({ sessionId, limit: 60 })
       if (cancelled) return
-      const live = getLiveMessages(sessionId)
-      const pendingInStore = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
-      dispatch(setMessages(mergeDbAndLive(mergeDbAndLive(rows, live), pendingInStore)))
-    })
+      dispatch(
+        setDisplayPage({
+          entries: page.entries,
+          oldestSequence: page.oldestSequence,
+          hasMoreBefore: page.hasMoreBefore,
+          generation
+        })
+      )
+      initLiveSessionFromStore(sessionId)
+      try {
+        const baseline = await window.api.chatGetContextHistorySummaryBaseline({ sessionId })
+        if (cancelled) return
+        applyContextSummaryDbBaseline(sessionId, generation, baseline.entries)
+        bumpContextSummary()
+      } catch {
+        // 校准失败保留空 base + 后续 override
+      }
+    })()
     return () => {
       cancelled = true
     }
+  }, [sessionId, dispatch, bumpContextSummary])
+
+  const loadPreviousPage = useCallback(async () => {
+    if (!sessionId) return { loaded: false as const, beforeSequence: null as number | null }
+    return loadPreviousDisplayPage({
+      sessionId,
+      getState: () => {
+        const s = store.getState().chat
+        return {
+          currentSessionId: s.currentSessionId,
+          hasMoreBefore: s.hasMoreBefore,
+          oldestSequence: s.oldestSequence,
+          loadingBefore: s.loadingBefore,
+          displayGeneration: s.displayGeneration
+        }
+      },
+      fetchPage: (payload) => window.api.chatGetMessagePage(payload),
+      setLoading: (loading) => dispatch(setLoadingBefore(loading)),
+      prepend: (payload) => dispatch(prependDisplayPage(payload))
+    })
   }, [sessionId, dispatch])
 
   useEffect(() => {
@@ -265,20 +316,57 @@ export function ChatView() {
   }, [sessionId, dispatch])
 
   useEffect(() => {
-    if (!scrollToMessageId || messages.length === 0) return
-    const el = scrollRef.current?.querySelector(`[data-message-id="${scrollToMessageId}"]`)
-    if (el) {
-      scrollIntoViewWithMotionPreference(el, { block: 'center', behavior: 'smooth' })
+    if (!scrollToMessageId || !sessionId) return
+    let cancelled = false
+    void (async () => {
+      if (!store.getState().chat.messages.some((m) => m.id === scrollToMessageId)) {
+        const seq = await window.api.chatGetMessageSequence({
+          sessionId,
+          messageId: scrollToMessageId
+        })
+        if (seq == null || cancelled) {
+          dispatch(setScrollToMessageId(null))
+          return
+        }
+        await ensureDisplayContainsMessage({
+          sessionId,
+          messageId: scrollToMessageId,
+          getMessages: () => store.getState().chat.messages,
+          getState: () => {
+            const s = store.getState().chat
+            return {
+              currentSessionId: s.currentSessionId,
+              hasMoreBefore: s.hasMoreBefore,
+              oldestSequence: s.oldestSequence,
+              loadingBefore: s.loadingBefore,
+              displayGeneration: s.displayGeneration
+            }
+          },
+          loadPrevious: () => loadPreviousPage()
+        })
+      }
+      if (cancelled) return
+      viewportRef.current?.scrollToMessageId(scrollToMessageId)
       dispatch(setScrollToMessageId(null))
+    })()
+    return () => {
+      cancelled = true
     }
-  }, [scrollToMessageId, messages, dispatch])
+  }, [scrollToMessageId, sessionId, dispatch, loadPreviousPage])
 
   const reloadSessionMessagesFromDb = useCallback(
     async (targetSessionId: string) => {
       if (store.getState().chat.currentSessionId !== targetSessionId) return
-      const rows = await window.api.chatGetMessages({ sessionId: targetSessionId })
-      const live = getLiveMessages(targetSessionId)
-      dispatch(setMessages(mergeDbAndLive(rows, live)))
+      const generation = store.getState().chat.displayGeneration + 1
+      const page = await window.api.chatGetMessagePage({ sessionId: targetSessionId, limit: 60 })
+      dispatch(
+        setDisplayPage({
+          entries: page.entries,
+          oldestSequence: page.oldestSequence,
+          hasMoreBefore: page.hasMoreBefore,
+          generation
+        })
+      )
     },
     [dispatch]
   )
@@ -308,46 +396,55 @@ export function ChatView() {
     return () => window.clearTimeout(t)
   }, [sessionId, dispatch])
 
+  const scrollRafRef = useRef<number | null>(null)
+
   const scrollBottom = useCallback((force = false) => {
-    requestAnimationFrame(() => {
-      const el = scrollRef.current
-      if (!el) return
-      scrollChatToBottom(el, { force, stickToBottom: stickToBottomRef.current })
+    if (scrollRafRef.current !== null) {
+      cancelAnimationFrame(scrollRafRef.current)
+    }
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      if (!force && !stickToBottomRef.current) return
+      viewportRef.current?.scrollToBottom(force ? 'smooth' : 'auto')
     })
   }, [])
 
   const scrollBottomThrottled = useMemo(
     () =>
       throttle((force = false) => {
-        requestAnimationFrame(() => {
-          const el = scrollRef.current
-          if (!el) return
-          scrollChatToBottom(el, { force, stickToBottom: stickToBottomRef.current })
+        if (scrollRafRef.current !== null) {
+          cancelAnimationFrame(scrollRafRef.current)
+        }
+        scrollRafRef.current = requestAnimationFrame(() => {
+          scrollRafRef.current = null
+          if (!force && !stickToBottomRef.current) return
+          viewportRef.current?.scrollToBottom('auto')
         })
       }, 100),
     []
   )
 
+  useEffect(() => {
+    return () => {
+      scrollBottomThrottled.cancel()
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current)
+        scrollRafRef.current = null
+      }
+    }
+  }, [scrollBottomThrottled])
+
+  useEffect(() => {
+    scrollBottomThrottled.cancel()
+    if (scrollRafRef.current !== null) {
+      cancelAnimationFrame(scrollRafRef.current)
+      scrollRafRef.current = null
+    }
+  }, [sessionId, scrollBottomThrottled])
+
   const streamingRequestId = sessionId ? runningSessions[sessionId]?.requestId ?? null : null
 
   const sessionRunning = Boolean(sessionId && runningSessions[sessionId])
-
-  useEffect(() => {
-    if (!sessionRunning) return
-    setRunningClock(Date.now())
-    const timer = window.setInterval(() => setRunningClock(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [sessionRunning])
-
-  const runningActivity = useMemo(() => {
-    if (!streamingAssistant) return null
-    return resolveStreamingActivityStatus({
-      message: streamingAssistant,
-      formatToolLabel: (toolName, input) => formatToolLabel(toolName, input, t),
-      t,
-      now: runningClock
-    })
-  }, [streamingAssistant, t, runningClock])
 
   const onToolConfirm = useCallback(
     (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => {
@@ -448,7 +545,8 @@ export function ChatView() {
       }
       routeAddMessage(runSessionId, userMsg)
       stickToBottomRef.current = true
-      await window.api.chatAppendMessage(userMsg)
+      const ack = await window.api.chatAppendMessage(userMsg)
+      dispatch(ackDisplayMessagePersisted({ messageId: ack.messageId, sequence: ack.sequence }))
       scrollBottom(true)
     },
     [dispatch, message, scrollBottom, t]
@@ -458,48 +556,44 @@ export function ChatView() {
     async (messageId: string) => {
       const msg = store.getState().chat.messages.find((m) => m.id === messageId)
       if (!msg || msg.role !== 'user' || msg.status !== 'queued') return
-
-      const result = await window.api.chatDeleteQueuedMessage({
-        messageId,
-        sessionId: msg.sessionId
-      })
-      if (!result.ok) {
+      try {
+        await commitMessageDelete({ sessionId: msg.sessionId, messageId })
+      } catch {
         message.warning(t('chatView.warnings.cancelQueueFailed'))
-        return
       }
-
-      dispatch(removeMessage(messageId))
-      removeLiveMessage(msg.sessionId, messageId)
     },
-    [dispatch, message, t]
+    [message, t]
   )
 
   const drainQueueForSession = useCallback(
     async (runSessionId: string) => {
       if (drainingQueueRef.current || isSessionRunning(runSessionId)) return
 
-      const next = getNextQueuedUserMessage(store.getState().chat.messages, runSessionId)
-      if (!next) return
+      const next = await window.api.chatGetNextQueuedMessage({ sessionId: runSessionId })
+      if (!next || next.message.role !== 'user' || next.message.status !== 'queued') return
 
       drainingQueueRef.current = true
       try {
-        dispatch(patchMessage({ id: next.id, patch: { status: 'sent' } }))
-        await window.api.chatPatchMessage({
-          messageId: next.id,
+        const sent = await commitMessagePatch({
           sessionId: runSessionId,
+          messageId: next.message.id,
           patch: { status: 'sent' }
         })
-        await sendInternalRef.current(next.content, undefined, {
+        await sendInternalRef.current(sent.message.content, undefined, {
           targetSessionId: runSessionId,
-          skipUserMessage: true,
-          attachments: next.attachments,
-          currentUserMessageId: next.id
+          contextIntent: {
+            kind: 'reuse-user',
+            currentUser: {
+              message: sent.message,
+              order: { kind: 'persisted', sequence: sent.sequence }
+            }
+          }
         })
       } finally {
         drainingQueueRef.current = false
       }
     },
-    [dispatch]
+    []
   )
 
   useEffect(() => {
@@ -625,43 +719,54 @@ export function ChatView() {
         return
       }
 
-      if ((options?.attachments?.length ?? 0) > 0 && !useToolsApi) {
+      const createUserAttachments =
+        options?.contextIntent?.kind === 'create-user'
+          ? options.contextIntent.attachments
+          : undefined
+      if ((createUserAttachments?.length ?? 0) > 0 && !useToolsApi) {
         message.error(tErrors('chat.imagesRequireTools'))
         return
       }
 
-      const userMsg: Message = {
-        id: crypto.randomUUID(),
-        sessionId: runSessionId,
-        role: 'user',
-        content: chatText,
-        attachments: options?.attachments?.length ? options.attachments : undefined,
-        timestamp: Date.now(),
-        status: 'sent',
-        schemaVersion: CURRENT_SCHEMA_VERSION
-      }
+      const intent: SendContextIntent =
+        options?.contextIntent ??
+        ({
+          kind: 'create-user',
+          text: chatText,
+          attachments: undefined
+        } as const)
 
-      if (!options?.skipUserMessage) {
-        routeAddMessage(runSessionId, userMsg)
+      // create-user 使用解析后的 chatText（可能被 skill/wiki 改写）
+      const resolvedIntent: SendContextIntent =
+        intent.kind === 'create-user'
+          ? { kind: 'create-user', text: chatText, attachments: intent.attachments }
+          : intent
+
+      if (resolvedIntent.kind === 'create-user') {
         stickToBottomRef.current = true
       }
 
-      const sessionMessages = await resolveSessionMessagesForApi(runSessionId)
-      const historyForApi = options?.skipUserMessage
-        ? filterMessagesForChatApi(sessionMessages)
-        : filterMessagesForChatApi([...sessionMessages.filter((m) => m.id !== userMsg.id), userMsg])
+      let apiRequest
+      try {
+        apiRequest = await prepareSendContext(runSessionId, resolvedIntent)
+      } catch (err) {
+        message.error(err instanceof Error ? err.message : String(err))
+        return
+      }
+      bumpContextSummary()
 
-      if (!options?.skipUserMessage) {
-        await window.api.chatAppendMessage(userMsg)
+      let historyForApi: Message[]
+      let currentUserMessageId: string
+      try {
+        const resolved = await resolveSessionContextForApi(apiRequest)
+        historyForApi = resolved.historyForApi
+        currentUserMessageId = resolved.requiredCurrentUserId
+      } catch (err) {
+        message.error(err instanceof Error ? err.message : String(err))
+        return
       }
 
-      const currentUserMessageId = options?.skipUserMessage
-        ? (options.currentUserMessageId ??
-          [...sessionMessages]
-            .reverse()
-            .find((m) => m.sessionId === runSessionId && m.role === 'user' && m.status !== 'queued')?.id ??
-          '')
-        : userMsg.id
+      const requiredUser = apiRequest.requiredCurrentUser.message
 
       const modelEntry = cfg.models.find((m) => m.name === chatModelName)
       let requestModel = chatModelName
@@ -690,7 +795,8 @@ export function ChatView() {
       const maxSystemChars = requestModelEntry ? Math.floor(requestModelEntry.maximumContext * 0.1) : undefined
 
       const lastUsage = store.getState().chat.lastUsage
-      const pendingAttachments = options?.skipUserMessage ? undefined : userMsg.attachments
+      const pendingAttachments =
+        resolvedIntent.kind === 'create-user' ? requiredUser.attachments : undefined
       const pendingImageTokens = pendingAttachments?.length
         ? estimateTokensFromImageAttachments(pendingAttachments)
         : 0
@@ -802,7 +908,9 @@ export function ChatView() {
       }
       routeAddMessage(runSessionId, assistantMsg)
       initLiveSessionFromStore(runSessionId)
-      await window.api.chatAppendMessage(assistantMsg)
+      const assistantAck = await window.api.chatAppendMessage(assistantMsg)
+      ackApiContextMessagePersisted(assistantAck, runSessionId)
+      dispatch(ackDisplayMessagePersisted({ messageId: assistantAck.messageId, sequence: assistantAck.sequence }))
       stickToBottomRef.current = true
       scrollBottom(true)
 
@@ -1163,42 +1271,43 @@ export function ChatView() {
         return
       }
 
-      await sendInternal(text, undefined, { targetSessionId, attachments })
+      await sendInternal(text, undefined, {
+        targetSessionId,
+        contextIntent: {
+          kind: 'create-user',
+          text,
+          attachments
+        }
+      })
     },
     [sessionId, cfg, sendInternal, dispatch, message, t, tErrors, currentSession, enqueueChatMessage, useToolsApi]
   )
 
   const retryFailedAssistant = useCallback(
     async (assistantMessageId: string) => {
-      const msgs = store.getState().chat.messages
-      const idx = msgs.findIndex((m) => m.id === assistantMessageId)
-      if (idx < 0) return
-      const assistant = msgs[idx]
-      if (assistant.role !== 'assistant' || assistant.status !== 'failed') return
-
-      let userText = ''
-      let userMsg: Message | undefined
-      for (let i = idx - 1; i >= 0; i--) {
-        const row = msgs[i]
-        if (row.role === 'user' && row.content.trim()) {
-          userText = row.content
-          userMsg = row
-          break
-        }
-      }
-      if (!userText.trim()) {
+      if (!sessionId) return
+      const target = await window.api.chatResolveRetryContext({
+        sessionId,
+        failedAssistantMessageId: assistantMessageId
+      })
+      if (!target) {
         message.warning(t('chatView.warnings.retryNoUserMessage'))
         return
       }
 
-      dispatch(setMessages(msgs.filter((m) => m.id !== assistantMessageId)))
-      await sendInternal(userText, undefined, {
-        skipUserMessage: true,
-        attachments: userMsg?.attachments,
-        currentUserMessageId: userMsg?.id
+      dispatch(removeMessage(assistantMessageId))
+      await sendInternal(target.currentUser.message.content, undefined, {
+        contextIntent: {
+          kind: 'reuse-user',
+          currentUser: {
+            message: target.currentUser.message,
+            order: { kind: 'persisted', sequence: target.currentUser.sequence }
+          },
+          excludeMessageIds: [target.failedAssistant.message.id]
+        }
       })
     },
-    [dispatch, message, sendInternal, t]
+    [dispatch, message, sendInternal, t, sessionId]
   )
 
   const launchIntentConsumedRef = useRef<string | null>(null)
@@ -1311,37 +1420,63 @@ export function ChatView() {
     [cfg, message]
   )
 
+  const messageActions = useMemo<ChatMessageActions>(
+    () => ({
+      archiveToWiki: (content) => {
+        void handleArchiveToWiki(content)
+      },
+      retryAssistant: (messageId) => {
+        void retryFailedAssistant(messageId)
+      },
+      cancelQueued: (messageId) => {
+        void cancelQueuedMessage(messageId)
+      },
+      confirmTool: onToolConfirm,
+      cancelTool: onToolCancel
+    }),
+    [handleArchiveToWiki, retryFailedAssistant, cancelQueuedMessage, onToolConfirm, onToolCancel]
+  )
+
   const resolveToolsInteractive = useCallback(
-    (messageId: string) => {
-      if (testPreviewMessageIds.has(messageId)) return testPreviewToolsInteractive
+    (m: Message) => {
+      if (testPreviewMessageIds.has(m.id)) return testPreviewToolsInteractive
       if (!sessionId || !cfg?.tools.enabled) return undefined
-      const message = messages.find((m) => m.id === messageId)
-      if (!message) return undefined
       return resolveMessageToolsInteractive({
-        message,
+        message: m,
         sessionId,
         toolsEnabled: cfg.tools.enabled,
         confirmMode: cfg.tools.confirmMode,
         pendingItems: pendingConfirmItems,
         streamingAssistantId,
-        streamingRequestId,
-        onToolConfirm,
-        onToolCancel
+        streamingRequestId
       })
     },
     [
       sessionId,
       cfg?.tools.enabled,
       cfg?.tools.confirmMode,
-      messages,
       pendingConfirmItems,
       streamingAssistantId,
       streamingRequestId,
       testPreviewMessageIds,
-      testPreviewToolsInteractive,
-      onToolConfirm,
-      onToolCancel
+      testPreviewToolsInteractive
     ]
+  )
+
+  const showArchiveToWikiFor = useCallback(
+    (m: Message) =>
+      Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim()),
+    [cfg?.wiki?.enabled]
+  )
+
+  const canRetryMessage = useCallback(
+    (m: Message) => m.role === 'assistant' && m.status === 'failed' && !running,
+    [running]
+  )
+
+  const canCancelQueuedMessage = useCallback(
+    (m: Message) => m.role === 'user' && m.status === 'queued',
+    []
   )
 
   const handleModelSelect = useCallback(
@@ -1359,80 +1494,100 @@ export function ChatView() {
 
   const scrollToLatestLabel = t('scrollToLatest.label')
 
+  const runningLabels = useMemo(
+    () => resolveChatRunningLabels(streamingAssistant, t),
+    [streamingAssistant, t]
+  )
+
+  const runningElapsedNode = streamingAssistant ? (
+    <ChatRunningElapsed streamingAssistant={streamingAssistant} />
+  ) : undefined
+
+  const renderViewportMessage = useCallback(
+    (_index: number, m: Message) => (
+      <ChatMessageList
+        messages={[m]}
+        enterMessageId={enterMessageId}
+        actions={messageActions}
+        resolveToolsInteractive={resolveToolsInteractive}
+        showArchiveToWiki={showArchiveToWikiFor}
+        canRetry={canRetryMessage}
+        canCancelQueued={canCancelQueuedMessage}
+        focusToolUseId={confirmFocusToolUseId}
+        workDir={cfg?.workDir}
+        shellConfig={cfg?.shell}
+        sessionMetadata={currentSession?.metadata}
+        onOpenFile={handleOpenFile}
+        wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
+      />
+    ),
+    [
+      enterMessageId,
+      messageActions,
+      resolveToolsInteractive,
+      showArchiveToWikiFor,
+      canRetryMessage,
+      canCancelQueuedMessage,
+      confirmFocusToolUseId,
+      cfg?.workDir,
+      cfg?.shell,
+      cfg?.wiki?.rootPath,
+      currentSession?.metadata,
+      handleOpenFile
+    ]
+  )
+
+  const viewportBody = !sessionId ? (
+    <div className="chat-scroll-wrap">
+      <div className="chat-scroll">
+        <div className="chat-empty">
+          <div className="chat-empty-icon" aria-hidden>
+            <MessagesSquare size={22} strokeWidth={1.75} />
+          </div>
+          <div className="chat-empty-title">{t('chatView.empty.noSessionTitle')}</div>
+          <p className="chat-empty-desc">{t('chatView.empty.noSessionDesc')}</p>
+        </div>
+      </div>
+    </div>
+  ) : messages.length === 0 ? (
+    <div className="chat-scroll-wrap">
+      <div className="chat-scroll">
+        <div className="chat-empty">
+          <div className="chat-empty-icon" aria-hidden>
+            <MessageSquare size={22} strokeWidth={1.75} />
+          </div>
+          <div className="chat-empty-title">{t('chatView.empty.startTitle')}</div>
+          <p className="chat-empty-desc">{t('chatView.empty.startDesc')}</p>
+        </div>
+      </div>
+    </div>
+  ) : (
+    <ChatMessageListSearch
+      sessionId={sessionId}
+      messages={messages}
+      displayEntries={displayEntries}
+    >
+      <ChatMessageViewport
+        ref={viewportRef}
+        messages={messages}
+        stickToBottom={stickToBottomRef.current}
+        onStickToBottomChange={handleStickToBottomChange}
+        onStartReached={() => {
+          void loadPreviousPage()
+        }}
+        scrollToLatestMounted
+        showScrollToLatest={showScrollToLatest}
+        scrollToLatestLabel={scrollToLatestLabel}
+        scrollToLatestIconHtml={scrollToLatestIconSvg}
+        onScrollToLatest={handleScrollToLatest}
+        renderMessage={renderViewportMessage}
+      />
+    </ChatMessageListSearch>
+  )
+
   return (
     <div className="chat-view">
-      <div className="chat-scroll-wrap">
-        <div ref={scrollRef} className="chat-scroll">
-        {!sessionId ? (
-          <div className="chat-empty">
-            <div className="chat-empty-icon" aria-hidden>
-              <MessagesSquare size={22} strokeWidth={1.75} />
-            </div>
-            <div className="chat-empty-title">{t('chatView.empty.noSessionTitle')}</div>
-            <p className="chat-empty-desc">{t('chatView.empty.noSessionDesc')}</p>
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="chat-empty">
-            <div className="chat-empty-icon" aria-hidden>
-              <MessageSquare size={22} strokeWidth={1.75} />
-            </div>
-            <div className="chat-empty-title">{t('chatView.empty.startTitle')}</div>
-            <p className="chat-empty-desc">{t('chatView.empty.startDesc')}</p>
-          </div>
-        ) : (
-          <ChatMessageListSearch messageCount={messages.length}>
-            {messages.map((m) => (
-              <ChatBubble
-                key={m.id}
-                message={m}
-                enter={m.id === enterMessageId}
-                toolsInteractive={resolveToolsInteractive(m.id)}
-                focusToolUseId={
-                  confirmFocusToolUseId &&
-                  m.toolCalls?.some((tc) => tc.id === confirmFocusToolUseId && tc.status === 'confirming')
-                    ? confirmFocusToolUseId
-                    : undefined
-                }
-                workDir={cfg?.workDir}
-                shellConfig={cfg?.shell}
-                sessionMetadata={currentSession?.metadata}
-                onOpenFile={handleOpenFile}
-                wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
-                showArchiveToWiki={Boolean(cfg?.wiki?.enabled && m.role === 'assistant' && m.status === 'completed' && m.content.trim())}
-                onArchiveToWiki={() => handleArchiveToWiki(m.content)}
-                onRetry={
-                  m.role === 'assistant' && m.status === 'failed' && !running
-                    ? () => void retryFailedAssistant(m.id)
-                    : undefined
-                }
-                onCancelQueued={
-                  m.role === 'user' && m.status === 'queued'
-                    ? () => void cancelQueuedMessage(m.id)
-                    : undefined
-                }
-              />
-            ))}
-          </ChatMessageListSearch>
-        )}
-        </div>
-        {sessionId && messages.length > 0 ? (
-          <button
-            type="button"
-            className={`chat-scroll-to-latest${showScrollToLatest ? '' : ' chat-scroll-to-latest--hidden'}`}
-            title={scrollToLatestLabel}
-            aria-label={scrollToLatestLabel}
-            aria-hidden={!showScrollToLatest}
-            tabIndex={showScrollToLatest ? 0 : -1}
-            onClick={handleScrollToLatest}
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter' && event.key !== ' ') return
-              event.preventDefault()
-              handleScrollToLatest()
-            }}
-            dangerouslySetInnerHTML={{ __html: scrollToLatestIconSvg }}
-          />
-        ) : null}
-      </div>
+      {viewportBody}
       {showLegacyWriteDirUi && pendingWriteDirConfirm ? (
         <div className="chat-write-dir-confirm">
           <div className="chat-write-dir-confirm__track">
@@ -1465,17 +1620,14 @@ export function ChatView() {
       <MessageInput
         ref={composerRef}
         sessionId={sessionId ?? undefined}
-        historyMessages={composerHistoryMessages}
+        historyImageTokens={contextScalars.historyImageTokens}
+        thinkingTokensToExclude={contextScalars.thinkingTokensToExclude}
         toolsEnabled={useToolsApi}
         running={running}
         queueCount={queueCount}
-        runningStatus={runningActivity?.label}
-        runningDetail={runningActivity?.detail}
-        runningElapsed={
-          runningActivity?.showElapsed && streamingAssistant
-            ? formatStreamingElapsed(runningClock - streamingAssistant.timestamp)
-            : undefined
-        }
+        runningStatus={runningLabels.label}
+        runningDetail={runningLabels.detail}
+        runningElapsed={runningElapsedNode}
         modelSlot={
           cfg ? (
             <ComposerModelPicker

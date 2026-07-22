@@ -37,6 +37,8 @@ import { ShellScrollbackView } from './ShellScrollbackView'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
 import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { buildFragmentId } from '../../../shared/chatSearchFragments'
+import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
 
 type Props = {
   record: ToolCallRecord
@@ -51,6 +53,7 @@ type Props = {
   onConfirm?: ToolConfirmHandler
   onCancel?: () => void
   onOpenFile?: (relPath: string) => void
+  activeSearchTarget?: ChatSearchActiveTarget | null
 }
 
 function truncate(s: string, max: number): string {
@@ -94,7 +97,8 @@ export function ToolCallCard({
   toolCalls,
   onConfirm,
   onCancel,
-  onOpenFile
+  onOpenFile,
+  activeSearchTarget = null
 }: Props) {
   const { t } = useTypedTranslation('chat')
   const cardRef = useRef<HTMLDivElement>(null)
@@ -155,6 +159,25 @@ export function ToolCallCard({
       (!fileTool && record.status === 'completed' && Object.keys(record.input).length > 0))
 
   const [expanded, setExpanded] = useState(() => defaultExpanded(record))
+  const userExpandedBeforeSearchRef = useRef<boolean | null>(null)
+  const searchReveal =
+    Boolean(activeSearchTarget?.revealPath?.toolUseId) &&
+    activeSearchTarget?.revealPath?.toolUseId === record.id
+  const searchSection = searchReveal ? activeSearchTarget?.revealPath?.toolSection : undefined
+
+  useEffect(() => {
+    if (searchReveal) {
+      if (userExpandedBeforeSearchRef.current == null) {
+        userExpandedBeforeSearchRef.current = expanded
+      }
+      setExpanded(true)
+      return
+    }
+    if (userExpandedBeforeSearchRef.current != null) {
+      setExpanded(userExpandedBeforeSearchRef.current)
+      userExpandedBeforeSearchRef.current = null
+    }
+  }, [searchReveal]) // eslint-disable-line react-hooks/exhaustive-deps -- 仅搜索覆盖进出时恢复
 
   useEffect(() => {
     if (record.toolName !== 'run_shell' || record.status !== 'executing') {
@@ -228,7 +251,15 @@ export function ToolCallCard({
     }
   }, [fileTool, fileWriteTool, isFailed, record.status, record.toolName, record.input, record.result?.data, record.progressOutput, record.progressOutputRaw])
 
-  const showDetail = (expanded || writeConfirming || browserConfirming || shellConfirming || scriptConfirming || larkCliConfirming) && hasDetail
+  const showDetail =
+    (expanded ||
+      searchReveal ||
+      writeConfirming ||
+      browserConfirming ||
+      shellConfirming ||
+      scriptConfirming ||
+      larkCliConfirming) &&
+    hasDetail
 
   const label = useMemo(() => {
     const silent = shellToolCompletedLabel(record, t)
@@ -242,15 +273,16 @@ export function ToolCallCard({
   }, [record.toolName, record.input])
 
   const paramPreview = useMemo(() => {
+    if (!showDetail) return ''
     try {
       return JSON.stringify(record.input, null, 2)
     } catch {
       return String(record.input)
     }
-  }, [record.input])
+  }, [showDetail, record.input])
 
   const resultStr = useMemo(() => {
-    if (!record.result) return ''
+    if (!showDetail || !record.result) return ''
     if (record.toolName === 'run_shell' && (shellHasFormattedOutput || isShellSilentResult(record.result.data))) {
       return ''
     }
@@ -260,7 +292,24 @@ export function ToolCallCard({
       return typeof record.result.data === 'string' ? record.result.data : JSON.stringify(record.result.data, null, 2)
     }
     return formatUserFacingError(record.result.error ?? '')
-  }, [record.result, record.toolName, shellHasFormattedOutput])
+  }, [showDetail, record.result, record.toolName, shellHasFormattedOutput])
+
+  const labelFragmentId =
+    messageId != null ? buildFragmentId(messageId, { kind: 'tool-label', toolUseId: record.id }) : undefined
+  const inputFragmentId =
+    messageId != null ? buildFragmentId(messageId, { kind: 'tool-input', toolUseId: record.id }) : undefined
+  const resultFragmentId =
+    messageId != null ? buildFragmentId(messageId, { kind: 'tool-result', toolUseId: record.id }) : undefined
+
+  const showSearchInput =
+    searchReveal && (searchSection === 'input' || searchSection == null) && Boolean(paramPreview)
+  const showSearchResult =
+    searchReveal && (searchSection === 'result' || searchSection == null) && Boolean(resultStr)
+  const searchInputOwnsFragment = activeSearchTarget?.fragmentId === inputFragmentId
+  const searchResultOwnsFragment = activeSearchTarget?.fragmentId === resultFragmentId
+  const renderFullSearchInput = searchInputOwnsFragment && (activeSearchTarget?.end ?? 0) > 4000
+  const renderFullSearchResult = searchResultOwnsFragment && (activeSearchTarget?.end ?? 0) > 4000
+  const displayedResultText = searchResultOwnsFragment ? activeSearchTarget?.searchableText ?? resultStr : resultStr
 
   const toggleExpanded = () => {
     if (!hasDetail || writeConfirming) return
@@ -284,9 +333,9 @@ export function ToolCallCard({
     (record.status === 'completed' || record.status === 'failed') &&
     (shellHasFormattedOutput || hasTerminalScrollback(shellResultData))
   const showShellCompletedTerminal =
-    showShellCompletedOutput && useTerminalUi && hasTerminalScrollback(shellResultData)
+    showShellCompletedOutput && useTerminalUi && hasTerminalScrollback(shellResultData) && !searchResultOwnsFragment
   const showShellCompletedPlain =
-    showShellCompletedOutput && (!useTerminalUi || !hasTerminalScrollback(shellResultData))
+    showShellCompletedOutput && (!useTerminalUi || !hasTerminalScrollback(shellResultData) || searchResultOwnsFragment)
   const showScriptCode = record.toolName === 'run_script' && Boolean(scriptCode.trim())
   const showScriptLiveOutput =
     record.toolName === 'run_script' && record.status === 'executing' && Boolean(record.progressOutput?.trim())
@@ -298,11 +347,17 @@ export function ToolCallCard({
     (record.status === 'failed' || record.status === 'rejected') &&
     !(record.toolName === 'run_shell' && showShellCompletedOutput) &&
     !(record.toolName === 'run_script' && showScriptCompletedOutput)
+  const earlySearchFragmentId =
+    activeSearchTarget && [labelFragmentId, inputFragmentId, resultFragmentId].includes(activeSearchTarget.fragmentId)
+      ? activeSearchTarget.fragmentId
+      : undefined
+  const earlySearchText = earlySearchFragmentId ? activeSearchTarget?.searchableText : undefined
 
   if (writeConfirming && onConfirm) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
   }
@@ -311,6 +366,7 @@ export function ToolCallCard({
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <BrowserConfirmCard record={record} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
   }
@@ -319,6 +375,7 @@ export function ToolCallCard({
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <ShellConfirmCard record={record} workDir={workDir} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
   }
@@ -327,6 +384,7 @@ export function ToolCallCard({
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <ScriptConfirmCard record={record} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
   }
@@ -335,6 +393,7 @@ export function ToolCallCard({
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <LarkCliConfirmCard record={record} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
   }
@@ -346,6 +405,7 @@ export function ToolCallCard({
           dependencyRecovery={record.result.dependencyRecovery}
           actionLabel={label}
         />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
   }
@@ -354,6 +414,7 @@ export function ToolCallCard({
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <WriteSuccessCard record={record} onView={onOpenFile} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
   }
@@ -386,7 +447,11 @@ export function ToolCallCard({
         }}
       >
         <ToolRowIcon toolName={record.toolName} pending={isPending} />
-        <span className="tool-row__label" title={labelTitle ?? label}>
+        <span
+          className="tool-row__label"
+          title={labelTitle ?? label}
+          data-search-fragment-id={labelFragmentId}
+        >
           {label}
         </span>
         {hasDetail ? (
@@ -443,25 +508,29 @@ export function ToolCallCard({
           ) : null}
 
           {showShellCompletedTerminal && shellResultData ? (
-            <ShellScrollbackView
-              scrollback={shellResultData.terminalScrollback}
-              stdout={shellResultData.stdout}
-              stderr={shellResultData.stderr}
-              exitCode={shellResultData.exitCode}
-              truncated={shellResultData.truncated}
-              persistedOutputPath={shellResultData.persistedOutputPath}
-              expanded={expanded}
-            />
+            <div data-search-fragment-id={resultFragmentId}>
+              <ShellScrollbackView
+                scrollback={shellResultData.terminalScrollback}
+                stdout={shellResultData.stdout ?? shellResultData.terminalScrollback?.plainText ?? shellResultData.terminalScrollback?.ansiText}
+                stderr={shellResultData.stderr}
+                exitCode={shellResultData.exitCode}
+                truncated={shellResultData.truncated}
+                persistedOutputPath={shellResultData.persistedOutputPath}
+                expanded={expanded}
+              />
+            </div>
           ) : null}
 
           {showShellCompletedPlain && shellResultData ? (
-            <ShellOutputView
-              stdout={shellResultData.stdout}
-              stderr={shellResultData.stderr}
-              exitCode={shellResultData.exitCode}
-              truncated={shellResultData.truncated}
-              persistedOutputPath={shellResultData.persistedOutputPath}
-            />
+            <div data-search-fragment-id={resultFragmentId}>
+              <ShellOutputView
+                stdout={shellResultData.stdout ?? shellResultData.terminalScrollback?.plainText ?? shellResultData.terminalScrollback?.ansiText}
+                stderr={shellResultData.stderr}
+                exitCode={shellResultData.exitCode}
+                truncated={shellResultData.truncated}
+                persistedOutputPath={shellResultData.persistedOutputPath}
+              />
+            </div>
           ) : null}
 
           {showScriptCode ? (
@@ -474,19 +543,46 @@ export function ToolCallCard({
           {showScriptLiveOutput ? <ShellOutputView content={record.progressOutput} isLive /> : null}
 
           {showScriptCompletedOutput && scriptResultData ? (
-            <ShellOutputView
-              stdout={scriptResultData.stdout}
-              stderr={scriptResultData.stderr}
-              exitCode={scriptResultData.exitCode}
-            />
+            <div data-search-fragment-id={resultFragmentId}>
+              <ShellOutputView
+                stdout={scriptResultData.stdout}
+                stderr={scriptResultData.stderr}
+                exitCode={scriptResultData.exitCode}
+              />
+            </div>
           ) : null}
 
           {record.status === 'completed' && resultStr ? (
-            <pre className="sa-chat-inset-code sa-command-inset">{truncate(resultStr, 4000)}</pre>
+            <pre
+              className="sa-chat-inset-code sa-command-inset"
+              data-search-fragment-id={resultFragmentId}
+            >
+              {renderFullSearchResult ? displayedResultText : truncate(displayedResultText, 4000)}
+            </pre>
           ) : null}
 
-          {record.status === 'completed' && !resultStr && !fileTool && !showShellCompletedOutput && record.toolName !== 'run_script' && Object.keys(record.input).length > 0 ? (
-            <pre className="sa-chat-inset-code sa-command-inset">{paramPreview}</pre>
+          {showSearchResult && !(record.status === 'completed' && resultStr) ? (
+            <pre
+              className="sa-chat-inset-code sa-command-inset"
+              data-search-fragment-id={resultFragmentId}
+            >
+              {renderFullSearchResult ? displayedResultText : truncate(displayedResultText, 4000)}
+            </pre>
+          ) : null}
+
+          {(record.status === 'completed' &&
+            !resultStr &&
+            !fileTool &&
+            !showShellCompletedOutput &&
+            record.toolName !== 'run_script' &&
+            Object.keys(record.input).length > 0) ||
+          showSearchInput ? (
+            <pre
+              className="sa-chat-inset-code sa-command-inset"
+              data-search-fragment-id={inputFragmentId}
+            >
+              {renderFullSearchInput ? paramPreview : truncate(paramPreview, 4000)}
+            </pre>
           ) : null}
           </div>
         </div>

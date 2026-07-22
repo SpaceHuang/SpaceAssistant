@@ -621,3 +621,28 @@ describe('ToolCallCard run_shell terminal collapse', () => {
     expect(document.querySelector('.shell-terminal-host')).not.toBeNull()
   })
 })
+
+describe('ToolCallCard deferred stringify', () => {
+  it('does not JSON.stringify large input while collapsed', () => {
+    const stringifySpy = vi.spyOn(JSON, 'stringify')
+    const bigInput = { path: 'src', entries: Array.from({ length: 50 }, (_, i) => ({ name: `f${i}.ts` })) }
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-big',
+          toolName: 'list_directory',
+          input: bigInput,
+          status: 'completed',
+          riskLevel: 'low',
+          result: { success: true, data: bigInput.entries },
+          completedAt: Date.now()
+        }}
+        confirmMode="direct"
+      />
+    )
+    expect(document.querySelector('.tool-row--expanded')).toBeNull()
+    const callsOnInput = stringifySpy.mock.calls.filter((c) => c[0] === bigInput)
+    expect(callsOnInput.length).toBe(0)
+    stringifySpy.mockRestore()
+  })
+})

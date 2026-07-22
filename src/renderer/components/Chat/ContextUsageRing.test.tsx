@@ -9,6 +9,10 @@ import type { SessionUsage } from '../../../shared/sessionUsage'
 import configReducer, { setConfig } from '../../store/configSlice'
 import { buildContextRingSegments, ContextUsageRing } from './ContextUsageRing'
 import type { AppConfig, Message } from '../../../shared/domainTypes'
+import {
+  estimateThinkingTokensFromMessage,
+  estimateTokensFromHistoryImages
+} from '../../../shared/contextUsageEstimate'
 import { DEFAULT_TOOLS_CONFIG, DEFAULT_SKILLS_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_FEISHU_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 
@@ -230,7 +234,8 @@ describe('ContextUsageRing', () => {
         ]
       }
     ]
-    renderRing({ input_tokens: 10000, output_tokens: 5000 }, undefined, { historyMessages })
+    const historyImageTokens = estimateTokensFromHistoryImages(historyMessages)
+    renderRing({ input_tokens: 10000, output_tokens: 5000 }, undefined, { historyImageTokens })
     const svg = document.querySelector('svg')!
     fireEvent.mouseEnter(svg)
     await waitFor(() => {
@@ -263,7 +268,8 @@ describe('ContextUsageRing', () => {
       }
     ]
 
-    renderRing(usage, undefined, { historyMessages })
+    const thinkingTokensToExclude = estimateThinkingTokensFromMessage(historyMessages[0]?.thinking)
+    renderRing(usage, undefined, { thinkingTokensToExclude })
     expect(screen.getByLabelText(/上下文用量约 9\.5%/)).toBeDefined()
   })
 
@@ -279,7 +285,8 @@ describe('ContextUsageRing', () => {
         thinking: { content: 'x'.repeat(350), isVisible: true, startTime: 1 }
       }
     ]
-    renderRing({ input_tokens: 1000, output_tokens: 5000 }, undefined, { historyMessages })
+    const thinkingTokensToExclude = estimateThinkingTokensFromMessage(historyMessages[0]?.thinking)
+    renderRing({ input_tokens: 1000, output_tokens: 5000 }, undefined, { thinkingTokensToExclude })
     const svg = document.querySelector('svg')!
     fireEvent.mouseEnter(svg)
     await waitFor(() => {

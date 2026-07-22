@@ -68,6 +68,8 @@ export function buildActivityItemTimestampResolver(message: {
   const textSegs = contentSegmentsForRender(message)
   const tools = message.toolCalls ?? []
   const skills = message.skillHints ?? []
+  const toolById = new Map(tools.map((tc) => [tc.id, tc]))
+  const skillById = new Map(skills.map((h) => [h.id, h]))
   const toolIndexById = new Map(tools.map((tc, i) => [tc.id, i]))
 
   return (item) => {
@@ -80,10 +82,10 @@ export function buildActivityItemTimestampResolver(message: {
       return seg?.startTime ?? message.timestamp
     }
     if (item.kind === 'skill') {
-      const hint = skills.find((h) => h.id === item.hintId)
+      const hint = skillById.get(item.hintId)
       return hint?.shownAt ?? message.timestamp
     }
-    const tc = tools.find((t) => t.id === item.toolId)
+    const tc = toolById.get(item.toolId)
     const idx = toolIndexById.get(item.toolId) ?? 0
     return tc?.startedAt ?? tc?.completedAt ?? idx * 1000 + 999
   }

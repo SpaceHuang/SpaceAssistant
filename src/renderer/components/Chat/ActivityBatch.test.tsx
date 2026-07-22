@@ -36,6 +36,7 @@ describe('ActivityBatch', () => {
     )
     expect(document.querySelector('.activity-batch--expanded')).toBeNull()
     expect(screen.getByRole('button', { name: '展开批次' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByTestId('item-thinking')).toBeNull()
   })
 
   it('expands and collapses on header click', () => {

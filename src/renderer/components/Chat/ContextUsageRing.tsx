@@ -3,11 +3,9 @@ import { Tooltip } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useTypedSelector } from '../../hooks'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
+import type { ChatImageAttachment } from '../../../shared/domainTypes'
 import {
   computeContextUsageDisplay,
-  estimateThinkingTokensFromMessage,
-  estimateTokensFromHistoryImages,
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../../shared/contextUsageEstimate'
@@ -30,7 +28,8 @@ type RingSegment = {
 
 type Props = {
   pendingImageAttachments?: ChatImageAttachment[]
-  historyMessages?: Message[]
+  historyImageTokens?: number
+  thinkingTokensToExclude?: number
 }
 
 /** 在同一圆环上按顺序拼接：已用 | 输出预留 | 剩余（由底色轨道表示） */
@@ -53,7 +52,11 @@ export function buildContextRingSegments(
   return segments
 }
 
-export function ContextUsageRing({ pendingImageAttachments, historyMessages }: Props) {
+export function ContextUsageRing({
+  pendingImageAttachments,
+  historyImageTokens = 0,
+  thinkingTokensToExclude = 0
+}: Props) {
   const { t } = useTypedTranslation('contextUsage')
   const { i18n } = useTranslation()
   const lastUsage = useTypedSelector((s) => s.chat.lastUsage)
@@ -63,11 +66,6 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
     if (!pendingImageAttachments?.length) return 0
     return estimateTokensFromImageAttachments(pendingImageAttachments)
   }, [pendingImageAttachments])
-
-  const historyImageTokens = useMemo(() => {
-    if (!historyMessages?.length) return 0
-    return estimateTokensFromHistoryImages(historyMessages)
-  }, [historyMessages])
 
   const currentModel = useMemo(() => {
     if (!config) return undefined
@@ -83,20 +81,6 @@ export function ContextUsageRing({ pendingImageAttachments, historyMessages }: P
     config != null
       ? resolveEffectiveOutputMaxTokens(config.model, config.models)
       : undefined
-
-  const lastAssistantThinking = useMemo(() => {
-    if (!historyMessages?.length) return undefined
-    for (let i = historyMessages.length - 1; i >= 0; i--) {
-      const m = historyMessages[i]
-      if (m?.role === 'assistant' && m.thinking) return m.thinking
-    }
-    return undefined
-  }, [historyMessages])
-
-  const thinkingTokensToExclude = useMemo(
-    () => estimateThinkingTokensFromMessage(lastAssistantThinking),
-    [lastAssistantThinking]
-  )
 
   const hasData =
     lastUsage != null &&

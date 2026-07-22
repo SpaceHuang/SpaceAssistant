@@ -123,7 +123,13 @@ describe('ChatBubble streaming render', () => {
   })
 
   it('shows retry action on failed assistant message', () => {
-    const onRetry = vi.fn()
+    const actions = {
+      archiveToWiki: vi.fn(),
+      retryAssistant: vi.fn(),
+      cancelQueued: vi.fn(),
+      confirmTool: vi.fn(),
+      cancelTool: vi.fn()
+    }
     const now = Date.now()
     render(
       <ChatBubble
@@ -132,11 +138,12 @@ describe('ChatBubble streaming render', () => {
           content: 'partial',
           contentSegments: [{ content: 'partial', startTime: now, endTime: now }]
         })}
-        onRetry={onRetry}
+        actions={actions}
+        showRetry
       />
     )
     fireEvent.click(screen.getByRole('button', { name: '重试回复' }))
-    expect(onRetry).toHaveBeenCalledTimes(1)
+    expect(actions.retryAssistant).toHaveBeenCalledWith('a1')
   })
 })
 
@@ -272,7 +279,13 @@ describe('ChatBubble activity batch', () => {
   })
 
   it('invokes onCancelQueued when cancel button clicked', () => {
-    const onCancelQueued = vi.fn()
+    const actions = {
+      archiveToWiki: vi.fn(),
+      retryAssistant: vi.fn(),
+      cancelQueued: vi.fn(),
+      confirmTool: vi.fn(),
+      cancelTool: vi.fn()
+    }
     render(
       <ChatBubble
         message={{
@@ -284,10 +297,11 @@ describe('ChatBubble activity batch', () => {
           status: 'queued',
           schemaVersion: 1
         }}
-        onCancelQueued={onCancelQueued}
+        actions={actions}
+        showCancelQueued
       />
     )
     fireEvent.click(screen.getByRole('button', { name: '取消排队' }))
-    expect(onCancelQueued).toHaveBeenCalledTimes(1)
+    expect(actions.cancelQueued).toHaveBeenCalledWith('u1')
   })
 })

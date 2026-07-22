@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { App, ConfigProvider } from 'antd'
+import React from 'react'
 import { ChatView } from './ChatView'
 import type { AppConfig, Message, Session } from '../../../shared/domainTypes'
 import {
@@ -14,12 +15,50 @@ import {
   DEFAULT_WIKI_CONFIG
 } from '../../../shared/domainTypes'
 import { changeAppLocale } from '../../i18n/localeSync'
-import { isChatScrollNearBottom, scrollChatToBottom } from '../../utils/chatScroll'
 import { scrollBehaviorPreference } from '../../utils/motionPreference'
 import { store } from '../../store'
 import { setChatStatus, setMessages, setSession } from '../../store/chatSlice'
 import { setConfig } from '../../store/configSlice'
 import { setSessions } from '../../store/sessionSlice'
+
+const scrollToIndexMock = vi.fn()
+
+vi.mock('react-virtuoso', () => {
+  const ReactLocal = require('react') as typeof React
+  return {
+    Virtuoso: ReactLocal.forwardRef(function VirtuosoMock(
+      {
+        data,
+        itemContent,
+        atBottomStateChange
+      }: {
+        data: Message[]
+        itemContent: (index: number, message: Message) => React.ReactNode
+        atBottomStateChange?: (atBottom: boolean) => void
+      },
+      ref: React.Ref<{ scrollToIndex: typeof scrollToIndexMock }>
+    ) {
+      ReactLocal.useImperativeHandle(ref, () => ({
+        scrollToIndex: scrollToIndexMock
+      }))
+      return (
+        <div
+          className="chat-scroll"
+          data-testid="virtuoso-mock"
+          onScroll={(event) => {
+            const el = event.currentTarget
+            const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+            atBottomStateChange?.(near)
+          }}
+        >
+          {data.map((message, index) => (
+            <div key={message.id}>{itemContent(index, message)}</div>
+          ))}
+        </div>
+      )
+    })
+  }
+})
 
 vi.mock('@xterm/xterm', () => {
   class Terminal {
@@ -61,22 +100,6 @@ vi.mock('@xterm/addon-serialize', () => ({
   }
 }))
 
-vi.mock('../../utils/chatScroll', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../utils/chatScroll')>()
-  return {
-    ...actual,
-    scrollChatToBottom: vi.fn()
-  }
-})
-
-vi.mock('../../utils/motionPreference', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../utils/motionPreference')>()
-  return {
-    ...actual,
-    scrollIntoViewWithMotionPreference: vi.fn()
-  }
-})
-
 vi.mock('../DetailPanel/DetailPanelContext', () => ({
   useDetailPanel: () => ({ openFile: vi.fn().mockResolvedValue(undefined) })
 }))
@@ -90,8 +113,6 @@ vi.mock('../../services/chatStreamService', () => ({
     callbacks.onDone({ usage: { input_tokens: 1, output_tokens: 1 } })
   })
 }))
-
-const scrollChatToBottomMock = vi.mocked(scrollChatToBottom)
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -195,6 +216,15 @@ function expectButtonVisible(button: HTMLElement) {
   expect(button.className).not.toContain('chat-scroll-to-latest--hidden')
 }
 
+function pageFromStore(sessionId: string) {
+  const messages = store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
+  return {
+    entries: messages.map((message, sequence) => ({ message, sequence })),
+    oldestSequence: messages.length ? 0 : null,
+    hasMoreBefore: false
+  }
+}
+
 async function renderChatWithMessages(messages: Message[], session: Session = testSession) {
   store.dispatch(setConfig(makeConfig()))
   store.dispatch(setSession(session.id))
@@ -212,7 +242,7 @@ async function renderChatWithMessages(messages: Message[], session: Session = te
   )
 
   await waitFor(() => {
-    expect(window.api.chatGetMessages).toHaveBeenCalled()
+    expect(window.api.chatGetMessagePage).toHaveBeenCalled()
   })
   await waitFor(() => {
     expect(view.container.querySelector('.chat-scroll-to-latest')).not.toBeNull()
@@ -221,7 +251,10 @@ async function renderChatWithMessages(messages: Message[], session: Session = te
   return view
 }
 
-function syncScrollState(container: HTMLElement, dims: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+function syncScrollState(
+  container: HTMLElement,
+  dims: { scrollHeight: number; clientHeight: number; scrollTop: number }
+) {
   const el = getScrollEl(container)
   setupScrollContainer(el, dims)
   fireEvent.scroll(el)
@@ -231,7 +264,7 @@ function syncScrollState(container: HTMLElement, dims: { scrollHeight: number; c
 describe('ChatView scroll to latest', () => {
   beforeEach(async () => {
     vi.clearAllMocks()
-    scrollChatToBottomMock.mockClear()
+    scrollToIndexMock.mockClear()
     await changeAppLocale('zh-CN')
 
     window.matchMedia = vi.fn((query: string) => ({
@@ -250,8 +283,24 @@ describe('ChatView scroll to latest', () => {
       chatGetMessages: vi.fn().mockImplementation(async ({ sessionId }: { sessionId: string }) =>
         store.getState().chat.messages.filter((m) => m.sessionId === sessionId)
       ),
-      chatAppendMessage: vi.fn().mockResolvedValue(undefined),
-      chatPatchMessage: vi.fn().mockResolvedValue(undefined),
+      chatGetMessagePage: vi.fn().mockImplementation(async ({ sessionId }: { sessionId: string }) =>
+        pageFromStore(sessionId)
+      ),
+      chatGetApiContextBaseline: vi.fn().mockResolvedValue({ sessionId: testSession.id, entries: [] }),
+      chatGetContextHistorySummaryBaseline: vi.fn().mockResolvedValue({
+        sessionId: testSession.id,
+        entries: []
+      }),
+      chatGetSearchCorpusPage: vi.fn().mockResolvedValue({
+        entries: [],
+        nextSequence: 0,
+        hasMore: false
+      }),
+      chatAppendMessage: vi.fn().mockResolvedValue({ messageId: 'x', sequence: 1 }),
+      chatPatchMessage: vi.fn().mockResolvedValue({ message: makeMessage({ id: 'x', role: 'user' }), sequence: 1 }),
+      chatGetNextQueuedMessage: vi.fn().mockResolvedValue(null),
+      chatResolveRetryContext: vi.fn().mockResolvedValue(null),
+      chatGetMessageSequence: vi.fn().mockResolvedValue(null),
       sessionGet: vi.fn().mockResolvedValue(null),
       sessionBackfillAutoTitleIfNeeded: vi.fn().mockResolvedValue(null),
       feishuOnInboundMessage: vi.fn().mockReturnValue(() => {}),
@@ -296,7 +345,6 @@ describe('ChatView scroll to latest', () => {
     const button = getScrollToLatestButton(container)
     expectButtonVisible(button)
     expect(button.getAttribute('aria-label')).toBe('跳到最新消息')
-    expect(isChatScrollNearBottom(getScrollEl(container))).toBe(false)
   })
 
   it('scrolls to bottom when the button is clicked', async () => {
@@ -305,11 +353,12 @@ describe('ChatView scroll to latest', () => {
       makeMessage({ id: 'a1', role: 'assistant' })
     ]
     const { container } = await renderChatWithMessages(messages)
-    const el = syncScrollState(container, { scrollHeight: 1000, clientHeight: 100, scrollTop: 100 })
+    syncScrollState(container, { scrollHeight: 1000, clientHeight: 100, scrollTop: 100 })
 
     fireEvent.click(getScrollToLatestButton(container))
 
-    expect(scrollChatToBottomMock).toHaveBeenCalledWith(el, { force: true, behavior: 'smooth' })
+    expect(scrollToIndexMock).toHaveBeenCalled()
+    expectButtonHidden(getScrollToLatestButton(container))
   })
 
   it('degrades scroll behavior when prefers-reduced-motion is enabled', async () => {
@@ -341,13 +390,13 @@ describe('ChatView scroll to latest', () => {
       makeMessage({ id: 'a1', role: 'assistant' })
     ]
     const { container } = await renderChatWithMessages(messages)
-    const el = syncScrollState(container, { scrollHeight: 1000, clientHeight: 100, scrollTop: 100 })
+    syncScrollState(container, { scrollHeight: 1000, clientHeight: 100, scrollTop: 100 })
 
     const button = getScrollToLatestButton(container)
     button.focus()
     fireEvent.keyDown(button, { key: 'Enter', code: 'Enter' })
 
-    expect(scrollChatToBottomMock).toHaveBeenCalledWith(el, { force: true, behavior: 'smooth' })
+    expect(scrollToIndexMock).toHaveBeenCalled()
   })
 
   it('shows the button while streaming when scrolled up and hides when near bottom', async () => {
@@ -384,7 +433,11 @@ describe('ChatView scroll to latest', () => {
     store.dispatch(setSession('session-b'))
     store.dispatch(setMessages([]))
     store.dispatch(setSessions([testSession, sessionB]))
-    vi.mocked(window.api.chatGetMessages).mockResolvedValueOnce([])
+    vi.mocked(window.api.chatGetMessagePage).mockResolvedValueOnce({
+      entries: [],
+      oldestSequence: null,
+      hasMoreBefore: false
+    })
 
     await waitFor(() => {
       expect(store.getState().chat.currentSessionId).toBe('session-b')

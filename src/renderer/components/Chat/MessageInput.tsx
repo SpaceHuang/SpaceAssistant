@@ -3,7 +3,7 @@ import { Input, Tooltip } from 'antd'
 import { Keyboard, Plus, Send, Square, X } from 'lucide-react'
 import { ContextUsageRing } from './ContextUsageRing'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
+import type { ChatImageAttachment } from '../../../shared/domainTypes'
 import { MAX_CHAT_IMAGE_ATTACHMENTS } from '../../../shared/chatAttachmentLimits'
 import { getFileExtension, getImageMimeType } from '../../../shared/fileTypes'
 
@@ -25,11 +25,13 @@ type Props = {
   /** 当前会话执行中的活动摘要（工具名 / 阶段） */
   runningStatus?: string
   runningDetail?: string
-  runningElapsed?: string
+  /** 可为字符串或叶子计时节点，避免输入区主体随秒级时钟刷新 */
+  runningElapsed?: React.ReactNode
   modelSlot?: React.ReactNode
   sessionId?: string
   toolsEnabled?: boolean
-  historyMessages?: Message[]
+  historyImageTokens?: number
+  thinkingTokensToExclude?: number
   onSend: (text: string, attachments?: ChatImageAttachment[]) => void
   onAbort?: () => void
 }
@@ -73,7 +75,8 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     modelSlot,
     sessionId,
     toolsEnabled: _toolsEnabled,
-    historyMessages,
+    historyImageTokens = 0,
+    thinkingTokensToExclude = 0,
     onSend,
     onAbort
   },
@@ -108,12 +111,12 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     const parts: string[] = []
     if (runningStatus) parts.push(runningStatus)
     if (runningDetail) parts.push(runningDetail)
-    if (runningElapsed) parts.push(runningElapsed)
+    if (typeof runningElapsed === 'string' && runningElapsed) parts.push(runningElapsed)
     if (queueCount > 0) parts.push(t('input.queuePending', { count: queueCount }))
     return parts.join(' · ')
   }, [running, runningStatus, runningDetail, runningElapsed, queueCount, t])
 
-  const showActivity = running && Boolean(activitySummary)
+  const showActivity = running && Boolean(activitySummary || runningElapsed)
   /** 已有活动摘要时不再重复「执行中」；无摘要时保留停止说明 */
   const showHint = !running || canQueueSend || !showActivity
 
@@ -485,7 +488,11 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
                     <span className="composer-status__activity">
                       {runningStatus ? <span className="composer-status__label">{runningStatus}</span> : null}
                       {runningDetail ? <span className="composer-status__detail">{runningDetail}</span> : null}
-                      {runningElapsed ? <span className="composer-status__elapsed">{runningElapsed}</span> : null}
+                      {typeof runningElapsed === 'string' ? (
+                        runningElapsed ? <span className="composer-status__elapsed">{runningElapsed}</span> : null
+                      ) : (
+                        runningElapsed
+                      )}
                       {queueCount > 0 ? (
                         <span className="composer-status__queue">{t('input.queuePending', { count: queueCount })}</span>
                       ) : null}
@@ -508,7 +515,8 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
           <div className="composer-footer__actions">
             <ContextUsageRing
               pendingImageAttachments={readyAttachments}
-              historyMessages={historyMessages}
+              historyImageTokens={historyImageTokens}
+              thinkingTokensToExclude={thinkingTokensToExclude}
             />
             {running && text.trim() ? (
               <button

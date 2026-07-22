@@ -161,8 +161,29 @@ describe('ChatView auto-create session', () => {
     Object.assign(window.api, {
       sessionCreate: vi.fn().mockResolvedValue(newSession),
       chatGetMessages: vi.fn().mockResolvedValue([]),
-      chatAppendMessage: vi.fn().mockResolvedValue(undefined),
-      chatPatchMessage: vi.fn().mockResolvedValue(undefined),
+      chatGetMessagePage: vi.fn().mockResolvedValue({
+        entries: [],
+        oldestSequence: null,
+        hasMoreBefore: false
+      }),
+      chatGetApiContextBaseline: vi.fn().mockResolvedValue({ sessionId: 'new-session-id', entries: [] }),
+      chatGetContextHistorySummaryBaseline: vi.fn().mockResolvedValue({
+        sessionId: 'new-session-id',
+        entries: []
+      }),
+      chatGetSearchCorpusPage: vi.fn().mockResolvedValue({
+        entries: [],
+        nextSequence: 0,
+        hasMore: false
+      }),
+      chatAppendMessage: vi.fn().mockImplementation(async (msg: { id: string }) => ({
+        messageId: msg.id,
+        sequence: Date.now()
+      })),
+      chatPatchMessage: vi.fn().mockResolvedValue(null),
+      chatGetNextQueuedMessage: vi.fn().mockResolvedValue(null),
+      chatResolveRetryContext: vi.fn().mockResolvedValue(null),
+      chatGetMessageSequence: vi.fn().mockResolvedValue(null),
       sessionGet: vi.fn().mockResolvedValue(null),
       sessionBackfillAutoTitleIfNeeded: vi.fn().mockResolvedValue(null),
       feishuOnInboundMessage: vi.fn().mockReturnValue(() => {}),
@@ -223,8 +244,19 @@ describe('ChatView auto-create session', () => {
   })
 
   it('keeps user message in API payload when session message load races with send', async () => {
-    vi.mocked(window.api.chatGetMessages).mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve([]), 50))
+    vi.mocked(window.api.chatGetMessagePage).mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                entries: [],
+                oldestSequence: null,
+                hasMoreBefore: false
+              }),
+            50
+          )
+        )
     )
     renderChatView()
     fireEvent.change(getTextarea(), { target: { value: 'race test' } })

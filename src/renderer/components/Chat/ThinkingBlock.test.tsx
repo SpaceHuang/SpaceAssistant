@@ -47,6 +47,20 @@ describe('ThinkingBlock', () => {
     expect(document.querySelector('.chat-thinking--expanded')).toBeNull()
   })
 
+  it('does not persist search reveal into the user expansion preference', () => {
+    const target = {
+      messageId: 'm1', fragmentId: 'm1:thinking:0', start: 0, end: 4,
+      order: 0, source: { kind: 'thinking' as const, segmentIndex: 0 },
+      renderStrategy: 'thinking' as const, searchableText: 'plan'
+    }
+    const { rerender } = render(
+      <ThinkingBlock content="plan" messageId="m1" activeSearchTarget={target} />
+    )
+    expect(document.querySelector('.chat-thinking--expanded')).not.toBeNull()
+    rerender(<ThinkingBlock content="plan" messageId="m1" activeSearchTarget={null} />)
+    expect(document.querySelector('.chat-thinking--expanded')).toBeNull()
+  })
+
   it('shows English label when locale is en-US', async () => {
     await changeAppLocale('en-US')
     render(<ThinkingBlock content="localized" active={false} />)

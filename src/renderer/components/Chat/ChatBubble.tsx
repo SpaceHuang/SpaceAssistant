@@ -15,6 +15,7 @@ import {
 } from '../../../shared/activityBatchGrouping'
 import { contentSegmentsForRender } from '../../../shared/contentSegments'
 import { thinkingSegmentsForRender } from '../../../shared/thinkingSegments'
+import { buildFragmentId } from '../../../shared/chatSearchFragments'
 import { ChatMarkdown } from './ChatMarkdown'
 import { formatChatTimestamp } from './formatChatTimestamp'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -30,20 +31,22 @@ import { ToolRowIcon } from './ToolRowIcon'
 import { ActivityBatch, type ActivityBatchSummary } from './ActivityBatch'
 import { ChatMessageAttachments } from './ChatMessageAttachments'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { FileConfirmMode } from '../../../shared/domainTypes'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
+import type { ChatMessageActions } from './ChatMessageActions'
+import type { ToolsInteractiveScalars } from '../../services/resolveMessageToolsInteractive'
+import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
 
-export type ToolsInteractiveProps = {
-  requestId: string
-  confirmMode: FileConfirmMode
-  onToolConfirm: (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => void
-  onToolCancel: (toolUseId: string) => void
+/** @deprecated 使用 ToolsInteractiveScalars；保留别名兼容旧导入 */
+export type ToolsInteractiveProps = ToolsInteractiveScalars & {
+  onToolConfirm?: (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => void
+  onToolCancel?: (toolUseId: string) => void
 }
 
 type Props = {
   message: Message
   /** 新追加的消息行入场动效（由 ChatView 按条数增量判定） */
   enter?: boolean
+  /** 工具交互标量；confirm/cancel 优先用 override，否则用 actions */
   toolsInteractive?: ToolsInteractiveProps
   focusToolUseId?: string | null
   workDir?: string
@@ -52,9 +55,13 @@ type Props = {
   onOpenFile?: (relPath: string) => void
   wikiRootPath?: string
   showArchiveToWiki?: boolean
-  onArchiveToWiki?: () => void
-  onRetry?: () => void
-  onCancelQueued?: () => void
+  showRetry?: boolean
+  showCancelQueued?: boolean
+  actions?: ChatMessageActions
+  /** 仅测试：气泡实际进入 render 时回调 */
+  onRenderProbe?: (messageId: string) => void
+  /** 当前搜索命中目标（仅目标消息传入） */
+  activeSearchTarget?: ChatSearchActiveTarget | null
 }
 
 
@@ -105,17 +112,32 @@ function AssistantTextBody({
   activeText,
   body,
   onOpenFile,
-  wikiRootPath
+  wikiRootPath,
+  messageId,
+  segmentIndex,
+  activeSearchTarget
 }: {
   activeText: boolean
   body: string
   onOpenFile?: (relPath: string) => void
   wikiRootPath?: string
+  messageId: string
+  segmentIndex: number
+  activeSearchTarget?: ChatSearchActiveTarget | null
 }) {
   if (activeText) {
     return <div className="chat-stream-plain chat-md-assistant">{body}</div>
   }
-  return <ChatMarkdown content={body} onOpenFile={onOpenFile} wikiRootPath={wikiRootPath} />
+  return (
+    <ChatMarkdown
+      content={body}
+      onOpenFile={onOpenFile}
+      wikiRootPath={wikiRootPath}
+      messageId={messageId}
+      segmentIndex={segmentIndex}
+      activeSearchTarget={activeSearchTarget}
+    />
+  )
 }
 
 function MessageMeta({
@@ -123,6 +145,7 @@ function MessageMeta({
   streaming,
   failed,
   queued = false,
+  showCancelQueued,
   onCancelQueued,
   showArchiveToWiki,
   onArchiveToWiki
@@ -131,6 +154,7 @@ function MessageMeta({
   streaming: boolean
   failed: boolean
   queued?: boolean
+  showCancelQueued?: boolean
   onCancelQueued?: () => void
   showArchiveToWiki?: boolean
   onArchiveToWiki?: () => void
@@ -170,7 +194,7 @@ function MessageMeta({
         </span>
       ) : null}
       {queued ? <span className="chat-bubble-status chat-bubble-status--queued">{t('streaming.queued')}</span> : null}
-      {queued && onCancelQueued ? (
+      {queued && showCancelQueued && onCancelQueued ? (
         <button type="button" className="chat-cancel-queue-btn" onClick={onCancelQueued}>
           {t('streaming.cancelQueue')}
         </button>
@@ -196,28 +220,72 @@ export const ChatBubble = memo(function ChatBubble({
   onOpenFile,
   wikiRootPath,
   showArchiveToWiki = false,
-  onArchiveToWiki,
-  onRetry,
-  onCancelQueued
+  showRetry = false,
+  showCancelQueued = false,
+  actions,
+  onRenderProbe,
+  activeSearchTarget = null
 }: Props) {
+  onRenderProbe?.(message.id)
   const { t } = useTypedTranslation('chat')
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
   const failed = message.status === 'failed'
-  const thinkingSegments = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
-  const textSegments = contentSegmentsForRender(message)
-  const toolById = new Map((message.toolCalls ?? []).map((tc) => [tc.id, tc]))
-  const skillById = new Map((message.skillHints ?? []).map((h) => [h.id, h]))
-  const activityTimeline = !isUser && message.role !== 'system' ? buildAssistantActivityTimeline(message) : []
-  const getTimestamp = useMemo(() => buildActivityItemTimestampResolver(message), [message])
-  const activitySegments = useMemo(
-    () => groupActivityTimeline(activityTimeline, getTimestamp),
-    [activityTimeline, getTimestamp]
-  )
+  const searchRevealPath = activeSearchTarget?.revealPath
+
+  const activityModel = useMemo(() => {
+    const thinkingSegments = message.thinking ? thinkingSegmentsForRender(message.thinking) : []
+    const textSegments = contentSegmentsForRender(message)
+    const toolById = new Map((message.toolCalls ?? []).map((tc) => [tc.id, tc]))
+    const skillById = new Map((message.skillHints ?? []).map((h) => [h.id, h]))
+    const timeline =
+      message.role !== 'user' && message.role !== 'system'
+        ? buildAssistantActivityTimeline(message)
+        : []
+    const getTimestamp = buildActivityItemTimestampResolver(message)
+    return {
+      thinkingSegments,
+      textSegments,
+      toolById,
+      skillById,
+      activityTimeline: timeline,
+      segments: groupActivityTimeline(timeline, getTimestamp)
+    }
+  }, [
+    message.thinking,
+    message.content,
+    message.contentSegments,
+    message.toolCalls,
+    message.skillHints,
+    message.role,
+    message.timestamp,
+    message.id,
+    message.sessionId,
+    message.status
+  ])
+
+  const {
+    thinkingSegments,
+    textSegments,
+    toolById,
+    skillById,
+    activityTimeline,
+    segments: activitySegments
+  } = activityModel
+
   const batchProgressCtx = useMemo(
     () => ({ streaming, thinkingSegments, toolById }),
     [streaming, thinkingSegments, toolById]
   )
+
+  const handleArchiveToWiki = actions
+    ? () => actions.archiveToWiki(message.content)
+    : undefined
+  const handleRetry = actions ? () => actions.retryAssistant(message.id) : undefined
+  const handleCancelQueued = actions ? () => actions.cancelQueued(message.id) : undefined
+  const confirmTool =
+    toolsInteractive?.onToolConfirm ?? (actions ? actions.confirmTool : undefined)
+  const cancelTool = toolsInteractive?.onToolCancel ?? (actions ? actions.cancelTool : undefined)
 
   const lastBatchSegmentIndex = useMemo(() => {
     for (let i = activitySegments.length - 1; i >= 0; i--) {
@@ -245,14 +313,20 @@ export const ChatBubble = memo(function ChatBubble({
             {message.attachments?.length ? (
               <ChatMessageAttachments sessionId={message.sessionId} attachments={message.attachments} />
             ) : null}
-            <div className="chat-md-user">{message.content}</div>
+            <div
+              className="chat-md-user"
+              data-search-fragment-id={buildFragmentId(message.id, { kind: 'user-content' })}
+            >
+              {message.content}
+            </div>
           </div>
           <MessageMeta
             message={message}
             streaming={false}
             failed={false}
             queued={message.status === 'queued'}
-            onCancelQueued={onCancelQueued}
+            showCancelQueued={showCancelQueued}
+            onCancelQueued={handleCancelQueued}
           />
         </div>
       </div>
@@ -268,6 +342,9 @@ export const ChatBubble = memo(function ChatBubble({
           key={key}
           content={seg.content}
           active={streaming && seg.endTime === undefined}
+          messageId={message.id}
+          segmentIndex={item.segmentIndex}
+          activeSearchTarget={activeSearchTarget}
         />
       )
     }
@@ -286,6 +363,9 @@ export const ChatBubble = memo(function ChatBubble({
             body={body}
             onOpenFile={onOpenFile}
             wikiRootPath={wikiRootPath}
+            messageId={message.id}
+            segmentIndex={item.segmentIndex}
+            activeSearchTarget={activeSearchTarget}
           />
         </div>
       )
@@ -301,6 +381,7 @@ export const ChatBubble = memo(function ChatBubble({
     }
     const tc = toolById.get(item.toolId)
     if (!tc) return null
+    const toolsLive = Boolean(toolsInteractive && (confirmTool || cancelTool))
     return (
       <ToolCallCard
         key={key}
@@ -314,16 +395,19 @@ export const ChatBubble = memo(function ChatBubble({
         focus={focusToolUseId === tc.id}
         confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
         onConfirm={
-          toolsInteractive && tc.status === 'confirming'
-            ? (approved, options) => toolsInteractive.onToolConfirm(tc.id, approved, options)
+          toolsLive && confirmTool && tc.status === 'confirming'
+            ? (approved, options) => confirmTool(tc.id, approved, options)
             : undefined
         }
         onCancel={
-          toolsInteractive && tc.status === 'executing'
-            ? () => toolsInteractive.onToolCancel(tc.id)
+          toolsLive && cancelTool && tc.status === 'executing'
+            ? () => cancelTool(tc.id)
             : undefined
         }
         onOpenFile={onOpenFile}
+        activeSearchTarget={
+          activeSearchTarget?.revealPath?.toolUseId === tc.id ? activeSearchTarget : null
+        }
       />
     )
   }
@@ -337,6 +421,18 @@ export const ChatBubble = memo(function ChatBubble({
     const batchInProgress = isActivityBatchInProgress(segment.items, batchProgressCtx)
     const isActive = isLastBatch && batchInProgress
     const keepExpanded = batchContainsConfirmingTool(segment.items, toolById)
+    const searchReveal = Boolean(
+      searchRevealPath &&
+        segment.items.some((item) => {
+          if (searchRevealPath.thinkingSegmentIndex != null && item.kind === 'thinking') {
+            return item.segmentIndex === searchRevealPath.thinkingSegmentIndex
+          }
+          if (searchRevealPath.toolUseId && item.kind === 'tool') {
+            return item.toolId === searchRevealPath.toolUseId
+          }
+          return false
+        })
+    )
 
     return (
       <ActivityBatch
@@ -344,6 +440,7 @@ export const ChatBubble = memo(function ChatBubble({
         items={segment.items}
         isActive={isActive}
         keepExpanded={keepExpanded}
+        searchReveal={searchReveal}
         summary={buildBatchSummary(segment.items, { toolById, thinkingSegments, t })}
         renderItem={(item, itemIndex) =>
           renderActivityItem(item, `${message.id}-batch-${segmentIndex}-${itemIndex}`)
@@ -406,8 +503,8 @@ export const ChatBubble = memo(function ChatBubble({
         {failed ? (
           <div className="chat-message-error" role="alert">
             <span className="chat-message-error__text">{t('bubble.retryFailedMessage')}</span>
-            {onRetry ? (
-              <button type="button" className="chat-message-error__retry" onClick={onRetry}>
+            {showRetry && handleRetry ? (
+              <button type="button" className="chat-message-error__retry" onClick={handleRetry}>
                 {t('bubble.retry')}
               </button>
             ) : null}
@@ -419,7 +516,7 @@ export const ChatBubble = memo(function ChatBubble({
           streaming={streaming}
           failed={failed}
           showArchiveToWiki={showArchiveToWiki}
-          onArchiveToWiki={onArchiveToWiki}
+          onArchiveToWiki={handleArchiveToWiki}
         />
       </div>
     </div>
@@ -428,11 +525,19 @@ export const ChatBubble = memo(function ChatBubble({
   prev.message === next.message &&
   prev.enter === next.enter &&
   prev.focusToolUseId === next.focusToolUseId &&
-  prev.toolsInteractive === next.toolsInteractive &&
+  prev.toolsInteractive?.requestId === next.toolsInteractive?.requestId &&
+  prev.toolsInteractive?.confirmMode === next.toolsInteractive?.confirmMode &&
+  prev.toolsInteractive?.onToolConfirm === next.toolsInteractive?.onToolConfirm &&
+  prev.toolsInteractive?.onToolCancel === next.toolsInteractive?.onToolCancel &&
+  prev.workDir === next.workDir &&
+  prev.shellConfig === next.shellConfig &&
+  prev.sessionMetadata === next.sessionMetadata &&
   prev.onOpenFile === next.onOpenFile &&
   prev.wikiRootPath === next.wikiRootPath &&
   prev.showArchiveToWiki === next.showArchiveToWiki &&
-  prev.onArchiveToWiki === next.onArchiveToWiki &&
-  prev.onRetry === next.onRetry &&
-  prev.onCancelQueued === next.onCancelQueued
+  prev.showRetry === next.showRetry &&
+  prev.showCancelQueued === next.showCancelQueued &&
+  prev.actions === next.actions &&
+  prev.onRenderProbe === next.onRenderProbe &&
+  prev.activeSearchTarget === next.activeSearchTarget
 )

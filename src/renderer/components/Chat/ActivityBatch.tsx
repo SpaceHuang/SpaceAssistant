@@ -14,17 +14,42 @@ type Props = {
   isActive: boolean
   /** 批次内含待确认工具时保持展开，避免确认卡片被折叠隐藏 */
   keepExpanded?: boolean
+  /** 搜索命中位于本批次时强制展开（不改 pin / 用户偏好） */
+  searchReveal?: boolean
   summary: ActivityBatchSummary
   renderItem: (item: AssistantActivityItem, index: number) => ReactNode
 }
 
-export function ActivityBatch({ items, isActive, keepExpanded = false, summary, renderItem }: Props) {
+export function ActivityBatch({
+  items,
+  isActive,
+  keepExpanded = false,
+  searchReveal = false,
+  summary,
+  renderItem
+}: Props) {
   const { t } = useTypedTranslation('chat')
   const [expanded, setExpanded] = useState(isActive)
   const [pinned, setPinned] = useState(false)
   const wasActiveRef = useRef(isActive)
+  const userExpandedBeforeSearchRef = useRef<boolean | null>(null)
 
   useEffect(() => {
+    if (searchReveal) {
+      if (userExpandedBeforeSearchRef.current == null) {
+        userExpandedBeforeSearchRef.current = expanded
+      }
+      setExpanded(true)
+      return
+    }
+    if (userExpandedBeforeSearchRef.current != null) {
+      setExpanded(userExpandedBeforeSearchRef.current)
+      userExpandedBeforeSearchRef.current = null
+    }
+  }, [searchReveal]) // eslint-disable-line react-hooks/exhaustive-deps -- 仅在搜索覆盖进出时恢复
+
+  useEffect(() => {
+    if (searchReveal) return
     if (keepExpanded) {
       setExpanded(true)
       return
@@ -43,7 +68,7 @@ export function ActivityBatch({ items, isActive, keepExpanded = false, summary, 
     }
 
     setExpanded(false)
-  }, [isActive, pinned, keepExpanded])
+  }, [isActive, pinned, keepExpanded, searchReveal])
 
   const toggleExpanded = () => setExpanded((v) => !v)
   const togglePin = (event: React.MouseEvent) => {
@@ -51,13 +76,14 @@ export function ActivityBatch({ items, isActive, keepExpanded = false, summary, 
     setPinned((v) => !v)
   }
 
-  const toggleLabel = expanded ? t('batch.collapse') : t('batch.expand')
+  const effectivelyExpanded = expanded || searchReveal
+  const toggleLabel = effectivelyExpanded ? t('batch.collapse') : t('batch.expand')
 
   return (
     <div
       className={[
         'activity-batch',
-        expanded ? 'activity-batch--expanded' : '',
+        effectivelyExpanded ? 'activity-batch--expanded' : '',
         isActive ? 'activity-batch--active' : ''
       ]
         .filter(Boolean)
@@ -68,7 +94,7 @@ export function ActivityBatch({ items, isActive, keepExpanded = false, summary, 
           type="button"
           className="activity-batch__header"
           onClick={toggleExpanded}
-          aria-expanded={expanded}
+          aria-expanded={effectivelyExpanded}
           aria-label={toggleLabel}
         >
           <span className="activity-batch__icon" aria-hidden>
@@ -90,11 +116,13 @@ export function ActivityBatch({ items, isActive, keepExpanded = false, summary, 
       <div className="activity-batch__body-panel">
         <div className="activity-batch__body-panel-inner">
           <div className="activity-batch__body">
-            {items.map((item, index) => (
-              <div key={`batch-item-${index}`} className="activity-batch__item">
-                {renderItem(item, index)}
-              </div>
-            ))}
+            {effectivelyExpanded
+              ? items.map((item, index) => (
+                  <div key={`batch-item-${index}`} className="activity-batch__item">
+                    {renderItem(item, index)}
+                  </div>
+                ))
+              : null}
           </div>
         </div>
       </div>

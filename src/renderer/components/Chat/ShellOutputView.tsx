@@ -49,6 +49,7 @@ export function ShellOutputView({
   return (
     <div className={`shell-output-block${hasFailure ? ' shell-output-block--failed' : ''}`}>
       {out.trim() ? <pre className="shell-output">{out}</pre> : null}
+      {out.trim() && errDisplay.trim() ? '\n' : null}
       {errDisplay.trim() ? <pre className="shell-output shell-output__stderr">{errDisplay}</pre> : null}
       {truncated && persistedOutputPath ? (
         <button
