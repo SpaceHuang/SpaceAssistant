@@ -71,6 +71,8 @@ export type AgentLogEventName =
   | 'fileContentWatcher.startFailed'
   | 'tool.result.pairing.repaired'
   | 'startup.streaming_cleanup'
+  | 'startup.legacy_workspace_layout_cleanup'
+  | 'startup.legacy_workspace_layout_cleanup_failed'
   | 'db.tool_calls.deserialize_failed'
   | 'backup.tool_pairing.anomaly'
   | 'migration.tool_calls.duplicate_id'

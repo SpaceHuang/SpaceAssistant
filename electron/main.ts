@@ -24,6 +24,7 @@ import {
 import { getConfigValue, getDefaultDbPath, openDatabase, setConfigValue } from './database'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
+import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
@@ -217,6 +218,14 @@ app.whenReady().then(() => {
   }
   appDb = db
   cleanupStreamingResiduesOnStartup(db)
+  try {
+    cleanupLegacyWorkspaceLayoutOnStartup(db)
+  } catch (err) {
+    console.warn(
+      '[legacyWorkspaceLayoutCleanup] failed:',
+      err instanceof Error ? err.message : String(err)
+    )
+  }
   void import('./shell/shellCommandTrust').then(({ persistExpiredTrustedCommandMarks }) => {
     persistExpiredTrustedCommandMarks(db)
   })

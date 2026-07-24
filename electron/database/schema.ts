@@ -138,5 +138,6 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_package
 export const SCHEMA_META_KEYS = {
   schemaVersion: 'schema_version',
   migratedFromJsonAt: 'migrated_from_json_at',
-  migratedFromJsonPath: 'migrated_from_json_path'
+  migratedFromJsonPath: 'migrated_from_json_path',
+  legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at'
 } as const

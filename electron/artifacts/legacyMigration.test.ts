@@ -34,7 +34,7 @@ describe('legacy artifact migration', () => {
     expect(saved.metadata.previewNote).toBe('touch')
   })
 
-  it('keeps writeDirChoice for legacy sessions on save', () => {
+  it('strips writeDirChoice for non-artifact sessions on save', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, {
       name: 'legacy',
@@ -45,6 +45,8 @@ describe('legacy artifact migration', () => {
       metadata: { ...(getSession(db, session.id)?.metadata ?? {}), previewNote: 'touch' }
     })
     const saved = getSession(db, session.id)!
-    expect(saved.metadata.writeDirChoice).toEqual({ dir: '/tmp/legacy', confirmedAt: 1 })
+    expect(saved.metadata.writeDirChoice).toBeUndefined()
+    expect(saved.metadata.previewNote).toBe('touch')
+    expect(saved.metadata.artifactDefaultDir).toBeUndefined()
   })
 })
