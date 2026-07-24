@@ -4,7 +4,6 @@ import {
   cancelAllToolConfirmsForRequest,
   cancelAllToolsForRequest
 } from './toolConfirmRegistry'
-import { cancelAllWriteDirConfirmsForRequest } from './workspaceLayout/writeDirConfirmRegistry'
 import { cancelArtifactDecisionsForRequest } from './artifacts/artifactDecisionBridge'
 
 export { CHAT_CANCELLED_MESSAGE }
@@ -29,7 +28,6 @@ export function registerChatCancel(requestId: string): AbortSignal {
 export function signalChatCancel(requestId: string): void {
   chatCancelControllers.get(requestId)?.abort()
   cancelAllToolConfirmsForRequest(requestId)
-  cancelAllWriteDirConfirmsForRequest(requestId)
   cancelAllToolsForRequest(requestId)
   cancelArtifactDecisionsForRequest(requestId)
 }

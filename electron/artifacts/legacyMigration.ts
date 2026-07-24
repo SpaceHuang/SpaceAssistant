@@ -2,14 +2,6 @@ import { isArtifactManagementEnabled } from './featureFlag'
 
 const WRITE_DIR_CHOICE_KEY = 'writeDirChoice'
 
-/** Legacy extension redirect and write-dir confirm apply only outside artifact-managed sessions. */
-export function shouldApplyLegacyWorkspaceLayout(
-  metadata: Record<string, unknown>,
-  layoutEnabled: boolean
-): boolean {
-  return layoutEnabled && !isArtifactManagementEnabled(metadata)
-}
-
 /**
  * Artifact sessions ignore legacy writeDirChoice at runtime and drop it on the next normal save.
  * writeDirChoice is never migrated to artifactDefaultDir.

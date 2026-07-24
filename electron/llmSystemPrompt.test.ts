@@ -99,18 +99,15 @@ describe('buildFinalSystemPrompt', () => {
     expect(second).toContain('English (en-US)')
   })
 
-  it('includes recent artifact context before workspace hints', () => {
+  it('includes recent artifact context in the system prompt', () => {
     const result = buildFinalSystemPrompt({
       locale: 'en-US',
       memoryEnabled: false,
       memoryContent: null,
       system: 'base',
-      artifactContextHint: 'Recent session artifacts (reuse artifactId when continuing edits):\n1. a1',
-      workspaceLayoutHint: 'layout hint'
+      artifactContextHint: 'Recent session artifacts (reuse artifactId when continuing edits):\n1. a1'
     })!
-    const artifactIdx = result.indexOf('Recent session artifacts')
-    const layoutIdx = result.indexOf('layout hint')
-    expect(artifactIdx).toBeGreaterThan(-1)
-    expect(layoutIdx).toBeGreaterThan(artifactIdx)
+    expect(result).toContain('Recent session artifacts')
+    expect(result.indexOf('Recent session artifacts')).toBeGreaterThan(result.indexOf('base'))
   })
 })

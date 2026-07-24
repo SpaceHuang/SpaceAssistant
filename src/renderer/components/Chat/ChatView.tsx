@@ -62,7 +62,6 @@ import { WriteDirConfirmPanel } from './WriteDirConfirmPanel'
 import { usePendingArtifactDecisionSnapshot } from '../../hooks/usePendingArtifactDecisionSnapshot'
 import { pendingArtifactDecisionStore } from '../../services/pendingArtifactDecisionStore'
 import { ArtifactDecisionCard } from './ArtifactDecisionCard'
-import { shouldShowLegacyWriteDirUi } from './legacyWriteDirUi'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
@@ -1398,10 +1397,7 @@ export function ChatView() {
     return null
   }, [currentSession?.metadata])
 
-  const showLegacyWriteDirUi = shouldShowLegacyWriteDirUi(
-    cfg?.workspaceLayout?.enabled,
-    currentSession?.metadata?.artifactManagementEnabled === true
-  )
+  const showLegacyWriteDirUi = false
 
   const testPreviewToolsInteractive = useMemo(
     () =>

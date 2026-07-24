@@ -21,8 +21,7 @@ import type {
   ShellConfig,
   ShellSecurityHints,
   ToolsConfig,
-  WikiConfig,
-  WorkspaceLayoutConfig
+  WikiConfig
 } from '../src/shared/domainTypes'
 import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
@@ -121,7 +120,7 @@ import {
   throwIfChatCancelled
 } from './chatCancelRegistry'
 import { getCachedMemoryContent } from './projectMemory'
-import { buildFinalSystemPrompt, buildWorkspaceLayoutHint, resolveRequestLocale } from './llmSystemPrompt'
+import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import type { AppLocale } from '../src/shared/locale'
 import { stripThinkingBlocksFromAssistantMessages } from '../src/shared/stripThinkingFromApiMessages'
 import {
@@ -148,8 +147,7 @@ import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
-import { applyWorkspaceLayoutRedirect, resolveWriteDirBase } from './workspaceLayout/redirect'
-import { isArtifactManagementEnabled, shouldUseLegacyWorkspaceRedirect } from './artifacts/featureFlag'
+import { isArtifactManagementEnabled } from './artifacts/featureFlag'
 import {
   createToolLoopArtifactState,
   listArtifactOccupiedPaths,
@@ -163,15 +161,6 @@ import { ArtifactRepository } from './artifacts/artifactRepository'
 import { getArtifactDecisionRequest } from './artifacts/artifactDecisionBridge'
 import { serializeArtifactDecisionForRemote } from './remote/artifactDecisionRemote'
 import { sendRemoteArtifactDecisionPrompt } from './remote/remoteDecisionOutbound'
-import {
-  getWriteDirChoice,
-  setWriteDirChoice
-} from './workspaceLayout/sessionWriteDir'
-import { waitForWriteDirConfirm } from './workspaceLayout/writeDirConfirmRegistry'
-import {
-  buildAndSnapshotCandidates,
-  clearWriteDirCandidateSnapshot
-} from './workspaceLayout/confirmFlow'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -339,7 +328,6 @@ export type RunToolChatSessionArgs = {
   browserConfig?: BrowserConfig
   shellConfig?: ShellConfig | null
   wikiConfig?: WikiConfig
-  workspaceLayout?: WorkspaceLayoutConfig
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
@@ -423,7 +411,6 @@ async function runToolChatSessionInner(
     browserConfig,
     shellConfig,
     wikiConfig,
-    workspaceLayout,
     feishuConfig,
     wechatConfig,
     larkCliRunner,
@@ -549,15 +536,8 @@ async function runToolChatSessionInner(
         : undefined
     const systemWithTools = appendAvailableToolsHint(baseSystemWithRecovery, toolNames)
     const locale = resolveRequestLocale(payloadLocale, appDb)
-    const sessionForLayout = appDb ? getSession(appDb, sessionId) : undefined
-    const layoutMeta = (sessionForLayout?.metadata ?? {}) as Record<string, unknown>
-    const artifactManagedForContext = appDb ? isArtifactManagementEnabled(sessionForLayout?.metadata ?? {}) : false
-    const writeDirChoiceForHint =
-      workspaceLayout?.enabled && !artifactManagedForContext ? getWriteDirChoice(layoutMeta) : null
-    const workspaceLayoutHint =
-      workspaceLayout && !artifactManagedForContext
-        ? buildWorkspaceLayoutHint(workspaceLayout, writeDirChoiceForHint)
-        : undefined
+    const sessionForContext = appDb ? getSession(appDb, sessionId) : undefined
+    const artifactManagedForContext = appDb ? isArtifactManagementEnabled(sessionForContext?.metadata ?? {}) : false
     const workDirForContext = resolveWorkDir ? resolveWorkDir() : initialWorkDir
     const artifactContextHint =
       artifactManagedForContext && appDb
@@ -570,7 +550,6 @@ async function runToolChatSessionInner(
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
-      workspaceLayoutHint,
       artifactContextHint
     })
     const messagesStripped = stripThinking(messagesForApi)
@@ -1016,7 +995,6 @@ async function runToolChatSessionInner(
         })
       }
 
-      let workspaceRedirectNote: string | undefined
       let resolvedArtifactWrite: PreparedArtifactWrite | undefined
       const artifactManagedSession = appDb ? isArtifactManagementEnabled(getSession(appDb, sessionId)?.metadata ?? {}) : false
       if (
@@ -1097,116 +1075,6 @@ async function runToolChatSessionInner(
           path: resolveResult.prepared.pathResolvedPayload.path,
           metadata: resolveResult.prepared.pathResolvedPayload.metadata
         })
-      }
-      if (
-        workspaceLayout?.enabled &&
-        shouldUseLegacyWorkspaceRedirect(appDb ? (getSession(appDb, sessionId)?.metadata ?? {}) : {}) &&
-        toolName === 'write_file' &&
-        typeof inputObj.path === 'string' &&
-        inputObj.path.trim()
-      ) {
-        const sessionRow = appDb ? getSession(appDb, sessionId) : undefined
-        const meta = { ...(sessionRow?.metadata ?? {}) } as Record<string, unknown>
-        let choice = getWriteDirChoice(meta)
-        if (!choice && workspaceLayout.writeDirConfirmEnabled) {
-          const userMsgs = initialMessages
-            .filter((m) => m.role === 'user')
-            .map((m) => {
-              if (typeof m.content === 'string') return m.content
-              if (Array.isArray(m.content)) {
-                return m.content
-                  .filter((b): b is { type: string; text?: string } => typeof b === 'object' && b !== null)
-                  .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
-                  .join('\n')
-              }
-              return ''
-            })
-            .filter(Boolean)
-          const candidates = await buildAndSnapshotCandidates({
-            requestId,
-            sessionId,
-            workDir,
-            fileStateCache: fileCache,
-            userMessages: userMsgs,
-            db: appDb
-          })
-          safeWebContentsSend(sender, 'file-write-dir:confirm-request', {
-            requestId,
-            sessionId,
-            candidates,
-            customOption: true as const
-          })
-          choice = await waitForWriteDirConfirm(requestId, sessionId)
-          clearWriteDirCandidateSnapshot(requestId, sessionId)
-          if (choice) {
-            setWriteDirChoice(meta, choice)
-            if (appDb && sessionRow) {
-              updateSession(appDb, sessionId, { metadata: meta })
-            }
-          } else {
-            const cancelErr = '未选择写入目录，已取消写入'
-            logToolLoopError(
-              { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-              cancelErr,
-              cancelErr
-            )
-            toolResults.push(buildToolErrorResult(toolUseId, cancelErr))
-            safeWebContentsSend(sender, 'tool:result', {
-              requestId,
-              toolUseId,
-              result: { success: false, error: cancelErr }
-            })
-            floatingNotificationManager?.onToolResult(requestId, toolUseId)
-            if (toolErrorRepeat.noteFailure(toolName, cancelErr)) {
-              abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${cancelErr}`
-              break
-            }
-            continue
-          }
-        }
-        const base = resolveWriteDirBase(choice, workDir)
-        if (base) {
-          const redirectOutcome = await applyWorkspaceLayoutRedirect({
-            toolName,
-            input: inputObj,
-            workDir,
-            sessionId,
-            workspaceLayout,
-            writeDirChoice: { dir: base },
-            wikiConfig
-          })
-          if (redirectOutcome.reject) {
-            const rejectReason = redirectOutcome.rejectReason ?? '路径规范校验失败'
-            logToolLoopError(
-              { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-              rejectReason,
-              rejectReason
-            )
-            toolResults.push(buildToolErrorResult(toolUseId, rejectReason))
-            safeWebContentsSend(sender, 'tool:result', {
-              requestId,
-              toolUseId,
-              result: { success: false, error: rejectReason }
-            })
-            floatingNotificationManager?.onToolResult(requestId, toolUseId)
-            if (toolErrorRepeat.noteFailure(toolName, rejectReason)) {
-              abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectReason}`
-              break
-            }
-            continue
-          }
-          if (redirectOutcome.redirected && redirectOutcome.newPath) {
-            inputObj.path = redirectOutcome.newPath
-            // 回写重定向后的路径到渲染进程的工具调用记录，否则右侧「引用文件」入口仍指向原始路径、点击无法打开
-            safeWebContentsSend(sender, 'tool:redirect', {
-              requestId,
-              toolUseId,
-              originalPath: redirectOutcome.originalPath ?? '',
-              newPath: redirectOutcome.newPath
-            })
-            workspaceRedirectNote = `[目录规范] 路径已从 ${redirectOutcome.originalPath} 重定向到 ${redirectOutcome.newPath}（依据扩展名→子目录映射）。`
-          }
-        }
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
@@ -1994,9 +1862,6 @@ async function runToolChatSessionInner(
       }
 
       let payload = formatToolResultPayload(execResult)
-      if (execResult.success && workspaceRedirectNote) {
-        payload = `${payload}\n\n${workspaceRedirectNote}`
-      }
       const recoverySkill =
         execResult.dependencyError &&
         resolveDependencyRecoverySkill(execResult.dependencyError.errorCode)

@@ -2,7 +2,7 @@ import type { IpcMain, WebContents } from 'electron'
 import { safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
-import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig, WorkspaceLayoutConfig } from '../src/shared/domainTypes'
+import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
@@ -35,7 +35,6 @@ export type ClaudeStreamDeps = {
   getBrowserConfig: () => BrowserConfig
   getShellConfig: () => ShellConfig
   getWikiConfig: () => WikiConfig
-  getWorkspaceLayout: () => WorkspaceLayoutConfig
   getAppDatabase: () => AppDatabase
   getProjectMemoryEnabled?: () => boolean
   getBrowserDetectContext: () => import('../src/shared/browserTypes').BrowserDetectContext
@@ -311,7 +310,6 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
-          workspaceLayout: deps.getWorkspaceLayout(),
           workDir: sessionWorkDir,
           userDataDir,
           getApiKey,
