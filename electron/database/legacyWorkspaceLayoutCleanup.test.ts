@@ -21,6 +21,29 @@ function rawSessionSnapshot(db: ReturnType<typeof createMemoryAppDb>) {
 }
 
 describe('cleanupLegacyWorkspaceLayoutOnStartup', () => {
+  it('final-release helicopter upgrade: old fixture without marker is fully cleaned on first run', () => {
+    // Same contract as the multi-session strip test: unmigrated DB + final code path.
+    const db = createMemoryAppDb()
+    const session = createSession(db, {
+      name: 'from-old-build',
+      metadata: { writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 9 }, keep: true }
+    })
+    setConfigValue(
+      db,
+      WORKSPACE_LAYOUT_CONFIG_KEY,
+      JSON.stringify({ enabled: true, writeDirConfirmEnabled: true, extensionSubdirMap: [] })
+    )
+    expect(getSchemaMeta(getDbConnection(db), CLEANED_AT)).toBeUndefined()
+
+    const result = cleanupLegacyWorkspaceLayoutOnStartup(db)
+    expect(result.ok).toBe(true)
+    expect(getConfigValue(db, WORKSPACE_LAYOUT_CONFIG_KEY)).toBeUndefined()
+    expect(getSession(db, session.id)!.metadata.writeDirChoice).toBeUndefined()
+    expect(getSession(db, session.id)!.metadata.keep).toBe(true)
+    expect(getSession(db, session.id)!.metadata.artifactDefaultDir).toBeUndefined()
+    expect(getSchemaMeta(getDbConnection(db), CLEANED_AT)).toBeTruthy()
+  })
+
   it('strips writeDirChoice and config without changing updated_at or listSessions order', () => {
     const db = createMemoryAppDb()
     const older = createSession(db, {

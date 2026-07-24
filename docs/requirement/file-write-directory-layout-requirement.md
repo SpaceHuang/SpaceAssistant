@@ -1,8 +1,13 @@
 # 文件写入目录规范 — 产品需求文档
 
+> **Deprecated / Superseded by artifact management.**  
+> 本需求描述的「扩展名→子目录」目录规范与 WriteDir 确认流已退役。  
+> 现行替代：工作产物管理（`docs/develop/explicit-output-directory-candidate-technical-design.md`）。  
+> 残存清理：`docs/develop/legacy-workspace-layout-cleanup-plan.md`。
+
 **版本：** 1.0
 **日期：** 2026-06-30
-**状态：** 待评审
+**状态：** Deprecated
 **关联文档：**
 - [tools-requirement.md](./tools-requirement.md)（工具安全基线与 write_file/edit_file 执行器）
 - [multi-workdir-requirement.md](./multi-workdir-requirement.md)（工作目录 / workDir profile 机制）

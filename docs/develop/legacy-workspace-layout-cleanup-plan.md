@@ -1,6 +1,6 @@
 # 旧「目录规范」残存清理计划
 
-> 状态：待实施（已按 review v1–v4 修订）  
+> 状态：**Done**（2026-07-24，分支 `refactor/legacy-workspace-layout-cleanup`）  
 > 日期：2026-07-24  
 > 背景：工作产物管理（artifact）已取代扩展名→子目录重定向；运行时门控已恒为关闭，但实现、IPC、UI、配置与测试仍大量残留。  
 > 相关：  
@@ -344,19 +344,19 @@ try {
 
 ## 7. 验证清单
 
-- [ ] 聚焦：原 `workspaceLayout` / WriteDir 测试已删除或改写，无失败引用
-- [ ] WP2：多会话清理前后 `updated_at` 不变、`listSessions` 顺序不变、无 `artifactDefaultDir` 副作用、二次执行幂等
-- [ ] WP2：坏 JSON 行 → 调用失败后 config/两条 session/`updated_at`/完成标记均原状；修复后重跑全量成功（必测）
-- [ ] WP5 / 最终树：无完成标记的旧 SQLite fixture 由最终代码首次打开 → helper 仍全量清理并写标记（必测）
-- [ ] 恢复路径：on-save 或导入边界仍能剥除 `writeDirChoice`（与 WP5 选定策略一致）
-- [ ] 最终树仍含完整 helper + 启动接线（非只读门闩）
-- [ ] `npm test`
-- [ ] `npm run typecheck:shared` && `npm run typecheck:renderer`
-- [ ] `npm run i18n:check`
+- [x] 聚焦：原 `workspaceLayout` / WriteDir 测试已删除或改写，无失败引用
+- [x] WP2：多会话清理前后 `updated_at` 不变、`listSessions` 顺序不变、无 `artifactDefaultDir` 副作用、二次执行幂等
+- [x] WP2：坏 JSON 行 → 调用失败后 config/两条 session/`updated_at`/完成标记均原状；修复后重跑全量成功（必测）
+- [x] WP5 / 最终树：无完成标记的旧 SQLite fixture 由最终代码首次打开 → helper 仍全量清理并写标记（必测）
+- [x] 恢复路径：on-save 或导入边界仍能剥除 `writeDirChoice`（与 WP5 选定策略一致）
+- [x] 最终树仍含完整 helper + 启动接线（非只读门闩）
+- [x] `npm test`
+- [x] `npm run typecheck:shared` && `npm run typecheck:renderer`
+- [x] `npm run i18n:check`
 - [ ] 手动：artifact **关** — `write_file` 到 `docs/analyze/foo.md` 路径不变、无确认卡
 - [ ] 手动：artifact **开**（新会话）— 带 `artifact` 的写入仍走决策/登记
-- [ ] grep：生产代码无 `applyWorkspaceLayoutRedirect` / `file-write-dir`；`writeDirChoice` 仅存于归档文档、本计划、以及保留的迁移/剥除 helper
-- [ ] DB（直升成功路径）：无 `config.workspaceLayout`；会话无 `writeDirChoice`；`schema_meta` 有完成标记
+- [x] grep：生产代码无 `applyWorkspaceLayoutRedirect` / `file-write-dir`；`writeDirChoice` 仅存于归档文档、本计划、以及保留的迁移/剥除 helper
+- [x] DB（直升成功路径）：无 `config.workspaceLayout`；会话无 `writeDirChoice`；`schema_meta` 有完成标记（单测覆盖）
 
 ---
 

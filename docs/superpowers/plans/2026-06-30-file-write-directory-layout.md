@@ -1,5 +1,8 @@
 # 文件写入目录规范 Implementation Plan
 
+> **Archived.** 本实施计划对应的目录规范运行时/UI/IPC 已由 `docs/develop/legacy-workspace-layout-cleanup-plan.md` 删除；请勿按本文继续实现。  
+> 现行替代：工作产物管理（artifact management）。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 新增可选的"目录规范"设置：开启后按"扩展名→子目录"映射把 Agent 新建文件重定向到约定子目录，并在每会话首次写入前确认写入目录。

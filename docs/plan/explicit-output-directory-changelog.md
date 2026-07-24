@@ -7,30 +7,24 @@
 - **配置键**：`config.artifactManagementEnabled`（设置 → 工具 → 工作产物 →「启用工作产物管理」）
 - **默认值**：`false`（opt-in 灰度）
 - **会话冻结**：开关仅在**创建会话时**从全局配置读取并写入 `sessions.metadata.artifactManagementEnabled`；后续修改设置不影响已有会话
-- **互斥**：artifact 会话不执行旧 `workspaceLayout` 扩展名重定向、不写 `writeDirChoice` 运行语义
+- **互斥**：legacy「目录规范」运行时已退役；任意会话均不再执行扩展名重定向或 WriteDir 确认。脏数据由启动 one-shot 清理与 on-save sanitizer 剥除 `writeDirChoice`（见 `legacy-workspace-layout-cleanup-plan.md`）。
 
 ## 数据迁移 v2
 
 - SQLite schema v2：新增 `session_artifacts`、`artifact_references`、`artifact_operations` 及索引
 - v1 数据库启动时单事务升级到 v2；高版本库拒绝打开
-- **不迁移** `sessions.metadata.writeDirChoice` → `artifactDefaultDir`；artifact 会话在下次正常 save 时剥离 `writeDirChoice`
+- **不迁移** `sessions.metadata.writeDirChoice` → `artifactDefaultDir`；启动 one-shot 与 on-save sanitizer **仅删除**顶层 `writeDirChoice`（DELETE ONLY）
 
 ## 旧行为保留与移除条件
 
-| 旧能力 | artifact 会话 | legacy 会话（flag=false，保留一版） |
-| --- | --- | --- |
-| 扩展名→子目录重定向 | 禁用 | 仍可用 |
-| WriteDirConfirmPanel / writeDir chip | 禁用 | 仍可用 |
-| WorkspaceLayoutTab 设置 UI | 已替换为 ArtifactSettingsTab | 旧配置只读留 DB，设置页不再编辑映射 |
+| 旧能力 | 当前状态（2026-07-24 cleanup） |
+| --- | --- |
+| 扩展名→子目录重定向 | **已删除**（运行时/模块/IPC） |
+| WriteDirConfirmPanel / writeDir chip | **已删除** |
+| WorkspaceLayoutTab / `AppConfig.workspaceLayout` | **已删除**；设置 → 工具 →「工作产物」nav key 为 `artifacts` |
+| `writeDirChoice` / `config.workspaceLayout` 脏数据 | 启动 one-shot + on-save sanitizer 剥除；完整迁移入口保留 |
 
-**移除旧 UI/重定向的前置条件**（记录门槛，尚未执行移除）：
-
-1. AC-01～AC-40 核心集成测试通过（`artifactAcceptance.integration.test.ts` 等）
-2. AC-01～AC-44 映射表可追溯（见 `explicit-output-directory-ac-mapping.md`）
-3. 三类端到端场景自动化通过
-4. Windows/Linux 路径安全人工验证完成
-
-当前状态：**灰度 gate 1～3 已通过**（2026-07-18 CI/本地 `npm test`）；gate 4 Windows/Linux 仍为 manual。
+详见 `docs/develop/legacy-workspace-layout-cleanup-plan.md`。
 
 ## 恢复与限制
 
@@ -38,12 +32,12 @@
 - 写入成功但 artifact 登记失败：工具结果失败，审计 `artifact.register.failed`，文件已落盘需用户核对
 - 工作区 profile 漂移：`ARTIFACT_WORKSPACE_CHANGED` 阻断 mutation
 
-## 不在 MVP 范围内
+## 不在 MVP 范围内（历史记录；legacy 清理已另立项完成）
 
-- 完全删除 legacy workspaceLayout 代码（仍 behind flag=false）
-- 自动迁移历史 writeDirChoice 为 artifact 默认目录
+- ~~完全删除 legacy workspaceLayout 代码（仍 behind flag=false）~~ → **已由 legacy-workspace-layout-cleanup 完成**
+- 自动迁移历史 writeDirChoice 为 artifact 默认目录（仍禁止；仅 DELETE）
 - Windows junction 自动化（标记 manual）
-- 全仓库 i18n strict 清零（既有 ~290 处硬编码中文未在本特性范围修复）
+- 全仓库 i18n strict 清零（既有硬编码中文未在本特性范围修复）
 
 ## 验证记录（2026-07-18）
 
