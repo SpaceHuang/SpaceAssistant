@@ -4,7 +4,6 @@ import { store } from '../store'
 import { addMessage, patchMessage, removeRunningSession } from '../store/chatSlice'
 import type { ToolChatController } from './chatToolSessionService'
 import { pendingConfirmStore } from './pendingConfirmStore'
-import { pendingWriteDirConfirmStore } from './pendingWriteDirConfirmStore'
 import { pendingArtifactDecisionStore } from './pendingArtifactDecisionStore'
 import {
   registerRunRequest,
@@ -294,7 +293,6 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
   }
   unregisterToolChatController(requestId)
   pendingConfirmStore.removeAllForRequest(requestId)
-  pendingWriteDirConfirmStore.removeAllForRequest(requestId)
   pendingArtifactDecisionStore.removeAllForRequest(requestId)
   unregisterRunRequest(requestId)
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App, Tag } from 'antd'
+import { App } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import {
@@ -56,9 +56,6 @@ import {
 import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
 import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
-import { usePendingWriteDirConfirmSnapshot } from '../../hooks/usePendingWriteDirConfirmSnapshot'
-import { pendingWriteDirConfirmStore } from '../../services/pendingWriteDirConfirmStore'
-import { WriteDirConfirmPanel } from './WriteDirConfirmPanel'
 import { usePendingArtifactDecisionSnapshot } from '../../hooks/usePendingArtifactDecisionSnapshot'
 import { pendingArtifactDecisionStore } from '../../services/pendingArtifactDecisionStore'
 import { ArtifactDecisionCard } from './ArtifactDecisionCard'
@@ -1385,19 +1382,7 @@ export function ChatView() {
   )
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
-  const pendingWriteDirConfirm = usePendingWriteDirConfirmSnapshot(sessionId)
   const pendingArtifactDecision = usePendingArtifactDecisionSnapshot(sessionId)
-
-  const writeDirChoiceDir = useMemo(() => {
-    const v = currentSession?.metadata?.writeDirChoice
-    if (v && typeof v === 'object' && v !== null && 'dir' in v) {
-      const dir = (v as { dir: unknown }).dir
-      if (typeof dir === 'string' && dir.trim()) return dir
-    }
-    return null
-  }, [currentSession?.metadata])
-
-  const showLegacyWriteDirUi = false
 
   const testPreviewToolsInteractive = useMemo(
     () =>
@@ -1584,18 +1569,6 @@ export function ChatView() {
   return (
     <div className="chat-view">
       {viewportBody}
-      {showLegacyWriteDirUi && pendingWriteDirConfirm ? (
-        <div className="chat-write-dir-confirm">
-          <div className="chat-write-dir-confirm__track">
-            <WriteDirConfirmPanel
-              requestId={pendingWriteDirConfirm.requestId}
-              sessionId={pendingWriteDirConfirm.sessionId}
-              candidates={pendingWriteDirConfirm.candidates}
-              onRespond={(choice) => pendingWriteDirConfirmStore.respond(pendingWriteDirConfirm, choice)}
-            />
-          </div>
-        </div>
-      ) : null}
       {pendingArtifactDecision ? (
         <div className="chat-artifact-decision">
           <div className="chat-artifact-decision__track">
@@ -1606,11 +1579,6 @@ export function ChatView() {
               onCancel={() => pendingArtifactDecisionStore.cancel(pendingArtifactDecision)}
             />
           </div>
-        </div>
-      ) : null}
-      {showLegacyWriteDirUi && writeDirChoiceDir ? (
-        <div className="chat-write-dir-chip">
-          <Tag>{t('writeDirChip.label', { dir: writeDirChoiceDir })}</Tag>
         </div>
       ) : null}
       <MessageInput

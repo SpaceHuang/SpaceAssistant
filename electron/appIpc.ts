@@ -89,19 +89,6 @@ import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } 
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
-import { submitWriteDirConfirm } from './workspaceLayout/writeDirConfirmRegistry'
-import {
-  resolveWriteDirCandidateDir,
-  clearWriteDirCandidateSnapshot
-} from './workspaceLayout/confirmFlow'
-import {
-  clearWriteDirChoice,
-  getWriteDirChoice,
-  setWriteDirChoice
-} from './workspaceLayout/sessionWriteDir'
-import { resolveSafePathReal } from './pathSecurity'
-import { resolveWorkDirForSession } from './workDirManager'
-import type { WriteDirConfirmResponse } from '../src/shared/api'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
@@ -367,56 +354,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
     }
   )
-
-  ipcMain.handle(
-    'file-write-dir:confirm-response',
-    async (_e, payload: WriteDirConfirmResponse) => {
-      let chosenDir: string | null = null
-      if (payload.choice?.type === 'candidate') {
-        chosenDir = resolveWriteDirCandidateDir(payload.requestId, payload.sessionId, payload.choice.key)
-      } else if (payload.choice?.type === 'custom') {
-        chosenDir = payload.choice.dir
-      }
-      const resolved = resolveWorkDirForSession(
-        ctx.db,
-        payload.sessionId,
-        () => ctx.workDirManager.listProfiles(),
-        () => ctx.workDirManager.getActiveProfileId(),
-        () => ctx.getWorkDir()
-      )
-      const sessionWorkDir = resolved?.workDir ?? ctx.getWorkDir()
-      if (chosenDir) {
-        try {
-          chosenDir = await resolveSafePathReal(sessionWorkDir, chosenDir)
-        } catch {
-          clearWriteDirCandidateSnapshot(payload.requestId, payload.sessionId)
-          submitWriteDirConfirm(payload.requestId, payload.sessionId, null)
-          return { ok: false as const, error: '目录超出工作目录范围' }
-        }
-      }
-      if (chosenDir && payload.sessionId) {
-        const session = getSession(ctx.db, payload.sessionId)
-        if (session) {
-          const meta = { ...session.metadata }
-          setWriteDirChoice(meta, { dir: chosenDir, confirmedAt: Date.now() })
-          updateSession(ctx.db, payload.sessionId, { metadata: meta })
-        }
-      }
-      clearWriteDirCandidateSnapshot(payload.requestId, payload.sessionId)
-      submitWriteDirConfirm(payload.requestId, payload.sessionId, chosenDir ? { dir: chosenDir } : null)
-      return { ok: true as const }
-    }
-  )
-
-  ipcMain.handle('file-write-dir:reset', async (_e, payload: { sessionId: string }) => {
-    const session = getSession(ctx.db, payload.sessionId)
-    if (!session) return { ok: false as const, error: '会话不存在' }
-    const meta = { ...session.metadata }
-    if (!getWriteDirChoice(meta)) return { ok: true as const }
-    clearWriteDirChoice(meta)
-    updateSession(ctx.db, payload.sessionId, { metadata: meta })
-    return { ok: true as const }
-  })
 
   ipcMain.handle('shell:manage-trusted-commands', async (_e, payload: unknown) => {
     const { listTrustedCommands, addTrustedCommand, removeTrustedCommands, cleanExpiredTrustedCommands } =

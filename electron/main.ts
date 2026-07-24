@@ -49,7 +49,6 @@ import { getMainWindowFrameOptions } from './windowFrame'
 import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowControlsIpc'
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
 import { createWorkDirManager, resolveWorkDirForSession, type WorkDirManager } from './workDirManager'
-import { clearAllSessionsWriteDirChoices } from './workspaceLayout/sessionWriteDir'
 import { FloatingNotificationManager } from './floatingNotificationManager'
 
 let floatingManager: FloatingNotificationManager | null = null
@@ -252,7 +251,6 @@ app.whenReady().then(() => {
     setWorkDir: applyWorkDirSideEffects,
     onBeforeSwitch: () => flushAgentLogger(),
     onAfterSwitch: (fromId, toId) => {
-      clearAllSessionsWriteDirChoices(db)
       const profiles = workDirManager!.listProfiles()
       const from = profiles.find((p) => p.id === fromId)
       const to = profiles.find((p) => p.id === toId)
