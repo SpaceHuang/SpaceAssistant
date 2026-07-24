@@ -162,7 +162,7 @@ export interface SubagentDispatchRecord {
 
 ```typescript
 export interface AppConfig {
-  // ...existing fields（locale / llmServices / tools / feishu / wechat / ... / workspaceLayout）
+  // ...existing fields（locale / llmServices / tools / feishu / wechat / ...）
   subagents: SubagentProfile[]     // 新增：固定两条（claude_code / codex）
 }
 

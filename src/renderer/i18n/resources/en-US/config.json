@@ -312,7 +312,7 @@
         "label": "Web access",
         "hint": "Browser automation and dependency checks"
       },
-      "workspaceLayout": {
+      "artifacts": {
         "label": "Artifacts",
         "hint": "Explicit output paths and artifact management (gray release)"
       }
@@ -606,21 +606,6 @@
     "scratchGitPolicyAsk": "Ask each time",
     "scratchGitPolicyHint": "Default when scratch files are first created in this workspace; change anytime here.",
     "overviewHint": "Artifacts are grouped as project changes, packages, scratch files, and research materials; paths come from write intents and user decisions, not extension redirects."
-  },
-  "workspaceLayout": {
-    "enabledLabel": "Enable directory layout",
-    "enabledHint": "When on, new agent files are organized by extension mapping; when off, behavior is unchanged.",
-    "writeDirConfirmEnabledLabel": "Confirm write directory before first write",
-    "writeDirConfirmEnabledHint": "Show candidate directories when a session first creates a file.",
-    "colExtension": "Extension",
-    "colSubdir": "Subdirectory",
-    "colAction": "Action",
-    "extPlaceholder": "py",
-    "subdirPlaceholder": "Script",
-    "addMapping": "Add mapping",
-    "invalidSubdir": "Must not contain path separators or ..",
-    "rulesHint": "Uses the last extension; unmapped files go to the write directory root; applies to new files only.",
-    "securityHint": "LLM-provided directory segments are discarded; final path is determined by your choice and mapping."
   },
   "feishuAudit": {
     "title": "Feishu activity log",

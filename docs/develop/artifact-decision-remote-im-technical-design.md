@@ -556,7 +556,7 @@ Owner 中还保存注册时的 `authOwner/source/privateChatTarget`。即使当�
 - resume 使用上一轮更新后的 artifact intent；
 - 桌面与 IM 抢答；
 - `artifactManagementEnabled=false` 时不注册 Owner、不发送、不拦截普通编号消息；
-- legacy `file-write-dir:confirm`、工具 Y/N 确认、普通桌面决策不受影响。
+- 工具 Y/N 确认、普通桌面决策不受影响（legacy `file-write-dir:confirm` 已退役删除）。
 
 验收时将需求 AC-IM-01～22 建立测试用例映射表，合并前要求 codec、bridge、两个 router 和 artifact flow 相关测试全部通过。
 

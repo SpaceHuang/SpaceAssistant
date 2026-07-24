@@ -11,6 +11,7 @@ import { getDbConnection, getSchemaMeta, isDatabaseEmpty, setSchemaMeta, type Ap
 import type { DbSnapshot, StoredMessage } from './types'
 import { deserializeToolCallsFromDb } from '../messageCodec'
 import { logAgentEvent } from '../agentLogger/agentLogger'
+import { sanitizeArtifactSessionMetadataOnSave } from '../artifacts/legacyMigration'
 
 export type MigrationResult = {
   sessions: number
@@ -24,6 +25,7 @@ export type MigrationResult = {
 }
 
 const DEFAULT_RECOVERED_MODEL = 'claude-sonnet-4-20250514'
+const WORKSPACE_LAYOUT_CONFIG_KEY = 'config.workspaceLayout'
 
 export type PreparedMigrationSnapshot = {
   snapshot: DbSnapshot
@@ -88,6 +90,27 @@ export function prepareSnapshotForMigration(snapshot: DbSnapshot): PreparedMigra
     },
     recoveredSessionIds,
     skippedMessageCount
+  }
+}
+
+/**
+ * DELETE ONLY legacy workspace-layout fields at the JSON→SQLite import boundary.
+ * Required because startup one-shot cleanup is skipped once its completion marker exists.
+ */
+export function stripLegacyWorkspaceLayoutFromMigrationSnapshot(snapshot: DbSnapshot): DbSnapshot {
+  const configs = { ...snapshot.configs }
+  delete configs[WORKSPACE_LAYOUT_CONFIG_KEY]
+  return {
+    ...snapshot,
+    sessions: snapshot.sessions.map((session) => ({
+      ...session,
+      metadata: sanitizeArtifactSessionMetadataOnSave(
+        session.metadata && typeof session.metadata === 'object' && !Array.isArray(session.metadata)
+          ? { ...session.metadata }
+          : {}
+      ).metadata
+    })),
+    configs
   }
 }
 
@@ -264,7 +287,9 @@ export function migrateFromJsonIfNeeded(db: AppDatabase, jsonPath: string): Migr
   const started = Date.now()
   const jsonStat = fs.statSync(jsonPath)
   const rawSnapshot = loadSnapshotFromJson(jsonPath)
-  const { snapshot, recoveredSessionIds, skippedMessageCount } = prepareSnapshotForMigration(rawSnapshot)
+  const prepared = prepareSnapshotForMigration(rawSnapshot)
+  const snapshot = stripLegacyWorkspaceLayoutFromMigrationSnapshot(prepared.snapshot)
+  const { recoveredSessionIds, skippedMessageCount } = prepared
   if (recoveredSessionIds.length > 0 || skippedMessageCount > 0) {
     console.warn('[database] migration repaired JSON snapshot', {
       recoveredSessionIds,

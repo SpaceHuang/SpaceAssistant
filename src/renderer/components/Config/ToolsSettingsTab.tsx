@@ -265,7 +265,7 @@ export function ToolsSettingsTab({
         )
       case 'browser':
         return <BrowserSettingsTab active browser={browserUi} onChange={setBrowserUi} models={models} />
-      case 'workspaceLayout':
+      case 'artifacts':
         return <ArtifactSettingsTab value={artifactSettingsUi} onChange={setArtifactSettingsUi} />
       default:
         return null

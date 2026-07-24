@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { createSession, getSession, setConfigValue } from '../database'
 import { ARTIFACT_MANAGEMENT_CONFIG_KEY, readArtifactManagementEnabledFromConfig } from './artifactConfig'
-import { isArtifactManagementEnabled, shouldUseLegacyWorkspaceRedirect } from './featureFlag'
+import { isArtifactManagementEnabled } from './featureFlag'
 
 describe('artifact management config and session freeze', () => {
   it('reads artifactManagementEnabled from app config', () => {
@@ -20,15 +20,14 @@ describe('artifact management config and session freeze', () => {
       artifactManagementEnabled: readArtifactManagementEnabledFromConfig(db)
     })
     expect(isArtifactManagementEnabled(getSession(db, session.id)!.metadata)).toBe(true)
-    expect(shouldUseLegacyWorkspaceRedirect(getSession(db, session.id)!.metadata)).toBe(false)
   })
 
-  it('keeps legacy redirect when config flag is off at session creation', () => {
+  it('records artifactManagementEnabled false when config flag is off at session creation', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, {
       name: 'artifact-off',
       artifactManagementEnabled: readArtifactManagementEnabledFromConfig(db)
     })
-    expect(shouldUseLegacyWorkspaceRedirect(getSession(db, session.id)!.metadata)).toBe(true)
+    expect(isArtifactManagementEnabled(getSession(db, session.id)!.metadata)).toBe(false)
   })
 })

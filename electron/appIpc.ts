@@ -55,7 +55,7 @@ import {
   REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE
 } from './remote/remoteSessionGuardMessages'
 import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../src/shared/llmModelConfig'
-import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, mergeWorkspaceLayoutConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
+import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
@@ -89,24 +89,10 @@ import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } 
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
 import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
-import { submitWriteDirConfirm } from './workspaceLayout/writeDirConfirmRegistry'
-import {
-  resolveWriteDirCandidateDir,
-  clearWriteDirCandidateSnapshot
-} from './workspaceLayout/confirmFlow'
-import {
-  clearWriteDirChoice,
-  getWriteDirChoice,
-  setWriteDirChoice
-} from './workspaceLayout/sessionWriteDir'
-import { resolveSafePathReal } from './pathSecurity'
-import { resolveWorkDirForSession } from './workDirManager'
-import type { WriteDirConfirmResponse } from '../src/shared/api'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
 import { mergeWikiConfig, mergeFeishuConfig } from '../src/shared/domainTypes'
-import type { WorkspaceLayoutConfig } from '../src/shared/domainTypes'
 import type { WikiConfig, WikiStatus, FeishuConfig, WeChatConfig, BrowserConfig, ShellConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb, persistBrowserConfig } from './browser/browserConfigDb'
 import { persistShellConfig, readShellConfigFromDb, syncShellDeniedTools } from './shell/shellConfigDb'
@@ -157,7 +143,6 @@ const CONFIG_KEYS = {
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   browser: 'config.browser',
   locale: 'config.locale',
-  workspaceLayout: 'config.workspaceLayout',
   artifactManagementEnabled: 'config.artifactManagementEnabled'
 } as const
 
@@ -246,15 +231,6 @@ function readWikiConfig(db: AppDatabase): WikiConfig {
   }
 }
 
-export function readWorkspaceLayoutConfig(db: AppDatabase): WorkspaceLayoutConfig {
-  const raw = getConfigValue(db, CONFIG_KEYS.workspaceLayout)
-  if (!raw) return mergeWorkspaceLayoutConfig(null)
-  try {
-    return mergeWorkspaceLayoutConfig(JSON.parse(raw) as Partial<WorkspaceLayoutConfig>)
-  } catch {
-    return mergeWorkspaceLayoutConfig(null)
-  }
-}
 
 /** 按 sequence 游标分页读取，不受固定条数上限约束，避免大会话导出被静默截断 */
 function backupPageReader(ctx: AppIpcContext, sessionId: string): MessagePageReader {
@@ -367,56 +343,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
     }
   )
-
-  ipcMain.handle(
-    'file-write-dir:confirm-response',
-    async (_e, payload: WriteDirConfirmResponse) => {
-      let chosenDir: string | null = null
-      if (payload.choice?.type === 'candidate') {
-        chosenDir = resolveWriteDirCandidateDir(payload.requestId, payload.sessionId, payload.choice.key)
-      } else if (payload.choice?.type === 'custom') {
-        chosenDir = payload.choice.dir
-      }
-      const resolved = resolveWorkDirForSession(
-        ctx.db,
-        payload.sessionId,
-        () => ctx.workDirManager.listProfiles(),
-        () => ctx.workDirManager.getActiveProfileId(),
-        () => ctx.getWorkDir()
-      )
-      const sessionWorkDir = resolved?.workDir ?? ctx.getWorkDir()
-      if (chosenDir) {
-        try {
-          chosenDir = await resolveSafePathReal(sessionWorkDir, chosenDir)
-        } catch {
-          clearWriteDirCandidateSnapshot(payload.requestId, payload.sessionId)
-          submitWriteDirConfirm(payload.requestId, payload.sessionId, null)
-          return { ok: false as const, error: '目录超出工作目录范围' }
-        }
-      }
-      if (chosenDir && payload.sessionId) {
-        const session = getSession(ctx.db, payload.sessionId)
-        if (session) {
-          const meta = { ...session.metadata }
-          setWriteDirChoice(meta, { dir: chosenDir, confirmedAt: Date.now() })
-          updateSession(ctx.db, payload.sessionId, { metadata: meta })
-        }
-      }
-      clearWriteDirCandidateSnapshot(payload.requestId, payload.sessionId)
-      submitWriteDirConfirm(payload.requestId, payload.sessionId, chosenDir ? { dir: chosenDir } : null)
-      return { ok: true as const }
-    }
-  )
-
-  ipcMain.handle('file-write-dir:reset', async (_e, payload: { sessionId: string }) => {
-    const session = getSession(ctx.db, payload.sessionId)
-    if (!session) return { ok: false as const, error: '会话不存在' }
-    const meta = { ...session.metadata }
-    if (!getWriteDirChoice(meta)) return { ok: true as const }
-    clearWriteDirChoice(meta)
-    updateSession(ctx.db, payload.sessionId, { metadata: meta })
-    return { ok: true as const }
-  })
 
   ipcMain.handle('shell:manage-trusted-commands', async (_e, payload: unknown) => {
     const { listTrustedCommands, addTrustedCommand, removeTrustedCommands, cleanExpiredTrustedCommands } =
@@ -856,7 +782,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const skills = readSkillsConfig(ctx.db)
     const wiki = readWikiConfig(ctx.db)
-    const workspaceLayout = readWorkspaceLayoutConfig(ctx.db)
     const feishu = readFeishuConfigFromDb(ctx.db)
     const wechat = readWeChatConfigFromDb(ctx.db)
     let workDirProfiles: AppConfig['workDirProfiles'] = []
@@ -905,7 +830,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       tools,
       skills,
       wiki,
-      workspaceLayout,
       artifactManagementEnabled: readArtifactManagementEnabledFromConfig(ctx.db),
       ...(scratchGitPolicy ? { scratchGitPolicy } : {}),
       feishu,
@@ -947,7 +871,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         browser: Partial<BrowserConfig>
         shell: Partial<ShellConfig>
         locale: AppConfig['locale']
-        workspaceLayout: Partial<WorkspaceLayoutConfig>
         artifactManagementEnabled?: boolean
         scratchGitPolicy?: 'add-ignore' | 'keep-visible' | null
       }>
@@ -1097,19 +1020,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeWikiConfig({ ...cur, ...payload.wiki })
         setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
-      }
-      if (payload.workspaceLayout !== undefined) {
-        let cur = mergeWorkspaceLayoutConfig(null)
-        const curRaw = getConfigValue(ctx.db, CONFIG_KEYS.workspaceLayout)
-        if (curRaw) {
-          try {
-            cur = mergeWorkspaceLayoutConfig(JSON.parse(curRaw) as Partial<WorkspaceLayoutConfig>)
-          } catch {
-            /* ignore */
-          }
-        }
-        const next = mergeWorkspaceLayoutConfig({ ...cur, ...payload.workspaceLayout })
-        setConfigValue(ctx.db, CONFIG_KEYS.workspaceLayout, JSON.stringify(next))
       }
       if (payload.artifactManagementEnabled !== undefined) {
         setConfigValue(

@@ -176,13 +176,13 @@ Electron ABI 仍由开放式 major 映射得出，Electron 35 会落到 ABI 130�
 
 1. `remoteSessionSwitchService` 为每次切换创建单调递增 token；消息加载完成后仅当 token 和 `currentSessionId` 仍匹配时提交 `setMessages`。工作目录切换成功而消息加载失败时，以同一 token 回滚桌面选择和 UI 状态。
 2. 备份导出使用按 sequence 的分页读取和流式 JSON 写出，直到无下一页；写入任何一页失败即删除临时备份并报告失败，不能生成不完整 `messages.json`。
-3. 新建 `tsconfig.renderer.json`，仅包含 `src/renderer` 与其需要的 `src/shared`，排除 Electron 主进程。`configSet` payload 明确加入 `wechat` 和 `workspaceLayout`，新增 `typecheck:renderer` 脚本并在 CI 的质量门禁中执行。
+3. 新建 `tsconfig.renderer.json`，仅包含 `src/renderer` 与其需要的 `src/shared`，排除 Electron 主进程。`configSet` payload 明确加入 `wechat`，新增 `typecheck:renderer` 脚本并在 CI 的质量门禁中执行。
 
 **测试与验收**
 
 - 不同会话快速切换、加载失败和后发先至响应均不会让旧会话消息覆盖当前会话。
 - 10,001 条及多页消息的备份/恢复完整且 sequence 稳定；中途失败不保留可被恢复的不完整文件。
-- 设置页的真实 `wechat`、`workspaceLayout` 调用通过 renderer 类型检查；删去任一字段会在 CI 失败。
+- 设置页的真实 `wechat` 调用通过 renderer 类型检查；删去该字段会在 CI 失败。
 
 ## 4. 实施依赖与合并顺序
 

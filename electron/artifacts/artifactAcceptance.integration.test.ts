@@ -3,7 +3,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { resetArtifactDecisionBridgeForTests } from './artifactDecisionBridge'
 import { createArtifactTestFixture, type ArtifactTestFixture } from './testHelpers'
-import { isArtifactManagementEnabled, shouldUseLegacyWorkspaceRedirect } from './featureFlag'
+import { isArtifactManagementEnabled } from './featureFlag'
 import {
   prepareArtifactToolWrite,
   registerArtifactWriteOutcome,
@@ -26,7 +26,7 @@ describe('artifact acceptance integration', () => {
   })
 
   describe('dev scenario (AC-01～05, AC-22～25, AC-33, AC-35～40)', () => {
-    it('AC-01/AC-35: artifact-enabled session skips legacy extension redirect semantics', () => {
+    it('AC-01/AC-35: artifact-enabled session freezes management flag on', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
       const session = createSession(fixture.db, {
@@ -36,7 +36,6 @@ describe('artifact acceptance integration', () => {
       })
       const metadata = getSession(fixture.db, session.id)!.metadata
       expect(isArtifactManagementEnabled(metadata)).toBe(true)
-      expect(shouldUseLegacyWorkspaceRedirect(metadata)).toBe(false)
     })
 
     it('AC-02/AC-05: explicit project paths resolve literally without redirect', () => {

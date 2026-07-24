@@ -312,7 +312,7 @@
         "label": "网络访问",
         "hint": "浏览器自动化与依赖检测"
       },
-      "workspaceLayout": {
+      "artifacts": {
         "label": "工作产物",
         "hint": "显式输出目录与工作产物管理（灰度）"
       }
@@ -606,21 +606,6 @@
     "scratchGitPolicyAsk": "每次询问",
     "scratchGitPolicyHint": "首次在本工作区创建会话草稿文件时的默认选择；可随时在此修改。",
     "overviewHint": "工作产物按项目变更、工作包、草稿与研究资料分组管理；位置由写入声明与用户决策决定，不再按扩展名自动重定向。"
-  },
-  "workspaceLayout": {
-    "enabledLabel": "启用目录规范",
-    "enabledHint": "开启后，Agent 新建文件将按下方映射归入子目录；关闭时行为与以前完全一致。",
-    "writeDirConfirmEnabledLabel": "首次写入前确认写入目录",
-    "writeDirConfirmEnabledHint": "每个会话首次新建文件前弹出候选目录供选择。",
-    "colExtension": "扩展名",
-    "colSubdir": "子目录",
-    "colAction": "操作",
-    "extPlaceholder": "py",
-    "subdirPlaceholder": "Script",
-    "addMapping": "新增映射",
-    "invalidSubdir": "不能包含路径分隔符或 ..",
-    "rulesHint": "取文件最后一个扩展名；未命中映射的文件直接写入所选目录根；仅对新建文件生效，编辑已有文件不重定向。",
-    "securityHint": "LLM 给出的目录部分会被丢弃，实际落点由你选定的目录与映射决定。"
   },
   "feishuAudit": {
     "title": "飞书操作记录",

@@ -381,7 +381,7 @@ onFileTreeSync(event):
 
 - 主进程在会话绑定 workDir 时，对该目录建立递归 `fs.watch`（参考已有 `electron/fileContentWatcher.ts`、`electron/projectMemory.ts` 的单文件 watch 先例）。
 - 监听 `rename`（增删）/ `change` 事件；`change`（仅内容变）**忽略**（树不关心内容）；`rename` 归一化为相对路径后经 `fileTreeSyncBus` 入队。
-- **必须忽略**的目录与文件（避免风暴）：`.git`、`node_modules`、构建产物（`dist`、`dist-electron`、`dist/renderer`）、`.agent/logs`、`logs/`、`sessions/`（备份目录）、Wiki 临时目录等；忽略规则复用现有路径规范（参考 `workspaceLayout/redirect`、`pathSecurity`）。
+- **必须忽略**的目录与文件（避免风暴）：`.git`、`node_modules`、构建产物（`dist`、`dist-electron`、`dist/renderer`）、`.agent/logs`、`logs/`、`sessions/`（备份目录）、Wiki 临时目录等；忽略规则复用现有路径规范（参考 `pathSecurity`）。
 - 平台差异：`fs.watch({ recursive: true })` 在 Windows / macOS 原生支持，Linux 需较新内核；若平台不支持递归，降级为方案 A + 仅监听已展开目录（见 D1）。
 
 ### 8.4 推荐（已决议 D1 = C）
@@ -552,7 +552,7 @@ onFileTreeSync(event):
 | # | 问题 | 决议 | 说明 |
 |---|------|------|------|
 | D1 | 是否引入 workDir 递归 `fs.watch` 兜底（方案 B） | **C. 分期** | 第一期仅方案 A（工具通知 + Subagent 通知 + 展开/滚动/防闪烁修复）；第二期视上线反馈再决定是否加方案 B |
-| D2 | 递归 watch 忽略目录清单 | **复用现有规范，集中维护** | 忽略规则复用 `workspaceLayout/redirect`、`pathSecurity` 等现有路径规范，不新增独立配置 |
+| D2 | 递归 watch 忽略目录清单 | **复用现有规范，集中维护** | 忽略规则复用 `pathSecurity` 等现有路径规范，不新增独立配置 |
 | D3 | 新增文件是否做"刚刚产生"高亮 | **A. 不做（完全静默）** | 与内容查看器静默策略一致；自动刷新全程无高亮、无 Toast、无文案 |
 | D4 | 手动「刷新」是否保留 Loading/Toast | **沿用现状** | 核查 `FileTreeToolbar` + `refreshTree`：文件树手动刷新**本就无 Loading/Toast**；"沿用现状"即仅改"保留展开态"，不引入任何反馈。注：本决策在文件树场景下"沿用现状"与"改为静默"实为同一行为 |
 | D5 | Linux 旧内核不支持递归 watch 时 | **降级方案 A** | 不引入 chokidar 等新依赖；第二期方案 B 在不支持递归 watch 的平台降级为方案 A |
