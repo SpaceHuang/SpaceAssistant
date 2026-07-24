@@ -28,6 +28,7 @@ res/mingcute-icons-main/
 test-browser.js
 
 # 本地参考文档，不纳入版本控制
+ref/
 docs/analysis/
 docs/references/
 docs/review/
