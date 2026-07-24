@@ -12,8 +12,9 @@ import {
   searchMessages
 } from './database'
 import { migrateFromJsonIfNeeded } from './database/migrateFromJson'
-import { getSchemaMeta, openSqliteDatabase } from './database/sqliteStore'
+import { getDbConnection, getSchemaMeta, openSqliteDatabase } from './database/sqliteStore'
 import { SCHEMA_META_KEYS } from './database/schema'
+import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
 
 describe('migrateFromJson', () => {
   const dirs: string[] = []
@@ -185,6 +186,71 @@ describe('migrateFromJson', () => {
     const result = migrateFromJsonIfNeeded(db2, jsonPath)
     expect(result).toBeNull()
     expect(fs.existsSync(jsonPath)).toBe(true)
+    db2.close()
+  })
+
+  it('strips writeDirChoice and workspaceLayout config when importing JSON after cleanup marker exists', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-legacy-layout-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+
+    // First boot: empty SQLite, cleanup writes completion marker (no sessions/configs yet).
+    const db1 = openSqliteDatabase(dbPath)
+    const cleaned = cleanupLegacyWorkspaceLayoutOnStartup(db1)
+    expect(cleaned.ok).toBe(true)
+    expect(getSchemaMeta(getDbConnection(db1), SCHEMA_META_KEYS.legacyWorkspaceLayoutCleanedAt)).toBeTruthy()
+    db1.close()
+
+    // Later: drop a legacy JSON beside the already-cleaned DB.
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [
+          {
+            id: 'sess-legacy',
+            name: 'from-json',
+            preview: '',
+            model: 'claude-sonnet-4-20250514',
+            temperature: 0.7,
+            maxTokens: 4096,
+            createdAt: 1,
+            updatedAt: 2,
+            messageCount: 0,
+            skillsState: { enabledSkillNames: [], disabledSkillNames: [] },
+            metadata: {
+              writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 },
+              keep: true
+            },
+            schemaVersion: 1
+          }
+        ],
+        messages: [],
+        configs: {
+          'config.locale': { value: 'zh-CN', createdAt: 1, updatedAt: 1 },
+          'config.workspaceLayout': {
+            value: JSON.stringify({ enabled: true, writeDirConfirmEnabled: true, extensionSubdirMap: [] }),
+            createdAt: 1,
+            updatedAt: 1
+          }
+        },
+        searchHistory: []
+      }),
+      'utf8'
+    )
+
+    const db2 = openSqliteDatabase(dbPath)
+    const result = migrateFromJsonIfNeeded(db2, jsonPath)
+    expect(result).not.toBeNull()
+    expect(result?.sessions).toBe(1)
+
+    // Startup cleanup would skip because marker already exists — import must have stripped.
+    expect(cleanupLegacyWorkspaceLayoutOnStartup(db2)).toEqual({ ok: true, skipped: true })
+    expect(getSession(db2, 'sess-legacy')?.metadata.writeDirChoice).toBeUndefined()
+    expect(getSession(db2, 'sess-legacy')?.metadata.keep).toBe(true)
+    expect(getSession(db2, 'sess-legacy')?.metadata.artifactDefaultDir).toBeUndefined()
+    expect(getConfigValue(db2, 'config.workspaceLayout')).toBeUndefined()
+    expect(getConfigValue(db2, 'config.locale')).toBe('zh-CN')
     db2.close()
   })
 })
