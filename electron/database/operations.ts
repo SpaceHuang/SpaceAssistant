@@ -144,6 +144,10 @@ export function createSession(
   const model = input.model ?? 'claude-sonnet-4-20250514'
   const temperature = input.temperature ?? DEFAULT_LLM_TEMPERATURE
   const maxTokens = input.maxTokens ?? 4096
+  const frozen = freezeArtifactManagementFlag(
+    input.metadata ? { ...input.metadata } : {},
+    input.artifactManagementEnabled
+  )
   const session: Session = {
     id,
     name: input.name,
@@ -156,7 +160,7 @@ export function createSession(
     updatedAt: now,
     messageCount: 0,
     skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
-    metadata: freezeArtifactManagementFlag(input.metadata ? { ...input.metadata } : {}, input.artifactManagementEnabled),
+    metadata: sanitizeArtifactSessionMetadataOnSave(frozen).metadata,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     workDirProfileId: input.workDirProfileId
   }

@@ -9,24 +9,36 @@ import {
   resolveArtifactDefaultDir,
   sanitizeArtifactSessionMetadataOnSave
 } from '../artifacts/legacyMigration'
+import type { AppDatabase } from './index'
 
 const WORKSPACE_LAYOUT_CONFIG_KEY = 'config.workspaceLayout'
 const CLEANED_AT = SCHEMA_META_KEYS.legacyWorkspaceLayoutCleanedAt
 
-function rawSessionSnapshot(db: ReturnType<typeof createMemoryAppDb>) {
+function rawSessionSnapshot(db: AppDatabase) {
   const conn = getDbConnection(db)
   return conn
     .prepare('SELECT id, metadata, updated_at FROM sessions ORDER BY id')
     .all() as Array<{ id: string; metadata: string; updated_at: number }>
 }
 
+/** Bypass createSession sanitizer to simulate pre-cleanup / restored backup rows. */
+function plantSessionMetadata(db: AppDatabase, sessionId: string, metadata: Record<string, unknown>): void {
+  getDbConnection(db)
+    .prepare('UPDATE sessions SET metadata = ? WHERE id = ?')
+    .run(JSON.stringify(metadata), sessionId)
+}
+
 describe('cleanupLegacyWorkspaceLayoutOnStartup', () => {
   it('final-release helicopter upgrade: old fixture without marker is fully cleaned on first run', () => {
-    // Same contract as the multi-session strip test: unmigrated DB + final code path.
     const db = createMemoryAppDb()
     const session = createSession(db, {
       name: 'from-old-build',
-      metadata: { writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 9 }, keep: true }
+      metadata: { keep: true }
+    })
+    plantSessionMetadata(db, session.id, {
+      ...getSession(db, session.id)!.metadata,
+      writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 9 },
+      keep: true
     })
     setConfigValue(
       db,
@@ -49,23 +61,28 @@ describe('cleanupLegacyWorkspaceLayoutOnStartup', () => {
     const older = createSession(db, {
       name: 'older',
       artifactManagementEnabled: false,
-      metadata: {
-        writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 },
-        keepMe: 'yes'
-      }
+      metadata: { keepMe: 'yes' }
     })
     const newer = createSession(db, {
       name: 'newer',
       artifactManagementEnabled: true,
-      metadata: {
-        writeDirChoice: { dir: '/tmp/other', confirmedAt: 2 },
-        artifactDefaultDir: 'Docs'
-      }
+      metadata: { artifactDefaultDir: 'Docs' }
     })
     const clean = createSession(db, {
       name: 'clean',
       artifactManagementEnabled: false,
       metadata: { note: 'untouched' }
+    })
+
+    plantSessionMetadata(db, older.id, {
+      ...getSession(db, older.id)!.metadata,
+      writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 },
+      keepMe: 'yes'
+    })
+    plantSessionMetadata(db, newer.id, {
+      ...getSession(db, newer.id)!.metadata,
+      writeDirChoice: { dir: '/tmp/other', confirmedAt: 2 },
+      artifactDefaultDir: 'Docs'
     })
 
     const conn = getDbConnection(db)
@@ -127,7 +144,12 @@ describe('cleanupLegacyWorkspaceLayoutOnStartup', () => {
     const db = createMemoryAppDb()
     const good = createSession(db, {
       name: 'good',
-      metadata: { writeDirChoice: { dir: '/tmp/x', confirmedAt: 1 }, keep: 1 }
+      metadata: { keep: 1 }
+    })
+    plantSessionMetadata(db, good.id, {
+      ...getSession(db, good.id)!.metadata,
+      writeDirChoice: { dir: '/tmp/x', confirmedAt: 1 },
+      keep: 1
     })
     setConfigValue(
       db,
@@ -172,6 +194,30 @@ describe('cleanupLegacyWorkspaceLayoutOnStartup', () => {
     expect(getSession(db, good.id)!.metadata.keep).toBe(1)
     expect(getSchemaMeta(getDbConnection(db), CLEANED_AT)).toBeTruthy()
   })
+
+  it('createSession after cleanup marker still strips writeDirChoice from metadata', () => {
+    const db = createMemoryAppDb()
+    cleanupLegacyWorkspaceLayoutOnStartup(db)
+    expect(getSchemaMeta(getDbConnection(db), CLEANED_AT)).toBeTruthy()
+
+    const created = createSession(db, {
+      name: 'reintroduced',
+      artifactManagementEnabled: false,
+      metadata: {
+        writeDirChoice: { dir: '/tmp/restored', confirmedAt: 99 },
+        keep: 'yes'
+      }
+    })
+
+    expect(created.metadata.writeDirChoice).toBeUndefined()
+    expect(created.metadata.keep).toBe('yes')
+    expect(created.metadata.artifactDefaultDir).toBeUndefined()
+
+    const stored = getSession(db, created.id)!
+    expect(stored.metadata.writeDirChoice).toBeUndefined()
+    expect(stored.metadata.keep).toBe('yes')
+    expect(stored.metadata.artifactDefaultDir).toBeUndefined()
+  })
 })
 
 describe('sanitizeArtifactSessionMetadataOnSave (all sessions)', () => {
@@ -193,7 +239,11 @@ describe('sanitizeArtifactSessionMetadataOnSave (all sessions)', () => {
     const session = createSession(db, {
       name: 'legacy',
       artifactManagementEnabled: false,
-      metadata: { writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 } }
+      metadata: { note: 'base' }
+    })
+    plantSessionMetadata(db, session.id, {
+      ...getSession(db, session.id)!.metadata,
+      writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 }
     })
     updateSession(db, session.id, {
       metadata: { ...(getSession(db, session.id)?.metadata ?? {}), previewNote: 'touch' }

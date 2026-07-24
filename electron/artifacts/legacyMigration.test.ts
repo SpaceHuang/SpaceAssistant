@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { createSession, getSession, updateSession } from '../database'
+import { getDbConnection } from '../database/sqliteStore'
 import {
   resolveArtifactDefaultDir,
   sanitizeArtifactSessionMetadataOnSave
 } from './legacyMigration'
+
+function plantWriteDirChoice(db: ReturnType<typeof createMemoryAppDb>, sessionId: string): void {
+  const meta = { ...getSession(db, sessionId)!.metadata, writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 } }
+  getDbConnection(db)
+    .prepare('UPDATE sessions SET metadata = ? WHERE id = ?')
+    .run(JSON.stringify(meta), sessionId)
+}
 
 describe('legacy artifact migration', () => {
   it('does not migrate writeDirChoice to artifactDefaultDir', () => {
@@ -24,8 +32,9 @@ describe('legacy artifact migration', () => {
     const session = createSession(db, {
       name: 'artifact',
       artifactManagementEnabled: true,
-      metadata: { writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 } }
+      metadata: {}
     })
+    plantWriteDirChoice(db, session.id)
     updateSession(db, session.id, {
       metadata: { ...(getSession(db, session.id)?.metadata ?? {}), previewNote: 'touch' }
     })
@@ -39,8 +48,9 @@ describe('legacy artifact migration', () => {
     const session = createSession(db, {
       name: 'legacy',
       artifactManagementEnabled: false,
-      metadata: { writeDirChoice: { dir: '/tmp/legacy', confirmedAt: 1 } }
+      metadata: {}
     })
+    plantWriteDirChoice(db, session.id)
     updateSession(db, session.id, {
       metadata: { ...(getSession(db, session.id)?.metadata ?? {}), previewNote: 'touch' }
     })
