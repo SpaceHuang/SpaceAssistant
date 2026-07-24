@@ -599,7 +599,7 @@
   },
   "artifactSettings": {
     "enabledLabel": "启用工作产物管理",
-    "enabledHint": "开启后，新建会话将使用显式输出目录与工作产物管理；旧「目录规范」扩展名重定向不再生效。已有会话保持创建时的开关状态。",
+    "enabledHint": "开启后，新建会话将使用显式输出目录与工作产物管理。关闭时也不会回退到旧「目录规范」扩展名重定向。已有会话保持创建时的开关状态。",
     "scratchGitPolicyLabel": "草稿 Git 策略",
     "scratchGitPolicyAddIgnore": "加入 .gitignore（仅 .spaceassistant/runs/）",
     "scratchGitPolicyKeepVisible": "继续但不忽略",

@@ -599,7 +599,7 @@
   },
   "artifactSettings": {
     "enabledLabel": "Enable artifact management",
-    "enabledHint": "New sessions use explicit output paths and artifact management; legacy extension redirects no longer apply. Existing sessions keep the flag frozen at creation.",
+    "enabledHint": "When on, new sessions use explicit output paths and artifact management. When off, legacy extension redirects also stay disabled. Existing sessions keep the flag frozen at creation.",
     "scratchGitPolicyLabel": "Scratch Git policy",
     "scratchGitPolicyAddIgnore": "Add to .gitignore (.spaceassistant/runs/ only)",
     "scratchGitPolicyKeepVisible": "Continue without ignoring",
