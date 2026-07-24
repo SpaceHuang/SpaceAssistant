@@ -39,6 +39,37 @@ export async function resolveSafePathReal(basePath: string, relativePath: string
   }
 }
 
+function isAbsolutePathInput(p: string): boolean {
+  return path.isAbsolute(p) || path.win32.isAbsolute(p) || /^\\\\/.test(p)
+}
+
+/**
+ * 解析落在 workDir 内的路径：相对路径走 resolveSafePathReal；
+ * 绝对路径直接校验包含关系（不得再当相对路径二次拼接，否则会剥掉前导 `/` 后嵌套出 Users/...）。
+ */
+export async function resolveSafeWorkDirPath(workDir: string, pathInput: string): Promise<string> {
+  const trimmed = pathInput.trim()
+  if (!trimmed) throw new Error('路径超出工作目录范围')
+
+  if (!isAbsolutePathInput(trimmed)) {
+    return resolveSafePathReal(workDir, trimmed)
+  }
+
+  const base = path.resolve(workDir)
+  const resolved = path.resolve(trimmed)
+  assertInsideBase(base, resolved)
+
+  try {
+    const baseReal = await fs.realpath(base)
+    const targetReal = await fs.realpath(resolved)
+    assertInsideBase(baseReal, targetReal)
+    return targetReal
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('路径超出')) throw e
+    return resolved
+  }
+}
+
 export type SafeWriteTarget = {
   /** 词法解析后的目标绝对路径（不跟随符号链接） */
   targetPath: string
