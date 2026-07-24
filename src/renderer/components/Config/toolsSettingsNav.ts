@@ -3,7 +3,7 @@ import type { NamespaceKeyMap } from '../../i18n/types'
 
 export const DEFAULT_TOOLS_SETTINGS_SUB_TAB: ToolsSettingsSubTab = 'switches'
 
-export const TOOLS_SETTINGS_SUB_TABS: ToolsSettingsSubTab[] = ['switches', 'file', 'script', 'shell', 'browser', 'workspaceLayout']
+export const TOOLS_SETTINGS_SUB_TABS: ToolsSettingsSubTab[] = ['switches', 'file', 'script', 'shell', 'browser', 'artifacts']
 
 type ConfigT = (key: NamespaceKeyMap['config'], options?: Record<string, unknown>) => string
 
@@ -13,7 +13,7 @@ const NAV_LABEL_KEYS: Record<ToolsSettingsSubTab, NamespaceKeyMap['config']> = {
   script: 'tools.nav.script.label',
   shell: 'tools.nav.shell.label',
   browser: 'tools.nav.browser.label',
-  workspaceLayout: 'tools.nav.workspaceLayout.label'
+  artifacts: 'tools.nav.artifacts.label'
 }
 
 const NAV_HINT_KEYS: Record<ToolsSettingsSubTab, NamespaceKeyMap['config']> = {
@@ -22,7 +22,7 @@ const NAV_HINT_KEYS: Record<ToolsSettingsSubTab, NamespaceKeyMap['config']> = {
   script: 'tools.nav.script.hint',
   shell: 'tools.nav.shell.hint',
   browser: 'tools.nav.browser.hint',
-  workspaceLayout: 'tools.nav.workspaceLayout.hint'
+  artifacts: 'tools.nav.artifacts.hint'
 }
 
 export function getToolsSettingsNav(t: ConfigT) {

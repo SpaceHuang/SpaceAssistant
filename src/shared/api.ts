@@ -21,8 +21,7 @@ import type {
   ShellSecurityHints,
   TrustedShellCommand,
   WikiConfig,
-  WikiStatus,
-  WorkspaceLayoutConfig
+  WikiStatus
 } from './domainTypes'
 
 export type ToolConfirmResponsePayload = {
@@ -334,7 +333,6 @@ export type SpaceAssistantApi = {
       browser: Partial<import('./domainTypes').BrowserConfig>
       shell: Partial<ShellConfig>
       locale: import('./domainTypes').AppLocale
-      workspaceLayout: Partial<WorkspaceLayoutConfig>
       artifactManagementEnabled?: boolean
       scratchGitPolicy?: 'add-ignore' | 'keep-visible' | null
     }>

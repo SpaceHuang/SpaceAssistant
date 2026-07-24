@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG, DEFAULT_WIKI_CONFIG, DEFAULT_WORKSPACE_LAYOUT_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG, DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
 import { DEFAULT_WECHAT_CONFIG } from '../../../shared/wechatTypes'
 import {
@@ -9,9 +9,9 @@ import {
 } from './configModalSnapshot'
 import { initLlmServiceTabState } from './llmServiceDrafts'
 
-const defaultWorkspaceLayout = {
-  ...DEFAULT_WORKSPACE_LAYOUT_CONFIG,
-  extensionSubdirMap: [...DEFAULT_WORKSPACE_LAYOUT_CONFIG.extensionSubdirMap]
+const defaultArtifactSettings = {
+  artifactManagementEnabled: false,
+  scratchGitPolicy: 'ask' as const
 }
 
 describe('normalizeSettingsTabKey', () => {
@@ -52,7 +52,7 @@ describe('buildConfigModalSnapshot', () => {
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG, enabled: true },
       shellEnabled: true,
-      workspaceLayout: defaultWorkspaceLayout
+      artifactSettings: defaultArtifactSettings
     }
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, toolUi: { ...base.toolUi, deniedTools: ['browser'] } })
@@ -84,7 +84,7 @@ describe('buildConfigModalSnapshot', () => {
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
-        workspaceLayout: defaultWorkspaceLayout
+        artifactSettings: defaultArtifactSettings
       })
     expect(configModalSnapshotsEqual(mk('/a'), mk('/b'))).toBe(false)
   })
@@ -114,7 +114,7 @@ describe('buildConfigModalSnapshot', () => {
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
-        workspaceLayout: defaultWorkspaceLayout
+        artifactSettings: defaultArtifactSettings
       })
     expect(configModalSnapshotsEqual(mk('zh-CN'), mk('en-US'))).toBe(false)
   })
@@ -143,7 +143,7 @@ describe('buildConfigModalSnapshot', () => {
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG },
       shellEnabled: true,
-      workspaceLayout: defaultWorkspaceLayout
+      artifactSettings: defaultArtifactSettings
     }
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, locale: 'en-US' })
@@ -176,7 +176,7 @@ describe('buildConfigModalSnapshot', () => {
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
-        workspaceLayout: defaultWorkspaceLayout
+        artifactSettings: defaultArtifactSettings
       })
     expect(configModalSnapshotsEqual(mk(false), mk(true))).toBe(false)
   })
