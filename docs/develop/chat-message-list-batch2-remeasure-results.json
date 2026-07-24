@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-07-24T13:46:21.502Z",
+  "measuredAt": "2026-07-22T16:53:44.920Z",
   "machine": {
     "platform": "darwin",
     "arch": "arm64",
@@ -9,22 +9,22 @@
     {
       "label": "full-500",
       "messageCount": 500,
-      "mountMs": 263.32674999999995,
+      "mountMs": 278.20570799999996,
       "domNodes": 4680,
-      "heapUsedMb": 61.11708068847656,
+      "heapUsedMb": 64.95709991455078,
       "streamCommits": {
         "count": 100,
-        "p50": 0.9814499999974942,
-        "p95": 1.642492999998467,
-        "max": 2.275319999995645,
+        "p50": 1.033370000001014,
+        "p95": 1.3060699999975895,
+        "max": 2.371537000001581,
         "longTaskCount": 0,
         "longTaskShare": 0
       },
       "mountCommits": {
         "count": 1,
-        "p50": 203.4787419999791,
-        "p95": 203.4787419999791,
-        "max": 203.4787419999791,
+        "p50": 220.00233400000377,
+        "p95": 220.00233400000377,
+        "max": 220.00233400000377,
         "longTaskCount": 1,
         "longTaskShare": 1
       }
@@ -32,31 +32,31 @@
     {
       "label": "latest-page-60",
       "messageCount": 60,
-      "mountMs": 27.11237499999993,
+      "mountMs": 27.11029099999996,
       "domNodes": 580,
-      "heapUsedMb": 18.74462890625,
+      "heapUsedMb": 14.929443359375,
       "streamCommits": {
         "count": 100,
-        "p50": 0.18950499999868953,
-        "p95": 0.24587899999960428,
-        "max": 0.32550200000127916,
+        "p50": 0.19124399999805064,
+        "p95": 0.28800699999987955,
+        "max": 0.3275859999998829,
         "longTaskCount": 0,
         "longTaskShare": 0
       },
       "mountCommits": {
         "count": 1,
-        "p50": 20.668562000004158,
-        "p95": 20.668562000004158,
-        "max": 20.668562000004158,
+        "p50": 20.194881000001715,
+        "p95": 20.194881000001715,
+        "max": 20.194881000001715,
         "longTaskCount": 0,
         "longTaskShare": 0
       }
     }
   ],
   "ratios": {
-    "mountMsPageOverFull": 0.10296096009995162,
+    "mountMsPageOverFull": 0.09744692585530979,
     "domNodesPageOverFull": 0.12393162393162394,
-    "mountCommitMaxPage": 20.668562000004158,
-    "mountCommitMaxFull": 203.4787419999791
+    "mountCommitMaxPage": 20.194881000001715,
+    "mountCommitMaxFull": 220.00233400000377
   }
 }
