@@ -29,8 +29,14 @@ import { runShellExecutor } from './runShellExecutor'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
-import { sliceFileLines } from '../../src/shared/readFileRange'
 import type { FileState } from '../fileStateCache'
+import { sliceFileTailLines } from '../../src/shared/readFileRange'
+import {
+  applyReadCharLimit,
+  isBinaryBuffer,
+  readFileRangeFromDisk,
+  readFileTailFromDisk
+} from './readFileStreaming'
 
 function recordReadFileCache(
   cache: ToolExecutionContext['fileStateCache'],
@@ -102,14 +108,6 @@ const GREP_SKIP_DIRS = new Set([
   'dist-electron',
   '.cursor'
 ])
-
-function isBinaryBuffer(buf: Buffer): boolean {
-  const n = Math.min(buf.length, 8000)
-  for (let i = 0; i < n; i++) {
-    if (buf[i] === 0) return true
-  }
-  return false
-}
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -201,79 +199,153 @@ export const readFileExecutor: ToolExecutor = {
       if (!st.isFile()) {
         return { success: false, error: `无法读取该路径（不是普通文件）: ${rel}`, duration: Date.now() - started }
       }
-      let buf: Buffer
-      try {
-        buf = await fs.readFile(abs, { signal: op })
-      } catch (e) {
-        const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
-        if (ab) return ab
-        throw e
-      }
-      if (isBinaryBuffer(buf)) {
-        return { success: false, error: '文件为二进制格式，无法读取', duration: Date.now() - started }
-      }
-      let text = buf.toString('utf8')
-      let truncated = false
-      if (text.length > READ_MAX) {
-        text = text.slice(0, READ_MAX)
-        truncated = true
-      }
 
       const offsetRaw = input.offset
       const limitRaw = input.limit
-      const rangeRequested =
-        (offsetRaw !== undefined && offsetRaw !== null) || (limitRaw !== undefined && limitRaw !== null)
-      let rangeMeta: {
-        totalLines: number
-        startLine: number
-        endLine: number
-        hasMore: boolean
-      } | undefined
+      const tailRaw = input.tail
+      const hasTail = tailRaw !== undefined && tailRaw !== null
+      const hasOffset = offsetRaw !== undefined && offsetRaw !== null
+      const hasLimit = limitRaw !== undefined && limitRaw !== null
+      const rangeRequested = hasTail || hasOffset || hasLimit
 
-      if (rangeRequested) {
-        const offset =
-          offsetRaw !== undefined && offsetRaw !== null && typeof offsetRaw === 'number' && Number.isFinite(offsetRaw)
-            ? Math.max(1, Math.floor(offsetRaw))
-            : 1
-        const limit =
-          limitRaw !== undefined && limitRaw !== null && typeof limitRaw === 'number' && Number.isFinite(limitRaw)
-            ? Math.max(1, Math.floor(limitRaw))
-            : undefined
-        const sliced = sliceFileLines(text, { offset, limit })
-        rangeMeta = {
-          totalLines: sliced.totalLines,
-          startLine: sliced.startLine,
-          endLine: sliced.endLine,
-          hasMore: sliced.hasMore
+      // Meta：大文件且无范围参数
+      if (!rangeRequested && st.size > READ_FILE_MAX_CHARS) {
+        recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
+          content: '',
+          truncated: true,
+          rangeRequested: false
+        })
+        return {
+          success: true,
+          data: {
+            path: rel,
+            content: '',
+            encoding: 'utf8',
+            byteSize: st.size,
+            exceedsReadLimit: true,
+            maxChars: READ_FILE_MAX_CHARS,
+            note: `文件超过 read_file 单次字符上限（${READ_FILE_MAX_CHARS}），未返回正文。请使用 tail（如 tail=200 读末尾）或 offset+limit 分段读取。`
+          },
+          duration: Date.now() - started
         }
-        text = sliced.content
       }
 
-      recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
-        content: text,
-        truncated,
-        rangeRequested
-      })
-      return {
-        success: true,
-        data: {
-          path: rel,
+      try {
+        if (hasTail) {
+          const tail =
+            typeof tailRaw === 'number' && Number.isFinite(tailRaw) ? Math.floor(tailRaw) : 1
+          const tailed = await readFileTailFromDisk(abs, tail, { signal: op, fileSize: st.size })
+          const limited = applyReadCharLimit(tailed.content, {
+            isTail: true,
+            hasMoreBefore: tailed.hasMoreBefore
+          })
+          const truncated = limited.truncated || tailed.truncated
+          // linesReturned 须为截断后实际返回行数（§4.3.2）
+          const linesReturned = limited.truncated
+            ? sliceFileTailLines(limited.content, tail).linesReturned
+            : tailed.linesReturned
+          recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
+            content: limited.content,
+            truncated,
+            rangeRequested: true
+          })
+          return {
+            success: true,
+            data: {
+              path: rel,
+              content: limited.content,
+              encoding: 'utf8',
+              linesReturned,
+              hasMoreBefore: limited.hasMoreBefore || tailed.truncated,
+              truncated,
+              ...(truncated ? { note: `内容超过 ${READ_MAX} 字符已截断（保留窗口尾部）` } : {})
+            },
+            duration: Date.now() - started
+          }
+        }
+
+        if (hasOffset || hasLimit) {
+          const offset =
+            hasOffset && typeof offsetRaw === 'number' && Number.isFinite(offsetRaw)
+              ? Math.floor(offsetRaw)
+              : 1
+          const limit =
+            hasLimit && typeof limitRaw === 'number' && Number.isFinite(limitRaw)
+              ? Math.floor(limitRaw)
+              : undefined
+          const ranged = await readFileRangeFromDisk(abs, offset, limit, {
+            signal: op,
+            fileSize: st.size
+          })
+          const limited = applyReadCharLimit(ranged.content, { isTail: false })
+          const truncated = limited.truncated || ranged.truncated
+          recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
+            content: limited.content,
+            truncated,
+            rangeRequested: true
+          })
+          const data: Record<string, unknown> = {
+            path: rel,
+            content: limited.content,
+            encoding: 'utf8',
+            startLine: ranged.startLine,
+            endLine: ranged.endLine,
+            hasMore: ranged.hasMore,
+            ...(ranged.totalLines !== undefined ? { totalLines: ranged.totalLines } : {}),
+            ...(truncated ? { truncated: true, note: `内容超过 ${READ_MAX} 字符已截断` } : {})
+          }
+          if (!truncated && ranged.hasMore) {
+            data.note =
+              ranged.totalLines !== undefined
+                ? `仅返回第 ${ranged.startLine}–${ranged.endLine} 行，共 ${ranged.totalLines} 行；可增大 offset 继续读取`
+                : `仅返回第 ${ranged.startLine}–${ranged.endLine} 行；可增大 offset 继续读取`
+          }
+          return { success: true, data, duration: Date.now() - started }
+        }
+
+        // Full：小文件全文（边界附近可能仍超字符上限 → Meta）
+        const buf = await fs.readFile(abs, { signal: op })
+        if (isBinaryBuffer(buf)) {
+          return { success: false, error: '文件为二进制格式，无法读取', duration: Date.now() - started }
+        }
+        const text = buf.toString('utf8')
+        if (text.length > READ_FILE_MAX_CHARS) {
+          recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
+            content: '',
+            truncated: true,
+            rangeRequested: false
+          })
+          return {
+            success: true,
+            data: {
+              path: rel,
+              content: '',
+              encoding: 'utf8',
+              byteSize: st.size,
+              exceedsReadLimit: true,
+              maxChars: READ_FILE_MAX_CHARS,
+              note: `文件超过 read_file 单次字符上限（${READ_FILE_MAX_CHARS}），未返回正文。请使用 tail（如 tail=200 读末尾）或 offset+limit 分段读取。`
+            },
+            duration: Date.now() - started
+          }
+        }
+        recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
           content: text,
-          encoding: 'utf8',
-          ...(truncated ? { truncated: true, note: `内容超过 ${READ_MAX} 字符已截断` } : {}),
-          ...(rangeMeta
-            ? {
-                totalLines: rangeMeta.totalLines,
-                startLine: rangeMeta.startLine,
-                endLine: rangeMeta.endLine,
-                hasMore: rangeMeta.hasMore,
-                ...(rangeMeta.hasMore
-                  ? { note: `仅返回第 ${rangeMeta.startLine}–${rangeMeta.endLine} 行，共 ${rangeMeta.totalLines} 行；可增大 offset 继续读取` }
-                  : {})
-              }
-            : {})
-        },
-        duration: Date.now() - started
+          truncated: false,
+          rangeRequested: false
+        })
+        return {
+          success: true,
+          data: { path: rel, content: text, encoding: 'utf8' },
+          duration: Date.now() - started
+        }
+      } catch (e) {
+        const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+        if (ab) return ab
+        if (e instanceof Error && e.message === 'BINARY') {
+          return { success: false, error: '文件为二进制格式，无法读取', duration: Date.now() - started }
+        }
+        throw e
       }
     } finally {
       dispose()

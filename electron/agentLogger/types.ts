@@ -70,6 +70,7 @@ export type AgentLogEventName =
   | 'fileContentWatcher.error'
   | 'fileContentWatcher.startFailed'
   | 'tool.result.pairing.repaired'
+  | 'tool.result.oversized.compacted'
   | 'startup.streaming_cleanup'
   | 'startup.legacy_workspace_layout_cleanup'
   | 'startup.legacy_workspace_layout_cleanup_failed'

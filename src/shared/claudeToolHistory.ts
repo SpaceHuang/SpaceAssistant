@@ -2,6 +2,7 @@ import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes
 import type { ClaudeChatMessageWithBlocks } from './api'
 import { MAX_CHAT_API_MESSAGES } from './chatApiMessageLimits'
 import { toolIdToOpenAiCompatibleApiToolName } from './anthropicToolSanitize'
+import { compactOversizedToolResultContent } from './oversizedToolResult'
 import { SYNTHETIC_TOOL_RESULT_PLACEHOLDER } from './toolResultPairing'
 
 export type ClaudeUserContentBlock =
@@ -15,20 +16,48 @@ export interface ToolResultBlockBuild {
   isError: boolean
 }
 
-export function buildToolResultBlock(tc: ToolCallRecord): ToolResultBlockBuild {
+export interface OversizedCompactedInfo {
+  originalLength: number
+  compactedLength: number
+}
+
+export interface BuildToolResultBlockOptions {
+  /** 超长压缩发生时回调（供 electron 侧打 warn 日志） */
+  onOversizedCompacted?: (info: OversizedCompactedInfo) => void
+}
+
+export function buildToolResultBlock(
+  tc: ToolCallRecord,
+  options?: BuildToolResultBlockOptions
+): ToolResultBlockBuild {
   if (tc.corrupted) {
-    return { content: tc.result?.error ?? '工具调用记录数据损坏', isError: true }
+    return compactToolResultBuild(tc.result?.error ?? '工具调用记录数据损坏', true, options)
   }
   if (!tc.result) {
     return { content: SYNTHETIC_TOOL_RESULT_PLACEHOLDER, isError: true }
   }
   if (tc.result.success === false) {
-    return { content: tc.result.error ?? '失败', isError: true }
+    return compactToolResultBuild(tc.result.error ?? '失败', true, options)
   }
   if (tc.result.data === undefined) return { content: '{}', isError: false }
   const content =
     typeof tc.result.data === 'string' ? tc.result.data : JSON.stringify(tc.result.data)
-  return { content, isError: false }
+  return compactToolResultBuild(content, false, options)
+}
+
+function compactToolResultBuild(
+  content: string,
+  isError: boolean,
+  options?: BuildToolResultBlockOptions
+): ToolResultBlockBuild {
+  const result = compactOversizedToolResultContent(content)
+  if (result.compacted) {
+    options?.onOversizedCompacted?.({
+      originalLength: result.originalLength,
+      compactedLength: result.content.length
+    })
+  }
+  return { content: result.content, isError }
 }
 
 /** API 不接受空字符串 content；无正文时用单空格占位，避免阻断后续请求 */
@@ -85,6 +114,8 @@ export function buildUserMessageContent(
 export type BuildClaudeToolChatMessagesOptions = {
   currentUserMessageId?: string
   resolveImage?: (a: ChatImageAttachment) => { mimeType: string; data: string } | null
+  /** 历史 tool_result 超长被压缩时回调（供调用方打 warn 日志） */
+  onOversizedToolResult?: (info: OversizedCompactedInfo & { toolUseId: string }) => void
 }
 
 /** 将本地消息列表转为带 content blocks 的 API 消息（含历史 tool_use / tool_result） */
@@ -130,7 +161,10 @@ export function buildClaudeToolChatMessages(
       const results: unknown[] = []
       for (const tc of m.toolCalls) {
         if (tc.status === 'calling' || tc.status === 'confirming' || tc.status === 'executing') continue
-        const block = buildToolResultBlock(tc)
+        const block = buildToolResultBlock(tc, {
+          onOversizedCompacted: (info) =>
+            options?.onOversizedToolResult?.({ ...info, toolUseId: tc.id })
+        })
         results.push({
           type: 'tool_result',
           tool_use_id: tc.id,

@@ -6,6 +6,11 @@ import {
   trimClaudeToolChatMessages
 } from './claudeToolHistory'
 import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
+import {
+  OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX,
+  formatOversizedToolResultPlaceholder
+} from './oversizedToolResult'
+import { MAX_TOOL_RESULT_CONTENT_CHARS } from './toolResultLimits'
 import { SYNTHETIC_TOOL_RESULT_PLACEHOLDER } from './toolResultPairing'
 
 function userMsg(id: string, content: string, extra: Partial<Message> = {}): Message {
@@ -243,6 +248,81 @@ describe('buildToolResultBlock', () => {
     )
     expect(block.content).toBe('permission denied')
     expect(block.isError).toBe(true)
+  })
+
+  it('compacts oversized successful string data to placeholder', () => {
+    const data = 'x'.repeat(MAX_TOOL_RESULT_CONTENT_CHARS + 10)
+    const block = buildToolResultBlock(
+      toolCall({ id: 't1', result: { success: true, data } })
+    )
+    expect(block.isError).toBe(false)
+    expect(block.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
+    expect(block.content).toBe(
+      formatOversizedToolResultPlaceholder(data.length, MAX_TOOL_RESULT_CONTENT_CHARS)
+    )
+  })
+
+  it('compacts oversized JSON-stringified object data', () => {
+    const data = { body: 'y'.repeat(MAX_TOOL_RESULT_CONTENT_CHARS + 10) }
+    const block = buildToolResultBlock(
+      toolCall({ id: 't1', result: { success: true, data } })
+    )
+    expect(block.isError).toBe(false)
+    expect(block.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
+    expect(block.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+  })
+
+  it('compacts oversized error content while keeping isError', () => {
+    const error = 'e'.repeat(MAX_TOOL_RESULT_CONTENT_CHARS + 5)
+    const block = buildToolResultBlock(
+      toolCall({ id: 't1', result: { success: false, error } })
+    )
+    expect(block.isError).toBe(true)
+    expect(block.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
+    expect(block.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+  })
+})
+
+describe('buildToolResultBlock oversized callback', () => {
+  it('invokes onOversizedCompacted with originalLength when compacting', () => {
+    const data = 'x'.repeat(MAX_TOOL_RESULT_CONTENT_CHARS + 10)
+    const events: Array<{ originalLength: number; compactedLength: number }> = []
+    buildToolResultBlock(toolCall({ id: 't1', result: { success: true, data } }), {
+      onOversizedCompacted: (info) => events.push(info)
+    })
+    expect(events).toHaveLength(1)
+    expect(events[0]!.originalLength).toBe(data.length)
+    expect(events[0]!.compactedLength).toBeLessThan(500)
+  })
+
+  it('does not invoke callback for short content', () => {
+    const events: unknown[] = []
+    buildToolResultBlock(toolCall({ id: 't1', result: { success: true, data: 'ok' } }), {
+      onOversizedCompacted: (info) => events.push(info)
+    })
+    expect(events).toHaveLength(0)
+  })
+})
+
+describe('buildClaudeToolChatMessages oversized callback', () => {
+  it('reports tool_use_id via onOversizedToolResult when history result is compacted', () => {
+    const data = 'y'.repeat(MAX_TOOL_RESULT_CONTENT_CHARS + 3)
+    const messages: Message[] = [
+      userMsg('u1', 'read file'),
+      {
+        ...assistantMsg('a1', ''),
+        toolCalls: [toolCall({ id: 'toolu_big', result: { success: true, data } })]
+      }
+    ]
+    const events: Array<{ toolUseId: string; originalLength: number }> = []
+    const api = buildClaudeToolChatMessages(messages, {
+      onOversizedToolResult: (info) => events.push(info)
+    })
+    expect(events).toEqual([
+      expect.objectContaining({ toolUseId: 'toolu_big', originalLength: data.length })
+    ])
+    const resultBlocks = api[2]!.content as Array<{ content: string }>
+    expect(resultBlocks[0]!.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
   })
 })
 

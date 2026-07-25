@@ -51,6 +51,15 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
       optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
       optPositiveInt(input.offset, 'offset', READ_FILE_MAX_LINE_LIMIT * 1000)
       optPositiveInt(input.limit, 'limit', READ_FILE_MAX_LINE_LIMIT)
+      optPositiveInt(input.tail, 'tail', READ_FILE_MAX_LINE_LIMIT)
+      if (
+        input.tail !== undefined &&
+        input.tail !== null &&
+        ((input.offset !== undefined && input.offset !== null) ||
+          (input.limit !== undefined && input.limit !== null))
+      ) {
+        throw new Error('工具参数无效：tail 不能与 offset/limit 同时使用')
+      }
       return
     case 'list_directory':
       optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)

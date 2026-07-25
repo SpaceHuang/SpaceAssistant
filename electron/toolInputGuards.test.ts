@@ -15,6 +15,31 @@ describe('assertSafeToolInput', () => {
     expect(() => assertSafeToolInput('read_file', { path: 'a.ts', limit: 99999 })).toThrow(/limit/)
   })
 
+  it('accepts valid read_file tail', () => {
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', tail: 50 })).not.toThrow()
+  })
+
+  it('rejects read_file when tail is used with offset', () => {
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', tail: 10, offset: 1 })).toThrow(
+      /tail 不能与 offset\/limit 同时使用/
+    )
+  })
+
+  it('rejects read_file when tail is used with limit', () => {
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', tail: 10, limit: 5 })).toThrow(
+      /tail 不能与 offset\/limit 同时使用/
+    )
+  })
+
+  it('rejects read_file negative offset', () => {
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', offset: -1 })).toThrow(/offset/)
+  })
+
+  it('rejects read_file tail out of range', () => {
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', tail: 2001 })).toThrow(/tail/)
+    expect(() => assertSafeToolInput('read_file', { path: 'a.ts', tail: 0 })).toThrow(/tail/)
+  })
+
   it('rejects path with NUL', () => {
     expect(() => assertSafeToolInput('read_file', { path: 'a\0b' })).toThrow(/空字节/)
   })

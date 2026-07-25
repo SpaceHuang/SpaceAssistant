@@ -8,6 +8,7 @@ import type { Message, Session } from '../src/shared/domainTypes'
 import type { AppLocale } from '../src/shared/locale'
 import { SESSION_TITLE_MAX_LENGTH } from '../src/shared/sessionDisplay'
 import { updateSession, getSession, getMessages, type AppDatabase } from './database'
+import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
 
 export const SESSION_META_TITLE_GENERATED = 'titleGenerated'
 export const SESSION_META_TITLE_USER_CUSTOM = 'titleUserCustom'
@@ -211,7 +212,17 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
     return undefined
   }
 
-  const convo = buildClaudeToolChatMessages(rowMessages)
+  const convo = buildClaudeToolChatMessages(rowMessages, {
+    onOversizedToolResult: (info) => {
+      logHistoryOversizedToolResult({
+        sessionId,
+        toolUseId: info.toolUseId,
+        originalLength: info.originalLength,
+        compactedLength: info.compactedLength,
+        source: 'session-title-suggest'
+      })
+    }
+  })
   const messagesForApi: Anthropic.MessageParam[] = convo.map((m) => ({
     role: m.role as Anthropic.MessageParam['role'],
     content: m.content as Anthropic.MessageParam['content']

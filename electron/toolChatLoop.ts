@@ -161,6 +161,8 @@ import { ArtifactRepository } from './artifacts/artifactRepository'
 import { getArtifactDecisionRequest } from './artifacts/artifactDecisionBridge'
 import { serializeArtifactDecisionForRemote } from './remote/artifactDecisionRemote'
 import { sendRemoteArtifactDecisionPrompt } from './remote/remoteDecisionOutbound'
+import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
+import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -251,8 +253,39 @@ function formatToolResultPayload(r: { success: boolean; data?: unknown; error?: 
 
 const MAX_CONSECUTIVE_SAME_TOOL_ERROR = 3
 
-function buildToolErrorResult(toolUseId: string, error: string): Anthropic.ToolResultBlockParam {
-  return { type: 'tool_result', tool_use_id: toolUseId, content: error, is_error: true }
+function compactToolResultContentForApi(
+  content: string,
+  ctx: { requestId?: string; sessionId?: string; toolUseId: string }
+): string {
+  const result = compactOversizedToolResultContent(content)
+  if (result.compacted) {
+    logAgentEvent('warn', 'tool.result.oversized.compacted', {
+      requestId: ctx.requestId,
+      sessionId: ctx.sessionId,
+      toolUseId: ctx.toolUseId,
+      originalLength: result.originalLength,
+      compactedLength: result.content.length,
+      maxChars: MAX_TOOL_RESULT_CONTENT_CHARS
+    })
+  }
+  return result.content
+}
+
+function buildToolErrorResult(
+  toolUseId: string,
+  error: string,
+  logCtx?: { requestId: string; sessionId: string }
+): Anthropic.ToolResultBlockParam {
+  return {
+    type: 'tool_result',
+    tool_use_id: toolUseId,
+    content: compactToolResultContentForApi(error, {
+      requestId: logCtx?.requestId,
+      sessionId: logCtx?.sessionId,
+      toolUseId
+    }),
+    is_error: true
+  }
 }
 
 function makeToolErrorRepeatTracker() {
@@ -796,7 +829,7 @@ async function runToolChatSessionInner(
           unknownToolError,
           unknownToolError
         )
-        toolResults.push(buildToolErrorResult(toolUseId, unknownToolError))
+        toolResults.push(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
@@ -827,7 +860,7 @@ async function runToolChatSessionInner(
           e,
           userMsg
         )
-        toolResults.push(buildToolErrorResult(toolUseId, userMsg))
+        toolResults.push(buildToolErrorResult(toolUseId, userMsg, { requestId, sessionId }))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
@@ -847,7 +880,7 @@ async function runToolChatSessionInner(
           remoteBlock,
           remoteBlock
         )
-        toolResults.push(buildToolErrorResult(toolUseId, remoteBlock))
+        toolResults.push(buildToolErrorResult(toolUseId, remoteBlock, { requestId, sessionId }))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
@@ -871,7 +904,7 @@ async function runToolChatSessionInner(
             toolName,
             reason: budgetCheck.reason
           })
-          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg))
+          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
           safeWebContentsSend(sender, 'tool:result', {
             requestId,
             toolUseId,
@@ -891,7 +924,7 @@ async function runToolChatSessionInner(
             toolName,
             reason: outboundGate.reason
           })
-          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg))
+          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
           safeWebContentsSend(sender, 'tool:result', {
             requestId,
             toolUseId,
@@ -913,7 +946,7 @@ async function runToolChatSessionInner(
           BROWSER_REMOTE_DISABLED_CODE,
           BROWSER_REMOTE_DISABLED_CODE
         )
-        toolResults.push(buildToolErrorResult(toolUseId, BROWSER_REMOTE_DISABLED_CODE))
+        toolResults.push(buildToolErrorResult(toolUseId, BROWSER_REMOTE_DISABLED_CODE, { requestId, sessionId }))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
@@ -932,7 +965,7 @@ async function runToolChatSessionInner(
           SHELL_REMOTE_DISABLED_ERROR,
           SHELL_REMOTE_DISABLED_ERROR
         )
-        toolResults.push(buildToolErrorResult(toolUseId, SHELL_REMOTE_DISABLED_ERROR))
+        toolResults.push(buildToolErrorResult(toolUseId, SHELL_REMOTE_DISABLED_ERROR, { requestId, sessionId }))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
@@ -970,7 +1003,7 @@ async function runToolChatSessionInner(
             shellPrecheck.error,
             shellPrecheck.error
           )
-          toolResults.push(buildToolErrorResult(toolUseId, shellPrecheck.error))
+          toolResults.push(buildToolErrorResult(toolUseId, shellPrecheck.error, { requestId, sessionId }))
           safeWebContentsSend(sender,'tool:result', {
             requestId,
             toolUseId,
@@ -1057,7 +1090,7 @@ async function runToolChatSessionInner(
           }
         })
         if (resolveResult.kind === 'error') {
-          toolResults.push(buildToolErrorResult(toolUseId, resolveResult.message))
+          toolResults.push(buildToolErrorResult(toolUseId, resolveResult.message, { requestId, sessionId }))
           safeWebContentsSend(sender, 'tool:result', { requestId, toolUseId, result: { success: false, error: resolveResult.message } })
           floatingNotificationManager?.onToolResult(requestId, toolUseId)
           if (toolErrorRepeat.noteFailure(toolName, resolveResult.message)) {
@@ -1297,7 +1330,7 @@ async function runToolChatSessionInner(
             denyMsg,
             `script deny patterns=${scriptAnalysis.patterns.join(',')}`
           )
-          toolResults.push(buildToolErrorResult(toolUseId, denyMsg))
+          toolResults.push(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }))
           safeWebContentsSend(sender, 'tool:result', {
             requestId,
             toolUseId,
@@ -1579,7 +1612,7 @@ async function runToolChatSessionInner(
           timeoutError,
           timeoutError
         )
-        toolResults.push(buildToolErrorResult(toolUseId, timeoutError))
+        toolResults.push(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
@@ -1645,7 +1678,7 @@ async function runToolChatSessionInner(
           rejectedError,
           rejectedError
         )
-        toolResults.push(buildToolErrorResult(toolUseId, rejectedError))
+        toolResults.push(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }))
         safeWebContentsSend(sender,'tool:result', {
           requestId,
           toolUseId,
@@ -1668,7 +1701,7 @@ async function runToolChatSessionInner(
             conflict,
             conflict
           )
-          toolResults.push(buildToolErrorResult(toolUseId, conflict))
+          toolResults.push(buildToolErrorResult(toolUseId, conflict, { requestId, sessionId }))
           safeWebContentsSend(sender,'tool:result', {
             requestId,
             toolUseId,
@@ -1861,7 +1894,11 @@ async function runToolChatSessionInner(
         })
       }
 
-      let payload = formatToolResultPayload(execResult)
+      let payload = compactToolResultContentForApi(formatToolResultPayload(execResult), {
+        requestId,
+        sessionId,
+        toolUseId
+      })
       const recoverySkill =
         execResult.dependencyError &&
         resolveDependencyRecoverySkill(execResult.dependencyError.errorCode)
@@ -1888,14 +1925,17 @@ async function runToolChatSessionInner(
         toolResults.push({
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: formatDependencyRecoveryToolContent(execResult.dependencyError)
+          content: compactToolResultContentForApi(
+            formatDependencyRecoveryToolContent(execResult.dependencyError),
+            { requestId, sessionId, toolUseId }
+          )
         })
         if (toolErrorRepeat.noteFailure(toolName, execResult.error ?? 'dependency')) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execResult.error ?? '依赖未就绪'}`
         }
       } else {
         const execError = execResult.error ?? '执行失败'
-        toolResults.push(buildToolErrorResult(toolUseId, execError))
+        toolResults.push(buildToolErrorResult(toolUseId, execError, { requestId, sessionId }))
         if (toolErrorRepeat.noteFailure(toolName, execError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execError}`
         }

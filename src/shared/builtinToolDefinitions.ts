@@ -43,18 +43,22 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'read_file',
     description:
-      '读取指定文件内容（仅适用于文件，不可用于目录；查看目录请用 list_directory）。路径相对于工作目录，不可超出工作目录范围。大文件请使用 offset（1-based 起始行号）与 limit（读取行数）分段读取，避免一次返回全文。',
+      '读取指定文件内容（仅适用于文件，不可用于目录；查看目录请用 list_directory）。路径相对于工作目录，不可超出工作目录范围。大文件须使用 offset+limit 分段读取，或使用 tail 读取末尾若干行（正序返回）；未提供 offset/limit/tail 且文件超过单次字符上限时，不返回正文前缀，仅返回体积等元数据与分段读取提示。tail 与 offset/limit 互斥。省略 limit 时单次最多返回 2000 行（且受单次字符上限约束）。',
     input_schema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对于工作目录的文件路径' },
         offset: {
           type: 'integer',
-          description: '起始行号（从 1 开始，含）。省略时从第 1 行开始'
+          description: '起始行号（从 1 开始，含，须为正整数）。省略时从第 1 行开始；不可与 tail 同时使用'
         },
         limit: {
           type: 'integer',
-          description: '最多读取的行数。省略时读取从 offset 到文件末尾（仍受单文件 2MB 上限约束）'
+          description: '最多读取的行数（1～2000）。省略时从 offset 起最多读取 2000 行（且受单次字符上限约束）；不可与 tail 同时使用'
+        },
+        tail: {
+          type: 'integer',
+          description: '读取文件末尾至多 N 行（1～2000），按文件内原有顺序（正序）返回。不可与 offset/limit 同时使用'
         }
       },
       required: ['path']

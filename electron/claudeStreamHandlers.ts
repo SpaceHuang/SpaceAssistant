@@ -24,6 +24,7 @@ import { sanitizeForLog } from './logSanitize'
 import { historyHasImageAttachments } from '../src/shared/visionModelRouting'
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
 import type { Message } from '../src/shared/domainTypes'
+import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
 export type ClaudeStreamDeps = {
@@ -106,7 +107,11 @@ function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessag
   })
 }
 
-function assertValidClaudeContentBlocks(content: unknown, idx: number): string | Array<unknown> {
+function assertValidClaudeContentBlocks(
+  content: unknown,
+  idx: number,
+  logContext?: { sessionId?: string }
+): string | Array<unknown> {
   if (typeof content === 'string') {
     const trimmed = content.trim()
     if (!trimmed) return ' '
@@ -132,11 +137,23 @@ function assertValidClaudeContentBlocks(content: unknown, idx: number): string |
     if (type === 'tool_result') {
       if (typeof (b as { tool_use_id?: unknown }).tool_use_id !== 'string') throw new Error('Invalid tool_result tool_use_id')
       if ((b as { content?: unknown }).content === undefined) throw new Error('Invalid tool_result content')
-      if (
-        typeof (b as { content?: unknown }).content === 'string' &&
-        (b as { content: string }).content.length > MAX_TOOL_RESULT_CONTENT_CHARS
-      ) {
-        throw new Error('tool_result content too long')
+      if (typeof (b as { content?: unknown }).content === 'string') {
+        const block = b as { tool_use_id: string; content: string }
+        const compacted = compactOversizedToolResultContent(block.content)
+        if (compacted.compacted) {
+          block.content = compacted.content
+          logAgentEvent(
+            'warn',
+            'tool.result.oversized.compacted',
+            sanitizeForLog({
+              sessionId: logContext?.sessionId,
+              toolUseId: block.tool_use_id,
+              originalLength: compacted.originalLength,
+              compactedLength: compacted.content.length,
+              maxChars: MAX_TOOL_RESULT_CONTENT_CHARS
+            }) as AgentLogFields
+          )
+        }
       }
       continue
     }
@@ -195,7 +212,7 @@ export function normalizeAndValidateClaudeMessagesWithContentBlocks(
     if (!msg || typeof msg !== 'object') throw new Error(`Invalid message at index ${idx}`)
     if (msg.role !== 'user' && msg.role !== 'assistant') throw new Error(`Invalid role at index ${idx}`)
 
-    const content = assertValidClaudeContentBlocks((msg as { content?: unknown }).content, idx)
+    const content = assertValidClaudeContentBlocks((msg as { content?: unknown }).content, idx, logContext)
 
     return {
       role: msg.role,
@@ -270,7 +287,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           builtMessages = await buildToolChatMessagesFromSource({
             userDataDir,
             sourceMessages: payload.sourceMessages,
-            currentUserMessageId
+            currentUserMessageId,
+            sessionId
           })
         } else if (Array.isArray(payload.messages)) {
           builtMessages = payload.messages

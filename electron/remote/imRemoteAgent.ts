@@ -11,6 +11,7 @@ import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import type { RemoteContext } from '../tools/types'
 import { readAppLocale } from '../appIpc'
 import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
+import { logHistoryOversizedToolResult } from '../oversizedToolResultLog'
 import {
   startRemoteProgressSession,
   stopRemoteProgressSession,
@@ -89,7 +90,17 @@ export async function runImRemoteAgent(args: {
 
     const toolsConfig = args.getToolsConfig()
     const rawMessages = getMessages(args.db, args.sessionId)
-    const built = buildClaudeToolChatMessages(rawMessages)
+    const built = buildClaudeToolChatMessages(rawMessages, {
+      onOversizedToolResult: (info) => {
+        logHistoryOversizedToolResult({
+          sessionId: args.sessionId,
+          toolUseId: info.toolUseId,
+          originalLength: info.originalLength,
+          compactedLength: info.compactedLength,
+          source: 'im-remote'
+        })
+      }
+    })
     const trimmed = trimClaudeToolChatMessages(built, MAX_CHAT_API_MESSAGES)
     const { messages } = ensureToolResultPairing(trimmed)
 
