@@ -23,14 +23,16 @@
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-width: 400px;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--sa-bg-base);
 }
 
 .app-main-body {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
 }
@@ -581,14 +583,36 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .chat-scroll {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: var(--sa-chat-scroll-padding);
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Virtuoso 的绝对定位 viewport 使用 width: 100%，滚动层不能再带横向
+   * padding，否则右对齐消息会落到可视区域外并被 overflow-x 裁切。 */
+  padding: 20px 0 28px;
   scroll-behavior: smooth;
+}
+
+/* Virtuoso 的 viewport 使用内联 width: 100%，需要明确继承滚动容器的可用宽度。
+ * 否则滚动容器的 padding 在 macOS 高 DPI 下可能被重复计入，触发横向溢出。 */
+.chat-scroll > [data-viewport-type='element'],
+.chat-scroll > [data-viewport-type='element'] > [data-testid='virtuoso-item-list'],
+.chat-scroll > [data-viewport-type='element'] > [data-testid='virtuoso-item-list'] > div {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.chat-scroll > [data-viewport-type='element'] > [data-testid='virtuoso-item-list'] > div {
+  padding-inline: 24px;
 }
 
 .chat-scroll-to-latest {
@@ -637,6 +661,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  padding: var(--sa-chat-scroll-padding);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -657,9 +682,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--sa-chat-row-gap);
-  max-width: 960px;
-  margin: 0 auto;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .chat-empty {
@@ -714,6 +740,10 @@
 
 .chat-bubble-row {
   display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .chat-bubble-row--enter {
@@ -781,8 +811,10 @@
 }
 
 .chat-bubble-col--user {
+  width: 100%;
   align-items: flex-end;
   max-width: var(--sa-chat-user-max-width);
+  box-sizing: border-box;
 }
 
 .chat-bubble-col--assistant {
@@ -797,8 +829,11 @@
 }
 
 .chat-bubble {
+  min-width: 0;
   max-width: 100%;
+  box-sizing: border-box;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .chat-bubble--user {
@@ -996,6 +1031,10 @@
 }
 
 .chat-md-user {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   font-size: var(--sa-chat-font-body);
   line-height: var(--sa-chat-line-body);
 }
