@@ -30,6 +30,10 @@
   "scrollToLatest": {
     "label": "Jump to latest message"
   },
+  "table": {
+    "copyMarkdown": "Copy Markdown table",
+    "copied": "Copied"
+  },
   "tool": {
     "view": "View",
     "cancel": "Cancel",

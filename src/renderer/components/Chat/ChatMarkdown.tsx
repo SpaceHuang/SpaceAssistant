@@ -1,9 +1,12 @@
 import ReactMarkdown from 'react-markdown'
+import { Button } from 'antd'
+import { Check, Copy } from 'lucide-react'
 import {
   memo,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ComponentPropsWithoutRef,
   type ReactNode
 } from 'react'
@@ -14,6 +17,9 @@ import { MarkdownLinkOrStatusDot } from '../shared/MarkdownLinkOrStatusDot'
 import { markdownRemarkPlugins, markdownRehypePlugins } from '../../utils/markdownPlugins'
 import { projectMarkdownForSearch } from '../../services/markdownSearchProjection'
 import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { writeClipboardText } from '../../utils/selectionCopy'
+import { tableToMarkdown } from '../../utils/tableMarkdownCopy'
 
 type Props = {
   content: string
@@ -49,6 +55,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
   segmentIndex = 0,
   activeSearchTarget = null
 }: Props) {
+  const { t } = useTypedTranslation('chat')
   const rendered = useMemo(() => normalizeMarkdownMath(content), [content])
   const rootRef = useRef<HTMLDivElement>(null)
   const codeIndexRef = useRef(0)
@@ -82,6 +89,47 @@ export const ChatMarkdown = memo(function ChatMarkdown({
       },
       pre({ children }: { children?: ReactNode }) {
         return <>{children}</>
+      },
+      table({ children, node: _node, ...rest }: ComponentPropsWithoutRef<'table'> & { node?: unknown }) {
+        const tableRef = useRef<HTMLTableElement>(null)
+        const [copied, setCopied] = useState(false)
+        const [mouseInside, setMouseInside] = useState(false)
+
+        const copyTable = async () => {
+          const markdown = tableRef.current ? tableToMarkdown(tableRef.current) : null
+          if (!markdown) return
+          await writeClipboardText(markdown)
+          setCopied(true)
+        }
+
+        return (
+          <div
+            className={`chat-md-table-shell${mouseInside ? '' : ' chat-md-table-shell--mouse-left'}`}
+            onMouseEnter={() => setMouseInside(true)}
+            onMouseLeave={() => {
+              setMouseInside(false)
+              setCopied(false)
+            }}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setCopied(false)
+            }}
+          >
+            <Button
+              type="text"
+              size="small"
+              icon={copied ? <Check size={14} /> : <Copy size={14} />}
+              className="chat-md-table-copy"
+              aria-label={copied ? t('table.copied') : t('table.copyMarkdown')}
+              title={copied ? t('table.copied') : t('table.copyMarkdown')}
+              onClick={() => void copyTable()}
+            >
+              {copied ? t('table.copied') : t('table.copyMarkdown')}
+            </Button>
+            <div className="chat-md-table-wrap">
+              <table ref={tableRef} {...rest}>{children}</table>
+            </div>
+          </div>
+        )
       },
       code(props: ComponentPropsWithoutRef<'code'> & { node?: unknown; children?: ReactNode }) {
         const { children, className, node: _node, ...rest } = props
@@ -133,7 +181,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
         )
       }
     }),
-    [wikiRootPath, baseRelPath, onOpenFile, messageId, segmentIndex, activeSearchTarget, codeOrder]
+    [wikiRootPath, baseRelPath, onOpenFile, messageId, segmentIndex, activeSearchTarget, codeOrder, t]
   )
 
   // KaTeX 会替换 math 节点；按投影顺序（display 先、再 inline）标注 fragment 身份

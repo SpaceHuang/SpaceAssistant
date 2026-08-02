@@ -498,6 +498,139 @@
   border-radius: 4px;
 }
 
+/* 聊天 Markdown 表格：按钮脱离表格边框，悬停时浮在右上角 */
+.chat-md-table-shell {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  margin: 0.8em 0;
+}
+
+.chat-md-table-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  border: 1px solid var(--sa-chat-card-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-elevated);
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sa-border-strong) transparent;
+}
+
+.chat-md-table-copy {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+  height: 24px;
+  padding-inline: 7px;
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-elevated);
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-xs);
+  box-shadow: 0 2px 8px rgba(45, 42, 38, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition:
+    opacity var(--sa-duration-fast) var(--sa-ease-out),
+    transform var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out),
+    background var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.chat-md-table-shell:hover .chat-md-table-copy,
+.chat-md-table-shell:focus-within .chat-md-table-copy {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+/* 鼠标离开后，即使按钮仍保留焦点，也不能让浮层继续停留。 */
+.chat-md-table-shell.chat-md-table-shell--mouse-left .chat-md-table-copy {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+}
+
+.chat-md-table-copy:hover {
+  color: var(--sa-primary-hover);
+  background: var(--sa-primary-subtle);
+  border-color: var(--sa-primary-muted);
+}
+
+.chat-md-table-copy:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-md-table-copy {
+    transition: none;
+  }
+}
+
+.chat-md-table-wrap table {
+  width: 100%;
+  min-width: 460px;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+}
+
+.chat-md-table-wrap th,
+.chat-md-table-wrap td {
+  padding: 8px 12px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--sa-chat-subject-border);
+  color: inherit;
+  word-break: break-word;
+}
+
+.chat-md-table-wrap th + th,
+.chat-md-table-wrap td + td {
+  border-inline-start: 1px solid color-mix(in srgb, var(--sa-chat-subject-border) 72%, transparent);
+}
+
+.chat-md-table-wrap th {
+  color: var(--sa-text-secondary);
+  background: var(--sa-bg-subtle);
+  font-size: 0.92em;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: nowrap;
+  border-bottom-color: var(--sa-border-strong);
+}
+
+.chat-md-table-wrap tbody tr {
+  transition: background-color var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.chat-md-table-wrap tbody tr:hover {
+  background: color-mix(in srgb, var(--sa-primary) 4%, var(--sa-bg-elevated));
+}
+
+.chat-md-table-wrap tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.chat-md-table-wrap::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.chat-md-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--sa-border-strong);
+  border-radius: var(--sa-radius-pill);
+}
+
+.chat-md-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--sa-text-tertiary);
+}
+
 .sa-prose a {
   color: var(--sa-primary);
 }
@@ -565,5 +698,3 @@
   outline-offset: 0;
   border-radius: 2px;
 }
-
-

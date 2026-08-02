@@ -1,5 +1,5 @@
-import { render } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, render } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { ChatMarkdown } from './ChatMarkdown'
 
 describe('ChatMarkdown', () => {
@@ -33,5 +33,40 @@ describe('ChatMarkdown', () => {
     expect(root.querySelector('.katex')).toBeTruthy()
     expect(root.querySelector('.stretchy.fbox')).toBeNull()
     expect(root.textContent).toContain('E')
+  })
+
+  it('shows a Markdown copy button for tables and copies the table structure', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const { container } = render(
+      <ChatMarkdown content={'| Name | State |\n| --- | --- |\n| Alpha | Ready |'} />
+    )
+
+    const button = container.querySelector('.chat-md-table-copy') as HTMLButtonElement
+    expect(button).toBeTruthy()
+    fireEvent.click(button)
+    await Promise.resolve()
+
+    expect(writeText).toHaveBeenCalledWith('| Name | State |\n| --- | --- |\n| Alpha | Ready |')
+  })
+
+  it('resets the copied state when leaving the table', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const { container } = render(
+      <ChatMarkdown content={'| Name | State |\n| --- | --- |\n| Alpha | Ready |'} />
+    )
+
+    const shell = container.querySelector('.chat-md-table-shell') as HTMLElement
+    const button = shell.querySelector('.chat-md-table-copy') as HTMLButtonElement
+    await act(async () => {
+      fireEvent.click(button)
+      await Promise.resolve()
+    })
+    expect(button.textContent).toContain('已复制')
+
+    fireEvent.mouseLeave(shell)
+    expect(button.textContent).toContain('复制 Markdown 表格')
+    expect(shell.classList.contains('chat-md-table-shell--mouse-left')).toBe(true)
   })
 })
