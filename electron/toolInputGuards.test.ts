@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { assertSafeToolInput } from './toolInputGuards'
+import { assertSafeToolInput, toolErrMissingPath } from './toolInputGuards'
+import { sanitizeToolErrorString } from './tools/toolUserErrors'
 
 describe('assertSafeToolInput', () => {
   it('accepts valid read_file path', () => {
@@ -129,4 +130,72 @@ describe('assertSafeToolInput', () => {
   it('rejects run_shell timeout out of range', () => {
     expect(() => assertSafeToolInput('run_shell', { command: 'echo', timeout: 0 })).toThrow(/timeout/)
   })
+})
+
+describe('assertSafeToolInput - path field aliases', () => {
+  it('accepts read_file with filePath', () => {
+    expect(() => assertSafeToolInput('read_file', { filePath: 'src/a.ts' })).not.toThrow()
+  })
+
+  it('accepts read_file with file_path', () => {
+    expect(() => assertSafeToolInput('read_file', { file_path: 'src/a.ts' })).not.toThrow()
+  })
+
+  it('rejects read_file with no path-like field and hints the correct name', () => {
+    expect(() => assertSafeToolInput('read_file', { offset: 1, limit: 10 })).toThrow(
+      /缺少必填参数 path.*请勿使用 filePath 或 file_path/
+    )
+  })
+
+  it('rejects read_file alias too long', () => {
+    expect(() => assertSafeToolInput('read_file', { filePath: 'x'.repeat(8193) })).toThrow(/过长/)
+  })
+
+  it('accepts list_directory with filePath', () => {
+    expect(() => assertSafeToolInput('list_directory', { filePath: 'src' })).not.toThrow()
+  })
+
+  it('accepts list_directory with no path (still optional)', () => {
+    expect(() => assertSafeToolInput('list_directory', {})).not.toThrow()
+  })
+
+  it('accepts grep with file_path', () => {
+    expect(() => assertSafeToolInput('grep', { pattern: 'x', file_path: 'src' })).not.toThrow()
+  })
+
+  it('accepts edit_file with filePath', () => {
+    expect(() =>
+      assertSafeToolInput('edit_file', { filePath: 'a.txt', old_string: 'a', new_string: 'b' })
+    ).not.toThrow()
+  })
+
+  it('accepts write_file with file_path', () => {
+    expect(() =>
+      assertSafeToolInput('write_file', { file_path: 'a.txt', content: 'hi' })
+    ).not.toThrow()
+  })
+
+  it('rejects edit_file with no path-like field and hints the correct name', () => {
+    expect(() =>
+      assertSafeToolInput('edit_file', { old_string: 'a', new_string: 'b' })
+    ).toThrow(/缺少必填参数 path.*请勿使用 filePath 或 file_path/)
+  })
+
+  it('rejects write_file with no path-like field and hints the correct name', () => {
+    expect(() => assertSafeToolInput('write_file', { content: 'hi' })).toThrow(
+      /缺少必填参数 path.*请勿使用 filePath 或 file_path/
+    )
+  })
+})
+
+describe('toolErrMissingPath hint survives sanitizeToolErrorString', () => {
+  const fileTools = ['read_file', 'edit_file', 'write_file'] as const
+  for (const toolName of fileTools) {
+    it(`${toolName} missing-path hint reaches model after sanitize`, () => {
+      const sanitized = sanitizeToolErrorString(toolErrMissingPath(toolName), toolName)
+      // 不得回落到 defaultForTool（如 read_file 的「读取文件失败，请检查路径后重试」）
+      expect(sanitized).toMatch(/缺少必填参数 path/)
+      expect(sanitized).toMatch(/请勿使用 filePath 或 file_path/)
+    })
+  }
 })

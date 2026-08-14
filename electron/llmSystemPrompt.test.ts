@@ -111,3 +111,23 @@ describe('buildFinalSystemPrompt', () => {
     expect(result.indexOf('Recent session artifacts')).toBeGreaterThan(result.indexOf('base'))
   })
 })
+
+describe('buildFinalSystemPrompt - tool convention hint', () => {
+  // 传入非空 system，确保 toolConventionHint 拼接时前面有 \n\n 空行分隔可被断言
+  const baseArgs = { system: '你是一个助手。', memoryContent: null, memoryEnabled: false }
+
+  it('zh-CN includes path field convention, separated by blank line', () => {
+    const prompt = buildFinalSystemPrompt({ ...baseArgs, locale: 'zh-CN' })
+    expect(prompt).toMatch(/工具调用约定/)
+    expect(prompt).toMatch(/字段名为 `path`/)
+    // hint 与前文以空行分隔（与 artifact/workspace/image hint 拼接范式一致）
+    expect(prompt).toMatch(/\n\n## 工具调用约定/)
+  })
+
+  it('en-US includes path field convention, separated by blank line', () => {
+    const prompt = buildFinalSystemPrompt({ ...baseArgs, locale: 'en-US' })
+    expect(prompt).toMatch(/Tool call conventions/)
+    expect(prompt).toMatch(/named `path`/)
+    expect(prompt).toMatch(/\n\n## Tool call conventions/)
+  })
+})

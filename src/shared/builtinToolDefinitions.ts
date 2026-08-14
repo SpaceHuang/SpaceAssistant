@@ -43,7 +43,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'read_file',
     description:
-      '读取指定文件内容（仅适用于文件，不可用于目录；查看目录请用 list_directory）。路径相对于工作目录，不可超出工作目录范围。大文件须使用 offset+limit 分段读取，或使用 tail 读取末尾若干行（正序返回）；未提供 offset/limit/tail 且文件超过单次字符上限时，不返回正文前缀，仅返回体积等元数据与分段读取提示。tail 与 offset/limit 互斥。省略 limit 时单次最多返回 2000 行（且受单次字符上限约束）。',
+      '读取指定文件内容（仅适用于文件，不可用于目录；查看目录请用 list_directory）。路径相对于工作目录，不可超出工作目录范围。大文件须使用 offset+limit 分段读取，或使用 tail 读取末尾若干行（正序返回）；未提供 offset/limit/tail 且文件超过单次字符上限时，不返回正文前缀，仅返回体积等元数据与分段读取提示。tail 与 offset/limit 互斥。省略 limit 时单次最多返回 2000 行（且受单次字符上限约束）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
     input_schema: {
       type: 'object',
       properties: {
@@ -67,7 +67,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'edit_file',
     description:
-      '通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。',
+      '通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
     input_schema: {
       type: 'object',
       properties: {
@@ -83,7 +83,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'write_file',
     description:
-      '将完整内容写入指定文件，完整替换文件原有内容。适用于创建新文件或完全重写文件。路径相对于工作目录，不可超出工作目录范围。',
+      '将完整内容写入指定文件，完整替换文件原有内容。适用于创建新文件或完全重写文件。路径相对于工作目录，不可超出工作目录范围。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
     input_schema: {
       type: 'object',
       properties: {
@@ -96,7 +96,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   },
   {
     name: 'list_directory',
-    description: '列出指定目录下的文件和子目录。路径相对于工作目录，不可超出工作目录范围。',
+    description: '列出指定目录下的文件和子目录。路径相对于工作目录，不可超出工作目录范围。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
     input_schema: {
       type: 'object',
       properties: {
@@ -107,7 +107,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'grep',
     description:
-      '在工作目录内按正则搜索文件内容（跨平台，内置实现，不依赖系统 grep/findstr/rg）。需要行号时用 output_mode=content；限制条数用 head_limit（等同 shell 的 head）。文本搜索一律用本工具，不要在 run_shell 中写 grep、findstr、head、find 等命令。',
+      '在工作目录内按正则搜索文件内容（跨平台，内置实现，不依赖系统 grep/findstr/rg）。需要行号时用 output_mode=content；限制条数用 head_limit（等同 shell 的 head）。文本搜索一律用本工具，不要在 run_shell 中写 grep、findstr、head、find 等命令。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
     input_schema: {
       type: 'object',
       properties: {

@@ -3,6 +3,7 @@
  */
 
 import { READ_FILE_MAX_CHARS, READ_FILE_MAX_LINE_LIMIT } from '../src/shared/toolResultLimits'
+import { extractPathField } from './toolPathField'
 
 const PATH_OR_GLOB_MAX = 8192
 const STRING_FIELD_MAX = 8192
@@ -33,9 +34,9 @@ function reqStringLen(v: unknown, field: string, max: number): void {
   assertStringLen(v, field, max)
 }
 
-/** 与 assertSafeToolInput / 执行器前置校验保持一致 */
+/** 与 assertSafeToolInput / 执行器前置校验保持一致；缺 path 时点名正确字段名以引导模型纠错。 */
 export function toolErrMissingPath(toolName: string): string {
-  return `工具参数无效：${toolName} 缺少必填参数 path`
+  return `工具参数无效：${toolName} 缺少必填参数 path（注意字段名为 path，请勿使用 filePath 或 file_path）`
 }
 
 function optPositiveInt(v: unknown, field: string, max: number): void {
@@ -47,8 +48,10 @@ function optPositiveInt(v: unknown, field: string, max: number): void {
 
 export function assertSafeToolInput(toolName: string, input: Record<string, unknown>): void {
   switch (toolName) {
-    case 'read_file':
-      optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+    case 'read_file': {
+      const p = extractPathField(input)
+      if (p === undefined) throw new Error(toolErrMissingPath('read_file'))
+      assertStringLen(p, 'path', PATH_OR_GLOB_MAX)
       optPositiveInt(input.offset, 'offset', READ_FILE_MAX_LINE_LIMIT * 1000)
       optPositiveInt(input.limit, 'limit', READ_FILE_MAX_LINE_LIMIT)
       optPositiveInt(input.tail, 'tail', READ_FILE_MAX_LINE_LIMIT)
@@ -61,14 +64,18 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
         throw new Error('工具参数无效：tail 不能与 offset/limit 同时使用')
       }
       return
-    case 'list_directory':
-      optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+    }
+    case 'list_directory': {
+      const p = extractPathField(input)
+      if (p !== undefined) assertStringLen(p, 'path', PATH_OR_GLOB_MAX)
       return
+    }
     case 'grep': {
       const pattern = input.pattern
       if (typeof pattern !== 'string' || !pattern.trim()) throw new Error('工具参数无效：grep 缺少 pattern')
       assertStringLen(pattern, 'pattern', STRING_FIELD_MAX)
-      optStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+      const gp = extractPathField(input)
+      if (gp !== undefined) assertStringLen(gp, 'path', PATH_OR_GLOB_MAX)
       optStringLen(input.glob, 'glob', PATH_OR_GLOB_MAX)
       const hl = input.head_limit
       if (hl !== undefined && hl !== null) {
@@ -91,7 +98,9 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
       return
     }
     case 'edit_file': {
-      reqStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+      const p = extractPathField(input)
+      if (p === undefined) throw new Error(toolErrMissingPath('edit_file'))
+      assertStringLen(p, 'path', PATH_OR_GLOB_MAX)
       const oldS = input.old_string
       const newS = input.new_string
       if (typeof oldS !== 'string' || typeof newS !== 'string') throw new Error('工具参数无效：edit_file 需要 old_string 与 new_string')
@@ -100,7 +109,9 @@ export function assertSafeToolInput(toolName: string, input: Record<string, unkn
       return
     }
     case 'write_file': {
-      reqStringLen(input.path, 'path', PATH_OR_GLOB_MAX)
+      const p = extractPathField(input)
+      if (p === undefined) throw new Error(toolErrMissingPath('write_file'))
+      assertStringLen(p, 'path', PATH_OR_GLOB_MAX)
       const content = input.content
       if (typeof content !== 'string') throw new Error('工具参数无效：write_file 需要 content')
       assertStringLen(content, 'content', TOOL_LARGE_TEXT_MAX)

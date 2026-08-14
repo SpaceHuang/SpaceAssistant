@@ -168,7 +168,10 @@ export const readFileExecutor: ToolExecutor = {
   name: 'read_file',
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
-    const rel = typeof input.path === 'string' ? input.path : ''
+    const rel = extractPathField(input)
+    if (rel === undefined) {
+      return { success: false, error: toolErrMissingPath('read_file'), duration: Date.now() - started }
+    }
     ctx.sendProgress('reading', '正在读取文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
@@ -357,7 +360,7 @@ export const listDirectoryExecutor: ToolExecutor = {
   name: 'list_directory',
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
-    const rel = typeof input.path === 'string' ? input.path : '.'
+    const rel = extractPathField(input) ?? '.'
     ctx.sendProgress('listing', '正在读取目录...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
@@ -472,6 +475,7 @@ function countOccurrencesWithEolTolerance(hay: string, needle: string): number {
 }
 
 import { toolErrMissingPath } from '../toolInputGuards'
+import { extractPathField } from '../toolPathField'
 
 const ERR_FILE_NOT_READ_FOR_EDIT =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
@@ -513,8 +517,8 @@ export const editFileExecutor: ToolExecutor = {
   name: 'edit_file',
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
-    const rel = typeof input.path === 'string' ? input.path : ''
-    if (!rel.trim()) {
+    const rel = extractPathField(input)
+    if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('edit_file'), duration: Date.now() - started }
     }
     const oldS = typeof input.old_string === 'string' ? input.old_string : ''
@@ -615,8 +619,8 @@ export const writeFileExecutor: ToolExecutor = {
   name: 'write_file',
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
-    const rel = typeof input.path === 'string' ? input.path : ''
-    if (!rel.trim()) {
+    const rel = extractPathField(input)
+    if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('write_file'), duration: Date.now() - started }
     }
     const content = typeof input.content === 'string' ? input.content : ''
@@ -885,7 +889,7 @@ export const grepExecutor: ToolExecutor = {
     const started = Date.now()
     const pattern = typeof input.pattern === 'string' ? input.pattern : ''
     if (!pattern) return { success: false, error: '缺少 pattern', duration: Date.now() - started }
-    const relPath = typeof input.path === 'string' ? input.path : ''
+    const relPath = extractPathField(input) ?? ''
     const glob = typeof input.glob === 'string' ? input.glob : undefined
     const outputMode = typeof input.output_mode === 'string' ? input.output_mode : 'files_with_matches'
     const ignoreCase = Boolean(input.ignore_case)

@@ -116,13 +116,15 @@ describe('edit/write fileStateCache', () => {
       ctx
     )
     expect(edit.success).toBe(false)
-    expect(edit.error).toBe('工具参数无效：edit_file 缺少必填参数 path')
+    expect(edit.error).toMatch(/缺少必填参数 path/)
+    expect(edit.error).toMatch(/请勿使用 filePath 或 file_path/)
   })
 
   it('rejects write when path is missing', async () => {
     const ctx = makeCtx(tmpDir, cache)
     const write = await writeFileExecutor.execute({ content: 'hello' }, ctx)
     expect(write.success).toBe(false)
-    expect(write.error).toBe('工具参数无效：write_file 缺少必填参数 path')
+    expect(write.error).toMatch(/缺少必填参数 path/)
+    expect(write.error).toMatch(/请勿使用 filePath 或 file_path/)
   })
 })

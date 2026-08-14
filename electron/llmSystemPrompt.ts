@@ -28,6 +28,19 @@ export function buildImageAttachmentsSystemHint(locale: AppLocale): string {
   ].join('\n')
 }
 
+export function buildToolConventionHint(locale: AppLocale): string {
+  if (locale === 'en-US') {
+    return [
+      '## Tool call conventions',
+      'For file tools (read_file / edit_file / write_file / list_directory / grep), the path argument is named `path`. Do not use `filePath` or `file_path`.'
+    ].join('\n')
+  }
+  return [
+    '## 工具调用约定',
+    '文件类工具（read_file / edit_file / write_file / list_directory / grep）的路径参数字段名为 `path`，请勿使用 `filePath` 或 `file_path`。'
+  ].join('\n')
+}
+
 export function buildFinalSystemPrompt(args: {
   system?: string
   memoryContent: string | null
@@ -44,5 +57,7 @@ export function buildFinalSystemPrompt(args: {
     const hint = buildImageAttachmentsSystemHint(args.locale)
     withMemory = withMemory ? `${withMemory}\n\n${hint}` : hint
   }
+  const toolConventionHint = buildToolConventionHint(args.locale)
+  withMemory = withMemory ? `${withMemory}\n\n${toolConventionHint}` : toolConventionHint
   return appendUiLocaleSystemHint(withMemory, args.locale)
 }
