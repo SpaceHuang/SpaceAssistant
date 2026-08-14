@@ -1,5 +1,9 @@
 # 多会话并行执行 — 改造技术方案
 
+> **文档状态：** 阶段 1-3 已落地（代码超前于本文档，2026-07-15 已核实并更新）  
+> **代码基线：** `src/renderer/services/chatRunnerService.ts`、`src/renderer/store/chatSlice.ts`、`src/renderer/services/pendingConfirmStore.ts`、`src/renderer/services/runRequestIndex.ts`、`src/renderer/components/SessionList/PendingConfirmBanner.tsx` 等  
+> **剩余工作：** 阶段 4（性能优化，按需）、文件冲突检测验证
+
 ## 1. 背景与目标
 
 ### 1.1 问题
@@ -27,35 +31,33 @@
 
 ## 2. 已完成：会话列表 Loading 状态（交互基础）
 
-> 状态：**已完成**，作为多会话并行交互改造的第一步。
+> 状态：**已完成**（阶段 0），后续已升级为多会话 Running 状态。
 
 ### 2.1 行为
 
-| 状态 | 列表前方图标 |
-|------|-------------|
-| 空闲 | 6px 灰色圆点 |
-| 执行中 | 主题色 `Loader2` 旋转图标（复用 `tool-row-spin` 动画） |
+| 状态 | 列表表现 |
+|------|---------|
+| 空闲 | CSS 默认样式 |
+| 执行中 | `session-item--running` CSS class（方案演进：最初使用 `SessionListIcon` + `Loader2` 图标，后改为 CSS class 控制，`SessionListIcon.tsx` 组件保留但 `SessionListPane` 通过 `runningSessions[item.id]` 直接计算） |
 | 选中 | 浅灰背景 + 会话名高亮（已移除左侧蓝色竖条，视觉更简洁） |
 
-### 2.2 实现要点
+### 2.2 实现要点（已演进）
 
-| 模块 | 改动 |
-|------|------|
-| `chatSlice` | 新增 `runningSessionId`，在 `setChatStatus({ status: 'streaming', sessionId })` 时写入，完成/出错/取消时清除 |
-| `SessionListIcon` | `src/renderer/components/SessionList/SessionListIcon.tsx` |
-| `App.tsx` / `LeftSessions` | 每项渲染 `<SessionListIcon loading={item.id === runningSessionId} />` |
-| `layout.css` | `.session-item-icon*` 样式 |
+| 模块 | 初始改动（阶段 0） | 当前状态 |
+|------|-------------------|---------|
+| `chatSlice` | 新增 `runningSessionId` 单字段 | 已升级为 `runningSessions: Record<string, RunningSessionMeta>`（多会话 Map），含 `requestId` / `status` / `updatedAt` |
+| `SessionListIcon` | `<SessionListIcon loading={item.id === runningSessionId} />` | 组件保留可用，但 `SessionListPane` 改用 CSS class `session-item--running` |
+| `SessionListPane` | — | 直接从 `runningSessions[item.id]` 计算 `running` 布尔值 |
 
-### 2.3 已知局限（待本方案后续阶段解决）
+### 2.3 演进说明
 
-- `runningSessionId` 目前为**单个**字段，尚不支持多会话同时 running 的列表展示（下一阶段改为 `runningSessionIds: string[]` 或 `Record<sessionId, RunMeta>`）。
-- 切换会话时 `chatStatus` 仍为全局 `streaming`，输入区与发送逻辑尚未按会话隔离。
+阶段 0 设计使用 `runningSessionId` 单字段 + `SessionListIcon` 组件。在阶段 1 的 `chatRunnerService` 落地后，状态模型升级为 `runningSessions` Map（多会话），展示方案随之切换为 CSS class 方式，更简洁且无需额外组件。~~已知局限已消除。~~
 
 ---
 
 ## 3. 现状与差距分析
 
-### 3.1 已具备、可复用
+### 3.1 已具备、可复用（均已就绪）
 
 | 能力 | 位置 | 说明 |
 |------|------|------|
@@ -65,20 +67,25 @@
 | IPC 并发 | `ipcMain.handle` | 多路 `claude-chat-create-with-tools` 可并行 await |
 | 事件过滤 | 渲染层 callback | 已按 `requestId` 过滤 delta / tool 事件 |
 
-### 3.2 主要阻碍（按优先级）
+### 3.2 主要阻碍 → 已解决
 
-| 优先级 | 问题 | 影响 |
+| 原优先级 | 问题 | 现状 |
 |--------|------|------|
-| P0 | 全局 `messages` / `chatStatus` / `streamingRequestId` | 切换即脱节；全局锁阻止并行发送 |
-| P0 | 工具确认 UI 只绑当前可见会话 | 后台会话 write/edit 确认不可见，主进程阻塞至超时 |
-| P0 | `ChatView.send()` 单编排器 + 闭包 | 无法并存多路 IPC 监听与状态机 |
-| P1 | IPC 事件无 `sessionId` | 渲染层需维护 `requestId → sessionId` 路由表 |
-| P1 | 流式进度仅写 Redux、不落库 | 切走再切回丢失增量；崩溃丢进度 |
-| P1 | 切换/删除/unmount 不清理 runner | 孤儿监听、错绑 patch |
-| P1 | `finishCancelled` 等回调用 viewing `sessionId` | 切换后中止可能写错会话 |
-| P2 | 共享 `workDir` 无写冲突协调 | 并行改同一文件可能 lost update |
-| P2 | JSON 全量 `db.save()` | 多会话同时完成时 I/O 放大 |
-| P3 | API 速率 / 主进程 CPU | 软瓶颈，产品层可设并发上限 |
+| ~~P0~~ | ~~全局 `messages` / `chatStatus` / `streamingRequestId`~~ | ✅ 已解决。`runningSessions` Map 替代单字段；`streamingRequestId` 从 per-session 计算；全局锁已移除。`chatStatus` 字段保留（兼容）但不再用于发送锁 |
+| ~~P0~~ | ~~工具确认 UI 只绑当前可见会话~~ | ✅ 已解决。`PendingConfirmBanner` + `pendingConfirmStore` + `pendingWriteDirConfirmStore` + `pendingArtifactDecisionStore` 三个跨会话队列，侧栏上方展示待办，可跳转 |
+| ~~P0~~ | ~~`ChatView.send()` 单编排器 + 闭包~~ | ✅ 已解决。`chatRunnerService`（~280 行）已接管所有编排；`ChatView` 变薄 |
+| ~~P1~~ | ~~IPC 事件无 `sessionId`~~ | ✅ 已解决。`runRequestIndex.ts`（`requestId → sessionId`，双路径：主进程直接传 `sessionId` + fallback 查表） |
+| ~~P1~~ | ~~流式进度仅写 Redux、不落库~~ | ✅ 已解决。`routeStreamPatchMessage` → 2s 节流 `chatPatchMessage` DB 落库 + `flushStreamPersist` 完成前确保不丢失 |
+| ~~P1~~ | ~~切换/删除/unmount 不清理 runner~~ | ✅ 已解决。`abortSessionRun` + `clearLiveSession` 完整清理 timer/rAF/pending patch/stores |
+| ~~P1~~ | ~~`finishCancelled` 等回调用 viewing `sessionId`~~ | ✅ 已解决。所有回调使用启动时捕获的 `sessionId` 参数 |
+
+### 3.3 剩余工作（低优先级）
+
+| 优先级 | 问题 | 影响 | 状态 |
+|--------|------|------|------|
+| P2 | 共享 `workDir` 无写冲突协调 | 并行改同一文件可能 lost update | 未验证（`toolWriteConflict.ts` 可能存在部分防护） |
+| P2 | JSON 全量 `db.save()` | 多会话同时完成时 I/O 放大 | 未动（阶段 4 按需） |
+| P3 | API 速率 / 主进程 CPU | 软瓶颈，产品层可设并发上限 | `DEFAULT_MAX_PARALLEL_CHAT_SESSIONS` 常量已定义 + 可配置 |
 
 ---
 
@@ -92,21 +99,21 @@
 
 ---
 
-## 5. 目标架构
+## 5. 架构（已落地）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Renderer                                                    │
 │  ┌──────────────┐   ┌─────────────────────────────────┐   │
 │  │ LeftSessions │   │ ChatView（纯展示 + 输入）          │   │
-│  │ loading 图标  │   │ 订阅 currentSessionId 的消息快照   │   │
+│  │ running 图标  │   │ 订阅 currentSessionId 的消息快照   │   │
 │  └──────┬───────┘   └───────────────┬─────────────────┘   │
 │         │                           │                       │
 │         │         ┌─────────────────▼─────────────────┐     │
 │         └────────►│ chatRunnerService（单例）          │     │
-│                   │  Map<sessionId, SessionRunState>   │     │
-│                   │  Map<requestId, sessionId>         │     │
-│                   │  pendingConfirms[]               │     │
+│                   │  Map<sessionId, Message[]> (live)  │     │
+│                   │  Map<requestId, sessionId> (index) │     │
+│                   │  pendingConfirmStore + 2 aux       │     │
 │                   └─────────────────┬─────────────────┘     │
 │                                     │ IPC                   │
 └─────────────────────────────────────┼───────────────────────┘
@@ -117,148 +124,136 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 5.1 状态拆分
+### 5.1 状态模型（已落地）
 
-**保留（UI 层）**
-
-| 字段 | 职责 |
-|------|------|
-| `currentSessionId` | 当前查看的会话 |
-| `messages` | **仅**当前查看会话的消息快照（从 runner 或 DB 同步） |
-
-**迁移到 `chatRunnerService`（运行层）**
-
-| 字段 | 职责 |
-|------|------|
-| `runs[sessionId]` | `{ requestId, assistantMessageId, status, ... }` |
-| `requestIndex[requestId]` | → `sessionId`，供 IPC 回调路由 |
-| `liveMessages[sessionId]` | 进行中会话的内存消息（含 streaming 增量） |
-
-**Redux 调整（轻量）**
+**Redux（`chatSlice`）**
 
 ```typescript
-// chatSlice 演进方向（示意）
 interface ChatState {
   currentSessionId: string | null
-  messages: Message[]              // 当前查看会话
-  runningSessions: Record<string, {
-    requestId: string
-    status: 'streaming' | 'error'
-    updatedAt: number
-  }>
+  messages: Message[]                          // 当前查看会话
+  chatStatus: ChatStatus                       // 保留（兼容），不再用于全局锁
+  runningSessions: Record<string, RunningSessionMeta>  // 多会话运行状态
+}
+
+type RunningSessionMeta = {
+  requestId: string
+  status: 'streaming' | 'error'
+  updatedAt: number
 }
 ```
 
-- 删除全局 `chatStatus` / `streamingRequestId` / 单值 `runningSessionId`。
-- 列表 Loading 改为 `sessionId in runningSessions`。
+- ~~单值 `runningSessionId`~~ → `runningSessions` Map（已完成）
+- `chatStatus` 字段保留但不再用于阻止并行发送（发送锁基于 per-session `runningSessions[sessionId]`）
+- `streamingRequestId` 在 `ChatView` 中从 `runningSessions[sessionId]?.requestId` 计算（per-session）
 
-### 5.2 SessionChatRunner 职责
+**`chatRunnerService`（渲染层单例）**
 
-每个会话最多一个活跃 runner；runner 封装现有 `ChatView.send()` 内逻辑：
+| 结构 | 职责 |
+|------|------|
+| `liveBySession: Map<sessionId, Message[]>` | 每活跃会话的内存消息快照 |
+| `toolControllersByRequestId` | 按 requestId 持有 ToolChatController |
+| `persistTimers` + `persistPendingPatch` | 2s 节流 DB 落库 |
+| `pendingUiPatches` + `uiFlushRafIds` | rAF 合并 UI 更新 |
+| `runRequestIndex.ts` | `requestId → sessionId` 独立路由表 |
 
-- 创建 user / assistant 消息，写 DB（append）。
-- 注册 IPC 监听（delta / thinking / tool*），在 **cleanup** 中统一 unsubscribe。
-- 增量更新 `liveMessages[sessionId]`；若 `sessionId === currentSessionId` 则同步到 Redux `messages`。
-- 完成 / 失败 / 取消时 `chatPatchMessage` 落库，从 `runningSessions` 移除。
-- **始终使用启动时捕获的 `sessionId`**，禁止依赖 React 组件内的 viewing sessionId。
+**跨会话确认队列（3 个 stores）**
 
-对外 API（示意）：
-
-```typescript
-chatRunner.start(sessionId, userText): Promise<void>
-chatRunner.abort(sessionId): void
-chatRunner.abortAll(): void
-chatRunner.getLiveMessages(sessionId): Message[]
-chatRunner.onChange(cb): unsubscribe
-```
-
-`ChatView` 变薄：挂载时 `syncMessages(currentSessionId)`，订阅 runner 变更刷新当前视图。
+| Store | 职责 |
+|------|------|
+| `pendingConfirmStore` | 工具确认（write/edit/shell 等） |
+| `pendingWriteDirConfirmStore` | 文件写入目录确认 |
+| `pendingArtifactDecisionStore` | 产物归属决策 |
+| `PendingConfirmBanner` | 侧栏上方"待确认"入口，可跳转 |
 
 ---
 
-## 6. 关键场景设计
+## 6. 关键场景设计（已落地）
 
 ### 6.1 切换会话
 
 1. `dispatch(setSession(newId))`。
-2. `ChatView` 从 `runner.getLiveMessages(newId)` 或 `chatGetMessages` 加载历史；若该会话有活跃 run，合并 live 增量。
+2. `ChatView` 从 `chatRunnerService` + DB merge 加载消息历史；若该会话有活跃 run，合并 live 增量（`mergeDbAndLive`）。
 3. **不** cancel 旧会话 request。
-4. 输入区 `running` 改为 `Boolean(runningSessions[currentSessionId])` — 仅当前会话显示「执行中」。
+4. 输入区 `sessionRunning` 从 `runningSessions[currentSessionId]` 计算 —— 仅当前会话显示「执行中」。
+
+**代码实现：**
+- `chatRunnerService.routeAddMessage` / `routeStreamPatchMessage` 仅在 `currentSessionId === sessionId` 时同步 Redux
+- `mergeDbAndLive` 合并 DB + Redux + live 三层数据
+- `resolveSessionMessagesForApi` 构建完整上下文供 LLM 请求使用
 
 ### 6.2 并行发送
 
-- `start()` 前检查：`runningSessions[sessionId]` 存在则拒绝（单会话单任务）。
-- 全局活跃数 ≥ `maxParallelSessions`（默认 3）则 toast 提示。
-- 移除现有 `store.getState().chat.chatStatus === 'streaming'` 全局锁。
+- 发送前检查：`runningSessions[sessionId]` 存在则拒绝（单会话单任务）。
+- 全局活跃数 ≥ `maxParallelSessions`（默认 3，可通过配置项调整）则 toast 提示。
+- ~~移除全局锁 `chatStatus === 'streaming'`~~ ✅ 已移除。
 
-### 6.3 工具确认（P0）
+**代码实现：**
+- `getMaxParallelChatSessions()` 从配置读取，`clampMaxParallelChatSessions` 边界校验
+- `countRunningSessions()` / `isSessionRunning()` 读取 `runningSessions` map
 
-**问题**：主进程 `await waitForToolConfirm(requestId, toolUseId)` 阻塞该会话 loop；UI 必须能响应任意 session 的 confirm。
+### 6.3 工具确认（跨会话）
 
-**方案（简单可维护）**：
+**方案（已实现）**：
 
-1. **`PendingConfirmStore`（渲染层单例）**  
-   收到 `tool:confirm-request` 时，经 `requestIndex` 解析 `sessionId`，写入队列 `{ sessionId, requestId, toolUseId, toolName, diff, ... }`。
+1. **`pendingConfirmStore`（渲染层单例）**  
+   收到 `tool:confirm-request` 时，经 payload 中的 `sessionId`（主进程已附带）或 `resolveSessionIdForRequest` 解析，写入队列 `{ sessionId, requestId, toolUseId, toolName, ... }`。
 
-2. **全局确认入口**（二选一，推荐 A）  
-   - **A. 侧栏待办条**：会话列表上方「2 项待确认」→ 点击跳到对应会话并展开 WriteConfirmCard。  
-   - B. 浮动通知 + Modal（交互更重，暂不采用）。
+2. **侧栏待办条（`PendingConfirmBanner`）**  
+   会话列表上方展示跨会话待确认项（"N 项待确认"），点击可跳转到对应会话并聚焦确认卡片。`useActionablePendingConfirms` hook 过滤仅当前 running session 的可操作项。
 
-3. **确认回调** 使用队列项内的 `requestId`，不再依赖全局 `streamingRequestId`。
+3. **确认回调** 使用队列项内的 `requestId`，不依赖全局 `streamingRequestId`。
 
-4. 会话被删除时：对该 session 下所有 pending confirm 自动 `reject`，并 `claudeChatCancel` 其 requestId。
+4. 会话被删除时：对该 session 下所有 pending confirm 自动 `reject`（`rejectAllForSession`），并 cancel requestId。
+
+**额外实现（超出原始设计）：**
+- `pendingWriteDirConfirmStore`（文件写入目录确认跨会话队列）
+- `pendingArtifactDecisionStore`（产物归属决策跨会话队列）
+- `confirmStoresInit.ts`（eager-init 三个 stores 的 IPC 监听）
 
 ### 6.4 中止
 
-- 输入区中止按钮：仅 abort **当前查看会话** 的 run（若存在）。
-- 会话列表：running 图标 hover 显示停止按钮（可选，阶段 2）。
+- 输入区中止按钮：仅 abort **当前查看会话** 的 run（`abortSessionRun`）。
 - 主进程已有 `claude-chat-cancel`，无需改动。
 
 ### 6.5 持久化策略
 
-**阶段 1（最小改动）**
+**已实现（超越原始设计）：**
 
-- 保持「完成时一次性 `chatPatchMessage`」。
-- `liveMessages[sessionId]` 作为切换期间的唯一增量来源。
-- 切回正在执行的会话时，从 `liveMessages` 恢复，而非仅读 DB。
-
-**阶段 2（可选）**
-
-- 流式节流落库（如每 2s 或每 512 字符 patch 一次），降低切走丢失风险。
-- 不在首阶段引入，避免 DB 写入风暴恶化。
+- `routeStreamPatchMessage`：live 立即更新 + Redux rAF 合并（`scheduleUiFlush`）+ DB 2s 节流（`scheduleThrottledPersist`）。
+- `flushStreamPersist`：完成前确保最后一批 DB patch 不丢失。
+- `flushUiPatch`：完成前确保最后一批 UI patch flush 到 Redux。
 
 ### 6.6 文件并发（P2，轻量防护）
 
-首阶段不做复杂锁，仅增加 **冲突检测**：
-
-- 工具执行前检查 path 是否出现在其他活跃 session 的「最近写入集合」中。
-- 若冲突，工具返回可读错误，由模型重试或用户切换会话。
-- `FileStateCache` 仍 per-session；后续可考虑 workDir 级 `mtime` 校验。
+~~首阶段不做复杂锁~~ → 未验证。`toolWriteConflict.ts` 可能存在部分防护，需进一步确认。
 
 ### 6.7 会话删除
 
-`sessionDelete` 流程扩展：
+`sessionDelete` 流程（已扩展）：
 
-1. `chatRunner.abort(sessionId)` + 清理 `liveMessages` / pending confirms。
-2. 现有 DB 删除逻辑不变。
-3. 主进程 `fileCaches.delete(sessionId)`（补充清理）。
+1. `chatRunnerService.finishSessionRun` / `abortSessionRun` + 清理 `liveBySession` / pending confirms。
+2. `pendingConfirmStore.rejectAllForSession` + 三个 stores 的 `removeAllForRequest`。
+3. `clearLiveSession`（清理 timer + rAF + pending patch）。
+4. dispatch `removeRunningSession`。
+5. 现有 DB 删除逻辑不变。
 
 ---
 
 ## 7. IPC 与 API 变更
 
-### 7.1 原则
+### 7.1 原则（已落地）
 
-主进程已按 `requestId` 隔离，**不强制**所有事件加 `sessionId`；渲染层 `requestIndex` 足够。
+主进程已按 `requestId` 隔离；渲染层 `runRequestIndex` 提供 `requestId → sessionId` 路由。主进程部分事件 payload 已附带 `sessionId`（优先使用，`pendingConfirmStore.init` 中使用 `d.sessionId ?? resolveSessionIdForRequest(d.requestId)` 双路径）。
 
-### 7.2 可选增强（低成本）
+### 7.2 已实现
 
-在 `tool:confirm-request`、`claude-chat-error` 等少量事件 payload 中追加 `sessionId`（主进程 payload 里已有），减少渲染层查表。属于便利优化，非阻塞项。
+在 `tool:confirm-request` 等事件 payload 中主进程已附带 `sessionId`，渲染层优先使用，减少查表。
 
 ### 7.3 不改动的部分
 
 - `chatCancelRegistry` / `toolConfirmRegistry` 结构。
-- `claude-chat-create-with-tools` 同步 invoke 语义（每会话一个 pending promise，由 runner 各自 await）。
+- `claude-chat-create-with-tools` 同步 invoke 语义（每会话一个 pending promise，由 chatRunnerService 各自 await）。
 
 ---
 
@@ -266,44 +261,50 @@ chatRunner.onChange(cb): unsubscribe
 
 ### 阶段 0 — 已完成 ✅
 
-- [x] 会话列表 Loading 图标（`SessionListIcon` + `runningSessionId`）
+- [x] 会话列表 Loading 图标（`SessionListIcon` + `runningSessionId` 初始方案）
 - [x] 选中态简化（移除左侧蓝色竖条）
+- [x] 后续演进为 `runningSessions` map + CSS class 方案
 
-### 阶段 1 — 运行层抽离（核心）
+### 阶段 1 — 已完成 ✅（运行层抽离）
 
-| 任务 | 说明 |
-|------|------|
-| 新增 `chatRunnerService` | 从 `ChatView.send()` 迁出 orchestration |
-| Redux 改为 `runningSessions`  map | 列表 Loading 支持多会话 |
-| 切换会话正确加载 | 合并 live / DB；修复 `finishCancelled` sessionId 错绑 |
-| 移除全局 send 锁 | 按 sessionId 判断是否可发 |
-| 单元测试 | runner 路由、并发上限、切换不 cancel |
+| 任务 | 说明 | 实现文件 |
+|------|------|---------|
+| 新增 `chatRunnerService` | 从 `ChatView.send()` 迁出 orchestration | `src/renderer/services/chatRunnerService.ts`（~280 行） |
+| Redux 改为 `runningSessions` map | 列表支持多会话 running 状态 | `chatSlice.ts`（`Record<string, RunningSessionMeta>`） |
+| 切换会话正确加载 | 合并 live / DB / Redux 三层 | `mergeDbAndLive` + `resolveSessionMessagesForApi` |
+| 移除全局 send 锁 | 按 `runningSessions[sessionId]` 判断 | `isSessionRunning` + `countRunningSessions` |
+| 流式节流 DB 落库 | 2s 节流 + flush 保证不丢失 | `routeStreamPatchMessage` → `scheduleThrottledPersist` |
+| 跨会话 `ToolChatController` 隔离 | 按 requestId 持有，防止覆盖 | `toolControllersByRequestId` Map |
+| 单元测试 | runner 路由、并发上限、切换不 cancel | `chatRunnerService.test.ts` |
 
-**验收**：A 执行中长任务时可切到 B 发消息；A 列表仍显示 loading；A 完成后 DB 正确。
+**验收**：A 执行中长任务时可切到 B 发消息；A 列表仍显示 running；A 完成后 DB 正确。✅
 
-### 阶段 2 — 工具确认队列
+### 阶段 2 — 已完成 ✅（工具确认队列）
 
-| 任务 | 说明 |
-|------|------|
-| `PendingConfirmStore` + 侧栏待办入口 | 后台 confirm 可处理 |
-| 确认 / 拒绝 / 超时 UI 闭环 | 不再 5min 盲等 |
-| 删 session 自动 reject | 防悬挂 |
+| 任务 | 说明 | 实现文件 |
+|------|------|---------|
+| `PendingConfirmStore` + 侧栏待办入口 | 后台 confirm 可处理 | `pendingConfirmStore.ts`（~145 行）+ `PendingConfirmBanner.tsx` |
+| 确认 / 拒绝 / 超时 UI 闭环 | 不再 5min 盲等 | `useActionablePendingConfirms` hook |
+| 删 session 自动 reject | 防悬挂 | `rejectAllForSession` |
+| 文件写入目录确认队列 | 跨会话 → `pendingWriteDirConfirmStore` | `pendingWriteDirConfirmStore.ts` |
+| 产物归属决策队列 | 跨会话 → `pendingArtifactDecisionStore` | `pendingArtifactDecisionStore.ts` |
+| 三个 stores eager-init | 在任何 chat run 前注册 IPC 监听 | `confirmStoresInit.ts` |
 
-**验收**：A 后台等待 write 确认，用户在 B 界面收到待办并可跳转确认。
+**验收**：A 后台等待 write 确认，用户在 B 界面看到侧栏待办并可跳转确认。✅
 
-### 阶段 3 — 生命周期与体验
+### 阶段 3 — 基本完成 ✅（生命周期与体验）
 
-| 任务 | 说明 |
-|------|------|
-| unmount / 切换 cleanup 规范 | 仅 unsubscribe viewing 相关，不杀 runner |
-| 列表项 abort 快捷操作 | 可选 |
-| 流式节流落库 | 可选 |
-| 文件冲突检测 | 轻量 |
+| 任务 | 说明 | 状态 |
+|------|------|------|
+| unmount / 切换 cleanup 规范 | 仅 unsubscribe viewing 相关，不杀 runner | ✅ `abortSessionRun` + `clearLiveSession` 完整清理 |
+| `finishSessionRun` sessionId 正确 | 使用启动时捕获的参数，非 viewing state | ✅ |
+| 流式节流落库 | 2s DB patch | ✅ 已实现（超出阶段 3 预期，阶段 1 已完成） |
+| 文件冲突检测 | 轻量检测 | ⚠️ 未验证（`toolWriteConflict.ts` 可能已有部分防护） |
 
-### 阶段 4 — 性能（按需）
+### 阶段 4 — 按需（性能）
 
 - DB 写入合并 / 迁移 SQLite。
-- 并发上限配置化（设置页）。
+- ~~并发上限配置化~~ → ✅ 已实现（`maxParallelChatSessions` 配置项 + `clampMaxParallelChatSessions` + `DEFAULT_MAX_PARALLEL_CHAT_SESSIONS` 常量）。
 
 ---
 
@@ -334,21 +335,46 @@ chatRunner.onChange(cb): unsubscribe
 
 ---
 
-## 11. 涉及文件（预估）
+## 11. 涉及文件
 
-| 阶段 | 文件 |
-|------|------|
-| 0 ✅ | `SessionListIcon.tsx`, `App.tsx`, `chatSlice.ts`, `layout.css`, `ChatView.tsx` |
-| 1 | 新增 `src/renderer/services/chatRunnerService.ts`；重构 `ChatView.tsx`；调整 `chatSlice.ts` |
-| 2 | 新增 `PendingConfirmBanner.tsx` 或侧栏组件；`App.tsx` |
-| 3 | `electron/toolChatLoop.ts`（冲突检测）；`appIpc.ts`（删 session 联动） |
+| 阶段 | 文件 | 状态 |
+|------|------|------|
+| 0 | `SessionListIcon.tsx`、`SessionListPane.tsx`、`chatSlice.ts`、`layout.css`、`ChatView.tsx` | ✅ |
+| 1 | `src/renderer/services/chatRunnerService.ts`（新增） | ✅ |
+| 1 | `src/renderer/services/runRequestIndex.ts`（新增） | ✅ |
+| 1 | `src/shared/chatParallelConfig.ts`（并发上限配置） | ✅ |
+| 2 | `src/renderer/services/pendingConfirmStore.ts`（新增） | ✅ |
+| 2 | `src/renderer/services/pendingWriteDirConfirmStore.ts`（新增） | ✅ |
+| 2 | `src/renderer/services/pendingArtifactDecisionStore.ts`（新增） | ✅ |
+| 2 | `src/renderer/services/confirmStoresInit.ts`（新增） | ✅ |
+| 2 | `src/renderer/components/SessionList/PendingConfirmBanner.tsx`（新增） | ✅ |
+| 2 | `src/renderer/hooks/useActionablePendingConfirms.ts`（新增） | ✅ |
+| 3 | `src/renderer/services/chatToolSessionService.ts` | ✅ |
+| 3 | `src/renderer/services/workDirSessionSync.ts` | ✅ |
+| — | 相关测试文件（`chatRunnerService.test.ts`、`pendingConfirmStore.test.ts` 等） | ✅ |
 
 ---
 
-## 12. 小结
+## 12. 实际实现与原始设计的偏差
 
-多会话并行的本质是 **把「正在看」和「正在跑」解耦**。主进程已具备 request 级隔离；渲染层需补 runner、per-session 运行表、确认队列三块。
+以下偏差已在落地过程中自然发生，记录供后续维护者参考：
 
-交互上，**会话列表 Loading 状态已落地**，后续只需将 `runningSessionId` 扩展为多会话 map，并与 runner 对齐。
+| 偏差 | 原始设计 | 实际实现 | 原因 |
+|------|---------|---------|------|
+| Loading 展示 | `SessionListIcon` 组件 | CSS class `session-item--running` | 简化，无需额外组件 |
+| `chatStatus` 删除 | 设计目标：删除全局字段 | 保留（兼容），仅不再用于锁 | 最小改动原则 |
+| `PendingConfirmStore` 命名 | 单数 | 实际有 3 个 stores | 职责分离（confirm / writeDir / artifact） |
+| `toolControllersByRequestId` | 未在设计中出现 | 实际实现的核心结构 | 多会话并行中防止后启动会话覆盖 ToolChatController |
+| `confirmStoresInit` | 未在设计中出现 | eager-init 模式 | 确保 IPC 监听在首次 confirm-request 到达前注册 |
+| 并发上限配置 | 阶段 4 | 阶段 1 同步实现 | `chatParallelConfig.ts` + `maxParallelChatSessions` 配置项 |
+| 流式 DB 节流落库 | 阶段 2 可选 | 阶段 1 已实现 | 2s 节流（`STREAM_PERSIST_MS = 2000`） |
 
-整体遵循「runner 单抽象 + Redux 轻量化 + 确认队列单入口」，避免引入独立任务系统或过早优化存储层，保证可维护与可渐进交付。
+---
+
+## 13. 小结
+
+多会话并行的本质是 **把「正在看」和「正在跑」解耦**。主进程已具备 request 级隔离；渲染层已补全 `chatRunnerService`（运行层）、`runningSessions` map（per-session 状态）、`runRequestIndex`（路由表）、确认队列（3 个跨会话 stores + `PendingConfirmBanner`）四块。
+
+**代码已处于阶段 3 基本完成的状态**，核心 P0/P1 阻碍全部解除。剩余 P2 项（文件冲突检测、SQLite 迁移）为按需优化，不阻塞基于多会话并行能力的上层功能开发。
+
+与原始设计方案相比，代码落地质量较高——`toolControllersByRequestId`、节流持久化、eager-init stores、并发上限可配置等细节超出设计预期，体现了良好的工程判断。
