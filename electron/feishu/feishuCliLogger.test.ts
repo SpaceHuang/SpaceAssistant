@@ -8,7 +8,7 @@ import {
   logFeishuCliEvent,
   resetFeishuCliLoggerForTests
 } from './feishuCliLogger'
-import { formatFeishuCliLogFileName } from './feishuCliLogPaths'
+import { formatAgentLogDateKey } from '../agentLogger/agentLogPaths'
 
 describe('feishuCliLogger', () => {
   let tempDir = ''
@@ -35,7 +35,12 @@ describe('feishuCliLogger', () => {
     })
     await flushFeishuCliLogger()
 
-    const logFile = path.join(tempDir, '.agent', 'logs', formatFeishuCliLogFileName(new Date()))
+    const logFile = path.join(
+      tempDir,
+      '.agent',
+      'logs',
+      `FeishuCli-${formatAgentLogDateKey(new Date())}.log`
+    )
     const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n')
     expect(lines.length).toBeGreaterThanOrEqual(2)
 

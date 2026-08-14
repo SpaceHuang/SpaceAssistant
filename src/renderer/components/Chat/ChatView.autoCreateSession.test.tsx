@@ -59,11 +59,6 @@ vi.mock('@xterm/addon-serialize', () => ({
   }
 }))
 
-vi.mock('../../utils/chatScroll', () => ({
-  isChatScrollNearBottom: vi.fn(() => true),
-  scrollChatToBottom: vi.fn()
-}))
-
 vi.mock('../../utils/motionPreference', () => ({
   scrollIntoViewWithMotionPreference: vi.fn()
 }))

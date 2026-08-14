@@ -8,7 +8,7 @@ import {
   logWeChatCliEvent,
   resetWeChatCliLoggerForTests
 } from './weChatCliLogger'
-import { formatWeChatCliLogFileName } from './weChatCliLogPaths'
+import { formatAgentLogDateKey } from '../agentLogger/agentLogPaths'
 
 describe('weChatCliLogger', () => {
   let tempDir = ''
@@ -35,7 +35,12 @@ describe('weChatCliLogger', () => {
     })
     await flushWeChatCliLogger()
 
-    const logFile = path.join(tempDir, '.agent', 'logs', formatWeChatCliLogFileName(new Date()))
+    const logFile = path.join(
+      tempDir,
+      '.agent',
+      'logs',
+      `WeChatCli-${formatAgentLogDateKey(new Date())}.log`
+    )
     const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n')
     expect(lines.length).toBeGreaterThanOrEqual(2)
 

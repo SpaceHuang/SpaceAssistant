@@ -38,10 +38,3 @@ export function getSessionAuxiliaryText(item: SearchResult): string | null {
   if (!shouldShowSessionAuxiliary(item.title, sessionName)) return null
   return sessionName
 }
-
-/** @deprecated 使用 getFileSearchDisplay */
-export function getFileAuxiliaryText(item: SearchResult): string | null {
-  if (item.type !== 'file' || !item.path) return null
-  const dir = getFileDirname(item.path)
-  return dir || null
-}

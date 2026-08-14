@@ -33,8 +33,3 @@ export function resolveRemoteConfirmPolicy(_args: {
 export function shouldRequestImConfirm(resolved: ResolvedRemoteConfirmPolicy): boolean {
   return resolved === 'im_confirm'
 }
-
-/** @deprecated Use remoteDenyOutbound / remoteAllowLocalWrite instead. */
-export function isRemoteReadOnlyPolicy(confirmPolicy: RemoteConfirmPolicyInput): boolean {
-  return confirmPolicy === 'remote_read_only'
-}

@@ -6,7 +6,6 @@ import {
   shellCommandNeverTrustable,
   shouldSkipRemoteBrowserActConfirm,
   shouldSkipRemoteBrowserNavigateConfirm,
-  shouldSkipRemoteFileWriteConfirm,
   shouldSkipRemoteLarkWriteConfirm,
   shouldSkipRemoteScriptConfirmOnAllow
 } from './remoteToolPolicy'
@@ -60,13 +59,6 @@ describe('applyMigrationConservativeOverlay', () => {
 })
 
 describe('per-tool confirm skip decisions', () => {
-  it('file write skip only when migrated and write allowed', () => {
-    expect(shouldSkipRemoteFileWriteConfirm({ remoteAllowLocalWrite: true })).toBe(false)
-    expect(shouldSkipRemoteFileWriteConfirm({ ...migrated, remoteAllowLocalWrite: false })).toBe(false)
-    expect(shouldSkipRemoteFileWriteConfirm({ ...migrated, remoteAllowLocalWrite: true })).toBe(false)
-    expect(shouldSkipRemoteFileWriteConfirm({ ...migrated })).toBe(false)
-  })
-
   it('script allow skip only when migrated and script confirm disabled', () => {
     expect(shouldSkipRemoteScriptConfirmOnAllow({ remoteScriptRequiresConfirm: false })).toBe(false)
     expect(shouldSkipRemoteScriptConfirmOnAllow({ ...migrated })).toBe(false)

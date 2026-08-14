@@ -66,14 +66,6 @@ export function applyMigrationConservativeOverlay(
 }
 
 /**
- * @deprecated Remote file writes no longer skip confirm via config.
- * They require a session-scoped RemoteWriteGrant (always returns false).
- */
-export function shouldSkipRemoteFileWriteConfirm(_config?: RemoteSecurityPolicyConfig | null): boolean {
-  return false
-}
-
-/**
  * run_script `allow` verdict may skip confirm only when migrated and script confirm disabled.
  *
  * Callers must only invoke this when `analyzeScriptContent(code, { remote: true })` itself

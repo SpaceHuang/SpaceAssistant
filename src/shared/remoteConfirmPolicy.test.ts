@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  isRemoteReadOnlyPolicy,
   normalizeWeChatConfirmPolicy,
   resolveRemoteConfirmPolicy,
   shouldRequestImConfirm
@@ -36,9 +35,4 @@ describe('remoteConfirmPolicy', () => {
     expect(normalizeWeChatConfirmPolicy('wechat_confirm')).toBe('im_confirm')
   })
 
-  it('isRemoteReadOnlyPolicy detects read-only', () => {
-    expect(isRemoteReadOnlyPolicy('remote_read_only')).toBe(true)
-    expect(isRemoteReadOnlyPolicy('wechat_confirm')).toBe(false)
-    expect(isRemoteReadOnlyPolicy('im_confirm')).toBe(false)
-  })
 })

@@ -6,13 +6,12 @@ import { createArtifactTestFixture, type ArtifactTestFixture } from './testHelpe
 import { isArtifactManagementEnabled } from './featureFlag'
 import {
   prepareArtifactToolWrite,
+  resumeArtifactToolWriteAfterDecision,
   registerArtifactWriteOutcome,
   createToolLoopArtifactState
 } from './toolLoopArtifactFlow'
 import { createSession, getSession } from '../database'
 import { ArtifactRepository } from './artifactRepository'
-import { resolveArtifactOutput } from './artifactResolver'
-import { resolveReferenceRetention } from './referenceRetention'
 import { buildArtifactCompletionSummary } from './completionSummary'
 import { ArtifactChangeCursor } from './changeCursor'
 import { extractExplicitPathEvidence } from './explicitPathEvidence'
@@ -25,7 +24,7 @@ describe('artifact acceptance integration', () => {
     fixtures.splice(0).forEach((fixture) => fixture.teardown())
   })
 
-  describe('dev scenario (AC-01～05, AC-22～25, AC-33, AC-35～40)', () => {
+  describe('dev scenario (AC-01～05, AC-22, AC-33, AC-36, AC-39)', () => {
     it('AC-01/AC-35: artifact-enabled session freezes management flag on', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
@@ -146,17 +145,6 @@ describe('artifact acceptance integration', () => {
       expect(fs.existsSync(path.join(fixture.workDir, 'src', 'config.json'))).toBe(true)
     })
 
-    it('AC-38/AC-40: path type conflict is rejected for file vs directory mismatch', async () => {
-      const fixture = createArtifactTestFixture()
-      fixtures.push(fixture)
-      const { resolveOutputPathKind } = await import('./outputPathKind')
-      const root = fixture.workDir
-      fs.mkdirSync(path.join(root, 'report'), { recursive: true })
-      await expect(
-        resolveOutputPathKind({ targetPath: path.join(root, 'report'), declaredKind: 'file' })
-      ).rejects.toThrow(/ARTIFACT_PATH_TYPE_CONFLICT/)
-    })
-
     it('AC-39: successful write registers artifact; failed write does not', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
@@ -207,7 +195,7 @@ describe('artifact acceptance integration', () => {
     })
   })
 
-  describe('analysis scenario (AC-06～17, AC-41～43)', () => {
+  describe('analysis scenario (AC-07, AC-09, AC-10, AC-11, AC-15)', () => {
     it('AC-07/AC-09/AC-11: package primary uses explicit paths literally', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
@@ -339,31 +327,13 @@ describe('artifact acceptance integration', () => {
       })
       expect(resumed.kind).toBe('ready')
       if (resumed.kind === 'ready') {
-        expect(resumed.prepared.finalPath).toBe('reports/ac10/report.md')
+        expect(resumed.prepared.finalPath).toBe(path.join('reports', 'ac10', 'report.md'))
       }
     })
 
-    it('AC-41: ordinary retrieval does not retain reference artifacts', () => {
-      expect(resolveReferenceRetention({ mode: 'retrieve' })).toEqual({ kind: 'none' })
-      expect(resolveReferenceRetention({ mode: 'short-summary' })).toEqual({ kind: 'none' })
-    })
-
-    it('AC-43: unassociated save requests long-term/pending/cancel decision', () => {
-      expect(resolveReferenceRetention({ mode: 'save' })).toEqual({
-        kind: 'reference-retention',
-        choices: ['long-term', 'pending', 'cancel']
-      })
-    })
-
-    it('AC-42: package-associated reference routes to materials directory', () => {
-      expect(resolveReferenceRetention({ mode: 'long-term', packageId: 'pkg-1' })).toEqual({
-        kind: 'package-reference',
-        packageId: 'pkg-1'
-      })
-    })
   })
 
-  describe('research writing scenario (AC-18～21, AC-26～28, AC-44)', () => {
+  describe('research writing scenario (AC-18, AC-19, AC-21, AC-26, AC-28)', () => {
     it('AC-18/AC-19: continuous draft.md edits reuse artifactId via prepareArtifactToolWrite', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)
@@ -471,10 +441,6 @@ describe('artifact acceptance integration', () => {
       expect(result.skipped.some((item) => item.id === 'ref-1')).toBe(true)
     })
 
-    it('AC-44: agent-suggested reference retention requires explicit decision', () => {
-      expect(resolveReferenceRetention({ mode: 'save' }).kind).toBe('reference-retention')
-    })
-
     it('AC-28: change cursor tracks staged draft updates for completion summary', () => {
       const cursor = new ArtifactChangeCursor('req-draft')
       cursor.record({
@@ -498,6 +464,79 @@ describe('artifact acceptance integration', () => {
       const summary = buildArtifactCompletionSummary(cursor.entries())
       expect(summary.package).toHaveLength(2)
       expect(summary.package[1]).toEqual({ finalPath: 'draft.md', stage: 'final' })
+    })
+  })
+
+  describe('retained decision-kind contracts', () => {
+    it('path-type options remain file/directory', () => {
+      expect(buildArtifactDecisionOptions('path-type').map((option) => option.key)).toEqual([
+        'file',
+        'directory'
+      ])
+    })
+
+    it('path-type resume applies chosen path kind', async () => {
+      const fixture = createArtifactTestFixture()
+      fixtures.push(fixture)
+      const result = await resumeArtifactToolWriteAfterDecision({
+        workDir: fixture.workDir,
+        sessionId: fixture.session.id,
+        requestId: 'ac-path-type',
+        toolUseId: 'tool-path-type',
+        path: 'notes.md',
+        artifact: {
+          container: 'project',
+          role: 'primary',
+          title: 'notes',
+          requestedPath: 'notes.md',
+          pathSource: 'agent-default'
+        },
+        decisionId: 'decision-path-type',
+        decisionKind: 'path-type',
+        attempt: 0,
+        choice: 'directory',
+        previousFinalPath: 'notes.md'
+      })
+      expect(result.kind).toBe('ready')
+      if (result.kind === 'ready') {
+        expect(result.prepared.intent.pathKind).toBe('directory')
+      }
+    })
+
+    it('reference-retention options remain long-term/pending/cancel', () => {
+      expect(buildArtifactDecisionOptions('reference-retention').map((option) => option.key)).toEqual([
+        'long-term',
+        'pending',
+        'cancel'
+      ])
+    })
+
+    it('reference-retention resume continues with the original intent', async () => {
+      const fixture = createArtifactTestFixture()
+      fixtures.push(fixture)
+      const result = await resumeArtifactToolWriteAfterDecision({
+        workDir: fixture.workDir,
+        sessionId: fixture.session.id,
+        requestId: 'ac-reference-retention',
+        toolUseId: 'tool-reference-retention',
+        path: 'notes.md',
+        artifact: {
+          container: 'project',
+          role: 'primary',
+          title: 'notes',
+          requestedPath: 'notes.md',
+          pathSource: 'agent-default'
+        },
+        decisionId: 'decision-reference-retention',
+        decisionKind: 'reference-retention',
+        attempt: 0,
+        choice: 'long-term',
+        previousFinalPath: 'notes.md'
+      })
+      expect(result.kind).toBe('ready')
+      if (result.kind === 'ready') {
+        expect(result.prepared.finalPath).toBe('notes.md')
+      }
     })
   })
 })

@@ -5,8 +5,7 @@ import {
   getFileDirname,
   getFileSearchDisplay,
   shouldShowSessionAuxiliary,
-  getSessionAuxiliaryText,
-  getFileAuxiliaryText
+  getSessionAuxiliaryText
 } from './searchResultUtils'
 
 describe('searchResultUtils', () => {
@@ -70,14 +69,4 @@ describe('searchResultUtils', () => {
     })
   })
 
-  it('getFileAuxiliaryText returns directory path', () => {
-    const item: SearchResult = {
-      id: 'file:1',
-      type: 'file',
-      title: 'src/utils/perf.ts',
-      preview: 'memoize',
-      path: 'src/utils/perf.ts'
-    }
-    expect(getFileAuxiliaryText(item)).toBe('src/utils')
-  })
 })
