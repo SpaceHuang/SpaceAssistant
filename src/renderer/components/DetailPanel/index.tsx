@@ -24,7 +24,13 @@ export function DetailPanel() {
     useDetailPanel()
   const config = useTypedSelector((s) => s.config.config)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
-  const { artifacts } = useSessionArtifacts(currentSessionId)
+  const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
+  // 与会话创建时冻结的开关对齐：设置关闭后新建会话不会启用，这一栏也不再占位。
+  // The session flag preserves the behavior used when the session was created,
+  // but the current global switch must still be able to hide this UI immediately.
+  const showSessionArtifacts =
+    config?.artifactManagementEnabled === true && currentSession?.metadata?.artifactManagementEnabled === true
+  const { artifacts } = useSessionArtifacts(showSessionArtifacts ? currentSessionId : null)
   const [relocateArtifact, setRelocateArtifact] = useState<ArtifactApiItem | null>(null)
   const [relocateSubmitting, setRelocateSubmitting] = useState(false)
 
@@ -73,49 +79,53 @@ export function DetailPanel() {
         onDoubleClick={resetReferencedFilesHeight}
       />
       <div className="detail-panel-bottom">
-        <SessionArtifactsPanel
-          sessionId={currentSessionId}
-          workDir={config?.workDir ?? ''}
-          artifacts={artifacts}
-          onOpen={handleFileSelect}
-          onDelete={(artifactId) => {
-            if (!currentSessionId) return
-            void window.api.artifactDelete({ sessionId: currentSessionId, artifactId })
-          }}
-          onRelocate={setRelocateArtifact}
-        />
-        <ArtifactRelocateDialog
-          open={relocateArtifact != null}
-          artifact={relocateArtifact}
-          submitting={relocateSubmitting}
-          onCancel={() => setRelocateArtifact(null)}
-          onSubmit={({ target, choice, overwriteAuthorized }) => {
-            if (!currentSessionId || !relocateArtifact) return
-            setRelocateSubmitting(true)
-            const payload = choiceToRelocatePayload(choice)
-            void window.api
-              .artifactRelocate({
-                sessionId: currentSessionId,
-                artifactId: relocateArtifact.id,
-                target,
-                ...payload,
-                overwriteAuthorized
-              })
-              .then((result) => {
-                if (!result.ok) {
-                  message.error(result.error ?? 'Relocate failed')
-                  return
-                }
-                message.success(
-                  result.activeArtifactId === relocateArtifact.id
-                    ? t('sessionArtifacts.relocateSuccessMove')
-                    : t('sessionArtifacts.relocateSuccessCopySwitch')
-                )
-                setRelocateArtifact(null)
-              })
-              .finally(() => setRelocateSubmitting(false))
-          }}
-        />
+        {showSessionArtifacts ? (
+          <>
+            <SessionArtifactsPanel
+              sessionId={currentSessionId}
+              workDir={config?.workDir ?? ''}
+              artifacts={artifacts}
+              onOpen={handleFileSelect}
+              onDelete={(artifactId) => {
+                if (!currentSessionId) return
+                void window.api.artifactDelete({ sessionId: currentSessionId, artifactId })
+              }}
+              onRelocate={setRelocateArtifact}
+            />
+            <ArtifactRelocateDialog
+              open={relocateArtifact != null}
+              artifact={relocateArtifact}
+              submitting={relocateSubmitting}
+              onCancel={() => setRelocateArtifact(null)}
+              onSubmit={({ target, choice, overwriteAuthorized }) => {
+                if (!currentSessionId || !relocateArtifact) return
+                setRelocateSubmitting(true)
+                const payload = choiceToRelocatePayload(choice)
+                void window.api
+                  .artifactRelocate({
+                    sessionId: currentSessionId,
+                    artifactId: relocateArtifact.id,
+                    target,
+                    ...payload,
+                    overwriteAuthorized
+                  })
+                  .then((result) => {
+                    if (!result.ok) {
+                      message.error(result.error ?? 'Relocate failed')
+                      return
+                    }
+                    message.success(
+                      result.activeArtifactId === relocateArtifact.id
+                        ? t('sessionArtifacts.relocateSuccessMove')
+                        : t('sessionArtifacts.relocateSuccessCopySwitch')
+                    )
+                    setRelocateArtifact(null)
+                  })
+                  .finally(() => setRelocateSubmitting(false))
+              }}
+            />
+          </>
+        ) : null}
         <ReferencedFilesPanel sessionId={currentSessionId} />
       </div>
       <RemoteStatusBar />

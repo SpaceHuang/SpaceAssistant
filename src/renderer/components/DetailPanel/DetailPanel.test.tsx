@@ -1,11 +1,13 @@
 import React from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, act, waitFor } from '@testing-library/react'
+import { render, act, waitFor, screen } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
 import { App } from 'antd'
 import configReducer from '../../store/configSlice'
 import chatReducer from '../../store/chatSlice'
+import sessionReducer from '../../store/sessionSlice'
+import type { Session } from '../../../shared/domainTypes'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './index'
 import {
   resetFileContentSyncBusForTests,
@@ -67,6 +69,16 @@ function createMockApi() {
   }
 }
 
+function makeSession(overrides: Partial<Session> & Pick<Session, 'id' | 'metadata'>): Session {
+  return {
+    name: overrides.name ?? overrides.id,
+    createdAt: 1,
+    updatedAt: 1,
+    schemaVersion: 1,
+    ...overrides
+  }
+}
+
 let panelActions: ReturnType<typeof useDetailPanel> | null = null
 
 function Harness() {
@@ -74,21 +86,25 @@ function Harness() {
   return <DetailPanel />
 }
 
-function renderPanel() {
+function renderPanel(options?: { sessions?: Session[]; currentSessionId?: string | null; artifactManagementEnabled?: boolean }) {
+  const sessions = options?.sessions ?? [makeSession({ id: 's1', metadata: {} })]
+  const currentSessionId = options?.currentSessionId === undefined ? 's1' : options.currentSessionId
   const store = configureStore({
-    reducer: { config: configReducer, chat: chatReducer },
+    reducer: { config: configReducer, chat: chatReducer, session: sessionReducer },
     preloadedState: {
       config: {
         config: {
           workDir: '/tmp/proj',
           wiki: { enabled: false, rootPath: 'llm-wiki', hideWikiFromFileTree: false },
           activeWorkDirProfileId: '',
-          workDirProfiles: []
+          workDirProfiles: [],
+          artifactManagementEnabled: options?.artifactManagementEnabled ?? false
         },
         settingsOpen: false,
         aboutOpen: false
       } as never,
-      chat: { currentSessionId: 's1' } as never
+      chat: { currentSessionId } as never,
+      session: { list: sessions, loading: false }
     }
   })
   return render(
@@ -143,5 +159,45 @@ describe('DetailPanel 文件树状态保留', () => {
     expect(panelActions!.selectedFile).toBeNull()
     expect(counters.mount).toBe(1)
     expect(counters.unmount).toBe(0)
+  })
+})
+
+describe('DetailPanel 本会话工作产物可见性', () => {
+  let originalApi: unknown
+
+  beforeEach(() => {
+    panelActions = null
+    resetFileContentSyncBusForTests()
+    setFileContentMetadataGetterForTests(async () => ({ mtime: 1000, size: 5 }))
+    originalApi = (window as Record<string, unknown>).api
+    ;(window as Record<string, unknown>).api = createMockApi()
+  })
+
+  afterEach(() => {
+    resetFileContentSyncBusForTests()
+    ;(window as Record<string, unknown>).api = originalApi
+    vi.clearAllMocks()
+  })
+
+  it('当前会话未启用工作产物管理时隐藏本会话工作产物栏', () => {
+    renderPanel({
+      sessions: [makeSession({ id: 's1', metadata: { artifactManagementEnabled: false } })]
+    })
+    expect(screen.queryByText('本会话工作产物')).toBeNull()
+  })
+
+  it('当前会话已启用工作产物管理时显示本会话工作产物栏', () => {
+    renderPanel({
+      sessions: [makeSession({ id: 's1', metadata: { artifactManagementEnabled: true } })],
+      artifactManagementEnabled: true
+    })
+    expect(screen.getByText('本会话工作产物')).toBeTruthy()
+  })
+
+  it('全局关闭工作产物管理时即使会话曾启用也隐藏本会话工作产物栏', () => {
+    renderPanel({
+      sessions: [makeSession({ id: 's1', metadata: { artifactManagementEnabled: true } })]
+    })
+    expect(screen.queryByText('本会话工作产物')).toBeNull()
   })
 })
