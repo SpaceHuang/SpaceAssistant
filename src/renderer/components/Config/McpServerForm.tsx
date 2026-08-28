@@ -210,9 +210,28 @@ export function McpServerForm({
                       }
                     />
                   </McpField>
-                  <McpField label={t('form.envLabel')}>
-                    <Space direction="vertical" style={{ width: '100%' }} size={4}>
-                      {draft.stdio.env.map((env, i) => (
+              <McpField
+                label={t('form.envLabel')}
+                labelAction={
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<Plus size={14} />}
+                    onClick={() =>
+                      onPatch({
+                        stdio: {
+                          ...draft.stdio!,
+                          env: [...draft.stdio!.env, { key: '', value: '', valuePresent: false }]
+                        }
+                      })
+                    }
+                  >
+                    {t('form.addEnv')}
+                  </Button>
+                }
+              >
+                <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                  {draft.stdio.env.map((env, i) => (
                         <div key={`${env.key}-${i}`} className="mcp-server-list-row mcp-server-list-row--env">
                           <Input
                             value={env.key}
@@ -233,28 +252,11 @@ export function McpServerForm({
                             />
                           ) : (
                             <span aria-hidden />
-                          )}
-                        </div>
-                      ))}
-                      <div className="mcp-server-add-row">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<Plus size={14} />}
-                          onClick={() =>
-                            onPatch({
-                              stdio: {
-                                ...draft.stdio!,
-                                env: [...draft.stdio!.env, { key: '', value: '', valuePresent: false }]
-                              }
-                            })
-                          }
-                        >
-                          {t('form.addEnv')}
-                        </Button>
-                      </div>
-                    </Space>
-                  </McpField>
+                      )}
+                    </div>
+                  ))}
+                </Space>
+              </McpField>
                 </>
               ) : null
             },

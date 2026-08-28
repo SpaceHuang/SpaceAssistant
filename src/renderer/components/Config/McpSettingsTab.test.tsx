@@ -224,6 +224,17 @@ describe('McpSettingsTab', () => {
     expect(addButton.closest('.mcp-server-field__label-action')).toBeTruthy()
   })
 
+  it('places the add-environment button on the env label row', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    const addButton = await screen.findByRole('button', { name: '添加环境变量' })
+    expect(addButton.closest('.mcp-server-field__label-action')).toBeTruthy()
+  })
+
   it('asks for confirmation when closing the editor with unsaved changes', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],
