@@ -58,6 +58,21 @@ describe('mcpDrafts', () => {
     expect(input).not.toHaveProperty('status')
   })
 
+  it('emits only the active transport group in write input', () => {
+    const draft = initMcpServerDraft(makeProfile())
+    // 模拟切换 Tab 后保留的另一组字段：stdio 数据仍在，但当前传输是 HTTP
+    draft.transport = 'streamable-http'
+    draft.http = { endpoint: 'https://example.com/mcp' }
+    const input = draftToWriteInput(draft)
+    expect(input.http?.endpoint).toBe('https://example.com/mcp')
+    expect(input.stdio).toBeUndefined()
+
+    draft.transport = 'stdio'
+    const backToStdio = draftToWriteInput(draft)
+    expect(backToStdio.stdio?.command).toBe('node')
+    expect(backToStdio.http).toBeUndefined()
+  })
+
   it('marks a draft dirty when secrets are entered or fields change', () => {
     const profile = makeProfile()
     const draft = initMcpServerDraft(profile)

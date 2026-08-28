@@ -121,7 +121,7 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
     ...(draft.auth.accessToken ? { accessToken: draft.auth.accessToken } : {}),
     ...(draft.auth.headerValue ? { headerValue: draft.auth.headerValue } : {})
   }
-  const stdio = draft.stdio
+  const stdio = draft.transport === 'stdio' && draft.stdio
     ? {
         command: draft.stdio.command,
         args: draft.stdio.args,
@@ -135,6 +135,9 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
         ...(draft.stdio.commandTrustedAt ? { commandTrustedAt: draft.stdio.commandTrustedAt } : {})
       }
     : undefined
+  const http = draft.transport === 'streamable-http' && draft.http
+    ? { endpoint: draft.http.endpoint }
+    : undefined
   return {
     id: draft.id,
     name: draft.name,
@@ -143,7 +146,7 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
     timeoutSec: draft.timeoutSec,
     auth,
     ...(stdio ? { stdio } : {}),
-    ...(draft.http ? { http: { endpoint: draft.http.endpoint } } : {}),
+    ...(http ? { http } : {}),
     enabledToolNames: draft.enabledToolNames,
     toolConfirmPolicy: draft.toolConfirmPolicy,
     ...(draft.createdAt ? { createdAt: draft.createdAt } : {}),
