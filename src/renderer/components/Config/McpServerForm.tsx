@@ -1,4 +1,4 @@
-import { Button, Input, InputNumber, Radio, Select, Space, Switch, Tabs, Typography } from 'antd'
+import { Button, Collapse, Input, InputNumber, Radio, Select, Space, Switch, Tabs, Typography } from 'antd'
 import { Plus, X } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { McpServerProfile, McpToolDescriptor } from '../../../shared/mcpTypes'
@@ -327,26 +327,47 @@ export function McpServerForm({
         ) : null}
       </div>
 
-      <div className="mcp-server-section">
-        <McpSectionTitle>{t('form.commonTitle')}</McpSectionTitle>
-        <McpField label={t('form.timeoutLabel')}>
-          <InputNumber
-            min={5}
-            max={300}
-            value={draft.timeoutSec}
-            onChange={(v) => onPatch({ timeoutSec: v ?? 60 })}
-          />
-        </McpField>
-        <McpField label={t('form.confirmPolicyLabel')} row>
-          <Radio.Group
-            value={draft.toolConfirmPolicy}
-            onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
-          >
-            <Radio value="always">{t('form.confirmAlways')}</Radio>
-            <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
-          </Radio.Group>
-        </McpField>
-      </div>
+      <Collapse
+        ghost
+        className="mcp-server-common"
+        items={[
+          {
+            key: 'common',
+            label: (
+              <span className="mcp-server-common__label">
+                <span className="mcp-server-common__title">{t('form.commonTitle')}</span>
+                <span className="mcp-server-common__summary">
+                  {t('form.timeoutValue', { value: draft.timeoutSec })} ·{' '}
+                  {draft.toolConfirmPolicy === 'always'
+                    ? t('form.confirmAlways')
+                    : t('form.confirmReadonlyAuto')}
+                </span>
+              </span>
+            ),
+            children: (
+              <div className="mcp-server-section">
+                <McpField label={t('form.timeoutLabel')}>
+                  <InputNumber
+                    min={5}
+                    max={300}
+                    value={draft.timeoutSec}
+                    onChange={(v) => onPatch({ timeoutSec: v ?? 60 })}
+                  />
+                </McpField>
+                <McpField label={t('form.confirmPolicyLabel')} row>
+                  <Radio.Group
+                    value={draft.toolConfirmPolicy}
+                    onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
+                  >
+                    <Radio value="always">{t('form.confirmAlways')}</Radio>
+                    <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
+                  </Radio.Group>
+                </McpField>
+              </div>
+            )
+          }
+        ]}
+      />
 
       <div className="mcp-server-form__footer">
         <Button size="small" loading={testing} onClick={onTest}>

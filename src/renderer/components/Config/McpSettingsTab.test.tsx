@@ -197,6 +197,21 @@ describe('McpSettingsTab', () => {
     expect(tools.compareDocumentPosition(common) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('keeps common params collapsed with a value summary and expands on demand', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+
+    expect(await screen.findByText(/60 秒 · 始终确认/)).toBeTruthy()
+    expect(screen.queryByText('调用超时（秒）')).toBeNull()
+
+    fireEvent.click(screen.getByText('公共参数'))
+    expect(await screen.findByText('调用超时（秒）')).toBeTruthy()
+  })
+
   it('asks for confirmation when closing the editor with unsaved changes', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],

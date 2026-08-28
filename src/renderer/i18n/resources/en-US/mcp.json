@@ -50,6 +50,7 @@
     "enabledLabel": "Enable this server",
     "enabledHint": "Only after the latest test succeeds, at least one tool is found and a tool allowlist is saved can this be enabled",
     "timeoutLabel": "Call timeout (s)",
+    "timeoutValue": "{{value}}s",
     "commonTitle": "Common settings",
     "connTitle": "Connection",
     "commandLabel": "Command",

@@ -1310,6 +1310,51 @@
   height: var(--sa-config-control-min-height);
 }
 
+/* 公共参数：默认收起，标题行显示当前值摘要 */
+.mcp-server-common.ant-collapse.ant-collapse-ghost {
+  border-top: 1px solid var(--sa-border);
+}
+
+.mcp-server-common .ant-collapse-header {
+  align-items: center;
+  padding: var(--sa-config-gap-substack) 0 !important;
+}
+
+.mcp-server-common .ant-collapse-header .ant-collapse-expand-icon {
+  order: 2;
+  margin-inline-end: 0;
+  color: var(--sa-text-tertiary);
+}
+
+.mcp-server-common__label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sa-config-gap-substack);
+  min-width: 0;
+  flex: 1;
+}
+
+.mcp-server-common__title {
+  font-size: var(--sa-config-font-sm);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+  flex-shrink: 0;
+}
+
+.mcp-server-common__summary {
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-common .ant-collapse-content-box {
+  padding: 0 0 var(--sa-config-gap-stack) !important;
+}
+
 .mcp-server-section {
   display: flex;
   flex-direction: column;
