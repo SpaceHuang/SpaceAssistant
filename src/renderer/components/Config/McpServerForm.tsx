@@ -109,9 +109,6 @@ export function McpServerForm({
               label: t('transport.stdio'),
               children: draft.stdio ? (
                 <>
-                  <Typography.Paragraph className="mcp-server-section__hint">
-                    {t('card.stdioNotice')}
-                  </Typography.Paragraph>
                   <McpField label={t('form.commandLabel')}>
                     <Input
                       value={draft.stdio.command}

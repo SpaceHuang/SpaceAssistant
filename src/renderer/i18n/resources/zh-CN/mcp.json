@@ -40,8 +40,7 @@
     "dirty": "有未保存更改",
     "commandSummary": "命令：{{command}}",
     "endpointSummary": "端点：{{endpoint}}",
-    "untestedHint": "未命名服务",
-    "stdioNotice": "stdio Server 是本机程序，可继承用户权限；只支持直接启动程序，不支持 sh -c、管道、重定向、&&、$() 或反引号。Windows 下不接受 .cmd/.bat 垫片（如 npx），请改用 node <入口.js>、python、docker 等写法。"
+    "untestedHint": "未命名服务"
   },
   "form": {
     "basicTitle": "基础信息",

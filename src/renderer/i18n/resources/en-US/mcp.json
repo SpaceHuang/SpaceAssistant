@@ -40,8 +40,7 @@
     "dirty": "Unsaved changes",
     "commandSummary": "Command: {{command}}",
     "endpointSummary": "Endpoint: {{endpoint}}",
-    "untestedHint": "Unnamed server",
-    "stdioNotice": "A stdio server is a local program that inherits your user permissions. Only direct program launch is supported; sh -c, pipes, redirection, &&, $() and backticks are not. On Windows, .cmd/.bat shims (such as npx) are not accepted; use node <entry.js>, python or docker instead."
+    "untestedHint": "Unnamed server"
   },
   "form": {
     "basicTitle": "Basic info",

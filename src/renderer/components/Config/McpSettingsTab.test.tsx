@@ -123,6 +123,23 @@ describe('McpSettingsTab', () => {
     expect(screen.getByText(/mcp_new_hello_/)).toBeTruthy()
   })
 
+  it('surfaces stdio validation errors only when the connection fails', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    mcpTestConnection.mockResolvedValue({
+      ok: false,
+      code: 'invalid-command',
+      message: 'Windows 下该命令为脚本垫片（.cmd/.bat），不可直接启动；请改用 node <入口.js>、python、docker 等写法'
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    fireEvent.click(await screen.findByRole('button', { name: '测试连接' }))
+    await waitFor(() => expect(mcpTestConnection).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText(/Windows 下该命令为脚本垫片/)).toBeTruthy()
+  })
+
   it('opens the editor prefilled with the saved server', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],
