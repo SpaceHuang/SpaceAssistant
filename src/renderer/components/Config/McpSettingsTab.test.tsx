@@ -138,36 +138,6 @@ describe('McpSettingsTab', () => {
     expect(screen.getByText('工具与权限')).toBeTruthy()
   })
 
-  it('places the service-level confirmation policy above the tool list', async () => {
-    mcpList.mockResolvedValue({
-      servers: [SAVED_SERVER],
-      toolCaches: {
-        'server-1': {
-          tools: [
-            {
-              serverId: 'server-1',
-              originalName: 'hello',
-              mappedName: 'mcp_new_hello_12345678',
-              description: 'says hello',
-              inputSchema: {},
-              discoveredAt: new Date().toISOString()
-            }
-          ],
-          protocolVersion: '2025-06-18',
-          discoveredAt: new Date().toISOString()
-        }
-      }
-    })
-    renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
-
-    expect(await screen.findByText('对整个服务的所有工具生效，无需逐个工具设置。')).toBeTruthy()
-    const policy = screen.getByText('调用前确认策略')
-    const toolList = document.querySelector('.mcp-server-tools') as HTMLElement
-    expect(toolList).toBeTruthy()
-    expect(policy.compareDocumentPosition(toolList) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  })
-
   it('asks for confirmation when closing the editor with unsaved changes', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],

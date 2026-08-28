@@ -283,24 +283,6 @@ export function McpServerForm({
 
       <div className="mcp-server-section">
         <McpSectionTitle>{t('form.toolsTitle')}</McpSectionTitle>
-        <McpField label={t('form.confirmPolicyLabel')} row>
-          <Radio.Group
-            value={draft.toolConfirmPolicy}
-            onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
-          >
-            <Radio value="always">{t('form.confirmAlways')}</Radio>
-            <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
-          </Radio.Group>
-        </McpField>
-        <Typography.Paragraph className="mcp-server-section__hint" style={{ margin: 0 }}>
-          {t('form.confirmPolicyServiceHint')}
-        </Typography.Paragraph>
-        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-          {t('form.confirmReadonlyAutoHint')}
-        </Typography.Paragraph>
-        <Typography.Paragraph className="mcp-server-section__hint" style={{ margin: 0 }}>
-          {t('form.toolsEnableHint')}
-        </Typography.Paragraph>
         {tools.length === 0 ? (
           <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
             {t('form.noToolsHint')}
@@ -343,6 +325,18 @@ export function McpServerForm({
             {t('form.skippedHint', { count: skippedCount })}
           </Typography.Paragraph>
         ) : null}
+        <McpField label={t('form.confirmPolicyLabel')} row>
+          <Radio.Group
+            value={draft.toolConfirmPolicy}
+            onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
+          >
+            <Radio value="always">{t('form.confirmAlways')}</Radio>
+            <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
+          </Radio.Group>
+        </McpField>
+        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+          {t('form.confirmReadonlyAutoHint')}
+        </Typography.Paragraph>
       </div>
 
       <div className="mcp-server-form__footer">
