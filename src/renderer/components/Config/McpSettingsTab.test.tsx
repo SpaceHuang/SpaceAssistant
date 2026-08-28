@@ -101,13 +101,23 @@ describe('McpSettingsTab', () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
     // 新建服务直接打开编辑弹窗
-    expect(await screen.findByPlaceholderText('例如 GitHub')).toBeTruthy()
+    const nameInput = (await screen.findByPlaceholderText('例如 GitHub')) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'GitHub' } })
 
     fireEvent.click(screen.getByRole('button', { name: '保存并应用' }))
     await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalledTimes(1))
     const payload = mcpSaveProfiles.mock.calls[0]![0] as { servers: Array<{ name: string; transport: string }> }
     expect(payload.servers).toHaveLength(1)
     expect(payload.servers[0]!.transport).toBe('stdio')
+  })
+
+  it('blocks saving when the server name is empty', async () => {
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
+    // 新建草稿名称为空，直接保存
+    fireEvent.click(await screen.findByRole('button', { name: '保存并应用' }))
+    expect(await screen.findByText('服务名称不能为空')).toBeTruthy()
+    expect(mcpSaveProfiles).not.toHaveBeenCalled()
   })
 
   it('tests a connection and displays discovered tools', async () => {

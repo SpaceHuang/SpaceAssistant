@@ -45,6 +45,7 @@
   "form": {
     "basicTitle": "基础信息",
     "nameLabel": "服务名称",
+    "nameRequired": "服务名称不能为空",
     "namePlaceholder": "例如 GitHub",
     "enabledLabel": "启用此服务",
     "enabledHint": "仅最近一次测试成功、发现至少一个工具且已保存工具白名单后可启用",

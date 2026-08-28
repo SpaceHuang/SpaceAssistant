@@ -45,6 +45,7 @@
   "form": {
     "basicTitle": "Basic info",
     "nameLabel": "Server name",
+    "nameRequired": "Server name is required",
     "namePlaceholder": "e.g. GitHub",
     "enabledLabel": "Enable this server",
     "enabledHint": "Only after the latest test succeeds, at least one tool is found and a tool allowlist is saved can this be enabled",

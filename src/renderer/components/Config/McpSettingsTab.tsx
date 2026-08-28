@@ -90,6 +90,10 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
 
   const saveServer = useCallback(
     async (id: string) => {
+      if (drafts.some((d) => !d.name.trim())) {
+        message.warning(t('form.nameRequired'))
+        return
+      }
       setSavingId(id)
       try {
         const result = await window.api.mcpSaveProfiles({
@@ -113,6 +117,10 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
     async (id: string) => {
       const draft = drafts.find((d) => d.id === id)
       if (!draft) return
+      if (!draft.name.trim()) {
+        message.warning(t('form.nameRequired'))
+        return
+      }
       setTestingId(id)
       try {
         const result = await window.api.mcpTestConnection({
