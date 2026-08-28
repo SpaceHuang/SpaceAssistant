@@ -128,8 +128,10 @@ export function McpServerForm({
       />
 
       <div className="mcp-server-section">
-        <McpSectionTitle>{t('form.connTitle')}</McpSectionTitle>
         <Tabs
+          tabBarExtraContent={{
+            left: <span className="mcp-server-conn-title">{t('form.connTitle')}</span>
+          }}
           activeKey={draft.transport}
           onChange={(key) =>
             onPatch({

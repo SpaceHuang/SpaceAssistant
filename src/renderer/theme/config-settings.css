@@ -1355,6 +1355,16 @@
   padding: 0 0 var(--sa-config-gap-stack) !important;
 }
 
+/* 连接方式标题与 Tab 表头同处一行 */
+.mcp-server-conn-title {
+  font-size: var(--sa-config-font-sm);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+  margin-inline-end: var(--sa-config-gap-substack);
+  white-space: nowrap;
+}
+
 .mcp-server-section {
   display: flex;
   flex-direction: column;
