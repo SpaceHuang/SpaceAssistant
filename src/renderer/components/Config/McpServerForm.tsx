@@ -282,27 +282,6 @@ export function McpServerForm({
       </div>
 
       <div className="mcp-server-section">
-        <McpSectionTitle>{t('form.commonTitle')}</McpSectionTitle>
-        <McpField label={t('form.timeoutLabel')}>
-          <InputNumber
-            min={5}
-            max={300}
-            value={draft.timeoutSec}
-            onChange={(v) => onPatch({ timeoutSec: v ?? 60 })}
-          />
-        </McpField>
-        <McpField label={t('form.confirmPolicyLabel')} row>
-          <Radio.Group
-            value={draft.toolConfirmPolicy}
-            onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
-          >
-            <Radio value="always">{t('form.confirmAlways')}</Radio>
-            <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
-          </Radio.Group>
-        </McpField>
-      </div>
-
-      <div className="mcp-server-section">
         <McpSectionTitle>{t('form.toolsTitle')}</McpSectionTitle>
         {tools.length === 0 ? (
           <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
@@ -346,6 +325,27 @@ export function McpServerForm({
             {t('form.skippedHint', { count: skippedCount })}
           </Typography.Paragraph>
         ) : null}
+      </div>
+
+      <div className="mcp-server-section">
+        <McpSectionTitle>{t('form.commonTitle')}</McpSectionTitle>
+        <McpField label={t('form.timeoutLabel')}>
+          <InputNumber
+            min={5}
+            max={300}
+            value={draft.timeoutSec}
+            onChange={(v) => onPatch({ timeoutSec: v ?? 60 })}
+          />
+        </McpField>
+        <McpField label={t('form.confirmPolicyLabel')} row>
+          <Radio.Group
+            value={draft.toolConfirmPolicy}
+            onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
+          >
+            <Radio value="always">{t('form.confirmAlways')}</Radio>
+            <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
+          </Radio.Group>
+        </McpField>
       </div>
 
       <div className="mcp-server-form__footer">

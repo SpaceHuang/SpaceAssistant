@@ -182,6 +182,21 @@ describe('McpSettingsTab', () => {
     expect(screen.getByText('MCP Endpoint')).toBeTruthy()
   })
 
+  it('orders sections as connection tabs → tools → common params', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+
+    const conn = screen.getByText('连接方式')
+    const tools = screen.getByText('工具与权限')
+    const common = screen.getByText('公共参数')
+    expect(conn.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(tools.compareDocumentPosition(common) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('asks for confirmation when closing the editor with unsaved changes', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],
