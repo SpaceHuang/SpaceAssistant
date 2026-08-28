@@ -1,4 +1,6 @@
-import { Button, Divider, Input, InputNumber, Radio, Select, Space, Switch, Tag, Typography } from 'antd'
+import { Button, Input, InputNumber, Radio, Select, Space, Switch, Tag, Typography } from 'antd'
+import { Plus, X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import type { McpServerProfile, McpToolDescriptor } from '../../../shared/mcpTypes'
 import type { McpServerDraft } from './mcpDrafts'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -40,6 +42,27 @@ const TRANSPORT_KEYS = {
   stdio: 'transport.stdio',
   'streamable-http': 'transport.http'
 } as const
+
+function McpField({
+  label,
+  children,
+  row = false
+}: {
+  label: string
+  children: ReactNode
+  row?: boolean
+}) {
+  return (
+    <div className={`mcp-server-field${row ? ' mcp-server-field--row' : ''}`}>
+      <span className="mcp-server-field__label">{label}</span>
+      <div className="mcp-server-field__control">{children}</div>
+    </div>
+  )
+}
+
+function McpSectionTitle({ children }: { children: ReactNode }) {
+  return <h4 className="mcp-server-section__title">{children}</h4>
+}
 
 export function McpServerCard({
   draft,
@@ -92,54 +115,52 @@ export function McpServerCard({
           onChange={(checked) => onPatch({ enabled: checked })}
           aria-label={t('form.enabledLabel')}
         />
-        <span className="mcp-server-card__name">{draft.name || t('card.untestedHint')}</span>
+        <span className="mcp-server-card__title" title={draft.name || t('card.untestedHint')}>
+          {draft.name || t('card.untestedHint')}
+        </span>
         <Tag>{t(TRANSPORT_KEYS[draft.transport])}</Tag>
         <Tag color={status === 'connected' ? 'green' : status === 'failed' || status === 'auth-expired' ? 'red' : 'default'}>
           {t(STATUS_KEYS[status])}
         </Tag>
-        {dirty ? <Tag color="orange">{t('card.dirty')}</Tag> : null}
-        <span className="mcp-server-card__spacer" />
-        <Button type="text" size="small" onClick={onToggleExpanded}>
-          {expanded ? t('card.collapse') : t('card.expand')}
-        </Button>
-        <Button type="text" size="small" danger onClick={onDelete}>
-          {t('card.delete')}
-        </Button>
+        <div className="mcp-server-card__header-actions">
+          <Button type="text" size="small" onClick={onToggleExpanded}>
+            {expanded ? t('card.collapse') : t('card.expand')}
+          </Button>
+          <Button type="text" size="small" danger onClick={onDelete}>
+            {t('card.delete')}
+          </Button>
+        </div>
       </div>
 
       <div className="mcp-server-card__summary">
-        <Typography.Text type="secondary" ellipsis={{ tooltip: summary }}>
+        <span className="mcp-server-card__summary-text" title={summary}>
           {summary}
-        </Typography.Text>
-        <Typography.Text type="secondary">
-          {' · '}
+        </span>
+        <span className="mcp-server-card__summary-meta">
           {t('card.toolSummary', { enabled: enabledCount, total: tools.length })}
           {toolsStale ? ` · ${t('card.toolsStale')}` : ''}
-        </Typography.Text>
+        </span>
       </div>
 
       {expanded ? (
-        <div className="mcp-server-card__form">
-          <Divider orientation="left">{t('form.basicTitle')}</Divider>
-          <Space direction="vertical" style={{ width: '100%' }} size="small">
-            <div className="config-form-row">
-              <span className="config-form-row__label">{t('form.nameLabel')}</span>
+        <div className="mcp-server-card__body">
+          <div className="mcp-server-section">
+            <McpSectionTitle>{t('form.basicTitle')}</McpSectionTitle>
+            <McpField label={t('form.nameLabel')}>
               <Input
                 value={draft.name}
                 placeholder={t('form.namePlaceholder')}
                 onChange={(e) => onPatch({ name: e.target.value })}
               />
-            </div>
-            <div className="config-form-row">
-              <span className="config-form-row__label">{t('form.enabledLabel')}</span>
+            </McpField>
+            <McpField label={t('form.enabledLabel')} row>
               <Switch
                 checked={draft.enabled}
                 disabled={!canEnable}
                 onChange={(checked) => onPatch({ enabled: checked })}
               />
-            </div>
-            <div className="config-form-row">
-              <span className="config-form-row__label">{t('form.transportLabel')}</span>
+            </McpField>
+            <McpField label={t('form.transportLabel')}>
               <Radio.Group
                 value={draft.transport}
                 onChange={(e) =>
@@ -154,27 +175,25 @@ export function McpServerCard({
                 <Radio value="stdio">{t('transport.stdio')}</Radio>
                 <Radio value="streamable-http">{t('transport.http')}</Radio>
               </Radio.Group>
-            </div>
-            <div className="config-form-row">
-              <span className="config-form-row__label">{t('form.timeoutLabel')}</span>
+            </McpField>
+            <McpField label={t('form.timeoutLabel')}>
               <InputNumber
                 min={5}
                 max={300}
                 value={draft.timeoutSec}
                 onChange={(v) => onPatch({ timeoutSec: v ?? 60 })}
-                style={{ width: 140 }}
               />
-            </div>
-          </Space>
+            </McpField>
+          </div>
 
-          <Divider orientation="left">{t('form.connTitle')}</Divider>
+          <div className="mcp-server-section">
+            <McpSectionTitle>{t('form.connTitle')}</McpSectionTitle>
           {draft.transport === 'stdio' && draft.stdio ? (
-            <Space direction="vertical" style={{ width: '100%' }} size="small">
-              <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+            <>
+              <Typography.Paragraph className="mcp-server-section__hint">
                 {t('card.stdioNotice')}
               </Typography.Paragraph>
-              <div className="config-form-row">
-                <span className="config-form-row__label">{t('form.commandLabel')}</span>
+              <McpField label={t('form.commandLabel')}>
                 <Input
                   value={draft.stdio.command}
                   placeholder={t('form.commandPlaceholder')}
@@ -182,14 +201,16 @@ export function McpServerCard({
                     onPatch({ stdio: { ...draft.stdio!, command: e.target.value } })
                   }
                 />
-              </div>
-              <div className="config-form-row">
-                <span className="config-form-row__label">{t('form.argsLabel')}</span>
+              </McpField>
+              <McpField label={t('form.argsLabel')}>
                 <Space direction="vertical" style={{ width: '100%' }} size={4}>
                   {draft.stdio.args.map((arg, i) => (
-                    <Space.Compact key={i} style={{ width: '100%' }}>
+                    <div key={i} className="mcp-server-list-row">
                       <Input value={arg} onChange={(e) => patchArg(i, e.target.value)} />
                       <Button
+                        type="text"
+                        icon={<X size={14} />}
+                        aria-label={t('card.delete')}
                         onClick={() =>
                           onPatch({
                             stdio: {
@@ -198,39 +219,38 @@ export function McpServerCard({
                             }
                           })
                         }
-                      >
-                        ×
-                      </Button>
-                    </Space.Compact>
+                      />
+                    </div>
                   ))}
-                  <Button
-                    size="small"
-                    onClick={() =>
-                      onPatch({ stdio: { ...draft.stdio!, args: [...draft.stdio!.args, ''] } })
-                    }
-                  >
-                    {t('form.addArg')}
-                  </Button>
+                  <div className="mcp-server-add-row">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<Plus size={14} />}
+                      onClick={() =>
+                        onPatch({ stdio: { ...draft.stdio!, args: [...draft.stdio!.args, ''] } })
+                      }
+                    >
+                      {t('form.addArg')}
+                    </Button>
+                  </div>
                 </Space>
-              </div>
-              <div className="config-form-row">
-                <span className="config-form-row__label">{t('form.cwdLabel')}</span>
+              </McpField>
+              <McpField label={t('form.cwdLabel')}>
                 <Input
                   value={draft.stdio.cwd ?? ''}
                   onChange={(e) =>
                     onPatch({ stdio: { ...draft.stdio!, cwd: e.target.value || undefined } })
                   }
                 />
-              </div>
-              <div className="config-form-row">
-                <span className="config-form-row__label">{t('form.envLabel')}</span>
+              </McpField>
+              <McpField label={t('form.envLabel')}>
                 <Space direction="vertical" style={{ width: '100%' }} size={4}>
                   {draft.stdio.env.map((env, i) => (
-                    <Space.Compact key={`${env.key}-${i}`} style={{ width: '100%' }}>
+                    <div key={`${env.key}-${i}`} className="mcp-server-list-row mcp-server-list-row--env">
                       <Input
                         value={env.key}
                         placeholder={t('form.envKeyPlaceholder')}
-                        style={{ width: '35%' }}
                         onChange={(e) => patchEnv(i, { key: e.target.value })}
                       />
                       <Input.Password
@@ -240,60 +260,52 @@ export function McpServerCard({
                       />
                       {env.valuePresent ? (
                         <Button
-                          onClick={() => patchEnv(i, { value: '', clear: true })}
+                          type="text"
+                          icon={<X size={14} />}
                           title={t('card.clearToken')}
-                        >
-                          ×
-                        </Button>
-                      ) : null}
-                      <Button
-                        onClick={() =>
-                          onPatch({
-                            stdio: {
-                              ...draft.stdio!,
-                              env: draft.stdio!.env.filter((_, idx) => idx !== i)
-                            }
-                          })
-                        }
-                      >
-                        ✕
-                      </Button>
-                    </Space.Compact>
+                          onClick={() => patchEnv(i, { value: '', clear: true })}
+                        />
+                      ) : (
+                        <span aria-hidden />
+                      )}
+                    </div>
                   ))}
-                  <Button
-                    size="small"
-                    onClick={() =>
-                      onPatch({
-                        stdio: {
-                          ...draft.stdio!,
-                          env: [...draft.stdio!.env, { key: '', value: '', valuePresent: false }]
-                        }
-                      })
-                    }
-                  >
-                    {t('form.addEnv')}
-                  </Button>
+                  <div className="mcp-server-add-row">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<Plus size={14} />}
+                      onClick={() =>
+                        onPatch({
+                          stdio: {
+                            ...draft.stdio!,
+                            env: [...draft.stdio!.env, { key: '', value: '', valuePresent: false }]
+                          }
+                        })
+                      }
+                    >
+                      {t('form.addEnv')}
+                    </Button>
+                  </div>
                 </Space>
-              </div>
-            </Space>
+              </McpField>
+            </>
           ) : (
-            <div className="config-form-row">
-              <span className="config-form-row__label">{t('form.httpEndpointLabel')}</span>
+            <McpField label={t('form.httpEndpointLabel')}>
               <Input
                 value={draft.http?.endpoint ?? ''}
                 placeholder="https://…"
                 onChange={(e) => onPatch({ http: { endpoint: e.target.value } })}
               />
-            </div>
+            </McpField>
           )}
+          </div>
 
-          <Divider orientation="left">{t('form.authTitle')}</Divider>
-          <Space direction="vertical" style={{ width: '100%' }} size="small">
-            <div className="config-form-row">
-              <span className="config-form-row__label">{t('form.authModeLabel')}</span>
+          <div className="mcp-server-section">
+            <McpSectionTitle>{t('form.authTitle')}</McpSectionTitle>
+            <McpField label={t('form.authModeLabel')}>
               <Select
                 value={draft.auth.mode}
-                style={{ width: 220 }}
                 onChange={(mode) => onPatch({ auth: { ...draft.auth, mode } })}
                 options={[
                   { value: 'none', label: t('form.authNone') },
@@ -302,124 +314,132 @@ export function McpServerCard({
                   { value: 'oauth', label: t('form.authOauth') }
                 ]}
               />
-            </div>
+            </McpField>
             {draft.auth.mode === 'bearer-token' ? (
-              <div className="config-form-row">
-                <span className="config-form-row__label">{t('form.accessTokenLabel')}</span>
+              <McpField label={t('form.accessTokenLabel')}>
                 <Input.Password
                   value={draft.auth.accessToken ?? ''}
                   placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
                   onChange={(e) => onPatch({ auth: { ...draft.auth, accessToken: e.target.value } })}
                 />
-              </div>
+              </McpField>
             ) : null}
             {draft.auth.mode === 'custom-header' ? (
               <>
-                <div className="config-form-row">
-                  <span className="config-form-row__label">{t('form.headerNameLabel')}</span>
+                <McpField label={t('form.headerNameLabel')}>
                   <Input
                     value={draft.auth.headerName ?? ''}
                     onChange={(e) => onPatch({ auth: { ...draft.auth, headerName: e.target.value } })}
                   />
-                </div>
-                <div className="config-form-row">
-                  <span className="config-form-row__label">{t('form.valuePrefixLabel')}</span>
+                </McpField>
+                <McpField label={t('form.valuePrefixLabel')}>
                   <Input
                     value={draft.auth.valuePrefix ?? ''}
                     onChange={(e) => onPatch({ auth: { ...draft.auth, valuePrefix: e.target.value } })}
                   />
-                </div>
-                <div className="config-form-row">
-                  <span className="config-form-row__label">{t('form.headerValueLabel')}</span>
+                </McpField>
+                <McpField label={t('form.headerValueLabel')}>
                   <Input.Password
                     value={draft.auth.headerValue ?? ''}
                     placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
                     onChange={(e) => onPatch({ auth: { ...draft.auth, headerValue: e.target.value } })}
                   />
-                </div>
+                </McpField>
               </>
             ) : null}
             {draft.auth.mode === 'oauth' ? (
-              <div className="config-form-row">
-                <span className="config-form-row__label">{t('form.oauthClientIdLabel')}</span>
+              <McpField label={t('form.oauthClientIdLabel')}>
                 <Input
                   value={draft.auth.oauthClientId ?? ''}
                   placeholder={t('form.oauthClientIdPlaceholder')}
                   onChange={(e) => onPatch({ auth: { ...draft.auth, oauthClientId: e.target.value } })}
                 />
-              </div>
+              </McpField>
             ) : null}
-          </Space>
-
-          <Divider orientation="left">{t('form.toolsTitle')}</Divider>
-          {tools.length === 0 ? (
-            <Typography.Paragraph type="secondary">{t('form.noToolsHint')}</Typography.Paragraph>
-          ) : (
-            <div className="mcp-server-card__tools">
-              {tools.map((tool) => {
-                const on = draft.enabledToolNames.includes(tool.originalName)
-                return (
-                  <div key={tool.originalName} className="config-tool-row">
-                    <Switch
-                      size="small"
-                      checked={on}
-                      onChange={(checked) =>
-                        onPatch({
-                          enabledToolNames: checked
-                            ? [...draft.enabledToolNames, tool.originalName]
-                            : draft.enabledToolNames.filter((n) => n !== tool.originalName)
-                        })
-                      }
-                    />
-                    <div className="config-tool-row__body">
-                      <span className="config-tool-row__name">{tool.originalName}</span>
-                      <code className="config-tool-row__id">{tool.mappedName}</code>
-                      <span className="config-tool-row__summary">{tool.description}</span>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-          {skippedCount > 0 ? (
-            <Typography.Paragraph type="warning">
-              {t('form.skippedHint', { count: skippedCount })}
-            </Typography.Paragraph>
-          ) : null}
-          <div className="config-form-row">
-            <span className="config-form-row__label">{t('form.confirmPolicyLabel')}</span>
-            <Radio.Group
-              value={draft.toolConfirmPolicy}
-              onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
-            >
-              <Radio value="always">{t('form.confirmAlways')}</Radio>
-              <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
-            </Radio.Group>
           </div>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            {t('form.confirmReadonlyAutoHint')}
-          </Typography.Paragraph>
+
+          <div className="mcp-server-section">
+            <McpSectionTitle>{t('form.toolsTitle')}</McpSectionTitle>
+            {tools.length === 0 ? (
+              <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+                {t('form.noToolsHint')}
+              </Typography.Paragraph>
+            ) : (
+              <div className="mcp-server-tools">
+                {tools.map((tool) => {
+                  const on = draft.enabledToolNames.includes(tool.originalName)
+                  return (
+                    <div key={tool.originalName} className="config-tool-row">
+                      <Switch
+                        size="small"
+                        checked={on}
+                        onChange={(checked) =>
+                          onPatch({
+                            enabledToolNames: checked
+                              ? [...draft.enabledToolNames, tool.originalName]
+                              : draft.enabledToolNames.filter((n) => n !== tool.originalName)
+                          })
+                        }
+                      />
+                      <div className="config-tool-row__body">
+                        <span className="config-tool-row__name" title={tool.originalName}>
+                          {tool.originalName}
+                        </span>
+                        <code className="config-tool-row__id" title={tool.mappedName}>
+                          {tool.mappedName}
+                        </code>
+                        <span className="config-tool-row__summary" title={tool.description}>
+                          {tool.description}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {skippedCount > 0 ? (
+              <Typography.Paragraph type="warning" style={{ margin: 0 }}>
+                {t('form.skippedHint', { count: skippedCount })}
+              </Typography.Paragraph>
+            ) : null}
+            <McpField label={t('form.confirmPolicyLabel')} row>
+              <Radio.Group
+                value={draft.toolConfirmPolicy}
+                onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
+              >
+                <Radio value="always">{t('form.confirmAlways')}</Radio>
+                <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
+              </Radio.Group>
+            </McpField>
+            <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+              {t('form.confirmReadonlyAutoHint')}
+            </Typography.Paragraph>
+          </div>
         </div>
       ) : null}
 
-      <div className="mcp-server-card__actions">
-        <Button size="small" loading={testing} onClick={onTest}>
-          {testing ? t('card.testing') : t('card.test')}
-        </Button>
-        <Button size="small" type="primary" loading={saving} onClick={onSave}>
-          {saving ? t('card.saving') : t('card.save')}
-        </Button>
-        <Button size="small" onClick={onClearSecret}>
-          {t('card.clearToken')}
-        </Button>
-        {draft.auth.mode === 'oauth' ? (
-          <Button size="small" loading={oauthStarting} onClick={onOauthStart}>
-            {t('card.connectAccount')}
+      <div className="mcp-server-card__footer">
+        <div className="mcp-server-card__footer-actions">
+          <Button type="text" size="small" onClick={onClearSecret}>
+            {t('card.clearToken')}
           </Button>
-        ) : null}
-        <Button size="small" onClick={onOpenDiagnostics}>
-          {t('card.diagnostics')}
-        </Button>
+          {draft.auth.mode === 'oauth' ? (
+            <Button type="text" size="small" loading={oauthStarting} onClick={onOauthStart}>
+              {t('card.connectAccount')}
+            </Button>
+          ) : null}
+          <Button type="text" size="small" onClick={onOpenDiagnostics}>
+            {t('card.diagnostics')}
+          </Button>
+        </div>
+        <div className="mcp-server-card__footer-actions mcp-server-card__footer-actions--primary">
+          <Button size="small" loading={testing} onClick={onTest}>
+            {testing ? t('card.testing') : t('card.test')}
+          </Button>
+          <Button size="small" type="primary" loading={saving} onClick={onSave}>
+            {saving ? t('card.saving') : t('card.save')}
+          </Button>
+        </div>
       </div>
     </div>
   )

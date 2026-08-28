@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { App, Button, Drawer, Empty, Spin } from 'antd'
+import { Plus } from 'lucide-react'
 import { MCP_MAX_SERVERS, type McpServerProfile, type McpToolCacheEntry } from '../../../shared/mcpTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import {
@@ -212,52 +213,57 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
 
   return (
     <div className="mcp-settings-tab" style={{ display: active ? undefined : 'none' }}>
-      <p className="config-field__hint">{t('intro')}</p>
-      <Button type="dashed" onClick={addServer} style={{ marginBottom: 12 }}>
-        {t('addServer')}
-      </Button>
+      <div className="mcp-settings-tab__header">
+        <p className="mcp-settings-tab__intro">{t('intro')}</p>
+        <Button type="dashed" icon={<Plus size={14} />} onClick={addServer}>
+          {t('addServer')}
+        </Button>
+      </div>
       {drafts.length === 0 ? <Empty description={t('empty')} /> : null}
-      {drafts.map((draft) => {
-        const profile = servers.find((s) => s.id === draft.id)
-        const cache = toolCaches[draft.id]
-        const tools = cache?.tools ?? []
-        const expanded = expandedIds.has(draft.id)
-        const canEnable = tools.length > 0 && draft.enabledToolNames.length > 0
-        return (
-          <McpServerCard
-            key={draft.id}
-            draft={draft}
-            profile={profile}
-            tools={tools}
-            skippedCount={cache?.skippedCount ?? 0}
-            expanded={expanded}
-            testing={testingId === draft.id}
-            saving={savingId === draft.id}
-            oauthStarting={oauthStartingId === draft.id}
-            dirty={isMcpDraftDirty(profile, draft)}
-            canEnable={canEnable}
-            toolsStale={cache?.stale}
-            onToggleExpanded={() =>
-              setExpandedIds((current) => {
-                const next = new Set(current)
-                if (next.has(draft.id)) next.delete(draft.id)
-                else next.add(draft.id)
-                return next
-              })
-            }
-            onPatch={(patch) => patchDraft(draft.id, patch)}
-            onSave={() => void saveServer(draft.id)}
-            onTest={() => void testServer(draft.id)}
-            onDelete={() => deleteServer(draft.id)}
-            onClearSecret={() => clearSecret(draft.id)}
-            onOpenDiagnostics={() => void openDiagnostics(draft.id)}
-            onOauthStart={() => void oauthStart(draft.id)}
-          />
-        )
-      })}
+      <div className="mcp-server-list">
+        {drafts.map((draft) => {
+          const profile = servers.find((s) => s.id === draft.id)
+          const cache = toolCaches[draft.id]
+          const tools = cache?.tools ?? []
+          const expanded = expandedIds.has(draft.id)
+          const canEnable = tools.length > 0 && draft.enabledToolNames.length > 0
+          return (
+            <McpServerCard
+              key={draft.id}
+              draft={draft}
+              profile={profile}
+              tools={tools}
+              skippedCount={cache?.skippedCount ?? 0}
+              expanded={expanded}
+              testing={testingId === draft.id}
+              saving={savingId === draft.id}
+              oauthStarting={oauthStartingId === draft.id}
+              dirty={isMcpDraftDirty(profile, draft)}
+              canEnable={canEnable}
+              toolsStale={cache?.stale}
+              onToggleExpanded={() =>
+                setExpandedIds((current) => {
+                  const next = new Set(current)
+                  if (next.has(draft.id)) next.delete(draft.id)
+                  else next.add(draft.id)
+                  return next
+                })
+              }
+              onPatch={(patch) => patchDraft(draft.id, patch)}
+              onSave={() => void saveServer(draft.id)}
+              onTest={() => void testServer(draft.id)}
+              onDelete={() => deleteServer(draft.id)}
+              onClearSecret={() => clearSecret(draft.id)}
+              onOpenDiagnostics={() => void openDiagnostics(draft.id)}
+              onOauthStart={() => void oauthStart(draft.id)}
+            />
+          )
+        })}
+      </div>
 
       <Drawer
         title={t('form.diagnosticsTitle')}
+        className="mcp-diagnostics-drawer"
         open={diagnosticsServer !== null}
         onClose={() => setDiagnosticsServer(null)}
         width={480}
@@ -270,12 +276,14 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
         {diagnostics.length === 0 ? (
           <Empty description={t('form.diagnosticsEmpty')} />
         ) : (
-          diagnostics.map((entry) => (
-            <div key={entry.occurredAt + entry.code} className="mcp-diagnostics-entry">
-              <code>{entry.code}</code>
-              <pre>{entry.message}</pre>
-            </div>
-          ))
+          <div className="mcp-diagnostics-list">
+            {diagnostics.map((entry) => (
+              <div key={entry.occurredAt + entry.code} className="mcp-diagnostics-entry">
+                <code>{entry.code}</code>
+                <pre>{entry.message}</pre>
+              </div>
+            ))}
+          </div>
         )}
       </Drawer>
     </div>
