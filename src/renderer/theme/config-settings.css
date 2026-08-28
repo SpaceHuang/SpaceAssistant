@@ -1215,7 +1215,10 @@
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);
-  max-width: 72ch;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mcp-settings-empty {

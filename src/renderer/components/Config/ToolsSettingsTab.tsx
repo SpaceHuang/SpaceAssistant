@@ -278,7 +278,8 @@ export function ToolsSettingsTab({
 
   return (
     <div className="config-tools-panel">
-      {hint ? <p className="config-tools-panel__intro">{hint}</p> : null}
+      {/* MCP 分区自带标题与说明，避免顶部提示行重复 */}
+      {hint && section !== 'mcp' ? <p className="config-tools-panel__intro">{hint}</p> : null}
       {renderSection()}
       <McpSettingsTab active={section === 'mcp'} open={open} />
     </div>
