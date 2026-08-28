@@ -1,6 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { Transport, TransportSendOptions } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage, MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js'
+import {
+  discoverOAuthServerInfo,
+  type OAuthClientProvider
+} from '@modelcontextprotocol/sdk/client/auth.js'
 import { MCP_CONNECT_TIMEOUT_MS, type McpServerProfile } from '../../src/shared/mcpTypes'
 import { createStdioTransport, StdioCommandValidationError } from './stdioTransport'
 import { createStreamableHttpTransport, McpEndpointValidationError } from './streamableHttpTransport'
@@ -136,6 +140,70 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   })
 }
 
+/** 按 401 WWW-Authenticate 的 resource_metadata 挑战路径解析授权服务器 origin。 */
+async function resolveOauthAuthorizationServerOriginViaChallenge(
+  endpoint: string
+): Promise<string | undefined> {
+  try {
+    const probe = await fetch(new URL(endpoint), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream'
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'spaceassistant', version: '0.1.5' }
+        }
+      }),
+      redirect: 'manual'
+    })
+    const authenticate = probe.headers.get('www-authenticate') ?? ''
+    const match = /resource_metadata="([^"]+)"/.exec(authenticate)
+    if (!match?.[1]) return undefined
+    const metadataResponse = await fetch(match[1])
+    if (!metadataResponse.ok) return undefined
+    const metadata = (await metadataResponse.json()) as { authorization_servers?: string[] }
+    const authServer = metadata.authorization_servers?.[0]
+    return authServer ? new URL(authServer).origin : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 解析 OAuth 授权服务器 origin（如 GitHub 的 https://github.com），
+ * 供跨源 OAuth 发现/token 交换放行；发现失败返回 undefined，不阻塞主流程。
+ */
+export async function resolveOauthAuthorizationServerOrigin(
+  endpoint: string
+): Promise<string | undefined> {
+  try {
+    const info = await withTimeout(
+      discoverOAuthServerInfo(new URL(endpoint)),
+      5000,
+      'OAuth 授权服务器发现超时'
+    )
+    // 仅当 RFC 9728 真实发现到 authorization_servers 时采用；否则 SDK 会把
+    // MCP 端点自身作为回退授权服务器（如 GitHub 的 401 场景），需走挑战式解析。
+    if (info.resourceMetadata?.authorization_servers?.length && info.authorizationServerUrl) {
+      return new URL(info.authorizationServerUrl).origin
+    }
+  } catch {
+    // 标准发现不可用（如仅支持挑战式发现）时，回退到 WWW-Authenticate 挑战解析
+  }
+  return withTimeout(
+    resolveOauthAuthorizationServerOriginViaChallenge(endpoint),
+    5000,
+    'OAuth 授权服务器发现超时'
+  ).catch(() => undefined)
+}
+
 export class McpConnectionManager {
   private sessions = new Map<string, PoolEntry>()
   private idleTimeoutMs: number
@@ -156,7 +224,7 @@ export class McpConnectionManager {
   async connect(
     profile: McpServerProfile,
     secretProvider: McpSecretProvider,
-    options?: { connectTimeoutMs?: number }
+    options?: { connectTimeoutMs?: number; oauthProvider?: OAuthClientProvider }
   ): Promise<McpSession> {
     const existing = this.sessions.get(profile.id)
     if (existing && !existing.dead) {
@@ -168,7 +236,12 @@ export class McpConnectionManager {
     }
 
     const timeoutMs = options?.connectTimeoutMs ?? this.connectTimeoutMs
-    const session = await this.createSession(profile, secretProvider, timeoutMs)
+    const session = await this.createSession(
+      profile,
+      secretProvider,
+      timeoutMs,
+      options?.oauthProvider
+    )
     this.sessions.set(profile.id, {
       session,
       lastUsedAt: Date.now(),
@@ -182,7 +255,8 @@ export class McpConnectionManager {
   private async createSession(
     profile: McpServerProfile,
     secretProvider: McpSecretProvider,
-    timeoutMs: number
+    timeoutMs: number,
+    oauthProvider?: OAuthClientProvider
   ): Promise<McpSession> {
     let rawTransport: Transport
     // 记录传输层最近一行 stderr/诊断，传输意外关闭时作为「死因」写入诊断。
@@ -211,17 +285,30 @@ export class McpConnectionManager {
     } else if (profile.transport === 'streamable-http') {
       if (!profile.http) throw new Error('HTTP 服务缺少 endpoint 配置')
       const authHeaders: Record<string, string> = {}
-      if (profile.auth.mode === 'bearer-token') {
-        const token = await secretProvider('access-token')
-        if (token) authHeaders.Authorization = `Bearer ${token}`
-      } else if (profile.auth.mode === 'custom-header') {
-        const value = await secretProvider('auth-header')
-        const headerName = profile.auth.headerName?.trim() || 'Authorization'
-        if (value) authHeaders[headerName] = `${profile.auth.valuePrefix ?? ''}${value}`
+      let authProvider: OAuthClientProvider | undefined
+      let allowedExtraOrigins: string[] | undefined
+      if (profile.auth.mode === 'oauth') {
+        if (!oauthProvider) {
+          throw new Error('OAuth 服务缺少 OAuth provider（请先完成授权后重试）')
+        }
+        authProvider = oauthProvider
+        const oauthOrigin = await resolveOauthAuthorizationServerOrigin(profile.http.endpoint)
+        if (oauthOrigin) allowedExtraOrigins = [oauthOrigin]
+      } else {
+        if (profile.auth.mode === 'bearer-token') {
+          const token = await secretProvider('access-token')
+          if (token) authHeaders.Authorization = `Bearer ${token}`
+        } else if (profile.auth.mode === 'custom-header') {
+          const value = await secretProvider('auth-header')
+          const headerName = profile.auth.headerName?.trim() || 'Authorization'
+          if (value) authHeaders[headerName] = `${profile.auth.valuePrefix ?? ''}${value}`
+        }
       }
       rawTransport = await createStreamableHttpTransport({
         endpoint: profile.http.endpoint,
         authHeaders,
+        ...(authProvider ? { authProvider } : {}),
+        ...(allowedExtraOrigins?.length ? { allowedExtraOrigins } : {}),
         onDiagnostic: (line) => {
           lastTransportLine = line
           void this.appendDiagnostic?.(profile.id, { code: 'http-diagnostic', message: line })
@@ -341,7 +428,11 @@ export class McpConnectionManager {
  */
 export async function testConnection(
   profile: McpServerProfile,
-  options?: { connectTimeoutMs?: number; secretProvider?: McpSecretProvider }
+  options?: {
+    connectTimeoutMs?: number
+    secretProvider?: McpSecretProvider
+    oauthProvider?: OAuthClientProvider
+  }
 ): Promise<McpTestConnectionResult> {
   const manager = new McpConnectionManager({
     connectTimeoutMs: options?.connectTimeoutMs,
@@ -349,7 +440,8 @@ export async function testConnection(
   })
   try {
     const session = await manager.connect(profile, options?.secretProvider ?? (async () => null), {
-      connectTimeoutMs: options?.connectTimeoutMs
+      connectTimeoutMs: options?.connectTimeoutMs,
+      oauthProvider: options?.oauthProvider
     })
     const toolsResult = await session.client.listTools()
     const tools = toolsResult.tools.map((t) => ({

@@ -4,6 +4,7 @@ import os from 'os'
 import path from 'path'
 import type { AddressInfo } from 'net'
 import { afterAll, describe, expect, it, vi } from 'vitest'
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
 
@@ -57,6 +58,100 @@ rl.on('line', (line) => {
   )
   return scriptPath
 }
+
+function startAuthRequiredHttpServer(): Promise<{
+  endpoint: string
+  receivedAuthHeaders: string[]
+}> {
+  const receivedAuthHeaders: string[] = []
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const auth = req.headers.authorization
+      if (auth) receivedAuthHeaders.push(auth)
+      if (!auth) {
+        res.writeHead(401, {
+          'WWW-Authenticate': 'Bearer resource_metadata="http://127.0.0.1:1/.well-known/oauth-protected-resource"'
+        })
+        res.end()
+        return
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write(': keepalive\n\n')
+        return
+      }
+      let raw = ''
+      req.on('data', (chunk) => {
+        raw += chunk.toString('utf8')
+      })
+      req.on('end', () => {
+        const message = JSON.parse(raw) as { method?: string; id?: number }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        if (message.method === 'initialize') {
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: '2025-06-18',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'oauth-http', version: '1.0.0' }
+              }
+            })
+          )
+        } else if (message.method === 'tools/list') {
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: { tools: [{ name: 't', description: '', inputSchema: { type: 'object' } }] }
+            })
+          )
+        } else {
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }))
+        }
+      })
+    })
+    server.listen(0, '127.0.0.1', () => {
+      servers.push(server)
+      resolve({
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`,
+        receivedAuthHeaders
+      })
+    })
+  })
+}
+
+function makeOauthProvider(accessToken: string): OAuthClientProvider {
+  return {
+    get redirectUrl() {
+      return 'http://127.0.0.1:1/callback'
+    },
+    get clientMetadata() {
+      return {}
+    },
+    state: () => 'state',
+    clientInformation: async () => ({ client_id: 'manual-client' }),
+    saveClientInformation: () => undefined,
+    tokens: async () => ({ access_token: accessToken, token_type: 'Bearer' }),
+    saveTokens: async () => undefined,
+    invalidateCredentials: async () => undefined,
+    redirectToAuthorization: async () => {
+      throw new Error('not expected')
+    },
+    saveCodeVerifier: () => undefined,
+    codeVerifier: async () => ''
+  }
+}
+
+const servers: Array<http.Server> = []
+
+afterAll(() => {
+  for (const server of servers) {
+    server.closeAllConnections?.()
+    server.close()
+  }
+})
 
 const tempDirs: string[] = []
 function makeTempDir(): string {
@@ -310,5 +405,37 @@ rl.on('line', (line) => {
     expect(session.protocolVersion).toBe('2025-06-18')
     await manager.disconnect(httpProfile.id)
     server.close()
+  })
+
+  it('connects to an OAuth Streamable HTTP server using the provider access token', async () => {
+    const { endpoint, receivedAuthHeaders } = await startAuthRequiredHttpServer()
+    const oauthProfile = makeProfile({
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint },
+      auth: { mode: 'oauth', secretPresent: true, oauthClientId: 'manual-client' }
+    })
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000 })
+
+    const session = await manager.connect(oauthProfile, async () => null, {
+      oauthProvider: makeOauthProvider('oauth-access-token')
+    })
+    expect(session.info.name).toBe('oauth-http')
+    expect(session.protocolVersion).toBe('2025-06-18')
+    expect(receivedAuthHeaders).toContain('Bearer oauth-access-token')
+    await manager.disconnect(oauthProfile.id)
+  })
+
+  it('rejects OAuth Streamable HTTP connections without a provider', async () => {
+    const { endpoint } = await startAuthRequiredHttpServer()
+    const oauthProfile = makeProfile({
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint },
+      auth: { mode: 'oauth', secretPresent: false }
+    })
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000 })
+
+    await expect(manager.connect(oauthProfile, async () => null)).rejects.toThrow(/OAuth/i)
   })
 })

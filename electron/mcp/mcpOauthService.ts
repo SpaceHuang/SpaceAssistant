@@ -18,6 +18,7 @@ import {
 import { listProfiles, updateServerStatus } from './mcpConfigStore'
 import { matchOauthClientPreset, type McpOAuthClientPreset } from './oauthClientPresets'
 import { createStreamableHttpTransport } from './streamableHttpTransport'
+import { resolveOauthAuthorizationServerOrigin } from './mcpConnectionManager'
 
 /**
  * MCP OAuth 2.1 服务：metadata 发现、PKCE（SDK）、state、固定 loopback 回调、
@@ -26,6 +27,14 @@ import { createStreamableHttpTransport } from './streamableHttpTransport'
  */
 
 export const MCP_OAUTH_LOOPBACK_PORT = 42188
+export const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000
+
+export class OAuthCallbackTimeoutError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'OAuthCallbackTimeoutError'
+  }
+}
 
 function oauthClientInfoKey(serverId: string): string {
   return `config.mcpOauthClientInfo.${serverId}`
@@ -41,14 +50,21 @@ export function hasActiveOAuthFlows(): boolean {
   return activeFlows.size > 0
 }
 
-function waitForLoopbackCode(port: number, expectedState: string): Promise<string> {
+function waitForLoopbackCode(
+  port: number,
+  expectedState: string,
+  timeoutMs: number
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    let settled = false
     const server = http.createServer((req, res) => {
       const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`)
       if (url.pathname === '/callback' && url.searchParams.get('state') === expectedState) {
         const code = url.searchParams.get('code') ?? ''
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end('<!doctype html><meta charset="utf-8"><p>授权完成，可关闭此窗口。</p>')
+        clearTimeout(timer)
+        settled = true
         resolve(code)
         server.close()
       } else {
@@ -56,13 +72,27 @@ function waitForLoopbackCode(port: number, expectedState: string): Promise<strin
         res.end('state mismatch')
       }
     })
-    server.on('error', reject)
+    server.on('error', (error) => {
+      clearTimeout(timer)
+      if (!settled) {
+        settled = true
+        reject(error)
+      }
+    })
     server.listen(port, '127.0.0.1')
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      server.close()
+      reject(new OAuthCallbackTimeoutError('授权等待超时，请重新发起连接'))
+    }, timeoutMs)
   })
 }
 
 export type McpOAuthProviderOptions = {
   loopbackPort?: number
+  /** 浏览器授权回调等待上限（默认 5 分钟）。 */
+  callbackTimeoutMs?: number
   /** 测试缝：代替浏览器，直接返回授权码。 */
   authorize?: (authorizationUrl: URL) => Promise<string>
   openBrowser?: (url: string) => Promise<void>
@@ -171,7 +201,11 @@ export function createMcpOAuthClientProvider(
         await shell.openExternal(url)
       })
       await open(authorizationUrl.toString())
-      const code = await waitForLoopbackCode(port, expectedState)
+      const code = await waitForLoopbackCode(
+        port,
+        expectedState,
+        options?.callbackTimeoutMs ?? MCP_OAUTH_CALLBACK_TIMEOUT_MS
+      )
       options?.onCode?.(code)
     },
     saveCodeVerifier: (codeVerifier) => {
@@ -189,11 +223,12 @@ export type McpOAuthStartResult =
 export async function startOAuthFlow(
   db: AppDatabase,
   serverId: string,
-  options?: McpOAuthProviderOptions & { fetchFn?: typeof fetch }
+  options?: McpOAuthProviderOptions & { fetchFn?: typeof fetch; profile?: McpServerProfile }
 ): Promise<McpOAuthStartResult> {
-  const profile = listProfiles(db).find((p) => p.id === serverId)
+  const profile = options?.profile ?? listProfiles(db).find((p) => p.id === serverId)
   if (!profile) return { ok: false, code: 'not-found', message: '服务不存在' }
   if (!profile.http) return { ok: false, code: 'no-endpoint', message: '服务缺少 endpoint' }
+  const endpoint = profile.http.endpoint
   if (activeFlows.has(serverId)) {
     return { ok: false, code: 'flow-active', message: '该服务正在授权中，请等待完成' }
   }
@@ -201,15 +236,33 @@ export async function startOAuthFlow(
 
   let preset: McpOAuthClientPreset | undefined
   try {
-    const serverUrl = new URL(profile.http.endpoint)
+    const serverUrl = new URL(endpoint)
+    let serverInfo: Awaited<ReturnType<typeof discoverOAuthServerInfo>> | undefined
     try {
-      const serverInfo = await discoverOAuthServerInfo(serverUrl, { fetchFn: options?.fetchFn })
+      serverInfo = await discoverOAuthServerInfo(serverUrl, { fetchFn: options?.fetchFn })
       const issuer = serverInfo.authorizationServerMetadata?.issuer
       if (issuer) {
         preset = matchOauthClientPreset(serverUrl.origin, issuer)
       }
     } catch {
       // 发现失败时由 SDK 的 401 流程自行发现；预设匹配仅在可发现 issuer 时生效
+    }
+
+    // GitHub 等不支持 DCR 的服务必须提供手工 OAuth Client ID，否则会得到
+    // 404/401 之类的晦涩错误；支持 DCR（registration_endpoint）的服务无需预填。
+    const authServerMetadata = serverInfo?.authorizationServerMetadata
+    const canRegisterDynamically = Boolean(authServerMetadata?.registration_endpoint)
+    const hasClientIdentity = Boolean(
+      getConfigValue(db, oauthClientInfoKey(profile.id)) ||
+        preset ||
+        profile.auth.oauthClientId?.trim()
+    )
+    if (!canRegisterDynamically && !hasClientIdentity) {
+      return {
+        ok: false,
+        code: 'oauth-client-required',
+        message: '该服务不支持自动注册客户端，请在认证方式中填写 OAuth Client ID 后重试'
+      }
     }
 
     let capturedCode: string | null = null
@@ -221,11 +274,21 @@ export async function startOAuthFlow(
       }
     })
 
-    let transport = await createStreamableHttpTransport({
-      endpoint: profile.http.endpoint,
-      authProvider: provider,
-      onDiagnostic: () => undefined
-    })
+    // 授权服务器与 MCP 端点不同源（如 GitHub）时放行其 origin，仅限 OAuth 发现与 token 交换。
+    const oauthExtraOrigins =
+      serverInfo?.resourceMetadata?.authorization_servers?.length && serverInfo.authorizationServerUrl
+        ? [new URL(serverInfo.authorizationServerUrl).origin]
+        : await resolveOauthAuthorizationServerOrigin(endpoint).then((origin) =>
+            origin ? [origin] : undefined
+          )
+    const buildTransport = () =>
+      createStreamableHttpTransport({
+        endpoint,
+        authProvider: provider,
+        ...(oauthExtraOrigins?.length ? { allowedExtraOrigins: oauthExtraOrigins } : {}),
+        onDiagnostic: () => undefined
+      })
+    let transport = await buildTransport()
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
     let client = new Client({ name: 'spaceassistant', version: '0.1.5' })
     try {
@@ -235,11 +298,7 @@ export async function startOAuthFlow(
         await transport.finishAuth(capturedCode)
         await client.close().catch(() => undefined)
         // SDK 传输不可重复 start：携带已保存 token 重建传输后连接
-        transport = await createStreamableHttpTransport({
-          endpoint: profile.http.endpoint,
-          authProvider: provider,
-          onDiagnostic: () => undefined
-        })
+        transport = await buildTransport()
         client = new Client({ name: 'spaceassistant', version: '0.1.5' })
         await client.connect(transport)
       } else {
@@ -256,6 +315,9 @@ export async function startOAuthFlow(
     return { ok: true }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    if (error instanceof OAuthCallbackTimeoutError) {
+      return { ok: false, code: 'oauth-timeout', message }
+    }
     return { ok: false, code: 'oauth-failed', message }
   } finally {
     activeFlows.delete(serverId)

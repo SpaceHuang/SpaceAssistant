@@ -28,6 +28,8 @@ export type McpHttpTransportOptions = {
   endpoint: string
   authHeaders?: Record<string, string>
   authProvider?: OAuthClientProvider
+  /** OAuth 授权服务器 origin 白名单（如 GitHub 的 github.com）；仅放行这些跨源端点。 */
+  allowedExtraOrigins?: string[]
   onDiagnostic?: (line: string) => void
 }
 
@@ -54,12 +56,13 @@ async function assertResolvedIpsAllowed(
 
 function makePolicyFetch(
   configuredUrl: URL,
+  allowedExtraOrigins: ReadonlySet<string>,
   onDiagnostic?: (line: string) => void
 ): typeof fetch {
   return async (input, init) => {
     const target =
       typeof input === 'string' ? new URL(input) : input instanceof URL ? input : new URL(String(input))
-    if (target.origin !== configuredUrl.origin) {
+    if (target.origin !== configuredUrl.origin && !allowedExtraOrigins.has(target.origin)) {
       onDiagnostic?.(`跨 origin 请求被拒绝（${target.origin}）`)
       throw new McpEndpointValidationError('跨 origin 重定向/请求被拒绝')
     }
@@ -90,11 +93,19 @@ export async function createStreamableHttpTransport(
       throw new McpEndpointValidationError(`受控请求头不允许: ${name}`)
     }
   }
+  const allowedExtraOrigins = new Set<string>()
+  for (const origin of options.allowedExtraOrigins ?? []) {
+    try {
+      allowedExtraOrigins.add(new URL(origin).origin)
+    } catch {
+      options.onDiagnostic?.(`忽略非法 OAuth origin: ${origin}`)
+    }
+  }
 
   return new StreamableHTTPClientTransport(url, {
     requestInit: { headers: authHeaders },
     ...(options.authProvider ? { authProvider: options.authProvider } : {}),
-    fetch: makePolicyFetch(url, options.onDiagnostic),
+    fetch: makePolicyFetch(url, allowedExtraOrigins, options.onDiagnostic),
     // 不自动重连重放：取消/失败不重试 tools/call
     reconnectionOptions: {
       maxRetries: 0,

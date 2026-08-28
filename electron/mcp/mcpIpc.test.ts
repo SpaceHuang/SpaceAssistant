@@ -1,6 +1,8 @@
 import fs from 'fs'
+import http from 'http'
 import os from 'os'
 import path from 'path'
+import type { AddressInfo } from 'net'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IpcMain } from 'electron'
 import type { AppDatabase } from '../database'
@@ -8,6 +10,8 @@ import { createTempDatabase } from '../database/testHelpers'
 import type { McpServerWriteInput } from '../../src/shared/mcpTypes'
 import { appendDiagnostic } from './mcpDiagnostics'
 import { registerMcpIpcHandlers } from './mcpIpc'
+import * as mcpOauthService from './mcpOauthService'
+import { setSecret } from './mcpSecretStore'
 
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
@@ -53,6 +57,77 @@ afterAll(() => {
   }
 })
 
+const httpServers: Array<http.Server> = []
+function startAuthRequiredHttpServer(): Promise<{
+  endpoint: string
+  receivedAuthHeaders: string[]
+}> {
+  const receivedAuthHeaders: string[] = []
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const auth = req.headers.authorization
+      if (auth) receivedAuthHeaders.push(auth)
+      if (!auth) {
+        res.writeHead(401, {
+          'WWW-Authenticate': 'Bearer resource_metadata="http://127.0.0.1:1/.well-known/oauth-protected-resource"'
+        })
+        res.end()
+        return
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write(': keepalive\n\n')
+        return
+      }
+      let raw = ''
+      req.on('data', (chunk) => {
+        raw += chunk.toString('utf8')
+      })
+      req.on('end', () => {
+        const message = JSON.parse(raw) as { method?: string; id?: number }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        if (message.method === 'initialize') {
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: '2025-06-18',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'ipc-oauth', version: '1.0.0' }
+              }
+            })
+          )
+        } else if (message.method === 'tools/list') {
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: { tools: [{ name: 't', description: '', inputSchema: { type: 'object' } }] }
+            })
+          )
+        } else {
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }))
+        }
+      })
+    })
+    server.listen(0, '127.0.0.1', () => {
+      httpServers.push(server)
+      resolve({
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`,
+        receivedAuthHeaders
+      })
+    })
+  })
+}
+
+afterAll(() => {
+  for (const server of httpServers) {
+    server.closeAllConnections?.()
+    server.close()
+  }
+})
+
 describe('mcp IPC handlers', () => {
   let db: AppDatabase
   let cleanup: () => void
@@ -68,6 +143,7 @@ describe('mcp IPC handlers', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     cleanup()
   })
 
@@ -169,5 +245,72 @@ rl.on('line', (line) => {
     })) as { ok: boolean; code?: string }
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('not-found')
+  })
+
+  it('mcp:test-connection sends the OAuth token for an already-authorized draft', async () => {
+    const { endpoint, receivedAuthHeaders } = await startAuthRequiredHttpServer()
+    const draft = makeInput({
+      id: 'oauth-draft',
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint },
+      auth: { mode: 'oauth', oauthClientId: 'manual-client' }
+    })
+    await setSecret(db, 'oauth-draft', 'access-token', 'oauth-token')
+    const spy = vi.spyOn(mcpOauthService, 'startOAuthFlow')
+
+    const result = (await handlers['mcp:test-connection']!(null, {
+      server: draft
+    })) as { ok: boolean; serverName?: string; tools?: Array<{ mappedName: string }> }
+
+    expect(spy).not.toHaveBeenCalled()
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.serverName).toBe('ipc-oauth')
+      expect(result.tools?.[0]?.mappedName).toMatch(/^mcp_/)
+    }
+    expect(receivedAuthHeaders).toContain('Bearer oauth-token')
+  })
+
+  it('mcp:test-connection starts OAuth for a draft without a token and surfaces failures', async () => {
+    const { endpoint } = await startAuthRequiredHttpServer()
+    const draft = makeInput({
+      id: 'oauth-draft-2',
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint },
+      auth: { mode: 'oauth', oauthClientId: 'manual-client' }
+    })
+    const spy = vi.spyOn(mcpOauthService, 'startOAuthFlow').mockResolvedValue({
+      ok: false,
+      code: 'oauth-client-required',
+      message: '需要 Client ID'
+    })
+
+    const result = (await handlers['mcp:test-connection']!(null, {
+      server: draft
+    })) as { ok: boolean; code?: string; message?: string }
+
+    expect(spy).toHaveBeenCalledWith(db, 'oauth-draft-2', expect.objectContaining({ profile: expect.anything() }))
+    expect(result).toEqual({ ok: false, code: 'oauth-client-required', message: '需要 Client ID' })
+  })
+
+  it('mcp:test-connection falls back to the saved bearer token when the draft leaves it blank', async () => {
+    const { endpoint, receivedAuthHeaders } = await startAuthRequiredHttpServer()
+    const draft = makeInput({
+      id: 'saved-bearer',
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint },
+      auth: { mode: 'bearer-token' }
+    })
+    await setSecret(db, 'saved-bearer', 'access-token', 'saved-pat')
+
+    const result = (await handlers['mcp:test-connection']!(null, {
+      server: draft
+    })) as { ok: boolean }
+
+    expect(result.ok).toBe(true)
+    expect(receivedAuthHeaders).toContain('Bearer saved-pat')
   })
 })

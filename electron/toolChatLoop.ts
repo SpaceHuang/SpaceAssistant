@@ -24,6 +24,7 @@ import {
 } from './mcp/mcpToolRegistry'
 import { isMcpSessionTrusted, rememberMcpSessionTrust } from './mcp/mcpSessionTrust'
 import { getSecret } from './mcp/mcpSecretStore'
+import { createMcpOAuthClientProvider } from './mcp/mcpOauthService'
 import { maskSensitiveArgs, mcpToolNeedsConfirmation } from '../src/shared/mcpTypes'
 import type {
   AutoApproveFallback,
@@ -2058,8 +2059,11 @@ function resolveMcpExecutor(
   if (!entry || !appDb) return undefined
   const profile = listProfiles(appDb).find((p) => p.id === entry.serverId)
   if (!profile) return undefined
+  const oauthProvider =
+    profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(appDb, profile) : undefined
   return createMcpToolExecutor(entry, {
-    getSession: (serverId) => manager.connect(profile, async (kind) => getSecret(appDb, serverId, kind)),
+    getSession: (serverId) =>
+      manager.connect(profile, async (kind) => getSecret(appDb, serverId, kind), { oauthProvider }),
     getProfile: () => profile,
     invalidateSession: (serverId) => manager.disconnect(serverId),
     getRecentDiagnostics: (serverId) => getDiagnostics(appDb, serverId)

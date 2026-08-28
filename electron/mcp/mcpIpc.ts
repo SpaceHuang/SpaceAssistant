@@ -18,7 +18,11 @@ import { clearSecret, getSecret } from './mcpSecretStore'
 import { appendDiagnostic, clearDiagnostics, getDiagnostics } from './mcpDiagnostics'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
 import { buildMappedToolDescriptors, discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
-import { isOAuthFlowActive, startOAuthFlow } from './mcpOauthService'
+import {
+  createMcpOAuthClientProvider,
+  isOAuthFlowActive,
+  startOAuthFlow
+} from './mcpOauthService'
 
 /**
  * mcp:* IPC 处理器注册（被 appIpc.ts 调用）。
@@ -95,11 +99,27 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     for (const env of input.stdio?.env ?? []) {
       if (env.value !== undefined && env.value !== '') draftSecrets[`env:${env.key}`] = env.value
     }
-    const secretProvider = async (kind: string): Promise<string | null> => draftSecrets[kind] ?? null
+    // 草稿未填写的新值优先；已保存服务编辑草稿留空时回退到已保存 Secret，
+    // 避免「已配好 token 只是没重填」被误判为未认证。
+    const secretProvider = async (kind: string): Promise<string | null> =>
+      draftSecrets[kind] ?? (await getSecret(ctx.db, profile.id, kind))
+
+    // OAuth 服务：已保存 token 直接携带；未授权则先跑一次授权流程（草稿 profile），
+    // 授权成功后 token 落在草稿 id 下，再按已授权状态连接。
+    let oauthProvider: ReturnType<typeof createMcpOAuthClientProvider> | undefined
+    if (profile.auth.mode === 'oauth') {
+      oauthProvider = createMcpOAuthClientProvider(ctx.db, profile)
+      const hasToken = await getSecret(ctx.db, profile.id, 'access-token')
+      if (!hasToken) {
+        const oauthResult = await startOAuthFlow(ctx.db, profile.id, { profile })
+        if (!oauthResult.ok) return oauthResult
+      }
+    }
 
     const result = await testConnection(profile, {
       connectTimeoutMs: MCP_CONNECT_TIMEOUT_MS,
-      secretProvider
+      secretProvider,
+      oauthProvider
     })
     if (!result.ok) return result
     const { descriptors, skipped } = buildMappedToolDescriptors(input.id, input.name, result.tools)
@@ -164,7 +184,9 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     })
     try {
       const secretProvider = async (kind: string): Promise<string | null> => getSecret(ctx.db, serverId, kind)
-      const session = await manager.connect(profile, secretProvider)
+      const oauthProvider =
+        profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(ctx.db, profile) : undefined
+      const session = await manager.connect(profile, secretProvider, { oauthProvider })
       const discovery = await discoverToolsFromSession(ctx.db, profile, session)
       if (!discovery.ok) {
         updateServerStatus(ctx.db, serverId, {
