@@ -1223,8 +1223,8 @@
 
 .mcp-settings-empty {
   display: flex;
-  justify-content: center;
-  padding: var(--sa-config-gap-block) 0;
+  justify-content: flex-start;
+  padding: var(--sa-config-gap-block) 0 0;
 }
 
 .mcp-settings-empty .ant-btn {
