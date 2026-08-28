@@ -1,6 +1,6 @@
 # MCP 外部能力接入与设置管理 — 需求规格
 
-**版本：** 1.1  
+**版本：** 1.2  
 **日期：** 2026-08-28  
 **状态：** 修订待评审  
 **关联文档：** [tools-requirement.md](./tools-requirement.md)、[settings-requirement.md](./settings-requirement.md)、[browser-network-access-settings-requirement.md](./browser-network-access-settings-requirement.md)、[shell-security-enhancement-requirement.md](./shell-security-enhancement-requirement.md)
@@ -160,6 +160,8 @@ MCP 服务采用**分区内保存**：编辑卡片后须点击该卡片的「保
 | 启动确认 | 首次保存或命令/参数改变时必须勾选「我信任此本地程序及其访问权限」后才可启用或测试。 |
 
 说明文本必须清晰提示：`stdio` Server 是本机程序，可继承用户权限；此处只支持直接启动程序，不支持 `sh -c`、管道、重定向、`&&`、`$()` 或反引号。
+
+**Windows 平台限制（已决策，见开发计划 §8 第 4 条）**：`shell:false` 在 Windows 上无法执行 `.cmd`/`.bat` 批处理垫片（libuv 限制），而 `npx`/`npm`/`pnpm` 在该平台均为 `.cmd` 垫片。P0 在命令解析阶段（含 PATH 解析命中垫片的情况）显性拒绝 `.cmd`/`.bat`，并给出可读引导（改用 `node <入口.js>`、`python`、`docker` 等无 Shell 写法）；§2.1 中「本机 `npx` 启动」的用户故事在 Windows 上通过上述等价写法满足，macOS/Linux 不受影响。Windows 的 npx 体验补偿（引导生成 / 受控安装）列入 P1 评估。
 
 命令、参数和工作目录不是凭据字段：界面必须提示用户将 API Key / token 放入环境变量，不能放入命令或参数；保存和测试时检测常见 token 格式及 `--token`、`--api-key`、`Authorization:` 等敏感参数模式并拒绝，防止凭据进入普通 Profile、进程列表或诊断日志。
 
@@ -526,5 +528,6 @@ export interface McpToolDescriptor {
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| 1.2 | 2026-08-28 | §4.3.2 补充 Windows 平台限制说明：`shell:false` 下 `.cmd`/`.bat` 垫片（含 `npx`）在命令解析阶段显性拒绝并给出可读引导；体验补偿列入 P1。与开发计划 v1.1 §8 第 4 条决策对齐。 |
 | 1.1 | 2026-08-28 | 采纳 v1 评审：统一 `window.api` 桥接与专用 MCP 保存 IPC；移除共享 Profile 中的环境变量值；新服务默认停用并统一授权状态。进一步收紧 `stdio` 环境变量、OAuth 草稿处理和工具上下文预算；明确官方 SDK 为直接依赖。确认固定并发/超时配置与 OAuth Client 预设目录；明确产品定位为个人用户，不纳入企业内网 MCP 能力。 |
 | 1.0 | 2026-08-28 | 首次定义 MCP Client 工具接入、设置入口、主流 access token/OAuth 配置、安全边界、架构与验收要求。 |
