@@ -296,6 +296,10 @@
         "label": "Tool toggles",
         "hint": "Control which capabilities the agent can use in chat"
       },
+      "mcp": {
+        "label": "MCP Servers",
+        "hint": "External MCP Server connections, auth and tool management"
+      },
       "file": {
         "label": "File operations",
         "hint": "Write confirmation and history backups"

@@ -116,6 +116,7 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
       id: c.id,
       toolName: c.toolName,
       input: typeof c.input === 'string' ? JSON.parse(c.input || '{}') : (c.input as Record<string, unknown>),
+      ...(c.mcp ? { mcp: c.mcp } : {}),
       result: c.result
         ? {
             success: c.result.success,

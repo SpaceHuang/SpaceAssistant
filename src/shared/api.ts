@@ -31,6 +31,10 @@ export type ToolConfirmResponsePayload = {
   trustCommand?: string
   trustDomain?: string
   trustActDomain?: string
+  /** MCP 确认卡片「本会话信任」（按 Session 作用域）。 */
+  sessionId?: string
+  trustMcpServerId?: string
+  trustMcpToolName?: string
 }
 
 export type ShellManageTrustedCommandsAction =
@@ -69,6 +73,22 @@ import type {
   BrowserDependencyToolError
 } from './browserTypes'
 import type { SessionUsage } from './sessionUsage'
+import type {
+  McpClearSecretPayload,
+  McpConfig,
+  McpDeleteServerPayload,
+  McpDiagnosticEntry,
+  McpGetDiagnosticsPayload,
+  McpOauthStartPayload,
+  McpOauthStartResult,
+  McpRefreshToolsPayload,
+  McpRefreshToolsResult,
+  McpSaveProfilesPayload,
+  McpSaveProfilesResult,
+  McpServerProfile,
+  McpTestConnectionPayload,
+  McpTestConnectionResult
+} from './mcpTypes'
 
 export type {
   BrowserDetectResult,
@@ -413,6 +433,13 @@ export type SpaceAssistantApi = {
       currentPageUrl?: string
       dangerInfo?: BrowserActDangerInfo
       sessionTrustedHint?: true
+      mcp?: {
+        serverId: string
+        serverName: string
+        originalToolName: string
+        description: string
+        maskedArgs: Record<string, unknown>
+      }
     }) => void
   ) => () => void
   toolOnProgress: (
@@ -574,6 +601,16 @@ export type SpaceAssistantApi = {
   workdirRemove: (profileId: string) => Promise<{ success: boolean; error?: string }>
   workdirSwitch: (profileId: string) => Promise<{ success: boolean; sessions: Session[]; error?: string }>
   workdirCheckWritable: (path: string) => Promise<{ ok: boolean; error?: string }>
+
+  mcpList: () => Promise<McpConfig>
+  mcpSaveProfiles: (payload: McpSaveProfilesPayload) => Promise<McpSaveProfilesResult>
+  mcpTestConnection: (payload: McpTestConnectionPayload) => Promise<McpTestConnectionResult>
+  mcpRefreshTools: (payload: McpRefreshToolsPayload) => Promise<McpRefreshToolsResult>
+  mcpClearSecret: (payload: McpClearSecretPayload) => Promise<{ servers: McpServerProfile[] }>
+  mcpDeleteServer: (payload: McpDeleteServerPayload) => Promise<{ ok: true }>
+  mcpGetDiagnostics: (payload: McpGetDiagnosticsPayload) => Promise<{ diagnostics: McpDiagnosticEntry[] }>
+  mcpClearDiagnostics: (payload: McpGetDiagnosticsPayload) => Promise<{ ok: true }>
+  mcpOauthStart: (payload: McpOauthStartPayload) => Promise<McpOauthStartResult>
 
   onRemoteSwitchSessionRequest: (
     cb: (data: { requestId: string; sessionId: string }) => void

@@ -113,6 +113,18 @@
   },
   "confirm": {
     "decisionAriaLabel": "Confirm: {{action}}",
+    "mcp": {
+      "title": "External MCP tool call",
+      "server": "Server: {{name}}",
+      "originalTool": "Original tool: {{name}}",
+      "argsLabel": "Arguments",
+      "emptyArgs": "(no arguments)",
+      "riskHint": "This tool is provided by an external MCP server and can perform server-defined operations.",
+      "allow": "Allow",
+      "deny": "Deny",
+      "trustSession": "Trust this session",
+      "trustHint": "Stop asking for this tool in this session"
+    },
     "write": {
       "allow": "Allow write",
       "deny": "Deny write",

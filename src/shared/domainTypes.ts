@@ -572,6 +572,13 @@ export interface ToolCallRecord {
   corrupted?: boolean
   /** artifact 管理路径解析后的结构化元数据 */
   artifactMeta?: import('./artifactTypes').ArtifactToolResultMeta
+  /** MCP 外部工具来源元数据（服务改名后仍可追溯，不进入模型上下文）。 */
+  mcp?: {
+    serverId: string
+    serverName: string
+    originalToolName: string
+    description?: string
+  }
   /** 应用崩溃中断后由启动清理降级 */
   interrupted?: boolean
 }

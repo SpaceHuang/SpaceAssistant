@@ -15,6 +15,13 @@ export type PendingConfirmItem = {
   currentPageUrl?: string
   dangerInfo?: BrowserActDangerInfo
   sessionTrustedHint?: true
+  mcp?: {
+    serverId: string
+    serverName: string
+    originalToolName: string
+    description: string
+    maskedArgs: Record<string, unknown>
+  }
   createdAt: number
 }
 
@@ -48,6 +55,7 @@ class PendingConfirmStore {
         ...(d.currentPageUrl ? { currentPageUrl: d.currentPageUrl } : {}),
         ...(d.dangerInfo ? { dangerInfo: d.dangerInfo } : {}),
         ...(d.sessionTrustedHint ? { sessionTrustedHint: d.sessionTrustedHint } : {}),
+        ...(d.mcp ? { mcp: d.mcp } : {}),
         createdAt: Date.now()
       })
       this.notify()
@@ -92,7 +100,10 @@ class PendingConfirmStore {
       approved,
       trustCommand: options?.trustCommand,
       trustDomain: options?.trustDomain,
-      trustActDomain: options?.trustActDomain
+      trustActDomain: options?.trustActDomain,
+      ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+      ...(options?.trustMcpServerId ? { trustMcpServerId: options.trustMcpServerId } : {}),
+      ...(options?.trustMcpToolName ? { trustMcpToolName: options.trustMcpToolName } : {})
     })
     this.remove(requestId, toolUseId)
   }

@@ -1,0 +1,283 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { App, Button, Drawer, Empty, Spin } from 'antd'
+import { MCP_MAX_SERVERS, type McpServerProfile, type McpToolCacheEntry } from '../../../shared/mcpTypes'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import {
+  draftToWriteInput,
+  initMcpServerDraft,
+  isMcpDraftDirty,
+  newMcpServerDraft,
+  type McpServerDraft
+} from './mcpDrafts'
+import { McpServerCard } from './McpServerCard'
+
+export type McpSettingsTabProps = {
+  /** 当前是否为 MCP 分区（用于离开分区时的草稿丢弃确认）。 */
+  active?: boolean
+  /** 设置页是否打开。 */
+  open?: boolean
+}
+
+export function McpSettingsTab({ active = true, open = true }: McpSettingsTabProps) {
+  const { modal, message } = App.useApp()
+  const { t } = useTypedTranslation('mcp')
+  const [loading, setLoading] = useState(false)
+  const [servers, setServers] = useState<McpServerProfile[]>([])
+  const [drafts, setDrafts] = useState<McpServerDraft[]>([])
+  const [toolCaches, setToolCaches] = useState<Record<string, McpToolCacheEntry>>({})
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [oauthStartingId, setOauthStartingId] = useState<string | null>(null)
+  const [diagnosticsServer, setDiagnosticsServer] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<Array<{ code: string; message: string; occurredAt: string }>>([])
+  const dirtyRef = useRef(false)
+  const prevActiveRef = useRef(active)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const config = await window.api.mcpList()
+      setServers(config.servers)
+      setToolCaches(config.toolCaches ?? {})
+      setDrafts(config.servers.map(initMcpServerDraft))
+      dirtyRef.current = false
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [message])
+
+  useEffect(() => {
+    if (open) void load()
+  }, [open, load])
+
+  // 离开 MCP 分区且有未保存草稿时提示确认
+  useEffect(() => {
+    if (prevActiveRef.current && !active && dirtyRef.current) {
+      modal.confirm({
+        title: t('messages.discardTitle'),
+        content: t('messages.discardContent'),
+        okText: t('messages.discardOk'),
+        cancelText: t('messages.discardCancel'),
+        onOk: () => {
+          dirtyRef.current = false
+        }
+      })
+    }
+    prevActiveRef.current = active
+  }, [active, modal, t])
+
+  const patchDraft = useCallback((id: string, patch: Partial<McpServerDraft>) => {
+    setDrafts((current) => current.map((d) => (d.id === id ? { ...d, ...patch } : d)))
+    dirtyRef.current = true
+  }, [])
+
+  const addServer = useCallback(() => {
+    if (drafts.length >= MCP_MAX_SERVERS) {
+      message.warning(t('maxServers', { max: MCP_MAX_SERVERS }))
+      return
+    }
+    const draft = newMcpServerDraft()
+    setDrafts((current) => [...current, draft])
+    setExpandedIds((current) => new Set(current).add(draft.id))
+    dirtyRef.current = true
+  }, [drafts.length, message, t])
+
+  const saveServer = useCallback(
+    async (id: string) => {
+      setSavingId(id)
+      try {
+        const result = await window.api.mcpSaveProfiles({
+          servers: drafts.map(draftToWriteInput)
+        })
+        setServers(result.servers)
+        setDrafts(result.servers.map(initMcpServerDraft))
+        dirtyRef.current = false
+        message.success(t('messages.saved'))
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : String(error))
+      } finally {
+        setSavingId(null)
+      }
+    },
+    [drafts, message, t]
+  )
+
+  const testServer = useCallback(
+    async (id: string) => {
+      const draft = drafts.find((d) => d.id === id)
+      if (!draft) return
+      setTestingId(id)
+      try {
+        const result = await window.api.mcpTestConnection({
+          server: draftToWriteInput(draft)
+        })
+        if (result.ok) {
+          setToolCaches((current) => ({
+            ...current,
+            [id]: {
+              tools: result.tools,
+              protocolVersion: result.protocolVersion,
+              discoveredAt: new Date().toISOString()
+            }
+          }))
+          message.success(t('messages.testOk', { count: result.tools.length }))
+        } else {
+          message.error(t('messages.testFailed', { message: result.message }))
+        }
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : String(error))
+      } finally {
+        setTestingId(null)
+      }
+    },
+    [drafts, message, t]
+  )
+
+  const deleteServer = useCallback(
+    (id: string) => {
+      const draft = drafts.find((d) => d.id === id)
+      modal.confirm({
+        title: t('card.deleteTitle'),
+        content: t('card.deleteContent', { name: draft?.name || id }),
+        okType: 'danger',
+        onOk: async () => {
+          await window.api.mcpDeleteServer({ serverId: id })
+          message.success(t('messages.deleted'))
+          await load()
+        }
+      })
+    },
+    [drafts, load, message, modal, t]
+  )
+
+  const clearSecret = useCallback(
+    (id: string) => {
+      const draft = drafts.find((d) => d.id === id)
+      const kind = draft?.auth.mode === 'custom-header' ? 'auth-header' : 'access-token'
+      modal.confirm({
+        title: t('card.clearTokenTitle'),
+        content: t('card.clearTokenContent'),
+        onOk: async () => {
+          await window.api.mcpClearSecret({ serverId: id, kind })
+          message.success(t('messages.tokenCleared'))
+          await load()
+        }
+      })
+    },
+    [drafts, load, message, modal, t]
+  )
+
+  const openDiagnostics = useCallback(async (id: string) => {
+    const result = await window.api.mcpGetDiagnostics({ serverId: id })
+    setDiagnostics(result.diagnostics)
+    setDiagnosticsServer(id)
+  }, [])
+
+  const oauthStart = useCallback(
+    async (id: string) => {
+      setOauthStartingId(id)
+      try {
+        const result = await window.api.mcpOauthStart({ serverId: id })
+        if (result.ok) {
+          message.success(t('messages.oauthStarted'))
+        } else {
+          message.error(t('messages.oauthFailed', { message: result.message }))
+        }
+        await load()
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : String(error))
+      } finally {
+        setOauthStartingId(null)
+      }
+    },
+    [load, message, t]
+  )
+
+  const clearDiagnostics = useCallback(async () => {
+    if (!diagnosticsServer) return
+    await window.api.mcpClearDiagnostics({ serverId: diagnosticsServer })
+    setDiagnostics([])
+  }, [diagnosticsServer])
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}>
+        <Spin />
+      </div>
+    )
+  }
+
+  return (
+    <div className="mcp-settings-tab" style={{ display: active ? undefined : 'none' }}>
+      <p className="config-field__hint">{t('intro')}</p>
+      <Button type="dashed" onClick={addServer} style={{ marginBottom: 12 }}>
+        {t('addServer')}
+      </Button>
+      {drafts.length === 0 ? <Empty description={t('empty')} /> : null}
+      {drafts.map((draft) => {
+        const profile = servers.find((s) => s.id === draft.id)
+        const cache = toolCaches[draft.id]
+        const tools = cache?.tools ?? []
+        const expanded = expandedIds.has(draft.id)
+        const canEnable = tools.length > 0 && draft.enabledToolNames.length > 0
+        return (
+          <McpServerCard
+            key={draft.id}
+            draft={draft}
+            profile={profile}
+            tools={tools}
+            skippedCount={cache?.skippedCount ?? 0}
+            expanded={expanded}
+            testing={testingId === draft.id}
+            saving={savingId === draft.id}
+            oauthStarting={oauthStartingId === draft.id}
+            dirty={isMcpDraftDirty(profile, draft)}
+            canEnable={canEnable}
+            toolsStale={cache?.stale}
+            onToggleExpanded={() =>
+              setExpandedIds((current) => {
+                const next = new Set(current)
+                if (next.has(draft.id)) next.delete(draft.id)
+                else next.add(draft.id)
+                return next
+              })
+            }
+            onPatch={(patch) => patchDraft(draft.id, patch)}
+            onSave={() => void saveServer(draft.id)}
+            onTest={() => void testServer(draft.id)}
+            onDelete={() => deleteServer(draft.id)}
+            onClearSecret={() => clearSecret(draft.id)}
+            onOpenDiagnostics={() => void openDiagnostics(draft.id)}
+            onOauthStart={() => void oauthStart(draft.id)}
+          />
+        )
+      })}
+
+      <Drawer
+        title={t('form.diagnosticsTitle')}
+        open={diagnosticsServer !== null}
+        onClose={() => setDiagnosticsServer(null)}
+        width={480}
+        extra={
+          <Button size="small" onClick={() => void clearDiagnostics()}>
+            {t('form.clearDiagnostics')}
+          </Button>
+        }
+      >
+        {diagnostics.length === 0 ? (
+          <Empty description={t('form.diagnosticsEmpty')} />
+        ) : (
+          diagnostics.map((entry) => (
+            <div key={entry.occurredAt + entry.code} className="mcp-diagnostics-entry">
+              <code>{entry.code}</code>
+              <pre>{entry.message}</pre>
+            </div>
+          ))
+        )}
+      </Drawer>
+    </div>
+  )
+}

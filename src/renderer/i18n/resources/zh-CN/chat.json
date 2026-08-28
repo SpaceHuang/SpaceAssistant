@@ -113,6 +113,18 @@
   },
   "confirm": {
     "decisionAriaLabel": "确认：{{action}}",
+    "mcp": {
+      "title": "外部 MCP 工具调用",
+      "server": "服务：{{name}}",
+      "originalTool": "原始工具：{{name}}",
+      "argsLabel": "参数摘要",
+      "emptyArgs": "（无参数）",
+      "riskHint": "该工具由外部 MCP 服务提供，可执行服务端定义的操作。",
+      "allow": "允许",
+      "deny": "拒绝",
+      "trustSession": "本会话信任",
+      "trustHint": "本会话内不再询问此工具"
+    },
     "write": {
       "allow": "允许写入",
       "deny": "拒绝写入",

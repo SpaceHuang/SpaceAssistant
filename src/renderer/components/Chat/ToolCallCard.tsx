@@ -25,6 +25,7 @@ import { formatBrowserToolLabel, formatBrowserToolLabelTitle } from './browserCo
 import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
+import { McpConfirmCard } from './McpConfirmCard'
 import { ShellConfirmCard } from './ShellConfirmCard'
 import { ScriptConfirmCard } from './ScriptConfirmCard'
 import { ScriptCodePreview, ScriptTimeoutMeta } from './ScriptCodePreview'
@@ -352,6 +353,17 @@ export function ToolCallCard({
       ? activeSearchTarget.fragmentId
       : undefined
   const earlySearchText = earlySearchFragmentId ? activeSearchTarget?.searchableText : undefined
+
+  const mcpConfirming = Boolean(record.mcp && record.status === 'confirming')
+
+  if (mcpConfirming && onConfirm) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <McpConfirmCard record={record} onConfirm={onConfirm} sessionId={sessionId} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
 
   if (writeConfirming && onConfirm) {
     return (

@@ -49,6 +49,8 @@ export type AgentLogEventName =
   | 'script.ask'
   | 'script.deny'
   | 'tool.confirm.skip_confirm'
+  | 'mcp.confirm.session_trust'
+  | 'mcp.trust.session'
   | 'tool.confirm.remote_write_grant_required'
   | 'tool.confirm.authorization_revoked'
   | 'remote.budget.pause'

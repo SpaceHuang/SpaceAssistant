@@ -296,6 +296,10 @@
         "label": "工具开关",
         "hint": "控制 Agent 在对话中可调用的能力"
       },
+      "mcp": {
+        "label": "MCP 服务",
+        "hint": "外部 MCP Server 的连接、认证与工具管理"
+      },
       "file": {
         "label": "文件操作",
         "hint": "写入确认方式与历史备份"

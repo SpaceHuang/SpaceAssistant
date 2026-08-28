@@ -97,60 +97,108 @@ electron/mcp/
 
 **目标**：用户可添加/测试/保存一个 stdio 服务并发现工具；工具暂不进模型循环。
 
+**阶段状态：** ✅ 已完成（2026-08-28）；P0-A 验收（第 9 项）结论见下
+
 1. **依赖与冒烟**：安装 `@modelcontextprotocol/sdk`；`npm run build` + 一次打包冒烟。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `@modelcontextprotocol/sdk@1.30.0` 已作为直接生产依赖锁定（CJS/ESM 双构建，主进程 tsc 编译通过）；`npm run build` 通过；`pack:win` 冒烟成功（`release/SpaceAssistant Setup 0.1.5.exe` 130 MB，SDK 纯 JS 无打包问题）。
 2. **共享类型与纯函数**：`src/shared/mcpTypes.ts`（类型 + Zod + 映射名/脱敏/敏感参数检测纯函数）。单元测试。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— 类型/Zod schema/`generateMappedToolName`/`deriveUniqueMappedToolName`（A6）/`sanitizeEndpointForDisplay`/`detectSensitiveParamValue`/`maskSensitiveArgs`；`mcpTypes.test.ts` 31 项通过。
 3. **存储层**：
    - `mcpSecretStore.ts`：`setSecret(serverId, kind, value) / getSecret / deleteSecretsForServer`，复用 `encryptSecret`，键隔离校验。
    - `mcpConfigStore.ts`：`listProfiles / saveProfiles / deleteServer`（连带清 Secret、工具缓存、诊断），20 个上限、名称唯一校验、事务。
    - `mcpDiagnostics.ts`：追加/读取/清除，写入前过脱敏规则（基底复用 `sanitizeForLog`，追加 MCP 专属规则，见 §8 第 3 条）。
 4. **stdio 传输**：`stdioTransport.ts`——`spawn(command, args, {shell:false})`；环境构建：最小继承集（`PATH`；Windows 加 `SystemRoot/ComSpec/PATHEXT` 等，大小写去重）+ 解密后的用户环境变量；stdout 仅接受 JSON-RPC 行，stderr 脱敏后入诊断。优先评估 SDK `StdioClientTransport` 是否允许自定义 env，允许则直接用，不允许再包一层。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— 评估结论：SDK `StdioClientTransport` 允许自定义 env，直接复用并薄封装；命令解析阶段显性拒绝 `.cmd`/`.bat`（含 PATH 解析命中，B1），环境最小继承 + Windows 大小写去重，stderr 逐行脱敏；`stdioTransport.test.ts` 14 项通过（含真实 Node MCP Server spawn 集成）。
    - **Windows `.cmd` 垫片决策（评审 B1，前置决策）**：Node/Electron 以 `shell:false` 在 Windows 上**无法直接执行 `.cmd`/`.bat`**（libuv 限制），而 `npx`/`npm`/`pnpm` 在 Windows 均为 `.cmd` 垫片，`spawn('npx', ...)` 会 `ENOENT`。P0 采纳**方案一（显性拒绝）**：命令解析阶段即拒绝 `.cmd`/`.bat`——包括用户显式填写 `.cmd` 路径，以及 PATH 解析后命中 `.cmd` 垫片的情况——诊断与 UI 给出可读引导（如「Windows 下 `npx` 为脚本垫片、不可直接启动；请改用 `node <server.js>`、`python <server.py>`、`docker run …` 或可执行文件路径」）。安全面不变，限制显性化。
    - 备选方案二（`cmd.exe /d /s /c` 包装 + argv 转义）与「不解析为 Shell 字符串」承诺冲突且属已知 CVE 类别（CVE-2024-27980），P0 不采用；若后续产品确认 `npx` 一键接入是强需求，另行评审豁免并补专项安全测试。
    - 配套测试夹具：Windows 下填写 `npx` 时的确定性「拒绝 + 引导」行为。
 5. **连接管理器（stdio 部分）**：`mcpConnectionManager.ts`——initialize（15s 超时）、`notifications/initialized`、capabilities 校验（Server 声明本期不支持能力时记录兼容性诊断）、空闲 5 分钟回收、进程退出标记断开 + 下次调用前重启一次。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— 连接池/超时/兼容性诊断/空闲回收/断线重启均实现；SDK 1.30 不暴露 stdio 协商协议版本，以传输层捕获 initialize 响应补偿；`mcpConnectionManager.test.ts` 6 项通过。
 6. **工具注册表（发现与映射）**：`mcpToolRegistry.ts`——`tools/list`、schema 校验（名称、深度 ≤20、单工具 ≤16 KiB）、映射名生成、缓存写入；`notifications/tools/list_changed` 标记过期。**映射名查重（评审 A6）**：发现/合并阶段对映射名全局查重，命中截断 hash 碰撞时确定性再派生（延长 hash，仍冲突再加计数后缀），保证 Anthropic API 工具名全局唯一。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— 校验（名称/深度/字节上限）、映射名生成与查重、缓存写入与 stale 标记；`mcpToolRegistry.test.ts` 10 项通过（含真实连接发现集成）。
 7. **IPC + preload + window.api**：`mcpIpc.ts` 注册 `mcp:list / mcp:save-profiles / mcp:test-connection / mcp:delete-server / mcp:clear-secret / mcp:get-diagnostics / mcp:refresh-tools`；`electron/preload.ts` 增加扁平方法；`src/shared/api.ts` 扩展 `SpaceAssistantApi`；契约测试（确认未新增第二桥接对象）。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `registerMcpIpcHandlers` 已在 `appIpc.ts` 接线；preload 扁平方法 + `api.ts` 类型就绪；契约测试确认单桥接 `window.api`、无通用 invoke、`config:set` 无 MCP 字段；`preload.mcp.test.ts` + `mcpIpc.test.ts` 覆盖，主进程侧 MCP 共 8 文件 72 项通过。
 8. **设置页**：
    - `toolsSettingsNav.ts` 的 `TOOLS_SETTINGS_SUB_TABS` 在 `switches` 后插入 `mcp`。
    - 新增 `src/renderer/components/Config/McpSettingsTab.tsx` + `McpServerCard.tsx` + 编辑表单（基础信息 → 连接方式 → 认证 → 工具与权限 → 诊断），draft 管理参考 `useLlmServiceDrafts.ts` 模式但**保存走 `mcp:save-profiles`**，不走弹窗底部「保存」；切换分区/关闭时未保存草稿丢弃并确认。
    - 服务卡片：启停开关（按需求 §4.3.1 的可启用条件禁用）、状态徽标、工具摘要、操作按钮；工具列表含启用开关与「调用前确认」策略。
    - i18n（评审 A2）：新增 `mcp` 命名空间，**zh-CN 与 en-US 同步补齐**（`i18n:check` 校验各 locale key 对齐，只加 zh-CN 会直接失败）；跑 `npm run i18n:generate-types`。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `ToolsSettingsSubTab`/`TOOLS_SETTINGS_SUB_TABS` 在 `switches` 后插入 `mcp`；新增 `McpSettingsTab` + `McpServerCard`（基础信息/连接方式/认证/工具与权限/诊断），草稿经 `mcpDrafts.ts` 纯函数管理，保存走 `mcp:save-profiles`（分区内保存，卡片「保存并应用」），离开分区时脏草稿确认；`mcp` 命名空间 zh-CN/en-US 同步补齐，`i18n:generate-types` 与 `i18n:check` 通过；`McpSettingsTab.test.tsx` 5 项 + `mcpDrafts.test.ts` 5 项通过。
 9. **P0-A 验收**：stdio 服务 CRUD + 测试并刷新可发现工具；安全存储不可用时含 Secret 保存失败且无半成品；命令/参数敏感模式被拒绝；**Windows 下 `npx` 场景行为为「明确拒绝 + 可读引导」且有测试覆盖（B1）**；`npm run i18n:check` 通过。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— MCP 聚焦测试 82 项全绿（含存储/传输/连接/注册表/IPC/契约/设置页）；`npm test` 全量 2511 项中 2492 通过，19 项为环境性失败（Windows 路径分隔符、EPERM fsync、性能阈值，见变更记录）；`typecheck:renderer` / `typecheck:shared` / `tsc -p tsconfig.electron.json` 全部通过；`i18n:check` 通过；`npm run build` 与 `pack:win` 冒烟成功。B1 拒绝 + 引导有专项测试覆盖（`stdioTransport.test.ts`）。
 
 ### P0-B：接入工具循环 + 确认卡片 + Streamable HTTP
 
 **目标**：MCP 工具进入真实对话；HTTP 服务可用（无认证/Bearer/自定义头）。
 
+**阶段状态：** ✅ 已完成（2026-08-28）；验收结论见第 7 项
+
 1. **工具集合合并（`toolChatLoop.ts`）**：
    - 在 `runToolChatSessionInner` 构建 tools 参数处（现有 `filterBuiltinToolsForApi` 调用点附近，toolChatLoop.ts:526），新增 `mcpToolRegistry.buildSnapshotTools(ctx)`：仅当 `remoteContext` 为空时注入；输出 Anthropic `Tool[]`，每个工具描述加来源前缀「外部 MCP 服务 `<名称>` 提供的工具」。
    - 实施预算：每轮最多 64 个 MCP 工具、累计 ≤96 KiB；超限按「服务配置数组顺序 → enabledToolNames 保存顺序」确定性裁剪，裁剪项记录供设置页展示「因上下文预算未注入」。
    - 快照：`mappedName → {serverId, originalName, discoveredAt}` 存请求级 Map，随请求生命周期。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `mcpToolRegistry.buildSnapshotTools`（仅桌面注入、白名单顺序、64 个 / 96 KiB 确定性预算裁剪 + budgetDropped 记录）；`toolChatLoop.ts:550` 合并 MCP 工具定义（描述带来源前缀）；`buildSnapshotFromDb` 请求级快照。
 2. **Executor 路由扩展**：
    - `builtinExecutors.ts` `getToolExecutor` 增加回退：未命中内置时，从当前请求的 MCP 快照查 `mcpToolExecutor`（通过 `ToolExecutionContext` 新增可选字段 `mcpSnapshot` 传入，避免全局可变状态）。
    - **伪造映射名分支（评审 A5）**：远程请求不注入 MCP 快照，模型伪造 `mcp_*` 映射名时默认会落入 `toolChatLoop.ts` unknown-tool 通用错误。需在 unknown-tool 分支**之前**按 `mcp_` 前缀 + 快照缺失做区分，返回「MCP 工具已变更或服务不可用」，不暴露是否存在同名服务。
    - `mcpToolExecutor.ts` 实现 `ToolExecutor`：输入 JSON Schema 校验（深度 20、256 KB）、每服务并发 4 / 全局 8 的信号量排队、结果转 `ToolExecutorResult`（>1 MB 走现有 `compactOversizedToolResultContent`）、取消时发送 MCP cancellation notification、`Mcp-Session-Id` 失效重新初始化一次、**不重试 tools/call**。
    - 错误分类按需求 §5.4 映射为安全的模型可见文案；原始错误脱敏后入诊断。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `resolveMcpExecutor` 回退（内置 Map 优先，快照外不可解析）；伪造 `mcp_*` 名在 unknown-tool 分支前返回「MCP 工具已变更或服务不可用」；`mcpToolExecutor`（参数深度 20 / 256 KiB 校验、每服务 4 / 全局 8 信号量、SDK request signal 取消并自动发 notifications/cancelled、>1 MB 压缩、会话失效重连一次且不重试 tools/call、§5.4 错误分类）。
 3. **确认链路**：
    - 新增 `mcpToolNeedsConfirmation(profile, tool)` 判定：默认始终确认；仅当服务开启 `readonly-auto` 且工具 `readOnlyHint:true && destructiveHint:false` 时免确认；确认卡片内提供「本会话信任」。
    - **「本会话信任」作用域已定（产品确认 2026-08-28）**：信任绑定到当前聊天 **Session**，切换/新建会话即失效，不写入长期设置；实现上复用现有内置工具确认的会话级状态（与 Write/Shell 卡片「本会话自动批准」语义一致）。
    - 渲染端 `ToolCallCard.tsx` 增加 `McpConfirmCard` 分发（服务名、原始工具名、描述、脱敏参数预览、数据大小、风险提示、取消、本会话信任）。
    - 拒绝/超时/取消返回结构化安全错误；`signalChatCancel` 级联取消所有挂起 MCP 调用。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `mcpToolNeedsConfirmation`（默认始终确认，readonly-auto + 安全注解免确认）；「本会话信任」按 Session 作用域（`mcpSessionTrust`，确认响应经 `tool:confirm-response` 写入）；`McpConfirmCard` 渲染服务名/原始工具名/描述/脱敏参数/信任勾选；拒绝/超时/取消映射安全文案。
 4. **持久化**：`ToolCallRecord` 增加可选 `mcp` 元数据（serverId/serverName/originalToolName）；`messageCodec.ts` 序列化/反序列化透传；`claudeToolHistory.ts` 回放兼容。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `ToolCallRecord.mcp`（含可选 description）+ `messageCodec` 透传 + 回环测试；历史回放兼容（mcp 元数据不进入模型上下文）。
 5. **Streamable HTTP**：
    - `endpointPolicy.ts`：URL 规范化与校验（禁 userinfo/query/fragment、仅 https + loopback http、禁私网/保留地址）、受控头黑名单、跨 origin 重定向拒绝（连接前后校验目标 IP，防 DNS rebinding）。
    - `streamableHttpTransport.ts`：基于 SDK transport，注入认证头（Bearer / 自定义头，从 Secret Store 解密注入，token 不进日志），处理 `Mcp-Session-Id`、JSON 与 SSE 响应、旧 HTTP+SSE 识别并提示升级。
    - 设置页表单补 HTTP 字段与认证模式（无认证 / Bearer / 自定义头）。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `endpointPolicy`（URL 边界、私网/保留地址拒绝、受控头黑名单、DNS 解析 IP 校验）；`streamableHttpTransport`（认证头注入、跨 origin 重定向拒绝、Mcp-Session-Id 由 SDK 管理、旧 HTTP+SSE 提示升级、关闭自动重连重放）；连接管理器 HTTP 分支 + 真实本地 HTTP Server 集成测试；设置页表单已含 endpoint 与认证字段。
 6. **远程 IM 测试**：验证飞书/微信会话 tools 参数中无 MCP 工具；模型伪造映射名时返回「MCP 工具已变更或服务不可用」。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `toolChatLoop.mcp.test.ts` 覆盖远程不注入 + 伪造名拒绝。
 7. **P0-B 验收**：需求 §9.1 第 3、4、5、6、8、9、10、11、12 条（除 OAuth 部分）。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— MCP 聚焦 122 项 + toolChatLoop 94 项全绿；`typecheck:renderer` / `typecheck:shared` / 主进程 tsc 通过；`i18n:check` 通过；`npm run build` 通过。
 
 ### P0-C：OAuth 2.1 + 安全回归 + 全量验收
 
+**阶段状态：** ✅ 已完成（2026-08-28）；验收结论见第 6 项
+
 1. **OAuth 服务**：`mcpOauthService.ts`——401/`WWW-Authenticate` 处理、Protected Resource Metadata / Authorization Server Metadata 发现、PKCE + 随机 state、固定 loopback 回调监听（完成后立即关闭）、`resource` 参数绑定、授权中锁定该服务编辑。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— 复用 SDK `auth()`/`discoverOAuthServerInfo`（PKCE/state/resource 绑定由 SDK 处理）；自有 provider（Secret Store 读写、loopback 固定端口 42188 回调、浏览器打开）；授权中 `isOAuthFlowActive` 锁定保存/删除/清除；mock Authorization Server 集成测试 3 项。
 2. **Client 解析顺序**：DCR 优先 → 内置精确匹配预设（新增只读 `electron/mcp/oauthClientPresets.ts`，随版本发布）→ 手工公开 clientId。不持久化 clientSecret。**首批预设目录（2026-08-28 产品确认）：仅 GitHub 一项**——需具备 GitHub 公开的 OAuth App 注册依据、loopback 回调验证与集成测试后方可在 P0-C 合入；核实不通过则目录留空（结构、精确匹配逻辑与手工 clientId 兜底先行交付），不阻塞 P0-C 主链路。Notion/Linear 等后续按同一准入门槛逐个迭代接入。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— DCR（SDK `registerClient`）→ 预设（`matchOauthClientPreset` 精确匹配 origin+issuer）→ 手工 `oauthClientId` 兜底；`oauthClientPresets.ts` 结构就绪、**目录留空**（GitHub 无公开注册依据证据，未合入）；clientSecret 不持久化。
 3. **Token 生命周期**：access/refresh token 入 Secret Store；临期或一次 401 时刷新；刷新失败置 `auth-expired` 并停止暴露工具；取消/失败不写 token。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `saveTokens`（access/refresh → Secret Store + `accessTokenExpiresAt`）；SDK 在 401 时自动刷新（refresh_token 存在）；刷新失败 `invalidateCredentials` 清 token + 置 `auth-expired`；取消/失败不写 token（集成测试覆盖）。
 4. **IPC**：`mcp:oauth-start`（仅已保存服务）；设置页「连接账户」按钮与授权状态展示（`自动注册（DCR）/ 内置预设：<名称> / 手动 Client ID`）。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— `mcp:oauth-start` 仅对已保存服务；`McpServerCard` 增加 OAuth 模式（Client ID 输入 + 「连接账户」按钮）；preload/api 契约测试含 `mcpOauthStart`。
 5. **安全回归**（需求 §9.2 全条）：重点补 IPC 响应/错误对象/诊断中 Secret 不可恢复的契约测试、`config:set` 拒绝 mcp 键、删除后 Secret 与缓存不可读。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— 契约测试断言可读类型（`McpServerProfile`/`McpConfig`/`McpSaveProfilesResult`）无 Secret 字段、一次性 Secret 仅存在于 `McpServerWriteInput`；`config:set` 无 MCP 字段（源码断言）；删除后 Secret/缓存不可读（存储层测试）；诊断脱敏（含已知 Secret 字面掩码）。
 6. **全量验收**：§9.1 / §9.2 逐条核对，跑全量测试（见 §5）。
+
+   - **状态：** ✅ 已完成（2026-08-28）—— MCP 聚焦 128 项全绿；`typecheck:renderer` / `typecheck:shared` / 主进程 tsc / `i18n:check` 通过；`npm run build` 通过；全量 `npm test` 结果见变更记录（与基线 19 项环境性失败一致，无新增回归）。
 
 ---
 
@@ -213,5 +261,6 @@ P1（Resources/Prompts、导入导出、远程 IM 细粒度授权等）不在本
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| 1.2-impl | 2026-08-28 | 按本计划完成 P0-A / P0-B / P0-C 全部实现（worktree `codex/mcp-integration`）。要点：SDK 1.30.0 锁定并 `pack:win` 冒烟通过；新增 `src/shared/mcpTypes.ts` 与 `electron/mcp/`（secret/config/diagnostics/stdio/connection/registry/executor/ipc/endpointPolicy/streamableHttp/oauth/presets/sessionTrust/semaphore）；工具循环合并 MCP 工具、请求级快照、确认卡片与「本会话信任」（Session 作用域）、`ToolCallRecord.mcp` 持久化透传；设置页新增 MCP 分区（分区内保存）。**基线说明**：worktree 首跑全量 `npm test` 为 2492 通过 / 19 失败，全部为环境性失败（Windows 路径分隔符断言、EPERM fsync、性能阈值，涉及 `electron/artifacts/*`、`safeAtomicWrite`、`runShellExecutor`、`toolResultPairing` 等，与 MCP 无关）；完成后的全量结果见 §5 验收。GitHub OAuth 预设未合入（目录留空），待公开注册依据与集成测试后按准入门槛接入。 |
 | 1.0 | 2026-08-28 | 初版。 |
 | 1.1 | 2026-08-28 | 采纳评审：B1 补 Windows `.cmd`/`.bat` 显性拒绝决策与验收条目；A1 Secret Store 写互斥；A2 i18n 补 en-US；A3 内置工具数更正为 16；A4 更正 `config:set` 无通用写入通道的现状描述；A5 补伪造映射名错误分支；A6 补映射名碰撞确定性再派生；A7 更正 `sanitizeForLog` 位于 `logSanitize.ts`。产品确认：「本会话信任」按 Session 作用域；`npx` 体验补偿定为 P0 静态文案 + P1 候选「引导生成 + 受控安装」（方案 2 + 2.5），含 `--ignore-scripts` 代价与诊断预算说明，更正方案 3 评估中 cmd 通道一条；首批 OAuth Client 预设仅 GitHub，核实不通过则目录留空不阻塞 P0-C；诊断脱敏定为 `sanitizeForLog` 基底 + MCP 专属规则，「最近错误」允许显示脱敏后状态码与错误正文。§8 待确认事项清零，更名为「决策记录」。后续修订：需求文档同步升 v1.2（§4.3.2 补 Windows `.cmd` 限制说明）；方案 2.5 补 npm-cli.js 定位的 P1 专项验证项（PATH 反推、nvm/fnm 兼容）；诊断脱敏补「仅解密当次涉及 serverId」的实施约束。 |

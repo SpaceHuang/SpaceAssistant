@@ -40,6 +40,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",
     "@browserbasehq/stagehand": "^3.0.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@reduxjs/toolkit": "^2.5.0",
     "@wechatbot/wechatbot": "^2.2.0",
     "@xterm/addon-fit": "^0.10.0",

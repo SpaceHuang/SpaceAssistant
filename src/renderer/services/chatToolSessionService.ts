@@ -104,7 +104,10 @@ export function createToolChatController(args: {
     onRecordsChange?.()
   }
 
-  const onUse = (d: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => {
+  const onUse = (d: {
+    requestId: string
+    toolUse: { id: string; name: string; input: unknown; mcp?: ToolCallRecord['mcp'] }
+  }) => {
     if (d.requestId !== getRequestId()) return
     records.push({
       id: d.toolUse.id,
@@ -112,6 +115,7 @@ export function createToolChatController(args: {
       input: (d.toolUse.input as Record<string, unknown>) ?? {},
       status: 'calling',
       riskLevel: builtinToolRiskLevel(d.toolUse.name),
+      ...(d.toolUse.mcp ? { mcp: d.toolUse.mcp } : {}),
       startedAt: Date.now()
     })
     flush()
@@ -167,6 +171,7 @@ export function createToolChatController(args: {
     currentPageUrl?: string
     dangerInfo?: BrowserActDangerInfo
     sessionTrustedHint?: true
+    mcp?: ToolCallRecord['mcp']
   }) => {
     if (d.requestId !== getRequestId()) return
     const i = records.findIndex((t) => t.id === d.toolUseId)
@@ -180,7 +185,8 @@ export function createToolChatController(args: {
         ...(d.autoApproveFallback ? { autoApproveFallback: d.autoApproveFallback } : {}),
         ...(d.currentPageUrl ? { currentPageUrl: d.currentPageUrl } : {}),
         ...(d.dangerInfo ? { dangerInfo: d.dangerInfo } : {}),
-        ...(d.sessionTrustedHint ? { sessionTrustedHint: d.sessionTrustedHint } : {})
+        ...(d.sessionTrustedHint ? { sessionTrustedHint: d.sessionTrustedHint } : {}),
+        ...(d.mcp ? { mcp: d.mcp } : {})
       }
       flush()
     }

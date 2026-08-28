@@ -9,6 +9,7 @@ import { ConfigResultAlert } from './ConfigResultAlert'
 import { ConfigSwitchRow } from './ConfigField'
 import { ShellSettingsTab } from './ShellSettingsTab'
 import { ArtifactSettingsTab, type ArtifactSettingsUi } from './ArtifactSettingsTab'
+import { McpSettingsTab } from './McpSettingsTab'
 import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
@@ -40,6 +41,8 @@ type Props = {
   pyTest: { ok: boolean; text: string } | null
   pyTesting: boolean
   onTestPython: () => void
+  /** 设置页打开状态（MCP 草稿丢弃确认用）。 */
+  open?: boolean
 }
 
 function BuiltinToolSwitchList({
@@ -113,7 +116,8 @@ export function ToolsSettingsTab({
   models,
   pyTest,
   pyTesting,
-  onTestPython
+  onTestPython,
+  open = false
 }: Props) {
   const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
@@ -276,6 +280,7 @@ export function ToolsSettingsTab({
     <div className="config-tools-panel">
       {hint ? <p className="config-tools-panel__intro">{hint}</p> : null}
       {renderSection()}
+      <McpSettingsTab active={section === 'mcp'} open={open} />
     </div>
   )
 }

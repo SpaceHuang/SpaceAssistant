@@ -32,6 +32,7 @@ import {
   updateMessageContent,
   updateSession
 } from './database'
+import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import type {
   AppConfig,
   FileInfo,
@@ -307,6 +308,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         trustCommand?: string
         trustDomain?: string
         trustActDomain?: string
+        sessionId?: string
+        trustMcpServerId?: string
+        trustMcpToolName?: string
       }
     ): Promise<void> => {
       if (payload.approved && payload.trustCommand?.trim()) {
@@ -337,6 +341,16 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         persistBrowserConfig(ctx.db, next)
         logAgentEvent('info', 'browser.trust.actDomain', {
           domain: payload.trustActDomain.trim(),
+          timestamp: Date.now()
+        })
+      }
+      if (payload.approved && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
+        const { rememberMcpSessionTrust } = await import('./mcp/mcpSessionTrust')
+        rememberMcpSessionTrust(payload.sessionId, payload.trustMcpServerId, payload.trustMcpToolName)
+        logAgentEvent('info', 'mcp.trust.session', {
+          sessionId: payload.sessionId,
+          serverId: payload.trustMcpServerId,
+          tool: payload.trustMcpToolName,
           timestamp: Date.now()
         })
       }
@@ -1741,6 +1755,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     if (!ctx.floatingNotificationManager) return
     ctx.floatingNotificationManager.showTestNotification()
   })
+
+  registerMcpIpcHandlers(ipcMain, ctx)
 }
 
 async function searchFilesUnder(

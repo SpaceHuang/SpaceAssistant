@@ -404,6 +404,16 @@ const api: SpaceAssistantApi = {
   workdirSwitch: (profileId) => ipcRenderer.invoke('workdir:switch', { profileId }),
   workdirCheckWritable: (path) => ipcRenderer.invoke('workdir:check-writable', { path }),
 
+  mcpList: () => ipcRenderer.invoke('mcp:list'),
+  mcpSaveProfiles: (payload) => ipcRenderer.invoke('mcp:save-profiles', payload),
+  mcpTestConnection: (payload) => ipcRenderer.invoke('mcp:test-connection', payload),
+  mcpRefreshTools: (payload) => ipcRenderer.invoke('mcp:refresh-tools', payload),
+  mcpClearSecret: (payload) => ipcRenderer.invoke('mcp:clear-secret', payload),
+  mcpDeleteServer: (payload) => ipcRenderer.invoke('mcp:delete-server', payload),
+  mcpGetDiagnostics: (payload) => ipcRenderer.invoke('mcp:get-diagnostics', payload),
+  mcpClearDiagnostics: (payload) => ipcRenderer.invoke('mcp:clear-diagnostics', payload),
+  mcpOauthStart: (payload) => ipcRenderer.invoke('mcp:oauth-start', payload),
+
   onRemoteSwitchSessionRequest: (cb) => {
     const fn = (_e: unknown, data: { requestId: string; sessionId: string }) => cb(data)
     ipcRenderer.on('remote:switch-session-request', fn)

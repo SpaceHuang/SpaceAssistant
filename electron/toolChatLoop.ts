@@ -14,6 +14,17 @@ import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolExecutorResult } from './tools/types'
+import { McpConnectionManager } from './mcp/mcpConnectionManager'
+import { appendDiagnostic } from './mcp/mcpDiagnostics'
+import { createMcpToolExecutor } from './mcp/mcpToolExecutor'
+import {
+  buildSnapshotFromDb,
+  snapshotEntriesToAnthropicTools,
+  type McpToolSnapshot
+} from './mcp/mcpToolRegistry'
+import { isMcpSessionTrusted, rememberMcpSessionTrust } from './mcp/mcpSessionTrust'
+import { getSecret } from './mcp/mcpSecretStore'
+import { maskSensitiveArgs, mcpToolNeedsConfirmation } from '../src/shared/mcpTypes'
 import type {
   AutoApproveFallback,
   AutoApprovedWriteMeta,
@@ -30,6 +41,7 @@ import { activateRecoverySkillInState } from '../src/shared/browserDependencyRec
 import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
 import { getSession, updateSession } from './database'
+import { listProfiles } from './mcp/mcpConfigStore'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
 import { browserActionNeedsConfirmation, type ActDangerAssessment, type BrowserAction } from './browser/browserActionPolicy'
 import { assessActDanger } from './browser/actDangerAssessor'
@@ -414,8 +426,13 @@ function failToolLoopWithLastUsage(
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
   const chatSignal = registerChatCancel(args.requestId)
+  const mcpConnectionManager = new McpConnectionManager({
+    appendDiagnostic: (serverId, entry) => {
+      if (args.appDb) void appendDiagnostic(args.appDb, serverId, entry)
+    }
+  })
   try {
-    return await runToolChatSessionInner({ ...args, chatSignal })
+    return await runToolChatSessionInner({ ...args, chatSignal, mcpConnectionManager })
   } catch (e) {
     if (e instanceof ChatCancelledError) return { ok: false, error: e.message }
     throw e
@@ -425,11 +442,12 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     }
     clearChatCancel(args.requestId)
     clearRequest(args.requestId)
+    await mcpConnectionManager.shutdown().catch(() => undefined)
   }
 }
 
 async function runToolChatSessionInner(
-  args: RunToolChatSessionArgs & { chatSignal: AbortSignal }
+  args: RunToolChatSessionArgs & { chatSignal: AbortSignal; mcpConnectionManager: McpConnectionManager }
 ): Promise<RunToolChatSessionResult> {
   const {
     sender,
@@ -458,6 +476,7 @@ async function runToolChatSessionInner(
     projectMemoryEnabled,
     chatSignal,
     getBrowserDetectContext,
+    mcpConnectionManager,
     floatingNotificationManager,
     hasImageAttachments
   } = args
@@ -524,7 +543,12 @@ async function runToolChatSessionInner(
   }
 
   const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext, shellConfig, wechatConfig)
-  const tools = sanitizeTools(builtinDefs as unknown[])
+  /** 请求级 MCP 工具快照：仅桌面会话注入（remoteContext 存在时为空）。 */
+  const mcpSnapshot: McpToolSnapshot = appDb
+    ? buildSnapshotFromDb(appDb, { remoteContext: Boolean(remoteContext) })
+    : { entries: new Map(), budgetDropped: [] }
+  const mcpToolDefs = snapshotEntriesToAnthropicTools([...mcpSnapshot.entries.values()])
+  const tools = sanitizeTools([...(builtinDefs as unknown[]), ...mcpToolDefs])
   const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
   if (toolNames.includes('browser')) {
     stagehandService.resetInferenceCount(sessionId)
@@ -732,7 +756,21 @@ async function runToolChatSessionInner(
             })
             safeWebContentsSend(sender,'tool:use', {
               requestId,
-              toolUse: { id: pending.id, name: compatName, input: toolUseBlock.input }
+              toolUse: {
+                id: pending.id,
+                name: compatName,
+                input: toolUseBlock.input,
+                ...(mcpSnapshot.entries.get(compatName)
+                  ? {
+                      mcp: {
+                        serverId: mcpSnapshot.entries.get(compatName)!.serverId,
+                        serverName: mcpSnapshot.entries.get(compatName)!.serverName,
+                        originalToolName: mcpSnapshot.entries.get(compatName)!.originalName,
+                        description: mcpSnapshot.entries.get(compatName)!.description
+                      }
+                    }
+                  : {})
+              }
             })
           }
         }
@@ -821,9 +859,11 @@ async function runToolChatSessionInner(
       const toolName = tu.name
       const inputObj = normalizeToolUseInputRecord(tu.input)
 
-      const exec = getToolExecutor(toolName)
+      const exec = getToolExecutor(toolName) ?? resolveMcpExecutor(toolName, mcpSnapshot, mcpConnectionManager, appDb)
       if (!exec) {
-        const unknownToolError = `未知工具: ${toolName}`
+        const unknownToolError = toolName.startsWith('mcp_')
+          ? 'MCP 工具已变更或服务不可用'
+          : `未知工具: ${toolName}`
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           unknownToolError,
@@ -1246,6 +1286,28 @@ async function runToolChatSessionInner(
         currentPageUrl,
         dangerAssessment
       )
+      // MCP 工具：默认始终确认；仅 readonly-auto + 安全注解免确认；「本会话信任」跳过。
+      const mcpEntryForConfirm = mcpSnapshot.entries.get(toolName)
+      if (mcpEntryForConfirm) {
+        const mcpProfile = appDb
+          ? listProfiles(appDb).find((p) => p.id === mcpEntryForConfirm.serverId)
+          : undefined
+        needsConfirm = mcpProfile ? mcpToolNeedsConfirmation(mcpProfile, mcpEntryForConfirm) : true
+        if (
+          needsConfirm &&
+          sessionId &&
+          isMcpSessionTrusted(sessionId, mcpEntryForConfirm.serverId, mcpEntryForConfirm.originalName)
+        ) {
+          needsConfirm = false
+          logAgentEvent('info', 'mcp.confirm.session_trust', {
+            requestId,
+            sessionId,
+            toolUseId,
+            serverId: mcpEntryForConfirm.serverId,
+            tool: mcpEntryForConfirm.originalName
+          })
+        }
+      }
       if (toolName === 'run_shell' && shellPrecheck?.ok && shellPrecheck.skipConfirm) {
         needsConfirm = false
       }
@@ -1509,6 +1571,17 @@ async function runToolChatSessionInner(
           input: inputObj,
           riskLevel:
             toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+          ...(mcpEntryForConfirm
+            ? {
+                mcp: {
+                  serverId: mcpEntryForConfirm.serverId,
+                  serverName: mcpEntryForConfirm.serverName,
+                  originalToolName: mcpEntryForConfirm.originalName,
+                  description: mcpEntryForConfirm.description,
+                  maskedArgs: maskSensitiveArgs(inputObj) as Record<string, unknown>
+                }
+              }
+            : {}),
           ...(toolName === 'browser' && inputObj.action === 'act'
             ? {
                 ...(currentPageUrl ? { currentPageUrl } : {}),
@@ -1972,6 +2045,24 @@ async function runToolChatSessionInner(
       return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage)
     }
   }
+}
+
+/** 未命中内置 executor 时，从请求级 MCP 快照解析映射工具执行器（快照外不可解析）。 */
+function resolveMcpExecutor(
+  toolName: string,
+  snapshot: McpToolSnapshot,
+  manager: McpConnectionManager,
+  appDb: AppDatabase | undefined
+): import('./tools/types').ToolExecutor | undefined {
+  const entry = snapshot.entries.get(toolName)
+  if (!entry || !appDb) return undefined
+  const profile = listProfiles(appDb).find((p) => p.id === entry.serverId)
+  if (!profile) return undefined
+  return createMcpToolExecutor(entry, {
+    getSession: (serverId) => manager.connect(profile, async (kind) => getSecret(appDb, serverId, kind)),
+    getProfile: () => profile,
+    invalidateSession: (serverId) => manager.disconnect(serverId)
+  })
 }
 
 /** @internal exported for unit tests */

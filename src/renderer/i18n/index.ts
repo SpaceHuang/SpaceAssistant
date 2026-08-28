@@ -16,6 +16,7 @@ import zhCNWiki from './resources/zh-CN/wiki.json'
 import zhCNDetailPanel from './resources/zh-CN/detailPanel.json'
 import zhCNContextUsage from './resources/zh-CN/contextUsage.json'
 import zhCNNotification from './resources/zh-CN/notification.json'
+import zhCNMcp from './resources/zh-CN/mcp.json'
 import enUSCommon from './resources/en-US/common.json'
 import enUSConfig from './resources/en-US/config.json'
 import enUSChat from './resources/en-US/chat.json'
@@ -28,6 +29,7 @@ import enUSWiki from './resources/en-US/wiki.json'
 import enUSDetailPanel from './resources/en-US/detailPanel.json'
 import enUSContextUsage from './resources/en-US/contextUsage.json'
 import enUSNotification from './resources/en-US/notification.json'
+import enUSMcp from './resources/en-US/mcp.json'
 
 const initialLocale = detectLocale(
   readStoredLocale(),
@@ -51,7 +53,8 @@ void i18n
         wiki: zhCNWiki,
         detailPanel: zhCNDetailPanel,
         contextUsage: zhCNContextUsage,
-        notification: zhCNNotification
+        notification: zhCNNotification,
+        mcp: zhCNMcp
       },
       'en-US': {
         common: enUSCommon,
@@ -65,13 +68,14 @@ void i18n
         wiki: enUSWiki,
         detailPanel: enUSDetailPanel,
         contextUsage: enUSContextUsage,
-        notification: enUSNotification
+        notification: enUSNotification,
+        mcp: enUSMcp
       }
     },
     lng: initialLocale,
     fallbackLng: 'zh-CN',
     defaultNS: 'common',
-    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification'],
+    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification', 'mcp'],
     interpolation: { escapeValue: false },
     debug: import.meta.env.DEV && !import.meta.env.VITEST,
     detection: {

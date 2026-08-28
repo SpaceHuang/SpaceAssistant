@@ -1,0 +1,255 @@
+import fs from 'fs'
+import http from 'http'
+import os from 'os'
+import path from 'path'
+import type { AddressInfo } from 'net'
+import { afterAll, describe, expect, it, vi } from 'vitest'
+import type { McpServerProfile } from '../../src/shared/mcpTypes'
+import { McpConnectionManager, testConnection } from './mcpConnectionManager'
+
+function makeProfile(overrides: Partial<McpServerProfile> = {}): McpServerProfile {
+  return {
+    id: '11111111-2222-4333-8444-555555555555',
+    name: 'Test Server',
+    enabled: false,
+    transport: 'stdio',
+    timeoutSec: 60,
+    auth: { mode: 'none', secretPresent: false },
+    stdio: { command: process.execPath, args: [], env: [] },
+    enabledToolNames: [],
+    toolConfirmPolicy: 'always',
+    status: 'untested',
+    createdAt: '2026-08-28T00:00:00.000Z',
+    updatedAt: '2026-08-28T00:00:00.000Z',
+    ...overrides
+  }
+}
+
+function writeServerScript(dir: string, name: string, behavior: string): string {
+  const scriptPath = path.join(dir, name)
+  fs.writeFileSync(
+    scriptPath,
+    `
+const readline = require('readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n')
+rl.on('line', (line) => {
+  let req
+  try { req = JSON.parse(line) } catch { return }
+  if (req.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: req.id, result: {
+      protocolVersion: '2025-06-18',
+      capabilities: ${behavior},
+      serverInfo: { name: 'test-server', version: '1.0.0' }
+    }})
+  } else if (req.method === 'notifications/initialized') {
+    // no reply
+  } else if (req.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: req.id, result: { tools: [
+      { name: 'echo', description: 'echo back', inputSchema: { type: 'object', properties: {} } }
+    ]}})
+  } else {
+    send({ jsonrpc: '2.0', id: req.id, error: { code: -32601, message: 'method not found' } })
+  }
+})
+`,
+    'utf8'
+  )
+  return scriptPath
+}
+
+const tempDirs: string[] = []
+function makeTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-mcp-conn-'))
+  tempDirs.push(dir)
+  return dir
+}
+
+afterAll(() => {
+  for (const dir of tempDirs) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+  }
+})
+
+describe('testConnection (stdio)', () => {
+  it('connects, initializes and discovers tools', async () => {
+    const dir = makeTempDir()
+    const script = writeServerScript(dir, 'server.js', '{ tools: {} }')
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [script], env: [] } })
+
+    const result = await testConnection(profile, { connectTimeoutMs: 8000 })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.serverInfo.name).toBe('test-server')
+      expect(result.protocolVersion).toBe('2025-06-18')
+      expect(result.tools[0]!.name).toBe('echo')
+    }
+  })
+
+  it('fails with a timeout when initialize never completes', async () => {
+    const dir = makeTempDir()
+    const scriptPath = path.join(dir, 'silent.js')
+    fs.writeFileSync(
+      scriptPath,
+      `
+const readline = require('readline')
+readline.createInterface({ input: process.stdin })
+// never respond
+`,
+      'utf8'
+    )
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [scriptPath], env: [] } })
+
+    const result = await testConnection(profile, { connectTimeoutMs: 400 })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toMatch(/timeout|TIMEOUT|timeout/i)
+    }
+  })
+})
+
+describe('McpConnectionManager', () => {
+  it('records a compatibility diagnostic for unsupported server capabilities', async () => {
+    const dir = makeTempDir()
+    const script = writeServerScript(dir, 'elicitation.js', '{ tools: {}, elicitation: {} }')
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [script], env: [] } })
+    const appendDiagnostic = vi.fn()
+    const manager = new McpConnectionManager({ appendDiagnostic })
+
+    const session = await manager.connect(profile, { connectTimeoutMs: 8000 })
+    expect(session.info.name).toBe('test-server')
+    await manager.disconnect(profile.id)
+
+    expect(appendDiagnostic).toHaveBeenCalledWith(
+      profile.id,
+      expect.objectContaining({ code: 'capability-unsupported' })
+    )
+  })
+
+  it('reuses a live session and restarts after process exit', async () => {
+    const dir = makeTempDir()
+    const scriptPath = path.join(dir, 'shortlived.js')
+    fs.writeFileSync(
+      scriptPath,
+      `
+const readline = require('readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n')
+rl.on('line', (line) => {
+  let req
+  try { req = JSON.parse(line) } catch { return }
+  if (req.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: req.id, result: {
+      protocolVersion: '2025-06-18',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'short-lived', version: '1.0.0' }
+    }})
+    setTimeout(() => process.exit(0), 100)
+  } else if (req.method === 'notifications/initialized') {
+    // no reply
+  } else if (req.method === 'tools/list') {
+    send({ jsonrpc: '2.0', id: req.id, result: { tools: [] } })
+  } else {
+    send({ jsonrpc: '2.0', id: req.id, error: { code: -32601, message: 'method not found' } })
+  }
+})
+`,
+      'utf8'
+    )
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [scriptPath], env: [] } })
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000 })
+
+    const first = await manager.connect(profile, {})
+    expect(first.info.name).toBe('short-lived')
+    const reused = await manager.connect(profile, {})
+    expect(reused).toBe(first)
+
+    // 等待进程退出，标记会话失效
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(manager.isSessionAlive(profile.id)).toBe(false)
+
+    const restarted = await manager.connect(profile, {})
+    expect(restarted).not.toBe(first)
+    expect(restarted.info.name).toBe('short-lived')
+    await manager.disconnect(profile.id)
+  })
+
+  it('disconnect closes the session and removes it from the pool', async () => {
+    const dir = makeTempDir()
+    const script = writeServerScript(dir, 'server.js', '{ tools: {} }')
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [script], env: [] } })
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000 })
+
+    await manager.connect(profile, {})
+    expect(manager.isSessionAlive(profile.id)).toBe(true)
+    await manager.disconnect(profile.id)
+    expect(manager.isSessionAlive(profile.id)).toBe(false)
+  })
+
+  it('reclaims idle sessions after the idle timeout', async () => {
+    const dir = makeTempDir()
+    const script = writeServerScript(dir, 'server.js', '{ tools: {} }')
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [script], env: [] } })
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000, idleTimeoutMs: 150 })
+
+    await manager.connect(profile, {})
+    expect(manager.isSessionAlive(profile.id)).toBe(true)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(manager.isSessionAlive(profile.id)).toBe(false)
+  })
+
+  it('connects to a Streamable HTTP server with bearer auth', async () => {
+    const server = http.createServer((req, res) => {
+      let raw = ''
+      req.on('data', (chunk) => {
+        raw += chunk.toString('utf8')
+      })
+      req.on('end', () => {
+        const message = JSON.parse(raw) as { method?: string; id?: number }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        if (message.method === 'initialize') {
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: '2025-06-18',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'http-echo', version: '1.0.0' }
+              }
+            })
+          )
+        } else if (message.method === 'tools/list') {
+          res.end(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: { tools: [{ name: 't', description: '', inputSchema: { type: 'object' } }] }
+            })
+          )
+        } else {
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }))
+        }
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+    const { port } = server.address() as AddressInfo
+    const httpProfile = makeProfile({
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint: `http://127.0.0.1:${port}/mcp` },
+      auth: { mode: 'bearer-token', secretPresent: true }
+    })
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000 })
+
+    const session = await manager.connect(httpProfile, async (kind) => (kind === 'access-token' ? 'tok' : null))
+    expect(session.info.name).toBe('http-echo')
+    expect(session.protocolVersion).toBe('2025-06-18')
+    await manager.disconnect(httpProfile.id)
+    server.close()
+  })
+})

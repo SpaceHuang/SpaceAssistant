@@ -952,6 +952,8 @@ export function ConfigSettingsPage() {
 
             setArtifactSettingsUi={setArtifactSettingsUi}
 
+            open={open}
+
             onShellEnabledChange={onShellEnabledChange}
 
             onTestShell={() => void testShell()}
