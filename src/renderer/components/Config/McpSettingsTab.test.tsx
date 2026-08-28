@@ -213,6 +213,17 @@ describe('McpSettingsTab', () => {
     expect(await screen.findByText('调用超时（秒）')).toBeTruthy()
   })
 
+  it('places the add-argument button on the args label row', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    const addButton = await screen.findByRole('button', { name: '添加参数' })
+    expect(addButton.closest('.mcp-server-field__label-action')).toBeTruthy()
+  })
+
   it('asks for confirmation when closing the editor with unsaved changes', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],

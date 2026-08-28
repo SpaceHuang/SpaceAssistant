@@ -21,15 +21,20 @@ export type McpServerFormProps = {
 function McpField({
   label,
   children,
-  row = false
+  row = false,
+  labelAction
 }: {
   label: string
   children: ReactNode
   row?: boolean
+  labelAction?: ReactNode
 }) {
   return (
     <div className={`mcp-server-field${row ? ' mcp-server-field--row' : ''}`}>
-      <span className="mcp-server-field__label">{label}</span>
+      <div className="mcp-server-field__label-row">
+        <span className="mcp-server-field__label">{label}</span>
+        {labelAction ? <div className="mcp-server-field__label-action">{labelAction}</div> : null}
+      </div>
       <div className="mcp-server-field__control">{children}</div>
     </div>
   )
@@ -161,9 +166,23 @@ export function McpServerForm({
                       }
                     />
                   </McpField>
-                  <McpField label={t('form.argsLabel')}>
-                    <Space direction="vertical" style={{ width: '100%' }} size={4}>
-                      {draft.stdio.args.map((arg, i) => (
+              <McpField
+                label={t('form.argsLabel')}
+                labelAction={
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<Plus size={14} />}
+                    onClick={() =>
+                      onPatch({ stdio: { ...draft.stdio!, args: [...draft.stdio!.args, ''] } })
+                    }
+                  >
+                    {t('form.addArg')}
+                  </Button>
+                }
+              >
+                <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                  {draft.stdio.args.map((arg, i) => (
                         <div key={i} className="mcp-server-list-row">
                           <Input value={arg} onChange={(e) => patchArg(i, e.target.value)} />
                           <Button
@@ -178,23 +197,11 @@ export function McpServerForm({
                                 }
                               })
                             }
-                          />
-                        </div>
-                      ))}
-                      <div className="mcp-server-add-row">
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<Plus size={14} />}
-                          onClick={() =>
-                            onPatch({ stdio: { ...draft.stdio!, args: [...draft.stdio!.args, ''] } })
-                          }
-                        >
-                          {t('form.addArg')}
-                        </Button>
-                      </div>
-                    </Space>
-                  </McpField>
+                      />
+                    </div>
+                  ))}
+                </Space>
+              </McpField>
                   <McpField label={t('form.cwdLabel')}>
                     <Input
                       value={draft.stdio.cwd ?? ''}
