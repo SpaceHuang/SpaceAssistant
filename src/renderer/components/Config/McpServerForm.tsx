@@ -167,6 +167,7 @@ export function McpServerForm({
 
       <div className="mcp-server-section">
         <Tabs
+          className="mcp-server-transport-tabs"
           tabBarExtraContent={{
             left: <span className="mcp-server-conn-title">{t('form.connTitle')}</span>
           }}

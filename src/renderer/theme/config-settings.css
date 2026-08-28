@@ -1365,8 +1365,25 @@
   font-weight: 600;
   line-height: var(--sa-config-line-tight);
   color: var(--sa-text);
-  margin-inline-end: var(--sa-config-gap-substack);
+  margin-inline-end: var(--sa-config-gap-block);
   white-space: nowrap;
+}
+
+/* 传输 Tab：两个标签等宽居中，标题与标签间距拉开 */
+.mcp-server-transport-tabs .ant-tabs-nav-wrap {
+  flex: 1;
+}
+
+.mcp-server-transport-tabs .ant-tabs-nav-list {
+  width: 100%;
+  display: flex;
+}
+
+.mcp-server-transport-tabs .ant-tabs-tab {
+  flex: 1;
+  justify-content: center;
+  margin: 0;
+  padding-inline: var(--sa-config-gap-field);
 }
 
 .mcp-server-section {
