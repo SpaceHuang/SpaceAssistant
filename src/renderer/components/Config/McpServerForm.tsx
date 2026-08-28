@@ -205,14 +205,14 @@ export function McpServerForm({
                 labelAction={
                   argsEmpty ? undefined : (
                     <Button type="text" size="small" icon={<Plus size={14} />} onClick={addArg}>
-                      {t('form.addArg')}
+                      {t('form.add')}
                     </Button>
                   )
                 }
               >
                 {argsEmpty ? (
                   <Button type="dashed" block icon={<Plus size={14} />} onClick={addArg}>
-                    {t('form.addArg')}
+                    {t('form.add')}
                   </Button>
                 ) : (
                   <Space direction="vertical" style={{ width: '100%' }} size={8}>
@@ -243,14 +243,14 @@ export function McpServerForm({
                 labelAction={
                   envEmpty ? undefined : (
                     <Button type="text" size="small" icon={<Plus size={14} />} onClick={addEnv}>
-                      {t('form.addEnv')}
+                      {t('form.add')}
                     </Button>
                   )
                 }
               >
                 {envEmpty ? (
                   <Button type="dashed" block icon={<Plus size={14} />} onClick={addEnv}>
-                    {t('form.addEnv')}
+                    {t('form.add')}
                   </Button>
                 ) : (
                   <Space direction="vertical" style={{ width: '100%' }} size={8}>

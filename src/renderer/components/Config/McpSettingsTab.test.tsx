@@ -229,8 +229,8 @@ describe('McpSettingsTab', () => {
     })
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
-    const addButton = await screen.findByRole('button', { name: '添加参数' })
-    expect(addButton.closest('.mcp-server-field__label-action')).toBeTruthy()
+    const addButtons = await screen.findAllByRole('button', { name: '添加' })
+    expect(addButtons.some((b) => b.closest('.mcp-server-field__label-action'))).toBe(true)
   })
 
   it('places the add-environment button on the env label row', async () => {
@@ -240,7 +240,9 @@ describe('McpSettingsTab', () => {
     })
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
-    const addButton = await screen.findByRole('button', { name: '添加环境变量' })
+    const addButtons = await screen.findAllByRole('button', { name: '添加' })
+    expect(addButtons).toHaveLength(2)
+    const addButton = addButtons[1]!
     expect(addButton.closest('.mcp-server-field__label-action')).toBeTruthy()
   })
 
@@ -248,8 +250,10 @@ describe('McpSettingsTab', () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
 
-    const addArg = await screen.findByRole('button', { name: '添加参数' })
-    const addEnv = await screen.findByRole('button', { name: '添加环境变量' })
+    const addButtons = await screen.findAllByRole('button', { name: '添加' })
+    expect(addButtons).toHaveLength(2)
+    const addArg = addButtons[0]!
+    const addEnv = addButtons[1]!
     expect(addArg.className).toContain('ant-btn-dashed')
     expect(addEnv.className).toContain('ant-btn-dashed')
 
