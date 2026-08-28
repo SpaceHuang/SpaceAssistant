@@ -261,7 +261,8 @@ export async function startOAuthFlow(
       return {
         ok: false,
         code: 'oauth-client-required',
-        message: '该服务不支持自动注册客户端，请在认证方式中填写 OAuth Client ID 后重试'
+        message:
+          'OAuth 需填写 Client ID：请在服务商创建 OAuth App（回调地址 http://127.0.0.1:42188/callback）后，把 Client ID 填到认证方式；或改用 Bearer token 认证直接填访问令牌'
       }
     }
 

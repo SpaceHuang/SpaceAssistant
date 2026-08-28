@@ -430,7 +430,11 @@ describe('mcpOauthService', () => {
       authorize: async () => 'code'
     })
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.code).toBe('oauth-client-required')
+    if (!result.ok) {
+      expect(result.code).toBe('oauth-client-required')
+      expect(result.message).toContain('http://127.0.0.1:42188/callback')
+      expect(result.message).toContain('Bearer token')
+    }
   })
 
   it('times out while waiting for the loopback callback', async () => {
