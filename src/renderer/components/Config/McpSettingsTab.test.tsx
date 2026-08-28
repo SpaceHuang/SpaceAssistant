@@ -36,6 +36,7 @@ describe('McpSettingsTab', () => {
   const mcpClearSecret = vi.fn()
   const mcpGetDiagnostics = vi.fn()
   const mcpClearDiagnostics = vi.fn()
+  const mcpRefreshTools = vi.fn()
 
   beforeEach(() => {
     mcpList.mockResolvedValue({ servers: [], toolCaches: {} })
@@ -70,7 +71,7 @@ describe('McpSettingsTab', () => {
       mcpClearSecret,
       mcpGetDiagnostics,
       mcpClearDiagnostics,
-      mcpRefreshTools: vi.fn()
+      mcpRefreshTools
     } as typeof window.api
   })
 
@@ -314,6 +315,31 @@ describe('McpSettingsTab', () => {
     }
     expect(payload.servers[0]!.enabled).toBe(true)
     expect(payload.servers[0]!.enabledToolNames).toContain('hello')
+  })
+
+  it('tests an unsaved server draft from the card with draft credentials', async () => {
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
+    // 编辑弹窗中填写名称与 Bearer token 后关闭编辑（不保存）
+    const nameInput = (await screen.findByPlaceholderText('例如 GitHub')) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'GitHub' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Close' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: '测试并刷新' }))
+    await waitFor(() => expect(mcpTestConnection).toHaveBeenCalled())
+    expect(mcpRefreshTools).not.toHaveBeenCalled()
+  })
+
+  it('refreshes a saved server from the card via refresh-tools', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    mcpRefreshTools.mockResolvedValue({ ok: true, serverName: 'p', tools: [] })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '测试并刷新' }))
+    await waitFor(() => expect(mcpRefreshTools).toHaveBeenCalled())
+    expect(mcpTestConnection).not.toHaveBeenCalled()
   })
 
   it('asks for confirmation when closing the editor with unsaved changes', async () => {

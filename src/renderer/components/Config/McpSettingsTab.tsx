@@ -331,7 +331,7 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
               canEnable={canEnable}
               toolsStale={cache?.stale}
               onEdit={() => setEditingId(draft.id)}
-              onRefresh={() => void refreshServer(draft.id)}
+              onRefresh={() => void (profile ? refreshServer(draft.id) : testServer(draft.id))}
               onDelete={() => deleteServer(draft.id)}
               onClearSecret={() => clearSecret(draft.id)}
               onOpenDiagnostics={() => void openDiagnostics(draft.id)}
