@@ -1218,6 +1218,19 @@
   max-width: 72ch;
 }
 
+.mcp-settings-empty {
+  display: flex;
+  justify-content: center;
+  padding: var(--sa-config-gap-block) 0;
+}
+
+.mcp-settings-empty .ant-btn {
+  height: 40px;
+  padding-inline: var(--sa-config-gap-block);
+  font-size: var(--sa-config-font);
+  border-radius: var(--sa-radius-sm);
+}
+
 .mcp-server-list {
   display: flex;
   flex-direction: column;

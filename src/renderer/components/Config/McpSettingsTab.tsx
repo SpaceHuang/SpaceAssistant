@@ -300,11 +300,19 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
           <h2 className="mcp-settings-tab__title">{t('title')}</h2>
           <p className="mcp-settings-tab__intro">{t('intro')}</p>
         </div>
-        <Button type="dashed" icon={<Plus size={14} />} onClick={addServer}>
-          {t('addServer')}
-        </Button>
+        {drafts.length > 0 ? (
+          <Button type="dashed" icon={<Plus size={14} />} onClick={addServer}>
+            {t('addServer')}
+          </Button>
+        ) : null}
       </div>
-      {drafts.length === 0 ? <Empty description={t('empty')} /> : null}
+      {drafts.length === 0 ? (
+        <div className="mcp-settings-empty">
+          <Button type="primary" size="large" icon={<Plus size={16} />} onClick={addServer}>
+            {t('addServer')}
+          </Button>
+        </div>
+      ) : null}
       <div className="mcp-server-list">
         {drafts.map((draft) => {
           const profile = servers.find((s) => s.id === draft.id)
