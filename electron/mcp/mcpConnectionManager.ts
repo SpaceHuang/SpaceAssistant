@@ -185,6 +185,8 @@ export class McpConnectionManager {
     timeoutMs: number
   ): Promise<McpSession> {
     let rawTransport: Transport
+    // 记录传输层最近一行 stderr/诊断，传输意外关闭时作为「死因」写入诊断。
+    let lastTransportLine: string | null = null
     if (profile.transport === 'stdio') {
       if (!profile.stdio) throw new Error('stdio 服务缺少连接配置')
       const env: Record<string, string> = {}
@@ -201,6 +203,7 @@ export class McpConnectionManager {
         },
         {
           onStderr: (line) => {
+            lastTransportLine = line
             void this.appendDiagnostic?.(profile.id, { code: 'stdio-stderr', message: line })
           }
         }
@@ -220,6 +223,7 @@ export class McpConnectionManager {
         endpoint: profile.http.endpoint,
         authHeaders,
         onDiagnostic: (line) => {
+          lastTransportLine = line
           void this.appendDiagnostic?.(profile.id, { code: 'http-diagnostic', message: line })
         }
       })
@@ -254,7 +258,8 @@ export class McpConnectionManager {
       }
     }
 
-    // 钩住传输关闭：进程退出/断线时标记失效，下次调用前重启。
+    // 钩住传输关闭：进程退出/断线时标记失效，下次调用前重启；
+    // 意外关闭（非 idle 回收/主动 disconnect）时把最近一行传输输出作为死因写入诊断。
     const previousOnClose = transport.onclose
     transport.onclose = () => {
       try {
@@ -264,6 +269,14 @@ export class McpConnectionManager {
       }
       const entry = this.sessions.get(profile.id)
       if (entry && entry.session.client === client) {
+        if (!entry.dead) {
+          void this.appendDiagnostic?.(profile.id, {
+            code: 'transport-closed',
+            message: lastTransportLine
+              ? `传输意外关闭，最近输出：${lastTransportLine}`
+              : '传输意外关闭（无 stderr/诊断输出）'
+          })
+        }
         entry.dead = true
       }
     }

@@ -178,6 +178,65 @@ rl.on('line', (line) => {
     await manager.disconnect(profile.id)
   })
 
+  it('records a transport-closed diagnostic with the last stderr line on unexpected exit', async () => {
+    const dir = makeTempDir()
+    const scriptPath = path.join(dir, 'fatal.js')
+    fs.writeFileSync(
+      scriptPath,
+      `
+const readline = require('readline')
+const rl = readline.createInterface({ input: process.stdin })
+const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\\n')
+rl.on('line', (line) => {
+  let req
+  try { req = JSON.parse(line) } catch { return }
+  if (req.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: req.id, result: {
+      protocolVersion: '2025-06-18',
+      capabilities: { tools: {} },
+      serverInfo: { name: 'fatal-server', version: '1.0.0' }
+    }})
+    process.stderr.write('ERROR worker quit with fatal: AuthRequired\\n')
+    setTimeout(() => process.exit(1), 100)
+  } else if (req.method === 'notifications/initialized') {
+    // no reply
+  }
+})
+`,
+      'utf8'
+    )
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [scriptPath], env: [] } })
+    const appendDiagnostic = vi.fn()
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000, appendDiagnostic })
+
+    await manager.connect(profile, {})
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(manager.isSessionAlive(profile.id)).toBe(false)
+
+    expect(appendDiagnostic).toHaveBeenCalledWith(
+      profile.id,
+      expect.objectContaining({ code: 'transport-closed' })
+    )
+    const closedCall = appendDiagnostic.mock.calls.find(([, entry]) => entry.code === 'transport-closed')
+    expect(closedCall?.[1].message).toContain('AuthRequired')
+    await manager.shutdown()
+  })
+
+  it('does not record a transport-closed diagnostic on deliberate disconnect', async () => {
+    const dir = makeTempDir()
+    const script = writeServerScript(dir, 'server.js', '{ tools: {} }')
+    const profile = makeProfile({ stdio: { command: process.execPath, args: [script], env: [] } })
+    const appendDiagnostic = vi.fn()
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000, appendDiagnostic })
+
+    await manager.connect(profile, {})
+    await manager.disconnect(profile.id)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    const closedCall = appendDiagnostic.mock.calls.find(([, entry]) => entry.code === 'transport-closed')
+    expect(closedCall).toBeUndefined()
+  })
+
   it('disconnect closes the session and removes it from the pool', async () => {
     const dir = makeTempDir()
     const script = writeServerScript(dir, 'server.js', '{ tools: {} }')

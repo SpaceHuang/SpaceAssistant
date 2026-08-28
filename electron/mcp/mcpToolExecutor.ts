@@ -3,6 +3,7 @@ import {
   MCP_GLOBAL_CONCURRENCY,
   MCP_PER_SERVER_CONCURRENCY,
   validateMcpCallArgs,
+  type McpDiagnosticEntry,
   type McpServerProfile
 } from '../../src/shared/mcpTypes'
 import { sanitizeForLog } from '../logSanitize'
@@ -17,7 +18,7 @@ import type { McpToolSnapshotEntry } from './mcpToolRegistry'
  * - 每服务并发 4 / 全局 8 信号量排队
  * - 取消时经 SDK request signal 发送 notifications/cancelled；不重试 tools/call
  * - 结果 >1 MB 走 compactOversizedToolResultContent
- * - 错误分类为安全的模型可见文案；原始错误脱敏后入诊断
+ * - 错误分类为安全的模型可见文案，附脱敏后的原始错误摘要与该服务近期诊断
  */
 
 const globalSemaphore = new Semaphore(MCP_GLOBAL_CONCURRENCY)
@@ -36,6 +37,8 @@ export type McpToolExecutorDeps = {
   getSession: (serverId: string) => Promise<McpSession>
   getProfile: (serverId: string) => McpServerProfile | undefined
   invalidateSession: (serverId: string) => Promise<void>
+  /** 读取该服务近期脱敏诊断（同步），用于失败时向模型附上下文。 */
+  getRecentDiagnostics?: (serverId: string) => McpDiagnosticEntry[]
 }
 
 function extractContentText(result: unknown): string {
@@ -59,12 +62,48 @@ function safeServerSummary(raw: string): string {
 
 function isConnectionFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /ECONNREFUSED|ENOTFOUND|socket hang up|connection closed|Connection closed|EPIPE|timed out/i.test(message)
+  return /ECONNREFUSED|ENOTFOUND|ECONNRESET|socket hang up|connection closed|channel closed|EPIPE|timed out/i.test(message)
 }
 
 function isAuthFailure(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /401|Unauthorized|authentication|auth expired|invalid token|access token/i.test(message)
+  return /401|403|Unauthorized|Forbidden|authentication|auth required|AuthRequired|auth expired|invalid token|access token/i.test(message)
+}
+
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g
+const DIAGNOSTIC_WINDOW_MS = 2 * 60 * 1000
+const DIAGNOSTIC_MAX_ENTRIES = 3
+const DIAGNOSTIC_MESSAGE_MAX = 300
+
+/**
+ * 把该服务近期诊断（写入时已脱敏）拼进模型可见的错误文案，
+ * 避免 Agent 只拿到「超时」等无信息量文案而瞎猜。
+ */
+function appendRecentDiagnostics(
+  deps: McpToolExecutorDeps,
+  serverId: string,
+  baseError: string
+): string {
+  if (!deps.getRecentDiagnostics) return baseError
+  let entries: McpDiagnosticEntry[]
+  try {
+    entries = deps.getRecentDiagnostics(serverId)
+  } catch {
+    return baseError
+  }
+  const now = Date.now()
+  const recent = entries
+    .filter((e) => {
+      const ts = Date.parse(e.occurredAt)
+      return !Number.isNaN(ts) && now - ts <= DIAGNOSTIC_WINDOW_MS
+    })
+    .slice(-DIAGNOSTIC_MAX_ENTRIES)
+  if (recent.length === 0) return baseError
+  const lines = recent.map((e) => {
+    const message = e.message.replace(ANSI_ESCAPE_RE, '').trim().slice(0, DIAGNOSTIC_MESSAGE_MAX)
+    return `- [${e.code}] ${message}`
+  })
+  return `${baseError}\n该服务近期诊断：\n${lines.join('\n')}`
 }
 
 export function createMcpToolExecutor(
@@ -104,17 +143,45 @@ export function createMcpToolExecutor(
             }
             const message = error instanceof Error ? error.message : String(error)
             if (/timed out|timeout|Request timed out/i.test(message)) {
-              return { success: false, error: 'MCP 工具调用超时或已取消。' }
+              return {
+                success: false,
+                error: appendRecentDiagnostics(
+                  deps,
+                  entry.serverId,
+                  `MCP 工具调用超时（${timeoutMs}ms 无响应）。原始错误：${safeServerSummary(message)}`
+                )
+              }
             }
             if (isAuthFailure(error)) {
               void deps.invalidateSession(entry.serverId)
-              return { success: false, error: 'MCP 服务认证失效，需要用户在设置中重新授权。' }
+              return {
+                success: false,
+                error: appendRecentDiagnostics(
+                  deps,
+                  entry.serverId,
+                  `MCP 服务认证失效，需要用户在设置中重新授权。原始错误：${safeServerSummary(message)}`
+                )
+              }
             }
             if (isConnectionFailure(error)) {
               void deps.invalidateSession(entry.serverId)
-              return { success: false, error: 'MCP 服务暂时不可达，请稍后重试或使用其他工具。' }
+              return {
+                success: false,
+                error: appendRecentDiagnostics(
+                  deps,
+                  entry.serverId,
+                  `MCP 服务暂时不可达，请稍后重试或使用其他工具。原始错误：${safeServerSummary(message)}`
+                )
+              }
             }
-            return { success: false, error: `MCP 工具执行失败：${safeServerSummary(message)}` }
+            return {
+              success: false,
+              error: appendRecentDiagnostics(
+                deps,
+                entry.serverId,
+                `MCP 工具执行失败：${safeServerSummary(message)}`
+              )
+            }
           }
         })
       )

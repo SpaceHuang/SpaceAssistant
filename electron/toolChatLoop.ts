@@ -15,7 +15,7 @@ import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
 import type { ToolExecutorResult } from './tools/types'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
-import { appendDiagnostic } from './mcp/mcpDiagnostics'
+import { appendDiagnostic, getDiagnostics } from './mcp/mcpDiagnostics'
 import { createMcpToolExecutor } from './mcp/mcpToolExecutor'
 import {
   buildSnapshotFromDb,
@@ -2061,7 +2061,8 @@ function resolveMcpExecutor(
   return createMcpToolExecutor(entry, {
     getSession: (serverId) => manager.connect(profile, async (kind) => getSecret(appDb, serverId, kind)),
     getProfile: () => profile,
-    invalidateSession: (serverId) => manager.disconnect(serverId)
+    invalidateSession: (serverId) => manager.disconnect(serverId),
+    getRecentDiagnostics: (serverId) => getDiagnostics(appDb, serverId)
   })
 }
 

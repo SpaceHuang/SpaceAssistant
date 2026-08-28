@@ -256,4 +256,131 @@ describe('mcpToolExecutor', () => {
     expect(result.error).toMatch(/超时|取消/)
     expect(elapsed).toBeLessThan(3000)
   })
+
+  it('surfaces the raw timeout message and recent diagnostics to the model', async () => {
+    const failingSession = {
+      serverId: 'server-1',
+      client: {
+        callTool: async () => {
+          throw new Error('Request timed out after 60000ms')
+        }
+      },
+      info: { name: 'Echo' },
+      protocolVersion: '',
+      capabilities: {},
+      close: async () => undefined
+    }
+    const executor = createMcpToolExecutor(
+      {
+        serverId: 'server-1',
+        serverName: 'Echo',
+        originalName: 'echo',
+        mappedName: 'mcp_echo_echo_12345678',
+        description: '',
+        inputSchema: { type: 'object' }
+      },
+      {
+        getSession: async () => failingSession as never,
+        getProfile: () => makeProfile('server-1', 'unused'),
+        invalidateSession: async () => undefined,
+        getRecentDiagnostics: () => [
+          {
+            id: 'd1',
+            code: 'stdio-stderr',
+            message:
+              '\x1b[2m2026-08-28T16:26:48Z\x1b[0m \x1b[31mERROR\x1b[0m worker quit with fatal: Transport channel closed, AuthRequired',
+            occurredAt: new Date().toISOString()
+          }
+        ]
+      }
+    )
+
+    const result = await executor.execute({ text: 'x' }, makeContext())
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('Request timed out after 60000ms')
+    expect(result.error).toContain('[stdio-stderr]')
+    expect(result.error).toContain('AuthRequired')
+    // ANSI 转义序列应被剥离
+    expect(result.error).not.toContain('\x1b')
+  })
+
+  it('classifies AuthRequired as an auth failure and invalidates the session', async () => {
+    let invalidated = 0
+    const failingSession = {
+      serverId: 'server-1',
+      client: {
+        callTool: async () => {
+          throw new Error(
+            'Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer ..." })'
+          )
+        }
+      },
+      info: { name: 'Echo' },
+      protocolVersion: '',
+      capabilities: {},
+      close: async () => undefined
+    }
+    const executor = createMcpToolExecutor(
+      {
+        serverId: 'server-1',
+        serverName: 'Echo',
+        originalName: 'echo',
+        mappedName: 'mcp_echo_echo_12345678',
+        description: '',
+        inputSchema: { type: 'object' }
+      },
+      {
+        getSession: async () => failingSession as never,
+        getProfile: () => makeProfile('server-1', 'unused'),
+        invalidateSession: async () => {
+          invalidated += 1
+        }
+      }
+    )
+
+    const result = await executor.execute({ text: 'x' }, makeContext())
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('认证失效')
+    expect(result.error).toContain('AuthRequired')
+    expect(invalidated).toBe(1)
+  })
+
+  it('classifies "Transport channel closed" as a connection failure', async () => {
+    let invalidated = 0
+    const failingSession = {
+      serverId: 'server-1',
+      client: {
+        callTool: async () => {
+          throw new Error('Transport channel closed')
+        }
+      },
+      info: { name: 'Echo' },
+      protocolVersion: '',
+      capabilities: {},
+      close: async () => undefined
+    }
+    const executor = createMcpToolExecutor(
+      {
+        serverId: 'server-1',
+        serverName: 'Echo',
+        originalName: 'echo',
+        mappedName: 'mcp_echo_echo_12345678',
+        description: '',
+        inputSchema: { type: 'object' }
+      },
+      {
+        getSession: async () => failingSession as never,
+        getProfile: () => makeProfile('server-1', 'unused'),
+        invalidateSession: async () => {
+          invalidated += 1
+        }
+      }
+    )
+
+    const result = await executor.execute({ text: 'x' }, makeContext())
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('暂时不可达')
+    expect(result.error).toContain('Transport channel closed')
+    expect(invalidated).toBe(1)
+  })
 })
