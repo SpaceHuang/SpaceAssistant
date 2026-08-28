@@ -15,8 +15,8 @@
     "disabled": "Disabled"
   },
   "transport": {
-    "stdio": "stdio",
-    "http": "Streamable HTTP"
+    "stdio": "Local process (stdio)",
+    "http": "Remote service (Streamable HTTP)"
   },
   "card": {
     "expand": "Expand",

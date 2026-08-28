@@ -15,8 +15,8 @@
     "disabled": "已停用"
   },
   "transport": {
-    "stdio": "stdio",
-    "http": "Streamable HTTP"
+    "stdio": "本机程序（stdio）",
+    "http": "远程服务（Streamable HTTP）"
   },
   "card": {
     "expand": "展开",
