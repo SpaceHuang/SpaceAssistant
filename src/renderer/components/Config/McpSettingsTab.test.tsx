@@ -177,7 +177,7 @@ describe('McpSettingsTab', () => {
     // stdio tab 激活时没有认证方式
     expect(screen.queryByText('认证方式')).toBeNull()
 
-    fireEvent.click(await screen.findByRole('tab', { name: '远程服务（Streamable HTTP）' }))
+    fireEvent.click(await screen.findByRole('tab', { name: '流式HTTP' }))
     expect(await screen.findByText('认证方式')).toBeTruthy()
     expect(screen.getByText('MCP Endpoint')).toBeTruthy()
   })

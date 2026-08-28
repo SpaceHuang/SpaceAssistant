@@ -16,7 +16,7 @@
   },
   "transport": {
     "stdio": "本机程序（stdio）",
-    "http": "远程服务（Streamable HTTP）"
+    "http": "流式HTTP"
   },
   "card": {
     "expand": "展开",
