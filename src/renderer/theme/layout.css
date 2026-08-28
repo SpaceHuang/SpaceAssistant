@@ -2577,6 +2577,11 @@
   padding: 10px 12px;
 }
 
+/* MCP 确认卡参数区：与 shell/lark 命令行同款内边距 */
+.write-confirm-card__subject-value--code.mcp-confirm-card__args {
+  padding: 10px 12px;
+}
+
 .write-confirm-card__subject-note,
 .write-confirm-card__note {
   margin: 0;

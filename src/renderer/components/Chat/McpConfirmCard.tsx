@@ -60,7 +60,7 @@ export function McpConfirmCard({ record, onConfirm, sessionId }: Props) {
             {argEntries.length === 0 ? (
               <p className="write-confirm-card__subject-note">{t('confirm.mcp.emptyArgs')}</p>
             ) : (
-              <pre className="write-confirm-card__subject-value write-confirm-card__subject-value--code">
+              <pre className="write-confirm-card__subject-value write-confirm-card__subject-value--code mcp-confirm-card__args">
                 {JSON.stringify(maskedArgs, null, 2)}
               </pre>
             )}
