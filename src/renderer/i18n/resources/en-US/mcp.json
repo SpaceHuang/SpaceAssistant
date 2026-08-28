@@ -64,7 +64,6 @@
     "addEnv": "Add environment variable",
     "trustLabel": "I trust this local program and its access rights",
     "httpEndpointLabel": "MCP Endpoint",
-    "authTitle": "Authentication",
     "authModeLabel": "Auth mode",
     "authNone": "None",
     "authBearer": "Bearer access token",

@@ -220,7 +220,6 @@ export function McpServerForm({
                       onChange={(e) => onPatch({ http: { endpoint: e.target.value } })}
                     />
                   </McpField>
-                  <McpSectionTitle>{t('form.authTitle')}</McpSectionTitle>
                   <McpField label={t('form.authModeLabel')}>
                     <Select
                       value={draft.auth.mode}

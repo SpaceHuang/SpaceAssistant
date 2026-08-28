@@ -64,7 +64,6 @@
     "addEnv": "添加环境变量",
     "trustLabel": "我信任此本地程序及其访问权限",
     "httpEndpointLabel": "MCP Endpoint",
-    "authTitle": "认证",
     "authModeLabel": "认证方式",
     "authNone": "无认证",
     "authBearer": "Bearer access token",
