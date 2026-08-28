@@ -82,7 +82,6 @@
     "confirmPolicyLabel": "调用前确认",
     "confirmAlways": "始终确认",
     "confirmReadonlyAuto": "只读工具可自动调用",
-    "confirmReadonlyAutoHint": "仅当 Server 声明 readOnlyHint 且未声明 destructiveHint 时可免确认",
     "noToolsHint": "尚未发现工具，请先测试并刷新",
     "testDraft": "测试连接",
     "skippedHint": "{{count}} 个工具因校验未通过未展示",

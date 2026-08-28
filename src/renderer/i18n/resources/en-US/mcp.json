@@ -82,7 +82,6 @@
     "confirmPolicyLabel": "Confirm before calls",
     "confirmAlways": "Always confirm",
     "confirmReadonlyAuto": "Auto-run read-only tools",
-    "confirmReadonlyAutoHint": "Only when the server declares readOnlyHint and not destructiveHint can calls skip confirmation",
     "noToolsHint": "No tools discovered yet. Test & Refresh first.",
     "testDraft": "Test connection",
     "skippedHint": "{{count}} tools were skipped after validation",

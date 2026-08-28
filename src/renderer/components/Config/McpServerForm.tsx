@@ -300,9 +300,6 @@ export function McpServerForm({
             <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
           </Radio.Group>
         </McpField>
-        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-          {t('form.confirmReadonlyAutoHint')}
-        </Typography.Paragraph>
       </div>
 
       <div className="mcp-server-section">
