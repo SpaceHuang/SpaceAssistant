@@ -68,7 +68,6 @@ export function McpServerForm({
   return (
     <div className="mcp-server-form">
       <div className="mcp-server-section">
-        <McpSectionTitle>{t('form.basicTitle')}</McpSectionTitle>
         <McpField label={t('form.nameLabel')}>
           <Input
             value={draft.name}

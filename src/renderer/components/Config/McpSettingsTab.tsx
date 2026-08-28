@@ -316,7 +316,7 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
       <Modal
         className="mcp-server-edit-modal"
         open={editingId !== null}
-        title={editingIsNew ? t('addServer') : editingDraft?.name || t('card.untestedHint')}
+        title={editingIsNew ? t('addServer') : t('card.editServer')}
         onCancel={closeEditor}
         width={720}
         footer={null}

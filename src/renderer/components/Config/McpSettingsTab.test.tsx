@@ -159,7 +159,8 @@ describe('McpSettingsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
     const nameInput = (await screen.findByPlaceholderText('例如 GitHub')) as HTMLInputElement
     expect(nameInput.value).toBe('GitHub')
-    expect(screen.getByText('基础信息')).toBeTruthy()
+    expect(screen.getByText('编辑服务')).toBeTruthy()
+    expect(screen.queryByText('基础信息')).toBeNull()
     expect(screen.getByText('连接方式')).toBeTruthy()
     expect(screen.queryByText('认证')).toBeNull()
     expect(screen.getByText('工具与权限')).toBeTruthy()
@@ -181,7 +182,7 @@ describe('McpSettingsTab', () => {
     expect(screen.getByText('MCP Endpoint')).toBeTruthy()
   })
 
-  it('orders sections as basic → common params → connection tabs → tools', async () => {
+  it('orders sections as common params → connection tabs → tools', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],
       toolCaches: {}
@@ -189,11 +190,9 @@ describe('McpSettingsTab', () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
 
-    const basic = screen.getByText('基础信息')
     const common = screen.getByText('公共参数')
     const conn = screen.getByText('连接方式')
     const tools = screen.getByText('工具与权限')
-    expect(basic.compareDocumentPosition(common) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(common.compareDocumentPosition(conn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(conn.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(common.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

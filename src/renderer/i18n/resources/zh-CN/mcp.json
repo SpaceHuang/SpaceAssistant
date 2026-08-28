@@ -22,6 +22,7 @@
     "expand": "展开",
     "collapse": "收起",
     "edit": "编辑",
+    "editServer": "编辑服务",
     "delete": "删除",
     "deleteTitle": "删除 MCP 服务",
     "deleteContent": "确定删除「{{name}}」？将同时删除其加密凭据与工具缓存。",

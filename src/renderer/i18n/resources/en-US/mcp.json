@@ -22,6 +22,7 @@
     "expand": "Expand",
     "collapse": "Collapse",
     "edit": "Edit",
+    "editServer": "Edit server",
     "delete": "Delete",
     "deleteTitle": "Delete MCP server",
     "deleteContent": "Delete \"{{name}}\"? Its encrypted credentials and tool cache will also be removed.",
