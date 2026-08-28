@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { App, Button, Drawer, Empty, Spin } from 'antd'
+import { App, Button, Drawer, Empty, Modal, Spin } from 'antd'
 import { Plus } from 'lucide-react'
 import { MCP_MAX_SERVERS, type McpServerProfile, type McpToolCacheEntry } from '../../../shared/mcpTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -11,6 +11,7 @@ import {
   type McpServerDraft
 } from './mcpDrafts'
 import { McpServerCard } from './McpServerCard'
+import { McpServerForm } from './McpServerForm'
 
 export type McpSettingsTabProps = {
   /** 当前是否为 MCP 分区（用于离开分区时的草稿丢弃确认）。 */
@@ -26,7 +27,8 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
   const [servers, setServers] = useState<McpServerProfile[]>([])
   const [drafts, setDrafts] = useState<McpServerDraft[]>([])
   const [toolCaches, setToolCaches] = useState<Record<string, McpToolCacheEntry>>({})
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [refreshingId, setRefreshingId] = useState<string | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
   const [oauthStartingId, setOauthStartingId] = useState<string | null>(null)
@@ -82,8 +84,8 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
     }
     const draft = newMcpServerDraft()
     setDrafts((current) => [...current, draft])
-    setExpandedIds((current) => new Set(current).add(draft.id))
     dirtyRef.current = true
+    setEditingId(draft.id)
   }, [drafts.length, message, t])
 
   const saveServer = useCallback(
@@ -97,6 +99,7 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
         setDrafts(result.servers.map(initMcpServerDraft))
         dirtyRef.current = false
         message.success(t('messages.saved'))
+        setEditingId(null)
       } catch (error) {
         message.error(error instanceof Error ? error.message : String(error))
       } finally {
@@ -136,6 +139,54 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
     },
     [drafts, message, t]
   )
+
+  const refreshServer = useCallback(
+    async (id: string) => {
+      setRefreshingId(id)
+      try {
+        const result = await window.api.mcpRefreshTools({ serverId: id })
+        if (result.ok) {
+          setToolCaches((current) => ({
+            ...current,
+            [id]: {
+              tools: result.tools,
+              protocolVersion: current[id]?.protocolVersion ?? '',
+              discoveredAt: new Date().toISOString()
+            }
+          }))
+          message.success(t('messages.testOk', { count: result.tools.length }))
+        } else {
+          message.error(t('messages.testFailed', { message: result.message }))
+        }
+        await load()
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : String(error))
+      } finally {
+        setRefreshingId(null)
+      }
+    },
+    [load, message, t]
+  )
+
+  const closeEditor = useCallback(() => {
+    if (!editingId) return
+    const draft = drafts.find((d) => d.id === editingId)
+    const profile = servers.find((s) => s.id === editingId)
+    if (draft && isMcpDraftDirty(profile, draft)) {
+      modal.confirm({
+        title: t('messages.discardTitle'),
+        content: t('messages.discardContent'),
+        okText: t('messages.discardOk'),
+        cancelText: t('messages.discardCancel'),
+        onOk: () => {
+          dirtyRef.current = false
+          setEditingId(null)
+        }
+      })
+      return
+    }
+    setEditingId(null)
+  }, [drafts, editingId, modal, servers, t])
 
   const deleteServer = useCallback(
     (id: string) => {
@@ -211,6 +262,11 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
     )
   }
 
+  const editingDraft = drafts.find((d) => d.id === editingId)
+  const editingProfile = servers.find((s) => s.id === editingId)
+  const editingCache = editingId ? toolCaches[editingId] : undefined
+  const editingIsNew = editingDraft ? !servers.some((s) => s.id === editingDraft.id) : false
+
   return (
     <div className="mcp-settings-tab" style={{ display: active ? undefined : 'none' }}>
       <div className="mcp-settings-tab__header">
@@ -225,7 +281,6 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
           const profile = servers.find((s) => s.id === draft.id)
           const cache = toolCaches[draft.id]
           const tools = cache?.tools ?? []
-          const expanded = expandedIds.has(draft.id)
           const canEnable = tools.length > 0 && draft.enabledToolNames.length > 0
           return (
             <McpServerCard
@@ -233,33 +288,46 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
               draft={draft}
               profile={profile}
               tools={tools}
-              skippedCount={cache?.skippedCount ?? 0}
-              expanded={expanded}
-              testing={testingId === draft.id}
-              saving={savingId === draft.id}
+              refreshing={refreshingId === draft.id}
               oauthStarting={oauthStartingId === draft.id}
               dirty={isMcpDraftDirty(profile, draft)}
               canEnable={canEnable}
               toolsStale={cache?.stale}
-              onToggleExpanded={() =>
-                setExpandedIds((current) => {
-                  const next = new Set(current)
-                  if (next.has(draft.id)) next.delete(draft.id)
-                  else next.add(draft.id)
-                  return next
-                })
-              }
-              onPatch={(patch) => patchDraft(draft.id, patch)}
-              onSave={() => void saveServer(draft.id)}
-              onTest={() => void testServer(draft.id)}
+              onEdit={() => setEditingId(draft.id)}
+              onRefresh={() => void refreshServer(draft.id)}
               onDelete={() => deleteServer(draft.id)}
               onClearSecret={() => clearSecret(draft.id)}
               onOpenDiagnostics={() => void openDiagnostics(draft.id)}
               onOauthStart={() => void oauthStart(draft.id)}
+              onToggleEnabled={(checked) => patchDraft(draft.id, { enabled: checked })}
             />
           )
         })}
       </div>
+
+      <Modal
+        className="mcp-server-edit-modal"
+        open={editingId !== null}
+        title={editingIsNew ? t('addServer') : editingDraft?.name || t('card.untestedHint')}
+        onCancel={closeEditor}
+        width={720}
+        footer={null}
+      >
+        {editingDraft ? (
+          <McpServerForm
+            draft={editingDraft}
+            profile={editingProfile}
+            tools={editingCache?.tools ?? []}
+            skippedCount={editingCache?.skippedCount ?? 0}
+            testing={testingId === editingDraft.id}
+            saving={savingId === editingDraft.id}
+            canEnable={(editingCache?.tools.length ?? 0) > 0 && editingDraft.enabledToolNames.length > 0}
+            onPatch={(patch) => patchDraft(editingDraft.id, patch)}
+            onTest={() => void testServer(editingDraft.id)}
+            onSave={() => void saveServer(editingDraft.id)}
+          />
+        ) : null}
+      </Modal>
 
       <Drawer
         title={t('form.diagnosticsTitle')}

@@ -100,7 +100,8 @@ describe('McpSettingsTab', () => {
   it('adds a server draft and saves via mcpSaveProfiles', async () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
-    expect(await screen.findByText('未命名服务')).toBeTruthy()
+    // 新建服务直接打开编辑弹窗
+    expect(await screen.findByPlaceholderText('例如 GitHub')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '保存并应用' }))
     await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalledTimes(1))
@@ -115,11 +116,39 @@ describe('McpSettingsTab', () => {
       toolCaches: {}
     })
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: '展开' }))
-    fireEvent.click(await screen.findByRole('button', { name: '测试并刷新' }))
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    fireEvent.click(await screen.findByRole('button', { name: '测试连接' }))
     await waitFor(() => expect(mcpTestConnection).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('hello')).toBeTruthy()
     expect(screen.getByText(/mcp_new_hello_/)).toBeTruthy()
+  })
+
+  it('opens the editor prefilled with the saved server', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    const nameInput = (await screen.findByPlaceholderText('例如 GitHub')) as HTMLInputElement
+    expect(nameInput.value).toBe('GitHub')
+    expect(screen.getByText('基础信息')).toBeTruthy()
+    expect(screen.getByText('连接方式')).toBeTruthy()
+    expect(screen.getByText('认证')).toBeTruthy()
+    expect(screen.getByText('工具与权限')).toBeTruthy()
+  })
+
+  it('asks for confirmation when closing the editor with unsaved changes', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    const nameInput = (await screen.findByPlaceholderText('例如 GitHub')) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'GitHub 2' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Close' }))
+    expect((await screen.findAllByText('放弃未保存的 MCP 草稿？')).length).toBeGreaterThan(0)
   })
 
   it('requires confirmation before deleting a server', async () => {

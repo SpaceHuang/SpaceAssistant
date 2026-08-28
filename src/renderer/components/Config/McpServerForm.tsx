@@ -1,0 +1,352 @@
+import { Button, Input, InputNumber, Radio, Select, Space, Switch, Typography } from 'antd'
+import { Plus, X } from 'lucide-react'
+import type { ReactNode } from 'react'
+import type { McpServerProfile, McpToolDescriptor } from '../../../shared/mcpTypes'
+import type { McpServerDraft } from './mcpDrafts'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+
+export type McpServerFormProps = {
+  draft: McpServerDraft
+  profile?: McpServerProfile
+  tools: McpToolDescriptor[]
+  skippedCount: number
+  testing: boolean
+  saving: boolean
+  canEnable: boolean
+  onPatch: (patch: Partial<McpServerDraft>) => void
+  onTest: () => void
+  onSave: () => void
+}
+
+function McpField({
+  label,
+  children,
+  row = false
+}: {
+  label: string
+  children: ReactNode
+  row?: boolean
+}) {
+  return (
+    <div className={`mcp-server-field${row ? ' mcp-server-field--row' : ''}`}>
+      <span className="mcp-server-field__label">{label}</span>
+      <div className="mcp-server-field__control">{children}</div>
+    </div>
+  )
+}
+
+function McpSectionTitle({ children }: { children: ReactNode }) {
+  return <h4 className="mcp-server-section__title">{children}</h4>
+}
+
+export function McpServerForm({
+  draft,
+  profile,
+  tools,
+  skippedCount,
+  testing,
+  saving,
+  canEnable,
+  onPatch,
+  onTest,
+  onSave
+}: McpServerFormProps) {
+  const { t } = useTypedTranslation('mcp')
+
+  const patchEnv = (index: number, patch: Partial<{ key: string; value: string; clear: boolean }>) => {
+    const env = [...(draft.stdio?.env ?? [])]
+    env[index] = { ...env[index]!, ...patch }
+    onPatch({ stdio: { ...(draft.stdio ?? { command: '', args: [], env: [] }), env } })
+  }
+
+  const patchArg = (index: number, value: string) => {
+    const args = [...(draft.stdio?.args ?? [])]
+    args[index] = value
+    onPatch({ stdio: { ...(draft.stdio ?? { command: '', args: [], env: [] }), args } })
+  }
+
+  return (
+    <div className="mcp-server-form">
+      <div className="mcp-server-section">
+        <McpSectionTitle>{t('form.basicTitle')}</McpSectionTitle>
+        <McpField label={t('form.nameLabel')}>
+          <Input
+            value={draft.name}
+            placeholder={t('form.namePlaceholder')}
+            onChange={(e) => onPatch({ name: e.target.value })}
+          />
+        </McpField>
+        <McpField label={t('form.enabledLabel')} row>
+          <Switch
+            checked={draft.enabled}
+            disabled={!canEnable}
+            onChange={(checked) => onPatch({ enabled: checked })}
+          />
+        </McpField>
+        <McpField label={t('form.transportLabel')}>
+          <Radio.Group
+            value={draft.transport}
+            onChange={(e) =>
+              onPatch({
+                transport: e.target.value,
+                ...(e.target.value === 'stdio'
+                  ? { http: undefined, stdio: { command: '', args: [], env: [] } }
+                  : { stdio: undefined, http: { endpoint: '' } })
+              })
+            }
+          >
+            <Radio value="stdio">{t('transport.stdio')}</Radio>
+            <Radio value="streamable-http">{t('transport.http')}</Radio>
+          </Radio.Group>
+        </McpField>
+        <McpField label={t('form.timeoutLabel')}>
+          <InputNumber
+            min={5}
+            max={300}
+            value={draft.timeoutSec}
+            onChange={(v) => onPatch({ timeoutSec: v ?? 60 })}
+          />
+        </McpField>
+      </div>
+
+      <div className="mcp-server-section">
+        <McpSectionTitle>{t('form.connTitle')}</McpSectionTitle>
+        {draft.transport === 'stdio' && draft.stdio ? (
+          <>
+            <Typography.Paragraph className="mcp-server-section__hint">
+              {t('card.stdioNotice')}
+            </Typography.Paragraph>
+            <McpField label={t('form.commandLabel')}>
+              <Input
+                value={draft.stdio.command}
+                placeholder={t('form.commandPlaceholder')}
+                onChange={(e) =>
+                  onPatch({ stdio: { ...draft.stdio!, command: e.target.value } })
+                }
+              />
+            </McpField>
+            <McpField label={t('form.argsLabel')}>
+              <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                {draft.stdio.args.map((arg, i) => (
+                  <div key={i} className="mcp-server-list-row">
+                    <Input value={arg} onChange={(e) => patchArg(i, e.target.value)} />
+                    <Button
+                      type="text"
+                      icon={<X size={14} />}
+                      aria-label={t('card.delete')}
+                      onClick={() =>
+                        onPatch({
+                          stdio: {
+                            ...draft.stdio!,
+                            args: draft.stdio!.args.filter((_, idx) => idx !== i)
+                          }
+                        })
+                      }
+                    />
+                  </div>
+                ))}
+                <div className="mcp-server-add-row">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<Plus size={14} />}
+                    onClick={() =>
+                      onPatch({ stdio: { ...draft.stdio!, args: [...draft.stdio!.args, ''] } })
+                    }
+                  >
+                    {t('form.addArg')}
+                  </Button>
+                </div>
+              </Space>
+            </McpField>
+            <McpField label={t('form.cwdLabel')}>
+              <Input
+                value={draft.stdio.cwd ?? ''}
+                onChange={(e) =>
+                  onPatch({ stdio: { ...draft.stdio!, cwd: e.target.value || undefined } })
+                }
+              />
+            </McpField>
+            <McpField label={t('form.envLabel')}>
+              <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                {draft.stdio.env.map((env, i) => (
+                  <div key={`${env.key}-${i}`} className="mcp-server-list-row mcp-server-list-row--env">
+                    <Input
+                      value={env.key}
+                      placeholder={t('form.envKeyPlaceholder')}
+                      onChange={(e) => patchEnv(i, { key: e.target.value })}
+                    />
+                    <Input.Password
+                      value={env.value}
+                      placeholder={env.valuePresent ? t('form.secretPresentHint') : t('form.envValuePlaceholder')}
+                      onChange={(e) => patchEnv(i, { value: e.target.value, clear: false })}
+                    />
+                    {env.valuePresent ? (
+                      <Button
+                        type="text"
+                        icon={<X size={14} />}
+                        title={t('card.clearToken')}
+                        onClick={() => patchEnv(i, { value: '', clear: true })}
+                      />
+                    ) : (
+                      <span aria-hidden />
+                    )}
+                  </div>
+                ))}
+                <div className="mcp-server-add-row">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<Plus size={14} />}
+                    onClick={() =>
+                      onPatch({
+                        stdio: {
+                          ...draft.stdio!,
+                          env: [...draft.stdio!.env, { key: '', value: '', valuePresent: false }]
+                        }
+                      })
+                    }
+                  >
+                    {t('form.addEnv')}
+                  </Button>
+                </div>
+              </Space>
+            </McpField>
+          </>
+        ) : (
+          <McpField label={t('form.httpEndpointLabel')}>
+            <Input
+              value={draft.http?.endpoint ?? ''}
+              placeholder="https://…"
+              onChange={(e) => onPatch({ http: { endpoint: e.target.value } })}
+            />
+          </McpField>
+        )}
+      </div>
+
+      <div className="mcp-server-section">
+        <McpSectionTitle>{t('form.authTitle')}</McpSectionTitle>
+        <McpField label={t('form.authModeLabel')}>
+          <Select
+            value={draft.auth.mode}
+            onChange={(mode) => onPatch({ auth: { ...draft.auth, mode } })}
+            options={[
+              { value: 'none', label: t('form.authNone') },
+              { value: 'bearer-token', label: t('form.authBearer') },
+              { value: 'custom-header', label: t('form.authCustomHeader') },
+              { value: 'oauth', label: t('form.authOauth') }
+            ]}
+          />
+        </McpField>
+        {draft.auth.mode === 'bearer-token' ? (
+          <McpField label={t('form.accessTokenLabel')}>
+            <Input.Password
+              value={draft.auth.accessToken ?? ''}
+              placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
+              onChange={(e) => onPatch({ auth: { ...draft.auth, accessToken: e.target.value } })}
+            />
+          </McpField>
+        ) : null}
+        {draft.auth.mode === 'custom-header' ? (
+          <>
+            <McpField label={t('form.headerNameLabel')}>
+              <Input
+                value={draft.auth.headerName ?? ''}
+                onChange={(e) => onPatch({ auth: { ...draft.auth, headerName: e.target.value } })}
+              />
+            </McpField>
+            <McpField label={t('form.valuePrefixLabel')}>
+              <Input
+                value={draft.auth.valuePrefix ?? ''}
+                onChange={(e) => onPatch({ auth: { ...draft.auth, valuePrefix: e.target.value } })}
+              />
+            </McpField>
+            <McpField label={t('form.headerValueLabel')}>
+              <Input.Password
+                value={draft.auth.headerValue ?? ''}
+                placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
+                onChange={(e) => onPatch({ auth: { ...draft.auth, headerValue: e.target.value } })}
+              />
+            </McpField>
+          </>
+        ) : null}
+        {draft.auth.mode === 'oauth' ? (
+          <McpField label={t('form.oauthClientIdLabel')}>
+            <Input
+              value={draft.auth.oauthClientId ?? ''}
+              placeholder={t('form.oauthClientIdPlaceholder')}
+              onChange={(e) => onPatch({ auth: { ...draft.auth, oauthClientId: e.target.value } })}
+            />
+          </McpField>
+        ) : null}
+      </div>
+
+      <div className="mcp-server-section">
+        <McpSectionTitle>{t('form.toolsTitle')}</McpSectionTitle>
+        {tools.length === 0 ? (
+          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+            {t('form.noToolsHint')}
+          </Typography.Paragraph>
+        ) : (
+          <div className="mcp-server-tools">
+            {tools.map((tool) => {
+              const on = draft.enabledToolNames.includes(tool.originalName)
+              return (
+                <div key={tool.originalName} className="config-tool-row">
+                  <Switch
+                    size="small"
+                    checked={on}
+                    onChange={(checked) =>
+                      onPatch({
+                        enabledToolNames: checked
+                          ? [...draft.enabledToolNames, tool.originalName]
+                          : draft.enabledToolNames.filter((n) => n !== tool.originalName)
+                      })
+                    }
+                  />
+                  <div className="config-tool-row__body">
+                    <span className="config-tool-row__name" title={tool.originalName}>
+                      {tool.originalName}
+                    </span>
+                    <code className="config-tool-row__id" title={tool.mappedName}>
+                      {tool.mappedName}
+                    </code>
+                    <span className="config-tool-row__summary" title={tool.description}>
+                      {tool.description}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {skippedCount > 0 ? (
+          <Typography.Paragraph type="warning" style={{ margin: 0 }}>
+            {t('form.skippedHint', { count: skippedCount })}
+          </Typography.Paragraph>
+        ) : null}
+        <McpField label={t('form.confirmPolicyLabel')} row>
+          <Radio.Group
+            value={draft.toolConfirmPolicy}
+            onChange={(e) => onPatch({ toolConfirmPolicy: e.target.value })}
+          >
+            <Radio value="always">{t('form.confirmAlways')}</Radio>
+            <Radio value="readonly-auto">{t('form.confirmReadonlyAuto')}</Radio>
+          </Radio.Group>
+        </McpField>
+        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+          {t('form.confirmReadonlyAutoHint')}
+        </Typography.Paragraph>
+      </div>
+
+      <div className="mcp-server-form__footer">
+        <Button size="small" loading={testing} onClick={onTest}>
+          {testing ? t('card.testing') : t('form.testDraft')}
+        </Button>
+        <Button size="small" type="primary" loading={saving} onClick={onSave}>
+          {saving ? t('card.saving') : t('card.save')}
+        </Button>
+      </div>
+    </div>
+  )
+}

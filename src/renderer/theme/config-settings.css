@@ -763,7 +763,7 @@
   margin-top: 0;
 }
 
-.config-settings-page .config-tool-row__id {
+.config-tool-row__id {
   display: inline-block;
   width: fit-content;
   max-width: 100%;
@@ -1143,7 +1143,7 @@
   background: var(--sa-bg-elevated);
 }
 
-.config-settings-page .config-tool-row {
+.config-tool-row {
   display: flex;
   align-items: flex-start;
   gap: var(--sa-config-gap-field);
@@ -1151,7 +1151,7 @@
   border-bottom: 1px solid var(--sa-border);
 }
 
-.config-settings-page .config-tool-row:last-child {
+.config-tool-row:last-child {
   border-bottom: none;
 }
 
@@ -1172,7 +1172,7 @@
   line-height: var(--sa-config-line);
 }
 
-.config-settings-page .config-tool-row--off {
+.config-tool-row--off {
   background: color-mix(in srgb, var(--sa-bg-muted) 80%, transparent);
 }
 
@@ -1182,7 +1182,7 @@
  * 间距走 --sa-config-* 4pt 刻度；扁平、无 ghost-card。
  */
 
-.config-settings-page .mcp-settings-tab {
+.mcp-settings-tab {
   display: flex;
   flex-direction: column;
   gap: var(--sa-config-gap-stack);
@@ -1190,7 +1190,7 @@
   min-width: 0;
 }
 
-.config-settings-page .mcp-settings-tab__header {
+.mcp-settings-tab__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1198,7 +1198,7 @@
   flex-wrap: wrap;
 }
 
-.config-settings-page .mcp-settings-tab__intro {
+.mcp-settings-tab__intro {
   margin: 0;
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
@@ -1206,13 +1206,13 @@
   max-width: 72ch;
 }
 
-.config-settings-page .mcp-server-list {
+.mcp-server-list {
   display: flex;
   flex-direction: column;
   gap: var(--sa-config-gap-stack);
 }
 
-.config-settings-page .mcp-server-card {
+.mcp-server-card {
   /* header 左 padding + Switch(28) + gap(12) = 表单内容与卡片标题列对齐 */
   --mcp-header-gutter: 34px;
   --mcp-content-indent: calc(var(--mcp-header-gutter) + 28px + 12px);
@@ -1225,11 +1225,11 @@
     background var(--sa-duration-fast) var(--sa-ease-out);
 }
 
-.config-settings-page .mcp-server-card--dirty {
+.mcp-server-card--dirty {
   border-color: color-mix(in srgb, var(--sa-warning, #d48806) 46%, var(--sa-border-strong));
 }
 
-.config-settings-page .mcp-server-card__header {
+.mcp-server-card__header {
   display: flex;
   align-items: center;
   gap: var(--sa-config-gap-substack);
@@ -1238,11 +1238,11 @@
   min-height: var(--sa-config-control-min-height);
 }
 
-.config-settings-page .mcp-server-card__header .ant-tag {
+.mcp-server-card__header .ant-tag {
   margin-inline-end: 0;
 }
 
-.config-settings-page .mcp-server-card__title {
+.mcp-server-card__title {
   flex: 1;
   min-width: 0;
   font-size: var(--sa-config-font);
@@ -1254,14 +1254,14 @@
   white-space: nowrap;
 }
 
-.config-settings-page .mcp-server-card__header-actions {
+.mcp-server-card__header-actions {
   display: flex;
   align-items: center;
   gap: var(--sa-config-gap-tight);
   flex-shrink: 0;
 }
 
-.config-settings-page .mcp-server-card__summary {
+.mcp-server-card__summary {
   display: flex;
   align-items: center;
   gap: var(--sa-config-gap-field);
@@ -1272,7 +1272,7 @@
   min-width: 0;
 }
 
-.config-settings-page .mcp-server-card__summary-text {
+.mcp-server-card__summary-text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1280,32 +1280,44 @@
   white-space: nowrap;
 }
 
-.config-settings-page .mcp-server-card__summary-meta {
+.mcp-server-card__summary-meta {
   flex-shrink: 0;
   font-size: var(--sa-config-font-sm);
   color: var(--sa-text-secondary);
 }
 
-.config-settings-page .mcp-server-card__body {
+.mcp-server-form {
   display: flex;
   flex-direction: column;
   gap: var(--sa-config-gap-section);
-  padding: var(--sa-config-gap-section) var(--sa-config-gap-substack) var(--sa-config-gap-stack)
-    var(--mcp-content-indent);
-  border-top: 1px solid var(--sa-border);
   font-size: var(--sa-config-font);
   line-height: var(--sa-config-line);
   min-width: 0;
 }
 
-.config-settings-page .mcp-server-section {
+.mcp-server-form__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sa-config-gap-substack);
+  padding-top: var(--sa-config-gap-section);
+  border-top: 1px solid var(--sa-border);
+}
+
+.mcp-server-form__footer .ant-btn-sm {
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line-tight);
+  height: var(--sa-config-control-min-height);
+}
+
+.mcp-server-section {
   display: flex;
   flex-direction: column;
   gap: var(--sa-config-gap-stack);
   min-width: 0;
 }
 
-.config-settings-page .mcp-server-section__title {
+.mcp-server-section__title {
   margin: 0;
   font-size: var(--sa-config-font-sm);
   font-weight: 600;
@@ -1313,47 +1325,47 @@
   color: var(--sa-text);
 }
 
-.config-settings-page .mcp-server-section__hint {
+.mcp-server-section__hint {
   margin: calc(-1 * var(--sa-config-gap-field)) 0 0;
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);
 }
 
-.config-settings-page .mcp-server-field {
+.mcp-server-field {
   display: flex;
   flex-direction: column;
   gap: var(--sa-config-gap-field);
   min-width: 0;
 }
 
-.config-settings-page .mcp-server-field__label {
+.mcp-server-field__label {
   font-size: var(--sa-config-font-sm);
   font-weight: 500;
   line-height: var(--sa-config-line-tight);
   color: var(--sa-text);
 }
 
-.config-settings-page .mcp-server-field__control {
+.mcp-server-field__control {
   min-width: 0;
 }
 
-.config-settings-page .mcp-server-field__control > .ant-input,
-.config-settings-page .mcp-server-field__control > .ant-input-affix-wrapper,
-.config-settings-page .mcp-server-field__control > .ant-select,
-.config-settings-page .mcp-server-field__control > .ant-input-number,
-.config-settings-page .mcp-server-field__control > .ant-radio-group,
-.config-settings-page .mcp-server-field__control > .ant-picker {
+.mcp-server-field__control > .ant-input,
+.mcp-server-field__control > .ant-input-affix-wrapper,
+.mcp-server-field__control > .ant-select,
+.mcp-server-field__control > .ant-input-number,
+.mcp-server-field__control > .ant-radio-group,
+.mcp-server-field__control > .ant-picker {
   width: 100%;
 }
 
-.config-settings-page .mcp-server-field__control .ant-input-affix-wrapper {
+.mcp-server-field__control .ant-input-affix-wrapper {
   min-height: var(--sa-config-control-min-height);
   display: inline-flex;
   align-items: center;
 }
 
-.config-settings-page .mcp-server-field--row {
+.mcp-server-field--row {
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -1361,23 +1373,23 @@
   gap: var(--sa-config-gap-substack);
 }
 
-.config-settings-page .mcp-server-field--row .mcp-server-field__label {
+.mcp-server-field--row .mcp-server-field__label {
   flex: 1;
   min-width: 0;
 }
 
-.config-settings-page .mcp-server-list-row {
+.mcp-server-list-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--sa-config-control-min-height);
   gap: var(--sa-config-gap-field);
   align-items: center;
 }
 
-.config-settings-page .mcp-server-list-row--env {
+.mcp-server-list-row--env {
   grid-template-columns: minmax(110px, 34%) minmax(0, 1fr) var(--sa-config-control-min-height);
 }
 
-.config-settings-page .mcp-server-list-row .ant-btn.ant-btn-icon-only {
+.mcp-server-list-row .ant-btn.ant-btn-icon-only {
   width: var(--sa-config-control-min-height);
   height: var(--sa-config-control-min-height);
   padding: 0;
@@ -1385,15 +1397,15 @@
   color: var(--sa-text-tertiary);
 }
 
-.config-settings-page .mcp-server-list-row .ant-btn.ant-btn-icon-only:hover {
+.mcp-server-list-row .ant-btn.ant-btn-icon-only:hover {
   color: var(--sa-error, #cf1322);
 }
 
-.config-settings-page .mcp-server-add-row {
+.mcp-server-add-row {
   align-self: flex-start;
 }
 
-.config-settings-page .mcp-server-tools {
+.mcp-server-tools {
   border: 1px solid var(--sa-border);
   border-radius: var(--sa-radius-md);
   max-height: min(420px, 55vh);
@@ -1401,19 +1413,19 @@
   background: var(--sa-bg-elevated);
 }
 
-.config-settings-page .mcp-server-tools .config-tool-row__body {
+.mcp-server-tools .config-tool-row__body {
   min-width: 0;
 }
 
-.config-settings-page .mcp-server-tools .config-tool-row__name,
-.config-settings-page .mcp-server-tools .config-tool-row__id,
-.config-settings-page .mcp-server-tools .config-tool-row__summary {
+.mcp-server-tools .config-tool-row__name,
+.mcp-server-tools .config-tool-row__id,
+.mcp-server-tools .config-tool-row__summary {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.config-settings-page .mcp-server-card__footer {
+.mcp-server-card__footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1423,18 +1435,18 @@
   border-top: 1px solid var(--sa-border);
 }
 
-.config-settings-page .mcp-server-card__footer-actions {
+.mcp-server-card__footer-actions {
   display: flex;
   align-items: center;
   gap: var(--sa-config-gap-substack);
   flex-wrap: wrap;
 }
 
-.config-settings-page .mcp-server-card__footer-actions--primary {
+.mcp-server-card__footer-actions--primary {
   margin-left: auto;
 }
 
-.config-settings-page .mcp-server-card__footer .ant-btn-sm {
+.mcp-server-card__footer .ant-btn-sm {
   font-size: var(--sa-config-font);
   line-height: var(--sa-config-line-tight);
   height: var(--sa-config-control-min-height);
@@ -1472,21 +1484,21 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .config-settings-page .mcp-server-card {
+  .mcp-server-card {
     transition: none;
   }
 }
 
-.config-settings-page .config-tool-row--off .config-tool-row__name {
+.config-tool-row--off .config-tool-row__name {
   color: var(--sa-text-secondary);
 }
 
-.config-settings-page .config-tool-row__switch {
+.config-tool-row__switch {
   flex-shrink: 0;
   margin-top: 2px;
 }
 
-.config-settings-page .config-tool-row__body {
+.config-tool-row__body {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1494,7 +1506,7 @@
   gap: var(--sa-config-gap-tight);
 }
 
-.config-settings-page .config-tool-row__name {
+.config-tool-row__name {
   display: block;
   font-size: var(--sa-config-font);
   font-weight: 600;
@@ -1502,19 +1514,19 @@
   color: var(--sa-text);
 }
 
-.config-settings-page .config-tool-row__summary,
-.config-settings-page .config-tool-row__disabled-hint {
+.config-tool-row__summary,
+.config-tool-row__disabled-hint {
   display: block;
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);
 }
 
-.config-settings-page .config-tool-row__disabled-hint {
+.config-tool-row__disabled-hint {
   color: var(--sa-text-tertiary);
 }
 
-.config-settings-page .config-tool-row--off .config-tool-row__disabled-hint {
+.config-tool-row--off .config-tool-row__disabled-hint {
   color: var(--sa-text-secondary);
 }
 
@@ -2082,3 +2094,4 @@
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
 }
+
