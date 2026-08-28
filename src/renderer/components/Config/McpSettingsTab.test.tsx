@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { App, ConfigProvider } from 'antd'
 import type { McpServerProfile } from '../../../shared/mcpTypes'
 import { McpSettingsTab } from './McpSettingsTab'
@@ -17,6 +17,15 @@ const SAVED_SERVER: McpServerProfile = {
   status: 'untested',
   createdAt: '2026-08-28T00:00:00.000Z',
   updatedAt: '2026-08-28T00:00:00.000Z'
+}
+
+const ENV_SERVER: McpServerProfile = {
+  ...SAVED_SERVER,
+  stdio: {
+    command: 'node',
+    args: ['server.js'],
+    env: [{ key: 'GITHUB_TOKEN', valuePresent: true }]
+  }
 }
 
 describe('McpSettingsTab', () => {
@@ -226,13 +235,46 @@ describe('McpSettingsTab', () => {
 
   it('places the add-environment button on the env label row', async () => {
     mcpList.mockResolvedValue({
-      servers: [SAVED_SERVER],
+      servers: [ENV_SERVER],
       toolCaches: {}
     })
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
     const addButton = await screen.findByRole('button', { name: '添加环境变量' })
     expect(addButton.closest('.mcp-server-field__label-action')).toBeTruthy()
+  })
+
+  it('shows dashed add placeholders when args and env lists are empty', async () => {
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
+
+    const addArg = await screen.findByRole('button', { name: '添加参数' })
+    const addEnv = await screen.findByRole('button', { name: '添加环境变量' })
+    expect(addArg.className).toContain('ant-btn-dashed')
+    expect(addEnv.className).toContain('ant-btn-dashed')
+
+    fireEvent.click(addArg)
+    expect(document.querySelectorAll('.mcp-server-list-row').length).toBe(1)
+  })
+
+  it('deletes an environment row and marks its stored secret for clearing', async () => {
+    mcpList.mockResolvedValue({
+      servers: [ENV_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+
+    const modal = await screen.findByRole('dialog')
+    const deleteButtons = within(modal).getAllByRole('button', { name: '删除' })
+    // [args 行删除, env 行删除]
+    fireEvent.click(deleteButtons[1]!)
+    expect(within(modal).queryByDisplayValue('GITHUB_TOKEN')).toBeNull()
+
+    fireEvent.click(within(modal).getByRole('button', { name: '保存并应用' }))
+    await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalled())
+    const payload = mcpSaveProfiles.mock.calls[0]![0] as { servers: Array<{ clearSecretKinds?: string[] }> }
+    expect(payload.servers[0]!.clearSecretKinds).toContain('env:GITHUB_TOKEN')
   })
 
   it('asks for confirmation when closing the editor with unsaved changes', async () => {

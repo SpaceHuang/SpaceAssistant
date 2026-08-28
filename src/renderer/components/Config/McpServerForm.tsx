@@ -70,6 +70,40 @@ export function McpServerForm({
     onPatch({ stdio: { ...(draft.stdio ?? { command: '', args: [], env: [] }), args } })
   }
 
+  const addArg = () => {
+    if (!draft.stdio) return
+    onPatch({ stdio: { ...draft.stdio, args: [...draft.stdio.args, ''] } })
+  }
+
+  const removeArg = (index: number) => {
+    if (!draft.stdio) return
+    onPatch({ stdio: { ...draft.stdio, args: draft.stdio.args.filter((_, i) => i !== index) } })
+  }
+
+  const addEnv = () => {
+    if (!draft.stdio) return
+    onPatch({
+      stdio: {
+        ...draft.stdio,
+        env: [...draft.stdio.env, { key: '', value: '', valuePresent: false }]
+      }
+    })
+  }
+
+  const removeEnv = (index: number) => {
+    if (!draft.stdio) return
+    const removed = draft.stdio.env[index]!
+    onPatch({
+      stdio: { ...draft.stdio, env: draft.stdio.env.filter((_, i) => i !== index) },
+      ...(removed.valuePresent && removed.key
+        ? { clearSecretKinds: [...(draft.clearSecretKinds ?? []), `env:${removed.key}`] }
+        : {})
+    })
+  }
+
+  const argsEmpty = Boolean(draft.stdio && draft.stdio.args.length === 0)
+  const envEmpty = Boolean(draft.stdio && draft.stdio.env.length === 0)
+
   return (
     <div className="mcp-server-form">
       <div className="mcp-server-section">
@@ -169,38 +203,32 @@ export function McpServerForm({
               <McpField
                 label={t('form.argsLabel')}
                 labelAction={
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<Plus size={14} />}
-                    onClick={() =>
-                      onPatch({ stdio: { ...draft.stdio!, args: [...draft.stdio!.args, ''] } })
-                    }
-                  >
-                    {t('form.addArg')}
-                  </Button>
+                  argsEmpty ? undefined : (
+                    <Button type="text" size="small" icon={<Plus size={14} />} onClick={addArg}>
+                      {t('form.addArg')}
+                    </Button>
+                  )
                 }
               >
-                <Space direction="vertical" style={{ width: '100%' }} size={4}>
-                  {draft.stdio.args.map((arg, i) => (
-                        <div key={i} className="mcp-server-list-row">
-                          <Input value={arg} onChange={(e) => patchArg(i, e.target.value)} />
-                          <Button
-                            type="text"
-                            icon={<X size={14} />}
-                            aria-label={t('card.delete')}
-                            onClick={() =>
-                              onPatch({
-                                stdio: {
-                                  ...draft.stdio!,
-                                  args: draft.stdio!.args.filter((_, idx) => idx !== i)
-                                }
-                              })
-                            }
-                      />
-                    </div>
-                  ))}
-                </Space>
+                {argsEmpty ? (
+                  <Button type="dashed" block icon={<Plus size={14} />} onClick={addArg}>
+                    {t('form.addArg')}
+                  </Button>
+                ) : (
+                  <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                    {draft.stdio!.args.map((arg, i) => (
+                      <div key={i} className="mcp-server-list-row">
+                        <Input value={arg} onChange={(e) => patchArg(i, e.target.value)} />
+                        <Button
+                          type="text"
+                          icon={<X size={14} />}
+                          aria-label={t('card.delete')}
+                          onClick={() => removeArg(i)}
+                        />
+                      </div>
+                    ))}
+                  </Space>
+                )}
               </McpField>
                   <McpField label={t('form.cwdLabel')}>
                     <Input
@@ -213,49 +241,41 @@ export function McpServerForm({
               <McpField
                 label={t('form.envLabel')}
                 labelAction={
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<Plus size={14} />}
-                    onClick={() =>
-                      onPatch({
-                        stdio: {
-                          ...draft.stdio!,
-                          env: [...draft.stdio!.env, { key: '', value: '', valuePresent: false }]
-                        }
-                      })
-                    }
-                  >
-                    {t('form.addEnv')}
-                  </Button>
+                  envEmpty ? undefined : (
+                    <Button type="text" size="small" icon={<Plus size={14} />} onClick={addEnv}>
+                      {t('form.addEnv')}
+                    </Button>
+                  )
                 }
               >
-                <Space direction="vertical" style={{ width: '100%' }} size={4}>
-                  {draft.stdio.env.map((env, i) => (
-                        <div key={`${env.key}-${i}`} className="mcp-server-list-row mcp-server-list-row--env">
-                          <Input
-                            value={env.key}
-                            placeholder={t('form.envKeyPlaceholder')}
-                            onChange={(e) => patchEnv(i, { key: e.target.value })}
-                          />
-                          <Input.Password
-                            value={env.value}
-                            placeholder={env.valuePresent ? t('form.secretPresentHint') : t('form.envValuePlaceholder')}
-                            onChange={(e) => patchEnv(i, { value: e.target.value, clear: false })}
-                          />
-                          {env.valuePresent ? (
-                            <Button
-                              type="text"
-                              icon={<X size={14} />}
-                              title={t('card.clearToken')}
-                              onClick={() => patchEnv(i, { value: '', clear: true })}
-                            />
-                          ) : (
-                            <span aria-hidden />
-                      )}
-                    </div>
-                  ))}
-                </Space>
+                {envEmpty ? (
+                  <Button type="dashed" block icon={<Plus size={14} />} onClick={addEnv}>
+                    {t('form.addEnv')}
+                  </Button>
+                ) : (
+                  <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                    {draft.stdio!.env.map((env, i) => (
+                      <div key={`${env.key}-${i}`} className="mcp-server-list-row mcp-server-list-row--env">
+                        <Input
+                          value={env.key}
+                          placeholder={t('form.envKeyPlaceholder')}
+                          onChange={(e) => patchEnv(i, { key: e.target.value })}
+                        />
+                        <Input.Password
+                          value={env.value}
+                          placeholder={env.valuePresent ? t('form.secretPresentHint') : t('form.envValuePlaceholder')}
+                          onChange={(e) => patchEnv(i, { value: e.target.value, clear: false })}
+                        />
+                        <Button
+                          type="text"
+                          icon={<X size={14} />}
+                          aria-label={t('card.delete')}
+                          onClick={() => removeEnv(i)}
+                        />
+                      </div>
+                    ))}
+                  </Space>
+                )}
               </McpField>
                 </>
               ) : null

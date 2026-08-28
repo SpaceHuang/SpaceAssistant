@@ -138,6 +138,11 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
   const http = draft.transport === 'streamable-http' && draft.http
     ? { endpoint: draft.http.endpoint }
     : undefined
+  // 若同名环境变量已重新填入新值，则之前的删除标记应被抵消，避免误清 Secret
+  const activeEnvKeys = new Set((draft.stdio?.env ?? []).map((e) => e.key))
+  const clearSecretKinds = (draft.clearSecretKinds ?? []).filter(
+    (k) => !(k.startsWith('env:') && activeEnvKeys.has(k.slice(4)))
+  )
   return {
     id: draft.id,
     name: draft.name,
@@ -151,7 +156,7 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
     toolConfirmPolicy: draft.toolConfirmPolicy,
     ...(draft.createdAt ? { createdAt: draft.createdAt } : {}),
     ...(draft.updatedAt ? { updatedAt: draft.updatedAt } : {}),
-    ...(draft.clearSecretKinds?.length ? { clearSecretKinds: draft.clearSecretKinds } : {})
+    ...(clearSecretKinds.length ? { clearSecretKinds } : {})
   }
 }
 

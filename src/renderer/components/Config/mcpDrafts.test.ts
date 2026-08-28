@@ -100,4 +100,14 @@ describe('mcpDrafts', () => {
     draft.auth.valuePrefix = 'Bearer '
     expect(isMcpDraftDirty(profile, draft)).toBe(false)
   })
+
+  it('drops stale env clears when the same key is re-added with a value', () => {
+    const draft = initMcpServerDraft(makeProfile())
+    draft.stdio!.env = draft.stdio!.env.filter((e) => e.key !== 'GITHUB_TOKEN')
+    draft.clearSecretKinds = ['env:GITHUB_TOKEN']
+    draft.stdio!.env = [{ key: 'GITHUB_TOKEN', value: 'new-value', valuePresent: false }]
+    const input = draftToWriteInput(draft)
+    expect(input.clearSecretKinds).toBeUndefined()
+    expect(input.stdio?.env[0]).toMatchObject({ key: 'GITHUB_TOKEN', value: 'new-value' })
+  })
 })
