@@ -70,7 +70,7 @@ export function newMcpServerDraft(): McpServerDraft {
     auth: { mode: 'none' },
     stdio: { command: '', args: [], env: [] },
     enabledToolNames: [],
-    toolConfirmPolicy: 'always'
+    toolConfirmPolicy: 'readonly-auto'
   }
 }
 

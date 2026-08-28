@@ -38,7 +38,7 @@ describe('mcpDrafts', () => {
     expect(a.name).toBe('')
     expect(a.enabled).toBe(false)
     expect(a.transport).toBe('stdio')
-    expect(a.toolConfirmPolicy).toBe('always')
+    expect(a.toolConfirmPolicy).toBe('readonly-auto')
   })
 
   it('initializes a draft from a stored profile without secret values', () => {

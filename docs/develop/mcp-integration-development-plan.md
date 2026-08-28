@@ -155,12 +155,12 @@ electron/mcp/
 
    - **状态：** ✅ 已完成（2026-08-28）—— `resolveMcpExecutor` 回退（内置 Map 优先，快照外不可解析）；伪造 `mcp_*` 名在 unknown-tool 分支前返回「MCP 工具已变更或服务不可用」；`mcpToolExecutor`（参数深度 20 / 256 KiB 校验、每服务 4 / 全局 8 信号量、SDK request signal 取消并自动发 notifications/cancelled、>1 MB 压缩、会话失效重连一次且不重试 tools/call、§5.4 错误分类）。
 3. **确认链路**：
-   - 新增 `mcpToolNeedsConfirmation(profile, tool)` 判定：默认始终确认；仅当服务开启 `readonly-auto` 且工具 `readOnlyHint:true && destructiveHint:false` 时免确认；确认卡片内提供「本会话信任」。
+   - 新增 `mcpToolNeedsConfirmation(profile, tool)` 判定：默认 `readonly-auto`（Server 声明 `readOnlyHint:true && destructiveHint:false` 的工具免确认，其余确认）；可切换「始终确认」；确认卡片内提供「本会话信任」。
    - **「本会话信任」作用域已定（产品确认 2026-08-28）**：信任绑定到当前聊天 **Session**，切换/新建会话即失效，不写入长期设置；实现上复用现有内置工具确认的会话级状态（与 Write/Shell 卡片「本会话自动批准」语义一致）。
    - 渲染端 `ToolCallCard.tsx` 增加 `McpConfirmCard` 分发（服务名、原始工具名、描述、脱敏参数预览、数据大小、风险提示、取消、本会话信任）。
    - 拒绝/超时/取消返回结构化安全错误；`signalChatCancel` 级联取消所有挂起 MCP 调用。
 
-   - **状态：** ✅ 已完成（2026-08-28）—— `mcpToolNeedsConfirmation`（默认始终确认，readonly-auto + 安全注解免确认）；「本会话信任」按 Session 作用域（`mcpSessionTrust`，确认响应经 `tool:confirm-response` 写入）；`McpConfirmCard` 渲染服务名/原始工具名/描述/脱敏参数/信任勾选；拒绝/超时/取消映射安全文案。
+   - **状态：** ✅ 已完成（2026-08-28）—— `mcpToolNeedsConfirmation`（默认 `readonly-auto`：readonly-auto + 安全注解免确认，其余确认；可切换「始终确认」）；「本会话信任」按 Session 作用域（`mcpSessionTrust`，确认响应经 `tool:confirm-response` 写入）；`McpConfirmCard` 渲染服务名/原始工具名/描述/脱敏参数/信任勾选；拒绝/超时/取消映射安全文案。
 4. **持久化**：`ToolCallRecord` 增加可选 `mcp` 元数据（serverId/serverName/originalToolName）；`messageCodec.ts` 序列化/反序列化透传；`claudeToolHistory.ts` 回放兼容。
 
    - **状态：** ✅ 已完成（2026-08-28）—— `ToolCallRecord.mcp`（含可选 description）+ `messageCodec` 透传 + 回环测试；历史回放兼容（mcp 元数据不进入模型上下文）。
