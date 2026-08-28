@@ -16,6 +16,7 @@ export type McpServerFormProps = {
   onPatch: (patch: Partial<McpServerDraft>) => void
   onTest: () => void
   onSave: () => void
+  onToggleEnabled: (checked: boolean) => void
 }
 
 function McpField({
@@ -54,7 +55,8 @@ export function McpServerForm({
   canEnable,
   onPatch,
   onTest,
-  onSave
+  onSave,
+  onToggleEnabled
 }: McpServerFormProps) {
   const { t } = useTypedTranslation('mcp')
 
@@ -118,7 +120,7 @@ export function McpServerForm({
           <Switch
             checked={draft.enabled}
             disabled={!canEnable}
-            onChange={(checked) => onPatch({ enabled: checked })}
+            onChange={onToggleEnabled}
           />
         </McpField>
       </div>

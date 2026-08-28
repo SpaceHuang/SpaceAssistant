@@ -77,6 +77,24 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
     dirtyRef.current = true
   }, [])
 
+  /** 启用服务时自动把已发现工具全部加入白名单，降低逐个勾选负担。 */
+  const toggleServerEnabled = useCallback((id: string, checked: boolean, toolNames: string[]) => {
+    setDrafts((current) =>
+      current.map((d) =>
+        d.id === id
+          ? {
+              ...d,
+              enabled: checked,
+              ...(checked
+                ? { enabledToolNames: [...new Set([...d.enabledToolNames, ...toolNames])] }
+                : {})
+            }
+          : d
+      )
+    )
+    dirtyRef.current = true
+  }, [])
+
   const addServer = useCallback(() => {
     if (drafts.length >= MCP_MAX_SERVERS) {
       message.warning(t('maxServers', { max: MCP_MAX_SERVERS }))
@@ -289,7 +307,7 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
           const profile = servers.find((s) => s.id === draft.id)
           const cache = toolCaches[draft.id]
           const tools = cache?.tools ?? []
-          const canEnable = tools.length > 0 && draft.enabledToolNames.length > 0
+          const canEnable = tools.length > 0
           return (
             <McpServerCard
               key={draft.id}
@@ -307,7 +325,13 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
               onClearSecret={() => clearSecret(draft.id)}
               onOpenDiagnostics={() => void openDiagnostics(draft.id)}
               onOauthStart={() => void oauthStart(draft.id)}
-              onToggleEnabled={(checked) => patchDraft(draft.id, { enabled: checked })}
+              onToggleEnabled={(checked) =>
+                toggleServerEnabled(
+                  draft.id,
+                  checked,
+                  tools.map((t) => t.originalName)
+                )
+              }
             />
           )
         })}
@@ -329,10 +353,17 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
             skippedCount={editingCache?.skippedCount ?? 0}
             testing={testingId === editingDraft.id}
             saving={savingId === editingDraft.id}
-            canEnable={(editingCache?.tools.length ?? 0) > 0 && editingDraft.enabledToolNames.length > 0}
+            canEnable={(editingCache?.tools.length ?? 0) > 0}
             onPatch={(patch) => patchDraft(editingDraft.id, patch)}
             onTest={() => void testServer(editingDraft.id)}
             onSave={() => void saveServer(editingDraft.id)}
+            onToggleEnabled={(checked) =>
+              toggleServerEnabled(
+                editingDraft.id,
+                checked,
+                (editingCache?.tools ?? []).map((t) => t.originalName)
+              )
+            }
           />
         ) : null}
       </Modal>

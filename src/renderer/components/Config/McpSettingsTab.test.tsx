@@ -281,6 +281,41 @@ describe('McpSettingsTab', () => {
     expect(payload.servers[0]!.clearSecretKinds).toContain('env:GITHUB_TOKEN')
   })
 
+  it('auto-enables discovered tools when the server is turned on', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {
+        'server-1': {
+          tools: [
+            {
+              serverId: 'server-1',
+              originalName: 'hello',
+              mappedName: 'mcp_new_hello_12345678',
+              description: 'says hello',
+              inputSchema: {},
+              discoveredAt: new Date().toISOString()
+            }
+          ],
+          protocolVersion: '2025-06-18',
+          discoveredAt: new Date().toISOString()
+        }
+      }
+    })
+    renderTab()
+    const toggle = await screen.findByRole('switch', { name: '启用此服务' })
+    expect(toggle.getAttribute('aria-disabled')).not.toBe('true')
+    fireEvent.click(toggle)
+
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+    await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalled())
+    const payload = mcpSaveProfiles.mock.calls[0]![0] as {
+      servers: Array<{ enabled: boolean; enabledToolNames: string[] }>
+    }
+    expect(payload.servers[0]!.enabled).toBe(true)
+    expect(payload.servers[0]!.enabledToolNames).toContain('hello')
+  })
+
   it('asks for confirmation when closing the editor with unsaved changes', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],
