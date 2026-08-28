@@ -212,13 +212,69 @@ export function McpServerForm({
               key: 'streamable-http',
               label: t('transport.http'),
               children: draft.http ? (
-                <McpField label={t('form.httpEndpointLabel')}>
-                  <Input
-                    value={draft.http.endpoint}
-                    placeholder="https://…"
-                    onChange={(e) => onPatch({ http: { endpoint: e.target.value } })}
-                  />
-                </McpField>
+                <>
+                  <McpField label={t('form.httpEndpointLabel')}>
+                    <Input
+                      value={draft.http.endpoint}
+                      placeholder="https://…"
+                      onChange={(e) => onPatch({ http: { endpoint: e.target.value } })}
+                    />
+                  </McpField>
+                  <McpSectionTitle>{t('form.authTitle')}</McpSectionTitle>
+                  <McpField label={t('form.authModeLabel')}>
+                    <Select
+                      value={draft.auth.mode}
+                      onChange={(mode) => onPatch({ auth: { ...draft.auth, mode } })}
+                      options={[
+                        { value: 'none', label: t('form.authNone') },
+                        { value: 'bearer-token', label: t('form.authBearer') },
+                        { value: 'custom-header', label: t('form.authCustomHeader') },
+                        { value: 'oauth', label: t('form.authOauth') }
+                      ]}
+                    />
+                  </McpField>
+                  {draft.auth.mode === 'bearer-token' ? (
+                    <McpField label={t('form.accessTokenLabel')}>
+                      <Input.Password
+                        value={draft.auth.accessToken ?? ''}
+                        placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
+                        onChange={(e) => onPatch({ auth: { ...draft.auth, accessToken: e.target.value } })}
+                      />
+                    </McpField>
+                  ) : null}
+                  {draft.auth.mode === 'custom-header' ? (
+                    <>
+                      <McpField label={t('form.headerNameLabel')}>
+                        <Input
+                          value={draft.auth.headerName ?? ''}
+                          onChange={(e) => onPatch({ auth: { ...draft.auth, headerName: e.target.value } })}
+                        />
+                      </McpField>
+                      <McpField label={t('form.valuePrefixLabel')}>
+                        <Input
+                          value={draft.auth.valuePrefix ?? ''}
+                          onChange={(e) => onPatch({ auth: { ...draft.auth, valuePrefix: e.target.value } })}
+                        />
+                      </McpField>
+                      <McpField label={t('form.headerValueLabel')}>
+                        <Input.Password
+                          value={draft.auth.headerValue ?? ''}
+                          placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
+                          onChange={(e) => onPatch({ auth: { ...draft.auth, headerValue: e.target.value } })}
+                        />
+                      </McpField>
+                    </>
+                  ) : null}
+                  {draft.auth.mode === 'oauth' ? (
+                    <McpField label={t('form.oauthClientIdLabel')}>
+                      <Input
+                        value={draft.auth.oauthClientId ?? ''}
+                        placeholder={t('form.oauthClientIdPlaceholder')}
+                        onChange={(e) => onPatch({ auth: { ...draft.auth, oauthClientId: e.target.value } })}
+                      />
+                    </McpField>
+                  ) : null}
+                </>
               ) : null
             }
           ]}
@@ -247,63 +303,6 @@ export function McpServerForm({
         <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
           {t('form.confirmReadonlyAutoHint')}
         </Typography.Paragraph>
-      </div>
-
-      <div className="mcp-server-section">
-        <McpSectionTitle>{t('form.authTitle')}</McpSectionTitle>
-        <McpField label={t('form.authModeLabel')}>
-          <Select
-            value={draft.auth.mode}
-            onChange={(mode) => onPatch({ auth: { ...draft.auth, mode } })}
-            options={[
-              { value: 'none', label: t('form.authNone') },
-              { value: 'bearer-token', label: t('form.authBearer') },
-              { value: 'custom-header', label: t('form.authCustomHeader') },
-              { value: 'oauth', label: t('form.authOauth') }
-            ]}
-          />
-        </McpField>
-        {draft.auth.mode === 'bearer-token' ? (
-          <McpField label={t('form.accessTokenLabel')}>
-            <Input.Password
-              value={draft.auth.accessToken ?? ''}
-              placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
-              onChange={(e) => onPatch({ auth: { ...draft.auth, accessToken: e.target.value } })}
-            />
-          </McpField>
-        ) : null}
-        {draft.auth.mode === 'custom-header' ? (
-          <>
-            <McpField label={t('form.headerNameLabel')}>
-              <Input
-                value={draft.auth.headerName ?? ''}
-                onChange={(e) => onPatch({ auth: { ...draft.auth, headerName: e.target.value } })}
-              />
-            </McpField>
-            <McpField label={t('form.valuePrefixLabel')}>
-              <Input
-                value={draft.auth.valuePrefix ?? ''}
-                onChange={(e) => onPatch({ auth: { ...draft.auth, valuePrefix: e.target.value } })}
-              />
-            </McpField>
-            <McpField label={t('form.headerValueLabel')}>
-              <Input.Password
-                value={draft.auth.headerValue ?? ''}
-                placeholder={profile?.auth.secretPresent ? t('form.secretPresentHint') : t('form.accessTokenPlaceholder')}
-                onChange={(e) => onPatch({ auth: { ...draft.auth, headerValue: e.target.value } })}
-              />
-            </McpField>
-          </>
-        ) : null}
-        {draft.auth.mode === 'oauth' ? (
-          <McpField label={t('form.oauthClientIdLabel')}>
-            <Input
-              value={draft.auth.oauthClientId ?? ''}
-              placeholder={t('form.oauthClientIdPlaceholder')}
-              onChange={(e) => onPatch({ auth: { ...draft.auth, oauthClientId: e.target.value } })}
-            />
-          </McpField>
-        ) : null}
       </div>
 
       <div className="mcp-server-section">

@@ -151,8 +151,25 @@ describe('McpSettingsTab', () => {
     expect(nameInput.value).toBe('GitHub')
     expect(screen.getByText('基础信息')).toBeTruthy()
     expect(screen.getByText('连接方式')).toBeTruthy()
-    expect(screen.getByText('认证')).toBeTruthy()
+    expect(screen.queryByText('认证')).toBeNull()
     expect(screen.getByText('工具与权限')).toBeTruthy()
+  })
+
+  it('keeps auth options inside the Streamable HTTP tab only', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+
+    // stdio tab 激活时没有认证方式
+    expect(screen.queryByText('认证方式')).toBeNull()
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Streamable HTTP' }))
+    expect(await screen.findByText('认证')).toBeTruthy()
+    expect(screen.getByText('认证方式')).toBeTruthy()
+    expect(screen.getByText('MCP Endpoint')).toBeTruthy()
   })
 
   it('asks for confirmation when closing the editor with unsaved changes', async () => {
