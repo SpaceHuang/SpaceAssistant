@@ -181,7 +181,7 @@ describe('McpSettingsTab', () => {
     expect(screen.getByText('MCP Endpoint')).toBeTruthy()
   })
 
-  it('orders sections as connection tabs → tools → common params', async () => {
+  it('orders sections as basic → common params → connection tabs → tools', async () => {
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],
       toolCaches: {}
@@ -189,11 +189,14 @@ describe('McpSettingsTab', () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
 
+    const basic = screen.getByText('基础信息')
+    const common = screen.getByText('公共参数')
     const conn = screen.getByText('连接方式')
     const tools = screen.getByText('工具与权限')
-    const common = screen.getByText('公共参数')
+    expect(basic.compareDocumentPosition(common) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(common.compareDocumentPosition(conn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(conn.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(tools.compareDocumentPosition(common) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(common.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('keeps common params collapsed with a value summary and expands on demand', async () => {
