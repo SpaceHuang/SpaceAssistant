@@ -1,6 +1,6 @@
 {
   "title": "MCP Servers",
-  "intro": "Connect external MCP Servers so their tools are available to the agent. MCP settings are saved per card: click \"Save & Apply\" on the card after editing.",
+  "intro": "Connect external services such as GitHub or a database so the agent can call their tools in chat. After editing a server, click \"Save & Apply\" on its card to apply the changes.",
   "addServer": "Add server",
   "maxServers": "Up to {{max}} servers",
   "empty": "No MCP servers yet. Use the button above to add one.",
