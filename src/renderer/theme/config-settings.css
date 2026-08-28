@@ -1192,14 +1192,26 @@
 
 .mcp-settings-tab__header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: var(--sa-config-gap-substack);
   flex-wrap: wrap;
 }
 
-.mcp-settings-tab__intro {
+.mcp-settings-tab__heading {
+  min-width: 0;
+}
+
+.mcp-settings-tab__title {
   margin: 0;
+  font-size: var(--sa-config-font-title);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+}
+
+.mcp-settings-tab__intro {
+  margin: var(--sa-config-gap-tight) 0 0;
   font-size: var(--sa-config-font-sm);
   line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);

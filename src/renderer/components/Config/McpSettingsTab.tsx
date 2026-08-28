@@ -296,7 +296,10 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
   return (
     <div className="mcp-settings-tab" style={{ display: active ? undefined : 'none' }}>
       <div className="mcp-settings-tab__header">
-        <p className="mcp-settings-tab__intro">{t('intro')}</p>
+        <div className="mcp-settings-tab__heading">
+          <h2 className="mcp-settings-tab__title">{t('title')}</h2>
+          <p className="mcp-settings-tab__intro">{t('intro')}</p>
+        </div>
         <Button type="dashed" icon={<Plus size={14} />} onClick={addServer}>
           {t('addServer')}
         </Button>
