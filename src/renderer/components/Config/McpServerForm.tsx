@@ -190,7 +190,7 @@ export function McpServerForm({
               key: 'stdio',
               label: t('transport.stdio'),
               children: draft.stdio ? (
-                <>
+                <div className="mcp-server-section">
                   <McpField label={t('form.commandLabel')}>
                     <Input
                       value={draft.stdio.command}
@@ -215,7 +215,7 @@ export function McpServerForm({
                     {t('form.addArg')}
                   </Button>
                 ) : (
-                  <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
                     {draft.stdio!.args.map((arg, i) => (
                       <div key={i} className="mcp-server-list-row">
                         <Input value={arg} onChange={(e) => patchArg(i, e.target.value)} />
@@ -253,7 +253,7 @@ export function McpServerForm({
                     {t('form.addEnv')}
                   </Button>
                 ) : (
-                  <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
                     {draft.stdio!.env.map((env, i) => (
                       <div key={`${env.key}-${i}`} className="mcp-server-list-row mcp-server-list-row--env">
                         <Input
@@ -277,14 +277,14 @@ export function McpServerForm({
                   </Space>
                 )}
               </McpField>
-                </>
+                </div>
               ) : null
             },
             {
               key: 'streamable-http',
               label: t('transport.http'),
               children: draft.http ? (
-                <>
+                <div className="mcp-server-section">
                   <McpField label={t('form.httpEndpointLabel')}>
                     <Input
                       value={draft.http.endpoint}
@@ -345,7 +345,7 @@ export function McpServerForm({
                       />
                     </McpField>
                   ) : null}
-                </>
+                </div>
               ) : null
             }
           ]}

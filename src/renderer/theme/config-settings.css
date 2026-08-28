@@ -1352,7 +1352,11 @@
 }
 
 .mcp-server-common .ant-collapse-content-box {
-  padding: 0 0 var(--sa-config-gap-stack) !important;
+  padding: 0 !important;
+}
+
+.mcp-server-edit-modal.ant-modal .ant-modal-body {
+  padding: var(--sa-config-gap-section) var(--sa-config-gap-section) var(--sa-config-gap-substack);
 }
 
 /* 连接方式标题与 Tab 表头同处一行 */
