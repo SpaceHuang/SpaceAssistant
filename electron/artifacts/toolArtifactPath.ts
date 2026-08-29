@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import type { ArtifactWriteIntent } from '../../src/shared/artifactTypes'
 import type { AppDatabase } from '../database'
@@ -126,10 +125,4 @@ export function resolveToolArtifactPath(input: ResolveToolArtifactPathInput): Re
 }
 
 /** Resolves the real workspace root for registration and lease keys. */
-export function resolveWorkspaceRootReal(workDir: string): string {
-  try {
-    return fs.realpathSync(workDir)
-  } catch {
-    return path.resolve(workDir)
-  }
-}
+export { resolveWorkspaceRootReal } from '../writeSafety/workspaceRoot'

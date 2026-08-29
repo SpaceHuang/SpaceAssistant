@@ -1,11 +1,11 @@
-import { normalizeToolRelPath } from './artifacts/normalizeToolRelPath'
-import type { ArtifactPathLease } from './artifacts/pathLeaseRegistry'
+import { normalizeToolRelPath } from './writeSafety/normalizeToolRelPath'
+import type { ArtifactPathLease } from './writeSafety/pathLeaseRegistry'
 import {
   acquireToolWriteLease,
   checkToolWriteLeaseConflict,
   clearToolPathLeases,
   releaseAllToolPathLeasesForSession
-} from './artifacts/toolPathLease'
+} from './writeSafety/toolPathLease'
 
 export { normalizeToolRelPath }
 
