@@ -73,6 +73,16 @@ describe('mcpDrafts', () => {
     expect(backToStdio.http).toBeUndefined()
   })
 
+  it('emits http endpoint for legacy SSE and clears stdio', () => {
+    const draft = initMcpServerDraft(makeProfile())
+    draft.transport = 'sse'
+    draft.http = { endpoint: 'https://example.com/sse' }
+    const input = draftToWriteInput(draft)
+    expect(input.transport).toBe('sse')
+    expect(input.http?.endpoint).toBe('https://example.com/sse')
+    expect(input.stdio).toBeUndefined()
+  })
+
   it('marks a draft dirty when secrets are entered or fields change', () => {
     const profile = makeProfile()
     const draft = initMcpServerDraft(profile)

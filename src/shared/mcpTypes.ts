@@ -25,7 +25,7 @@ export const MCP_TOOL_NAME_MAX = 64
 export const MCP_DIAGNOSTICS_MAX_PER_SERVER = 20
 export const MCP_DIAGNOSTICS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 
-export type McpTransportType = 'stdio' | 'streamable-http'
+export type McpTransportType = 'stdio' | 'streamable-http' | 'sse'
 export type McpAuthMode = 'none' | 'bearer-token' | 'custom-header' | 'oauth'
 export type McpConnectionStatus =
   | 'untested'
@@ -256,7 +256,7 @@ export const McpServerProfileSchema = z
     id: z.string().min(1).max(128),
     name: z.string().trim().min(1).max(MCP_SERVER_NAME_MAX),
     enabled: z.boolean(),
-    transport: z.enum(['stdio', 'streamable-http']),
+    transport: z.enum(['stdio', 'streamable-http', 'sse']),
     timeoutSec: z
       .number()
       .int()
@@ -287,7 +287,7 @@ export const McpServerProfileSchema = z
     if (v.transport === 'stdio' && !v.stdio) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'stdio required', path: ['stdio'] })
     }
-    if (v.transport === 'streamable-http' && !v.http) {
+    if ((v.transport === 'streamable-http' || v.transport === 'sse') && !v.http) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'http required', path: ['http'] })
     }
   })
@@ -336,7 +336,7 @@ export const McpServerWriteInputSchema = z
     id: z.string().min(1).max(128),
     name: z.string().trim().min(1).max(MCP_SERVER_NAME_MAX),
     enabled: z.boolean(),
-    transport: z.enum(['stdio', 'streamable-http']),
+    transport: z.enum(['stdio', 'streamable-http', 'sse']),
     timeoutSec: z
       .number()
       .int()
@@ -359,7 +359,7 @@ export const McpServerWriteInputSchema = z
     if (v.transport === 'stdio' && !v.stdio) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'stdio required', path: ['stdio'] })
     }
-    if (v.transport === 'streamable-http' && !v.http) {
+    if ((v.transport === 'streamable-http' || v.transport === 'sse') && !v.http) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'http required', path: ['http'] })
     }
   })

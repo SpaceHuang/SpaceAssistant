@@ -135,7 +135,7 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
         ...(draft.stdio.commandTrustedAt ? { commandTrustedAt: draft.stdio.commandTrustedAt } : {})
       }
     : undefined
-  const http = draft.transport === 'streamable-http' && draft.http
+  const http = (draft.transport === 'streamable-http' || draft.transport === 'sse') && draft.http
     ? { endpoint: draft.http.endpoint }
     : undefined
   // 若同名环境变量已重新填入新值，则之前的删除标记应被抵消，避免误清 Secret

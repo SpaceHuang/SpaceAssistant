@@ -9,6 +9,13 @@ export type EndpointValidationResult =
   | { ok: true; normalized: string }
   | { ok: false; code: string; message: string }
 
+export class McpEndpointValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'McpEndpointValidationError'
+  }
+}
+
 function parseIpv4(host: string): number[] | null {
   const parts = host.split('.')
   if (parts.length !== 4) return null

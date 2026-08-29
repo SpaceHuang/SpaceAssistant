@@ -8,6 +8,7 @@ import {
 import { MCP_CONNECT_TIMEOUT_MS, type McpServerProfile } from '../../src/shared/mcpTypes'
 import { createStdioTransport, StdioCommandValidationError } from './stdioTransport'
 import { createStreamableHttpTransport, McpEndpointValidationError } from './streamableHttpTransport'
+import { createSseTransport } from './sseTransport'
 
 /**
  * MCP 连接管理器：连接池、initialize 超时、capabilities 兼容性诊断、空闲回收、
@@ -284,7 +285,7 @@ export class McpConnectionManager {
       )
     } else if (profile.transport === 'streamable-http') {
       if (!profile.http) throw new Error('HTTP 服务缺少 endpoint 配置')
-      const authHeaders: Record<string, string> = {}
+      let authHeaders: Record<string, string> = {}
       let authProvider: OAuthClientProvider | undefined
       let allowedExtraOrigins: string[] | undefined
       if (profile.auth.mode === 'oauth') {
@@ -295,14 +296,7 @@ export class McpConnectionManager {
         const oauthOrigin = await resolveOauthAuthorizationServerOrigin(profile.http.endpoint)
         if (oauthOrigin) allowedExtraOrigins = [oauthOrigin]
       } else {
-        if (profile.auth.mode === 'bearer-token') {
-          const token = await secretProvider('access-token')
-          if (token) authHeaders.Authorization = `Bearer ${token}`
-        } else if (profile.auth.mode === 'custom-header') {
-          const value = await secretProvider('auth-header')
-          const headerName = profile.auth.headerName?.trim() || 'Authorization'
-          if (value) authHeaders[headerName] = `${profile.auth.valuePrefix ?? ''}${value}`
-        }
+        authHeaders = await this.buildAuthHeaders(profile, secretProvider)
       }
       rawTransport = await createStreamableHttpTransport({
         endpoint: profile.http.endpoint,
@@ -312,6 +306,20 @@ export class McpConnectionManager {
         onDiagnostic: (line) => {
           lastTransportLine = line
           void this.appendDiagnostic?.(profile.id, { code: 'http-diagnostic', message: line })
+        }
+      })
+    } else if (profile.transport === 'sse') {
+      if (!profile.http) throw new Error('SSE 服务缺少 endpoint 配置')
+      if (profile.auth.mode === 'oauth') {
+        throw new Error('SSE 传输暂不支持 OAuth 认证')
+      }
+      const authHeaders = await this.buildAuthHeaders(profile, secretProvider)
+      rawTransport = await createSseTransport({
+        endpoint: profile.http.endpoint,
+        authHeaders,
+        onDiagnostic: (line) => {
+          lastTransportLine = line
+          void this.appendDiagnostic?.(profile.id, { code: 'sse-diagnostic', message: line })
         }
       })
     } else {
@@ -386,6 +394,22 @@ export class McpConnectionManager {
       }
     }
     return session
+  }
+
+  private async buildAuthHeaders(
+    profile: McpServerProfile,
+    secretProvider: McpSecretProvider
+  ): Promise<Record<string, string>> {
+    const authHeaders: Record<string, string> = {}
+    if (profile.auth.mode === 'bearer-token') {
+      const token = await secretProvider('access-token')
+      if (token) authHeaders.Authorization = `Bearer ${token}`
+    } else if (profile.auth.mode === 'custom-header') {
+      const value = await secretProvider('auth-header')
+      const headerName = profile.auth.headerName?.trim() || 'Authorization'
+      if (value) authHeaders[headerName] = `${profile.auth.valuePrefix ?? ''}${value}`
+    }
+    return authHeaders
   }
 
   private touch(serverId: string): void {

@@ -1,6 +1,6 @@
 import dns from 'dns/promises'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import type { EventSourceInit } from 'eventsource'
 import {
   McpEndpointValidationError,
   assertEndpointIpAllowed,
@@ -12,20 +12,14 @@ import {
 export { McpEndpointValidationError } from './endpointPolicy'
 
 /**
- * Streamable HTTP 传输安全封装：
- * - endpoint 校验（URL 边界 + 私网/保留地址拒绝）。
- * - DNS 解析后校验目标 IP（防 DNS rebinding）。
- * - 认证头注入（Bearer / 自定义头，token 不进日志）。
- * - 禁止跟随跨 origin 重定向（3xx 视为连接失败）。
- * - Mcp-Session-Id 由 SDK 传输管理。
+ * Legacy SSE 传输安全封装：
+ * - endpoint 校验与 DNS 解析校验复用 MCP HTTP 规则。
+ * - SSE GET 与 message POST 全部走 policy fetch，禁止跨 origin 与重定向。
+ * - 不使用 OAuth provider；Bearer / 自定义头显式注入 GET 与 POST 两条路径。
  */
-
-export type McpHttpTransportOptions = {
+export type McpSseTransportOptions = {
   endpoint: string
   authHeaders?: Record<string, string>
-  authProvider?: OAuthClientProvider
-  /** OAuth 授权服务器 origin 白名单（如 GitHub 的 github.com）；仅放行这些跨源端点。 */
-  allowedExtraOrigins?: string[]
   onDiagnostic?: (line: string) => void
 }
 
@@ -52,13 +46,12 @@ async function assertResolvedIpsAllowed(
 
 function makePolicyFetch(
   configuredUrl: URL,
-  allowedExtraOrigins: ReadonlySet<string>,
   onDiagnostic?: (line: string) => void
 ): typeof fetch {
   return async (input, init) => {
     const target =
       typeof input === 'string' ? new URL(input) : input instanceof URL ? input : new URL(String(input))
-    if (target.origin !== configuredUrl.origin && !allowedExtraOrigins.has(target.origin)) {
+    if (target.origin !== configuredUrl.origin) {
       onDiagnostic?.(`跨 origin 请求被拒绝（${target.origin}）`)
       throw new McpEndpointValidationError('跨 origin 重定向/请求被拒绝')
     }
@@ -73,9 +66,7 @@ function makePolicyFetch(
   }
 }
 
-export async function createStreamableHttpTransport(
-  options: McpHttpTransportOptions
-): Promise<StreamableHTTPClientTransport> {
+export async function createSseTransport(options: McpSseTransportOptions): Promise<SSEClientTransport> {
   const validation = validateMcpEndpoint(options.endpoint)
   if (!validation.ok) {
     throw new McpEndpointValidationError(validation.message)
@@ -89,25 +80,22 @@ export async function createStreamableHttpTransport(
       throw new McpEndpointValidationError(`受控请求头不允许: ${name}`)
     }
   }
-  const allowedExtraOrigins = new Set<string>()
-  for (const origin of options.allowedExtraOrigins ?? []) {
-    try {
-      allowedExtraOrigins.add(new URL(origin).origin)
-    } catch {
-      options.onDiagnostic?.(`忽略非法 OAuth origin: ${origin}`)
-    }
+
+  const policyFetch = makePolicyFetch(url, options.onDiagnostic)
+  const eventSourceInit: EventSourceInit = {
+    fetch: async (input, init) =>
+      policyFetch(input, {
+        ...init,
+        headers: {
+          ...(init?.headers as Record<string, string> | undefined),
+          ...authHeaders
+        }
+      })
   }
 
-  return new StreamableHTTPClientTransport(url, {
+  return new SSEClientTransport(url, {
     requestInit: { headers: authHeaders },
-    ...(options.authProvider ? { authProvider: options.authProvider } : {}),
-    fetch: makePolicyFetch(url, allowedExtraOrigins, options.onDiagnostic),
-    // 不自动重连重放：取消/失败不重试 tools/call
-    reconnectionOptions: {
-      maxRetries: 0,
-      maxReconnectionDelay: 0,
-      initialReconnectionDelay: 0,
-      reconnectionDelayGrowFactor: 1
-    }
+    eventSourceInit,
+    fetch: policyFetch
   })
 }

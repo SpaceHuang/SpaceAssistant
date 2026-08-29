@@ -34,7 +34,8 @@ const STATUS_KEYS = {
 
 const TRANSPORT_KEYS = {
   stdio: 'transport.stdio',
-  'streamable-http': 'transport.http'
+  'streamable-http': 'transport.http',
+  sse: 'transport.sse'
 } as const
 
 export function McpServerCard({

@@ -65,7 +65,7 @@ describe('mcpTypes schemas', () => {
   })
 
   it('rejects an invalid transport type', () => {
-    expect(() => McpServerProfileSchema.parse({ ...baseProfile, transport: 'sse' })).toThrow()
+    expect(() => McpServerProfileSchema.parse({ ...baseProfile, transport: 'websocket' })).toThrow()
   })
 
   it('strips unknown fields on read profile (migration tolerance)', () => {
@@ -100,6 +100,28 @@ describe('mcpTypes schemas', () => {
       })
     ).toThrow()
   })
+
+  it('accepts a legacy SSE profile with an http endpoint', () => {
+    const parsed = McpServerProfileSchema.parse({
+      ...baseProfile,
+      transport: 'sse',
+      stdio: undefined,
+      http: { endpoint: 'https://example.com/sse' }
+    })
+    expect(parsed.transport).toBe('sse')
+    expect(parsed.http?.endpoint).toBe('https://example.com/sse')
+  })
+
+  it('requires endpoint when transport is legacy SSE', () => {
+    expect(() =>
+      McpServerProfileSchema.parse({
+        ...baseProfile,
+        transport: 'sse',
+        stdio: undefined,
+        http: undefined
+      })
+    ).toThrow(/http required/)
+  })
 })
 
 describe('mcpTypes write input schema', () => {
@@ -130,6 +152,28 @@ describe('mcpTypes write input schema', () => {
   it('rejects unknown fields (strict)', () => {
     expect(() => McpServerWriteInputSchema.parse({ ...baseWriteInput, status: 'connected' })).toThrow()
     expect(() => McpServerWriteInputSchema.parse({ ...baseWriteInput, secrets: { x: 1 } })).toThrow()
+  })
+
+  it('accepts a legacy SSE write input with an http endpoint', () => {
+    const parsed = McpServerWriteInputSchema.parse({
+      ...baseWriteInput,
+      transport: 'sse',
+      stdio: undefined,
+      http: { endpoint: 'https://example.com/sse' }
+    })
+    expect(parsed.transport).toBe('sse')
+    expect(parsed.http?.endpoint).toBe('https://example.com/sse')
+  })
+
+  it('requires endpoint when a legacy SSE write input omits http', () => {
+    expect(() =>
+      McpServerWriteInputSchema.parse({
+        ...baseWriteInput,
+        transport: 'sse',
+        stdio: undefined,
+        http: undefined
+      })
+    ).toThrow(/http required/)
   })
 
   it('rejects malformed env key names', () => {

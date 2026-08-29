@@ -144,6 +144,17 @@ function makeOauthProvider(accessToken: string): OAuthClientProvider {
   }
 }
 
+function startLegacySseServer(handler: (req: http.IncomingMessage, res: http.ServerResponse) => void): Promise<string> {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler)
+    server.listen(0, '127.0.0.1', () => {
+      servers.push(server)
+      const { port } = server.address() as AddressInfo
+      resolve(`http://127.0.0.1:${port}/sse`)
+    })
+  })
+}
+
 const servers: Array<http.Server> = []
 
 afterAll(() => {
@@ -437,5 +448,95 @@ rl.on('line', (line) => {
     const manager = new McpConnectionManager({ connectTimeoutMs: 8000 })
 
     await expect(manager.connect(oauthProfile, async () => null)).rejects.toThrow(/OAuth/i)
+  })
+
+  it('connects to a legacy SSE server with bearer auth', async () => {
+    let stream: http.ServerResponse | null = null
+    const endpoint = await startLegacySseServer((req, res) => {
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write('event: endpoint\ndata: /messages?sessionId=test-session\n\n')
+        stream = res
+        return
+      }
+      let raw = ''
+      req.on('data', (chunk) => {
+        raw += chunk.toString('utf8')
+      })
+      req.on('end', () => {
+        const message = JSON.parse(raw) as { method?: string; id?: number }
+        res.writeHead(202)
+        res.end()
+        const sse = stream
+        if (!sse || message.method === 'notifications/initialized') return
+        if (message.method === 'initialize') {
+          sse.write(
+            `data: ${JSON.stringify({
+              jsonrpc: '2.0',
+              id: message.id,
+              result: {
+                protocolVersion: '2024-11-05',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'legacy-sse', version: '1.0.0' }
+              }
+            })}\n\n`
+          )
+        }
+      })
+    })
+    const sseProfile = makeProfile({
+      transport: 'sse',
+      stdio: undefined,
+      http: { endpoint },
+      auth: { mode: 'bearer-token', secretPresent: true }
+    })
+    const manager = new McpConnectionManager({ connectTimeoutMs: 8000 })
+
+    const session = await manager.connect(
+      sseProfile,
+      async (kind) => (kind === 'access-token' ? 'legacy-token' : null)
+    )
+    expect(session.info.name).toBe('legacy-sse')
+    expect(session.protocolVersion).toBe('2024-11-05')
+    await manager.disconnect(sseProfile.id)
+  })
+
+  it('classifies invalid SSE endpoints as invalid-endpoint', async () => {
+    const profile = makeProfile({
+      transport: 'sse',
+      stdio: undefined,
+      http: { endpoint: 'https://192.168.1.10/sse' }
+    })
+    const result = await testConnection(profile, { connectTimeoutMs: 1000 })
+    expect(result).toMatchObject({ ok: false, code: 'invalid-endpoint' })
+  })
+
+  it('requires an endpoint and reports SSE transport diagnostics', async () => {
+    const missingEndpoint = makeProfile({ transport: 'sse', stdio: undefined, http: undefined })
+    const manager = new McpConnectionManager()
+    await expect(manager.connect(missingEndpoint, async () => null)).rejects.toThrow(
+      'SSE 服务缺少 endpoint 配置'
+    )
+
+    const diagnostics: Array<{ code: string; message: string }> = []
+    const endpoint = await startLegacySseServer((_req, res) => {
+      res.writeHead(302, { Location: 'http://127.0.0.1:1/redirected' })
+      res.end()
+    })
+    const redirectProfile = makeProfile({
+      transport: 'sse',
+      stdio: undefined,
+      http: { endpoint }
+    })
+    const diagnosticManager = new McpConnectionManager({
+      connectTimeoutMs: 2000,
+      appendDiagnostic: (serverId, entry) => {
+        diagnostics.push(entry)
+      }
+    })
+    await expect(diagnosticManager.connect(redirectProfile, async () => null)).rejects.toThrow(/重定向/)
+    await vi.waitFor(() => {
+      expect(diagnostics.some((entry) => entry.code === 'sse-diagnostic')).toBe(true)
+    })
   })
 })
