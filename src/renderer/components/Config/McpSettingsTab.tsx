@@ -37,20 +37,24 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
   const dirtyRef = useRef(false)
   const prevActiveRef = useRef(active)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const config = await window.api.mcpList()
-      setServers(config.servers)
-      setToolCaches(config.toolCaches ?? {})
-      setDrafts(config.servers.map(initMcpServerDraft))
-      dirtyRef.current = false
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : String(error))
-    } finally {
-      setLoading(false)
-    }
-  }, [message])
+  const load = useCallback(
+    async (options?: { silent?: boolean }) => {
+      // silent 模式不切换全屏 Spin，避免刷新时整个分区（含编辑弹窗）卸载重建。
+      if (!options?.silent) setLoading(true)
+      try {
+        const config = await window.api.mcpList()
+        setServers(config.servers)
+        setToolCaches(config.toolCaches ?? {})
+        setDrafts(config.servers.map(initMcpServerDraft))
+        dirtyRef.current = false
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (!options?.silent) setLoading(false)
+      }
+    },
+    [message]
+  )
 
   useEffect(() => {
     if (open) void load()
@@ -144,7 +148,12 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
         const result = await window.api.mcpTestConnection({
           server: draftToWriteInput(draft)
         })
-        if (result.ok) {
+        if (!result.ok) {
+          message.error(t('messages.testFailed', { message: result.message }))
+          return
+        }
+        // 其他草稿存在未填名称时无法整体保存，退化为仅更新内存中的工具缓存。
+        if (drafts.some((d) => !d.name.trim())) {
           setToolCaches((current) => ({
             ...current,
             [id]: {
@@ -154,9 +163,36 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
             }
           }))
           message.success(t('messages.testOk', { count: result.tools.length }))
-        } else {
-          message.error(t('messages.testFailed', { message: result.message }))
+          return
         }
+        // 测试成功后立即落盘：保存配置并通过 refresh 持久化工具缓存与连接状态，
+        // 避免用户返回列表时仍显示「未连接」而需要再点一次测试。
+        const draftsAtTest = drafts
+        await window.api.mcpSaveProfiles({
+          servers: drafts.map(draftToWriteInput)
+        })
+        await window.api.mcpRefreshTools({ serverId: id })
+        // 静默回刷 servers/toolCaches。测试+刷新耗时较长，期间用户可能继续编辑
+        // （如立即打开「启用服务」开关），这类草稿保留用户版本，不被回刷覆盖。
+        const config = await window.api.mcpList()
+        setServers(config.servers)
+        setToolCaches(config.toolCaches ?? {})
+        const fresh = config.servers.map(initMcpServerDraft)
+        setDrafts((current) => {
+          let keptUserEdits = false
+          const next = fresh.map((f) => {
+            const cur = current.find((d) => d.id === f.id)
+            const before = draftsAtTest.find((d) => d.id === f.id)
+            if (cur && before && JSON.stringify(cur) !== JSON.stringify(before)) {
+              keptUserEdits = true
+              return cur
+            }
+            return f
+          })
+          dirtyRef.current = keptUserEdits
+          return next
+        })
+        message.success(t('messages.testOk', { count: result.tools.length }))
       } catch (error) {
         message.error(error instanceof Error ? error.message : String(error))
       } finally {
@@ -184,7 +220,7 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
         } else {
           message.error(t('messages.testFailed', { message: result.message }))
         }
-        await load()
+        await load({ silent: true })
       } catch (error) {
         message.error(error instanceof Error ? error.message : String(error))
       } finally {

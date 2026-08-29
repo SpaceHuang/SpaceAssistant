@@ -28,6 +28,13 @@ const ENV_SERVER: McpServerProfile = {
   }
 }
 
+const SSE_SERVER: McpServerProfile = {
+  ...SAVED_SERVER,
+  transport: 'sse',
+  stdio: undefined,
+  http: { endpoint: 'https://example.com/sse' }
+}
+
 describe('McpSettingsTab', () => {
   const mcpList = vi.fn()
   const mcpSaveProfiles = vi.fn()
@@ -131,16 +138,160 @@ describe('McpSettingsTab', () => {
   })
 
   it('tests a connection and displays discovered tools', async () => {
+    const discoveredTool = {
+      serverId: 'server-1',
+      originalName: 'hello',
+      mappedName: 'mcp_new_hello_12345678',
+      description: 'says hello',
+      inputSchema: {},
+      discoveredAt: new Date().toISOString()
+    }
     mcpList.mockResolvedValue({
       servers: [SAVED_SERVER],
-      toolCaches: {}
+      toolCaches: {
+        'server-1': {
+          tools: [discoveredTool],
+          protocolVersion: '2025-06-18',
+          discoveredAt: new Date().toISOString()
+        }
+      }
     })
+    mcpRefreshTools.mockResolvedValue({ ok: true, serverName: 'test-server', tools: [discoveredTool] })
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
     fireEvent.click(await screen.findByRole('button', { name: '测试连接' }))
     await waitFor(() => expect(mcpTestConnection).toHaveBeenCalledTimes(1))
     expect(await screen.findByText('hello')).toBeTruthy()
     expect(screen.getByText(/mcp_new_hello_/)).toBeTruthy()
+  })
+
+  it('persists config and status after a successful test', async () => {
+    mcpList.mockResolvedValue({
+      servers: [SAVED_SERVER],
+      toolCaches: {}
+    })
+    mcpRefreshTools.mockResolvedValue({ ok: true, serverName: 'test-server', tools: [] })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    fireEvent.click(await screen.findByRole('button', { name: '测试连接' }))
+    await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalledTimes(1))
+    expect(mcpRefreshTools).toHaveBeenCalledWith({ serverId: 'server-1' })
+  })
+
+  it('keeps enabled state when toggling right after a successful first test', async () => {
+    // 模拟真实后端：mcpList 返回最近一次保存的 profiles 与工具缓存
+    let savedProfiles: McpServerProfile[] = []
+    let savedTools: unknown[] = []
+    mcpList.mockImplementation(async () => ({
+      servers: savedProfiles,
+      toolCaches:
+        savedProfiles.length > 0
+          ? {
+              [savedProfiles[0]!.id]: {
+                tools: savedTools,
+                protocolVersion: '2025-06-18',
+                discoveredAt: new Date().toISOString()
+              }
+            }
+          : {}
+    }))
+    mcpSaveProfiles.mockImplementation(async (payload: { servers: Array<McpServerProfile & { id: string }> }) => {
+      savedProfiles = payload.servers.map((s) => ({
+        ...SAVED_SERVER,
+        ...s,
+        auth: { mode: 'none', secretPresent: false },
+        stdio: { command: 'node', args: ['server.js'], env: [] }
+      }))
+      return { servers: savedProfiles }
+    })
+    mcpRefreshTools.mockImplementation(async () => {
+      savedTools = [
+        {
+          serverId: savedProfiles[0]?.id ?? 'server-1',
+          originalName: 'hello',
+          mappedName: 'mcp_new_hello_12345678',
+          description: 'says hello',
+          inputSchema: {},
+          discoveredAt: new Date().toISOString()
+        }
+      ]
+      return { ok: true, serverName: 'test-server', tools: savedTools }
+    })
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
+    const nameInput = (await screen.findByPlaceholderText('例如 GitHub')) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'GitHub' } })
+
+    // 首次测试成功（自动保存 + 刷新）
+    fireEvent.click(await screen.findByRole('button', { name: '测试连接' }))
+    await waitFor(() => expect(mcpRefreshTools).toHaveBeenCalled())
+
+    // 立即启用并保存
+    const toggle = await screen.findByRole('switch', { name: '启用此服务' })
+    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+    await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalledTimes(2))
+    const payload = mcpSaveProfiles.mock.calls[1]![0] as { servers: Array<{ enabled: boolean }> }
+    expect(payload.servers[0]!.enabled).toBe(true)
+
+    // 回到列表后开关应为启用状态
+    const cardToggle = await screen.findByRole('switch', { name: '启用此服务' })
+    expect(cardToggle.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('preserves the enable toggle clicked while the test is still in flight', async () => {
+    // 已保存服务 + 已有工具缓存：编辑弹窗中「启用服务」开关可用
+    const cachedTool = {
+      serverId: 'server-1',
+      originalName: 'hello',
+      mappedName: 'mcp_new_hello_12345678',
+      description: 'says hello',
+      inputSchema: {},
+      discoveredAt: new Date().toISOString()
+    }
+    let profiles: McpServerProfile[] = [SAVED_SERVER]
+    mcpList.mockImplementation(async () => ({
+      servers: profiles,
+      toolCaches: {
+        'server-1': {
+          tools: [cachedTool],
+          protocolVersion: '2025-06-18',
+          discoveredAt: new Date().toISOString()
+        }
+      }
+    }))
+    mcpSaveProfiles.mockImplementation(async (payload: { servers: Array<Partial<McpServerProfile> & { id: string }> }) => {
+      profiles = payload.servers.map((s) => ({ ...SAVED_SERVER, ...s }) as McpServerProfile)
+      return { servers: profiles }
+    })
+    // refresh-tools 挂起，模拟真实环境下测试链路耗时
+    let resolveRefresh: (value: { ok: true; serverName: string; tools: unknown[] }) => void = () => undefined
+    mcpRefreshTools.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveRefresh = resolve
+        })
+    )
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    fireEvent.click(await screen.findByRole('button', { name: '测试连接' }))
+    // 测试链路尚未完成时就点击启用
+    const toggle = await screen.findByRole('switch', { name: '启用此服务' })
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    resolveRefresh({ ok: true, serverName: 'test-server', tools: [cachedTool] })
+
+    // 回刷完成后开关不应被重置为关闭
+    await waitFor(() => expect(mcpRefreshTools).toHaveBeenCalled())
+    const toggleAfter = await screen.findByRole('switch', { name: '启用此服务' })
+    expect(toggleAfter.getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: '保存并应用' }))
+    await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalledTimes(2))
+    const payload = mcpSaveProfiles.mock.calls[1]![0] as { servers: Array<{ enabled: boolean }> }
+    expect(payload.servers[0]!.enabled).toBe(true)
   })
 
   it('surfaces stdio validation errors only when the connection fails', async () => {
@@ -190,6 +341,23 @@ describe('McpSettingsTab', () => {
     fireEvent.click(await screen.findByRole('tab', { name: '流式HTTP' }))
     expect(await screen.findByText('认证方式')).toBeTruthy()
     expect(screen.getByText('MCP Endpoint')).toBeTruthy()
+  })
+
+  it('supports legacy SSE endpoint and bearer auth without OAuth', async () => {
+    mcpList.mockResolvedValue({ servers: [], toolCaches: {} })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'SSE（旧版）' }))
+    expect(await screen.findByText('MCP Endpoint')).toBeTruthy()
+    expect(await screen.findByText('认证方式')).toBeTruthy()
+    expect(screen.queryByText('OAuth 2.1 (P0-C)')).toBeNull()
+  })
+
+  it('shows the legacy SSE label for saved SSE servers', async () => {
+    mcpList.mockResolvedValue({ servers: [SSE_SERVER], toolCaches: {} })
+    renderTab()
+    expect(await screen.findByText('SSE（旧版）')).toBeTruthy()
   })
 
   it('orders sections as common params → connection tabs → tools', async () => {
@@ -327,7 +495,9 @@ describe('McpSettingsTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '测试并刷新' }))
     await waitFor(() => expect(mcpTestConnection).toHaveBeenCalled())
-    expect(mcpRefreshTools).not.toHaveBeenCalled()
+    // 测试成功后会自动保存配置并刷新，持久化工具缓存与连接状态
+    await waitFor(() => expect(mcpSaveProfiles).toHaveBeenCalled())
+    expect(mcpRefreshTools).toHaveBeenCalled()
   })
 
   it('refreshes a saved server from the card via refresh-tools', async () => {
