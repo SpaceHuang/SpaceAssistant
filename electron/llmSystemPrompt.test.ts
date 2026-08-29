@@ -99,17 +99,6 @@ describe('buildFinalSystemPrompt', () => {
     expect(second).toContain('English (en-US)')
   })
 
-  it('includes recent artifact context in the system prompt', () => {
-    const result = buildFinalSystemPrompt({
-      locale: 'en-US',
-      memoryEnabled: false,
-      memoryContent: null,
-      system: 'base',
-      artifactContextHint: 'Recent session artifacts (reuse artifactId when continuing edits):\n1. a1'
-    })!
-    expect(result).toContain('Recent session artifacts')
-    expect(result.indexOf('Recent session artifacts')).toBeGreaterThan(result.indexOf('base'))
-  })
 })
 
 describe('buildFinalSystemPrompt - tool convention hint', () => {

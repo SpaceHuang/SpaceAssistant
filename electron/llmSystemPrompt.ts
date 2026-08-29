@@ -47,12 +47,8 @@ export function buildFinalSystemPrompt(args: {
   memoryEnabled: boolean
   locale: AppLocale
   hasImageAttachments?: boolean
-  artifactContextHint?: string
 }): string | undefined {
   let withMemory = buildSystemPrompt(args.system, args.memoryContent, args.memoryEnabled)
-  if (args.artifactContextHint) {
-    withMemory = withMemory ? `${withMemory}\n\n${args.artifactContextHint}` : args.artifactContextHint
-  }
   if (args.hasImageAttachments) {
     const hint = buildImageAttachmentsSystemHint(args.locale)
     withMemory = withMemory ? `${withMemory}\n\n${hint}` : hint
