@@ -63,9 +63,7 @@ function createMockApi() {
     fileGetMetadata: vi.fn().mockResolvedValue({ mtime: 1000, size: 5, isText: true }),
     fileWatchContent: vi.fn().mockResolvedValue(undefined),
     fileOnTreeChanged: vi.fn(() => () => {}),
-    fileOnContentChanged: vi.fn(() => () => {}),
-    artifactList: vi.fn().mockResolvedValue([]),
-    artifactOnChanged: vi.fn(() => () => undefined)
+    fileOnContentChanged: vi.fn(() => () => {})
   }
 }
 
@@ -86,7 +84,7 @@ function Harness() {
   return <DetailPanel />
 }
 
-function renderPanel(options?: { sessions?: Session[]; currentSessionId?: string | null; artifactManagementEnabled?: boolean }) {
+function renderPanel(options?: { sessions?: Session[]; currentSessionId?: string | null }) {
   const sessions = options?.sessions ?? [makeSession({ id: 's1', metadata: {} })]
   const currentSessionId = options?.currentSessionId === undefined ? 's1' : options.currentSessionId
   const store = configureStore({
@@ -98,7 +96,7 @@ function renderPanel(options?: { sessions?: Session[]; currentSessionId?: string
           wiki: { enabled: false, rootPath: 'llm-wiki', hideWikiFromFileTree: false },
           activeWorkDirProfileId: '',
           workDirProfiles: [],
-          artifactManagementEnabled: options?.artifactManagementEnabled ?? false
+          artifactManagementEnabled: false
         },
         settingsOpen: false,
         aboutOpen: false
@@ -162,42 +160,3 @@ describe('DetailPanel 文件树状态保留', () => {
   })
 })
 
-describe('DetailPanel 本会话工作产物可见性', () => {
-  let originalApi: unknown
-
-  beforeEach(() => {
-    panelActions = null
-    resetFileContentSyncBusForTests()
-    setFileContentMetadataGetterForTests(async () => ({ mtime: 1000, size: 5 }))
-    originalApi = (window as Record<string, unknown>).api
-    ;(window as Record<string, unknown>).api = createMockApi()
-  })
-
-  afterEach(() => {
-    resetFileContentSyncBusForTests()
-    ;(window as Record<string, unknown>).api = originalApi
-    vi.clearAllMocks()
-  })
-
-  it('当前会话未启用工作产物管理时隐藏本会话工作产物栏', () => {
-    renderPanel({
-      sessions: [makeSession({ id: 's1', metadata: { artifactManagementEnabled: false } })]
-    })
-    expect(screen.queryByText('本会话工作产物')).toBeNull()
-  })
-
-  it('当前会话已启用工作产物管理时显示本会话工作产物栏', () => {
-    renderPanel({
-      sessions: [makeSession({ id: 's1', metadata: { artifactManagementEnabled: true } })],
-      artifactManagementEnabled: true
-    })
-    expect(screen.getByText('本会话工作产物')).toBeTruthy()
-  })
-
-  it('全局关闭工作产物管理时即使会话曾启用也隐藏本会话工作产物栏', () => {
-    renderPanel({
-      sessions: [makeSession({ id: 's1', metadata: { artifactManagementEnabled: true } })]
-    })
-    expect(screen.queryByText('本会话工作产物')).toBeNull()
-  })
-})

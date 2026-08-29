@@ -12,7 +12,6 @@ import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
 import type { LlmServiceTabState } from './llmServiceDrafts'
 import type { ToolsSettingsUi } from './ToolsSettingsTab'
-import type { ArtifactSettingsUi } from './ArtifactSettingsTab'
 
 export type ConfigModalSnapshotInput = {
   workDirProfiles: WorkDirProfile[]
@@ -28,7 +27,6 @@ export type ConfigModalSnapshotInput = {
   browser: BrowserConfig
   shell: ShellConfig
   shellEnabled: boolean
-  artifactSettings: ArtifactSettingsUi
 }
 
 function normalizeModels(models: ModelEntry[]): ModelEntry[] {
@@ -97,8 +95,7 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     feishu: input.feishu,
     wechat: input.wechat,
     browser: { ...input.browser, allowedDomains: [] },
-    shell: { ...input.shell, enabled: input.shellEnabled },
-    artifactSettings: { ...input.artifactSettings }
+    shell: { ...input.shell, enabled: input.shellEnabled }
   }
   return JSON.stringify(payload)
 }
@@ -134,11 +131,7 @@ export function buildConfigModalSnapshotFromConfig(
     wechat: cfg.wechat,
     browser: { ...browserCfg, enabled: true, trustedDomains, allowedDomains: [] },
     shell: cfg.shell ?? { ...DEFAULT_SHELL_CONFIG, enabled: shellEnabled },
-    shellEnabled,
-    artifactSettings: {
-      artifactManagementEnabled: Boolean(cfg.artifactManagementEnabled),
-      scratchGitPolicy: cfg.scratchGitPolicy ?? 'ask'
-    }
+    shellEnabled
   })
 }
 

@@ -56,9 +56,6 @@ import {
 import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 import { resolveMessageToolsInteractive } from '../../services/resolveMessageToolsInteractive'
 import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
-import { usePendingArtifactDecisionSnapshot } from '../../hooks/usePendingArtifactDecisionSnapshot'
-import { pendingArtifactDecisionStore } from '../../services/pendingArtifactDecisionStore'
-import { ArtifactDecisionCard } from './ArtifactDecisionCard'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
 import { runClaudeChatStream } from '../../services/chatStreamService'
@@ -1382,7 +1379,6 @@ export function ChatView() {
   )
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
-  const pendingArtifactDecision = usePendingArtifactDecisionSnapshot(sessionId)
 
   const testPreviewToolsInteractive = useMemo(
     () =>
@@ -1569,18 +1565,6 @@ export function ChatView() {
   return (
     <div className="chat-view">
       {viewportBody}
-      {pendingArtifactDecision ? (
-        <div className="chat-artifact-decision">
-          <div className="chat-artifact-decision__track">
-            <ArtifactDecisionCard
-              request={pendingArtifactDecision}
-              uiStatus={pendingArtifactDecision.uiStatus ?? 'active'}
-              onRespond={(choice) => pendingArtifactDecisionStore.respond(pendingArtifactDecision, choice)}
-              onCancel={() => pendingArtifactDecisionStore.cancel(pendingArtifactDecision)}
-            />
-          </div>
-        </div>
-      ) : null}
       <MessageInput
         ref={composerRef}
         sessionId={sessionId ?? undefined}

@@ -4,7 +4,6 @@ import { store } from '../store'
 import { addMessage, patchMessage, removeRunningSession } from '../store/chatSlice'
 import type { ToolChatController } from './chatToolSessionService'
 import { pendingConfirmStore } from './pendingConfirmStore'
-import { pendingArtifactDecisionStore } from './pendingArtifactDecisionStore'
 import {
   registerRunRequest,
   unregisterRunRequest,
@@ -293,7 +292,6 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
   }
   unregisterToolChatController(requestId)
   pendingConfirmStore.removeAllForRequest(requestId)
-  pendingArtifactDecisionStore.removeAllForRequest(requestId)
   unregisterRunRequest(requestId)
 }
 
@@ -302,14 +300,12 @@ export function abortSessionRun(sessionId: string): void {
   if (meta) {
     void window.api.claudeChatCancel({ requestId: meta.requestId })
     unregisterToolChatController(meta.requestId)
-    pendingArtifactDecisionStore.removeAllForRequest(meta.requestId)
     unregisterRunRequest(meta.requestId)
   } else {
     for (const requestId of toolControllersByRequestId.keys()) {
-      if (resolveSessionIdForRequest(requestId) === sessionId) {
-        unregisterToolChatController(requestId)
-        pendingArtifactDecisionStore.removeAllForRequest(requestId)
-      }
+        if (resolveSessionIdForRequest(requestId) === sessionId) {
+          unregisterToolChatController(requestId)
+        }
     }
     unregisterRunRequestsForSession(sessionId)
   }
