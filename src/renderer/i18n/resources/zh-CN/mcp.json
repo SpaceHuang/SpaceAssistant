@@ -17,7 +17,7 @@
   "transport": {
     "stdio": "本机程序（stdio）",
     "http": "流式HTTP",
-    "sse": "SSE（旧版）"
+    "sse": "SSE"
   },
   "card": {
     "expand": "展开",

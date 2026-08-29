@@ -17,7 +17,7 @@
   "transport": {
     "stdio": "Local process (stdio)",
     "http": "Remote service (Streamable HTTP)",
-    "sse": "SSE (legacy)"
+    "sse": "SSE"
   },
   "card": {
     "expand": "Expand",
