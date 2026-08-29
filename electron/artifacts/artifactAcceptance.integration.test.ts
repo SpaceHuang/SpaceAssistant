@@ -25,18 +25,6 @@ describe('artifact acceptance integration', () => {
   })
 
   describe('dev scenario (AC-01～05, AC-22, AC-33, AC-36, AC-39)', () => {
-    it('AC-01/AC-35: artifact-enabled session freezes management flag on', () => {
-      const fixture = createArtifactTestFixture()
-      fixtures.push(fixture)
-      const session = createSession(fixture.db, {
-        name: 'artifact-on',
-        workDirProfileId: fixture.profile.id,
-        artifactManagementEnabled: true
-      })
-      const metadata = getSession(fixture.db, session.id)!.metadata
-      expect(isArtifactManagementEnabled(metadata)).toBe(true)
-    })
-
     it('AC-02/AC-05: explicit project paths resolve literally without redirect', () => {
       const fixture = createArtifactTestFixture()
       fixtures.push(fixture)

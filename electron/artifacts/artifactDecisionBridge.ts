@@ -1,9 +1,9 @@
-import type { ArtifactDecisionResponsePayload } from '../../src/shared/api'
 import type {
   ArtifactDecisionRequest,
   ArtifactDecisionSubmitResult,
   RemoteArtifactDecisionOwner
 } from '../../src/shared/artifactDecisionTypes'
+import type { ArtifactDecisionResponsePayload } from './ipcPayloads'
 import type { ArtifactPathProvenance } from '../../src/shared/artifactTypes'
 import { ArtifactDecisionRegistry } from './decisionRegistry'
 

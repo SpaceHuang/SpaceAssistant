@@ -17,8 +17,6 @@ import {
   serializeToolUseForDb
 } from '../messageCodec'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
-import { ARTIFACT_MANAGEMENT_ENABLED_KEY, freezeArtifactManagementFlag } from '../artifacts/featureFlag'
-import { sanitizeArtifactSessionMetadataOnSave } from '../artifacts/legacyMigration'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import {
   estimateThinkingTokensFromMessage,
@@ -136,7 +134,6 @@ export function createSession(
     maxTokens?: number
     metadata?: Record<string, unknown>
     workDirProfileId?: string
-    artifactManagementEnabled?: boolean
   }
 ): Session {
   const now = Date.now()
@@ -144,10 +141,6 @@ export function createSession(
   const model = input.model ?? 'claude-sonnet-4-20250514'
   const temperature = input.temperature ?? DEFAULT_LLM_TEMPERATURE
   const maxTokens = input.maxTokens ?? 4096
-  const frozen = freezeArtifactManagementFlag(
-    input.metadata ? { ...input.metadata } : {},
-    input.artifactManagementEnabled
-  )
   const session: Session = {
     id,
     name: input.name,
@@ -160,7 +153,7 @@ export function createSession(
     updatedAt: now,
     messageCount: 0,
     skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
-    metadata: sanitizeArtifactSessionMetadataOnSave(frozen).metadata,
+    metadata: input.metadata ? { ...input.metadata } : {},
     schemaVersion: CURRENT_SCHEMA_VERSION,
     workDirProfileId: input.workDirProfileId
   }
@@ -217,17 +210,7 @@ export function updateSession(
 ): Session | undefined {
   const cur = getSession(db, sessionId)
   if (!cur) return undefined
-  let metadata = patch.metadata
-    ? {
-        ...patch.metadata,
-        ...(ARTIFACT_MANAGEMENT_ENABLED_KEY in cur.metadata
-          ? { [ARTIFACT_MANAGEMENT_ENABLED_KEY]: cur.metadata[ARTIFACT_MANAGEMENT_ENABLED_KEY] }
-          : {})
-      }
-    : cur.metadata
-  if (patch.metadata) {
-    metadata = sanitizeArtifactSessionMetadataOnSave(metadata).metadata
-  }
+  const metadata = patch.metadata ?? cur.metadata
   const next: Session = {
     ...cur,
     ...patch,
@@ -273,16 +256,7 @@ export function updateSession(
 
 export function deleteSession(db: AppDatabase, sessionId: string): void {
   const conn = getDbConnection(db)
-  const pending = conn
-    .prepare(`SELECT 1 FROM artifact_operations op
-      JOIN session_artifacts artifact ON artifact.id = op.artifact_id
-      WHERE artifact.session_id = ? AND op.phase NOT IN ('completed', 'rolled_back', 'recovery_required') LIMIT 1`)
-    .get(sessionId)
-  if (pending) throw new Error('Cannot delete session while an artifact operation is pending')
   conn.transaction(() => {
-    conn
-      .prepare('DELETE FROM artifact_operations WHERE artifact_id IN (SELECT id FROM session_artifacts WHERE session_id = ?)')
-      .run(sessionId)
     conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
   })()
   deleteSessionUsage(db, sessionId)

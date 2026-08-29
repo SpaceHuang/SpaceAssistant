@@ -107,10 +107,6 @@ import { classifyWikiPath } from './wiki/wikiPaths'
 import { copyFileInWorkDir, importRawFromWorkDir, wikiImportFileTreeChange } from './wiki/wikiImport'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { openExternalLink } from './externalLink'
-import { readArtifactManagementEnabledFromConfig } from './artifacts/artifactConfig'
-import { readScratchGitPolicyPreference, writeScratchGitPolicyPreference } from './artifacts/scratchGitPolicyStore'
-import { createArtifactIpcHandlers, emitArtifactChanged } from './artifacts/artifactIpc'
-import { setArtifactDecisionSettledNotify } from './artifacts/artifactDecisionBridge'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 import {
   deleteSessionChatAttachments,
@@ -143,8 +139,7 @@ const CONFIG_KEYS = {
   activeWorkDirProfileId: 'config.activeWorkDirProfileId',
   maxParallelChatSessions: 'config.maxParallelChatSessions',
   browser: 'config.browser',
-  locale: 'config.locale',
-  artifactManagementEnabled: 'config.artifactManagementEnabled'
+  locale: 'config.locale'
 } as const
 
 export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
@@ -267,15 +262,6 @@ async function backupAfterMessagePatch(
 }
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
-  const artifactHandlers = createArtifactIpcHandlers({
-    db: ctx.db,
-    getProfiles: () => ctx.workDirManager.listProfiles(),
-    getActiveProfileId: () => ctx.workDirManager.getActiveProfileId(),
-    notifyChanged: (event) => emitArtifactChanged(getMainWindow(), event)
-  })
-  setArtifactDecisionSettledNotify((event) => {
-    getMainWindow()?.webContents.send('artifact:decision-settled', event)
-  })
 
   const skillManager = createSkillManager({
     getUserDataPath: ctx.getUserDataPath,
@@ -476,32 +462,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     })
   })
 
-  ipcMain.handle('artifact:list', (_e, payload: { sessionId?: string }) => {
-    return artifactHandlers.list(payload)
-  })
-
-  ipcMain.handle('artifact:delete', async (_e, payload: { sessionId?: string; artifactId?: string }) => {
-    return artifactHandlers.delete(payload)
-  })
-
-  ipcMain.handle('artifact:clean-session', async (_e, payload: { sessionId?: string; includeReferences?: boolean }) => {
-    return artifactHandlers.cleanSession(payload)
-  })
-
-  ipcMain.handle('artifact:decision-response', (_e, payload: import('../src/shared/api').ArtifactDecisionResponsePayload) => {
-    return artifactHandlers.decisionResponse(payload)
-  })
-
-  ipcMain.handle('artifact:set-default-dir', (_e, payload: { sessionId?: string; dir?: string }) => {
-    artifactHandlers.setDefaultDir(payload)
-  })
-
-  ipcMain.handle(
-    'artifact:relocate',
-    async (_e, payload: { sessionId?: string; artifactId?: string; target?: string; mode?: 'move' | 'copy' }) =>
-      artifactHandlers.relocate(payload)
-  )
-
   ipcMain.handle(
     'session:create',
     async (
@@ -510,8 +470,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     ): Promise<Session> => {
       const s = createSession(ctx.db, {
         ...payload,
-        workDirProfileId: ctx.workDirManager.getActiveProfileId(),
-        artifactManagementEnabled: readArtifactManagementEnabledFromConfig(ctx.db)
+        workDirProfileId: ctx.workDirManager.getActiveProfileId()
       })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
       await ctx.backup.backupImmediate(s, arrayMessagePageReader([]))
@@ -819,7 +778,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const activeWorkDirProfileId =
       getConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId) ?? workDirProfiles.find((p) => p.isDefault)?.id ?? 'default'
-    const scratchGitPolicy = readScratchGitPolicyPreference(ctx.db, activeWorkDirProfileId)
     const maxParallelRaw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
     const browser = readBrowserConfigFromDb(ctx.db)
     const shell = readShellConfigFromDb(ctx.db)
@@ -844,8 +802,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       tools,
       skills,
       wiki,
-      artifactManagementEnabled: readArtifactManagementEnabledFromConfig(ctx.db),
-      ...(scratchGitPolicy ? { scratchGitPolicy } : {}),
       feishu,
       wechat,
       workDirProfiles,
@@ -885,8 +841,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         browser: Partial<BrowserConfig>
         shell: Partial<ShellConfig>
         locale: AppConfig['locale']
-        artifactManagementEnabled?: boolean
-        scratchGitPolicy?: 'add-ignore' | 'keep-visible' | null
       }>
     ): Promise<void> => {
       try {
@@ -1034,24 +988,6 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         }
         const next = mergeWikiConfig({ ...cur, ...payload.wiki })
         setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
-      }
-      if (payload.artifactManagementEnabled !== undefined) {
-        setConfigValue(
-          ctx.db,
-          CONFIG_KEYS.artifactManagementEnabled,
-          payload.artifactManagementEnabled ? 'true' : 'false'
-        )
-      }
-      if (payload.scratchGitPolicy !== undefined) {
-        const profileId =
-          payload.activeWorkDirProfileId ??
-          getConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId) ??
-          'default'
-        if (payload.scratchGitPolicy === null) {
-          writeScratchGitPolicyPreference(ctx.db, profileId, undefined)
-        } else {
-          writeScratchGitPolicyPreference(ctx.db, profileId, payload.scratchGitPolicy)
-        }
       }
       if (payload.feishu !== undefined) {
         persistFeishuConfig(ctx.db, payload.feishu)

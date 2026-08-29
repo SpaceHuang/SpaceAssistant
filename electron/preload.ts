@@ -14,28 +14,6 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('session:backfill-auto-title-if-needed', payload) as Promise<Session | undefined>,
   sessionDelete: (sessionId) => ipcRenderer.invoke('session:delete', sessionId),
 
-  artifactList: (payload) => ipcRenderer.invoke('artifact:list', payload),
-  artifactDecisionResponse: (payload) => ipcRenderer.invoke('artifact:decision-response', payload),
-  artifactDelete: (payload) => ipcRenderer.invoke('artifact:delete', payload),
-  artifactCleanSession: (payload) => ipcRenderer.invoke('artifact:clean-session', payload),
-  artifactRelocate: (payload) => ipcRenderer.invoke('artifact:relocate', payload),
-  artifactSetDefaultDir: (payload) => ipcRenderer.invoke('artifact:set-default-dir', payload),
-  artifactOnChanged: (cb) => {
-    const fn = (_e: unknown, event: { sessionId: string; artifactId: string; action: 'created' | 'updated' | 'deleted' }) => cb(event)
-    ipcRenderer.on('artifact:changed', fn)
-    return () => ipcRenderer.removeListener('artifact:changed', fn)
-  },
-  artifactOnDecisionRequest: (cb) => {
-    const fn = (_e: unknown, request: import('../src/shared/artifactDecisionTypes').ArtifactDecisionRequest) => cb(request)
-    ipcRenderer.on('artifact:decision-request', fn)
-    return () => ipcRenderer.removeListener('artifact:decision-request', fn)
-  },
-  artifactOnDecisionSettled: (cb) => {
-    const fn = (_e: unknown, event: { decisionId: string; reason: string }) => cb(event)
-    ipcRenderer.on('artifact:decision-settled', fn)
-    return () => ipcRenderer.removeListener('artifact:decision-settled', fn)
-  },
-
   usageSet: (payload) => ipcRenderer.invoke('usage:set', payload),
   usageGet: (sessionId) => ipcRenderer.invoke('usage:get', sessionId),
   usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),
@@ -176,27 +154,6 @@ const api: SpaceAssistantApi = {
     const fn = (_e: unknown, data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => cb(data)
     ipcRenderer.on('tool:use', fn)
     return () => ipcRenderer.removeListener('tool:use', fn)
-  },
-  toolOnRedirect: (cb) => {
-    const fn = (
-      _e: unknown,
-      data: { requestId: string; toolUseId: string; originalPath: string; newPath: string }
-    ) => cb(data)
-    ipcRenderer.on('tool:redirect', fn)
-    return () => ipcRenderer.removeListener('tool:redirect', fn)
-  },
-  toolOnPathResolved: (cb) => {
-    const fn = (
-      _e: unknown,
-      data: {
-        requestId: string
-        toolUseId: string
-        path: string
-        metadata: import('../src/shared/artifactTypes').ArtifactToolResultMeta
-      }
-    ) => cb(data)
-    ipcRenderer.on('tool:path-resolved', fn)
-    return () => ipcRenderer.removeListener('tool:path-resolved', fn)
   },
   toolOnConfirmRequest: (cb) => {
     const fn = (

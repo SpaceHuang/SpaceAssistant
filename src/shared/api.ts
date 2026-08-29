@@ -110,29 +110,6 @@ export type FileMetadata = {
   isText: boolean
 }
 
-export type ArtifactApiItem = {
-  id: string
-  sessionId: string
-  container: 'project' | 'package' | 'scratch'
-  role: 'primary' | 'supporting' | 'reference' | 'scratch'
-  title: string
-  finalPath: string
-  status: 'active' | 'deleted'
-  stage?: 'working' | 'draft' | 'final'
-  packageId?: string
-}
-
-export type ArtifactDecisionResponsePayload = {
-  decisionId: string
-  requestId: string
-  sessionId: string
-  toolUseId: string
-  attempt: number
-  choice: string
-}
-
-export type { ArtifactDecisionSubmitResult } from './artifactDecisionTypes'
-
 export type ClaudeChatSendStreamPayload = {
   requestId: string
   sessionId: string
@@ -202,27 +179,6 @@ export type SpaceAssistantApi = {
   }) => Promise<Session | undefined>
   sessionBackfillAutoTitleIfNeeded: (payload: { sessionId: string }) => Promise<Session | undefined>
   sessionDelete: (sessionId: string) => Promise<void>
-
-  artifactList: (payload: { sessionId: string }) => Promise<ArtifactApiItem[]>
-  artifactDecisionResponse: (
-    payload: ArtifactDecisionResponsePayload
-  ) => Promise<import('./artifactDecisionTypes').ArtifactDecisionSubmitResult>
-  artifactDelete: (payload: { sessionId: string; artifactId: string }) => Promise<{ ok: boolean; error?: string }>
-  artifactCleanSession: (payload: { sessionId: string; includeReferences?: boolean }) => Promise<{ deleted: string[]; skipped: Array<{ artifactId: string; reason: string }> }>
-  artifactRelocate: (payload: {
-    sessionId: string
-    artifactId: string
-    target: string
-    mode: 'move' | 'copy'
-    switchToCopy?: boolean
-    overwriteAuthorized?: boolean
-  }) => Promise<{ ok: boolean; error?: string; artifactId?: string; activeArtifactId?: string }>
-  artifactSetDefaultDir: (payload: { sessionId: string; dir: string }) => Promise<void>
-  artifactOnChanged: (cb: (event: { sessionId: string; artifactId: string; action: 'created' | 'updated' | 'deleted' }) => void) => () => void
-  artifactOnDecisionRequest: (cb: (request: import('./artifactDecisionTypes').ArtifactDecisionRequest) => void) => () => void
-  artifactOnDecisionSettled: (
-    cb: (event: { decisionId: string; reason: string }) => void
-  ) => () => void
 
   usageSet: (payload: { sessionId: string; usage: SessionUsage }) => Promise<void>
   usageGet: (sessionId: string) => Promise<SessionUsage | undefined>
@@ -353,8 +309,6 @@ export type SpaceAssistantApi = {
       browser: Partial<import('./domainTypes').BrowserConfig>
       shell: Partial<ShellConfig>
       locale: import('./domainTypes').AppLocale
-      artifactManagementEnabled?: boolean
-      scratchGitPolicy?: 'add-ignore' | 'keep-visible' | null
     }>
   ) => Promise<void>
   configTestConnection: (options?: {
@@ -408,17 +362,6 @@ export type SpaceAssistantApi = {
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
   toolOnUse: (cb: (data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void) => () => void
-  toolOnRedirect: (
-    cb: (data: { requestId: string; toolUseId: string; originalPath: string; newPath: string }) => void
-  ) => () => void
-  toolOnPathResolved: (
-    cb: (data: {
-      requestId: string
-      toolUseId: string
-      path: string
-      metadata: import('./artifactTypes').ArtifactToolResultMeta
-    }) => void
-  ) => () => void
   toolOnConfirmRequest: (
     cb: (data: {
       requestId: string

@@ -11,7 +11,6 @@ import { getDbConnection, getSchemaMeta, isDatabaseEmpty, setSchemaMeta, type Ap
 import type { DbSnapshot, StoredMessage } from './types'
 import { deserializeToolCallsFromDb } from '../messageCodec'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { sanitizeArtifactSessionMetadataOnSave } from '../artifacts/legacyMigration'
 
 export type MigrationResult = {
   sessions: number
@@ -100,18 +99,7 @@ export function prepareSnapshotForMigration(snapshot: DbSnapshot): PreparedMigra
 export function stripLegacyWorkspaceLayoutFromMigrationSnapshot(snapshot: DbSnapshot): DbSnapshot {
   const configs = { ...snapshot.configs }
   delete configs[WORKSPACE_LAYOUT_CONFIG_KEY]
-  return {
-    ...snapshot,
-    sessions: snapshot.sessions.map((session) => ({
-      ...session,
-      metadata: sanitizeArtifactSessionMetadataOnSave(
-        session.metadata && typeof session.metadata === 'object' && !Array.isArray(session.metadata)
-          ? { ...session.metadata }
-          : {}
-      ).metadata
-    })),
-    configs
-  }
+  return { ...snapshot, configs }
 }
 
 function insertSession(conn: ReturnType<typeof getDbConnection>, session: Session): void {

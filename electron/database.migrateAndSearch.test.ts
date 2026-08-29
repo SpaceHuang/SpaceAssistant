@@ -189,7 +189,7 @@ describe('migrateFromJson', () => {
     db2.close()
   })
 
-  it('strips writeDirChoice and workspaceLayout config when importing JSON after cleanup marker exists', () => {
+  it('strips workspaceLayout config when importing JSON after cleanup marker exists', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-legacy-layout-'))
     dirs.push(dir)
     const jsonPath = path.join(dir, 'spaceassistant-data.json')
@@ -244,9 +244,9 @@ describe('migrateFromJson', () => {
     expect(result).not.toBeNull()
     expect(result?.sessions).toBe(1)
 
-    // Startup cleanup would skip because marker already exists — import must have stripped.
+    // Startup cleanup would skip because marker already exists — import strips config only.
     expect(cleanupLegacyWorkspaceLayoutOnStartup(db2)).toEqual({ ok: true, skipped: true })
-    expect(getSession(db2, 'sess-legacy')?.metadata.writeDirChoice).toBeUndefined()
+    expect(getSession(db2, 'sess-legacy')?.metadata.writeDirChoice).toBeDefined()
     expect(getSession(db2, 'sess-legacy')?.metadata.keep).toBe(true)
     expect(getSession(db2, 'sess-legacy')?.metadata.artifactDefaultDir).toBeUndefined()
     expect(getConfigValue(db2, 'config.workspaceLayout')).toBeUndefined()
@@ -290,3 +290,4 @@ describe('searchMessages', () => {
 })
 
 import { getDbConnection } from './database/sqliteStore'
+
