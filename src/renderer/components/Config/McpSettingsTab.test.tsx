@@ -348,7 +348,7 @@ describe('McpSettingsTab', () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
 
-    fireEvent.click(await screen.findByRole('tab', { name: 'SSE（旧版）' }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'SSE' }))
     expect(await screen.findByText('MCP Endpoint')).toBeTruthy()
     expect(await screen.findByText('认证方式')).toBeTruthy()
     expect(screen.queryByText('OAuth 2.1 (P0-C)')).toBeNull()
@@ -357,7 +357,7 @@ describe('McpSettingsTab', () => {
   it('shows the legacy SSE label for saved SSE servers', async () => {
     mcpList.mockResolvedValue({ servers: [SSE_SERVER], toolCaches: {} })
     renderTab()
-    expect(await screen.findByText('SSE（旧版）')).toBeTruthy()
+    expect(await screen.findByText('SSE')).toBeTruthy()
   })
 
   it('orders sections as common params → connection tabs → tools', async () => {
