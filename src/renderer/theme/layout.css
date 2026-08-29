@@ -594,9 +594,8 @@
   box-sizing: border-box;
   overflow-x: hidden;
   overflow-y: auto;
-  /* Virtuoso 的绝对定位 viewport 使用 width: 100%，滚动层不能再带横向
-   * padding，否则右对齐消息会落到可视区域外并被 overflow-x 裁切。 */
-  padding: 20px 0 28px;
+  /* Virtuoso 的绝对定位 viewport 从滚动层 top:0 开始渲染，滚动层上的
+   * padding 会被 viewport 覆盖；间距统一由内层 item-list 容器提供。 */
   scroll-behavior: smooth;
 }
 
@@ -612,7 +611,7 @@
 }
 
 .chat-scroll > [data-viewport-type='element'] > [data-testid='virtuoso-item-list'] > div {
-  padding-inline: 24px;
+  padding: 20px 24px 28px;
 }
 
 .chat-scroll-to-latest {
