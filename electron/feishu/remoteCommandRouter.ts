@@ -12,11 +12,6 @@ import { shouldAcceptInbound } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
 import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
-import {
-  createArtifactDecisionAuditAppender,
-  createFeishuSendDecisionText
-} from '../remote/remoteDecisionOutbound'
-import { handleArtifactDecisionInbound } from '../remote/artifactDecisionImBridge'
 import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
 import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
@@ -347,35 +342,7 @@ export class RemoteCommandRouter {
       return
     }
 
-    const decisionRaw = accept.userMessage ?? msg.content
-    const decisionResult = await handleArtifactDecisionInbound({
-      raw: decisionRaw,
-      identity: {
-        source: 'feishu',
-        authOwner: guard.snapshot.owner,
-        privateChatTarget: msg.chatId
-      },
-      authorizeBeforeSubmit: () => {
-        const re = revalidateImInboundGuard(guard.snapshot, { getConfig: getGuardConfig })
-        if (!re.ok) return { ok: false, reason: 'authorization_revoked' }
-        return { ok: true }
-      },
-      replyText: (text) => replyFeishuText(this.deps.runner, msg.messageId, text),
-      audit: createArtifactDecisionAuditAppender({
-        source: 'feishu',
-        append: (entry) => this.deps.auditLogger.append(entry as never)
-      })
-    })
-    if (decisionResult.handled) {
-      await this.deps.processedStore.markCompleted(
-        msg.messageId,
-        claimResult.claimId,
-        `artifact_decision_${decisionResult.reason}`
-      )
-      return
-    }
-
-    // Workdir disambiguation only after guard/claim/artifact decision (prevents rebind bypass).
+    // Workdir disambiguation only after guard/claim (prevents rebind bypass).
     this.purgeExpiredDisambiguation()
     const disambigKey = msg.chatId
     const pending = this.pendingDisambiguation.get(disambigKey)
@@ -729,16 +696,6 @@ export class RemoteCommandRouter {
           workDirProfileId: profile?.id ?? this.deps.workDirManager.getActiveProfileId(),
           authorizationGeneration: authSnapshot.authorizationGeneration,
           requestId,
-          sendDecisionText: createFeishuSendDecisionText({
-            runner: this.deps.runner,
-            messageId: msg.messageId,
-            chatId: msg.chatId,
-            sessionId
-          }),
-          appendArtifactDecisionAudit: createArtifactDecisionAuditAppender({
-            source: 'feishu',
-            append: (entry) => this.deps.auditLogger.append(entry as never)
-          }),
           appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
             this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
           appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>
