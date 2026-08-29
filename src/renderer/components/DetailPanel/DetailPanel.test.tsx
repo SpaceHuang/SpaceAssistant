@@ -95,8 +95,7 @@ function renderPanel(options?: { sessions?: Session[]; currentSessionId?: string
           workDir: '/tmp/proj',
           wiki: { enabled: false, rootPath: 'llm-wiki', hideWikiFromFileTree: false },
           activeWorkDirProfileId: '',
-          workDirProfiles: [],
-          artifactManagementEnabled: false
+          workDirProfiles: []
         },
         settingsOpen: false,
         aboutOpen: false

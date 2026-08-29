@@ -109,7 +109,7 @@ describe('buildFinalSystemPrompt - tool convention hint', () => {
     const prompt = buildFinalSystemPrompt({ ...baseArgs, locale: 'zh-CN' })
     expect(prompt).toMatch(/工具调用约定/)
     expect(prompt).toMatch(/字段名为 `path`/)
-    // hint 与前文以空行分隔（与 artifact/workspace/image hint 拼接范式一致）
+    // hint 与前文以空行分隔（与 workspace/image hint 拼接范式一致）
     expect(prompt).toMatch(/\n\n## 工具调用约定/)
   })
 

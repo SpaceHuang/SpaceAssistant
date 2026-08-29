@@ -14,8 +14,20 @@ describe('artifactPathIdentity', () => {
     const existing = path.join(root, 'actual.txt')
     fs.writeFileSync(existing, 'x')
 
-    expect(artifactPathIdentity(path.join(root, '.', 'actual.txt'))).toBe(fs.realpathSync(existing))
-    expect(artifactPathIdentity(path.join(root, 'nested', '..', 'new.txt'))).toBe(path.normalize(path.join(root, 'new.txt')))
+    // On win32 the identity is the case-folded, forward-slash normalized path; on other
+    // platforms it is the filesystem realpath for the existing file and the lexical
+    // normalized path for an absent one.
+    const expectedExisting =
+      process.platform === 'win32'
+        ? path.win32.normalize(path.join(root, '.', 'actual.txt')).replace(/\\/g, '/').toLowerCase()
+        : fs.realpathSync(existing)
+    const expectedAbsent =
+      process.platform === 'win32'
+        ? path.win32.normalize(path.join(root, 'nested', '..', 'new.txt')).replace(/\\/g, '/').toLowerCase()
+        : path.normalize(path.join(root, 'new.txt'))
+
+    expect(artifactPathIdentity(path.join(root, '.', 'actual.txt'))).toBe(expectedExisting)
+    expect(artifactPathIdentity(path.join(root, 'nested', '..', 'new.txt'))).toBe(expectedAbsent)
   })
 
   it('normalizes Windows separators and case while rejecting ambiguous aliases', () => {
