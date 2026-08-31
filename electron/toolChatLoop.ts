@@ -905,6 +905,16 @@ async function runToolChatSessionInner(
             toolName,
             reason: budgetCheck.reason
           })
+          getSecurityAuditLog().record({
+            ts: Date.now(),
+            event: 'budget.exhausted',
+            lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+            origin: { kind: 'direct-owner' },
+            sessionId,
+            toolName,
+            reason: budgetCheck.reason,
+            actor: 'system'
+          })
           toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
           safeWebContentsSend(sender, 'tool:result', {
             requestId,
@@ -924,6 +934,16 @@ async function runToolChatSessionInner(
             toolUseId,
             toolName,
             reason: outboundGate.reason
+          })
+          getSecurityAuditLog().record({
+            ts: Date.now(),
+            event: 'budget.exhausted',
+            lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+            origin: { kind: 'direct-owner' },
+            sessionId,
+            toolName,
+            reason: outboundGate.reason,
+            actor: 'system'
           })
           toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
           safeWebContentsSend(sender, 'tool:result', {
