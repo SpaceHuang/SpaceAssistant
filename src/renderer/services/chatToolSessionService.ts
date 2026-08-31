@@ -13,6 +13,7 @@ import type {
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
 import { filterBuiltinToolsForRenderer } from '../../shared/toolsConfigFilter'
+import { getCachedToolExposure } from './toolExposureService'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from '../../shared/anthropicToolSanitize'
 import type { ClaudeChatCreateWithToolsPayload } from '../../shared/api'
 
@@ -37,7 +38,8 @@ export function buildToolChatPayload(args: {
     args.toolsConfig,
     undefined,
     args.browserConfig,
-    args.shellConfig
+    args.shellConfig,
+    getCachedToolExposure() ?? undefined
   )
   const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
   return {
