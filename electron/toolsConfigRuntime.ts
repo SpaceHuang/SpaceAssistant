@@ -3,6 +3,7 @@ import type { WeChatConfig } from '../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig } from '../src/shared/domainTypes'
 import type { RemoteContext } from './tools/types'
 import { BUILTIN_TOOL_DEFINITIONS } from '../src/shared/builtinToolDefinitions'
+import { evaluateExposure } from './confirmation/exposure'
 
 export function isShellToolEnabled(shellConfig: ShellConfig | null | undefined, cfg: ToolsConfig): boolean {
   if (!shellConfig?.enabled) return false
@@ -55,5 +56,13 @@ export function filterBuiltinToolsForApi(
       (t) => t.name !== 'list_work_dirs' && t.name !== 'switch_work_dir' && t.name !== 'switch_session'
     )
   }
+  // exposure 规则（主进程唯一评估者）：remote 链路按 lane 评估（如 im-no-wechat-send）；
+  // desktop 链路不受该 exposure 规则影响。
+  const lane = remoteContext
+    ? remoteContext.source === 'feishu'
+      ? 'feishu'
+      : 'wechat'
+    : 'desktop'
+  list = list.filter((t) => evaluateExposure({ toolName: t.name, lane }).allowed)
   return list
 }
