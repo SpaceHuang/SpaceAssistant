@@ -43,4 +43,15 @@ describe('parseImConfirmReply', () => {
   it('footer includes confirmId', () => {
     expect(formatImConfirmPromptFooter({ confirmId: 'AB12' })).toContain('AB12')
   })
+
+  it('记N <id>：确认并记住第 N 档（memoryTiers 编号）', () => {
+    expect(parseImConfirmReply('记1 AB12')).toEqual({ kind: 'remember', confirmId: 'AB12', tier: 1 })
+    expect(parseImConfirmReply('记2 ab12')).toEqual({ kind: 'remember', confirmId: 'AB12', tier: 2 })
+    expect(parseImConfirmReply('记12 AB12')).toEqual({ kind: 'remember', confirmId: 'AB12', tier: 12 })
+  })
+
+  it('记N 缺确认码 → not_confirm；裸记 → 非确认', () => {
+    expect(parseImConfirmReply('记1')).toEqual({ kind: 'not_confirm' })
+    expect(parseImConfirmReply('记')).toEqual({ kind: 'not_confirm' })
+  })
 })

@@ -7,6 +7,8 @@
 export type ImConfirmReply =
   | { kind: 'approve'; confirmId: string }
   | { kind: 'approve_and_trust'; confirmId: string }
+  /** 记N <id>：确认并记住第 N 档（编号对应 memoryTiers 顺序）。 */
+  | { kind: 'remember'; confirmId: string; tier: number }
   | { kind: 'reject'; confirmId: string }
   | { kind: 'trust_misclick' }
   | { kind: 'usage_hint' }
@@ -53,6 +55,12 @@ export function parseImConfirmReply(raw: string): ImConfirmReply {
     return { kind: 'not_confirm' }
   }
   const confirmId = idRaw.toUpperCase()
+
+  // 记N <id>：确认并记住第 N 档（memoryTiers 编号）
+  const remember = parts[0]!.match(/^记(\d+)$/)
+  if (remember && CONFIRM_ID_RE.test(idRaw)) {
+    return { kind: 'remember', confirmId, tier: Number(remember[1]) }
+  }
 
   // Y <id> TRUST / 确认 <id> 并信任
   if (parts.length >= 3) {
