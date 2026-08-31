@@ -41,3 +41,21 @@ export function evaluateExposure(args: EvaluateExposureArgs): ExposureResult {
   }
   return { allowed: true }
 }
+
+/**
+ * 为某链路筛出可见工具清单（主进程唯一评估者，渲染进程消费结果）。
+ * 规则：deniedTools 配置 + exposure 规则（`im-no-wechat-send` 等）任一命中即过滤。
+ * 工具开关（enabled/allow）由调用方在其后叠加。
+ */
+export function filterToolsForLane(args: {
+  tools: string[]
+  lane: ExecutionLane
+  deniedTools?: string[]
+  rules?: PolicyRule[]
+}): string[] {
+  const denied = new Set(args.deniedTools ?? [])
+  return args.tools.filter((toolName) => {
+    if (denied.has(toolName)) return false
+    return evaluateExposure({ toolName, lane: args.lane, rules: args.rules }).allowed
+  })
+}

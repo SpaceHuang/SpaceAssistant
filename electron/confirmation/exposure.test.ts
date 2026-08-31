@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { evaluateExposure } from './exposure'
+import { evaluateExposure, filterToolsForLane } from './exposure'
 
 describe('evaluateExposure（工具曝光过滤规则）', () => {
   it('wechat_send 在 wechat/feishu 链路被 exposure 规则拒绝（im-no-wechat-send）', () => {
@@ -24,5 +24,14 @@ describe('evaluateExposure（工具曝光过滤规则）', () => {
       { id: 'allow-tool-x', when: 'exposure', match: { lane: ['desktop'], toolName: 'x' }, action: 'allow', reason: 'r' }
     ]
     expect(evaluateExposure({ toolName: 'x', lane: 'desktop', rules }).allowed).toBe(true)
+  })
+
+  it('filterToolsForLane 合并 deniedTools + exposure 规则过滤', () => {
+    const tools = ['wechat_send', 'wechat_reply', 'run_shell', 'write_file']
+    // wechat_send 被 exposure 规则（im-no-wechat-send）过滤；write_file 被 deniedTools 过滤
+    const visible = filterToolsForLane({ tools, lane: 'wechat', deniedTools: ['write_file'] })
+    expect(visible).toEqual(['wechat_reply', 'run_shell'])
+    // desktop 不受 im-no-wechat-send exposure 规则影响
+    expect(filterToolsForLane({ tools, lane: 'desktop', deniedTools: [] })).toContain('wechat_send')
   })
 })
