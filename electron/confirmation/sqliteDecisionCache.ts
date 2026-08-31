@@ -128,6 +128,14 @@ export class SqliteDecisionCache implements DecisionCacheView {
     return this.db.prepare('DELETE FROM decision_cache').run().changes
   }
 
+  /** 清理过期（expires_at 已过）与休眠（超过 DORMANT_MS 未命中）条目；返回清理数。 */
+  expireDormant(now = Date.now()): number {
+    const dormantBefore = now - DORMANT_MS
+    return this.db
+      .prepare('DELETE FROM decision_cache WHERE (expires_at IS NOT NULL AND expires_at <= ?) OR last_hit_at <= ?')
+      .run(now, dormantBefore).changes
+  }
+
   private rowToEntry(row: CacheRow): DecisionCacheEntry {
     return {
       id: row.id,

@@ -88,4 +88,16 @@ describe('SqliteDecisionCache', () => {
     expect(cache.clear(shellKey())).toBe(1)
     expect(cache.lookup(shellKey())).toBeNull()
   })
+
+  it('expireDormant 清理过期与休眠条目', () => {
+    const { cache } = open()
+    cache.record(entry()) // 有效持久
+    cache.record(entry({ key: shellKey('curl x'), expiresAt: Date.now() - 1000 })) // 过期
+    cache.record(entry({ key: shellKey('rm -rf'), lastHitAt: Date.now() - 181 * 24 * 3600 * 1000 })) // 休眠
+    const before = cache.lookup(shellKey())
+    expect(before).not.toBeNull()
+    expect(cache.expireDormant()).toBe(2)
+    // 有效条目仍可命中
+    expect(cache.lookup(shellKey())).not.toBeNull()
+  })
 })
