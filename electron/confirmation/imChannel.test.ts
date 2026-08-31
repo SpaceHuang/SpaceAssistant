@@ -83,4 +83,50 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     // 会话级 pending 已清空
     expect(ch.hasPendingForSession('s1')).toBe(false)
   })
+
+  it('sendPrompt 收到含 sessionId/toolName/confirmId 的条目（供构建 IM 提示）', async () => {
+    let sentEntry: unknown
+    const ch = new ImChannel({
+      lane: 'wechat',
+      timeoutMs: 1000,
+      sendPrompt: (entry) => {
+        sentEntry = entry
+      }
+    })
+    const p = ch.request(req(), {
+      sessionId: 's1',
+      toolName: 'run_shell',
+      toolInput: { command: 'ping baidu.com' },
+      messageId: 'm1',
+      matchKey: 'u1',
+      trustEligible: true
+    })
+    const e = sentEntry as { sessionId: string; toolName: string; confirmId?: string }
+    expect(e.sessionId).toBe('s1')
+    expect(e.toolName).toBe('run_shell')
+    expect(e.confirmId).toBeTruthy()
+    ch.cancel(ch.listPending()[0]!.id)
+    await p.catch(() => undefined)
+  })
+
+  it('isAuthorizedInbound 拒绝未授权发送者（不消费、不解析）', async () => {
+    const ch = new ImChannel({
+      lane: 'wechat',
+      timeoutMs: 1000,
+      sendPrompt: () => undefined,
+      isAuthorizedInbound: (inbound, entry) => inbound.matchKey === entry.matchKey && entry.messageId !== inbound.messageId
+    })
+    const p = ch.request(req(), {
+      sessionId: 's1',
+      toolName: 'run_shell',
+      messageId: 'm1',
+      matchKey: 'u1'
+    })
+    const id = ch.listPending()[0]!.confirmId!
+    // 未授权发送者（不同 matchKey）→ 不命中，pending 仍存在
+    expect(ch.tryResolveFromInbound({ kind: 'approve', confirmId: id }, { matchKey: 'other', messageId: 'm2' })).toBe(true)
+    expect(ch.countPending()).toBe(1)
+    ch.cancel(ch.listPending()[0]!.id)
+    await p.catch(() => undefined)
+  })
 })
