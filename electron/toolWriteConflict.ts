@@ -1,15 +1,15 @@
-import { normalizeToolRelPath } from './artifacts/normalizeToolRelPath'
-import type { ArtifactPathLease } from './artifacts/pathLeaseRegistry'
+import { normalizeToolRelPath } from './writeSafety/normalizeToolRelPath'
+import type { PathLease } from './writeSafety/pathLeaseRegistry'
 import {
   acquireToolWriteLease,
   checkToolWriteLeaseConflict,
   clearToolPathLeases,
   releaseAllToolPathLeasesForSession
-} from './artifacts/toolPathLease'
+} from './writeSafety/toolPathLease'
 
 export { normalizeToolRelPath }
 
-const sessionLeases = new Map<string, Map<string, ArtifactPathLease>>()
+const sessionLeases = new Map<string, Map<string, PathLease>>()
 
 export function checkWritePathConflict(sessionId: string, relPath: string, workDir?: string): string | null {
   return checkToolWriteLeaseConflict(sessionId, relPath, workDir)

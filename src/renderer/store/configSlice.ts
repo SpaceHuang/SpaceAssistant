@@ -2,7 +2,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { AppConfig } from '../../shared/domainTypes'
 import type { RemoteImCommonConfig } from '../../shared/imTypes'
 
-export type ToolsSettingsSubTab = 'switches' | 'mcp' | 'file' | 'script' | 'shell' | 'browser' | 'artifacts'
+export type ToolsSettingsSubTab = 'switches' | 'mcp' | 'file' | 'script' | 'shell' | 'browser'
 
 interface ConfigState {
   config: AppConfig | null

@@ -570,8 +570,6 @@ export interface ToolCallRecord {
   sessionTrustedHint?: true
   /** 反序列化失败等导致的数据损坏标记，重建时生成合成错误占位 */
   corrupted?: boolean
-  /** artifact 管理路径解析后的结构化元数据 */
-  artifactMeta?: import('./artifactTypes').ArtifactToolResultMeta
   /** MCP 外部工具来源元数据（服务改名后仍可追溯，不进入模型上下文）。 */
   mcp?: {
     serverId: string
@@ -757,10 +755,6 @@ export interface AppConfig {
   wechat: WeChatConfig
   browser: BrowserConfig
   shell: ShellConfig
-  /** Opt-in gray flag; frozen onto each session at creation time. */
-  artifactManagementEnabled: boolean
-  /** Saved scratch Git policy for the active workDir profile; undefined = ask each time. */
-  scratchGitPolicy?: 'add-ignore' | 'keep-visible'
 }
 
 /** 从 FeishuConfig 移除 Plan 远程字段；幂等 */

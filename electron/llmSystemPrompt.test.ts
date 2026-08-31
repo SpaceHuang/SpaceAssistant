@@ -99,17 +99,6 @@ describe('buildFinalSystemPrompt', () => {
     expect(second).toContain('English (en-US)')
   })
 
-  it('includes recent artifact context in the system prompt', () => {
-    const result = buildFinalSystemPrompt({
-      locale: 'en-US',
-      memoryEnabled: false,
-      memoryContent: null,
-      system: 'base',
-      artifactContextHint: 'Recent session artifacts (reuse artifactId when continuing edits):\n1. a1'
-    })!
-    expect(result).toContain('Recent session artifacts')
-    expect(result.indexOf('Recent session artifacts')).toBeGreaterThan(result.indexOf('base'))
-  })
 })
 
 describe('buildFinalSystemPrompt - tool convention hint', () => {
@@ -120,7 +109,7 @@ describe('buildFinalSystemPrompt - tool convention hint', () => {
     const prompt = buildFinalSystemPrompt({ ...baseArgs, locale: 'zh-CN' })
     expect(prompt).toMatch(/工具调用约定/)
     expect(prompt).toMatch(/字段名为 `path`/)
-    // hint 与前文以空行分隔（与 artifact/workspace/image hint 拼接范式一致）
+    // hint 与前文以空行分隔（与 workspace/image hint 拼接范式一致）
     expect(prompt).toMatch(/\n\n## 工具调用约定/)
   })
 

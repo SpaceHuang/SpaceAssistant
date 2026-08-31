@@ -8,7 +8,6 @@ import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ConfigResultAlert } from './ConfigResultAlert'
 import { ConfigSwitchRow } from './ConfigField'
 import { ShellSettingsTab } from './ShellSettingsTab'
-import { ArtifactSettingsTab, type ArtifactSettingsUi } from './ArtifactSettingsTab'
 import { McpSettingsTab } from './McpSettingsTab'
 import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -31,8 +30,6 @@ type Props = {
   setBrowserUi: React.Dispatch<React.SetStateAction<BrowserConfig>>
   shellUi: ShellConfig
   setShellUi: React.Dispatch<React.SetStateAction<ShellConfig>>
-  artifactSettingsUi: ArtifactSettingsUi
-  setArtifactSettingsUi: React.Dispatch<React.SetStateAction<ArtifactSettingsUi>>
   onShellEnabledChange: (enabled: boolean) => void
   onTestShell?: () => void
   shellTesting?: boolean
@@ -107,8 +104,6 @@ export function ToolsSettingsTab({
   setBrowserUi,
   shellUi,
   setShellUi,
-  artifactSettingsUi,
-  setArtifactSettingsUi,
   onShellEnabledChange,
   onTestShell,
   shellTesting,
@@ -269,8 +264,6 @@ export function ToolsSettingsTab({
         )
       case 'browser':
         return <BrowserSettingsTab active browser={browserUi} onChange={setBrowserUi} models={models} />
-      case 'artifacts':
-        return <ArtifactSettingsTab value={artifactSettingsUi} onChange={setArtifactSettingsUi} />
       default:
         return null
     }

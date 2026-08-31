@@ -9,10 +9,6 @@ import {
 } from './configModalSnapshot'
 import { initLlmServiceTabState } from './llmServiceDrafts'
 
-const defaultArtifactSettings = {
-  artifactManagementEnabled: false,
-  scratchGitPolicy: 'ask' as const
-}
 
 describe('normalizeSettingsTabKey', () => {
   it('maps legacy tab keys to current IA', () => {
@@ -52,7 +48,6 @@ describe('buildConfigModalSnapshot', () => {
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG, enabled: true },
       shellEnabled: true,
-      artifactSettings: defaultArtifactSettings
     }
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, toolUi: { ...base.toolUi, deniedTools: ['browser'] } })
@@ -84,7 +79,6 @@ describe('buildConfigModalSnapshot', () => {
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
-        artifactSettings: defaultArtifactSettings
       })
     expect(configModalSnapshotsEqual(mk('/a'), mk('/b'))).toBe(false)
   })
@@ -114,7 +108,6 @@ describe('buildConfigModalSnapshot', () => {
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
-        artifactSettings: defaultArtifactSettings
       })
     expect(configModalSnapshotsEqual(mk('zh-CN'), mk('en-US'))).toBe(false)
   })
@@ -143,7 +136,6 @@ describe('buildConfigModalSnapshot', () => {
       browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
       shell: { ...DEFAULT_SHELL_CONFIG },
       shellEnabled: true,
-      artifactSettings: defaultArtifactSettings
     }
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, locale: 'en-US' })
@@ -176,7 +168,6 @@ describe('buildConfigModalSnapshot', () => {
         browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
         shell: { ...DEFAULT_SHELL_CONFIG },
         shellEnabled: true,
-        artifactSettings: defaultArtifactSettings
       })
     expect(configModalSnapshotsEqual(mk(false), mk(true))).toBe(false)
   })

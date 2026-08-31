@@ -89,7 +89,6 @@ import { WorkDirList, validateWorkDirProfiles } from './WorkDirList'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
-import type { ArtifactSettingsUi } from './ArtifactSettingsTab'
 
 const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat'] as const
 
@@ -193,11 +192,6 @@ export function ConfigSettingsPage() {
   const [maxParallelChatSessions, setMaxParallelChatSessions] = useState(DEFAULT_MAX_PARALLEL_CHAT_SESSIONS)
 
   const [wikiUi, setWikiUi] = useState<WikiConfig>({ ...DEFAULT_WIKI_CONFIG })
-
-  const [artifactSettingsUi, setArtifactSettingsUi] = useState<ArtifactSettingsUi>({
-    artifactManagementEnabled: false,
-    scratchGitPolicy: 'ask'
-  })
 
   const [feishuUi, setFeishuUi] = useState<FeishuConfig>({ ...DEFAULT_FEISHU_CONFIG })
 
@@ -340,11 +334,6 @@ export function ConfigSettingsPage() {
 
       setWikiUi(cfg.wiki ?? { ...DEFAULT_WIKI_CONFIG })
 
-      setArtifactSettingsUi({
-        artifactManagementEnabled: Boolean(cfg.artifactManagementEnabled),
-        scratchGitPolicy: cfg.scratchGitPolicy ?? 'ask'
-      })
-
       setFeishuUi(cfg.feishu ?? { ...DEFAULT_FEISHU_CONFIG })
 
       setWechatUi(cfg.wechat ?? { ...DEFAULT_WECHAT_CONFIG })
@@ -446,8 +435,6 @@ export function ConfigSettingsPage() {
 
       wiki: wikiUi,
 
-      artifactSettings: artifactSettingsUi,
-
       feishu: feishuUi,
 
       wechat: wechatUi,
@@ -483,8 +470,6 @@ export function ConfigSettingsPage() {
     maxParallelChatSessions,
 
     wikiUi,
-
-    artifactSettingsUi,
 
     feishuUi,
 
@@ -652,10 +637,6 @@ export function ConfigSettingsPage() {
         maxParallelChatSessions,
 
         wiki: wikiUi,
-
-        artifactManagementEnabled: artifactSettingsUi.artifactManagementEnabled,
-        scratchGitPolicy:
-          artifactSettingsUi.scratchGitPolicy === 'ask' ? null : artifactSettingsUi.scratchGitPolicy,
 
         feishu: feishuUi,
 
@@ -947,10 +928,6 @@ export function ConfigSettingsPage() {
             shellUi={shellUi}
 
             setShellUi={setShellUi}
-
-            artifactSettingsUi={artifactSettingsUi}
-
-            setArtifactSettingsUi={setArtifactSettingsUi}
 
             open={open}
 

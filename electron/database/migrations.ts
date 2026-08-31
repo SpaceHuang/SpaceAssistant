@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { ARTIFACT_V2_SQL, DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 
 export class DatabaseUpgradeRequiredError extends Error {
   constructor(foundVersion: number) {
@@ -21,7 +21,7 @@ function readSchemaVersion(conn: Database.Database): number | undefined {
   return parseSchemaVersion(row?.value)
 }
 
-export function runMigrations(conn: Database.Database, options: { v2Sql?: string } = {}): void {
+export function runMigrations(conn: Database.Database): void {
   conn.transaction(() => {
     let version = readSchemaVersion(conn)
     if (version === undefined) {
@@ -30,8 +30,15 @@ export function runMigrations(conn: Database.Database, options: { v2Sql?: string
     }
     if (version > DB_SCHEMA_VERSION) throw new DatabaseUpgradeRequiredError(version)
     if (version === 1) {
-      conn.exec(options.v2Sql ?? ARTIFACT_V2_SQL)
-      version = 2
+      conn.exec(CREATE_TABLES_SQL)
+      version = 3
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 2) {
+      conn.exec('DROP TABLE IF EXISTS artifact_operations')
+      conn.exec('DROP TABLE IF EXISTS artifact_references')
+      conn.exec('DROP TABLE IF EXISTS session_artifacts')
+      version = 3
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
   })()

@@ -160,20 +160,6 @@ import {
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
-import { isArtifactManagementEnabled } from './artifacts/featureFlag'
-import {
-  createToolLoopArtifactState,
-  listArtifactOccupiedPaths,
-  registerArtifactWriteOutcome,
-  resolveArtifactToolWriteWithDecision,
-  type PreparedArtifactWrite
-} from './artifacts/toolLoopArtifactFlow'
-import { buildArtifactCompletionSummary } from './artifacts/completionSummary'
-import { buildArtifactContextSummaries, formatArtifactContextBlock } from './artifacts/artifactContextQuery'
-import { ArtifactRepository } from './artifacts/artifactRepository'
-import { getArtifactDecisionRequest } from './artifacts/artifactDecisionBridge'
-import { serializeArtifactDecisionForRemote } from './remote/artifactDecisionRemote'
-import { sendRemoteArtifactDecisionPrompt } from './remote/remoteDecisionOutbound'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
@@ -556,22 +542,6 @@ async function runToolChatSessionInner(
   }
   let loopRound = 0
   let lastValidUsage: ToolLoopUsage | undefined
-  const lastUserMessage = [...initialMessages].reverse().find((m) => m.role === 'user')
-  const lastUserText =
-    typeof lastUserMessage?.content === 'string'
-      ? lastUserMessage.content
-      : Array.isArray(lastUserMessage?.content)
-        ? lastUserMessage.content
-            .map((part: unknown) =>
-              typeof part === 'string'
-                ? part
-                : part && typeof part === 'object' && 'text' in part
-                  ? String((part as { text?: unknown }).text ?? '')
-                  : ''
-            )
-            .join('')
-        : ''
-  const artifactState = appDb ? createToolLoopArtifactState(requestId, lastUserText) : undefined
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -594,21 +564,12 @@ async function runToolChatSessionInner(
         : undefined
     const systemWithTools = appendAvailableToolsHint(baseSystemWithRecovery, toolNames)
     const locale = resolveRequestLocale(payloadLocale, appDb)
-    const sessionForContext = appDb ? getSession(appDb, sessionId) : undefined
-    const artifactManagedForContext = appDb ? isArtifactManagementEnabled(sessionForContext?.metadata ?? {}) : false
-    const workDirForContext = resolveWorkDir ? resolveWorkDir() : initialWorkDir
-    const artifactContextHint =
-      artifactManagedForContext && appDb
-        ? formatArtifactContextBlock(buildArtifactContextSummaries(new ArtifactRepository(appDb), sessionId), workDirForContext) ||
-          undefined
-        : undefined
     const systemPrompt = buildFinalSystemPrompt({
       system: systemWithTools,
       memoryContent,
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
-      artifactContextHint
     })
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
@@ -839,12 +800,6 @@ async function runToolChatSessionInner(
     }
 
     if (toolUses.length === 0) {
-      if (artifactState) {
-        const summary = buildArtifactCompletionSummary(artifactState.changeCursor.entries())
-        if (summary.project.length + summary.package.length + summary.scratch.length > 0) {
-          safeWebContentsSend(sender, 'artifact:completion-summary', { requestId, sessionId, summary })
-        }
-      }
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }) }
     }
@@ -1068,89 +1023,6 @@ async function runToolChatSessionInner(
           hints: shellPrecheck.hints
         })
       }
-
-      let resolvedArtifactWrite: PreparedArtifactWrite | undefined
-      const artifactManagedSession = appDb ? isArtifactManagementEnabled(getSession(appDb, sessionId)?.metadata ?? {}) : false
-      if (
-        artifactManagedSession &&
-        artifactState &&
-        (toolName === 'write_file' || toolName === 'edit_file') &&
-        typeof inputObj.path === 'string' &&
-        inputObj.artifact
-      ) {
-        const occupiedPaths = listArtifactOccupiedPaths(appDb!, sessionId, workDir)
-        const remoteDecisionOwner =
-          remoteContext && artifactManagedSession
-            ? {
-                source: remoteContext.source,
-                authOwner: remoteContext.authOwner ?? remoteContext.userId ?? '',
-                privateChatTarget:
-                  remoteContext.source === 'feishu'
-                    ? (remoteContext.chatId ?? '')
-                    : (remoteContext.userId ?? ''),
-                originSessionId: remoteContext.originSessionId ?? sessionId,
-                requestId: remoteContext.requestId ?? requestId
-              }
-            : undefined
-        const resolveResult = await resolveArtifactToolWriteWithDecision({
-          workDir,
-          sessionId,
-          requestId,
-          toolUseId,
-          path: inputObj.path,
-          artifact: inputObj.artifact,
-          occupiedPaths,
-          db: appDb,
-          userMessage: lastUserText,
-          evidenceConsumption: artifactState.evidenceConsumption,
-          signal: chatSignal,
-          remoteDecisionOwner,
-          onDecisionRequired: async (pending) => {
-            const request = getArtifactDecisionRequest(pending.decisionId)
-            if (!request) {
-              if (remoteContext && artifactManagedSession) {
-                throw new Error('artifact_decision_request_missing')
-              }
-              return
-            }
-            safeWebContentsSend(sender, 'artifact:decision-request', request)
-            if (!remoteContext || !artifactManagedSession) return
-            if (!remoteContext.sendDecisionText) {
-              throw new Error('sendDecisionText_missing')
-            }
-            const text = serializeArtifactDecisionForRemote(request)
-            await sendRemoteArtifactDecisionPrompt({
-              sendDecisionText: remoteContext.sendDecisionText,
-              appendAudit: remoteContext.appendArtifactDecisionAudit,
-              text,
-              decisionId: request.decisionId,
-              kind: request.kind,
-              originSessionId: remoteContext.originSessionId ?? sessionId,
-              requestId
-            })
-          }
-        })
-        if (resolveResult.kind === 'error') {
-          toolResults.push(buildToolErrorResult(toolUseId, resolveResult.message, { requestId, sessionId }))
-          safeWebContentsSend(sender, 'tool:result', { requestId, toolUseId, result: { success: false, error: resolveResult.message } })
-          floatingNotificationManager?.onToolResult(requestId, toolUseId)
-          if (toolErrorRepeat.noteFailure(toolName, resolveResult.message)) {
-            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${resolveResult.message}`
-            break
-          }
-          continue
-        }
-        if (resolveResult.kind !== 'ready') continue
-        resolvedArtifactWrite = resolveResult.prepared
-        inputObj.path = resolveResult.prepared.finalPath
-        safeWebContentsSend(sender, 'tool:path-resolved', {
-          requestId,
-          toolUseId,
-          path: resolveResult.prepared.pathResolvedPayload.path,
-          metadata: resolveResult.prepared.pathResolvedPayload.metadata
-        })
-      }
-
       let outcome: ToolConfirmOutcome = 'approved'
       let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
       let autoApproveFallback: AutoApproveFallback | undefined
@@ -1892,27 +1764,6 @@ async function runToolChatSessionInner(
       }
 
       const durationMs = Date.now() - execStartedAt
-      if (execResult.success && resolvedArtifactWrite && appDb && artifactState) {
-        const session = getSession(appDb, sessionId)
-        if (!session?.workDirProfileId) {
-          execResult = { success: false, error: 'Artifact session workspace is unavailable' }
-        } else {
-          const regOutcome = registerArtifactWriteOutcome({
-            db: appDb,
-            sessionId,
-            workDir,
-            workDirProfileId: session.workDirProfileId,
-            requestId,
-            prepared: resolvedArtifactWrite,
-            writeSucceeded: true,
-            changeCursor: artifactState.changeCursor,
-            audit: (event, detail) => logAgentEvent('warn', 'tool.error', { ...detail, artifactAuditEvent: event })
-          })
-          if (!regOutcome.ok) {
-            execResult = { success: false, error: regOutcome.error }
-          }
-        }
-      }
       if (execResult.success && fileAutoApproved && (toolName === 'write_file' || toolName === 'edit_file')) {
         logAgentEvent('info', 'file.auto_approve', {
           requestId,

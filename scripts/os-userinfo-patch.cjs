@@ -1,0 +1,1 @@
+const os = require('os'); const orig = os.userInfo; os.userInfo = function(...args){ try { return orig.apply(os,args) } catch { return { username: 'Space', uid: -1, gid: -1, shell: null, homedir: os.homedir() } } };
