@@ -6,6 +6,8 @@ import { logWeChatCliEvent } from './weChatCliLogger'
 import { buildConfirmInstantPrompt } from '../remote/remoteProgressHooks'
 import {
   formatImConfirmPromptFooter,
+  IM_CONFIRM_TRUST_MISCLICK_HINT,
+  IM_CONFIRM_USAGE_HINT,
   parseImConfirmReply
 } from '../remote/imConfirmReply'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
@@ -77,6 +79,13 @@ export class WeChatConfirmManager {
         const inbound = entry.context as IncomingMessage
         const prompt = this.buildWeChatYnPrompt(entry as unknown as WeChatPendingConfirm)
         if (prompt) void replyBot.reply(inbound, prompt).catch(() => undefined)
+      },
+      onTrust: (entry) => this.tryAddTrust(entry as unknown as WeChatPendingConfirm),
+      onHint: (entry, kind) => {
+        const replyBot = this.getReplyBot?.()
+        if (!replyBot) return
+        const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : IM_CONFIRM_USAGE_HINT
+        void replyBot.reply(entry.context as IncomingMessage, hint).catch(() => undefined)
       }
     })
   }

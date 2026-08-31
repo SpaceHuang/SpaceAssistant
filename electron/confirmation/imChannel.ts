@@ -44,6 +44,10 @@ export interface ImChannelDeps {
     inbound: { matchKey?: string; messageId: string },
     entry: ImPendingConfirm
   ) => boolean
+  /** approve_and_trust 时由链路侧写入信任；返回 false（无资格/写入失败）则不解析。 */
+  onTrust?: (entry: ImPendingConfirm) => boolean
+  /** trust_misclick / usage_hint 时由链路侧回复提示。 */
+  onHint?: (entry: ImPendingConfirm, kind: 'trust_misclick' | 'usage_hint') => void
 }
 
 function toOutcome(decision: PendingDecision, memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
@@ -149,6 +153,11 @@ export class ImChannel {
     inbound: { matchKey?: string; messageId: string }
   ): boolean {
     if (parsed.kind === 'not_confirm') return false
+    if (parsed.kind === 'trust_misclick' || parsed.kind === 'usage_hint') {
+      const any = this.registry.listPending().find((p) => this.isInboundAuthorized(inbound, p))
+      if (any) this.deps.onHint?.(any, parsed.kind)
+      return true
+    }
     if (parsed.confirmId == null) return false
     const match = this.registry
       .listPending()
@@ -160,6 +169,8 @@ export class ImChannel {
       return true
     }
     if (parsed.kind === 'approve_and_trust') {
+      if (match.trustEligible === false) return true
+      if (this.deps.onTrust && !this.deps.onTrust(match)) return true
       this.resolve(match.id, 'y')
       return true
     }

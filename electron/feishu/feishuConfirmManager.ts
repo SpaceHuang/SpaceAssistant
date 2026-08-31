@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
@@ -8,19 +7,17 @@ import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
 import { formatFeishuRemoteProgressPrefix } from './feishuRemoteProgress'
 import type { AppDatabase } from '../database'
 import {
-  PendingRequestRegistry,
-  type PendingDecision
-} from '../remote/pendingRequestRegistry'
-import {
   formatImConfirmPromptFooter,
   IM_CONFIRM_TRUST_MISCLICK_HINT,
   IM_CONFIRM_USAGE_HINT,
   parseImConfirmReply
 } from '../remote/imConfirmReply'
-import { allocateConfirmId, releaseConfirmId } from '../remote/confirmId'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 import { addTrustedCommand, canShowShellTrustOption } from '../shell/shellCommandTrust'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
+import { ImChannel, type ImPendingConfirm } from '../confirmation/imChannel'
+import { getSecurityAuditLog } from '../confirmation/audit'
+import type { ConfirmRequest } from '../../src/shared/confirmation/types'
 
 export type FeishuConfirmKind = 'tool_write'
 
@@ -47,44 +44,62 @@ export interface FeishuPendingConfirm {
 }
 
 export class FeishuConfirmManager {
-  private registry = new PendingRequestRegistry<FeishuPendingConfirm>()
+  private readonly im: ImChannel
 
   constructor(
     private auditLogger?: FeishuAuditLogger,
     private runner?: LarkCliRunner,
     private db?: AppDatabase
-  ) {}
+  ) {
+    this.im = new ImChannel({
+      lane: 'feishu',
+      timeoutMs: 10 * 60_000,
+      audit: getSecurityAuditLog(),
+      log: (event, fields) => {
+        logFeishuCliEvent('info', event, fields)
+        if (event === 'confirm.request') {
+          void this.auditLogger?.append({ type: 'confirm_request', confirmId: String(fields.confirmId ?? '') })
+        }
+      },
+      sendPrompt: (entry) => {
+        if (entry.matchKey) this.notifyConfirmPrompt(entry)
+      },
+      isAuthorizedInbound: (inbound, entry) => {
+        // 归属校验由调用方先做（p2p+owner），这里仅匹配 chatId + 非同一消息
+        return inbound.matchKey === entry.matchKey && entry.messageId !== inbound.messageId
+      },
+      onTrust: (entry) => this.tryAddTrust(entry as unknown as FeishuPendingConfirm),
+      onHint: (entry, kind) => {
+        const runner = this.runner
+        if (!runner) return
+        const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : IM_CONFIRM_USAGE_HINT
+        void replyFeishuText(runner, (entry as unknown as FeishuPendingConfirm).messageId, hint).catch(() => undefined)
+      }
+    })
+  }
 
   listPending(): FeishuPendingConfirm[] {
-    return this.registry.listPending()
+    return this.im.listPending() as unknown as FeishuPendingConfirm[]
   }
 
   hasPendingForSession(sessionId: string): boolean {
-    return this.registry.hasPendingForSession(sessionId)
+    return this.im.hasPendingForSession(sessionId)
   }
 
   countPending(): number {
-    return this.registry.countPending()
+    return this.im.countPending()
   }
 
   cancel(id: string): boolean {
-    if (!this.registry.get(id)) return false
-    logFeishuCliEvent('info', 'feishu.confirm.cancel', { confirmId: id })
-    this.resolve(id, 'n')
-    return true
+    return this.im.cancel(id)
   }
 
   cancelAllPending(): void {
-    for (const { id } of this.registry.listPending()) {
-      this.resolve(id, 'n')
-    }
+    this.im.cancelAllPending()
   }
 
   cancelByChannel(channel: 'feishu' | 'wechat'): number {
-    if (channel !== 'feishu') return 0
-    const ids = this.registry.listPending().map((p) => p.id)
-    for (const id of ids) this.resolve(id, 'n')
-    return ids.length
+    return this.im.cancelByChannel(channel)
   }
 
   tryResolveFromInbound(
@@ -96,54 +111,10 @@ export class FeishuConfirmManager {
 
     // Confirm path requires bound owner + p2p (must not resolve from group / non-owner).
     if (!isFeishuConfirmAuthorizedSender(msg, opts?.ownerOpenId)) return false
-
-    if (parsed.kind === 'trust_misclick' || parsed.kind === 'usage_hint') {
-      const match = this.registry.listPending().find((p) => matchesFeishuConfirmPending(p, msg))
-      if (match) {
-        void this.replyHint(
-          match,
-          parsed.kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : IM_CONFIRM_USAGE_HINT
-        )
-        return true
-      }
-      return true
-    }
-
-    const match = this.registry
-      .listPending()
-      .find((p) => p.confirmId === parsed.confirmId && matchesFeishuConfirmPending(p, msg))
-    if (!match) {
-      const any = this.registry.listPending().find((p) => matchesFeishuConfirmPending(p, msg))
-      if (any) void this.replyHint(any, IM_CONFIRM_USAGE_HINT)
-      return true
-    }
-
-    if (
-      match.authorizationGeneration != null &&
-      match.authorizationGeneration !== remoteAuthorizationRegistry.getGeneration('feishu')
-    ) {
-      this.resolve(match.id, 'n')
-      return true
-    }
-
-    if (parsed.kind === 'approve_and_trust') {
-      if (match.trustEligible === false || !this.tryAddTrust(match)) {
-        void this.replyHint(match, IM_CONFIRM_USAGE_HINT)
-        return true
-      }
-      logFeishuCliEvent('info', 'feishu.inbound.confirm_resolved', {
-        confirmId: match.id,
-        decision: 'y',
-        trust: true
-      })
-      this.resolve(match.id, 'y')
-      return true
-    }
-
-    const decision: 'y' | 'n' = parsed.kind === 'approve' ? 'y' : 'n'
-    logFeishuCliEvent('info', 'feishu.inbound.confirm_resolved', { confirmId: match.id, decision })
-    this.resolve(match.id, decision)
-    return true
+    return this.im.tryResolveFromInbound(
+      parsed as { kind: string; confirmId?: string; tier?: number },
+      { matchKey: msg.chatId, messageId: msg.messageId }
+    )
   }
 
   private tryAddTrust(pending: FeishuPendingConfirm): boolean {
@@ -159,67 +130,39 @@ export class FeishuConfirmManager {
     return true
   }
 
-  private replyHint(pending: FeishuPendingConfirm, text: string): void {
-    if (!this.runner) return
-    void replyFeishuText(this.runner, pending.messageId, text).catch(() => undefined)
-  }
-
-  private emitResolved(id: string, decision: PendingDecision): void {
-    logFeishuCliEvent('info', 'feishu.confirm.resolved', { confirmId: id, decision })
-    void this.auditLogger?.append({ type: 'confirm_request', confirmId: id, decision })
-  }
-
-  private resolve(id: string, decision: PendingDecision): void {
-    const item = this.registry.get(id)
-    if (!item) return
-    if (item.confirmId) releaseConfirmId(item.confirmId)
-    this.emitResolved(id, decision)
-    this.registry.resolve(id, decision)
-  }
-
   requestConfirm(
     pending: Omit<FeishuPendingConfirm, 'id' | 'createdAt' | 'expiresAt' | 'channel'>,
     timeoutMs = 10 * 60_000
   ): Promise<'y' | 'n' | 'timeout'> {
-    if (this.registry.hasPendingForSession(pending.sessionId)) {
-      return Promise.resolve('n')
+    const confirmRequest: ConfirmRequest = {
+      facts: {
+        toolName: pending.toolName ?? 'unknown',
+        actionClass: 'write',
+        baseRiskLevel: 'medium',
+        signals: [],
+        summary: { text: pending.toolName ?? 'unknown' }
+      },
+      riskLevel: 'medium',
+      memoryTiers: [],
+      timeoutMs: null
     }
-
-    const id = randomUUID()
-    const confirmId = allocateConfirmId()
-    const now = Date.now()
-    const entry: FeishuPendingConfirm = {
-      ...pending,
-      channel: 'feishu',
-      confirmId,
+    return this.im.request(confirmRequest, {
+      sessionId: pending.sessionId,
+      toolName: pending.toolName,
+      toolInput: pending.toolInput,
+      messageId: pending.messageId,
+      matchKey: pending.chatId,
+      context: pending.chatId,
+      trustEligible: pending.trustEligible ?? false,
+      authOwner: pending.authOwner,
       authorizationGeneration:
         pending.authorizationGeneration ?? remoteAuthorizationRegistry.getGeneration('feishu'),
-      trustEligible: pending.trustEligible ?? false,
-      id,
-      createdAt: now,
-      expiresAt: now + timeoutMs
-    }
-    logFeishuCliEvent('info', 'feishu.confirm.request', {
-      confirmId: id,
-      shortConfirmId: confirmId,
-      kind: entry.kind,
-      sessionId: entry.sessionId,
-      toolName: entry.toolName,
-      messageId: entry.messageId,
-      chatId: entry.chatId,
-      expiresAt: entry.expiresAt
-    })
-    void this.auditLogger?.append({
-      type: 'confirm_request',
-      confirmId: id
-    })
-    void this.notifyConfirmPrompt(entry)
-
-    return this.registry.register(entry, timeoutMs, {
-      onTimeout: () => {
-        releaseConfirmId(confirmId)
-        this.emitResolved(id, 'timeout')
-      }
+      requestId: pending.requestId,
+      memoryTiers: []
+    }).then((outcome) => {
+      if (outcome.kind === 'approved') return 'y'
+      if (outcome.kind === 'timeout') return 'timeout'
+      return 'n'
     })
   }
 
@@ -258,23 +201,23 @@ export class FeishuConfirmManager {
     return `${progressPrefix}⚠️ 需要确认以下操作：\n工具：${pending.toolName}\n命令：${String(cmd).slice(0, 2000)}\n${footer}（10 分钟内有效）`
   }
 
-  private notifyConfirmPrompt(entry: FeishuPendingConfirm): void {
+  private notifyConfirmPrompt(entry: ImPendingConfirm): void {
     if (!this.runner) return
-    const text = this.buildConfirmPromptText(entry)
+    const text = this.buildConfirmPromptText(entry as unknown as FeishuPendingConfirm)
     const send = this.db
       ? () =>
           sendFeishuRemoteOutbound({
             runner: this.runner!,
-            messageId: entry.messageId,
+            messageId: (entry as unknown as FeishuPendingConfirm).messageId,
             body: text,
-            sessionId: entry.sessionId,
-            touch: { db: this.db!, sessionId: entry.sessionId }
+            sessionId: (entry as unknown as FeishuPendingConfirm).sessionId,
+            touch: { db: this.db!, sessionId: (entry as unknown as FeishuPendingConfirm).sessionId }
           })
-      : () => replyFeishuText(this.runner!, entry.messageId, text)
+      : () => replyFeishuText(this.runner!, (entry as unknown as FeishuPendingConfirm).messageId, text)
     void send().catch((e) => {
       logFeishuCliEvent('error', 'feishu.confirm.prompt_failed', {
         confirmId: entry.id,
-        messageId: entry.messageId,
+        messageId: (entry as unknown as FeishuPendingConfirm).messageId,
         error: e instanceof Error ? e.message : String(e)
       })
     })
