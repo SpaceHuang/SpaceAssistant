@@ -1540,6 +1540,7 @@ async function runToolChatSessionInner(
           input: inputObj,
           riskLevel:
             toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+          ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
           ...(mcpEntryForConfirm
             ? {
                 mcp: {
