@@ -1,5 +1,6 @@
 import { remoteAuthorizationRegistry, type RemoteAuthChannel } from './remoteAuthorizationRegistry'
 import { classifyImOrigin, evaluateIngress } from '../confirmation/ingress'
+import { getSecurityAuditLog, type AuditSink } from '../confirmation/audit'
 
 export type ImInboundGuardConfig = {
   enabled?: boolean
@@ -33,6 +34,8 @@ export function evaluateImInboundGuard(args: {
   getConfig: () => ImInboundGuardConfig
   /** Optional login probe (WeChat). Default: treat as logged in when omitted. */
   isLoggedIn?: () => boolean
+  /** 审计出口（测试注入）；缺省走主进程 SecurityAuditLog 单例（异步、不阻断）。 */
+  audit?: AuditSink
 }): GuardResult {
   const cfg = args.getConfig()
   if (cfg.enabled === false) return { ok: false, reason: 'channel_disabled' }
@@ -48,6 +51,19 @@ export function evaluateImInboundGuard(args: {
     origin: originInfo
   })
   if (!ingress.allow) {
+    // ingress deny 必落 policy.deny-ingress 审计（§5.2a/§5.6）；此时尚无会话，sessionId 置空。
+    // 审计为异步缓冲写，失败降级不阻断主流程。
+    ;(args.audit ?? getSecurityAuditLog()).record({
+      ts: Date.now(),
+      event: 'policy.deny-ingress',
+      lane: args.channel === 'feishu' ? 'feishu' : 'wechat',
+      origin: originInfo,
+      sessionId: '',
+      decision: 'deny',
+      ruleId: ingress.ruleId,
+      reason: ingress.reason,
+      actor: 'system'
+    })
     return { ok: false, reason: 'not_owner' }
   }
   return {
