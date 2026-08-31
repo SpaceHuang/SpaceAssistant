@@ -34,7 +34,8 @@ describe('evaluateIngress（decideIngress 集成）', () => {
 
   it('名单外者（direct-other）未被默认 deny 规则拦截（需配置规则）', () => {
     const r = evaluateIngress({ lane: 'feishu', origin: { kind: 'direct-other', senderId: 'x' } }, DEFAULT_POLICY_RULES)
-    // 默认规则不含"名单外一律拒"，仅群聊拒；此处保持放行，由上游配置决定
-    expect(r.allow).toBe(true)
+    // 默认规则含"名单外一律拒"（等价现状 not_owner 不响应）
+    expect(r.allow).toBe(false)
+    expect(r.ruleId).toBe('ingress-direct-other-deny')
   })
 })

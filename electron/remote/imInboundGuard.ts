@@ -1,4 +1,5 @@
 import { remoteAuthorizationRegistry, type RemoteAuthChannel } from './remoteAuthorizationRegistry'
+import { classifyImOrigin, evaluateIngress } from '../confirmation/ingress'
 
 export type ImInboundGuardConfig = {
   enabled?: boolean
@@ -39,7 +40,14 @@ export function evaluateImInboundGuard(args: {
   const loggedIn = args.isLoggedIn ? args.isLoggedIn() : cfg.loggedIn !== false
   if (!loggedIn) return { ok: false, reason: 'not_logged_in' }
   const allow = cfg.remoteSenderAllowlist ?? []
-  if (!allow.length || !allow.includes(args.senderId)) {
+  // 白名单由来源分类器吸收：名单内 direct-owner / 名单外 direct-other；
+  // 再由 ingress 规则判定准入（默认规则"名单外一律拒"等价现状 not_owner 不响应）。
+  const originInfo = classifyImOrigin({ senderId: args.senderId, allowlist: allow })
+  const ingress = evaluateIngress({
+    lane: args.channel === 'feishu' ? 'feishu' : 'wechat',
+    origin: originInfo
+  })
+  if (!ingress.allow) {
     return { ok: false, reason: 'not_owner' }
   }
   return {

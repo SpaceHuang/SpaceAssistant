@@ -98,6 +98,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
 
   // ===== ingress 时机示例 =====
   {
+    id: 'ingress-direct-other-deny',
+    when: 'ingress',
+    match: { origin: 'direct-other' },
+    action: 'deny',
+    reason: '发送者不在白名单，拒绝响应'
+  },
+  {
     id: 'ingress-feishu-group-deny',
     when: 'ingress',
     match: { lane: ['feishu'], origin: 'group' },
