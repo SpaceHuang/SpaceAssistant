@@ -297,6 +297,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         sessionId?: string
         trustMcpServerId?: string
         trustMcpToolName?: string
+        memoryTier?: import('../src/shared/confirmation/types').CacheKey
       }
     ): Promise<void> => {
       if (payload.approved && payload.trustCommand?.trim()) {
@@ -338,6 +339,23 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           serverId: payload.trustMcpServerId,
           tool: payload.trustMcpToolName,
           timestamp: Date.now()
+        })
+      }
+      if (payload.approved && payload.memoryTier) {
+        // 记忆档位：用户选中的"记住"写入 decision_cache（执行链路写缓存，落 cache.write 审计）
+        const { SqliteDecisionCache, canonicalKeyJson } = await import('./confirmation/sqliteDecisionCache')
+        const { getDbConnection } = await import('./database')
+        const cache = new SqliteDecisionCache(getDbConnection(ctx.db))
+        cache.record({
+          id: canonicalKeyJson(payload.memoryTier),
+          key: payload.memoryTier,
+          decision: 'allow',
+          lane: 'desktop',
+          scope: 'persistent',
+          createdAt: Date.now(),
+          lastHitAt: Date.now(),
+          hitCount: 0,
+          source: 'user-confirm'
         })
       }
       submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
