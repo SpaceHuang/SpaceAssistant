@@ -75,7 +75,7 @@ import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { decideRunScript } from './confirmation/decisionPipeline'
 import { getSecurityAuditLog } from './confirmation/audit'
-import { DesktopChannel } from './confirmation/channels'
+import { DesktopChannel, LegacyImChannel } from './confirmation/channels'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
 import type { ConfirmRequest } from '../src/shared/confirmation/types'
 import {
@@ -1346,28 +1346,48 @@ async function runToolChatSessionInner(
             status: 'confirming',
             progressOutput: undefined
           })
-          const decision = await requestRemoteConfirm({
-            remoteContext,
-            payload: {
-              sessionId,
-              toolCallId: toolUseId,
+          const confirmPayload = {
+            sessionId,
+            toolCallId: toolUseId,
+            toolName,
+            toolInput: inputObj,
+            messageId: remoteContext.messageId,
+            chatId: remoteContext.chatId,
+            userId: remoteContext.userId,
+            trustEligible:
+              toolName === 'run_shell' && shellPrecheck?.ok
+                ? canShowShellTrustOption(
+                    shellPrecheck.analysis,
+                    typeof inputObj.command === 'string' ? inputObj.command : undefined
+                  )
+                : false
+          }
+          const remoteMetadata = getBuiltinToolMetadata(toolName)
+          const remoteReq: ConfirmRequest = {
+            facts: {
               toolName,
-              toolInput: inputObj,
-              messageId: remoteContext.messageId,
-              chatId: remoteContext.chatId,
-              userId: remoteContext.userId,
-              trustEligible:
-                toolName === 'run_shell' && shellPrecheck?.ok
-                  ? canShowShellTrustOption(
-                      shellPrecheck.analysis,
-                      typeof inputObj.command === 'string' ? inputObj.command : undefined
-                    )
-                  : false
+              actionClass: remoteMetadata?.actionClass ?? 'execute',
+              baseRiskLevel: remoteMetadata?.riskLevel ?? 'medium',
+              signals: [],
+              summary: { text: toolName }
             },
-            wechatConfig
-          })
+            riskLevel:
+              toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
+                ? 'high'
+                : 'medium',
+            memoryTiers: [],
+            timeoutMs: null
+          }
+          const imOutcome = await new LegacyImChannel({
+            requestId,
+            sessionId,
+            toolName,
+            lane: remoteContext.source === 'feishu' ? 'feishu' : 'wechat',
+            audit: getSecurityAuditLog(),
+            send: () => requestRemoteConfirm({ remoteContext, payload: confirmPayload, wechatConfig })
+          }).request(remoteReq)
           // Sync authorization + lease check in the same turn as executor — no await between check and execute.
-          if (decision === 'y') {
+          if (imOutcome.kind === 'approved') {
             const originSessionId = remoteContext.originSessionId ?? sessionId
             const authOwner = remoteContext.authOwner ?? remoteContext.userId ?? ''
             const currentGen = remoteAuthorizationRegistry.getGeneration(remoteContext.source)
@@ -1422,7 +1442,7 @@ async function runToolChatSessionInner(
               }
             }
           } else {
-            outcome = decision === 'timeout' ? 'timeout' : 'rejected'
+            outcome = imOutcome.kind === 'timeout' ? 'timeout' : 'rejected'
           }
         } else {
           outcome = 'rejected'
