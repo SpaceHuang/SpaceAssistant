@@ -1,11 +1,11 @@
 import { normalizeToolRelPath } from './normalizeToolRelPath'
-import { ArtifactPathLeaseRegistry, type ArtifactPathLease } from './pathLeaseRegistry'
-import { artifactLeaseKey, artifactPathIdentityForRelative } from './artifactPathKeys'
+import { PathLeaseRegistry, type PathLease } from './pathLeaseRegistry'
+import { leaseKey, pathIdentityForRelative } from './pathKeys'
 import { resolveWorkspaceRootReal } from './workspaceRoot'
 
-const sharedRegistry = new ArtifactPathLeaseRegistry()
+const sharedRegistry = new PathLeaseRegistry()
 const sessionWriteIdentities = new Map<string, Set<string>>()
-const heldWriteLeases = new Map<string, ArtifactPathLease>()
+const heldWriteLeases = new Map<string, PathLease>()
 
 function sessionPathKey(sessionId: string, identity: string): string {
   return `${sessionId}\0${identity}`
@@ -16,11 +16,11 @@ function resolveLeaseIdentity(relPath: string, workDir?: string): string {
   if (!normalized) return ''
   if (!workDir) return normalized
   const workspaceRootReal = resolveWorkspaceRootReal(workDir)
-  return artifactLeaseKey(workspaceRootReal, artifactPathIdentityForRelative(workDir, normalized))
+  return leaseKey(workspaceRootReal, pathIdentityForRelative(workDir, normalized))
 }
 
-/** Process-wide lease registry shared by tool loop and artifact mutation services. */
-export function getSharedArtifactPathLeaseRegistry(): ArtifactPathLeaseRegistry {
+/** Process-wide lease registry shared by the tool loop and the write-safety layer. */
+export function getSharedPathLeaseRegistry(): PathLeaseRegistry {
   return sharedRegistry
 }
 
@@ -42,7 +42,7 @@ export function checkToolWriteLeaseConflict(sessionId: string, relPath: string, 
   return null
 }
 
-export function acquireToolWriteLease(sessionId: string, relPath: string, workDir?: string): ArtifactPathLease {
+export function acquireToolWriteLease(sessionId: string, relPath: string, workDir?: string): PathLease {
   const identity = resolveLeaseIdentity(relPath, workDir)
   if (!identity) return { release: () => undefined }
   const conflict = checkToolWriteLeaseConflict(sessionId, relPath, workDir)
@@ -94,6 +94,6 @@ export function toolWriteLeaseIdentity(workDir: string, relPath: string): string
   return resolveLeaseIdentity(relPath, workDir)
 }
 
-export function artifactDeleteLeaseIdentity(workspaceRootReal: string, pathIdentityKey: string): string {
-  return artifactLeaseKey(workspaceRootReal, pathIdentityKey)
+export function deleteLeaseIdentity(workspaceRootReal: string, pathIdentityKey: string): string {
+  return leaseKey(workspaceRootReal, pathIdentityKey)
 }

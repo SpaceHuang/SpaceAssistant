@@ -1,41 +1,41 @@
-export interface ArtifactPathLease {
+export interface PathLease {
   release(): void
 }
 
-export interface ArtifactPathMultiLease extends ArtifactPathLease {
+export interface PathMultiLease extends PathLease {
   identities: string[]
 }
 
 type LeaseState = { uses: number; write: boolean; deleting: boolean }
 
-/** In-process lease state for artifact identities; callers must release in finally blocks. */
-export class ArtifactPathLeaseRegistry {
+/** In-process lease state for path identities; callers must release in finally blocks. */
+export class PathLeaseRegistry {
   private readonly states = new Map<string, LeaseState>()
 
-  acquireUse(identity: string): ArtifactPathLease {
+  acquireUse(identity: string): PathLease {
     const state = this.state(identity)
-    if (state.write || state.deleting) throw new Error('Artifact path lease is unavailable')
+    if (state.write || state.deleting) throw new Error('Path lease is unavailable')
     state.uses += 1
     return this.lease(identity, () => { state.uses -= 1 })
   }
 
-  acquireWrite(identity: string): ArtifactPathLease {
+  acquireWrite(identity: string): PathLease {
     const state = this.state(identity)
-    if (state.uses || state.write || state.deleting) throw new Error('Artifact path lease is unavailable')
+    if (state.uses || state.write || state.deleting) throw new Error('Path lease is unavailable')
     state.write = true
     return this.lease(identity, () => { state.write = false })
   }
 
-  claimDelete(identity: string): ArtifactPathLease {
+  claimDelete(identity: string): PathLease {
     const state = this.state(identity)
-    if (state.uses || state.write || state.deleting) throw new Error('Artifact path lease is unavailable')
+    if (state.uses || state.write || state.deleting) throw new Error('Path lease is unavailable')
     state.deleting = true
     return this.lease(identity, () => { state.deleting = false })
   }
 
-  acquireWrites(identities: readonly string[]): ArtifactPathMultiLease {
+  acquireWrites(identities: readonly string[]): PathMultiLease {
     const ordered = [...new Set(identities)].sort()
-    const leases: ArtifactPathLease[] = []
+    const leases: PathLease[] = []
     try {
       for (const identity of ordered) leases.push(this.acquireWrite(identity))
     } catch (error) {
@@ -62,7 +62,7 @@ export class ArtifactPathLeaseRegistry {
     return state
   }
 
-  private lease(identity: string, onRelease: () => void): ArtifactPathLease {
+  private lease(identity: string, onRelease: () => void): PathLease {
     let released = false
     return { release: () => {
       if (released) return

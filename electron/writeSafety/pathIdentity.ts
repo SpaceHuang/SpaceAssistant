@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 /** Stable path identity: filesystem identity when present, lexical identity before creation. */
-export function artifactPathIdentity(targetPath: string, options: { platform?: NodeJS.Platform } = {}): string {
+export function pathIdentity(targetPath: string, options: { platform?: NodeJS.Platform } = {}): string {
   const platform = options.platform ?? process.platform
   if (platform === 'win32') return windowsPathIdentity(targetPath)
   const normalized = path.normalize(targetPath)

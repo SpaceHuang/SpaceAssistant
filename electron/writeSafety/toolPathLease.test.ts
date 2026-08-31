@@ -4,7 +4,7 @@ import {
   checkToolWriteLeaseConflict,
   clearToolPathLeases,
   releaseAllToolPathLeasesForSession,
-  getSharedArtifactPathLeaseRegistry
+  getSharedPathLeaseRegistry
 } from './toolPathLease'
 
 describe('toolPathLease', () => {
@@ -15,12 +15,12 @@ describe('toolPathLease', () => {
   it('acquires an exclusive write lease and releases it in a finally-style flow', () => {
     const lease = acquireToolWriteLease('s1', 'src/a.ts')
     expect(checkToolWriteLeaseConflict('s2', 'src/a.ts')).toMatch(/占用/)
-    expect(() => getSharedArtifactPathLeaseRegistry().acquireWrite('src/a.ts')).toThrow(/lease/i)
+    expect(() => getSharedPathLeaseRegistry().acquireWrite('src/a.ts')).toThrow(/lease/i)
 
     lease.release()
 
     expect(checkToolWriteLeaseConflict('s2', 'src/a.ts')).toBeNull()
-    expect(() => getSharedArtifactPathLeaseRegistry().acquireWrite('src/a.ts')).not.toThrow()
+    expect(() => getSharedPathLeaseRegistry().acquireWrite('src/a.ts')).not.toThrow()
   })
 
   it('releases every outstanding lease for a session', () => {

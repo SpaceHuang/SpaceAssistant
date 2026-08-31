@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { ArtifactPathLeaseRegistry } from './pathLeaseRegistry'
+import { PathLeaseRegistry } from './pathLeaseRegistry'
 
-describe('ArtifactPathLeaseRegistry', () => {
+describe('PathLeaseRegistry', () => {
   it('shares use leases while write and delete remain exclusive', () => {
-    const registry = new ArtifactPathLeaseRegistry()
+    const registry = new PathLeaseRegistry()
     const first = registry.acquireUse('path-a')
     const second = registry.acquireUse('path-a')
     expect(() => registry.acquireWrite('path-a')).toThrow(/lease/i)
@@ -17,14 +17,14 @@ describe('ArtifactPathLeaseRegistry', () => {
   })
 
   it('allows reacquisition after a finally-style release', () => {
-    const registry = new ArtifactPathLeaseRegistry()
+    const registry = new PathLeaseRegistry()
     const lease = registry.acquireWrite('path-a')
     lease.release()
     expect(() => registry.acquireWrite('path-a')).not.toThrow()
   })
 
   it('releases a delete tombstone after finally-style release so the path can be rewritten', () => {
-    const registry = new ArtifactPathLeaseRegistry()
+    const registry = new PathLeaseRegistry()
     const activeUse = registry.acquireUse('path-a')
     expect(() => registry.claimDelete('path-a')).toThrow(/lease/i)
     activeUse.release()
@@ -35,10 +35,10 @@ describe('ArtifactPathLeaseRegistry', () => {
   })
 
   it('acquires multi-path writes in identity order and rolls back if any path is unavailable', () => {
-    const registry = new ArtifactPathLeaseRegistry()
+    const registry = new PathLeaseRegistry()
     expect(registry.acquireWrites(['path-b', 'path-a']).identities).toEqual(['path-a', 'path-b'])
 
-    const blocked = new ArtifactPathLeaseRegistry()
+    const blocked = new PathLeaseRegistry()
     blocked.acquireWrite('path-b')
     expect(() => blocked.acquireWrites(['path-a', 'path-b'])).toThrow(/lease/i)
     expect(() => blocked.acquireWrite('path-a')).not.toThrow()

@@ -2,9 +2,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { artifactPathIdentity } from './pathIdentity'
+import { pathIdentity } from './pathIdentity'
 
-describe('artifactPathIdentity', () => {
+describe('pathIdentity', () => {
   const dirs: string[] = []
   afterEach(() => dirs.splice(0).forEach((dir) => fs.rmSync(dir, { recursive: true, force: true })))
 
@@ -26,13 +26,13 @@ describe('artifactPathIdentity', () => {
         ? path.win32.normalize(path.join(root, 'nested', '..', 'new.txt')).replace(/\\/g, '/').toLowerCase()
         : path.normalize(path.join(root, 'new.txt'))
 
-    expect(artifactPathIdentity(path.join(root, '.', 'actual.txt'))).toBe(expectedExisting)
-    expect(artifactPathIdentity(path.join(root, 'nested', '..', 'new.txt'))).toBe(expectedAbsent)
+    expect(pathIdentity(path.join(root, '.', 'actual.txt'))).toBe(expectedExisting)
+    expect(pathIdentity(path.join(root, 'nested', '..', 'new.txt'))).toBe(expectedAbsent)
   })
 
   it('normalizes Windows separators and case while rejecting ambiguous aliases', () => {
-    expect(artifactPathIdentity('C:\\Work\\Reports\\FINAL.TXT', { platform: 'win32' })).toBe('c:/work/reports/final.txt')
-    expect(() => artifactPathIdentity('C:\\Work\\CON.txt', { platform: 'win32' })).toThrow(/device name/i)
-    expect(() => artifactPathIdentity('C:\\Work\\report. ', { platform: 'win32' })).toThrow(/trailing/i)
+    expect(pathIdentity('C:\\Work\\Reports\\FINAL.TXT', { platform: 'win32' })).toBe('c:/work/reports/final.txt')
+    expect(() => pathIdentity('C:\\Work\\CON.txt', { platform: 'win32' })).toThrow(/device name/i)
+    expect(() => pathIdentity('C:\\Work\\report. ', { platform: 'win32' })).toThrow(/trailing/i)
   })
 })
