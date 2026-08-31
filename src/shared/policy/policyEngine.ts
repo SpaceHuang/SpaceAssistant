@@ -38,7 +38,9 @@ export function deriveCacheKeys(facts: ContentFacts): CacheKey[] {
     switch (signal.kind) {
       case 'command-sequence':
         for (const cmd of signal.commands) {
-          if (cmd.verb) keys.push({ kind: 'shell-command', verb: cmd.verb, level: 'exact' })
+          // exact 档：使用完整规范化签名（防止 `FOO=1 cmd` / `cd x && cmd` / 引号空白变体命中缓存）
+          if (cmd.signature) keys.push({ kind: 'shell-command', verb: cmd.signature, level: 'exact' })
+          else if (cmd.verb) keys.push({ kind: 'shell-command', verb: cmd.verb, level: 'exact' })
         }
         break
       case 'network-egress':
