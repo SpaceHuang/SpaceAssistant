@@ -74,6 +74,7 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { decideRunScript } from './confirmation/decisionPipeline'
+import { decideTool } from './confirmation/decisionPipeline'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { DesktopChannel, LegacyImChannel } from './confirmation/channels'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
@@ -1184,6 +1185,34 @@ async function runToolChatSessionInner(
         currentPageUrl,
         dangerAssessment
       )
+      // 桌面 write/edit：引擎化基线判定 + 记忆档位下发（护栏：现有 toolChatLoop 等价测试）
+      let confirmMemoryTiers: import('../src/shared/confirmation/types').MemoryTier[] = []
+      if (!remoteContext && (toolName === 'write_file' || toolName === 'edit_file')) {
+        const metadata = getBuiltinToolMetadata(toolName)
+        if (metadata) {
+          const dt = decideTool({
+            descriptor: metadata,
+            toolInput: inputObj,
+            env: {
+              os: process.platform,
+              workDir,
+              sensitivePaths: getBuiltinSensitivePrefixes(userDataDir)
+            },
+            lane: 'desktop',
+            origin: { kind: 'direct-owner' },
+            sessionId,
+            config: { confirmMode: toolsConfig.confirmMode },
+            migrationComplete: false
+          })
+          if (dt.decision.type === 'auto-allow') needsConfirm = false
+          else if (dt.decision.type === 'require-confirm') {
+            needsConfirm = true
+            confirmMemoryTiers = dt.decision.memoryTiers
+          } else {
+            needsConfirm = true
+          }
+        }
+      }
       // MCP 工具：默认始终确认；仅 readonly-auto + 安全注解免确认；「本会话信任」跳过。
       const mcpEntryForConfirm = mcpSnapshot.entries.get(toolName)
       if (mcpEntryForConfirm) {
@@ -1560,7 +1589,7 @@ async function runToolChatSessionInner(
             toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
               ? 'high'
               : 'medium',
-          memoryTiers: [],
+          memoryTiers: confirmMemoryTiers,
           timeoutMs: null
         }
         const channelOutcome = await new DesktopChannel({
