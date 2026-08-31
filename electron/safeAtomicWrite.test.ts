@@ -51,17 +51,29 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     expect(await fs.readFile(abs, 'utf8')).toBe('new')
   })
 
-  it('rejects parent symlink escape', async () => {
-    await fs.symlink(outside, path.join(workDir, 'symlink-outside'))
+  it('rejects parent symlink escape', async (ctx) => {
+    try {
+      await fs.symlink(outside, path.join(workDir, 'symlink-outside'))
+    } catch (error) {
+      // Windows 无开发者模式/权限时无法创建符号链接，属环境限制，跳过而非失败。
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw error
+    }
     await expect(resolveSafeWriteTarget(workDir, 'symlink-outside/new-file.txt')).rejects.toThrow(
       /符号链接/
     )
   })
 
-  it('rejects target that is a symlink', async () => {
+  it('rejects target that is a symlink', async (ctx) => {
     const outsideFile = path.join(outside, 'secret.txt')
     await fs.writeFile(outsideFile, 'secret')
-    await fs.symlink(outsideFile, path.join(workDir, 'link.txt'))
+    try {
+      await fs.symlink(outsideFile, path.join(workDir, 'link.txt'))
+    } catch (error) {
+      // Windows 无开发者模式/权限时无法创建符号链接，属环境限制，跳过而非失败。
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip()
+      throw error
+    }
     await expect(resolveSafeWriteTarget(workDir, 'link.txt')).rejects.toThrow(/符号链接/)
   })
 

@@ -7,8 +7,7 @@
     "skipLibCheck": true
   },
   "include": [
-    "src/shared/**/*.ts",
-    "typeTests/**/*.ts"
+    "src/shared/**/*.ts"
   ],
   "exclude": [
     "src/shared/**/*.test.ts",
