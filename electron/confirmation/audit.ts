@@ -16,7 +16,13 @@ let singleton: SecurityAuditLog | null = null
  * 保证审计记录不阻断主流程（§5.6）。
  */
 export function getSecurityAuditLog(): AuditSink {
-  const logDir = getAgentLogDir()
+  let logDir: string | null = null
+  try {
+    const candidate = getAgentLogDir()
+    logDir = typeof candidate === 'string' && candidate.length > 0 ? candidate : null
+  } catch {
+    // agentLogger 未初始化或被测试 mock：降级 no-op，审计不阻断主流程
+  }
   if (!logDir) return NOOP
   if (!singleton) singleton = new SecurityAuditLog({ logDir })
   return singleton

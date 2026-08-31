@@ -75,6 +75,9 @@ import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { decideRunScript } from './confirmation/decisionPipeline'
 import { getSecurityAuditLog } from './confirmation/audit'
+import { DesktopChannel } from './confirmation/channels'
+import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
+import type { ConfirmRequest } from '../src/shared/confirmation/types'
 import {
   formatScriptDenyUserMessage,
   getRemoteTaskController
@@ -142,7 +145,6 @@ import { stripThinkingBlocksFromAssistantMessages } from '../src/shared/stripThi
 import {
   clearToolCancel,
   registerToolCancel,
-  waitForToolConfirm,
   type ToolConfirmOutcome
 } from './toolConfirmRegistry'
 import fs from 'fs/promises'
@@ -1504,7 +1506,37 @@ async function runToolChatSessionInner(
             createdAt: Date.now()
           })
         }
-        outcome = await waitForToolConfirm(requestId, toolUseId)
+        // 统一走桌面确认通道（包装 waitForToolConfirm；落 confirm.* 审计）
+        const metadata = getBuiltinToolMetadata(toolName)
+        const confirmReq: ConfirmRequest = {
+          facts: {
+            toolName,
+            actionClass: metadata?.actionClass ?? 'execute',
+            baseRiskLevel: metadata?.riskLevel ?? 'medium',
+            signals: [],
+            summary: { text: toolName }
+          },
+          riskLevel:
+            toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
+              ? 'high'
+              : 'medium',
+          memoryTiers: [],
+          timeoutMs: null
+        }
+        const channelOutcome = await new DesktopChannel({
+          requestId,
+          toolUseId,
+          sessionId,
+          toolName,
+          lane: 'desktop',
+          audit: getSecurityAuditLog()
+        }).request(confirmReq)
+        outcome =
+          channelOutcome.kind === 'approved'
+            ? 'approved'
+            : channelOutcome.kind === 'timeout'
+              ? 'timeout'
+              : 'rejected'
         // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolName === 'run_shell' && shellSecurityHints) {
