@@ -27,6 +27,8 @@ export interface ImPendingConfirm {
   memoryTiers: MemoryTier[]
   /** 由调用方注入的匹配键（wechat: userId；feishu: chatId）。 */
   matchKey?: string
+  /** 链路专属扩展上下文（如微信 reply 所需的 IncomingMessage），供 sendPrompt 消费。 */
+  context?: unknown
 }
 
 export interface ImChannelDeps {

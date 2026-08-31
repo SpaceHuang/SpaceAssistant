@@ -129,4 +129,25 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     ch.cancel(ch.listPending()[0]!.id)
     await p.catch(() => undefined)
   })
+
+  it('context 扩展上下文回传至 sendPrompt（供 IM reply 使用）', async () => {
+    let sent: unknown
+    const ch = new ImChannel({
+      lane: 'wechat',
+      timeoutMs: 1000,
+      sendPrompt: (entry) => {
+        sent = entry.context
+      }
+    })
+    const p = ch.request(req(), {
+      sessionId: 's1',
+      toolName: 'run_shell',
+      messageId: 'm1',
+      matchKey: 'u1',
+      context: { raw: 'orig' }
+    })
+    expect((sent as { raw: string }).raw).toBe('orig')
+    ch.cancel(ch.listPending()[0]!.id)
+    await p.catch(() => undefined)
+  })
 })
