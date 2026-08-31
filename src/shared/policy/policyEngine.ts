@@ -61,8 +61,16 @@ export function deriveCacheKeys(facts: ContentFacts): CacheKey[] {
   return keys
 }
 
-/** 依据候选缓存键生成确认界面的记忆档位（默认最窄可用档）。 */
+/**
+ * 依据候选缓存键生成确认界面的记忆档位（默认最窄可用档）。
+ * run_script 记忆封顶（§5.3）：携带 script-network / script-uncertified 信号的调用
+ * 强制"仅此一次"、不开放任何记忆档位——这两条规则非 locked 且位于缓存检查之后，
+ * 开放记忆会让"记住"绕过网络命中确认与未认证降级，属安全松动。
+ */
 export function buildMemoryTiers(facts: ContentFacts): MemoryTier[] {
+  if (facts.signals.some((s) => s.kind === 'script-network' || s.kind === 'script-uncertified')) {
+    return []
+  }
   const keys = deriveCacheKeys(facts)
   return keys.map((key) => ({
     key,

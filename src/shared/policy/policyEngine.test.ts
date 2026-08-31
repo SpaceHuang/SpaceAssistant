@@ -6,7 +6,7 @@ import type {
   PolicyEngineDeps
 } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
-import { decide, decideIngress } from './policyEngine'
+import { buildMemoryTiers, decide, decideIngress } from './policyEngine'
 
 function mkFacts(
   toolName: string,
@@ -347,5 +347,37 @@ describe('decideIngress：消息入口准入', () => {
     const r = decideIngress({ lane: 'feishu', origin: { kind: 'group' } }, rules)
     expect(r.ruleId).toBe('allow-any')
     expect(r.action).toBe('allow')
+  })
+})
+
+describe('buildMemoryTiers：run_script 记忆封顶（§5.3）', () => {
+  it('携带 script-network 信号的调用强制"仅此一次"，不开放记忆档位', () => {
+    const facts = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-network', patterns: ['https://example.com'] },
+      // 同时携带可派生缓存键的 path-target 信号：封顶必须压过它，"记住路径"不得绕过网络确认
+      { kind: 'path-target', path: 'out/report.txt', zone: 'workdir-normal' }
+    ], 'high')
+    expect(buildMemoryTiers(facts)).toEqual([])
+  })
+
+  it('携带 script-uncertified 信号的调用强制"仅此一次"，不开放记忆档位', () => {
+    const facts = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-uncertified' },
+      { kind: 'path-target', path: 'out/report.txt', zone: 'workdir-normal' }
+    ], 'high')
+    expect(buildMemoryTiers(facts)).toEqual([])
+  })
+
+  it('普通脚本（无网络/未认证信号）不受影响', () => {
+    const facts = mkFacts('run_shell', 'execute', [
+      {
+        kind: 'command-sequence',
+        commands: [{ verb: 'ls', signature: 'ls', args: [] }],
+        persistable: true
+      }
+    ], 'high')
+    expect(buildMemoryTiers(facts).length).toBeGreaterThan(0)
   })
 })
