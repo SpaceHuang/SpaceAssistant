@@ -74,6 +74,7 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { decideRunScript } from './confirmation/decisionPipeline'
+import { getSecurityAuditLog } from './confirmation/audit'
 import {
   formatScriptDenyUserMessage,
   getRemoteTaskController
@@ -1277,6 +1278,23 @@ async function runToolChatSessionInner(
           migrationComplete: isRemoteSecurityMigrationComplete(channelConfig)
         })
         const decision = scriptDecision.decision
+        // 判定即记录（§5.6）：policy.decision 事件（异步缓冲，不阻断）
+        getSecurityAuditLog().record({
+          ts: Date.now(),
+          event: 'policy.decision',
+          lane,
+          origin: { kind: 'direct-owner' },
+          sessionId,
+          toolName: 'run_script',
+          actionClass: 'execute',
+          riskLevel: 'high',
+          factsSummary: scriptDecision.summary,
+          signals: scriptDecision.signals.map((s) => s.kind),
+          decision: decision.type,
+          ruleId: decision.ruleId,
+          reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
+          actor: 'system'
+        })
         if (decision.type === 'deny') {
           const denyMsg = formatScriptDenyUserMessage(scriptDecision.rawAnalysis.reason)
           logAgentEvent('info', 'script.deny', {
