@@ -77,6 +77,7 @@ const api: SpaceAssistantApi = {
   claudeChatCancel: (payload) => ipcRenderer.invoke('claude-chat-cancel', payload),
 
   configGet: () => ipcRenderer.invoke('config:get'),
+  getToolExposureList: (payload) => ipcRenderer.invoke('exposure:get-tools', payload),
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),
   configTestConnection: (options?: {
     serviceId?: string

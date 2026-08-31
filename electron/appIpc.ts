@@ -812,6 +812,24 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   })
 
   ipcMain.handle(
+    'exposure:get-tools',
+    async (
+      _e,
+      payload: { lane: 'desktop' | 'wechat' | 'feishu'; config: AppConfig }
+    ): Promise<string[]> => {
+      const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
+      return exposedToolNamesForLane(
+        payload.lane,
+        payload.config.tools,
+        payload.config.feishu,
+        payload.config.browser,
+        payload.config.shell,
+        payload.config.wechat
+      )
+    }
+  )
+
+  ipcMain.handle(
     'config:set',
     async (
       _e,
