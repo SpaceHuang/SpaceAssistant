@@ -209,3 +209,56 @@ export type SecurityAuditEventKind =
   | 'settings.tool-toggle'
   | 'budget.exhausted'
   | `migration.${string}`
+
+// ===== 策略层（policyEngine / defaultRules 依赖）=====
+export type PolicyAction = 'deny' | 'allow' | 'ask' | 'auto-evaluator'
+export type PolicyWhen = 'ingress' | 'exposure' | 'invocation'
+
+export interface PolicyRuleMatch {
+  lane?: ExecutionLane[]
+  origin?: OriginInfo['kind']
+  /** 字符串或字符串数组（数组语义"任一命中"）。 */
+  toolName?: string | string[]
+  actionClass?: ActionClass
+  /** 「包含」语义：所列信号全部出现在事实信号集即命中。 */
+  signals?: string[]
+  target?: 'owner-only'
+}
+
+export interface PolicyRule {
+  id: string
+  when: PolicyWhen
+  match?: PolicyRuleMatch
+  action: PolicyAction
+  /** 系统保护条目：UI 只读、自定义套餐不可调松。 */
+  locked?: boolean
+  reason: string
+  /** 条件放行：门控不满足即不命中（参数化配置引用，非策略层读运行时状态）。 */
+  askUnless?: { config: string; equals: unknown; andMigrationComplete?: boolean }
+  /** 配置前置：值等于 equals 才命中（参数化配置引用）。 */
+  configRequires?: { config: string; equals: unknown }
+  /** 上下文前置：消费 ExecutionContext 中注入的只读事实。 */
+  requiresContext?: { remoteWriteGrantValid?: boolean }
+}
+
+/** 策略层只读缓存视图：写缓存是执行链路的事。 */
+export interface DecisionCacheView {
+  lookup(key: CacheKey): DecisionCacheEntry | null
+}
+
+/** 第 4 步自动审批器：批准返回 Decision，不裁决（approve:false）交还规则链。 */
+export type AutoEvaluator = (
+  facts: ContentFacts,
+  context: ExecutionContext
+) => { approve: true; reason: string } | { approve: false; reason: string }
+
+/** decide 的求值环境：策略层保持纯函数，所有运行时输入经由依赖对象传入。 */
+export interface PolicyEngineDeps {
+  cache: DecisionCacheView
+  /** 配置值（confirmMode / remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
+  config: Record<string, unknown>
+  /** 迁移完成位（参数化配置引用问询）。 */
+  migrationComplete: boolean
+  /** 第 4 步自动审批器（可注入，缺省不裁决）。 */
+  autoEvaluator?: AutoEvaluator
+}
