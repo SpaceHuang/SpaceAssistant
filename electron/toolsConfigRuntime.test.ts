@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import { DEFAULT_WECHAT_CONFIG } from '../src/shared/wechatTypes'
-import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
+import { filterBuiltinToolsForApi, exposedToolNamesForLane } from './toolsConfigRuntime'
 import type { FeishuRemoteContext, WeChatRemoteContext } from '../tools/types'
 
 describe('filterBuiltinToolsForApi workdir tools', () => {
@@ -84,5 +84,29 @@ describe('filterBuiltinToolsForApi wechat_send remote filtering', () => {
     ).map((t) => t.name)
     expect(names).not.toContain('wechat_send')
     expect(names).toContain('wechat_reply')
+  })
+})
+
+describe('exposedToolNamesForLane（IPC 下发清单求值）', () => {
+  const wechatEnabled = { ...DEFAULT_WECHAT_CONFIG, enabled: true }
+
+  it('desktop 链路包含 read/write/run_shell/browser，排除 workdir 与 wechat_send 的 exposure 限制', () => {
+    const cfg = { ...DEFAULT_TOOLS_CONFIG, deniedTools: [] }
+    const names = exposedToolNamesForLane('desktop', cfg, null, null, { enabled: true }, wechatEnabled)
+    expect(names).toContain('write_file')
+    expect(names).toContain('run_shell')
+    expect(names).not.toContain('list_work_dirs')
+    expect(names).toContain('wechat_send') // desktop 不受 im-no-wechat-send exposure 限制
+  })
+
+  it('wechat 链路包含 workdir 工具但排除 wechat_send（exposure 规则 + 远程过滤）', () => {
+    const names = exposedToolNamesForLane('wechat', DEFAULT_TOOLS_CONFIG, null, null, null, wechatEnabled)
+    expect(names).toContain('list_work_dirs')
+    expect(names).not.toContain('wechat_send')
+  })
+
+  it('feishu 链路同样排除 wechat_send', () => {
+    const names = exposedToolNamesForLane('feishu', DEFAULT_TOOLS_CONFIG, null, null, null, wechatEnabled)
+    expect(names).not.toContain('wechat_send')
   })
 })

@@ -4,6 +4,7 @@ import type { BrowserConfig, ShellConfig, ToolsConfig } from '../src/shared/doma
 import type { RemoteContext } from './tools/types'
 import { BUILTIN_TOOL_DEFINITIONS } from '../src/shared/builtinToolDefinitions'
 import { evaluateExposure } from './confirmation/exposure'
+import type { ExecutionLane } from '../src/shared/confirmation/types'
 
 export function isShellToolEnabled(shellConfig: ShellConfig | null | undefined, cfg: ToolsConfig): boolean {
   if (!shellConfig?.enabled) return false
@@ -65,4 +66,27 @@ export function filterBuiltinToolsForApi(
     : 'desktop'
   list = list.filter((t) => evaluateExposure({ toolName: t.name, lane }).allowed)
   return list
+}
+
+/**
+ * exposure 清单求值（主进程唯一评估者，供 IPC 下发渲染端）：
+ * 按链路(desktop/wechat/feishu)返回可见工具名清单（合并 exposure 规则 + 开关/deniedTools/allow）。
+ */
+export function exposedToolNamesForLane(
+  lane: ExecutionLane,
+  cfg: ToolsConfig,
+  feishu?: FeishuConfig | null,
+  browserConfig?: BrowserConfig | null,
+  shellConfig?: ShellConfig | null,
+  wechat?: WeChatConfig | null
+): string[] {
+  if (lane === 'desktop') {
+    return filterBuiltinToolsForApi(cfg, feishu, browserConfig, null, shellConfig, wechat).map((t) => t.name)
+  }
+  const remoteContext = {
+    source: lane === 'feishu' ? ('feishu' as const) : ('wechat' as const),
+    messageId: 'exposure',
+    confirmPolicy: 'always' as const
+  } as const
+  return filterBuiltinToolsForApi(cfg, feishu, browserConfig, remoteContext, shellConfig, wechat).map((t) => t.name)
 }
