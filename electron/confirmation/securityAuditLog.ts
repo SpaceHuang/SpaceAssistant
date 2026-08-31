@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import { logAgentError } from '../agentLogger/agentLogger'
 
 /** 脱敏：命中敏感形态的字段值统一替换，不落用户正文/token/secret/API Key。 */
 const SENSITIVE_PATTERN = /(sk-[A-Za-z0-9_-]+|Bearer\s+\S+|secret\s*=\s*[^\s,;]+|api[_-]?key\s*=\s*[^\s,;]+)/gi
@@ -31,6 +32,11 @@ export function auditLine(event: SecurityAuditEvent): string {
   return JSON.stringify(sanitizeAuditEvent(event))
 }
 
+/** 缓冲上限：超过则丢弃最旧事件并计数，避免持续写失败时缓冲无限增长（B3）。 */
+export const MAX_AUDIT_BUFFER = 2000
+/** 失败重试次数上限：超过后停止定时重试，等待下一次 record() 触发（避免无界循环）。 */
+export const MAX_AUDIT_RETRY = 8
+
 export interface SecurityAuditLogDeps {
   /** 日志目录：开发 `{项目根}/logs/`，打包 `{workDir}/.agent/logs/`，由调用方解析。 */
   logDir: string
@@ -50,6 +56,11 @@ export class SecurityAuditLog {
   private buffer: SecurityAuditEvent[] = []
   private flushTimer: NodeJS.Timeout | null = null
   private today = new Date()
+  private pendingDelay = 50
+  private retryCount = 0
+  private droppedCount = 0
+  /** 上次执行过期清理的日期（仅按日变化时跑一次，§5.6-1）。 */
+  private lastCleanupDay = ''
 
   constructor(deps: SecurityAuditLogDeps) {
     this.deps = deps
@@ -57,16 +68,23 @@ export class SecurityAuditLog {
 
   /** 记录事件（同步入缓冲、异步落盘，不阻断调用方）。 */
   record(event: SecurityAuditEvent): void {
+    if (this.buffer.length >= MAX_AUDIT_BUFFER) {
+      this.buffer.shift()
+      this.droppedCount++
+    }
     this.buffer.push(event)
     this.scheduleFlush()
   }
 
   private scheduleFlush(): void {
     if (this.flushTimer) return
+    const delay = this.pendingDelay
+    this.pendingDelay = 50
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null
       void this.flush()
-    }, 50)
+    }, delay)
+    this.flushTimer.unref?.()
   }
 
   /** 立即落盘（供测试/退出前调用）。 */
@@ -77,23 +95,43 @@ export class SecurityAuditLog {
       const file = path.join(this.deps.logDir, `SecurityAudit-${dateStamp(this.today)}.log`)
       await fs.mkdir(this.deps.logDir, { recursive: true })
       await fs.appendFile(file, events.map(auditLine).join('\n') + '\n', 'utf8')
+      this.retryCount = 0
       this.rotateIfDateChanged()
-      await this.cleanupExpired()
     } catch (e) {
-      // 故障不阻断：把事件退回缓冲以便重试，并降级记 agentLogger 错误
+      // 故障不阻断：把事件退回缓冲，降级记 agentLogger 错误，并指数退避重试调度（B3）。
       this.buffer.unshift(...events)
-      // eslint-disable-next-line no-console
-      console.error('[SecurityAuditLog] write failed', e)
+      if (this.buffer.length > MAX_AUDIT_BUFFER) {
+        this.buffer.splice(0, this.buffer.length - MAX_AUDIT_BUFFER)
+      }
+      this.retryCount++
+      this.pendingDelay = Math.min(50 * 2 ** Math.min(this.retryCount, 7), 5000)
+      logAgentError(
+        'security.audit.write_failed',
+        { message: e instanceof Error ? e.message : String(e) },
+        e,
+        '安全审计日志写入失败，已延迟重试'
+      )
+      if (this.retryCount < MAX_AUDIT_RETRY) {
+        this.scheduleFlush()
+      }
     }
   }
 
   private rotateIfDateChanged(): void {
     const now = new Date()
-    if (now.getDate() !== this.today.getDate()) {
+    // 用 dateStamp 比较（避免跨月同日不轮转，M6）
+    const stamp = dateStamp(now)
+    if (stamp !== dateStamp(this.today)) {
       this.today = now
+      void this.cleanupExpired()
+    } else if (this.lastCleanupDay !== stamp) {
+      // 首次写入当前日期文件时顺带清理一次过期文件
+      this.lastCleanupDay = stamp
+      void this.cleanupExpired()
     }
   }
 
+  /** 清理超过保留天数的审计文件（启动时或每日首次写入时由调用方/rotate 触发）。 */
   private async cleanupExpired(): Promise<void> {
     const retentionDays = this.deps.retentionDays ?? 180
     const cutoff = Date.now() - retentionDays * 24 * 3600 * 1000

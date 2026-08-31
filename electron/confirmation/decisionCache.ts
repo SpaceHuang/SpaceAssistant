@@ -24,6 +24,12 @@ export interface LegacyExemptionAdapterDeps {
  *
  * 签名规范化逻辑落在此层：缓存键一律取事实的规范化签名，防止构造变体绕过（§9 变体绕过测试集）。
  * P3 将替换为 SqliteDecisionCache，接口不变，策略层与主循环零改动。
+ *
+ * 已知等价性缺口（M2，P1 验收需知悉）：现状 shell 信任是结构化 `TrustedShellCommand`（支持
+ * `verb + 固定前缀 + plain-tokens 尾部通配`，如信任 `npm install <任意参数>`，见
+ * `shellCommandTrust.argvMatchesTrust`）；本适配器入参为 `string[]`，仅做整串规范化等值匹配，
+ * 属 fail-safe 方向的子集（少放行 → 多弹确认）。不威胁安全，但未完全复现现状"对外行为不变"的
+ * 放行范围。若需等价，应改为接受 `TrustedShellCommand[]` 并复用 `argvMatchesTrust`。
  */
 export class LegacyExemptionAdapter implements DecisionCacheView {
   constructor(private readonly deps: LegacyExemptionAdapterDeps) {}

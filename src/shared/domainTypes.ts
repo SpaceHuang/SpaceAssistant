@@ -2,7 +2,7 @@ export const CURRENT_SCHEMA_VERSION = 1
 
 import type { BrowserDependencyToolError } from './browserTypes'
 import type { AppLocale } from './locale'
-import { getBuiltinToolMetadata } from './builtinToolDefinitions'
+import { getBuiltinToolMetadata } from './builtinToolMetadata'
 
 export type { AppLocale }
 

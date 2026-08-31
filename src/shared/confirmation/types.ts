@@ -89,7 +89,7 @@ export interface ConfirmSummary {
 }
 
 export type FactSignal =
-  | { kind: 'command-sequence'; commands: CommandFact[] }
+  | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
   | { kind: 'network-egress'; domains: string[] }
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }

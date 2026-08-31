@@ -66,7 +66,7 @@ describe('安全审计日志：独立文件 + JSON Lines 落盘', () => {
 })
 
 describe('安全审计日志：故障不阻断', () => {
-  it('写失败时 flush 仍正常返回（不抛异常、不改变判定）', async () => {
+  it('写失败时 flush 仍正常返回，事件保留在缓冲（B3）', async () => {
     // logDir 指向一个普通文件，appendFile 必然失败
     const dir = await tmpDir()
     const filePath = path.join(dir, 'block')
@@ -74,5 +74,20 @@ describe('安全审计日志：故障不阻断', () => {
     const log = new SecurityAuditLog({ logDir: filePath })
     log.record(baseEvent())
     await expect(log.flush()).resolves.toBeUndefined()
+    // 事件未静默丢失（仍留在缓冲），后续可再次尝试
+    await expect(log.flush()).resolves.toBeUndefined()
+  })
+
+  it('写失败后恢复目录可写，事件最终落盘（重试不静默丢弃）', async () => {
+    const base = await tmpDir()
+    const block = path.join(base, 'block')
+    await fs.writeFile(block, 'x')
+    const log = new SecurityAuditLog({ logDir: block })
+    log.record(baseEvent())
+    await log.flush() // 写失败 → 事件保留
+    await fs.rm(block, { force: true }) // 恢复：移除阻塞文件
+    await log.flush() // 重试成功
+    const files = await fs.readdir(block)
+    expect(files.some((f) => /^SecurityAudit-\d{8}\.log$/.test(f))).toBe(true)
   })
 })

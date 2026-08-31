@@ -80,5 +80,6 @@ export type AgentLogEventName =
   | 'backup.tool_pairing.anomaly'
   | 'migration.tool_calls.duplicate_id'
   | 'migration.tool_calls.missing_result'
+  | 'security.audit.write_failed'
 
 export type AgentLogFields = Record<string, unknown>

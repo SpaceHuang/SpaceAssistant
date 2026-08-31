@@ -49,6 +49,9 @@ export const NETWORK_MODULES = new Set([
   'httpx'
 ])
 
+/** 网络命中相关的模式 ID（供脚本提取器识别 `script-network` 信号）。 */
+export const NETWORK_PATTERN_IDS = new Set(['A6', 'B10'])
+
 export const DANGEROUS_ATTRS = new Set([
   'system',
   'popen',

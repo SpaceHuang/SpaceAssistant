@@ -9,6 +9,7 @@ import type {
   PolicyEngineDeps,
   PolicyRule
 } from '../confirmation/types'
+import { memoryTierLabel } from '../confirmation/labels'
 
 /** 把事实集合映射为"信号 token 集合"，供 `match.signals` 的包含语义匹配。 */
 export function signalTokenSet(facts: ContentFacts): Set<string> {
@@ -37,8 +38,10 @@ export function deriveCacheKeys(facts: ContentFacts): CacheKey[] {
   for (const signal of facts.signals) {
     switch (signal.kind) {
       case 'command-sequence':
-        for (const cmd of signal.commands) {
-          // exact 档：使用完整规范化签名（防止 `FOO=1 cmd` / `cd x && cmd` / 引号空白变体命中缓存）
+        // B1：仅当命令序列为单分段、无元语法且可持久化信任时，才派生 shell-command exact 缓存键。
+        // 复合命令（`a && b`、管道）不得因任一分段被信任而放行整条命令（变体绕过硬性要求）。
+        if (signal.persistable && signal.commands.length === 1) {
+          const cmd = signal.commands[0]!
           if (cmd.signature) keys.push({ kind: 'shell-command', verb: cmd.signature, level: 'exact' })
           else if (cmd.verb) keys.push({ kind: 'shell-command', verb: cmd.verb, level: 'exact' })
         }
@@ -63,13 +66,14 @@ export function buildMemoryTiers(facts: ContentFacts): MemoryTier[] {
   const keys = deriveCacheKeys(facts)
   return keys.map((key) => ({
     key,
-    label: key.kind === 'shell-command' ? `记住 ${key.verb}` : `记住 ${key.kind} 目标`
+    label: memoryTierLabel(key)
   }))
 }
 
 function isGrantValid(grant: ExecutionContext['remoteWriteGrant']): boolean {
   if (!grant) return false
-  return grant.remainingOps > 0 || grant.remainingBytes > 0
+  // 与 remoteWriteGrantRegistry 语义一致：ops 与 bytes 必须同时 > 0 才算有效（B2）
+  return grant.remainingOps > 0 && grant.remainingBytes > 0
 }
 
 function ruleMatchesInvocation(
@@ -91,6 +95,8 @@ function ruleMatchesInvocation(
     const tokens = signalTokenSet(facts)
     if (!m.signals.every((s) => tokens.has(s))) return false
   }
+  // M1：owner-only 出站目标约束——仅信源为 direct-owner 时命中
+  if (m.target === 'owner-only' && context.origin.kind !== 'direct-owner') return false
   // 门控：configRequires 不满足即不命中
   if (rule.configRequires && deps.config[rule.configRequires.config] !== rule.configRequires.equals) return false
   // 门控：requiresContext 消费上下文只读事实
@@ -196,8 +202,8 @@ export function decide(
       const res = deps.autoEvaluator(facts, context)
       if (res.approve) return autoAllow(rule.id, facts)
     }
-    // 不裁决 → 继续评估后续条目（约定 2），最终通常落到默认表 ask
-    break
+    // 约定 2：评估器不裁决 → 继续评估后续条目（M3，不再 break 截断后续 auto 条目），最终通常落到默认表 ask
+    continue
   }
 
   // 第 5 步：链路软约束（只影响体验，纯决策层无操作）

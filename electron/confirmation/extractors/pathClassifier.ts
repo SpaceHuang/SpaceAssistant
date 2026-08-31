@@ -4,8 +4,9 @@ import type { EnvFacts, PathZone } from '../../../src/shared/confirmation/types'
 /** 定位目录前缀：路径落在系统根下即归为 system-dir。 */
 function isSystemDir(p: string): boolean {
   const norm = p.replace(/\\/g, '/').toLowerCase()
-  const winRoot = /^[a-z]:\/(windows|program files|programdata|system32)\//
-  const posixRoot = /^\/(etc|usr|bin|sbin|lib|var|system|library)\//
+  // M9：允许无尾分隔符的 Windows 根（如 `C:\Windows`），并补 Program Files (x86)。
+  const winRoot = /^[a-z]:\/(windows|program files|program files \(x86\)|programdata|system32)(\/|$)/
+  const posixRoot = /^\/(etc|usr|bin|sbin|lib|var|system|library)(\/|$)/
   return winRoot.test(norm) || posixRoot.test(norm)
 }
 

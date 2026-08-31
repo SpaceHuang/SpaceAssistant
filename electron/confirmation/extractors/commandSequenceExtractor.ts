@@ -1,6 +1,7 @@
 import { parseShellCommandForTrust, parseShellSegments, tokenizeShellArgv } from '../../shell/shellCommandParser'
 import { commandHasShellMetasyntax } from '../../shell/shellCommandParser'
 import type { CommandFact, EnvFacts, FactSignal } from '../../../src/shared/confirmation/types'
+import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
 
 /**
  * 命令序列提取器（run_shell）。
@@ -51,14 +52,17 @@ export function extractCommandSignals(command: string, _env: EnvFacts): {
   }
 
   const commands: CommandFact[] = segments.map((s, i) => segmentFacts(s, i))
+  // 仅单分段 + 无元语法的简单命令才允许派生信任缓存键（等价于现 parseShellCommandForTrust 的 persistable 判定）；
+  // 复合命令（`a && b`、管道等）不得因任一分段被信任而放行整条命令（B1 / §5.2 变体绕过）。
+  const persistable = segments.length === 1 && isPersistableTrustCommand(command)
   const signature = commands
     .map((c) => c.signature)
     .filter(Boolean)
     .join(' && ')
   return {
-    signals: [{ kind: 'command-sequence', commands }],
+    signals: [{ kind: 'command-sequence', commands, ...(persistable ? { persistable } : {}) }],
     summary: {
-      text: signature ? `命令序列：${signature}` : '命令无法解析，需确认'
+      text: signature ? `${CONFIRMATION_LABELS.summaryCommandSequencePrefix}${signature}` : CONFIRMATION_LABELS.summaryEmptyCommand
     }
   }
 }

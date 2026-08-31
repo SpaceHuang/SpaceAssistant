@@ -4,6 +4,7 @@ import type {
   FactSignal,
   ToolActionDescriptor
 } from '../../../src/shared/confirmation/types'
+import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
 import { extractCommandSignals } from './commandSequenceExtractor'
 import { buildPathSignal } from './pathClassifier'
 import { extractScriptSignals } from './scriptAnalysisExtractor'
@@ -26,7 +27,10 @@ const EXTRACTOR_IMPLEMENTATIONS: Record<
   'path-classifier': (input, env) => {
     const rawPath = typeof input.path === 'string' ? input.path : ''
     if (!rawPath) return { signals: [], summaryText: '' }
-    return { signals: [buildPathSignal(rawPath, env)], summaryText: `目标路径：${rawPath}` }
+    return {
+      signals: [buildPathSignal(rawPath, env)],
+      summaryText: `${CONFIRMATION_LABELS.summaryPathTargetPrefix}${rawPath}`
+    }
   }
 }
 
@@ -55,6 +59,9 @@ export function runExtractors(
     actionClass: descriptor.actionClass,
     baseRiskLevel: descriptor.riskLevel,
     signals,
-    summary: { text: summaryParts.length > 0 ? summaryParts.join('；') : '未识别到特殊风险，按默认策略判定' }
+    summary: {
+      text:
+        summaryParts.length > 0 ? summaryParts.join('；') : CONFIRMATION_LABELS.summaryDefault
+    }
   }
 }

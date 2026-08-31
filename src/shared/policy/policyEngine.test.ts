@@ -17,8 +17,16 @@ function mkFacts(
   return { toolName, actionClass, baseRiskLevel, signals, summary: { text: 'summary' } }
 }
 
-function mkContext(lane: ExecutionContext['lane']): ExecutionContext {
-  return { lane, origin: { kind: 'direct-owner' }, sessionId: 's1' }
+function mkContext(
+  lane: ExecutionContext['lane'],
+  remoteWriteGrant?: ExecutionContext['remoteWriteGrant']
+): ExecutionContext {
+  return {
+    lane,
+    origin: { kind: 'direct-owner' },
+    sessionId: 's1',
+    ...(remoteWriteGrant ? { remoteWriteGrant } : {})
+  }
 }
 
 function emptyCache(): DecisionCacheView {
@@ -204,18 +212,81 @@ describe('decide：自动审批器（desktop-auto-approve）不与截胡', () =>
     )
     expect(d.type).toBe('require-confirm')
   })
+
+  it('首条匹配的 auto 规则评估器不批准时继续评估后续 auto 规则（M3）', () => {
+    const rules = [
+      {
+        id: 'auto-1',
+        when: 'invocation',
+        match: { lane: ['desktop'], toolName: ['write_file'] },
+        action: 'auto-evaluator',
+        reason: 'r1'
+      },
+      {
+        id: 'auto-2',
+        when: 'invocation',
+        match: { lane: ['desktop'], toolName: ['write_file'] },
+        action: 'auto-evaluator',
+        reason: 'r2'
+      }
+    ]
+    let calls = 0
+    const d = decide(
+      mkFacts('write_file', 'write', [], 'medium'),
+      mkContext('desktop'),
+      rules,
+      deps({
+        config: { confirmMode: 'auto' },
+        autoEvaluator: () => {
+          calls++
+          return calls === 1 ? { approve: false, reason: '信息不足' } : { approve: true, reason: '低风险' }
+        }
+      })
+    )
+    expect(calls).toBe(2)
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('auto-2')
+  })
 })
 
 describe('decide：远程写 grant 消费', () => {
-  it('远程 grant 有效且余量充足 → 免确认（remote-write-grant-allow 先于 im-write-ask）', () => {
+  it('未注入 grant 余量 → 不误放行（回落到确认）', () => {
     const d = decide(
       mkFacts('write_file', 'write', [], 'medium'),
       mkContext('wechat'),
       DEFAULT_POLICY_RULES,
       deps({ config: {}, migrationComplete: true })
     )
-    // 未注入 grant 余量 → context.remoteWriteGrant 不能证明有效。
-    // 该规则依赖 ExecutionContext 注入，decide 直接消费 context，这里仅验证不误放行：
+    expect(d.type).toBe('require-confirm')
+  })
+
+  it('grant 有效（ops>0 且 bytes>0）→ 远程写免确认（remote-write-grant-allow 先于 im-write-ask）', () => {
+    const d = decide(
+      mkFacts('write_file', 'write', [], 'medium'),
+      mkContext('wechat', { remainingOps: 3, remainingBytes: 100 }),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('auto-allow')
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('remote-write-grant-allow')
+  })
+
+  it('grant ops=0（操作数耗尽）→ 无效，回落到确认', () => {
+    const d = decide(
+      mkFacts('write_file', 'write', [], 'medium'),
+      mkContext('wechat', { remainingOps: 0, remainingBytes: 100 }),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('require-confirm')
+  })
+
+  it('grant bytes=0（字节耗尽）→ 无效，回落到确认', () => {
+    const d = decide(
+      mkFacts('write_file', 'write', [], 'medium'),
+      mkContext('wechat', { remainingOps: 3, remainingBytes: 0 }),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
     expect(d.type).toBe('require-confirm')
   })
 })
@@ -265,6 +336,16 @@ describe('decideIngress：消息入口准入', () => {
 
   it('白名单内单聊（direct-owner）默认放行', () => {
     const r = decideIngress({ lane: 'wechat', origin: { kind: 'direct-owner', senderId: 'u1' } }, DEFAULT_POLICY_RULES)
+    expect(r.action).toBe('allow')
+  })
+
+  it('数组顺序首条命中即返回：allow 条目先于同域 deny 时会掩盖 deny（依赖顺序自律）', () => {
+    const rules = [
+      { id: 'allow-any', when: 'ingress', match: { lane: ['feishu'] }, action: 'allow', reason: 'r' },
+      { id: 'deny-group', when: 'ingress', match: { lane: ['feishu'], origin: 'group' }, action: 'deny', reason: 'r' }
+    ]
+    const r = decideIngress({ lane: 'feishu', origin: { kind: 'group' } }, rules)
+    expect(r.ruleId).toBe('allow-any')
     expect(r.action).toBe('allow')
   })
 })

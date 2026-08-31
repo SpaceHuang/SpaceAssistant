@@ -2,9 +2,12 @@ import {
   analyzeScriptContent,
   isScriptCertifiedRemoteSafe,
   parsePythonModule,
-  collectPatternHits
+  collectPatternHits,
+  NETWORK_PATTERN_IDS
 } from '../../shell/scriptContentSecurity'
+import type { ModuleAst } from '../../shell/scriptContentSecurity'
 import type { ContentFacts, EnvFacts, FactSignal, ConfirmSummary } from '../../../src/shared/confirmation/types'
+import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
 
 /**
  * 脚本内容分析提取器（run_script / run_script 类）。
@@ -19,15 +22,14 @@ import type { ContentFacts, EnvFacts, FactSignal, ConfirmSummary } from '../../.
  * verdict 判定字段，判定完全交给策略层。
  */
 
-const NETWORK_PATTERNS = new Set(['A6', 'B10'])
-
-function detectNetworkHits(code: string): string[] {
+function analyzeOnce(code: string): { ast: ModuleAst | null; networkPatterns: string[] } {
   try {
     const ast = parsePythonModule(code)
     const hits = collectPatternHits(ast, {})
-    return hits.filter((h) => NETWORK_PATTERNS.has(h.pattern)).map((h) => h.pattern)
+    const networkPatterns = hits.filter((h) => NETWORK_PATTERN_IDS.has(h.pattern)).map((h) => h.pattern)
+    return { ast, networkPatterns }
   } catch {
-    return []
+    return { ast: null, networkPatterns: [] }
   }
 }
 
@@ -40,27 +42,26 @@ export function extractScriptSignals(
   const signal = analysis.verdict === 'allow' ? 'clean' : analysis.verdict === 'deny' ? 'dangerous' : 'suspicious'
   signals.push({ kind: 'script-analysis', signal, patterns: analysis.patterns })
 
-  const networkHits = detectNetworkHits(code)
-  if (networkHits.length > 0) {
-    signals.push({ kind: 'script-network', patterns: networkHits })
-  }
-
-  // 远程认证态：未通过 isScriptCertifiedRemoteSafe 认证时产 script-uncertified 信号
-  try {
-    const ast = parsePythonModule(code)
-    if (!isScriptCertifiedRemoteSafe(ast)) {
+  // 共享同一次解析（M8）：AST 同时用于网络命中识别与远程认证态
+  const once = analyzeOnce(code)
+  if (!once.ast) {
+    signals.push({ kind: 'extraction-failed', reason: 'parse_error' })
+  } else {
+    if (once.networkPatterns.length > 0) {
+      signals.push({ kind: 'script-network', patterns: once.networkPatterns })
+    }
+    // 远程认证态：未通过 isScriptCertifiedRemoteSafe 认证时产 script-uncertified 信号
+    if (!isScriptCertifiedRemoteSafe(once.ast)) {
       signals.push({ kind: 'script-uncertified' })
     }
-  } catch {
-    signals.push({ kind: 'extraction-failed', reason: 'parse_error' })
   }
 
   const summaryText =
     signal === 'clean'
-      ? '脚本静态分析未发现危险模式'
+      ? CONFIRMATION_LABELS.summaryCleanScript
       : signal === 'dangerous'
-        ? '脚本含危险模式，已拒绝'
-        : '脚本含需确认的危险模式'
+        ? CONFIRMATION_LABELS.summaryDangerousScript
+        : CONFIRMATION_LABELS.summarySuspiciousScript
   return {
     signals,
     summary: {
