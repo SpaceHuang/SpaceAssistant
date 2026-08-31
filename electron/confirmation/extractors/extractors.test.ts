@@ -3,6 +3,7 @@ import type { EnvFacts } from '../../../src/shared/confirmation/types'
 import { extractCommandSignals, isPersistableTrustCommand } from './commandSequenceExtractor'
 import { classifyPath } from './pathClassifier'
 import { extractScriptSignals } from './scriptAnalysisExtractor'
+import { extractBrowserSignals } from './browserDomainExtractor'
 import { runExtractors } from './runExtractors'
 
 const env: EnvFacts = {
@@ -113,5 +114,23 @@ describe('runExtractors', () => {
     )
     const pt = facts.signals.find((s) => s.kind === 'path-target')
     expect(pt && pt.kind === 'path-target' && pt.zone).toBe('sensitive-file')
+  })
+})
+
+describe('browserDomainExtractor', () => {
+  it('提取 network-egress / outbound-target 域名信号', () => {
+    const r = extractBrowserSignals({ action: 'navigate', url: 'https://example.com/a' }, env)
+    const ne = r.signals.find((s) => s.kind === 'network-egress')
+    expect(ne && ne.kind === 'network-egress' && ne.domains).toEqual(['example.com'])
+    expect(r.signals.some((s) => s.kind === 'outbound-target')).toBe(true)
+  })
+
+  it('域名可经 decideTool 产出（browser descriptor）', () => {
+    const facts = runExtractors(
+      { toolName: 'browser', actionClass: 'outbound', riskLevel: 'medium', extractors: ['browser-domain'] },
+      { action: 'navigate', url: 'https://example.com' },
+      env
+    )
+    expect(facts.signals.some((s) => s.kind === 'network-egress')).toBe(true)
   })
 })

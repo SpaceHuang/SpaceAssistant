@@ -8,6 +8,7 @@ import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
 import { extractCommandSignals } from './commandSequenceExtractor'
 import { buildPathSignal } from './pathClassifier'
 import { extractScriptSignals } from './scriptAnalysisExtractor'
+import { extractBrowserSignals } from './browserDomainExtractor'
 
 /** 主要工具专用的提取器（映射 descriptor.extractors 里声明的 id 到实际实现）。 */
 const EXTRACTOR_IMPLEMENTATIONS: Record<
@@ -23,6 +24,10 @@ const EXTRACTOR_IMPLEMENTATIONS: Record<
     const code = typeof input.code === 'string' ? input.code : ''
     const r = extractScriptSignals(code, env)
     return { signals: r.signals, summaryText: r.summary.text }
+  },
+  'browser-domain': (input, _env) => {
+    const r = extractBrowserSignals(input, _env)
+    return { signals: r.signals, summaryText: r.summary }
   },
   'path-classifier': (input, env) => {
     const rawPath = typeof input.path === 'string' ? input.path : ''
