@@ -4,6 +4,7 @@ import { extractCommandSignals, isPersistableTrustCommand } from './commandSeque
 import { classifyPath } from './pathClassifier'
 import { extractScriptSignals } from './scriptAnalysisExtractor'
 import { extractBrowserSignals } from './browserDomainExtractor'
+import { extractOutboundTarget, extractLarkSubcommand } from './outboundExtractors'
 import { runExtractors } from './runExtractors'
 
 const env: EnvFacts = {
@@ -132,5 +133,28 @@ describe('browserDomainExtractor', () => {
       env
     )
     expect(facts.signals.some((s) => s.kind === 'network-egress')).toBe(true)
+  })
+})
+
+describe('outbound / lark 提取器', () => {
+  it('wechat_send 接收者 → outbound-target 信号', () => {
+    const r = extractOutboundTarget({ userId: 'u1', text: 'hi' })
+    const t = r.signals.find((s) => s.kind === 'outbound-target')
+    expect(t && t.kind === 'outbound-target' && t.recipient).toBe('u1')
+  })
+
+  it('lark 子命令 → outbound-target（读/写分类复用 classifyLarkCliImpact）', () => {
+    const r = extractLarkSubcommand({ args: ['message', 'send', '--chat-id', 'oc_x', '--text', 'x'] })
+    expect(r.signals.some((s) => s.kind === 'outbound-target')).toBe(true)
+    expect(r.summary).toContain('写')
+  })
+
+  it('runExtractors 支持 run_lark_cli 的 lark-subcommand', () => {
+    const facts = runExtractors(
+      { toolName: 'run_lark_cli', actionClass: 'execute', riskLevel: 'high', extractors: ['lark-subcommand'] },
+      { args: ['doc', 'get', '--token', 'x'] },
+      env
+    )
+    expect(facts.signals.some((s) => s.kind === 'outbound-target')).toBe(true)
   })
 })

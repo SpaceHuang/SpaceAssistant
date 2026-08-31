@@ -9,6 +9,7 @@ import { extractCommandSignals } from './commandSequenceExtractor'
 import { buildPathSignal } from './pathClassifier'
 import { extractScriptSignals } from './scriptAnalysisExtractor'
 import { extractBrowserSignals } from './browserDomainExtractor'
+import { extractOutboundTarget, extractLarkSubcommand } from './outboundExtractors'
 
 /** 主要工具专用的提取器（映射 descriptor.extractors 里声明的 id 到实际实现）。 */
 const EXTRACTOR_IMPLEMENTATIONS: Record<
@@ -27,6 +28,14 @@ const EXTRACTOR_IMPLEMENTATIONS: Record<
   },
   'browser-domain': (input, _env) => {
     const r = extractBrowserSignals(input, _env)
+    return { signals: r.signals, summaryText: r.summary }
+  },
+  'outbound-target': (input) => {
+    const r = extractOutboundTarget(input)
+    return { signals: r.signals, summaryText: r.summary }
+  },
+  'lark-subcommand': (input) => {
+    const r = extractLarkSubcommand(input)
     return { signals: r.signals, summaryText: r.summary }
   },
   'path-classifier': (input, env) => {
