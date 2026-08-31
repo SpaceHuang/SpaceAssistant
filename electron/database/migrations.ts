@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, SCHEMA_META_KEYS } from './schema'
 
 export class DatabaseUpgradeRequiredError extends Error {
   constructor(foundVersion: number) {
@@ -39,6 +39,12 @@ export function runMigrations(conn: Database.Database): void {
       conn.exec('DROP TABLE IF EXISTS artifact_references')
       conn.exec('DROP TABLE IF EXISTS session_artifacts')
       version = 3
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 3) {
+      // 工具确认机制框架（P3）：决策缓存表 + 用户规则覆盖表
+      conn.exec(MIGRATION_V4_TABLES_SQL)
+      version = 4
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
   })()

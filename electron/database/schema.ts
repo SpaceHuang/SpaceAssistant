@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 3
+export const DB_SCHEMA_VERSION = 4
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -64,6 +64,35 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, sequ
 CREATE INDEX IF NOT EXISTS idx_messages_content ON messages(content);
 CREATE INDEX IF NOT EXISTS idx_sessions_work_dir_profile ON sessions(work_dir_profile_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
+`
+
+/**
+ * v3 → v4：工具确认机制框架 —— 决策缓存表 + 用户规则覆盖表。
+ * 用 CREATE TABLE IF NOT EXISTS 保证幂等（v4 升级与全新库均安全）。
+ */
+export const MIGRATION_V4_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS decision_cache (
+  id TEXT PRIMARY KEY NOT NULL,
+  key_json TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  lane TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  source TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_hit_at INTEGER NOT NULL,
+  hit_count INTEGER NOT NULL DEFAULT 0,
+  expires_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_cache_key ON decision_cache(key_json);
+
+CREATE TABLE IF NOT EXISTS policy_rules (
+  rule_id TEXT PRIMARY KEY NOT NULL,
+  action TEXT NOT NULL,
+  params TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `
 
 export const SCHEMA_META_KEYS = {
