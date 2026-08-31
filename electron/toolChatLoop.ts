@@ -66,12 +66,14 @@ import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { RemoteContext } from './tools/types'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
+import type { ExecutionLane } from '../src/shared/confirmation/types'
 import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
 import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
-import { analyzeScriptContent } from './shell/scriptContentSecurity'
+import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
+import { decideRunScript } from './confirmation/decisionPipeline'
 import {
   formatScriptDenyUserMessage,
   getRemoteTaskController
@@ -92,7 +94,7 @@ import {
 import {
   shouldSkipRemoteBrowserActConfirm,
   shouldSkipRemoteBrowserNavigateConfirm,
-  shouldSkipRemoteScriptConfirmOnAllow
+  isRemoteSecurityMigrationComplete
 } from './remote/remoteToolPolicy'
 import {
   remoteWriteGrantRegistry
@@ -1250,20 +1252,44 @@ async function runToolChatSessionInner(
 
       if (toolName === 'run_script') {
         const code = typeof inputObj.code === 'string' ? inputObj.code : ''
-        const scriptAnalysis = analyzeScriptContent(code, { remote: Boolean(remoteContext) })
-        if (scriptAnalysis.verdict === 'deny') {
-          const denyMsg = formatScriptDenyUserMessage(scriptAnalysis.reason)
+        const lane: ExecutionLane = remoteContext
+          ? remoteContext.source === 'feishu'
+            ? 'feishu'
+            : 'wechat'
+          : 'desktop'
+        const channelConfig = remoteContext
+          ? remoteContext.source === 'feishu'
+            ? feishuConfig
+            : wechatConfig
+          : undefined
+        // 事实提取 → 策略判定（引擎驱动，行为与现状等价，见 §5.1/§9）
+        const scriptDecision = decideRunScript({
+          code,
+          env: {
+            os: process.platform,
+            workDir,
+            sensitivePaths: getBuiltinSensitivePrefixes(userDataDir)
+          },
+          lane,
+          origin: { kind: 'direct-owner' },
+          sessionId,
+          config: { remoteScriptRequiresConfirm: channelConfig?.remoteScriptRequiresConfirm ?? true },
+          migrationComplete: isRemoteSecurityMigrationComplete(channelConfig)
+        })
+        const decision = scriptDecision.decision
+        if (decision.type === 'deny') {
+          const denyMsg = formatScriptDenyUserMessage(scriptDecision.rawAnalysis.reason)
           logAgentEvent('info', 'script.deny', {
             requestId,
             sessionId,
             toolUseId,
-            patterns: scriptAnalysis.patterns,
+            patterns: scriptDecision.rawAnalysis.patterns,
             remote: Boolean(remoteContext)
           })
           logToolLoopError(
             { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
             denyMsg,
-            `script deny patterns=${scriptAnalysis.patterns.join(',')}`
+            `script deny patterns=${scriptDecision.rawAnalysis.patterns.join(',')}`
           )
           toolResults.push(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }))
           safeWebContentsSend(sender, 'tool:result', {
@@ -1277,33 +1303,14 @@ async function runToolChatSessionInner(
           }
           continue
         }
-        if (scriptAnalysis.verdict === 'allow') {
-          // Desktop keeps skip-on-allow; remote skip requires completed migration + script switch off.
-          const channelConfig = remoteContext
-            ? remoteContext.source === 'feishu'
-              ? feishuConfig
-              : wechatConfig
-            : undefined
-          const remoteBlocksSkip =
-            Boolean(remoteContext) && !shouldSkipRemoteScriptConfirmOnAllow(channelConfig)
-          needsConfirm = remoteBlocksSkip
-          logAgentEvent('info', remoteBlocksSkip ? 'script.ask' : 'script.allow.execute', {
-            requestId,
-            sessionId,
-            toolUseId,
-            patterns: scriptAnalysis.patterns,
-            remote: Boolean(remoteContext)
-          })
-        } else {
-          needsConfirm = true
-          logAgentEvent('info', 'script.ask', {
-            requestId,
-            sessionId,
-            toolUseId,
-            patterns: scriptAnalysis.patterns,
-            remote: Boolean(remoteContext)
-          })
-        }
+        needsConfirm = decision.type === 'require-confirm'
+        logAgentEvent('info', needsConfirm ? 'script.ask' : 'script.allow.execute', {
+          requestId,
+          sessionId,
+          toolUseId,
+          patterns: scriptDecision.rawAnalysis.patterns,
+          remote: Boolean(remoteContext)
+        })
         // Content analysis replaces autoAllowScriptExecution as the gate.
       }
       if (fileAutoApproved) {
