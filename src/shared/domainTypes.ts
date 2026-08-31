@@ -2,6 +2,7 @@ export const CURRENT_SCHEMA_VERSION = 1
 
 import type { BrowserDependencyToolError } from './browserTypes'
 import type { AppLocale } from './locale'
+import { getBuiltinToolMetadata } from './builtinToolDefinitions'
 
 export type { AppLocale }
 
@@ -490,37 +491,14 @@ export interface SkillActivationLogEntry {
 }
 
 export function builtinToolRiskLevel(name: string): ToolRiskLevel {
-  switch (name) {
-    case 'read_file':
-    case 'list_directory':
-    case 'grep':
-    case 'read_feishu_attachment':
-    case 'browser':
-    case 'browser_detect':
-    case 'list_work_dirs':
-    case 'switch_work_dir':
-    case 'switch_session':
-      return 'low'
-    case 'edit_file':
-    case 'write_file':
-      return 'medium'
-    case 'run_script':
-    case 'run_lark_cli':
-    case 'run_shell':
-      return 'high'
-    default:
-      return 'medium'
-  }
+  // 读元数据：riskLevel 与既有返回值严格一致（P0 对外行为不变）
+  return getBuiltinToolMetadata(name)?.riskLevel ?? 'medium'
 }
 
 export function builtinToolNeedsConfirmation(name: string): boolean {
-  return (
-    name === 'edit_file' ||
-    name === 'write_file' ||
-    name === 'run_script' ||
-    name === 'run_lark_cli' ||
-    name === 'run_shell'
-  )
+  const meta = getBuiltinToolMetadata(name)
+  if (!meta) return false
+  return meta.actionClass === 'write' || meta.actionClass === 'execute'
 }
 
 export interface AutoApprovedWriteMeta {
