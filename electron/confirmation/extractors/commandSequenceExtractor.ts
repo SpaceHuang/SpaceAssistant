@@ -15,6 +15,12 @@ function normalizeToken(tok: string): string {
   return tok.replace(/^["']|["']$/g, '').trim()
 }
 
+/** 规范化 shell 命令签名（与缓存键同源）：归一化引号/空白/大小写，供对账与变体绕过防护。 */
+export function normalizeShellSignature(command: string): string {
+  const tokens = tokenizeShellArgv(command) ?? []
+  return tokens.map(normalizeToken).filter(Boolean).join(' ')
+}
+
 function segmentFacts(segment: string, index: number): CommandFact {
   const argv = tokenizeShellArgv(segment) ?? []
   if (argv.length === 0) {
@@ -22,7 +28,7 @@ function segmentFacts(segment: string, index: number): CommandFact {
   }
   const verb = argv[0]!
   const args = argv.slice(1)
-  const signature = argv.map(normalizeToken).filter(Boolean).join(' ')
+  const signature = normalizeShellSignature(segment)
   return {
     verb,
     args,
