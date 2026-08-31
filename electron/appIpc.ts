@@ -33,6 +33,7 @@ import {
   updateSession
 } from './database'
 import { registerMcpIpcHandlers } from './mcp/mcpIpc'
+import { clearDecisionCacheOnSessionDelete } from './confirmation/cacheMaintenanceHooks'
 import type {
   AppConfig,
   FileInfo,
@@ -581,6 +582,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     clearSessionToolResources(sessionId)
     deleteSession(ctx.db, sessionId)
+    // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程
+    try {
+      clearDecisionCacheOnSessionDelete(ctx.db, sessionId)
+    } catch (e) {
+      logAgentEvent('warn', 'confirmation.cache.session_scope_clear_failed', {
+        sessionId,
+        message: e instanceof Error ? e.message : String(e)
+      })
+    }
     await deleteSessionChatAttachments(ctx.getUserDataPath(), sessionId)
     if (s) await ctx.backup.deleteBackup(s)
   })

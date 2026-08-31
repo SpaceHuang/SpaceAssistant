@@ -81,5 +81,11 @@ export type AgentLogEventName =
   | 'migration.tool_calls.duplicate_id'
   | 'migration.tool_calls.missing_result'
   | 'security.audit.write_failed'
+  | 'confirmation.cache.startup_cleanup'
+  | 'confirmation.cache.startup_cleanup_failed'
+  | 'confirmation.cache.session_scope_cleared'
+  | 'confirmation.cache.session_scope_clear_failed'
+  | 'confirmation.exemption_migration.done'
+  | 'confirmation.exemption_migration.failed'
 
 export type AgentLogFields = Record<string, unknown>
