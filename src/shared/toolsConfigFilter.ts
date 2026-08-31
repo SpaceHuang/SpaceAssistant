@@ -6,9 +6,15 @@ export function filterBuiltinToolsForRenderer(
   cfg: ToolsConfig,
   feishu?: FeishuConfig | null,
   browserConfig?: BrowserConfig | null,
-  shellConfig?: ShellConfig | null
+  shellConfig?: ShellConfig | null,
+  /** 主进程预计算的可见工具清单（exposure 规则 + deniedTools）；提供时不重新过滤，仅作薄壳映射。 */
+  visibleTools?: string[]
 ): typeof BUILTIN_TOOL_DEFINITIONS {
   if (!cfg.enabled) return []
+  if (visibleTools) {
+    // 渲染端薄壳：直接消费主进程评估结果（deniedTools/exposure 规则已在主进程生效）
+    return BUILTIN_TOOL_DEFINITIONS.filter((t) => visibleTools.includes(t.name))
+  }
   let list = BUILTIN_TOOL_DEFINITIONS.filter((t) => {
     if (cfg.deniedTools.includes(t.name)) return false
     if (cfg.allowedTools.length > 0 && !cfg.allowedTools.includes(t.name)) return false
