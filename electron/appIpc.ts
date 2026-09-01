@@ -34,6 +34,8 @@ import {
 } from './database'
 import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { clearDecisionCacheOnSessionDelete } from './confirmation/cacheMaintenanceHooks'
+import { getSecurityAuditLog } from './confirmation/audit'
+import { recordUserAnswerToCache } from './confirmation/decisionCacheWriter'
 import type {
   AppConfig,
   FileInfo,
@@ -284,6 +286,24 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
   })
 
+  // 桌面端“信任/记住”勾选统一经 AuditedDecisionCache 落 cache.write 审计（§5.6-4）。
+  const recordTrustToCache = (
+    key: import('../src/shared/confirmation/types').CacheKey,
+    sessionId?: string,
+    scope: 'session' | 'persistent' = 'persistent'
+  ): void => {
+    recordUserAnswerToCache({
+      db: ctx.db,
+      audit: getSecurityAuditLog(),
+      lane: 'desktop',
+      sessionId: sessionId ?? 'desktop',
+      key,
+      decision: 'allow',
+      scope,
+      source: 'user-confirm'
+    })
+  }
+
   ipcMain.handle(
     'tool:confirm-response',
     async (
@@ -321,6 +341,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           domain: payload.trustDomain.trim(),
           timestamp: Date.now()
         })
+        // 双写 navigate 档（domain-any-action）缓存键，供执行链路缓存命中
+        recordTrustToCache({ kind: 'domain', domain: payload.trustDomain.trim(), level: 'domain-any-action' }, payload.sessionId)
       }
       if (payload.approved && payload.trustActDomain?.trim()) {
         const { addTrustedActDomain } = await import('./browser/browserDomainTrust')
@@ -331,6 +353,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           domain: payload.trustActDomain.trim(),
           timestamp: Date.now()
         })
+        // 双写 act 档（domain+action）缓存键，与 navigate 档隔离
+        recordTrustToCache({ kind: 'domain', domain: payload.trustActDomain.trim(), level: 'domain+action' }, payload.sessionId)
       }
       if (payload.approved && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
         const { rememberMcpSessionTrust } = await import('./mcp/mcpSessionTrust')
@@ -341,21 +365,28 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           tool: payload.trustMcpToolName,
           timestamp: Date.now()
         })
+        // 会话级 MCP 信任双写 decision_cache（键带 sessionId，等价 mcpSessionTrust 内存语义）
+        recordTrustToCache(
+          {
+            kind: 'mcp-tool',
+            serverId: payload.trustMcpServerId,
+            toolName: payload.trustMcpToolName,
+            sessionId: payload.sessionId
+          },
+          payload.sessionId,
+          'session'
+        )
       }
       if (payload.approved && payload.memoryTier) {
-        // 记忆档位：用户选中的"记住"写入 decision_cache（执行链路写缓存，落 cache.write 审计）
-        const { SqliteDecisionCache, canonicalKeyJson } = await import('./confirmation/sqliteDecisionCache')
-        const { getDbConnection } = await import('./database')
-        const cache = new SqliteDecisionCache(getDbConnection(ctx.db))
-        cache.record({
-          id: canonicalKeyJson(payload.memoryTier),
+        // 记忆档位：用户选中的“记住”写入 decision_cache（执行链路侧写缓存），落 cache.write 审计
+        recordUserAnswerToCache({
+          db: ctx.db,
+          audit: getSecurityAuditLog(),
+          lane: 'desktop',
+          sessionId: payload.sessionId ?? 'desktop',
           key: payload.memoryTier,
           decision: 'allow',
-          lane: 'desktop',
           scope: 'persistent',
-          createdAt: Date.now(),
-          lastHitAt: Date.now(),
-          hitCount: 0,
           source: 'user-confirm'
         })
       }
