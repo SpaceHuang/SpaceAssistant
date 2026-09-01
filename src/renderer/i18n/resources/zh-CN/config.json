@@ -315,6 +315,10 @@
       "browser": {
         "label": "网络访问",
         "hint": "浏览器自动化与依赖检测"
+      },
+      "security": {
+        "label": "工具与安全",
+        "hint": "策略套餐、确认模式、工具开关、确认记忆与安全审计"
       }
     },
     "file": {
@@ -394,7 +398,8 @@
       "lastUsed": "上次使用",
       "status": "状态",
       "empty": "暂无已信任命令",
-      "refresh": "刷新"
+      "refresh": "刷新",
+      "movedHint": "信任命令管理已迁移到「工具与安全 → 确认记忆管理」。"
     },
     "autoAllow": {
       "title": "大模型生成的脚本自动允许执行（已由内容分析接管）",
@@ -449,7 +454,8 @@
       "batchDelete": "批量删除",
       "columnDomain": "域名",
       "empty": "暂无可信域名",
-      "invalidDomain": "无效的域名格式"
+      "invalidDomain": "无效的域名格式",
+      "movedHint": "信任域名管理已迁移到「工具与安全 → 确认记忆管理」。"
     },
     "actTrustTitle": "act 操作信任域名",
     "actTrustHelper": "在这些域名上的浏览器操作无需确认，跨会话生效。",
@@ -725,7 +731,8 @@
     "remoteBrowserNavigateRequiresConfirm": "远程浏览器导航需确认",
     "remoteBrowserNavigateRequiresConfirmHint": "仅覆盖远程会话的 navigate；不影响桌面默认。截图/观察/提取不确认。",
     "remoteBrowserActRequiresConfirm": "远程浏览器页面操作需确认",
-    "remoteBrowserActRequiresConfirmHint": "即使关闭，提交/支付/删除/授权等高影响操作仍会确认；扫描失败时也会确认。"
+    "remoteBrowserActRequiresConfirmHint": "即使关闭，提交/支付/删除/授权等高影响操作仍会确认；扫描失败时也会确认。",
+    "confirmMovedHint": "远程确认开关与链路硬约束已迁移到「工具与安全」页统一管理。"
   },
   "remoteSecurityUpgrade": {
     "title": "远程安全设置一次性确认",
@@ -748,5 +755,101 @@
     "confirm": "确认并保存",
     "cancel": "取消",
     "saveFailed": "保存失败，请重试"
+  },
+  "toolsSecurity": {
+    "intro": "统一管理工具确认策略、确认记忆与安全审计。本页的套餐、记忆与审计设置变更立即生效，并记入安全审计日志。",
+    "openPage": "前往「工具与安全」",
+    "policy": {
+      "title": "策略套餐",
+      "hint": "为每条链路选择策略套餐。自定义套餐可调整规则动作；锁定（locked）的系统保护规则只读、不可修改。",
+      "laneDesktop": "桌面",
+      "laneWechat": "微信",
+      "laneFeishu": "飞书",
+      "packageStrict": "严格",
+      "packageStandard": "标准",
+      "packageLoose": "宽松",
+      "packageCustom": "自定义",
+      "strictHint": "严格：原本放行的规则上调为询问。",
+      "looseHint": "宽松：询问类规则下调为自动放行，请确认你了解风险。",
+      "customHint": "自定义：在下表中调整每条规则的动作（拒绝/允许/询问）。",
+      "ruleColumn": "规则",
+      "whenColumn": "时机",
+      "actionColumn": "动作",
+      "defaultColumn": "默认",
+      "stateColumn": "状态",
+      "overriddenTag": "已覆盖",
+      "lockedTag": "锁定",
+      "reset": "恢复默认",
+      "actionDeny": "拒绝",
+      "actionAllow": "允许",
+      "actionAsk": "询问",
+      "actionAutoEvaluator": "自动审批",
+      "whenInvocation": "工具调用",
+      "whenExposure": "工具可见性",
+      "whenIngress": "消息准入",
+      "saveFailed": "保存失败",
+      "hardConstraintTitle": "链路硬约束",
+      "hardConstraintHint": "远程链路允许写入本地文件（remoteAllowLocalWrite）。关闭后远程会话的写文件操作一律拒绝；无论开关状态，硬约束检查始终执行。",
+      "hardConstraintConfirmTitle": "确认修改链路硬约束？",
+      "hardConstraintConfirmContent": "该开关影响远程链路的安全边界，修改会记入安全审计日志。"
+    },
+    "confirmMode": {
+      "title": "确认模式"
+    },
+    "switches": {
+      "title": "工具开关",
+      "hint": "与「工具 → 开关」页读写同一份配置。"
+    },
+    "memory": {
+      "title": "确认记忆管理",
+      "hint": "「下次别问了」的确认记忆（decision_cache）。清除后下次调用会再次询问。",
+      "columnSummary": "内容",
+      "columnTier": "档位",
+      "columnScope": "作用域",
+      "columnLane": "链路",
+      "columnHits": "命中",
+      "columnCreated": "创建时间",
+      "scopeSession": "会话级",
+      "scopePersistent": "持久",
+      "laneAll": "全部链路",
+      "empty": "暂无确认记忆",
+      "clearAll": "清空全部",
+      "clearAllConfirmTitle": "清空全部确认记忆？",
+      "clearAllConfirmContent": "共 {{count}} 条，清除后所有工具调用将重新询问。",
+      "cleared": "已清除 {{count}} 条",
+      "tierExact": "仅此命令",
+      "tierVerbTarget": "命令+目标",
+      "tierVerb": "同类命令",
+      "tierDomainAction": "域名+动作",
+      "tierDomainAny": "域名",
+      "tierFile": "文件",
+      "tierDirectory": "目录",
+      "tierZone": "目录区",
+      "tierMcpTool": "MCP 工具",
+      "tierRemoteWrite": "远程写授权"
+    },
+    "audit": {
+      "title": "安全审计记录",
+      "hint": "只读查看安全审计日志（SecurityAudit-*.log），判定、确认、缓存与配置变更全程留痕。",
+      "columnTime": "时间",
+      "columnEvent": "事件",
+      "columnLane": "链路",
+      "columnTool": "工具",
+      "columnSummary": "摘要",
+      "filterLane": "链路",
+      "filterEvent": "事件类型",
+      "filterTool": "工具名",
+      "rangeAll": "全部时间",
+      "rangeToday": "今天",
+      "range7d": "近 7 天",
+      "range30d": "近 30 天",
+      "all": "全部",
+      "empty": "暂无审计记录",
+      "refresh": "刷新",
+      "noLog": "审计日志尚未初始化",
+      "retentionLabel": "日志保留天数",
+      "retentionHint": "超过保留天数的审计文件会自动清理（默认 180 天）。",
+      "retentionSaved": "已保存"
+    }
   }
 }

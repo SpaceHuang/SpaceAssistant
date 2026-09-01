@@ -315,6 +315,10 @@
       "browser": {
         "label": "Web access",
         "hint": "Browser automation and dependency checks"
+      },
+      "security": {
+        "label": "Tools & Security",
+        "hint": "Policy packages, confirm mode, tool switches, confirmation memory and security audit"
       }
     },
     "file": {
@@ -394,7 +398,8 @@
       "lastUsed": "Last used",
       "status": "Status",
       "empty": "No trusted commands yet",
-      "refresh": "Refresh"
+      "refresh": "Refresh",
+      "movedHint": "Trusted-command management has moved to \"Tools & Security > Confirmation Memory\"."
     },
     "autoAllow": {
       "title": "Auto-allow model-generated scripts (content analysis now gates this)",
@@ -449,7 +454,8 @@
       "batchDelete": "Delete selected",
       "columnDomain": "Domain",
       "empty": "No trusted domains yet",
-      "invalidDomain": "Invalid domain format"
+      "invalidDomain": "Invalid domain format",
+      "movedHint": "Trusted-domain management has moved to \"Tools & Security > Confirmation Memory\"."
     },
     "actTrustTitle": "Trusted domains for browser actions",
     "actTrustHelper": "Browser actions on these domains skip confirmation across sessions.",
@@ -725,7 +731,8 @@
     "remoteBrowserNavigateRequiresConfirm": "Confirm remote browser navigate",
     "remoteBrowserNavigateRequiresConfirmHint": "Applies only to remote navigate; desktop defaults are unchanged. Screenshot/observe/extract never confirm.",
     "remoteBrowserActRequiresConfirm": "Confirm remote browser act",
-    "remoteBrowserActRequiresConfirmHint": "Even when off, high-impact acts (submit/pay/delete/auth) still ask; scan or parse failures also ask."
+    "remoteBrowserActRequiresConfirmHint": "Even when off, high-impact acts (submit/pay/delete/auth) still ask; scan or parse failures also ask.",
+    "confirmMovedHint": "Remote confirmation switches and lane hard constraints have moved to the \"Tools & Security\" page."
   },
   "remoteSecurityUpgrade": {
     "title": "One-time remote security confirmation",
@@ -748,5 +755,101 @@
     "confirm": "Confirm and save",
     "cancel": "Cancel",
     "saveFailed": "Save failed, please retry"
+  },
+  "toolsSecurity": {
+    "intro": "Manage tool confirmation policies, confirmation memory and the security audit log in one place. Changes on this page take effect immediately and are recorded in the security audit log.",
+    "openPage": "Open \"Tools & Security\"",
+    "policy": {
+      "title": "Policy Packages",
+      "hint": "Choose a policy package per lane. The custom package lets you adjust rule actions; locked system-protection rules are read-only.",
+      "laneDesktop": "Desktop",
+      "laneWechat": "WeChat",
+      "laneFeishu": "Feishu",
+      "packageStrict": "Strict",
+      "packageStandard": "Standard",
+      "packageLoose": "Loose",
+      "packageCustom": "Custom",
+      "strictHint": "Strict: rules that would allow are escalated to ask.",
+      "looseHint": "Loose: ask rules are relaxed to auto-allow. Make sure you understand the risk.",
+      "customHint": "Custom: adjust each rule action (deny/allow/ask) in the table below.",
+      "ruleColumn": "Rule",
+      "whenColumn": "Timing",
+      "actionColumn": "Action",
+      "defaultColumn": "Default",
+      "stateColumn": "State",
+      "overriddenTag": "Overridden",
+      "lockedTag": "Locked",
+      "reset": "Reset",
+      "actionDeny": "Deny",
+      "actionAllow": "Allow",
+      "actionAsk": "Ask",
+      "actionAutoEvaluator": "Auto evaluator",
+      "whenInvocation": "Invocation",
+      "whenExposure": "Exposure",
+      "whenIngress": "Ingress",
+      "saveFailed": "Save failed",
+      "hardConstraintTitle": "Lane hard constraint",
+      "hardConstraintHint": "Remote lanes may write local files (remoteAllowLocalWrite). When off, write operations from remote sessions are always denied; the hard-constraint check always runs regardless of the switch.",
+      "hardConstraintConfirmTitle": "Change lane hard constraint?",
+      "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log."
+    },
+    "confirmMode": {
+      "title": "Confirm Mode"
+    },
+    "switches": {
+      "title": "Tool Switches",
+      "hint": "Reads and writes the same configuration as the \"Tools -> Switches\" page."
+    },
+    "memory": {
+      "title": "Confirmation Memory",
+      "hint": "Remembered answers (do-not-ask-again) from the decision_cache. Clearing an entry means it will ask again next time.",
+      "columnSummary": "Content",
+      "columnTier": "Tier",
+      "columnScope": "Scope",
+      "columnLane": "Lane",
+      "columnHits": "Hits",
+      "columnCreated": "Created",
+      "scopeSession": "Session",
+      "scopePersistent": "Persistent",
+      "laneAll": "All lanes",
+      "empty": "No confirmation memory yet",
+      "clearAll": "Clear all",
+      "clearAllConfirmTitle": "Clear all confirmation memory?",
+      "clearAllConfirmContent": "{{count}} entries. Every tool call will ask again after clearing.",
+      "cleared": "Cleared {{count}} entries",
+      "tierExact": "Exact command",
+      "tierVerbTarget": "Command + target",
+      "tierVerb": "Command family",
+      "tierDomainAction": "Domain + action",
+      "tierDomainAny": "Domain",
+      "tierFile": "File",
+      "tierDirectory": "Directory",
+      "tierZone": "Zone",
+      "tierMcpTool": "MCP tool",
+      "tierRemoteWrite": "Remote write grant"
+    },
+    "audit": {
+      "title": "Security Audit Log",
+      "hint": "Read-only view of the security audit log (SecurityAudit-*.log): decisions, confirmations, cache and settings changes.",
+      "columnTime": "Time",
+      "columnEvent": "Event",
+      "columnLane": "Lane",
+      "columnTool": "Tool",
+      "columnSummary": "Summary",
+      "filterLane": "Lane",
+      "filterEvent": "Event type",
+      "filterTool": "Tool name",
+      "rangeAll": "All time",
+      "rangeToday": "Today",
+      "range7d": "Last 7 days",
+      "range30d": "Last 30 days",
+      "all": "All",
+      "empty": "No audit records",
+      "refresh": "Refresh",
+      "noLog": "Audit log not initialized yet",
+      "retentionLabel": "Retention (days)",
+      "retentionHint": "Audit files older than the retention period are cleaned up automatically (default 180 days).",
+      "retentionSaved": "Saved"
+    }
   }
 }
