@@ -72,6 +72,7 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
+import { recordUserAnswerToCache } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { DesktopChannel, LegacyImChannel } from './confirmation/channels'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
@@ -1473,6 +1474,22 @@ async function runToolChatSessionInner(
         inputObj.url.trim()
       ) {
         rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
+        // 会话级信任双写 decision_cache（navigate 档 domain-any-action，键带 sessionId）
+        if (appDb) {
+          const navHost = extractHostname(inputObj.url.trim())
+          if (navHost) {
+            recordUserAnswerToCache({
+              db: appDb,
+              audit: getSecurityAuditLog(),
+              lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+              sessionId,
+              key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
+              decision: 'allow',
+              scope: 'session',
+              source: 'user-confirm'
+            })
+          }
+        }
       }
       if (
         outcome === 'approved' &&
@@ -1483,6 +1500,22 @@ async function runToolChatSessionInner(
         const actUrl = stagehandService.peekCurrentUrl(sessionId)
         if (actUrl) {
           rememberBrowserSessionActTrust(sessionId, actUrl)
+          // 会话级信任双写 decision_cache（act 档 domain+action，键带 sessionId）
+          if (appDb) {
+            const actHost = extractHostname(actUrl)
+            if (actHost) {
+              recordUserAnswerToCache({
+                db: appDb,
+                audit: getSecurityAuditLog(),
+                lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+                sessionId,
+                key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
+                decision: 'allow',
+                scope: 'session',
+                source: 'user-confirm'
+              })
+            }
+          }
           logAgentEvent('info', 'browser.act.sessionTrust.remember', {
             sessionId,
             host: extractHostname(actUrl),
