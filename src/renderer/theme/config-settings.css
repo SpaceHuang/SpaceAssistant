@@ -2229,3 +2229,36 @@
   line-height: var(--sa-config-line);
 }
 
+/* 「工具与安全」设置页：渐近式分区（Collapse ghost），标题对齐 section-title 层级 */
+.config-settings-page .config-tools-security.ant-collapse.ant-collapse-ghost {
+  width: 100%;
+}
+
+.config-settings-page .config-tools-security .ant-collapse-item {
+  border-bottom: 1px solid var(--sa-border);
+}
+
+.config-settings-page .config-tools-security .ant-collapse-item:last-child {
+  border-bottom: none;
+}
+
+.config-settings-page .config-tools-security .ant-collapse-header {
+  align-items: center;
+  padding: var(--sa-config-gap-substack) 0 !important;
+}
+
+.config-settings-page .config-tools-security .ant-collapse-header-text {
+  font-size: var(--sa-config-font-section);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+}
+
+.config-settings-page .config-tools-security .ant-collapse-expand-icon {
+  color: var(--sa-text-tertiary);
+}
+
+.config-settings-page .config-tools-security .ant-collapse-content-box {
+  padding: 0 0 var(--sa-config-gap-field) !important;
+}
+

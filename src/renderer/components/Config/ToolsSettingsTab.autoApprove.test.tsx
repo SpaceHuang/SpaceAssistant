@@ -82,23 +82,13 @@ describe('ToolsSettingsTab script auto allow', () => {
 })
 
 describe('ToolsSettingsTab auto approve', () => {
-  it('renders three confirmation mode options', () => {
+  it('file section no longer hosts confirmation mode (moved to security)', () => {
     renderFileSection()
-    expect(screen.getByText('展示文件修改内容')).toBeTruthy()
-    expect(screen.getByText('直接确认')).toBeTruthy()
-    expect(screen.getByText('自动放行安全写入')).toBeTruthy()
-  })
-
-  it('shows auto approve hints when mode is auto', () => {
-    renderFileSection('auto')
-    expect(screen.getByText(/满足以下全部条件时自动执行/)).toBeTruthy()
-  })
-
-  it('opens confirm modal when switching to auto', () => {
-    const { setToolUi } = renderFileSection('diff')
-    fireEvent.click(screen.getByText('自动放行安全写入'))
-    expect(screen.getAllByText('确认切换为自动放行安全写入？').length).toBeGreaterThan(0)
-    fireEvent.click(screen.getByRole('button', { name: '确认开启' }))
-    expect(setToolUi).toHaveBeenCalled()
+    // 确认模式已迁移到「工具与安全」页，文件操作仅保留历史备份/快照
+    expect(screen.queryByText('展示文件修改内容')).toBeNull()
+    expect(screen.queryByText('直接确认')).toBeNull()
+    expect(screen.queryByText('自动放行安全写入')).toBeNull()
+    expect(screen.getByText('文件历史备份')).toBeTruthy()
+    expect(screen.getByText('每文件最多快照数')).toBeTruthy()
   })
 })
