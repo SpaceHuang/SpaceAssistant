@@ -525,7 +525,7 @@ export interface ToolCallRecord {
   result?: ToolCallResultPersisted
   status: ToolCallStatus
   riskLevel: ToolRiskLevel
-  /** 确认卡片可选的"记忆档位"（由主进程 decideTool 下发，无则不展示选择器）。 */
+  /** 确认卡片可选的"记忆档位"（由主进程决策引擎下发，无则不展示选择器）。 */
   memoryTiers?: import('./confirmation/types').MemoryTier[]
   /** 确认阶段由主进程下发的 diff，仅会话内使用 */
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
