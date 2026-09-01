@@ -1447,7 +1447,13 @@ function readExposureInputsFromDb(
       // exposure 重推：配置变更后主进程重新求值并推送桌面链路清单（§5.2 exposure 定稿）
       try {
         const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
-        const tools = exposedToolNamesForLane('desktop', ...readExposureInputsFromDb(ctx.db))
+        const { loadEffectivePolicyRules } = await import('./confirmation/policyRulesRuntime')
+        const tools = exposedToolNamesForLane(
+          'desktop',
+          ...readExposureInputsFromDb(ctx.db),
+          undefined,
+          loadEffectivePolicyRules(ctx.db, 'desktop')
+        )
         getMainWindow()?.webContents.send('exposure:tools-changed', { lane: 'desktop', tools })
       } catch {
         /* 重推失败不阻断配置保存；渲染端下次 refresh 时补齐 */
