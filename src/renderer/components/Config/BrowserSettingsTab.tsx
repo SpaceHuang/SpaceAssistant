@@ -1,4 +1,4 @@
-import { Alert, App, Button, Input, Select, Space, Table, Tooltip } from 'antd'
+import { Alert, Button, Input, Select, Space, Tooltip } from 'antd'
 import { Info } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { BrowserConfig, ModelEntry } from '../../../shared/domainTypes'
@@ -20,18 +20,10 @@ import { SaIconButton } from '../ui/SaIconButton'
 import { ConfigModelOptionContent, sortModelsFastFirst } from './ConfigModelOption'
 import { configModalModelSelectPopupClassNames, configModalSelectPopupClassNames } from './configModalUi'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
+import { ToolsSecurityShortcut } from './ToolsSecurityShortcut'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const refreshSvg = patchSvg(refresh2LineRaw)
-
-const DOMAIN_HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i
-
-function isValidTrustDomain(domain: string): boolean {
-  if (!domain || domain.length > 253) return false
-  if (domain === 'localhost') return true
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(domain)) return true
-  return DOMAIN_HOST_RE.test(domain)
-}
 
 type Props = {
   browser: BrowserConfig
@@ -42,63 +34,14 @@ type Props = {
 }
 
 export function BrowserSettingsTab({ browser, onChange, models = [], active = false }: Props) {
-  const { message } = App.useApp()
   const { t } = useTypedTranslation('config')
   const dispatch = useAppDispatch()
   const { detect, detecting, refresh } = useBrowserDetect({ active })
   const [repairLoading, setRepairLoading] = useState(false)
-  const [newDomain, setNewDomain] = useState('')
-  const [selectedDomains, setSelectedDomains] = useState<string[]>([])
-  const [newActDomain, setNewActDomain] = useState('')
-  const [selectedActDomains, setSelectedActDomains] = useState<string[]>([])
   const [actKeywordsOpen, setActKeywordsOpen] = useState(false)
   const [actKeywordsDraft, setActKeywordsDraft] = useState('')
 
   const patch = (p: Partial<BrowserConfig>) => onChange({ ...browser, ...p })
-
-  const addTrustedDomain = () => {
-    const d = newDomain.trim().toLowerCase()
-    if (!d) return
-    if (!isValidTrustDomain(d)) {
-      message.warning(t('browser.trust.invalidDomain'))
-      return
-    }
-    if (browser.trustedDomains.includes(d)) {
-      setNewDomain('')
-      return
-    }
-    patch({ trustedDomains: [...browser.trustedDomains, d] })
-    setNewDomain('')
-  }
-
-  const removeSelectedDomains = () => {
-    if (!selectedDomains.length) return
-    const remove = new Set(selectedDomains)
-    patch({ trustedDomains: browser.trustedDomains.filter((d) => !remove.has(d)) })
-    setSelectedDomains([])
-  }
-
-  const addActTrustedDomain = () => {
-    const d = newActDomain.trim().toLowerCase()
-    if (!d) return
-    if (!isValidTrustDomain(d)) {
-      message.warning(t('browser.trust.invalidDomain'))
-      return
-    }
-    if (browser.actTrustedDomains.includes(d)) {
-      setNewActDomain('')
-      return
-    }
-    patch({ actTrustedDomains: [...browser.actTrustedDomains, d] })
-    setNewActDomain('')
-  }
-
-  const removeSelectedActDomains = () => {
-    if (!selectedActDomains.length) return
-    const remove = new Set(selectedActDomains)
-    patch({ actTrustedDomains: browser.actTrustedDomains.filter((d) => !remove.has(d)) })
-    setSelectedActDomains([])
-  }
 
   const saveActKeywords = () => {
     const list = actKeywordsDraft
@@ -311,95 +254,8 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         </ConfigSettingsStack>
       </section>
 
-      <section className="browser-trust-section">
-        <div className="config-skill-section-header">
-          <h3 className="config-section-title">{t('browser.trust.title')}</h3>
-          <Space size="small">
-            <Button
-              size="small"
-              danger
-              disabled={!selectedDomains.length}
-              onClick={removeSelectedDomains}
-            >
-              {t('browser.trust.batchDelete')}
-            </Button>
-          </Space>
-        </div>
-        <p className="config-field__hint">{t('browser.trustedDomainsHint')}</p>
-        <ConfigField label={t('browser.trust.addDomain')}>
-          <Space.Compact style={{ width: '100%' }}>
-            <Input
-              value={newDomain}
-              placeholder={t('browser.trustedDomainsPlaceholder')}
-              onChange={(e) => setNewDomain(e.target.value)}
-              onPressEnter={addTrustedDomain}
-            />
-            <Button onClick={addTrustedDomain}>{t('browser.trust.addDomainButton')}</Button>
-          </Space.Compact>
-        </ConfigField>
-        <Table
-          size="small"
-          pagination={false}
-          rowKey="domain"
-          rowSelection={{
-            selectedRowKeys: selectedDomains,
-            onChange: (keys) => setSelectedDomains(keys as string[])
-          }}
-          dataSource={browser.trustedDomains.map((domain) => ({ domain }))}
-          locale={{ emptyText: t('browser.trust.empty') }}
-          columns={[
-            {
-              title: t('browser.trust.columnDomain'),
-              dataIndex: 'domain'
-            }
-          ]}
-        />
-      </section>
-
-      <section className="browser-trust-section">
-        <div className="config-skill-section-header">
-          <h3 className="config-section-title">{t('browser.actTrustTitle')}</h3>
-          <Space size="small">
-            <Button
-              size="small"
-              danger
-              disabled={!selectedActDomains.length}
-              onClick={removeSelectedActDomains}
-            >
-              {t('browser.trust.batchDelete')}
-            </Button>
-          </Space>
-        </div>
-        <p className="config-field__hint">{t('browser.actTrustHelper')}</p>
-        <ConfigField label={t('browser.actTrustAdd')}>
-          <Space.Compact style={{ width: '100%' }}>
-            <Input
-              value={newActDomain}
-              placeholder={t('browser.trustedDomainsPlaceholder')}
-              onChange={(e) => setNewActDomain(e.target.value)}
-              onPressEnter={addActTrustedDomain}
-            />
-            <Button onClick={addActTrustedDomain}>{t('browser.trust.addDomainButton')}</Button>
-          </Space.Compact>
-        </ConfigField>
-        <Table
-          size="small"
-          pagination={false}
-          rowKey="domain"
-          rowSelection={{
-            selectedRowKeys: selectedActDomains,
-            onChange: (keys) => setSelectedActDomains(keys as string[])
-          }}
-          dataSource={browser.actTrustedDomains.map((domain) => ({ domain }))}
-          locale={{ emptyText: t('browser.actTrustEmpty') }}
-          columns={[
-            {
-              title: t('browser.trust.columnDomain'),
-              dataIndex: 'domain'
-            }
-          ]}
-        />
-      </section>
+      {/* P4：信任域名管理迁移到「工具与安全 → 确认记忆管理」，此处保留快捷入口 */}
+      <ToolsSecurityShortcut hintKey="browser.trust.movedHint" />
 
       <ConfigSwitchRow
         label={t('browser.actSessionTrustEnable')}

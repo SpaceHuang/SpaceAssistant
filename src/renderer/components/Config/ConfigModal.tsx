@@ -947,6 +947,10 @@ export function ConfigSettingsPage() {
 
             onTestPython={() => void testPython()}
 
+            remoteImValue={feishuUi}
+
+            onRemoteImChange={applyRemoteImCommonLocal}
+
           />
 
         )

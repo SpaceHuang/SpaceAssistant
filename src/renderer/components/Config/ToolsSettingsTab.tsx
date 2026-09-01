@@ -3,12 +3,14 @@ import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
+import type { RemoteImCommonConfig } from '../../../shared/imTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ConfigResultAlert } from './ConfigResultAlert'
 import { ConfigSwitchRow } from './ConfigField'
 import { ShellSettingsTab } from './ShellSettingsTab'
 import { McpSettingsTab } from './McpSettingsTab'
+import { ToolsSecuritySettingsTab } from './ToolsSecuritySettingsTab'
 import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
@@ -40,9 +42,12 @@ type Props = {
   onTestPython: () => void
   /** 设置页打开状态（MCP 草稿丢弃确认用）。 */
   open?: boolean
+  /** 「工具与安全」页链路硬约束读写 RemoteImCommon 同一份草稿配置。 */
+  remoteImValue?: RemoteImCommonConfig
+  onRemoteImChange?: (patch: Partial<RemoteImCommonConfig>) => void
 }
 
-function BuiltinToolSwitchList({
+export function BuiltinToolSwitchList({
   toolUi,
   setToolUi,
   onShellEnabledChange
@@ -112,7 +117,9 @@ export function ToolsSettingsTab({
   pyTest,
   pyTesting,
   onTestPython,
-  open = false
+  open = false,
+  remoteImValue,
+  onRemoteImChange
 }: Props) {
   const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
@@ -264,6 +271,17 @@ export function ToolsSettingsTab({
         )
       case 'browser':
         return <BrowserSettingsTab active browser={browserUi} onChange={setBrowserUi} models={models} />
+      case 'security':
+        return remoteImValue && onRemoteImChange ? (
+          <ToolsSecuritySettingsTab
+            active
+            toolUi={toolUi}
+            setToolUi={setToolUi}
+            onShellEnabledChange={onShellEnabledChange}
+            remoteImValue={remoteImValue}
+            onRemoteImChange={onRemoteImChange}
+          />
+        ) : null
       default:
         return null
     }

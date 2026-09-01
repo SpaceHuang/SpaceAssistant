@@ -1,7 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { App, ConfigProvider } from 'antd'
+import { Provider } from 'react-redux'
+import { configureStore } from '@reduxjs/toolkit'
 import { ShellSettingsTab } from './ShellSettingsTab'
+import configReducer from '../../store/configSlice'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { changeAppLocale } from '../../i18n/localeSync'
 
@@ -16,22 +19,26 @@ describe('ShellSettingsTab', () => {
 
   it('does not show auto allow switch on shell section', () => {
     render(
-      <ConfigProvider>
-        <App>
-          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={vi.fn()} />
-        </App>
-      </ConfigProvider>
+      <Provider store={configureStore({ reducer: { config: configReducer } })}>
+        <ConfigProvider>
+          <App>
+            <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={vi.fn()} />
+          </App>
+        </ConfigProvider>
+      </Provider>
     )
     expect(screen.queryByText('大模型生成的脚本自动允许执行')).toBeNull()
   })
 
   it('shows builtin deny rules', () => {
     render(
-      <ConfigProvider>
-        <App>
-          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={vi.fn()} />
-        </App>
-      </ConfigProvider>
+      <Provider store={configureStore({ reducer: { config: configReducer } })}>
+        <ConfigProvider>
+          <App>
+            <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={vi.fn()} />
+          </App>
+        </ConfigProvider>
+      </Provider>
     )
     expect(screen.getByText(/sudo:\*/)).toBeTruthy()
     expect(screen.getByText(/lark-cli:\*/)).toBeTruthy()
@@ -40,11 +47,13 @@ describe('ShellSettingsTab', () => {
   it('adds a rule when clicking add button (zh-CN)', () => {
     const onChange = vi.fn()
     render(
-      <ConfigProvider>
-        <App>
-          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={onChange} />
-        </App>
-      </ConfigProvider>
+      <Provider store={configureStore({ reducer: { config: configReducer } })}>
+        <ConfigProvider>
+          <App>
+            <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={onChange} />
+          </App>
+        </ConfigProvider>
+      </Provider>
     )
     fireEvent.click(screen.getByRole('button', { name: '添加规则' }))
     expect(onChange).toHaveBeenCalled()
@@ -58,11 +67,13 @@ describe('ShellSettingsTab', () => {
     await changeAppLocale('en-US')
     const onChange = vi.fn()
     render(
-      <ConfigProvider>
-        <App>
-          <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={onChange} />
-        </App>
-      </ConfigProvider>
+      <Provider store={configureStore({ reducer: { config: configReducer } })}>
+        <ConfigProvider>
+          <App>
+            <ShellSettingsTab shell={DEFAULT_SHELL_CONFIG} onChange={onChange} />
+          </App>
+        </ConfigProvider>
+      </Provider>
     )
     fireEvent.click(screen.getByRole('button', { name: 'Add rule' }))
     expect(onChange).toHaveBeenCalled()

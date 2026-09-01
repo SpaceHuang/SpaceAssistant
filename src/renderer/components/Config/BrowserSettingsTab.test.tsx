@@ -101,7 +101,7 @@ describe('BrowserSettingsTab', () => {
     expect(store.getState().config.settingsOpen).toBe(false)
   })
 
-  it('adds trusted domain via input and supports batch delete', async () => {
+  it('trust management is replaced by tools-security shortcut (P4)', async () => {
     const onChange = vi.fn()
     const store = configureStore({
       reducer: {
@@ -131,18 +131,11 @@ describe('BrowserSettingsTab', () => {
       </Provider>
     )
 
-    fireEvent.click(screen.getAllByRole('checkbox', { name: 'Select all' })[0]!)
-    fireEvent.click(screen.getAllByRole('button', { name: '批量删除' })[0]!)
-    expect(onChange).toHaveBeenCalled()
-    const next = onChange.mock.calls.at(-1)?.[0] as typeof DEFAULT_BROWSER_CONFIG
-    expect(next.trustedDomains).toEqual([])
-
-    fireEvent.change(screen.getAllByPlaceholderText('例：example.com')[0]!, {
-      target: { value: 'docs.github.com' }
-    })
-    fireEvent.click(screen.getAllByRole('button', { name: /添/ })[0]!)
-    expect(onChange).toHaveBeenCalled()
-    const added = onChange.mock.calls.at(-1)?.[0] as typeof DEFAULT_BROWSER_CONFIG
-    expect(added.trustedDomains).toContain('docs.github.com')
+    // 信任管理表格已移除，降级为快捷入口
+    expect(screen.queryByPlaceholderText('例：example.com')).toBeNull()
+    expect(await screen.findByText('信任域名管理已迁移到「工具与安全 → 确认记忆管理」。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '前往「工具与安全」' }))
+    expect(store.getState().config.settingsActiveTab).toBe('tools')
+    expect(store.getState().config.settingsToolsSubTab).toBe('security')
   })
 })

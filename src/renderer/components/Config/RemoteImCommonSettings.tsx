@@ -16,6 +16,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 import { RemoteSecurityUpgradeModal } from './RemoteSecurityUpgradeModal'
+import { ToolsSecurityShortcut } from './ToolsSecurityShortcut'
 
 type Props = {
   value: RemoteImCommonConfig
@@ -182,6 +183,9 @@ export function RemoteImCommonSettings({
         ]}
       />
 
+      {/* P4：链路硬约束（remoteAllowLocalWrite）与远程确认开关迁移到「工具与安全」页 */}
+      <ToolsSecurityShortcut hintKey="remoteImCommon.confirmMovedHint" />
+
       <ConfigSwitchRow
         label={t('remoteImCommon.restrictWritesAndOutbound')}
         hint={t('remoteImCommon.restrictWritesAndOutboundHint')}
@@ -190,46 +194,11 @@ export function RemoteImCommonSettings({
       />
 
       <Checkbox
-        checked={value.remoteAllowLocalWrite}
-        onChange={(e) => onChange({ remoteAllowLocalWrite: e.target.checked })}
-      >
-        {t('remoteImCommon.remoteAllowLocalWrite')}
-      </Checkbox>
-
-      <Checkbox
         checked={value.remoteDenyOutbound}
         onChange={(e) => onChange({ remoteDenyOutbound: e.target.checked })}
       >
         {t('remoteImCommon.remoteDenyOutbound')}
       </Checkbox>
-
-      <ConfigSwitchRow
-        label={t('remoteImCommon.remoteScriptRequiresConfirm')}
-        hint={t('remoteImCommon.remoteScriptRequiresConfirmHint')}
-        checked={value.remoteScriptRequiresConfirm !== false}
-        onChange={(v) => onChange({ remoteScriptRequiresConfirm: Boolean(v) })}
-      />
-
-      <ConfigSwitchRow
-        label={t('remoteImCommon.remoteBrowserNavigateRequiresConfirm')}
-        hint={t('remoteImCommon.remoteBrowserNavigateRequiresConfirmHint')}
-        checked={
-          value.remoteBrowserNavigateRequiresConfirm ?? value.remoteBrowserRequiresConfirm
-        }
-        onChange={(v) =>
-          onChange({
-            remoteBrowserNavigateRequiresConfirm: Boolean(v),
-            remoteBrowserRequiresConfirm: Boolean(v)
-          })
-        }
-      />
-
-      <ConfigSwitchRow
-        label={t('remoteImCommon.remoteBrowserActRequiresConfirm')}
-        hint={t('remoteImCommon.remoteBrowserActRequiresConfirmHint')}
-        checked={value.remoteBrowserActRequiresConfirm !== false}
-        onChange={(v) => onChange({ remoteBrowserActRequiresConfirm: Boolean(v) })}
-      />
 
       <ConfigField label={t('remoteImCommon.rateLimitLabel')}>
         <InputNumber
