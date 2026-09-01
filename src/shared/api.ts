@@ -1,5 +1,13 @@
 import type { AppLocale } from './locale'
 import type {
+  SecurityAuditQueryPayload,
+  SecurityAuditQueryResult,
+  SecurityClearCachePayload,
+  SecuritySettingsModelPayload
+} from './confirmation/settingsCenter'
+import type { CacheKey, DecisionCacheEntry, ExecutionLane, PolicyAction } from './confirmation/types'
+import type { PolicyPackage } from './policy/policyPackages'
+import type {
   AppConfig,
   AutoApproveFallback,
   BrowserActDangerInfo,
@@ -288,6 +296,33 @@ export type SpaceAssistantApi = {
   onToolExposureChanged: (
     cb: (payload: { lane: 'desktop' | 'wechat' | 'feishu'; tools: string[] }) => void
   ) => () => void
+
+  // ===== 「工具与安全」设置页（§7 五区，P4）=====
+  /** 五区数据装配结果（套餐/确认模式/工具开关/确认记忆/审计摘要/规则视图）。 */
+  securityGetSettingsModel: () => Promise<SecuritySettingsModelPayload>
+  /** 套餐选择（每链路）；变更落 settings.policy-change。 */
+  securitySetPolicyPackage: (payload: {
+    lane: ExecutionLane
+    package: PolicyPackage
+  }) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** 自定义套餐规则覆盖（主进程强制校验：locked 只读、不可增删、顺序不可改）。 */
+  securitySetRuleOverride: (payload: {
+    ruleId: string
+    action: Extract<PolicyAction, 'deny' | 'allow' | 'ask'>
+    params?: Record<string, unknown>
+  }) => Promise<{ ok: true } | { ok: false; error: string }>
+  securityRemoveRuleOverride: (payload: {
+    ruleId: string
+  }) => Promise<{ ok: true; removed: number } | { ok: false; error: string }>
+  /** 确认记忆管理：decision_cache 全量列表。 */
+  securityListDecisionCache: () => Promise<DecisionCacheEntry[]>
+  /** 清除确认记忆（单条带 key / 全部缺省），落 cache.clear 审计。 */
+  securityClearDecisionCache: (payload: SecurityClearCachePayload) => Promise<{ ok: true; cleared: number }>
+  /** 安全审计记录只读查询（按时间/链路/事件类型/工具过滤）。 */
+  securityQueryAudit: (query: SecurityAuditQueryPayload) => Promise<SecurityAuditQueryResult>
+  securityGetAuditRetention: () => Promise<number>
+  /** 保留天数设置，落 settings.policy-change。 */
+  securitySetAuditRetention: (payload: { days: number }) => Promise<{ ok: true } | { ok: false; error: string }>
   configSet: (
     payload: Partial<{
       baseUrl: string

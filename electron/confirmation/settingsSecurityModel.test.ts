@@ -32,3 +32,16 @@ describe('buildSettingsSecurityModel（P4 设置中心五区数据）', () => {
     expect(model.audit).toEqual({ retentionDays: 180, haveAuditLog: true })
   })
 })
+
+describe('toRuleViews（规则合并视图）', () => {
+  it('覆盖合并动作 + overridden 标记，locked 透传', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [
+      { id: 'a', when: 'invocation' as const, action: 'ask' as const, reason: 'r1' },
+      { id: 'b', when: 'invocation' as const, action: 'deny' as const, locked: true, reason: 'r2' }
+    ]
+    const views = toRuleViews(rules, [{ ruleId: 'a', action: 'allow' }])
+    expect(views[0]).toMatchObject({ id: 'a', action: 'allow', defaultAction: 'ask', overridden: true, locked: false })
+    expect(views[1]).toMatchObject({ id: 'b', action: 'deny', overridden: false, locked: true })
+  })
+})

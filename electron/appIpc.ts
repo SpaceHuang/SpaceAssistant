@@ -34,7 +34,9 @@ import {
 } from './database'
 import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { clearDecisionCacheOnSessionDelete } from './confirmation/cacheMaintenanceHooks'
-import { getSecurityAuditLog } from './confirmation/audit'
+import { getSecurityAuditLog, setSecurityAuditRetentionDays } from './confirmation/audit'
+import { readSecurityAuditRetentionDays } from './confirmation/policyRulesRuntime'
+import { recordSettingsChange } from './confirmation/settingsAudit'
 import { recordUserAnswerToCache } from './confirmation/decisionCacheWriter'
 import type {
   AppConfig,
@@ -304,6 +306,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     })
   }
 
+  // 设置变更审计（§5.6-6）：策略/工具开关/确认配置变更落 settings.* 事件（含新旧值）。
+  const recordSettings = (args: {
+    kind: 'policy-change' | 'tool-toggle'
+    lane: 'desktop' | 'wechat' | 'feishu'
+    key: string
+    before: unknown
+    after: unknown
+    reason?: string
+  }): void => {
+    recordSettingsChange(getSecurityAuditLog(), { ...args, sessionId: 'settings' })
+  }
+
   ipcMain.handle(
     'tool:confirm-response',
     async (
@@ -404,6 +418,14 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (action === 'add' && typeof (payload as { command?: string }).command === 'string') {
         addTrustedCommand(ctx.db, (payload as { command: string }).command)
+        // §5.6-6：shell 信任命令新增落 settings.policy-change
+        recordSettings({
+          kind: 'policy-change',
+          lane: 'desktop',
+          key: 'shell.trustedCommands',
+          before: undefined,
+          after: (payload as { command: string }).command
+        })
         return { ok: true as const, commands: listTrustedCommands(ctx.db) }
       }
       if (action === 'remove' && Array.isArray((payload as { ids?: string[] }).ids)) {
@@ -416,6 +438,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             type: 'shell_command',
             item: item.command ?? item.executable,
             timestamp: Date.now()
+          })
+          // §5.6-6：shell 信任命令删除落 settings.policy-change（含新旧值）
+          recordSettings({
+            kind: 'policy-change',
+            lane: 'desktop',
+            key: 'shell.trustedCommands',
+            before: item.command ?? item.executable,
+            after: undefined,
+            reason: 'remove-trusted-command'
           })
         }
         return { ok: true as const, commands }
@@ -915,6 +946,194 @@ function readExposureInputsFromDb(
     }
   )
 
+  // ===== 「工具与安全」设置页（§7 五区，P4）=====
+  // 启动时把持久化的审计保留天数注入审计单例（设置页可调，§5.6-1）。
+  setSecurityAuditRetentionDays(readSecurityAuditRetentionDays(ctx.db))
+
+  const securityDeps = async () => {
+    const runtime = await import('./confirmation/policyRulesRuntime')
+    const model = await import('./confirmation/settingsSecurityModel')
+    const auditMod = await import('./confirmation/audit')
+    const { SqliteDecisionCache } = await import('./confirmation/sqliteDecisionCache')
+    const { PolicyRuleStore } = await import('./confirmation/policyRuleStore')
+    const { DEFAULT_POLICY_RULES } = await import('../src/shared/policy/defaultRules')
+    const { recordSettingsChange } = await import('./confirmation/settingsAudit')
+    return { runtime, model, auditMod, SqliteDecisionCache, PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange }
+  }
+
+  ipcMain.handle('security:get-settings-model', async () => {
+    const { runtime, model, auditMod, SqliteDecisionCache, PolicyRuleStore, DEFAULT_POLICY_RULES } =
+      await securityDeps()
+    const { getDbConnection } = await import('./database')
+    const conn = getDbConnection(ctx.db)
+    const tools = readToolsConfig(ctx.db)
+    return model.buildSettingsSecurityModel({
+      packages: runtime.readPolicyPackages(ctx.db),
+      confirmMode: tools.confirmMode,
+      deniedTools: tools.deniedTools,
+      cache: new SqliteDecisionCache(conn).list(),
+      rules: model.toRuleViews(DEFAULT_POLICY_RULES, new PolicyRuleStore(conn).listOverrides()),
+      retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
+      haveAuditLog: auditMod.getSecurityAuditLogDir() != null
+    })
+  })
+
+  ipcMain.handle(
+    'security:set-policy-package',
+    async (_e, payload: { lane?: unknown; package?: unknown }) => {
+      const { runtime, recordSettingsChange } = await securityDeps()
+      const { isPolicyPackage } = await import('../src/shared/policy/policyPackages')
+      const lane = payload?.lane
+      const pkg = payload?.package
+      if (lane !== 'desktop' && lane !== 'wechat' && lane !== 'feishu' && lane !== 'automation') {
+        return { ok: false as const, error: 'invalid lane' }
+      }
+      if (!isPolicyPackage(pkg)) return { ok: false as const, error: 'invalid package' }
+      const packages = runtime.readPolicyPackages(ctx.db)
+      const before = packages[lane]
+      if (before === pkg) return { ok: true as const }
+      packages[lane] = pkg
+      runtime.writePolicyPackages(ctx.db, packages)
+      ctx.db.flushSave()
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane,
+        sessionId: 'settings',
+        key: `policyPackage.${lane}`,
+        before,
+        after: pkg
+      })
+      return { ok: true as const }
+    }
+  )
+
+  ipcMain.handle(
+    'security:set-rule-override',
+    async (_e, payload: { ruleId?: unknown; action?: unknown; params?: unknown }) => {
+      const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+      const { validateRuleOverride } = await import('../src/shared/policy/policyPackages')
+      const { getDbConnection } = await import('./database')
+      const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
+      // 主进程侧强制校验：规则必须存在、非 locked、动作 ∈ {deny,allow,ask}；不可增删、顺序不可改（§4 第 1 区）
+      const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action)
+      if (!check.ok) return { ok: false as const, error: check.error }
+      const params =
+        payload?.params && typeof payload.params === 'object' && !Array.isArray(payload.params)
+          ? (payload.params as Record<string, unknown>)
+          : {}
+      const store = new PolicyRuleStore(getDbConnection(ctx.db))
+      const prev = store.getOverride(ruleId)
+      const before = prev?.action ?? check.rule.action
+      store.setOverride({ ruleId, action: payload!.action as never, params })
+      ctx.db.flushSave()
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: 'desktop',
+        sessionId: 'settings',
+        key: ruleId,
+        before,
+        after: payload!.action
+      })
+      return { ok: true as const }
+    }
+  )
+
+  ipcMain.handle('security:remove-rule-override', async (_e, payload: { ruleId?: unknown }) => {
+    const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+    const { getDbConnection } = await import('./database')
+    const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
+    const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
+    if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
+    const store = new PolicyRuleStore(getDbConnection(ctx.db))
+    const prev = store.getOverride(ruleId)
+    const removed = store.removeOverride(ruleId)
+    ctx.db.flushSave()
+    if (removed > 0) {
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: 'desktop',
+        sessionId: 'settings',
+        key: ruleId,
+        before: prev?.action,
+        after: rule.action,
+        reason: 'reset-to-default'
+      })
+    }
+    return { ok: true as const, removed }
+  })
+
+  ipcMain.handle('security:list-cache', async () => {
+    const { SqliteDecisionCache } = await securityDeps()
+    const { getDbConnection } = await import('./database')
+    return new SqliteDecisionCache(getDbConnection(ctx.db)).list()
+  })
+
+  ipcMain.handle('security:clear-cache', async (_e, payload: { key?: unknown }) => {
+    const { SqliteDecisionCache } = await securityDeps()
+    const { getDbConnection } = await import('./database')
+    const { canonicalKeyJson } = await import('./confirmation/sqliteDecisionCache')
+    const cache = new SqliteDecisionCache(getDbConnection(ctx.db))
+    const audit = getSecurityAuditLog()
+    // 清除即"下次再问"（§7 第 4 区）；单条/全部均落 cache.clear 审计
+    const key = payload?.key && typeof payload.key === 'object' ? (payload.key as never) : null
+    const cleared = key ? cache.clear(key) : cache.clearAll()
+    ctx.db.flushSave()
+    audit.record({
+      ts: Date.now(),
+      event: 'cache.clear',
+      lane: 'desktop',
+      sessionId: 'settings',
+      cacheKey: key ? canonicalKeyJson(key) : '*',
+      reason: key ? undefined : 'clear-all',
+      actor: 'user'
+    })
+    return { ok: true as const, cleared }
+  })
+
+  ipcMain.handle('security:query-audit', async (_e, payload: unknown) => {
+    const { querySecurityAuditLog } = await import('./confirmation/securityAuditReader')
+    const { getSecurityAuditLogDir } = await import('./confirmation/audit')
+    const dir = getSecurityAuditLogDir()
+    if (!dir) return []
+    const q = (payload && typeof payload === 'object' ? payload : {}) as {
+      since?: number
+      until?: number
+      lane?: 'desktop' | 'wechat' | 'feishu' | 'automation'
+      event?: string
+      toolName?: string
+      limit?: number
+    }
+    return querySecurityAuditLog(dir, q)
+  })
+
+  ipcMain.handle('security:get-audit-retention', async () => {
+    const { runtime } = await securityDeps()
+    return runtime.readSecurityAuditRetentionDays(ctx.db)
+  })
+
+  ipcMain.handle('security:set-audit-retention', async (_e, payload: { days?: unknown }) => {
+    const { runtime, auditMod, recordSettingsChange } = await securityDeps()
+    const days = typeof payload?.days === 'number' ? Math.floor(payload.days) : Number.NaN
+    if (!Number.isFinite(days) || days < 1 || days > 3650) {
+      return { ok: false as const, error: 'invalid retention days' }
+    }
+    const before = runtime.readSecurityAuditRetentionDays(ctx.db)
+    runtime.writeSecurityAuditRetentionDays(ctx.db, days)
+    ctx.db.flushSave()
+    auditMod.setSecurityAuditRetentionDays(days)
+    if (before !== days) {
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: 'desktop',
+        sessionId: 'settings',
+        key: 'securityAudit.retentionDays',
+        before,
+        after: days
+      })
+    }
+    return { ok: true as const }
+  })
+
   ipcMain.handle(
     'config:set',
     async (
@@ -1063,8 +1282,29 @@ function readExposureInputsFromDb(
             to: payload.tools.confirmMode,
             timestamp: Date.now()
           })
+          // §5.6-6：确认模式变更落 settings.policy-change（含新旧值）
+          recordSettings({
+            kind: 'policy-change',
+            lane: 'desktop',
+            key: 'tools.confirmMode',
+            before: cur.confirmMode,
+            after: payload.tools.confirmMode
+          })
         }
         const next = mergeToolsConfig({ ...cur, ...payload.tools })
+        // §5.6-6：deniedTools 变更落 settings.tool-toggle（含新旧值）
+        if (
+          payload.tools.deniedTools !== undefined &&
+          JSON.stringify(payload.tools.deniedTools) !== JSON.stringify(cur.deniedTools)
+        ) {
+          recordSettings({
+            kind: 'tool-toggle',
+            lane: 'desktop',
+            key: 'deniedTools',
+            before: cur.deniedTools,
+            after: payload.tools.deniedTools
+          })
+        }
         setConfigValue(ctx.db, CONFIG_KEYS.tools, JSON.stringify(next))
       }
       if (payload.skills !== undefined) {
@@ -1094,9 +1334,36 @@ function readExposureInputsFromDb(
         setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
       }
       if (payload.feishu !== undefined) {
+        // §5.6-6：链路硬约束/确认开关变更落 settings.policy-change（含新旧值）
+        const prevFeishu = readFeishuConfigFromDb(ctx.db)
+        for (const key of [
+          'remoteAllowLocalWrite',
+          'remoteDenyOutbound',
+          'remoteScriptRequiresConfirm',
+          'remoteBrowserNavigateRequiresConfirm',
+          'remoteBrowserActRequiresConfirm'
+        ] as const) {
+          const nextVal = payload.feishu[key]
+          if (nextVal !== undefined && nextVal !== prevFeishu[key]) {
+            recordSettings({ kind: 'policy-change', lane: 'feishu', key, before: prevFeishu[key], after: nextVal })
+          }
+        }
         persistFeishuConfig(ctx.db, payload.feishu)
       }
       if (payload.wechat !== undefined) {
+        const prevWechat = readWeChatConfigFromDb(ctx.db)
+        for (const key of [
+          'remoteAllowLocalWrite',
+          'remoteDenyOutbound',
+          'remoteScriptRequiresConfirm',
+          'remoteBrowserNavigateRequiresConfirm',
+          'remoteBrowserActRequiresConfirm'
+        ] as const) {
+          const nextVal = payload.wechat[key]
+          if (nextVal !== undefined && nextVal !== prevWechat[key]) {
+            recordSettings({ kind: 'policy-change', lane: 'wechat', key, before: prevWechat[key], after: nextVal })
+          }
+        }
         persistWeChatConfig(ctx.db, payload.wechat)
       }
       if (payload.workDirProfiles !== undefined) {
@@ -1122,8 +1389,21 @@ function readExposureInputsFromDb(
         )
       }
       if (payload.browser !== undefined) {
+        const prevBrowser = readBrowserConfigFromDb(ctx.db)
+        // §5.6-6：浏览器信任域名清单变更落 settings.policy-change（含新旧值）
+        for (const key of ['trustedDomains', 'actTrustedDomains'] as const) {
+          const nextVal = payload.browser[key]
+          if (nextVal !== undefined && JSON.stringify(nextVal) !== JSON.stringify(prevBrowser[key] ?? [])) {
+            recordSettings({
+              kind: 'policy-change',
+              lane: 'desktop',
+              key: `browser.${key}`,
+              before: prevBrowser[key] ?? [],
+              after: nextVal
+            })
+          }
+        }
         if (payload.browser.trustedDomains !== undefined) {
-          const prevBrowser = readBrowserConfigFromDb(ctx.db)
           const prevSet = new Set((prevBrowser.trustedDomains ?? []).map((d) => d.toLowerCase()))
           const nextSet = new Set(
             (payload.browser.trustedDomains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean)

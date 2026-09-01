@@ -9,6 +9,8 @@ export interface AuditSink {
 const NOOP: AuditSink = { record: () => undefined }
 
 let singleton: SecurityAuditLog | null = null
+/** 单例创建前先行配置的保留天数（启动时从 DB 注入），创建时一并应用。 */
+let configuredRetentionDays: number | null = null
 
 /**
  * 主循环审计出口：惰性构造 SecurityAuditLog，目录复用 agentLogger 的日志目录
@@ -24,23 +26,31 @@ export function getSecurityAuditLog(): AuditSink {
     // agentLogger 未初始化或被测试 mock：降级 no-op，审计不阻断主流程
   }
   if (!logDir) return NOOP
-  if (!singleton) singleton = new SecurityAuditLog({ logDir })
+  if (!singleton) {
+    singleton = new SecurityAuditLog({
+      logDir,
+      ...(configuredRetentionDays != null ? { retentionDays: configuredRetentionDays } : {})
+    })
+  }
   return singleton
 }
 
 /** 仅供测试重置单例。 */
 export function resetSecurityAuditLogForTests(): void {
   singleton = null
+  configuredRetentionDays = null
 }
 
-/** 设置页调整保留天数（§5.6-1）：转发到真实单例；no-op 降级时静默忽略。 */
+/** 设置页调整保留天数（§5.6-1）：记录配置并转发到真实单例（未创建时创建时应用）。 */
 export function setSecurityAuditRetentionDays(days: number): void {
+  if (Number.isFinite(days) && days > 0) configuredRetentionDays = Math.floor(days)
   if (singleton) singleton.setRetentionDays(days)
 }
 
-/** 当前生效的保留天数（单例未创建时返回传入默认值）。 */
+/** 当前生效的保留天数（单例未创建时回落到已配置值/默认值）。 */
 export function getSecurityAuditRetentionDays(fallback = 180): number {
-  return singleton ? singleton.getRetentionDays() : fallback
+  if (singleton) return singleton.getRetentionDays()
+  return configuredRetentionDays ?? fallback
 }
 
 /** 审计日志目录（供只读查询）；agentLogger 未初始化时返回 null。 */

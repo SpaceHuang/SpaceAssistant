@@ -78,6 +78,17 @@ const api: SpaceAssistantApi = {
 
   configGet: () => ipcRenderer.invoke('config:get'),
   getToolExposureList: (payload) => ipcRenderer.invoke('exposure:get-tools', payload),
+
+  // ===== 「工具与安全」设置页（§7 五区，P4）=====
+  securityGetSettingsModel: () => ipcRenderer.invoke('security:get-settings-model'),
+  securitySetPolicyPackage: (payload) => ipcRenderer.invoke('security:set-policy-package', payload),
+  securitySetRuleOverride: (payload) => ipcRenderer.invoke('security:set-rule-override', payload),
+  securityRemoveRuleOverride: (payload) => ipcRenderer.invoke('security:remove-rule-override', payload),
+  securityListDecisionCache: () => ipcRenderer.invoke('security:list-cache'),
+  securityClearDecisionCache: (payload) => ipcRenderer.invoke('security:clear-cache', payload),
+  securityQueryAudit: (query) => ipcRenderer.invoke('security:query-audit', query),
+  securityGetAuditRetention: () => ipcRenderer.invoke('security:get-audit-retention'),
+  securitySetAuditRetention: (payload) => ipcRenderer.invoke('security:set-audit-retention', payload),
   onToolExposureChanged: (cb) => {
     const fn = (_e: unknown, payload: { lane: 'desktop' | 'wechat' | 'feishu'; tools: string[] }) => cb(payload)
     ipcRenderer.on('exposure:tools-changed', fn)
