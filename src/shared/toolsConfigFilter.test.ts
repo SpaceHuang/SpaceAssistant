@@ -1,28 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_TOOLS_CONFIG } from './domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from './builtinToolDefinitions'
 import { filterBuiltinToolsForRenderer } from './toolsConfigFilter'
 
-describe('filterBuiltinToolsForRenderer', () => {
-  it('未提供 visibleTools 时走旧滤镜（cfg 开关生效）', () => {
-    expect(filterBuiltinToolsForRenderer({ ...DEFAULT_TOOLS_CONFIG, enabled: false })).toEqual([])
-  })
-
-  it('提供 visibleTools 时作薄壳映射：仅返回清单内的工具定义', () => {
+describe('filterBuiltinToolsForRenderer（消费主进程清单的薄壳）', () => {
+  it('仅返回主进程清单内的工具定义（清单驱动渲染，不自算）', () => {
     const visible = ['read_file', 'run_shell']
-    const list = filterBuiltinToolsForRenderer(DEFAULT_TOOLS_CONFIG, null, null, null, visible)
+    const list = filterBuiltinToolsForRenderer(visible)
     expect(list.map((t) => t.name)).toEqual(['read_file', 'run_shell'])
     expect(list[0]).toBe(BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'read_file'))
   })
 
-  it('薄壳无视 allowedTools/deniedTools（已由主进程前置，渲染端不重复过滤）', () => {
-    const list = filterBuiltinToolsForRenderer(
-      { ...DEFAULT_TOOLS_CONFIG, deniedTools: ['read_file'] },
-      null,
-      null,
-      null,
-      ['read_file', 'write_file']
-    )
-    expect(list.map((t) => t.name)).toEqual(['read_file', 'write_file'])
+  it('清单之外的内置工具一律不返回（deniedTools/开关/exposure 规则已由主进程前置）', () => {
+    const list = filterBuiltinToolsForRenderer(['read_file'])
+    expect(list.map((t) => t.name)).toEqual(['read_file'])
+  })
+
+  it('空清单 → 空工具列表（冷启动空窗不渲染工具）', () => {
+    expect(filterBuiltinToolsForRenderer([])).toEqual([])
+  })
+
+  it('清单中的未知名不产生工具定义', () => {
+    const list = filterBuiltinToolsForRenderer(['no_such_tool', 'write_file'])
+    expect(list.map((t) => t.name)).toEqual(['write_file'])
   })
 })

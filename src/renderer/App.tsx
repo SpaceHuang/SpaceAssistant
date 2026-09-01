@@ -18,6 +18,7 @@ import { initWeChatRemoteStreamBridge } from './services/wechatRemoteStreamServi
 import { initContextUsageStreamBridge } from './services/contextUsageStreamService'
 import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchService'
 import { initConfirmStores } from './services/confirmStoresInit'
+import { initToolExposure } from './services/toolExposureService'
 import { SessionListPane } from './components/SessionList/SessionListPane'
 import { SearchPane } from './components/Search/SearchPane'
 import { SearchProvider } from './components/Search/SearchProvider'
@@ -149,6 +150,7 @@ function AppShellInner() {
 
   useEffect(() => {
     initConfirmStores()
+    const offToolExposure = initToolExposure()
     void window.api
       .sessionList()
       .then((list) => {
@@ -179,6 +181,7 @@ function AppShellInner() {
       offWeChatStream()
       offContextUsage()
       offRemoteSessionSwitch()
+      offToolExposure()
     }
   }, [dispatch])
 

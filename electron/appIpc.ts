@@ -870,21 +870,42 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     } as AppConfig)
   })
 
+/**
+ * 从 DB 读取 exposure 求值输入（tools/feishu/browser/shell/wechat），与 config:get 同口径。
+ */
+function readExposureInputsFromDb(
+  db: AppDatabase
+): [
+  ReturnType<typeof mergeToolsConfig>,
+  ReturnType<typeof readFeishuConfigFromDb>,
+  ReturnType<typeof readBrowserConfigFromDb>,
+  ReturnType<typeof readShellConfigFromDb>,
+  ReturnType<typeof readWeChatConfigFromDb>
+] {
+  let tools = mergeToolsConfig(null)
+  const toolsRaw = getConfigValue(db, CONFIG_KEYS.tools)
+  if (toolsRaw) {
+    try {
+      tools = mergeToolsConfig(JSON.parse(toolsRaw) as Partial<ToolsConfig>)
+    } catch {
+      /* keep default */
+    }
+  }
+  return [
+    tools,
+    readFeishuConfigFromDb(db),
+    readBrowserConfigFromDb(db),
+    readShellConfigFromDb(db),
+    readWeChatConfigFromDb(db)
+  ]
+}
+
   ipcMain.handle(
     'exposure:get-tools',
-    async (
-      _e,
-      payload: { lane: 'desktop' | 'wechat' | 'feishu'; config: AppConfig }
-    ): Promise<string[]> => {
+    async (_e, payload: { lane: 'desktop' | 'wechat' | 'feishu' }): Promise<string[]> => {
+      // 主进程为唯一评估者：一律读 DB 配置求值，不信任渲染端上行的 config（§5.2 exposure 定稿）
       const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
-      return exposedToolNamesForLane(
-        payload.lane,
-        payload.config.tools,
-        payload.config.feishu,
-        payload.config.browser,
-        payload.config.shell,
-        payload.config.wechat
-      )
+      return exposedToolNamesForLane(payload.lane, ...readExposureInputsFromDb(ctx.db))
     }
   )
 
@@ -1137,6 +1158,14 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()
+      // exposure 重推：配置变更后主进程重新求值并推送桌面链路清单（§5.2 exposure 定稿）
+      try {
+        const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
+        const tools = exposedToolNamesForLane('desktop', ...readExposureInputsFromDb(ctx.db))
+        getMainWindow()?.webContents.send('exposure:tools-changed', { lane: 'desktop', tools })
+      } catch {
+        /* 重推失败不阻断配置保存；渲染端下次 refresh 时补齐 */
+      }
     }
   )
 

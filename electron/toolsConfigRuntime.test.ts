@@ -110,3 +110,61 @@ describe('exposedToolNamesForLane（IPC 下发清单求值）', () => {
     expect(names).not.toContain('wechat_send')
   })
 })
+
+describe('policy.deny-exposure 审计（§5.6 发射点）', () => {
+  function fakeAudit() {
+    const events: Array<Record<string, unknown>> = []
+    return { events, record: (e: Record<string, unknown>) => events.push(e) }
+  }
+
+  const denyReadFileRule = {
+    id: 'test-deny-read-file',
+    when: 'exposure' as const,
+    match: { lane: ['desktop' as const], toolName: 'read_file' },
+    action: 'deny' as const,
+    reason: '测试规则：拒绝暴露 read_file'
+  }
+
+  it('策略规则过滤的条目落 policy.deny-exposure（含 ruleId/reason/lane）', () => {
+    const audit = fakeAudit()
+    const names = exposedToolNamesForLane(
+      'desktop',
+      DEFAULT_TOOLS_CONFIG,
+      null,
+      null,
+      null,
+      null,
+      audit,
+      [denyReadFileRule]
+    )
+    expect(names).not.toContain('read_file')
+    expect(audit.events).toHaveLength(1)
+    expect(audit.events[0]).toMatchObject({
+      event: 'policy.deny-exposure',
+      lane: 'desktop',
+      toolName: 'read_file',
+      decision: 'deny',
+      ruleId: 'test-deny-read-file',
+      reason: '测试规则：拒绝暴露 read_file',
+      actor: 'system'
+    })
+  })
+
+  it('普通开关过滤（deniedTools/shell 未启用）不落 policy.deny-exposure', () => {
+    const audit = fakeAudit()
+    const names = exposedToolNamesForLane(
+      'desktop',
+      { ...DEFAULT_TOOLS_CONFIG, deniedTools: ['write_file'] },
+      null,
+      null,
+      null,
+      null,
+      audit,
+      [denyReadFileRule]
+    )
+    expect(names).not.toContain('write_file')
+    // 仅 read_file 被策略规则过滤；write_file 属普通开关过滤不记
+    expect(audit.events).toHaveLength(1)
+    expect(audit.events[0]!.toolName).toBe('read_file')
+  })
+})

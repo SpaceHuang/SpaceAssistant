@@ -282,11 +282,12 @@ export type SpaceAssistantApi = {
   claudeChatCancel: (payload: { requestId: string }) => Promise<void>
 
   configGet: () => Promise<AppConfig>
-  /** exposure 清单：主进程按链路求值可见工具名（数据给渲染端薄壳消费）。 */
-  getToolExposureList: (payload: {
-    lane: 'desktop' | 'wechat' | 'feishu'
-    config: AppConfig
-  }) => Promise<string[]>
+  /** exposure 清单：主进程读 DB 按链路求值可见工具名（渲染端薄壳消费，不上行 config）。 */
+  getToolExposureList: (payload: { lane: 'desktop' | 'wechat' | 'feishu' }) => Promise<string[]>
+  /** 配置变更后主进程重推桌面链路清单。 */
+  onToolExposureChanged: (
+    cb: (payload: { lane: 'desktop' | 'wechat' | 'feishu'; tools: string[] }) => void
+  ) => () => void
   configSet: (
     payload: Partial<{
       baseUrl: string

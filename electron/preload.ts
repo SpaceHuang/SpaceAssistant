@@ -78,6 +78,11 @@ const api: SpaceAssistantApi = {
 
   configGet: () => ipcRenderer.invoke('config:get'),
   getToolExposureList: (payload) => ipcRenderer.invoke('exposure:get-tools', payload),
+  onToolExposureChanged: (cb) => {
+    const fn = (_e: unknown, payload: { lane: 'desktop' | 'wechat' | 'feishu'; tools: string[] }) => cb(payload)
+    ipcRenderer.on('exposure:tools-changed', fn)
+    return () => ipcRenderer.removeListener('exposure:tools-changed', fn)
+  },
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),
   configTestConnection: (options?: {
     serviceId?: string
