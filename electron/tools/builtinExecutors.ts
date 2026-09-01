@@ -3,7 +3,7 @@ import { spawn } from 'child_process'
 import fs from 'fs/promises'
 import path from 'path'
 import type { Dirent } from 'fs'
-import { resolveSafePath, resolveSafePathReal, resolveSafeWriteTarget } from '../pathSecurity'
+import { resolveSafePath, resolveSafePathReal, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
 import {
   captureFileIdentity,
   identityFromStat,
@@ -701,19 +701,21 @@ export const writeFileExecutor: ToolExecutor = {
   }
 }
 
+export type GrepExecArgs = {
+  glob?: string
+  outputMode: string
+  ignoreCase: boolean
+  showLineNumber: boolean
+  context?: number
+  multiline: boolean
+  headLimit: number
+}
+
 async function grepWithRg(
   workDir: string,
   searchPath: string,
   pattern: string,
-  args: {
-    glob?: string
-    outputMode: string
-    ignoreCase: boolean
-    showLineNumber: boolean
-    context?: number
-    multiline: boolean
-    headLimit: number
-  },
+  args: GrepExecArgs,
   timeoutMs: number,
   signal: AbortSignal,
   onProgress: (msg: string) => void
@@ -737,13 +739,17 @@ async function grepWithRg(
     const proc = spawn('rg', rgArgs, { cwd: workDir, windowsHide: true })
     let out = ''
     let killed = false
+    let truncated = false
     const t = setTimeout(() => {
       killed = true
       proc.kill('SIGTERM')
     }, timeoutMs)
     proc.stdout?.on('data', (ch: Buffer) => {
       out += ch.toString('utf8')
-      if (out.length > 512 * 1024) out = out.slice(-400 * 1024)
+      if (out.length > 512 * 1024) {
+        out = out.slice(0, 400 * 1024)
+        truncated = true
+      }
       onProgress(`搜索中...`)
     })
     proc.stderr?.on('data', () => {})
@@ -756,26 +762,32 @@ async function grepWithRg(
       if (signal.aborted) resolve(out.trimEnd() + '\n[已取消]')
       else if (killed) resolve(out.trimEnd() + '\n[搜索超时，仅展示部分结果]')
       else if (code !== 0 && code !== 1) resolve(null)
-      else resolve(out.trimEnd() || 'No matches found')
+      else {
+        let result = out.trimEnd()
+        if (args.headLimit > 0) {
+          const lines = result.split('\n')
+          if (lines.length > args.headLimit) {
+            result = lines.slice(0, args.headLimit).join('\n') + `\n[已按 head_limit=${args.headLimit} 截断，共 ${lines.length} 行]`
+          }
+        }
+        if (truncated) result += '\n[输出过大，仅展示前 400KB]'
+        resolve(result || 'No matches found')
+      }
     })
   })
 }
 
-async function grepFallbackJs(
+export async function grepFallbackJs(
   workDir: string,
   absSearch: string,
   pattern: string,
-  args: {
-    glob?: string
-    outputMode: string
-    ignoreCase: boolean
-    showLineNumber: boolean
-    headLimit: number
-  },
+  args: GrepExecArgs,
   signal: AbortSignal,
   onProgress: (s: string) => void
 ): Promise<string> {
-  let flags = args.ignoreCase ? 'gi' : 'g'
+  let flags = 'g'
+  if (args.ignoreCase) flags += 'i'
+  if (args.multiline) flags += 's'
   let lineRe: RegExp
   try {
     lineRe = new RegExp(pattern, flags)
@@ -789,26 +801,153 @@ async function grepFallbackJs(
   let totalMatches = 0
   let filesScanned = 0
 
-  function matchGlob(rel: string, g?: string): boolean {
-    if (!g) return true
-    const base = path.basename(rel)
-    if (g.includes('*')) {
-      const rx = g
-        .replace(/\./g, '\\.')
-        .replace(/\*\*/g, '___')
-        .replace(/\*/g, '[^/\\\\]*')
-        .replace(/___/g, '.*')
-      try {
-        return new RegExp(`^${rx}$`, 'i').test(rel) || new RegExp(`^${rx}$`, 'i').test(base)
-      } catch {
-        return true
+  // glob 过滤只对目录递归生效；显式命名的单文件目标不应用（与 ripgrep 语义一致）。
+  // 匹配前先统一为 posix 分隔符，避免 Windows 反斜杠路径对含 / 的 glob 失配。
+  const buildGlobMatcher = (g: string | undefined): ((rel: string) => boolean) | null => {
+    if (!g) return null
+    const toPosix = (r: string): string => r.split(path.sep).join('/')
+    if (!g.includes('*')) {
+      const gg = toPosix(g)
+      return (rel: string): boolean => {
+        const p = toPosix(rel)
+        const base = p.slice(p.lastIndexOf('/') + 1)
+        return p.endsWith(gg) || base === gg
       }
     }
-    return rel.endsWith(g) || base === g
+    const rx = g
+      .replace(/\./g, '\\.')
+      .replace(/\*\*/g, '___')
+      .replace(/\*/g, '[^/]*')
+      .replace(/___/g, '.*')
+    let re: RegExp
+    try {
+      re = new RegExp(`^${rx}$`, 'i')
+    } catch {
+      return () => true
+    }
+    return (rel: string): boolean => {
+      const p = toPosix(rel)
+      const base = p.slice(p.lastIndexOf('/') + 1)
+      return re.test(p) || re.test(base)
+    }
   }
 
+  const globMatcher = buildGlobMatcher(args.glob)
+  const matchesGlob = (rel: string, applyGlob: boolean): boolean =>
+    !applyGlob || !globMatcher || globMatcher(rel)
+
+  async function scanFile(full: string, applyGlob: boolean): Promise<void> {
+    const rel = path.relative(workDir, full)
+    if (!matchesGlob(rel, applyGlob)) return
+    filesScanned++
+    if (filesScanned % 30 === 0) onProgress(`搜索中... 已扫描 ${filesScanned} 个文件`)
+    let buf: Buffer
+    try {
+      buf = await fs.readFile(full)
+    } catch {
+      return
+    }
+    if (buf.length > GREP_FILE_MAX) return
+    if (isBinaryBuffer(buf)) return
+    const text = buf.toString('utf8')
+
+    if (args.outputMode === 'content') {
+      if (args.multiline) scanContentMultiline(rel, text)
+      else scanContentLines(rel, text)
+      return
+    }
+
+    const matches = countMatches(text)
+    if (matches === 0) return
+    totalMatches += matches
+    if (args.outputMode === 'files_with_matches') {
+      filesWithMatches.push(rel)
+      if (filesWithMatches.length >= headLimit) return
+    } else if (args.outputMode === 'count') {
+      counts.set(rel, matches)
+    }
+  }
+
+  // 统一展示规则：内嵌换行转义为字面量 \n（保证一条匹配一行），单条展示上限 500 字符
+  function clampLine(line: string): string {
+    let display = line.replace(/\r?\n/g, '\\n')
+    if (display.length > 500) display = display.slice(0, 500) + ' [行被截断]'
+    return display
+  }
+
+  // 对齐 rg 输出：匹配行 rel:num:content，上下文行 rel-num-content；不带行号时省略 num
+  function pushContentLine(rel: string, num: number, line: string, isMatch: boolean): void {
+    const display = clampLine(line)
+    if (args.showLineNumber !== false) {
+      contentLines.push(isMatch ? `${rel}:${num}:${display}` : `${rel}-${num}-${display}`)
+    } else {
+      contentLines.push(isMatch ? `${rel}:${display}` : `${rel}-${display}`)
+    }
+  }
+
+  // 逐行匹配（非 multiline），context>0 时附带上下文行
+  function scanContentLines(rel: string, text: string): void {
+    const lines = text.split(/\r?\n/)
+    const ctx = args.context && args.context > 0 ? args.context : 0
+    const emitted = new Set<number>()
+    for (let idx = 0; idx < lines.length; idx++) {
+      const line = lines[idx]!
+      lineRe.lastIndex = 0
+      if (!lineRe.test(line)) continue
+      totalMatches++
+      if (ctx > 0) {
+        const lo = Math.max(0, idx - ctx)
+        const hi = Math.min(lines.length - 1, idx + ctx)
+        for (let cix = lo; cix <= hi; cix++) {
+          if (emitted.has(cix)) continue
+          emitted.add(cix)
+          pushContentLine(rel, cix + 1, lines[cix]!, cix === idx)
+        }
+      } else {
+        pushContentLine(rel, idx + 1, line, true)
+      }
+      if (totalMatches >= headLimit) return
+    }
+  }
+
+  // 跨行匹配（multiline）：对整段文本做匹配，输出命中块
+  function scanContentMultiline(rel: string, text: string): void {
+    lineRe.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = lineRe.exec(text)) !== null) {
+      totalMatches++
+      const startLine = text.slice(0, m.index).split('\n').length
+      pushContentLine(rel, startLine, m[0], true)
+      if (totalMatches >= headLimit) return
+      if (m[0].length === 0) lineRe.lastIndex++
+    }
+  }
+
+  // count/files 模式用于判断文件是否命中并统计：multiline 按整段计数，否则按行计数
+  function countMatches(text: string): number {
+    let c = 0
+    if (args.multiline) {
+      lineRe.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = lineRe.exec(text)) !== null) {
+        c++
+        if (m[0].length === 0) lineRe.lastIndex++
+      }
+      return c
+    }
+    const lines = text.split(/\r?\n/)
+    for (const line of lines) {
+      lineRe.lastIndex = 0
+      if (lineRe.test(line)) c++
+    }
+    return c
+  }
+
+  const limitReached = (): boolean =>
+    (args.outputMode === 'content' && totalMatches >= headLimit) ||
+    (args.outputMode === 'files_with_matches' && filesWithMatches.length >= headLimit)
+
   async function walk(dir: string): Promise<void> {
-    if (signal.aborted) return
     let entries: Dirent[]
     try {
       entries = await fs.readdir(dir, { withFileTypes: true })
@@ -816,54 +955,18 @@ async function grepFallbackJs(
       return
     }
     for (const ent of entries) {
-      if (signal.aborted) return
+      if (signal.aborted || limitReached()) return
       if (GREP_SKIP_DIRS.has(ent.name)) continue
       const full = path.join(dir, ent.name)
-      const rel = path.relative(workDir, full)
       if (ent.isDirectory()) await walk(full)
-      else if (ent.isFile()) {
-        if (!matchGlob(rel, args.glob)) continue
-        filesScanned++
-        if (filesScanned % 30 === 0) onProgress(`搜索中... 已扫描 ${filesScanned} 个文件`)
-        let buf: Buffer
-        try {
-          buf = await fs.readFile(full)
-        } catch {
-          continue
-        }
-        if (buf.length > GREP_FILE_MAX) continue
-        if (isBinaryBuffer(buf)) continue
-        const text = buf.toString('utf8')
-        const lines = text.split(/\r?\n/)
-        let fileMatches = 0
-        for (let idx = 0; idx < lines.length; idx++) {
-          const line = lines[idx]!
-          lineRe.lastIndex = 0
-          if (lineRe.test(line)) {
-            fileMatches++
-            totalMatches++
-            if (args.outputMode === 'content') {
-              const num = args.showLineNumber !== false ? `${idx + 1}:` : ''
-              let display = line
-              if (display.length > 500) display = display.slice(0, 500) + ' [行被截断]'
-              contentLines.push(`${rel}:${num}${display}`)
-              if (contentLines.length >= headLimit) return
-            }
-          }
-        }
-        if (fileMatches > 0) {
-          if (args.outputMode === 'files_with_matches') {
-            filesWithMatches.push(rel)
-            if (filesWithMatches.length >= headLimit) return
-          } else if (args.outputMode === 'count') {
-            counts.set(rel, fileMatches)
-          }
-        }
-      }
+      else if (ent.isFile()) await scanFile(full, true)
     }
   }
 
-  await walk(absSearch)
+  if (signal.aborted) return 'No matches found'
+  const st = await fs.stat(absSearch).catch(() => null)
+  if (st?.isFile()) await scanFile(absSearch, false)
+  else await walk(absSearch)
   if (args.outputMode === 'files_with_matches') {
     if (filesWithMatches.length === 0) return 'No matches found'
     const slice = filesWithMatches.slice(0, headLimit)
@@ -879,8 +982,8 @@ async function grepFallbackJs(
     return `${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`
   }
   if (contentLines.length === 0) return 'No matches found'
-  const suffix = `\n[共 ${contentLines.length} 条匹配${headLimit !== Infinity ? `，限制: ${headLimit}` : ''}]`
-  return contentLines.slice(0, headLimit).join('\n') + suffix
+  const suffix = `\n[共 ${totalMatches} 条匹配${headLimit !== Infinity ? `，限制: ${headLimit}` : ''}]`
+  return contentLines.join('\n') + suffix
 }
 
 export const grepExecutor: ToolExecutor = {
@@ -901,13 +1004,7 @@ export const grepExecutor: ToolExecutor = {
     let absSearch: string
     try {
       if (relPath && path.isAbsolute(relPath)) {
-        const norm = path.resolve(relPath)
-        const base = path.resolve(ctx.workDir)
-        const relToBase = path.relative(base, norm)
-        if (relToBase.startsWith('..') || path.isAbsolute(relToBase)) {
-          return { success: false, error: '路径超出工作目录范围', duration: Date.now() - started }
-        }
-        absSearch = await fs.realpath(norm).catch(() => norm)
+        absSearch = await resolveSafeWorkDirPath(ctx.workDir, relPath)
       } else {
         absSearch = relPath ? await resolveSafePathReal(ctx.workDir, relPath) : path.resolve(ctx.workDir)
       }
@@ -915,12 +1012,12 @@ export const grepExecutor: ToolExecutor = {
       return { success: false, error: '路径超出工作目录范围', duration: Date.now() - started }
     }
     const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
-    const gargs = { glob, outputMode, ignoreCase, showLineNumber, context, multiline, headLimit }
+    const gargs: GrepExecArgs = { glob, outputMode, ignoreCase, showLineNumber, context, multiline, headLimit }
     let text = await grepWithRg(ctx.workDir, absSearch, pattern, gargs, timeoutMs, ctx.signal, (m) =>
       ctx.sendProgress('grep', m)
     )
     if (text == null) {
-      text = await grepFallbackJs(ctx.workDir, absSearch, pattern, { glob, outputMode, ignoreCase, showLineNumber, headLimit }, ctx.signal, (m) =>
+      text = await grepFallbackJs(ctx.workDir, absSearch, pattern, gargs, ctx.signal, (m) =>
         ctx.sendProgress('grep', m)
       )
     }
