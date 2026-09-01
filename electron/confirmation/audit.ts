@@ -32,3 +32,23 @@ export function getSecurityAuditLog(): AuditSink {
 export function resetSecurityAuditLogForTests(): void {
   singleton = null
 }
+
+/** 设置页调整保留天数（§5.6-1）：转发到真实单例；no-op 降级时静默忽略。 */
+export function setSecurityAuditRetentionDays(days: number): void {
+  if (singleton) singleton.setRetentionDays(days)
+}
+
+/** 当前生效的保留天数（单例未创建时返回传入默认值）。 */
+export function getSecurityAuditRetentionDays(fallback = 180): number {
+  return singleton ? singleton.getRetentionDays() : fallback
+}
+
+/** 审计日志目录（供只读查询）；agentLogger 未初始化时返回 null。 */
+export function getSecurityAuditLogDir(): string | null {
+  try {
+    const candidate = getAgentLogDir()
+    return typeof candidate === 'string' && candidate.length > 0 ? candidate : null
+  } catch {
+    return null
+  }
+}

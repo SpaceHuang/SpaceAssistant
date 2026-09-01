@@ -217,6 +217,9 @@ export interface SecurityAuditEvent {
   memoryTier?: string
   /** 规范化签名文本（与缓存键同源，可对账），不落原始输入。 */
   cacheKey?: string
+  /** settings.* 事件的新旧值（JSON 序列化文本，写入前脱敏）。 */
+  before?: string
+  after?: string
   actor: 'user' | 'system' | 'migration'
 }
 

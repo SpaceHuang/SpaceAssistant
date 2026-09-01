@@ -905,7 +905,13 @@ function readExposureInputsFromDb(
     async (_e, payload: { lane: 'desktop' | 'wechat' | 'feishu' }): Promise<string[]> => {
       // 主进程为唯一评估者：一律读 DB 配置求值，不信任渲染端上行的 config（§5.2 exposure 定稿）
       const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
-      return exposedToolNamesForLane(payload.lane, ...readExposureInputsFromDb(ctx.db))
+      const { loadEffectivePolicyRules } = await import('./confirmation/policyRulesRuntime')
+      return exposedToolNamesForLane(
+        payload.lane,
+        ...readExposureInputsFromDb(ctx.db),
+        undefined,
+        loadEffectivePolicyRules(ctx.db, payload.lane)
+      )
     }
   )
 

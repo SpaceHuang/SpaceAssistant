@@ -20,7 +20,9 @@ export function sanitizeAuditEvent(event: SecurityAuditEvent): SecurityAuditEven
     'cacheKey',
     'requestId',
     'ruleId',
-    'sessionId'
+    'sessionId',
+    'before',
+    'after'
   ] as const) {
     const v = out[k]
     if (typeof v === 'string') out[k] = sanitizeAuditField(v) as never
@@ -53,6 +55,7 @@ export interface SecurityAuditLogDeps {
  */
 export class SecurityAuditLog {
   private readonly deps: SecurityAuditLogDeps
+  private retentionDays: number
   private buffer: SecurityAuditEvent[] = []
   private flushTimer: NodeJS.Timeout | null = null
   private today = new Date()
@@ -64,6 +67,16 @@ export class SecurityAuditLog {
 
   constructor(deps: SecurityAuditLogDeps) {
     this.deps = deps
+    this.retentionDays = deps.retentionDays ?? 180
+  }
+
+  /** 设置页可调保留天数（§5.6-1）；立即生效于下一次过期清理。 */
+  setRetentionDays(days: number): void {
+    if (Number.isFinite(days) && days > 0) this.retentionDays = Math.floor(days)
+  }
+
+  getRetentionDays(): number {
+    return this.retentionDays
   }
 
   /** 记录事件（同步入缓冲、异步落盘，不阻断调用方）。 */
@@ -133,8 +146,7 @@ export class SecurityAuditLog {
 
   /** 清理超过保留天数的审计文件（启动时或每日首次写入时由调用方/rotate 触发）。 */
   private async cleanupExpired(): Promise<void> {
-    const retentionDays = this.deps.retentionDays ?? 180
-    const cutoff = Date.now() - retentionDays * 24 * 3600 * 1000
+    const cutoff = Date.now() - this.retentionDays * 24 * 3600 * 1000
     try {
       const files = (await fs.readdir(this.deps.logDir)).filter((f) => f.startsWith('SecurityAudit-') && f.endsWith('.log'))
       for (const f of files) {

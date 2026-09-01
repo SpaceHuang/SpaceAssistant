@@ -91,3 +91,22 @@ describe('安全审计日志：故障不阻断', () => {
     expect(files.some((f) => /^SecurityAudit-\d{8}\.log$/.test(f))).toBe(true)
   })
 })
+
+describe('安全审计日志：保留天数可调（§5.6-1）', () => {
+  it('setRetentionDays 立即生效；非法值忽略', async () => {
+    const dir = await tmpDir()
+    const log = new SecurityAuditLog({ logDir: dir })
+    expect(log.getRetentionDays()).toBe(180)
+    log.setRetentionDays(30)
+    expect(log.getRetentionDays()).toBe(30)
+    log.setRetentionDays(0)
+    log.setRetentionDays(Number.NaN)
+    expect(log.getRetentionDays()).toBe(30)
+  })
+
+  it('before/after 字段写入前经脱敏（含新旧值不落 secret）', () => {
+    const line = auditLine({ ...baseEvent(), before: 'ask', after: 'allow sk-abcdef123' })
+    expect(line).toContain('"before":"ask"')
+    expect(line).not.toContain('sk-abcdef123')
+  })
+})

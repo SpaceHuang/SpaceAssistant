@@ -27,6 +27,19 @@ export function recordSettingsChange(
     origin: args.origin,
     reason: args.reason,
     cacheKey: args.key,
+    // 新旧值以 JSON 文本落审计（§5.6-6：配置变更必记，含新旧值）
+    before: stringifyAuditValue(args.before),
+    after: stringifyAuditValue(args.after),
     actor: 'user'
   })
+}
+
+/** 新旧值序列化：失败降级为 String()，不落对象引用。 */
+function stringifyAuditValue(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
 }

@@ -75,6 +75,7 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerToCache } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
+import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
 import type { ConfirmRequest } from '../src/shared/confirmation/types'
 import {
@@ -522,7 +523,19 @@ async function runToolChatSessionInner(
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
-  const builtinDefs = filterBuiltinToolsForApi(toolsConfig, feishuConfig, browserConfig, remoteContext, shellConfig, wechatConfig)
+  // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）；默认 standard 时为零行为变化快路径
+  const exposureLane = remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop'
+  const exposureRules = appDb ? loadEffectivePolicyRules(appDb, exposureLane) : undefined
+  const builtinDefs = filterBuiltinToolsForApi(
+    toolsConfig,
+    feishuConfig,
+    browserConfig,
+    remoteContext,
+    shellConfig,
+    wechatConfig,
+    undefined,
+    exposureRules
+  )
   /** 请求级 MCP 工具快照：仅桌面会话注入（remoteContext 存在时为空）。 */
   const mcpSnapshot: McpToolSnapshot = appDb
     ? buildSnapshotFromDb(appDb, { remoteContext: Boolean(remoteContext) })

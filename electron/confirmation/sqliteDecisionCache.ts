@@ -123,6 +123,12 @@ export class SqliteDecisionCache implements DecisionCacheView {
     return this.db.prepare('DELETE FROM decision_cache WHERE key_json = ?').run(canonicalKeyJson(key)).changes
   }
 
+  /** 确认记忆管理列表：全量读出（按创建时间倒序），供设置页分组展示。 */
+  list(): DecisionCacheEntry[] {
+    const rows = this.db.prepare('SELECT * FROM decision_cache ORDER BY created_at DESC').all() as CacheRow[]
+    return rows.map((r) => this.rowToEntry(r))
+  }
+
   /** 清除全部（清空确认记忆）。 */
   clearAll(): number {
     return this.db.prepare('DELETE FROM decision_cache').run().changes

@@ -48,6 +48,7 @@ import {
 import { AuditedDecisionCache } from './auditedDecisionCache'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getSecurityAuditLog } from './audit'
+import { loadEffectivePolicyRules } from './policyRulesRuntime'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 
@@ -343,7 +344,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       return { approve: false as const, reason: '无评估器' }
     }
   }
-  const decision = decide(facts, context, DEFAULT_POLICY_RULES, deps)
+  // 套餐/规则覆盖生效（§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用，行为不变
+  const rules = args.appDb ? loadEffectivePolicyRules(args.appDb, lane) : DEFAULT_POLICY_RULES
+  const decision = decide(facts, context, rules, deps)
 
   // 判定即记录（§5.6）：policy.decision 事件
   audit.record({
