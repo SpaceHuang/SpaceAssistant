@@ -8,7 +8,7 @@ import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechat
 import { mergeWeChatConfig } from '../../src/shared/wechatTypes'
 import type { WeChatAuditLogger } from './weChatAuditLogger'
 import type { WeChatBotService } from './weChatBotService'
-import type { WeChatConfirmManager } from './weChatConfirmManager'
+import type { WeChatImChannel } from './weChatImChannel'
 import { shouldAcceptWeChatInbound, parseSdkInboundMessage } from './weChatInboundParser'
 import type { WeChatProcessedStore } from './weChatProcessedStore'
 import { replyWeChatSummary } from './weChatReplyService'
@@ -26,10 +26,7 @@ import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFol
 import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
-import {
-  createWeChatRequestToolConfirm,
-  WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE
-} from '../remote/remoteConfirmBridge'
+import { WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
 
 
 const rateLimiter = createRateLimiter()
@@ -38,7 +35,7 @@ export type WeChatCommandRouterDeps = {
   db: AppDatabase
   botService: WeChatBotService
   processedStore: WeChatProcessedStore
-  confirmManager: WeChatConfirmManager
+  imChannel: WeChatImChannel
   auditLogger: WeChatAuditLogger
   getWeChatConfig: () => WeChatConfig
   getAppConfig: () => {
@@ -92,7 +89,7 @@ export class WeChatCommandRouter {
     const bot = this.deps.botService.getBot()
 
     if (
-      this.deps.confirmManager.tryResolveFromInbound(msg, raw, {
+      this.deps.imChannel.tryResolveFromInboundMessage(msg, {
         allowedUserIds: config.remoteSenderAllowlist
       })
     ) {
@@ -388,13 +385,7 @@ export class WeChatCommandRouter {
           contextToken: msg.contextToken,
           confirmPolicy: config.remoteConfirmPolicy,
           wechatConfig: config,
-          confirmManager: this.deps.confirmManager,
-          requestToolConfirm: createWeChatRequestToolConfirm({
-            confirmManager: this.deps.confirmManager,
-            wechatConfig: config,
-            userId: msg.userId,
-            inboundRaw
-          }),
+          imChannel: this.deps.imChannel,
           confirmTimeoutMessage: WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
           originSessionId: sessionId,
           outboundSessionId: sessionId,
@@ -424,7 +415,7 @@ export class WeChatCommandRouter {
             getBaseUrl: this.deps.getBaseUrl,
             getModel: this.deps.getModel,
             botService: this.deps.botService,
-            confirmManager: this.deps.confirmManager,
+            imChannel: this.deps.imChannel,
             getToolsConfig: this.deps.getToolsConfig,
             getBrowserConfig: this.deps.getBrowserConfig,
             getWikiConfig: this.deps.getWikiConfig,

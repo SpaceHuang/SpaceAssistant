@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { DesktopChannel, LegacyImChannel } from './channels'
+import { channelFor, DesktopChannel } from './channels'
 import type { AuditSink } from './channels'
+import { ImChannel } from './imChannel'
 import type { ConfirmRequest, SecurityAuditEvent } from '../../src/shared/confirmation/types'
 
 function req(overrides: Partial<ConfirmRequest> = {}): ConfirmRequest {
@@ -61,30 +62,54 @@ describe('DesktopChannel', () => {
   })
 })
 
-describe('LegacyImChannel', () => {
-  it("'y'→approved、'n'→rejected、'timeout'→timeout，并落 confirm.* 审计", async () => {
+describe('channelFor 远程分支（ImChannel 直连）', () => {
+  const buildPending = () => ({
+    sessionId: 's2',
+    toolName: 'run_shell',
+    messageId: 'm1',
+    matchKey: 'u1',
+    requestId: 'req-2'
+  })
+
+  it("入站 'y'→approved，confirm.request/outcome 审计同一 requestId 关联", async () => {
     const audit = auditSink()
-    const ch = new LegacyImChannel({
+    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, audit, sendPrompt: () => undefined })
+    const ch = channelFor({
+      lane: 'wechat',
       requestId: 'req-2',
       sessionId: 's2',
       toolName: 'run_shell',
-      lane: 'wechat',
-      audit,
-      send: async () => 'y'
+      imChannel: im,
+      buildImPending: buildPending
     })
-    expect(await ch.request(req())).toEqual({ kind: 'approved' })
-    expect(audit.events.map((e) => e.outcome ?? e.event)).toEqual(['confirm.request', 'approved'])
+    const p = ch.request(req())
+    const cid = im.listPending()[0]!.confirmId!
+    im.tryResolveFromInbound({ kind: 'approve', confirmId: cid }, { matchKey: 'u1', messageId: 'm2' })
+    await expect(p).resolves.toEqual({ kind: 'approved' })
+    expect(audit.events.map((e) => e.event)).toEqual(['confirm.request', 'confirm.outcome'])
+    expect(audit.events[0]!.requestId).toBe('req-2')
+    expect(audit.events[1]!.requestId).toBe('req-2')
+    expect(audit.events[1]!.outcome).toBe('approved')
+  })
 
-    const ch2 = new LegacyImChannel({
+  it("入站 'n'→rejected；缺 imChannel 时兜底 rejected（不发消息）", async () => {
+    const audit = auditSink()
+    const im = new ImChannel({ lane: 'feishu', timeoutMs: 1000, audit, sendPrompt: () => undefined })
+    const ch = channelFor({
+      lane: 'feishu',
       requestId: 'req-3',
       sessionId: 's2',
       toolName: 'run_shell',
-      lane: 'feishu',
-      audit,
-      send: async () => 'timeout'
+      imChannel: im,
+      buildImPending: buildPending
     })
-    expect(await ch2.request(req())).toEqual({ kind: 'timeout' })
-    expect(audit.events.at(-1)!.event).toBe('confirm.outcome')
-    expect(audit.events.at(-1)!.outcome).toBe('timeout')
+    const p = ch.request(req())
+    const cid = im.listPending()[0]!.confirmId!
+    im.tryResolveFromInbound({ kind: 'reject', confirmId: cid }, { matchKey: 'u1', messageId: 'm2' })
+    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    expect(audit.events.at(-1)!.outcome).toBe('rejected')
+
+    const noIm = channelFor({ lane: 'wechat', requestId: 'r', sessionId: 's', toolName: 'run_shell' })
+    await expect(noIm.request(req())).resolves.toEqual({ kind: 'rejected' })
   })
 })

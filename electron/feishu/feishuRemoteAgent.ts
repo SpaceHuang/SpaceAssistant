@@ -4,7 +4,7 @@ import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import type { LarkCliRunner } from './larkCliRunner'
-import type { FeishuConfirmManager } from './feishuConfirmManager'
+import type { FeishuImChannel } from './feishuImChannel'
 import type { FeishuRemoteContext } from '../tools/types'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import { createFeishuProgressAdapter, pickFeishuProgressConfig } from '../remote/feishuProgressAdapter'
@@ -27,7 +27,7 @@ export async function runFeishuRemoteAgent(ctx: {
   getBaseUrl: () => string
   getModel: () => string
   runner: LarkCliRunner
-  confirmManager: FeishuConfirmManager
+  imChannel: FeishuImChannel
   getToolsConfig: () => ToolsConfig
   getBrowserConfig?: () => BrowserConfig
   getWikiConfig?: () => WikiConfig

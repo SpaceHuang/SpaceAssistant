@@ -105,8 +105,8 @@ describe('RemoteCommandRouter workdir binding', () => {
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
-      confirmManager: {
-        tryResolveFromInbound: () => options?.tryResolveConfirm ?? false
+      imChannel: {
+        tryResolveFromInboundMessage: () => options?.tryResolveConfirm ?? false
       } as never,
       auditLogger: { append: auditAppend } as never,
       getFeishuConfig: () =>
@@ -263,8 +263,8 @@ describe('RemoteCommandRouter busy guard', () => {
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
-      confirmManager: {
-        tryResolveFromInbound: () => options?.tryResolveConfirm ?? false
+      imChannel: {
+        tryResolveFromInboundMessage: () => options?.tryResolveConfirm ?? false
       } as never,
       auditLogger: { append: vi.fn().mockResolvedValue(undefined) } as never,
       getFeishuConfig: () =>

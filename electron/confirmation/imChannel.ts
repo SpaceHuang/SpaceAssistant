@@ -31,6 +31,12 @@ export interface ImPendingConfirm {
   context?: unknown
 }
 
+/** ImChannel.request 的待确认入参（id/confirmId/时间戳/链路由通道补齐）。 */
+export type ImPendingInput = Omit<
+  ImPendingConfirm,
+  'id' | 'confirmId' | 'createdAt' | 'expiresAt' | 'channel' | 'memoryTiers'
+> & { memoryTiers?: MemoryTier[] }
+
 export interface ImChannelDeps {
   lane: 'feishu' | 'wechat'
   timeoutMs: number
@@ -102,13 +108,7 @@ export class ImChannel {
     return true
   }
 
-  request(
-    req: ConfirmRequest,
-    pending: Omit<
-      ImPendingConfirm,
-      'id' | 'confirmId' | 'createdAt' | 'expiresAt' | 'channel' | 'memoryTiers'
-    > & { memoryTiers?: MemoryTier[] }
-  ): Promise<ConfirmOutcome> {
+  request(req: ConfirmRequest, pending: ImPendingInput): Promise<ConfirmOutcome> {
     if (this.registry.hasPendingForSession(pending.sessionId)) return Promise.resolve({ kind: 'rejected' })
     const id = randomUUID()
     const confirmId = allocateConfirmId()
@@ -128,7 +128,8 @@ export class ImChannel {
       event: 'confirm.request',
       lane: this.deps.lane,
       sessionId: entry.sessionId,
-      requestId: id,
+      // 审计 requestId 优先用主循环传入的 requestId，保证与桌面通道/policy.* 事件同键关联
+      requestId: entry.requestId ?? id,
       toolName: entry.toolName,
       riskLevel: req.riskLevel as RiskLevel,
       factsSummary: req.facts.summary.text,
@@ -207,7 +208,7 @@ export class ImChannel {
       event: 'confirm.outcome',
       lane: this.deps.lane,
       sessionId: entry.sessionId,
-      requestId: entry.id,
+      requestId: entry.requestId ?? entry.id,
       toolName: entry.toolName,
       outcome: decision === 'y' ? 'approved' : decision === 'n' ? 'rejected' : 'timeout',
       ...(memory ? { memoryTier: memory.label } : {}),

@@ -88,7 +88,7 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
     getBaseUrl: () => 'https://api.example.com',
     getModel: () => 'claude-sonnet-4-20250514',
     runner: {} as never,
-    confirmManager: {} as never,
+    imChannel: {} as never,
     getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
     remoteContext: { source: 'feishu' as const, messageId: 'msg-1', larkCliRunner: {} as never }
   }

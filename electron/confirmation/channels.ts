@@ -7,8 +7,8 @@ import type {
   RiskLevel,
   SecurityAuditEvent
 } from '../../src/shared/confirmation/types'
-import type { RemoteConfirmDecision } from '../tools/types'
 import { waitForToolConfirm } from '../toolConfirmRegistry'
+import { ImChannel, type ImPendingInput } from './imChannel'
 
 export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout'
 
@@ -20,12 +20,6 @@ export interface AuditSink {
 function mapToolOutcome(outcome: ToolConfirmOutcome): ConfirmOutcome {
   if (outcome === 'approved') return { kind: 'approved' }
   if (outcome === 'timeout') return { kind: 'timeout' }
-  return { kind: 'rejected' }
-}
-
-function mapRemoteDecision(decision: RemoteConfirmDecision): ConfirmOutcome {
-  if (decision === 'y') return { kind: 'approved' }
-  if (decision === 'timeout') return { kind: 'timeout' }
   return { kind: 'rejected' }
 }
 
@@ -96,8 +90,9 @@ export class DesktopChannel implements ConfirmationChannel {
 }
 
 /**
- * §5.5 统一分发：按 lane 产出确认通道（桌面卡片 / IM 桥），主循环不再按链路分双叉。
- * 远程链路需注入 `sendIm`（requestRemoteConfirm 闭包）；桌面链路需 `toolUseId`。
+ * §5.5 统一分发：按 lane 产出确认通道（桌面卡片 / IM 通道），主循环不再按链路分双叉。
+ * 远程链路注入合并后的 `ImChannel` 单例与 `buildImPending`（lane 差异由调用方注入）；
+ * 桌面链路需 `toolUseId`。
  */
 export function channelFor(args: {
   lane: 'desktop' | 'wechat' | 'feishu'
@@ -106,7 +101,8 @@ export function channelFor(args: {
   toolName: string
   toolUseId?: string
   audit?: AuditSink
-  sendIm?: () => Promise<RemoteConfirmDecision>
+  imChannel?: ImChannel
+  buildImPending?: (req: ConfirmRequest) => ImPendingInput
 }): ConfirmationChannel {
   if (args.lane === 'desktop') {
     return new DesktopChannel({
@@ -118,57 +114,42 @@ export function channelFor(args: {
       ...(args.audit ? { audit: args.audit } : {})
     })
   }
-  return new LegacyImChannel({
-    requestId: args.requestId,
-    sessionId: args.sessionId,
-    toolName: args.toolName,
-    lane: args.lane,
-    ...(args.audit ? { audit: args.audit } : {}),
-    send: args.sendIm ?? (() => Promise.resolve('n' as const))
-  })
+  if (!args.imChannel || !args.buildImPending) {
+    // 远程链路缺少 IM 通道实例时安全兜底为拒绝（等价原 requestToolConfirm 缺失返回 n）
+    return new RejectingChannel()
+  }
+  return new ImRequestChannel({ imChannel: args.imChannel, buildPending: args.buildImPending })
 }
 
 /**
- * P1 过渡态：LegacyImChannel —— 薄包装现有远程确认路径（经 remoteConfirmBridge 的
- * requestToolConfirm），实现 ConfirmationChannel 接口、行为零变化，并落 confirm.* 审计事件。
- * P2 将由合并后的 ImChannel 替换。
+ * §5.4 P2：远程分支通道 —— 直接落在合并后的 ImChannel 上。
+ * confirm.request / confirm.outcome 审计由 ImChannel 内部以同一 requestId 落，
+ * 记N 档位经 ConfirmOutcome.memory 透传；取消沿用 PendingRequestRegistry。
  */
-export class LegacyImChannel implements ConfirmationChannel {
+export class ImRequestChannel implements ConfirmationChannel {
   constructor(
     private readonly deps: {
-      requestId: string
-      sessionId: string
-      toolName: string
-      lane: 'wechat' | 'feishu'
-      origin?: OriginInfo
-      actionClass?: ActionClass
-      riskLevel?: RiskLevel
-      audit?: AuditSink
-      /** 实际发起 IM 确认的函数（注入现有 requestToolConfirm / requestRemoteConfirm）。 */
-      send: () => Promise<RemoteConfirmDecision>
+      imChannel: ImChannel
+      buildPending: (req: ConfirmRequest) => ImPendingInput
     }
   ) {}
 
-  async request(req: ConfirmRequest): Promise<ConfirmOutcome> {
-    const base = eventBase({ ...this.deps, lane: this.deps.lane })
-    this.deps.audit?.record({
-      ...base,
-      event: 'confirm.request',
-      ts: Date.now(),
-      factsSummary: req.facts.summary.text,
-      signals: req.facts.signals.map((s) => s.kind)
-    })
-    const decision = await this.deps.send()
-    this.deps.audit?.record({
-      ...base,
-      event: 'confirm.outcome',
-      ts: Date.now(),
-      outcome: decision === 'y' ? 'approved' : decision === 'n' ? 'rejected' : 'timeout'
-    })
-    return mapRemoteDecision(decision)
+  request(req: ConfirmRequest): Promise<ConfirmOutcome> {
+    return this.deps.imChannel.request(req, this.deps.buildPending(req))
+  }
+
+  cancel(requestId: string): void {
+    this.deps.imChannel.cancel(requestId)
+  }
+}
+
+/** 远程链路无 IM 通道实例时的兜底通道：一律拒绝，不发送任何 IM 消息。 */
+class RejectingChannel implements ConfirmationChannel {
+  request(_req: ConfirmRequest): Promise<ConfirmOutcome> {
+    return Promise.resolve({ kind: 'rejected' })
   }
 
   cancel(_requestId: string): void {
-    /* IM 通道取消沿用 PendingRequestRegistry 机制 */
+    /* 无待确认可取消 */
   }
 }

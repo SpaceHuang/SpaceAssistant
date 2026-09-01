@@ -80,7 +80,7 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
     getBaseUrl: () => 'https://api.example.com',
     getModel: () => 'claude-sonnet-4-20250514',
     botService: { getBot: () => null } as never,
-    confirmManager: {} as never,
+    imChannel: {} as never,
     getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
     getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [], autoAllowScriptExecution: true }),
     remoteContext: {

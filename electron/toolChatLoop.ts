@@ -109,9 +109,8 @@ import {
 } from './remote/remoteProgressHooks'
 import {
   REMOTE_CONFIRM_TIMEOUT_MESSAGES,
-  requestRemoteConfirm,
   resolveRemoteContextConfirmPolicy
-} from './remote/remoteConfirmBridge'
+} from './remote/remoteConfirmPolicy'
 import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
 import {
   beginLlm,
@@ -1278,30 +1277,33 @@ async function runToolChatSessionInner(
             sessionId,
             toolName,
             audit: getSecurityAuditLog(),
-            ...(remoteContext
+            ...(remoteContext?.imChannel
               ? {
-                  sendIm: () =>
-                    requestRemoteConfirm({
-                      remoteContext,
-                      payload: {
-                        sessionId,
-                        toolCallId: toolUseId,
-                        toolName,
-                        toolInput: inputObj,
-                        messageId: remoteContext.messageId,
-                        chatId: remoteContext.chatId,
-                        userId: remoteContext.userId,
-                        memoryTiers: confirmMemoryTiers,
-                        trustEligible:
-                          toolName === 'run_shell' && shellPrecheck?.ok
-                            ? canShowShellTrustOption(
-                                shellPrecheck.analysis,
-                                typeof inputObj.command === 'string' ? inputObj.command : undefined
-                              )
-                            : false
-                      },
-                      wechatConfig
-                    })
+                  imChannel: remoteContext.imChannel,
+                  buildImPending: () => ({
+                    sessionId,
+                    toolName,
+                    toolInput: inputObj,
+                    messageId: remoteContext.messageId,
+                    matchKey:
+                      remoteContext.source === 'feishu'
+                        ? (remoteContext.chatId ?? '')
+                        : (remoteContext.userId ?? ''),
+                    context:
+                      remoteContext.source === 'feishu' ? remoteContext.chatId : remoteContext.inboundRaw,
+                    trustEligible:
+                      toolName === 'run_shell' && shellPrecheck?.ok
+                        ? canShowShellTrustOption(
+                            shellPrecheck.analysis,
+                            typeof inputObj.command === 'string' ? inputObj.command : undefined
+                          )
+                        : false,
+                    ...(remoteContext.authOwner ? { authOwner: remoteContext.authOwner } : {}),
+                    ...(remoteContext.authorizationGeneration != null
+                      ? { authorizationGeneration: remoteContext.authorizationGeneration }
+                      : {}),
+                    requestId
+                  })
                 }
               : {})
           }).request(confirmReq)
