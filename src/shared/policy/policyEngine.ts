@@ -21,6 +21,17 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         // 使规则能用 `signals:['clean']` / `['dangerous']` 匹配。
         tokens.add(signal.signal)
         break
+      case 'lark-subcommand':
+        tokens.add(signal.kind)
+        tokens.add(`lark-${signal.impact}`)
+        // high_impact / unknown 归并到 write 域（fail-closed，与 isOutboundWriteTool 一致）
+        if (signal.impact !== 'read') tokens.add('lark-write')
+        break
+      case 'browser-action':
+        tokens.add(signal.kind)
+        tokens.add(`browser-${signal.action}`)
+        if (signal.action === 'act' && signal.dangerous) tokens.add('browser-act-dangerous')
+        break
       default:
         tokens.add(signal.kind)
     }
@@ -33,7 +44,7 @@ function hasDangerousSignal(facts: ContentFacts): boolean {
 }
 
 /** 从事实推导候选缓存键（规范化签名不落原始输入）。 */
-export function deriveCacheKeys(facts: ContentFacts): CacheKey[] {
+export function deriveCacheKeys(facts: ContentFacts, sessionId?: string): CacheKey[] {
   const keys: CacheKey[] = []
   for (const signal of facts.signals) {
     switch (signal.kind) {
@@ -47,8 +58,26 @@ export function deriveCacheKeys(facts: ContentFacts): CacheKey[] {
         }
         break
       case 'network-egress':
+        // 浏览器 navigate 域名信任档（domain-any-action）；会话级条目按 sessionId 绑定。
         for (const domain of signal.domains) {
           keys.push({ kind: 'domain', domain, level: 'domain-any-action' })
+          if (sessionId) keys.push({ kind: 'domain', domain, level: 'domain-any-action', sessionId })
+        }
+        break
+      case 'browser-action':
+        // 浏览器 act 域名信任档（domain+action），与 navigate 信任档分离（等价现状
+        // trustedDomains / actTrustedDomains 两张独立清单，不得互相放行）。
+        if (signal.action === 'act' && signal.host && !signal.dangerous) {
+          keys.push({ kind: 'domain', domain: signal.host, level: 'domain+action' })
+          if (sessionId) {
+            keys.push({ kind: 'domain', domain: signal.host, level: 'domain+action', sessionId })
+          }
+        }
+        break
+      case 'mcp-tool':
+        // MCP 会话信任：仅会话级（等价 mcpSessionTrust 内存语义），无 sessionId 不派生键。
+        if (sessionId) {
+          keys.push({ kind: 'mcp-tool', serverId: signal.serverId, toolName: signal.toolName, sessionId })
         }
         break
       case 'path-target':
@@ -105,10 +134,21 @@ function ruleMatchesInvocation(
   }
   // M1：owner-only 出站目标约束——仅信源为 direct-owner 时命中
   if (m.target === 'owner-only' && context.origin.kind !== 'direct-owner') return false
-  // 门控：configRequires 不满足即不命中
-  if (rule.configRequires && deps.config[rule.configRequires.config] !== rule.configRequires.equals) return false
+  // 门控：configRequires 不满足即不命中（数组语义"全部满足"）
+  if (rule.configRequires) {
+    const reqs = Array.isArray(rule.configRequires) ? rule.configRequires : [rule.configRequires]
+    for (const req of reqs) {
+      if (deps.config[req.config] !== req.equals) return false
+    }
+  }
   // 门控：requiresContext 消费上下文只读事实
   if (rule.requiresContext?.remoteWriteGrantValid === true && !isGrantValid(context.remoteWriteGrant)) {
+    return false
+  }
+  if (
+    rule.requiresContext?.outboundWriteBudgetExhausted === true &&
+    !(context.outboundWriteBudgetRemaining != null && context.outboundWriteBudgetRemaining <= 0)
+  ) {
     return false
   }
   return true
@@ -143,8 +183,8 @@ function deny(ruleId: string, reason: string): Decision {
   return { type: 'deny', ruleId, reason }
 }
 
-function lookupCache(facts: ContentFacts, cache: DecisionCacheView): Decision | null {
-  for (const key of deriveCacheKeys(facts)) {
+function lookupCache(facts: ContentFacts, cache: DecisionCacheView, sessionId?: string): Decision | null {
+  for (const key of deriveCacheKeys(facts, sessionId)) {
     const entry = cache.lookup(key)
     if (entry && entry.decision === 'allow') return autoAllow('cache-hit', facts, key)
     if (entry && entry.decision === 'deny') return deny('cache-hit', '缓存记忆为拒绝')
@@ -192,8 +232,8 @@ export function decide(
   )
   if (laneHardDeny) return deny(laneHardDeny.id, laneHardDeny.reason)
 
-  // 第 2 步：缓存命中
-  const cacheHit = lookupCache(facts, deps.cache)
+  // 第 2 步：缓存命中（会话级键按 context.sessionId 绑定）
+  const cacheHit = lookupCache(facts, deps.cache, context.sessionId)
   if (cacheHit) return cacheHit
 
   // 第 3 步：能力声明放行（套餐 B 预留，本期无人写入）

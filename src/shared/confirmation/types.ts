@@ -63,6 +63,11 @@ export interface EnvFacts {
   os: 'win32' | 'darwin' | 'linux' | string
   workDir: string
   sensitivePaths: string[]
+  /**
+   * 浏览器 act 的链路侧事实（当前页域名 + 高危评估结论），由执行链路注入：
+   * 提取器只读 toolInput，act 的目标域名与 dangerAssessment 不在输入里。
+   */
+  browserAct?: { currentHost?: string; dangerous?: boolean }
 }
 
 // ===== 事实提取层 =====
@@ -98,6 +103,15 @@ export type FactSignal =
   | { kind: 'script-network'; patterns: string[] }
   /** 未通过 isScriptCertifiedRemoteSafe 认证时产出。 */
   | { kind: 'script-uncertified' }
+  /**
+   * 浏览器动作事实：动作名 + 目标域名（act 时为当前页域名，由执行链路注入 env）+
+   * 高危评估结论。dangerous 映射 suspicious 档（§5.1 裁决：问而非拒）。
+   */
+  | { kind: 'browser-action'; action: string; host?: string; dangerous?: boolean }
+  /** lark-cli 子命令读/写分类事实（复用 classifyLarkCliImpact；high_impact/unknown fail-closed 必确认）。 */
+  | { kind: 'lark-subcommand'; impact: 'read' | 'write' | 'low_write' | 'high_impact' | 'unknown' }
+  /** MCP 工具调用事实：携带 serverId 与原始工具名（会话信任缓存键来源）。 */
+  | { kind: 'mcp-tool'; serverId: string; toolName: string }
   | { kind: 'extraction-failed'; reason: string }
   // reserved: 沙箱迭代启用
   | { kind: 'sandbox-escape'; blockedReason: string }
@@ -150,9 +164,21 @@ export interface ConfirmationChannel {
 // ===== 决策缓存 =====
 export type CacheKey =
   | { kind: 'shell-command'; verb: string; target?: string; level: 'exact' | 'verb+target' | 'verb' }
-  | { kind: 'domain'; domain: string; level: 'domain+action' | 'domain-any-action' }
+  | {
+      kind: 'domain'
+      domain: string
+      level: 'domain+action' | 'domain-any-action'
+      /** 会话级条目绑定 chat sessionId（等价原内存态按会话失效）；持久条目不设。 */
+      sessionId?: string
+    }
   | { kind: 'path'; path: string; level: 'file' | 'directory' | 'zone' }
-  | { kind: 'mcp-tool'; serverId: string; toolName: string }
+  | {
+      kind: 'mcp-tool'
+      serverId: string
+      toolName: string
+      /** MCP 会话信任按 chat sessionId 绑定（等价 mcpSessionTrust 内存语义）。 */
+      sessionId?: string
+    }
   | { kind: 'remote-write'; sessionId: string }
 
 export interface DecisionCacheEntry {
@@ -235,10 +261,16 @@ export interface PolicyRule {
   reason: string
   /** 条件放行：门控不满足即不命中（参数化配置引用，非策略层读运行时状态）。 */
   askUnless?: { config: string; equals: unknown; andMigrationComplete?: boolean }
-  /** 配置前置：值等于 equals 才命中（参数化配置引用）。 */
-  configRequires?: { config: string; equals: unknown }
+  /** 配置前置：值等于 equals 才命中；数组语义为"全部满足"（参数化配置引用）。 */
+  configRequires?: PolicyConfigRequirement | PolicyConfigRequirement[]
   /** 上下文前置：消费 ExecutionContext 中注入的只读事实。 */
-  requiresContext?: { remoteWriteGrantValid?: boolean }
+  requiresContext?: { remoteWriteGrantValid?: boolean; outboundWriteBudgetExhausted?: boolean }
+}
+
+/** 配置前置条件（值等于 equals 才满足）。 */
+export interface PolicyConfigRequirement {
+  config: string
+  equals: unknown
 }
 
 /** 策略层只读缓存视图：写缓存是执行链路的事。 */

@@ -25,6 +25,8 @@ export function extractLarkSubcommand(toolInput: Record<string, unknown>): {
   const argv = Array.isArray(args) ? args : []
   const { impact } = classifyLarkCliImpact(argv)
   const signals: FactSignal[] = [
+    // 读/写分类信号（high_impact/unknown fail-closed 必确认，等价现 larkCliWriteNeedsConfirm）
+    { kind: 'lark-subcommand', impact },
     {
       kind: 'outbound-target',
       channel: 'lark-cli',
