@@ -17,7 +17,7 @@ import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import { isAppLocale } from '../src/shared/locale'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
-import { MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
+import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import { ensureToolResultPairing } from '../src/shared/toolResultPairing'
 import { sanitizeForLog } from './logSanitize'
@@ -120,7 +120,7 @@ function assertValidClaudeContentBlocks(
   }
 
   if (!Array.isArray(content)) throw new Error(`Invalid content blocks at index ${idx}`)
-  if (content.length > 80) throw new Error(`Too many content blocks at index ${idx}`)
+  if (content.length > MAX_CHAT_API_CONTENT_BLOCKS) throw new Error(`Too many content blocks at index ${idx}`)
 
   for (const b of content) {
     if (!b || typeof b !== 'object') throw new Error('Invalid content block')
