@@ -44,4 +44,22 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(views[0]).toMatchObject({ id: 'a', action: 'allow', defaultAction: 'ask', overridden: true, locked: false })
     expect(views[1]).toMatchObject({ id: 'b', action: 'deny', overridden: false, locked: true })
   })
+
+  it('lanes 透传 match.lane（无 lane 限定的规则保持缺省=全链路通用）', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [
+      {
+        id: 'remote-deny-wechat-outbound',
+        when: 'invocation' as const,
+        match: { lane: ['wechat' as const], toolName: ['wechat_send', 'wechat_reply'] },
+        action: 'deny' as const,
+        locked: true,
+        reason: 'r'
+      },
+      { id: 'universal', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
+    ]
+    const views = toRuleViews(rules, [])
+    expect(views[0]!.lanes).toEqual(['wechat'])
+    expect(views[1]!.lanes).toBeUndefined()
+  })
 })
