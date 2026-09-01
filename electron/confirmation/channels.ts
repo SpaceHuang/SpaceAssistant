@@ -96,6 +96,39 @@ export class DesktopChannel implements ConfirmationChannel {
 }
 
 /**
+ * §5.5 统一分发：按 lane 产出确认通道（桌面卡片 / IM 桥），主循环不再按链路分双叉。
+ * 远程链路需注入 `sendIm`（requestRemoteConfirm 闭包）；桌面链路需 `toolUseId`。
+ */
+export function channelFor(args: {
+  lane: 'desktop' | 'wechat' | 'feishu'
+  requestId: string
+  sessionId: string
+  toolName: string
+  toolUseId?: string
+  audit?: AuditSink
+  sendIm?: () => Promise<RemoteConfirmDecision>
+}): ConfirmationChannel {
+  if (args.lane === 'desktop') {
+    return new DesktopChannel({
+      requestId: args.requestId,
+      toolUseId: args.toolUseId ?? '',
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      lane: 'desktop',
+      ...(args.audit ? { audit: args.audit } : {})
+    })
+  }
+  return new LegacyImChannel({
+    requestId: args.requestId,
+    sessionId: args.sessionId,
+    toolName: args.toolName,
+    lane: args.lane,
+    ...(args.audit ? { audit: args.audit } : {}),
+    send: args.sendIm ?? (() => Promise.resolve('n' as const))
+  })
+}
+
+/**
  * P1 过渡态：LegacyImChannel —— 薄包装现有远程确认路径（经 remoteConfirmBridge 的
  * requestToolConfirm），实现 ConfirmationChannel 接口、行为零变化，并落 confirm.* 审计事件。
  * P2 将由合并后的 ImChannel 替换。

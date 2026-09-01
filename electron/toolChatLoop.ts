@@ -74,7 +74,7 @@ import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
 import { recordUserAnswerToCache } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
-import { DesktopChannel, LegacyImChannel } from './confirmation/channels'
+import { channelFor } from './confirmation/channels'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
 import type { ConfirmRequest } from '../src/shared/confirmation/types'
 import {
@@ -1159,108 +1159,17 @@ async function runToolChatSessionInner(
         gate.decision.type === 'require-confirm' ? gate.decision.memoryTiers : []
       const mcpEntryForConfirm = gate.mcpEntry
 
-      if (needsConfirm && remoteContext) {
-        const resolvedPolicy = resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig)
-        if (shouldRequestImConfirm(resolvedPolicy)) {
-          onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
-            toolName,
-            input: inputObj,
-            status: 'confirming',
-            progressOutput: undefined
-          })
-          const confirmPayload = {
-            sessionId,
-            toolCallId: toolUseId,
-            toolName,
-            toolInput: inputObj,
-            messageId: remoteContext.messageId,
-            chatId: remoteContext.chatId,
-            userId: remoteContext.userId,
-            memoryTiers: confirmMemoryTiers,
-            trustEligible:
-              toolName === 'run_shell' && shellPrecheck?.ok
-                ? canShowShellTrustOption(
-                    shellPrecheck.analysis,
-                    typeof inputObj.command === 'string' ? inputObj.command : undefined
-                  )
-                : false
-          }
-          const remoteReq: ConfirmRequest = {
-            facts: gate.facts,
-            riskLevel:
-              toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
-                ? 'high'
-                : 'medium',
-            memoryTiers: confirmMemoryTiers,
-            timeoutMs: null
-          }
-          const imOutcome = await new LegacyImChannel({
-            requestId,
-            sessionId,
-            toolName,
-            lane: remoteContext.source === 'feishu' ? 'feishu' : 'wechat',
-            audit: getSecurityAuditLog(),
-            send: () => requestRemoteConfirm({ remoteContext, payload: confirmPayload, wechatConfig })
-          }).request(remoteReq)
-          // Sync authorization + lease check in the same turn as executor — no await between check and execute.
-          if (imOutcome.kind === 'approved') {
-            const originSessionId = remoteContext.originSessionId ?? sessionId
-            const authOwner = remoteContext.authOwner ?? remoteContext.userId ?? ''
-            const currentGen = remoteAuthorizationRegistry.getGeneration(remoteContext.source)
-            const leaseOk =
-              Boolean(remoteContext.requestId) &&
-              isRequestLeaseOwner(originSessionId, remoteContext.requestId!)
-            if (
-              !authOwner ||
-              !leaseOk ||
-              (remoteContext.authorizationGeneration != null &&
-                remoteContext.authorizationGeneration !== currentGen)
-            ) {
-              outcome = 'rejected'
-              rejectReason = 'authorization_revoked'
-              logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
-                requestId,
-                sessionId,
-                toolUseId,
-                toolName,
-                expectedGeneration: remoteContext.authorizationGeneration,
-                currentGeneration: currentGen,
-                leaseOk,
-                hasAuthOwner: Boolean(authOwner)
-              })
-            } else {
-              outcome = 'approved'
-              // First remote write confirm issues a session-scoped write grant, then reserves this op.
-              if (toolName === 'write_file' || toolName === 'edit_file') {
-                const workDirProfileId = remoteContext.workDirProfileId ?? 'default'
-                const gen =
-                  remoteContext.authorizationGeneration ??
-                  remoteAuthorizationRegistry.getGeneration(remoteContext.source)
-                remoteWriteGrantRegistry.issue({
-                  channel: remoteContext.source,
-                  owner: authOwner,
-                  originSessionId,
-                  workDirProfileId,
-                  authorizationGeneration: gen
-                })
-                const reserved = remoteWriteGrantRegistry.reserve({
-                  channel: remoteContext.source,
-                  owner: authOwner,
-                  originSessionId,
-                  workDirProfileId,
-                  authorizationGeneration: gen,
-                  byteCount: estimateWriteToolBytes(toolName, inputObj)
-                })
-                if (!reserved.ok) {
-                  outcome = 'rejected'
-                  rejectReason = 'authorization_revoked'
-                }
-              }
-            }
-          } else {
-            outcome = imOutcome.kind === 'timeout' ? 'timeout' : 'rejected'
-          }
-        } else {
+      if (needsConfirm) {
+        const confirmLane = remoteContext
+          ? remoteContext.source === 'feishu'
+            ? ('feishu' as const)
+            : ('wechat' as const)
+          : ('desktop' as const)
+        const askViaIm = remoteContext
+          ? shouldRequestImConfirm(resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig))
+          : true
+        if (remoteContext && !askViaIm) {
+          // 远程只读策略：不发 IM 确认，直接拒绝
           outcome = 'rejected'
           rejectReason = 'remote_read_only'
           logAgentEvent('info', 'tool.confirm.remote_read_only_reject', {
@@ -1272,159 +1181,245 @@ async function runToolChatSessionInner(
             remoteSource: remoteContext.source,
             confirmPolicy: remoteContext.confirmPolicy
           })
-        }
-      } else if (needsConfirm) {
-        const useDiff =
-          toolsConfig.confirmMode === 'diff' ||
-          toolsConfig.confirmMode === 'auto' ||
-          Boolean(autoApproveFallback)
-        const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
-        const actDanger =
-          toolName === 'browser' && inputObj.action === 'act' && dangerAssessment?.dangerous
-            ? dangerAssessment
-            : null
-        const actCurrentHost = currentPageUrl ? extractHostname(currentPageUrl) : null
-        const sessionTrustedHint =
-          !!actCurrentHost &&
-          !!sessionId &&
-          !actDanger &&
-          isBrowserSessionActTrustedHost(sessionId, actCurrentHost)
-            ? true
+        } else {
+          // 确认前展示（链路差异，纯展示不归通道）：远程进度 hook / 桌面卡片 + 浮动通知
+          if (remoteContext) {
+            onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
+              toolName,
+              input: inputObj,
+              status: 'confirming',
+              progressOutput: undefined
+            })
+          } else {
+          const useDiff =
+            toolsConfig.confirmMode === 'diff' ||
+            toolsConfig.confirmMode === 'auto' ||
+            Boolean(autoApproveFallback)
+          const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
+          const actDanger =
+            toolName === 'browser' && inputObj.action === 'act' && dangerAssessment?.dangerous
+              ? dangerAssessment
+              : null
+          const actCurrentHost = currentPageUrl ? extractHostname(currentPageUrl) : null
+          const sessionTrustedHint =
+            !!actCurrentHost &&
+            !!sessionId &&
+            !actDanger &&
+            isBrowserSessionActTrustedHost(sessionId, actCurrentHost)
+              ? true
+              : undefined
+          const dangerInfo = actDanger
+            ? {
+                userReason: actDanger.userReason,
+                consequence: actDanger.consequence ?? 'generic',
+                source: actDanger.source!,
+                ...(actDanger.fillPreview?.length ? { fillPreview: actDanger.fillPreview } : {})
+              }
             : undefined
-        const dangerInfo = actDanger
-          ? {
-              userReason: actDanger.userReason,
-              consequence: actDanger.consequence ?? 'generic',
-              source: actDanger.source!,
-              ...(actDanger.fillPreview?.length ? { fillPreview: actDanger.fillPreview } : {})
-            }
-          : undefined
-        safeWebContentsSend(sender,'tool:confirm-request', {
-          requestId,
-          sessionId,
-          toolUseId,
-          toolName,
-          input: inputObj,
-          riskLevel:
-            toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
-          ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
-          ...(mcpEntryForConfirm
-            ? {
-                mcp: {
-                  serverId: mcpEntryForConfirm.serverId,
-                  serverName: mcpEntryForConfirm.serverName,
-                  originalToolName: mcpEntryForConfirm.originalName,
-                  description: mcpEntryForConfirm.description,
-                  maskedArgs: maskSensitiveArgs(inputObj) as Record<string, unknown>
-                }
-              }
-            : {}),
-          ...(toolName === 'browser' && inputObj.action === 'act'
-            ? {
-                ...(currentPageUrl ? { currentPageUrl } : {}),
-                ...(dangerInfo ? { dangerInfo } : {}),
-                ...(sessionTrustedHint ? { sessionTrustedHint } : {})
-              }
-            : {}),
-          ...(diff ? { diff } : {}),
-          ...(shellSecurityHints ? { shellSecurityHints } : {}),
-          ...(autoApproveFallback ? { autoApproveFallback } : {})
-        })
-        // 通知浮动通知管理器
-        if (floatingNotificationManager) {
-          const session = appDb ? getSession(appDb, sessionId) : undefined
-          floatingNotificationManager.onConfirmRequest({
+          safeWebContentsSend(sender,'tool:confirm-request', {
+            requestId,
             sessionId,
-            sessionName: sessionDisplayNameRaw(session?.name, sessionId),
             toolUseId,
             toolName,
             input: inputObj,
-            requestId,
-            createdAt: Date.now()
+            riskLevel:
+              toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+            ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
+            ...(mcpEntryForConfirm
+              ? {
+                  mcp: {
+                    serverId: mcpEntryForConfirm.serverId,
+                    serverName: mcpEntryForConfirm.serverName,
+                    originalToolName: mcpEntryForConfirm.originalName,
+                    description: mcpEntryForConfirm.description,
+                    maskedArgs: maskSensitiveArgs(inputObj) as Record<string, unknown>
+                  }
+                }
+              : {}),
+            ...(toolName === 'browser' && inputObj.action === 'act'
+              ? {
+                  ...(currentPageUrl ? { currentPageUrl } : {}),
+                  ...(dangerInfo ? { dangerInfo } : {}),
+                  ...(sessionTrustedHint ? { sessionTrustedHint } : {})
+                }
+              : {}),
+            ...(diff ? { diff } : {}),
+            ...(shellSecurityHints ? { shellSecurityHints } : {}),
+            ...(autoApproveFallback ? { autoApproveFallback } : {})
           })
-        }
-        // 统一走桌面确认通道（包装 waitForToolConfirm；落 confirm.* 审计）
-        const metadata = getBuiltinToolMetadata(toolName)
-        const confirmReq: ConfirmRequest = {
-          facts: {
+          // 通知浮动通知管理器
+          if (floatingNotificationManager) {
+            const session = appDb ? getSession(appDb, sessionId) : undefined
+            floatingNotificationManager.onConfirmRequest({
+              sessionId,
+              sessionName: sessionDisplayNameRaw(session?.name, sessionId),
+              toolUseId,
+              toolName,
+              input: inputObj,
+              requestId,
+              createdAt: Date.now()
+            })
+          }
+          }
+          // §5.5 统一通道分发：channelFor(lane)；confirm.* 审计由通道内部以同一 requestId 落
+          const confirmReq: ConfirmRequest = {
+            facts: gate.facts,
+            riskLevel:
+              toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
+                ? 'high'
+                : 'medium',
+            memoryTiers: confirmMemoryTiers,
+            timeoutMs: null
+          }
+          const channelOutcome = await channelFor({
+            lane: confirmLane,
+            requestId,
+            toolUseId,
+            sessionId,
             toolName,
-            actionClass: metadata?.actionClass ?? 'execute',
-            baseRiskLevel: metadata?.riskLevel ?? 'medium',
-            signals: [],
-            summary: { text: toolName }
-          },
-          riskLevel:
-            toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
-              ? 'high'
-              : 'medium',
-          memoryTiers: confirmMemoryTiers,
-          timeoutMs: null
+            audit: getSecurityAuditLog(),
+            ...(remoteContext
+              ? {
+                  sendIm: () =>
+                    requestRemoteConfirm({
+                      remoteContext,
+                      payload: {
+                        sessionId,
+                        toolCallId: toolUseId,
+                        toolName,
+                        toolInput: inputObj,
+                        messageId: remoteContext.messageId,
+                        chatId: remoteContext.chatId,
+                        userId: remoteContext.userId,
+                        memoryTiers: confirmMemoryTiers,
+                        trustEligible:
+                          toolName === 'run_shell' && shellPrecheck?.ok
+                            ? canShowShellTrustOption(
+                                shellPrecheck.analysis,
+                                typeof inputObj.command === 'string' ? inputObj.command : undefined
+                              )
+                            : false
+                      },
+                      wechatConfig
+                    })
+                }
+              : {})
+          }).request(confirmReq)
+          outcome =
+            channelOutcome.kind === 'approved'
+              ? 'approved'
+              : channelOutcome.kind === 'timeout'
+                ? 'timeout'
+                : 'rejected'
         }
-        const channelOutcome = await new DesktopChannel({
-          requestId,
-          toolUseId,
-          sessionId,
-          toolName,
-          lane: 'desktop',
-          audit: getSecurityAuditLog()
-        }).request(confirmReq)
-        outcome =
-          channelOutcome.kind === 'approved'
-            ? 'approved'
-            : channelOutcome.kind === 'timeout'
-              ? 'timeout'
-              : 'rejected'
-        // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
-        floatingNotificationManager?.onToolResult(requestId, toolUseId)
-        if (toolName === 'run_shell' && shellSecurityHints) {
-          const command = typeof inputObj.command === 'string' ? inputObj.command : ''
-          if (outcome === 'approved' && shellSecurityHints.requiresRiskAck) {
-            if (shellSecurityHints.securityWarning) {
-              logShellWeakDenyOutcome({
-                requestId,
-                sessionId,
-                command,
-                outcome: 'confirm',
-                hints: shellSecurityHints
-              })
-            } else {
-              logShellPathConfirm({
-                requestId,
-                sessionId,
-                command,
-                outcome: 'confirm',
-                hints: shellSecurityHints
-              })
+        if (!remoteContext) {
+          // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
+          floatingNotificationManager?.onToolResult(requestId, toolUseId)
+          if (toolName === 'run_shell' && shellSecurityHints) {
+            const command = typeof inputObj.command === 'string' ? inputObj.command : ''
+            if (outcome === 'approved' && shellSecurityHints.requiresRiskAck) {
+              if (shellSecurityHints.securityWarning) {
+                logShellWeakDenyOutcome({
+                  requestId,
+                  sessionId,
+                  command,
+                  outcome: 'confirm',
+                  hints: shellSecurityHints
+                })
+              } else {
+                logShellPathConfirm({
+                  requestId,
+                  sessionId,
+                  command,
+                  outcome: 'confirm',
+                  hints: shellSecurityHints
+                })
+              }
+            } else if (outcome === 'rejected' && shellSecurityHints.requiresRiskAck) {
+              if (shellSecurityHints.securityWarning) {
+                logShellWeakDenyOutcome({
+                  requestId,
+                  sessionId,
+                  command,
+                  outcome: 'reject',
+                  hints: shellSecurityHints
+                })
+              } else {
+                logShellPathConfirm({
+                  requestId,
+                  sessionId,
+                  command,
+                  outcome: 'reject',
+                  hints: shellSecurityHints
+                })
+              }
             }
-          } else if (outcome === 'rejected' && shellSecurityHints.requiresRiskAck) {
-            if (shellSecurityHints.securityWarning) {
-              logShellWeakDenyOutcome({
-                requestId,
-                sessionId,
-                command,
-                outcome: 'reject',
-                hints: shellSecurityHints
+          }
+          logAgentEvent('info', 'tool.confirm', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            outcome
+          })
+          throwIfChatCancelled(chatSignal)
+        } else if (outcome === 'approved') {
+          // 同步授权段（硬不变量）：IM 回答回来后与执行同一同步段完成租约/代际复核 + grant issue/reserve，
+          // 期间无任何 await（防 TOCTOU，等价原 :1470 注释语义）
+          const originSessionId = remoteContext.originSessionId ?? sessionId
+          const authOwner = remoteContext.authOwner ?? remoteContext.userId ?? ''
+          const currentGen = remoteAuthorizationRegistry.getGeneration(remoteContext.source)
+          const leaseOk =
+            Boolean(remoteContext.requestId) &&
+            isRequestLeaseOwner(originSessionId, remoteContext.requestId!)
+          if (
+            !authOwner ||
+            !leaseOk ||
+            (remoteContext.authorizationGeneration != null &&
+              remoteContext.authorizationGeneration !== currentGen)
+          ) {
+            outcome = 'rejected'
+            rejectReason = 'authorization_revoked'
+            logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
+              requestId,
+              sessionId,
+              toolUseId,
+              toolName,
+              expectedGeneration: remoteContext.authorizationGeneration,
+              currentGeneration: currentGen,
+              leaseOk,
+              hasAuthOwner: Boolean(authOwner)
+            })
+          } else {
+            // First remote write confirm issues a session-scoped write grant, then reserves this op.
+            if (toolName === 'write_file' || toolName === 'edit_file') {
+              const workDirProfileId = remoteContext.workDirProfileId ?? 'default'
+              const gen =
+                remoteContext.authorizationGeneration ??
+                remoteAuthorizationRegistry.getGeneration(remoteContext.source)
+              remoteWriteGrantRegistry.issue({
+                channel: remoteContext.source,
+                owner: authOwner,
+                originSessionId,
+                workDirProfileId,
+                authorizationGeneration: gen
               })
-            } else {
-              logShellPathConfirm({
-                requestId,
-                sessionId,
-                command,
-                outcome: 'reject',
-                hints: shellSecurityHints
+              const reserved = remoteWriteGrantRegistry.reserve({
+                channel: remoteContext.source,
+                owner: authOwner,
+                originSessionId,
+                workDirProfileId,
+                authorizationGeneration: gen,
+                byteCount: estimateWriteToolBytes(toolName, inputObj)
               })
+              if (!reserved.ok) {
+                outcome = 'rejected'
+                rejectReason = 'authorization_revoked'
+              }
             }
           }
         }
-        logAgentEvent('info', 'tool.confirm', {
-          requestId,
-          sessionId,
-          loopRound,
-          toolUseId,
-          toolName,
-          outcome
-        })
-        throwIfChatCancelled(chatSignal)
       }
 
       if (toolName === 'run_shell' && shellPrecheck?.ok) {
