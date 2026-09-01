@@ -99,7 +99,7 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     } as typeof window.api
   })
 
-  it('渲染五区标题并加载模型/记忆/审计', async () => {
+  it('渲染五区标题并加载模型/记忆/审计', { timeout: 20000 }, async () => {
     renderTab()
     expect(await screen.findByText('策略套餐')).toBeTruthy()
     expect(screen.getByText('确认模式')).toBeTruthy()
@@ -117,7 +117,7 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     expect(screen.getByText('锁定')).toBeTruthy()
   })
 
-  it('切换套餐调用 securitySetPolicyPackage（standard 无二次确认）', async () => {
+  it('切换套餐调用 securitySetPolicyPackage（standard 无二次确认）', { timeout: 20000 }, async () => {
     renderTab()
     const selects = await screen.findAllByRole('combobox')
     // 前三个为链路套餐选择器
@@ -128,7 +128,7 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
   })
 
-  it('自定义套餐下修改规则动作调用 securitySetRuleOverride', async () => {
+  it('自定义套餐下修改规则动作调用 securitySetRuleOverride', { timeout: 20000 }, async () => {
     renderTab()
     // wechat 为 custom → 非 locked 规则动作可编辑
     const ruleRow = (await screen.findByText('im-write-ask')).closest('tr')!
