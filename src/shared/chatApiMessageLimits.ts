@@ -9,8 +9,9 @@ export const MAX_CHAT_API_MESSAGES = 50000
  *
  * 触发 `content.length > MAX_CHAT_API_CONTENT_BLOCKS` 时直接 `throw`，会在请求发出前就拒绝，
  * 因此一条历史里若存在超过该数量的块，会阻碍后续整个会话继续。为避免误伤合法的高并发
- * 工具轮次（模型可能一次返回大量 tool_use，且上游通常接受），此值曾在 80 被上调到 160。
- * 若后续确认到 Anthropic Messages API 的真实上限，请改回/对齐该真实值，并考虑改为「压缩合并
- * 后放行 + warn 日志」而不是直接 throw。
+ * 工具轮次（模型可能一次返回大量 tool_use），该值从 80 → 160 → 4096 逐级上调；实测上游对
+ * 单条消息 196+ 个 tool_use 块仍能正常处理，因此这里不再试图对齐某个上游硬上限，而是作为
+ * 防御病态历史（避免单条消息无界膨胀）的宽松护栏。若仍触达该值，建议改为「压缩合并后放行 +
+ * warn 日志」而不是直接 throw，以彻底避免毒化整个会话。
  */
-export const MAX_CHAT_API_CONTENT_BLOCKS = 160
+export const MAX_CHAT_API_CONTENT_BLOCKS = 4096
