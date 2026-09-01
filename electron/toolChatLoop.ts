@@ -22,7 +22,6 @@ import {
   snapshotEntriesToAnthropicTools,
   type McpToolSnapshot
 } from './mcp/mcpToolRegistry'
-import { isMcpSessionTrusted, rememberMcpSessionTrust } from './mcp/mcpSessionTrust'
 import { getSecret } from './mcp/mcpSecretStore'
 import { createMcpOAuthClientProvider } from './mcp/mcpOauthService'
 import { maskSensitiveArgs, mcpToolNeedsConfirmation } from '../src/shared/mcpTypes'
@@ -44,7 +43,7 @@ import { getSkillByName } from './skills/skillScanner'
 import { getSession, updateSession } from './database'
 import { listProfiles } from './mcp/mcpConfigStore'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
-import { browserActionNeedsConfirmation, type ActDangerAssessment, type BrowserAction } from './browser/browserActionPolicy'
+import { type ActDangerAssessment } from './browser/browserActionPolicy'
 import { assessActDanger } from './browser/actDangerAssessor'
 import {
   clearBrowserSessionActTrust,
@@ -59,7 +58,6 @@ import {
   formatDependencyRecoveryToolContent,
   resolveDependencyRecoverySkill
 } from './browser/browserDependencyRecovery'
-import { builtinToolNeedsConfirmation } from '../src/shared/domainTypes'
 import type { AppDatabase } from './database'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import type { FeishuConfig } from '../src/shared/feishuTypes'
@@ -73,8 +71,7 @@ import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
 import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
 import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
-import { decideRunScript } from './confirmation/decisionPipeline'
-import { decideTool } from './confirmation/decisionPipeline'
+import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { DesktopChannel, LegacyImChannel } from './confirmation/channels'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
@@ -88,19 +85,9 @@ import {
   createRemoteTaskBudgetState,
   recordOutboundWrite,
   recordToolCall,
-  type BudgetPauseReason,
   type RemoteTaskBudgetState
 } from './remote/remoteTaskBudget'
 import { DEFAULT_REMOTE_TASK_BUDGET } from '../src/shared/imTypes'
-import {
-  classifyLarkCliImpact,
-  larkCliWriteNeedsConfirm
-} from './feishu/larkCliImpactPolicy'
-import {
-  shouldSkipRemoteBrowserActConfirm,
-  shouldSkipRemoteBrowserNavigateConfirm,
-  isRemoteSecurityMigrationComplete
-} from './remote/remoteToolPolicy'
 import {
   remoteWriteGrantRegistry
 } from './remote/remoteWriteGrantRegistry'
@@ -875,26 +862,7 @@ async function runToolChatSessionInner(
         continue
       }
 
-      const remoteBlock = evaluateRemoteToolBlock(toolName, inputObj, remoteContext, feishuConfig, wechatConfig)
-      if (remoteBlock) {
-        logToolLoopError(
-          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-          remoteBlock,
-          remoteBlock
-        )
-        toolResults.push(buildToolErrorResult(toolUseId, remoteBlock, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: remoteBlock, blockedReason: 'feishu_remote_write_blocked' }
-        })
-        if (toolErrorRepeat.noteFailure(toolName, remoteBlock)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${remoteBlock}`
-          break
-        }
-        continue
-      }
-
+      // 远程预算：工具调用计数门控（计数留执行链路；出站写预算由 gate 上下文承载）
       if (remoteBudgetState) {
         const budgetCheck = checkRemoteTaskBudget(remoteBudgetState, 'tool_call')
         if (!budgetCheck.ok) {
@@ -926,181 +894,6 @@ async function runToolChatSessionInner(
           break
         }
         recordToolCall(remoteBudgetState)
-        const outboundGate = evaluateOutboundWriteBudgetGate(remoteBudgetState, toolName, inputObj)
-        if (!outboundGate.allow) {
-          const pauseMsg = outboundGate.message
-          logAgentEvent('info', 'remote.budget.pause', {
-            requestId,
-            sessionId,
-            toolUseId,
-            toolName,
-            reason: outboundGate.reason
-          })
-          getSecurityAuditLog().record({
-            ts: Date.now(),
-            event: 'budget.exhausted',
-            lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
-            origin: { kind: 'direct-owner' },
-            sessionId,
-            toolName,
-            reason: outboundGate.reason,
-            actor: 'system'
-          })
-          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
-          safeWebContentsSend(sender, 'tool:result', {
-            requestId,
-            toolUseId,
-            result: { success: false, error: pauseMsg, blockedReason: 'remote_task_budget' }
-          })
-          abortRepeatedToolError = pauseMsg
-          break
-        }
-      }
-
-      if (
-        toolName === 'browser' &&
-        Boolean(remoteContext) &&
-        browserConfig &&
-        !browserConfig.allowRemoteSessions
-      ) {
-        logToolLoopError(
-          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-          BROWSER_REMOTE_DISABLED_CODE,
-          BROWSER_REMOTE_DISABLED_CODE
-        )
-        toolResults.push(buildToolErrorResult(toolUseId, BROWSER_REMOTE_DISABLED_CODE, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: BROWSER_REMOTE_DISABLED_CODE }
-        })
-        if (toolErrorRepeat.noteFailure(toolName, BROWSER_REMOTE_DISABLED_CODE)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${BROWSER_REMOTE_DISABLED_CODE}`
-          break
-        }
-        continue
-      }
-
-      if (toolName === 'run_shell' && Boolean(remoteContext)) {
-        logToolLoopError(
-          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-          SHELL_REMOTE_DISABLED_ERROR,
-          SHELL_REMOTE_DISABLED_ERROR
-        )
-        toolResults.push(buildToolErrorResult(toolUseId, SHELL_REMOTE_DISABLED_ERROR, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: SHELL_REMOTE_DISABLED_ERROR }
-        })
-        if (toolErrorRepeat.noteFailure(toolName, SHELL_REMOTE_DISABLED_ERROR)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${SHELL_REMOTE_DISABLED_ERROR}`
-          break
-        }
-        continue
-      }
-
-      let shellPrecheck: RunShellPrecheckResult | null = null
-      let shellSecurityHints: ShellSecurityHints | undefined
-      if (toolName === 'run_shell') {
-        const command = typeof inputObj.command === 'string' ? inputObj.command : ''
-        shellPrecheck = await precheckRunShellTool({
-          command,
-          workDir,
-          userDataDir,
-          shellConfig,
-          appDb
-        })
-        if (!shellPrecheck.ok) {
-          logShellSecurityDeny({
-            requestId,
-            sessionId,
-            command,
-            reason: shellPrecheck.auditReason,
-            validatorId: shellPrecheck.validatorId,
-            denyType: shellPrecheck.denyType
-          })
-          logToolLoopError(
-            { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-            shellPrecheck.error,
-            shellPrecheck.error
-          )
-          toolResults.push(buildToolErrorResult(toolUseId, shellPrecheck.error, { requestId, sessionId }))
-          safeWebContentsSend(sender,'tool:result', {
-            requestId,
-            toolUseId,
-            result: { success: false, error: shellPrecheck.error }
-          })
-          if (toolErrorRepeat.noteFailure(toolName, shellPrecheck.error)) {
-            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${shellPrecheck.error}`
-            break
-          }
-          continue
-        }
-        shellSecurityHints = shellPrecheck.hints
-        logShellPrecheck({
-          requestId,
-          sessionId,
-          toolUseId,
-          loopRound,
-          command,
-          verdict: shellPrecheck.analysis.verdict,
-          skipConfirm: shellPrecheck.skipConfirm,
-          hints: shellPrecheck.hints
-        })
-      }
-      let outcome: ToolConfirmOutcome = 'approved'
-      let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
-      let autoApproveFallback: AutoApproveFallback | undefined
-      let fileAutoApproved = false
-      let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
-      // fileAutoApproved is desktop-only — must not cover remote authorization checks.
-      if (
-        !remoteContext &&
-        (toolName === 'write_file' || toolName === 'edit_file') &&
-        toolsConfig.confirmMode === 'auto'
-      ) {
-        const autoEval = await evaluateFileToolAutoApproval({
-          workDir,
-          userDataDir,
-          toolsConfig,
-          shellConfig,
-          toolName,
-          input: inputObj
-        })
-        if (autoEval.approve) {
-          fileAutoApproved = true
-          const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
-          const diff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
-          let bytesWritten = 0
-          if (toolName === 'write_file') {
-            const content = typeof inputObj.content === 'string' ? inputObj.content : ''
-            bytesWritten = Buffer.byteLength(content, 'utf8')
-          } else if (diff) {
-            bytesWritten = Buffer.byteLength(diff.newContent, 'utf8')
-          }
-          const stats = diff
-            ? computeDiffLineStats(diff.oldContent, diff.newContent)
-            : { add: 0, remove: 0 }
-          fileAutoApproveMeta = {
-            path: relPath,
-            added: stats.add,
-            removed: stats.remove,
-            bytesWritten,
-            ...(diff ? { diff } : {})
-          }
-        } else {
-          autoApproveFallback = { reason: autoEval.reason, reasonCode: autoEval.reasonCode }
-          logAgentEvent('info', 'file.auto_approve.fallback', {
-            requestId,
-            sessionId,
-            toolUseId,
-            toolName,
-            relPath: typeof inputObj.path === 'string' ? inputObj.path : '',
-            reason: autoEval.reason,
-            reasonCode: autoEval.reasonCode
-          })
-        }
       }
 
       const sendProgress = (status: string, payload?: string | import('./tools/types').ToolProgressPayload) => {
@@ -1142,6 +935,7 @@ async function runToolChatSessionInner(
         }
       }
 
+      // 浏览器 act 危险评估（gate 的事实输入；评估留执行链路）
       let dangerAssessment: ActDangerAssessment | null = null
       if (toolName === 'browser' && inputObj.action === 'act' && sessionId && browserConfig) {
         const remoteActPath = Boolean(remoteContext)
@@ -1175,216 +969,194 @@ async function runToolChatSessionInner(
       const currentPageUrl =
         toolName === 'browser' && sessionId ? stagehandService.peekCurrentUrl(sessionId) : undefined
 
-      let needsConfirm = toolNeedsUserConfirmation(
+      // ===== §5.5 直线流程：门控判定（组装上下文 → 事实提取 → decide → policy.decision 审计）=====
+      const gate = await evaluateToolCallGate({
         toolName,
-        inputObj,
+        toolInput: inputObj,
+        sessionId,
+        workDir,
+        userDataDir,
+        remoteContext,
+        toolsConfig,
+        shellConfig,
+        browserConfig,
         feishuConfig,
         wechatConfig,
-        browserConfig,
-        sessionId,
+        appDb,
+        remoteBudgetState,
+        dangerAssessment,
         currentPageUrl,
-        dangerAssessment
-      )
-      // 桌面 write/edit：引擎化基线判定 + 记忆档位下发（护栏：现有 toolChatLoop 等价测试）
-      let confirmMemoryTiers: import('../src/shared/confirmation/types').MemoryTier[] = []
-      if (!remoteContext && (toolName === 'write_file' || toolName === 'edit_file')) {
-        const metadata = getBuiltinToolMetadata(toolName)
-        if (metadata) {
-          const dt = decideTool({
-            descriptor: metadata,
-            toolInput: inputObj,
-            env: {
-              os: process.platform,
-              workDir,
-              sensitivePaths: getBuiltinSensitivePrefixes(userDataDir)
-            },
-            lane: 'desktop',
-            origin: { kind: 'direct-owner' },
-            sessionId,
-            config: { confirmMode: toolsConfig.confirmMode },
-            migrationComplete: false
-          })
-          if (dt.decision.type === 'auto-allow') needsConfirm = false
-          else if (dt.decision.type === 'require-confirm') {
-            needsConfirm = true
-            confirmMemoryTiers = dt.decision.memoryTiers
-          } else {
-            needsConfirm = true
-          }
-        }
-      }
-      // MCP 工具：默认始终确认；仅 readonly-auto + 安全注解免确认；「本会话信任」跳过。
-      const mcpEntryForConfirm = mcpSnapshot.entries.get(toolName)
-      if (mcpEntryForConfirm) {
-        const mcpProfile = appDb
-          ? listProfiles(appDb).find((p) => p.id === mcpEntryForConfirm.serverId)
-          : undefined
-        needsConfirm = mcpProfile ? mcpToolNeedsConfirmation(mcpProfile, mcpEntryForConfirm) : true
-        if (
-          needsConfirm &&
-          sessionId &&
-          isMcpSessionTrusted(sessionId, mcpEntryForConfirm.serverId, mcpEntryForConfirm.originalName)
-        ) {
-          needsConfirm = false
-          logAgentEvent('info', 'mcp.confirm.session_trust', {
-            requestId,
-            sessionId,
-            toolUseId,
-            serverId: mcpEntryForConfirm.serverId,
-            tool: mcpEntryForConfirm.originalName
-          })
-        }
-      }
-      if (toolName === 'run_shell' && shellPrecheck?.ok && shellPrecheck.skipConfirm) {
-        needsConfirm = false
-      }
+        mcpEntry: mcpSnapshot.entries.get(toolName)
+      })
 
-      if (
-        remoteContext &&
-        (toolName === 'write_file' || toolName === 'edit_file')
-      ) {
-        // Remote writes require a session-scoped RemoteWriteGrant — never config-based skip.
-        const originSessionId = remoteContext.originSessionId ?? sessionId
-        const workDirProfileId = remoteContext.workDirProfileId ?? 'default'
-        const authOwner = remoteContext.authOwner ?? remoteContext.userId ?? ''
-        const gen =
-          remoteContext.authorizationGeneration ??
-          remoteAuthorizationRegistry.getGeneration(remoteContext.source)
-        const byteCount = estimateWriteToolBytes(toolName, inputObj)
-        const reserved =
-          authOwner &&
-          remoteContext.requestId &&
-          isRequestLeaseOwner(originSessionId, remoteContext.requestId)
-            ? remoteWriteGrantRegistry.reserve({
-                channel: remoteContext.source,
-                owner: authOwner,
-                originSessionId,
-                workDirProfileId,
-                authorizationGeneration: gen,
-                byteCount
-              })
-            : ({ ok: false as const, reason: 'missing' as const })
-        if (reserved.ok) {
-          needsConfirm = false
-          logAgentEvent('info', 'tool.confirm.skip_confirm', {
-            requestId,
-            sessionId,
-            toolUseId,
-            toolName,
-            reason: 'remote_write_grant',
-            grantId: reserved.grant.grantId
-          })
-        } else {
-          needsConfirm = true
-          logAgentEvent('info', 'tool.confirm.remote_write_grant_required', {
-            requestId,
-            sessionId,
-            toolUseId,
-            toolName,
-            reserveReason: reserved.reason
-          })
-        }
-      }
-
-      if (
-        shouldSkipRemoteBrowserConfirm(remoteContext, toolName, inputObj, feishuConfig, wechatConfig)
-      ) {
-        // High-impact / uncertain act must still confirm even when act switch allows skip.
-        if (!(toolName === 'browser' && inputObj.action === 'act' && dangerAssessment?.dangerous)) {
-          needsConfirm = false
-          logAgentEvent('info', 'tool.confirm.skip_confirm', {
-            requestId,
-            sessionId,
-            toolUseId,
-            toolName,
-            reason: 'remote_browser_no_confirm'
-          })
-        }
-      }
-
-      if (toolName === 'run_script') {
-        const code = typeof inputObj.code === 'string' ? inputObj.code : ''
-        const lane: ExecutionLane = remoteContext
-          ? remoteContext.source === 'feishu'
-            ? 'feishu'
-            : 'wechat'
-          : 'desktop'
-        const channelConfig = remoteContext
-          ? remoteContext.source === 'feishu'
-            ? feishuConfig
-            : wechatConfig
-          : undefined
-        // 事实提取 → 策略判定（引擎驱动，行为与现状等价，见 §5.1/§9）
-        const scriptDecision = decideRunScript({
-          code,
-          env: {
-            os: process.platform,
-            workDir,
-            sensitivePaths: getBuiltinSensitivePrefixes(userDataDir)
-          },
-          lane,
-          origin: { kind: 'direct-owner' },
+      // run_shell 预检拒绝（validator 性质，gate 前置短路）
+      if (gate.shellPrecheckDeny) {
+        const command = typeof inputObj.command === 'string' ? inputObj.command : ''
+        logShellSecurityDeny({
+          requestId,
           sessionId,
-          config: { remoteScriptRequiresConfirm: channelConfig?.remoteScriptRequiresConfirm ?? true },
-          migrationComplete: isRemoteSecurityMigrationComplete(channelConfig)
+          command,
+          reason: gate.shellPrecheckDeny.auditReason,
+          validatorId: gate.shellPrecheckDeny.validatorId,
+          denyType: gate.shellPrecheckDeny.denyType
         })
-        const decision = scriptDecision.decision
-        // 判定即记录（§5.6）：policy.decision 事件（异步缓冲，不阻断）
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          gate.shellPrecheckDeny.error,
+          gate.shellPrecheckDeny.error
+        )
+        toolResults.push(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }))
+        safeWebContentsSend(sender,'tool:result', {
+          requestId,
+          toolUseId,
+          result: { success: false, error: gate.shellPrecheckDeny.error }
+        })
+        if (toolErrorRepeat.noteFailure(toolName, gate.shellPrecheckDeny.error)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${gate.shellPrecheckDeny.error}`
+          break
+        }
+        continue
+      }
+      const shellPrecheck: RunShellPrecheckResult | null = gate.shellPrecheck
+        ? { ok: true, ...gate.shellPrecheck }
+        : null
+      const shellSecurityHints: ShellSecurityHints | undefined = gate.shellPrecheck?.hints
+      if (gate.shellPrecheck) {
+        logShellPrecheck({
+          requestId,
+          sessionId,
+          toolUseId,
+          loopRound,
+          command: typeof inputObj.command === 'string' ? inputObj.command : '',
+          verdict: gate.shellPrecheck.analysis.verdict,
+          skipConfirm: gate.shellPrecheck.skipConfirm,
+          hints: gate.shellPrecheck.hints
+        })
+      }
+
+      // 出站写预算耗尽 → 预算三选暂停流程（规则 remote-outbound-budget-pause-* 的映射）
+      if (gate.budgetPause) {
+        const pauseMsg = gate.budgetPause.message
+        logAgentEvent('info', 'remote.budget.pause', {
+          requestId,
+          sessionId,
+          toolUseId,
+          toolName,
+          reason: gate.budgetPause.reason
+        })
         getSecurityAuditLog().record({
           ts: Date.now(),
-          event: 'policy.decision',
-          lane,
+          event: 'budget.exhausted',
+          lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
           origin: { kind: 'direct-owner' },
           sessionId,
-          toolName: 'run_script',
-          actionClass: 'execute',
-          riskLevel: 'high',
-          factsSummary: scriptDecision.summary,
-          signals: scriptDecision.signals.map((s) => s.kind),
-          decision: decision.type,
-          ruleId: decision.ruleId,
-          reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
+          toolName,
+          reason: gate.budgetPause.reason,
           actor: 'system'
         })
-        if (decision.type === 'deny') {
-          const denyMsg = formatScriptDenyUserMessage(scriptDecision.rawAnalysis.reason)
+        toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
+        safeWebContentsSend(sender, 'tool:result', {
+          requestId,
+          toolUseId,
+          result: { success: false, error: pauseMsg, blockedReason: 'remote_task_budget' }
+        })
+        abortRepeatedToolError = pauseMsg
+        break
+      }
+
+      // 其余 deny → 用户可见错误（远程硬阻断 / 脚本危险 / 缓存 deny 等）
+      if (gate.decision.type === 'deny') {
+        let denyMsg = gate.decision.reason
+        if (toolName === 'run_script' && gate.rawScriptAnalysis) {
+          denyMsg = formatScriptDenyUserMessage(gate.rawScriptAnalysis.reason)
           logAgentEvent('info', 'script.deny', {
             requestId,
             sessionId,
             toolUseId,
-            patterns: scriptDecision.rawAnalysis.patterns,
+            patterns: gate.rawScriptAnalysis.patterns,
             remote: Boolean(remoteContext)
           })
-          logToolLoopError(
-            { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
-            denyMsg,
-            `script deny patterns=${scriptDecision.rawAnalysis.patterns.join(',')}`
-          )
-          toolResults.push(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }))
-          safeWebContentsSend(sender, 'tool:result', {
-            requestId,
-            toolUseId,
-            result: { success: false, error: denyMsg }
-          })
-          if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
-            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
-            break
-          }
-          continue
         }
-        needsConfirm = decision.type === 'require-confirm'
-        logAgentEvent('info', needsConfirm ? 'script.ask' : 'script.allow.execute', {
+        const blockedReason = gate.decision.ruleId.startsWith('remote-deny-')
+          ? 'feishu_remote_write_blocked'
+          : undefined
+        logToolLoopError(
+          { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
+          denyMsg,
+          toolName === 'run_script' && gate.rawScriptAnalysis
+            ? `script deny patterns=${gate.rawScriptAnalysis.patterns.join(',')}`
+            : denyMsg
+        )
+        toolResults.push(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }))
+        safeWebContentsSend(sender,'tool:result', {
+          requestId,
+          toolUseId,
+          result: { success: false, error: denyMsg, ...(blockedReason ? { blockedReason } : {}) }
+        })
+        if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
+          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
+          break
+        }
+        continue
+      }
+      if (toolName === 'run_script' && gate.rawScriptAnalysis) {
+        logAgentEvent('info', gate.decision.type === 'require-confirm' ? 'script.ask' : 'script.allow.execute', {
           requestId,
           sessionId,
           toolUseId,
-          patterns: scriptDecision.rawAnalysis.patterns,
+          patterns: gate.rawScriptAnalysis.patterns,
           remote: Boolean(remoteContext)
         })
-        // Content analysis replaces autoAllowScriptExecution as the gate.
       }
-      if (fileAutoApproved) {
-        needsConfirm = false
+
+      // 判定通过：出站写记账（原相对位置：确认前）
+      if (remoteBudgetState && isOutboundWriteTool(toolName, inputObj)) {
+        recordOutboundWrite(remoteBudgetState)
       }
+
+      let outcome: ToolConfirmOutcome = 'approved'
+      let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
+      const autoApproveFallback: AutoApproveFallback | undefined = gate.autoApproveFallback
+      if (autoApproveFallback) {
+        logAgentEvent('info', 'file.auto_approve.fallback', {
+          requestId,
+          sessionId,
+          toolUseId,
+          toolName,
+          relPath: typeof inputObj.path === 'string' ? inputObj.path : '',
+          reason: autoApproveFallback.reason,
+          reasonCode: autoApproveFallback.reasonCode
+        })
+      }
+      // 桌面写/编辑自动批准：构建 diff/字节 meta（纯展示，判定已在 gate 完成）
+      let fileAutoApproved = false
+      let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
+      if (gate.decision.type === 'auto-allow' && gate.decision.ruleId === 'desktop-auto-approve') {
+        fileAutoApproved = true
+        const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
+        const diff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
+        let bytesWritten = 0
+        if (toolName === 'write_file') {
+          const content = typeof inputObj.content === 'string' ? inputObj.content : ''
+          bytesWritten = Buffer.byteLength(content, 'utf8')
+        } else if (diff) {
+          bytesWritten = Buffer.byteLength(diff.newContent, 'utf8')
+        }
+        const stats = diff
+          ? computeDiffLineStats(diff.oldContent, diff.newContent)
+          : { add: 0, remove: 0 }
+        fileAutoApproveMeta = {
+          path: relPath,
+          added: stats.add,
+          removed: stats.remove,
+          bytesWritten,
+          ...(diff ? { diff } : {})
+        }
+      }
+      const needsConfirm = gate.decision.type === 'require-confirm'
+      const confirmMemoryTiers =
+        gate.decision.type === 'require-confirm' ? gate.decision.memoryTiers : []
+      const mcpEntryForConfirm = gate.mcpEntry
 
       if (needsConfirm && remoteContext) {
         const resolvedPolicy = resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig)
@@ -1403,6 +1175,7 @@ async function runToolChatSessionInner(
             messageId: remoteContext.messageId,
             chatId: remoteContext.chatId,
             userId: remoteContext.userId,
+            memoryTiers: confirmMemoryTiers,
             trustEligible:
               toolName === 'run_shell' && shellPrecheck?.ok
                 ? canShowShellTrustOption(
@@ -1411,20 +1184,13 @@ async function runToolChatSessionInner(
                   )
                 : false
           }
-          const remoteMetadata = getBuiltinToolMetadata(toolName)
           const remoteReq: ConfirmRequest = {
-            facts: {
-              toolName,
-              actionClass: remoteMetadata?.actionClass ?? 'execute',
-              baseRiskLevel: remoteMetadata?.riskLevel ?? 'medium',
-              signals: [],
-              summary: { text: toolName }
-            },
+            facts: gate.facts,
             riskLevel:
               toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
                 ? 'high'
                 : 'medium',
-            memoryTiers: [],
+            memoryTiers: confirmMemoryTiers,
             timeoutMs: null
           }
           const imOutcome = await new LegacyImChannel({
@@ -2048,147 +1814,6 @@ function resolveMcpExecutor(
   })
 }
 
-/** @internal exported for unit tests */
-export function shouldSkipRemoteBrowserConfirm(
-  remoteContext: RemoteContext | undefined,
-  toolName: string,
-  inputObj: Record<string, unknown>,
-  feishuConfig?: FeishuConfig,
-  wechatConfig?: WeChatConfig
-): boolean {
-  if (!remoteContext || toolName !== 'browser') return false
-  const action = inputObj.action
-  if (action !== 'navigate' && action !== 'act') return false
-  const channelConfig = remoteContext.source === 'feishu' ? feishuConfig : wechatConfig
-  if (action === 'navigate') {
-    return shouldSkipRemoteBrowserNavigateConfirm(channelConfig)
-  }
-  // action === 'act': gated by migration completeness (conservative overlay).
-  return shouldSkipRemoteBrowserActConfirm(channelConfig)
-}
-
-function isOutboundWriteTool(toolName: string, inputObj: Record<string, unknown>): boolean {
-  if (toolName === 'wechat_send' || toolName === 'wechat_reply') return true
-  if (toolName !== 'run_lark_cli') return false
-  // unknown / non-string argv → fail closed (count as write); pure reads do not burn budget
-  return classifyLarkCliImpact(inputObj.args).impact !== 'read'
-}
-
-function evaluateOutboundWriteBudgetGate(
-  state: RemoteTaskBudgetState,
-  toolName: string,
-  inputObj: Record<string, unknown>
-): { allow: true } | { allow: false; message: string; reason: BudgetPauseReason } {
-  if (!isOutboundWriteTool(toolName, inputObj)) return { allow: true }
-  const outboundCheck = checkRemoteTaskBudget(state, 'outbound_write')
-  if (!outboundCheck.ok) {
-    return {
-      allow: false,
-      message: `${outboundCheck.message}（继续 / 回桌面 / 停止）`,
-      reason: outboundCheck.reason
-    }
-  }
-  recordOutboundWrite(state)
-  return { allow: true }
-}
-
-/** @internal exported for unit tests */
-export function evaluateOutboundWriteBudgetGateForTests(
-  state: RemoteTaskBudgetState,
-  toolName: string,
-  inputObj: Record<string, unknown> = {}
-): { allow: true } | { allow: false; message: string; reason: BudgetPauseReason } {
-  return evaluateOutboundWriteBudgetGate(state, toolName, inputObj)
-}
-
-function toolNeedsUserConfirmation(
-  toolName: string,
-  inputObj: Record<string, unknown>,
-  feishuConfig?: FeishuConfig,
-  wechatConfig?: WeChatConfig,
-  browserConfig?: BrowserConfig,
-  sessionId?: string,
-  currentPageUrl?: string,
-  danger?: ActDangerAssessment | null
-): boolean {
-  if (toolName === 'browser' && browserConfig) {
-    const action = inputObj.action
-    if (typeof action !== 'string') return true
-    return browserActionNeedsConfirmation(
-      action as BrowserAction,
-      inputObj,
-      browserConfig,
-      sessionId,
-      currentPageUrl,
-      danger
-    )
-  }
-  if (toolName === 'run_lark_cli') {
-    const args = inputObj.args
-    if (!Array.isArray(args)) return true
-    const requireConfirm = feishuConfig?.larkCliWriteRequiresConfirm ?? true
-    return larkCliWriteNeedsConfirm(args, requireConfirm)
-  }
-  // wechat_reply / wechat_send: 一对一私聊出站发给用户自己，无需前置确认（见 wechat-remote-outbound-confirm-removal-requirement）
-  return builtinToolNeedsConfirmation(toolName)
-}
-
-/** @internal exported for unit tests */
-export function toolNeedsUserConfirmationForTests(
-  toolName: string,
-  inputObj: Record<string, unknown>,
-  feishuConfig?: FeishuConfig,
-  wechatConfig?: WeChatConfig,
-  browserConfig?: BrowserConfig,
-  sessionId?: string,
-  currentPageUrl?: string,
-  danger?: ActDangerAssessment | null
-): boolean {
-  return toolNeedsUserConfirmation(
-    toolName,
-    inputObj,
-    feishuConfig,
-    wechatConfig,
-    browserConfig,
-    sessionId,
-    currentPageUrl,
-    danger
-  )
-}
-
-function evaluateRemoteToolBlock(
-  toolName: string,
-  inputObj: Record<string, unknown>,
-  remoteContext: RemoteContext | undefined,
-  feishuConfig?: FeishuConfig,
-  wechatConfig?: WeChatConfig
-): string | null {
-  if (!remoteContext) return null
-
-  const channelConfig = remoteContext.source === 'feishu' ? feishuConfig : wechatConfig
-  const denyOutbound = channelConfig?.remoteDenyOutbound ?? false
-
-  // remoteAllowLocalWrite no longer hard-denies; remote writes go through RemoteWriteGrant.
-
-  if (remoteContext.source === 'feishu' && toolName === 'run_lark_cli' && denyOutbound) {
-    const args = inputObj.args
-    if (!Array.isArray(args)) return '远程策略禁止此类写操作。'
-    if (classifyLarkCliImpact(args).impact !== 'read') {
-      return '远程策略禁止此类写操作。'
-    }
-  }
-
-  if (
-    remoteContext.source === 'wechat' &&
-    (toolName === 'wechat_send' || toolName === 'wechat_reply') &&
-    denyOutbound
-  ) {
-    return '远程策略禁止此类写操作。'
-  }
-
-  return null
-}
-
 function estimateWriteToolBytes(toolName: string, inputObj: Record<string, unknown>): number {
   if (toolName === 'write_file') {
     const content = typeof inputObj.content === 'string' ? inputObj.content : ''
@@ -2200,15 +1825,4 @@ function estimateWriteToolBytes(toolName: string, inputObj: Record<string, unkno
     return Buffer.byteLength(oldS, 'utf8') + Buffer.byteLength(newS, 'utf8')
   }
   return 0
-}
-
-/** @internal exported for unit tests */
-export function evaluateRemoteToolBlockForTests(
-  toolName: string,
-  inputObj: Record<string, unknown>,
-  remoteContext: RemoteContext | undefined,
-  feishuConfig?: FeishuConfig,
-  wechatConfig?: WeChatConfig
-): string | null {
-  return evaluateRemoteToolBlock(toolName, inputObj, remoteContext, feishuConfig, wechatConfig)
 }
