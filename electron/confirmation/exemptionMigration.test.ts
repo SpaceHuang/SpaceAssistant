@@ -20,15 +20,19 @@ describe('buildExemptionMigrationEntries（P3 豁免迁移）', () => {
     expect(e.decision).toBe('allow')
   })
 
-  it('浏览器持久域名信任（trustedDomains + actTrustedDomains）→ domain 键（去重）', () => {
+  it('浏览器持久域名信任按清单分档：trustedDomains→domain-any-action，actTrustedDomains→domain+action', () => {
     const entries = buildExemptionMigrationEntries({
       browserTrustedDomains: ['example.com'],
       actTrustedDomains: ['example.com', 'feishu.cn']
     })
-    expect(entries.map((e) => (e.key.kind === 'domain' ? e.key.domain : ''))).toEqual(
-      expect.arrayContaining(['example.com', 'feishu.cn'])
+    expect(entries).toHaveLength(3)
+    expect(entries.map((e) => e.key)).toEqual(
+      expect.arrayContaining([
+        { kind: 'domain', domain: 'example.com', level: 'domain-any-action' },
+        { kind: 'domain', domain: 'example.com', level: 'domain+action' },
+        { kind: 'domain', domain: 'feishu.cn', level: 'domain+action' }
+      ])
     )
-    expect(entries).toHaveLength(2)
   })
 
   it('忽略空命令/域名；并入 extra 条目', () => {

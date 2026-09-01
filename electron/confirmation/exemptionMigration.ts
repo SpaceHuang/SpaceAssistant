@@ -13,7 +13,8 @@ export interface ExemptionMigrationInput {
  * 把存量豁免（shell 信任命令 / 浏览器持久域名信任）转换为 decision_cache 条目（P3 §5.3）。
  *
  * - shell 信任命令 → shell-command 精确签名键（persistent）；
- * - 浏览器持久域名信任（browserConfig.trustedDomains / actTrustedDomains）→ domain 键（persistent）；
+ * - 浏览器持久域名信任按两张清单分档：trustedDomains → `domain-any-action` 键（navigate 档）、
+ *   actTrustedDomains → `domain+action` 键（act 档），persistent（等价现状隔离语义）；
  * - 会话级（MCP 会话信任 / act 会话信任）为运行时内存态，由调用方以 extra 注入（scope=session，
  *   应用启动时清空，见 §5.3 清理钩子）。
  * - 其余额外条目（如 policy_rules 覆盖、migration.* 审计）由调用方封装。
@@ -41,17 +42,24 @@ export function buildExemptionMigrationEntries(input: ExemptionMigrationInput): 
   const domains = new Set([...(input.browserTrustedDomains ?? []), ...(input.actTrustedDomains ?? [])])
   for (const domain of domains) {
     if (!domain) continue
-    entries.push({
-      id: `mig-domain-${domain}`,
-      key: { kind: 'domain', domain, level: 'domain-any-action' },
-      decision: 'allow',
-      lane: '*',
-      scope: 'persistent',
-      createdAt: now,
-      lastHitAt: now,
-      hitCount: 0,
-      source: 'migration'
-    })
+    // 档位拆分（等价现状两张独立清单）：navigate 信任（trustedDomains）→ domain-any-action 档；
+    // act 信任（actTrustedDomains）→ domain+action 档。两档键互不命中，避免 act 被 navigate 信任放行。
+    const levels: Array<'domain-any-action' | 'domain+action'> = []
+    if (input.browserTrustedDomains?.includes(domain)) levels.push('domain-any-action')
+    if (input.actTrustedDomains?.includes(domain)) levels.push('domain+action')
+    for (const level of levels) {
+      entries.push({
+        id: `mig-domain-${level}-${domain}`,
+        key: { kind: 'domain', domain, level },
+        decision: 'allow',
+        lane: '*',
+        scope: 'persistent',
+        createdAt: now,
+        lastHitAt: now,
+        hitCount: 0,
+        source: 'migration'
+      })
+    }
   }
 
   entries.push(...(input.extra ?? []))

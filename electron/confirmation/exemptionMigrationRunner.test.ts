@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getConfigValue, getDbConnection, openSqliteDatabase } from '../database'
+import { getConfigValue, getDbConnection, openSqliteDatabase, setConfigValue } from '../database'
 import type { AppDatabase } from '../database'
 import { addTrustedCommand } from '../shell/shellCommandTrust'
 import { persistBrowserConfig } from '../browser/browserConfigDb'
@@ -35,7 +35,7 @@ describe('runExemptionMigrationOnce（§6 启动一次性豁免迁移）', () =>
     const cache = new SqliteDecisionCache(getDbConnection(db))
     expect(cache.lookup({ kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' })).not.toBeNull()
     expect(cache.lookup({ kind: 'domain', domain: 'example.com', level: 'domain-any-action' })).not.toBeNull()
-    expect(cache.lookup({ kind: 'domain', domain: 'feishu.cn', level: 'domain-any-action' })).not.toBeNull()
+    expect(cache.lookup({ kind: 'domain', domain: 'feishu.cn', level: 'domain+action' })).not.toBeNull()
 
     expect(events).toHaveLength(3)
     for (const e of events) {
@@ -91,4 +91,40 @@ describe('runExemptionMigrationOnce（§6 启动一次性豁免迁移）', () =>
     const before = cache.lookup({ kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' })
     expect(before).not.toBeNull()
   })
+
+  it('v1 → v2：清除仅属 act 清单的错档（domain-any-action）条目，改写为 domain+action 档', () => {
+    const db = openSqliteDatabase(':memory:')
+    dbs.push(db)
+    const cache = new SqliteDecisionCache(getDbConnection(db))
+    const now = Date.now()
+    // 模拟 v1 迁移产物：feishu.cn 只在 act 清单却落在 navigate 档；example.com 两清单都有
+    for (const domain of ['feishu.cn', 'example.com']) {
+      cache.record({
+        id: `mig-domain-${domain}`,
+        key: { kind: 'domain', domain, level: 'domain-any-action' },
+        decision: 'allow',
+        lane: '*',
+        scope: 'persistent',
+        createdAt: now,
+        lastHitAt: now,
+        hitCount: 0,
+        source: 'migration'
+      })
+    }
+    setConfigValueForTest(db)
+    persistBrowserConfig(db, { trustedDomains: ['example.com'], actTrustedDomains: ['feishu.cn', 'example.com'] })
+
+    const r = runExemptionMigrationOnce(db)
+    expect(r.status).toBe('done')
+    // 错档条目被清除；正确两档条目写入
+    expect(cache.lookup({ kind: 'domain', domain: 'feishu.cn', level: 'domain-any-action' })).toBeNull()
+    expect(cache.lookup({ kind: 'domain', domain: 'feishu.cn', level: 'domain+action' })).not.toBeNull()
+    expect(cache.lookup({ kind: 'domain', domain: 'example.com', level: 'domain-any-action' })).not.toBeNull()
+    expect(cache.lookup({ kind: 'domain', domain: 'example.com', level: 'domain+action' })).not.toBeNull()
+  })
 })
+
+/** 把迁移版本号固定在 v1（模拟旧版本库）。 */
+function setConfigValueForTest(db: AppDatabase): void {
+  setConfigValue(db, EXEMPTION_MIGRATION_VERSION_KEY, '1')
+}

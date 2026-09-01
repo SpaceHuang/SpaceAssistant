@@ -15,8 +15,8 @@ import type { AuditSink } from './audit'
  * - 迁移过程逐条落 `migration.*` 审计事件（§5.6）。
  */
 
-/** 确认框架豁免迁移版本号。 */
-export const CONFIRMATION_EXEMPTION_MIGRATION_VERSION = 1
+/** 确认框架豁免迁移版本号。v2：actTrustedDomains 拆分为 domain+action 档（修正 v1 合并档位的语义漂移）。 */
+export const CONFIRMATION_EXEMPTION_MIGRATION_VERSION = 2
 export const EXEMPTION_MIGRATION_VERSION_KEY = 'config.confirmation.exemptionMigrationVersion'
 
 export interface ExemptionMigrationRunDeps {
@@ -65,6 +65,14 @@ export function runExemptionMigrationOnce(
       actTrustedDomains: browser.actTrustedDomains
     })
     const cache = new SqliteDecisionCache(getDbConnection(db))
+    // v1 → v2 修正：v1 把 actTrustedDomains 并入 domain-any-action 档（navigate 档），
+    // 会让 act 被 navigate 信任放行（语义漂移）；这里清除仅属于 act 清单的错档条目。
+    if (current === 1) {
+      for (const domain of browser.actTrustedDomains) {
+        if (!domain || browser.trustedDomains.includes(domain)) continue
+        cache.clear({ kind: 'domain', domain, level: 'domain-any-action' })
+      }
+    }
     const written = migrateExemptionsToCache(entries, cache)
     // 逐条落 migration.* 审计（§5.6）：落规范化键（可对账），不落原始输入
     for (const entry of entries) {
