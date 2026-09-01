@@ -54,20 +54,44 @@ function formatTs(ts: number): string {
   return ts > 0 ? new Date(ts).toLocaleString() : '—'
 }
 
-/** 区 1：策略套餐 + 规则覆盖 + 链路硬约束。 */
+/** 区 1：策略套餐 + 规则覆盖 + 链路硬约束（确认模式并入 desktop-auto-approve 规则行）。 */
 function PolicyPackageSection({
   model,
+  toolUi,
+  setToolUi,
   remoteImValue,
   onRemoteImChange,
   onModelChange
 }: {
   model: SecuritySettingsModelPayload | null
+  toolUi: ToolsSettingsUi
+  setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
   remoteImValue: RemoteImCommonConfig
   onRemoteImChange: (patch: Partial<RemoteImCommonConfig>) => void
   onModelChange: () => void
 }) {
   const { message, modal } = App.useApp()
   const { t } = useTypedTranslation('config')
+
+  /** 确认模式（写文件）：desktop-auto-approve 规则行的控件，auto 档带二次确认。 */
+  const handleConfirmModeChange = (next: FileConfirmMode) => {
+    if (next === 'auto' && toolUi.confirmMode !== 'auto') {
+      modal.confirm({
+        title: t('tools.file.autoApprove.confirmTitle'),
+        content: (
+          <div>
+            <p>{t('tools.file.autoApprove.confirmMessage')}</p>
+            <p>{t('tools.file.autoApprove.confirmWarning')}</p>
+          </div>
+        ),
+        okText: t('tools.file.autoApprove.confirmOk'),
+        cancelText: t('tools.file.autoApprove.confirmCancel'),
+        onOk: () => setToolUi((s) => ({ ...s, confirmMode: 'auto' }))
+      })
+      return
+    }
+    setToolUi((s) => ({ ...s, confirmMode: next }))
+  }
 
   const laneLabel = (lane: (typeof LANES)[number]): string =>
     lane === 'desktop'
@@ -163,21 +187,47 @@ function PolicyPackageSection({
         {
           title: t('toolsSecurity.policy.actionColumn'),
           width: 140,
-          render: (_, r) =>
-            r.locked ? (
-              <span>
-                {r.action === 'auto-evaluator'
-                  ? t('toolsSecurity.policy.actionAutoEvaluator')
-                  : r.action === 'deny'
-                    ? t('toolsSecurity.policy.actionDeny')
-                    : r.action === 'allow'
-                      ? t('toolsSecurity.policy.actionAllow')
-                      : t('toolsSecurity.policy.actionAsk')}
-              </span>
-            ) : (
+          render: (_, r) => {
+            // 确认模式（diff/direct/auto）并入规则列表：desktop-auto-approve 行的动作列即确认模式控件，
+            // 读写 toolUi 草稿（统一保存），不受套餐 custom 前置限制
+            if (r.id === 'desktop-auto-approve') {
+              return (
+                <Select
+                  size="small"
+                  value={toolUi.confirmMode}
+                  style={{ width: '100%' }}
+                  classNames={configModalSelectPopupClassNames}
+                  options={(['diff', 'direct', 'auto'] as const).map((v) => ({
+                    value: v,
+                    label:
+                      v === 'diff'
+                        ? t('tools.file.confirmDiff')
+                        : v === 'direct'
+                          ? t('tools.file.confirmDirect')
+                          : t('tools.file.confirmAuto')
+                  }))}
+                  onChange={(v) => handleConfirmModeChange(v)}
+                />
+              )
+            }
+            // 其余 auto-evaluator 规则是执行链路注入的评估器入口，动作不可被套餐覆盖
+            if (r.locked || r.action === 'auto-evaluator') {
+              return (
+                <span>
+                  {r.action === 'auto-evaluator'
+                    ? t('toolsSecurity.policy.actionAutoEvaluator')
+                    : r.action === 'deny'
+                      ? t('toolsSecurity.policy.actionDeny')
+                      : r.action === 'allow'
+                        ? t('toolsSecurity.policy.actionAllow')
+                        : t('toolsSecurity.policy.actionAsk')}
+                </span>
+              )
+            }
+            return (
               <Select
                 size="small"
-                value={r.action === 'auto-evaluator' ? undefined : r.action}
+                value={r.action}
                 disabled={(model?.packages[lane] ?? 'standard') !== 'custom'}
                 style={{ width: '100%' }}
                 classNames={configModalSelectPopupClassNames}
@@ -193,6 +243,7 @@ function PolicyPackageSection({
                 onChange={(v) => changeRuleAction(r, v)}
               />
             )
+          }
         },
         {
           title: t('toolsSecurity.policy.stateColumn'),
@@ -260,62 +311,6 @@ function PolicyPackageSection({
           }
         })}
       />
-    </ConfigSettingsStack>
-  )
-}
-
-/** 区 2：确认模式（与「工具 → 文件」页读写同一份配置）。 */
-function ConfirmModeSection({
-  toolUi,
-  setToolUi
-}: {
-  toolUi: ToolsSettingsUi
-  setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
-}) {
-  const { modal } = App.useApp()
-  const { t } = useTypedTranslation('config')
-
-  const handleConfirmModeChange = (next: FileConfirmMode) => {
-    if (next === 'auto' && toolUi.confirmMode !== 'auto') {
-      modal.confirm({
-        title: t('tools.file.autoApprove.confirmTitle'),
-        content: (
-          <div>
-            <p>{t('tools.file.autoApprove.confirmMessage')}</p>
-            <p>{t('tools.file.autoApprove.confirmWarning')}</p>
-          </div>
-        ),
-        okText: t('tools.file.autoApprove.confirmOk'),
-        cancelText: t('tools.file.autoApprove.confirmCancel'),
-        onOk: () => setToolUi((s) => ({ ...s, confirmMode: 'auto' }))
-      })
-      return
-    }
-    setToolUi((s) => ({ ...s, confirmMode: next }))
-  }
-
-  return (
-    <ConfigSettingsStack>
-      <Form.Item>
-        <Radio.Group value={toolUi.confirmMode} onChange={(e) => handleConfirmModeChange(e.target.value)}>
-          <Space direction="vertical">
-            <Radio value="diff">{t('tools.file.confirmDiff')}</Radio>
-            <Radio value="direct">{t('tools.file.confirmDirect')}</Radio>
-            <Radio value="auto">{t('tools.file.confirmAuto')}</Radio>
-          </Space>
-        </Radio.Group>
-      </Form.Item>
-      {toolUi.confirmMode === 'auto' ? (
-        <div className="config-field__hint">
-          <p>{t('tools.file.autoApprove.description')}</p>
-          <ul>
-            <li>{t('tools.file.autoApprove.conditionInWorkDir')}</li>
-            <li>{t('tools.file.autoApprove.conditionNotSensitive')}</li>
-            <li>{t('tools.file.autoApprove.conditionMaxBytes', { size: '256 KB' })}</li>
-          </ul>
-          <p>{t('tools.file.autoApprove.fallbackHint')}</p>
-        </div>
-      ) : null}
     </ConfigSettingsStack>
   )
 }
@@ -573,9 +568,10 @@ function AuditSection({
 }
 
 /**
- * 「工具与安全」设置页（§7 五区，P4）：
- * 1. 策略套餐 2. 确认模式 3. 工具开关 4. 确认记忆管理 5. 安全审计记录。
- * 区 2/3 与「工具」页共享同一份草稿配置（统一保存）；区 1/4/5 走即时 IPC 并落审计。
+ * 「工具与安全」设置页（§7，P4）：
+ * 1. 策略套餐（含规则列表；确认模式并入 desktop-auto-approve 规则行）2. 工具开关
+ * 3. 确认记忆管理 4. 安全审计记录。
+ * 区 2 与「工具」页共享同一份草稿配置（统一保存）；区 1/3/4 走即时 IPC 并落审计。
  */
 export function ToolsSecuritySettingsTab({
   active,
@@ -614,16 +610,13 @@ export function ToolsSecuritySettingsTab({
             children: (
               <PolicyPackageSection
                 model={model}
+                toolUi={toolUi}
+                setToolUi={setToolUi}
                 remoteImValue={remoteImValue}
                 onRemoteImChange={onRemoteImChange}
                 onModelChange={() => void reloadModel()}
               />
             )
-          },
-          {
-            key: 'confirmMode',
-            label: t('toolsSecurity.confirmMode.title'),
-            children: <ConfirmModeSection toolUi={toolUi} setToolUi={setToolUi} />
           },
           {
             key: 'switches',

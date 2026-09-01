@@ -48,6 +48,25 @@ const MODEL: SecuritySettingsModelPayload = {
       lanes: ['desktop']
     },
     {
+      id: 'desktop-auto-approve',
+      when: 'invocation',
+      action: 'auto-evaluator',
+      defaultAction: 'auto-evaluator',
+      locked: false,
+      reason: '桌面 confirmMode=auto 时写/编辑文件的自动审批',
+      overridden: false,
+      lanes: ['desktop']
+    },
+    {
+      id: 'shell-precheck-auto-allow',
+      when: 'invocation',
+      action: 'auto-evaluator',
+      defaultAction: 'auto-evaluator',
+      locked: false,
+      reason: 'shell 预检判定可跳过确认',
+      overridden: false
+    },
+    {
       id: 'universal-no-lane',
       when: 'invocation',
       action: 'ask',
@@ -129,7 +148,6 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
   it('渲染五区标题并加载模型/记忆/审计', { timeout: 20000 }, async () => {
     renderTab()
     expect(await screen.findByText('策略套餐')).toBeTruthy()
-    expect(screen.getByText('确认模式')).toBeTruthy()
     expect(screen.getByText('工具开关')).toBeTruthy()
     expect(screen.getByText('确认记忆管理')).toBeTruthy()
     expect(screen.getByText('安全审计记录')).toBeTruthy()
@@ -202,5 +220,41 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     await waitFor(() => {
       expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({ ruleId: 'im-write-ask', action: 'allow' })
     })
+  })
+})
+
+describe('确认模式并入规则列表（desktop-auto-approve 规则行即确认模式控件）', () => {
+  it('桌面 Tab 的 desktop-auto-approve 行渲染确认模式选择器（不受套餐限制）', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('desktop-auto-approve')).closest('tr')!
+    const select = within(row as HTMLElement).getByRole('combobox')
+    // 当前值 diff → 展示文件修改内容；非自定义套餐下也可编辑
+    expect(within(row as HTMLElement).getByText('展示文件修改内容')).toBeTruthy()
+    expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
+  })
+
+  it('切换为自动放行需二次确认，确认后写入 confirmMode=auto 草稿', { timeout: 20000 }, async () => {
+    const { setToolUi } = renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('desktop-auto-approve')).closest('tr')!
+    fireEvent.mouseDown(within(row as HTMLElement).getByRole('combobox'))
+    fireEvent.click(await screen.findByText('自动放行安全写入'))
+    // 二次确认弹窗
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认开启' }))
+    await waitFor(() => {
+      expect(setToolUi).toHaveBeenCalled()
+    })
+    const updater = setToolUi.mock.calls[0]![0] as (s: { confirmMode: string }) => { confirmMode: string }
+    expect(updater({ confirmMode: 'diff' })).toEqual({ confirmMode: 'auto' })
+  })
+
+  it('其余 auto-evaluator 规则（shell 预检放行）保持只读文本', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('shell-precheck-auto-allow')).closest('tr')!
+    expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
+    expect(within(row as HTMLElement).getByText('自动审批')).toBeTruthy()
   })
 })

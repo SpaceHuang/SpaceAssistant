@@ -790,9 +790,6 @@
       "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log.",
       "packageLabel": "Package"
     },
-    "confirmMode": {
-      "title": "Confirm Mode"
-    },
     "switches": {
       "title": "Tool Switches",
       "hint": "Control which capabilities the agent can use in chat."
