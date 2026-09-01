@@ -68,6 +68,33 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     expect(outcome).toEqual({ kind: 'approved', memory: tiers[0]!.key })
   })
 
+  it('记N 选中后触发 onMemory 回调（链路侧写 decision_cache）', async () => {
+    const tiers: MemoryTier[] = [
+      { key: { kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' }, label: '记住 ping baidu.com' }
+    ]
+    const seen: Array<{ sessionId: string; tier: MemoryTier }> = []
+    const ch = new ImChannel({
+      lane: 'feishu',
+      timeoutMs: 1000,
+      sendPrompt: () => undefined,
+      onMemory: (entry, tier) => {
+        seen.push({ sessionId: entry.sessionId, tier })
+      }
+    })
+    const p = ch.request(req(tiers), {
+      sessionId: 's9',
+      toolName: 'run_shell',
+      messageId: 'm1',
+      matchKey: 'c1',
+      memoryTiers: tiers
+    })
+    ch.tryResolveFromInbound({ kind: 'remember', confirmId: ch.listPending()[0]!.confirmId, tier: 1 }, { matchKey: 'c1', messageId: 'm2' })
+    await p
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.sessionId).toBe('s9')
+    expect(seen[0]!.tier).toEqual(tiers[0])
+  })
+
   it('入站 rejects；resolveFromDesktop 可代答；cancelByChannel 只作用于本链路', async () => {
     const ch = new ImChannel({ lane: 'feishu', timeoutMs: 1000, sendPrompt: () => undefined })
     const p = ch.request(req(), {

@@ -5,6 +5,7 @@ import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { BrowserDetectContext } from '../../src/shared/browserTypes'
 import type { AppDatabase } from '../database'
+import type { MemoryTier } from '../../src/shared/confirmation/types'
 import type { WorkDirManager } from '../workDirManager'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
@@ -24,6 +25,8 @@ export type RemoteConfirmPayload = {
   inboundRaw?: IncomingMessage
   /** When false, IM trust phrases are rejected without approving. */
   trustEligible?: boolean
+  /** 决策引擎派生的记忆档位（记N 选项）；空数组表示不开放记忆。 */
+  memoryTiers?: MemoryTier[]
 }
 
 /** Shared confirm-manager surface used by remote session tools (pending checks). */

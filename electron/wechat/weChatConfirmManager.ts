@@ -15,7 +15,8 @@ import { addTrustedCommand } from '../shell/shellCommandTrust'
 import type { AppDatabase } from '../database'
 import { ImChannel, type ImPendingConfirm } from '../confirmation/imChannel'
 import { getSecurityAuditLog } from '../confirmation/audit'
-import type { ConfirmRequest } from '../../src/shared/confirmation/types'
+import type { ConfirmRequest, MemoryTier } from '../../src/shared/confirmation/types'
+import { recordUserAnswerToCache, scopeForCacheKey } from '../confirmation/decisionCacheWriter'
 
 export type WeChatConfirmKind = 'tool_write'
 
@@ -38,6 +39,8 @@ export interface WeChatPendingConfirm {
   requestId?: string
   /** Short confirm id for IM protocol (Y <confirmId>) */
   confirmId?: string
+  /** 决策引擎派生的记忆档位（记N 选项）。 */
+  memoryTiers?: MemoryTier[]
 }
 
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5 * 60_000
@@ -81,6 +84,20 @@ export class WeChatConfirmManager {
         if (prompt) void replyBot.reply(inbound, prompt).catch(() => undefined)
       },
       onTrust: (entry) => this.tryAddTrust(entry as unknown as WeChatPendingConfirm),
+      // 记N：写 decision_cache（执行链路侧），落 cache.write 审计；无 db 时跳过
+      onMemory: (entry, tier) => {
+        if (!this.db) return
+        recordUserAnswerToCache({
+          db: this.db,
+          audit: getSecurityAuditLog(),
+          lane: 'wechat',
+          sessionId: entry.sessionId,
+          key: tier.key,
+          decision: 'allow',
+          scope: scopeForCacheKey(tier.key),
+          source: 'user-confirm'
+        })
+      },
       onHint: (entry, kind) => {
         const replyBot = this.getReplyBot?.()
         if (!replyBot) return
@@ -161,7 +178,7 @@ export class WeChatConfirmManager {
         summary: { text: pending.toolName ?? 'unknown' }
       },
       riskLevel: 'medium',
-      memoryTiers: [],
+      memoryTiers: pending.memoryTiers ?? [],
       timeoutMs: null
     }
     return this.im.request(confirmRequest, {
@@ -176,7 +193,7 @@ export class WeChatConfirmManager {
       authorizationGeneration:
         pending.authorizationGeneration ?? remoteAuthorizationRegistry.getGeneration('wechat'),
       requestId: pending.requestId,
-      memoryTiers: []
+      memoryTiers: pending.memoryTiers ?? []
     }).then((outcome) => {
       if (outcome.kind === 'approved') return 'y'
       if (outcome.kind === 'timeout') return 'timeout'

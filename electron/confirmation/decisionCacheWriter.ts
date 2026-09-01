@@ -18,6 +18,11 @@ function expiresAtForKey(key: CacheKey, now: number): number | undefined {
   return undefined
 }
 
+/** 按缓存键推导记忆范围：绑定 sessionId 的键为会话级，其余持久。 */
+export function scopeForCacheKey(key: CacheKey): 'session' | 'persistent' {
+  return 'sessionId' in key && key.sessionId ? 'session' : 'persistent'
+}
+
 export interface RecordUserAnswerArgs {
   db: AppDatabase
   audit?: AuditSink

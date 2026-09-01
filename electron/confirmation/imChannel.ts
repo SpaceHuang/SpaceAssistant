@@ -46,6 +46,8 @@ export interface ImChannelDeps {
   ) => boolean
   /** approve_and_trust 时由链路侧写入信任；返回 false（无资格/写入失败）则不解析。 */
   onTrust?: (entry: ImPendingConfirm) => boolean
+  /** 记N 选中档位后由链路侧写 decision_cache（执行链路侧写缓存，落 cache.write 审计）。 */
+  onMemory?: (entry: ImPendingConfirm, tier: MemoryTier) => void
   /** trust_misclick / usage_hint 时由链路侧回复提示。 */
   onHint?: (entry: ImPendingConfirm, kind: 'trust_misclick' | 'usage_hint') => void
 }
@@ -165,7 +167,9 @@ export class ImChannel {
     if (!match) return true
 
     if (parsed.kind === 'remember' && parsed.tier != null && match.memoryTiers[parsed.tier - 1]) {
-      this.resolve(match.id, 'y', match.memoryTiers[parsed.tier - 1])
+      const tier = match.memoryTiers[parsed.tier - 1]!
+      this.resolve(match.id, 'y', tier)
+      this.deps.onMemory?.(match, tier)
       return true
     }
     if (parsed.kind === 'approve_and_trust') {
