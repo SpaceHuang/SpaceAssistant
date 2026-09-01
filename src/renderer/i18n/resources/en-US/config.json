@@ -292,17 +292,13 @@
       "fallbackDisabledHint": "When disabled, the agent cannot call this tool in chat."
     },
     "nav": {
-      "switches": {
-        "label": "Tool toggles",
-        "hint": "Control which capabilities the agent can use in chat"
-      },
       "mcp": {
         "label": "MCP Servers",
         "hint": "External MCP Server connections, auth and tool management"
       },
       "file": {
         "label": "File operations",
-        "hint": "Write confirmation and history backups"
+        "hint": "File history backups and snapshots"
       },
       "script": {
         "label": "Script execution",
@@ -318,11 +314,10 @@
       },
       "security": {
         "label": "Tools & Security",
-        "hint": "Policy packages, confirm mode, tool switches, confirmation memory and security audit"
+        "hint": "Single home for policy packages, confirm mode, tool switches, confirmation memory and audit"
       }
     },
     "file": {
-      "confirmModeLabel": "File write confirmation mode",
       "confirmDiff": "Show file changes",
       "confirmDirect": "Confirm directly",
       "confirmAuto": "Auto-approve safe writes",
@@ -339,7 +334,8 @@
         "confirmCancel": "Cancel"
       },
       "checkpointLabel": "File history backup",
-      "maxSnapshotsLabel": "Max snapshots per file"
+      "maxSnapshotsLabel": "Max snapshots per file",
+      "checkpointInfo": "When enabled, a history snapshot is kept before file writes, so you can roll back after Agent changes."
     },
     "script": {
       "pythonPathLabel": "Python path",
@@ -757,7 +753,7 @@
     "saveFailed": "Save failed, please retry"
   },
   "toolsSecurity": {
-    "intro": "Manage tool confirmation policies, confirmation memory and the security audit log in one place. Changes on this page take effect immediately and are recorded in the security audit log.",
+    "intro": "Manage tool confirmation policies, confirmation memory and security audit in one place; confirm mode and tool switches now live here too. Changes apply immediately and are written to the audit log.",
     "openPage": "Open \"Tools & Security\"",
     "policy": {
       "title": "Policy Packages",
@@ -791,14 +787,15 @@
       "hardConstraintTitle": "Lane hard constraint",
       "hardConstraintHint": "Remote lanes may write local files (remoteAllowLocalWrite). When off, write operations from remote sessions are always denied; the hard-constraint check always runs regardless of the switch.",
       "hardConstraintConfirmTitle": "Change lane hard constraint?",
-      "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log."
+      "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log.",
+      "packageLabel": "Package"
     },
     "confirmMode": {
       "title": "Confirm Mode"
     },
     "switches": {
       "title": "Tool Switches",
-      "hint": "Reads and writes the same configuration as the \"Tools -> Switches\" page."
+      "hint": "Control which capabilities the agent can use in chat."
     },
     "memory": {
       "title": "Confirmation Memory",

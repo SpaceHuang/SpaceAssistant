@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { App, ConfigProvider } from 'antd'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
@@ -24,7 +24,8 @@ const MODEL: SecuritySettingsModelPayload = {
       defaultAction: 'ask',
       locked: false,
       reason: '远程链路写本地文件默认需要确认',
-      overridden: false
+      overridden: false,
+      lanes: ['wechat', 'feishu']
     },
     {
       id: 'remote-shell-disabled',
@@ -33,6 +34,26 @@ const MODEL: SecuritySettingsModelPayload = {
       defaultAction: 'deny',
       locked: true,
       reason: 'SHELL_REMOTE_DISABLED',
+      overridden: false,
+      lanes: ['wechat', 'feishu']
+    },
+    {
+      id: 'script-clean-allow-desktop',
+      when: 'invocation',
+      action: 'allow',
+      defaultAction: 'allow',
+      locked: false,
+      reason: '桌面 clean 脚本免确认',
+      overridden: false,
+      lanes: ['desktop']
+    },
+    {
+      id: 'universal-no-lane',
+      when: 'invocation',
+      action: 'ask',
+      defaultAction: 'ask',
+      locked: false,
+      reason: '无 lane 限定的通用规则应出现在每个链路 Tab',
       overridden: false
     }
   ]
@@ -68,6 +89,12 @@ function renderTab() {
     </Provider>
   )
   return { store, setToolUi }
+}
+
+/** 切到指定链路 Tab 并等待其规则表出现。 */
+async function openLaneTab(name: string) {
+  fireEvent.click(await screen.findByRole('tab', { name }))
+  return screen.findByRole('tabpanel')
 }
 
 describe('ToolsSecuritySettingsTab（§7 五区）', () => {
@@ -113,25 +140,61 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
     // 记忆条目摘要展示
     expect(await screen.findByText('git status')).toBeTruthy()
-    // locked 规则不渲染可编辑 Select（仅一个可编辑动作选择器）
-    expect(screen.getByText('锁定')).toBeTruthy()
+  })
+
+  it('策略套餐区按链路拆 Tab：默认桌面 Tab 只展示适用规则，无硬约束开关', { timeout: 20000 }, async () => {
+    renderTab()
+    // 三个链路 Tab 标题
+    expect(await screen.findByRole('tab', { name: '桌面' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: '微信' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: '飞书' })).toBeTruthy()
+    // 默认桌面 Tab：桌面规则 + 通用规则可见，远程规则不可见
+    const panel = await screen.findByRole('tabpanel')
+    expect(await within(panel).findByText('script-clean-allow-desktop')).toBeTruthy()
+    expect(within(panel).getByText('universal-no-lane')).toBeTruthy()
+    expect(within(panel).queryByText('im-write-ask')).toBeNull()
+    expect(within(panel).queryByText('remote-shell-disabled')).toBeNull()
+    // 桌面链路无硬约束开关（仅远程链路展示）
+    expect(within(panel).queryByText('链路硬约束')).toBeNull()
+  })
+
+  it('微信 Tab 展示硬约束开关与该链路规则（含 locked 只读）', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('微信')
+    expect(await within(panel).findByText('链路硬约束')).toBeTruthy()
+    expect(await within(panel).findByText('im-write-ask')).toBeTruthy()
+    expect(within(panel).getByText('remote-shell-disabled')).toBeTruthy()
+    // locked 规则不渲染可编辑 Select（展示锁定标记）
+    expect(within(panel).getByText('锁定')).toBeTruthy()
+    // 桌面规则不出现在微信 Tab
+    expect(within(panel).queryByText('script-clean-allow-desktop')).toBeNull()
   })
 
   it('切换套餐调用 securitySetPolicyPackage（standard 无二次确认）', { timeout: 20000 }, async () => {
     renderTab()
-    const selects = await screen.findAllByRole('combobox')
-    // 前三个为链路套餐选择器
-    fireEvent.mouseDown(selects[0]!)
+    const panel = await screen.findByRole('tabpanel')
+    const select = (await within(panel).findAllByRole('combobox'))[0]!
+    fireEvent.mouseDown(select)
     fireEvent.click(await screen.findByText('严格'))
     await waitFor(() => {
       expect(window.api.securitySetPolicyPackage).toHaveBeenCalledWith({ lane: 'desktop', package: 'strict' })
     })
   })
 
-  it('自定义套餐下修改规则动作调用 securitySetRuleOverride', { timeout: 20000 }, async () => {
+  it('非自定义链路的规则动作不可编辑（桌面 standard 只读）', { timeout: 20000 }, async () => {
     renderTab()
-    // wechat 为 custom → 非 locked 规则动作可编辑
-    const ruleRow = (await screen.findByText('im-write-ask')).closest('tr')!
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('script-clean-allow-desktop')).closest('tr')!
+    // 规则行内不渲染可选的动作 Select（仅纯文本），或 Select 处于禁用态
+    const select = row.querySelector('.ant-select')
+    if (select) expect(select.className).toContain('ant-select-disabled')
+    else expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
+  })
+
+  it('自定义套餐链路（微信）下修改规则动作调用 securitySetRuleOverride', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('微信')
+    const ruleRow = (await within(panel).findByText('im-write-ask')).closest('tr')!
     const select = ruleRow.querySelector('.ant-select-selector')!
     fireEvent.mouseDown(select)
     const options = await screen.findAllByText('允许')

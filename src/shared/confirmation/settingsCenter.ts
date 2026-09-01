@@ -25,6 +25,8 @@ export interface SecuritySettingsRuleView {
   locked: boolean
   reason: string
   overridden: boolean
+  /** 规则适用链路（rule.match.lane）；缺省表示不限定链路、全链路通用。 */
+  lanes?: ExecutionLane[]
 }
 
 /** 五区数据装配结果。 */

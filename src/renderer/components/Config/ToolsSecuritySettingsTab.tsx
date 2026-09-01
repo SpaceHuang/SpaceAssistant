@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, App, Button, Form, Input, InputNumber, Radio, Select, Space, Switch, Table, Tag } from 'antd'
+import { Alert, App, Button, Collapse, Form, Input, InputNumber, Radio, Select, Space, Switch, Table, Tabs, Tag } from 'antd'
 import type { FileConfirmMode } from '../../../shared/domainTypes'
 import type { RemoteImCommonConfig } from '../../../shared/imTypes'
 import type {
@@ -130,121 +130,135 @@ function PolicyPackageSection({
     return null
   }
 
-  const anyCustom = model ? LANES.some((l) => model.packages[l] === 'custom') : false
+  /** 当前 Tab 链路的生效规则：无 lane 限定的通用规则对每个链路都适用。 */
+  const rulesForLane = (lane: (typeof LANES)[number]): SecuritySettingsRuleView[] =>
+    (model?.rules ?? []).filter((r) => !r.lanes || r.lanes.includes(lane))
+
+  const renderRulesTable = (lane: (typeof LANES)[number]) => (
+    <Table<SecuritySettingsRuleView>
+      size="small"
+      pagination={false}
+      rowKey="id"
+      dataSource={rulesForLane(lane)}
+      columns={[
+        {
+          title: t('toolsSecurity.policy.ruleColumn'),
+          render: (_, r) => (
+            <span>
+              <code className="config-tool-row__id">{r.id}</code>
+              <div className="config-field__hint">{r.reason}</div>
+            </span>
+          )
+        },
+        {
+          title: t('toolsSecurity.policy.whenColumn'),
+          width: 100,
+          render: (_, r) =>
+            r.when === 'invocation'
+              ? t('toolsSecurity.policy.whenInvocation')
+              : r.when === 'exposure'
+                ? t('toolsSecurity.policy.whenExposure')
+                : t('toolsSecurity.policy.whenIngress')
+        },
+        {
+          title: t('toolsSecurity.policy.actionColumn'),
+          width: 140,
+          render: (_, r) =>
+            r.locked ? (
+              <span>
+                {r.action === 'auto-evaluator'
+                  ? t('toolsSecurity.policy.actionAutoEvaluator')
+                  : r.action === 'deny'
+                    ? t('toolsSecurity.policy.actionDeny')
+                    : r.action === 'allow'
+                      ? t('toolsSecurity.policy.actionAllow')
+                      : t('toolsSecurity.policy.actionAsk')}
+              </span>
+            ) : (
+              <Select
+                size="small"
+                value={r.action === 'auto-evaluator' ? undefined : r.action}
+                disabled={(model?.packages[lane] ?? 'standard') !== 'custom'}
+                style={{ width: '100%' }}
+                classNames={configModalSelectPopupClassNames}
+                options={(['deny', 'allow', 'ask'] as const).map((v) => ({
+                  value: v,
+                  label:
+                    v === 'deny'
+                      ? t('toolsSecurity.policy.actionDeny')
+                      : v === 'allow'
+                        ? t('toolsSecurity.policy.actionAllow')
+                        : t('toolsSecurity.policy.actionAsk')
+                }))}
+                onChange={(v) => changeRuleAction(r, v)}
+              />
+            )
+        },
+        {
+          title: t('toolsSecurity.policy.stateColumn'),
+          width: 140,
+          render: (_, r) => (
+            <Space size={4}>
+              {r.locked ? <Tag>{t('toolsSecurity.policy.lockedTag')}</Tag> : null}
+              {r.overridden ? <Tag color="orange">{t('toolsSecurity.policy.overriddenTag')}</Tag> : null}
+              {r.overridden ? (
+                <Button size="small" type="link" onClick={() => resetRule(r)}>
+                  {t('toolsSecurity.policy.reset')}
+                </Button>
+              ) : null}
+            </Space>
+          )
+        }
+      ]}
+    />
+  )
 
   return (
     <ConfigSettingsStack>
-      <h3 className="config-section-title">{t('toolsSecurity.policy.title')}</h3>
       <p className="config-field__hint">{t('toolsSecurity.policy.hint')}</p>
-      {LANES.map((lane) => {
-        const pkg = model?.packages[lane] ?? 'standard'
-        const hint = packageHint(pkg)
-        return (
-          <Form.Item key={lane} label={laneLabel(lane)}>
-            <Select
-              value={pkg}
-              style={{ width: 200 }}
-              classNames={configModalSelectPopupClassNames}
-              options={PACKAGE_VALUES.map((v) => ({
-                value: v,
-                label:
-                  v === 'strict'
-                    ? t('toolsSecurity.policy.packageStrict')
-                    : v === 'standard'
-                      ? t('toolsSecurity.policy.packageStandard')
-                      : v === 'loose'
-                        ? t('toolsSecurity.policy.packageLoose')
-                        : t('toolsSecurity.policy.packageCustom')
-              }))}
-              onChange={(v) => changePackage(lane, v)}
-            />
-            {hint ? <p className="config-field__hint">{hint}</p> : null}
-          </Form.Item>
-        )
-      })}
-
-      <ConfigSwitchRow
-        label={t('toolsSecurity.policy.hardConstraintTitle')}
-        hint={t('toolsSecurity.policy.hardConstraintHint')}
-        checked={remoteImValue.remoteAllowLocalWrite}
-        onChange={toggleHardConstraint}
-      />
-
-      <Table<SecuritySettingsRuleView>
-        size="small"
-        pagination={false}
-        rowKey="id"
-        dataSource={model?.rules ?? []}
-        columns={[
-          {
-            title: t('toolsSecurity.policy.ruleColumn'),
-            render: (_, r) => (
-              <span>
-                <code className="config-tool-row__id">{r.id}</code>
-                <div className="config-field__hint">{r.reason}</div>
-              </span>
-            )
-          },
-          {
-            title: t('toolsSecurity.policy.whenColumn'),
-            width: 100,
-            render: (_, r) =>
-              r.when === 'invocation'
-                ? t('toolsSecurity.policy.whenInvocation')
-                : r.when === 'exposure'
-                  ? t('toolsSecurity.policy.whenExposure')
-                  : t('toolsSecurity.policy.whenIngress')
-          },
-          {
-            title: t('toolsSecurity.policy.actionColumn'),
-            width: 140,
-            render: (_, r) =>
-              r.locked ? (
-                <span>
-                  {r.action === 'auto-evaluator'
-                    ? t('toolsSecurity.policy.actionAutoEvaluator')
-                    : r.action === 'deny'
-                      ? t('toolsSecurity.policy.actionDeny')
-                      : r.action === 'allow'
-                        ? t('toolsSecurity.policy.actionAllow')
-                        : t('toolsSecurity.policy.actionAsk')}
-                </span>
-              ) : (
-                <Select
-                  size="small"
-                  value={r.action === 'auto-evaluator' ? undefined : r.action}
-                  disabled={!anyCustom}
-                  style={{ width: '100%' }}
-                  classNames={configModalSelectPopupClassNames}
-                  options={(['deny', 'allow', 'ask'] as const).map((v) => ({
-                    value: v,
-                    label:
-                      v === 'deny'
-                        ? t('toolsSecurity.policy.actionDeny')
-                        : v === 'allow'
-                          ? t('toolsSecurity.policy.actionAllow')
-                          : t('toolsSecurity.policy.actionAsk')
-                  }))}
-                  onChange={(v) => changeRuleAction(r, v)}
-                />
-              )
-          },
-          {
-            title: t('toolsSecurity.policy.stateColumn'),
-            width: 140,
-            render: (_, r) => (
-              <Space size={4}>
-                {r.locked ? <Tag>{t('toolsSecurity.policy.lockedTag')}</Tag> : null}
-                {r.overridden ? <Tag color="orange">{t('toolsSecurity.policy.overriddenTag')}</Tag> : null}
-                {r.overridden ? (
-                  <Button size="small" type="link" onClick={() => resetRule(r)}>
-                    {t('toolsSecurity.policy.reset')}
-                  </Button>
+      <Tabs
+        items={LANES.map((lane) => {
+          const pkg = model?.packages[lane] ?? 'standard'
+          const hint = packageHint(pkg)
+          return {
+            key: lane,
+            label: laneLabel(lane),
+            children: (
+              <ConfigSettingsStack>
+                <Form.Item label={t('toolsSecurity.policy.packageLabel')} style={{ marginBottom: 0 }}>
+                  <Select
+                    value={pkg}
+                    style={{ width: 200 }}
+                    classNames={configModalSelectPopupClassNames}
+                    options={PACKAGE_VALUES.map((v) => ({
+                      value: v,
+                      label:
+                        v === 'strict'
+                          ? t('toolsSecurity.policy.packageStrict')
+                          : v === 'standard'
+                            ? t('toolsSecurity.policy.packageStandard')
+                            : v === 'loose'
+                              ? t('toolsSecurity.policy.packageLoose')
+                              : t('toolsSecurity.policy.packageCustom')
+                    }))}
+                    onChange={(v) => changePackage(lane, v)}
+                  />
+                  {hint ? <p className="config-field__hint">{hint}</p> : null}
+                </Form.Item>
+                {/* 链路硬约束（remoteAllowLocalWrite）仅远程链路相关，桌面 Tab 不展示 */}
+                {lane !== 'desktop' ? (
+                  <ConfigSwitchRow
+                    label={t('toolsSecurity.policy.hardConstraintTitle')}
+                    hint={t('toolsSecurity.policy.hardConstraintHint')}
+                    checked={remoteImValue.remoteAllowLocalWrite}
+                    onChange={toggleHardConstraint}
+                  />
                 ) : null}
-              </Space>
+                {renderRulesTable(lane)}
+              </ConfigSettingsStack>
             )
           }
-        ]}
+        })}
       />
     </ConfigSettingsStack>
   )
@@ -282,7 +296,6 @@ function ConfirmModeSection({
 
   return (
     <ConfigSettingsStack>
-      <h3 className="config-section-title">{t('toolsSecurity.confirmMode.title')}</h3>
       <Form.Item>
         <Radio.Group value={toolUi.confirmMode} onChange={(e) => handleConfirmModeChange(e.target.value)}>
           <Space direction="vertical">
@@ -292,6 +305,17 @@ function ConfirmModeSection({
           </Space>
         </Radio.Group>
       </Form.Item>
+      {toolUi.confirmMode === 'auto' ? (
+        <div className="config-field__hint">
+          <p>{t('tools.file.autoApprove.description')}</p>
+          <ul>
+            <li>{t('tools.file.autoApprove.conditionInWorkDir')}</li>
+            <li>{t('tools.file.autoApprove.conditionNotSensitive')}</li>
+            <li>{t('tools.file.autoApprove.conditionMaxBytes', { size: '256 KB' })}</li>
+          </ul>
+          <p>{t('tools.file.autoApprove.fallbackHint')}</p>
+        </div>
+      ) : null}
     </ConfigSettingsStack>
   )
 }
@@ -339,7 +363,6 @@ function MemorySection({ active }: { active: boolean }) {
   return (
     <ConfigSettingsStack>
       <div className="config-skill-section-header">
-        <h3 className="config-section-title">{t('toolsSecurity.memory.title')}</h3>
         <Space size="small">
           <Button size="small" onClick={() => void reload()}>
             {t('toolsSecurity.audit.refresh')}
@@ -471,7 +494,6 @@ function AuditSection({
   return (
     <ConfigSettingsStack>
       <div className="config-skill-section-header">
-        <h3 className="config-section-title">{t('toolsSecurity.audit.title')}</h3>
         <Button size="small" onClick={() => void query()}>
           {t('toolsSecurity.audit.refresh')}
         </Button>
@@ -581,20 +603,56 @@ export function ToolsSecuritySettingsTab({
   return (
     <ConfigSettingsStack>
       <p className="config-field__hint">{t('toolsSecurity.intro')}</p>
-      <PolicyPackageSection
-        model={model}
-        remoteImValue={remoteImValue}
-        onRemoteImChange={onRemoteImChange}
-        onModelChange={() => void reloadModel()}
+      <Collapse
+        ghost
+        className="config-tools-security"
+        defaultActiveKey={['policy']}
+        items={[
+          {
+            key: 'policy',
+            label: t('toolsSecurity.policy.title'),
+            children: (
+              <PolicyPackageSection
+                model={model}
+                remoteImValue={remoteImValue}
+                onRemoteImChange={onRemoteImChange}
+                onModelChange={() => void reloadModel()}
+              />
+            )
+          },
+          {
+            key: 'confirmMode',
+            label: t('toolsSecurity.confirmMode.title'),
+            children: <ConfirmModeSection toolUi={toolUi} setToolUi={setToolUi} />
+          },
+          {
+            key: 'switches',
+            label: t('toolsSecurity.switches.title'),
+            children: (
+              <div>
+                <p className="config-field__hint">{t('toolsSecurity.switches.hint')}</p>
+                <BuiltinToolSwitchList
+                  toolUi={toolUi}
+                  setToolUi={setToolUi}
+                  onShellEnabledChange={onShellEnabledChange}
+                />
+              </div>
+            )
+          },
+          {
+            key: 'memory',
+            label: t('toolsSecurity.memory.title'),
+            children: <MemorySection active={active} />,
+            forceRender: true
+          },
+          {
+            key: 'audit',
+            label: t('toolsSecurity.audit.title'),
+            children: <AuditSection active={active} model={model} onModelChange={() => void reloadModel()} />,
+            forceRender: true
+          }
+        ]}
       />
-      <ConfirmModeSection toolUi={toolUi} setToolUi={setToolUi} />
-      <div>
-        <h3 className="config-section-title">{t('toolsSecurity.switches.title')}</h3>
-        <p className="config-field__hint">{t('toolsSecurity.switches.hint')}</p>
-        <BuiltinToolSwitchList toolUi={toolUi} setToolUi={setToolUi} onShellEnabledChange={onShellEnabledChange} />
-      </div>
-      <MemorySection active={active} />
-      <AuditSection active={active} model={model} onModelChange={() => void reloadModel()} />
     </ConfigSettingsStack>
   )
 }

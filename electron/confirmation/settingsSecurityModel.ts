@@ -62,7 +62,8 @@ export function toRuleViews(
       defaultAction: rule.action,
       locked: rule.locked === true,
       reason: rule.reason,
-      overridden: o != null && o.action !== rule.action
+      overridden: o != null && o.action !== rule.action,
+      ...(rule.match?.lane ? { lanes: rule.match.lane } : {})
     }
   })
 }

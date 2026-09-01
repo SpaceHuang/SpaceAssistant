@@ -292,17 +292,13 @@
       "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。"
     },
     "nav": {
-      "switches": {
-        "label": "工具开关",
-        "hint": "控制 Agent 在对话中可调用的能力"
-      },
       "mcp": {
         "label": "MCP 服务",
         "hint": "外部 MCP Server 的连接、认证与工具管理"
       },
       "file": {
         "label": "文件操作",
-        "hint": "写入确认方式与历史备份"
+        "hint": "文件历史备份与快照管理"
       },
       "script": {
         "label": "脚本执行",
@@ -318,11 +314,10 @@
       },
       "security": {
         "label": "工具与安全",
-        "hint": "策略套餐、确认模式、工具开关、确认记忆与安全审计"
+        "hint": "策略套餐、确认模式、工具开关、确认记忆与安全审计的统一入口"
       }
     },
     "file": {
-      "confirmModeLabel": "文件写入确认模式",
       "confirmDiff": "展示文件修改内容",
       "confirmDirect": "直接确认",
       "confirmAuto": "自动放行安全写入",
@@ -339,7 +334,8 @@
         "confirmCancel": "取消"
       },
       "checkpointLabel": "文件历史备份",
-      "maxSnapshotsLabel": "每文件最多快照数"
+      "maxSnapshotsLabel": "每文件最多快照数",
+      "checkpointInfo": "开启后，文件写入前会保留历史快照，可在 Agent 修改后回滚。"
     },
     "script": {
       "pythonPathLabel": "Python 路径",
@@ -757,7 +753,7 @@
     "saveFailed": "保存失败，请重试"
   },
   "toolsSecurity": {
-    "intro": "统一管理工具确认策略、确认记忆与安全审计。本页的套餐、记忆与审计设置变更立即生效，并记入安全审计日志。",
+    "intro": "统一管理工具确认策略、确认记忆与安全审计；确认模式与工具开关也集中在这里配置。本页变更立即生效，并记入安全审计日志。",
     "openPage": "前往「工具与安全」",
     "policy": {
       "title": "策略套餐",
@@ -791,14 +787,15 @@
       "hardConstraintTitle": "链路硬约束",
       "hardConstraintHint": "远程链路允许写入本地文件（remoteAllowLocalWrite）。关闭后远程会话的写文件操作一律拒绝；无论开关状态，硬约束检查始终执行。",
       "hardConstraintConfirmTitle": "确认修改链路硬约束？",
-      "hardConstraintConfirmContent": "该开关影响远程链路的安全边界，修改会记入安全审计日志。"
+      "hardConstraintConfirmContent": "该开关影响远程链路的安全边界，修改会记入安全审计日志。",
+      "packageLabel": "套餐"
     },
     "confirmMode": {
       "title": "确认模式"
     },
     "switches": {
       "title": "工具开关",
-      "hint": "与「工具 → 开关」页读写同一份配置。"
+      "hint": "控制 Agent 在对话中可调用的能力。"
     },
     "memory": {
       "title": "确认记忆管理",
