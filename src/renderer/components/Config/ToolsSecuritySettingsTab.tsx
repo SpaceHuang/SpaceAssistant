@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, App, Button, Collapse, Form, Input, InputNumber, Radio, Select, Space, Switch, Table, Tabs, Tag } from 'antd'
 import type { BrowserConfig, FileConfirmMode } from '../../../shared/domainTypes'
+import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 import type { FeishuConfig } from '../../../shared/feishuTypes'
 import type {
   DecisionCacheEntry,
@@ -12,7 +13,7 @@ import type {
   SecuritySettingsRuleView
 } from '../../../shared/confirmation/settingsCenter'
 import type { PolicyPackage } from '../../../shared/policy/policyPackages'
-import { ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
+import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 import { groupMemoryEntries, memoryEntrySummary } from './toolsSecurityFormat'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -328,6 +329,21 @@ function MemorySection({
   const { t } = useTypedTranslation('config')
   const { t: tCommon } = useTypedTranslation('common')
   const [entries, setEntries] = useState<DecisionCacheEntry[]>([])
+  const [actKeywordsOpen, setActKeywordsOpen] = useState(false)
+  const [actKeywordsDraft, setActKeywordsDraft] = useState('')
+
+  const saveActKeywords = () => {
+    const list = actKeywordsDraft
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    onBrowserChange({ ...browser, actHighRiskKeywords: list })
+  }
+
+  const resetActKeywords = () => {
+    onBrowserChange({ ...browser, actHighRiskKeywords: [...DEFAULT_BROWSER_CONFIG.actHighRiskKeywords] })
+    setActKeywordsDraft(DEFAULT_BROWSER_CONFIG.actHighRiskKeywords.join(', '))
+  }
 
   const reload = useCallback(async () => {
     try {
@@ -371,6 +387,33 @@ function MemorySection({
         checked={browser.actSessionTrustEnabled}
         onChange={(v) => onBrowserChange({ ...browser, actSessionTrustEnabled: v })}
       />
+      {/* R7：act 高风险关键词编辑区自网络访问页迁入，仍读写 browser.actHighRiskKeywords */}
+      <ConfigField
+        label={t('toolsSecurity.memory.actHighRiskKeywordsLabel')}
+        hint={t('toolsSecurity.memory.actHighRiskKeywordsHint')}
+      >
+        <Button type="link" size="small" onClick={() => setActKeywordsOpen((v) => !v)}>
+          {actKeywordsOpen ? t('browser.detectCollapse') : t('browser.detectExpandHint')}
+        </Button>
+        {actKeywordsOpen ? (
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Input.TextArea
+              value={actKeywordsDraft || browser.actHighRiskKeywords.join(', ')}
+              placeholder={t('toolsSecurity.memory.actHighRiskKeywordsPlaceholder')}
+              onChange={(e) => setActKeywordsDraft(e.target.value)}
+              autoSize={{ minRows: 2, maxRows: 6 }}
+            />
+            <Space>
+              <Button size="small" onClick={saveActKeywords}>
+                {t('toolsSecurity.memory.actHighRiskKeywordsSave')}
+              </Button>
+              <Button size="small" onClick={resetActKeywords}>
+                {t('toolsSecurity.memory.actHighRiskKeywordsReset')}
+              </Button>
+            </Space>
+          </Space>
+        ) : null}
+      </ConfigField>
       <div className="config-skill-section-header">
         <Space size="small">
           <Button size="small" onClick={() => void reload()}>

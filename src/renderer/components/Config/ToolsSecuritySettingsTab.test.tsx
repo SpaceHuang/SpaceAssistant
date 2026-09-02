@@ -189,6 +189,32 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
   })
 
+  it('act 高风险关键词编辑区渲染在确认记忆区，保存时解析逗号分隔并调用 onBrowserChange', { timeout: 20000 }, async () => {
+    const onBrowserChange = vi.fn()
+    renderTab({ onBrowserChange })
+    // 记忆区在 Collapse 中，默认未展开，先点开
+    fireEvent.click(await screen.findByText('确认记忆管理'))
+    const label = await screen.findByText('高风险关键词')
+    const field = label.closest('.config-field')!
+    // 展开编辑区
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: '点击展开详情' }))
+    const textarea = within(field as HTMLElement).getByPlaceholderText('逗号分隔，如：支付, 转账, 删除')
+    fireEvent.change(textarea, { target: { value: '支付, 转账, 删除' } })
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(
+        expect.objectContaining({ actHighRiskKeywords: ['支付', '转账', '删除'] })
+      )
+    })
+    // 恢复默认
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: '恢复默认' }))
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(
+        expect.objectContaining({ actHighRiskKeywords: DEFAULT_BROWSER_CONFIG.actHighRiskKeywords })
+      )
+    })
+  })
+
   it('策略套餐区按链路拆 Tab：默认桌面 Tab 只展示适用规则，无硬约束开关', { timeout: 20000 }, async () => {
     renderTab()
     // 三个链路 Tab 标题

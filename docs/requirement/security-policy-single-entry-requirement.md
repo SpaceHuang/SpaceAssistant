@@ -51,7 +51,7 @@
 
 在 `docs/develop/` 增补一条约定（可并入现有设置开发文档）：今后任何设置项跨页迁移，禁止在原位置保留常驻迁移 UI 超过**一个大版本**；迁移信息通过一次性提示或更新日志承载。
 
-### R5 MCP「调用前确认」设置收敛进安全策略（方案已确认，待实施）
+### R5 MCP「调用前确认」设置收敛进安全策略（已实施）
 
 > **状态：已实施**（含行为保持迁移；迁移时 strict/loose 套餐链路保持原样，仅 standard 链路转 custom）。本条与 R1–R3 同一范式（同一类安全决策只能有一个入口），但涉及语义合并，单独列出。
 
@@ -104,6 +104,27 @@
 2. custom 套餐下 `lark-write-ask` 存在覆盖时，开关不误导（有优先级说明）。
 3. `tsc` 双 gate、`i18n-check`、相关测试全部通过。
 
+### R7 act「高风险关键词」入口收敛进安全策略页
+
+> **状态：已实施**。与 R6 同一范式：纯挪 UI 入口，**机制、配置 key（`browser.actHighRiskKeywords`）、默认值、引擎逻辑全部不动，无迁移、无行为变化**。
+
+#### 背景与定性
+
+- `browser.actHighRiskKeywords`（`src/shared/domainTypes.ts:81`；现 UI 在 `BrowserSettingsTab.tsx:256-281`，i18n `browser.actHighRisk*`）：act 指令命中关键词即被 `assessActDanger`（`electron/browser/actDangerAssessor.ts:181-192`）判为危险，**强制确认、不享受会话信任与信任域名**。
+- 定性：它是 act 确认链路的「一票否决」信号源，与 R6 挪入区 4 的 `actSessionTrustEnabled` 是同一条链路的两端——信任记忆决定「什么时候不问」，高风险关键词决定「什么时候必须问」。分处两个 Tab 违背单一入口原则，用户配置信任后还需到网络访问页找否决清单。
+
+#### 变更方案
+
+1. **UI**：删除 `BrowserSettingsTab.tsx` 的「高风险关键词」编辑区（展开/收起、TextArea、保存/重置）；在安全策略页区 4「确认记忆管理」内、act 会话信任开关旁新增同义编辑区，读写仍走现有 `browser` 配置通道（`ConfigModal.tsx` 的 `browserUi` state 透传，同 R6）。
+2. **i18n**：`browser.actHighRiskTitle/Helper/Placeholder/Save/Reset` 迁入 `toolsSecurity.memory.*` 命名空间（zh-CN/en-US 同步），并重新生成 `src/renderer/i18n/types.ts`。
+3. **测试**：更新 `BrowserSettingsTab.test.tsx` 及安全策略页相关测试。
+4. **明确不做**：引擎硬编码部分（`DANGER_LABEL_WORDS` 页面控件扫描、高影响指令正则 `actDangerAssessor.ts:196`）不受该列表影响，保持原样；`navigateRequiresConfirm` 仍按 R6 决议挂账不动。
+
+#### 验收标准
+
+1. 网络访问页不再出现「高风险关键词」；安全策略页区 4 内可正常编辑、保存、重置，行为与迁移前等价。
+2. `tsc` 双 gate、`i18n-check`、相关测试全部通过。
+
 ## 5. 非目标
 
 - 不改动任何配置的存储 key、读写通道或默认值（`config.tools`、`decision_cache`、`config.wechat/feishu` 等保持原样）。
@@ -128,5 +149,6 @@
 | 修改（测试） | `BrowserSettingsTab.test.tsx`、`RemoteImCommonSettings.test.tsx` |
 | 修改（发布说明） | 版本更新日志中补充迁移关系说明 |
 | 文档 | `docs/develop/` 迁移规范约定（R4，后续跟进，本次不变更） |
-| R6（待实施） | `BrowserSettingsTab.tsx`、`FeishuSettingsTab.tsx`、`ToolsSecuritySettingsTab.tsx`、i18n `config.json`（zh-CN/en-US）、`src/renderer/i18n/types.ts`、相关测试 |
-| R5（待实施） | `toolCallGate.ts`、`defaultRules.ts`、`confirmation/types.ts`、`mcpTypes.ts`、`mcpConfigStore.ts`、`mcpIpc.ts`、`mcpDrafts.ts`、`McpServerForm.tsx`、i18n `mcp.confirmPolicy*`、迁移代码及相关测试 |
+| R6（已实施） | `BrowserSettingsTab.tsx`、`FeishuSettingsTab.tsx`、`ToolsSecuritySettingsTab.tsx`、i18n `config.json`（zh-CN/en-US）、`src/renderer/i18n/types.ts`、相关测试 |
+| R5（已实施） | `toolCallGate.ts`、`defaultRules.ts`、`confirmation/types.ts`、`mcpTypes.ts`、`mcpConfigStore.ts`、`mcpIpc.ts`、`mcpDrafts.ts`、`McpServerForm.tsx`、i18n `mcp.confirmPolicy*`、迁移代码及相关测试 |
+| R7（已实施） | `BrowserSettingsTab.tsx`、`ToolsSecuritySettingsTab.tsx`、i18n `config.json`（zh-CN/en-US）、`src/renderer/i18n/types.ts`、`ToolsSecuritySettingsTab.test.tsx`（`ConfigModal.tsx` 复用 R6 透传通道，无需改动） |

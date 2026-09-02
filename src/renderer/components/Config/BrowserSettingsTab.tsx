@@ -1,11 +1,10 @@
-import { Alert, Button, Input, Select, Space, Tooltip } from 'antd'
+import { Alert, Button, Select, Tooltip } from 'antd'
 import { Info } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { BrowserConfig, ModelEntry } from '../../../shared/domainTypes'
 import {
   BROWSER_SETUP_REPAIR_INITIAL_MESSAGE,
-  BROWSER_SETUP_REPAIR_SESSION_NAME,
-  DEFAULT_BROWSER_CONFIG
+  BROWSER_SETUP_REPAIR_SESSION_NAME
 } from '../../../shared/domainTypes'
 import { BrowserDetectStatusSummary } from '../Browser/BrowserDetectStatusSummary'
 import { useBrowserDetect } from '../../hooks/useBrowserDetect'
@@ -37,23 +36,9 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
   const dispatch = useAppDispatch()
   const { detect, detecting, refresh } = useBrowserDetect({ active })
   const [repairLoading, setRepairLoading] = useState(false)
-  const [actKeywordsOpen, setActKeywordsOpen] = useState(false)
-  const [actKeywordsDraft, setActKeywordsDraft] = useState('')
 
   const patch = (p: Partial<BrowserConfig>) => onChange({ ...browser, ...p })
 
-  const saveActKeywords = () => {
-    const list = actKeywordsDraft
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-    patch({ actHighRiskKeywords: list })
-  }
-
-  const resetActKeywords = () => {
-    patch({ actHighRiskKeywords: [...DEFAULT_BROWSER_CONFIG.actHighRiskKeywords] })
-    setActKeywordsDraft(DEFAULT_BROWSER_CONFIG.actHighRiskKeywords.join(', '))
-  }
   const stagehandModels = useMemo(
     () => sortModelsFastFirst(models.filter((m) => m.enabled)),
     [models]
@@ -252,33 +237,6 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
           )}
         </ConfigSettingsStack>
       </section>
-
-      <ConfigField label={t('browser.actHighRiskTitle')} hint={t('browser.actHighRiskHelper')}>
-        <Button type="link" size="small" onClick={() => setActKeywordsOpen((v) => !v)}>
-          {actKeywordsOpen ? t('browser.detectCollapse') : t('browser.detectExpandHint')}
-        </Button>
-        {actKeywordsOpen ? (
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <Input.TextArea
-              value={
-                actKeywordsDraft ||
-                browser.actHighRiskKeywords.join(', ')
-              }
-              placeholder={t('browser.actHighRiskPlaceholder')}
-              onChange={(e) => setActKeywordsDraft(e.target.value)}
-              autoSize={{ minRows: 2, maxRows: 6 }}
-            />
-            <Space>
-              <Button size="small" onClick={saveActKeywords}>
-                {t('browser.actHighRiskSave')}
-              </Button>
-              <Button size="small" onClick={resetActKeywords}>
-                {t('browser.actHighRiskReset')}
-              </Button>
-            </Space>
-          </Space>
-        ) : null}
-      </ConfigField>
 
       <ConfigSwitchRow
         label={t('browser.allowHttpLabel')}
