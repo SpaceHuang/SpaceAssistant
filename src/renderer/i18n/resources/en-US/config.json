@@ -761,7 +761,7 @@
     "openPage": "Open \"Security Policy\"",
     "policy": {
       "title": "Policy Packages",
-      "hint": "Choose a policy package per lane. The custom package lets you adjust rule actions; locked system-protection rules are read-only.",
+      "hint": "Choose a policy package per lane. The custom package lets you adjust rule actions; system-protection rules are toggled via Enabled/Disabled.",
       "laneDesktop": "Desktop",
       "laneWechat": "WeChat",
       "laneFeishu": "Feishu",
@@ -779,6 +779,8 @@
       "stateColumn": "State",
       "overriddenTag": "Overridden",
       "lockedTag": "Locked",
+      "enabledTag": "Enabled",
+      "disabledTag": "Disabled",
       "reset": "Reset",
       "actionDeny": "Deny",
       "actionAllow": "Allow",
@@ -788,10 +790,6 @@
       "whenExposure": "Exposure",
       "whenIngress": "Ingress",
       "saveFailed": "Save failed",
-      "hardConstraintTitle": "Lane hard constraint",
-      "hardConstraintHint": "Remote lanes may write local files (remoteAllowLocalWrite). When off, write operations from remote sessions are always denied; the hard-constraint check always runs regardless of the switch.",
-      "hardConstraintConfirmTitle": "Change lane hard constraint?",
-      "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log.",
       "packageLabel": "Current security package",
       "actionAutoShort": "Auto",
       "packageSelectHint": "The package sets the default for all rules below; choose Custom to override per rule."

@@ -312,6 +312,11 @@ export type SpaceAssistantApi = {
     action: PolicyAction
     params?: Record<string, unknown>
   }) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** 系统保护（禁止类）规则「启用/不启用」：启用=在策略链中生效，不启用=不再作为硬拒绝。 */
+  securitySetRuleEnabled: (payload: {
+    ruleId: string
+    enabled: boolean
+  }) => Promise<{ ok: true } | { ok: false; error: string }>
   securityRemoveRuleOverride: (payload: {
     ruleId: string
   }) => Promise<{ ok: true; removed: number } | { ok: false; error: string }>

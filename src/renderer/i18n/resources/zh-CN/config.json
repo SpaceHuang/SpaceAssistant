@@ -761,7 +761,7 @@
     "openPage": "前往「安全策略」",
     "policy": {
       "title": "策略套餐",
-      "hint": "为每条链路选择策略套餐。自定义套餐可调整规则动作；锁定（locked）的系统保护规则只读、不可修改。",
+      "hint": "为每条链路选择策略套餐。自定义套餐可调整规则动作；系统保护规则用「启用/不启用」控制是否生效。",
       "laneDesktop": "桌面",
       "laneWechat": "微信",
       "laneFeishu": "飞书",
@@ -779,6 +779,8 @@
       "stateColumn": "状态",
       "overriddenTag": "已覆盖",
       "lockedTag": "锁定",
+      "enabledTag": "启用",
+      "disabledTag": "不启用",
       "reset": "恢复默认",
       "actionDeny": "拒绝",
       "actionAllow": "允许",
@@ -788,10 +790,6 @@
       "whenExposure": "工具可见性",
       "whenIngress": "消息准入",
       "saveFailed": "保存失败",
-      "hardConstraintTitle": "链路硬约束",
-      "hardConstraintHint": "远程链路允许写入本地文件（remoteAllowLocalWrite）。关闭后远程会话的写文件操作一律拒绝；无论开关状态，硬约束检查始终执行。",
-      "hardConstraintConfirmTitle": "确认修改链路硬约束？",
-      "hardConstraintConfirmContent": "该开关影响远程链路的安全边界，修改会记入安全审计日志。",
       "packageLabel": "当前安全套餐",
       "actionAutoShort": "自动",
       "packageSelectHint": "选择套餐后，下方规则的动作将按套餐预设生效；自定义套餐可逐条覆盖。"

@@ -83,6 +83,7 @@ const api: SpaceAssistantApi = {
   securityGetSettingsModel: () => ipcRenderer.invoke('security:get-settings-model'),
   securitySetPolicyPackage: (payload) => ipcRenderer.invoke('security:set-policy-package', payload),
   securitySetRuleOverride: (payload) => ipcRenderer.invoke('security:set-rule-override', payload),
+  securitySetRuleEnabled: (payload) => ipcRenderer.invoke('security:set-rule-enabled', payload),
   securityRemoveRuleOverride: (payload) => ipcRenderer.invoke('security:remove-rule-override', payload),
   securityListDecisionCache: () => ipcRenderer.invoke('security:list-cache'),
   securityClearDecisionCache: (payload) => ipcRenderer.invoke('security:clear-cache', payload),

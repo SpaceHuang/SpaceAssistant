@@ -3,7 +3,6 @@ import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
-import type { RemoteImCommonConfig } from '../../../shared/imTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ConfigResultAlert } from './ConfigResultAlert'
@@ -42,9 +41,6 @@ type Props = {
   onTestPython: () => void
   /** 设置页打开状态（MCP 草稿丢弃确认用）。 */
   open?: boolean
-  /** 「安全策略」页链路硬约束读写 RemoteImCommon 同一份草稿配置。 */
-  remoteImValue?: RemoteImCommonConfig
-  onRemoteImChange?: (patch: Partial<RemoteImCommonConfig>) => void
 }
 
 export function BuiltinToolSwitchList({
@@ -117,9 +113,7 @@ export function ToolsSettingsTab({
   pyTest,
   pyTesting,
   onTestPython,
-  open = false,
-  remoteImValue,
-  onRemoteImChange
+  open = false
 }: Props) {
   const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
@@ -232,13 +226,7 @@ export function ToolsSettingsTab({
       case 'browser':
         return <BrowserSettingsTab active browser={browserUi} onChange={setBrowserUi} models={models} />
       case 'security':
-        return remoteImValue && onRemoteImChange ? (
-          <ToolsSecuritySettingsTab
-            active
-            remoteImValue={remoteImValue}
-            onRemoteImChange={onRemoteImChange}
-          />
-        ) : null
+        return <ToolsSecuritySettingsTab active />
       default:
         return null
     }

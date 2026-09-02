@@ -972,7 +972,12 @@ function readExposureInputsFromDb(
       confirmMode: tools.confirmMode,
       deniedTools: tools.deniedTools,
       cache: new SqliteDecisionCache(conn).list(),
-      rules: model.toRuleViews(DEFAULT_POLICY_RULES, new PolicyRuleStore(conn).listOverrides(), tools.confirmMode),
+      rules: model.toRuleViews(
+        DEFAULT_POLICY_RULES,
+        new PolicyRuleStore(conn).listOverrides(),
+        tools.confirmMode,
+        runtime.readDisabledPolicyRuleIds(ctx.db)
+      ),
       retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
       haveAuditLog: auditMod.getSecurityAuditLogDir() != null
     })
@@ -1061,6 +1066,36 @@ function readExposureInputsFromDb(
     }
     return { ok: true as const, removed }
   })
+
+  // 系统保护（禁止类）规则「启用/不启用」开关：启用=在策略链中生效（可作第 1 步硬拒），
+  // 不启用=从生效规则集剔除（不再硬拒，交还常规规则链）。仅 locked 系统保护规则可切换。
+  ipcMain.handle(
+    'security:set-rule-enabled',
+    async (_e, payload: { ruleId?: unknown; enabled?: unknown }) => {
+      const { runtime, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+      const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
+      const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
+      if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
+      if (!rule.locked) return { ok: false as const, error: `rule is not a protection rule: ${ruleId}` }
+      const enabled = payload?.enabled !== false
+      const disabledIds = runtime.readDisabledPolicyRuleIds(ctx.db)
+      const before = !disabledIds.includes(ruleId)
+      const nextDisabled = enabled
+        ? disabledIds.filter((id) => id !== ruleId)
+        : Array.from(new Set([...disabledIds, ruleId]))
+      runtime.writeDisabledPolicyRuleIds(ctx.db, nextDisabled)
+      ctx.db.flushSave()
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: (rule.match?.lane?.[0] as 'desktop' | 'wechat' | 'feishu' | 'automation') ?? 'desktop',
+        sessionId: 'settings',
+        key: `policyRuleEnabled.${ruleId}`,
+        before,
+        after: enabled
+      })
+      return { ok: true as const }
+    }
+  )
 
   ipcMain.handle('security:list-cache', async () => {
     const { SqliteDecisionCache } = await securityDeps()

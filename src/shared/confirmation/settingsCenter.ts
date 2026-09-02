@@ -22,6 +22,8 @@ export interface SecuritySettingsRuleView {
   action: PolicyAction
   /** 内置默认动作（未合并覆盖）。 */
   defaultAction: PolicyAction
+  /** 系统保护（locked）禁止类规则是否处于「启用」状态；禁用后在策略链中不再生效。 */
+  enabled: boolean
   locked: boolean
   reason: string
   overridden: boolean

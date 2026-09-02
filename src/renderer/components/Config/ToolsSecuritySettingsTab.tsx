@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, App, Button, Collapse, Form, Input, InputNumber, Radio, Select, Space, Switch, Table, Tabs, Tag } from 'antd'
 import type { FileConfirmMode } from '../../../shared/domainTypes'
-import type { RemoteImCommonConfig } from '../../../shared/imTypes'
 import type {
   DecisionCacheEntry,
   ExecutionLane,
@@ -12,7 +11,7 @@ import type {
   SecuritySettingsRuleView
 } from '../../../shared/confirmation/settingsCenter'
 import type { PolicyPackage } from '../../../shared/policy/policyPackages'
-import { ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
+import { ConfigSettingsStack } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 import { groupMemoryEntries, memoryEntrySummary } from './toolsSecurityFormat'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -20,9 +19,6 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 type Props = {
   /** 子 Tab 激活时加载即时数据（套餐/记忆/审计）。 */
   active: boolean
-  /** 链路硬约束（remoteAllowLocalWrite）读写 RemoteImCommon 同一份配置。 */
-  remoteImValue: RemoteImCommonConfig
-  onRemoteImChange: (patch: Partial<RemoteImCommonConfig>) => void
 }
 
 const PACKAGE_VALUES: PolicyPackage[] = ['strict', 'standard', 'loose', 'custom']
@@ -48,16 +44,12 @@ function formatTs(ts: number): string {
   return ts > 0 ? new Date(ts).toLocaleString() : '—'
 }
 
-/** 区 1：策略套餐 + 规则覆盖 + 链路硬约束（确认模式并入 desktop-auto-approve 规则行）。 */
+/** 区 1：策略套餐 + 规则覆盖（确认模式并入 desktop-auto-approve 规则行；系统保护规则以「启用/不启用」开关控制）。 */
 function PolicyPackageSection({
   model,
-  remoteImValue,
-  onRemoteImChange,
   onModelChange
 }: {
   model: SecuritySettingsModelPayload | null
-  remoteImValue: RemoteImCommonConfig
-  onRemoteImChange: (patch: Partial<RemoteImCommonConfig>) => void
   onModelChange: () => void
 }) {
   const { message, modal } = App.useApp()
@@ -136,12 +128,16 @@ function PolicyPackageSection({
     })()
   }
 
-  const toggleHardConstraint = (checked: boolean) => {
-    modal.confirm({
-      title: t('toolsSecurity.policy.hardConstraintConfirmTitle'),
-      content: t('toolsSecurity.policy.hardConstraintConfirmContent'),
-      onOk: () => onRemoteImChange({ remoteAllowLocalWrite: checked })
-    })
+  /** 系统保护规则「启用/不启用」：写 security:set-rule-enabled，成功后重载模型。 */
+  const toggleRuleEnabled = (rule: SecuritySettingsRuleView, enabled: boolean) => {
+    void (async () => {
+      const res = await window.api.securitySetRuleEnabled({ ruleId: rule.id, enabled })
+      if (!res.ok) {
+        message.error(t('toolsSecurity.policy.saveFailed'))
+        return
+      }
+      onModelChange()
+    })()
   }
 
   const packageHint = (pkg: PolicyPackage): string | null => {
@@ -194,7 +190,11 @@ function PolicyPackageSection({
                     ? t('toolsSecurity.policy.actionAsk')
                     : t('toolsSecurity.policy.actionAutoShort')
             if (r.locked) {
-              return <span>{actionLabel(r.action as 'deny' | 'allow' | 'ask' | 'auto-evaluator')}</span>
+              return (
+                <span className={r.enabled ? undefined : 'config-field__hint'}>
+                  {actionLabel(r.action as 'deny' | 'allow' | 'ask' | 'auto-evaluator')}
+                </span>
+              )
             }
             // 默认动作即 auto-evaluator 的规则（自动审批器入口，如 desktop-auto-approve）：
             // 动作域为 询问/允许/自动，与其他规则同口径受套餐管理（custom 可编辑）
@@ -220,7 +220,15 @@ function PolicyPackageSection({
           width: 140,
           render: (_, r) => (
             <Space size={4}>
-              {r.locked ? <Tag>{t('toolsSecurity.policy.lockedTag')}</Tag> : null}
+              {r.locked ? (
+                <Switch
+                  size="small"
+                  checked={r.enabled}
+                  onChange={(v) => toggleRuleEnabled(r, v)}
+                  checkedChildren={t('toolsSecurity.policy.enabledTag')}
+                  unCheckedChildren={t('toolsSecurity.policy.disabledTag')}
+                />
+              ) : null}
               {r.overridden ? <Tag color="orange">{t('toolsSecurity.policy.overriddenTag')}</Tag> : null}
               {r.overridden ? (
                 <Button size="small" type="link" onClick={() => resetRule(r)}>
@@ -278,15 +286,6 @@ function PolicyPackageSection({
                     </p>
                   ) : null}
                 </div>
-                {/* 链路硬约束（remoteAllowLocalWrite）仅远程链路相关，桌面 Tab 不展示 */}
-                {lane !== 'desktop' ? (
-                  <ConfigSwitchRow
-                    label={t('toolsSecurity.policy.hardConstraintTitle')}
-                    hint={t('toolsSecurity.policy.hardConstraintHint')}
-                    checked={remoteImValue.remoteAllowLocalWrite}
-                    onChange={toggleHardConstraint}
-                  />
-                ) : null}
                 {renderRulesTable(lane)}
               </ConfigSettingsStack>
             )
@@ -554,7 +553,7 @@ function AuditSection({
  * 规则行，动作域 询问/允许/自动，统一受套餐管理）2. 确认记忆管理 3. 安全审计记录。
  * 工具开关（Agent 可用能力面）在「工具 → 工具开关」独立子 Tab，与安全策略管控并列。
  */
-export function ToolsSecuritySettingsTab({ active, remoteImValue, onRemoteImChange }: Props) {
+export function ToolsSecuritySettingsTab({ active }: Props) {
   const { t } = useTypedTranslation('config')
   const [model, setModel] = useState<SecuritySettingsModelPayload | null>(null)
 
@@ -584,8 +583,6 @@ export function ToolsSecuritySettingsTab({ active, remoteImValue, onRemoteImChan
             children: (
               <PolicyPackageSection
                 model={model}
-                remoteImValue={remoteImValue}
-                onRemoteImChange={onRemoteImChange}
                 onModelChange={() => void reloadModel()}
               />
             )

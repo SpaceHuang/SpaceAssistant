@@ -7,8 +7,10 @@ import {
   DEFAULT_SECURITY_AUDIT_RETENTION_DAYS,
   listPolicyRulesWithOverrides,
   loadEffectivePolicyRules,
+  readDisabledPolicyRuleIds,
   readPolicyPackages,
   readSecurityAuditRetentionDays,
+  writeDisabledPolicyRuleIds,
   writePolicyPackages,
   writeSecurityAuditRetentionDays
 } from './policyRulesRuntime'
@@ -42,6 +44,22 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(locked?.action).toBe('deny')
     // 其它链路不受影响
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
+  })
+
+  it('「不启用」的系统保护规则被剔除（不再作为第 1 步硬拒）；未禁用时仍是 DEFAULT_POLICY_RULES 引用', () => {
+    const d = db()
+    // 未禁用：标准套餐返回 DEFAULT_POLICY_RULES 引用（快路径）
+    expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
+    expect(readDisabledPolicyRuleIds(d)).toEqual([])
+    // 禁用 script-network-deny-remote：该规则被剔除，返回新数组（不是引用）
+    writeDisabledPolicyRuleIds(d, ['script-network-deny-remote'])
+    const rules = loadEffectivePolicyRules(d, 'wechat')
+    expect(rules).not.toBe(DEFAULT_POLICY_RULES)
+    expect(rules.find((r) => r.id === 'script-network-deny-remote')).toBeUndefined()
+    expect(rules.find((r) => r.id === 'script-network-ask-desktop')).toBeTruthy()
+    // disabled 集合读写往返
+    writeDisabledPolicyRuleIds(d, ['a', 'b', 'a'])
+    expect(readDisabledPolicyRuleIds(d)).toEqual(['a', 'b'])
   })
 
   it('custom 套餐：policy_rules 覆盖生效；locked 覆盖被忽略', () => {

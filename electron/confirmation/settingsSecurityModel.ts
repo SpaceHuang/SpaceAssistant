@@ -51,9 +51,11 @@ export function buildSettingsSecurityModel(args: {
 export function toRuleViews(
   rules: PolicyRule[],
   overrides: Array<{ ruleId: string; action: PolicyRule['action'] }>,
-  confirmMode?: FileConfirmMode
+  confirmMode?: FileConfirmMode,
+  disabledRuleIds?: string[]
 ): SecuritySettingsRuleView[] {
   const byId = new Map(overrides.map((o) => [o.ruleId, o]))
+  const disabled = new Set(disabledRuleIds ?? [])
   return rules.map((rule) => {
     const o = byId.get(rule.id)
     // desktop-auto-approve 的默认语义是"confirmMode=auto 才命中评估器"：
@@ -67,6 +69,7 @@ export function toRuleViews(
       when: rule.when,
       action: derived,
       defaultAction: rule.action,
+      enabled: !disabled.has(rule.id),
       locked: rule.locked === true,
       reason: rule.reason,
       overridden: o != null && o.action !== rule.action,

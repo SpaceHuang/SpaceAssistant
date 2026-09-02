@@ -4,8 +4,6 @@ import { App, ConfigProvider } from 'antd'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
 import { ToolsSecuritySettingsTab } from './ToolsSecuritySettingsTab'
-import type { ToolsSettingsUi } from './ToolsSettingsTab'
-import { DEFAULT_REMOTE_IM_COMMON_CONFIG } from '../../../shared/imTypes'
 import configReducer from '../../store/configSlice'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SecuritySettingsModelPayload } from '../../../shared/confirmation/settingsCenter'
@@ -22,6 +20,7 @@ const MODEL: SecuritySettingsModelPayload = {
       when: 'invocation',
       action: 'ask',
       defaultAction: 'ask',
+      enabled: true,
       locked: false,
       reason: '远程链路写本地文件默认需要确认',
       overridden: false,
@@ -32,6 +31,7 @@ const MODEL: SecuritySettingsModelPayload = {
       when: 'invocation',
       action: 'deny',
       defaultAction: 'deny',
+      enabled: true,
       locked: true,
       reason: 'SHELL_REMOTE_DISABLED',
       overridden: false,
@@ -42,6 +42,7 @@ const MODEL: SecuritySettingsModelPayload = {
       when: 'invocation',
       action: 'allow',
       defaultAction: 'allow',
+      enabled: true,
       locked: false,
       reason: '桌面 clean 脚本免确认',
       overridden: false,
@@ -53,6 +54,7 @@ const MODEL: SecuritySettingsModelPayload = {
       when: 'invocation',
       action: 'ask',
       defaultAction: 'auto-evaluator',
+      enabled: true,
       locked: false,
       reason: '桌面 confirmMode=auto 时写/编辑文件的自动审批',
       overridden: false,
@@ -63,6 +65,7 @@ const MODEL: SecuritySettingsModelPayload = {
       when: 'invocation',
       action: 'auto-evaluator',
       defaultAction: 'auto-evaluator',
+      enabled: true,
       locked: false,
       reason: 'shell 预检判定可跳过确认',
       overridden: false
@@ -72,6 +75,7 @@ const MODEL: SecuritySettingsModelPayload = {
       when: 'invocation',
       action: 'ask',
       defaultAction: 'ask',
+      enabled: true,
       locked: false,
       reason: '无 lane 限定的通用规则应出现在每个链路 Tab',
       overridden: false
@@ -79,36 +83,17 @@ const MODEL: SecuritySettingsModelPayload = {
   ]
 }
 
-const TOOL_UI: ToolsSettingsUi = {
-  confirmMode: 'diff',
-  deniedTools: [],
-  pythonPath: 'python',
-  scriptTimeout: 300,
-  fileCheckpointingEnabled: true,
-  maxFileSnapshots: 100,
-  grepTimeoutSec: 60
-}
-
 function renderTab() {
   const store = configureStore({ reducer: { config: configReducer } })
-  const setToolUi = vi.fn()
   render(
     <Provider store={store}>
       <ConfigProvider>
         <App>
-          <ToolsSecuritySettingsTab
-            active
-            toolUi={TOOL_UI}
-            setToolUi={setToolUi}
-            onShellEnabledChange={vi.fn()}
-            remoteImValue={DEFAULT_REMOTE_IM_COMMON_CONFIG}
-            onRemoteImChange={vi.fn()}
-          />
+          <ToolsSecuritySettingsTab active />
         </App>
       </ConfigProvider>
     </Provider>
   )
-  return { store, setToolUi }
 }
 
 /** 切到指定链路 Tab 并等待其规则表出现。 */
@@ -125,6 +110,7 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
       securityGetSettingsModel: vi.fn().mockResolvedValue(MODEL),
       securitySetPolicyPackage: vi.fn().mockResolvedValue({ ok: true }),
       securitySetRuleOverride: vi.fn().mockResolvedValue({ ok: true }),
+      securitySetRuleEnabled: vi.fn().mockResolvedValue({ ok: true }),
       securityRemoveRuleOverride: vi.fn().mockResolvedValue({ ok: true, removed: 1 }),
       securityListDecisionCache: vi.fn().mockResolvedValue([
         {
@@ -172,20 +158,37 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).getByText('universal-no-lane')).toBeTruthy()
     expect(within(panel).queryByText('im-write-ask')).toBeNull()
     expect(within(panel).queryByText('remote-shell-disabled')).toBeNull()
-    // 桌面链路无硬约束开关（仅远程链路展示）
+    // 已移除独立的「链路硬约束」主开关，系统保护规则用「启用/不启用」开关
     expect(within(panel).queryByText('链路硬约束')).toBeNull()
   })
 
-  it('微信 Tab 展示硬约束开关与该链路规则（含 locked 只读）', { timeout: 20000 }, async () => {
+  it('微信 Tab 展示系统保护规则（locked）的「启用/不启用」开关，不渲染锁定标记', { timeout: 20000 }, async () => {
     renderTab()
     const panel = await openLaneTab('微信')
-    expect(await within(panel).findByText('链路硬约束')).toBeTruthy()
     expect(await within(panel).findByText('im-write-ask')).toBeTruthy()
     expect(within(panel).getByText('remote-shell-disabled')).toBeTruthy()
-    // locked 规则不渲染可编辑 Select（展示锁定标记）
-    expect(within(panel).getByText('锁定')).toBeTruthy()
+    // locked 系统保护规则用「启用/不启用」Switch，不再显示「锁定」标记
+    expect(within(panel).queryByText('锁定')).toBeNull()
+    const ruleRow = within(panel).getByText('remote-shell-disabled').closest('tr')!
+    const sw = ruleRow.querySelector('.ant-switch')!
+    expect(sw).toBeTruthy()
+    expect(sw.className).toContain('ant-switch-checked')
     // 桌面规则不出现在微信 Tab
     expect(within(panel).queryByText('script-clean-allow-desktop')).toBeNull()
+  })
+
+  it('系统保护规则开关切换调用 securitySetRuleEnabled（启用→不启用）', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('微信')
+    const ruleRow = (await within(panel).findByText('remote-shell-disabled')).closest('tr')!
+    const sw = ruleRow.querySelector('.ant-switch')!
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(window.api.securitySetRuleEnabled).toHaveBeenCalledWith({
+        ruleId: 'remote-shell-disabled',
+        enabled: false
+      })
+    })
   })
 
   it('切换套餐调用 securitySetPolicyPackage（standard 无二次确认）', { timeout: 20000 }, async () => {
