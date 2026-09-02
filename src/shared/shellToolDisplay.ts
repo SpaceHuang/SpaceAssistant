@@ -1,6 +1,6 @@
 /** run_shell 在 IM 远程会话中被拦截时的 tool_result 文案 */
 export const SHELL_REMOTE_DISABLED_ERROR =
-  '远程指令不允许执行本地 shell 命令。请在桌面端 SpaceAssistant 中确认后执行。'
+  '远程链路禁止执行本地 shell 命令。'
 
 /** @deprecated 使用 SHELL_REMOTE_DISABLED_ERROR */
 export const SHELL_FEISHU_REMOTE_DISABLED_ERROR = SHELL_REMOTE_DISABLED_ERROR
