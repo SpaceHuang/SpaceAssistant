@@ -101,7 +101,7 @@ describe('BrowserSettingsTab', () => {
     expect(store.getState().config.settingsOpen).toBe(false)
   })
 
-  it('trust management is replaced by tools-security shortcut (P4)', async () => {
+  it('trust management table is removed (moved to tools security)', async () => {
     const onChange = vi.fn()
     const store = configureStore({
       reducer: {
@@ -131,11 +131,7 @@ describe('BrowserSettingsTab', () => {
       </Provider>
     )
 
-    // 信任管理表格已移除，降级为快捷入口
+    // 信任管理表格已移除（迁移到「安全策略」页）
     expect(screen.queryByPlaceholderText('例：example.com')).toBeNull()
-    expect(await screen.findByText('信任域名管理已迁移到「安全策略 → 确认记忆管理」。')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '前往「安全策略」' }))
-    expect(store.getState().config.settingsActiveTab).toBe('tools')
-    expect(store.getState().config.settingsToolsSubTab).toBe('security')
   })
 })

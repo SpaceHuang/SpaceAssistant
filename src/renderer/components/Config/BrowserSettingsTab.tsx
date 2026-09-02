@@ -20,7 +20,6 @@ import { SaIconButton } from '../ui/SaIconButton'
 import { ConfigModelOptionContent, sortModelsFastFirst } from './ConfigModelOption'
 import { configModalModelSelectPopupClassNames, configModalSelectPopupClassNames } from './configModalUi'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
-import { ToolsSecurityShortcut } from './ToolsSecurityShortcut'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 const refreshSvg = patchSvg(refresh2LineRaw)
@@ -253,9 +252,6 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
           )}
         </ConfigSettingsStack>
       </section>
-
-      {/* P4：信任域名管理迁移到「安全策略 → 确认记忆管理」，此处保留快捷入口 */}
-      <ToolsSecurityShortcut hintKey="browser.trust.movedHint" />
 
       <ConfigSwitchRow
         label={t('browser.actSessionTrustEnable')}

@@ -398,8 +398,7 @@
       "lastUsed": "上次使用",
       "status": "状态",
       "empty": "暂无已信任命令",
-      "refresh": "刷新",
-      "movedHint": "信任命令管理已迁移到「安全策略 → 确认记忆管理」。"
+      "refresh": "刷新"
     },
     "autoAllow": {
       "title": "大模型生成的脚本自动允许执行（已由内容分析接管）",
@@ -454,8 +453,7 @@
       "batchDelete": "批量删除",
       "columnDomain": "域名",
       "empty": "暂无可信域名",
-      "invalidDomain": "无效的域名格式",
-      "movedHint": "信任域名管理已迁移到「安全策略 → 确认记忆管理」。"
+      "invalidDomain": "无效的域名格式"
     },
     "actTrustTitle": "act 操作信任域名",
     "actTrustHelper": "在这些域名上的浏览器操作无需确认，跨会话生效。",
@@ -731,8 +729,7 @@
     "remoteBrowserNavigateRequiresConfirm": "远程浏览器导航需确认",
     "remoteBrowserNavigateRequiresConfirmHint": "仅覆盖远程会话的 navigate；不影响桌面默认。截图/观察/提取不确认。",
     "remoteBrowserActRequiresConfirm": "远程浏览器页面操作需确认",
-    "remoteBrowserActRequiresConfirmHint": "即使关闭，提交/支付/删除/授权等高影响操作仍会确认；扫描失败时也会确认。",
-    "confirmMovedHint": "远程确认开关与链路硬约束已迁移到「安全策略」页统一管理。"
+    "remoteBrowserActRequiresConfirmHint": "即使关闭，提交/支付/删除/授权等高影响操作仍会确认；扫描失败时也会确认。"
   },
   "remoteSecurityUpgrade": {
     "title": "远程安全设置一次性确认",
@@ -758,7 +755,6 @@
   },
   "toolsSecurity": {
     "intro": "统一管理工具确认策略、确认记忆与安全审计；确认模式与工具开关也集中在这里配置。本页变更立即生效，并记入安全审计日志。",
-    "openPage": "前往「安全策略」",
     "policy": {
       "title": "策略套餐",
       "hint": "为每条链路选择策略套餐。自定义套餐可调整规则动作；系统保护规则用「启用/不启用」控制是否生效。",

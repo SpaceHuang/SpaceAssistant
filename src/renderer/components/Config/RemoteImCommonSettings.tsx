@@ -16,7 +16,6 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 import { RemoteSecurityUpgradeModal } from './RemoteSecurityUpgradeModal'
-import { ToolsSecurityShortcut } from './ToolsSecurityShortcut'
 
 type Props = {
   value: RemoteImCommonConfig
@@ -182,9 +181,6 @@ export function RemoteImCommonSettings({
           }
         ]}
       />
-
-      {/* P4：链路硬约束（remoteAllowLocalWrite）与远程确认开关迁移到「安全策略」页 */}
-      <ToolsSecurityShortcut hintKey="remoteImCommon.confirmMovedHint" />
 
       <ConfigSwitchRow
         label={t('remoteImCommon.restrictWritesAndOutbound')}

@@ -5,7 +5,6 @@ import type { ShellConfig, ShellRule } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigResultAlert } from './ConfigResultAlert'
-import { ToolsSecurityShortcut } from './ToolsSecurityShortcut'
 
 type Props = {
   shell: ShellConfig
@@ -69,9 +68,6 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
         message={t('shell.boundaryTitle')}
         description={t('shell.boundaryDescription')}
       />
-
-      {/* P4：信任命令管理迁移到「安全策略 → 确认记忆管理」，此处保留快捷入口 */}
-      <ToolsSecurityShortcut hintKey="shell.trust.movedHint" />
 
       <Form.Item label={t('shell.defaultTimeoutLabel')}>
         <InputNumber

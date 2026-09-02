@@ -48,17 +48,9 @@ describe('RemoteImCommonSettings', () => {
     expect(screen.getByText('禁止远程出站（微信发送 / 飞书写工具）')).toBeTruthy()
     expect(screen.getByText(/消息频率限制/)).toBeTruthy()
     expect(screen.getByText('已绑定发送者（只读）')).toBeTruthy()
-    // P4：确认/信任管理项降级为「安全策略」快捷入口
-    expect(screen.getByText('远程确认开关与链路硬约束已迁移到「安全策略」页统一管理。')).toBeTruthy()
+    // P4：确认/信任管理项已迁移到「安全策略」页，此处不再展示
     expect(screen.queryByText('允许远程指令执行本地文件写操作')).toBeNull()
     expect(screen.queryByText('远程浏览器导航需确认')).toBeNull()
-  })
-
-  it('shortcut navigates to tools security sub tab', async () => {
-    const store = renderTab({})
-    fireEvent.click(await screen.findByRole('button', { name: '前往「安全策略」' }))
-    expect(store.getState().config.settingsActiveTab).toBe('tools')
-    expect(store.getState().config.settingsToolsSubTab).toBe('security')
   })
 
   it('calls onChange when notify checkbox is toggled', async () => {
