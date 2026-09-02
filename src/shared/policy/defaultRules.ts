@@ -68,7 +68,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'remote-outbound-budget-pause-wechat',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: ['wechat_send', 'wechat_reply'] },
+    match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'] },
     action: 'deny',
     locked: true,
     requiresContext: { outboundWriteBudgetExhausted: true },
@@ -77,7 +77,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'remote-outbound-budget-pause-lark',
     when: 'invocation',
-    match: { lane: ['wechat', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-write'] },
+    match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-write'] },
     action: 'deny',
     locked: true,
     requiresContext: { outboundWriteBudgetExhausted: true },
