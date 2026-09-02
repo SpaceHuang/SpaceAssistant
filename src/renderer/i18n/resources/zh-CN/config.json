@@ -792,7 +792,7 @@
       "hardConstraintHint": "远程链路允许写入本地文件（remoteAllowLocalWrite）。关闭后远程会话的写文件操作一律拒绝；无论开关状态，硬约束检查始终执行。",
       "hardConstraintConfirmTitle": "确认修改链路硬约束？",
       "hardConstraintConfirmContent": "该开关影响远程链路的安全边界，修改会记入安全审计日志。",
-      "packageLabel": "套餐",
+      "packageLabel": "当前安全套餐",
       "actionAutoShort": "自动"
     },
     "memory": {
