@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { openSqliteDatabase, getDbConnection, type AppDatabase } from '../database'
 import { SqliteDecisionCache, canonicalKeyJson } from './sqliteDecisionCache'
+import { PolicyRuleStore } from './policyRuleStore'
+import { writePolicyPackages } from './policyRulesRuntime'
 import { createRemoteTaskBudgetState } from '../remote/remoteTaskBudget'
 import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 import {
@@ -358,5 +360,74 @@ describe('evaluateToolCallGate', () => {
     )
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'script-network-deny-remote' })
     expect(r.rawScriptAnalysis).toBeTruthy()
+  })
+})
+
+describe('desktop-auto-approve 规则覆盖（确认模式并入规则列表，§7）', () => {
+  function dbWithDesktopOverride(action: 'ask' | 'allow' | 'auto-evaluator'): AppDatabase {
+    const db = openDb()
+    writePolicyPackages(db, { desktop: 'custom', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    new PolicyRuleStore(getDbConnection(db)).setOverride({ ruleId: 'desktop-auto-approve', action })
+    return db
+  }
+
+  it('覆盖为"询问"：confirmMode=auto 也一律确认（覆盖剥离 confirmMode 门控）', async () => {
+    const db = dbWithDesktopOverride('ask')
+    let evaluatorCalled = false
+    const r = await evaluateToolCallGate(
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        toolsConfig: toolsConfig({ confirmMode: 'auto' }),
+        appDb: db,
+        fileAutoApproval: async () => {
+          evaluatorCalled = true
+          return { approve: true }
+        }
+      })
+    )
+    expect(r.decision.type).toBe('require-confirm')
+    if (r.decision.type === 'require-confirm') expect(r.decision.ruleId).toBe('desktop-auto-approve')
+    expect(evaluatorCalled).toBe(false)
+  })
+
+  it('覆盖为"允许"：confirmMode=diff 也直接放行（不经过评估器）', async () => {
+    const db = dbWithDesktopOverride('allow')
+    let evaluatorCalled = false
+    const r = await evaluateToolCallGate(
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        toolsConfig: toolsConfig({ confirmMode: 'diff' }),
+        appDb: db,
+        fileAutoApproval: async () => {
+          evaluatorCalled = true
+          return { approve: false }
+        }
+      })
+    )
+    expect(r.decision.type).toBe('auto-allow')
+    expect(r.decision.ruleId).toBe('desktop-auto-approve')
+    expect(evaluatorCalled).toBe(false)
+  })
+
+  it('覆盖为"自动"：confirmMode=diff 也走评估器裁决', async () => {
+    const db = dbWithDesktopOverride('auto-evaluator')
+    let evaluatorCalled = false
+    const r = await evaluateToolCallGate(
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        toolsConfig: toolsConfig({ confirmMode: 'diff' }),
+        appDb: db,
+        fileAutoApproval: async () => {
+          evaluatorCalled = true
+          return { approve: true }
+        }
+      })
+    )
+    expect(evaluatorCalled).toBe(true)
+    expect(r.decision.type).toBe('auto-allow')
+    expect(r.decision.ruleId).toBe('desktop-auto-approve')
   })
 })

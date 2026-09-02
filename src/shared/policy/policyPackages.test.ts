@@ -86,3 +86,49 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     expect(ok.ok).toBe(true)
   })
 })
+
+describe('auto-evaluator 规则的覆盖（确认模式并入规则列表）', () => {
+  const AUTO_RULES = [
+    {
+      id: 'desktop-auto-approve',
+      when: 'invocation' as const,
+      match: { lane: ['desktop' as const], toolName: ['write_file', 'edit_file'] },
+      action: 'auto-evaluator' as const,
+      configRequires: { config: 'confirmMode', equals: 'auto' },
+      reason: 'r'
+    },
+    { id: 'plain-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
+  ]
+
+  it('默认动作为 auto-evaluator 的规则允许覆盖为 询问/允许/自动', () => {
+    expect(validateRuleOverride(AUTO_RULES, 'desktop-auto-approve', 'ask').ok).toBe(true)
+    expect(validateRuleOverride(AUTO_RULES, 'desktop-auto-approve', 'allow').ok).toBe(true)
+    expect(validateRuleOverride(AUTO_RULES, 'desktop-auto-approve', 'auto-evaluator').ok).toBe(true)
+    // 普通规则仍不允许覆盖成 auto-evaluator
+    expect(validateRuleOverride(AUTO_RULES, 'plain-ask', 'auto-evaluator').ok).toBe(false)
+  })
+
+  it('覆盖后剥离条件门控（configRequires/askUnless/requiresContext），用户显式定死动作', () => {
+    const out = resolvePolicyRules({
+      lane: 'desktop',
+      packages: { desktop: 'custom' },
+      overrides: [{ ruleId: 'desktop-auto-approve', action: 'ask' }],
+      rules: AUTO_RULES
+    })
+    const r = out.find((x) => x.id === 'desktop-auto-approve')!
+    expect(r.action).toBe('ask')
+    expect(r.configRequires).toBeUndefined()
+  })
+
+  it('覆盖为 auto-evaluator：保留评估器语义且不再受 confirmMode 门控', () => {
+    const out = resolvePolicyRules({
+      lane: 'desktop',
+      packages: { desktop: 'custom' },
+      overrides: [{ ruleId: 'desktop-auto-approve', action: 'auto-evaluator' }],
+      rules: AUTO_RULES
+    })
+    const r = out.find((x) => x.id === 'desktop-auto-approve')!
+    expect(r.action).toBe('auto-evaluator')
+    expect(r.configRequires).toBeUndefined()
+  })
+})

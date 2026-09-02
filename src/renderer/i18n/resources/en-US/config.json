@@ -788,7 +788,8 @@
       "hardConstraintHint": "Remote lanes may write local files (remoteAllowLocalWrite). When off, write operations from remote sessions are always denied; the hard-constraint check always runs regardless of the switch.",
       "hardConstraintConfirmTitle": "Change lane hard constraint?",
       "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log.",
-      "packageLabel": "Package"
+      "packageLabel": "Package",
+      "actionAutoShort": "Auto"
     },
     "switches": {
       "title": "Tool Switches",

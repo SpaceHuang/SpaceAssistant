@@ -44,13 +44,16 @@ export interface PolicyRuleOverrideInput {
   params?: Record<string, unknown>
 }
 
-/** 自定义套餐可编辑的动作集合（auto-evaluator 条目不可由覆盖产生/改成该动作）。 */
+/** 自定义套餐可编辑的动作集合（普通规则限定 deny/allow/ask）。 */
 const CUSTOM_EDITABLE_ACTIONS: readonly PolicyAction[] = ['deny', 'allow', 'ask']
+/** 默认动作即 auto-evaluator 的规则（自动审批器入口）允许的动作域：询问/允许/自动。 */
+const AUTO_EVALUATOR_EDITABLE_ACTIONS: readonly PolicyAction[] = ['deny', 'allow', 'ask', 'auto-evaluator']
 
 /**
  * 自定义套餐覆盖校验（主进程强制，UI 仅作前置提示）：
- * 规则必须存在、非 locked、动作 ∈ {deny, allow, ask}；不可增删规则、顺序不可改由
- * "仅按 id 覆盖动作"天然保证。
+ * 规则必须存在、非 locked；普通规则动作 ∈ {deny, allow, ask}；
+ * 默认动作即 auto-evaluator 的规则（如 desktop-auto-approve）额外允许覆盖回 auto-evaluator。
+ * 不可增删规则、顺序不可改由"仅按 id 覆盖动作"天然保证。
  */
 export function validateRuleOverride(
   baseRules: PolicyRule[],
@@ -60,7 +63,8 @@ export function validateRuleOverride(
   const rule = baseRules.find((r) => r.id === ruleId)
   if (!rule) return { ok: false, error: `unknown rule: ${ruleId}` }
   if (rule.locked) return { ok: false, error: `rule is locked: ${ruleId}` }
-  if (!CUSTOM_EDITABLE_ACTIONS.includes(action as PolicyAction)) {
+  const editable = rule.action === 'auto-evaluator' ? AUTO_EVALUATOR_EDITABLE_ACTIONS : CUSTOM_EDITABLE_ACTIONS
+  if (!editable.includes(action as PolicyAction)) {
     return { ok: false, error: `invalid action: ${String(action)}` }
   }
   return { ok: true, rule }
@@ -82,8 +86,13 @@ function applyCustom(rules: PolicyRule[], overrides: PolicyRuleOverrideInput[]):
   return rules.map((r) => {
     if (r.locked) return r
     const o = byId.get(r.id)
-    if (!o || !CUSTOM_EDITABLE_ACTIONS.includes(o.action)) return r
-    return { ...r, action: o.action }
+    if (!o) return r
+    const editable = r.action === 'auto-evaluator' ? AUTO_EVALUATOR_EDITABLE_ACTIONS : CUSTOM_EDITABLE_ACTIONS
+    if (!editable.includes(o.action)) return r
+    // 覆盖 = 用户显式定死动作：剥离条件门控（configRequires/askUnless/requiresContext），
+    // 否则被门控拦截时覆盖静默失效（如 desktop-auto-approve 覆盖为"询问"但 confirmMode≠auto 不命中）
+    const { configRequires: _c, askUnless: _a, requiresContext: _r, ...rest } = r
+    return { ...rest, action: o.action }
   })
 }
 

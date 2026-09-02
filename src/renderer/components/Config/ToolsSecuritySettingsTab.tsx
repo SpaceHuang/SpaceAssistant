@@ -57,41 +57,17 @@ function formatTs(ts: number): string {
 /** 区 1：策略套餐 + 规则覆盖 + 链路硬约束（确认模式并入 desktop-auto-approve 规则行）。 */
 function PolicyPackageSection({
   model,
-  toolUi,
-  setToolUi,
   remoteImValue,
   onRemoteImChange,
   onModelChange
 }: {
   model: SecuritySettingsModelPayload | null
-  toolUi: ToolsSettingsUi
-  setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
   remoteImValue: RemoteImCommonConfig
   onRemoteImChange: (patch: Partial<RemoteImCommonConfig>) => void
   onModelChange: () => void
 }) {
   const { message, modal } = App.useApp()
   const { t } = useTypedTranslation('config')
-
-  /** 确认模式（写文件）：desktop-auto-approve 规则行的控件，auto 档带二次确认。 */
-  const handleConfirmModeChange = (next: FileConfirmMode) => {
-    if (next === 'auto' && toolUi.confirmMode !== 'auto') {
-      modal.confirm({
-        title: t('tools.file.autoApprove.confirmTitle'),
-        content: (
-          <div>
-            <p>{t('tools.file.autoApprove.confirmMessage')}</p>
-            <p>{t('tools.file.autoApprove.confirmWarning')}</p>
-          </div>
-        ),
-        okText: t('tools.file.autoApprove.confirmOk'),
-        cancelText: t('tools.file.autoApprove.confirmCancel'),
-        onOk: () => setToolUi((s) => ({ ...s, confirmMode: 'auto' }))
-      })
-      return
-    }
-    setToolUi((s) => ({ ...s, confirmMode: next }))
-  }
 
   const laneLabel = (lane: (typeof LANES)[number]): string =>
     lane === 'desktop'
@@ -121,7 +97,11 @@ function PolicyPackageSection({
     void apply()
   }
 
-  const changeRuleAction = (rule: SecuritySettingsRuleView, action: 'deny' | 'allow' | 'ask') => {
+  /** 规则动作改覆盖：写 policy_rules（settings.policy-change 审计在主进程落）。 */
+  const changeRuleAction = (
+    rule: SecuritySettingsRuleView,
+    action: 'deny' | 'allow' | 'ask' | 'auto-evaluator'
+  ) => {
     void (async () => {
       const res = await window.api.securitySetRuleOverride({ ruleId: rule.id, action })
       if (!res.ok) {
@@ -130,6 +110,29 @@ function PolicyPackageSection({
       }
       onModelChange()
     })()
+  }
+
+  /** 选择"自动"（启用自动审批器）保留二次确认警示。 */
+  const changeRuleActionGuarded = (
+    rule: SecuritySettingsRuleView,
+    action: 'deny' | 'allow' | 'ask' | 'auto-evaluator'
+  ) => {
+    if (action === 'auto-evaluator' && rule.action !== 'auto-evaluator') {
+      modal.confirm({
+        title: t('tools.file.autoApprove.confirmTitle'),
+        content: (
+          <div>
+            <p>{t('tools.file.autoApprove.confirmMessage')}</p>
+            <p>{t('tools.file.autoApprove.confirmWarning')}</p>
+          </div>
+        ),
+        okText: t('tools.file.autoApprove.confirmOk'),
+        cancelText: t('tools.file.autoApprove.confirmCancel'),
+        onOk: () => changeRuleAction(rule, action)
+      })
+      return
+    }
+    changeRuleAction(rule, action)
   }
 
   const resetRule = (rule: SecuritySettingsRuleView) => {
@@ -188,42 +191,23 @@ function PolicyPackageSection({
           title: t('toolsSecurity.policy.actionColumn'),
           width: 140,
           render: (_, r) => {
-            // 确认模式（diff/direct/auto）并入规则列表：desktop-auto-approve 行的动作列即确认模式控件，
-            // 读写 toolUi 草稿（统一保存），不受套餐 custom 前置限制
-            if (r.id === 'desktop-auto-approve') {
-              return (
-                <Select
-                  size="small"
-                  value={toolUi.confirmMode}
-                  style={{ width: '100%' }}
-                  classNames={configModalSelectPopupClassNames}
-                  options={(['diff', 'direct', 'auto'] as const).map((v) => ({
-                    value: v,
-                    label:
-                      v === 'diff'
-                        ? t('tools.file.confirmDiff')
-                        : v === 'direct'
-                          ? t('tools.file.confirmDirect')
-                          : t('tools.file.confirmAuto')
-                  }))}
-                  onChange={(v) => handleConfirmModeChange(v)}
-                />
-              )
+            const actionLabel = (v: 'deny' | 'allow' | 'ask' | 'auto-evaluator') =>
+              v === 'deny'
+                ? t('toolsSecurity.policy.actionDeny')
+                : v === 'allow'
+                  ? t('toolsSecurity.policy.actionAllow')
+                  : v === 'ask'
+                    ? t('toolsSecurity.policy.actionAsk')
+                    : t('toolsSecurity.policy.actionAutoShort')
+            if (r.locked) {
+              return <span>{actionLabel(r.action as 'deny' | 'allow' | 'ask' | 'auto-evaluator')}</span>
             }
-            // 其余 auto-evaluator 规则是执行链路注入的评估器入口，动作不可被套餐覆盖
-            if (r.locked || r.action === 'auto-evaluator') {
-              return (
-                <span>
-                  {r.action === 'auto-evaluator'
-                    ? t('toolsSecurity.policy.actionAutoEvaluator')
-                    : r.action === 'deny'
-                      ? t('toolsSecurity.policy.actionDeny')
-                      : r.action === 'allow'
-                        ? t('toolsSecurity.policy.actionAllow')
-                        : t('toolsSecurity.policy.actionAsk')}
-                </span>
-              )
-            }
+            // 默认动作即 auto-evaluator 的规则（自动审批器入口，如 desktop-auto-approve）：
+            // 动作域为 询问/允许/自动，与其他规则同口径受套餐管理（custom 可编辑）
+            const options =
+              r.defaultAction === 'auto-evaluator'
+                ? (['ask', 'allow', 'auto-evaluator'] as const)
+                : (['deny', 'allow', 'ask'] as const)
             return (
               <Select
                 size="small"
@@ -231,16 +215,8 @@ function PolicyPackageSection({
                 disabled={(model?.packages[lane] ?? 'standard') !== 'custom'}
                 style={{ width: '100%' }}
                 classNames={configModalSelectPopupClassNames}
-                options={(['deny', 'allow', 'ask'] as const).map((v) => ({
-                  value: v,
-                  label:
-                    v === 'deny'
-                      ? t('toolsSecurity.policy.actionDeny')
-                      : v === 'allow'
-                        ? t('toolsSecurity.policy.actionAllow')
-                        : t('toolsSecurity.policy.actionAsk')
-                }))}
-                onChange={(v) => changeRuleAction(r, v)}
+                options={options.map((v) => ({ value: v, label: actionLabel(v) }))}
+                onChange={(v) => changeRuleActionGuarded(r, v)}
               />
             )
           }
@@ -610,8 +586,6 @@ export function ToolsSecuritySettingsTab({
             children: (
               <PolicyPackageSection
                 model={model}
-                toolUi={toolUi}
-                setToolUi={setToolUi}
                 remoteImValue={remoteImValue}
                 onRemoteImChange={onRemoteImChange}
                 onModelChange={() => void reloadModel()}

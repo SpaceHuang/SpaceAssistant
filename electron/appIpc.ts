@@ -972,7 +972,7 @@ function readExposureInputsFromDb(
       confirmMode: tools.confirmMode,
       deniedTools: tools.deniedTools,
       cache: new SqliteDecisionCache(conn).list(),
-      rules: model.toRuleViews(DEFAULT_POLICY_RULES, new PolicyRuleStore(conn).listOverrides()),
+      rules: model.toRuleViews(DEFAULT_POLICY_RULES, new PolicyRuleStore(conn).listOverrides(), tools.confirmMode),
       retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
       haveAuditLog: auditMod.getSecurityAuditLogDir() != null
     })
@@ -1014,7 +1014,7 @@ function readExposureInputsFromDb(
       const { validateRuleOverride } = await import('../src/shared/policy/policyPackages')
       const { getDbConnection } = await import('./database')
       const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
-      // 主进程侧强制校验：规则必须存在、非 locked、动作 ∈ {deny,allow,ask}；不可增删、顺序不可改（§4 第 1 区）
+      // 主进程侧强制校验：规则必须存在、非 locked、动作域按规则类型限定（§4 第 1 区）
       const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action)
       if (!check.ok) return { ok: false as const, error: check.error }
       const params =

@@ -48,9 +48,10 @@ const MODEL: SecuritySettingsModelPayload = {
       lanes: ['desktop']
     },
     {
+      // 主进程 toRuleViews 按 confirmMode=diff 派生后的形态（diff/direct → 询问）
       id: 'desktop-auto-approve',
       when: 'invocation',
-      action: 'auto-evaluator',
+      action: 'ask',
       defaultAction: 'auto-evaluator',
       locked: false,
       reason: '桌面 confirmMode=auto 时写/编辑文件的自动审批',
@@ -223,38 +224,49 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
   })
 })
 
-describe('确认模式并入规则列表（desktop-auto-approve 规则行即确认模式控件）', () => {
-  it('桌面 Tab 的 desktop-auto-approve 行渲染确认模式选择器（不受套餐限制）', { timeout: 20000 }, async () => {
+describe('确认模式并入规则列表（desktop-auto-approve 与其他规则同口径）', () => {
+  it('标准套餐下 desktop-auto-approve 行显示"询问"（confirmMode=diff 派生）且禁用', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('desktop-auto-approve')).closest('tr')!
+    expect(within(row as HTMLElement).getByText('询问')).toBeTruthy()
+    const select = row.querySelector('.ant-select')!
+    expect(select.className).toContain('ant-select-disabled')
+  })
+
+  it('自定义套餐下该行为可编辑三选（询问/允许/自动），选"自动"二次确认后写规则覆盖', { timeout: 20000 }, async () => {
+    // 桌面链路切到自定义套餐
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'custom' }
+    })
     renderTab()
     const panel = await screen.findByRole('tabpanel')
     const row = (await within(panel).findByText('desktop-auto-approve')).closest('tr')!
     const select = within(row as HTMLElement).getByRole('combobox')
-    // 当前值 diff → 展示文件修改内容；非自定义套餐下也可编辑
-    expect(within(row as HTMLElement).getByText('展示文件修改内容')).toBeTruthy()
     expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
-  })
-
-  it('切换为自动放行需二次确认，确认后写入 confirmMode=auto 草稿', { timeout: 20000 }, async () => {
-    const { setToolUi } = renderTab()
-    const panel = await screen.findByRole('tabpanel')
-    const row = (await within(panel).findByText('desktop-auto-approve')).closest('tr')!
-    fireEvent.mouseDown(within(row as HTMLElement).getByRole('combobox'))
-    fireEvent.click(await screen.findByText('自动放行安全写入'))
-    // 二次确认弹窗
+    fireEvent.mouseDown(select)
+    // 选项为二字词：自动（该行不允许"拒绝"）
+    const options = await screen.findAllByText('自动')
+    fireEvent.click(options[options.length - 1]!)
+    // 自动 = 开启自动审批：保留二次确认
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: '确认开启' }))
     await waitFor(() => {
-      expect(setToolUi).toHaveBeenCalled()
+      expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({
+        ruleId: 'desktop-auto-approve',
+        action: 'auto-evaluator'
+      })
     })
-    const updater = setToolUi.mock.calls[0]![0] as (s: { confirmMode: string }) => { confirmMode: string }
-    expect(updater({ confirmMode: 'diff' })).toEqual({ confirmMode: 'auto' })
   })
 
-  it('其余 auto-evaluator 规则（shell 预检放行）保持只读文本', { timeout: 20000 }, async () => {
+  it('其余 auto-evaluator 规则（shell 预检放行）同口径：自定义链路下可编辑，当前值"自动"', { timeout: 20000 }, async () => {
     renderTab()
-    const panel = await screen.findByRole('tabpanel')
+    const panel = await openLaneTab('微信')
     const row = (await within(panel).findByText('shell-precheck-auto-allow')).closest('tr')!
-    expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
-    expect(within(row as HTMLElement).getByText('自动审批')).toBeTruthy()
+    // wechat 为 custom：可编辑，当前值展示"自动"
+    const select = within(row as HTMLElement).getByRole('combobox')
+    expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
+    expect(within(row as HTMLElement).getByText('自动')).toBeTruthy()
   })
 })

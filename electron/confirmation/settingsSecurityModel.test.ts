@@ -63,3 +63,22 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(views[1]!.lanes).toBeUndefined()
   })
 })
+
+  it('desktop-auto-approve 无覆盖时动作由 confirmMode 派生（auto→自动，其余→询问）', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [
+      {
+        id: 'desktop-auto-approve',
+        when: 'invocation' as const,
+        match: { lane: ['desktop' as const] },
+        action: 'auto-evaluator' as const,
+        configRequires: { config: 'confirmMode', equals: 'auto' },
+        reason: 'r'
+      }
+    ]
+    expect(toRuleViews(rules, [], 'auto')[0]!.action).toBe('auto-evaluator')
+    expect(toRuleViews(rules, [], 'diff')[0]!.action).toBe('ask')
+    expect(toRuleViews(rules, [], 'direct')[0]!.action).toBe('ask')
+    // 有覆盖时覆盖优先
+    expect(toRuleViews(rules, [{ ruleId: 'desktop-auto-approve', action: 'allow' }], 'diff')[0]!.action).toBe('allow')
+  })

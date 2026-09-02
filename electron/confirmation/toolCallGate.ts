@@ -167,12 +167,22 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     shellSkipConfirm = precheck.skipConfirm
   }
 
-  // ===== 桌面写/编辑自动审批（confirmMode=auto 时预计算，评估器闭包消费）=====
+  // ===== 生效规则集（套餐/覆盖，§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用 =====
+  // 提前加载：桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作
+  const rules = args.appDb ? loadEffectivePolicyRules(args.appDb, lane) : DEFAULT_POLICY_RULES
+
+  // ===== 桌面写/编辑自动审批（预计算，评估器闭包消费）=====
+  // 生效条件：desktop-auto-approve 动作为 auto-evaluator；默认规则带 confirmMode=auto 门控，
+  // 覆盖后（门控剥离，见 applyCustom）由规则动作直接决定——确认模式已并入规则列表统一受套餐管理
+  const autoApproveRule = rules.find((r) => r.id === 'desktop-auto-approve')
+  const autoApproveActive =
+    autoApproveRule?.action === 'auto-evaluator' &&
+    (autoApproveRule.configRequires ? args.toolsConfig.confirmMode === 'auto' : true)
   let fileAutoApprove: boolean | undefined
   if (
     !args.remoteContext &&
     (args.toolName === 'write_file' || args.toolName === 'edit_file') &&
-    args.toolsConfig.confirmMode === 'auto'
+    autoApproveActive
   ) {
     const autoEval = await (args.fileAutoApproval ?? evaluateFileToolAutoApproval)({
       workDir: args.workDir,
@@ -344,8 +354,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       return { approve: false as const, reason: '无评估器' }
     }
   }
-  // 套餐/规则覆盖生效（§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用，行为不变
-  const rules = args.appDb ? loadEffectivePolicyRules(args.appDb, lane) : DEFAULT_POLICY_RULES
+  // 生效规则集已在上方加载（自动审批预计算依赖），此处直接判定
   const decision = decide(facts, context, rules, deps)
 
   // 判定即记录（§5.6）：policy.decision 事件

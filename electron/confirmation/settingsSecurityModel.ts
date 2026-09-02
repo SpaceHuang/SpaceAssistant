@@ -47,18 +47,25 @@ export function buildSettingsSecurityModel(args: {
   }
 }
 
-/** 默认规则 → 展示视图（无覆盖）。 */
+/** 默认规则 → 展示视图（无覆盖）。confirmMode 用于派生 desktop-auto-approve 的展示动作（确认模式已并入规则行）。 */
 export function toRuleViews(
   rules: PolicyRule[],
-  overrides: Array<{ ruleId: string; action: PolicyRule['action'] }>
+  overrides: Array<{ ruleId: string; action: PolicyRule['action'] }>,
+  confirmMode?: FileConfirmMode
 ): SecuritySettingsRuleView[] {
   const byId = new Map(overrides.map((o) => [o.ruleId, o]))
   return rules.map((rule) => {
     const o = byId.get(rule.id)
+    // desktop-auto-approve 的默认语义是"confirmMode=auto 才命中评估器"：
+    // 无覆盖时把展示动作派生为 自动（confirmMode=auto）/ 询问（其余），与规则行控件同口径
+    const derived =
+      rule.id === 'desktop-auto-approve' && !o
+        ? ((confirmMode === 'auto' ? 'auto-evaluator' : 'ask') as PolicyRule['action'])
+        : (o?.action ?? rule.action)
     return {
       id: rule.id,
       when: rule.when,
-      action: o?.action ?? rule.action,
+      action: derived,
       defaultAction: rule.action,
       locked: rule.locked === true,
       reason: rule.reason,
