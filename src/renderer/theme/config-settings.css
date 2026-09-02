@@ -1138,8 +1138,6 @@
 .config-settings-page .config-tool-list {
   border: 1px solid var(--sa-border);
   border-radius: var(--sa-radius-md);
-  max-height: min(520px, 60vh);
-  overflow: auto;
   background: var(--sa-bg-elevated);
 }
 
