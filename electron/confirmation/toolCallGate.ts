@@ -1,7 +1,6 @@
 import { decide } from '../../src/shared/policy/policyEngine'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
-import { mcpToolNeedsConfirmation } from '../../src/shared/mcpTypes'
 import type {
   AutoApproveFallback,
   BrowserConfig,
@@ -32,7 +31,6 @@ import { evaluateFileToolAutoApproval } from '../tools/writeFileAutoApproval'
 import { extractHostname } from '../browser/urlSecurity'
 import type { ActDangerAssessment } from '../browser/browserActionPolicy'
 import { classifyLarkCliImpact } from '../feishu/larkCliImpactPolicy'
-import { listProfiles } from '../mcp/mcpConfigStore'
 import type { McpToolSnapshotEntry } from '../mcp/mcpToolRegistry'
 import type { RemoteContext } from '../tools/types'
 import type { AppDatabase } from '../database'
@@ -217,24 +215,31 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // ===== 事实提取 =====
   let facts: ContentFacts
   if (args.mcpEntry) {
-    // MCP：默认始终确认；仅 readonly-auto + 安全注解免确认（不产信号，落默认表 read → 放行）。
-    const profile = args.appDb
-      ? listProfiles(args.appDb).find((p) => p.id === args.mcpEntry!.serverId)
-      : undefined
-    const needsConfirm = profile ? mcpToolNeedsConfirmation(profile, args.mcpEntry) : true
+    // MCP：事实提取为纯信号——总是产 mcp-tool（落 mcp-tool-ask 默认确认，会话信任经缓存命中放行）；
+    // 注解安全（server 声明 readOnlyHint:true 且 destructiveHint≠true）时额外产 mcp-readonly，
+    // 由 mcp-readonly-allow 规则放行（strict 套餐自动上调为 ask）。actionClass：注解安全 → read，否则 write。
+    const annotationsSafe =
+      args.mcpEntry.annotations?.readOnlyHint === true && args.mcpEntry.annotations.destructiveHint !== true
     facts = {
       toolName: args.toolName,
-      actionClass: needsConfirm ? 'write' : 'read',
+      actionClass: annotationsSafe ? 'read' : 'write',
       baseRiskLevel: 'medium',
-      signals: needsConfirm
-        ? [
-            {
-              kind: 'mcp-tool',
-              serverId: args.mcpEntry.serverId,
-              toolName: args.mcpEntry.originalName
-            }
-          ]
-        : [],
+      signals: [
+        {
+          kind: 'mcp-tool',
+          serverId: args.mcpEntry.serverId,
+          toolName: args.mcpEntry.originalName
+        },
+        ...(annotationsSafe
+          ? [
+              {
+                kind: 'mcp-readonly',
+                serverId: args.mcpEntry.serverId,
+                toolName: args.mcpEntry.originalName
+              } as const
+            ]
+          : [])
+      ],
       summary: { text: `MCP ${args.mcpEntry.serverName}/${args.mcpEntry.originalName}` }
     }
     result.mcpEntry = args.mcpEntry

@@ -87,5 +87,7 @@ export type AgentLogEventName =
   | 'confirmation.cache.session_scope_clear_failed'
   | 'confirmation.exemption_migration.done'
   | 'confirmation.exemption_migration.failed'
+  | 'confirmation.mcp_confirm_policy_migration.done'
+  | 'confirmation.mcp_confirm_policy_migration.failed'
 
 export type AgentLogFields = Record<string, unknown>

@@ -9,7 +9,6 @@ import {
   deriveUniqueMappedToolName,
   detectSensitiveParamValue,
   generateMappedToolName,
-  mcpToolNeedsConfirmation,
   maskSensitiveArgs,
   trimMcpToolsForBudget,
   sanitizeEndpointForDisplay,
@@ -32,7 +31,6 @@ describe('mcpTypes schemas', () => {
       env: [{ key: 'GITHUB_TOKEN', valuePresent: false }]
     },
     enabledToolNames: [],
-    toolConfirmPolicy: 'always',
     status: 'untested',
     createdAt: '2026-08-28T00:00:00.000Z',
     updatedAt: '2026-08-28T00:00:00.000Z'
@@ -41,7 +39,6 @@ describe('mcpTypes schemas', () => {
   it('parses a valid server profile and applies defaults', () => {
     const parsed = McpServerProfileSchema.parse(baseProfile)
     expect(parsed.status).toBe('untested')
-    expect(parsed.toolConfirmPolicy).toBe('always')
     expect(parsed.timeoutSec).toBe(60)
   })
 
@@ -137,8 +134,7 @@ describe('mcpTypes write input schema', () => {
       args: ['server.js'],
       env: [{ key: 'GITHUB_TOKEN', valuePresent: false, value: 'ghp_abc' }]
     },
-    enabledToolNames: [],
-    toolConfirmPolicy: 'always'
+    enabledToolNames: []
   }
 
   it('accepts a valid write input with one-time secrets', () => {
@@ -366,44 +362,6 @@ describe('trimMcpToolsForBudget', () => {
     const result = trimMcpToolsForBudget(tools)
     expect(result.kept).toHaveLength(MCP_TOOLS_PER_ROUND_MAX)
     expect(result.dropped).toHaveLength(6)
-  })
-})
-
-describe('mcpToolNeedsConfirmation', () => {
-  const profile = {
-    id: 's1',
-    name: 'S',
-    enabled: true,
-    transport: 'stdio',
-    timeoutSec: 60,
-    auth: { mode: 'none', secretPresent: false },
-    enabledToolNames: ['read'],
-    toolConfirmPolicy: 'always',
-    status: 'connected',
-    createdAt: '2026-08-28T00:00:00.000Z',
-    updatedAt: '2026-08-28T00:00:00.000Z'
-  } as const
-
-  it('confirms every call under the always policy', () => {
-    const tool = makeToolDescriptor('read', { annotations: { readOnlyHint: true, destructiveHint: false } })
-    expect(mcpToolNeedsConfirmation({ ...profile, toolConfirmPolicy: 'always' }, tool)).toBe(true)
-  })
-
-  it('skips confirmation only for readonly-auto + readOnlyHint && !destructiveHint', () => {
-    const safe = makeToolDescriptor('read', { annotations: { readOnlyHint: true, destructiveHint: false } })
-    const readonlyAuto = { ...profile, toolConfirmPolicy: 'readonly-auto' as const }
-    expect(mcpToolNeedsConfirmation(readonlyAuto, safe)).toBe(false)
-  })
-
-  it('confirms when annotations are missing or destructive', () => {
-    const readonlyAuto = { ...profile, toolConfirmPolicy: 'readonly-auto' as const }
-    expect(mcpToolNeedsConfirmation(readonlyAuto, makeToolDescriptor('no-ann'))).toBe(true)
-    expect(
-      mcpToolNeedsConfirmation(
-        readonlyAuto,
-        makeToolDescriptor('destructive', { annotations: { readOnlyHint: true, destructiveHint: true } })
-      )
-    ).toBe(true)
   })
 })
 

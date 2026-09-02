@@ -24,7 +24,6 @@ const MCP_PROFILE: McpServerProfile = {
   auth: { mode: 'none', secretPresent: false },
   stdio: { command: 'node', args: ['server.js'], env: [] },
   enabledToolNames: ['create_issue'],
-  toolConfirmPolicy: 'always',
   status: 'connected',
   createdAt: '2026-08-28T00:00:00.000Z',
   updatedAt: '2026-08-28T00:00:00.000Z'

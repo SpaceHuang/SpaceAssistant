@@ -51,6 +51,36 @@
 
 在 `docs/develop/` 增补一条约定（可并入现有设置开发文档）：今后任何设置项跨页迁移，禁止在原位置保留常驻迁移 UI 超过**一个大版本**；迁移信息通过一次性提示或更新日志承载。
 
+### R5 MCP「调用前确认」设置收敛进安全策略（方案已确认，待实施）
+
+> **状态：已实施**（含行为保持迁移；迁移时 strict/loose 套餐链路保持原样，仅 standard 链路转 custom）。本条与 R1–R3 同一范式（同一类安全决策只能有一个入口），但涉及语义合并，单独列出。
+
+#### 现状
+
+- 每个 MCP server 的 profile 带有 `toolConfirmPolicy: 'always' | 'readonly-auto'` 字段（`src/shared/mcpTypes.ts:84`），UI 入口在 `McpServerForm.tsx:139` 的「调用前确认」下拉（i18n `mcp.confirmPolicyLabel/confirmAlways/confirmReadonlyAuto`）。
+- 它在 `electron/confirmation/toolCallGate.ts:219-239` 的**事实提取阶段**生效：`always` → 产 `mcp-tool` 信号，落默认规则 `mcp-tool-ask`（`src/shared/policy/defaultRules.ts:236`）→ 询问；`readonly-auto` 且注解安全（`readOnlyHint === true && destructiveHint !== true`）→ 不产信号、actionClass 降为 `read` → 默认表放行。
+
+#### 问题
+
+1. **策略框架外的暗豁免**：被 `readonly-auto` 放行的调用不产生信号，在安全策略规则视图中不可见、审计不到规则命中；strict 套餐（「宁可多问」）无法将其上调为 ask，与套餐语义矛盾。
+2. **per-server 粒度无可兑现的安全收益**：该设置的本质是「是否信任 server 单方面声明的、不可验证的只读注解」。对不信任的 server，正确动作是不接入（其只读工具的读取面与返回内容注入面都不是确认弹窗能 containment 的）；而新建 server 默认即 `readonly-auto`（`mcpDrafts.ts:73`），差异化实际几乎不发生。粒度存在、收益为零，代价是 N 份存储、N 个入口、复杂度随 server 数线性增长。
+
+#### 变更方案
+
+1. **事实提取改为纯信号**（`toolCallGate.ts` MCP 分支）：不再读取 profile；总是产 `mcp-tool` 信号（带 serverId/toolName）；注解安全时**额外**产新信号 `mcp-readonly`（在 `src/shared/confirmation/types.ts` 信号联合类型中新增，payload 同 `mcp-tool`）。actionClass：注解安全 → `read`，否则 → `write`。
+2. **默认规则表**（`defaultRules.ts`）：在 `mcp-tool-ask` **之前**新增 `mcp-readonly-allow`（match `{ signals: ['mcp-readonly'] }`，action `allow`，非 locked），并注释顺序依赖。strict 套餐自动将其上调为 ask；自定义套餐可覆盖为 ask/deny——「全局始终确认」由规则覆盖表达，不再需要独立开关。
+3. **删除 per-server 字段全链路**：`mcpTypes.ts`（`McpToolConfirmPolicy`、两处 zod schema、`mcpToolNeedsConfirmation`）、`mcpConfigStore.ts`、`mcpIpc.ts`、`mcpDrafts.ts`、`McpServerForm.tsx` 下拉、i18n key `mcp.confirmPolicy*`（zh-CN/en-US），以及相关测试（`mcpTypes.test.ts`、`mcpDrafts.test.ts`、`McpServerForm`/`McpSettingsTab` 测试、electron 侧 mock 中的该字段）。
+4. **迁移**：启动迁移读取现有 profile；若**任一** profile 为 `always`，向 `policy_rules` 写入 `mcp-readonly-allow` → `ask` 的覆盖，并将受影响链路套餐置为 `custom`（规则覆盖仅在 custom 套餐下生效，`policyRulesRuntime.ts:85`；custom + 仅此一条覆盖与其余默认规则行为等价，属行为保持型迁移）。全部为 `readonly-auto` 则无需动作。
+5. **确认记忆不受影响**：`mcp-tool` 会话信任键（`policyEngine.ts:82-87`）派生逻辑不变；`mcp-readonly` 命中 allow 规则、不进确认，无需派生缓存键。
+6. **未来如需 per-server 差异化**：正确出口是规则引擎给 `mcp-tool` 信号匹配加 serverId 维度做 ask/deny 覆盖（表达「不信任该 server」），不恢复注解信任开关。本期不做。
+
+#### 验收标准
+
+1. MCP server 表单不再出现「调用前确认」下拉；安全策略规则视图可见 `mcp-readonly-allow` 条目。
+2. 行为等价：原 `always` profile 迁移后只读注解工具仍需确认；原 `readonly-auto` profile 行为不变。
+3. strict 套餐下只读注解 MCP 工具转为询问。
+4. `tsc` 双 gate、`i18n-check`、electron 与 renderer 相关测试全部通过。
+
 ## 5. 非目标
 
 - 不改动任何配置的存储 key、读写通道或默认值（`config.tools`、`decision_cache`、`config.wechat/feishu` 等保持原样）。
@@ -75,3 +105,4 @@
 | 修改（测试） | `BrowserSettingsTab.test.tsx`、`RemoteImCommonSettings.test.tsx` |
 | 修改（发布说明） | 版本更新日志中补充迁移关系说明 |
 | 文档 | `docs/develop/` 迁移规范约定（R4，后续跟进，本次不变更） |
+| R5（待实施） | `toolCallGate.ts`、`defaultRules.ts`、`confirmation/types.ts`、`mcpTypes.ts`、`mcpConfigStore.ts`、`mcpIpc.ts`、`mcpDrafts.ts`、`McpServerForm.tsx`、i18n `mcp.confirmPolicy*`、迁移代码及相关测试 |

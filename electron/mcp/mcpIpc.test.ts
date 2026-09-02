@@ -41,7 +41,6 @@ function makeInput(overrides: Partial<McpServerWriteInput> = {}): McpServerWrite
     auth: { mode: 'none' },
     stdio: { command: 'node', args: ['server.js'], env: [] },
     enabledToolNames: [],
-    toolConfirmPolicy: 'always',
     ...overrides
   }
 }

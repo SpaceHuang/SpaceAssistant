@@ -21,7 +21,6 @@ function makeProfile(overrides: Partial<McpServerProfile> = {}): McpServerProfil
       env: [{ key: 'GITHUB_TOKEN', valuePresent: true }]
     },
     enabledToolNames: [],
-    toolConfirmPolicy: 'always',
     status: 'untested',
     createdAt: '2026-08-28T00:00:00.000Z',
     updatedAt: '2026-08-28T00:00:00.000Z',
@@ -38,7 +37,6 @@ describe('mcpDrafts', () => {
     expect(a.name).toBe('')
     expect(a.enabled).toBe(false)
     expect(a.transport).toBe('stdio')
-    expect(a.toolConfirmPolicy).toBe('readonly-auto')
   })
 
   it('initializes a draft from a stored profile without secret values', () => {

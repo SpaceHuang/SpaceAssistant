@@ -52,6 +52,7 @@ import { createWorkDirManager, resolveWorkDirForSession, type WorkDirManager } f
 import { FloatingNotificationManager } from './floatingNotificationManager'
 import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceHooks'
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
+import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
 
 let floatingManager: FloatingNotificationManager | null = null
@@ -310,6 +311,7 @@ app.whenReady().then(() => {
   // 先做一次性的存量豁免迁移（版本门控、幂等、失败不阻塞），再做启动缓存清理
   // （清空会话级条目 = "进程消亡即失效"语义等价物 + 过期/休眠清理）。
   runExemptionMigrationOnce(db, { audit: getSecurityAuditLog() })
+  runMcpConfirmPolicyMigrationOnce(db, { audit: getSecurityAuditLog() })
   runStartupDecisionCacheCleanup(db)
 
   const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))

@@ -265,6 +265,68 @@ describe('evaluateToolCallGate', () => {
     expect(audit.events.some((e) => e.event === 'cache.hit')).toBe(true)
   })
 
+  it('MCP 安全注解工具 → auto-allow(mcp-readonly-allow)；无注解 → require-confirm(mcp-tool-ask)', async () => {
+    const db = openDb()
+    const readonlyEntry = {
+      serverId: 'srv1',
+      serverName: 'Srv',
+      originalName: 'list_issues',
+      mappedName: 'mcp__srv1__list_issues',
+      description: '',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, destructiveHint: false }
+    }
+    // 注解安全：额外产 mcp-readonly 信号 → 命中 mcp-readonly-allow 放行，actionClass 降 read
+    const r1 = await evaluateToolCallGate(
+      base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry, appDb: db })
+    )
+    expect(r1.decision.type).toBe('auto-allow')
+    expect(r1.decision.ruleId).toBe('mcp-readonly-allow')
+
+    // destructiveHint:true 不算安全注解 → 仍确认
+    const r2 = await evaluateToolCallGate(
+      base({
+        toolName: readonlyEntry.mappedName,
+        toolInput: {},
+        mcpEntry: { ...readonlyEntry, annotations: { readOnlyHint: true, destructiveHint: true } },
+        appDb: db
+      })
+    )
+    expect(r2.decision.type).toBe('require-confirm')
+    if (r2.decision.type === 'require-confirm') {
+      expect(r2.decision.ruleId).toBe('mcp-tool-ask')
+      expect(r2.decision.facts.actionClass).toBe('write')
+      // 总是产 mcp-tool 信号；不安全注解不产 mcp-readonly
+      expect(r2.decision.facts.signals).toEqual([
+        { kind: 'mcp-tool', serverId: 'srv1', toolName: 'list_issues' }
+      ])
+    }
+  })
+
+  it('MCP 安全注解 + custom 套餐覆盖 mcp-readonly-allow→ask → require-confirm（等价原 always 迁移后行为）', async () => {
+    const db = openDb()
+    new PolicyRuleStore(getDbConnection(db)).setOverride({
+      ruleId: 'mcp-readonly-allow',
+      action: 'ask',
+      params: {}
+    })
+    writePolicyPackages(db, { desktop: 'custom', wechat: 'custom', feishu: 'custom', automation: 'custom' })
+    const readonlyEntry = {
+      serverId: 'srv1',
+      serverName: 'Srv',
+      originalName: 'list_issues',
+      mappedName: 'mcp__srv1__list_issues',
+      description: '',
+      inputSchema: {},
+      annotations: { readOnlyHint: true }
+    }
+    const r = await evaluateToolCallGate(
+      base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry, appDb: db })
+    )
+    expect(r.decision.type).toBe('require-confirm')
+    if (r.decision.type === 'require-confirm') expect(r.decision.ruleId).toBe('mcp-readonly-allow')
+  })
+
   it('桌面 browser navigate 命中域名信任缓存 → auto-allow；未命中 → require-confirm', async () => {
     const db = openDb()
     const input = { action: 'navigate', url: 'https://example.com' }

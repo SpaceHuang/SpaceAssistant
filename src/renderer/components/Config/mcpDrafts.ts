@@ -2,7 +2,6 @@ import type {
   McpAuthMode,
   McpServerProfile,
   McpServerWriteInput,
-  McpToolConfirmPolicy,
   McpTransportType
 } from '../../../shared/mcpTypes'
 
@@ -43,7 +42,6 @@ export type McpServerDraft = {
   }
   http?: { endpoint: string }
   enabledToolNames: string[]
-  toolConfirmPolicy: McpToolConfirmPolicy
   createdAt?: string
   updatedAt?: string
   clearSecretKinds?: string[]
@@ -70,7 +68,6 @@ export function newMcpServerDraft(): McpServerDraft {
     auth: { mode: 'none' },
     stdio: { command: '', args: [], env: [] },
     enabledToolNames: [],
-    toolConfirmPolicy: 'readonly-auto'
   }
 }
 
@@ -105,7 +102,6 @@ export function initMcpServerDraft(profile: McpServerProfile): McpServerDraft {
       : {}),
     ...(profile.http ? { http: { endpoint: profile.http.endpoint } } : {}),
     enabledToolNames: profile.enabledToolNames,
-    toolConfirmPolicy: profile.toolConfirmPolicy,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt
   }
@@ -153,7 +149,6 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
     ...(stdio ? { stdio } : {}),
     ...(http ? { http } : {}),
     enabledToolNames: draft.enabledToolNames,
-    toolConfirmPolicy: draft.toolConfirmPolicy,
     ...(draft.createdAt ? { createdAt: draft.createdAt } : {}),
     ...(draft.updatedAt ? { updatedAt: draft.updatedAt } : {}),
     ...(clearSecretKinds.length ? { clearSecretKinds } : {})
@@ -190,7 +185,6 @@ export function isMcpDraftDirty(
     ) ||
     (profile.http?.endpoint ?? '') !== (draft.http?.endpoint ?? '') ||
     !jsonEqual(profile.enabledToolNames, draft.enabledToolNames) ||
-    profile.toolConfirmPolicy !== draft.toolConfirmPolicy ||
     (draft.clearSecretKinds?.length ?? 0) > 0 ||
     (draft.stdio?.env.some((e) => e.clear) ?? false)
   )

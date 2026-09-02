@@ -24,7 +24,7 @@ import {
 } from './mcp/mcpToolRegistry'
 import { getSecret } from './mcp/mcpSecretStore'
 import { createMcpOAuthClientProvider } from './mcp/mcpOauthService'
-import { maskSensitiveArgs, mcpToolNeedsConfirmation } from '../src/shared/mcpTypes'
+import { maskSensitiveArgs } from '../src/shared/mcpTypes'
 import type {
   AutoApproveFallback,
   AutoApprovedWriteMeta,

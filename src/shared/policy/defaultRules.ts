@@ -230,8 +230,19 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'allow',
     reason: 'lark-cli 读类子命令免确认'
   },
-  // MCP 工具默认确认（现 mcpToolNeedsConfirmation 判定需确认时产 mcp-tool 信号）；
-  // 会话信任经缓存命中放行（步骤 2）；readonly-auto + 安全注解不产该信号，落默认表 read → 放行。
+  // MCP 只读注解放行：工具带安全注解（readOnlyHint:true 且 destructiveHint≠true）时额外产
+  // mcp-readonly 信号，命中本条目默认放行（替代原 per-server readonly-auto 豁免，改由策略可见、
+  // 可审计、可覆盖）。必须排在 mcp-tool-ask 之前：注解安全调用同时带 mcp-tool 信号，先命中放行，
+  // 否则落到 ask。strict 套餐按"非 locked allow 上调为 ask"自动收紧；custom 套餐可覆盖为 ask/deny
+  // （「全局始终确认」由规则覆盖表达）。
+  {
+    id: 'mcp-readonly-allow',
+    when: 'invocation',
+    match: { signals: ['mcp-readonly'] },
+    action: 'allow',
+    reason: 'MCP 只读注解工具默认免确认'
+  },
+  // MCP 工具默认确认（总是产 mcp-tool 信号）；会话信任经缓存命中放行（步骤 2）。
   {
     id: 'mcp-tool-ask',
     when: 'invocation',

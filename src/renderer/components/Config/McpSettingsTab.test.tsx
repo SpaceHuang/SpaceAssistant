@@ -13,7 +13,6 @@ const SAVED_SERVER: McpServerProfile = {
   auth: { mode: 'none', secretPresent: false },
   stdio: { command: 'node', args: ['server.js'], env: [] },
   enabledToolNames: [],
-  toolConfirmPolicy: 'always',
   status: 'untested',
   createdAt: '2026-08-28T00:00:00.000Z',
   updatedAt: '2026-08-28T00:00:00.000Z'
@@ -384,7 +383,7 @@ describe('McpSettingsTab', () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
 
-    expect(await screen.findByText(/60 秒 · 始终确认/)).toBeTruthy()
+    expect(await screen.findByText(/60 秒/)).toBeTruthy()
     expect(screen.queryByText('调用超时（秒）')).toBeNull()
 
     fireEvent.click(screen.getByText('公共参数'))

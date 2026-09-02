@@ -18,7 +18,6 @@ function makeProfile(overrides: Partial<McpServerProfile> = {}): McpServerProfil
     auth: { mode: 'none', secretPresent: false },
     stdio: { command: process.execPath, args: [], env: [] },
     enabledToolNames: [],
-    toolConfirmPolicy: 'always',
     status: 'untested',
     createdAt: '2026-08-28T00:00:00.000Z',
     updatedAt: '2026-08-28T00:00:00.000Z',

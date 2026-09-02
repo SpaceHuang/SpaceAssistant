@@ -203,7 +203,6 @@ rl.on('line', (line) => {
       auth: { mode: 'none', secretPresent: false },
       stdio: { command: process.execPath, args: [scriptPath], env: [] },
       enabledToolNames: [],
-      toolConfirmPolicy: 'always',
       status: 'untested',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -236,7 +235,6 @@ describe('buildSnapshotTools', () => {
     timeoutSec: 60,
     auth: { mode: 'none', secretPresent: false },
     enabledToolNames: ['tool_a1', 'tool_a2'],
-    toolConfirmPolicy: 'always',
     status: 'connected',
     createdAt: '2026-08-28T00:00:00.000Z',
     updatedAt: '2026-08-28T00:00:00.000Z'

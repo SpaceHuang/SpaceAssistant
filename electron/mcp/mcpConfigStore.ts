@@ -152,7 +152,6 @@ export async function saveProfiles(
         : {}),
       ...(input.http ? { http: { endpoint: input.http.endpoint } } : {}),
       enabledToolNames: input.enabledToolNames,
-      toolConfirmPolicy: input.toolConfirmPolicy,
       ...(prev?.discoveredAt ? { discoveredAt: prev.discoveredAt } : {}),
       ...(prev?.discoveredProtocolVersion ? { discoveredProtocolVersion: prev.discoveredProtocolVersion } : {}),
       status: prev?.status ?? 'untested',

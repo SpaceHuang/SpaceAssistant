@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { decide, deriveCacheKeys } from '../../src/shared/policy/policyEngine'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
+import { resolvePolicyRules } from '../../src/shared/policy/policyPackages'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import { runExtractors } from './extractors/runExtractors'
 import { BROWSER_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePolicy'
@@ -273,34 +274,49 @@ describe('判定矩阵：wechat_send / wechat_reply', () => {
 })
 
 describe('判定矩阵：MCP 工具', () => {
-  function mcpFacts(serverId: string, toolName: string, confirmRequired: boolean): ContentFacts {
+  // 新模型（R5）：总是产 mcp-tool 信号；注解安全时额外产 mcp-readonly，actionClass 降 read。
+  function mcpFacts(serverId: string, toolName: string, readonlySafe: boolean): ContentFacts {
     return {
       toolName: `mcp_${serverId}_${toolName}`,
-      actionClass: confirmRequired ? 'write' : 'read',
+      actionClass: readonlySafe ? 'read' : 'write',
       baseRiskLevel: 'medium',
-      signals: confirmRequired ? [{ kind: 'mcp-tool', serverId, toolName }] : [],
+      signals: [
+        { kind: 'mcp-tool', serverId, toolName },
+        ...(readonlySafe ? [{ kind: 'mcp-readonly' as const, serverId, toolName }] : [])
+      ],
       summary: { text: `mcp ${serverId}/${toolName}` }
     }
   }
-  it('需确认（无信任）→ 确认', () => {
-    const d = decide(mcpFacts('srv', 'tool', true), ctx('desktop'), DEFAULT_POLICY_RULES, deps())
+  it('无安全注解 → 确认（mcp-tool-ask）', () => {
+    const d = decide(mcpFacts('srv', 'tool', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps())
     expect(d.type).toBe('require-confirm')
     expect(d.ruleId).toBe('mcp-tool-ask')
   })
-  it('readonly-auto（无 mcp-tool 信号，read 类）→ 放行', () => {
-    const d = decide(mcpFacts('srv', 'tool', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps())
+  it('安全注解（mcp-readonly 信号）→ 命中 mcp-readonly-allow 放行（先于 mcp-tool-ask）', () => {
+    const d = decide(mcpFacts('srv', 'tool', true), ctx('desktop'), DEFAULT_POLICY_RULES, deps())
     expect(d.type).toBe('auto-allow')
+    expect(d.ruleId).toBe('mcp-readonly-allow')
+  })
+  it('strict 套餐：mcp-readonly-allow 上调为 ask → 安全注解工具转询问', () => {
+    const strictRules = resolvePolicyRules({
+      lane: 'desktop',
+      packages: { desktop: 'strict' },
+      rules: DEFAULT_POLICY_RULES
+    })
+    const d = decide(mcpFacts('srv', 'tool', true), ctx('desktop'), strictRules, deps())
+    expect(d.type).toBe('require-confirm')
+    expect(d.ruleId).toBe('mcp-readonly-allow')
   })
   it('会话信任（sessionId 绑定）→ 放行；其他会话/其他工具不命中', () => {
     const cache = mapCache([
       allowEntry({ kind: 'mcp-tool', serverId: 'srv', toolName: 'tool', sessionId: 's1' }, 'session')
     ])
-    expect(decide(mcpFacts('srv', 'tool', true), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)).type).toBe('auto-allow')
+    expect(decide(mcpFacts('srv', 'tool', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)).type).toBe('auto-allow')
     expect(
-      decide(mcpFacts('srv', 'tool', true), ctx('desktop', { sessionId: 's2' }), DEFAULT_POLICY_RULES, deps({}, cache)).type
+      decide(mcpFacts('srv', 'tool', false), ctx('desktop', { sessionId: 's2' }), DEFAULT_POLICY_RULES, deps({}, cache)).type
     ).toBe('require-confirm')
     expect(
-      decide(mcpFacts('srv', 'other', true), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)).type
+      decide(mcpFacts('srv', 'other', false), ctx('desktop'), DEFAULT_POLICY_RULES, deps({}, cache)).type
     ).toBe('require-confirm')
   })
 })

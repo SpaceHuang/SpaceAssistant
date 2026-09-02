@@ -38,7 +38,6 @@ function makeWriteInput(overrides: Partial<McpServerWriteInput> = {}): McpServer
       env: []
     },
     enabledToolNames: [],
-    toolConfirmPolicy: 'always',
     ...overrides
   }
 }
