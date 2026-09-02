@@ -2262,3 +2262,56 @@
   padding: 0 0 var(--sa-config-gap-field) !important;
 }
 
+/* 链路套参数：套餐选择是统辖下方规则表的决策，需在视觉上占主导 */
+.config-settings-page .config-policy-selector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-field);
+  margin: var(--sa-config-gap-substack) 0 var(--sa-config-gap-stack);
+  padding: var(--sa-config-gap-field) var(--sa-config-gap-substack);
+  background: var(--sa-surface-inset);
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+}
+
+.config-settings-page .config-policy-selector__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-substack);
+  flex-wrap: wrap;
+}
+
+.config-settings-page .config-policy-selector__label {
+  font-size: var(--sa-config-font-section);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+}
+
+.config-settings-page .config-policy-selector__meta {
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.config-settings-page .config-policy-selector__select.ant-select {
+  width: 100%;
+  max-width: none;
+}
+
+.config-settings-page .config-policy-selector .config-field__hint {
+  margin: 0;
+}
+
+/* 「全部放行」为高风险套餐：该提示升级为警告条 */
+.config-settings-page .config-policy-selector .config-field__hint--warn {
+  margin: 0;
+  padding: var(--sa-config-gap-field) var(--sa-config-gap-substack);
+  background: var(--sa-warning-subtle);
+  border: 1px solid color-mix(in srgb, var(--sa-warning) 32%, var(--sa-border));
+  border-radius: var(--sa-radius-sm);
+  color: color-mix(in srgb, var(--sa-warning) 82%, var(--sa-text));
+  font-weight: 500;
+}
+

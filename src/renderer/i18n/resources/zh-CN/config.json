@@ -767,10 +767,10 @@
       "laneFeishu": "飞书",
       "packageStrict": "严格",
       "packageStandard": "标准",
-      "packageLoose": "宽松",
+      "packageLoose": "全部放行",
       "packageCustom": "自定义",
       "strictHint": "严格：原本放行的规则上调为询问。",
-      "looseHint": "宽松：询问类规则下调为自动放行，请确认你了解风险。",
+      "looseHint": "允许 Agent 无需审批，执行下面所有操作。请确认你了解风险，避免长期切换到全部放行状态。",
       "customHint": "自定义：在下表中调整每条规则的动作（拒绝/允许/询问）。",
       "ruleColumn": "规则",
       "whenColumn": "时机",
@@ -793,7 +793,8 @@
       "hardConstraintConfirmTitle": "确认修改链路硬约束？",
       "hardConstraintConfirmContent": "该开关影响远程链路的安全边界，修改会记入安全审计日志。",
       "packageLabel": "当前安全套餐",
-      "actionAutoShort": "自动"
+      "actionAutoShort": "自动",
+      "packageSelectHint": "选择套餐后，下方规则的动作将按套餐预设生效；自定义套餐可逐条覆盖。"
     },
     "memory": {
       "title": "确认记忆管理",

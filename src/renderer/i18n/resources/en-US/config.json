@@ -767,10 +767,10 @@
       "laneFeishu": "Feishu",
       "packageStrict": "Strict",
       "packageStandard": "Standard",
-      "packageLoose": "Loose",
+      "packageLoose": "Allow all",
       "packageCustom": "Custom",
       "strictHint": "Strict: rules that would allow are escalated to ask.",
-      "looseHint": "Loose: ask rules are relaxed to auto-allow. Make sure you understand the risk.",
+      "looseHint": "Lets the agent run all of the operations below without approval. Make sure you understand the risk; avoid leaving it on Allow all for long.",
       "customHint": "Custom: adjust each rule action (deny/allow/ask) in the table below.",
       "ruleColumn": "Rule",
       "whenColumn": "Timing",
@@ -793,7 +793,8 @@
       "hardConstraintConfirmTitle": "Change lane hard constraint?",
       "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log.",
       "packageLabel": "Current security package",
-      "actionAutoShort": "Auto"
+      "actionAutoShort": "Auto",
+      "packageSelectHint": "The package sets the default for all rules below; choose Custom to override per rule."
     },
     "memory": {
       "title": "Confirmation Memory",

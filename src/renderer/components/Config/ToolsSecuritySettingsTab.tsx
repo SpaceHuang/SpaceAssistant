@@ -246,10 +246,18 @@ function PolicyPackageSection({
             label: laneLabel(lane),
             children: (
               <ConfigSettingsStack>
-                <Form.Item label={t('toolsSecurity.policy.packageLabel')} className="config-form-item-inline">
+                <div className="config-policy-selector">
+                  <div className="config-policy-selector__head">
+                    <span className="config-policy-selector__label">
+                      {t('toolsSecurity.policy.packageLabel')}
+                    </span>
+                    <span className="config-policy-selector__meta">
+                      {t('toolsSecurity.policy.packageSelectHint')}
+                    </span>
+                  </div>
                   <Select
                     value={pkg}
-                    style={{ width: 200 }}
+                    className="config-policy-selector__select"
                     classNames={configModalSelectPopupClassNames}
                     options={PACKAGE_VALUES.map((v) => ({
                       value: v,
@@ -264,8 +272,12 @@ function PolicyPackageSection({
                     }))}
                     onChange={(v) => changePackage(lane, v)}
                   />
-                  {hint ? <p className="config-field__hint">{hint}</p> : null}
-                </Form.Item>
+                  {hint ? (
+                    <p className={`config-field__hint${pkg === 'loose' ? ' config-field__hint--warn' : ''}`}>
+                      {hint}
+                    </p>
+                  ) : null}
+                </div>
                 {/* 链路硬约束（remoteAllowLocalWrite）仅远程链路相关，桌面 Tab 不展示 */}
                 {lane !== 'desktop' ? (
                   <ConfigSwitchRow
