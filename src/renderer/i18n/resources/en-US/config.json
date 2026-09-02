@@ -399,15 +399,6 @@
       "status": "Status",
       "empty": "No trusted commands yet",
       "refresh": "Refresh"
-    },
-    "autoAllow": {
-      "title": "Auto-allow model-generated scripts (content analysis now gates this)",
-      "description": "This switch no longer bypasses safety analysis: dangerous scripts still ask or deny; safe scripts may skip confirm. run_shell still uses trusted commands or confirmation cards.",
-      "confirmTitle": "Enable?",
-      "confirmMessage": "Dangerous scripts still ask or deny; safe scripts that pass analysis may skip confirm.",
-      "confirmWarning": "⚠️ Content analysis is a heuristic gate, not a sandbox.",
-      "confirmOk": "Enable",
-      "confirmCancel": "Cancel"
     }
   },
   "browser": {

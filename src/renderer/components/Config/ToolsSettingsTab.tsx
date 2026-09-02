@@ -1,4 +1,4 @@
-import { App, Button, Form, Input, InputNumber, Space, Switch } from 'antd'
+import { Button, Form, Input, InputNumber, Space, Switch } from 'antd'
 import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
@@ -6,7 +6,6 @@ import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/dom
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ConfigResultAlert } from './ConfigResultAlert'
-import { ConfigSwitchRow } from './ConfigField'
 import { ShellSettingsTab } from './ShellSettingsTab'
 import { McpSettingsTab } from './McpSettingsTab'
 import { ToolsSecuritySettingsTab } from './ToolsSecuritySettingsTab'
@@ -115,30 +114,8 @@ export function ToolsSettingsTab({
   onTestPython,
   open = false
 }: Props) {
-  const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
   const hint = getToolsSettingsSectionHint(section, t)
-
-  const patchShellUi = (partial: Partial<ShellConfig>) => setShellUi((s) => ({ ...s, ...partial }))
-
-  const handleAutoAllowScriptChange = (enabled: boolean) => {
-    if (enabled) {
-      modal.confirm({
-        title: t('shell.autoAllow.confirmTitle'),
-        content: (
-          <div>
-            <p>{t('shell.autoAllow.confirmMessage')}</p>
-            <p>{t('shell.autoAllow.confirmWarning')}</p>
-          </div>
-        ),
-        okText: t('shell.autoAllow.confirmOk'),
-        cancelText: t('shell.autoAllow.confirmCancel'),
-        onOk: () => patchShellUi({ autoAllowScriptExecution: true })
-      })
-      return
-    }
-    patchShellUi({ autoAllowScriptExecution: false })
-  }
 
   const renderSection = () => {
     switch (section) {
@@ -174,12 +151,6 @@ export function ToolsSettingsTab({
       case 'script':
         return (
           <div className="config-form-stack">
-            <ConfigSwitchRow
-              label={t('shell.autoAllow.title')}
-              hint={t('shell.autoAllow.description')}
-              checked={shellUi.autoAllowScriptExecution ?? false}
-              onChange={handleAutoAllowScriptChange}
-            />
             <Form.Item label={t('tools.script.pythonPathLabel')}>
               <Space.Compact style={{ width: '100%' }}>
                 <Input

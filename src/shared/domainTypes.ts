@@ -242,15 +242,13 @@ export interface ShellConfig {
   /** plain：v1 纯文本；terminal：xterm + scrollback（默认） */
   outputMode?: ShellOutputMode
   trustedCommands?: TrustedShellCommand[]
-  autoAllowScriptExecution?: boolean
 }
 
 export const DEFAULT_SHELL_CONFIG: ShellConfig = {
   enabled: false,
   shellDefaultTimeoutSec: 300,
   maxInlineOutputBytes: 102400,
-  outputMode: 'terminal',
-  autoAllowScriptExecution: false
+  outputMode: 'terminal'
 }
 
 export function mergeShellConfig(partial?: Partial<ShellConfig> | null): ShellConfig {

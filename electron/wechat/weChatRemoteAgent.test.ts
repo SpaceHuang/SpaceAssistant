@@ -82,7 +82,7 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
     botService: { getBot: () => null } as never,
     imChannel: {} as never,
     getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
-    getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [], autoAllowScriptExecution: true }),
+    getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
     remoteContext: {
       source: 'wechat' as const,
       messageId: 'msg-1',
@@ -130,7 +130,7 @@ describe('runWeChatRemoteAgent', () => {
     await runWeChatRemoteAgent(baseCtx(() => sender))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        shellConfig: expect.objectContaining({ autoAllowScriptExecution: true })
+        shellConfig: expect.objectContaining({ maxInlineOutputBytes: 1024 })
       })
     )
   })

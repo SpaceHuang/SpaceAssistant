@@ -399,15 +399,6 @@
       "status": "状态",
       "empty": "暂无已信任命令",
       "refresh": "刷新"
-    },
-    "autoAllow": {
-      "title": "大模型生成的脚本自动允许执行（已由内容分析接管）",
-      "description": "开启与否不再跳过安全分析：危险脚本仍会确认或拒绝；安全脚本可免确认。run_shell 仍按信任命令或确认卡片流程执行。",
-      "confirmTitle": "确认开启？",
-      "confirmMessage": "危险脚本仍会确认或拒绝；内容分析达标的安全脚本可免确认。",
-      "confirmWarning": "⚠️ 内容分析为启发式闸门，不是沙箱。",
-      "confirmOk": "确认开启",
-      "confirmCancel": "取消"
     }
   },
   "browser": {
