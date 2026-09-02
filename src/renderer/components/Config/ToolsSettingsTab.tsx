@@ -3,6 +3,7 @@ import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
+import type { FeishuConfig } from '../../../shared/feishuTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ConfigResultAlert } from './ConfigResultAlert'
@@ -28,6 +29,9 @@ type Props = {
   setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
   browserUi: BrowserConfig
   setBrowserUi: React.Dispatch<React.SetStateAction<BrowserConfig>>
+  /** 飞书配置（安全策略页「飞书写操作需确认」开关用，R6）。 */
+  feishuUi: FeishuConfig
+  setFeishuUi: React.Dispatch<React.SetStateAction<FeishuConfig>>
   shellUi: ShellConfig
   setShellUi: React.Dispatch<React.SetStateAction<ShellConfig>>
   onShellEnabledChange: (enabled: boolean) => void
@@ -102,6 +106,8 @@ export function ToolsSettingsTab({
   setToolUi,
   browserUi,
   setBrowserUi,
+  feishuUi,
+  setFeishuUi,
   shellUi,
   setShellUi,
   onShellEnabledChange,
@@ -197,7 +203,15 @@ export function ToolsSettingsTab({
       case 'browser':
         return <BrowserSettingsTab active browser={browserUi} onChange={setBrowserUi} models={models} />
       case 'security':
-        return <ToolsSecuritySettingsTab active />
+        return (
+          <ToolsSecuritySettingsTab
+            active
+            browser={browserUi}
+            onBrowserChange={setBrowserUi}
+            feishu={feishuUi}
+            onFeishuChange={setFeishuUi}
+          />
+        )
       default:
         return null
     }

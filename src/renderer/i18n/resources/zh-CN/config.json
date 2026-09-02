@@ -450,8 +450,6 @@
     "actTrustHelper": "在这些域名上的浏览器操作无需确认，跨会话生效。",
     "actTrustAdd": "添加域名",
     "actTrustEmpty": "暂无信任的 act 域名",
-    "actSessionTrustEnable": "启用 act 会话级信任",
-    "actSessionTrustHelper": "首次确认后，同会话同域名的后续 act 操作自动放行。",
     "actHighRiskTitle": "高风险关键词",
     "actHighRiskHelper": "命中以下关键词的 act 指令将强制确认，不享受任何信任。",
     "actHighRiskReset": "恢复默认",
@@ -508,8 +506,6 @@
     "rebindConfirmOk": "确认重新绑定",
     "cancelBind": "取消绑定",
     "clearOwner": "清除 Owner",
-    "larkCliWriteRequiresConfirm": "飞书写操作需确认",
-    "larkCliWriteRequiresConfirmHint": "默认关闭：飞书 CLI 写操作（发消息、改文档、日历等）免确认。可影响群消息、共享文档与日历等第三方资源；误操作外部影响面大于微信「只回自己」。需要时可开启确认。",
     "eventStatus": {
       "badge": "{{state}} · {{processed}}",
       "processed": "已处理 {{count}}",
@@ -779,10 +775,14 @@
       "saveFailed": "保存失败",
       "packageLabel": "当前安全套餐",
       "actionAutoShort": "自动",
-      "packageSelectHint": "选择套餐后，下方规则的动作将按套餐预设生效；自定义套餐可逐条覆盖。"
+      "packageSelectHint": "选择套餐后，下方规则的动作将按套餐预设生效；自定义套餐可逐条覆盖。",
+      "larkWriteRequiresConfirm": "飞书写操作需确认",
+      "larkWriteRequiresConfirmHint": "默认关闭：飞书 CLI 写操作（发消息、改文档、日历等）免确认。可影响群消息、共享文档与日历等第三方资源；误操作外部影响面大于微信「只回自己」。需要时可开启确认。自定义套餐下对 lark-write-ask 的规则覆盖优先于本开关。"
     },
     "memory": {
       "title": "确认记忆管理",
+      "actSessionTrustLabel": "启用 act 会话级信任",
+      "actSessionTrustHint": "首次确认后，同会话同域名的后续 act 操作自动放行。关闭后 act 不产生会话记忆，每次都会询问。",
       "hint": "「下次别问了」的确认记忆（decision_cache）。清除后下次调用会再次询问。",
       "columnSummary": "内容",
       "columnTier": "档位",

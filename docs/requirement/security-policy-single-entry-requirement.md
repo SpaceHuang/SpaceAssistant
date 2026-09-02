@@ -81,6 +81,29 @@
 3. strict 套餐下只读注解 MCP 工具转为询问。
 4. `tsc` 双 gate、`i18n-check`、electron 与 renderer 相关测试全部通过。
 
+### R6 确认行为开关入口收敛：act 会话信任 + 飞书写确认
+
+> **状态：已实施**。两个开关均为「确认行为决策」，按单一入口范式移入安全策略页；**机制、配置 key、默认值、引擎逻辑全部不动，无迁移、无行为变化**（方案 A：纯挪 UI）。
+
+#### 背景与定性
+
+1. **act 会话级信任**（`browser.actSessionTrustEnabled`，默认 true；现 UI 在 `BrowserSettingsTab.tsx:256-261`，i18n `browser.actSessionTrustEnable/Helper`）：控制确认记忆的派生——`toolCallGate.ts:206` 仅在开启时注入 `currentHost`，`policyEngine.ts:72-80` 才据此派生 act 的「同会话同域名」信任键（`domain+action` 档）。关闭 = act 不产出任何会话记忆、每次必问。这是真实有价值的全局开关（不删），但语义属于确认记忆层，应与安全策略页区 4「确认记忆管理」同处。
+2. **飞书写操作需确认**（`feishu.larkCliWriteRequiresConfirm`，默认 false；现 UI 在 `FeishuSettingsTab.tsx:391-394`，i18n `feishu.larkCliWriteRequiresConfirm/Hint`）：本身不是独立机制，是默认规则 `lark-write-ask` 的 `askUnless` 门控配置（`defaultRules.ts:223`）。决策已在规则引擎内，散落在飞书设置页的只是门控开关 UI。非 custom 套餐下它是该规则唯一控制口（不冗余）；custom 套餐下与规则覆盖**重复且可静默打架**（覆盖剥离 askUnless，`policyPackages.ts:92-94` → 开关形同虚设），必须在同一入口消解。
+
+#### 变更方案
+
+1. **act 会话级信任**：删除 `BrowserSettingsTab.tsx:256-261` 的 `ConfigSwitchRow`；在安全策略页区 4「确认记忆管理」顶部新增同义开关，读写仍走现有 `browser` 配置通道。
+2. **飞书写操作需确认**：删除 `FeishuSettingsTab.tsx:391-394` 的开关；在安全策略页规则区（区 1）新增「规则快捷开关」位（或在规则视图就近）放置该开关，读写仍走现有 `feishu` 配置通道；开关旁注明「自定义套餐下对 `lark-write-ask` 的规则覆盖优先于本开关」。
+3. **i18n**：4 个 key（`browser.actSessionTrustEnable/Helper`、`feishu.larkCliWriteRequiresConfirm/Hint`）迁入安全策略页对应命名空间（zh-CN/en-US 同步），并重新生成 `src/renderer/i18n/types.ts`。
+4. **测试**：更新 `BrowserSettingsTab.test.tsx`、`FeishuSettingsTab.test.tsx`、安全策略页相关测试。
+5. **明确不做**：`navigateRequiresConfirm`（浏览器 navigate 确认开关）虽同属 askUnless 门控，本期不动；strict 套餐是否收紧 askUnless 门控单独立项决策，不在本条范围。
+
+#### 验收标准
+
+1. 网络访问、飞书设置页不再出现这两个开关；安全策略页内可正常读写，行为与迁移前逐项等价。
+2. custom 套餐下 `lark-write-ask` 存在覆盖时，开关不误导（有优先级说明）。
+3. `tsc` 双 gate、`i18n-check`、相关测试全部通过。
+
 ## 5. 非目标
 
 - 不改动任何配置的存储 key、读写通道或默认值（`config.tools`、`decision_cache`、`config.wechat/feishu` 等保持原样）。
@@ -105,4 +128,5 @@
 | 修改（测试） | `BrowserSettingsTab.test.tsx`、`RemoteImCommonSettings.test.tsx` |
 | 修改（发布说明） | 版本更新日志中补充迁移关系说明 |
 | 文档 | `docs/develop/` 迁移规范约定（R4，后续跟进，本次不变更） |
+| R6（待实施） | `BrowserSettingsTab.tsx`、`FeishuSettingsTab.tsx`、`ToolsSecuritySettingsTab.tsx`、i18n `config.json`（zh-CN/en-US）、`src/renderer/i18n/types.ts`、相关测试 |
 | R5（待实施） | `toolCallGate.ts`、`defaultRules.ts`、`confirmation/types.ts`、`mcpTypes.ts`、`mcpConfigStore.ts`、`mcpIpc.ts`、`mcpDrafts.ts`、`McpServerForm.tsx`、i18n `mcp.confirmPolicy*`、迁移代码及相关测试 |

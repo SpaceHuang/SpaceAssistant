@@ -3,6 +3,7 @@ import { App } from 'antd'
 import { describe, expect, it, vi } from 'vitest'
 import { ToolsSettingsTab } from './ToolsSettingsTab'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
 
 function renderFileSection(confirmMode: 'diff' | 'direct' | 'auto' = 'diff') {
   const setToolUi = vi.fn()
@@ -22,6 +23,8 @@ function renderFileSection(confirmMode: 'diff' | 'direct' | 'auto' = 'diff') {
         setToolUi={setToolUi}
         browserUi={DEFAULT_BROWSER_CONFIG}
         setBrowserUi={vi.fn()}
+        feishuUi={DEFAULT_FEISHU_CONFIG}
+        setFeishuUi={vi.fn()}
         shellUi={DEFAULT_SHELL_CONFIG}
         setShellUi={vi.fn()}
         onShellEnabledChange={vi.fn()}

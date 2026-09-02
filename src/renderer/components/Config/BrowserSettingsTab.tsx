@@ -253,13 +253,6 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         </ConfigSettingsStack>
       </section>
 
-      <ConfigSwitchRow
-        label={t('browser.actSessionTrustEnable')}
-        hint={t('browser.actSessionTrustHelper')}
-        checked={browser.actSessionTrustEnabled}
-        onChange={(v) => patch({ actSessionTrustEnabled: v })}
-      />
-
       <ConfigField label={t('browser.actHighRiskTitle')} hint={t('browser.actHighRiskHelper')}>
         <Button type="link" size="small" onClick={() => setActKeywordsOpen((v) => !v)}>
           {actKeywordsOpen ? t('browser.detectCollapse') : t('browser.detectExpandHint')}

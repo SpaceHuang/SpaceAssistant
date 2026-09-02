@@ -925,6 +925,10 @@ export function ConfigSettingsPage() {
 
             setBrowserUi={setBrowserUi}
 
+            feishuUi={feishuUi}
+
+            setFeishuUi={setFeishuUi}
+
             shellUi={shellUi}
 
             setShellUi={setShellUi}

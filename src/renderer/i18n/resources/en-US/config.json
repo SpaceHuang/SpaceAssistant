@@ -450,8 +450,6 @@
     "actTrustHelper": "Browser actions on these domains skip confirmation across sessions.",
     "actTrustAdd": "Add domain",
     "actTrustEmpty": "No trusted act domains yet",
-    "actSessionTrustEnable": "Enable act session trust",
-    "actSessionTrustHelper": "After the first confirmation, later act actions on the same domain in this session run automatically.",
     "actHighRiskTitle": "High-risk keywords",
     "actHighRiskHelper": "Act instructions matching these keywords always require confirmation and never use trust.",
     "actHighRiskReset": "Restore defaults",
@@ -508,8 +506,6 @@
     "rebindConfirmOk": "Confirm rebind",
     "cancelBind": "Cancel bind",
     "clearOwner": "Clear owner",
-    "larkCliWriteRequiresConfirm": "Confirm Feishu write operations",
-    "larkCliWriteRequiresConfirmHint": "Off by default: Feishu CLI writes (messages, docs, calendar, etc.) skip confirmation. Writes can affect group chats, shared docs, and calendars—broader external impact than WeChat private reply. Turn on when you want confirmation.",
     "eventStatus": {
       "badge": "{{state}} · {{processed}}",
       "processed": "Processed {{count}}",
@@ -779,10 +775,14 @@
       "saveFailed": "Save failed",
       "packageLabel": "Current security package",
       "actionAutoShort": "Auto",
-      "packageSelectHint": "The package sets the default for all rules below; choose Custom to override per rule."
+      "packageSelectHint": "The package sets the default for all rules below; choose Custom to override per rule.",
+      "larkWriteRequiresConfirm": "Confirm Feishu write operations",
+      "larkWriteRequiresConfirmHint": "Off by default: Feishu CLI writes (messages, docs, calendar, etc.) skip confirmation. Writes can affect group chats, shared docs, and calendars—broader external impact than WeChat private reply. Turn on when you want confirmation. Under the custom package, rule overrides for lark-write-ask take precedence over this switch."
     },
     "memory": {
       "title": "Confirmation Memory",
+      "actSessionTrustLabel": "Enable act session trust",
+      "actSessionTrustHint": "After the first confirmation, later act actions on the same domain in this session run automatically. When off, act keeps no session memory and asks every time.",
       "hint": "Remembered answers (do-not-ask-again) from the decision_cache. Clearing an entry means it will ask again next time.",
       "columnSummary": "Content",
       "columnTier": "Tier",

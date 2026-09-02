@@ -387,13 +387,6 @@ export function FeishuSettingsTab({ feishu, onChange }: Props) {
           </Radio.Group>
         </ConfigField>
 
-        <ConfigSwitchRow
-          label={t('feishu.larkCliWriteRequiresConfirm')}
-          hint={t('feishu.larkCliWriteRequiresConfirmHint')}
-          checked={feishu.larkCliWriteRequiresConfirm}
-          onChange={(larkCliWriteRequiresConfirm) => patch({ larkCliWriteRequiresConfirm })}
-        />
-
         <Button onClick={() => setAuditOpen(true)}>{t('feishu.viewAudit')}</Button>
       </ConfigSettingsStack>
 

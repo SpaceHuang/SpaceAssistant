@@ -7,6 +7,8 @@ import { ToolsSecuritySettingsTab } from './ToolsSecuritySettingsTab'
 import configReducer from '../../store/configSlice'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SecuritySettingsModelPayload } from '../../../shared/confirmation/settingsCenter'
+import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
 
 const MODEL: SecuritySettingsModelPayload = {
   packages: { desktop: 'standard', wechat: 'custom', feishu: 'standard', automation: 'standard' },
@@ -83,13 +85,24 @@ const MODEL: SecuritySettingsModelPayload = {
   ]
 }
 
-function renderTab() {
+function renderTab(overrides?: {
+  browser?: typeof DEFAULT_BROWSER_CONFIG
+  onBrowserChange?: (next: typeof DEFAULT_BROWSER_CONFIG) => void
+  feishu?: typeof DEFAULT_FEISHU_CONFIG
+  onFeishuChange?: (next: typeof DEFAULT_FEISHU_CONFIG) => void
+}) {
   const store = configureStore({ reducer: { config: configReducer } })
   render(
     <Provider store={store}>
       <ConfigProvider>
         <App>
-          <ToolsSecuritySettingsTab active />
+          <ToolsSecuritySettingsTab
+            active
+            browser={overrides?.browser ?? DEFAULT_BROWSER_CONFIG}
+            onBrowserChange={overrides?.onBrowserChange ?? (() => {})}
+            feishu={overrides?.feishu ?? DEFAULT_FEISHU_CONFIG}
+            onFeishuChange={overrides?.onFeishuChange ?? (() => {})}
+          />
         </App>
       </ConfigProvider>
     </Provider>
@@ -144,6 +157,36 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
     // 记忆条目摘要展示
     expect(await screen.findByText('git status')).toBeTruthy()
+  })
+
+  it('飞书写确认开关渲染在策略套餐区，切换时调用 onFeishuChange', { timeout: 20000 }, async () => {
+    const onFeishuChange = vi.fn()
+    renderTab({ feishu: { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }, onFeishuChange })
+    expect(await screen.findByText('飞书写操作需确认')).toBeTruthy()
+    const row = screen.getByText('飞书写操作需确认').closest('.config-field')!
+    const sw = row.querySelector('.ant-switch')!
+    expect(sw.className).not.toContain('ant-switch-checked')
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(onFeishuChange).toHaveBeenCalledWith(
+        expect.objectContaining({ larkCliWriteRequiresConfirm: true })
+      )
+    })
+  })
+
+  it('act 会话级信任开关渲染在确认记忆区，切换时调用 onBrowserChange', { timeout: 20000 }, async () => {
+    const onBrowserChange = vi.fn()
+    renderTab({ browser: { ...DEFAULT_BROWSER_CONFIG, actSessionTrustEnabled: true }, onBrowserChange })
+    expect(await screen.findByText('启用 act 会话级信任')).toBeTruthy()
+    const row = screen.getByText('启用 act 会话级信任').closest('.config-field')!
+    const sw = row.querySelector('.ant-switch')!
+    expect(sw.className).toContain('ant-switch-checked')
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(
+        expect.objectContaining({ actSessionTrustEnabled: false })
+      )
+    })
   })
 
   it('策略套餐区按链路拆 Tab：默认桌面 Tab 只展示适用规则，无硬约束开关', { timeout: 20000 }, async () => {
