@@ -38,9 +38,6 @@ import type { RemoteContext } from '../tools/types'
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database'
 import { checkRemoteTaskBudget, type RemoteTaskBudgetState } from '../remote/remoteTaskBudget'
-import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
-import { isRequestLeaseOwner } from '../remote/remoteAgentRegistry'
-import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 import {
   isRemoteSecurityMigrationComplete,
   shouldSkipRemoteBrowserActConfirm
@@ -281,33 +278,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       }
     }
   }
-  if (
-    args.remoteContext &&
-    (args.toolName === 'write_file' || args.toolName === 'edit_file')
-  ) {
-    const originSessionId = args.remoteContext.originSessionId ?? args.sessionId
-    const authOwner = args.remoteContext.authOwner ?? args.remoteContext.userId ?? ''
-    const gen =
-      args.remoteContext.authorizationGeneration ??
-      remoteAuthorizationRegistry.getGeneration(args.remoteContext.source)
-    const leaseOk =
-      Boolean(args.remoteContext.requestId) &&
-      isRequestLeaseOwner(originSessionId, args.remoteContext.requestId!)
-    const grant =
-      authOwner && leaseOk
-        ? remoteWriteGrantRegistry.findActive({
-            channel: args.remoteContext.source,
-            owner: authOwner,
-            originSessionId,
-            workDirProfileId: args.remoteContext.workDirProfileId ?? 'default',
-            authorizationGeneration: gen
-          })
-        : null
-    context.remoteWriteGrant = grant
-      ? { remainingOps: grant.remainingOps, remainingBytes: grant.remainingBytes }
-      : null
-  }
-
   // ===== 配置袋（规则 configRequires/askUnless 消费）=====
   const config: Record<string, unknown> = {
     confirmMode: args.toolsConfig.confirmMode,

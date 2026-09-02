@@ -4,6 +4,8 @@
  * Bare Y/N never executes.
  */
 
+import type { MemoryTier } from '../../src/shared/confirmation/types'
+
 export type ImConfirmReply =
   | { kind: 'approve'; confirmId: string }
   | { kind: 'approve_and_trust'; confirmId: string }
@@ -93,10 +95,19 @@ export const IM_CONFIRM_TRUST_MISCLICK_HINT =
 export function formatImConfirmPromptFooter(opts?: {
   trustEligible?: boolean
   confirmId?: string
+  memoryTiers?: MemoryTier[]
 }): string {
   const id = opts?.confirmId ? ` ${opts.confirmId}` : ' <确认码>'
+  const base =
+    opts?.trustEligible === false
+      ? `回复 Y${id} 确认，N${id} 取消`
+      : `回复 Y${id} 确认，N${id} 取消，或 Y${id} TRUST`
+  const tiers = opts?.memoryTiers
+  if (!tiers || tiers.length === 0) return base
+  // 记忆档位（记N）：用户可确认并记住第 N 档，编号对应 memoryTiers 顺序。
+  const tierText = tiers.map((m, i) => `记${i + 1}${id} ${m.label}`).join('；')
   if (opts?.trustEligible === false) {
-    return `回复 Y${id} 确认，N${id} 取消`
+    return `回复 Y${id} 确认，N${id} 取消，或 ${tierText}`
   }
-  return `回复 Y${id} 确认，N${id} 取消，或 Y${id} TRUST`
+  return `回复 Y${id} 确认，N${id} 取消，或 Y${id} TRUST；${tierText}`
 }

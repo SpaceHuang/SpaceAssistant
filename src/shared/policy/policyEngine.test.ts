@@ -17,15 +17,11 @@ function mkFacts(
   return { toolName, actionClass, baseRiskLevel, signals, summary: { text: 'summary' } }
 }
 
-function mkContext(
-  lane: ExecutionContext['lane'],
-  remoteWriteGrant?: ExecutionContext['remoteWriteGrant']
-): ExecutionContext {
+function mkContext(lane: ExecutionContext['lane']): ExecutionContext {
   return {
     lane,
     origin: { kind: 'direct-owner' },
-    sessionId: 's1',
-    ...(remoteWriteGrant ? { remoteWriteGrant } : {})
+    sessionId: 's1'
   }
 }
 
@@ -248,8 +244,8 @@ describe('decide：自动审批器（desktop-auto-approve）不与截胡', () =>
   })
 })
 
-describe('decide：远程写 grant 消费', () => {
-  it('未注入 grant 余量 → 不误放行（回落到确认）', () => {
+describe('decide：远程写会话信任（decision_cache remote-write）', () => {
+  it('无会话写信任 → 远程写默认回落到确认（im-write-ask）', () => {
     const d = decide(
       mkFacts('write_file', 'write', [], 'medium'),
       mkContext('wechat'),
@@ -257,33 +253,38 @@ describe('decide：远程写 grant 消费', () => {
       deps({ config: {}, migrationComplete: true })
     )
     expect(d.type).toBe('require-confirm')
+    if (d.type === 'require-confirm') expect(d.ruleId).toBe('im-write-ask')
   })
 
-  it('grant 有效（ops>0 且 bytes>0）→ 远程写免确认（remote-write-grant-allow 先于 im-write-ask）', () => {
+  it('会话写信任（remote-write allow 缓存）→ 远程写免确认（cache-hit 先于 im-write-ask）', () => {
+    const cache: DecisionCacheView = {
+      lookup: () => ({
+        id: 'rw',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        key: { kind: 'remote-write', sessionId: 's1' } as any,
+        decision: 'allow',
+        lane: 'wechat',
+        scope: 'session',
+        createdAt: 1,
+        lastHitAt: 1,
+        hitCount: 1,
+        source: 'user-confirm'
+      })
+    }
     const d = decide(
       mkFacts('write_file', 'write', [], 'medium'),
-      mkContext('wechat', { remainingOps: 3, remainingBytes: 100 }),
+      mkContext('wechat'),
       DEFAULT_POLICY_RULES,
-      deps()
+      deps({ cache })
     )
     expect(d.type).toBe('auto-allow')
-    expect(d.type === 'auto-allow' && d.ruleId).toBe('remote-write-grant-allow')
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('cache-hit')
   })
 
-  it('grant ops=0（操作数耗尽）→ 无效，回落到确认', () => {
+  it('非远程链路（桌面）不消费 remote-write 会话信任，写文件走确认', () => {
     const d = decide(
       mkFacts('write_file', 'write', [], 'medium'),
-      mkContext('wechat', { remainingOps: 0, remainingBytes: 100 }),
-      DEFAULT_POLICY_RULES,
-      deps()
-    )
-    expect(d.type).toBe('require-confirm')
-  })
-
-  it('grant bytes=0（字节耗尽）→ 无效，回落到确认', () => {
-    const d = decide(
-      mkFacts('write_file', 'write', [], 'medium'),
-      mkContext('wechat', { remainingOps: 3, remainingBytes: 0 }),
+      mkContext('desktop'),
       DEFAULT_POLICY_RULES,
       deps()
     )

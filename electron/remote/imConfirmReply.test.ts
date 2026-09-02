@@ -44,6 +44,18 @@ describe('parseImConfirmReply', () => {
     expect(formatImConfirmPromptFooter({ confirmId: 'AB12' })).toContain('AB12')
   })
 
+  it('footer lists memory tiers as 记N <id> <label>', () => {
+    const text = formatImConfirmPromptFooter({
+      confirmId: 'AB12',
+      memoryTiers: [
+        { key: { kind: 'path', path: 'src/a.ts', level: 'file' }, label: '记住 src/a.ts' },
+        { key: { kind: 'remote-write', sessionId: 's1' }, label: '记住 本会话写文件' }
+      ]
+    })
+    expect(text).toContain('记1 AB12 记住 src/a.ts')
+    expect(text).toContain('记2 AB12 记住 本会话写文件')
+  })
+
   it('记N <id>：确认并记住第 N 档（memoryTiers 编号）', () => {
     expect(parseImConfirmReply('记1 AB12')).toEqual({ kind: 'remember', confirmId: 'AB12', tier: 1 })
     expect(parseImConfirmReply('记2 ab12')).toEqual({ kind: 'remember', confirmId: 'AB12', tier: 2 })

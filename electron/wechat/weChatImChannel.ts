@@ -119,7 +119,8 @@ export function buildWeChatConfirmPrompt(pending: ImPendingConfirm, progressPref
   const tool = pending.toolName ?? 'unknown'
   const footer = formatImConfirmPromptFooter({
     trustEligible: pending.trustEligible === true,
-    confirmId: pending.confirmId
+    confirmId: pending.confirmId,
+    memoryTiers: pending.memoryTiers
   })
   const summary = `该操作需在确认后执行：\n工具：${tool}\n${footer}`
   const prefix = progressPrefix.trim() || `【进度】等待确认：${tool}`

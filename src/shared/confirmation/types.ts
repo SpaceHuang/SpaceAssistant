@@ -31,8 +31,6 @@ export interface ExecutionContext {
   sessionId: string
   /** 出站写额度余量（只读，由执行链路注入）。 */
   outboundWriteBudgetRemaining?: number
-  /** 远程写授权余量（只读）；reserve 扣减仍在执行链路。 */
-  remoteWriteGrant?: { remainingOps: number; remainingBytes: number } | null
   /** 套餐 B 预留：本期无人写入。 */
   declaredCapabilities?: DeclaredCapability[]
 }
@@ -267,7 +265,7 @@ export interface PolicyRule {
   /** 配置前置：值等于 equals 才命中；数组语义为"全部满足"（参数化配置引用）。 */
   configRequires?: PolicyConfigRequirement | PolicyConfigRequirement[]
   /** 上下文前置：消费 ExecutionContext 中注入的只读事实。 */
-  requiresContext?: { remoteWriteGrantValid?: boolean; outboundWriteBudgetExhausted?: boolean }
+  requiresContext?: { outboundWriteBudgetExhausted?: boolean }
 }
 
 /** 配置前置条件（值等于 equals 才满足）。 */

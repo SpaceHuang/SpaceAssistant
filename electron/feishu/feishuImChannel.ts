@@ -129,7 +129,8 @@ export function buildFeishuConfirmPromptText(pending: ImPendingConfirm): string 
   const progressPrefix = formatFeishuRemoteProgressPrefix(pending.sessionId)
   const footer = formatImConfirmPromptFooter({
     trustEligible: pending.trustEligible === true,
-    confirmId: pending.confirmId
+    confirmId: pending.confirmId,
+    memoryTiers: pending.memoryTiers
   })
   if (pending.toolName === 'browser' && pending.toolInput) {
     const action = pending.toolInput.action

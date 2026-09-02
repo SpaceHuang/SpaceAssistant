@@ -25,5 +25,8 @@ export function memoryTierLabel(key: CacheKey): string {
   if (key.kind === 'shell-command') {
     return `${CONFIRMATION_LABELS.memoryTierPrefix} ${key.verb}`
   }
+  if (key.kind === 'remote-write') {
+    return `${CONFIRMATION_LABELS.memoryTierPrefix} 本会话写文件`
+  }
   return `${CONFIRMATION_LABELS.memoryTierPrefix} ${key.kind} ${CONFIRMATION_LABELS.memoryTierGenericSuffix}`
 }

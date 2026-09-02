@@ -90,9 +90,6 @@ import {
   type RemoteTaskBudgetState
 } from './remote/remoteTaskBudget'
 import { DEFAULT_REMOTE_TASK_BUDGET } from '../src/shared/imTypes'
-import {
-  remoteWriteGrantRegistry
-} from './remote/remoteWriteGrantRegistry'
 import { isRequestLeaseOwner } from './remote/remoteAgentRegistry'
 import {
   logShellPathConfirm,
@@ -1406,33 +1403,6 @@ async function runToolChatSessionInner(
               leaseOk,
               hasAuthOwner: Boolean(authOwner)
             })
-          } else {
-            // First remote write confirm issues a session-scoped write grant, then reserves this op.
-            if (toolName === 'write_file' || toolName === 'edit_file') {
-              const workDirProfileId = remoteContext.workDirProfileId ?? 'default'
-              const gen =
-                remoteContext.authorizationGeneration ??
-                remoteAuthorizationRegistry.getGeneration(remoteContext.source)
-              remoteWriteGrantRegistry.issue({
-                channel: remoteContext.source,
-                owner: authOwner,
-                originSessionId,
-                workDirProfileId,
-                authorizationGeneration: gen
-              })
-              const reserved = remoteWriteGrantRegistry.reserve({
-                channel: remoteContext.source,
-                owner: authOwner,
-                originSessionId,
-                workDirProfileId,
-                authorizationGeneration: gen,
-                byteCount: estimateWriteToolBytes(toolName, inputObj)
-              })
-              if (!reserved.ok) {
-                outcome = 'rejected'
-                rejectReason = 'authorization_revoked'
-              }
-            }
           }
         }
       }
@@ -1855,17 +1825,4 @@ function resolveMcpExecutor(
     invalidateSession: (serverId) => manager.disconnect(serverId),
     getRecentDiagnostics: (serverId) => getDiagnostics(appDb, serverId)
   })
-}
-
-function estimateWriteToolBytes(toolName: string, inputObj: Record<string, unknown>): number {
-  if (toolName === 'write_file') {
-    const content = typeof inputObj.content === 'string' ? inputObj.content : ''
-    return Buffer.byteLength(content, 'utf8')
-  }
-  if (toolName === 'edit_file') {
-    const oldS = typeof inputObj.old_string === 'string' ? inputObj.old_string : ''
-    const newS = typeof inputObj.new_string === 'string' ? inputObj.new_string : ''
-    return Buffer.byteLength(oldS, 'utf8') + Buffer.byteLength(newS, 'utf8')
-  }
-  return 0
 }

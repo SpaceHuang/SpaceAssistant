@@ -328,20 +328,18 @@ describe('判定矩阵：write_file / edit_file', () => {
     expect(d.type).toBe('auto-allow')
     expect(d.ruleId).toBe('cache-hit')
   })
-  it('远程无授权 → 确认（im-write-ask）；grant 有效 → 放行（remote-write-grant-allow）', () => {
+  it('远程写默认确认（im-write-ask）；会话写信任（remote-write 缓存）→ 免确认（cache-hit）', () => {
     const ask = decideToolCall('write_file', input, 'feishu', deps())
     expect(ask.type).toBe('require-confirm')
-    expect(ask.ruleId).toBe('im-write-ask')
-    const granted = decideToolCall('write_file', input, 'feishu', deps(), {
-      remoteWriteGrant: { remainingOps: 10, remainingBytes: 1024 }
-    })
-    expect(granted.type).toBe('auto-allow')
-    expect(granted.ruleId).toBe('remote-write-grant-allow')
-    // grant 余量耗尽视同无效
-    const exhausted = decideToolCall('write_file', input, 'feishu', deps(), {
-      remoteWriteGrant: { remainingOps: 0, remainingBytes: 1024 }
-    })
-    expect(exhausted.type).toBe('require-confirm')
+    if (ask.type === 'require-confirm') expect(ask.ruleId).toBe('im-write-ask')
+    const trusted = decideToolCall(
+      'write_file',
+      input,
+      'feishu',
+      deps({}, mapCache([allowEntry({ kind: 'remote-write', sessionId: 's1' }, 'session')]))
+    )
+    expect(trusted.type).toBe('auto-allow')
+    if (trusted.type === 'auto-allow') expect(trusted.ruleId).toBe('cache-hit')
   })
   it('远程写不命中桌面 auto 审批（lane 隔离）', () => {
     const d = decideToolCall('write_file', input, 'feishu', deps({ confirmMode: 'auto' }, mapCache([]), {

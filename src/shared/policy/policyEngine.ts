@@ -4,6 +4,7 @@ import type {
   Decision,
   DecisionCacheView,
   ExecutionContext,
+  ExecutionLane,
   IngressFacts,
   MemoryTier,
   PolicyEngineDeps,
@@ -44,7 +45,11 @@ function hasDangerousSignal(facts: ContentFacts): boolean {
 }
 
 /** 从事实推导候选缓存键（规范化签名不落原始输入）。 */
-export function deriveCacheKeys(facts: ContentFacts, sessionId?: string): CacheKey[] {
+export function deriveCacheKeys(
+  facts: ContentFacts,
+  sessionId?: string,
+  lane?: ExecutionLane
+): CacheKey[] {
   const keys: CacheKey[] = []
   for (const signal of facts.signals) {
     switch (signal.kind) {
@@ -87,6 +92,13 @@ export function deriveCacheKeys(facts: ContentFacts, sessionId?: string): CacheK
         break
     }
   }
+  // 远程写会话信任：远程链路写文件时派生会话级 remote-write 键（用户记N 选「记住本会话写文件」后，
+  // 该会话后续写文件免确认）。置于单条路径档之后（窄档优先），且不派生持久键，避免宽范围叠加。
+  if ((lane === 'wechat' || lane === 'feishu') && sessionId) {
+    if (facts.toolName === 'write_file' || facts.toolName === 'edit_file') {
+      keys.push({ kind: 'remote-write', sessionId })
+    }
+  }
   return keys
 }
 
@@ -96,21 +108,15 @@ export function deriveCacheKeys(facts: ContentFacts, sessionId?: string): CacheK
  * 强制"仅此一次"、不开放任何记忆档位——这两条规则非 locked 且位于缓存检查之后，
  * 开放记忆会让"记住"绕过网络命中确认与未认证降级，属安全松动。
  */
-export function buildMemoryTiers(facts: ContentFacts): MemoryTier[] {
+export function buildMemoryTiers(facts: ContentFacts, sessionId?: string, lane?: ExecutionLane): MemoryTier[] {
   if (facts.signals.some((s) => s.kind === 'script-network' || s.kind === 'script-uncertified')) {
     return []
   }
-  const keys = deriveCacheKeys(facts)
+  const keys = deriveCacheKeys(facts, sessionId, lane)
   return keys.map((key) => ({
     key,
     label: memoryTierLabel(key)
   }))
-}
-
-function isGrantValid(grant: ExecutionContext['remoteWriteGrant']): boolean {
-  if (!grant) return false
-  // 与 remoteWriteGrantRegistry 语义一致：ops 与 bytes 必须同时 > 0 才算有效（B2）
-  return grant.remainingOps > 0 && grant.remainingBytes > 0
 }
 
 function ruleMatchesInvocation(
@@ -142,9 +148,6 @@ function ruleMatchesInvocation(
     }
   }
   // 门控：requiresContext 消费上下文只读事实
-  if (rule.requiresContext?.remoteWriteGrantValid === true && !isGrantValid(context.remoteWriteGrant)) {
-    return false
-  }
   if (
     rule.requiresContext?.outboundWriteBudgetExhausted === true &&
     !(context.outboundWriteBudgetRemaining != null && context.outboundWriteBudgetRemaining <= 0)
@@ -164,13 +167,18 @@ function askUnlessHolds(rule: PolicyRule, deps: PolicyEngineDeps): boolean {
   return true
 }
 
-function requireConfirm(rule: PolicyRule, facts: ContentFacts): Decision {
+function requireConfirm(
+  rule: PolicyRule,
+  facts: ContentFacts,
+  sessionId?: string,
+  lane?: ExecutionLane
+): Decision {
   return {
     type: 'require-confirm',
     ruleId: rule.id,
     riskLevel: facts.baseRiskLevel,
     facts,
-    memoryTiers: buildMemoryTiers(facts),
+    memoryTiers: buildMemoryTiers(facts, sessionId, lane),
     timeoutMs: null
   }
 }
@@ -183,8 +191,13 @@ function deny(ruleId: string, reason: string): Decision {
   return { type: 'deny', ruleId, reason }
 }
 
-function lookupCache(facts: ContentFacts, cache: DecisionCacheView, sessionId?: string): Decision | null {
-  for (const key of deriveCacheKeys(facts, sessionId)) {
+function lookupCache(
+  facts: ContentFacts,
+  cache: DecisionCacheView,
+  sessionId?: string,
+  lane?: ExecutionLane
+): Decision | null {
+  for (const key of deriveCacheKeys(facts, sessionId, lane)) {
     const entry = cache.lookup(key)
     if (entry && entry.decision === 'allow') return autoAllow('cache-hit', facts, key)
     if (entry && entry.decision === 'deny') return deny('cache-hit', '缓存记忆为拒绝')
@@ -192,10 +205,15 @@ function lookupCache(facts: ContentFacts, cache: DecisionCacheView, sessionId?: 
   return null
 }
 
-function applyDefault(facts: ContentFacts): Decision {
+function applyDefault(facts: ContentFacts, sessionId?: string, lane?: ExecutionLane): Decision {
   const tokens = signalTokenSet(facts)
   if (tokens.has('extraction-failed')) {
-    return requireConfirm({ id: 'default-extraction-failed', when: 'invocation', action: 'ask', reason: '提取失败，信息不足' }, facts)
+    return requireConfirm(
+      { id: 'default-extraction-failed', when: 'invocation', action: 'ask', reason: '提取失败，信息不足' },
+      facts,
+      sessionId,
+      lane
+    )
   }
   // 缺元数据 / 无信号一律按"信息不足宁可多问"处理
   if (facts.actionClass === 'read' || facts.actionClass === 'outbound') {
@@ -203,7 +221,9 @@ function applyDefault(facts: ContentFacts): Decision {
   }
   return requireConfirm(
     { id: 'default-write-execute-ask', when: 'invocation', action: 'ask', reason: '默认按动作类别询问' },
-    facts
+    facts,
+    sessionId,
+    lane
   )
 }
 
@@ -233,7 +253,7 @@ export function decide(
   if (laneHardDeny) return deny(laneHardDeny.id, laneHardDeny.reason)
 
   // 第 2 步：缓存命中（会话级键按 context.sessionId 绑定）
-  const cacheHit = lookupCache(facts, deps.cache, context.sessionId)
+  const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane)
   if (cacheHit) return cacheHit
 
   // 第 3 步：能力声明放行（套餐 B 预留，本期无人写入）
@@ -261,12 +281,14 @@ export function decide(
   for (const rule of defaultRules) {
     if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
     if (rule.action === 'ask') {
-      return askUnlessHolds(rule, deps) ? autoAllow(rule.id, facts) : requireConfirm(rule, facts)
+      return askUnlessHolds(rule, deps)
+        ? autoAllow(rule.id, facts)
+        : requireConfirm(rule, facts, context.sessionId, context.lane)
     }
     if (rule.action === 'allow') return autoAllow(rule.id, facts)
   }
 
-  return applyDefault(facts)
+  return applyDefault(facts, context.sessionId, context.lane)
 }
 
 /**

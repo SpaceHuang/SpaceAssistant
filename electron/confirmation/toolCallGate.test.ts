@@ -5,12 +5,7 @@ import { SqliteDecisionCache, canonicalKeyJson } from './sqliteDecisionCache'
 import { PolicyRuleStore } from './policyRuleStore'
 import { writePolicyPackages } from './policyRulesRuntime'
 import { createRemoteTaskBudgetState } from '../remote/remoteTaskBudget'
-import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
-import {
-  tryClaimRemoteSession,
-  releaseRemoteSession,
-  resetRunningRemoteAgentRegistryForTests
-} from '../remote/remoteAgentRegistry'
+import { resetRunningRemoteAgentRegistryForTests } from '../remote/remoteAgentRegistry'
 import type { RemoteContext } from '../tools/types'
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../../src/shared/domainTypes'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
@@ -24,7 +19,6 @@ function openDb(): AppDatabase {
 
 afterEach(() => {
   shells.splice(0).forEach((db) => db.close())
-  remoteWriteGrantRegistry.clearAll()
   resetRunningRemoteAgentRegistryForTests()
 })
 
@@ -214,7 +208,7 @@ describe('evaluateToolCallGate', () => {
     expect(r.budgetPause?.message).toContain('继续')
   })
 
-  it('远程 write_file 无 grant → require-confirm(im-write-ask)', async () => {
+  it('远程 write_file 默认（无会话写信任）→ require-confirm(im-write-ask)', async () => {
     const r = await evaluateToolCallGate(
       base({
         toolName: 'write_file',
@@ -224,32 +218,6 @@ describe('evaluateToolCallGate', () => {
     )
     expect(r.decision.type).toBe('require-confirm')
     if (r.decision.type === 'require-confirm') expect(r.decision.ruleId).toBe('im-write-ask')
-  })
-
-  it('远程 write_file 持有效 grant + 租约 → auto-allow(remote-write-grant-allow)', async () => {
-    tryClaimRemoteSession('s1', 'req1', 4)
-    remoteWriteGrantRegistry.issue({
-      channel: 'feishu',
-      owner: 'owner1',
-      originSessionId: 's1',
-      workDirProfileId: 'default',
-      authorizationGeneration: 7
-    })
-    const r = await evaluateToolCallGate(
-      base({
-        toolName: 'write_file',
-        toolInput: { path: 'a.txt', content: 'x' },
-        remoteContext: remoteContext({
-          requestId: 'req1',
-          userId: 'owner1',
-          authorizationGeneration: 7,
-          originSessionId: 's1'
-        })
-      })
-    )
-    expect(r.decision.type).toBe('auto-allow')
-    expect(r.decision.ruleId).toBe('remote-write-grant-allow')
-    releaseRemoteSession('s1', 'req1')
   })
 
   it('MCP 需确认工具 → require-confirm(mcp-tool-ask)；缓存命中后 → auto-allow(cache-hit)', async () => {
