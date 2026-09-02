@@ -204,21 +204,21 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'lark-high-impact-ask',
     when: 'invocation',
-    match: { toolName: 'run_lark_cli', signals: ['lark-high_impact'] },
+    match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-high_impact'] },
     action: 'ask',
     reason: 'lark-cli 高影响子命令需确认'
   },
   {
     id: 'lark-unknown-ask',
     when: 'invocation',
-    match: { toolName: 'run_lark_cli', signals: ['lark-unknown'] },
+    match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-unknown'] },
     action: 'ask',
     reason: 'lark-cli 子命令无法分类，信息不足需确认'
   },
   {
     id: 'lark-write-ask',
     when: 'invocation',
-    match: { toolName: 'run_lark_cli', signals: ['lark-write'] },
+    match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-write'] },
     action: 'ask',
     askUnless: { config: 'larkCliWriteRequiresConfirm', equals: false },
     reason: 'lark-cli 写类子命令需确认'
@@ -226,7 +226,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'lark-read-allow',
     when: 'invocation',
-    match: { toolName: 'run_lark_cli', signals: ['lark-read'] },
+    match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-read'] },
     action: 'allow',
     reason: 'lark-cli 读类子命令免确认'
   },
@@ -270,7 +270,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'ingress-direct-other-deny',
     when: 'ingress',
-    match: { origin: 'direct-other' },
+    match: { lane: ['wechat', 'feishu'], origin: 'direct-other' },
     action: 'deny',
     reason: '发送者不在白名单，拒绝响应'
   },
