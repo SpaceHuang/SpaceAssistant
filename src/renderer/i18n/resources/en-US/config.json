@@ -317,8 +317,8 @@
         "hint": "Browser automation and dependency checks"
       },
       "security": {
-        "label": "Tools & Security",
-        "hint": "Single home for policy packages, confirm mode, tool switches, confirmation memory and audit"
+        "label": "Security Policy",
+        "hint": "Single home for policy packages, confirmation memory and audit"
       }
     },
     "file": {
@@ -399,7 +399,7 @@
       "status": "Status",
       "empty": "No trusted commands yet",
       "refresh": "Refresh",
-      "movedHint": "Trusted-command management has moved to \"Tools & Security > Confirmation Memory\"."
+      "movedHint": "Trusted-command management has moved to \"Security Policy > Confirmation Memory\"."
     },
     "autoAllow": {
       "title": "Auto-allow model-generated scripts (content analysis now gates this)",
@@ -455,7 +455,7 @@
       "columnDomain": "Domain",
       "empty": "No trusted domains yet",
       "invalidDomain": "Invalid domain format",
-      "movedHint": "Trusted-domain management has moved to \"Tools & Security > Confirmation Memory\"."
+      "movedHint": "Trusted-domain management has moved to \"Security Policy > Confirmation Memory\"."
     },
     "actTrustTitle": "Trusted domains for browser actions",
     "actTrustHelper": "Browser actions on these domains skip confirmation across sessions.",
@@ -732,7 +732,7 @@
     "remoteBrowserNavigateRequiresConfirmHint": "Applies only to remote navigate; desktop defaults are unchanged. Screenshot/observe/extract never confirm.",
     "remoteBrowserActRequiresConfirm": "Confirm remote browser act",
     "remoteBrowserActRequiresConfirmHint": "Even when off, high-impact acts (submit/pay/delete/auth) still ask; scan or parse failures also ask.",
-    "confirmMovedHint": "Remote confirmation switches and lane hard constraints have moved to the \"Tools & Security\" page."
+    "confirmMovedHint": "Remote confirmation switches and lane hard constraints have moved to the \"Security Policy\" page."
   },
   "remoteSecurityUpgrade": {
     "title": "One-time remote security confirmation",
@@ -758,7 +758,7 @@
   },
   "toolsSecurity": {
     "intro": "Manage tool confirmation policies, confirmation memory and security audit in one place; confirm mode and tool switches now live here too. Changes apply immediately and are written to the audit log.",
-    "openPage": "Open \"Tools & Security\"",
+    "openPage": "Open \"Security Policy\"",
     "policy": {
       "title": "Policy Packages",
       "hint": "Choose a policy package per lane. The custom package lets you adjust rule actions; locked system-protection rules are read-only.",

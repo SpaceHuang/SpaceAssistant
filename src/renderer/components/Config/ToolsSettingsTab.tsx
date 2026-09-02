@@ -42,7 +42,7 @@ type Props = {
   onTestPython: () => void
   /** 设置页打开状态（MCP 草稿丢弃确认用）。 */
   open?: boolean
-  /** 「工具与安全」页链路硬约束读写 RemoteImCommon 同一份草稿配置。 */
+  /** 「安全策略」页链路硬约束读写 RemoteImCommon 同一份草稿配置。 */
   remoteImValue?: RemoteImCommonConfig
   onRemoteImChange?: (patch: Partial<RemoteImCommonConfig>) => void
 }

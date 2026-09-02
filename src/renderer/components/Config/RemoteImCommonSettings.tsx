@@ -183,7 +183,7 @@ export function RemoteImCommonSettings({
         ]}
       />
 
-      {/* P4：链路硬约束（remoteAllowLocalWrite）与远程确认开关迁移到「工具与安全」页 */}
+      {/* P4：链路硬约束（remoteAllowLocalWrite）与远程确认开关迁移到「安全策略」页 */}
       <ToolsSecurityShortcut hintKey="remoteImCommon.confirmMovedHint" />
 
       <ConfigSwitchRow

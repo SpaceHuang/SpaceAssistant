@@ -20,7 +20,7 @@ export type { PolicyPackage }
 export type SettingsSecurityModel = SecuritySettingsModelPayload
 
 /**
- * 设置中心"工具与安全"页（§7 五区）的数据装配：套餐/确认模式/工具开关/确认记忆/审计摘要/规则视图。
+ * 设置中心"安全策略"页（§7 五区）的数据装配：套餐/确认模式/工具开关/确认记忆/审计摘要/规则视图。
  * 纯数据函数，供渲染端直接消费；审计日志实体由 SecurityAuditLog 提供。
  */
 export function buildSettingsSecurityModel(args: {

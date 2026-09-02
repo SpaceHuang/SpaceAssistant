@@ -79,7 +79,7 @@ const api: SpaceAssistantApi = {
   configGet: () => ipcRenderer.invoke('config:get'),
   getToolExposureList: (payload) => ipcRenderer.invoke('exposure:get-tools', payload),
 
-  // ===== 「工具与安全」设置页（§7 五区，P4）=====
+  // ===== 「安全策略」设置页（§7 五区，P4）=====
   securityGetSettingsModel: () => ipcRenderer.invoke('security:get-settings-model'),
   securitySetPolicyPackage: (payload) => ipcRenderer.invoke('security:set-policy-package', payload),
   securitySetRuleOverride: (payload) => ipcRenderer.invoke('security:set-rule-override', payload),

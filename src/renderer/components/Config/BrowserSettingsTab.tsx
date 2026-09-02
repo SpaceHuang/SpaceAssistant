@@ -254,7 +254,7 @@ export function BrowserSettingsTab({ browser, onChange, models = [], active = fa
         </ConfigSettingsStack>
       </section>
 
-      {/* P4：信任域名管理迁移到「工具与安全 → 确认记忆管理」，此处保留快捷入口 */}
+      {/* P4：信任域名管理迁移到「安全策略 → 确认记忆管理」，此处保留快捷入口 */}
       <ToolsSecurityShortcut hintKey="browser.trust.movedHint" />
 
       <ConfigSwitchRow

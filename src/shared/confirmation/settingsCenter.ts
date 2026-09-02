@@ -10,7 +10,7 @@ import type {
 } from './types'
 
 /**
- * 设置中心「工具与安全」页（§7 五区）跨进程载荷类型。
+ * 设置中心「安全策略」页（§7 五区）跨进程载荷类型。
  * 主进程装配（electron/confirmation/settingsSecurityModel.ts），渲染端只读消费。
  */
 

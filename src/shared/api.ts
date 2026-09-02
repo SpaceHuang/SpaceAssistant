@@ -297,7 +297,7 @@ export type SpaceAssistantApi = {
     cb: (payload: { lane: 'desktop' | 'wechat' | 'feishu'; tools: string[] }) => void
   ) => () => void
 
-  // ===== 「工具与安全」设置页（§7 五区，P4）=====
+  // ===== 「安全策略」设置页（§7 五区，P4）=====
   /** 五区数据装配结果（套餐/确认模式/工具开关/确认记忆/审计摘要/规则视图）。 */
   securityGetSettingsModel: () => Promise<SecuritySettingsModelPayload>
   /** 套餐选择（每链路）；变更落 settings.policy-change。 */

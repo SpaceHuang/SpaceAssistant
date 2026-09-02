@@ -2229,7 +2229,7 @@
   line-height: var(--sa-config-line);
 }
 
-/* 「工具与安全」设置页：渐近式分区（Collapse ghost），标题对齐 section-title 层级 */
+/* 「安全策略」设置页：渐近式分区（Collapse ghost），标题对齐 section-title 层级 */
 .config-settings-page .config-tools-security.ant-collapse.ant-collapse-ghost {
   width: 100%;
 }

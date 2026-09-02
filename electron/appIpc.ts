@@ -946,7 +946,7 @@ function readExposureInputsFromDb(
     }
   )
 
-  // ===== 「工具与安全」设置页（§7 五区，P4）=====
+  // ===== 「安全策略」设置页（§7 五区，P4）=====
   // 启动时把持久化的审计保留天数注入审计单例（设置页可调，§5.6-1）。
   setSecurityAuditRetentionDays(readSecurityAuditRetentionDays(ctx.db))
 

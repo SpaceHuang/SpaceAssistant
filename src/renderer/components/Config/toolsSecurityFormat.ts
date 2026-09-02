@@ -2,7 +2,7 @@ import type { CacheKey, DecisionCacheEntry } from '../../../shared/confirmation/
 import type { NamespaceKeyMap } from '../../i18n/types'
 
 /**
- * 「工具与安全 → 确认记忆管理」的展示装配（纯函数，可单测）：
+ * 「安全策略 → 确认记忆管理」的展示装配（纯函数，可单测）：
  * 缓存键 → 档位 i18n key + 内容摘要；条目按 作用域+档位 分组。
  */
 

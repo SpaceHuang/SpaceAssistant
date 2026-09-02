@@ -70,7 +70,7 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
         description={t('shell.boundaryDescription')}
       />
 
-      {/* P4：信任命令管理迁移到「工具与安全 → 确认记忆管理」，此处保留快捷入口 */}
+      {/* P4：信任命令管理迁移到「安全策略 → 确认记忆管理」，此处保留快捷入口 */}
       <ToolsSecurityShortcut hintKey="shell.trust.movedHint" />
 
       <Form.Item label={t('shell.defaultTimeoutLabel')}>

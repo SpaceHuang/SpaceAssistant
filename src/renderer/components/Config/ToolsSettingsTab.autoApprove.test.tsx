@@ -84,7 +84,7 @@ describe('ToolsSettingsTab script auto allow', () => {
 describe('ToolsSettingsTab auto approve', () => {
   it('file section no longer hosts confirmation mode (moved to security)', () => {
     renderFileSection()
-    // 确认模式已迁移到「工具与安全」页，文件操作仅保留历史备份/快照
+    // 确认模式已迁移到「安全策略」页，文件操作仅保留历史备份/快照
     expect(screen.queryByText('展示文件修改内容')).toBeNull()
     expect(screen.queryByText('直接确认')).toBeNull()
     expect(screen.queryByText('自动放行安全写入')).toBeNull()

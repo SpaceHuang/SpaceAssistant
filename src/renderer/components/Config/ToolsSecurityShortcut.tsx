@@ -6,7 +6,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 /**
  * 旧设置页的信任/确认管理项快捷入口（P4，§7）：信任管理 UI 由
- * 「工具与安全 → 确认记忆管理」取代，旧位置降级为跳转链接（读写同一份配置）。
+ * 「安全策略 → 确认记忆管理」取代，旧位置降级为跳转链接（读写同一份配置）。
  */
 export function ToolsSecurityShortcut({ hintKey }: { hintKey: NamespaceKeyMap['config'] }) {
   const { t } = useTypedTranslation('config')
