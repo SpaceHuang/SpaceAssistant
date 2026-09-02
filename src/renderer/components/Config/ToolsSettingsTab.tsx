@@ -148,6 +148,14 @@ export function ToolsSettingsTab({
 
   const renderSection = () => {
     switch (section) {
+      case 'switches':
+        return (
+          <BuiltinToolSwitchList
+            toolUi={toolUi}
+            setToolUi={setToolUi}
+            onShellEnabledChange={onShellEnabledChange}
+          />
+        )
       case 'file':
         return (
           <div className="config-form-stack">
@@ -227,9 +235,6 @@ export function ToolsSettingsTab({
         return remoteImValue && onRemoteImChange ? (
           <ToolsSecuritySettingsTab
             active
-            toolUi={toolUi}
-            setToolUi={setToolUi}
-            onShellEnabledChange={onShellEnabledChange}
             remoteImValue={remoteImValue}
             onRemoteImChange={onRemoteImChange}
           />

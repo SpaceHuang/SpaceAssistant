@@ -12,8 +12,6 @@ import type {
   SecuritySettingsRuleView
 } from '../../../shared/confirmation/settingsCenter'
 import type { PolicyPackage } from '../../../shared/policy/policyPackages'
-import type { ToolsSettingsUi } from './ToolsSettingsTab'
-import { BuiltinToolSwitchList } from './ToolsSettingsTab'
 import { ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 import { groupMemoryEntries, memoryEntrySummary } from './toolsSecurityFormat'
@@ -22,10 +20,6 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 type Props = {
   /** 子 Tab 激活时加载即时数据（套餐/记忆/审计）。 */
   active: boolean
-  /** 确认模式/工具开关与「工具」页共享同一份草稿配置（统一保存）。 */
-  toolUi: ToolsSettingsUi
-  setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
-  onShellEnabledChange: (enabled: boolean) => void
   /** 链路硬约束（remoteAllowLocalWrite）读写 RemoteImCommon 同一份配置。 */
   remoteImValue: RemoteImCommonConfig
   onRemoteImChange: (patch: Partial<RemoteImCommonConfig>) => void
@@ -544,19 +538,11 @@ function AuditSection({
 }
 
 /**
- * 「工具与安全」设置页（§7，P4）：
- * 1. 策略套餐（含规则列表；确认模式并入 desktop-auto-approve 规则行）2. 工具开关
- * 3. 确认记忆管理 4. 安全审计记录。
- * 区 2 与「工具」页共享同一份草稿配置（统一保存）；区 1/3/4 走即时 IPC 并落审计。
+ * 「工具与安全」设置页（§7，P4）：1. 策略套餐（含规则列表；确认模式并入 desktop-auto-approve
+ * 规则行，动作域 询问/允许/自动，统一受套餐管理）2. 确认记忆管理 3. 安全审计记录。
+ * 工具开关（Agent 可用能力面）在「工具 → 工具开关」独立子 Tab，与安全策略管控并列。
  */
-export function ToolsSecuritySettingsTab({
-  active,
-  toolUi,
-  setToolUi,
-  onShellEnabledChange,
-  remoteImValue,
-  onRemoteImChange
-}: Props) {
+export function ToolsSecuritySettingsTab({ active, remoteImValue, onRemoteImChange }: Props) {
   const { t } = useTypedTranslation('config')
   const [model, setModel] = useState<SecuritySettingsModelPayload | null>(null)
 
@@ -590,20 +576,6 @@ export function ToolsSecuritySettingsTab({
                 onRemoteImChange={onRemoteImChange}
                 onModelChange={() => void reloadModel()}
               />
-            )
-          },
-          {
-            key: 'switches',
-            label: t('toolsSecurity.switches.title'),
-            children: (
-              <div>
-                <p className="config-field__hint">{t('toolsSecurity.switches.hint')}</p>
-                <BuiltinToolSwitchList
-                  toolUi={toolUi}
-                  setToolUi={setToolUi}
-                  onShellEnabledChange={onShellEnabledChange}
-                />
-              </div>
             )
           },
           {

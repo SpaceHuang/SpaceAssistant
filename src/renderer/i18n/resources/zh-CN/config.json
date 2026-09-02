@@ -292,6 +292,10 @@
       "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。"
     },
     "nav": {
+      "switches": {
+        "label": "工具开关",
+        "hint": "控制 Agent 在对话中可调用的能力"
+      },
       "mcp": {
         "label": "MCP 服务",
         "hint": "外部 MCP Server 的连接、认证与工具管理"
@@ -790,10 +794,6 @@
       "hardConstraintConfirmContent": "该开关影响远程链路的安全边界，修改会记入安全审计日志。",
       "packageLabel": "套餐",
       "actionAutoShort": "自动"
-    },
-    "switches": {
-      "title": "工具开关",
-      "hint": "控制 Agent 在对话中可调用的能力。"
     },
     "memory": {
       "title": "确认记忆管理",

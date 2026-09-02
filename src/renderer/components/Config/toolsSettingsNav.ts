@@ -1,20 +1,22 @@
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import type { NamespaceKeyMap } from '../../i18n/types'
 
-export const DEFAULT_TOOLS_SETTINGS_SUB_TAB: ToolsSettingsSubTab = 'security'
+export const DEFAULT_TOOLS_SETTINGS_SUB_TAB: ToolsSettingsSubTab = 'switches'
 
 export const TOOLS_SETTINGS_SUB_TABS: ToolsSettingsSubTab[] = [
-  'security',
+  'switches',
   'mcp',
   'file',
   'script',
   'shell',
-  'browser'
+  'browser',
+  'security'
 ]
 
 type ConfigT = (key: NamespaceKeyMap['config'], options?: Record<string, unknown>) => string
 
 const NAV_LABEL_KEYS: Record<ToolsSettingsSubTab, NamespaceKeyMap['config']> = {
+  switches: 'tools.nav.switches.label',
   security: 'tools.nav.security.label',
   mcp: 'tools.nav.mcp.label',
   file: 'tools.nav.file.label',
@@ -24,6 +26,7 @@ const NAV_LABEL_KEYS: Record<ToolsSettingsSubTab, NamespaceKeyMap['config']> = {
 }
 
 const NAV_HINT_KEYS: Record<ToolsSettingsSubTab, NamespaceKeyMap['config']> = {
+  switches: 'tools.nav.switches.hint',
   security: 'tools.nav.security.hint',
   mcp: 'tools.nav.mcp.hint',
   file: 'tools.nav.file.hint',

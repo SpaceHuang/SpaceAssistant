@@ -2,7 +2,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { AppConfig } from '../../shared/domainTypes'
 import type { RemoteImCommonConfig } from '../../shared/imTypes'
 
-export type ToolsSettingsSubTab = 'mcp' | 'file' | 'script' | 'shell' | 'browser' | 'security'
+export type ToolsSettingsSubTab = 'switches' | 'mcp' | 'file' | 'script' | 'shell' | 'browser' | 'security'
 
 interface ConfigState {
   config: AppConfig | null
@@ -61,7 +61,7 @@ export const configSlice = createSlice({
         } else {
           state.settingsActiveTab = tab
           if (tab === 'tools' && !action.payload.toolsSubTab) {
-            state.settingsToolsSubTab = 'security'
+            state.settingsToolsSubTab = 'switches'
           }
         }
       }

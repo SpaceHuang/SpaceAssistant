@@ -146,10 +146,9 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     } as typeof window.api
   })
 
-  it('渲染五区标题并加载模型/记忆/审计', { timeout: 20000 }, async () => {
+  it('渲染各区标题（策略套餐/确认记忆/安全审计）并加载模型/记忆/审计', { timeout: 20000 }, async () => {
     renderTab()
     expect(await screen.findByText('策略套餐')).toBeTruthy()
-    expect(screen.getByText('工具开关')).toBeTruthy()
     expect(screen.getByText('确认记忆管理')).toBeTruthy()
     expect(screen.getByText('安全审计记录')).toBeTruthy()
     await waitFor(() => {

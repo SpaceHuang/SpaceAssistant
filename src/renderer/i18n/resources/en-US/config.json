@@ -292,6 +292,10 @@
       "fallbackDisabledHint": "When disabled, the agent cannot call this tool in chat."
     },
     "nav": {
+      "switches": {
+        "label": "Tool Switches",
+        "hint": "Control which capabilities the Agent can invoke in conversations"
+      },
       "mcp": {
         "label": "MCP Servers",
         "hint": "External MCP Server connections, auth and tool management"
@@ -790,10 +794,6 @@
       "hardConstraintConfirmContent": "This switch affects the security boundary of remote lanes. The change is recorded in the security audit log.",
       "packageLabel": "Package",
       "actionAutoShort": "Auto"
-    },
-    "switches": {
-      "title": "Tool Switches",
-      "hint": "Control which capabilities the agent can use in chat."
     },
     "memory": {
       "title": "Confirmation Memory",
