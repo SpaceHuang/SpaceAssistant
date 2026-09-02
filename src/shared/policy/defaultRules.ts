@@ -239,14 +239,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'ask',
     reason: 'MCP 工具调用需确认'
   },
-  // grant 消费规则：远程写授权有效且余量充足 → 免确认（定序先于 im-write-ask）
+  // 远程写授权消费规则：授权有效且额度未用完 → 免确认（定序先于 im-write-ask）
   {
     id: 'remote-write-grant-allow',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], actionClass: 'write' },
     action: 'allow',
     requiresContext: { remoteWriteGrantValid: true },
-    reason: '远程写授权 grant 有效且余量充足时免确认'
+    reason: '远程会话已获得临时写文件授权，授权有效且额度未用完时写文件免确认'
   },
   {
     id: 'im-write-ask',
