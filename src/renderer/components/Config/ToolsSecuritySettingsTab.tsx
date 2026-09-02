@@ -246,7 +246,7 @@ function PolicyPackageSection({
             label: laneLabel(lane),
             children: (
               <ConfigSettingsStack>
-                <Form.Item label={t('toolsSecurity.policy.packageLabel')} style={{ marginBottom: 0 }}>
+                <Form.Item label={t('toolsSecurity.policy.packageLabel')} className="config-form-item-inline">
                   <Select
                     value={pkg}
                     style={{ width: 200 }}
