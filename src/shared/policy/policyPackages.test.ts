@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PolicyRule } from '../confirmation/types'
+import { DEFAULT_POLICY_RULES } from './defaultRules'
 import {
   DEFAULT_POLICY_PACKAGES,
   isPolicyPackage,
@@ -130,5 +131,35 @@ describe('auto-evaluator 规则的覆盖（确认模式并入规则列表）', (
     const r = out.find((x) => x.id === 'desktop-auto-approve')!
     expect(r.action).toBe('auto-evaluator')
     expect(r.configRequires).toBeUndefined()
+  })
+})
+
+describe('fail-closed 兜底规则必须 locked（评审中等项）', () => {
+  const FAIL_CLOSED_IDS = ['lark-high-impact-ask', 'lark-unknown-ask', 'script-uncertified-ask-remote']
+
+  it('三条 fail-closed ask 规则均标 locked', () => {
+    for (const id of FAIL_CLOSED_IDS) {
+      const rule = DEFAULT_POLICY_RULES.find((r) => r.id === id)
+      expect(rule, id).toBeDefined()
+      expect(rule!.locked, id).toBe(true)
+    }
+  })
+
+  it('loose 套餐不得把 fail-closed ask 下调为 allow', () => {
+    const out = resolvePolicyRules({
+      lane: 'feishu',
+      packages: { feishu: 'loose' },
+      rules: DEFAULT_POLICY_RULES
+    })
+    for (const id of FAIL_CLOSED_IDS) {
+      const rule = out.find((r) => r.id === id)
+      expect(rule?.action, id).toBe('ask')
+    }
+  })
+
+  it('locked 规则拒绝规则覆盖（validateRuleOverride）', () => {
+    for (const id of FAIL_CLOSED_IDS) {
+      expect(validateRuleOverride(DEFAULT_POLICY_RULES, id, 'allow').ok).toBe(false)
+    }
   })
 })

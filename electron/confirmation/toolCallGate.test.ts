@@ -101,10 +101,12 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('run_shell 预检 deny → gate 前置短路（shellPrecheckDeny），不进引擎', async () => {
+    const audit = auditSink()
     const r = await evaluateToolCallGate(
       base({
         toolName: 'run_shell',
         toolInput: { command: 'rm -rf /' },
+        audit,
         runShellPrecheck: async () => ({
           ok: false,
           error: '命令未通过安全检查',
@@ -116,6 +118,15 @@ describe('evaluateToolCallGate', () => {
     expect(r.decision.type).toBe('deny')
     expect(r.decision.ruleId).toBe('shell-precheck-deny')
     expect(r.shellPrecheckDeny?.error).toBe('命令未通过安全检查')
+    // 审计断点修复：最高频的硬拒也必须落 policy.decision（"判定即记录"）
+    const evt = audit.events.find((e) => e.event === 'policy.decision')
+    expect(evt).toBeDefined()
+    expect(evt).toMatchObject({
+      decision: 'deny',
+      ruleId: 'shell-precheck-deny',
+      toolName: 'run_shell',
+      reason: 'security_deny'
+    })
   })
 
   it('run_shell 预检 skipConfirm → auto-allow(shell-precheck-auto-allow)', async () => {

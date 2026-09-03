@@ -46,6 +46,24 @@ describe('recordUserAnswerToCache', () => {
     expect(Math.abs(hit!.expiresAt! - expected)).toBeLessThan(60_000)
   })
 
+  it('remote-write 键带 30 分钟 TTL（等价旧 RemoteWriteGrant 租约期）', () => {
+    const db = open()
+    const key: CacheKey = { kind: 'remote-write', sessionId: 's-remote' }
+    recordUserAnswerToCache({
+      db,
+      lane: 'wechat',
+      sessionId: 's-remote',
+      key,
+      decision: 'allow',
+      scope: 'session',
+      source: 'user-confirm'
+    })
+    const hit = new SqliteDecisionCache(getDbConnection(db)).lookup(key)
+    expect(hit).not.toBeNull()
+    const expected = Date.now() + 30 * 60_000
+    expect(Math.abs(hit!.expiresAt! - expected)).toBeLessThan(60_000)
+  })
+
   it('非 shell 键无 TTL', () => {
     const db = open()
     const key: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action' }

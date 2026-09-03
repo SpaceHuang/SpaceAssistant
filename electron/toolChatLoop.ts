@@ -90,7 +90,7 @@ import {
   type RemoteTaskBudgetState
 } from './remote/remoteTaskBudget'
 import { DEFAULT_REMOTE_TASK_BUDGET } from '../src/shared/imTypes'
-import { isRequestLeaseOwner } from './remote/remoteAgentRegistry'
+import { recheckRemoteWriteAuthorization } from './remote/remoteWriteAuthorization'
 import {
   logShellPathConfirm,
   logShellSecurityDeny,
@@ -109,7 +109,6 @@ import {
   REMOTE_CONFIRM_TIMEOUT_MESSAGES,
   resolveRemoteContextConfirmPolicy
 } from './remote/remoteConfirmPolicy'
-import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
 import {
   beginLlm,
   beginTool,
@@ -1379,18 +1378,8 @@ async function runToolChatSessionInner(
         } else if (outcome === 'approved') {
           // 同步授权段（硬不变量）：IM 回答回来后与执行同一同步段完成租约/代际复核 + grant issue/reserve，
           // 期间无任何 await（防 TOCTOU，等价原 :1470 注释语义）
-          const originSessionId = remoteContext.originSessionId ?? sessionId
-          const authOwner = remoteContext.authOwner ?? remoteContext.userId ?? ''
-          const currentGen = remoteAuthorizationRegistry.getGeneration(remoteContext.source)
-          const leaseOk =
-            Boolean(remoteContext.requestId) &&
-            isRequestLeaseOwner(originSessionId, remoteContext.requestId!)
-          if (
-            !authOwner ||
-            !leaseOk ||
-            (remoteContext.authorizationGeneration != null &&
-              remoteContext.authorizationGeneration !== currentGen)
-          ) {
+          const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
+          if (!recheck.ok) {
             outcome = 'rejected'
             rejectReason = 'authorization_revoked'
             logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
@@ -1399,11 +1388,38 @@ async function runToolChatSessionInner(
               toolUseId,
               toolName,
               expectedGeneration: remoteContext.authorizationGeneration,
-              currentGeneration: currentGen,
-              leaseOk,
-              hasAuthOwner: Boolean(authOwner)
+              currentGeneration: recheck.currentGeneration,
+              leaseOk: recheck.leaseOk,
+              hasAuthOwner: recheck.hasAuthOwner
             })
           }
+        }
+      }
+
+      // B3：remote-write 记忆缓存命中（记N 会话信任）同样过 owner/租约/代际复核——
+      // 缓存命中不得跳过撤销检查，否则撤销/换绑后新 owner 会继承旧授权的写权限。
+      if (
+        outcome === 'approved' &&
+        remoteContext &&
+        gate.decision.type === 'auto-allow' &&
+        gate.decision.ruleId === 'cache-hit' &&
+        gate.decision.cacheKey?.kind === 'remote-write'
+      ) {
+        const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
+        if (!recheck.ok) {
+          outcome = 'rejected'
+          rejectReason = 'authorization_revoked'
+          logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            via: 'remote-write-cache-hit',
+            expectedGeneration: remoteContext.authorizationGeneration,
+            currentGeneration: recheck.currentGeneration,
+            leaseOk: recheck.leaseOk,
+            hasAuthOwner: recheck.hasAuthOwner
+          })
         }
       }
 

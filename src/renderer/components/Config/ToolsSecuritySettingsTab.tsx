@@ -232,7 +232,7 @@ function PolicyPackageSection({
           width: 140,
           render: (_, r) => (
             <Space size={4}>
-              {r.locked ? (
+              {r.locked && r.action === 'deny' ? (
                 <Switch
                   size="small"
                   checked={r.enabled}
@@ -330,19 +330,21 @@ function MemorySection({
   const { t: tCommon } = useTypedTranslation('common')
   const [entries, setEntries] = useState<DecisionCacheEntry[]>([])
   const [actKeywordsOpen, setActKeywordsOpen] = useState(false)
-  const [actKeywordsDraft, setActKeywordsDraft] = useState('')
+  // null = 未编辑（展示已保存值）；空串是合法草稿（允许清空为 0 个关键词）
+  const [actKeywordsDraft, setActKeywordsDraft] = useState<string | null>(null)
 
   const saveActKeywords = () => {
-    const list = actKeywordsDraft
+    const list = (actKeywordsDraft ?? browser.actHighRiskKeywords.join(', '))
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
     onBrowserChange({ ...browser, actHighRiskKeywords: list })
+    setActKeywordsDraft(null)
   }
 
   const resetActKeywords = () => {
     onBrowserChange({ ...browser, actHighRiskKeywords: [...DEFAULT_BROWSER_CONFIG.actHighRiskKeywords] })
-    setActKeywordsDraft(DEFAULT_BROWSER_CONFIG.actHighRiskKeywords.join(', '))
+    setActKeywordsDraft(null)
   }
 
   const reload = useCallback(async () => {
@@ -398,7 +400,7 @@ function MemorySection({
         {actKeywordsOpen ? (
           <Space direction="vertical" style={{ width: '100%' }}>
             <Input.TextArea
-              value={actKeywordsDraft || browser.actHighRiskKeywords.join(', ')}
+              value={actKeywordsDraft ?? browser.actHighRiskKeywords.join(', ')}
               placeholder={t('toolsSecurity.memory.actHighRiskKeywordsPlaceholder')}
               onChange={(e) => setActKeywordsDraft(e.target.value)}
               autoSize={{ minRows: 2, maxRows: 6 }}

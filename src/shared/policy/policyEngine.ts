@@ -86,6 +86,8 @@ export function deriveCacheKeys(
         }
         break
       case 'path-target':
+        // B4：敏感文件（sensitive-file zone）不派生任何缓存键——既不给记忆档位，也不消费已有条目。
+        if (signal.zone === 'sensitive-file') break
         keys.push({ kind: 'path', path: signal.path, level: 'file' })
         break
       default:
@@ -112,7 +114,12 @@ export function buildMemoryTiers(facts: ContentFacts, sessionId?: string, lane?:
   if (facts.signals.some((s) => s.kind === 'script-network' || s.kind === 'script-uncertified')) {
     return []
   }
-  const keys = deriveCacheKeys(facts, sessionId, lane)
+  let keys = deriveCacheKeys(facts, sessionId, lane)
+  // B4：远程链路（IM 记N）不开放全局持久档——远程确认写出的持久 allow 会反向放行桌面与
+  // 其他链路（lookup 只按 key_json 匹配），旧行为远程从不写域名/路径信任。仅保留会话级档位。
+  if (lane === 'wechat' || lane === 'feishu') {
+    keys = keys.filter((k) => 'sessionId' in k && Boolean(k.sessionId))
+  }
   return keys.map((key) => ({
     key,
     label: memoryTierLabel(key)

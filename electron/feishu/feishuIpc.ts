@@ -3,6 +3,8 @@ import { runNpmCommand, runNpxCommand } from './npmCommandRunner'
 import { runFeishuCliWithBrowserFlow } from './feishuCliFlow'
 import type { AppDatabase } from '../database'
 import { getConfigValue, setConfigValue } from '../database'
+import { getDbConnection } from '../database'
+import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { mergeFeishuConfig, type FeishuConfig } from '../../src/shared/feishuTypes'
 import { LarkCliRunner } from './larkCliRunner'
 import { FeishuProcessedStore } from './feishuProcessedStore'
@@ -107,6 +109,13 @@ export function createFeishuBundle(deps: {
   const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db })
   remoteAuthorizationRegistry.registerPendingCancel({
     cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
+  })
+  // B3：授权撤销/换绑/登出时联动清空本链路会话级确认记忆（remote-write 记N 等）
+  remoteAuthorizationRegistry.registerCacheClearer({
+    clearByChannel: (ch) =>
+      ch === 'feishu'
+        ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('feishu', 'session')
+        : 0
   })
   remoteAuthorizationRegistry.registerAuditAppender((event) => {
     void auditLogger.append(event as { type: string })

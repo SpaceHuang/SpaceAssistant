@@ -152,6 +152,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         signals: [],
         summary: { text: args.toolName }
       }
+      // 判定即记录（§5.6）：预检硬拒同样落 policy.decision，最高频拒绝不得在审计中缺失
+      audit.record({
+        ts: Date.now(),
+        event: 'policy.decision',
+        lane,
+        origin,
+        sessionId: args.sessionId,
+        toolName: args.toolName,
+        actionClass: 'execute',
+        riskLevel: 'high',
+        factsSummary: args.toolName,
+        signals: [],
+        decision: 'deny',
+        ruleId: 'shell-precheck-deny',
+        reason: precheck.auditReason,
+        actor: 'system'
+      })
       return result
     }
     result.shellPrecheck = {

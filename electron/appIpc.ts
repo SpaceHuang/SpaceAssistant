@@ -34,10 +34,11 @@ import {
 } from './database'
 import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { clearDecisionCacheOnSessionDelete } from './confirmation/cacheMaintenanceHooks'
+import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from './confirmation/legacyTrustRevocation'
 import { getSecurityAuditLog, setSecurityAuditRetentionDays } from './confirmation/audit'
 import { readSecurityAuditRetentionDays } from './confirmation/policyRulesRuntime'
 import { recordSettingsChange } from './confirmation/settingsAudit'
-import { recordUserAnswerToCache } from './confirmation/decisionCacheWriter'
+import { recordUserAnswerToCache, scopeForCacheKey } from './confirmation/decisionCacheWriter'
 import type {
   AppConfig,
   FileInfo,
@@ -94,7 +95,7 @@ import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
-import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
+import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier } from './toolConfirmRegistry'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
@@ -318,6 +319,24 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     recordSettingsChange(getSecurityAuditLog(), { ...args, sessionId: 'settings' })
   }
 
+  // exposure 重推（§5.2）：套餐/规则变更后主进程重新求值并推送该链路工具清单，
+  // 渲染端工具清单缓存不滞后（权威路径在主进程）。失败不阻断设置保存。
+  const pushExposureToolsChanged = async (lane: 'desktop' | 'wechat' | 'feishu'): Promise<void> => {
+    try {
+      const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
+      const { loadEffectivePolicyRules } = await import('./confirmation/policyRulesRuntime')
+      const tools = exposedToolNamesForLane(
+        lane,
+        ...readExposureInputsFromDb(ctx.db),
+        undefined,
+        loadEffectivePolicyRules(ctx.db, lane)
+      )
+      getMainWindow()?.webContents.send('exposure:tools-changed', { lane, tools })
+    } catch {
+      /* 重推失败不阻断；渲染端下次 refresh 时补齐 */
+    }
+  }
+
   ipcMain.handle(
     'tool:confirm-response',
     async (
@@ -344,6 +363,17 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             fixedArgvPrefix: added.fixedArgvPrefix,
             timestamp: Date.now()
           })
+          // B6：双写 decision_cache（与迁移键同构），让该信任在「确认记忆」页可见、可单条撤销
+          if (added.executable) {
+            recordTrustToCache(
+              {
+                kind: 'shell-command',
+                verb: [added.executable, ...(added.fixedArgvPrefix ?? [])].join(' '),
+                level: 'exact'
+              },
+              payload.sessionId
+            )
+          }
         }
       }
       if (payload.approved && payload.trustDomain?.trim()) {
@@ -392,17 +422,28 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         )
       }
       if (payload.approved && payload.memoryTier) {
-        // 记忆档位：用户选中的“记住”写入 decision_cache（执行链路侧写缓存），落 cache.write 审计
-        recordUserAnswerToCache({
-          db: ctx.db,
-          audit: getSecurityAuditLog(),
-          lane: 'desktop',
-          sessionId: payload.sessionId ?? 'desktop',
-          key: payload.memoryTier,
-          decision: 'allow',
-          scope: 'persistent',
-          source: 'user-confirm'
-        })
+        // 记忆档位：用户选中的“记住”写入 decision_cache（执行链路侧写缓存），落 cache.write 审计。
+        // B1：仅接受本次待确认请求决策层给出的档位（防渲染端伪造任意持久放行键）；
+        // B2：scope 按键派生（带 sessionId 的会话级键不得错标为 persistent）。
+        if (isPendingMemoryTier(payload.requestId, payload.toolUseId, payload.memoryTier)) {
+          recordUserAnswerToCache({
+            db: ctx.db,
+            audit: getSecurityAuditLog(),
+            lane: 'desktop',
+            sessionId: payload.sessionId ?? 'desktop',
+            key: payload.memoryTier,
+            decision: 'allow',
+            scope: scopeForCacheKey(payload.memoryTier),
+            source: 'user-confirm'
+          })
+        } else {
+          logAgentEvent('warn', 'tool.confirm.memory_tier_rejected', {
+            requestId: payload.requestId,
+            toolUseId: payload.toolUseId,
+            sessionId: payload.sessionId,
+            timestamp: Date.now()
+          })
+        }
       }
       submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
     }
@@ -1008,6 +1049,7 @@ function readExposureInputsFromDb(
         before,
         after: pkg
       })
+      if (lane !== 'automation') await pushExposureToolsChanged(lane)
       return { ok: true as const }
     }
   )
@@ -1039,6 +1081,7 @@ function readExposureInputsFromDb(
         before,
         after: payload!.action
       })
+      for (const l of ['desktop', 'wechat', 'feishu'] as const) await pushExposureToolsChanged(l)
       return { ok: true as const }
     }
   )
@@ -1068,7 +1111,8 @@ function readExposureInputsFromDb(
   })
 
   // 系统保护（禁止类）规则「启用/不启用」开关：启用=在策略链中生效（可作第 1 步硬拒），
-  // 不启用=从生效规则集剔除（不再硬拒，交还常规规则链）。仅 locked 系统保护规则可切换。
+  // 不启用=从生效规则集剔除（不再硬拒，交还常规规则链）。仅 locked + deny 的保护规则可切换；
+  // fail-closed 的 locked ask 规则（lark-high-impact-ask 等）不可禁用——禁用等价调松兜底。
   ipcMain.handle(
     'security:set-rule-enabled',
     async (_e, payload: { ruleId?: unknown; enabled?: unknown }) => {
@@ -1076,7 +1120,9 @@ function readExposureInputsFromDb(
       const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
       const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
       if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
-      if (!rule.locked) return { ok: false as const, error: `rule is not a protection rule: ${ruleId}` }
+      if (!rule.locked || rule.action !== 'deny') {
+        return { ok: false as const, error: `rule is not a protection rule: ${ruleId}` }
+      }
       const enabled = payload?.enabled !== false
       const disabledIds = runtime.readDisabledPolicyRuleIds(ctx.db)
       const before = !disabledIds.includes(ruleId)
@@ -1093,6 +1139,7 @@ function readExposureInputsFromDb(
         before,
         after: enabled
       })
+      for (const l of ['desktop', 'wechat', 'feishu'] as const) await pushExposureToolsChanged(l)
       return { ok: true as const }
     }
   )
@@ -1112,6 +1159,11 @@ function readExposureInputsFromDb(
     // 清除即"下次再问"（§7 第 4 区）；单条/全部均落 cache.clear 审计
     const key = payload?.key && typeof payload.key === 'object' ? (payload.key as never) : null
     const cleared = key ? cache.clear(key) : cache.clearAll()
+    // B6/B7：decision_cache 与旧信任存储（shell 信任命令 / 浏览器域名信任）双源生效，
+    // 清除必须联动撤销旧存储，否则信任永久生效、不可见、不可撤销（fail-open）。
+    const legacyRevoked = key
+      ? revokeLegacyTrustForCacheKey(ctx.db, key)
+      : revokeAllLegacyTrust(ctx.db)
     ctx.db.flushSave()
     audit.record({
       ts: Date.now(),
@@ -1122,7 +1174,7 @@ function readExposureInputsFromDb(
       reason: key ? undefined : 'clear-all',
       actor: 'user'
     })
-    return { ok: true as const, cleared }
+    return { ok: true as const, cleared, legacyRevoked }
   })
 
   ipcMain.handle('security:query-audit', async (_e, payload: unknown) => {
@@ -1480,19 +1532,7 @@ function readExposureInputsFromDb(
       stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()
       // exposure 重推：配置变更后主进程重新求值并推送桌面链路清单（§5.2 exposure 定稿）
-      try {
-        const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
-        const { loadEffectivePolicyRules } = await import('./confirmation/policyRulesRuntime')
-        const tools = exposedToolNamesForLane(
-          'desktop',
-          ...readExposureInputsFromDb(ctx.db),
-          undefined,
-          loadEffectivePolicyRules(ctx.db, 'desktop')
-        )
-        getMainWindow()?.webContents.send('exposure:tools-changed', { lane: 'desktop', tools })
-      } catch {
-        /* 重推失败不阻断配置保存；渲染端下次 refresh 时补齐 */
-      }
+      await pushExposureToolsChanged('desktop')
     }
   )
 

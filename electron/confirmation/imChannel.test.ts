@@ -95,6 +95,65 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     expect(seen[0]!.tier).toEqual(tiers[0])
   })
 
+  it('请求结束后 pendingMemory 即清理（长跑进程不累积）', async () => {
+    const tiers: MemoryTier[] = [
+      { key: { kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' }, label: '记住 ping' }
+    ]
+    const ch = new ImChannel({ lane: 'feishu', timeoutMs: 1000, sendPrompt: () => undefined })
+    const p = ch.request(req(tiers), {
+      sessionId: 's1',
+      toolName: 'run_shell',
+      messageId: 'm1',
+      matchKey: 'c1',
+      memoryTiers: tiers
+    })
+    const id = ch.listPending()[0]!.id
+    ch.tryResolveFromInbound({ kind: 'remember', confirmId: ch.listPending()[0]!.confirmId, tier: 1 }, { matchKey: 'c1', messageId: 'm2' })
+    await p
+    expect(ch.lastMemory(id)).toBeUndefined()
+  })
+
+  it('sendPrompt 在注册之后调用：同步触发的入站解析不丢失', async () => {
+    let chRef: ImChannel | undefined
+    const ch = new ImChannel({
+      lane: 'wechat',
+      timeoutMs: 1000,
+      sendPrompt: (entry) => {
+        // 模拟同步回环：发送提示的同一调用栈内就收到入站 Y
+        chRef!.tryResolveFromInbound(
+          { kind: 'approve', confirmId: entry.confirmId },
+          { matchKey: 'u1', messageId: 'm2' }
+        )
+      }
+    })
+    chRef = ch
+    const p = ch.request(req(), {
+      sessionId: 's1',
+      toolName: 'run_shell',
+      messageId: 'm1',
+      matchKey: 'u1'
+    })
+    await expect(p).resolves.toEqual({ kind: 'approved' })
+  })
+
+  it('sendPrompt 同步抛异常：请求不抛出、确认码释放、条目仍可待超时', async () => {
+    const ch = new ImChannel({
+      lane: 'wechat',
+      timeoutMs: 50,
+      sendPrompt: () => {
+        throw new Error('send failed')
+      }
+    })
+    const p = ch.request(req(), {
+      sessionId: 's1',
+      toolName: 'run_shell',
+      messageId: 'm1',
+      matchKey: 'u1'
+    })
+    expect(ch.countPending()).toBe(1)
+    await expect(p).resolves.toEqual({ kind: 'timeout' })
+  })
+
   it('入站 rejects；resolveFromDesktop 可代答；cancelByChannel 只作用于本链路', async () => {
     const ch = new ImChannel({ lane: 'feishu', timeoutMs: 1000, sendPrompt: () => undefined })
     const p = ch.request(req(), {

@@ -382,3 +382,88 @@ describe('buildMemoryTiers：run_script 记忆封顶（§5.3）', () => {
     expect(buildMemoryTiers(facts).length).toBeGreaterThan(0)
   })
 })
+
+describe('buildMemoryTiers：远程链路不开放持久档（B4）', () => {
+  it('远程链路 navigate 域名确认只给会话档，不给全局持久档', () => {
+    const facts = mkFacts('browser', 'outbound', [
+      { kind: 'network-egress', domains: ['example.com'], via: 'browser-navigate' }
+    ], 'medium')
+    const tiers = buildMemoryTiers(facts, 's1', 'feishu')
+    expect(tiers.length).toBeGreaterThan(0)
+    for (const t of tiers) {
+      expect('sessionId' in t.key && t.key.sessionId).toBe('s1')
+    }
+  })
+
+  it('桌面链路仍开放持久档（行为不回退）', () => {
+    const facts = mkFacts('browser', 'outbound', [
+      { kind: 'network-egress', domains: ['example.com'], via: 'browser-navigate' }
+    ], 'medium')
+    const tiers = buildMemoryTiers(facts, 's1', 'desktop')
+    expect(tiers.some((t) => !('sessionId' in t.key))).toBe(true)
+  })
+
+  it('远程链路写文件只保留 remote-write 会话档，path 持久档不开放', () => {
+    const facts = mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: 'a.txt', zone: 'workdir-normal' }
+    ], 'medium')
+    const tiers = buildMemoryTiers(facts, 's1', 'wechat')
+    expect(tiers.every((t) => 'sessionId' in t.key && t.key.sessionId)).toBe(true)
+    expect(tiers.some((t) => t.key.kind === 'remote-write')).toBe(true)
+  })
+})
+
+describe('deriveCacheKeys/buildMemoryTiers：sensitive-file zone 不派生键（B4）', () => {
+  it('敏感文件路径不开放记忆档位', () => {
+    const facts = mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: '.env', zone: 'sensitive-file' }
+    ], 'high')
+    expect(buildMemoryTiers(facts, 's1', 'desktop')).toEqual([])
+  })
+
+  it('敏感文件路径不消费已有缓存键（lookup 不派生键）', () => {
+    const facts = mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: '.env', zone: 'sensitive-file' }
+    ], 'high')
+    const d = decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache: cacheWith('allow') }))
+    expect(d.type).not.toBe('auto-allow')
+  })
+
+  it('普通 workdir 路径仍派生记忆档位', () => {
+    const facts = mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: 'out/a.txt', zone: 'workdir-normal' }
+    ], 'medium')
+    expect(buildMemoryTiers(facts, 's1', 'desktop').length).toBeGreaterThan(0)
+  })
+})
+
+describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）', () => {
+  const mcpReadonlySignals: ContentFacts['signals'] = [
+    { kind: 'mcp-tool', serverId: 'srv', toolName: 'query' },
+    { kind: 'mcp-readonly', serverId: 'srv', toolName: 'query' }
+  ]
+
+  it('桌面：server 声明只读注解 → 自动放行（需求文档背书的产品决策）', () => {
+    const d = decide(
+      mkFacts('mcp__srv__query', 'read', mcpReadonlySignals, 'medium'),
+      mkContext('desktop'),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('auto-allow')
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('mcp-readonly-allow')
+  })
+
+  it('远程链路：server 自我声明的只读注解不免确认（不可信输入不得静默执行）', () => {
+    for (const lane of ['wechat', 'feishu'] as const) {
+      const d = decide(
+        mkFacts('mcp__srv__query', 'read', mcpReadonlySignals, 'medium'),
+        mkContext(lane),
+        DEFAULT_POLICY_RULES,
+        deps()
+      )
+      expect(d.type).toBe('require-confirm')
+      expect(d.type === 'require-confirm' && d.ruleId).toBe('mcp-tool-ask')
+    }
+  })
+})

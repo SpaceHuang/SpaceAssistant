@@ -115,12 +115,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'ask',
     reason: '桌面执行含网络访问的脚本需确认'
   },
-  // 远程 clean 但未认证脚本降级为确认（script-uncertified 信号在未认证时产出）
+  // 远程 clean 但未认证脚本降级为确认（script-uncertified 信号在未认证时产出）；fail-closed 兜底，locked
   {
     id: 'script-uncertified-ask-remote',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-uncertified'] },
     action: 'ask',
+    locked: true,
     reason: '未通过远程安全认证的脚本需确认'
   },
   // 远程 clean 已认证脚本：消费 remoteScriptRequiresConfirm 配置（迁移门控语义）
@@ -201,11 +202,13 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   // lark-cli 高影响/未知子命令无条件确认（fail-closed，等价现 larkCliWriteNeedsConfirm：
   // high_impact/unknown 不消费开关）；写类按开关；读类免确认。
+  // 三条 fail-closed 兜底规则标 locked：任何套餐不得调松、不可覆盖（评审中等项）。
   {
     id: 'lark-high-impact-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-high_impact'] },
     action: 'ask',
+    locked: true,
     reason: 'lark-cli 高影响子命令需确认'
   },
   {
@@ -213,6 +216,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     when: 'invocation',
     match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-unknown'] },
     action: 'ask',
+    locked: true,
     reason: 'lark-cli 子命令无法分类，信息不足需确认'
   },
   {
@@ -235,10 +239,12 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   // 可审计、可覆盖）。必须排在 mcp-tool-ask 之前：注解安全调用同时带 mcp-tool 信号，先命中放行，
   // 否则落到 ask。strict 套餐按"非 locked allow 上调为 ask"自动收紧；custom 套餐可覆盖为 ask/deny
   // （「全局始终确认」由规则覆盖表达）。
+  // B5：annotations 是 server 单方面声明的不可信输入，放行仅限桌面 lane——远程链路（wechat/feishu）
+  // 不消费该豁免，只读工具一样可能把本地数据带回 IM 会话，落 mcp-tool-ask 确认。
   {
     id: 'mcp-readonly-allow',
     when: 'invocation',
-    match: { signals: ['mcp-readonly'] },
+    match: { lane: ['desktop'], signals: ['mcp-readonly'] },
     action: 'allow',
     reason: 'MCP 只读注解工具默认免确认'
   },

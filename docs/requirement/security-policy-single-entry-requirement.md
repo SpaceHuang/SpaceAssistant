@@ -68,7 +68,7 @@
 #### 变更方案
 
 1. **事实提取改为纯信号**（`toolCallGate.ts` MCP 分支）：不再读取 profile；总是产 `mcp-tool` 信号（带 serverId/toolName）；注解安全时**额外**产新信号 `mcp-readonly`（在 `src/shared/confirmation/types.ts` 信号联合类型中新增，payload 同 `mcp-tool`）。actionClass：注解安全 → `read`，否则 → `write`。
-2. **默认规则表**（`defaultRules.ts`）：在 `mcp-tool-ask` **之前**新增 `mcp-readonly-allow`（match `{ signals: ['mcp-readonly'] }`，action `allow`，非 locked），并注释顺序依赖。strict 套餐自动将其上调为 ask；自定义套餐可覆盖为 ask/deny——「全局始终确认」由规则覆盖表达，不再需要独立开关。
+2. **默认规则表**（`defaultRules.ts`）：在 `mcp-tool-ask` **之前**新增 `mcp-readonly-allow`（match `{ signals: ['mcp-readonly'] }`，action `allow`，非 locked），并注释顺序依赖。strict 套餐自动将其上调为 ask；自定义套餐可覆盖为 ask/deny——「全局始终确认」由规则覆盖表达，不再需要独立开关。**（2026-09-02 评审修订 B5）**：annotations 是 server 单方面声明的不可信输入，该放行仅限桌面 lane（match 加 `lane: ['desktop']`）；远程链路（wechat/feishu）不消费注解豁免，落 `mcp-tool-ask` 确认，与本文件「annotations 不能绕过远程访问策略」的不变量一致。
 3. **删除 per-server 字段全链路**：`mcpTypes.ts`（`McpToolConfirmPolicy`、两处 zod schema、`mcpToolNeedsConfirmation`）、`mcpConfigStore.ts`、`mcpIpc.ts`、`mcpDrafts.ts`、`McpServerForm.tsx` 下拉、i18n key `mcp.confirmPolicy*`（zh-CN/en-US），以及相关测试（`mcpTypes.test.ts`、`mcpDrafts.test.ts`、`McpServerForm`/`McpSettingsTab` 测试、electron 侧 mock 中的该字段）。
 4. **迁移**：启动迁移读取现有 profile；若**任一** profile 为 `always`，向 `policy_rules` 写入 `mcp-readonly-allow` → `ask` 的覆盖，并将受影响链路套餐置为 `custom`（规则覆盖仅在 custom 套餐下生效，`policyRulesRuntime.ts:85`；custom + 仅此一条覆盖与其余默认规则行为等价，属行为保持型迁移）。全部为 `readonly-auto` 则无需动作。
 5. **确认记忆不受影响**：`mcp-tool` 会话信任键（`policyEngine.ts:82-87`）派生逻辑不变；`mcp-readonly` 命中 allow 规则、不进确认，无需派生缓存键。

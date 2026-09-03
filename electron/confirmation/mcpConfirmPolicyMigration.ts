@@ -68,16 +68,21 @@ export function runMcpConfirmPolicyMigrationOnce(
       // 覆盖 upsert 幂等。套餐：规则覆盖仅在 custom 下生效，故 standard 链路转 custom
       // （custom + 仅此一条覆盖与 standard 其余规则行为等价）；strict 保持原样（其
       // "allow→ask" 上调已达成迁移意图），loose 是用户显式宽松选择，亦不改写。
-      new PolicyRuleStore(getDbConnection(db)).setOverride({
-        ruleId: 'mcp-readonly-allow',
-        action: 'ask',
-        params: {}
-      })
-      const packages = readPolicyPackages(db)
-      for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
-        if (packages[lane] === 'standard') packages[lane] = 'custom'
-      }
-      writePolicyPackages(db, packages)
+      // 多处写入包同一事务：崩溃不留半迁移状态（幂等重试仍可兜底）。
+      const conn = getDbConnection(db)
+      conn.transaction(() => {
+        new PolicyRuleStore(conn).setOverride({
+          ruleId: 'mcp-readonly-allow',
+          action: 'ask',
+          params: {}
+        })
+        const packages = readPolicyPackages(db)
+        for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
+          if (packages[lane] === 'standard') packages[lane] = 'custom'
+        }
+        writePolicyPackages(db, packages)
+        setConfigValue(db, MCP_CONFIRM_POLICY_MIGRATION_VERSION_KEY, String(MCP_CONFIRM_POLICY_MIGRATION_VERSION))
+      })()
       deps.audit?.record({
         ts: Date.now(),
         event: 'migration.mcp-confirm-policy',
@@ -86,8 +91,9 @@ export function runMcpConfirmPolicyMigrationOnce(
         reason: 'mcp-readonly-allow→ask;packages→custom',
         actor: 'migration'
       })
+    } else {
+      setConfigValue(db, MCP_CONFIRM_POLICY_MIGRATION_VERSION_KEY, String(MCP_CONFIRM_POLICY_MIGRATION_VERSION))
     }
-    setConfigValue(db, MCP_CONFIRM_POLICY_MIGRATION_VERSION_KEY, String(MCP_CONFIRM_POLICY_MIGRATION_VERSION))
     logAgentEvent('info', 'confirmation.mcp_confirm_policy_migration.done', { migrated: needsMigration })
     return { status: 'done', migrated: needsMigration }
   } catch (e) {

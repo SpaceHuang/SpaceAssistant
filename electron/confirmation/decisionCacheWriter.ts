@@ -12,9 +12,13 @@ import type { AuditSink } from './channels'
 /** execute 类（shell 命令）记忆 TTL：90 天（§5.3 TTL 按风险分级）。 */
 const EXECUTE_MEMORY_TTL_MS = 90 * 24 * 3600 * 1000
 
-/** 按缓存键推导写入用的 TTL（execute 类 90 天，其余无 TTL）。 */
+/** 远程写会话信任 TTL：30 分钟（B3：等价旧 RemoteWriteGrant 租约期，不得无限期存活）。 */
+const REMOTE_WRITE_MEMORY_TTL_MS = 30 * 60 * 1000
+
+/** 按缓存键推导写入用的 TTL（execute 类 90 天，remote-write 30 分钟，其余无 TTL）。 */
 function expiresAtForKey(key: CacheKey, now: number): number | undefined {
   if (key.kind === 'shell-command') return now + EXECUTE_MEMORY_TTL_MS
+  if (key.kind === 'remote-write') return now + REMOTE_WRITE_MEMORY_TTL_MS
   return undefined
 }
 

@@ -60,7 +60,11 @@ export class DesktopChannel implements ConfirmationChannel {
       actionClass?: ActionClass
       riskLevel?: RiskLevel
       audit?: AuditSink
-      waitForToolConfirm?: (requestId: string, toolUseId: string) => Promise<ToolConfirmOutcome>
+      waitForToolConfirm?: (
+        requestId: string,
+        toolUseId: string,
+        memoryTiers?: ConfirmRequest['memoryTiers']
+      ) => Promise<ToolConfirmOutcome>
     }
   ) {}
 
@@ -74,7 +78,8 @@ export class DesktopChannel implements ConfirmationChannel {
       signals: req.facts.signals.map((s) => s.kind)
     })
     const wait = this.deps.waitForToolConfirm ?? waitForToolConfirm
-    const outcome = await wait(this.deps.requestId, this.deps.toolUseId)
+    // 把决策层给出的记忆档位登记到 registry，供 tool:confirm-response 校验渲染端回传档位（B1）
+    const outcome = await wait(this.deps.requestId, this.deps.toolUseId, req.memoryTiers)
     this.deps.audit?.record({
       ...base,
       event: 'confirm.outcome',

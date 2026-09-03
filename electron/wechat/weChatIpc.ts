@@ -4,6 +4,8 @@ import path from 'path'
 import { type IpcMain } from 'electron'
 import type { AppDatabase } from '../database'
 import { getConfigValue, setConfigValue } from '../database'
+import { getDbConnection } from '../database'
+import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import {
   mergeWeChatConfig,
   weChatConfigNeedsPolicyMigration,
@@ -93,6 +95,13 @@ export function createWeChatBundle(deps: {
   })
   remoteAuthorizationRegistry.registerPendingCancel({
     cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
+  })
+  // B3：授权撤销/换绑/登出时联动清空本链路会话级确认记忆（remote-write 记N 等）
+  remoteAuthorizationRegistry.registerCacheClearer({
+    clearByChannel: (ch) =>
+      ch === 'wechat'
+        ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('wechat', 'session')
+        : 0
   })
   remoteAuthorizationRegistry.registerAuditAppender((event) => {
     void auditLogger.append(event as { type: string })

@@ -59,6 +59,23 @@ describe('RemoteAuthorizationRegistry', () => {
     })
   })
 
+  it('clears lane session-scope decision cache on invalidate (B3)', () => {
+    const cleared: string[] = []
+    registry.registerCacheClearer({
+      clearByChannel: (ch) => {
+        cleared.push(ch)
+        return ch === 'wechat' ? 2 : 0
+      }
+    })
+    const audits: Array<Record<string, unknown>> = []
+    registry.registerAuditAppender((e) => {
+      audits.push(e)
+    })
+    registry.invalidate('wechat', 'logout')
+    expect(cleared).toEqual(['wechat'])
+    expect(audits[0]).toMatchObject({ clearedCacheEntries: 2 })
+  })
+
   it('approve after invalidate cannot use old generation semantics', () => {
     const pending = new PendingRequestRegistry<{
       id: string

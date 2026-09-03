@@ -215,6 +215,23 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
   })
 
+  it('关键词可清空为 0 个（空串不回退为旧值，保存为空列表）', { timeout: 20000 }, async () => {
+    const onBrowserChange = vi.fn()
+    renderTab({ onBrowserChange })
+    fireEvent.click(await screen.findByText('确认记忆管理'))
+    const label = await screen.findByText('高风险关键词')
+    const field = label.closest('.config-field')!
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: '点击展开详情' }))
+    const textarea = within(field as HTMLElement).getByPlaceholderText('逗号分隔，如：支付, 转账, 删除')
+    fireEvent.change(textarea, { target: { value: '' } })
+    // 清空后输入框保持为空，不得回显旧关键词
+    expect((textarea as HTMLTextAreaElement).value).toBe('')
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(expect.objectContaining({ actHighRiskKeywords: [] }))
+    })
+  })
+
   it('策略套餐区按链路拆 Tab：默认桌面 Tab 只展示适用规则，无硬约束开关', { timeout: 20000 }, async () => {
     renderTab()
     // 三个链路 Tab 标题

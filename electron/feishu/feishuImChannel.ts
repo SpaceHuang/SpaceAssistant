@@ -39,6 +39,14 @@ export class FeishuImChannel extends ImChannel {
         if (event === 'confirm.request') {
           void deps.auditLogger?.append({ type: 'confirm_request', confirmId: String(fields.confirmId ?? '') })
         }
+        if (event === 'confirm.resolved') {
+          // 与微信侧同口径：解析结果（decision）落飞书审计，供下游对账
+          void deps.auditLogger?.append({
+            type: 'confirm_request',
+            confirmId: String(fields.confirmId ?? ''),
+            decision: String(fields.decision ?? '') as 'y' | 'n' | 'timeout'
+          })
+        }
       },
       sendPrompt: (entry) => {
         if (entry.matchKey) notifyFeishuConfirmPrompt(deps, entry)

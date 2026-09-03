@@ -53,6 +53,7 @@ export type AgentLogEventName =
   | 'mcp.trust.session'
   | 'tool.confirm.remote_write_grant_required'
   | 'tool.confirm.authorization_revoked'
+  | 'tool.confirm.memory_tier_rejected'
   | 'remote.budget.pause'
   | 'shell.path.confirm'
   | 'shell.path.reject'

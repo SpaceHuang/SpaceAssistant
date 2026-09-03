@@ -135,13 +135,22 @@ export class ImChannel {
       factsSummary: req.facts.summary.text,
       actor: 'system'
     })
-    this.deps.sendPrompt(entry)
-    return this.registry.register(entry, this.deps.timeoutMs, {
+    // 先注册再发送提示：sendPrompt 同步触发入站解析时能命中待确认项；
+    // 注入实现同步抛异常时释放 confirmId，避免短确认码泄漏
+    const outcomePromise = this.registry.register(entry, this.deps.timeoutMs, {
       onTimeout: () => {
         if (confirmId) releaseConfirmId(confirmId)
       }
-    }).then((decision) => {
+    })
+    try {
+      this.deps.sendPrompt(entry)
+    } catch {
+      if (confirmId) releaseConfirmId(confirmId)
+    }
+    return outcomePromise.then((decision) => {
       const memory = this.pendingMemory.get(id)
+      // 记忆档位随请求结束即清理，pendingMemory 不随长跑进程累积
+      this.pendingMemory.delete(id)
       this.emitConfirmOutcome(decision, entry, memory)
       return toOutcome(decision, entry.memoryTiers, memory)
     })
