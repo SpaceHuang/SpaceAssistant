@@ -54,12 +54,19 @@ import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceH
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
 import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
+import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
 
 let floatingManager: FloatingNotificationManager | null = null
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
 const WIKI_CONFIG_KEY = 'config.wiki'
+
+// 开发版使用独立的 Electron userData，避免与已安装版或其他分支共用数据库。
+// 必须在 app.whenReady() 前设置，否则 Electron 已经确定了默认 userData 路径。
+if (isSpaceAssistantDev()) {
+  app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -100,12 +107,6 @@ async function waitForUrlOk(urlStr: string, timeoutMs: number): Promise<void> {
 function getDevServerMissingHtml(expectedUrl: string): string {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"/><title>开发服务器未就绪</title></head><body>
   <p>无法连接 <code>${expectedUrl}</code>。请先运行 <code>npm run dev</code> 或单独启动 <code>npm run dev:renderer</code>。</p></body></html>`
-}
-
-function getRendererURL(): string {
-  if (process.env.ELECTRON_START_URL) return process.env.ELECTRON_START_URL
-  const port = process.env.VITE_DEV_SERVER_PORT ?? '9240'
-  return `http://127.0.0.1:${port}`
 }
 
 function getRendererIndexPath(): string {

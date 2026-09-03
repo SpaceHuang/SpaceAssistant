@@ -18,7 +18,7 @@
     "predev": "npm run i18n:generate-types",
     "prebuild:renderer": "npm run i18n:generate-types",
     "dev:renderer": "vite --strictPort",
-    "dev:electron": "npm run build:electron:incremental && electron dist-electron/electron/main.js",
+    "dev:electron": "cross-env SPACEASSISTANT_DEV=1 npm run build:electron:incremental && cross-env SPACEASSISTANT_DEV=1 electron dist-electron/electron/main.js",
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "build:renderer": "vite build",
     "build:tray-icons": "node scripts/build-tray-icons.mjs",
