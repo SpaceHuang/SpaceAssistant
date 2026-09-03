@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { getDbConnection, openSqliteDatabase } from '../database'
 import { getSchemaMeta } from './sqliteStore'
 import { SCHEMA_META_KEYS } from './schema'
-import { runMigrations } from './migrations'
+import { DatabaseUpgradeRequiredError, runMigrations } from './migrations'
 
 const V4_TABLES = ['decision_cache', 'policy_rules'] as const
 const dirs: string[] = []
@@ -71,6 +71,25 @@ describe('schema v4 migrations (确认框架表)', () => {
     expect(() => runMigrations(conn)).not.toThrow()
     expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
     db.close()
+  })
+
+  it('高版本库即使包含当前应用依赖的表也必须拒绝打开', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-future-version-'))
+    dirs.push(dir)
+    const dbPath = path.join(dir, 'test.db')
+    const future = new DatabaseSync(dbPath)
+    future.exec(`
+      CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      CREATE TABLE configs (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, preview TEXT NOT NULL DEFAULT '', model TEXT NOT NULL, temperature REAL NOT NULL, max_tokens INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, message_count INTEGER NOT NULL DEFAULT 0, skills_state TEXT NOT NULL, metadata TEXT NOT NULL, schema_version INTEGER NOT NULL, work_dir_profile_id TEXT);
+      CREATE TABLE messages (id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, schema_version INTEGER NOT NULL, timestamp INTEGER NOT NULL, sequence INTEGER NOT NULL);
+      CREATE TABLE search_history (id TEXT PRIMARY KEY NOT NULL, query TEXT NOT NULL, timestamp INTEGER NOT NULL);
+      CREATE TABLE session_usages (session_id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL);
+      INSERT INTO schema_meta (key, value) VALUES ('schema_version', '7');
+    `)
+    future.close()
+
+    expect(() => openSqliteDatabase(dbPath)).toThrow(DatabaseUpgradeRequiredError)
   })
 })
 

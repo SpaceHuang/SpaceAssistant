@@ -28,7 +28,9 @@ export function runMigrations(conn: Database.Database): void {
       version = 1
       conn.prepare('INSERT INTO schema_meta (key, value) VALUES (?, ?)').run(SCHEMA_META_KEYS.schemaVersion, String(version))
     }
-    if (version > DB_SCHEMA_VERSION) throw new DatabaseUpgradeRequiredError(version)
+    if (version > DB_SCHEMA_VERSION) {
+      throw new DatabaseUpgradeRequiredError(version)
+    }
     if (version === 1) {
       conn.exec(CREATE_TABLES_SQL)
       version = 3
