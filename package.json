@@ -73,7 +73,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/react-syntax-highlighter": "^15.5.13",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.1.1",
     "@vitest/coverage-v8": "^4.1.0",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
@@ -84,8 +84,8 @@
     "rimraf": "^6.0.1",
     "sharp": "^0.33.5",
     "tsx": "^4.22.4",
-    "typescript": "^5.7.2",
-    "vite": "^6.0.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2",
     "vitest": "^4.1.0"
   },
   "build": {

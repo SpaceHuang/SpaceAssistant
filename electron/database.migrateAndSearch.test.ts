@@ -369,5 +369,3 @@ describe('searchMessages', () => {
   })
 })
 
-import { getDbConnection } from './database/sqliteStore'
-

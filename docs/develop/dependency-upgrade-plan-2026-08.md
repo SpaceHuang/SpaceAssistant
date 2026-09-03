@@ -1,7 +1,7 @@
 # 依赖版本迭代计划（Node / Electron / 工具链）
 
 制定日期：2026-08-31；修订日期：2026-09-03（v3）
-状态：**修订后待实施**。本版吸收 `docs/review/dependency-upgrade-plan-2026-08-review-v2.md` 的三项阻断意见，并以当前仓库检索结果和 Electron/Node 官方文档复核。
+状态：**已实施（Phase 1–3 完成，含遗留人工验收项）**。本版吸收 `docs/review/dependency-upgrade-plan-2026-08-review-v2.md` 的三项阻断意见，并以当前仓库检索结果和 Electron/Node 官方文档复核。Phase 1/2/3 实施记录分别见附录 A/B/C。
 
 ## 1. 目标、边界与版本原则
 
@@ -188,3 +188,56 @@ Phase 3  Electron 40 → 44、平台下线确认与工具链升级
 
 - **Windows x64 / macOS x64 / macOS arm64 人工冒烟矩阵**：启动与旧库升级、聊天流式、工具调用循环、SQLite 读写、托盘、飞书/微信桥接、内嵌终端、PDF 导出、剪贴板与外链打开（§3-39 命中路径）。责任人：发布负责人；回归路径：按 §4 第 3 条逐项人工冒烟，macOS 探针由 CI `sqlite-electron-probe` 矩阵（macos-15-intel、macos-latest）补跑。
 - **安装包验收**：Windows NSIS 与 macOS x64/arm64 DMG 产物的首次启动与已有数据库读写。责任人：发布负责人；回归路径：`npm run pack:win` / `npm run pack:mac` 产物人工验收。
+
+
+## 附录 C：Phase 3 实施记录（2026-09-03）
+
+实施分支 `chore/dependency-upgrade`（worktree `.worktrees/dep-upgrade`），基于 Phase 2 提交 `af1abab`。
+
+### 精确依赖版本
+
+- `electron` **40.10.6 → 44.1.1**（44 通道最新稳定 patch，`npm view electron versions` 确认 44 系为 `44.0.0 / 44.1.0 / 44.1.1`，`latest` dist-tag 即 44.1.1；lockfile 记录精确版本）。Electron 44 运行时内嵌 Node 24.19.0（探针实测）。
+- `@types/node` 保持 **^24**（lockfile 实际 24.13.3），未随动。
+- `vite` **6.x → 8.2.2**、`@vitejs/plugin-react` **4.x → 6.1.1**（peer 约束 `@vitejs/plugin-react@6.1.1 → vite ^8.0.0`，组合成立）。
+- `vitest` 保持 **^4** 主版本不随动（lockfile 内由 ^4.1.0 解析为 4.1.6）：`vitest@4` peer 为 `vite ^6.0.0 || ^7.0.0 || ^8.0.0-0`，覆盖 vite 8 稳定版，peer 约束不要求升主版本。
+- `typescript` **5.7 → 5.9.3**（5.x 最新稳定）。曾尝试 `typescript@7.0.2`（npm latest）：TS 7 移除 `baseUrl` 与 `moduleResolution=node10`，主进程 tsconfig 迁移到 `NodeNext` 后全仓数百处相对 import 需补 `.js` 扩展名（`error TS2835`），属大规模侵入性改造，超出本阶段最小改动边界；按「不预设不相容版本、选可行方案」原则回退至 5.9.3，TS 7 迁移留作独立计划。
+
+### §3 影响矩阵 Electron 41–44 逐行结论（清单来源：electronjs.org/docs/latest/breaking-changes 41.0–44.0 段）
+
+- **41–43**（PDF WebContents、`Session.clearStorageData` quotas、macOS 通知迁移 UNNotification、dialog 默认 Downloads 目录、Linux `showHiddenFiles` 移除）——检索 `printToPDF|clearStorageData|showHiddenFiles|defaultPath|new Notification`（范围 `electron/ src/`）：
+  - `clearStorageData`、`showHiddenFiles`、`new Notification` **无命中**：不清除站点存储、不传 showHiddenFiles、不使用系统 `Notification`（应用通知为自建浮动窗口 `floatingNotification*.ts`，macOS UNNotification 签名要求不适用）。
+  - **命中**：`electron/appIpc.ts:1715` 使用 `webContents.printToPDF({ printBackground: true })` 导出 PDF。Electron 41 的变化是「PDF 资源不再创建独立 guest WebContents」，针对在窗口中直接加载 PDF 的场景；本仓库是自建的隐藏 BrowserWindow 加载 HTML 后调用 `printToPDF`，API 签名未变，不受该变化影响。记录为人工冒烟项（PDF 导出）。
+  - **命中**：`electron/appIpc.ts:1697` `dialog.showSaveDialog` 显式传入 `defaultPath`（`absDefault`），不受「默认目录改为 Downloads」影响；`electron/appIpc.ts:1797` `dialog.showOpenDialog`（选择工作目录）未传 `defaultPath`，行为变化为初始目录固定为 Downloads 且系统不再记忆上次目录。评估为可接受的 UX 变化，**不改代码**，记录为人工冒烟项。Linux `showHiddenFiles` 移除为 Linux-only，不适用。
+- **44**（macOS 12、Windows ia32/Linux armv7l 下线；renderer clipboard 移除；`select-client-certificate` 的 `webContents` 可为空；`net.request` frame header；ANGLE 静态链接）——检索 `clipboard|select-client-certificate|net\.request|libEGL|libGLESv2`（范围 `electron/ src/`）：
+  - `select-client-certificate`、`net.request`、`libEGL`、`libGLESv2` **无命中**：不监听证书选择事件（无需补 nullable webContents 处理与测试）、不走 `net.request`（LLM/API 请求均走 Node https/fetch）、打包配置不引用独立 ANGLE 库（ANGLE 静态链接进二进制对本仓库无影响）。
+  - renderer `clipboard` 复核（Phase 2 已确认）：renderer 无任何 `from 'electron'` / `require('electron')` 命中，全部走 `navigator.clipboard` 或 copy 事件 `clipboardData`；主进程亦无 `clipboard` 命中。Electron 44 移除 renderer clipboard 对本仓库无影响。
+  - **平台支持决策已落地**：发布面明确为 **macOS 13+ / Windows x64 / macOS x64+arm64**。`package.json` `build.mac.minimumSystemVersion` 新增 `"13.0"`；`docs/develop/release-guide.md` 支持平台行更新为「Windows x64（NSIS）、macOS 13+（x64/arm64 DMG；Electron 44 起 macOS 12 不再受支持）」。Windows ia32 与 Linux armv7l 本就不在发布配置内（build 仅 win nsis x64、mac dmg x64+arm64、linux AppImage 为开发便利产物，非支持承诺）。
+
+### 门禁结果（本机 Windows x64）
+
+- Electron 44.1.1 升级后：`npm run build:electron` 全量编译通过（零错误）；`npm run typecheck:shared`、`npm run typecheck:renderer` 通过；`npm test` 全绿（**447 文件 / 2760 通过 / 2 跳过**，718s）。
+- 真实 Electron 探针：`npx electron scripts/probe-node-sqlite.mjs` 输出 `electron=44.1.1 node=24.19.0 arch=x64 platform=win32`，`ok: file db write/read/checkpoint verified`（stderr 仅 libpng iCCP 警告，为托盘图标既有提示，与本次升级无关）。
+- 工具链升级后（vite 8.2.2 + plugin-react 6.1.1 + TS 5.9.3 + vitest 4.1.6）：`npm run build:renderer` 通过（Vite 8 / rolldown 构建，仅 chunk 体积提示）；两项 typecheck 通过；`npm run i18n:check` 通过（硬编码中文计数为既有存量告警，非新增）。
+- 工具链引入的一处真实修复：Vite 8 的 oxc transform 比 esbuild 严格，`electron/database.migrateAndSearch.test.ts:372` 存在重复 `import { getDbConnection }`（与 15 行重复声明），esbuild 容忍、oxc 报 PARSE_ERROR；删除文件尾部多余的重复 import（该行本就无效），修复后单测 7/7 通过。
+- 最终 `npm test` 全绿（**447 文件 / 2760 通过 / 2 跳过**，233s）。期间 `src/shared/toolResultPairing.test.ts` 的「10000 条消息 < 50ms」耗时断言在高负载轮次出现 56–59ms 超时，空闲轮复跑与全量复跑均通过，确认为计时阈值 flaky（该代码路径本次未改动，vitest 仅 4.1.0→4.1.6 次要 bump），非升级回归。
+
+### 渲染性能对比（§5 第 4 条口径）
+
+按 `docs/develop/chat-message-list-renderer-performance-audit.md` §7 的约定口径，基线实测数据已存在（`chat-message-list-batch{1,2}-remeasure-results.json`，vitest+jsdom+React.Profiler，同一 fixture），升级后于机器空闲时以相同测试重采。对比（升级前 09-03 16:43 采集 → 升级后 09-03 17:41 采集，同机 win32 x64 / Node 24.19.0）：
+
+| 批次 | 场景 | 消息数 | mount ms（前→后） | 流式 commit p95 ms（前→后） | DOM 节点（前→后） | heap MB（前→后） |
+| --- | --- | --- | --- | --- | --- | --- |
+| batch1 | small | 20 | 78.2 → 54.4 | 1.68 → 1.09 | 201 → 201 | 0.0 → 0.0 |
+| batch1 | large | 500 | 766.2 → 689.2 | 5.85 → 4.65 | 4682 → 4682 | 52.4 → 51.3 |
+| batch2 | 全量语料 | 500 | 858.4 → 896.5 | 9.29 → 5.02 | 4680 → 4680 | 59.8 → 60.3 |
+| batch2 | 折叠 | 60 | 247.4 → 81.0 | 4.38 → 0.96 | 580 → 580 | 10.3 → 10.2 |
+
+结论：DOM 节点数与堆占用完全一致（±1 MB），commit 耗时在 jsdom 近似口径下无上升迹象。注意该口径为 vitest+jsdom+React.Profiler 近似测量，对机器负载敏感（高负载轮次曾出现 2–3 倍漂移），不构成「无回归」的强结论；真实应用内的 FPS、Long Task、内存曲线仍为人工测量项。两个 remeasure-results.json 会被测试重写，未纳入提交。
+
+### 需真机/人工验收项（本环境无法自动完成）
+
+- **Windows x64 / macOS x64 / macOS arm64 人工冒烟矩阵**：在 Electron 44 下回归启动与旧库升级、聊天流式、工具调用循环、SQLite 读写、托盘、飞书/微信桥接、内嵌终端、**PDF 导出**（§3-41 printToPDF 命中）、**目录选择对话框初始目录**（§3-43 行为变化，确认 Downloads 初始目录可接受）、剪贴板与外链打开。macOS 探针由 CI `sqlite-electron-probe` 矩阵补跑。
+- **macOS 13 下限验证**：mac 产物 `minimumSystemVersion: 13.0` 生效（LSMinimumSystemVersion 写入 Info.plist），并在 macOS 13 机器上验证启动。
+- **安装包验收**：Windows NSIS 与 macOS x64/arm64 DMG 产物首次启动与已有数据库读写。
+- **真实渲染性能**：按审计文档 §7 在约定最低配置机器上用 React Profiler / Performance 面板复核四组 fixture。
+- **TypeScript 7 迁移**：`baseUrl`/`node10` 移除与 NodeNext import 扩展名改造为独立计划，不在本阶段。
