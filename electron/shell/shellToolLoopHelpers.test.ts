@@ -30,15 +30,14 @@ describe('shellToolLoopHelpers', () => {
     }
   })
 
-  it('denies sudo even when autoAllowScriptExecution is enabled', async () => {
+  it('denies sudo', async () => {
     const result = await precheckRunShellTool({
       command: 'sudo rm -rf /',
       workDir,
       userDataDir: os.tmpdir(),
       shellConfig: {
         enabled: true,
-        shellDefaultTimeoutSec: 300,
-        autoAllowScriptExecution: true
+        shellDefaultTimeoutSec: 300
       },
       appDb: db
     })
@@ -66,15 +65,14 @@ describe('shellToolLoopHelpers', () => {
     expect(result.skipConfirm).toBe(true)
   })
 
-  it('does not skip confirm for safe command when only autoAllowScriptExecution is enabled', async () => {
+  it('does not skip confirm for untrusted safe command', async () => {
     const result = await precheckRunShellTool({
       command: 'echo safe',
       workDir,
       userDataDir: os.tmpdir(),
       shellConfig: {
         enabled: true,
-        shellDefaultTimeoutSec: 300,
-        autoAllowScriptExecution: true
+        shellDefaultTimeoutSec: 300
       },
       appDb: db
     })

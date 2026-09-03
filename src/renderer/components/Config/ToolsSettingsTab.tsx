@@ -1,14 +1,15 @@
-import { App, Button, Form, Input, InputNumber, Radio, Space, Switch } from 'antd'
+import { Button, Form, Input, InputNumber, Space, Switch } from 'antd'
 import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
+import type { FeishuConfig } from '../../../shared/feishuTypes'
 import type { ToolsSettingsSubTab } from '../../store/configSlice'
 import { BrowserSettingsTab } from './BrowserSettingsTab'
 import { ConfigResultAlert } from './ConfigResultAlert'
-import { ConfigSwitchRow } from './ConfigField'
 import { ShellSettingsTab } from './ShellSettingsTab'
 import { McpSettingsTab } from './McpSettingsTab'
+import { ToolsSecuritySettingsTab } from './ToolsSecuritySettingsTab'
 import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
@@ -28,6 +29,9 @@ type Props = {
   setToolUi: React.Dispatch<React.SetStateAction<ToolsSettingsUi>>
   browserUi: BrowserConfig
   setBrowserUi: React.Dispatch<React.SetStateAction<BrowserConfig>>
+  /** 飞书配置（安全策略页「飞书写操作需确认」开关用，R6）。 */
+  feishuUi: FeishuConfig
+  setFeishuUi: React.Dispatch<React.SetStateAction<FeishuConfig>>
   shellUi: ShellConfig
   setShellUi: React.Dispatch<React.SetStateAction<ShellConfig>>
   onShellEnabledChange: (enabled: boolean) => void
@@ -42,7 +46,7 @@ type Props = {
   open?: boolean
 }
 
-function BuiltinToolSwitchList({
+export function BuiltinToolSwitchList({
   toolUi,
   setToolUi,
   onShellEnabledChange
@@ -102,6 +106,8 @@ export function ToolsSettingsTab({
   setToolUi,
   browserUi,
   setBrowserUi,
+  feishuUi,
+  setFeishuUi,
   shellUi,
   setShellUi,
   onShellEnabledChange,
@@ -114,49 +120,8 @@ export function ToolsSettingsTab({
   onTestPython,
   open = false
 }: Props) {
-  const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
   const hint = getToolsSettingsSectionHint(section, t)
-
-  const patchShellUi = (partial: Partial<ShellConfig>) => setShellUi((s) => ({ ...s, ...partial }))
-
-  const handleAutoAllowScriptChange = (enabled: boolean) => {
-    if (enabled) {
-      modal.confirm({
-        title: t('shell.autoAllow.confirmTitle'),
-        content: (
-          <div>
-            <p>{t('shell.autoAllow.confirmMessage')}</p>
-            <p>{t('shell.autoAllow.confirmWarning')}</p>
-          </div>
-        ),
-        okText: t('shell.autoAllow.confirmOk'),
-        cancelText: t('shell.autoAllow.confirmCancel'),
-        onOk: () => patchShellUi({ autoAllowScriptExecution: true })
-      })
-      return
-    }
-    patchShellUi({ autoAllowScriptExecution: false })
-  }
-
-  const handleConfirmModeChange = (next: FileConfirmMode) => {
-    if (next === 'auto' && toolUi.confirmMode !== 'auto') {
-      modal.confirm({
-        title: t('tools.file.autoApprove.confirmTitle'),
-        content: (
-          <div>
-            <p>{t('tools.file.autoApprove.confirmMessage')}</p>
-            <p>{t('tools.file.autoApprove.confirmWarning')}</p>
-          </div>
-        ),
-        okText: t('tools.file.autoApprove.confirmOk'),
-        cancelText: t('tools.file.autoApprove.confirmCancel'),
-        onOk: () => setToolUi((s) => ({ ...s, confirmMode: 'auto' }))
-      })
-      return
-    }
-    setToolUi((s) => ({ ...s, confirmMode: next }))
-  }
 
   const renderSection = () => {
     switch (section) {
@@ -171,28 +136,7 @@ export function ToolsSettingsTab({
       case 'file':
         return (
           <div className="config-form-stack">
-            <div className="config-form-group">
-              <Form.Item label={t('tools.file.confirmModeLabel')}>
-                <Radio.Group value={toolUi.confirmMode} onChange={(e) => handleConfirmModeChange(e.target.value)}>
-                  <Space direction="vertical">
-                    <Radio value="diff">{t('tools.file.confirmDiff')}</Radio>
-                    <Radio value="direct">{t('tools.file.confirmDirect')}</Radio>
-                    <Radio value="auto">{t('tools.file.confirmAuto')}</Radio>
-                  </Space>
-                </Radio.Group>
-              </Form.Item>
-              {toolUi.confirmMode === 'auto' ? (
-                <div className="config-field__hint">
-                  <p>{t('tools.file.autoApprove.description')}</p>
-                  <ul>
-                    <li>{t('tools.file.autoApprove.conditionInWorkDir')}</li>
-                    <li>{t('tools.file.autoApprove.conditionNotSensitive')}</li>
-                    <li>{t('tools.file.autoApprove.conditionMaxBytes', { size: '256 KB' })}</li>
-                  </ul>
-                  <p>{t('tools.file.autoApprove.fallbackHint')}</p>
-                </div>
-              ) : null}
-            </div>
+            <p className="config-field__hint">{t('tools.file.checkpointInfo')}</p>
             <Form.Item label={t('tools.file.checkpointLabel')} className="config-form-item-inline">
               <Switch
                 checked={toolUi.fileCheckpointingEnabled}
@@ -213,12 +157,6 @@ export function ToolsSettingsTab({
       case 'script':
         return (
           <div className="config-form-stack">
-            <ConfigSwitchRow
-              label={t('shell.autoAllow.title')}
-              hint={t('shell.autoAllow.description')}
-              checked={shellUi.autoAllowScriptExecution ?? false}
-              onChange={handleAutoAllowScriptChange}
-            />
             <Form.Item label={t('tools.script.pythonPathLabel')}>
               <Space.Compact style={{ width: '100%' }}>
                 <Input
@@ -264,6 +202,16 @@ export function ToolsSettingsTab({
         )
       case 'browser':
         return <BrowserSettingsTab active browser={browserUi} onChange={setBrowserUi} models={models} />
+      case 'security':
+        return (
+          <ToolsSecuritySettingsTab
+            active
+            browser={browserUi}
+            onBrowserChange={setBrowserUi}
+            feishu={feishuUi}
+            onFeishuChange={setFeishuUi}
+          />
+        )
       default:
         return null
     }

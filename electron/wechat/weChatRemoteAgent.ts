@@ -4,7 +4,7 @@ import type { AppDatabase } from '../database'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import { buildWeChatRemoteSystemAppendix } from '../../src/shared/wechatPrompts'
-import type { WeChatConfirmManager } from './weChatConfirmManager'
+import type { WeChatImChannel } from './weChatImChannel'
 import type { WeChatRemoteContext } from '../tools/types'
 import type { WeChatBotService } from './weChatBotService'
 import { logWeChatCliEvent } from './weChatCliLogger'
@@ -28,7 +28,7 @@ export async function runWeChatRemoteAgent(ctx: {
   getBaseUrl: () => string
   getModel: () => string
   botService: WeChatBotService
-  confirmManager: WeChatConfirmManager
+  imChannel: WeChatImChannel
   getToolsConfig: () => ToolsConfig
   getBrowserConfig?: () => BrowserConfig
   getWikiConfig?: () => WikiConfig

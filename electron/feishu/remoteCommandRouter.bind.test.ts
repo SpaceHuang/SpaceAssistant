@@ -79,7 +79,7 @@ describe('RemoteCommandRouter pairing-code bind', () => {
         has: vi.fn().mockResolvedValue(false),
         mark: vi.fn().mockResolvedValue(undefined)
       } as never,
-      confirmManager: { tryResolveFromInbound: () => false } as never,
+      imChannel: { tryResolveFromInboundMessage: () => false } as never,
       auditLogger: { append: auditAppend } as never,
       getFeishuConfig: () =>
         mergeFeishuConfig({

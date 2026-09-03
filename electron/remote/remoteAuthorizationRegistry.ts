@@ -21,6 +21,11 @@ export type WriteGrantRevoker = {
   revokeByChannel: (channel: RemoteAuthChannel, reason: string) => number
 }
 
+/** 撤销时同步清空该链路会话级 decision_cache 条目的钩子（B3：授权撤销须联动记忆缓存）。 */
+export type CacheClearByChannel = {
+  clearByChannel: (channel: RemoteAuthChannel) => number
+}
+
 type AuditAppend = (event: { type: string; ts?: number } & Record<string, unknown>) => void | Promise<void>
 
 /**
@@ -32,6 +37,7 @@ export class RemoteAuthorizationRegistry {
   private generations = new Map<RemoteAuthChannel, number>()
   private pendingCancels: PendingCancelByChannel[] = []
   private writeGrantRevoker: WriteGrantRevoker | null = null
+  private cacheClearers: CacheClearByChannel[] = []
   private auditAppenders: AuditAppend[] = []
 
   getGeneration(channel: RemoteAuthChannel): number {
@@ -44,6 +50,10 @@ export class RemoteAuthorizationRegistry {
 
   setWriteGrantRevoker(revoker: WriteGrantRevoker | null): void {
     this.writeGrantRevoker = revoker
+  }
+
+  registerCacheClearer(clearer: CacheClearByChannel): void {
+    this.cacheClearers.push(clearer)
   }
 
   registerAuditAppender(append: AuditAppend): void {
@@ -70,6 +80,16 @@ export class RemoteAuthorizationRegistry {
       revokedGrants = remoteWriteGrantRegistry.revokeByChannel(channel, String(reason))
     }
 
+    // B3：授权撤销联动清空该链路会话级 decision_cache（remote-write 记N 等记忆不得跨越撤销存活）
+    let clearedCacheEntries = 0
+    for (const c of this.cacheClearers) {
+      try {
+        clearedCacheEntries += c.clearByChannel(channel)
+      } catch {
+        /* 缓存清理失败不阻断撤销 */
+      }
+    }
+
     const event = {
       type: 'authorization_revoked',
       ts: Date.now(),
@@ -77,7 +97,8 @@ export class RemoteAuthorizationRegistry {
       reason: String(reason),
       authorizationGeneration: next,
       cancelledPending,
-      revokedGrants
+      revokedGrants,
+      clearedCacheEntries
     }
     for (const append of this.auditAppenders) {
       try {

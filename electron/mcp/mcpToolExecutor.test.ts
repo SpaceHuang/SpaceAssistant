@@ -89,7 +89,6 @@ function makeProfile(serverId: string, scriptPath: string): McpServerProfile {
     auth: { mode: 'none', secretPresent: false },
     stdio: { command: process.execPath, args: [scriptPath], env: [] },
     enabledToolNames: ['echo'],
-    toolConfirmPolicy: 'always',
     status: 'connected',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()

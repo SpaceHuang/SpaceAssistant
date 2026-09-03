@@ -4,6 +4,8 @@ import path from 'path'
 import { type IpcMain } from 'electron'
 import type { AppDatabase } from '../database'
 import { getConfigValue, setConfigValue } from '../database'
+import { getDbConnection } from '../database'
+import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import {
   mergeWeChatConfig,
   weChatConfigNeedsPolicyMigration,
@@ -11,7 +13,7 @@ import {
 } from '../../src/shared/wechatTypes'
 import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
-import { WeChatConfirmManager } from './weChatConfirmManager'
+import { WeChatImChannel } from './weChatImChannel'
 import { WeChatBotService, detectWeChatSdk } from './weChatBotService'
 import { WeChatCommandRouter } from './weChatCommandRouter'
 import type { WorkDirManager } from '../workDirManager'
@@ -29,7 +31,7 @@ const WECHAT_CONFIG_KEY = 'config.wechat'
 
 export type WeChatServiceBundle = {
   processedStore: WeChatProcessedStore
-  confirmManager: WeChatConfirmManager
+  imChannel: WeChatImChannel
   auditLogger: WeChatAuditLogger
   botService: WeChatBotService
   router: WeChatCommandRouter | null
@@ -85,14 +87,21 @@ export function createWeChatBundle(deps: {
     }
   })
 
-  const confirmManager = new WeChatConfirmManager(
+  const imChannel = new WeChatImChannel({
     auditLogger,
-    getWc,
-    () => botService.getBot() ?? undefined,
-    deps.db
-  )
+    getWebContents: getWc,
+    getReplyBot: () => botService.getBot() ?? undefined,
+    db: deps.db
+  })
   remoteAuthorizationRegistry.registerPendingCancel({
-    cancelByChannel: (ch) => confirmManager.cancelByChannel(ch)
+    cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
+  })
+  // B3：授权撤销/换绑/登出时联动清空本链路会话级确认记忆（remote-write 记N 等）
+  remoteAuthorizationRegistry.registerCacheClearer({
+    clearByChannel: (ch) =>
+      ch === 'wechat'
+        ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('wechat', 'session')
+        : 0
   })
   remoteAuthorizationRegistry.registerAuditAppender((event) => {
     void auditLogger.append(event as { type: string })
@@ -102,7 +111,7 @@ export function createWeChatBundle(deps: {
     db: deps.db,
     botService,
     processedStore,
-    confirmManager,
+    imChannel,
     auditLogger,
     getWeChatConfig: readCfg,
     getAppConfig: () => ({
@@ -133,7 +142,7 @@ export function createWeChatBundle(deps: {
     logWeChatCliEvent('warn', 'wechat.bundle.stale_login', { storageDir })
   }
 
-  bundle = { processedStore, confirmManager, auditLogger, botService, router }
+  bundle = { processedStore, imChannel, auditLogger, botService, router }
   logWeChatCliEvent('info', 'wechat.service.bundle_created', {
     loggedIn: cfg.loggedIn && hasStoredCredentials,
     remoteEnabled: cfg.remoteEnabled,
@@ -173,7 +182,7 @@ export async function pauseWeChatPollIfWindowClosed(): Promise<void> {
 export async function shutdownWeChatServices(): Promise<void> {
   cancelAllActiveChats()
   remoteAuthorizationRegistry.invalidate('wechat', 'service_stopped')
-  bundle?.confirmManager.cancelAllPending()
+  bundle?.imChannel.cancelAllPending()
   await bundle?.botService?.stopPoll()
   logWeChatCliEvent('info', 'wechat.service.shutdown', {})
   await flushWeChatCliLogger()
@@ -295,10 +304,10 @@ export function registerWeChatIpcHandlers(
     async (_e, opts: { since?: number; types?: string[]; limit?: number }) => b.auditLogger.query(opts ?? {})
   )
 
-  ipcMain.handle('wechat:pending-confirms', async () => b.confirmManager.listPending())
+  ipcMain.handle('wechat:pending-confirms', async () => b.imChannel.listPending())
 
   ipcMain.handle('wechat:confirm-response', async (_e, payload: { requestId: string; approved: boolean }) => {
-    const ok = b.confirmManager.resolveFromDesktop(payload.requestId, payload.approved)
+    const ok = b.imChannel.resolveFromDesktop(payload.requestId, payload.approved)
     return { ok }
   })
 

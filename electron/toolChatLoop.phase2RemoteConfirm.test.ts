@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import {
-  shouldSkipRemoteBrowserConfirm,
-  toolNeedsUserConfirmationForTests
-} from './toolChatLoop'
-import { DEFAULT_FEISHU_CONFIG } from '../src/shared/feishuTypes'
+import { evaluateToolCallGate, type ToolCallGateArgs } from './confirmation/toolCallGate'
+import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../src/shared/feishuTypes'
 import { DEFAULT_WECHAT_CONFIG } from '../src/shared/wechatTypes'
-import { DEFAULT_BROWSER_CONFIG } from '../src/shared/domainTypes'
+import {
+  DEFAULT_BROWSER_CONFIG,
+  DEFAULT_TOOLS_CONFIG,
+  type BrowserConfig,
+  type ToolsConfig
+} from '../src/shared/domainTypes'
 import type { RemoteContext } from './tools/types'
 
 const feishuRemote: RemoteContext = {
@@ -14,163 +16,165 @@ const feishuRemote: RemoteContext = {
   confirmPolicy: 'always'
 }
 
-describe('phase2 remote confirm defaults', () => {
-  it('larkCliWriteRequiresConfirm defaults true; high-impact always asks', () => {
+const toolsConfig: ToolsConfig = { ...DEFAULT_TOOLS_CONFIG, deniedTools: [] }
+
+async function needsConfirm(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  overrides: Partial<ToolCallGateArgs> = {}
+): Promise<boolean> {
+  const r = await evaluateToolCallGate({
+    toolName,
+    toolInput,
+    sessionId: 's1',
+    workDir: '/tmp/wd',
+    userDataDir: '/tmp/ud',
+    toolsConfig,
+    audit: { record: () => undefined },
+    ...overrides
+  })
+  return r.decision.type === 'require-confirm'
+}
+
+const lark = (args: unknown[], feishuConfig: FeishuConfig) =>
+  needsConfirm('run_lark_cli', { args }, { feishuConfig })
+
+describe('phase2 remote confirm defaults（经 toolCallGate + 规则表）', () => {
+  it('larkCliWriteRequiresConfirm defaults true; high-impact always asks', async () => {
     expect(DEFAULT_FEISHU_CONFIG.larkCliWriteRequiresConfirm).toBe(true)
-    expect(
-      toolNeedsUserConfirmationForTests(
-        'run_lark_cli',
-        { args: ['message', 'send', '--receive-id', 'ou_1'] },
-        DEFAULT_FEISHU_CONFIG
-      )
-    ).toBe(true)
+    expect(await lark(['message', 'send', '--receive-id', 'ou_1'], DEFAULT_FEISHU_CONFIG)).toBe(true)
     // Even when switch is false, group/high-impact still asks.
     expect(
-      toolNeedsUserConfirmationForTests(
-        'run_lark_cli',
-        { args: ['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_x'] },
-        { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }
-      )
-    ).toBe(true)
-  })
-
-  it('low-impact lark write can skip when switch explicitly false', () => {
-    expect(
-      toolNeedsUserConfirmationForTests(
-        'run_lark_cli',
-        { args: ['message', 'send', '--receive-id', 'ou_1'] },
-        { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }
-      )
-    ).toBe(false)
-  })
-
-  it('high-impact ops always confirm even when old write-pair list misses them', () => {
-    const noConfirm = { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }
-    // These are not covered by isLarkCliWriteOperation WRITE_PAIRS; classifier must still ask.
-    expect(
-      toolNeedsUserConfirmationForTests('run_lark_cli', { args: ['doc', 'delete', '--token', 't'] }, noConfirm)
-    ).toBe(true)
-    expect(
-      toolNeedsUserConfirmationForTests(
-        'run_lark_cli',
-        { args: ['doc', 'permission', 'update'] },
-        noConfirm
-      )
-    ).toBe(true)
-    expect(
-      toolNeedsUserConfirmationForTests(
-        'run_lark_cli',
-        { args: ['calendar', 'delete', '--event-id', 'e1'] },
-        noConfirm
-      )
-    ).toBe(true)
-  })
-
-  it('read ops do not confirm when routed solely through impact classifier', () => {
-    expect(
-      toolNeedsUserConfirmationForTests(
-        'run_lark_cli',
-        { args: ['doc', 'get', '--token', 't'] },
-        { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: true }
-      )
-    ).toBe(false)
-  })
-
-  it('non-string args fail closed to confirm without throwing', () => {
-    expect(() =>
-      toolNeedsUserConfirmationForTests('run_lark_cli', { args: ['doc', 1] }, DEFAULT_FEISHU_CONFIG)
-    ).not.toThrow()
-    expect(
-      toolNeedsUserConfirmationForTests('run_lark_cli', { args: ['doc', 1] }, {
+      await lark(['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_x'], {
         ...DEFAULT_FEISHU_CONFIG,
         larkCliWriteRequiresConfirm: false
       })
     ).toBe(true)
   })
 
-  it('explicit larkCliWriteRequiresConfirm true still requires confirm for writes', () => {
+  it('low-impact lark write can skip when switch explicitly false', async () => {
     expect(
-      toolNeedsUserConfirmationForTests(
-        'run_lark_cli',
-        { args: ['message', 'send', '--receive-id', 'ou_1'] },
-        { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: true }
-      )
+      await lark(['message', 'send', '--receive-id', 'ou_1'], {
+        ...DEFAULT_FEISHU_CONFIG,
+        larkCliWriteRequiresConfirm: false
+      })
+    ).toBe(false)
+  })
+
+  it('high-impact ops always confirm even when old write-pair list misses them', async () => {
+    const noConfirm = { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }
+    expect(await lark(['doc', 'delete', '--token', 't'], noConfirm)).toBe(true)
+    expect(await lark(['doc', 'permission', 'update'], noConfirm)).toBe(true)
+    expect(await lark(['calendar', 'delete', '--event-id', 'e1'], noConfirm)).toBe(true)
+  })
+
+  it('read ops do not confirm when routed solely through impact classifier', async () => {
+    expect(
+      await lark(['doc', 'get', '--token', 't'], {
+        ...DEFAULT_FEISHU_CONFIG,
+        larkCliWriteRequiresConfirm: true
+      })
+    ).toBe(false)
+  })
+
+  it('non-string args fail closed to confirm without throwing', async () => {
+    await expect(lark(['doc', 1], DEFAULT_FEISHU_CONFIG)).resolves.not.toThrow
+    expect(
+      await lark(['doc', 1], { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false })
     ).toBe(true)
   })
 
-  it('desktop browser defaults remain navigate/act require confirm', () => {
+  it('explicit larkCliWriteRequiresConfirm true still requires confirm for writes', async () => {
+    expect(
+      await lark(['message', 'send', '--receive-id', 'ou_1'], {
+        ...DEFAULT_FEISHU_CONFIG,
+        larkCliWriteRequiresConfirm: true
+      })
+    ).toBe(true)
+  })
+
+  it('desktop browser defaults remain navigate/act require confirm', async () => {
     expect(DEFAULT_BROWSER_CONFIG.navigateRequiresConfirm).toBe(true)
     expect(DEFAULT_BROWSER_CONFIG.actRequiresConfirm).toBe(true)
     expect(
-      toolNeedsUserConfirmationForTests(
+      await needsConfirm(
         'browser',
         { action: 'navigate', url: 'https://example.com' },
-        undefined,
-        undefined,
-        DEFAULT_BROWSER_CONFIG
+        { browserConfig: DEFAULT_BROWSER_CONFIG }
       )
     ).toBe(true)
   })
 
-  it('pre-migration: navigate may skip but act still confirms (conservative overlay)', () => {
+  it('pre-migration: navigate may skip but act still confirms (conservative overlay)', async () => {
     expect(DEFAULT_FEISHU_CONFIG.remoteBrowserRequiresConfirm).toBe(false)
-    // navigate is not gated by the migration overlay.
+    const browserConfig: BrowserConfig = { ...DEFAULT_BROWSER_CONFIG, allowRemoteSessions: true }
+    // navigate is not gated by the migration overlay（远程开关默认放行 → 不确认）
     expect(
-      shouldSkipRemoteBrowserConfirm(
-        feishuRemote,
+      await needsConfirm(
         'browser',
         { action: 'navigate', url: 'https://example.com' },
-        DEFAULT_FEISHU_CONFIG
+        { remoteContext: feishuRemote, feishuConfig: DEFAULT_FEISHU_CONFIG, browserConfig }
       )
-    ).toBe(true)
+    ).toBe(false)
     // act must NOT skip until migration completes.
     expect(
-      shouldSkipRemoteBrowserConfirm(
-        feishuRemote,
+      await needsConfirm(
         'browser',
         { action: 'act', instruction: 'click' },
-        DEFAULT_FEISHU_CONFIG
+        { remoteContext: feishuRemote, feishuConfig: DEFAULT_FEISHU_CONFIG, browserConfig }
       )
-    ).toBe(false)
+    ).toBe(true)
+    // screenshot 等非 navigate/act 动作本就免确认
     expect(
-      shouldSkipRemoteBrowserConfirm(
-        feishuRemote,
+      await needsConfirm(
         'browser',
         { action: 'screenshot' },
-        DEFAULT_FEISHU_CONFIG
+        { remoteContext: feishuRemote, feishuConfig: DEFAULT_FEISHU_CONFIG, browserConfig }
       )
     ).toBe(false)
   })
 
-  it('migrated: act skips only when remoteBrowserActRequiresConfirm is false', () => {
+  it('migrated: act skips only when remoteBrowserActRequiresConfirm is false', async () => {
     const migrated = {
       ...DEFAULT_FEISHU_CONFIG,
       remoteSecurityConfigVersion: 1,
       remoteBrowserActRequiresConfirm: false,
       remoteBrowserNavigateRequiresConfirm: false
     }
+    const browserConfig: BrowserConfig = { ...DEFAULT_BROWSER_CONFIG, allowRemoteSessions: true }
     expect(
-      shouldSkipRemoteBrowserConfirm(feishuRemote, 'browser', { action: 'act', instruction: 'click' }, migrated)
-    ).toBe(true)
-    expect(
-      shouldSkipRemoteBrowserConfirm(
-        feishuRemote,
+      await needsConfirm(
         'browser',
         { action: 'act', instruction: 'click' },
-        { ...migrated, remoteBrowserActRequiresConfirm: true }
+        { remoteContext: feishuRemote, feishuConfig: migrated, browserConfig }
       )
     ).toBe(false)
+    expect(
+      await needsConfirm(
+        'browser',
+        { action: 'act', instruction: 'click' },
+        {
+          remoteContext: feishuRemote,
+          feishuConfig: { ...migrated, remoteBrowserActRequiresConfirm: true },
+          browserConfig
+        }
+      )
+    ).toBe(true)
   })
 
-  it('remote browser still confirms when remoteBrowserRequiresConfirm is true', () => {
+  it('remote browser still confirms when remoteBrowserRequiresConfirm is true', async () => {
+    const browserConfig: BrowserConfig = { ...DEFAULT_BROWSER_CONFIG, allowRemoteSessions: true }
     expect(
-      shouldSkipRemoteBrowserConfirm(
-        feishuRemote,
+      await needsConfirm(
         'browser',
         { action: 'navigate', url: 'https://example.com' },
-        { ...DEFAULT_FEISHU_CONFIG, remoteBrowserRequiresConfirm: true }
+        {
+          remoteContext: feishuRemote,
+          feishuConfig: { ...DEFAULT_FEISHU_CONFIG, remoteBrowserRequiresConfirm: true },
+          browserConfig
+        }
       )
-    ).toBe(false)
+    ).toBe(true)
   })
 
   it('changing remoteBrowserRequiresConfirm does not change DEFAULT_BROWSER_CONFIG', () => {

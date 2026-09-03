@@ -6,6 +6,7 @@ import { normalizeViewerUrl } from '../../../shared/viewerUrl'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { summarizeBrowserConfirmInput } from './browserConfirmDisplay'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
+import { MemoryTierSelect } from './MemoryTierSelect'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
@@ -42,6 +43,7 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
   const { t } = useTypedTranslation('chat')
   const { openUrl } = useDetailPanel()
   const [trustChecked, setTrustChecked] = useState(false)
+  const [memoryTier, setMemoryTier] = useState<number | null>(null)
   const summary = summarizeBrowserConfirmInput(record.input, record.currentPageUrl)
 
   const urlValue = summary?.detailLabel === 'URL' ? summary.detailValue : ''
@@ -72,6 +74,7 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
   const sessionTrustedHint = record.sessionTrustedHint === true
   const canTrust = !isDangerous && ((action === 'navigate' && mode === 'open') || action === 'act')
   const canTrustDomain = canTrust && Boolean(trustableDomain)
+  const memoryTierOptions = (record.memoryTiers ?? []).map((mt, i) => ({ label: mt.label, tier: i + 1 }))
 
   const handleOpenInViewer = () => {
     if (!canOpenInViewer) return
@@ -84,15 +87,17 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
   }
 
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
+    const sel = memoryTier
+    const selected = approved && sel != null ? record.memoryTiers?.[sel - 1]?.key : undefined
     if (approved && trustChecked && canTrustDomain && trustableDomain) {
       if (action === 'act') {
-        onConfirm(approved, { ...options, trustActDomain: trustableDomain })
+        onConfirm(approved, { ...options, trustActDomain: trustableDomain, ...(selected ? { memoryTier: selected } : {}) })
       } else {
-        onConfirm(approved, { ...options, trustDomain: trustableDomain })
+        onConfirm(approved, { ...options, trustDomain: trustableDomain, ...(selected ? { memoryTier: selected } : {}) })
       }
       return
     }
-    onConfirm(approved, options)
+    onConfirm(approved, { ...options, ...(selected ? { memoryTier: selected } : {}) })
   }
 
   const allowLabel =
@@ -205,6 +210,7 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
               ) : null}
             </div>
           ) : null}
+          <MemoryTierSelect options={memoryTierOptions} value={memoryTier} onChange={setMemoryTier} />
         </div>
       </ConfirmCardDecision>
     </div>

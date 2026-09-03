@@ -293,8 +293,8 @@
     },
     "nav": {
       "switches": {
-        "label": "Tool toggles",
-        "hint": "Control which capabilities the agent can use in chat"
+        "label": "Tool Switches",
+        "hint": "Control which capabilities the Agent can invoke in conversations"
       },
       "mcp": {
         "label": "MCP Servers",
@@ -302,7 +302,7 @@
       },
       "file": {
         "label": "File operations",
-        "hint": "Write confirmation and history backups"
+        "hint": "File history backups and snapshots"
       },
       "script": {
         "label": "Script execution",
@@ -315,10 +315,13 @@
       "browser": {
         "label": "Web access",
         "hint": "Browser automation and dependency checks"
+      },
+      "security": {
+        "label": "Security Policy",
+        "hint": "Single home for policy packages, confirmation memory and audit"
       }
     },
     "file": {
-      "confirmModeLabel": "File write confirmation mode",
       "confirmDiff": "Show file changes",
       "confirmDirect": "Confirm directly",
       "confirmAuto": "Auto-approve safe writes",
@@ -335,7 +338,8 @@
         "confirmCancel": "Cancel"
       },
       "checkpointLabel": "File history backup",
-      "maxSnapshotsLabel": "Max snapshots per file"
+      "maxSnapshotsLabel": "Max snapshots per file",
+      "checkpointInfo": "When enabled, a history snapshot is kept before file writes, so you can roll back after Agent changes."
     },
     "script": {
       "pythonPathLabel": "Python path",
@@ -395,15 +399,6 @@
       "status": "Status",
       "empty": "No trusted commands yet",
       "refresh": "Refresh"
-    },
-    "autoAllow": {
-      "title": "Auto-allow model-generated scripts (content analysis now gates this)",
-      "description": "This switch no longer bypasses safety analysis: dangerous scripts still ask or deny; safe scripts may skip confirm. run_shell still uses trusted commands or confirmation cards.",
-      "confirmTitle": "Enable?",
-      "confirmMessage": "Dangerous scripts still ask or deny; safe scripts that pass analysis may skip confirm.",
-      "confirmWarning": "⚠️ Content analysis is a heuristic gate, not a sandbox.",
-      "confirmOk": "Enable",
-      "confirmCancel": "Cancel"
     }
   },
   "browser": {
@@ -455,13 +450,6 @@
     "actTrustHelper": "Browser actions on these domains skip confirmation across sessions.",
     "actTrustAdd": "Add domain",
     "actTrustEmpty": "No trusted act domains yet",
-    "actSessionTrustEnable": "Enable act session trust",
-    "actSessionTrustHelper": "After the first confirmation, later act actions on the same domain in this session run automatically.",
-    "actHighRiskTitle": "High-risk keywords",
-    "actHighRiskHelper": "Act instructions matching these keywords always require confirmation and never use trust.",
-    "actHighRiskReset": "Restore defaults",
-    "actHighRiskPlaceholder": "Comma-separated, e.g. pay, transfer, delete",
-    "actHighRiskSave": "Save",
     "actHighRiskRemoveWarn": "Removing keywords reduces protection for automatic actions. Continue?",
     "allowHttpLabel": "Allow HTTP",
     "allowHttpHint": "When off, only https links are allowed.",
@@ -513,8 +501,6 @@
     "rebindConfirmOk": "Confirm rebind",
     "cancelBind": "Cancel bind",
     "clearOwner": "Clear owner",
-    "larkCliWriteRequiresConfirm": "Confirm Feishu write operations",
-    "larkCliWriteRequiresConfirmHint": "Off by default: Feishu CLI writes (messages, docs, calendar, etc.) skip confirmation. Writes can affect group chats, shared docs, and calendars—broader external impact than WeChat private reply. Turn on when you want confirmation.",
     "eventStatus": {
       "badge": "{{state}} · {{processed}}",
       "processed": "Processed {{count}}",
@@ -748,5 +734,103 @@
     "confirm": "Confirm and save",
     "cancel": "Cancel",
     "saveFailed": "Save failed, please retry"
+  },
+  "toolsSecurity": {
+    "intro": "Manage tool confirmation policies, confirmation memory and security audit in one place; confirm mode and tool switches now live here too. Changes apply immediately and are written to the audit log.",
+    "policy": {
+      "title": "Policy Packages",
+      "hint": "Choose a policy package per lane. The custom package lets you adjust rule actions; system-protection rules are toggled via Enabled/Disabled.",
+      "laneDesktop": "Desktop",
+      "laneWechat": "WeChat",
+      "laneFeishu": "Feishu",
+      "packageStrict": "Strict",
+      "packageStandard": "Standard",
+      "packageLoose": "Allow all",
+      "packageCustom": "Custom",
+      "strictHint": "Strict: rules that would allow are escalated to ask.",
+      "looseHint": "Lets the agent run all of the operations below without approval. Make sure you understand the risk; avoid leaving it on Allow all for long.",
+      "customHint": "Custom: adjust each rule action (deny/allow/ask) in the table below.",
+      "ruleColumn": "Rule",
+      "whenColumn": "Timing",
+      "actionColumn": "Action",
+      "defaultColumn": "Default",
+      "stateColumn": "State",
+      "overriddenTag": "Overridden",
+      "lockedTag": "Locked",
+      "enabledTag": "Enabled",
+      "disabledTag": "Disabled",
+      "reset": "Reset",
+      "actionDeny": "Deny",
+      "actionAllow": "Allow",
+      "actionAsk": "Ask",
+      "actionAutoEvaluator": "Auto evaluator",
+      "whenInvocation": "Invocation",
+      "whenExposure": "Exposure",
+      "whenIngress": "Ingress",
+      "saveFailed": "Save failed",
+      "packageLabel": "Current security package",
+      "actionAutoShort": "Auto",
+      "packageSelectHint": "The package sets the default for all rules below; choose Custom to override per rule.",
+      "larkWriteRequiresConfirm": "Confirm Feishu write operations",
+      "larkWriteRequiresConfirmHint": "Off by default: Feishu CLI writes (messages, docs, calendar, etc.) skip confirmation. Writes can affect group chats, shared docs, and calendars—broader external impact than WeChat private reply. Turn on when you want confirmation. Under the custom package, rule overrides for lark-write-ask take precedence over this switch."
+    },
+    "memory": {
+      "title": "Confirmation Memory",
+      "actSessionTrustLabel": "Enable act session trust",
+      "actSessionTrustHint": "After the first confirmation, later act actions on the same domain in this session run automatically. When off, act keeps no session memory and asks every time.",
+      "actHighRiskKeywordsLabel": "High-risk keywords",
+      "actHighRiskKeywordsHint": "Act instructions matching these keywords always require confirmation and never use trust.",
+      "actHighRiskKeywordsPlaceholder": "Comma-separated, e.g. pay, transfer, delete",
+      "actHighRiskKeywordsSave": "Save",
+      "actHighRiskKeywordsReset": "Restore defaults",
+      "hint": "Remembered answers (do-not-ask-again) from the decision_cache. Clearing an entry means it will ask again next time.",
+      "columnSummary": "Content",
+      "columnTier": "Tier",
+      "columnScope": "Scope",
+      "columnLane": "Lane",
+      "columnHits": "Hits",
+      "columnCreated": "Created",
+      "scopeSession": "Session",
+      "scopePersistent": "Persistent",
+      "laneAll": "All lanes",
+      "empty": "No confirmation memory yet",
+      "clearAll": "Clear all",
+      "clearAllConfirmTitle": "Clear all confirmation memory?",
+      "clearAllConfirmContent": "{{count}} entries. Every tool call will ask again after clearing.",
+      "cleared": "Cleared {{count}} entries",
+      "tierExact": "Exact command",
+      "tierVerbTarget": "Command + target",
+      "tierVerb": "Command family",
+      "tierDomainAction": "Domain + action",
+      "tierDomainAny": "Domain",
+      "tierFile": "File",
+      "tierDirectory": "Directory",
+      "tierZone": "Zone",
+      "tierMcpTool": "MCP tool",
+      "tierRemoteWrite": "Remote write grant"
+    },
+    "audit": {
+      "title": "Security Audit Log",
+      "hint": "Read-only view of the security audit log (SecurityAudit-*.log): decisions, confirmations, cache and settings changes.",
+      "columnTime": "Time",
+      "columnEvent": "Event",
+      "columnLane": "Lane",
+      "columnTool": "Tool",
+      "columnSummary": "Summary",
+      "filterLane": "Lane",
+      "filterEvent": "Event type",
+      "filterTool": "Tool name",
+      "rangeAll": "All time",
+      "rangeToday": "Today",
+      "range7d": "Last 7 days",
+      "range30d": "Last 30 days",
+      "all": "All",
+      "empty": "No audit records",
+      "refresh": "Refresh",
+      "noLog": "Audit log not initialized yet",
+      "retentionLabel": "Retention (days)",
+      "retentionHint": "Audit files older than the retention period are cleaned up automatically (default 180 days).",
+      "retentionSaved": "Saved"
+    }
   }
 }

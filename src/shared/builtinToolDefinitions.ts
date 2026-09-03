@@ -276,3 +276,8 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
 ]
 
 export const ALL_BUILTIN_TOOL_NAMES = BUILTIN_TOOL_DEFINITIONS.map((t) => t.name)
+
+export {
+  BUILTIN_TOOL_METADATA,
+  getBuiltinToolMetadata
+} from './builtinToolMetadata'

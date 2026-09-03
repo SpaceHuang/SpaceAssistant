@@ -103,11 +103,6 @@ export function canShowShellTrustOption(
   return true
 }
 
-/** run_script（Python）在开启自动执行时跳过确认卡片 */
-export function shouldSkipRunScriptConfirmForAutoAllow(shellConfig?: ShellConfig | null): boolean {
-  return shellConfig?.autoAllowScriptExecution === true
-}
-
 export function shouldSkipShellConfirmForTrust(
   command: string,
   analysis: ShellAnalysisResult,

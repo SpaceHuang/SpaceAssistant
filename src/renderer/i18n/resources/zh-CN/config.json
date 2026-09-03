@@ -302,7 +302,7 @@
       },
       "file": {
         "label": "文件操作",
-        "hint": "写入确认方式与历史备份"
+        "hint": "文件历史备份与快照管理"
       },
       "script": {
         "label": "脚本执行",
@@ -315,10 +315,13 @@
       "browser": {
         "label": "网络访问",
         "hint": "浏览器自动化与依赖检测"
+      },
+      "security": {
+        "label": "安全策略",
+        "hint": "策略套餐、确认记忆与安全审计的统一入口"
       }
     },
     "file": {
-      "confirmModeLabel": "文件写入确认模式",
       "confirmDiff": "展示文件修改内容",
       "confirmDirect": "直接确认",
       "confirmAuto": "自动放行安全写入",
@@ -335,7 +338,8 @@
         "confirmCancel": "取消"
       },
       "checkpointLabel": "文件历史备份",
-      "maxSnapshotsLabel": "每文件最多快照数"
+      "maxSnapshotsLabel": "每文件最多快照数",
+      "checkpointInfo": "开启后，文件写入前会保留历史快照，可在 Agent 修改后回滚。"
     },
     "script": {
       "pythonPathLabel": "Python 路径",
@@ -395,15 +399,6 @@
       "status": "状态",
       "empty": "暂无已信任命令",
       "refresh": "刷新"
-    },
-    "autoAllow": {
-      "title": "大模型生成的脚本自动允许执行（已由内容分析接管）",
-      "description": "开启与否不再跳过安全分析：危险脚本仍会确认或拒绝；安全脚本可免确认。run_shell 仍按信任命令或确认卡片流程执行。",
-      "confirmTitle": "确认开启？",
-      "confirmMessage": "危险脚本仍会确认或拒绝；内容分析达标的安全脚本可免确认。",
-      "confirmWarning": "⚠️ 内容分析为启发式闸门，不是沙箱。",
-      "confirmOk": "确认开启",
-      "confirmCancel": "取消"
     }
   },
   "browser": {
@@ -455,13 +450,6 @@
     "actTrustHelper": "在这些域名上的浏览器操作无需确认，跨会话生效。",
     "actTrustAdd": "添加域名",
     "actTrustEmpty": "暂无信任的 act 域名",
-    "actSessionTrustEnable": "启用 act 会话级信任",
-    "actSessionTrustHelper": "首次确认后，同会话同域名的后续 act 操作自动放行。",
-    "actHighRiskTitle": "高风险关键词",
-    "actHighRiskHelper": "命中以下关键词的 act 指令将强制确认，不享受任何信任。",
-    "actHighRiskReset": "恢复默认",
-    "actHighRiskPlaceholder": "逗号分隔，如：支付, 转账, 删除",
-    "actHighRiskSave": "保存",
     "actHighRiskRemoveWarn": "删除关键词将降低对自动操作的保护，确定？",
     "allowHttpLabel": "允许 HTTP",
     "allowHttpHint": "关闭后只允许访问 https 链接。",
@@ -513,8 +501,6 @@
     "rebindConfirmOk": "确认重新绑定",
     "cancelBind": "取消绑定",
     "clearOwner": "清除 Owner",
-    "larkCliWriteRequiresConfirm": "飞书写操作需确认",
-    "larkCliWriteRequiresConfirmHint": "默认关闭：飞书 CLI 写操作（发消息、改文档、日历等）免确认。可影响群消息、共享文档与日历等第三方资源；误操作外部影响面大于微信「只回自己」。需要时可开启确认。",
     "eventStatus": {
       "badge": "{{state}} · {{processed}}",
       "processed": "已处理 {{count}}",
@@ -748,5 +734,103 @@
     "confirm": "确认并保存",
     "cancel": "取消",
     "saveFailed": "保存失败，请重试"
+  },
+  "toolsSecurity": {
+    "intro": "统一管理工具确认策略、确认记忆与安全审计；确认模式与工具开关也集中在这里配置。本页变更立即生效，并记入安全审计日志。",
+    "policy": {
+      "title": "策略套餐",
+      "hint": "为每条链路选择策略套餐。自定义套餐可调整规则动作；系统保护规则用「启用/不启用」控制是否生效。",
+      "laneDesktop": "桌面",
+      "laneWechat": "微信",
+      "laneFeishu": "飞书",
+      "packageStrict": "严格",
+      "packageStandard": "标准",
+      "packageLoose": "全部放行",
+      "packageCustom": "自定义",
+      "strictHint": "严格：原本放行的规则上调为询问。",
+      "looseHint": "允许 Agent 无需审批，执行下面所有操作。请确认你了解风险，避免长期切换到全部放行状态。",
+      "customHint": "自定义：在下表中调整每条规则的动作（拒绝/允许/询问）。",
+      "ruleColumn": "规则",
+      "whenColumn": "时机",
+      "actionColumn": "动作",
+      "defaultColumn": "默认",
+      "stateColumn": "状态",
+      "overriddenTag": "已覆盖",
+      "lockedTag": "锁定",
+      "enabledTag": "启用",
+      "disabledTag": "不启用",
+      "reset": "恢复默认",
+      "actionDeny": "拒绝",
+      "actionAllow": "允许",
+      "actionAsk": "询问",
+      "actionAutoEvaluator": "自动审批",
+      "whenInvocation": "工具调用",
+      "whenExposure": "工具可见性",
+      "whenIngress": "消息准入",
+      "saveFailed": "保存失败",
+      "packageLabel": "当前安全套餐",
+      "actionAutoShort": "自动",
+      "packageSelectHint": "选择套餐后，下方规则的动作将按套餐预设生效；自定义套餐可逐条覆盖。",
+      "larkWriteRequiresConfirm": "飞书写操作需确认",
+      "larkWriteRequiresConfirmHint": "默认关闭：飞书 CLI 写操作（发消息、改文档、日历等）免确认。可影响群消息、共享文档与日历等第三方资源；误操作外部影响面大于微信「只回自己」。需要时可开启确认。自定义套餐下对 lark-write-ask 的规则覆盖优先于本开关。"
+    },
+    "memory": {
+      "title": "确认记忆管理",
+      "actSessionTrustLabel": "启用 act 会话级信任",
+      "actSessionTrustHint": "首次确认后，同会话同域名的后续 act 操作自动放行。关闭后 act 不产生会话记忆，每次都会询问。",
+      "actHighRiskKeywordsLabel": "高风险关键词",
+      "actHighRiskKeywordsHint": "命中以下关键词的 act 指令将强制确认，不享受任何信任。",
+      "actHighRiskKeywordsPlaceholder": "逗号分隔，如：支付, 转账, 删除",
+      "actHighRiskKeywordsSave": "保存",
+      "actHighRiskKeywordsReset": "恢复默认",
+      "hint": "「下次别问了」的确认记忆（decision_cache）。清除后下次调用会再次询问。",
+      "columnSummary": "内容",
+      "columnTier": "档位",
+      "columnScope": "作用域",
+      "columnLane": "链路",
+      "columnHits": "命中",
+      "columnCreated": "创建时间",
+      "scopeSession": "会话级",
+      "scopePersistent": "持久",
+      "laneAll": "全部链路",
+      "empty": "暂无确认记忆",
+      "clearAll": "清空全部",
+      "clearAllConfirmTitle": "清空全部确认记忆？",
+      "clearAllConfirmContent": "共 {{count}} 条，清除后所有工具调用将重新询问。",
+      "cleared": "已清除 {{count}} 条",
+      "tierExact": "仅此命令",
+      "tierVerbTarget": "命令+目标",
+      "tierVerb": "同类命令",
+      "tierDomainAction": "域名+动作",
+      "tierDomainAny": "域名",
+      "tierFile": "文件",
+      "tierDirectory": "目录",
+      "tierZone": "目录区",
+      "tierMcpTool": "MCP 工具",
+      "tierRemoteWrite": "远程写授权"
+    },
+    "audit": {
+      "title": "安全审计记录",
+      "hint": "只读查看安全审计日志（SecurityAudit-*.log），判定、确认、缓存与配置变更全程留痕。",
+      "columnTime": "时间",
+      "columnEvent": "事件",
+      "columnLane": "链路",
+      "columnTool": "工具",
+      "columnSummary": "摘要",
+      "filterLane": "链路",
+      "filterEvent": "事件类型",
+      "filterTool": "工具名",
+      "rangeAll": "全部时间",
+      "rangeToday": "今天",
+      "range7d": "近 7 天",
+      "range30d": "近 30 天",
+      "all": "全部",
+      "empty": "暂无审计记录",
+      "refresh": "刷新",
+      "noLog": "审计日志尚未初始化",
+      "retentionLabel": "日志保留天数",
+      "retentionHint": "超过保留天数的审计文件会自动清理（默认 180 天）。",
+      "retentionSaved": "已保存"
+    }
   }
 }

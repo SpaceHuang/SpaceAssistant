@@ -33,6 +33,12 @@ import {
   updateSession
 } from './database'
 import { registerMcpIpcHandlers } from './mcp/mcpIpc'
+import { clearDecisionCacheOnSessionDelete } from './confirmation/cacheMaintenanceHooks'
+import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from './confirmation/legacyTrustRevocation'
+import { getSecurityAuditLog, setSecurityAuditRetentionDays } from './confirmation/audit'
+import { readSecurityAuditRetentionDays } from './confirmation/policyRulesRuntime'
+import { recordSettingsChange } from './confirmation/settingsAudit'
+import { recordUserAnswerToCache, scopeForCacheKey } from './confirmation/decisionCacheWriter'
 import type {
   AppConfig,
   FileInfo,
@@ -89,7 +95,7 @@ import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
-import { submitToolConfirmResponse, signalToolCancel } from './toolConfirmRegistry'
+import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier } from './toolConfirmRegistry'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
@@ -283,6 +289,54 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
   })
 
+  // 桌面端“信任/记住”勾选统一经 AuditedDecisionCache 落 cache.write 审计（§5.6-4）。
+  const recordTrustToCache = (
+    key: import('../src/shared/confirmation/types').CacheKey,
+    sessionId?: string,
+    scope: 'session' | 'persistent' = 'persistent'
+  ): void => {
+    recordUserAnswerToCache({
+      db: ctx.db,
+      audit: getSecurityAuditLog(),
+      lane: 'desktop',
+      sessionId: sessionId ?? 'desktop',
+      key,
+      decision: 'allow',
+      scope,
+      source: 'user-confirm'
+    })
+  }
+
+  // 设置变更审计（§5.6-6）：策略/工具开关/确认配置变更落 settings.* 事件（含新旧值）。
+  const recordSettings = (args: {
+    kind: 'policy-change' | 'tool-toggle'
+    lane: 'desktop' | 'wechat' | 'feishu'
+    key: string
+    before: unknown
+    after: unknown
+    reason?: string
+  }): void => {
+    recordSettingsChange(getSecurityAuditLog(), { ...args, sessionId: 'settings' })
+  }
+
+  // exposure 重推（§5.2）：套餐/规则变更后主进程重新求值并推送该链路工具清单，
+  // 渲染端工具清单缓存不滞后（权威路径在主进程）。失败不阻断设置保存。
+  const pushExposureToolsChanged = async (lane: 'desktop' | 'wechat' | 'feishu'): Promise<void> => {
+    try {
+      const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
+      const { loadEffectivePolicyRules } = await import('./confirmation/policyRulesRuntime')
+      const tools = exposedToolNamesForLane(
+        lane,
+        ...readExposureInputsFromDb(ctx.db),
+        undefined,
+        loadEffectivePolicyRules(ctx.db, lane)
+      )
+      getMainWindow()?.webContents.send('exposure:tools-changed', { lane, tools })
+    } catch {
+      /* 重推失败不阻断；渲染端下次 refresh 时补齐 */
+    }
+  }
+
   ipcMain.handle(
     'tool:confirm-response',
     async (
@@ -297,6 +351,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         sessionId?: string
         trustMcpServerId?: string
         trustMcpToolName?: string
+        memoryTier?: import('../src/shared/confirmation/types').CacheKey
       }
     ): Promise<void> => {
       if (payload.approved && payload.trustCommand?.trim()) {
@@ -308,6 +363,17 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             fixedArgvPrefix: added.fixedArgvPrefix,
             timestamp: Date.now()
           })
+          // B6：双写 decision_cache（与迁移键同构），让该信任在「确认记忆」页可见、可单条撤销
+          if (added.executable) {
+            recordTrustToCache(
+              {
+                kind: 'shell-command',
+                verb: [added.executable, ...(added.fixedArgvPrefix ?? [])].join(' '),
+                level: 'exact'
+              },
+              payload.sessionId
+            )
+          }
         }
       }
       if (payload.approved && payload.trustDomain?.trim()) {
@@ -319,6 +385,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           domain: payload.trustDomain.trim(),
           timestamp: Date.now()
         })
+        // 双写 navigate 档（domain-any-action）缓存键，供执行链路缓存命中
+        recordTrustToCache({ kind: 'domain', domain: payload.trustDomain.trim(), level: 'domain-any-action' }, payload.sessionId)
       }
       if (payload.approved && payload.trustActDomain?.trim()) {
         const { addTrustedActDomain } = await import('./browser/browserDomainTrust')
@@ -329,6 +397,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           domain: payload.trustActDomain.trim(),
           timestamp: Date.now()
         })
+        // 双写 act 档（domain+action）缓存键，与 navigate 档隔离
+        recordTrustToCache({ kind: 'domain', domain: payload.trustActDomain.trim(), level: 'domain+action' }, payload.sessionId)
       }
       if (payload.approved && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
         const { rememberMcpSessionTrust } = await import('./mcp/mcpSessionTrust')
@@ -339,6 +409,41 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           tool: payload.trustMcpToolName,
           timestamp: Date.now()
         })
+        // 会话级 MCP 信任双写 decision_cache（键带 sessionId，等价 mcpSessionTrust 内存语义）
+        recordTrustToCache(
+          {
+            kind: 'mcp-tool',
+            serverId: payload.trustMcpServerId,
+            toolName: payload.trustMcpToolName,
+            sessionId: payload.sessionId
+          },
+          payload.sessionId,
+          'session'
+        )
+      }
+      if (payload.approved && payload.memoryTier) {
+        // 记忆档位：用户选中的“记住”写入 decision_cache（执行链路侧写缓存），落 cache.write 审计。
+        // B1：仅接受本次待确认请求决策层给出的档位（防渲染端伪造任意持久放行键）；
+        // B2：scope 按键派生（带 sessionId 的会话级键不得错标为 persistent）。
+        if (isPendingMemoryTier(payload.requestId, payload.toolUseId, payload.memoryTier)) {
+          recordUserAnswerToCache({
+            db: ctx.db,
+            audit: getSecurityAuditLog(),
+            lane: 'desktop',
+            sessionId: payload.sessionId ?? 'desktop',
+            key: payload.memoryTier,
+            decision: 'allow',
+            scope: scopeForCacheKey(payload.memoryTier),
+            source: 'user-confirm'
+          })
+        } else {
+          logAgentEvent('warn', 'tool.confirm.memory_tier_rejected', {
+            requestId: payload.requestId,
+            toolUseId: payload.toolUseId,
+            sessionId: payload.sessionId,
+            timestamp: Date.now()
+          })
+        }
       }
       submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
     }
@@ -354,6 +459,14 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       if (action === 'add' && typeof (payload as { command?: string }).command === 'string') {
         addTrustedCommand(ctx.db, (payload as { command: string }).command)
+        // §5.6-6：shell 信任命令新增落 settings.policy-change
+        recordSettings({
+          kind: 'policy-change',
+          lane: 'desktop',
+          key: 'shell.trustedCommands',
+          before: undefined,
+          after: (payload as { command: string }).command
+        })
         return { ok: true as const, commands: listTrustedCommands(ctx.db) }
       }
       if (action === 'remove' && Array.isArray((payload as { ids?: string[] }).ids)) {
@@ -366,6 +479,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             type: 'shell_command',
             item: item.command ?? item.executable,
             timestamp: Date.now()
+          })
+          // §5.6-6：shell 信任命令删除落 settings.policy-change（含新旧值）
+          recordSettings({
+            kind: 'policy-change',
+            lane: 'desktop',
+            key: 'shell.trustedCommands',
+            before: item.command ?? item.executable,
+            after: undefined,
+            reason: 'remove-trusted-command'
           })
         }
         return { ok: true as const, commands }
@@ -563,6 +685,15 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     clearSessionToolResources(sessionId)
     deleteSession(ctx.db, sessionId)
+    // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程
+    try {
+      clearDecisionCacheOnSessionDelete(ctx.db, sessionId)
+    } catch (e) {
+      logAgentEvent('warn', 'confirmation.cache.session_scope_clear_failed', {
+        sessionId,
+        message: e instanceof Error ? e.message : String(e)
+      })
+    }
     await deleteSessionChatAttachments(ctx.getUserDataPath(), sessionId)
     if (s) await ctx.backup.deleteBackup(s)
   })
@@ -811,6 +942,285 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     } as AppConfig)
   })
 
+/**
+ * 从 DB 读取 exposure 求值输入（tools/feishu/browser/shell/wechat），与 config:get 同口径。
+ */
+function readExposureInputsFromDb(
+  db: AppDatabase
+): [
+  ReturnType<typeof mergeToolsConfig>,
+  ReturnType<typeof readFeishuConfigFromDb>,
+  ReturnType<typeof readBrowserConfigFromDb>,
+  ReturnType<typeof readShellConfigFromDb>,
+  ReturnType<typeof readWeChatConfigFromDb>
+] {
+  let tools = mergeToolsConfig(null)
+  const toolsRaw = getConfigValue(db, CONFIG_KEYS.tools)
+  if (toolsRaw) {
+    try {
+      tools = mergeToolsConfig(JSON.parse(toolsRaw) as Partial<ToolsConfig>)
+    } catch {
+      /* keep default */
+    }
+  }
+  return [
+    tools,
+    readFeishuConfigFromDb(db),
+    readBrowserConfigFromDb(db),
+    readShellConfigFromDb(db),
+    readWeChatConfigFromDb(db)
+  ]
+}
+
+  ipcMain.handle(
+    'exposure:get-tools',
+    async (_e, payload: { lane: 'desktop' | 'wechat' | 'feishu' }): Promise<string[]> => {
+      // 主进程为唯一评估者：一律读 DB 配置求值，不信任渲染端上行的 config（§5.2 exposure 定稿）
+      const { exposedToolNamesForLane } = await import('./toolsConfigRuntime')
+      const { loadEffectivePolicyRules } = await import('./confirmation/policyRulesRuntime')
+      return exposedToolNamesForLane(
+        payload.lane,
+        ...readExposureInputsFromDb(ctx.db),
+        undefined,
+        loadEffectivePolicyRules(ctx.db, payload.lane)
+      )
+    }
+  )
+
+  // ===== 「安全策略」设置页（§7 五区，P4）=====
+  // 启动时把持久化的审计保留天数注入审计单例（设置页可调，§5.6-1）。
+  setSecurityAuditRetentionDays(readSecurityAuditRetentionDays(ctx.db))
+
+  const securityDeps = async () => {
+    const runtime = await import('./confirmation/policyRulesRuntime')
+    const model = await import('./confirmation/settingsSecurityModel')
+    const auditMod = await import('./confirmation/audit')
+    const { SqliteDecisionCache } = await import('./confirmation/sqliteDecisionCache')
+    const { PolicyRuleStore } = await import('./confirmation/policyRuleStore')
+    const { DEFAULT_POLICY_RULES } = await import('../src/shared/policy/defaultRules')
+    const { recordSettingsChange } = await import('./confirmation/settingsAudit')
+    return { runtime, model, auditMod, SqliteDecisionCache, PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange }
+  }
+
+  ipcMain.handle('security:get-settings-model', async () => {
+    const { runtime, model, auditMod, SqliteDecisionCache, PolicyRuleStore, DEFAULT_POLICY_RULES } =
+      await securityDeps()
+    const { getDbConnection } = await import('./database')
+    const conn = getDbConnection(ctx.db)
+    const tools = readToolsConfig(ctx.db)
+    return model.buildSettingsSecurityModel({
+      packages: runtime.readPolicyPackages(ctx.db),
+      confirmMode: tools.confirmMode,
+      deniedTools: tools.deniedTools,
+      cache: new SqliteDecisionCache(conn).list(),
+      rules: model.toRuleViews(
+        DEFAULT_POLICY_RULES,
+        new PolicyRuleStore(conn).listOverrides(),
+        tools.confirmMode,
+        runtime.readDisabledPolicyRuleIds(ctx.db)
+      ),
+      retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
+      haveAuditLog: auditMod.getSecurityAuditLogDir() != null
+    })
+  })
+
+  ipcMain.handle(
+    'security:set-policy-package',
+    async (_e, payload: { lane?: unknown; package?: unknown }) => {
+      const { runtime, recordSettingsChange } = await securityDeps()
+      const { isPolicyPackage } = await import('../src/shared/policy/policyPackages')
+      const lane = payload?.lane
+      const pkg = payload?.package
+      if (lane !== 'desktop' && lane !== 'wechat' && lane !== 'feishu' && lane !== 'automation') {
+        return { ok: false as const, error: 'invalid lane' }
+      }
+      if (!isPolicyPackage(pkg)) return { ok: false as const, error: 'invalid package' }
+      const packages = runtime.readPolicyPackages(ctx.db)
+      const before = packages[lane]
+      if (before === pkg) return { ok: true as const }
+      packages[lane] = pkg
+      runtime.writePolicyPackages(ctx.db, packages)
+      ctx.db.flushSave()
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane,
+        sessionId: 'settings',
+        key: `policyPackage.${lane}`,
+        before,
+        after: pkg
+      })
+      if (lane !== 'automation') await pushExposureToolsChanged(lane)
+      return { ok: true as const }
+    }
+  )
+
+  ipcMain.handle(
+    'security:set-rule-override',
+    async (_e, payload: { ruleId?: unknown; action?: unknown; params?: unknown }) => {
+      const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+      const { validateRuleOverride } = await import('../src/shared/policy/policyPackages')
+      const { getDbConnection } = await import('./database')
+      const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
+      // 主进程侧强制校验：规则必须存在、非 locked、动作域按规则类型限定（§4 第 1 区）
+      const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action)
+      if (!check.ok) return { ok: false as const, error: check.error }
+      const params =
+        payload?.params && typeof payload.params === 'object' && !Array.isArray(payload.params)
+          ? (payload.params as Record<string, unknown>)
+          : {}
+      const store = new PolicyRuleStore(getDbConnection(ctx.db))
+      const prev = store.getOverride(ruleId)
+      const before = prev?.action ?? check.rule.action
+      store.setOverride({ ruleId, action: payload!.action as never, params })
+      ctx.db.flushSave()
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: 'desktop',
+        sessionId: 'settings',
+        key: ruleId,
+        before,
+        after: payload!.action
+      })
+      for (const l of ['desktop', 'wechat', 'feishu'] as const) await pushExposureToolsChanged(l)
+      return { ok: true as const }
+    }
+  )
+
+  ipcMain.handle('security:remove-rule-override', async (_e, payload: { ruleId?: unknown }) => {
+    const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+    const { getDbConnection } = await import('./database')
+    const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
+    const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
+    if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
+    const store = new PolicyRuleStore(getDbConnection(ctx.db))
+    const prev = store.getOverride(ruleId)
+    const removed = store.removeOverride(ruleId)
+    ctx.db.flushSave()
+    if (removed > 0) {
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: 'desktop',
+        sessionId: 'settings',
+        key: ruleId,
+        before: prev?.action,
+        after: rule.action,
+        reason: 'reset-to-default'
+      })
+    }
+    return { ok: true as const, removed }
+  })
+
+  // 系统保护（禁止类）规则「启用/不启用」开关：启用=在策略链中生效（可作第 1 步硬拒），
+  // 不启用=从生效规则集剔除（不再硬拒，交还常规规则链）。仅 locked + deny 的保护规则可切换；
+  // fail-closed 的 locked ask 规则（lark-high-impact-ask 等）不可禁用——禁用等价调松兜底。
+  ipcMain.handle(
+    'security:set-rule-enabled',
+    async (_e, payload: { ruleId?: unknown; enabled?: unknown }) => {
+      const { runtime, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
+      const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
+      const rule = DEFAULT_POLICY_RULES.find((r) => r.id === ruleId)
+      if (!rule) return { ok: false as const, error: `unknown rule: ${ruleId}` }
+      if (!rule.locked || rule.action !== 'deny') {
+        return { ok: false as const, error: `rule is not a protection rule: ${ruleId}` }
+      }
+      const enabled = payload?.enabled !== false
+      const disabledIds = runtime.readDisabledPolicyRuleIds(ctx.db)
+      const before = !disabledIds.includes(ruleId)
+      const nextDisabled = enabled
+        ? disabledIds.filter((id) => id !== ruleId)
+        : Array.from(new Set([...disabledIds, ruleId]))
+      runtime.writeDisabledPolicyRuleIds(ctx.db, nextDisabled)
+      ctx.db.flushSave()
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: (rule.match?.lane?.[0] as 'desktop' | 'wechat' | 'feishu' | 'automation') ?? 'desktop',
+        sessionId: 'settings',
+        key: `policyRuleEnabled.${ruleId}`,
+        before,
+        after: enabled
+      })
+      for (const l of ['desktop', 'wechat', 'feishu'] as const) await pushExposureToolsChanged(l)
+      return { ok: true as const }
+    }
+  )
+
+  ipcMain.handle('security:list-cache', async () => {
+    const { SqliteDecisionCache } = await securityDeps()
+    const { getDbConnection } = await import('./database')
+    return new SqliteDecisionCache(getDbConnection(ctx.db)).list()
+  })
+
+  ipcMain.handle('security:clear-cache', async (_e, payload: { key?: unknown }) => {
+    const { SqliteDecisionCache } = await securityDeps()
+    const { getDbConnection } = await import('./database')
+    const { canonicalKeyJson } = await import('./confirmation/sqliteDecisionCache')
+    const cache = new SqliteDecisionCache(getDbConnection(ctx.db))
+    const audit = getSecurityAuditLog()
+    // 清除即"下次再问"（§7 第 4 区）；单条/全部均落 cache.clear 审计
+    const key = payload?.key && typeof payload.key === 'object' ? (payload.key as never) : null
+    const cleared = key ? cache.clear(key) : cache.clearAll()
+    // B6/B7：decision_cache 与旧信任存储（shell 信任命令 / 浏览器域名信任）双源生效，
+    // 清除必须联动撤销旧存储，否则信任永久生效、不可见、不可撤销（fail-open）。
+    const legacyRevoked = key
+      ? revokeLegacyTrustForCacheKey(ctx.db, key)
+      : revokeAllLegacyTrust(ctx.db)
+    ctx.db.flushSave()
+    audit.record({
+      ts: Date.now(),
+      event: 'cache.clear',
+      lane: 'desktop',
+      sessionId: 'settings',
+      cacheKey: key ? canonicalKeyJson(key) : '*',
+      reason: key ? undefined : 'clear-all',
+      actor: 'user'
+    })
+    return { ok: true as const, cleared, legacyRevoked }
+  })
+
+  ipcMain.handle('security:query-audit', async (_e, payload: unknown) => {
+    const { querySecurityAuditLog } = await import('./confirmation/securityAuditReader')
+    const { getSecurityAuditLogDir } = await import('./confirmation/audit')
+    const dir = getSecurityAuditLogDir()
+    if (!dir) return []
+    const q = (payload && typeof payload === 'object' ? payload : {}) as {
+      since?: number
+      until?: number
+      lane?: 'desktop' | 'wechat' | 'feishu' | 'automation'
+      event?: string
+      toolName?: string
+      limit?: number
+    }
+    return querySecurityAuditLog(dir, q)
+  })
+
+  ipcMain.handle('security:get-audit-retention', async () => {
+    const { runtime } = await securityDeps()
+    return runtime.readSecurityAuditRetentionDays(ctx.db)
+  })
+
+  ipcMain.handle('security:set-audit-retention', async (_e, payload: { days?: unknown }) => {
+    const { runtime, auditMod, recordSettingsChange } = await securityDeps()
+    const days = typeof payload?.days === 'number' ? Math.floor(payload.days) : Number.NaN
+    if (!Number.isFinite(days) || days < 1 || days > 3650) {
+      return { ok: false as const, error: 'invalid retention days' }
+    }
+    const before = runtime.readSecurityAuditRetentionDays(ctx.db)
+    runtime.writeSecurityAuditRetentionDays(ctx.db, days)
+    ctx.db.flushSave()
+    auditMod.setSecurityAuditRetentionDays(days)
+    if (before !== days) {
+      recordSettingsChange(getSecurityAuditLog(), {
+        kind: 'policy-change',
+        lane: 'desktop',
+        sessionId: 'settings',
+        key: 'securityAudit.retentionDays',
+        before,
+        after: days
+      })
+    }
+    return { ok: true as const }
+  })
+
   ipcMain.handle(
     'config:set',
     async (
@@ -959,8 +1369,29 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             to: payload.tools.confirmMode,
             timestamp: Date.now()
           })
+          // §5.6-6：确认模式变更落 settings.policy-change（含新旧值）
+          recordSettings({
+            kind: 'policy-change',
+            lane: 'desktop',
+            key: 'tools.confirmMode',
+            before: cur.confirmMode,
+            after: payload.tools.confirmMode
+          })
         }
         const next = mergeToolsConfig({ ...cur, ...payload.tools })
+        // §5.6-6：deniedTools 变更落 settings.tool-toggle（含新旧值）
+        if (
+          payload.tools.deniedTools !== undefined &&
+          JSON.stringify(payload.tools.deniedTools) !== JSON.stringify(cur.deniedTools)
+        ) {
+          recordSettings({
+            kind: 'tool-toggle',
+            lane: 'desktop',
+            key: 'deniedTools',
+            before: cur.deniedTools,
+            after: payload.tools.deniedTools
+          })
+        }
         setConfigValue(ctx.db, CONFIG_KEYS.tools, JSON.stringify(next))
       }
       if (payload.skills !== undefined) {
@@ -990,9 +1421,36 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
       }
       if (payload.feishu !== undefined) {
+        // §5.6-6：链路硬约束/确认开关变更落 settings.policy-change（含新旧值）
+        const prevFeishu = readFeishuConfigFromDb(ctx.db)
+        for (const key of [
+          'remoteAllowLocalWrite',
+          'remoteDenyOutbound',
+          'remoteScriptRequiresConfirm',
+          'remoteBrowserNavigateRequiresConfirm',
+          'remoteBrowserActRequiresConfirm'
+        ] as const) {
+          const nextVal = payload.feishu[key]
+          if (nextVal !== undefined && nextVal !== prevFeishu[key]) {
+            recordSettings({ kind: 'policy-change', lane: 'feishu', key, before: prevFeishu[key], after: nextVal })
+          }
+        }
         persistFeishuConfig(ctx.db, payload.feishu)
       }
       if (payload.wechat !== undefined) {
+        const prevWechat = readWeChatConfigFromDb(ctx.db)
+        for (const key of [
+          'remoteAllowLocalWrite',
+          'remoteDenyOutbound',
+          'remoteScriptRequiresConfirm',
+          'remoteBrowserNavigateRequiresConfirm',
+          'remoteBrowserActRequiresConfirm'
+        ] as const) {
+          const nextVal = payload.wechat[key]
+          if (nextVal !== undefined && nextVal !== prevWechat[key]) {
+            recordSettings({ kind: 'policy-change', lane: 'wechat', key, before: prevWechat[key], after: nextVal })
+          }
+        }
         persistWeChatConfig(ctx.db, payload.wechat)
       }
       if (payload.workDirProfiles !== undefined) {
@@ -1018,8 +1476,21 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         )
       }
       if (payload.browser !== undefined) {
+        const prevBrowser = readBrowserConfigFromDb(ctx.db)
+        // §5.6-6：浏览器信任域名清单变更落 settings.policy-change（含新旧值）
+        for (const key of ['trustedDomains', 'actTrustedDomains'] as const) {
+          const nextVal = payload.browser[key]
+          if (nextVal !== undefined && JSON.stringify(nextVal) !== JSON.stringify(prevBrowser[key] ?? [])) {
+            recordSettings({
+              kind: 'policy-change',
+              lane: 'desktop',
+              key: `browser.${key}`,
+              before: prevBrowser[key] ?? [],
+              after: nextVal
+            })
+          }
+        }
         if (payload.browser.trustedDomains !== undefined) {
-          const prevBrowser = readBrowserConfigFromDb(ctx.db)
           const prevSet = new Set((prevBrowser.trustedDomains ?? []).map((d) => d.toLowerCase()))
           const nextSet = new Set(
             (payload.browser.trustedDomains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean)
@@ -1060,6 +1531,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()
+      // exposure 重推：配置变更后主进程重新求值并推送桌面链路清单（§5.2 exposure 定稿）
+      await pushExposureToolsChanged('desktop')
     }
   )
 

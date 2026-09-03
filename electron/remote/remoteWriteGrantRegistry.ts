@@ -2,6 +2,11 @@
  * Remote session-scoped write authorization (WP1).
  * Grants bind channel + owner + originSessionId + workDirProfileId + authorizationGeneration.
  * Budget: 30 min / 500 writes / 50 MiB. In-memory only — gone on app restart.
+ *
+ * 注意（B3 评审遗留）：新确认框架下 issue/reserve 已无生产调用方（远程写免确认改由
+ * decision_cache 的 remote-write 会话键 + recheckRemoteWriteAuthorization 复核承载）；
+ * 本模块仅保留 revoke 路径供撤销联动（remoteAuthorizationRegistry.invalidate → revokeByChannel /
+ * revokeByOriginSession）。如需恢复预算/次数语义，应优先在缓存键 TTL 与复核层补齐，而非复活本模块。
  */
 
 import { randomBytes } from 'crypto'

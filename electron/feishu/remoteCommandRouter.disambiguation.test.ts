@@ -98,7 +98,7 @@ describe('RemoteCommandRouter workdir disambiguation identity', () => {
         markExecuting,
         markCompleted
       }) as never,
-      confirmManager: { tryResolveFromInbound: () => false } as never,
+      imChannel: { tryResolveFromInboundMessage: () => false } as never,
       auditLogger: { append: auditAppend } as never,
       getFeishuConfig: () =>
         mergeFeishuConfig({
@@ -336,7 +336,7 @@ describe('RemoteCommandRouter markExecuting gate', () => {
         markExecuting,
         markCompleted
       } as never,
-      confirmManager: { tryResolveFromInbound: () => false } as never,
+      imChannel: { tryResolveFromInboundMessage: () => false } as never,
       auditLogger: { append: auditAppend } as never,
       getFeishuConfig: () =>
         mergeFeishuConfig({

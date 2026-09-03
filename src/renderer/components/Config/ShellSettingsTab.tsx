@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
 import { ConfigSettingsStack } from './ConfigField'
 import { Info } from 'lucide-react'
@@ -31,16 +30,9 @@ function SensitivePrefixesHelp() {
   )
 }
 
-function formatTrustDate(ts: number | undefined): string {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleString()
-}
-
 export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, shellTest }: Props) {
-  const { modal } = App.useApp()
   const { t } = useTypedTranslation('config')
   const { t: tCommon } = useTypedTranslation('common')
-  const [selectedTrustIds, setSelectedTrustIds] = useState<string[]>([])
 
   const builtinDenyDisplay = [
     { pattern: 'sudo:*', reason: t('shell.builtinDenyReason.privilege') },
@@ -50,40 +42,6 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
   ]
 
   const patch = (partial: Partial<ShellConfig>) => onChange((s) => ({ ...s, ...partial }))
-
-  const syncTrustedCommands = async () => {
-    const res = await window.api.shellManageTrustedCommands({ action: 'list' })
-    if (res.ok) patch({ trustedCommands: res.commands })
-  }
-
-  useEffect(() => {
-    void syncTrustedCommands()
-  }, [])
-
-  const removeSelectedTrusted = async () => {
-    if (!selectedTrustIds.length) return
-    const res = await window.api.shellManageTrustedCommands({ action: 'remove', ids: selectedTrustIds })
-    if (res.ok) {
-      patch({ trustedCommands: res.commands })
-      setSelectedTrustIds([])
-    }
-  }
-
-  const cleanExpiredTrusted = async () => {
-    const expiredCount = (shell.trustedCommands ?? []).filter((c) => c.expired).length
-    if (!expiredCount) return
-    modal.confirm({
-      title: t('shell.trust.cleanExpired'),
-      content: t('shell.trust.cleanExpiredConfirm', { count: expiredCount }),
-      onOk: async () => {
-        const res = await window.api.shellManageTrustedCommands({ action: 'cleanExpired' })
-        if (res.ok) {
-          patch({ trustedCommands: res.commands })
-          setSelectedTrustIds([])
-        }
-      }
-    })
-  }
 
   const addRule = () => {
     const id = `rule-${Date.now()}`
@@ -110,69 +68,6 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
         message={t('shell.boundaryTitle')}
         description={t('shell.boundaryDescription')}
       />
-
-      <div className="config-shell-section">
-        <div className="config-skill-section-header">
-          <strong>{t('shell.trust.title')}</strong>
-          <Space size="small">
-            <Button size="small" disabled={!selectedTrustIds.length} onClick={() => void removeSelectedTrusted()}>
-              {t('shell.trust.batchDelete')}
-            </Button>
-            <Button size="small" onClick={() => void cleanExpiredTrusted()}>
-              {t('shell.trust.cleanExpired')}
-            </Button>
-            <Button size="small" onClick={() => void syncTrustedCommands()}>
-              {t('shell.trust.refresh')}
-            </Button>
-          </Space>
-        </div>
-        <p className="config-field__hint">{t('shell.trust.hint')}</p>
-        <Table
-          size="small"
-          pagination={false}
-          rowKey="id"
-          rowSelection={{
-            selectedRowKeys: selectedTrustIds,
-            onChange: (keys) => setSelectedTrustIds(keys as string[])
-          }}
-          dataSource={shell.trustedCommands ?? []}
-          locale={{ emptyText: t('shell.trust.empty') }}
-          columns={[
-            {
-              title: t('shell.columnPattern'),
-              render: (_, row) => {
-                const scope =
-                  row.schemaVersion === 2 && row.executable
-                    ? [row.executable, ...(row.fixedArgvPrefix ?? [])].join(' ') +
-                      (row.trailingArgv === 'exact' ? '' : ' …')
-                    : row.command ?? ''
-                return scope
-              }
-            },
-            {
-              title: t('shell.trust.source'),
-              width: 100,
-              render: (_, row) => row.source ?? '—'
-            },
-            {
-              title: t('shell.trust.lastUsed'),
-              dataIndex: 'lastUsedAt',
-              width: 180,
-              render: (_, row) => formatTrustDate(row.lastUsedAt ?? row.createdAt)
-            },
-            {
-              title: t('shell.trust.status'),
-              width: 120,
-              render: (_, row) => {
-                if (row.expired) return t('shell.trust.expired')
-                if (row.legacyStatus === 'converted-pending-review') return t('shell.trust.pendingReview')
-                if (row.legacyStatus === 'invalid') return t('shell.trust.invalid')
-                return '—'
-              }
-            }
-          ]}
-        />
-      </div>
 
       <Form.Item label={t('shell.defaultTimeoutLabel')}>
         <InputNumber

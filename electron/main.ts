@@ -50,6 +50,10 @@ import { attachWindowMaximizeEvents, registerWindowControlsIpc } from './windowC
 import { isAllowedExternalUrl, openExternalLink } from './externalLink'
 import { createWorkDirManager, resolveWorkDirForSession, type WorkDirManager } from './workDirManager'
 import { FloatingNotificationManager } from './floatingNotificationManager'
+import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceHooks'
+import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
+import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
+import { getSecurityAuditLog } from './confirmation/audit'
 
 let floatingManager: FloatingNotificationManager | null = null
 
@@ -302,6 +306,13 @@ app.whenReady().then(() => {
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
+
+  // 确认框架启动维护（§5.3/§6，DB 初始化之后、审计 logger 就绪之后）：
+  // 先做一次性的存量豁免迁移（版本门控、幂等、失败不阻塞），再做启动缓存清理
+  // （清空会话级条目 = "进程消亡即失效"语义等价物 + 过期/休眠清理）。
+  runExemptionMigrationOnce(db, { audit: getSecurityAuditLog() })
+  runMcpConfirmPolicyMigrationOnce(db, { audit: getSecurityAuditLog() })
+  runStartupDecisionCacheCleanup(db)
 
   const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))
 

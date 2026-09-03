@@ -2,6 +2,7 @@ export const CURRENT_SCHEMA_VERSION = 1
 
 import type { BrowserDependencyToolError } from './browserTypes'
 import type { AppLocale } from './locale'
+import { getBuiltinToolMetadata } from './builtinToolMetadata'
 
 export type { AppLocale }
 
@@ -241,15 +242,13 @@ export interface ShellConfig {
   /** plain：v1 纯文本；terminal：xterm + scrollback（默认） */
   outputMode?: ShellOutputMode
   trustedCommands?: TrustedShellCommand[]
-  autoAllowScriptExecution?: boolean
 }
 
 export const DEFAULT_SHELL_CONFIG: ShellConfig = {
   enabled: false,
   shellDefaultTimeoutSec: 300,
   maxInlineOutputBytes: 102400,
-  outputMode: 'terminal',
-  autoAllowScriptExecution: false
+  outputMode: 'terminal'
 }
 
 export function mergeShellConfig(partial?: Partial<ShellConfig> | null): ShellConfig {
@@ -490,37 +489,14 @@ export interface SkillActivationLogEntry {
 }
 
 export function builtinToolRiskLevel(name: string): ToolRiskLevel {
-  switch (name) {
-    case 'read_file':
-    case 'list_directory':
-    case 'grep':
-    case 'read_feishu_attachment':
-    case 'browser':
-    case 'browser_detect':
-    case 'list_work_dirs':
-    case 'switch_work_dir':
-    case 'switch_session':
-      return 'low'
-    case 'edit_file':
-    case 'write_file':
-      return 'medium'
-    case 'run_script':
-    case 'run_lark_cli':
-    case 'run_shell':
-      return 'high'
-    default:
-      return 'medium'
-  }
+  // 读元数据：riskLevel 与既有返回值严格一致（P0 对外行为不变）
+  return getBuiltinToolMetadata(name)?.riskLevel ?? 'medium'
 }
 
 export function builtinToolNeedsConfirmation(name: string): boolean {
-  return (
-    name === 'edit_file' ||
-    name === 'write_file' ||
-    name === 'run_script' ||
-    name === 'run_lark_cli' ||
-    name === 'run_shell'
-  )
+  const meta = getBuiltinToolMetadata(name)
+  if (!meta) return false
+  return meta.actionClass === 'write' || meta.actionClass === 'execute'
 }
 
 export interface AutoApprovedWriteMeta {
@@ -547,6 +523,8 @@ export interface ToolCallRecord {
   result?: ToolCallResultPersisted
   status: ToolCallStatus
   riskLevel: ToolRiskLevel
+  /** 确认卡片可选的"记忆档位"（由主进程决策引擎下发，无则不展示选择器）。 */
+  memoryTiers?: import('./confirmation/types').MemoryTier[]
   /** 确认阶段由主进程下发的 diff，仅会话内使用 */
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
   /** run_shell 路径/安全警示（确认卡片展示） */

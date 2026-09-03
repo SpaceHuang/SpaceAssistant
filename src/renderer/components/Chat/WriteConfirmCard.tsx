@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { FileConfirmMode, ToolCallRecord } from '../../../shared/domainTypes'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { ConfirmCardCollapsible } from './ConfirmCardCollapsible'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
+import { MemoryTierSelect } from './MemoryTierSelect'
 import { pathBasename } from './toolCallDisplay'
 import { buildUnifiedDiffLines, diffLineStats, type DiffLine } from './writeConfirmDiff'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -43,6 +44,7 @@ function capDiffLines(lines: DiffLine[], max: number, truncatedLine: string): { 
 
 export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
   const { t } = useTypedTranslation('chat')
+  const [memoryTier, setMemoryTier] = useState<number | null>(null)
 
   const { oldText, newText, path } = useMemo(
     () => resolveDiffContent(record, confirmMode),
@@ -64,6 +66,12 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
       : t('confirm.write.writeAction', { fileName })
 
   const fallback = record.autoApproveFallback
+  const memoryTierOptions = (record.memoryTiers ?? []).map((mt, i) => ({ label: mt.label, tier: i + 1 }))
+  const handleConfirm: ToolConfirmHandler = (approved, options) => {
+    const sel = memoryTier
+    const selected = approved && sel != null ? record.memoryTiers?.[sel - 1]?.key : undefined
+    onConfirm(approved, { ...options, ...(selected ? { memoryTier: selected } : {}) })
+  }
 
   return (
     <div className="write-confirm-card">
@@ -76,7 +84,7 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
         actionSummary={actionSummary}
         allowLabel={t('confirm.write.allow')}
         denyLabel={t('confirm.write.deny')}
-        onConfirm={onConfirm}
+        onConfirm={handleConfirm}
         badges={
           add > 0 || remove > 0 ? (
             <>
@@ -113,6 +121,7 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
             </div>
           </div>
         ) : null}
+        <MemoryTierSelect options={memoryTierOptions} value={memoryTier} onChange={setMemoryTier} />
       </ConfirmCardDecision>
     </div>
   )

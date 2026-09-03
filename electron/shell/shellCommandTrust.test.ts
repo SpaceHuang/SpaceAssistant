@@ -17,7 +17,6 @@ import {
   normalizeTrustedCommandPrefix,
   persistExpiredTrustedCommandMarks,
   removeTrustedCommands,
-  shouldSkipRunScriptConfirmForAutoAllow,
   shouldSkipShellConfirmForTrust
 } from './shellCommandTrust'
 import { persistShellConfig, readShellConfigFromDb } from './shellConfigDb'
@@ -271,30 +270,6 @@ describe('shellCommandTrust', () => {
       expect(matchesTrustedCommand('npm test $(x)', shellConfig.trustedCommands)).toBe(false)
       expect(canShowShellTrustOption(analysis, 'npm test | cat')).toBe(false)
     })
-  })
-
-  it('shouldSkipRunScriptConfirmForAutoAllow when auto allow enabled', () => {
-    expect(shouldSkipRunScriptConfirmForAutoAllow({ enabled: true, shellDefaultTimeoutSec: 300 })).toBe(
-      false
-    )
-    expect(
-      shouldSkipRunScriptConfirmForAutoAllow({
-        enabled: true,
-        shellDefaultTimeoutSec: 300,
-        autoAllowScriptExecution: true
-      })
-    ).toBe(true)
-  })
-
-  it('shouldSkipShellConfirmForTrust ignores autoAllowScriptExecution', () => {
-    const analysis = askAnalysis()
-    expect(
-      shouldSkipShellConfirmForTrust('echo hi', analysis, {
-        enabled: true,
-        shellDefaultTimeoutSec: 300,
-        autoAllowScriptExecution: true
-      })
-    ).toBe(false)
   })
 
   it('confirmLegacyTrustConversion activates pending-review entries', () => {

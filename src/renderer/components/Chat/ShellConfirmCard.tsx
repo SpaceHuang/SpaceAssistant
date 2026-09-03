@@ -3,6 +3,7 @@ import { AlertTriangle } from 'lucide-react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
+import { MemoryTierSelect } from './MemoryTierSelect'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
@@ -15,6 +16,7 @@ type Props = {
 export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
   const { t } = useTypedTranslation('chat')
   const [trustChecked, setTrustChecked] = useState(false)
+  const [memoryTier, setMemoryTier] = useState<number | null>(null)
   const emptyLabel = t('tool.empty')
 
   const commandPreviewLines = (command: string): string[] => {
@@ -44,13 +46,16 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
       : hasCommandHead
         ? commandHead!
         : t('confirm.shell.executeTitle')
+  const memoryTierOptions = (record.memoryTiers ?? []).map((mt, i) => ({ label: mt.label, tier: i + 1 }))
 
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
+    const sel = memoryTier
+    const selected = approved && sel != null ? record.memoryTiers?.[sel - 1]?.key : undefined
     if (approved && trustChecked && canTrust && command.trim()) {
-      onConfirm(approved, { ...options, trustCommand: command.trim() })
+      onConfirm(approved, { ...options, trustCommand: command.trim(), ...(selected ? { memoryTier: selected } : {}) })
       return
     }
-    onConfirm(approved, options)
+    onConfirm(approved, { ...options, ...(selected ? { memoryTier: selected } : {}) })
   }
 
   return (
@@ -140,6 +145,7 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
               <span className="write-confirm-card__trust-label">{t('toolCall.confirm.trustThisCommand')}</span>
             </label>
           ) : null}
+          <MemoryTierSelect options={memoryTierOptions} value={memoryTier} onChange={setMemoryTier} />
         </div>
       </ConfirmCardDecision>
     </div>

@@ -95,7 +95,8 @@
   "toolCall": {
     "confirm": {
       "trustThisCommand": "Trust this command — don't ask again",
-      "trustThisDomain": "Trust this domain — don't ask again"
+      "trustThisDomain": "Trust this domain — don't ask again",
+      "onlyOnce": "Only this once"
     }
   },
   "toast": {

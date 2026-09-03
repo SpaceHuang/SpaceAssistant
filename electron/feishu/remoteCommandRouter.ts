@@ -7,7 +7,7 @@ import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import { readRemoteSessionIdleMinutes } from '../../src/shared/remoteSessionResolve'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
-import { FeishuConfirmManager } from './feishuConfirmManager'
+import { FeishuImChannel } from './feishuImChannel'
 import { shouldAcceptInbound } from './feishuInboundParser'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
@@ -33,10 +33,7 @@ import type { WorkDirManager } from '../workDirManager'
 import { bindSessionWorkDir, SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
-import {
-  createFeishuRequestToolConfirm,
-  FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE
-} from '../remote/remoteConfirmBridge'
+import { FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
 import {
   maskOpenId,
   parseFeishuBindProtocol,
@@ -73,7 +70,7 @@ export type RemoteCommandRouterDeps = {
   db: AppDatabase
   runner: LarkCliRunner
   processedStore: FeishuProcessedStore
-  confirmManager: FeishuConfirmManager
+  imChannel: FeishuImChannel
   auditLogger: FeishuAuditLogger
   getFeishuConfig: () => FeishuConfig
   ownerBind?: FeishuOwnerBindController
@@ -183,7 +180,7 @@ export class RemoteCommandRouter {
     logFeishuCliEvent('info', 'feishu.inbound.received', inboundSummaryForLog(msg))
 
     const ownerOpenId = readOwnerOpenIdFromAllowlist(config.remoteSenderAllowlist)
-    if (this.deps.confirmManager.tryResolveFromInbound(msg, { ownerOpenId })) return
+    if (this.deps.imChannel.tryResolveFromInboundMessage(msg, { ownerOpenId })) return
 
     const bindingActive = Boolean(this.deps.ownerBind?.isBindingActive())
     const accept = shouldAcceptInbound(msg, config, { bindingActive })
@@ -684,8 +681,7 @@ export class RemoteCommandRouter {
           messageId: msg.messageId,
           confirmPolicy: config.remoteConfirmPolicy,
           feishuConfig: config,
-          confirmManager: this.deps.confirmManager,
-          requestToolConfirm: createFeishuRequestToolConfirm(this.deps.confirmManager),
+          imChannel: this.deps.imChannel,
           confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
           larkCliRunner: this.deps.runner,
           chatId: msg.chatId,
@@ -718,7 +714,7 @@ export class RemoteCommandRouter {
             getBaseUrl: this.deps.getBaseUrl,
             getModel: this.deps.getModel,
             runner: this.deps.runner,
-            confirmManager: this.deps.confirmManager,
+            imChannel: this.deps.imChannel,
             getToolsConfig: this.deps.getToolsConfig,
             getBrowserConfig: this.deps.getBrowserConfig,
             getWikiConfig: this.deps.getWikiConfig,

@@ -7,27 +7,8 @@ import type { BrowserDetectContext } from '../../src/shared/browserTypes'
 import type { AppDatabase } from '../database'
 import type { WorkDirManager } from '../workDirManager'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
-import type { FeishuConfirmManager } from '../feishu/feishuConfirmManager'
-import type { WeChatConfirmManager } from '../wechat/weChatConfirmManager'
+import type { ImChannel } from '../confirmation/imChannel'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
-
-export type RemoteConfirmDecision = 'y' | 'n' | 'timeout'
-
-export type RemoteConfirmPayload = {
-  sessionId: string
-  toolCallId: string
-  toolName: string
-  toolInput: Record<string, unknown>
-  messageId: string
-  chatId?: string
-  userId?: string
-  inboundRaw?: IncomingMessage
-  /** When false, IM trust phrases are rejected without approving. */
-  trustEligible?: boolean
-}
-
-/** Shared confirm-manager surface used by remote session tools (pending checks). */
-export type RemoteConfirmManager = FeishuConfirmManager | WeChatConfirmManager
 
 export interface RemoteContext {
   source: 'feishu' | 'wechat'
@@ -47,9 +28,8 @@ export interface RemoteContext {
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
-  confirmManager?: RemoteConfirmManager
-  /** Platform adapter set when building remoteContext; prefer over source if/else in bridge. */
-  requestToolConfirm?: (payload: RemoteConfirmPayload) => Promise<RemoteConfirmDecision>
+  /** 合并后的 IM 确认通道单例（lane 由实例决定）；主循环经 channelFor 直接调用。 */
+  imChannel?: ImChannel
   /** Tool-loop timeout error text; platforms set when building remoteContext. */
   confirmTimeoutMessage?: string
   appendWorkDirSwitchAudit?: (profileId: string, profileName: string) => void | Promise<void>

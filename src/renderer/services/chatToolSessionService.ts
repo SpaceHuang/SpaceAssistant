@@ -13,6 +13,7 @@ import type {
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
 import { filterBuiltinToolsForRenderer } from '../../shared/toolsConfigFilter'
+import { getCachedToolExposure } from './toolExposureService'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from '../../shared/anthropicToolSanitize'
 import type { ClaudeChatCreateWithToolsPayload } from '../../shared/api'
 
@@ -33,12 +34,8 @@ export function buildToolChatPayload(args: {
   locale?: import('../../shared/locale').AppLocale
   effectiveModelForUsage?: string
 }): ClaudeChatCreateWithToolsPayload {
-  const toolsFiltered = filterBuiltinToolsForRenderer(
-    args.toolsConfig,
-    undefined,
-    args.browserConfig,
-    args.shellConfig
-  )
+  // 纯薄壳：只消费主进程下发的 exposure 清单；空窗（null）时不上行任何工具
+  const toolsFiltered = filterBuiltinToolsForRenderer(getCachedToolExposure() ?? [])
   const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
   return {
     requestId: args.requestId,

@@ -53,6 +53,7 @@ export type AgentLogEventName =
   | 'mcp.trust.session'
   | 'tool.confirm.remote_write_grant_required'
   | 'tool.confirm.authorization_revoked'
+  | 'tool.confirm.memory_tier_rejected'
   | 'remote.budget.pause'
   | 'shell.path.confirm'
   | 'shell.path.reject'
@@ -80,5 +81,14 @@ export type AgentLogEventName =
   | 'backup.tool_pairing.anomaly'
   | 'migration.tool_calls.duplicate_id'
   | 'migration.tool_calls.missing_result'
+  | 'security.audit.write_failed'
+  | 'confirmation.cache.startup_cleanup'
+  | 'confirmation.cache.startup_cleanup_failed'
+  | 'confirmation.cache.session_scope_cleared'
+  | 'confirmation.cache.session_scope_clear_failed'
+  | 'confirmation.exemption_migration.done'
+  | 'confirmation.exemption_migration.failed'
+  | 'confirmation.mcp_confirm_policy_migration.done'
+  | 'confirmation.mcp_confirm_policy_migration.failed'
 
 export type AgentLogFields = Record<string, unknown>

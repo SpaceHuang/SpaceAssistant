@@ -208,7 +208,7 @@ describe('switchSessionExecutor', () => {
     releaseRemoteSession(caller.id, 'req-inbound')
   })
 
-  it('rejects when caller has pending confirm via confirmManager', async () => {
+  it('rejects when caller has pending confirm via imChannel', async () => {
     const { db, manager } = setup()
     const caller = createSession(db, { name: 'caller', metadata: { source: 'feishu', feishuChatId: 'c1' } })
     const target = createSession(db, { name: 'target', metadata: { source: 'feishu', feishuChatId: 'c1' } })
@@ -219,9 +219,9 @@ describe('switchSessionExecutor', () => {
         messageId: 'm1',
         confirmPolicy: 'always',
         chatId: 'c1',
-        confirmManager: { hasPendingForSession: (id: string) => id === caller.id } as NonNullable<
+        imChannel: { hasPendingForSession: (id: string) => id === caller.id } as NonNullable<
           ToolExecutionContext['remoteContext']
-        >['confirmManager']
+        >['imChannel']
       })
     )
     expect(result.success).toBe(false)

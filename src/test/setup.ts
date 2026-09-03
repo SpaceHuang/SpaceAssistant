@@ -53,7 +53,9 @@ if (typeof window !== 'undefined') {
     toolOnConfirmRequest: api.toolOnConfirmRequest ?? (() => () => {}),
     toolOnResult: api.toolOnResult ?? (() => () => {}),
     workdirSwitch: api.workdirSwitch ?? (async () => ({ success: true, sessions: [] })),
-    configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig))
+    configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig)),
+    getToolExposureList: api.getToolExposureList ?? (async () => []),
+    onToolExposureChanged: api.onToolExposureChanged ?? (() => () => {})
   } as SpaceAssistantApi
 }
 

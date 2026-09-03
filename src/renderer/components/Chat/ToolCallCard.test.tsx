@@ -97,9 +97,9 @@ describe('ToolCallCard file write expand behavior', () => {
       <ToolCallCard record={writeRecord('confirming')} confirmMode="direct" onConfirm={onConfirm} />
     )
     fireEvent.click(screen.getByRole('button', { name: '允许写入' }))
-    expect(onConfirm).toHaveBeenCalledWith(true)
+    expect(onConfirm).toHaveBeenCalledWith(true, {})
     fireEvent.click(screen.getByRole('button', { name: '拒绝写入' }))
-    expect(onConfirm).toHaveBeenCalledWith(false)
+    expect(onConfirm).toHaveBeenCalledWith(false, {})
   })
 
   it('does not show per-card cancel while browser is executing', () => {

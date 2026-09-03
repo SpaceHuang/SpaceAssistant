@@ -37,8 +37,6 @@ export type McpConnectionStatus =
   | 'no-tools'
   | 'disabled'
 
-export type McpToolConfirmPolicy = 'always' | 'readonly-auto'
-
 export type McpToolAnnotations = {
   readOnlyHint?: boolean
   destructiveHint?: boolean
@@ -81,7 +79,6 @@ export interface McpServerProfile {
   }
   http?: { endpoint: string }
   enabledToolNames: string[]
-  toolConfirmPolicy: McpToolConfirmPolicy
   discoveredAt?: string
   discoveredProtocolVersion?: string
   status: McpConnectionStatus
@@ -117,7 +114,6 @@ export interface McpServerWriteInput {
   }
   http?: { endpoint: string }
   enabledToolNames: string[]
-  toolConfirmPolicy: McpToolConfirmPolicy
   createdAt?: string
   updatedAt?: string
   clearSecretKinds?: string[]
@@ -269,7 +265,6 @@ export const McpServerProfileSchema = z
       .array(z.string().min(1).max(256))
       .max(512)
       .refine(uniqueStrings, { message: 'enabledToolNames must be unique' }),
-    toolConfirmPolicy: z.enum(['always', 'readonly-auto']),
     discoveredAt: z.string().max(64).optional(),
     discoveredProtocolVersion: z.string().max(32).optional(),
     status: z.enum(MCP_CONNECTION_STATUSES),
@@ -349,7 +344,6 @@ export const McpServerWriteInputSchema = z
       .array(z.string().min(1).max(256))
       .max(512)
       .refine(uniqueStrings, { message: 'enabledToolNames must be unique' }),
-    toolConfirmPolicy: z.enum(['always', 'readonly-auto']),
     createdAt: z.string().optional(),
     updatedAt: z.string().optional(),
     clearSecretKinds: z.array(z.string().min(1).max(256)).max(64).optional()
@@ -628,20 +622,6 @@ export function trimMcpToolsForBudget(
     totalBytes += size
   }
   return { kept, dropped }
-}
-
-/**
- * MCP 工具确认策略：默认始终确认；仅当服务开启 `readonly-auto` 且工具同时满足
- * `readOnlyHint: true` 与 `destructiveHint: false` 时免确认（Server 注解只是提示，
- * 不能自动放宽默认策略）。
- */
-export function mcpToolNeedsConfirmation(
-  profile: Pick<McpServerProfile, 'toolConfirmPolicy'>,
-  tool: Pick<McpToolDescriptor, 'annotations'>
-): boolean {
-  if (profile.toolConfirmPolicy !== 'readonly-auto') return true
-  const annotations = tool.annotations
-  return !(annotations?.readOnlyHint === true && annotations.destructiveHint !== true)
 }
 
 export type McpCallArgsValidationResult = { ok: true } | { ok: false; reason: string }

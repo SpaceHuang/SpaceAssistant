@@ -92,6 +92,7 @@ import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserReco
 import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
+import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
 import { buildSystemPromptFromSkills, buildSkillRouteSignature, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
@@ -188,13 +189,15 @@ export function ChatView() {
     const svc = cfg.llmServices.find((s) => s.id === chatLlmServiceId)
     return svc?.baseUrl || cfg.baseUrl || undefined
   }, [cfg, chatLlmServiceId])
+  // exposure 清单由主进程下发；空窗（null）内不启用工具（避免清单闪空，§5.2 启动时序定稿）
+  const [exposureTools, setExposureTools] = useState<string[] | null>(() => getCachedToolExposure())
+  useEffect(() => subscribeToolExposure(setExposureTools), [])
   const useToolsApi = useMemo(
     () =>
       Boolean(
-        cfg?.tools.enabled &&
-          filterBuiltinToolsForRenderer(cfg.tools, cfg.feishu, cfg.browser).length > 0
+        cfg?.tools.enabled && exposureTools && filterBuiltinToolsForRenderer(exposureTools).length > 0
       ),
-    [cfg]
+    [cfg, exposureTools]
   )
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const viewportRef = useRef<ChatMessageViewportHandle>(null)

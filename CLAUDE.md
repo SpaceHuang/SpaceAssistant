@@ -120,6 +120,19 @@ API Key 通过 Electron 的 `safeStorage` API 加密（`electron/secureApiKey.ts
 
 初始化后会写入 `wechat.logger.startup`。写入前经 `sanitizeForLog` 与微信字段规则脱敏（不落用户消息正文、token、二维码完整 URL 等）。设置页「微信操作记录」仍使用 `{userData}/logs/wechat-audit.log`；审计写入会镜像到 `wechat.audit.*` 事件。
 
+## 排障：安全审计日志
+
+工具确认机制的判定/确认/缓存/配置变更证据写入独立文件 `SecurityAudit-{YYYYMMDD}.log`（JSON Lines），目录与 Agent 日志相同：
+
+- 开发模式（`npm run dev`）：`{项目根}/logs/`
+- 打包模式：`{workDir}/.agent/logs/`
+
+与 `FeishuCli-*` / `WeChatCli-*` / `Agent-*` 等功能日志**物理隔离**（安全审计面向追责回溯，默认保留 180 天，设置页可调）。事件族：`policy.decision` / `policy.deny-ingress` / `policy.deny-exposure` / `confirm.request` / `confirm.outcome` / `budget.exhausted` / `cache.*` / `settings.*` / `migration.*`。
+
+写入前经 `sanitizeForLog` + 安全审计字段规则脱敏：只落事实摘要与规范化签名（与缓存键同源、可对账），**不落用户消息正文、命令全文、token、secret、API Key**。写入异步缓冲批量落盘，失败降级 `agentLogger` 并重试，**不阻断工具判定与确认流程**。
+
+与飞书/微信的 `feishu-audit.log` / `wechat-audit.log`（IM 操作审计）职责不同、互不替代。
+
 ## IPC 通道参考
 
 所有通道定义在 `electron/preload.ts` 和 `electron/appIpc.ts`：

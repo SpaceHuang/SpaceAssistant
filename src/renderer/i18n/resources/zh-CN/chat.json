@@ -95,7 +95,8 @@
   "toolCall": {
     "confirm": {
       "trustThisCommand": "信任此命令，后续不再询问",
-      "trustThisDomain": "信任此域名，后续不再询问"
+      "trustThisDomain": "信任此域名，后续不再询问",
+      "onlyOnce": "仅此一次"
     }
   },
   "toast": {

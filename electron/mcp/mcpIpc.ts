@@ -59,7 +59,6 @@ function writeInputToProfile(input: McpServerWriteInput): McpServerProfile {
       : {}),
     ...(input.http ? { http: { endpoint: input.http.endpoint } } : {}),
     enabledToolNames: input.enabledToolNames,
-    toolConfirmPolicy: input.toolConfirmPolicy,
     status: 'untested',
     createdAt: input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now

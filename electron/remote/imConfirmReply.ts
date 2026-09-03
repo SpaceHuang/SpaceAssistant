@@ -4,9 +4,13 @@
  * Bare Y/N never executes.
  */
 
+import type { MemoryTier } from '../../src/shared/confirmation/types'
+
 export type ImConfirmReply =
   | { kind: 'approve'; confirmId: string }
   | { kind: 'approve_and_trust'; confirmId: string }
+  /** 记N <id>：确认并记住第 N 档（编号对应 memoryTiers 顺序）。 */
+  | { kind: 'remember'; confirmId: string; tier: number }
   | { kind: 'reject'; confirmId: string }
   | { kind: 'trust_misclick' }
   | { kind: 'usage_hint' }
@@ -54,6 +58,12 @@ export function parseImConfirmReply(raw: string): ImConfirmReply {
   }
   const confirmId = idRaw.toUpperCase()
 
+  // 记N <id>：确认并记住第 N 档（memoryTiers 编号）
+  const remember = parts[0]!.match(/^记(\d+)$/)
+  if (remember && CONFIRM_ID_RE.test(idRaw)) {
+    return { kind: 'remember', confirmId, tier: Number(remember[1]) }
+  }
+
   // Y <id> TRUST / 确认 <id> 并信任
   if (parts.length >= 3) {
     const rest = parts.slice(2).join(' ').toLowerCase()
@@ -85,10 +95,19 @@ export const IM_CONFIRM_TRUST_MISCLICK_HINT =
 export function formatImConfirmPromptFooter(opts?: {
   trustEligible?: boolean
   confirmId?: string
+  memoryTiers?: MemoryTier[]
 }): string {
   const id = opts?.confirmId ? ` ${opts.confirmId}` : ' <确认码>'
+  const base =
+    opts?.trustEligible === false
+      ? `回复 Y${id} 确认，N${id} 取消`
+      : `回复 Y${id} 确认，N${id} 取消，或 Y${id} TRUST`
+  const tiers = opts?.memoryTiers
+  if (!tiers || tiers.length === 0) return base
+  // 记忆档位（记N）：用户可确认并记住第 N 档，编号对应 memoryTiers 顺序。
+  const tierText = tiers.map((m, i) => `记${i + 1}${id} ${m.label}`).join('；')
   if (opts?.trustEligible === false) {
-    return `回复 Y${id} 确认，N${id} 取消`
+    return `回复 Y${id} 确认，N${id} 取消，或 ${tierText}`
   }
-  return `回复 Y${id} 确认，N${id} 取消，或 Y${id} TRUST`
+  return `回复 Y${id} 确认，N${id} 取消，或 Y${id} TRUST；${tierText}`
 }

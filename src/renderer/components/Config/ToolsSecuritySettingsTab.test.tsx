@@ -1,0 +1,360 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { App, ConfigProvider } from 'antd'
+import { Provider } from 'react-redux'
+import { configureStore } from '@reduxjs/toolkit'
+import { ToolsSecuritySettingsTab } from './ToolsSecuritySettingsTab'
+import configReducer from '../../store/configSlice'
+import { changeAppLocale } from '../../i18n/localeSync'
+import type { SecuritySettingsModelPayload } from '../../../shared/confirmation/settingsCenter'
+import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
+import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
+
+const MODEL: SecuritySettingsModelPayload = {
+  packages: { desktop: 'standard', wechat: 'custom', feishu: 'standard', automation: 'standard' },
+  confirmMode: 'diff',
+  deniedTools: [],
+  memoryEntries: [],
+  audit: { retentionDays: 180, haveAuditLog: true },
+  rules: [
+    {
+      id: 'im-write-ask',
+      when: 'invocation',
+      action: 'ask',
+      defaultAction: 'ask',
+      enabled: true,
+      locked: false,
+      reason: '远程链路写本地文件默认需要确认',
+      overridden: false,
+      lanes: ['wechat', 'feishu']
+    },
+    {
+      id: 'remote-shell-disabled',
+      when: 'invocation',
+      action: 'deny',
+      defaultAction: 'deny',
+      enabled: true,
+      locked: true,
+      reason: 'SHELL_REMOTE_DISABLED',
+      overridden: false,
+      lanes: ['wechat', 'feishu']
+    },
+    {
+      id: 'script-clean-allow-desktop',
+      when: 'invocation',
+      action: 'allow',
+      defaultAction: 'allow',
+      enabled: true,
+      locked: false,
+      reason: '桌面 clean 脚本免确认',
+      overridden: false,
+      lanes: ['desktop']
+    },
+    {
+      // 主进程 toRuleViews 按 confirmMode=diff 派生后的形态（diff/direct → 询问）
+      id: 'desktop-auto-approve',
+      when: 'invocation',
+      action: 'ask',
+      defaultAction: 'auto-evaluator',
+      enabled: true,
+      locked: false,
+      reason: '桌面 confirmMode=auto 时写/编辑文件的自动审批',
+      overridden: false,
+      lanes: ['desktop']
+    },
+    {
+      id: 'shell-precheck-auto-allow',
+      when: 'invocation',
+      action: 'auto-evaluator',
+      defaultAction: 'auto-evaluator',
+      enabled: true,
+      locked: false,
+      reason: 'shell 预检判定可跳过确认',
+      overridden: false
+    },
+    {
+      id: 'universal-no-lane',
+      when: 'invocation',
+      action: 'ask',
+      defaultAction: 'ask',
+      enabled: true,
+      locked: false,
+      reason: '无 lane 限定的通用规则应出现在每个链路 Tab',
+      overridden: false
+    }
+  ]
+}
+
+function renderTab(overrides?: {
+  browser?: typeof DEFAULT_BROWSER_CONFIG
+  onBrowserChange?: (next: typeof DEFAULT_BROWSER_CONFIG) => void
+  feishu?: typeof DEFAULT_FEISHU_CONFIG
+  onFeishuChange?: (next: typeof DEFAULT_FEISHU_CONFIG) => void
+}) {
+  const store = configureStore({ reducer: { config: configReducer } })
+  render(
+    <Provider store={store}>
+      <ConfigProvider>
+        <App>
+          <ToolsSecuritySettingsTab
+            active
+            browser={overrides?.browser ?? DEFAULT_BROWSER_CONFIG}
+            onBrowserChange={overrides?.onBrowserChange ?? (() => {})}
+            feishu={overrides?.feishu ?? DEFAULT_FEISHU_CONFIG}
+            onFeishuChange={overrides?.onFeishuChange ?? (() => {})}
+          />
+        </App>
+      </ConfigProvider>
+    </Provider>
+  )
+}
+
+/** 切到指定链路 Tab 并等待其规则表出现。 */
+async function openLaneTab(name: string) {
+  fireEvent.click(await screen.findByRole('tab', { name }))
+  return screen.findByRole('tabpanel')
+}
+
+describe('ToolsSecuritySettingsTab（§7 五区）', () => {
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
+    window.api = {
+      ...window.api,
+      securityGetSettingsModel: vi.fn().mockResolvedValue(MODEL),
+      securitySetPolicyPackage: vi.fn().mockResolvedValue({ ok: true }),
+      securitySetRuleOverride: vi.fn().mockResolvedValue({ ok: true }),
+      securitySetRuleEnabled: vi.fn().mockResolvedValue({ ok: true }),
+      securityRemoveRuleOverride: vi.fn().mockResolvedValue({ ok: true, removed: 1 }),
+      securityListDecisionCache: vi.fn().mockResolvedValue([
+        {
+          id: 'c1',
+          key: { kind: 'shell-command', verb: 'git status', level: 'exact' },
+          decision: 'allow',
+          lane: '*',
+          scope: 'persistent',
+          createdAt: 1,
+          lastHitAt: 1,
+          hitCount: 2,
+          source: 'user-confirm'
+        }
+      ]),
+      securityClearDecisionCache: vi.fn().mockResolvedValue({ ok: true, cleared: 1 }),
+      securityQueryAudit: vi.fn().mockResolvedValue([]),
+      securityGetAuditRetention: vi.fn().mockResolvedValue(180),
+      securitySetAuditRetention: vi.fn().mockResolvedValue({ ok: true })
+    } as typeof window.api
+  })
+
+  it('渲染各区标题（策略套餐/确认记忆/安全审计）并加载模型/记忆/审计', { timeout: 20000 }, async () => {
+    renderTab()
+    expect(await screen.findByText('策略套餐')).toBeTruthy()
+    expect(screen.getByText('确认记忆管理')).toBeTruthy()
+    expect(screen.getByText('安全审计记录')).toBeTruthy()
+    await waitFor(() => {
+      expect(window.api.securityGetSettingsModel).toHaveBeenCalled()
+      expect(window.api.securityListDecisionCache).toHaveBeenCalled()
+      expect(window.api.securityQueryAudit).toHaveBeenCalled()
+    })
+    // 记忆条目摘要展示
+    expect(await screen.findByText('git status')).toBeTruthy()
+  })
+
+  it('飞书写确认开关渲染在策略套餐区，切换时调用 onFeishuChange', { timeout: 20000 }, async () => {
+    const onFeishuChange = vi.fn()
+    renderTab({ feishu: { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }, onFeishuChange })
+    expect(await screen.findByText('飞书写操作需确认')).toBeTruthy()
+    const row = screen.getByText('飞书写操作需确认').closest('.config-field')!
+    const sw = row.querySelector('.ant-switch')!
+    expect(sw.className).not.toContain('ant-switch-checked')
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(onFeishuChange).toHaveBeenCalledWith(
+        expect.objectContaining({ larkCliWriteRequiresConfirm: true })
+      )
+    })
+  })
+
+  it('act 会话级信任开关渲染在确认记忆区，切换时调用 onBrowserChange', { timeout: 20000 }, async () => {
+    const onBrowserChange = vi.fn()
+    renderTab({ browser: { ...DEFAULT_BROWSER_CONFIG, actSessionTrustEnabled: true }, onBrowserChange })
+    expect(await screen.findByText('启用 act 会话级信任')).toBeTruthy()
+    const row = screen.getByText('启用 act 会话级信任').closest('.config-field')!
+    const sw = row.querySelector('.ant-switch')!
+    expect(sw.className).toContain('ant-switch-checked')
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(
+        expect.objectContaining({ actSessionTrustEnabled: false })
+      )
+    })
+  })
+
+  it('act 高风险关键词编辑区渲染在确认记忆区，保存时解析逗号分隔并调用 onBrowserChange', { timeout: 20000 }, async () => {
+    const onBrowserChange = vi.fn()
+    renderTab({ onBrowserChange })
+    // 记忆区在 Collapse 中，默认未展开，先点开
+    fireEvent.click(await screen.findByText('确认记忆管理'))
+    const label = await screen.findByText('高风险关键词')
+    const field = label.closest('.config-field')!
+    // 展开编辑区
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: '点击展开详情' }))
+    const textarea = within(field as HTMLElement).getByPlaceholderText('逗号分隔，如：支付, 转账, 删除')
+    fireEvent.change(textarea, { target: { value: '支付, 转账, 删除' } })
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(
+        expect.objectContaining({ actHighRiskKeywords: ['支付', '转账', '删除'] })
+      )
+    })
+    // 恢复默认
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: '恢复默认' }))
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(
+        expect.objectContaining({ actHighRiskKeywords: DEFAULT_BROWSER_CONFIG.actHighRiskKeywords })
+      )
+    })
+  })
+
+  it('关键词可清空为 0 个（空串不回退为旧值，保存为空列表）', { timeout: 20000 }, async () => {
+    const onBrowserChange = vi.fn()
+    renderTab({ onBrowserChange })
+    fireEvent.click(await screen.findByText('确认记忆管理'))
+    const label = await screen.findByText('高风险关键词')
+    const field = label.closest('.config-field')!
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: '点击展开详情' }))
+    const textarea = within(field as HTMLElement).getByPlaceholderText('逗号分隔，如：支付, 转账, 删除')
+    fireEvent.change(textarea, { target: { value: '' } })
+    // 清空后输入框保持为空，不得回显旧关键词
+    expect((textarea as HTMLTextAreaElement).value).toBe('')
+    fireEvent.click(within(field as HTMLElement).getByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => {
+      expect(onBrowserChange).toHaveBeenCalledWith(expect.objectContaining({ actHighRiskKeywords: [] }))
+    })
+  })
+
+  it('策略套餐区按链路拆 Tab：默认桌面 Tab 只展示适用规则，无硬约束开关', { timeout: 20000 }, async () => {
+    renderTab()
+    // 三个链路 Tab 标题
+    expect(await screen.findByRole('tab', { name: '桌面' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: '微信' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: '飞书' })).toBeTruthy()
+    // 默认桌面 Tab：桌面规则 + 通用规则可见，远程规则不可见
+    const panel = await screen.findByRole('tabpanel')
+    expect(await within(panel).findByText('script-clean-allow-desktop')).toBeTruthy()
+    expect(within(panel).getByText('universal-no-lane')).toBeTruthy()
+    expect(within(panel).queryByText('im-write-ask')).toBeNull()
+    expect(within(panel).queryByText('remote-shell-disabled')).toBeNull()
+    // 已移除独立的「链路硬约束」主开关，系统保护规则用「启用/不启用」开关
+    expect(within(panel).queryByText('链路硬约束')).toBeNull()
+  })
+
+  it('微信 Tab 展示系统保护规则（locked）的「启用/不启用」开关，不渲染锁定标记', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('微信')
+    expect(await within(panel).findByText('im-write-ask')).toBeTruthy()
+    expect(within(panel).getByText('remote-shell-disabled')).toBeTruthy()
+    // locked 系统保护规则用「启用/不启用」Switch，不再显示「锁定」标记
+    expect(within(panel).queryByText('锁定')).toBeNull()
+    const ruleRow = within(panel).getByText('remote-shell-disabled').closest('tr')!
+    const sw = ruleRow.querySelector('.ant-switch')!
+    expect(sw).toBeTruthy()
+    expect(sw.className).toContain('ant-switch-checked')
+    // 桌面规则不出现在微信 Tab
+    expect(within(panel).queryByText('script-clean-allow-desktop')).toBeNull()
+  })
+
+  it('系统保护规则开关切换调用 securitySetRuleEnabled（启用→不启用）', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('微信')
+    const ruleRow = (await within(panel).findByText('remote-shell-disabled')).closest('tr')!
+    const sw = ruleRow.querySelector('.ant-switch')!
+    fireEvent.click(sw)
+    await waitFor(() => {
+      expect(window.api.securitySetRuleEnabled).toHaveBeenCalledWith({
+        ruleId: 'remote-shell-disabled',
+        enabled: false
+      })
+    })
+  })
+
+  it('切换套餐调用 securitySetPolicyPackage（standard 无二次确认）', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const select = (await within(panel).findAllByRole('combobox'))[0]!
+    fireEvent.mouseDown(select)
+    fireEvent.click(await screen.findByText('严格'))
+    await waitFor(() => {
+      expect(window.api.securitySetPolicyPackage).toHaveBeenCalledWith({ lane: 'desktop', package: 'strict' })
+    })
+  })
+
+  it('非自定义链路的规则动作不可编辑（桌面 standard 只读）', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('script-clean-allow-desktop')).closest('tr')!
+    // 规则行内不渲染可选的动作 Select（仅纯文本），或 Select 处于禁用态
+    const select = row.querySelector('.ant-select')
+    if (select) expect(select.className).toContain('ant-select-disabled')
+    else expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
+  })
+
+  it('自定义套餐链路（微信）下修改规则动作调用 securitySetRuleOverride', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('微信')
+    const ruleRow = (await within(panel).findByText('im-write-ask')).closest('tr')!
+    const select = ruleRow.querySelector('.ant-select-selector')!
+    fireEvent.mouseDown(select)
+    const options = await screen.findAllByText('允许')
+    fireEvent.click(options[options.length - 1]!)
+    await waitFor(() => {
+      expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({ ruleId: 'im-write-ask', action: 'allow' })
+    })
+  })
+})
+
+describe('确认模式并入规则列表（desktop-auto-approve 与其他规则同口径）', () => {
+  it('标准套餐下 desktop-auto-approve 行显示"询问"（confirmMode=diff 派生）且禁用', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('desktop-auto-approve')).closest('tr')!
+    expect(within(row as HTMLElement).getByText('询问')).toBeTruthy()
+    const select = row.querySelector('.ant-select')!
+    expect(select.className).toContain('ant-select-disabled')
+  })
+
+  it('自定义套餐下该行为可编辑三选（询问/允许/自动），选"自动"二次确认后写规则覆盖', { timeout: 20000 }, async () => {
+    // 桌面链路切到自定义套餐
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'custom' }
+    })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('desktop-auto-approve')).closest('tr')!
+    const select = within(row as HTMLElement).getByRole('combobox')
+    expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
+    fireEvent.mouseDown(select)
+    // 选项为二字词：自动（该行不允许"拒绝"）
+    const options = await screen.findAllByText('自动')
+    fireEvent.click(options[options.length - 1]!)
+    // 自动 = 开启自动审批：保留二次确认
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认开启' }))
+    await waitFor(() => {
+      expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({
+        ruleId: 'desktop-auto-approve',
+        action: 'auto-evaluator'
+      })
+    })
+  })
+
+  it('其余 auto-evaluator 规则（shell 预检放行）同口径：自定义链路下可编辑，当前值"自动"', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('微信')
+    const row = (await within(panel).findByText('shell-precheck-auto-allow')).closest('tr')!
+    // wechat 为 custom：可编辑，当前值展示"自动"
+    const select = within(row as HTMLElement).getByRole('combobox')
+    expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
+    expect(within(row as HTMLElement).getByText('自动')).toBeTruthy()
+  })
+})

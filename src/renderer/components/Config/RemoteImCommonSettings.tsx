@@ -190,46 +190,11 @@ export function RemoteImCommonSettings({
       />
 
       <Checkbox
-        checked={value.remoteAllowLocalWrite}
-        onChange={(e) => onChange({ remoteAllowLocalWrite: e.target.checked })}
-      >
-        {t('remoteImCommon.remoteAllowLocalWrite')}
-      </Checkbox>
-
-      <Checkbox
         checked={value.remoteDenyOutbound}
         onChange={(e) => onChange({ remoteDenyOutbound: e.target.checked })}
       >
         {t('remoteImCommon.remoteDenyOutbound')}
       </Checkbox>
-
-      <ConfigSwitchRow
-        label={t('remoteImCommon.remoteScriptRequiresConfirm')}
-        hint={t('remoteImCommon.remoteScriptRequiresConfirmHint')}
-        checked={value.remoteScriptRequiresConfirm !== false}
-        onChange={(v) => onChange({ remoteScriptRequiresConfirm: Boolean(v) })}
-      />
-
-      <ConfigSwitchRow
-        label={t('remoteImCommon.remoteBrowserNavigateRequiresConfirm')}
-        hint={t('remoteImCommon.remoteBrowserNavigateRequiresConfirmHint')}
-        checked={
-          value.remoteBrowserNavigateRequiresConfirm ?? value.remoteBrowserRequiresConfirm
-        }
-        onChange={(v) =>
-          onChange({
-            remoteBrowserNavigateRequiresConfirm: Boolean(v),
-            remoteBrowserRequiresConfirm: Boolean(v)
-          })
-        }
-      />
-
-      <ConfigSwitchRow
-        label={t('remoteImCommon.remoteBrowserActRequiresConfirm')}
-        hint={t('remoteImCommon.remoteBrowserActRequiresConfirmHint')}
-        checked={value.remoteBrowserActRequiresConfirm !== false}
-        onChange={(v) => onChange({ remoteBrowserActRequiresConfirm: Boolean(v) })}
-      />
 
       <ConfigField label={t('remoteImCommon.rateLimitLabel')}>
         <InputNumber

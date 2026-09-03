@@ -3,10 +3,12 @@ import { runNpmCommand, runNpxCommand } from './npmCommandRunner'
 import { runFeishuCliWithBrowserFlow } from './feishuCliFlow'
 import type { AppDatabase } from '../database'
 import { getConfigValue, setConfigValue } from '../database'
+import { getDbConnection } from '../database'
+import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { mergeFeishuConfig, type FeishuConfig } from '../../src/shared/feishuTypes'
 import { LarkCliRunner } from './larkCliRunner'
 import { FeishuProcessedStore } from './feishuProcessedStore'
-import { FeishuConfirmManager } from './feishuConfirmManager'
+import { FeishuImChannel } from './feishuImChannel'
 import { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuEventService } from './feishuEventService'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
@@ -47,7 +49,7 @@ const ACTIVE_WORKDIR_KEY = 'config.activeWorkDirProfileId'
 export type FeishuServiceBundle = {
   runner: LarkCliRunner
   processedStore: FeishuProcessedStore
-  confirmManager: FeishuConfirmManager
+  imChannel: FeishuImChannel
   auditLogger: FeishuAuditLogger
   eventService: FeishuEventService | null
   router: RemoteCommandRouter | null
@@ -104,9 +106,16 @@ export function createFeishuBundle(deps: {
   const runner = new LarkCliRunner(() => readCfg().cliPath ?? '')
   const processedStore = new FeishuProcessedStore(userData)
   const auditLogger = new FeishuAuditLogger(userData)
-  const confirmManager = new FeishuConfirmManager(auditLogger, runner, deps.db)
+  const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db })
   remoteAuthorizationRegistry.registerPendingCancel({
-    cancelByChannel: (ch) => confirmManager.cancelByChannel(ch)
+    cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
+  })
+  // B3：授权撤销/换绑/登出时联动清空本链路会话级确认记忆（remote-write 记N 等）
+  remoteAuthorizationRegistry.registerCacheClearer({
+    clearByChannel: (ch) =>
+      ch === 'feishu'
+        ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('feishu', 'session')
+        : 0
   })
   remoteAuthorizationRegistry.registerAuditAppender((event) => {
     void auditLogger.append(event as { type: string })
@@ -141,7 +150,7 @@ export function createFeishuBundle(deps: {
     db: deps.db,
     runner,
     processedStore,
-    confirmManager,
+    imChannel,
     auditLogger,
     getFeishuConfig: readCfg,
     ownerBind,
@@ -167,7 +176,7 @@ export function createFeishuBundle(deps: {
   const eventService = new FeishuEventService(runner, (msg) => void router.handleInbound(msg), () => {})
 
   const cfg = readCfg()
-  bundle = { runner, processedStore, confirmManager, auditLogger, eventService, router, ownerBind }
+  bundle = { runner, processedStore, imChannel, auditLogger, eventService, router, ownerBind }
   syncOwnerBindWithConfig(cfg, ownerBind)
   logFeishuCliEvent('info', 'feishu.service.bundle_created', {
     hasRunner: true,
@@ -202,7 +211,7 @@ export async function autoStartFeishuEventIfNeeded(db: AppDatabase): Promise<voi
 export async function shutdownFeishuServices(): Promise<void> {
   cancelAllActiveChats()
   remoteAuthorizationRegistry.invalidate('feishu', 'service_stopped')
-  bundle?.confirmManager.cancelAllPending()
+  bundle?.imChannel.cancelAllPending()
   await bundle?.eventService?.stop()
   logFeishuCliEvent('info', 'feishu.service.shutdown', {})
   await flushFeishuCliLogger()
@@ -379,9 +388,21 @@ export function registerFeishuIpcHandlers(
 
   ipcMain.handle('feishu:event-status', async () => b.eventService?.getStatus())
 
-  ipcMain.handle('feishu:pending-confirms', async () => b.confirmManager.listPending())
+  ipcMain.handle('feishu:pending-confirms', async () =>
+    // 映射为渲染端既有 Summary 形状（kind/chatId 由 lane 字段回填）
+    b.imChannel.listPending().map((p) => ({
+      id: p.id,
+      kind: 'tool_write' as const,
+      sessionId: p.sessionId,
+      toolName: p.toolName,
+      messageId: p.messageId,
+      chatId: p.matchKey ?? '',
+      createdAt: p.createdAt,
+      expiresAt: p.expiresAt
+    }))
+  )
 
-  ipcMain.handle('feishu:cancel-confirm', async (_e, id: string) => b.confirmManager.cancel(id))
+  ipcMain.handle('feishu:cancel-confirm', async (_e, id: string) => b.imChannel.cancel(id))
 
   ipcMain.handle('feishu:audit-tail', async (_e, limit?: number) => b.auditLogger.tail(limit ?? 50))
 
@@ -393,7 +414,7 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle('feishu:health-check', async () => {
     const cli = await b.runner.detect()
     const event = b.eventService?.getStatus() ?? { state: 'stopped' as const, processedCount: 0 }
-    const pendingConfirms = b.confirmManager.countPending()
+    const pendingConfirms = b.imChannel.countPending()
     const result = {
       cli,
       event,

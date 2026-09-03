@@ -1,30 +1,12 @@
-import type { FeishuConfig } from './feishuTypes'
-import type { BrowserConfig, ShellConfig, ToolsConfig } from './domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from './builtinToolDefinitions'
 
+/**
+ * 渲染端薄壳：只消费主进程评估下发的可见工具清单（exposure 规则、deniedTools、
+ * 各开关均已在主进程生效），不再维护镜像 if 链（§5.2 exposure 定稿）。
+ */
 export function filterBuiltinToolsForRenderer(
-  cfg: ToolsConfig,
-  feishu?: FeishuConfig | null,
-  browserConfig?: BrowserConfig | null,
-  shellConfig?: ShellConfig | null
+  visibleTools: readonly string[]
 ): typeof BUILTIN_TOOL_DEFINITIONS {
-  if (!cfg.enabled) return []
-  let list = BUILTIN_TOOL_DEFINITIONS.filter((t) => {
-    if (cfg.deniedTools.includes(t.name)) return false
-    if (cfg.allowedTools.length > 0 && !cfg.allowedTools.includes(t.name)) return false
-    return true
-  })
-  if (!shellConfig?.enabled) {
-    list = list.filter((t) => t.name !== 'run_shell')
-  }
-  if (!feishu?.enabled) {
-    list = list.filter((t) => t.name !== 'run_lark_cli' && t.name !== 'read_feishu_attachment')
-  }
-  if (feishu?.integrationMode === 'mcp') {
-    list = list.filter((t) => t.name !== 'run_lark_cli')
-  }
-  if (!browserConfig?.enabled) {
-    list = list.filter((t) => t.name !== 'browser')
-  }
-  return list
+  const visible = new Set(visibleTools)
+  return BUILTIN_TOOL_DEFINITIONS.filter((t) => visible.has(t.name))
 }

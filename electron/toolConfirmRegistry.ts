@@ -1,8 +1,13 @@
+import type { CacheKey, MemoryTier } from '../src/shared/confirmation/types'
+import { canonicalKeyJson } from './confirmation/sqliteDecisionCache'
+
 export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout'
 
 type Waiter = {
   resolve: (v: ToolConfirmOutcome) => void
   timeoutId: ReturnType<typeof setTimeout>
+  /** 本次待确认请求决策层给出的记忆档位（规范化键集合）；无档位时不接受任何 memoryTier。 */
+  memoryKeys?: Set<string>
 }
 
 const CONFIRM_MS = 5 * 60 * 1000
@@ -13,15 +18,35 @@ export function confirmKey(requestId: string, toolUseId: string): string {
   return `${requestId}\0${toolUseId}`
 }
 
-export function waitForToolConfirm(requestId: string, toolUseId: string): Promise<ToolConfirmOutcome> {
+export function waitForToolConfirm(
+  requestId: string,
+  toolUseId: string,
+  memoryTiers?: MemoryTier[]
+): Promise<ToolConfirmOutcome> {
   const key = confirmKey(requestId, toolUseId)
   return new Promise<ToolConfirmOutcome>((resolve) => {
     const timeoutId = setTimeout(() => {
       pending.delete(key)
       resolve('timeout')
     }, CONFIRM_MS)
-    pending.set(key, { resolve, timeoutId })
+    pending.set(key, {
+      resolve,
+      timeoutId,
+      ...(memoryTiers?.length
+        ? { memoryKeys: new Set(memoryTiers.map((t) => canonicalKeyJson(t.key))) }
+        : {})
+    })
   })
+}
+
+/**
+ * 校验渲染端回传的 memoryTier 是否属于该待确认请求决策层给出的档位（B1）。
+ * 无 pending 请求、请求未登记档位、或键不在档位内时一律 false（fail-closed）。
+ */
+export function isPendingMemoryTier(requestId: string, toolUseId: string, key: CacheKey): boolean {
+  const w = pending.get(confirmKey(requestId, toolUseId))
+  if (!w?.memoryKeys) return false
+  return w.memoryKeys.has(canonicalKeyJson(key))
 }
 
 export function submitToolConfirmResponse(requestId: string, toolUseId: string, approved: boolean): void {

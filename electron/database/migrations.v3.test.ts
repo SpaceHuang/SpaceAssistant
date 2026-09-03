@@ -17,7 +17,7 @@ function artifactTables(conn: ReturnType<typeof getDbConnection>): string[] {
   return rows.map((r) => r.name).filter((name) => (ARTIFACT_TABLES as readonly string[]).includes(name))
 }
 
-describe('schema v3 migrations (artifact table removal)', () => {
+describe('schema migrations: artifact table removal (库最终落在 v4)', () => {
   const dirs: string[] = []
 
   afterEach(() => {
@@ -33,7 +33,7 @@ describe('schema v3 migrations (artifact table removal)', () => {
   it('creates a v3 database directly from v1 without artifact tables', () => {
     const db = openSqliteDatabase(':memory:')
     const conn = getDbConnection(db)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('3')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
     expect(artifactTables(conn)).toEqual([])
     expect(
       conn.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_artifacts%'").all()
@@ -110,9 +110,9 @@ describe('schema v3 migrations (artifact table removal)', () => {
 
     const db = openSqliteDatabase(dbPath)
     const conn = getDbConnection(db)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('3')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
     expect(artifactTables(conn)).toEqual([])
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('3')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
     expect((conn.prepare('SELECT COUNT(*) AS c FROM sessions').get() as { c: number }).c).toBe(1)
     expect((conn.prepare('SELECT COUNT(*) AS c FROM configs').get() as { c: number }).c).toBe(1)
     expect(getSchemaMeta(conn, SCHEMA_META_KEYS.migratedFromJsonAt)).toBeUndefined()
@@ -126,7 +126,7 @@ describe('schema v3 migrations (artifact table removal)', () => {
     openSqliteDatabase(dbPath).close()
     const second = openSqliteDatabase(dbPath)
     const conn = getDbConnection(second)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('3')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
     expect(artifactTables(conn)).toEqual([])
     second.close()
   })
@@ -146,7 +146,7 @@ describe('schema v3 migrations (artifact table removal)', () => {
 
     const db = openSqliteDatabase(dbPath)
     const conn = getDbConnection(db)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('3')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
     expect(artifactTables(conn)).toEqual([])
     db.close()
   })

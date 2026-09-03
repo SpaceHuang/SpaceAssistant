@@ -304,7 +304,6 @@ describe('mcpOauthService', () => {
         auth: { mode: 'oauth', oauthClientId: 'manual-client' },
         http: { endpoint },
         enabledToolNames: ['t'],
-        toolConfirmPolicy: 'always'
       }
     ])
     return 'server-1'
@@ -395,7 +394,6 @@ describe('mcpOauthService', () => {
       auth: { mode: 'oauth', secretPresent: false, oauthClientId: 'manual-client' },
       http: { endpoint },
       enabledToolNames: [],
-      toolConfirmPolicy: 'always',
       status: 'untested',
       createdAt: '2026-08-28T00:00:00.000Z',
       updatedAt: '2026-08-28T00:00:00.000Z'
@@ -422,7 +420,6 @@ describe('mcpOauthService', () => {
         auth: { mode: 'oauth' },
         http: { endpoint },
         enabledToolNames: [],
-        toolConfirmPolicy: 'always'
       }
     ])
 

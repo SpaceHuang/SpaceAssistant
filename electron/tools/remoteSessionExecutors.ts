@@ -45,7 +45,7 @@ function sessionIdentityMatches(target: ReturnType<typeof getSession>, remoteCon
 }
 
 function hasPendingConfirm(remoteContext: RemoteContext, sessionId: string): boolean {
-  return remoteContext.confirmManager?.hasPendingForSession(sessionId) ?? false
+  return remoteContext.imChannel?.hasPendingForSession(sessionId) ?? false
 }
 
 export const switchSessionExecutor: ToolExecutor = {

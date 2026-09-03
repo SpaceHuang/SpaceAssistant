@@ -5,7 +5,7 @@ import { WeChatCommandRouter } from './weChatCommandRouter'
 import { makeIncomingMessage } from './__mocks__/wechatBotMock'
 import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
-import { WeChatConfirmManager } from './weChatConfirmManager'
+import { WeChatImChannel } from './weChatImChannel'
 import fs from 'fs/promises'
 import fsSync from 'fs'
 import os from 'os'
@@ -78,7 +78,7 @@ describe('WeChatCommandRouter', () => {
         getRawBot: () => null
       } as never,
       processedStore: processed,
-      confirmManager: new WeChatConfirmManager(),
+      imChannel: new WeChatImChannel(),
       auditLogger: audit,
       getWeChatConfig: () => ({
         ...DEFAULT_WECHAT_CONFIG,
@@ -130,7 +130,7 @@ describe('WeChatCommandRouter', () => {
         getRawBot: () => null
       } as never,
       processedStore: processed,
-      confirmManager: new WeChatConfirmManager(),
+      imChannel: new WeChatImChannel(),
       auditLogger: audit,
       getWeChatConfig: () => ({
         ...DEFAULT_WECHAT_CONFIG,
@@ -168,7 +168,7 @@ describe('WeChatCommandRouter', () => {
         getRawBot: () => null
       } as never,
       processedStore: processed,
-      confirmManager: new WeChatConfirmManager(),
+      imChannel: new WeChatImChannel(),
       auditLogger: audit,
       getWeChatConfig: () => ({
         ...DEFAULT_WECHAT_CONFIG,
@@ -237,7 +237,7 @@ describe('WeChatCommandRouter', () => {
         getRawBot: () => null
       } as never,
       processedStore: processed,
-      confirmManager: new WeChatConfirmManager(),
+      imChannel: new WeChatImChannel(),
       auditLogger: audit,
       getWeChatConfig: () => ({
         ...DEFAULT_WECHAT_CONFIG,
