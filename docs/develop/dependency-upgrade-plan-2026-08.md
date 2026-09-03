@@ -144,3 +144,47 @@ Phase 3  Electron 40 → 44、平台下线确认与工具链升级
 - macOS x64 / arm64 探针与安装包验收：由 CI `sqlite-electron-probe` 矩阵（windows-latest、macos-15-intel、macos-latest）执行探针；macOS DMG 首次启动与已有数据库读写需人工在真机验收。责任人：发布负责人；回归路径：CI 探针日志 + `npm run pack:mac` 产物人工冒烟。
 - 旧数据库副本验证（真实 `userData/spaceassistant-data.db` 及其 `-wal`/`-shm` 复制到隔离目录做启动/读写/关闭）：需人工在装有旧版本数据的机器上执行。责任人：发布负责人；回归路径：升级安装包首次启动冒烟。
 - Windows x64 安装包（NSIS）首次启动与已有数据库读写：同上，人工验收。
+
+## 附录 B：Phase 2 实施记录（2026-09-04）
+
+实施分支 `chore/dependency-upgrade`（worktree `.worktrees/dep-upgrade`），基于 Phase 1 提交 `b4d4daa`。
+
+### 精确依赖版本
+
+- `electron` **35.7.5 → 40.10.6**（devDependency，40 通道最新稳定 patch，来源 `npm view electron versions`；lockfile 记录精确版本）。
+- `@types/node` **^22.20.1 → ^24.13.3**（Electron 40 内嵌 Node 24 的类型基线）。
+- `engines`（package.json 未声明）与 CI/release workflow 的 Node **22 保持不变**（`.github/workflows/ci.yml`、`release.yml` 未改动）。
+- 无 peer/类型冲突：`@types/node@^24` 升级后主进程全量编译（`tsc -p tsconfig.electron.json`）与两项 typecheck 均零错误，未出现需要降版或改代码的冲突。
+
+### §3 影响矩阵 Electron 36–40 逐行结论（检索于升级前代码基线）
+
+- **36**（`app.commandLine` 行为、`PrinterInfo`、`Session.clearStorageData`、session 扩展 API、GTK4）：检索 `app.commandLine|clearStorageData|PrinterInfo|session\.(loadExtension|removeExtension|getAllExtensions)|isAeroGlassEnabled`（范围 `electron/ src/ scripts/`），**输出为空**。应用不注册命令行开关、不打印、不清除站点存储、不加载浏览器扩展。GTK4 为 Linux-only，Linux 桌面端不在支持面，不适用。闭环，无需修复。
+- **37**（utility process 未处理拒绝/同步退出、WebUSB/WebSerial、`ProtocolResponse.session`、Linux workspace 可见性）：检索 `utilityProcess|WebUSB|WebSerial|ProtocolResponse|IsVisibleOnAllWorkspaces`，**输出为空**。未使用 utilityProcess（工具循环在主次进程内）、未申请 WebUSB/WebSerial 权限、未自定义 protocol 响应。Linux workspace 可见性为 Linux-only，不适用。闭环，无需修复。
+- **38**（`ELECTRON_OZONE_PLATFORM_HINT`、`ORIGINAL_XDG_CURRENT_DESKTOP`、macOS 11、`plugin-crashed`、webFrame 路由 API）：全仓检索上述环境变量与 `plugin-crashed|webFrame\.routingId|findFrameByRoutingId`，**代码输出为空**（仅本计划文档自身命中）。两个环境变量为 Linux-only，不适用；未使用 Pepper 插件与 webFrame 路由 API。macOS 11：产品发布面本就只声明 Windows x64、macOS x64/arm64，未承诺 macOS 11 最低版本，Electron 38 起最低 macOS 12 与发布面无冲突。闭环，无需修复。
+- **39**（`--host-rules`、`window.open` popup 可调整大小、macOS 音频捕获声明）：检索 `host-rules|window\.open|setWindowOpenHandler|desktopCapturer|NSAudioCaptureUsageDescription`：
+  - `host-rules`、`setWindowOpenHandler`、`desktopCapturer`、`NSAudioCaptureUsageDescription` 无命中（不做屏幕捕获、不做音频捕获、未注册弹窗处理器、未传 host-rules）。
+  - **命中**：`src/renderer/services/openExternalUrl.ts:14` 及其测试使用 `window.open(url, '_blank', 'noopener,noreferrer')` 作为 `appOpenExternal` IPC 不可用时的回退。Electron 39 的变化是 popup 默认可调整大小；该路径意图是交给系统浏览器打开外链，弹窗是否可调整大小不影响功能，且正常路径走 `shell.openExternal`。**处理：记录为已知行为差异，不改代码**；外链打开归入人工冒烟矩阵。
+- **40**（renderer 直接 Electron `clipboard` 弃用、dSYM 改 tar.xz）：检索 renderer/preload 的 `from 'electron'|require\('electron'\)|clipboard`：
+  - renderer 无任何 `from 'electron'` / `require('electron')` 命中；所有剪贴板写入均走 `navigator.clipboard.writeText`（`selectionCopy.ts:21`、`FileTree.tsx:88,92`、`ShikiCodeBlock.tsx:18`、`xtermHelpers.ts:207`）或 copy 事件的 `clipboardData`，符合官方迁移方向。`electron/preload.ts` 无 clipboard 命中。
+  - dSYM 改 tar.xz 仅影响调试符号消费链；本仓库发布流程（electron-builder NSIS/DMG，无 Sentry/符号服务器上传）不消费 dSYM，不适用。
+  - 闭环，无需修复。
+
+### 门禁结果（升级后，本机 Windows x64）
+
+- `npm run build:electron`（rimraf + `tsc -p tsconfig.electron.json` 全量编译）：通过，零错误。
+- `npm run typecheck:renderer`（`tsc -p tsconfig.renderer.json --noEmit`）：通过，零错误。
+- `npm run typecheck:shared`：通过（`[typecheck:shared] ok`）。
+- `npm test`（vitest run 双项目全量）：**447 个测试文件全部通过，2760 passed / 2 skipped（共 2762）**，耗时约 251s。
+- 探针 `npx electron scripts/probe-node-sqlite.mjs`（未设 `ELECTRON_RUN_AS_NODE`，stdout 重定向到文件查看）：
+
+```
+[probe-node-sqlite] electron=40.10.6 node=24.15.0 arch=x64 platform=win32
+[probe-node-sqlite] ok: file db write/read/checkpoint verified   (exit=0)
+```
+
+- 升级后无需修改任何主进程源码：无类型错误、无运行时 API 变化命中仓库代码。
+
+### 需真机/人工验收项（本环境无法自动完成）
+
+- **Windows x64 / macOS x64 / macOS arm64 人工冒烟矩阵**：启动与旧库升级、聊天流式、工具调用循环、SQLite 读写、托盘、飞书/微信桥接、内嵌终端、PDF 导出、剪贴板与外链打开（§3-39 命中路径）。责任人：发布负责人；回归路径：按 §4 第 3 条逐项人工冒烟，macOS 探针由 CI `sqlite-electron-probe` 矩阵（macos-15-intel、macos-latest）补跑。
+- **安装包验收**：Windows NSIS 与 macOS x64/arm64 DMG 产物的首次启动与已有数据库读写。责任人：发布负责人；回归路径：`npm run pack:win` / `npm run pack:mac` 产物人工验收。
