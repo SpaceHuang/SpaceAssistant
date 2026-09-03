@@ -5,7 +5,7 @@
 SpaceAssistant 通过 **GitHub Actions** 在推送版本 tag 时自动完成质量门禁、双平台打包与 GitHub Release 发布。维护者只需在 `main` 分支上更新版本号、提交代码并推送 tag，无需在本地手动打安装包（除非调试）。
 
 **当前状态**：
-- 支持平台：**Windows**（NSIS x64）、**macOS**（x64 / arm64 两种 DMG）
+- 支持平台：**Windows x64**（NSIS）、**macOS 13+**（x64 / arm64 两种 DMG；Electron 44 起 macOS 12 不再受支持）
 - 代码签名：**未启用**（安装说明见 Release Notes）
 - 触发方式：推送 `v*` 格式 tag（如 `v0.1.5`）
 
