@@ -387,6 +387,30 @@
   color: var(--sa-text);
 }
 
+.session-pending-confirm-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--sa-warning, #d89614) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sa-warning, #d89614) 14%, transparent);
+  color: var(--sa-warning, #ad6800);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.session-pending-confirm-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .session-item--active .session-item-name {
   color: var(--sa-list-selected-fg);
   font-weight: 500;
@@ -496,71 +520,6 @@
   opacity: 1;
 }
 
-.pending-confirm-banner {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  margin: 0 2px;
-  border-radius: var(--sa-radius-sm);
-  background: var(--sa-warning-subtle);
-  border: 1px solid color-mix(in srgb, var(--sa-warning) 35%, transparent);
-}
-
-.pending-confirm-banner__title {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--sa-sider-label-font-size);
-  font-weight: 600;
-  line-height: var(--sa-sider-label-line-height);
-  color: var(--sa-warning);
-}
-
-.pending-confirm-banner__list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.pending-confirm-banner__item {
-  display: block;
-  width: 100%;
-  padding: 6px 8px;
-  border: none;
-  border-radius: var(--sa-radius-sm);
-  background: var(--sa-surface-raised);
-  color: var(--sa-text);
-  font-size: var(--sa-sider-font-size);
-  line-height: var(--sa-sider-line-height);
-  text-align: left;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition:
-    background var(--sa-duration-fast) var(--sa-ease-out),
-    transform var(--sa-duration-fast) var(--sa-ease-out);
-}
-
-.pending-confirm-banner__item:hover {
-  background: var(--sa-surface-highlight-hover);
-}
-
-.pending-confirm-banner__item:active {
-  transform: scale(0.99);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pending-confirm-banner__item:active {
-    transform: none;
-  }
-}
-
-.pending-confirm-banner__item:focus-visible {
-  outline: 2px solid var(--sa-primary);
-  outline-offset: 2px;
-}
 
 .tool-row--focus {
   outline: 2px solid color-mix(in srgb, var(--sa-warning) 55%, transparent);

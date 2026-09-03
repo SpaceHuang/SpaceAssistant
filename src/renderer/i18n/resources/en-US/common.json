@@ -79,8 +79,10 @@
     },
     "new": "New session",
     "pendingConfirm": {
-      "aria": "Pending tool confirmations",
-      "count": "{{count}} pending"
+      "badge": "Confirm",
+      "itemAria": "{{name}}, confirmation needed",
+      "itemCountAria": "{{name}}, {{count}} confirmations needed",
+      "announced": "Session “{{name}}” needs confirmation"
     },
     "searchAria": "Search sessions",
     "searchPlaceholder": "Search sessions",

@@ -1,14 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { App as AntdApp, Empty, Input } from 'antd'
 import { Square, Trash2 } from 'lucide-react'
 import type { Session } from '../../../shared/domainTypes'
 import { useAppDispatch, useTypedSelector } from '../../hooks'
 import { removeSession } from '../../store/sessionSlice'
-import { setSession } from '../../store/chatSlice'
+import { setConfirmFocusToolUseId, setSession } from '../../store/chatSlice'
 import { groupSessionsByTime } from '../../utils/groupSessions'
 import { sessionDisplayName, sessionListEmptyDescription } from '../../utils/sessionDisplay'
 import { abortSessionRun } from '../../services/chatRunnerService'
-import { PendingConfirmBanner } from './PendingConfirmBanner'
+import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
+import { pendingConfirmBySession } from '../../hooks/pendingConfirmBySession'
 import { SessionDeleteConfirmModal } from './SessionDeleteConfirmModal'
 import { SessionListIcon } from './SessionListIcon'
 import { SessionItemContextMenu } from './SessionItemContextMenu'
@@ -27,6 +28,21 @@ export function SessionListPane() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const pendingBySession = pendingConfirmBySession(usePendingConfirmSnapshot(), sessions, runningSessions)
+  const previousPendingIds = useRef<Set<string>>(new Set())
+  const [announcement, setAnnouncement] = useState('')
+
+  useEffect(() => {
+    const newlyPending = [...pendingBySession.keys()].find((id) => !previousPendingIds.current.has(id))
+    if (newlyPending) {
+      const session = sessions.find((item) => item.id === newlyPending)
+      const pending = pendingBySession.get(newlyPending)
+      if (session && pending) {
+        setAnnouncement(t('session.pendingConfirm.announced', { name: sessionDisplayName(session.name) }))
+      }
+    }
+    previousPendingIds.current = new Set(pendingBySession.keys())
+  }, [pendingBySession, sessions, t])
 
   const query = q.trim()
   const filtered = sessions.filter((s) =>
@@ -65,6 +81,9 @@ export function SessionListPane() {
 
   return (
     <div className="sider-pane">
+      <div aria-live="polite" className="session-pending-confirm-announcement">
+        {announcement}
+      </div>
       <Input
         allowClear
         placeholder={t('session.searchPlaceholder')}
@@ -73,7 +92,6 @@ export function SessionListPane() {
         onChange={(e) => setQ(e.target.value)}
         className="session-list-search"
       />
-      <PendingConfirmBanner />
       <div className="session-list-scroll">
         {groups.length === 0 ? (
           <Empty
@@ -94,6 +112,8 @@ export function SessionListPane() {
                     const active = item.id === currentId
                     const running = Boolean(runningSessions[item.id])
                     const deleting = deletingId === item.id
+                    const pending = pendingBySession.get(item.id)
+                    const name = sessionDisplayName(item.name)
                     const rowClass = [
                       'session-item',
                       active && 'session-item--active',
@@ -114,10 +134,12 @@ export function SessionListPane() {
                             type="button"
                             className="session-item-select"
                             aria-current={active ? 'true' : undefined}
+                            aria-label={pending ? t('session.pendingConfirm.itemCountAria', { name, count: pending.count }) : undefined}
                             disabled={deleting}
                             onClick={() => {
                               if (editingSessionId === item.id) return
                               dispatch(setSession(item.id))
+                              if (pending) dispatch(setConfirmFocusToolUseId(pending.firstToolUseId))
                             }}
                           >
                             <SessionListIcon loading={running} />
@@ -129,14 +151,13 @@ export function SessionListPane() {
                             ) : (
                               <span
                                 className="session-item-name"
-                                title={sessionDisplayName(item.name)}
-                                aria-label={t('session.rename.aria', {
-                                  name: sessionDisplayName(item.name)
-                                })}
+                                title={name}
+                                aria-label={pending ? undefined : t('session.rename.aria', { name })}
                               >
-                                {sessionDisplayName(item.name)}
+                                {name}
                               </span>
                             )}
+                            {pending && editingSessionId !== item.id ? <span className="session-pending-confirm-badge">{t('session.pendingConfirm.badge')}</span> : null}
                           </button>
                           {running ? (
                             <button

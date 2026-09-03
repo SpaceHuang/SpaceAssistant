@@ -1494,6 +1494,7 @@ export function ChatView() {
         canRetry={canRetryMessage}
         canCancelQueued={canCancelQueuedMessage}
         focusToolUseId={confirmFocusToolUseId}
+        pendingConfirmItems={pendingConfirmItems}
         workDir={cfg?.workDir}
         shellConfig={cfg?.shell}
         sessionMetadata={currentSession?.metadata}
@@ -1509,6 +1510,7 @@ export function ChatView() {
       canRetryMessage,
       canCancelQueuedMessage,
       confirmFocusToolUseId,
+      pendingConfirmItems,
       cfg?.workDir,
       cfg?.shell,
       cfg?.wiki?.rootPath,

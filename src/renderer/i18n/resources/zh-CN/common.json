@@ -79,8 +79,10 @@
     },
     "new": "新会话",
     "pendingConfirm": {
-      "aria": "待确认工具",
-      "count": "{{count}} 项待确认"
+      "badge": "待确认",
+      "itemAria": "{{name}}，待确认",
+      "itemCountAria": "{{name}}，{{count}} 项待确认",
+      "announced": "会话“{{name}}”需要确认"
     },
     "searchAria": "搜索会话",
     "searchPlaceholder": "搜索会话",

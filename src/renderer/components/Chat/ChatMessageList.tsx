@@ -1,8 +1,11 @@
+import { useMemo } from 'react'
 import type { Message, ShellConfig } from '../../../shared/domainTypes'
 import type { ToolsInteractiveScalars } from '../../services/resolveMessageToolsInteractive'
 import { useChatSearchActiveTarget } from '../Search/SearchProvider'
 import { ChatBubble, type ToolsInteractiveProps } from './ChatBubble'
 import type { ChatMessageActions } from './ChatMessageActions'
+import type { PendingConfirmItem } from '../../services/pendingConfirmStore'
+import { restorePendingConfirmToolCalls } from '../../services/resolveMessageToolsInteractive'
 
 export type ChatMessageListProps = {
   messages: Message[]
@@ -13,6 +16,7 @@ export type ChatMessageListProps = {
   canRetry: (message: Message) => boolean
   canCancelQueued: (message: Message) => boolean
   focusToolUseId?: string | null
+  pendingConfirmItems?: PendingConfirmItem[]
   workDir?: string
   shellConfig?: ShellConfig
   sessionMetadata?: Record<string, unknown>
@@ -34,6 +38,7 @@ export function ChatMessageList({
   canRetry,
   canCancelQueued,
   focusToolUseId,
+  pendingConfirmItems = [],
   workDir,
   shellConfig,
   sessionMetadata,
@@ -42,10 +47,14 @@ export function ChatMessageList({
   onBubbleRender
 }: ChatMessageListProps) {
   const activeTarget = useChatSearchActiveTarget()
+  const restoredMessages = useMemo(
+    () => restorePendingConfirmToolCalls(messages, pendingConfirmItems),
+    [messages, pendingConfirmItems]
+  )
 
   return (
     <>
-      {messages.map((m) => {
+      {restoredMessages.map((m) => {
         const toolsInteractive = resolveToolsInteractive(m)
         const rowFocus =
           focusToolUseId &&

@@ -6,16 +6,18 @@ import type { Session } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_SESSION_SKILLS_STATE } from '../../../shared/domainTypes'
 import { changeAppLocale } from '../../i18n/localeSync'
 import { store } from '../../store'
-import { setSession } from '../../store/chatSlice'
+import { setChatStatus, setSession } from '../../store/chatSlice'
 import { setSessions } from '../../store/sessionSlice'
 import { SessionListPane } from './SessionListPane'
+
+const pendingItems = vi.hoisted(() => ({ current: [] as Array<{ sessionId: string; requestId: string; toolUseId: string; toolName: string; input: unknown; riskLevel: 'low' | 'medium' | 'high'; createdAt: number }> }))
 
 vi.mock('../../services/chatRunnerService', () => ({
   abortSessionRun: vi.fn()
 }))
 
-vi.mock('./PendingConfirmBanner', () => ({
-  PendingConfirmBanner: () => null
+vi.mock('../../hooks/usePendingConfirmSnapshot', () => ({
+  usePendingConfirmSnapshot: () => pendingItems.current
 }))
 
 const mockSessionUpdate = vi.fn()
@@ -57,6 +59,7 @@ describe('SessionListPane rename', () => {
     vi.clearAllMocks()
     store.dispatch(setSessions([]))
     store.dispatch(setSession(null))
+    pendingItems.current = []
     await changeAppLocale('zh-CN')
     window.api = {
       ...window.api,
@@ -127,6 +130,21 @@ describe('SessionListPane rename', () => {
     fireEvent.change(search, { target: { value: '重构' } })
     expect(screen.getByText('重构登录')).toBeDefined()
     expect(screen.queryByText('其它')).toBeNull()
+  })
+
+  it('shows one badge per pending session and focuses the earliest item', async () => {
+    pendingItems.current = [
+      { sessionId: 's1', requestId: 'r1', toolUseId: 'later', toolName: 'run_shell', input: {}, riskLevel: 'medium', createdAt: 20 },
+      { sessionId: 's1', requestId: 'r1', toolUseId: 'earliest', toolName: 'run_shell', input: {}, riskLevel: 'medium', createdAt: 10 },
+      { sessionId: 's2', requestId: 'r2', toolUseId: 'other', toolName: 'write_file', input: {}, riskLevel: 'high', createdAt: 15 }
+    ]
+    store.dispatch(setChatStatus({ status: 'streaming', sessionId: 's1', requestId: 'r1' }))
+    store.dispatch(setChatStatus({ status: 'streaming', sessionId: 's2', requestId: 'r2' }))
+    renderPane([stubSession('s1', '会话 A'), stubSession('s2', '会话 B')])
+
+    expect(screen.getAllByText('待确认')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: '会话 A，2 项待确认' }))
+    expect(store.getState().chat.confirmFocusToolUseId).toBe('earliest')
   })
 })
 
