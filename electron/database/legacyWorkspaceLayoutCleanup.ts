@@ -43,7 +43,7 @@ export function cleanupLegacyWorkspaceLayoutOnStartup(db: AppDatabase): LegacyWo
   }
 
   try {
-    const summary = runInTransaction(db, () => {
+    const summary = runInTransaction(conn, () => {
       if (getSchemaMeta(conn, SCHEMA_META_KEYS.legacyWorkspaceLayoutCleanedAt)) {
         return { skipped: true as const }
       }

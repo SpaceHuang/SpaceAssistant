@@ -1,4 +1,5 @@
 import { getConfigValue, getDbConnection, setConfigValue, type AppDatabase } from '../database'
+import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { PolicyRuleStore } from './policyRuleStore'
 import { readPolicyPackages, writePolicyPackages } from './policyRulesRuntime'
@@ -70,7 +71,7 @@ export function runMcpConfirmPolicyMigrationOnce(
       // "allow→ask" 上调已达成迁移意图），loose 是用户显式宽松选择，亦不改写。
       // 多处写入包同一事务：崩溃不留半迁移状态（幂等重试仍可兜底）。
       const conn = getDbConnection(db)
-      conn.transaction(() => {
+      runInTransaction(conn, () => {
         new PolicyRuleStore(conn).setOverride({
           ruleId: 'mcp-readonly-allow',
           action: 'ask',
@@ -82,7 +83,7 @@ export function runMcpConfirmPolicyMigrationOnce(
         }
         writePolicyPackages(db, packages)
         setConfigValue(db, MCP_CONFIRM_POLICY_MIGRATION_VERSION_KEY, String(MCP_CONFIRM_POLICY_MIGRATION_VERSION))
-      })()
+      })
       deps.audit?.record({
         ts: Date.now(),
         event: 'migration.mcp-confirm-policy',

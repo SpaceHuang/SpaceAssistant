@@ -105,3 +105,42 @@ Phase 3  Electron 40 → 44、平台下线确认与工具链升级
 ```
 
 每阶段的 PR/发布记录必须附：精确依赖版本与 lockfile diff、§3 影响矩阵结论、自动命令输出、各平台探针结果、安装包手工验收记录，以及未自动化项的责任人与回归路径。参考资料： [Electron 版本发布页](https://releases.electronjs.org/release?channel=stable)、[Electron 40 发布说明](https://www.electronjs.org/blog/electron-40-0)、[Electron Breaking Changes](https://www.electronjs.org/docs/latest/breaking-changes/)、[Node SQLite API](https://nodejs.org/api/sqlite.html)。
+
+## 附录 A：Phase 1 实施记录（2026-09-04）
+
+实施分支 `chore/dependency-upgrade`（worktree `.worktrees/dep-upgrade`），基于 main。
+
+### 版本与探针输出
+
+- Electron **35.7.5**（内嵌 Node **22.16.0**），本机 Windows x64；`@types/node` 升至 `^22.20.1`（含 `node:sqlite` 声明）。
+- `node:sqlite` 在 Electron 35 / Node 22.16 中为实验性 API，但**无需任何 flag**；启动时仅打印 `ExperimentalWarning: SQLite is an experimental feature`，主进程与探针均不做特殊处理。
+- 探针 `scripts/probe-node-sqlite.mjs` 本机实跑（`npx electron scripts/probe-node-sqlite.mjs`，未设 `ELECTRON_RUN_AS_NODE`）：
+
+```
+[probe-node-sqlite] electron=35.7.5 node=22.16.0 arch=x64 platform=win32
+[probe-node-sqlite] ok: file db write/read/checkpoint verified   (exit=0)
+```
+
+注：Windows Git Bash 的 MSYS pty 会吞掉 GUI 子进程 stdout，本机验证时输出需重定向到文件查看；CI runner（powershell/cmd）不受影响。
+
+### 关键实现决策
+
+- 事务 helper 落在 `electron/database/transaction.ts`（`runInTransaction(conn, fn)` + `lastInsertRowidToNumber`），由 `sqliteStore.ts` 再导出以保持「连接级事务入口由 sqliteStore 导出」的契约。未直接定义在 sqliteStore.ts 的原因：`sqliteStore → migrations → helper` 存在循环依赖，vite SSR/vitest 下循环边缘会拿到半初始化命名空间（实测 `runInTransaction is not a function`）。
+- `node:sqlite` 与 better-sqlite3 的两处语义差异已在封装/迁移层消化：绑定值拒绝 `undefined`（`migrateFromJson` 可空列统一 `?? null`）；`run().changes`/`lastInsertRowid` 类型为 `number | bigint`（显式 `Number()`，`lastInsertRowidToNumber` 超安全整数抛错）。
+- 既有测试遗留 `conn.transaction(fn)()` 的 `})()` 调用尾已在迁移中逐一清除（`mcpConfirmPolicyMigration.ts` 曾因此报错）。
+
+### 门禁结果
+
+- 聚焦测试：`sqliteStore.transaction.test.ts`（新增 11 例）、`migrations.v3/v4`、`mcpConfirmPolicyMigration`（含新增「事务中途写入失败」原子性用例）、`database.migrateAndSearch`（含新增「导入中途约束错误整体回滚」用例）、`legacyWorkspaceLayoutCleanup`、`operations`、`streamingCleanup` 等全绿；全量 `npm test` 全绿（详见提交说明）。
+- `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron` 全绿。
+- 残留扫描 `rg -n -S 'better-sqlite3|\.transaction\(' electron scripts package.json .github AGENTS.md CLAUDE.md`：无未批准命中。白名单（合理残留）：
+  - `package-lock.json` 中 `node-abi`/`node-gyp`/`node-gyp-build` 为 electron-builder（app-builder-lib）的传递依赖，非本项目直接依赖，保留。
+  - `.github/workflows/ci.yml` 注释中出现 `ELECTRON_RUN_AS_NODE` 字样，语义为「不得设置」，非实际设置。
+  - `docs/` 下历史文档（含本计划、`b344321-current-code-refactor-plan.md`、`wechat-integration-requirement.md`）提及 better-sqlite3 为历史叙述，不在扫描路径内。
+- AGENTS.md 为 gitignore 的本地文件（不在仓库内），其 better-sqlite3/原生绑定说明已在本地同步更新；CLAUDE.md 已随本提交更新。
+
+### 需真机/人工验收项（本环境无法自动完成）
+
+- macOS x64 / arm64 探针与安装包验收：由 CI `sqlite-electron-probe` 矩阵（windows-latest、macos-15-intel、macos-latest）执行探针；macOS DMG 首次启动与已有数据库读写需人工在真机验收。责任人：发布负责人；回归路径：CI 探针日志 + `npm run pack:mac` 产物人工冒烟。
+- 旧数据库副本验证（真实 `userData/spaceassistant-data.db` 及其 `-wal`/`-shm` 复制到隔离目录做启动/读写/关闭）：需人工在装有旧版本数据的机器上执行。责任人：发布负责人；回归路径：升级安装包首次启动冒烟。
+- Windows x64 安装包（NSIS）首次启动与已有数据库读写：同上，人工验收。

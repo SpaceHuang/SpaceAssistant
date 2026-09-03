@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { getConfigValue, openSqliteDatabase, setConfigValue } from '../database'
 import type { AppDatabase } from '../database'
 import { PolicyRuleStore } from './policyRuleStore'
-import { loadEffectivePolicyRules, readPolicyPackages, writePolicyPackages } from './policyRulesRuntime'
+import { loadEffectivePolicyRules, POLICY_PACKAGES_CONFIG_KEY, readPolicyPackages, writePolicyPackages } from './policyRulesRuntime'
 import type { AuditSink } from './audit'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import {
@@ -161,5 +161,49 @@ describe('runMcpConfirmPolicyMigrationOnce（R5 MCP 确认策略收敛迁移）'
     expect(again.status).toBe('done')
     const store = new PolicyRuleStore(getDbConnection(db))
     expect(store.listOverrides().filter((o) => o.ruleId === 'mcp-readonly-allow')).toHaveLength(1)
+  })
+
+  it('事务中途写入失败：规则覆盖/套餐/版本标记均不部分落盘，修复后重跑完成', () => {
+    const db = openSqliteDatabase(':memory:')
+    dbs.push(db)
+    seedProfiles(db, [{ id: 'a', toolConfirmPolicy: 'always' }])
+
+    // 注入故障：套餐写入（事务中段）触发约束错误，此时规则覆盖已写入
+    const conn = getDbConnection(db)
+    conn.exec(
+      `CREATE TRIGGER fail_policy_packages BEFORE INSERT ON configs
+       WHEN NEW.key = '${POLICY_PACKAGES_CONFIG_KEY}'
+       BEGIN SELECT RAISE(ABORT, 'injected failure'); END`
+    )
+
+    const failed = runMcpConfirmPolicyMigrationOnce(db)
+    expect(failed.status).toBe('failed')
+
+    // 前序写入（规则覆盖）随事务回滚，套餐与版本标记均未推进
+    const store = new PolicyRuleStore(conn)
+    expect(store.getOverride('mcp-readonly-allow')).toBeNull()
+    expect(readPolicyPackages(db)).toEqual({
+      desktop: 'standard',
+      wechat: 'standard',
+      feishu: 'standard',
+      automation: 'standard'
+    })
+    expect(getConfigValue(db, MCP_CONFIRM_POLICY_MIGRATION_VERSION_KEY)).toBeUndefined()
+
+    // 故障解除后重跑：完成且行为正确
+    conn.exec('DROP TRIGGER fail_policy_packages')
+    const retried = runMcpConfirmPolicyMigrationOnce(db)
+    expect(retried.status).toBe('done')
+    expect(retried.migrated).toBe(true)
+    expect(store.getOverride('mcp-readonly-allow')?.action).toBe('ask')
+    expect(readPolicyPackages(db)).toEqual({
+      desktop: 'custom',
+      wechat: 'custom',
+      feishu: 'custom',
+      automation: 'custom'
+    })
+    expect(Number(getConfigValue(db, MCP_CONFIRM_POLICY_MIGRATION_VERSION_KEY))).toBe(
+      MCP_CONFIRM_POLICY_MIGRATION_VERSION
+    )
   })
 })

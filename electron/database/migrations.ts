@@ -1,5 +1,6 @@
-import type Database from 'better-sqlite3'
+import type { DatabaseSync } from 'node:sqlite'
 import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, SCHEMA_META_KEYS } from './schema'
+import { runInTransaction } from './transaction'
 
 export class DatabaseUpgradeRequiredError extends Error {
   constructor(foundVersion: number) {
@@ -14,15 +15,15 @@ function parseSchemaVersion(value: string | undefined): number | undefined {
   return Number(value)
 }
 
-function readSchemaVersion(conn: Database.Database): number | undefined {
+function readSchemaVersion(conn: DatabaseSync): number | undefined {
   const row = conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion) as
     | { value: string }
     | undefined
   return parseSchemaVersion(row?.value)
 }
 
-export function runMigrations(conn: Database.Database): void {
-  conn.transaction(() => {
+export function runMigrations(conn: DatabaseSync): void {
+  runInTransaction(conn, () => {
     let version = readSchemaVersion(conn)
     if (version === undefined) {
       version = 1
@@ -47,5 +48,5 @@ export function runMigrations(conn: Database.Database): void {
       version = 4
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
-  })()
+  })
 }

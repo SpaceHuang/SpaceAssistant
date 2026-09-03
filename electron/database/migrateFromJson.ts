@@ -7,7 +7,7 @@ import {
 } from '../../src/shared/domainTypes'
 import { loadSnapshotFromJson } from './jsonSnapshot'
 import { SCHEMA_META_KEYS } from './schema'
-import { getDbConnection, getSchemaMeta, isDatabaseEmpty, setSchemaMeta, type AppDatabase } from './sqliteStore'
+import { getDbConnection, getSchemaMeta, isDatabaseEmpty, runInTransaction, setSchemaMeta, type AppDatabase } from './sqliteStore'
 import type { DbSnapshot, StoredMessage } from './types'
 import { deserializeToolCallsFromDb } from '../messageCodec'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -150,9 +150,10 @@ function insertMessage(conn: ReturnType<typeof getDbConnection>, row: StoredMess
       sessionId: row.sessionId,
       role: row.role,
       content: row.content,
-      toolUse: row.toolUse,
-      toolCalls: row.toolCalls,
-      thinking: row.thinking,
+      // node:sqlite 拒绝 undefined 绑定；可空列统一归一为 null（旧驱动行为为隐式 NULL）
+      toolUse: row.toolUse ?? null,
+      toolCalls: row.toolCalls ?? null,
+      thinking: row.thinking ?? null,
       contentSegments: row.contentSegments ?? null,
       skillHints: row.skillHints ?? null,
       attachments: row.attachments ?? null,
@@ -173,7 +174,7 @@ function importSnapshot(conn: ReturnType<typeof getDbConnection>, snapshot: DbSn
   )
   const insertUsage = conn.prepare('INSERT INTO session_usages (session_id, data) VALUES (@sessionId, @data)')
 
-  const tx = conn.transaction(() => {
+  runInTransaction(conn, () => {
     for (const [key, entry] of Object.entries(snapshot.configs)) {
       insertConfig.run({
         key,
@@ -195,7 +196,6 @@ function importSnapshot(conn: ReturnType<typeof getDbConnection>, snapshot: DbSn
       insertUsage.run({ sessionId, data: JSON.stringify(usage) })
     }
   })
-  tx()
 }
 
 function verifyCounts(conn: ReturnType<typeof getDbConnection>, snapshot: DbSnapshot): void {

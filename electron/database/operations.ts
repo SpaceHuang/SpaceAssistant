@@ -16,7 +16,7 @@ import {
   serializeToolCallsForDb,
   serializeToolUseForDb
 } from '../messageCodec'
-import { getDbConnection, type AppDatabase } from './sqliteStore'
+import { getDbConnection, runInTransaction, type AppDatabase } from './sqliteStore'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import {
   estimateThinkingTokensFromMessage,
@@ -256,9 +256,9 @@ export function updateSession(
 
 export function deleteSession(db: AppDatabase, sessionId: string): void {
   const conn = getDbConnection(db)
-  conn.transaction(() => {
+  runInTransaction(conn, () => {
     conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
-  })()
+  })
   deleteSessionUsage(db, sessionId)
   db.flushSave()
 }

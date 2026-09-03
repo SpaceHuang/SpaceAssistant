@@ -7,7 +7,7 @@
  * partially (§2.3.3 atomic requirement). No per-field renderer saves.
  */
 import type { AppDatabase } from '../database'
-import { getConfigValue, runInTransaction, setConfigValue } from '../database'
+import { getConfigValue, getDbConnection, runInTransaction, setConfigValue } from '../database'
 import { mergeFeishuConfig, type FeishuConfig } from '../../src/shared/feishuTypes'
 import { mergeWeChatConfig, type WeChatConfig } from '../../src/shared/wechatTypes'
 import type {
@@ -56,7 +56,7 @@ export function commitRemoteSecurityConfig(
   patch: RemoteSecurityPatch,
   hooks: CommitHooks = {}
 ): CommitResult {
-  return runInTransaction(db, () => {
+  return runInTransaction(getDbConnection(db), () => {
     const feishuRaw = readRawFeishu(db)
     const wechatRaw = readRawWeChat(db)
 

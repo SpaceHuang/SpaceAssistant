@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3'
+import type { DatabaseSync } from 'node:sqlite'
 import type {
   CacheKey,
   DecisionCacheEntry,
@@ -57,7 +57,7 @@ interface CacheRow {
  * 接口与策略层 `DecisionCacheView` 一致：只读视图由策略层消费，写缓存由执行链路完成。
  */
 export class SqliteDecisionCache implements DecisionCacheView {
-  constructor(private readonly db: Database.Database) {}
+  constructor(private readonly db: DatabaseSync) {}
 
   lookup(key: CacheKey): DecisionCacheEntry | null {
     const now = Date.now()
@@ -105,41 +105,45 @@ export class SqliteDecisionCache implements DecisionCacheView {
 
   /** 应用启动时清理所有会话级条目（内存态语义：进程消亡即失效）。 */
   clearAllSession(): number {
-    return this.db.prepare("DELETE FROM decision_cache WHERE scope = 'session'").run().changes
+    return Number(this.db.prepare("DELETE FROM decision_cache WHERE scope = 'session'").run().changes)
   }
 
   /** 换绑/重置：清空指定链路（或键值域）的全部条目。 */
   clearLane(lane: string | '*', scope?: 'session' | 'persistent'): number {
     if (scope) {
-      return this.db
-        .prepare('DELETE FROM decision_cache WHERE lane = ? AND scope = ?')
-        .run(lane, scope).changes
+      return Number(
+        this.db
+          .prepare('DELETE FROM decision_cache WHERE lane = ? AND scope = ?')
+          .run(lane, scope).changes
+      )
     }
-    return this.db.prepare('DELETE FROM decision_cache WHERE lane = ?').run(lane).changes
+    return Number(this.db.prepare('DELETE FROM decision_cache WHERE lane = ?').run(lane).changes)
   }
 
   /** 清除指定规范化键（确认记忆管理：清除即下次再问）。 */
   clear(key: CacheKey): number {
-    return this.db.prepare('DELETE FROM decision_cache WHERE key_json = ?').run(canonicalKeyJson(key)).changes
+    return Number(this.db.prepare('DELETE FROM decision_cache WHERE key_json = ?').run(canonicalKeyJson(key)).changes)
   }
 
   /** 确认记忆管理列表：全量读出（按创建时间倒序），供设置页分组展示。 */
   list(): DecisionCacheEntry[] {
-    const rows = this.db.prepare('SELECT * FROM decision_cache ORDER BY created_at DESC').all() as CacheRow[]
+    const rows = this.db.prepare('SELECT * FROM decision_cache ORDER BY created_at DESC').all() as unknown as CacheRow[]
     return rows.map((r) => this.rowToEntry(r))
   }
 
   /** 清除全部（清空确认记忆）。 */
   clearAll(): number {
-    return this.db.prepare('DELETE FROM decision_cache').run().changes
+    return Number(this.db.prepare('DELETE FROM decision_cache').run().changes)
   }
 
   /** 清理过期（expires_at 已过）与休眠（超过 DORMANT_MS 未命中）条目；返回清理数。 */
   expireDormant(now = Date.now()): number {
     const dormantBefore = now - DORMANT_MS
-    return this.db
-      .prepare('DELETE FROM decision_cache WHERE (expires_at IS NOT NULL AND expires_at <= ?) OR last_hit_at <= ?')
-      .run(now, dormantBefore).changes
+    return Number(
+      this.db
+        .prepare('DELETE FROM decision_cache WHERE (expires_at IS NOT NULL AND expires_at <= ?) OR last_hit_at <= ?')
+        .run(now, dormantBefore).changes
+    )
   }
 
   private rowToEntry(row: CacheRow): DecisionCacheEntry {

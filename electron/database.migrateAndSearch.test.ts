@@ -85,6 +85,86 @@ describe('migrateFromJson', () => {
     db.close()
   })
 
+  it('导入中途约束错误：整体回滚，前序写入/版本标记均不落盘，JSON 不重命名', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-atomic-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+
+    const session = {
+      id: 'sess-1',
+      name: 'hello',
+      preview: 'hi',
+      model: 'claude-sonnet-4-20250514',
+      temperature: 0.7,
+      maxTokens: 4096,
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 2,
+      skillsState: { enabledSkillNames: [], disabledSkillNames: [] },
+      metadata: {},
+      schemaVersion: 1,
+      workDirProfileId: 'default'
+    }
+    const message = (id: string, sequence: number) => ({
+      id,
+      sessionId: 'sess-1',
+      role: 'user',
+      content: `msg ${id}`,
+      toolUse: null,
+      toolCalls: null,
+      thinking: null,
+      status: 'sent',
+      schemaVersion: 1,
+      timestamp: 1,
+      sequence
+    })
+
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [session],
+        // 第二条消息与第一条主键冲突：在 configs/sessions 已写入后触发约束错误
+        messages: [message('m1', 0), message('m1', 1)],
+        configs: {
+          'config.locale': { value: 'zh-CN', createdAt: 1, updatedAt: 1 }
+        },
+        searchHistory: [],
+        sessionUsages: {}
+      }),
+      'utf8'
+    )
+
+    const db = openSqliteDatabase(dbPath)
+    expect(() => migrateFromJsonIfNeeded(db, jsonPath)).toThrow(/JSON migration failed/)
+
+    const conn = getDbConnection(db)
+    const count = (table: string) => (conn.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c
+    expect(count('configs')).toBe(0)
+    expect(count('sessions')).toBe(0)
+    expect(count('messages')).toBe(0)
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.migratedFromJsonAt)).toBeUndefined()
+    // 源 JSON 未重命名，可修复后重试
+    expect(fs.existsSync(jsonPath)).toBe(true)
+    db.close()
+
+    // 修复数据后重试成功（幂等可重入）
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [session],
+        messages: [message('m1', 0)],
+        configs: { 'config.locale': { value: 'zh-CN', createdAt: 1, updatedAt: 1 } },
+        searchHistory: [],
+        sessionUsages: {}
+      }),
+      'utf8'
+    )
+    const db2 = openDatabase(dbPath)
+    expect(getMessages(db2, 'sess-1')).toHaveLength(1)
+    db2.close()
+  })
+
   it('recovers orphan messages by creating placeholder sessions', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-orphan-'))
     dirs.push(dir)

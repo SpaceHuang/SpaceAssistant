@@ -25,15 +25,10 @@
     "build:electron": "rimraf dist-electron && tsc -p tsconfig.electron.json",
     "build:electron:incremental": "tsc -p tsconfig.electron.json",
     "build": "npm run build:tray-icons && npm run build:renderer && npm run build:electron",
-    "rebuild:native": "node scripts/install-sqlite-bindings.mjs",
-    "postinstall": "node scripts/install-sqlite-bindings.mjs",
     "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
     "typecheck:shared": "node scripts/check-shared-config-types.mjs",
-    "probe:sqlite": "electron scripts/probe-better-sqlite3.mjs",
+    "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
     "verify:macos-app": "node scripts/verify-macos-app-signature.mjs",
-    "prepack": "node scripts/install-sqlite-bindings.mjs",
-    "prepack:win": "node scripts/install-sqlite-bindings.mjs",
-    "prepack:mac": "node scripts/install-sqlite-bindings.mjs",
     "reinstall:electron": "rimraf node_modules/electron && npm install",
     "pack": "npm run build && electron-builder",
     "pack:win": "npm run build && electron-builder --win",
@@ -51,12 +46,10 @@
     "@xterm/xterm": "^5.5.0",
     "antd": "^5.22.0",
     "axios": "^1.7.0",
-    "better-sqlite3": "^12.11.1",
     "i18next": "^26.3.1",
     "i18next-browser-languagedetector": "^8.2.1",
     "katex": "^0.17.0",
     "lucide-react": "^0.468.0",
-    "node-abi": "^4.33.0",
     "playwright": "^1.52.0",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
@@ -76,8 +69,7 @@
   "devDependencies": {
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.3.0",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.10.0",
+    "@types/node": "^22.20.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/react-syntax-highlighter": "^15.5.13",
@@ -88,7 +80,6 @@
     "electron": "^35.7.5",
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
-    "node-gyp": "^12.4.0",
     "png-to-ico": "^2.1.8",
     "rimraf": "^6.0.1",
     "sharp": "^0.33.5",
@@ -103,9 +94,6 @@
     "productName": "SpaceAssistant",
     "icon": "res/icons/sa-logo-512.png",
     "npmRebuild": false,
-    "asarUnpack": [
-      "**/better-sqlite3/**"
-    ],
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
     },
@@ -118,7 +106,6 @@
       "dist-electron/**/*",
       "resources/tray/**",
       "package.json",
-      "node_modules/better-sqlite3/**",
       "!**/node_modules/bufferutil/**"
     ],
     "extraResources": [

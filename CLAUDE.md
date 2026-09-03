@@ -59,11 +59,11 @@ npm run pack:linux          # Linux AppImage
 
 ### 数据库
 
-主存储为 **SQLite**（`better-sqlite3`，WAL 模式），文件位于 Electron `userData` 目录下的 `spaceassistant-data.db`。配置、会话、消息、搜索历史、token 用量分表存储，写入为增量 SQL，不再全量序列化。
+主存储为 **SQLite**（Electron 内嵌 `node:sqlite` 的 `DatabaseSync`，WAL 模式），文件位于 Electron `userData` 目录下的 `spaceassistant-data.db`。配置、会话、消息、搜索历史、token 用量分表存储，写入为增量 SQL，不再全量序列化。
 
 首次升级时若存在旧版 `spaceassistant-data.json`，启动会自动一次性导入 SQLite，并将原 JSON 重命名为 `spaceassistant-data.json.migrated-{timestamp}`。
 
-实现位于 `electron/database/`（`schema.ts`、`sqliteStore.ts`、`operations.ts`、`migrateFromJson.ts`），对外 API 仍由 `electron/database.ts` re-export。`npm install` 后需能成功编译/下载 `better-sqlite3` 原生模块（Windows 需 Visual Studio Build Tools 或预编译二进制）。
+实现位于 `electron/database/`（`schema.ts`、`sqliteStore.ts`、`operations.ts`、`migrateFromJson.ts`），对外 API 仍由 `electron/database.ts` re-export。无原生绑定依赖（`node:sqlite` 内嵌于 Electron）；事务统一走 `electron/database/transaction.ts` 的 `runInTransaction(conn, fn)`。
 
 工作目录下的 `sessions/<id>-<date>/` 明文备份仍为辅助导出渠道，写入经 `DebouncedSessionBackupManager` 防抖（约 3s），消息完成时立即 flush。
 

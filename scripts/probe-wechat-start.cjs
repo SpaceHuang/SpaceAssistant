@@ -1,5 +1,5 @@
 const { app } = require('electron')
-const Database = require('better-sqlite3')
+const { DatabaseSync } = require('node:sqlite')
 const path = require('path')
 
 app.setName('spaceassistant')
@@ -8,7 +8,7 @@ app.whenReady().then(async () => {
   const userData = app.getPath('userData')
   const dbPath = path.join(userData, 'spaceassistant-data.db')
   console.log('userData:', userData)
-  const db = new Database(dbPath)
+  const db = new DatabaseSync(dbPath)
   const row = db.prepare("SELECT value FROM configs WHERE key='config.wechat'").get()
   console.log('wechat:', row?.value ?? '(none)')
   const fs = require('fs')
