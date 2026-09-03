@@ -106,6 +106,7 @@ export function SessionListPane() {
                     return (
                       <SessionItemContextMenu
                         key={item.id}
+                        sessionId={item.id}
                         onRename={() => setEditingSessionId(item.id)}
                       >
                         <div role="listitem" className={rowClass}>

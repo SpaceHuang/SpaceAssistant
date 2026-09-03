@@ -136,11 +136,28 @@ describe('SessionItemContextMenu', () => {
     const { SessionItemContextMenu } = await import('./SessionItemContextMenu')
     render(
       <ConfigProvider>
-        <SessionItemContextMenu onRename={vi.fn()} open>
+        <SessionItemContextMenu onRename={vi.fn()} sessionId="session-123" open>
           <span>trigger</span>
         </SessionItemContextMenu>
       </ConfigProvider>
     )
     expect(within(document.body).getByText('重命名')).toBeDefined()
+    expect(within(document.body).getByText('复制会话 ID')).toBeDefined()
+  })
+
+  it('copies the session id from the context menu', async () => {
+    await changeAppLocale('zh-CN')
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    const { SessionItemContextMenu } = await import('./SessionItemContextMenu')
+    render(
+      <ConfigProvider>
+        <SessionItemContextMenu onRename={vi.fn()} sessionId="session-123" open>
+          <span>trigger</span>
+        </SessionItemContextMenu>
+      </ConfigProvider>
+    )
+    fireEvent.click(within(document.body).getByText('复制会话 ID'))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('session-123'))
   })
 })

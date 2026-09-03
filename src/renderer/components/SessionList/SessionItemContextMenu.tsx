@@ -14,18 +14,26 @@ function wrapMenuClick(handler: () => void): (info: MenuInfo) => void {
 
 interface SessionItemContextMenuProps {
   onRename: () => void
+  sessionId: string
   children: React.ReactNode
   /** For testing only - controls dropdown open state */
   open?: boolean
 }
 
-export function SessionItemContextMenu({ onRename, children, open }: SessionItemContextMenuProps) {
+export function SessionItemContextMenu({ onRename, sessionId, children, open }: SessionItemContextMenuProps) {
   const { t } = useTypedTranslation('common')
   const items: MenuProps['items'] = [
     {
       key: 'rename',
       label: t('session.rename.menuItem'),
       onClick: wrapMenuClick(onRename)
+    },
+    {
+      key: 'copy-session-id',
+      label: t('session.copyId.menuItem'),
+      onClick: wrapMenuClick(() => {
+        void navigator.clipboard.writeText(sessionId).catch(() => {})
+      })
     }
   ]
 

@@ -92,6 +92,9 @@
       "failed": "更新标题失败，请稍后重试",
       "tooLong": "标题不能超过 {{max}} 个字符"
     },
+    "copyId": {
+      "menuItem": "复制会话 ID"
+    },
     "stopAria": "中止「{{name}}」的执行",
     "unnamed": "未命名会话"
   },

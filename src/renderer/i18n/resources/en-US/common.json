@@ -92,6 +92,9 @@
       "failed": "Could not update title. Try again later.",
       "tooLong": "Title cannot exceed {{max}} characters"
     },
+    "copyId": {
+      "menuItem": "Copy session ID"
+    },
     "stopAria": "Stop execution for \"{{name}}\"",
     "unnamed": "Untitled session"
   },
