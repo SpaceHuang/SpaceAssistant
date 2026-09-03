@@ -1,144 +1,107 @@
 # 依赖版本迭代计划（Node / Electron / 工具链）
 
-制定日期：2026-08-31（v2，依据 `docs/review/dependency-upgrade-plan-2026-08-review-v1.md` 评审结论修订）
+制定日期：2026-08-31；修订日期：2026-09-03（v3）
+状态：**修订后待实施**。本版吸收 `docs/review/dependency-upgrade-plan-2026-08-review-v2.md` 的三项阻断意见，并以当前仓库检索结果和 Electron/Node 官方文档复核。
 
-## 0. v2 修订摘要
+## 1. 目标、边界与版本原则
 
-对照评审报告，v1 有 3 个阻断性问题，本版全部修正：
+本次目标是先以 Electron 35 的内置 `node:sqlite` 消除 `better-sqlite3` 原生绑定，再分两步升级 Electron 与构建工具链。React、antd 和业务功能不在本计划内。每个阶段必须是独立提交；上一个阶段所有门禁通过后才能进入下一阶段。
 
-1. **执行顺序反转**：评审实测 **Electron 35.7.5 完整主进程（内嵌 Node 22.16.0）已可直接使用 `node:sqlite`，无需任何 flag**——v1 中「Electron 37+ 起可用」的断言过保守且错误。因此把 node:sqlite 替换提到最前（Phase C → 现在的 Phase 1），在现有 Electron 35 上完成；之后的 Electron 升级变成**纯 JS 升级**，彻底绕开本机无 Visual Studio Build Tools、better-sqlite3 跨 ABI 无预编译绑定的死结（评审阻断 1）。
-2. **清理清单补全**：v1 遗漏了 CI/release workflow、运维脚本、`prepack*` 钩子、`node-abi`/`node-gyp` 依赖、`CLAUDE.md` 等 8 处 better-sqlite3 硬引用，卸载依赖会直接打红发布流水线（评审阻断 2）。已全部补入 Phase 1 清理清单（§3）。
-3. **可行性证据固化**：评审已替本计划在真实 Electron 主进程中验证 `node:sqlite` 可用（v1 只测了系统 Node，证据链不成立，评审阻断 3）。该验证固化为 Phase 1 的显式门禁项（新增 `probe:node-sqlite` 脚本）。
+| 项目 | 当前 | 目标 / 决策 |
+| --- | --- | --- |
+| Electron | `^35.7.5` | 分别升至锁定的 40.x、44.x；实施当天从 [Electron Releases](https://releases.electronjs.org/release?channel=stable) 记录实际稳定 patch 与 `package-lock.json` 精确版本，不在计划中宣称固定版本“最新” |
+| Electron 40 运行时 | — | Node **24.11.1**、Chromium 144；类型基线为 `@types/node@^24`，不是 Node 22 |
+| Electron 44 | — | 目标平台为 Windows x64、macOS x64/arm64；macOS 最低版本升为 **13**。Linux 桌面端、Windows ia32 与 Linux armv7l 均不在产品支持面 |
+| 开发/CI Node | CI 22，本机 24 | `engines.node: >=22.13`；CI 保留 Node 22 用于最低开发环境，Electron 运行时兼容性必须由完整 Electron 探针验证 |
+| better-sqlite3 / node-abi / node-gyp | 已安装 | Phase 1 全部移除 |
+| TypeScript / Vite / React 插件 | 5.7 / 6 / 4 | 在 Phase 3 升至相容的当前稳定主版本；先由 lockfile 与 peer-dependency 校验确定组合，不预设不相容版本 |
 
-其余采纳的评审意见：`engines` 写 `>=22.13`（Vite 7 下限为 22.12，但 22.12 上 `node:sqlite` 仍需 flag，取 22.13 更严谨）、`migrations.ts` 存在 better-sqlite3 类型引用需一并改、`pragma()` → `exec()` 映射已核实安全（`sqliteStore.ts:86-88,97` 四处返回值均被丢弃）、命名参数裸键绑定与 null 原型对象行为已实测与 better-sqlite3 一致、`afterPack` 钩子与 better-sqlite3 无关（清理清单已明确标注勿动）、CI/release 探针的 `ELECTRON_RUN_AS_NODE: '1'` 变量需随探针替换一并删除。
+Electron 40 已内嵌 Node 24.11.1；因此 `@types/node@^22` 只能用于 CI 最低 Node 22 的额外检查，不能被表述为 Electron 40 的类型基线。[Electron 40 发布说明](https://www.electronjs.org/blog/electron-40-0)
 
-## 1. 现状盘点
+### 平台支持的前置决策
 
-| 项目 | 当前版本 | 目标版本 | 说明 |
-| --- | --- | --- | --- |
-| 本机 Node（开发环境） | v24.19.0 | 保持 v24 LTS | 已是最新 LTS 线，无需变动 |
-| Electron | ^35.7.5 | ^44.1.0 | 35 早已 EOL；44 为当前最新稳定大版本（Chromium 152 / Node 24.19） |
-| electron-builder | ^25.1.8 | ^26.x | 新版要求 Node ≥ 22，本机已满足 |
-| TypeScript | ^5.7.2 | ^5.9.x | 跟随 Electron 44 类型 |
-| Vite | ^6.0.3 | ^7.x | 仅渲染进程构建，可独立升级；注意 Vite 7 要求 Node ≥ 20.19/22.12 |
-| `@vitejs/plugin-react` | ^4.3.4 | 最新 major | Vite 7 下需要支持 Vite 7 peer 的新 major |
-| vitest | ^4.1.0 | 保持 / 跟随 Vite 主版本 | 已较新 |
-| React / antd | 18.3 / 5.22 | 本次不动 | 与 Electron 升级解耦，避免一次改太多 |
-| better-sqlite3 | ^12.11.1 | **移除（Phase 1）** | 用内置 `node:sqlite` 替代 |
-| `node-abi` / `node-gyp` | dependencies / devDependencies | **移除（Phase 1）** | 随 better-sqlite3 一起退场（`node-abi` 放在 dependencies 本就不妥） |
-| `package.json` engines | 未声明 | 补充 `"node": ">=22.13"` | 对齐 Vite 7 / electron-builder 26 的最低要求（Vite 7 下限 22.12；取 22.13 是因 22.12 上 `node:sqlite` 仍需 `--experimental-sqlite` flag，22.13 起免 flag，与本计划 Phase 1 的测试环境语义一致。实际开发机均为 Node 24，影响仅为理论层面） |
+仓库当前的发布配置和发布指南只产出 Windows x64、macOS x64/arm64，未产出 Windows ia32 或 Linux armv7l。因此实施 Electron 44 前须在发布说明和支持文档中明确：**macOS 13+、Windows x64、macOS x64/arm64** 为本次发布支持面；若产品仍承诺 macOS 12，则 Electron 44 不可作为目标版本，计划暂停并另选版本。不得把这一兼容性破坏留到打包后才发现。
 
-支持窗口参考：Electron 官方只维护最近 3 个稳定大版本（当前 42 / 43 / 44），35 已无任何安全更新。
+## 2. Phase 1：以 node:sqlite 替换 better-sqlite3
 
-## 2. Phase 1（原 Phase C，提前执行）：node:sqlite 替换 better-sqlite3
+### 2.1 已确认的迁移范围
 
-### 可行性依据（评审实测，已固化）
+现有 Electron 35.7.5 完整主进程（Node 22.16.0）可加载 `node:sqlite`；但该验证必须由仓库脚本重复执行，不能仅依赖人工结论。`DatabaseSync` 没有 `transaction(fn)`，所有直接调用必须迁移，不能以“少量调用点”概括。
 
-```
-$ electron.exe probe-node-sqlite-electron.cjs   # 完整 Electron 主进程（非 ELECTRON_RUN_AS_NODE）
-[probe] electron 35.7.5 node 22.16.0 node:sqlite OK [{"a":42}]
-```
+| 类别 | 必改文件 / 入口 | 改动要求 |
+| --- | --- | --- |
+| 连接与事务 | `electron/database/sqliteStore.ts` | `DatabaseSync`、PRAGMA 改用 `exec()`；删除原生 binding/asar 解析；提供唯一事务入口 |
+| 直接事务调用 | `electron/database/migrations.ts:25`、`electron/database/operations.ts:259`、`electron/database/migrateFromJson.ts:176`、`electron/confirmation/mcpConfirmPolicyMigration.ts:73` | 全部改为统一事务入口；禁止保留 `conn.transaction(...)` |
+| 类型引用 | `electron/database/migrations.ts:1`、`electron/confirmation/sqliteDecisionCache.ts:1`、`electron/confirmation/policyRuleStore.ts:1` | 改为从 `node:sqlite` 导入的共享连接类型；不得再引用 `better-sqlite3` |
+| 调试/运维脚本 | `scripts/read-wechat-config.mjs`、`scripts/probe-wechat-start.cjs`、`scripts/probe-wechat-state.cjs` | 改用 `node:sqlite`，或在确认已无用途后删除 |
+| 原生绑定链 | `scripts/install-sqlite-bindings.mjs`、`scripts/probe-better-sqlite3.mjs`、`scripts/native-bindings-manifest.json`、`scripts/dry-run-mac-pack.mjs` | 删除绑定安装、探针、manifest 与 macOS 绑定存在性检查 |
+| 包与文档 | `package.json`、`package-lock.json`、`.github/workflows/ci.yml`、`.github/workflows/release.yml`、`AGENTS.md`、`CLAUDE.md` | 删除依赖、脚本、打包 glob、原生绑定说明；保留 `afterPack`，它与 SQLite 无关 |
 
-即现有 Electron 35 即可用 `node:sqlite`（内嵌 Node ≥ 22.16，无需 flag）。其余已实测结论：
+### 2.2 事务契约（实施前不可省略）
 
-- 系统 Node 24.19.0：`node:sqlite` OK，FTS5 虚拟表可建（本项目搜索未用 FTS5，已全文检索确认）；
-- 命名参数：现有 SQL 用 `@id` 前缀、绑定时传裸键（如 `operations.ts:239`），实测 Node 24 下**裸键与前缀键均可绑定**，可直接平移；
-- `.all()` / `.get()` 返回 null 原型对象：与 better-sqlite3 行为一致，无需改调用方；
-- `sqliteStore.ts:86-88,97` 四处 `pragma()` 返回值均被丢弃（含 `wal_checkpoint`），`exec('PRAGMA ...')` 映射安全；未来若需读 PRAGMA 返回值，用 `db.prepare('PRAGMA ...').all()`。
+在 `sqliteStore.ts` 定义并导出连接级 `runInTransaction(conn, fn)`；业务层若只有 `AppDatabase`，再由其薄封装取得连接后调用该函数。`migrations.ts`、JSON 导入和确认策略迁移都必须使用它，业务代码不得自行发出事务边界语句。
 
-### 收益
+- 最外层调用使用 `BEGIN` / `COMMIT`；回调抛错时 `ROLLBACK` 后重新抛出原错误。
+- 嵌套调用使用每连接单调递增、不可由外部输入的 `SAVEPOINT` 名；成功 `RELEASE SAVEPOINT`，失败 `ROLLBACK TO SAVEPOINT` 后 `RELEASE SAVEPOINT` 并重新抛错。用 `WeakMap<DatabaseSync, TransactionState>` 保存深度与序号，关闭连接后不保留状态。
+- 保持同步回调契约；拒绝 `Promise`/thenable，避免在同步事务已经提交后继续写入。`lastInsertRowid` 进入既有 number 领域模型时显式 `Number()`，并为超出安全整数的值抛错或保留 bigint，不能静默精度丢失。
+- `runMigrations` 接收连接并调用统一 helper；`migrateFromJson` 的整个导入、确认策略迁移的规则/套餐/版本标记写入必须各自在同一原子事务内完成。
 
-- 删除 better-sqlite3 及整条原生绑定安装链：Windows 新机器 `npm install` 不再需要 VS Build Tools，不再可能卡 node-gyp；
-- 消除「Electron ABI 与 Node ABI 不一致导致绑定加载失败」整类故障；
-- 修复本机现状：无 VS 机器上 `npm test` 中依赖 better-sqlite3 Node 绑定的测试目前必然失败，替换后本地全量测试才可能真正全绿；
-- 安装包体积减小，打包链路简化。
+### 2.3 实施步骤
 
-### 迁移方案
+1. 先新增 `scripts/probe-node-sqlite.mjs`，其在 `app.whenReady()` 后创建临时文件数据库，输出 `process.versions.electron`、`process.versions.node`，执行建表、写入、读取并校验结果；无论成功或失败都在 `finally` 调用 `app.quit()`，失败设置非零 `process.exitCode`。不得设置 `ELECTRON_RUN_AS_NODE`。
+2. 先为事务 helper 写回归测试，再替换数据库实现与上表全部调用点。最低覆盖：提交、回调抛错后的完整回滚、嵌套成功、内层抛错被外层处理后的 savepoint 回滚、关闭后不可继续使用。
+3. 增加/扩展 JSON 导入与 MCP 确认策略迁移测试：故意在中途制造约束错误或抛错，断言前序写入、套餐变更和迁移版本标记均未部分落盘；成功路径保持幂等。
+4. 将 `@types/node` 升至含 `node:sqlite` 声明的最新 22.x；移除 `better-sqlite3`、`@types/better-sqlite3`、`node-abi`、`node-gyp`，以及 `rebuild:native`、`probe:sqlite`、绑定相关 `postinstall`/`prepack*`。删除 `asarUnpack` 和 `files` 中的 better-sqlite3 glob；**不要删除** `afterPack`。
+5. 将 CI/release 的旧探针改为新探针，并从 `sqlite-electron-probe` 矩阵删除 `ubuntu-latest`。Windows x64、macOS x64、macOS arm64 都直接运行完整 Electron 主进程探针，且不得设置 `ELECTRON_RUN_AS_NODE`。普通单元测试、类型检查和 Electron 主进程编译仍可在 Ubuntu 上运行，但它们不构成 Linux 桌面应用兼容承诺，因此不引入 Xvfb。
+6. 将真实 `userData/spaceassistant-data.db` 及其 `-wal`、`-shm` 文件复制到隔离临时目录，再对副本做启动、读写和关闭验证；不得直接操作开发者正在使用的数据文件。随后分别验证 Windows x64 安装包、macOS x64/arm64 安装包的首次启动与已有数据库读写。
 
-API 对照（两者都是同步 API，语义高度接近）：
+### 2.4 Phase 1 自动门禁与清理门禁
 
-| better-sqlite3 | node:sqlite |
+| 门禁 | 通过标准 |
 | --- | --- |
-| `new Database(path)` | `new DatabaseSync(path)` |
-| `db.pragma('journal_mode = WAL')` | `db.exec('PRAGMA journal_mode = WAL')` |
-| `stmt.run(...params)` → `{changes, lastInsertRowid}` | `stmt.run(...)` → 同形（`lastInsertRowid` 为 `number \| bigint`，涉自增 id 处统一 `Number()`） |
-| `stmt.get(...)` / `stmt.all(...)` | 同名，行为一致（含 null 原型对象） |
-| `db.transaction(fn)` | **没有**，需在 `sqliteStore.ts` 内用 `BEGIN` / `COMMIT` / `ROLLBACK` 封装等价 helper，保持上层签名不变 |
+| 事务与迁移测试 | 聚焦新增/受影响 Vitest 测试全绿，随后 `npm test` 全绿 |
+| 类型与构建 | `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron` 全绿 |
+| 真实 Electron 探针 | Windows x64、macOS x64、macOS arm64 三个 CI runner 记录 Electron/Node 版本并完成一次文件数据库读写，成功与失败路径均稳定退出；Ubuntu 仅运行普通质量门禁 |
+| 残留扫描 | `rg -n -S 'better-sqlite3|\.transaction\(' electron scripts package.json .github AGENTS.md CLAUDE.md` 无未批准结果；允许的 `transaction` 文本必须在计划实施时以文件/行和理由列入白名单 |
+| 数据与产物 | 旧数据库副本验证通过；release dry-run（`--publish never`）通过；Windows x64、macOS x64/arm64 产物均完成启动和数据库读写人工验收 |
 
-改动面：`electron/database/sqliteStore.ts`（连接与语句执行层）+ `electron/database/migrations.ts:1`（`import type Database from 'better-sqlite3'` 类型引用）+ 少量调用点。
+若 node:sqlite 存在无法在封装层消化的语义差异，回退必须恢复完整的原生绑定安装、CI 与打包配置，并先验证目标 Electron ABI 的可用预编译产物；不能只重新加入 npm 依赖。
 
-注意：Node 22.16 的 `node:sqlite` 仍带 `ExperimentalWarning`，属正常；后续 Electron 44（Node 24）下该警告消失。
+## 3. Electron 兼容性影响矩阵
 
-### 步骤
+每次 Electron 阶段开始时，以 [官方 breaking changes](https://www.electronjs.org/docs/latest/breaking-changes/) 为唯一清单来源重跑下表检索。每行必须在 PR 中填写「命中位置与修复」或「检索命令、输出为空及不适用理由」；不能以单一四关键词检索代替。
 
-1. 新增 `scripts/probe-node-sqlite.mjs`（仿照现有 `scripts/probe-better-sqlite3.mjs`），在**完整 Electron 主进程**下验证 `node:sqlite` 可用，注册为 `npm run probe:node-sqlite`；
-2. 用 `node:sqlite` 重写 `sqliteStore.ts` 连接/执行层，封装 `transaction(fn)` helper；改 `migrations.ts` 类型引用；`lastInsertRowid` 统一 `Number()`；
-3. 跑 `npm run test:electron`，再全量 `npm test`；
-4. **清理清单（评审补全版，逐项核对）**：
-   - `npm uninstall better-sqlite3 @types/better-sqlite3 node-abi`；移除 devDependencies 中的 `node-gyp`；
-   - `package.json` scripts：删除 `rebuild:native`、`probe:sqlite`、`postinstall` 中的绑定安装、`prepack` / `prepack:win` / `prepack:mac` 三个钩子；
-   - `package.json` build 字段：删除 `asarUnpack` 中的 `"**/better-sqlite3/**"` 与 `files` 中的 `"node_modules/better-sqlite3/**"`（卸载后是死 glob，一并清掉）。**注意：`afterPack` 钩子 `scripts/after-pack.cjs` 与 better-sqlite3 无关**（它做的是 Windows exe 图标修补 resedit 和 macOS arm64 ad-hoc 签名），**不要动**，误删会破坏打包图标和 macOS 启动；
-   - 删除脚本：`scripts/install-sqlite-bindings.mjs`、`scripts/probe-better-sqlite3.mjs`、`scripts/native-bindings-manifest.json`、`scripts/rebuild` 相关脚本；
-   - 迁移或删除调试工具：`scripts/read-wechat-config.mjs`（改用 `node:sqlite`）、`scripts/probe-wechat-start.cjs` / `scripts/probe-wechat-state.cjs`（改用 `node:sqlite`）；
-   - `scripts/dry-run-mac-pack.mjs:158-164`：删除 better-sqlite3 electron 绑定存在性校验段；
-   - `.github/workflows/ci.yml:20,50,52`：删除 `npm run rebuild:native` ×2 与 `npm run probe:sqlite`，替换为 `npm run probe:node-sqlite`；**同时删除探针步骤上的 `ELECTRON_RUN_AS_NODE: '1'` 环境变量**（ci.yml:54 附近）——新探针要求在完整 Electron 主进程下运行，带此变量测的是 Node 模式而非真实运行时；
-   - `.github/workflows/release.yml:44,77,93`：同上处理（含 "Probe better-sqlite3 under Electron" 步骤），**同样删除其 `ELECTRON_RUN_AS_NODE: '1'` 环境变量**（release.yml:95 附近）；
-   - 文档：更新 `AGENTS.md` 与 `CLAUDE.md` 的数据库/构建段落；
-5. 老用户数据兼容验证：用现有 `userData` 下的 `spaceassistant-data.db`（含 WAL）启动，确认读取无缝（文件格式相同）；
-6. 打包验证：`npm run pack:win` 实装跑核心路径。
+| Electron | 官方变化类别 | 仓库核查与验收 |
+| --- | --- | --- |
+| 36 | `app.commandLine` 行为、`PrinterInfo`、`Session.clearStorageData`、session 扩展 API、GTK4 | 检索 `app.commandLine|clearStorageData|PrinterInfo|session\.(loadExtension|removeExtension|getAllExtensions)|isAeroGlassEnabled`；GTK4 仅记录为 Linux 桌面端不适用，其他命中在支持平台验证 |
+| 37 | utility process 未处理拒绝/同步退出、WebUSB/WebSerial、`ProtocolResponse.session`、Linux workspace 可见性 | 检索 `utilityProcess|WebUSB|WebSerial|ProtocolResponse|IsVisibleOnAllWorkspaces`；工具子进程取消/退出在 Windows/macOS 验证，Linux workspace 行为记录为不适用 |
+| 38 | `ELECTRON_OZONE_PLATFORM_HINT`、`ORIGINAL_XDG_CURRENT_DESKTOP`、macOS 11、`plugin-crashed`、webFrame 路由 API | 检索环境变量、`plugin-crashed|webFrame\.routingId|findFrameByRoutingId`；确认 macOS 11 已不在支持面 |
+| 39 | `--host-rules`、`window.open` popup 可调整大小、macOS 音频捕获声明 | 检索 `host-rules|window\.open|setWindowOpenHandler|desktopCapturer|NSAudioCaptureUsageDescription`；外链/弹窗与屏幕/音频捕获实际路径冒烟 |
+| 40 | renderer 直接 Electron `clipboard` 弃用、dSYM 改为 tar.xz | 检索 renderer/preload 的 `from 'electron'|require\('electron'\)|clipboard`；当前 renderer 应使用 `navigator.clipboard`，必要能力经 preload/contextBridge；检查调试符号消费链 |
+| 41–43 | PDF WebContents、`Session.clearStorageData` 的 quotas、通知实现、dialog 默认目录、Linux dialog 参数 | 检索 `printToPDF|clearStorageData|Notification|showHiddenFiles|defaultPath`；PDF 导出、通知、文件选择器在 Windows/macOS 冒烟，Linux dialog 参数记录为不适用 |
+| 44 | macOS 12、Windows ia32/Linux armv7l 下线；renderer clipboard 移除；`select-client-certificate` 的 `webContents` 可为空；`net.request` frame header；ANGLE 打包变化 | 发布支持面复核；检索 `clipboard|select-client-certificate|net\.request|libEGL|libGLESv2`；证书选择和网络请求命中时补充测试，产物中不得依赖独立 ANGLE 库 |
 
-### Phase 1 门禁
+## 4. Phase 2：Electron 35 → 40
 
-`probe:node-sqlite`（Electron 完整主进程）OK + `npm test` 全量绿 + 老数据文件读取验证 + `ci.yml` 全绿 + `release.yml` 一次 dry-run（`--publish never`）通过 + `pack:win` 实装验证。
+1. 完成 §3 中 Electron 36–40 每一行的适用性记录与必要修复，再升级 Electron 至选定 40.x，并把 `@types/node` 升至 `^24`；保持 CI Node 22 的 `npm ci`、测试和构建检查，用以验证 declared engine 下限。
+2. 在锁定依赖后执行 `npm run build:electron`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm test` 与 Windows x64、macOS x64/arm64 的完整 Electron 探针；Ubuntu 继续只跑普通质量门禁。
+3. 在 Windows x64、macOS x64/arm64 手工冒烟：启动/升级旧库、聊天流式、工具调用循环、SQLite 读写、托盘、飞书/微信桥接、内嵌终端、PDF 导出与剪贴板；打包产物验证至少覆盖同一平台组合。
 
-### 回退
+Phase 2 门禁为上述命令与人工矩阵均通过、`package-lock.json` 记录精确 Electron 版本、§3 的 36–40 行全部闭环。未闭环项必须阻断阶段合并。
 
-若实测发现 `node:sqlite` 在某条 SQL 上有封装层吸收不掉的行为差异，回退到 better-sqlite3，但此时必须先在 `native-bindings-manifest.json` 登记新 ABI 预编译包（v1 断言「v12 对 Electron 44 仍有 prebuild」无验证依据，评审已指出），否则后续 Electron 升级卡死。
+## 5. Phase 3：Electron 40 → 44 与工具链升级
 
-## 3. Phase 2（原 Phase A）：Electron 35 → 40
+1. 先完成 §3 的 41–44 影响记录及平台支持决策；若 macOS 12 仍需支持，停止本阶段。
+2. 升级 Electron 至选定 44.x，保持 `@types/node@^24`；完成构建、全量测试、三个受支持平台 runner 的探针和 Windows/macOS 三种产物验收。
+3. 将 TypeScript、Vite、`@vitejs/plugin-react` 升至经 peer 依赖验证的相容稳定版本；Vitest 只有在 peer 约束要求时才随动。每次工具链变动后运行 `npm run build:renderer`、两项 typecheck、`npm test` 和 `npm run i18n:check`。
+4. 以 `docs/develop/chat-message-list-renderer-performance-audit.md` 的约定口径采集相同 fixture 的渲染性能对比；若基线尚无实测数据，先补录基线，不能把“无回归”写成结论。
 
-此时已无原生模块，是纯 JS 升级，「本机无 VS」从阻断项变为无关项。
-
-重点 breaking changes（35 之后）：
-
-- **Electron 36**：移除部分废弃 API；macOS 最低系统版本提升（本项目 Windows 优先，影响小）。
-- **Electron 37**：Node 升级到 22；`session.cookies` 部分行为收紧。
-- **Electron 38**：Chromium 140；`webContents` 打印 API 调整。
-- **Electron 39/40**：Node 22 LTS 后续 minor；`desktopCapturer` 旧回调签名等移除。
-
-行动项：
-
-1. 升级前全文检索 `grep -rn "shell.openItem\|remote\b\|new-window\|scrollBounce" electron/`，确认未命中已移除 API（`remote` 模块本项目未用，走 IPC，已确认）；
-2. `npm install -D electron@^40`；同步升级 `electron-builder` 到最新、`@types/node` 到 ^22（以 Electron 40 内嵌 Node 为准）；
-3. 在 `package.json` 增加 `"engines": { "node": ">=22.13" }`；
-4. 验证：`npm run build:electron` + `npm run typecheck:renderer` + `npm run test:electron`；手动冒烟 `npm run dev`（聊天流式 / 工具调用循环 / SQLite 读写 / 托盘 / 飞书微信桥接 / 内嵌终端）；
-5. `npm run pack:win` 实装验证（重点：node:sqlite 在新 ABI 下的表现——它是内置模块，无绑定问题，但仍过一遍数据库路径）。
-
-## 4. Phase 3（原 Phase B）：Electron 40 → 44 + 工具链随行升级
-
-- **Electron 41–44**：Node 升到 24（与开发机一致，`@types/node` 升到 ^24）；Chromium 146→152 的 Web 平台变更对渲染进程（React/antd）基本透明，主要关注 `session` 权限处理器收紧；Node 24 下 `node:sqlite` 不再是 experimental，警告消失。
-- 行动项与 Phase 2 相同：升级 → 检索废弃 API → 构建 + 测试 → dev 冒烟 → pack:win 实装。
-- 额外验证项：新版 Chromium 渲染性能回归——对照 `docs/develop/chat-message-list-renderer-performance-audit.md` 的基线数据做一次对比。
-- 工具链同批做：
-  - TypeScript ^5.7 → ^5.9：`tsc -p tsconfig.electron.json --noEmit` 与 `npm run typecheck:renderer` 全绿为准；
-  - Vite ^6 → ^7 + `@vitejs/plugin-react` 升到支持 Vite 7 peer 的新 major：`npm run build:renderer` 通过即可；
-  - vitest 如有 peer 约束再同步升级，保持 `pool: 'forks'`（electron 项目）配置不变。
-
-## 5. 执行顺序与验收门禁
+## 6. 交付顺序与证据归档
 
 ```
-Phase 1  node:sqlite 替换（在现有 Electron 35 上）  门禁：probe node:sqlite(Electron 完整主进程) + npm test 全量
-         + 老数据文件读取验证 + ci.yml 全绿 + release.yml dry-run + pack:win 实装
-Phase 2  Electron 35 → 40（已无原生模块）          门禁：build + typecheck + test + dev 冒烟 + pack:win 实装
-Phase 3  Electron 40 → 44 + 工具链                 门禁：同上 + 渲染性能基线对比
+Phase 1  node:sqlite 替换、事务语义和 CI 探针
+Phase 2  Electron 35 → 40（Node 24 类型基线）
+Phase 3  Electron 40 → 44、平台下线确认与工具链升级
 ```
 
-每个 Phase 单独一个分支 / 提交单元，门禁全绿再进下一个。预计工作量：Phase 1 约一天（含脚本与 CI 清理），Phase 2/3 各半天到一天（大头在冒烟验证）。
-
-## 6. 参考资料
-
-- [Electron Releases（版本与内嵌 Node/Chromium 对照）](https://releases.electronjs.org/releases/stable)
-- [Electron 版本支持策略](https://electronjs.org/docs/latest/tutorial/electron-timelines)
-- [electron 生态迁移到 Node 22 公告](https://electronjs.org/blog/ecosystem-node-22)
-- [Node 内置 sqlite 模块介绍](https://blog.logrocket.com/using-built-in-sqlite-module-node-js/)
-- 评审报告：`docs/review/dependency-upgrade-plan-2026-08-review-v1.md`
+每阶段的 PR/发布记录必须附：精确依赖版本与 lockfile diff、§3 影响矩阵结论、自动命令输出、各平台探针结果、安装包手工验收记录，以及未自动化项的责任人与回归路径。参考资料： [Electron 版本发布页](https://releases.electronjs.org/release?channel=stable)、[Electron 40 发布说明](https://www.electronjs.org/blog/electron-40-0)、[Electron Breaking Changes](https://www.electronjs.org/docs/latest/breaking-changes/)、[Node SQLite API](https://nodejs.org/api/sqlite.html)。
