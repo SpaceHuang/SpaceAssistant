@@ -56,3 +56,19 @@ docs/project/
 # 本地分析报告，不纳入版本控制
 docs/analyze/
 docs/review/
+
+# 会话明文备份（运行时辅助导出渠道）
+sessions/
+
+# 后台任务运行时数据
+background-tasks/
+
+# LLM wiki 本地内容与技能目录
+llm-wiki/
+.space-skills/
+
+# Codex 本地配置
+.codex/
+
+# Impeccable hook 本地配置
+.github/hooks/
