@@ -8,6 +8,7 @@ import {
   getConfigValue,
   getMessages,
   getSession,
+  listSearchHistory,
   openDatabase,
   searchMessages
 } from './database'
@@ -247,6 +248,63 @@ describe('migrateFromJson', () => {
 
     const db = openDatabase(dbPath)
     expect(getMessages(db, 'sess-legacy')).toHaveLength(1)
+    db.close()
+  })
+
+  it('归一历史快照（评审 C2）：searchHistory 多余字段与缺失可选字段的消息可一次性迁移', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-normalize-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+
+    const session = {
+      id: 'sess-n1',
+      name: 'normalize',
+      preview: '',
+      model: 'claude-sonnet-4-20250514',
+      temperature: 0.7,
+      maxTokens: 4096,
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 1,
+      skillsState: { enabledSkillNames: [], disabledSkillNames: [] },
+      metadata: {},
+      schemaVersion: 1
+    }
+
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [session],
+        messages: [
+          {
+            id: 'm-n1',
+            sessionId: 'sess-n1',
+            role: 'user',
+            content: 'legacy minimal message',
+            // 全部可空列缺失（旧 JSON 无这些键），且携带历史遗留未知字段
+            legacyUnknownField: 'should-be-dropped',
+            status: 'sent',
+            schemaVersion: 1,
+            timestamp: 1,
+            sequence: 0
+          }
+        ],
+        configs: {},
+        searchHistory: [
+          // 历史遗留多余字段：node:sqlite 对多余命名参数键直接抛 Unknown named parameter
+          { id: 'h-n1', query: 'legacy query', timestamp: 1, source: 'legacy-panel', extraField: { a: 1 } }
+        ],
+        sessionUsages: {}
+      }),
+      'utf8'
+    )
+
+    const db = openDatabase(dbPath)
+    const messages = getMessages(db, 'sess-n1')
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.content).toBe('legacy minimal message')
+    expect(listSearchHistory(db)).toEqual(['legacy query'])
     db.close()
   })
 

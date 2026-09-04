@@ -5,9 +5,16 @@ import { createDebouncedDbSave } from '../dbSaveScheduler'
 import { CREATE_TABLES_SQL } from './schema'
 import { runMigrations } from './migrations'
 
-// 事务 helper 实现于 ./transaction（打破 sqliteStore → migrations → helper 的循环依赖），
-// 此处再导出以保持「连接级事务入口由 sqliteStore 导出」的对外契约。
-export { runInTransaction, lastInsertRowidToNumber } from './transaction'
+/**
+ * 生产默认 busy timeout（ms），与旧 better-sqlite3 构造器默认 timeout=5000 对齐；
+ * node:sqlite 默认 busy_timeout=0（锁争用立即抛错），必须显式设置（评审阻断 1）。
+ */
+export const DEFAULT_BUSY_TIMEOUT_MS = 5000
+
+export type OpenSqliteDatabaseOptions = {
+  /** busy timeout（ms），默认 DEFAULT_BUSY_TIMEOUT_MS；测试可注入短超时验证等待行为 */
+  busyTimeoutMs?: number
+}
 
 export type AppDatabase = {
   readonly filePath: string
@@ -41,11 +48,11 @@ function walCheckpoint(conn: DatabaseSync, truncate = false): void {
   conn.exec(truncate ? 'PRAGMA wal_checkpoint(TRUNCATE)' : 'PRAGMA wal_checkpoint(PASSIVE)')
 }
 
-export function openSqliteDatabase(dbPath: string): AppDatabase {
+export function openSqliteDatabase(dbPath: string, options?: OpenSqliteDatabaseOptions): AppDatabase {
   const dir = path.dirname(dbPath)
   fs.mkdirSync(dir, { recursive: true })
 
-  const conn = new DatabaseSync(dbPath)
+  const conn = new DatabaseSync(dbPath, { timeout: options?.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS })
   configureConnection(conn)
   initSchema(conn)
 

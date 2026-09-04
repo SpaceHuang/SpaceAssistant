@@ -1,7 +1,8 @@
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import type { AppDatabase } from './index'
 import { SCHEMA_META_KEYS } from './schema'
-import { getDbConnection, getSchemaMeta, runInTransaction, setSchemaMeta } from './sqliteStore'
+import { getDbConnection, getSchemaMeta, setSchemaMeta } from './sqliteStore'
+import { changesToNumber, runInTransaction } from './transaction'
 
 const WORKSPACE_LAYOUT_CONFIG_KEY = 'config.workspaceLayout'
 const WRITE_DIR_CHOICE_KEY = 'writeDirChoice'
@@ -63,7 +64,7 @@ export function cleanupLegacyWorkspaceLayoutOnStartup(db: AppDatabase): LegacyWo
       }
 
       const deleteResult = conn.prepare('DELETE FROM configs WHERE key = ?').run(WORKSPACE_LAYOUT_CONFIG_KEY)
-      const deletedConfig = deleteResult.changes > 0
+      const deletedConfig = changesToNumber(deleteResult.changes) > 0
 
       const updateStmt = conn.prepare('UPDATE sessions SET metadata = ? WHERE id = ?')
       for (const u of updates) {

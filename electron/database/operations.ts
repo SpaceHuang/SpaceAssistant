@@ -16,7 +16,8 @@ import {
   serializeToolCallsForDb,
   serializeToolUseForDb
 } from '../messageCodec'
-import { getDbConnection, runInTransaction, type AppDatabase } from './sqliteStore'
+import { getDbConnection, type AppDatabase } from './sqliteStore'
+import { changesToNumber, runInTransaction } from './transaction'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import {
   estimateThinkingTokensFromMessage,
@@ -762,7 +763,7 @@ export function setConfigValue(db: AppDatabase, key: string, value: string): voi
 export function deleteConfigValue(db: AppDatabase, key: string): boolean {
   const conn = getDbConnection(db)
   const result = conn.prepare('DELETE FROM configs WHERE key = ?').run(key)
-  if (result.changes === 0) return false
+  if (changesToNumber(result.changes) === 0) return false
   db.save()
   return true
 }

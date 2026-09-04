@@ -7,7 +7,8 @@ import {
 } from '../../src/shared/domainTypes'
 import { loadSnapshotFromJson } from './jsonSnapshot'
 import { SCHEMA_META_KEYS } from './schema'
-import { getDbConnection, getSchemaMeta, isDatabaseEmpty, runInTransaction, setSchemaMeta, type AppDatabase } from './sqliteStore'
+import { getDbConnection, getSchemaMeta, isDatabaseEmpty, setSchemaMeta, type AppDatabase } from './sqliteStore'
+import { runInTransaction } from './transaction'
 import type { DbSnapshot, StoredMessage } from './types'
 import { deserializeToolCallsFromDb } from '../messageCodec'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -133,6 +134,7 @@ function insertSession(conn: ReturnType<typeof getDbConnection>, session: Sessio
 }
 
 function insertMessage(conn: ReturnType<typeof getDbConnection>, row: StoredMessage): void {
+  // row 已在 loadSnapshotFromJson 边界完成归一：字段集固定、可空列已为 null（评审 C2）
   conn
     .prepare(
       `INSERT INTO messages (
@@ -150,10 +152,9 @@ function insertMessage(conn: ReturnType<typeof getDbConnection>, row: StoredMess
       sessionId: row.sessionId,
       role: row.role,
       content: row.content,
-      // node:sqlite 拒绝 undefined 绑定；可空列统一归一为 null（旧驱动行为为隐式 NULL）
-      toolUse: row.toolUse ?? null,
-      toolCalls: row.toolCalls ?? null,
-      thinking: row.thinking ?? null,
+      toolUse: row.toolUse,
+      toolCalls: row.toolCalls,
+      thinking: row.thinking,
       contentSegments: row.contentSegments ?? null,
       skillHints: row.skillHints ?? null,
       attachments: row.attachments ?? null,

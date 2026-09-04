@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { lastInsertRowidToNumber, runInTransaction } from './sqliteStore'
+import { changesToNumber, runInTransaction } from './transaction'
 
 function createConn(): DatabaseSync {
   const conn = new DatabaseSync(':memory:')
@@ -123,17 +123,58 @@ describe('runInTransaction（连接级事务入口）', () => {
   })
 })
 
-describe('lastInsertRowidToNumber（bigint → number 安全转换）', () => {
+describe('changesToNumber（changes → number 安全转换，评审 C1）', () => {
   it('普通 number 原样返回', () => {
-    expect(lastInsertRowidToNumber(42)).toBe(42)
+    expect(changesToNumber(42)).toBe(42)
   })
 
   it('安全整数范围内的 bigint 转为 number', () => {
-    expect(lastInsertRowidToNumber(BigInt(7))).toBe(7)
-    expect(lastInsertRowidToNumber(BigInt(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER)
+    expect(changesToNumber(BigInt(7))).toBe(7)
+    expect(changesToNumber(BigInt(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER)
   })
 
   it('超出安全整数范围抛错，不静默丢失精度', () => {
-    expect(() => lastInsertRowidToNumber(BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1))).toThrow(/safe integer/i)
+    expect(() => changesToNumber(BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1))).toThrow(/safe integer/i)
+  })
+
+  it('0n === 0 陷阱：bigint 0 转换后与 number 0 严格相等（deleteConfigValue 语义依赖）', () => {
+    expect(changesToNumber(BigInt(0)) === 0).toBe(true)
+  })
+})
+
+describe('自动回滚守卫（评审阻断 2：SQLite 自动回滚后 ROLLBACK 不得掩盖原始错误）', () => {
+  function createConnWithRaiseRollbackTrigger(): DatabaseSync {
+    const conn = createConn()
+    conn.exec(
+      `CREATE TRIGGER fail_insert BEFORE INSERT ON items
+       WHEN NEW.value = 'boom'
+       BEGIN SELECT RAISE(ROLLBACK, 'trigger boom'); END`
+    )
+    return conn
+  }
+
+  it('外层事务：RAISE(ROLLBACK) 自动回滚后仍抛出原始业务错误而非 cannot rollback', () => {
+    const conn = createConnWithRaiseRollbackTrigger()
+    expect(() =>
+      runInTransaction(conn, () => {
+        conn.prepare('INSERT INTO items (value) VALUES (?)').run('boom')
+      })
+    ).toThrow(/trigger boom/)
+    expect(countItems(conn)).toBe(0)
+    conn.close()
+  })
+
+  it('嵌套事务：内层触发 RAISE(ROLLBACK)，savepoint 回滚与外层回滚守卫均不掩盖原始错误', () => {
+    const conn = createConnWithRaiseRollbackTrigger()
+    expect(() =>
+      runInTransaction(conn, () => {
+        conn.prepare('INSERT INTO items (value) VALUES (?)').run('outer')
+        runInTransaction(conn, () => {
+          conn.prepare('INSERT INTO items (value) VALUES (?)').run('boom')
+        })
+      })
+    ).toThrow(/trigger boom/)
+    expect(countItems(conn)).toBe(0)
+    conn.close()
   })
 })

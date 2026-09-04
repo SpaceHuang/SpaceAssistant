@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { changesToNumber } from '../database/transaction'
 import type { PolicyAction, PolicyRule } from '../../src/shared/confirmation/types'
 
 export interface PolicyRuleOverride {
@@ -55,7 +56,7 @@ export class PolicyRuleStore {
   }
 
   removeOverride(ruleId: string): number {
-    return Number(this.db.prepare('DELETE FROM policy_rules WHERE rule_id = ?').run(ruleId).changes)
+    return changesToNumber(this.db.prepare('DELETE FROM policy_rules WHERE rule_id = ?').run(ruleId).changes)
   }
 
   /** 把覆盖合并回默认规则（覆盖 action/params；locked 条目不得被覆盖由调用方前置校验）。 */

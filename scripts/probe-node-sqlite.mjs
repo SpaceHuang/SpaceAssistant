@@ -18,6 +18,17 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
   process.exit(1)
 }
 
+// 超时兜底（评审 P1）：CI 上 Electron 偶发卡在 whenReady() 之前（沙盒/浏览器初始化），
+// 无超时会让 probe 作业挂到默认 job 超时。超时后打印诊断并立即失败退出。
+const TIMEOUT_MS = Number(process.env.PROBE_NODE_SQLITE_TIMEOUT_MS ?? 60_000)
+const watchdog = setTimeout(() => {
+  console.error(
+    `[probe-node-sqlite] timed out after ${TIMEOUT_MS}ms ` +
+      `(electron=${process.versions.electron ?? 'n/a'} node=${process.versions.node} arch=${process.arch} platform=${process.platform})`
+  )
+  process.exit(1)
+}, TIMEOUT_MS)
+
 let dir
 app
   .whenReady()
@@ -42,6 +53,7 @@ app
     process.exitCode = 1
   })
   .finally(() => {
+    clearTimeout(watchdog)
     try {
       if (dir) fs.rmSync(dir, { recursive: true, force: true })
     } catch {

@@ -47,7 +47,13 @@ export function runInTransaction<T>(conn: DatabaseSync, fn: () => T): T {
       conn.exec('COMMIT')
       return result
     } catch (err) {
-      conn.exec('ROLLBACK')
+      // SQLite 可能已因错误自动回滚（如 RAISE(ROLLBACK) / SQLITE_FULL），
+      // 此时 ROLLBACK 自身会抛 "cannot rollback"；守卫并始终重抛原始错误。
+      try {
+        conn.exec('ROLLBACK')
+      } catch {
+        /* 自动回滚场景：忽略次生错误，保留原始错误 */
+      }
       throw err
     } finally {
       state.depth = 0
@@ -65,8 +71,18 @@ export function runInTransaction<T>(conn: DatabaseSync, fn: () => T): T {
     conn.exec(`RELEASE SAVEPOINT ${savepoint}`)
     return result
   } catch (err) {
-    conn.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`)
-    conn.exec(`RELEASE SAVEPOINT ${savepoint}`)
+    // 同理：自动回滚后 savepoint 已不存在，ROLLBACK TO / RELEASE 均可能抛错；
+    // 任何次生错误都不得掩盖原始错误。
+    try {
+      conn.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`)
+    } catch {
+      /* ignore */
+    }
+    try {
+      conn.exec(`RELEASE SAVEPOINT ${savepoint}`)
+    } catch {
+      /* ignore */
+    }
     throw err
   } finally {
     state.depth--
@@ -74,16 +90,17 @@ export function runInTransaction<T>(conn: DatabaseSync, fn: () => T): T {
 }
 
 /**
- * `StatementSync.run()` 的 `lastInsertRowid` 在 node:sqlite 中为 `number | bigint`；
+ * `StatementSync.run()` 的 `changes` / `lastInsertRowid` 在 node:sqlite 中为 `number | bigint`；
  * 进入既有 number 领域模型前必须显式转换，超出安全整数范围抛错，不做静默精度丢失。
+ * （`0n === 0` 为 false，裸比较在驱动返回 bigint 时会误判，必须经此 helper 归一。）
  */
-export function lastInsertRowidToNumber(value: number | bigint): number {
+export function changesToNumber(value: number | bigint): number {
   if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value)) throw new Error(`lastInsertRowid ${value} is not a safe integer`)
+    if (!Number.isSafeInteger(value)) throw new Error(`changes ${value} is not a safe integer`)
     return value
   }
   if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
-    throw new Error(`lastInsertRowid ${value} exceeds the safe integer range`)
+    throw new Error(`changes ${value} exceeds the safe integer range`)
   }
   return Number(value)
 }

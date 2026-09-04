@@ -3,9 +3,9 @@ import {
   deleteConfigValue,
   getConfigValue,
   getDbConnection,
-  runInTransaction,
   setConfigValue
 } from '../database'
+import { runInTransaction } from '../database/transaction'
 import {
   MCP_MAX_SERVERS,
   McpServerWriteInputSchema,

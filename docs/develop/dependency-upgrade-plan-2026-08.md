@@ -241,3 +241,56 @@ Phase 3  Electron 40 → 44、平台下线确认与工具链升级
 - **安装包验收**：Windows NSIS 与 macOS x64/arm64 DMG 产物首次启动与已有数据库读写。
 - **真实渲染性能**：按审计文档 §7 在约定最低配置机器上用 React Profiler / Performance 面板复核四组 fixture。
 - **TypeScript 7 迁移**：`baseUrl`/`node10` 移除与 NodeNext import 扩展名改造为独立计划，不在本阶段。
+
+---
+
+## 附录：评审 v1 修复记录
+- 修复日期：2026-09-04
+- 对应评审：`docs/review/dependency-upgrade-implementation-code-review-v1.md`（主仓库）
+- 修复方式：阻断 1/2 与 C1/C2 均先写失败回归测试（11 个测试先红），再改实现。
+
+### 阻断 1：busy timeout 丢失（CONFIRMED）
+
+- 处置：`electron/database/sqliteStore.ts` 的 `new DatabaseSync(dbPath)` 改为 `new DatabaseSync(dbPath, { timeout: busyTimeoutMs })`；新增导出 `DEFAULT_BUSY_TIMEOUT_MS = 5000`（与旧 better-sqlite3 默认对齐）；`openSqliteDatabase` 增加可注入 `options.busyTimeoutMs`（生产不传即用 5000，测试注入短超时）。
+- 回归测试：`electron/database/sqliteStore.busyTimeout.test.ts`（新增，2 例）
+  - 默认连接 `PRAGMA busy_timeout` 返回 5000；
+  - 连接 A `BEGIN IMMEDIATE` 持写锁，连接 B（注入 300ms）写入等待 ~300ms 后抛 `database is locked`（elapsed ≥ 200ms），A COMMIT 后 B 写入成功——修复前 B 约 1ms 即抛错（测试先红确认）。
+
+### 阻断 2：回滚路径无守卫（CONFIRMED）
+
+- 处置：`electron/database/transaction.ts` 外层 `ROLLBACK` 与嵌套 `ROLLBACK TO SAVEPOINT` / `RELEASE SAVEPOINT` 均包 try/catch，catch 中始终重抛原始错误；次生错误（`cannot rollback - no transaction is active` 等）仅忽略不掩盖。
+- 回归测试：`electron/database/sqliteStore.transaction.test.ts` 新增 describe「自动回滚守卫」（2 例），用 `RAISE(ROLLBACK, 'trigger boom')` 触发器制造自动回滚：修复前外层与嵌套均抛 `cannot rollback`（先红确认），修复后抛原始 `trigger boom`。
+
+### P1：探针无超时兜底
+
+- 处置：`scripts/probe-node-sqlite.mjs` 增加 60s watchdog（`PROBE_NODE_SQLITE_TIMEOUT_MS` 可覆盖），超时打印 electron/node/arch/platform 诊断并 `process.exit(1)`；正常路径 `clearTimeout` 后 `app.quit()`。
+- 验证：本机 `npx electron scripts/probe-node-sqlite.mjs` 正常输出 ok 并退出码 0。
+
+### P2：engines 缺失
+
+- 处置：`package.json` 补 `"engines": { "node": ">=22.13" }`（计划文档 §自述下限）。
+
+### P3：Linux 无 CI 验证
+
+- 处置：不恢复 ubuntu 探针（计划 §2.3.5 明确不引入 Xvfb）。改为文档标注：`CLAUDE.md` 与 `docs/develop/release-guide.md` 的 `pack:linux` 条目标注「无 CI 探针验证，不在本次发布支持面」。
+
+### C1：changes 转换策略统一
+
+- 处置：`electron/database/transaction.ts` 提供共享 `changesToNumber(value: number | bigint)`（带安全整数校验，超范围抛错）；删除零生产调用的 `lastInsertRowidToNumber`。替换 7 处裸 `Number(...)`（`confirmation/policyRuleStore.ts:58`、`confirmation/sqliteDecisionCache.ts` 6 处）与 2 处未包装比较（`operations.ts:765` 的 `deleteConfigValue`、`legacyWorkspaceLayoutCleanup.ts:66`）。`electron/database/index.ts` 桶导出同步改为从 `./transaction` 导出 `changesToNumber` / `runInTransaction`。
+- 单测：`sqliteStore.transaction.test.ts` 的 `changesToNumber` describe（含 bigint 超安全整数抛错、`0n === 0` 陷阱：转换后严格相等为 true）。
+
+### C2：undefined→null 归一分散
+
+- 处置：归一收敛到 `loadSnapshotFromJson`（不可信 JSON → DbSnapshot 唯一边界）：消息重建为仅含已知字段、全部可空列归一为 null（含 `session_id` 历史字段兼容）；`searchHistory` 条目剔除未知字段并过滤无效项。插入层 `insertMessage` 不再维护归一清单（字段集已由边界保证）；`insertSearch.run(item)` 绑定的已是归一后仅含 `@id/@query/@timestamp` 的对象，多余命名参数风险消除。
+- 回归测试：`electron/database.migrateAndSearch.test.ts` 新增「归一历史快照」用例：含历史遗留多余字段的 searchHistory 条目与缺失全部可选字段（且携带未知字段）的消息可一次性迁移成功，消息与搜索历史数据正确（修复前抛 `Unknown named parameter`，先红确认）。
+
+### C3：import 路径统一
+
+- 处置：`runInTransaction` canonical 路径统一为 `./transaction`（electron/database 内：operations、migrateFromJson、legacyWorkspaceLayoutCleanup、migrations）/ `../database/transaction`（其他模块：mcpConfigStore、remoteSecurityConfigDb、mcpConfirmPolicyMigration、confirmation/*）；删除 `sqliteStore.ts` 的转发导出及「对外契约」注释；对外桶导出仅保留 `electron/database/index.ts`（改从 `./transaction` 直接再导出）。
+
+### 门禁结果
+
+- 定向测试（5 个受影响文件，38 例）：全绿；
+- `npm test` 全量：448 文件 / 2766 通过 / 2 skipped，全绿；
+- `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron`：全绿；
+- 本机 `npx electron scripts/probe-node-sqlite.mjs`：正常输出 ok，退出码 0。

@@ -39,7 +39,7 @@ npm run test:watch          # vitest --watch
 # 打包分发
 npm run pack:win            # Windows NSIS 安装包
 npm run pack:mac            # macOS DMG
-npm run pack:linux          # Linux AppImage
+npm run pack:linux          # Linux AppImage（无 CI 探针验证，不在本次发布支持面）
 ```
 
 ## 架构

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { changesToNumber } from '../database/transaction'
 import type {
   CacheKey,
   DecisionCacheEntry,
@@ -105,24 +106,24 @@ export class SqliteDecisionCache implements DecisionCacheView {
 
   /** 应用启动时清理所有会话级条目（内存态语义：进程消亡即失效）。 */
   clearAllSession(): number {
-    return Number(this.db.prepare("DELETE FROM decision_cache WHERE scope = 'session'").run().changes)
+    return changesToNumber(this.db.prepare("DELETE FROM decision_cache WHERE scope = 'session'").run().changes)
   }
 
   /** 换绑/重置：清空指定链路（或键值域）的全部条目。 */
   clearLane(lane: string | '*', scope?: 'session' | 'persistent'): number {
     if (scope) {
-      return Number(
+      return changesToNumber(
         this.db
           .prepare('DELETE FROM decision_cache WHERE lane = ? AND scope = ?')
           .run(lane, scope).changes
       )
     }
-    return Number(this.db.prepare('DELETE FROM decision_cache WHERE lane = ?').run(lane).changes)
+    return changesToNumber(this.db.prepare('DELETE FROM decision_cache WHERE lane = ?').run(lane).changes)
   }
 
   /** 清除指定规范化键（确认记忆管理：清除即下次再问）。 */
   clear(key: CacheKey): number {
-    return Number(this.db.prepare('DELETE FROM decision_cache WHERE key_json = ?').run(canonicalKeyJson(key)).changes)
+    return changesToNumber(this.db.prepare('DELETE FROM decision_cache WHERE key_json = ?').run(canonicalKeyJson(key)).changes)
   }
 
   /** 确认记忆管理列表：全量读出（按创建时间倒序），供设置页分组展示。 */
@@ -133,13 +134,13 @@ export class SqliteDecisionCache implements DecisionCacheView {
 
   /** 清除全部（清空确认记忆）。 */
   clearAll(): number {
-    return Number(this.db.prepare('DELETE FROM decision_cache').run().changes)
+    return changesToNumber(this.db.prepare('DELETE FROM decision_cache').run().changes)
   }
 
   /** 清理过期（expires_at 已过）与休眠（超过 DORMANT_MS 未命中）条目；返回清理数。 */
   expireDormant(now = Date.now()): number {
     const dormantBefore = now - DORMANT_MS
-    return Number(
+    return changesToNumber(
       this.db
         .prepare('DELETE FROM decision_cache WHERE (expires_at IS NOT NULL AND expires_at <= ?) OR last_hit_at <= ?')
         .run(now, dormantBefore).changes

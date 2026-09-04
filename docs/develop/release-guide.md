@@ -175,7 +175,7 @@ npm run build
 # 分平台打包
 npm run pack:win     # Windows NSIS 安装包
 npm run pack:mac     # 仅 macOS 可执行
-npm run pack:linux   # Linux AppImage（当前 CI 未纳入自动发版）
+npm run pack:linux   # Linux AppImage（当前 CI 未纳入自动发版；CI 无 sqlite-electron-probe 验证，不在本次发布支持面）
 ```
 
 配置入口：`package.json` 的 `build` 字段（electron-builder）。
