@@ -314,13 +314,15 @@ function fillEmptyMessages(
   strict: boolean
 ): ClaudeChatMessageWithBlocks[] {
   return messages.map((m) => {
-    const before = JSON.stringify(m.content)
-    const content = ensureNonEmptyContent(m.role, m.content as string | ContentBlock[], fixes)
-    if (JSON.stringify(content) !== before) {
+    const raw = m.content as string | ContentBlock[]
+    const content = ensureNonEmptyContent(m.role, raw, fixes)
+    // ensureNonEmptyContent 只在填充时返回新值，直接比较引用即可，避免逐条 JSON.stringify
+    if (content !== raw) {
       report.repaired = true
       throwIfStrict(report, strict)
+      return { ...m, content }
     }
-    return { ...m, content }
+    return m
   })
 }
 
