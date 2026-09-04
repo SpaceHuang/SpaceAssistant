@@ -4,7 +4,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import manifest from './ripgrep-manifest.json' with { type: 'json' }
 import { validateManifest } from './ripgrep-manifest.mjs'
 
@@ -143,7 +143,7 @@ export async function prepareTarget(targetKey, opts = {}) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const targets = process.argv.slice(2).filter((arg) => arg.startsWith('--target=')).map((arg) => arg.slice(9))
   const selected = targets.length ? targets : ['darwin-x64', 'darwin-arm64', 'win32-x64']
   for (const target of selected) await prepareTarget(target)

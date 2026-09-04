@@ -120,7 +120,11 @@ async function installElectronFromManifest(arch) {
   const tmpExtract = path.join(releaseDir, `.tmp-electron-${arch}`)
   fs.rmSync(tmpExtract, { recursive: true, force: true })
   fs.mkdirSync(tmpExtract, { recursive: true })
-  execSync(`tar -xf "${tgz}" -C "${tmpExtract}"`, { stdio: 'inherit' })
+  // Windows bsdtar 会把带盘符的绝对路径（E:\...）误判为远程文件，统一用相对路径 + cwd
+  execSync(`tar -xf "electron-prebuild-${arch}.tar.gz" -C ".tmp-electron-${arch}"`, {
+    stdio: 'inherit',
+    cwd: releaseDir
+  })
   fs.unlinkSync(tgz)
 
   const built = path.join(tmpExtract, 'build/Release/better_sqlite3.node')
