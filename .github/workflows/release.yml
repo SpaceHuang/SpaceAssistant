@@ -44,6 +44,10 @@ jobs:
         run: npm run rebuild:native
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
+      - run: node scripts/ripgrep-manifest.mjs
+      - name: Assert tests do not depend on ignored ripgrep staging
+        shell: bash
+        run: test -z "$(find resources/ripgrep -type f ! -name '.gitkeep' -print -quit)"
       - run: npm test
 
   build:
@@ -77,7 +81,10 @@ jobs:
         run: npm run rebuild:native
 
       - name: Build & pack
-        run: npm run build && npx electron-builder --${{ matrix.pack }} --publish never
+        shell: bash
+        run: |
+          if [ "${{ matrix.pack }}" = "win" ]; then npm run prepare:rg -- --target=win32-x64; else npm run prepare:rg -- --target=darwin-x64 --target=darwin-arm64; fi
+          npm run build && npx electron-builder --${{ matrix.pack }} --publish never
         env:
           CI: true
           CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -85,9 +92,31 @@ jobs:
       - name: Verify macOS app signature
         if: matrix.pack == 'mac'
         run: |
-          APP=$(find release -name '*.app' -type d | head -n 1)
-          test -n "$APP"
-          npm run verify:macos-app -- "$APP"
+          for APP in $(find release -type d -name '*.app' -prune -print); do
+            npm run verify:macos-app -- "$APP"
+          done
+          test -n "$(find release -type d -name '*.app' -prune -print)"
+
+      - name: Verify bundled ripgrep in unpacked outputs
+        shell: bash
+        run: |
+          if [ "${{ matrix.pack }}" = "win" ]; then
+            FOUND=0
+            while IFS= read -r APP; do
+              FOUND=1
+              test -f "$APP/bin/rg.exe"
+              npm run verify:rg:package -- "$(dirname "$APP")" win32-x64
+            done < <(find release -type d -name 'resources' -print)
+            test "$FOUND" -eq 1
+          else
+            FOUND=0
+            while IFS= read -r APP; do
+              FOUND=1
+              test -x "$APP/Contents/Resources/bin/rg"
+              npm run verify:rg:package -- "$APP"
+            done < <(find release -type d -name '*.app' -prune -print)
+            test "$FOUND" -eq 1
+          fi
 
       - name: Probe better-sqlite3 under Electron
         run: npm run probe:sqlite

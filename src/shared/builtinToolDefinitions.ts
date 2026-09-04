@@ -69,28 +69,29 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'grep',
     description:
-      '在工作目录内按正则搜索文件内容（跨平台，内置实现，不依赖系统 grep/findstr/rg）。需要行号时用 output_mode=content；限制条数用 head_limit（等同 shell 的 head）。文本搜索一律用本工具，不要在 run_shell 中写 grep、findstr、head、find 等命令。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
+      '在当前工作目录范围内递归搜索文件内容。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。',
     input_schema: {
       type: 'object',
       properties: {
-        pattern: { type: 'string', description: '正则表达式搜索模式' },
+        pattern: { type: 'string', description: '使用 ripgrep 默认正则语法的搜索模式；默认不支持 lookaround 和反向引用' },
         path: {
           type: 'string',
-          description: '搜索路径，支持相对路径（相对于工作目录）和绝对路径，默认搜索整个工作目录'
+          description: '工作目录内要搜索的文件或目录；支持相对路径和工作目录内的绝对路径，默认搜索整个工作目录'
         },
-        glob: { type: 'string', description: "文件名 glob 过滤模式，如 '*.ts'、'**/*.{ts,tsx}'" },
+        glob: { type: 'string', description: "使用 .gitignore 风格 glob，支持 !pattern 排除和 {ts,tsx} alternatives；显式单文件 path 不受过滤" },
         output_mode: {
           type: 'string',
           enum: ['files_with_matches', 'content', 'count'],
           description:
-            '输出模式：files_with_matches（默认）、content（含行号）、count（每文件匹配行数）'
+            '输出模式：files_with_matches（默认，只返回文件路径）、content（匹配行/块，默认含行号）、count（每文件匹配行数）'
         },
         ignore_case: { type: 'boolean', description: '忽略大小写，默认 false' },
         show_line_number: { type: 'boolean', description: '显示行号（仅 content 模式），默认 true' },
-        context: { type: 'number', description: '匹配行前后上下文行数（仅 content 模式）' },
-        multiline: { type: 'boolean', description: '多行模式，默认 false' },
-        head_limit: { type: 'number', description: '最大返回条数，默认 100，0 表示不限制' }
+        context: { type: 'integer', minimum: 0, maximum: 1000, description: '仅 content：匹配行前后各返回 N 行，整数 0～1000；其他模式返回参数错误' },
+        multiline: { type: 'boolean', description: '仅 content：允许匹配跨行且 . 可匹配换行；其他模式返回参数错误' },
+        head_limit: { type: 'integer', minimum: 0, maximum: 1000000, description: '最多返回的非空输出行数，默认 100；0 不限制行数但仍受 400 KiB 总上限约束' }
       },
+      additionalProperties: false,
       required: ['pattern']
     }
   },

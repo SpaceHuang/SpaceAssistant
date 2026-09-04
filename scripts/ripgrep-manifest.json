@@ -1,0 +1,28 @@
+{
+  "version": "14.1.1",
+  "license": "MIT OR Unlicense",
+  "source": "https://github.com/BurntSushi/ripgrep/releases/tag/14.1.1",
+  "targets": {
+    "darwin-x64": {
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-apple-darwin.tar.gz",
+      "archiveSha256": "fc87e78f7cb3fea12d69072e7ef3b21509754717b746368fd40d88963630e2b3",
+      "binarySha256": "923dcc25cab57d33f4e7dd0476d4b74a554401a38817e246a8d6101dcd51c50f",
+      "archiveType": "tar.gz",
+      "binaryPath": "ripgrep-14.1.1-x86_64-apple-darwin/rg"
+    },
+    "darwin-arm64": {
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-aarch64-apple-darwin.tar.gz",
+      "archiveSha256": "24ad76777745fbff131c8fbc466742b011f925bfa4fffa2ded6def23b5b937be",
+      "binarySha256": "0e0cb83f5195f1f51bb8feef1fff5b0b171e82bd1db6bd35deee701a3e7102f8",
+      "archiveType": "tar.gz",
+      "binaryPath": "ripgrep-14.1.1-aarch64-apple-darwin/rg"
+    },
+    "win32-x64": {
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-pc-windows-gnu.zip",
+      "archiveSha256": "01469c43c3fffdb4baff80469a75a7bf1dc3d0bf4ef63cda72a22f885f27465a",
+      "binarySha256": "48da6c43ed3652bd9778accd91075cb31841c5ad680f589222a0cbaf06087c83",
+      "archiveType": "zip",
+      "binaryPath": "ripgrep-14.1.1-x86_64-pc-windows-gnu/rg.exe"
+    }
+  }
+}

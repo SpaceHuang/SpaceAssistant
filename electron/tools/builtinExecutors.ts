@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
-import { spawn } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
+import { app } from 'electron'
 import fs from 'fs/promises'
 import path from 'path'
 import type { Dirent } from 'fs'
@@ -20,6 +21,7 @@ import {
 } from './toolExecutionResource'
 import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
 import { killProcessTree } from '../spawnUtil'
+import { resolveRipgrepBinary } from './ripgrepBinary'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
@@ -711,24 +713,52 @@ export type GrepExecArgs = {
   headLimit: number
 }
 
-async function grepWithRg(
+export type RipgrepRunResult =
+  | { kind: 'success'; output: string }
+  | { kind: 'no_match'; output: 'No matches found' }
+  | { kind: 'unavailable'; reason: 'missing' | 'permission' | 'load_failed' }
+  | { kind: 'invalid_request'; message: string }
+  | { kind: 'timeout'; partialOutput: string }
+  | { kind: 'cancelled'; partialOutput: string }
+  | { kind: 'failed'; exitCode: number | null; message: string }
+
+export function validateGrepInput(input: Record<string, unknown>): string | null {
+  const outputMode = typeof input.output_mode === 'string' ? input.output_mode : 'files_with_matches'
+  if (!['files_with_matches', 'content', 'count'].includes(outputMode)) return 'output_mode 参数无效'
+  const context = typeof input.context === 'number' ? input.context : undefined
+  const headLimit = typeof input.head_limit === 'number' ? input.head_limit : 100
+  if (context !== undefined && (!Number.isInteger(context) || context < 0 || context > 1000)) return 'context 必须是 0～1000 的整数'
+  if (!Number.isInteger(headLimit) || headLimit < 0 || headLimit > 1_000_000) return 'head_limit 必须是 0～1000000 的整数'
+  if (outputMode !== 'content' && (Object.prototype.hasOwnProperty.call(input, 'context') || Object.prototype.hasOwnProperty.call(input, 'multiline') || Object.prototype.hasOwnProperty.call(input, 'show_line_number'))) return 'context、multiline、show_line_number 仅适用于 content 模式'
+  return null
+}
+
+export function createGrepRipgrepDiagnostic(resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch' | 'path'>): string {
+  return `source=${resolved.source};platform=${resolved.platform};arch=${resolved.arch};status=${resolved.path ? 'ready' : 'unavailable'}`
+}
+
+export async function grepWithRg(
+  binaryPath: string,
   workDir: string,
   searchPath: string,
   pattern: string,
   args: GrepExecArgs,
   timeoutMs: number,
   signal: AbortSignal,
-  onProgress: (msg: string) => void
-): Promise<string | null> {
-  const rgArgs = ['--color', 'never', '--regexp', pattern]
+  onProgress: (msg: string) => void,
+  spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn
+): Promise<RipgrepRunResult> {
+  if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
+  const rgArgs = ['--no-config', '--color', 'never', '--regexp', pattern]
   if (args.ignoreCase) rgArgs.push('-i')
   if (args.glob) {
     rgArgs.push('--glob', args.glob)
   }
   if (args.outputMode === 'files_with_matches') rgArgs.push('-l')
-  else if (args.outputMode === 'count') rgArgs.push('--count')
+  else if (args.outputMode === 'count') rgArgs.push('--count', '--with-filename')
   else {
     if (args.showLineNumber !== false) rgArgs.push('-n')
+    else rgArgs.push('--no-line-number')
     if (args.context != null && args.context > 0) rgArgs.push('-C', String(args.context))
     if (args.multiline) rgArgs.push('-U', '--multiline-dotall')
   }
@@ -736,32 +766,53 @@ async function grepWithRg(
   for (const d of GREP_SKIP_DIRS) rgArgs.push('--glob', `!**/${d}/**`)
   rgArgs.push(searchPath)
   return await new Promise((resolve) => {
-    const proc = spawn('rg', rgArgs, { cwd: workDir, windowsHide: true })
+    const proc = spawnProcess(binaryPath, rgArgs, { cwd: workDir, windowsHide: true })
+    let settled = false
     let out = ''
+    let stderr = ''
     let killed = false
     let truncated = false
     const t = setTimeout(() => {
+      if (settled) return
       killed = true
       proc.kill('SIGTERM')
     }, timeoutMs)
+    const onAbort = () => {
+      if (!settled) {
+        killed = true
+        proc.kill('SIGTERM')
+      }
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
     proc.stdout?.on('data', (ch: Buffer) => {
       out += ch.toString('utf8')
-      if (out.length > 512 * 1024) {
-        out = out.slice(0, 400 * 1024)
+      if (Buffer.byteLength(out, 'utf8') > 512 * 1024) {
+        out = Buffer.from(out, 'utf8').subarray(0, 400 * 1024).toString('utf8')
         truncated = true
       }
       onProgress(`搜索中...`)
     })
-    proc.stderr?.on('data', () => {})
-    proc.on('error', () => {
+    proc.stderr?.on('data', (ch: Buffer) => {
+      if (Buffer.byteLength(stderr, 'utf8') < 16 * 1024) {
+        stderr += ch.toString('utf8')
+        if (Buffer.byteLength(stderr, 'utf8') > 16 * 1024) stderr = Buffer.from(stderr).subarray(0, 16 * 1024).toString('utf8')
+      }
+    })
+    const finish = (result: RipgrepRunResult) => {
+      if (settled) return
+      settled = true
       clearTimeout(t)
-      resolve(null)
+      signal.removeEventListener('abort', onAbort)
+      resolve(result)
+    }
+    proc.on('error', (err) => {
+      const errorCode = (err as NodeJS.ErrnoException).code
+      finish({ kind: 'unavailable', reason: errorCode === 'EACCES' ? 'permission' : 'missing' })
     })
     proc.on('close', (code) => {
-      clearTimeout(t)
-      if (signal.aborted) resolve(out.trimEnd() + '\n[已取消]')
-      else if (killed) resolve(out.trimEnd() + '\n[搜索超时，仅展示部分结果]')
-      else if (code !== 0 && code !== 1) resolve(null)
+      if (signal.aborted) finish({ kind: 'cancelled', partialOutput: out.trimEnd() })
+      else if (killed) finish({ kind: 'timeout', partialOutput: out.trimEnd() })
+      else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(Buffer.from(stderr.trim(), 'utf8').subarray(0, 4000).toString('utf8') || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
         if (args.headLimit > 0) {
@@ -771,7 +822,7 @@ async function grepWithRg(
           }
         }
         if (truncated) result += '\n[输出过大，仅展示前 400KB]'
-        resolve(result || 'No matches found')
+        finish(result ? { kind: 'success', output: result } : { kind: 'no_match', output: 'No matches found' })
       }
     })
   })
@@ -995,6 +1046,8 @@ export const grepExecutor: ToolExecutor = {
     const relPath = extractPathField(input) ?? ''
     const glob = typeof input.glob === 'string' ? input.glob : undefined
     const outputMode = typeof input.output_mode === 'string' ? input.output_mode : 'files_with_matches'
+    const inputError = validateGrepInput(input)
+    if (inputError) return { success: false, error: inputError, duration: Date.now() - started }
     const ignoreCase = Boolean(input.ignore_case)
     const showLineNumber = input.show_line_number !== false
     const context = typeof input.context === 'number' ? input.context : undefined
@@ -1013,15 +1066,46 @@ export const grepExecutor: ToolExecutor = {
     }
     const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
     const gargs: GrepExecArgs = { glob, outputMode, ignoreCase, showLineNumber, context, multiline, headLimit }
-    let text = await grepWithRg(ctx.workDir, absSearch, pattern, gargs, timeoutMs, ctx.signal, (m) =>
-      ctx.sendProgress('grep', m)
-    )
-    if (text == null) {
-      text = await grepFallbackJs(ctx.workDir, absSearch, pattern, gargs, ctx.signal, (m) =>
+    const resolved = resolveRipgrepBinary({
+      packaged: app?.isPackaged ?? false,
+      resourcesPath: process.resourcesPath,
+      developmentRoot: path.resolve(__dirname, '../../..'),
+      platform: process.platform,
+      arch: process.arch
+    })
+    void ctx.recordDiagnostic?.({
+      code: 'grep-ripgrep',
+      message: createGrepRipgrepDiagnostic(resolved)
+    })
+    if (!resolved.path) {
+      void ctx.recordDiagnostic?.({
+        code: 'grep-ripgrep-fallback',
+        message: 'source=' + resolved.source + ';platform=' + resolved.platform + ';arch=' + resolved.arch + ';status=fallback;reason=' + (resolved.reason ?? 'unavailable')
+      })
+      const fallbackOutput = await grepFallbackJs(ctx.workDir, absSearch, pattern, gargs, ctx.signal, (m) =>
         ctx.sendProgress('grep', m)
       )
+      return { success: true, data: { output: fallbackOutput, degraded: true }, duration: Date.now() - started }
     }
-    return { success: true, data: { output: text }, duration: Date.now() - started }
+    const text = await grepWithRg(resolved.path, ctx.workDir, absSearch, pattern, gargs, timeoutMs, ctx.signal, (m) =>
+      ctx.sendProgress('grep', m)
+    )
+    if (text.kind === 'success' || text.kind === 'no_match') {
+      return { success: true, data: { output: text.output }, duration: Date.now() - started }
+    }
+    if (text.kind === 'unavailable') {
+      void ctx.recordDiagnostic?.({
+        code: 'grep-ripgrep-fallback',
+        message: 'source=' + resolved.source + ';platform=' + resolved.platform + ';arch=' + resolved.arch + ';status=fallback;reason=' + text.reason
+      })
+      const fallbackOutput = await grepFallbackJs(ctx.workDir, absSearch, pattern, gargs, ctx.signal, (m) =>
+        ctx.sendProgress('grep', m)
+      )
+      return { success: true, data: { output: fallbackOutput, degraded: true }, duration: Date.now() - started }
+    }
+    if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
+    if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
+    return { success: false, error: text.message, duration: Date.now() - started }
   }
 }
 
