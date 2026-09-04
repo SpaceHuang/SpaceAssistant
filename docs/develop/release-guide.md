@@ -5,7 +5,7 @@
 SpaceAssistant 通过 **GitHub Actions** 在推送版本 tag 时自动完成质量门禁、双平台打包与 GitHub Release 发布。维护者只需在 `main` 分支上更新版本号、提交代码并推送 tag，无需在本地手动打安装包（除非调试）。
 
 **当前状态**：
-- 支持平台：**Windows**（NSIS x64）、**macOS**（x64 / arm64 两种 DMG）
+- 支持平台：**Windows x64**（NSIS）、**macOS 13+**（x64 / arm64 两种 DMG；Electron 44 起 macOS 12 不再受支持）
 - 代码签名：**未启用**（安装说明见 Release Notes）
 - 触发方式：推送 `v*` 格式 tag（如 `v0.1.5`）
 
@@ -175,7 +175,7 @@ npm run build
 # 分平台打包
 npm run pack:win     # Windows NSIS 安装包
 npm run pack:mac     # 仅 macOS 可执行
-npm run pack:linux   # Linux AppImage（当前 CI 未纳入自动发版）
+npm run pack:linux   # Linux AppImage（当前 CI 未纳入自动发版；CI 无 sqlite-electron-probe 验证，不在本次发布支持面）
 ```
 
 配置入口：`package.json` 的 `build` 字段（electron-builder）。

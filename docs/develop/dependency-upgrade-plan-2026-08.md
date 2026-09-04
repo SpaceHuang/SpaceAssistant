@@ -1,7 +1,7 @@
 # 依赖版本迭代计划（Node / Electron / 工具链）
 
 制定日期：2026-08-31；修订日期：2026-09-03（v3）
-状态：**修订后待实施**。本版吸收 `docs/review/dependency-upgrade-plan-2026-08-review-v2.md` 的三项阻断意见，并以当前仓库检索结果和 Electron/Node 官方文档复核。
+状态：**已实施（Phase 1–3 完成，含遗留人工验收项）**。本版吸收 `docs/review/dependency-upgrade-plan-2026-08-review-v2.md` 的三项阻断意见，并以当前仓库检索结果和 Electron/Node 官方文档复核。Phase 1/2/3 实施记录分别见附录 A/B/C。
 
 ## 1. 目标、边界与版本原则
 
@@ -105,3 +105,192 @@ Phase 3  Electron 40 → 44、平台下线确认与工具链升级
 ```
 
 每阶段的 PR/发布记录必须附：精确依赖版本与 lockfile diff、§3 影响矩阵结论、自动命令输出、各平台探针结果、安装包手工验收记录，以及未自动化项的责任人与回归路径。参考资料： [Electron 版本发布页](https://releases.electronjs.org/release?channel=stable)、[Electron 40 发布说明](https://www.electronjs.org/blog/electron-40-0)、[Electron Breaking Changes](https://www.electronjs.org/docs/latest/breaking-changes/)、[Node SQLite API](https://nodejs.org/api/sqlite.html)。
+
+## 附录 A：Phase 1 实施记录（2026-09-04）
+
+实施分支 `chore/dependency-upgrade`（worktree `.worktrees/dep-upgrade`），基于 main。
+
+### 版本与探针输出
+
+- Electron **35.7.5**（内嵌 Node **22.16.0**），本机 Windows x64；`@types/node` 升至 `^22.20.1`（含 `node:sqlite` 声明）。
+- `node:sqlite` 在 Electron 35 / Node 22.16 中为实验性 API，但**无需任何 flag**；启动时仅打印 `ExperimentalWarning: SQLite is an experimental feature`，主进程与探针均不做特殊处理。
+- 探针 `scripts/probe-node-sqlite.mjs` 本机实跑（`npx electron scripts/probe-node-sqlite.mjs`，未设 `ELECTRON_RUN_AS_NODE`）：
+
+```
+[probe-node-sqlite] electron=35.7.5 node=22.16.0 arch=x64 platform=win32
+[probe-node-sqlite] ok: file db write/read/checkpoint verified   (exit=0)
+```
+
+注：Windows Git Bash 的 MSYS pty 会吞掉 GUI 子进程 stdout，本机验证时输出需重定向到文件查看；CI runner（powershell/cmd）不受影响。
+
+### 关键实现决策
+
+- 事务 helper 落在 `electron/database/transaction.ts`（`runInTransaction(conn, fn)` + `lastInsertRowidToNumber`），由 `sqliteStore.ts` 再导出以保持「连接级事务入口由 sqliteStore 导出」的契约。未直接定义在 sqliteStore.ts 的原因：`sqliteStore → migrations → helper` 存在循环依赖，vite SSR/vitest 下循环边缘会拿到半初始化命名空间（实测 `runInTransaction is not a function`）。
+- `node:sqlite` 与 better-sqlite3 的两处语义差异已在封装/迁移层消化：绑定值拒绝 `undefined`（`migrateFromJson` 可空列统一 `?? null`）；`run().changes`/`lastInsertRowid` 类型为 `number | bigint`（显式 `Number()`，`lastInsertRowidToNumber` 超安全整数抛错）。
+- 既有测试遗留 `conn.transaction(fn)()` 的 `})()` 调用尾已在迁移中逐一清除（`mcpConfirmPolicyMigration.ts` 曾因此报错）。
+
+### 门禁结果
+
+- 聚焦测试：`sqliteStore.transaction.test.ts`（新增 11 例）、`migrations.v3/v4`、`mcpConfirmPolicyMigration`（含新增「事务中途写入失败」原子性用例）、`database.migrateAndSearch`（含新增「导入中途约束错误整体回滚」用例）、`legacyWorkspaceLayoutCleanup`、`operations`、`streamingCleanup` 等全绿；全量 `npm test` 全绿（详见提交说明）。
+- `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron` 全绿。
+- 残留扫描 `rg -n -S 'better-sqlite3|\.transaction\(' electron scripts package.json .github AGENTS.md CLAUDE.md`：无未批准命中。白名单（合理残留）：
+  - `package-lock.json` 中 `node-abi`/`node-gyp`/`node-gyp-build` 为 electron-builder（app-builder-lib）的传递依赖，非本项目直接依赖，保留。
+  - `.github/workflows/ci.yml` 注释中出现 `ELECTRON_RUN_AS_NODE` 字样，语义为「不得设置」，非实际设置。
+  - `docs/` 下历史文档（含本计划、`b344321-current-code-refactor-plan.md`、`wechat-integration-requirement.md`）提及 better-sqlite3 为历史叙述，不在扫描路径内。
+- AGENTS.md 为 gitignore 的本地文件（不在仓库内），其 better-sqlite3/原生绑定说明已在本地同步更新；CLAUDE.md 已随本提交更新。
+
+### 需真机/人工验收项（本环境无法自动完成）
+
+- macOS x64 / arm64 探针与安装包验收：由 CI `sqlite-electron-probe` 矩阵（windows-latest、macos-15-intel、macos-latest）执行探针；macOS DMG 首次启动与已有数据库读写需人工在真机验收。责任人：发布负责人；回归路径：CI 探针日志 + `npm run pack:mac` 产物人工冒烟。
+- 旧数据库副本验证（真实 `userData/spaceassistant-data.db` 及其 `-wal`/`-shm` 复制到隔离目录做启动/读写/关闭）：需人工在装有旧版本数据的机器上执行。责任人：发布负责人；回归路径：升级安装包首次启动冒烟。
+- Windows x64 安装包（NSIS）首次启动与已有数据库读写：同上，人工验收。
+
+## 附录 B：Phase 2 实施记录（2026-09-04）
+
+实施分支 `chore/dependency-upgrade`（worktree `.worktrees/dep-upgrade`），基于 Phase 1 提交 `b4d4daa`。
+
+### 精确依赖版本
+
+- `electron` **35.7.5 → 40.10.6**（devDependency，40 通道最新稳定 patch，来源 `npm view electron versions`；lockfile 记录精确版本）。
+- `@types/node` **^22.20.1 → ^24.13.3**（Electron 40 内嵌 Node 24 的类型基线）。
+- `engines`（package.json 未声明）与 CI/release workflow 的 Node **22 保持不变**（`.github/workflows/ci.yml`、`release.yml` 未改动）。
+- 无 peer/类型冲突：`@types/node@^24` 升级后主进程全量编译（`tsc -p tsconfig.electron.json`）与两项 typecheck 均零错误，未出现需要降版或改代码的冲突。
+
+### §3 影响矩阵 Electron 36–40 逐行结论（检索于升级前代码基线）
+
+- **36**（`app.commandLine` 行为、`PrinterInfo`、`Session.clearStorageData`、session 扩展 API、GTK4）：检索 `app.commandLine|clearStorageData|PrinterInfo|session\.(loadExtension|removeExtension|getAllExtensions)|isAeroGlassEnabled`（范围 `electron/ src/ scripts/`），**输出为空**。应用不注册命令行开关、不打印、不清除站点存储、不加载浏览器扩展。GTK4 为 Linux-only，Linux 桌面端不在支持面，不适用。闭环，无需修复。
+- **37**（utility process 未处理拒绝/同步退出、WebUSB/WebSerial、`ProtocolResponse.session`、Linux workspace 可见性）：检索 `utilityProcess|WebUSB|WebSerial|ProtocolResponse|IsVisibleOnAllWorkspaces`，**输出为空**。未使用 utilityProcess（工具循环在主次进程内）、未申请 WebUSB/WebSerial 权限、未自定义 protocol 响应。Linux workspace 可见性为 Linux-only，不适用。闭环，无需修复。
+- **38**（`ELECTRON_OZONE_PLATFORM_HINT`、`ORIGINAL_XDG_CURRENT_DESKTOP`、macOS 11、`plugin-crashed`、webFrame 路由 API）：全仓检索上述环境变量与 `plugin-crashed|webFrame\.routingId|findFrameByRoutingId`，**代码输出为空**（仅本计划文档自身命中）。两个环境变量为 Linux-only，不适用；未使用 Pepper 插件与 webFrame 路由 API。macOS 11：产品发布面本就只声明 Windows x64、macOS x64/arm64，未承诺 macOS 11 最低版本，Electron 38 起最低 macOS 12 与发布面无冲突。闭环，无需修复。
+- **39**（`--host-rules`、`window.open` popup 可调整大小、macOS 音频捕获声明）：检索 `host-rules|window\.open|setWindowOpenHandler|desktopCapturer|NSAudioCaptureUsageDescription`：
+  - `host-rules`、`setWindowOpenHandler`、`desktopCapturer`、`NSAudioCaptureUsageDescription` 无命中（不做屏幕捕获、不做音频捕获、未注册弹窗处理器、未传 host-rules）。
+  - **命中**：`src/renderer/services/openExternalUrl.ts:14` 及其测试使用 `window.open(url, '_blank', 'noopener,noreferrer')` 作为 `appOpenExternal` IPC 不可用时的回退。Electron 39 的变化是 popup 默认可调整大小；该路径意图是交给系统浏览器打开外链，弹窗是否可调整大小不影响功能，且正常路径走 `shell.openExternal`。**处理：记录为已知行为差异，不改代码**；外链打开归入人工冒烟矩阵。
+- **40**（renderer 直接 Electron `clipboard` 弃用、dSYM 改 tar.xz）：检索 renderer/preload 的 `from 'electron'|require\('electron'\)|clipboard`：
+  - renderer 无任何 `from 'electron'` / `require('electron')` 命中；所有剪贴板写入均走 `navigator.clipboard.writeText`（`selectionCopy.ts:21`、`FileTree.tsx:88,92`、`ShikiCodeBlock.tsx:18`、`xtermHelpers.ts:207`）或 copy 事件的 `clipboardData`，符合官方迁移方向。`electron/preload.ts` 无 clipboard 命中。
+  - dSYM 改 tar.xz 仅影响调试符号消费链；本仓库发布流程（electron-builder NSIS/DMG，无 Sentry/符号服务器上传）不消费 dSYM，不适用。
+  - 闭环，无需修复。
+
+### 门禁结果（升级后，本机 Windows x64）
+
+- `npm run build:electron`（rimraf + `tsc -p tsconfig.electron.json` 全量编译）：通过，零错误。
+- `npm run typecheck:renderer`（`tsc -p tsconfig.renderer.json --noEmit`）：通过，零错误。
+- `npm run typecheck:shared`：通过（`[typecheck:shared] ok`）。
+- `npm test`（vitest run 双项目全量）：**447 个测试文件全部通过，2760 passed / 2 skipped（共 2762）**，耗时约 251s。
+- 探针 `npx electron scripts/probe-node-sqlite.mjs`（未设 `ELECTRON_RUN_AS_NODE`，stdout 重定向到文件查看）：
+
+```
+[probe-node-sqlite] electron=40.10.6 node=24.15.0 arch=x64 platform=win32
+[probe-node-sqlite] ok: file db write/read/checkpoint verified   (exit=0)
+```
+
+- 升级后无需修改任何主进程源码：无类型错误、无运行时 API 变化命中仓库代码。
+
+### 需真机/人工验收项（本环境无法自动完成）
+
+- **Windows x64 / macOS x64 / macOS arm64 人工冒烟矩阵**：启动与旧库升级、聊天流式、工具调用循环、SQLite 读写、托盘、飞书/微信桥接、内嵌终端、PDF 导出、剪贴板与外链打开（§3-39 命中路径）。责任人：发布负责人；回归路径：按 §4 第 3 条逐项人工冒烟，macOS 探针由 CI `sqlite-electron-probe` 矩阵（macos-15-intel、macos-latest）补跑。
+- **安装包验收**：Windows NSIS 与 macOS x64/arm64 DMG 产物的首次启动与已有数据库读写。责任人：发布负责人；回归路径：`npm run pack:win` / `npm run pack:mac` 产物人工验收。
+
+
+## 附录 C：Phase 3 实施记录（2026-09-03）
+
+实施分支 `chore/dependency-upgrade`（worktree `.worktrees/dep-upgrade`），基于 Phase 2 提交 `af1abab`。
+
+### 精确依赖版本
+
+- `electron` **40.10.6 → 44.1.1**（44 通道最新稳定 patch，`npm view electron versions` 确认 44 系为 `44.0.0 / 44.1.0 / 44.1.1`，`latest` dist-tag 即 44.1.1；lockfile 记录精确版本）。Electron 44 运行时内嵌 Node 24.19.0（探针实测）。
+- `@types/node` 保持 **^24**（lockfile 实际 24.13.3），未随动。
+- `vite` **6.x → 8.2.2**、`@vitejs/plugin-react` **4.x → 6.1.1**（peer 约束 `@vitejs/plugin-react@6.1.1 → vite ^8.0.0`，组合成立）。
+- `vitest` 保持 **^4** 主版本不随动（lockfile 内由 ^4.1.0 解析为 4.1.6）：`vitest@4` peer 为 `vite ^6.0.0 || ^7.0.0 || ^8.0.0-0`，覆盖 vite 8 稳定版，peer 约束不要求升主版本。
+- `typescript` **5.7 → 5.9.3**（5.x 最新稳定）。曾尝试 `typescript@7.0.2`（npm latest）：TS 7 移除 `baseUrl` 与 `moduleResolution=node10`，主进程 tsconfig 迁移到 `NodeNext` 后全仓数百处相对 import 需补 `.js` 扩展名（`error TS2835`），属大规模侵入性改造，超出本阶段最小改动边界；按「不预设不相容版本、选可行方案」原则回退至 5.9.3，TS 7 迁移留作独立计划。
+
+### §3 影响矩阵 Electron 41–44 逐行结论（清单来源：electronjs.org/docs/latest/breaking-changes 41.0–44.0 段）
+
+- **41–43**（PDF WebContents、`Session.clearStorageData` quotas、macOS 通知迁移 UNNotification、dialog 默认 Downloads 目录、Linux `showHiddenFiles` 移除）——检索 `printToPDF|clearStorageData|showHiddenFiles|defaultPath|new Notification`（范围 `electron/ src/`）：
+  - `clearStorageData`、`showHiddenFiles`、`new Notification` **无命中**：不清除站点存储、不传 showHiddenFiles、不使用系统 `Notification`（应用通知为自建浮动窗口 `floatingNotification*.ts`，macOS UNNotification 签名要求不适用）。
+  - **命中**：`electron/appIpc.ts:1715` 使用 `webContents.printToPDF({ printBackground: true })` 导出 PDF。Electron 41 的变化是「PDF 资源不再创建独立 guest WebContents」，针对在窗口中直接加载 PDF 的场景；本仓库是自建的隐藏 BrowserWindow 加载 HTML 后调用 `printToPDF`，API 签名未变，不受该变化影响。记录为人工冒烟项（PDF 导出）。
+  - **命中**：`electron/appIpc.ts:1697` `dialog.showSaveDialog` 显式传入 `defaultPath`（`absDefault`），不受「默认目录改为 Downloads」影响；`electron/appIpc.ts:1797` `dialog.showOpenDialog`（选择工作目录）未传 `defaultPath`，行为变化为初始目录固定为 Downloads 且系统不再记忆上次目录。评估为可接受的 UX 变化，**不改代码**，记录为人工冒烟项。Linux `showHiddenFiles` 移除为 Linux-only，不适用。
+- **44**（macOS 12、Windows ia32/Linux armv7l 下线；renderer clipboard 移除；`select-client-certificate` 的 `webContents` 可为空；`net.request` frame header；ANGLE 静态链接）——检索 `clipboard|select-client-certificate|net\.request|libEGL|libGLESv2`（范围 `electron/ src/`）：
+  - `select-client-certificate`、`net.request`、`libEGL`、`libGLESv2` **无命中**：不监听证书选择事件（无需补 nullable webContents 处理与测试）、不走 `net.request`（LLM/API 请求均走 Node https/fetch）、打包配置不引用独立 ANGLE 库（ANGLE 静态链接进二进制对本仓库无影响）。
+  - renderer `clipboard` 复核（Phase 2 已确认）：renderer 无任何 `from 'electron'` / `require('electron')` 命中，全部走 `navigator.clipboard` 或 copy 事件 `clipboardData`；主进程亦无 `clipboard` 命中。Electron 44 移除 renderer clipboard 对本仓库无影响。
+  - **平台支持决策已落地**：发布面明确为 **macOS 13+ / Windows x64 / macOS x64+arm64**。`package.json` `build.mac.minimumSystemVersion` 新增 `"13.0"`；`docs/develop/release-guide.md` 支持平台行更新为「Windows x64（NSIS）、macOS 13+（x64/arm64 DMG；Electron 44 起 macOS 12 不再受支持）」。Windows ia32 与 Linux armv7l 本就不在发布配置内（build 仅 win nsis x64、mac dmg x64+arm64、linux AppImage 为开发便利产物，非支持承诺）。
+
+### 门禁结果（本机 Windows x64）
+
+- Electron 44.1.1 升级后：`npm run build:electron` 全量编译通过（零错误）；`npm run typecheck:shared`、`npm run typecheck:renderer` 通过；`npm test` 全绿（**447 文件 / 2760 通过 / 2 跳过**，718s）。
+- 真实 Electron 探针：`npx electron scripts/probe-node-sqlite.mjs` 输出 `electron=44.1.1 node=24.19.0 arch=x64 platform=win32`，`ok: file db write/read/checkpoint verified`（stderr 仅 libpng iCCP 警告，为托盘图标既有提示，与本次升级无关）。
+- 工具链升级后（vite 8.2.2 + plugin-react 6.1.1 + TS 5.9.3 + vitest 4.1.6）：`npm run build:renderer` 通过（Vite 8 / rolldown 构建，仅 chunk 体积提示）；两项 typecheck 通过；`npm run i18n:check` 通过（硬编码中文计数为既有存量告警，非新增）。
+- 工具链引入的一处真实修复：Vite 8 的 oxc transform 比 esbuild 严格，`electron/database.migrateAndSearch.test.ts:372` 存在重复 `import { getDbConnection }`（与 15 行重复声明），esbuild 容忍、oxc 报 PARSE_ERROR；删除文件尾部多余的重复 import（该行本就无效），修复后单测 7/7 通过。
+- 最终 `npm test` 全绿（**447 文件 / 2760 通过 / 2 跳过**，233s）。期间 `src/shared/toolResultPairing.test.ts` 的「10000 条消息 < 50ms」耗时断言在高负载轮次出现 56–59ms 超时，空闲轮复跑与全量复跑均通过，确认为计时阈值 flaky（该代码路径本次未改动，vitest 仅 4.1.0→4.1.6 次要 bump），非升级回归。
+
+### 渲染性能对比（§5 第 4 条口径）
+
+按 `docs/develop/chat-message-list-renderer-performance-audit.md` §7 的约定口径，基线实测数据已存在（`chat-message-list-batch{1,2}-remeasure-results.json`，vitest+jsdom+React.Profiler，同一 fixture），升级后于机器空闲时以相同测试重采。对比（升级前 09-03 16:43 采集 → 升级后 09-03 17:41 采集，同机 win32 x64 / Node 24.19.0）：
+
+| 批次 | 场景 | 消息数 | mount ms（前→后） | 流式 commit p95 ms（前→后） | DOM 节点（前→后） | heap MB（前→后） |
+| --- | --- | --- | --- | --- | --- | --- |
+| batch1 | small | 20 | 78.2 → 54.4 | 1.68 → 1.09 | 201 → 201 | 0.0 → 0.0 |
+| batch1 | large | 500 | 766.2 → 689.2 | 5.85 → 4.65 | 4682 → 4682 | 52.4 → 51.3 |
+| batch2 | 全量语料 | 500 | 858.4 → 896.5 | 9.29 → 5.02 | 4680 → 4680 | 59.8 → 60.3 |
+| batch2 | 折叠 | 60 | 247.4 → 81.0 | 4.38 → 0.96 | 580 → 580 | 10.3 → 10.2 |
+
+结论：DOM 节点数与堆占用完全一致（±1 MB），commit 耗时在 jsdom 近似口径下无上升迹象。注意该口径为 vitest+jsdom+React.Profiler 近似测量，对机器负载敏感（高负载轮次曾出现 2–3 倍漂移），不构成「无回归」的强结论；真实应用内的 FPS、Long Task、内存曲线仍为人工测量项。两个 remeasure-results.json 会被测试重写，未纳入提交。
+
+### 需真机/人工验收项（本环境无法自动完成）
+
+- **Windows x64 / macOS x64 / macOS arm64 人工冒烟矩阵**：在 Electron 44 下回归启动与旧库升级、聊天流式、工具调用循环、SQLite 读写、托盘、飞书/微信桥接、内嵌终端、**PDF 导出**（§3-41 printToPDF 命中）、**目录选择对话框初始目录**（§3-43 行为变化，确认 Downloads 初始目录可接受）、剪贴板与外链打开。macOS 探针由 CI `sqlite-electron-probe` 矩阵补跑。
+- **macOS 13 下限验证**：mac 产物 `minimumSystemVersion: 13.0` 生效（LSMinimumSystemVersion 写入 Info.plist），并在 macOS 13 机器上验证启动。
+- **安装包验收**：Windows NSIS 与 macOS x64/arm64 DMG 产物首次启动与已有数据库读写。
+- **真实渲染性能**：按审计文档 §7 在约定最低配置机器上用 React Profiler / Performance 面板复核四组 fixture。
+- **TypeScript 7 迁移**：`baseUrl`/`node10` 移除与 NodeNext import 扩展名改造为独立计划，不在本阶段。
+
+---
+
+## 附录：评审 v1 修复记录
+- 修复日期：2026-09-04
+- 对应评审：`docs/review/dependency-upgrade-implementation-code-review-v1.md`（主仓库）
+- 修复方式：阻断 1/2 与 C1/C2 均先写失败回归测试（11 个测试先红），再改实现。
+
+### 阻断 1：busy timeout 丢失（CONFIRMED）
+
+- 处置：`electron/database/sqliteStore.ts` 的 `new DatabaseSync(dbPath)` 改为 `new DatabaseSync(dbPath, { timeout: busyTimeoutMs })`；新增导出 `DEFAULT_BUSY_TIMEOUT_MS = 5000`（与旧 better-sqlite3 默认对齐）；`openSqliteDatabase` 增加可注入 `options.busyTimeoutMs`（生产不传即用 5000，测试注入短超时）。
+- 回归测试：`electron/database/sqliteStore.busyTimeout.test.ts`（新增，2 例）
+  - 默认连接 `PRAGMA busy_timeout` 返回 5000；
+  - 连接 A `BEGIN IMMEDIATE` 持写锁，连接 B（注入 300ms）写入等待 ~300ms 后抛 `database is locked`（elapsed ≥ 200ms），A COMMIT 后 B 写入成功——修复前 B 约 1ms 即抛错（测试先红确认）。
+
+### 阻断 2：回滚路径无守卫（CONFIRMED）
+
+- 处置：`electron/database/transaction.ts` 外层 `ROLLBACK` 与嵌套 `ROLLBACK TO SAVEPOINT` / `RELEASE SAVEPOINT` 均包 try/catch，catch 中始终重抛原始错误；次生错误（`cannot rollback - no transaction is active` 等）仅忽略不掩盖。
+- 回归测试：`electron/database/sqliteStore.transaction.test.ts` 新增 describe「自动回滚守卫」（2 例），用 `RAISE(ROLLBACK, 'trigger boom')` 触发器制造自动回滚：修复前外层与嵌套均抛 `cannot rollback`（先红确认），修复后抛原始 `trigger boom`。
+
+### P1：探针无超时兜底
+
+- 处置：`scripts/probe-node-sqlite.mjs` 增加 60s watchdog（`PROBE_NODE_SQLITE_TIMEOUT_MS` 可覆盖），超时打印 electron/node/arch/platform 诊断并 `process.exit(1)`；正常路径 `clearTimeout` 后 `app.quit()`。
+- 验证：本机 `npx electron scripts/probe-node-sqlite.mjs` 正常输出 ok 并退出码 0。
+
+### P2：engines 缺失
+
+- 处置：`package.json` 补 `"engines": { "node": ">=22.13" }`（计划文档 §自述下限）。
+
+### P3：Linux 无 CI 验证
+
+- 处置：不恢复 ubuntu 探针（计划 §2.3.5 明确不引入 Xvfb）。改为文档标注：`CLAUDE.md` 与 `docs/develop/release-guide.md` 的 `pack:linux` 条目标注「无 CI 探针验证，不在本次发布支持面」。
+
+### C1：changes 转换策略统一
+
+- 处置：`electron/database/transaction.ts` 提供共享 `changesToNumber(value: number | bigint)`（带安全整数校验，超范围抛错）；删除零生产调用的 `lastInsertRowidToNumber`。替换 7 处裸 `Number(...)`（`confirmation/policyRuleStore.ts:58`、`confirmation/sqliteDecisionCache.ts` 6 处）与 2 处未包装比较（`operations.ts:765` 的 `deleteConfigValue`、`legacyWorkspaceLayoutCleanup.ts:66`）。`electron/database/index.ts` 桶导出同步改为从 `./transaction` 导出 `changesToNumber` / `runInTransaction`。
+- 单测：`sqliteStore.transaction.test.ts` 的 `changesToNumber` describe（含 bigint 超安全整数抛错、`0n === 0` 陷阱：转换后严格相等为 true）。
+
+### C2：undefined→null 归一分散
+
+- 处置：归一收敛到 `loadSnapshotFromJson`（不可信 JSON → DbSnapshot 唯一边界）：消息重建为仅含已知字段、全部可空列归一为 null（含 `session_id` 历史字段兼容）；`searchHistory` 条目剔除未知字段并过滤无效项。插入层 `insertMessage` 不再维护归一清单（字段集已由边界保证）；`insertSearch.run(item)` 绑定的已是归一后仅含 `@id/@query/@timestamp` 的对象，多余命名参数风险消除。
+- 回归测试：`electron/database.migrateAndSearch.test.ts` 新增「归一历史快照」用例：含历史遗留多余字段的 searchHistory 条目与缺失全部可选字段（且携带未知字段）的消息可一次性迁移成功，消息与搜索历史数据正确（修复前抛 `Unknown named parameter`，先红确认）。
+
+### C3：import 路径统一
+
+- 处置：`runInTransaction` canonical 路径统一为 `./transaction`（electron/database 内：operations、migrateFromJson、legacyWorkspaceLayoutCleanup、migrations）/ `../database/transaction`（其他模块：mcpConfigStore、remoteSecurityConfigDb、mcpConfirmPolicyMigration、confirmation/*）；删除 `sqliteStore.ts` 的转发导出及「对外契约」注释；对外桶导出仅保留 `electron/database/index.ts`（改从 `./transaction` 直接再导出）。
+
+### 门禁结果
+
+- 定向测试（5 个受影响文件，38 例）：全绿；
+- `npm test` 全量：448 文件 / 2766 通过 / 2 skipped，全绿；
+- `npm run typecheck:shared`、`npm run typecheck:renderer`、`npm run build:electron`：全绿；
+- 本机 `npx electron scripts/probe-node-sqlite.mjs`：正常输出 ok，退出码 0。

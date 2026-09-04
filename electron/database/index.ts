@@ -5,7 +5,9 @@ import { openSqliteDatabase, type AppDatabase } from './sqliteStore'
 
 export type { AppDatabase } from './sqliteStore'
 export type { StoredMessage } from './types'
-export { openSqliteDatabase, getDbConnection, runInTransaction } from './sqliteStore'
+// 事务入口与 changes 转换 helper 的对外桶导出；实现位于 ./transaction（canonical 路径）。
+export { openSqliteDatabase, getDbConnection } from './sqliteStore'
+export { changesToNumber, runInTransaction } from './transaction'
 
 export type {
   MessagesPage,

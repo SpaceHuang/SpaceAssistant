@@ -16,8 +16,6 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - name: Install better-sqlite3 native bindings (Node)
-        run: npm run rebuild:native
       - run: npm run i18n:generate-types
       - run: npm run i18n:check
       - run: npm run typecheck:shared
@@ -38,8 +36,6 @@ jobs:
             label: macos-x64
           - os: macos-latest
             label: macos-arm64
-          - os: ubuntu-latest
-            label: linux-x64
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -47,8 +43,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - run: npm run rebuild:native
-      - name: Probe better-sqlite3 under Electron
+      # 完整 Electron 主进程探针（node:sqlite 内嵌于 Electron，无需原生绑定）；
+      # 不得设置 ELECTRON_RUN_AS_NODE，必须以真实 Electron 应用启动。
+      - name: Probe node:sqlite under Electron
         run: npm run probe:sqlite
-        env:
-          ELECTRON_RUN_AS_NODE: '1'

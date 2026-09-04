@@ -1,4 +1,5 @@
-import type Database from 'better-sqlite3'
+import type { DatabaseSync } from 'node:sqlite'
+import { changesToNumber } from '../database/transaction'
 import type { PolicyAction, PolicyRule } from '../../src/shared/confirmation/types'
 
 export interface PolicyRuleOverride {
@@ -18,10 +19,10 @@ interface Row {
  * `applyOverrides` 把覆盖合并回默认规则，供策略引擎按 `when` 过滤后评估。
  */
 export class PolicyRuleStore {
-  constructor(private readonly db: Database.Database) {}
+  constructor(private readonly db: DatabaseSync) {}
 
   listOverrides(): PolicyRuleOverride[] {
-    const rows = this.db.prepare('SELECT rule_id, action, params FROM policy_rules').all() as Row[]
+    const rows = this.db.prepare('SELECT rule_id, action, params FROM policy_rules').all() as unknown as Row[]
     return rows.map((r) => ({
       ruleId: r.rule_id,
       action: r.action as PolicyAction,
@@ -55,7 +56,7 @@ export class PolicyRuleStore {
   }
 
   removeOverride(ruleId: string): number {
-    return this.db.prepare('DELETE FROM policy_rules WHERE rule_id = ?').run(ruleId).changes
+    return changesToNumber(this.db.prepare('DELETE FROM policy_rules WHERE rule_id = ?').run(ruleId).changes)
   }
 
   /** 把覆盖合并回默认规则（覆盖 action/params；locked 条目不得被覆盖由调用方前置校验）。 */

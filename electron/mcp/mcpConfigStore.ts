@@ -2,9 +2,10 @@ import type { AppDatabase } from '../database'
 import {
   deleteConfigValue,
   getConfigValue,
-  runInTransaction,
+  getDbConnection,
   setConfigValue
 } from '../database'
+import { runInTransaction } from '../database/transaction'
 import {
   MCP_MAX_SERVERS,
   McpServerWriteInputSchema,
@@ -162,7 +163,7 @@ export async function saveProfiles(
   })
 
   return withMcpSecretWriteLock(() => {
-    return runInTransaction(db, () => {
+    return runInTransaction(getDbConnection(db), () => {
       const map = readSecretMapRaw(db)
       for (const change of secretChanges) {
         const key = secretMapKey(change.serverId, change.kind)
@@ -208,7 +209,7 @@ export async function saveProfiles(
 /** 删除服务：连带清 Secret、工具缓存与诊断。 */
 export async function deleteServer(db: AppDatabase, serverId: string): Promise<void> {
   return withMcpSecretWriteLock(() => {
-    runInTransaction(db, () => {
+    runInTransaction(getDbConnection(db), () => {
       const profiles = listProfiles(db).filter((p) => p.id !== serverId)
       setConfigValue(db, MCP_CONFIG_KEYS.profiles, JSON.stringify(profiles))
       deleteSecretsForServerRaw(db, serverId)

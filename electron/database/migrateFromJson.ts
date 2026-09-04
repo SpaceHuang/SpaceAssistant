@@ -8,6 +8,7 @@ import {
 import { loadSnapshotFromJson } from './jsonSnapshot'
 import { SCHEMA_META_KEYS } from './schema'
 import { getDbConnection, getSchemaMeta, isDatabaseEmpty, setSchemaMeta, type AppDatabase } from './sqliteStore'
+import { runInTransaction } from './transaction'
 import type { DbSnapshot, StoredMessage } from './types'
 import { deserializeToolCallsFromDb } from '../messageCodec'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -133,6 +134,7 @@ function insertSession(conn: ReturnType<typeof getDbConnection>, session: Sessio
 }
 
 function insertMessage(conn: ReturnType<typeof getDbConnection>, row: StoredMessage): void {
+  // row 已在 loadSnapshotFromJson 边界完成归一：字段集固定、可空列已为 null（评审 C2）
   conn
     .prepare(
       `INSERT INTO messages (
@@ -173,7 +175,7 @@ function importSnapshot(conn: ReturnType<typeof getDbConnection>, snapshot: DbSn
   )
   const insertUsage = conn.prepare('INSERT INTO session_usages (session_id, data) VALUES (@sessionId, @data)')
 
-  const tx = conn.transaction(() => {
+  runInTransaction(conn, () => {
     for (const [key, entry] of Object.entries(snapshot.configs)) {
       insertConfig.run({
         key,
@@ -195,7 +197,6 @@ function importSnapshot(conn: ReturnType<typeof getDbConnection>, snapshot: DbSn
       insertUsage.run({ sessionId, data: JSON.stringify(usage) })
     }
   })
-  tx()
 }
 
 function verifyCounts(conn: ReturnType<typeof getDbConnection>, snapshot: DbSnapshot): void {

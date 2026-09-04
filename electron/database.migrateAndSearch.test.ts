@@ -8,6 +8,7 @@ import {
   getConfigValue,
   getMessages,
   getSession,
+  listSearchHistory,
   openDatabase,
   searchMessages
 } from './database'
@@ -83,6 +84,86 @@ describe('migrateFromJson', () => {
     expect(getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.migratedFromJsonAt)).toBeTruthy()
     expect(fs.existsSync(jsonPath)).toBe(false)
     db.close()
+  })
+
+  it('导入中途约束错误：整体回滚，前序写入/版本标记均不落盘，JSON 不重命名', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-atomic-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+
+    const session = {
+      id: 'sess-1',
+      name: 'hello',
+      preview: 'hi',
+      model: 'claude-sonnet-4-20250514',
+      temperature: 0.7,
+      maxTokens: 4096,
+      createdAt: 1,
+      updatedAt: 2,
+      messageCount: 2,
+      skillsState: { enabledSkillNames: [], disabledSkillNames: [] },
+      metadata: {},
+      schemaVersion: 1,
+      workDirProfileId: 'default'
+    }
+    const message = (id: string, sequence: number) => ({
+      id,
+      sessionId: 'sess-1',
+      role: 'user',
+      content: `msg ${id}`,
+      toolUse: null,
+      toolCalls: null,
+      thinking: null,
+      status: 'sent',
+      schemaVersion: 1,
+      timestamp: 1,
+      sequence
+    })
+
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [session],
+        // 第二条消息与第一条主键冲突：在 configs/sessions 已写入后触发约束错误
+        messages: [message('m1', 0), message('m1', 1)],
+        configs: {
+          'config.locale': { value: 'zh-CN', createdAt: 1, updatedAt: 1 }
+        },
+        searchHistory: [],
+        sessionUsages: {}
+      }),
+      'utf8'
+    )
+
+    const db = openSqliteDatabase(dbPath)
+    expect(() => migrateFromJsonIfNeeded(db, jsonPath)).toThrow(/JSON migration failed/)
+
+    const conn = getDbConnection(db)
+    const count = (table: string) => (conn.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get() as { c: number }).c
+    expect(count('configs')).toBe(0)
+    expect(count('sessions')).toBe(0)
+    expect(count('messages')).toBe(0)
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.migratedFromJsonAt)).toBeUndefined()
+    // 源 JSON 未重命名，可修复后重试
+    expect(fs.existsSync(jsonPath)).toBe(true)
+    db.close()
+
+    // 修复数据后重试成功（幂等可重入）
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [session],
+        messages: [message('m1', 0)],
+        configs: { 'config.locale': { value: 'zh-CN', createdAt: 1, updatedAt: 1 } },
+        searchHistory: [],
+        sessionUsages: {}
+      }),
+      'utf8'
+    )
+    const db2 = openDatabase(dbPath)
+    expect(getMessages(db2, 'sess-1')).toHaveLength(1)
+    db2.close()
   })
 
   it('recovers orphan messages by creating placeholder sessions', () => {
@@ -167,6 +248,63 @@ describe('migrateFromJson', () => {
 
     const db = openDatabase(dbPath)
     expect(getMessages(db, 'sess-legacy')).toHaveLength(1)
+    db.close()
+  })
+
+  it('归一历史快照（评审 C2）：searchHistory 多余字段与缺失可选字段的消息可一次性迁移', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-normalize-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+
+    const session = {
+      id: 'sess-n1',
+      name: 'normalize',
+      preview: '',
+      model: 'claude-sonnet-4-20250514',
+      temperature: 0.7,
+      maxTokens: 4096,
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 1,
+      skillsState: { enabledSkillNames: [], disabledSkillNames: [] },
+      metadata: {},
+      schemaVersion: 1
+    }
+
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        sessions: [session],
+        messages: [
+          {
+            id: 'm-n1',
+            sessionId: 'sess-n1',
+            role: 'user',
+            content: 'legacy minimal message',
+            // 全部可空列缺失（旧 JSON 无这些键），且携带历史遗留未知字段
+            legacyUnknownField: 'should-be-dropped',
+            status: 'sent',
+            schemaVersion: 1,
+            timestamp: 1,
+            sequence: 0
+          }
+        ],
+        configs: {},
+        searchHistory: [
+          // 历史遗留多余字段：node:sqlite 对多余命名参数键直接抛 Unknown named parameter
+          { id: 'h-n1', query: 'legacy query', timestamp: 1, source: 'legacy-panel', extraField: { a: 1 } }
+        ],
+        sessionUsages: {}
+      }),
+      'utf8'
+    )
+
+    const db = openDatabase(dbPath)
+    const messages = getMessages(db, 'sess-n1')
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.content).toBe('legacy minimal message')
+    expect(listSearchHistory(db)).toEqual(['legacy query'])
     db.close()
   })
 
@@ -288,6 +426,4 @@ describe('searchMessages', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })
-
-import { getDbConnection } from './database/sqliteStore'
 

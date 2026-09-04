@@ -1,10 +1,10 @@
 const { app } = require('electron')
-const Database = require('better-sqlite3')
+const { DatabaseSync } = require('node:sqlite')
 const path = require('path')
 
 app.whenReady().then(() => {
   const dbPath = path.join(app.getPath('userData'), 'spaceassistant-data.db')
-  const db = new Database(dbPath)
+  const db = new DatabaseSync(dbPath)
   const row = db.prepare("SELECT value FROM configs WHERE key='config.wechat'").get()
   console.log('dbPath:', dbPath)
   console.log('wechat:', row?.value ?? '(none)')
