@@ -1638,6 +1638,15 @@ async function runToolChatSessionInner(
             toolUseId,
             sessionId,
             sendProgress,
+            recordDiagnostic: (entry) => {
+              logAgentEvent('info', 'tool.result', {
+                requestId,
+                sessionId,
+                toolName,
+                code: entry.code,
+                diagnostic: entry.message
+              })
+            },
             signal,
             fileStateCache: fileCache,
             toolsConfig,

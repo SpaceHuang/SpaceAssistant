@@ -63,6 +63,8 @@ export interface ToolExecutionContext {
   toolUseId: string
   sessionId: string
   sendProgress: (status: string, payload?: string | ToolProgressPayload) => void
+  /** 仅记录不含 pattern、cwd、命中文本或文件名的工具诊断。 */
+  recordDiagnostic?: (entry: { code: string; message: string }) => void | Promise<void>
   /** run_shell 有效输出模式（主进程在 toolChatLoop 解析） */
   shellOutputMode?: 'plain' | 'terminal'
   signal: AbortSignal

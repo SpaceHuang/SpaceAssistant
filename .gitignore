@@ -30,6 +30,10 @@ coverage/
 # Trae IDE 本地配置目录
 .trae/
 
+# ripgrep release staging (downloaded and verified locally/CI)
+resources/ripgrep/*
+!resources/ripgrep/.gitkeep
+
 # Agent 本地配置文件
 AGENTS.md
 

@@ -1,10 +1,12 @@
 const fs = require('fs')
 const path = require('path')
 const { execFileSync } = require('child_process')
+const crypto = require('crypto')
 
 /** @param {import('app-builder-lib').AfterPackContext} context */
 module.exports = async function afterPack(context) {
   const platform = context.electronPlatformName
+  if (platform === 'win32' || platform === 'darwin') copyBundledRipgrep(context)
   if (platform === 'win32') {
     return patchWindowsIcon(context)
   }
@@ -12,6 +14,42 @@ module.exports = async function afterPack(context) {
     return adHocSignMacApp(context)
   }
 }
+
+function copyBundledRipgrep(context) {
+  const manifest = context.ripgrepManifest || JSON.parse(fs.readFileSync(path.join(context.packager.info.projectDir, 'scripts', 'ripgrep-manifest.json'), 'utf8'))
+  const archNames = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' }
+  const arch = typeof context.arch === 'string' ? context.arch : archNames[context.arch]
+  const key = `${context.electronPlatformName}-${arch}`
+  const target = manifest.targets[key]
+  if (!target) throw new Error(`[afterPack] unsupported ripgrep target: ${key}`)
+  const sourceName = key.startsWith('win32') ? 'rg.exe' : 'rg'
+  const source = path.join(context.ripgrepSourceDir || path.join(context.packager.info.projectDir, 'resources', 'ripgrep'), key, sourceName)
+  if (!fs.existsSync(source)) throw new Error(`[afterPack] missing verified ripgrep staging: ${source}`)
+  const bytes = fs.readFileSync(source)
+  const digest = crypto.createHash('sha256').update(bytes).digest('hex')
+  if (digest !== target.binarySha256) throw new Error(`[afterPack] ripgrep SHA-256 mismatch for ${key}`)
+  const destination = context.electronPlatformName === 'darwin'
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'bin', sourceName)
+    : path.join(context.appOutDir, 'resources', 'bin', sourceName)
+  fs.mkdirSync(path.dirname(destination), { recursive: true })
+  fs.writeFileSync(destination, bytes, { mode: 0o755, flag: 'wx' })
+  if (context.electronPlatformName === 'darwin') fs.chmodSync(destination, 0o755)
+  const copiedDigest = crypto.createHash('sha256').update(fs.readFileSync(destination)).digest('hex')
+  if (copiedDigest !== target.binarySha256) throw new Error(`[afterPack] copied ripgrep SHA-256 mismatch for ${key}`)
+  const licenseSource = context.ripgrepLicenseDir || path.join(context.packager.info.projectDir, 'resources', 'licenses', 'ripgrep')
+  const licenseDestination = context.electronPlatformName === 'darwin'
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'licenses', 'ripgrep')
+    : path.join(context.appOutDir, 'resources', 'licenses', 'ripgrep')
+  for (const license of ['COPYING', 'UNLICENSE', 'LICENSE-MIT']) {
+    const sourceLicense = path.join(licenseSource, license)
+    if (!fs.existsSync(sourceLicense)) throw new Error(`[afterPack] missing ripgrep license: ${sourceLicense}`)
+    fs.mkdirSync(licenseDestination, { recursive: true })
+    fs.copyFileSync(sourceLicense, path.join(licenseDestination, license), fs.constants.COPYFILE_EXCL)
+  }
+  console.log(`[afterPack] bundled ripgrep ${key}: ${destination}`)
+}
+
+module.exports.copyBundledRipgrep = copyBundledRipgrep
 
 /**
  * 无 Apple 开发者证书时对 macOS app 做 ad-hoc 签名，使 arm64 可本机启动
