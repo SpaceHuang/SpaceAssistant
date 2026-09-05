@@ -58,7 +58,6 @@ import { resolveMessageToolsInteractive } from '../../services/resolveMessageToo
 import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
-import { runClaudeChatStream } from '../../services/chatStreamService'
 import { applyContextUsageUpdate } from '../../services/contextUsageStreamService'
 import {
   computeEstimatedOccupancy,
@@ -192,13 +191,7 @@ export function ChatView() {
   // exposure 清单由主进程下发；空窗（null）内不启用工具（避免清单闪空，§5.2 启动时序定稿）
   const [exposureTools, setExposureTools] = useState<string[] | null>(() => getCachedToolExposure())
   useEffect(() => subscribeToolExposure(setExposureTools), [])
-  const useToolsApi = useMemo(
-    () =>
-      Boolean(
-        cfg?.tools.enabled && exposureTools && filterBuiltinToolsForRenderer(exposureTools).length > 0
-      ),
-    [cfg, exposureTools]
-  )
+  // 工具能力由主进程按请求计算；该状态仅用于界面显示。
   const chatLaunchIntent = useTypedSelector((s) => s.chatLaunch.intent)
   const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
@@ -719,11 +712,6 @@ export function ChatView() {
         options?.contextIntent?.kind === 'create-user'
           ? options.contextIntent.attachments
           : undefined
-      if ((createUserAttachments?.length ?? 0) > 0 && !useToolsApi) {
-        message.error(tErrors('chat.imagesRequireTools'))
-        return
-      }
-
       const intent: SendContextIntent =
         options?.contextIntent ??
         ({
@@ -924,7 +912,7 @@ export function ChatView() {
       let contentState = createContentState(assistantMsg.timestamp)
       let thinkingState = createThinkingState(assistantMsg.timestamp)
 
-      if (useToolsApi) {
+      {
         const controller = createToolChatController({
           dispatch,
           assistantMessageId: assistantId,
@@ -1127,92 +1115,8 @@ export function ChatView() {
         }
         return
       }
-
-      const basePayload = buildClaudePayload(historyForApi)
-
-      await runClaudeChatStream(
-        {
-          requestId,
-          sessionId: runSessionId,
-          model: requestModel,
-          baseUrl: requestBaseUrl,
-          messages: basePayload,
-          system: systemPrompt || undefined,
-          maxTokens: outputMaxTokens,
-          locale: resolveChatLocale()
-        },
-        {
-          onDelta: (t) => {
-            if (hasOpenThinkingSegment(thinkingState)) {
-              thinkingState = closeOpenThinkingSegment(thinkingState)
-            }
-            contentState = appendContentDelta(contentState, t)
-            routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
-            scrollBottomThrottled()
-          },
-          onThinkingDelta: (t) => {
-            if (hasOpenContentSegment(contentState)) {
-              contentState = closeOpenContentSegment(contentState)
-            }
-            thinkingState = appendThinkingDelta(thinkingState, t)
-            routeStreamPatchMessage(runSessionId, assistantId, buildAssistantStreamPatch(thinkingState, contentState))
-            scrollBottomThrottled()
-          },
-          onDone: async () => {
-            const reconciled = reconcileAssistantStreamOnComplete({
-              stopReason: 'end_turn',
-              contentState,
-              thinkingState
-            })
-            contentState = reconciled.contentState
-            thinkingState = reconciled.thinkingState
-            flushStreamPersist(runSessionId, assistantId)
-            flushUiPatch(runSessionId, assistantId)
-            const thinking = finalizeThinking(thinkingState)
-            const contentSegments = finalizeContentSegments(contentState)
-            routePatchMessage(runSessionId, assistantId, {
-              content: reconciled.textOut,
-              contentSegments,
-              status: 'completed',
-              thinking
-            })
-            await window.api.chatPatchMessage({
-              messageId: assistantId,
-              sessionId: runSessionId,
-              patch: {
-                content: reconciled.textOut,
-                contentSegments,
-                status: 'completed',
-                thinking
-              }
-            })
-            dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
-            finishSessionRun(runSessionId, requestId, assistantId)
-            clearLiveSession(runSessionId)
-            scrollBottom()
-          },
-          onError: async (err) => {
-            if (isChatCancelledError(err) || abortRequestedRef.current) {
-              await finishCancelled(runSessionId, requestId, assistantId, contentState, thinkingState)
-              return
-            }
-            flushStreamPersist(runSessionId, assistantId)
-            flushUiPatch(runSessionId, assistantId)
-            routePatchMessage(runSessionId, assistantId, { status: 'failed', content: contentState.content || err })
-            await window.api.chatPatchMessage({
-              messageId: assistantId,
-              sessionId: runSessionId,
-              patch: { status: 'failed', content: contentState.content || err }
-            })
-            dispatch(setChatStatus({ status: 'error', error: err, requestId: null, sessionId: runSessionId }))
-            finishSessionRun(runSessionId, requestId, assistantId)
-            clearLiveSession(runSessionId)
-            message.error(formatUserFacingError(err))
-          }
-        }
-      )
     },
-    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t, tErrors, tContextUsage, useToolsApi]
+    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, finishCancelled, message, persistSkillHintSystemMessage, t, tErrors, tContextUsage]
   )
 
   sendInternalRef.current = sendInternal
@@ -1222,10 +1126,7 @@ export function ChatView() {
       if (!text.trim()) return
 
       const hasAttachments = (attachments?.length ?? 0) > 0
-      if (hasAttachments && !useToolsApi) {
-        message.error(tErrors('chat.imagesRequireTools'))
-        return
-      }
+      // 图片是否可发送由模型视觉能力校验，不由工具开关决定。
 
       let targetSessionId = sessionId
       if (!targetSessionId) {
@@ -1276,7 +1177,7 @@ export function ChatView() {
         }
       })
     },
-    [sessionId, cfg, sendInternal, dispatch, message, t, tErrors, currentSession, enqueueChatMessage, useToolsApi]
+    [sessionId, cfg, sendInternal, dispatch, message, t, tErrors, currentSession, enqueueChatMessage]
   )
 
   const retryFailedAssistant = useCallback(
@@ -1424,7 +1325,6 @@ export function ChatView() {
       return resolveMessageToolsInteractive({
         message: m,
         sessionId,
-        toolsEnabled: cfg.tools.enabled,
         confirmMode: cfg.tools.confirmMode,
         pendingItems: pendingConfirmItems,
         streamingAssistantId,
@@ -1575,7 +1475,6 @@ export function ChatView() {
         sessionId={sessionId ?? undefined}
         historyImageTokens={contextScalars.historyImageTokens}
         thinkingTokensToExclude={contextScalars.thinkingTokensToExclude}
-        toolsEnabled={useToolsApi}
         running={running}
         queueCount={queueCount}
         runningStatus={runningLabels.label}

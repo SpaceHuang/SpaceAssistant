@@ -29,7 +29,6 @@ type Props = {
   runningElapsed?: React.ReactNode
   modelSlot?: React.ReactNode
   sessionId?: string
-  toolsEnabled?: boolean
   historyImageTokens?: number
   thinkingTokensToExclude?: number
   onSend: (text: string, attachments?: ChatImageAttachment[]) => void
@@ -74,7 +73,6 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     runningElapsed,
     modelSlot,
     sessionId,
-    toolsEnabled: _toolsEnabled,
     historyImageTokens = 0,
     thinkingTokensToExclude = 0,
     onSend,

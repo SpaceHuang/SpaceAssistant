@@ -38,6 +38,10 @@ import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from './confirmati
 import { getSecurityAuditLog, setSecurityAuditRetentionDays } from './confirmation/audit'
 import { readSecurityAuditRetentionDays } from './confirmation/policyRulesRuntime'
 import { recordSettingsChange } from './confirmation/settingsAudit'
+import { isToolEnabledByConfig } from './toolsConfigRuntime'
+import { BUILTIN_TOOL_DEFINITIONS } from '../src/shared/builtinToolDefinitions'
+import { rejectPendingConfirmsForToolAcrossLanes } from './toolConfirmRegistry'
+import { revokeToolForAllLanes } from './toolRevocationRegistry'
 import { recordUserAnswerToCache, scopeForCacheKey } from './confirmation/decisionCacheWriter'
 import type {
   AppConfig,
@@ -1379,6 +1383,19 @@ function readExposureInputsFromDb(
           })
         }
         const next = mergeToolsConfig({ ...cur, ...payload.tools })
+        // 这里比较的是全局内置工具配置，而不是桌面暴露清单。
+        // 远程 lane 专属的 workdir 工具也必须触发在途请求撤销。
+        const beforeNames = new Set(
+          BUILTIN_TOOL_DEFINITIONS.filter((tool) => isToolEnabledByConfig(tool.name, cur)).map((tool) => tool.name)
+        )
+        const afterNames = new Set(
+          BUILTIN_TOOL_DEFINITIONS.filter((tool) => isToolEnabledByConfig(tool.name, next)).map((tool) => tool.name)
+        )
+        for (const toolName of beforeNames) {
+          if (afterNames.has(toolName)) continue
+          revokeToolForAllLanes(toolName)
+          rejectPendingConfirmsForToolAcrossLanes(toolName)
+        }
         // §5.6-6：deniedTools 变更落 settings.tool-toggle（含新旧值）
         if (
           payload.tools.deniedTools !== undefined &&

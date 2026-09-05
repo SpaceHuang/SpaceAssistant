@@ -29,7 +29,7 @@ if (typeof window !== 'undefined' && !window.localStorage) {
 }
 
 import '../renderer/i18n'
-import { beforeEach } from 'vitest'
+import { beforeEach, vi } from 'vitest'
 import { changeAppLocale } from '../renderer/i18n/localeSync'
 import type { SpaceAssistantApi } from '../shared/api'
 import type { AppConfig } from '../shared/domainTypes'
@@ -50,7 +50,14 @@ if (typeof window !== 'undefined') {
     appQuit: api.appQuit ?? (async () => {}),
     appToggleDevTools: api.appToggleDevTools ?? (async () => {}),
     claudeChatOnUsage: api.claudeChatOnUsage ?? (() => () => undefined),
+    claudeChatCreateWithTools: api.claudeChatCreateWithTools ?? vi.fn(async () => ({ ok: true, content: [], stopReason: 'end_turn' })),
+    claudeChatOnDelta: api.claudeChatOnDelta ?? (() => () => {}),
+    claudeChatOnThinkingDelta: api.claudeChatOnThinkingDelta ?? (() => () => {}),
+    claudeChatOnDone: api.claudeChatOnDone ?? (() => () => {}),
+    claudeChatOnError: api.claudeChatOnError ?? (() => () => {}),
+    toolOnUse: api.toolOnUse ?? (() => () => {}),
     toolOnConfirmRequest: api.toolOnConfirmRequest ?? (() => () => {}),
+    toolOnProgress: api.toolOnProgress ?? (() => () => {}),
     toolOnResult: api.toolOnResult ?? (() => () => {}),
     workdirSwitch: api.workdirSwitch ?? (async () => ({ success: true, sessions: [] })),
     configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig)),
@@ -95,4 +102,36 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
     removeEventListener: () => {},
     dispatchEvent: () => false
   })
+}
+
+// jsdom 不提供 canvas 2D 上下文；xterm 在 renderer 测试导入时会探测它。
+if (typeof window !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
+  const canvasProto = HTMLCanvasElement.prototype as HTMLCanvasElement & {
+    getContext?: (contextId: string, options?: unknown) => unknown
+  }
+  const originalGetContext = canvasProto.getContext
+  canvasProto.getContext = ((contextId: string, options?: unknown) => {
+    if (contextId !== '2d') return originalGetContext?.call(canvasProto, contextId, options) ?? null
+    return {
+      canvas: canvasProto,
+      measureText: () => ({ width: 0 }),
+      fillText: () => {},
+      strokeText: () => {},
+      fillRect: () => {},
+      clearRect: () => {},
+      save: () => {},
+      restore: () => {},
+      translate: () => {},
+      scale: () => {},
+      setTransform: () => {},
+      resetTransform: () => {},
+      beginPath: () => {},
+      closePath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      stroke: () => {},
+      fill: () => {},
+      createLinearGradient: () => ({ addColorStop: () => {} })
+    } as unknown
+  }) as HTMLCanvasElement['getContext']
 }
