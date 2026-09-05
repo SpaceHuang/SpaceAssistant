@@ -117,12 +117,18 @@ function parseStoredServices(raw: string | undefined): LlmServiceProfile[] {
       const supportedModelIds = Array.isArray(supportedRaw)
         ? supportedRaw.filter((x): x is string => typeof x === 'string')
         : undefined
+      const fetchedRaw = o.fetchedModelIds
+      const fetchedModelIds = Array.isArray(fetchedRaw)
+        ? fetchedRaw.filter((x): x is string => typeof x === 'string')
+        : undefined
       out.push({
         id,
         name,
         baseUrl: typeof o.baseUrl === 'string' ? o.baseUrl : '',
         apiKeyPresent: false,
         supportedModelIds,
+        fetchedModelIds,
+        fetchedAt: typeof o.fetchedAt === 'number' ? o.fetchedAt : undefined,
         createdAt: typeof o.createdAt === 'string' ? o.createdAt : undefined,
         updatedAt: typeof o.updatedAt === 'string' ? o.updatedAt : undefined
       })
@@ -380,11 +386,16 @@ export function persistLlmServices(
   const previousServices = readLlmServices(db)
   const toStore = services.map((s) => {
     const old = previousServices.find((x) => x.id === s.id)
+    const nextBaseUrl = s.baseUrl.trim()
+    // baseUrl 变更即服务指向改变，旧拉取结论作废（P1-7，渲染层外的兜底）
+    const baseUrlChanged = old ? nextBaseUrl !== old.baseUrl.trim() : false
     return {
       id: s.id,
       name: s.name.trim(),
-      baseUrl: s.baseUrl.trim(),
+      baseUrl: nextBaseUrl,
       supportedModelIds: s.supportedModelIds ?? old?.supportedModelIds ?? [],
+      fetchedModelIds: baseUrlChanged ? undefined : (s.fetchedModelIds ?? old?.fetchedModelIds),
+      fetchedAt: baseUrlChanged ? undefined : (s.fetchedAt ?? old?.fetchedAt),
       createdAt: old?.createdAt ?? s.createdAt ?? ts,
       updatedAt: ts
     }

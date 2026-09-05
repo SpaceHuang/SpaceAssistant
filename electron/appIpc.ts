@@ -64,6 +64,8 @@ import {
 import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../src/shared/llmModelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
+import { fetchServiceModels } from './llmModelListFetcher'
+import type { FetchServiceModelsResult } from '../src/shared/llmModelConfig'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
@@ -1540,7 +1542,7 @@ function readExposureInputsFromDb(
     'config:test-connection',
     async (
       _e,
-      options?: { serviceId?: string; apiKey?: string; baseUrl?: string; supportedModelIds?: string[] }
+      options?: { serviceId?: string; apiKey?: string; baseUrl?: string; supportedModelIds?: string[]; models?: ModelEntry[] }
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         if (!options?.serviceId) {
@@ -1555,13 +1557,19 @@ function readExposureInputsFromDb(
           return { success: false, error: creds.error ?? ErrorCodes.API_KEY_NOT_CONFIGURED }
         }
 
-        const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
-        let models: ModelEntry[] = []
-        if (rawModels) {
-          try {
-            models = JSON.parse(rawModels) as ModelEntry[]
-          } catch {
-            models = []
+        // 草稿目录优先：拉取合并的新模型尚未保存时，测试连接也要能用上
+        let models: ModelEntry[]
+        if (options.models !== undefined) {
+          models = Array.isArray(options.models) ? options.models : []
+        } else {
+          const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
+          models = []
+          if (rawModels) {
+            try {
+              models = JSON.parse(rawModels) as ModelEntry[]
+            } catch {
+              models = []
+            }
           }
         }
         const enabledModel = resolveTestConnectionModel(ctx.db, models, options.serviceId, {
@@ -1583,6 +1591,41 @@ function readExposureInputsFromDb(
         return { success: true }
       } catch (e) {
         return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'llm:fetch-service-models',
+    async (
+      _e,
+      options?: { serviceId?: string; apiKey?: string; baseUrl?: string }
+    ): Promise<FetchServiceModelsResult> => {
+      let creds: { apiKey: string | null; baseUrl: string | undefined; error?: string }
+      try {
+        creds = await resolveTestConnectionCredentials(ctx.db, options)
+      } catch (e) {
+        // baseUrl 草稿校验失败与网络无关，单独分类避免误导（P1-6）
+        const msg = e instanceof Error ? e.message : String(e)
+        const isBaseUrl = /baseurl/i.test(msg)
+        logAgentEvent('warn', 'llm.fetch_models', { success: false, error: msg })
+        return { ok: false, error: isBaseUrl ? 'invalid-base-url' : 'network' }
+      }
+      try {
+        if (creds.error || !creds.apiKey) {
+          return { ok: false, error: 'no-api-key' }
+        }
+        const result = await fetchServiceModels({ baseUrl: creds.baseUrl, apiKey: creds.apiKey })
+        logAgentEvent('info', 'llm.fetch_models', {
+          success: result.ok,
+          ...(result.ok
+            ? { modelCount: result.models.length, truncated: result.truncated }
+            : { error: result.error, status: 'status' in result ? result.status : undefined })
+        })
+        return result
+      } catch (e) {
+        logAgentEvent('warn', 'llm.fetch_models', { success: false, error: e instanceof Error ? e.message : String(e) })
+        return { ok: false, error: 'network' }
       }
     }
   )

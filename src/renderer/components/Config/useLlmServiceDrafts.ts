@@ -14,6 +14,9 @@ import { getEnabledModelIds } from '../../../shared/llmModelConfig'
 export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, enabledModelIds: string[] = []) {
   const [state, setState] = useState<LlmServiceTabState>({ drafts: {}, activeIds: [], order: [] })
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  // enabledModelIds 仅在初始化时取最新值；其后续变化（如拉取合并新模型）不得触发草稿重建
+  const enabledModelIdsRef = useRef(enabledModelIds)
+  enabledModelIdsRef.current = enabledModelIds
 
   useEffect(() => {
     if (open && cfg) {
@@ -22,10 +25,11 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, enable
         : cfg.activeLlmServiceId
           ? [cfg.activeLlmServiceId]
           : []
-      const modelIds = enabledModelIds.length ? enabledModelIds : getEnabledModelIds(cfg.models ?? [])
+      const currentEnabled = enabledModelIdsRef.current
+      const modelIds = currentEnabled.length ? currentEnabled : getEnabledModelIds(cfg.models ?? [])
       setState(initLlmServiceTabState(cfg.llmServices ?? [], ids, modelIds))
     }
-  }, [open, cfg, enabledModelIds])
+  }, [open, cfg])
 
   const scrollToCard = useCallback((serviceId: string) => {
     requestAnimationFrame(() => {

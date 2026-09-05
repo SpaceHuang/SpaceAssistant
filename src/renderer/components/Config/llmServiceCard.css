@@ -68,6 +68,15 @@
   color: var(--sa-warning, #d48806);
 }
 
+.config-models-settings .llm-service-model-stale-tag {
+  margin-left: var(--sa-config-gap-tight);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: var(--sa-config-font-sm);
+  color: var(--sa-warning, #d48806);
+  background: color-mix(in srgb, var(--sa-warning, #d48806) 14%, transparent);
+}
+
 .config-models-settings .llm-service-card-header {
   display: flex;
   align-items: center;

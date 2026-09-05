@@ -87,4 +87,49 @@ describe('llmServiceDrafts', () => {
     const result = toggleActiveService(state, 'b')
     expect(result).toEqual({ error: 'needModels', name: 'Service B' })
   })
+
+  it('carries fetchedModelIds/fetchedAt from profile into draft and save payload', () => {
+    const withCache = [
+      {
+        ...services[0]!,
+        fetchedModelIds: ['kimi-k2.7-code'],
+        fetchedAt: 1700000000000
+      }
+    ]
+    let state = initLlmServiceTabState(withCache, ['a'], enabledIds)
+    expect(state.drafts.a!.fetchedModelIds).toEqual(['kimi-k2.7-code'])
+    expect(state.drafts.a!.fetchedAt).toBe(1700000000000)
+
+    state = updateServiceDraft(state, 'a', {
+      fetchedModelIds: ['m1', 'm3'],
+      fetchedAt: 1700000001000
+    })
+    const payload = buildLlmServicesSavePayload(state)
+    expect(payload.llmServices[0]!.fetchedModelIds).toEqual(['m1', 'm3'])
+    expect(payload.llmServices[0]!.fetchedAt).toBe(1700000001000)
+  })
+
+  it('omits fetch cache fields when never fetched', () => {
+    const state = initLlmServiceTabState(services, ['a'], enabledIds)
+    const payload = buildLlmServicesSavePayload(state)
+    expect(payload.llmServices[0]!.fetchedModelIds).toBeUndefined()
+    expect(payload.llmServices[0]!.fetchedAt).toBeUndefined()
+  })
+
+  it('clears fetch cache when baseUrl changes (draft points to another service)', () => {
+    const withCache = [{ ...services[0]!, fetchedModelIds: ['kimi-k2.7-code'], fetchedAt: 1700000000000 }]
+    let state = initLlmServiceTabState(withCache, ['a'], enabledIds)
+    state = updateServiceDraft(state, 'a', { baseUrl: 'https://b.com' })
+    expect(state.drafts.a!.fetchedModelIds).toBeUndefined()
+    expect(state.drafts.a!.fetchedAt).toBeUndefined()
+  })
+
+  it('keeps fetch cache when baseUrl patch is unchanged or unrelated fields change', () => {
+    const withCache = [{ ...services[0]!, fetchedModelIds: ['kimi-k2.7-code'], fetchedAt: 1700000000000 }]
+    let state = initLlmServiceTabState(withCache, ['a'], enabledIds)
+    state = updateServiceDraft(state, 'a', { baseUrl: 'https://a.com' })
+    expect(state.drafts.a!.fetchedModelIds).toEqual(['kimi-k2.7-code'])
+    state = updateServiceDraft(state, 'a', { name: 'Renamed' })
+    expect(state.drafts.a!.fetchedModelIds).toEqual(['kimi-k2.7-code'])
+  })
 })

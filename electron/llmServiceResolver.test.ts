@@ -109,6 +109,30 @@ describe('llmServiceResolver', () => {
     expect(readActiveLlmServiceIds(db)).toEqual([s1.id, s2id])
   })
 
+  it('drops fetch cache when baseUrl changes on persist (P1-7)', () => {
+    migrateLegacyLlmServicesIfNeeded(db)
+    const s1 = readLlmServices(db)[0]!
+    const cached = { ...s1, supportedModelIds: ['1'], fetchedModelIds: ['m-a'], fetchedAt: 1700000000000 }
+    persistLlmServices(db, [cached], [s1.id])
+    expect(readLlmServices(db)[0]!.fetchedModelIds).toEqual(['m-a'])
+
+    // baseUrl 未变：缓存保留；baseUrl 变更：缓存清除
+    persistLlmServices(db, [{ ...cached, name: 'Renamed' }], [s1.id])
+    expect(readLlmServices(db)[0]!.fetchedModelIds).toEqual(['m-a'])
+    persistLlmServices(db, [{ ...cached, baseUrl: 'https://other.example.com', fetchedModelIds: undefined, fetchedAt: undefined }], [s1.id])
+    expect(readLlmServices(db)[0]!.fetchedModelIds).toBeUndefined()
+    expect(readLlmServices(db)[0]!.fetchedAt).toBeUndefined()
+  })
+
+  it('drops stored fetch cache when baseUrl changes even if payload still carries it', () => {
+    migrateLegacyLlmServicesIfNeeded(db)
+    const s1 = readLlmServices(db)[0]!
+    persistLlmServices(db, [{ ...s1, supportedModelIds: ['1'], fetchedModelIds: ['m-a'], fetchedAt: 1 }], [s1.id])
+    // 渲染层未清缓存的异常场景：持久层兜底，baseUrl 变更即作废旧缓存
+    persistLlmServices(db, [{ ...s1, baseUrl: 'https://new.example.com', supportedModelIds: ['1'], fetchedModelIds: ['m-a'], fetchedAt: 1 }], [s1.id])
+    expect(readLlmServices(db)[0]!.fetchedModelIds).toBeUndefined()
+  })
+
   it('rejects duplicate service names', () => {
     migrateLegacyLlmServicesIfNeeded(db)
     const services = readLlmServices(db)
@@ -215,7 +239,7 @@ describe('llmServiceResolver', () => {
     expect(result.services[0]!.supportedModelIds?.length).toBeGreaterThan(0)
     expect(result.preferredLanguageModelId).toBeTruthy()
     expect(result.models.every((m) => m.isDefault === false)).toBe(true)
-    expect(result.models.find((m) => m.name === 'kimi-k2.6')?.isVision).toBe(true)
+    expect(result.models.find((m) => m.name === 'kimi-k2.7-code')?.isVision).toBe(true)
   })
 
   it('resolveTestConnectionModel uses service intersection and language preferred', () => {
@@ -235,7 +259,7 @@ describe('llmServiceResolver', () => {
     migrateMultiServiceModelConfig(db, models)
     const s1 = readLlmServices(db)[0]!
     const s2id = crypto.randomUUID()
-    const kimi = models.find((m) => m.name === 'kimi-k2.6')!
+    const kimi = models.find((m) => m.name === 'kimi-k2.7-code')!
     const pro = models.find((m) => m.name === 'deepseek-v4-pro')!
     setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId, pro.id)
     persistLlmServices(
@@ -247,7 +271,7 @@ describe('llmServiceResolver', () => {
       [s1.id],
       { [s2id]: 'sk-b' }
     )
-    expect(resolveTestConnectionModel(db, models, s2id)?.name).toBe('kimi-k2.6')
+    expect(resolveTestConnectionModel(db, models, s2id)?.name).toBe('kimi-k2.7-code')
   })
 
   it('resolveTestConnectionModel accepts draft supportedModelIds override', () => {
@@ -268,7 +292,7 @@ describe('llmServiceResolver', () => {
     migrateMultiServiceModelConfig(db, models)
     const s1 = readLlmServices(db)[0]!
     const s2id = crypto.randomUUID()
-    const kimi = models.find((m) => m.name === 'kimi-k2.6')!
+    const kimi = models.find((m) => m.name === 'kimi-k2.7-code')!
     const pro = models.find((m) => m.name === 'deepseek-v4-pro')!
     setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId, pro.id)
     persistLlmServices(
@@ -280,7 +304,7 @@ describe('llmServiceResolver', () => {
       [s1.id, s2id],
       { [s2id]: 'sk-volcano' }
     )
-    expect(resolveTestConnectionModel(db, models, s2id)?.name).toBe('kimi-k2.6')
+    expect(resolveTestConnectionModel(db, models, s2id)?.name).toBe('kimi-k2.7-code')
   })
 
   it('resolveLlmCredentialsForModel picks first matching active service', async () => {

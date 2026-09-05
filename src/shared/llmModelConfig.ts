@@ -3,24 +3,29 @@ import { DEFAULT_MODEL_MAX_CONTEXT, DEFAULT_MODEL_MAX_TOKENS } from './domainTyp
 
 /** 内置模型快速/视觉标签默认值（§6.4） */
 export const BUILTIN_MODEL_TAG_DEFAULTS: Record<string, { isFast: boolean; isVision: boolean }> = {
-  'kimi-k2.6': { isFast: false, isVision: true },
-  'glm-5.1': { isFast: false, isVision: true },
+  'kimi-k2.7-code': { isFast: false, isVision: true },
+  'glm-5.3': { isFast: false, isVision: false },
+  'glm-5.3-flash': { isFast: true, isVision: true },
   'minimax-m2.7': { isFast: false, isVision: true },
   'deepseek-v4-pro': { isFast: false, isVision: false },
   'deepseek-v4-flash': { isFast: true, isVision: false },
   'claude-sonnet-4-6': { isFast: false, isVision: true },
   'claude-opus-4-7': { isFast: false, isVision: true },
   'claude-haiku-4-5': { isFast: true, isVision: true },
-  'gpt-5.5': { isFast: false, isVision: true },
-  'gemini-3.1-pro': { isFast: false, isVision: true },
-  'gemini-3.1-flash-lite': { isFast: true, isVision: true }
+  'gpt-5.5': { isFast: false, isVision: true }
 }
 
 export const PREFERRED_BUILTIN_MODEL_NAMES = {
   language: 'deepseek-v4-pro',
   fast: 'deepseek-v4-flash',
-  vision: 'kimi-k2.6'
+  vision: 'kimi-k2.7-code'
 } as const
+
+/** 内置模型名升级映射：迁移旧名到新名（保留原 id 与作者配置） */
+export const BUILTIN_MODEL_NAME_MIGRATIONS: Record<string, string> = {
+  'kimi-k2.6': 'kimi-k2.7-code',
+  'glm-5.1': 'glm-5.3'
+}
 
 export type PreferredModelKind = 'language' | 'fast' | 'vision'
 
@@ -49,7 +54,13 @@ export function normalizeModelEntry(entry: Partial<ModelEntry> & Pick<ModelEntry
 }
 
 export function migrateModelEntries(models: ModelEntry[]): ModelEntry[] {
-  return models.map((m) => normalizeModelEntry(m))
+  const existingNames = new Set(models.map((m) => m.name))
+  return models.map((m) => {
+    const target = BUILTIN_MODEL_NAME_MIGRATIONS[m.name]
+    // 目标名已被其它条目占用时跳过重命名，避免产生同名重复条目（不可删、按名查找失效）
+    const renamed = target && !existingNames.has(target) ? target : m.name
+    return normalizeModelEntry({ ...m, name: renamed })
+  })
 }
 
 export function getEnabledModelIds(models: ModelEntry[]): string[] {
@@ -223,4 +234,102 @@ export function resolveServiceForModel(
     return s
   }
   return undefined
+}
+
+/** 拉取到的服务模型信息（宽容解析后的最小结构） */
+export interface FetchedModelInfo {
+  /** 服务 API 返回的模型 id，映射为 ModelEntry.name */
+  id: string
+  displayName?: string
+}
+
+/** 模型列表拉取错误分类（主进程与渲染层统一使用，仅此一处定义） */
+export type FetchServiceModelsError =
+  | 'unauthorized'
+  | 'not-found'
+  | 'timeout'
+  | 'network'
+  | 'invalid-response'
+  | 'no-api-key'
+  | 'invalid-base-url'
+
+export type FetchServiceModelsResult =
+  | { ok: true; models: FetchedModelInfo[]; truncated: boolean }
+  | { ok: false; error: FetchServiceModelsError; status?: number }
+
+export interface MergeFetchedModelsResult {
+  /** 合并后的全局模型目录（既有条目原样保留，新条目追加） */
+  models: ModelEntry[]
+  /** 该服务合并后的 supportedModelIds（替换语义：恰好等于本次拉取到的集合） */
+  supportedModelIds: string[]
+  /** 本次新建条目的 name 列表 */
+  addedNames: string[]
+  /** 原勾选中因不在本次拉取结果里而被移除的 ModelEntry.id */
+  removedIds: string[]
+  /** 目录是否发生变化（新增或重新启用条目）；为 false 时无需回写目录 */
+  catalogChanged: boolean
+}
+
+/**
+ * 拉取结果合并进全局目录并替换服务勾选（§6.4，应用前自动清空）：
+ * - name 已存在：不新建、不覆盖用户字段，仅确保 enabled=true 并纳入勾选；
+ * - name 不存在：按 normalizeModelEntry 兜底规则新建（内置标签表命中则用之）并纳入勾选；
+ * - 原勾选但本次未拉到的：从 supportedModelIds 移除（目录条目保留），记入 removedIds。
+ */
+export function mergeFetchedModels(
+  models: ModelEntry[],
+  fetched: FetchedModelInfo[],
+  serviceSupportedIds: string[],
+  createId: () => string = () => crypto.randomUUID()
+): MergeFetchedModelsResult {
+  const nextModels = [...models]
+  const supported: string[] = []
+  const addedNames: string[] = []
+  let catalogChanged = false
+  for (const f of fetched) {
+    const name = f.id
+    const existing = nextModels.find((m) => m.name === name)
+    if (existing) {
+      if (!existing.enabled) {
+        nextModels[nextModels.indexOf(existing)] = { ...existing, enabled: true }
+        catalogChanged = true
+      }
+      if (!supported.includes(existing.id)) supported.push(existing.id)
+      continue
+    }
+    const entry = normalizeModelEntry({ id: createId(), name })
+    nextModels.push(entry)
+    supported.push(entry.id)
+    addedNames.push(name)
+    catalogChanged = true
+  }
+  const supportedSet = new Set(supported)
+  const removedIds = serviceSupportedIds.filter((id) => !supportedSet.has(id))
+  return { models: nextModels, supportedModelIds: supported, addedNames, removedIds, catalogChanged }
+}
+
+export interface FetchedModelsDiff {
+  /** supported − fetched：疑似已下线的已勾选模型（ModelEntry.id）。 */
+  staleIds: string[]
+}
+
+/**
+ * 失效模型检测（§6.2）：基于服务最近一次拉取结论计算差集。
+ * 拉取为替换语义，fetched − supported 恒为空，故只产出 staleIds；
+ * 该差集只出现在「上次拉取后用户手动勾选了别的模型」的场景。
+ */
+export function diffFetchedModels(
+  supportedIds: string[],
+  models: ModelEntry[],
+  fetchedNames: string[]
+): FetchedModelsDiff {
+  const fetchedSet = new Set(fetchedNames)
+  const byId = new Map(models.map((m) => [m.id, m]))
+  const staleIds: string[] = []
+  for (const id of supportedIds) {
+    const entry = byId.get(id)
+    if (!entry) continue
+    if (!fetchedSet.has(entry.name)) staleIds.push(id)
+  }
+  return { staleIds }
 }

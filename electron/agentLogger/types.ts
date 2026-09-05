@@ -6,6 +6,7 @@ export type AgentLogEventName =
   | 'llm.max_tokens_floor'
   | 'llm.response'
   | 'llm.error'
+  | 'llm.fetch_models'
   | 'tool.request'
   | 'tool.confirm'
   | 'tool.confirm.remote_read_only_reject'

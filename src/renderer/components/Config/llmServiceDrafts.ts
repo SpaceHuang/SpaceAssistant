@@ -9,6 +9,9 @@ export type LlmServiceDraft = {
   apiKeyDraft: string
   apiKeyPresent: boolean
   supportedModelIds: string[]
+  /** 最近一次拉取成功的服务模型 id 缓存（=ModelEntry.name），随保存落库 */
+  fetchedModelIds?: string[]
+  fetchedAt?: number
   expanded: boolean
   isNew?: boolean
 }
@@ -40,6 +43,8 @@ export function initLlmServiceTabState(
       apiKeyDraft: '',
       apiKeyPresent: s.apiKeyPresent,
       supportedModelIds: supported,
+      fetchedModelIds: s.fetchedModelIds ? [...s.fetchedModelIds] : undefined,
+      fetchedAt: s.fetchedAt,
       expanded: fallbackActive.includes(s.id)
     }
   }
@@ -141,15 +146,21 @@ export function removeServiceDraft(
 export function updateServiceDraft(
   state: LlmServiceTabState,
   serviceId: string,
-  patch: Partial<Pick<LlmServiceDraft, 'name' | 'baseUrl' | 'apiKeyDraft' | 'supportedModelIds'>>
+  patch: Partial<Pick<LlmServiceDraft, 'name' | 'baseUrl' | 'apiKeyDraft' | 'supportedModelIds' | 'fetchedModelIds' | 'fetchedAt'>>
 ): LlmServiceTabState {
   const d = state.drafts[serviceId]
   if (!d) return state
+  const next = { ...d, ...patch }
+  // baseUrl 变更意味着服务指向改变，旧拉取结论不再可信（P1-7）
+  if (patch.baseUrl !== undefined && patch.baseUrl.trim() !== d.baseUrl.trim()) {
+    next.fetchedModelIds = undefined
+    next.fetchedAt = undefined
+  }
   return {
     ...state,
     drafts: {
       ...state.drafts,
-      [serviceId]: { ...d, ...patch }
+      [serviceId]: next
     }
   }
 }
@@ -204,7 +215,9 @@ export function buildLlmServicesSavePayload(state: LlmServiceTabState): {
       name: d.name.trim(),
       baseUrl: d.baseUrl.trim(),
       apiKeyPresent: d.apiKeyPresent || Boolean(d.apiKeyDraft.trim()),
-      supportedModelIds: [...d.supportedModelIds]
+      supportedModelIds: [...d.supportedModelIds],
+      fetchedModelIds: d.fetchedModelIds ? [...d.fetchedModelIds] : undefined,
+      fetchedAt: d.fetchedAt
     }
   })
   const llmServiceKeys: Record<string, string> = {}

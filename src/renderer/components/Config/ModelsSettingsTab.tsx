@@ -256,7 +256,7 @@ export function ModelsSettingsTab({
         </h2>
         <p className="config-models-section__intro">{t('models.apiServices.intro')}</p>
         <div className="config-models-section__content">
-          <LlmServiceTab draftsApi={draftsApi} enabledModels={enabledModels} />
+          <LlmServiceTab draftsApi={draftsApi} enabledModels={enabledModels} models={models} onModelsChange={onModelsChange} />
         </div>
       </section>
 

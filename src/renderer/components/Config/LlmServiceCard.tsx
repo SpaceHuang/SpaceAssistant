@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { App, Button, Checkbox, Input, Select, Space } from 'antd'
+import { App, Button, Checkbox, Input, Select, Space, Tooltip } from 'antd'
 import type { ModelEntry } from '../../../shared/domainTypes'
+import { diffFetchedModels } from '../../../shared/llmModelConfig'
 import { ConfigModelOptionContent } from './ConfigModelOption'
 import type { LlmServiceDraft } from './llmServiceDrafts'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -45,7 +46,10 @@ type Props = {
   onToggleActive: () => void
   onToggleExpand: () => void
   onDelete: () => void
-  onPatch: (patch: Partial<Pick<LlmServiceDraft, 'name' | 'baseUrl' | 'apiKeyDraft' | 'supportedModelIds'>>) => void
+  onPatch: (patch: Partial<Pick<LlmServiceDraft, 'name' | 'baseUrl' | 'apiKeyDraft' | 'supportedModelIds' | 'fetchedModelIds' | 'fetchedAt'>>) => void
+  /** 从服务拉取模型列表；未提供时隐藏入口 */
+  onFetchModels?: () => void
+  fetchingModels?: boolean
 }
 
 export function LlmServiceCard({
@@ -58,7 +62,9 @@ export function LlmServiceCard({
   onToggleActive,
   onToggleExpand,
   onDelete,
-  onPatch
+  onPatch,
+  onFetchModels,
+  fetchingModels = false
 }: Props) {
   const { message } = App.useApp()
   const { t } = useTypedTranslation('config')
@@ -77,7 +83,8 @@ export function LlmServiceCard({
         serviceId: draft.id,
         apiKey: draft.apiKeyDraft.trim() || undefined,
         baseUrl: draft.baseUrl,
-        supportedModelIds: draft.supportedModelIds
+        supportedModelIds: draft.supportedModelIds,
+        models: enabledModels
       })
       if (r.success) message.success(t('messages.connectionSuccess'))
       else message.error(r.error ?? t('messages.connectionFailed'))
@@ -91,6 +98,14 @@ export function LlmServiceCard({
 
   const selectAll = () => onPatch({ supportedModelIds: [...selectableIds] })
   const clearAll = () => onPatch({ supportedModelIds: [] })
+
+  // §6.2 失效模型检测：已勾选但不在最近一次拉取结果中的模型
+  const staleIds = draft.fetchedModelIds
+    ? diffFetchedModels(draft.supportedModelIds, enabledModels, draft.fetchedModelIds).staleIds
+    : []
+  const staleSet = new Set(staleIds)
+  const removeStale = () => onPatch({ supportedModelIds: draft.supportedModelIds.filter((id) => !staleSet.has(id)) })
+  const hasKey = draft.apiKeyPresent || Boolean(draft.apiKeyDraft.trim())
 
   return (
     <div
@@ -145,6 +160,16 @@ export function LlmServiceCard({
             <div className="llm-service-supported-models__header">
               <span className="llm-service-field-label">{t('llmService.supportedModelsLabel')}</span>
               <Space size={4}>
+                {onFetchModels ? (
+                  <Tooltip title={hasKey ? undefined : t('llmService.fetchModels.needKey')}>
+                    {/* disabled 按钮不触发指针事件，需包一层 span 才能展示提示 */}
+                    <span>
+                      <Button size="small" type="link" loading={fetchingModels} disabled={!hasKey} onClick={onFetchModels}>
+                        {t('llmService.fetchModels.button')}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                ) : null}
                 <Button size="small" type="link" onClick={selectAll}>
                   {t('llmService.selectAllModels')}
                 </Button>
@@ -162,13 +187,29 @@ export function LlmServiceCard({
               options={enabledModels.map((m) => ({ value: m.id, label: m.name }))}
               optionRender={(opt) => {
                 const m = enabledModels.find((x) => x.id === opt.value)
-                return m ? <ConfigModelOptionContent m={m} compact /> : opt.label
+                const content = m ? <ConfigModelOptionContent m={m} compact /> : opt.label
+                return staleSet.has(opt.value as string) ? (
+                  <span>
+                    {content}
+                    <span className="llm-service-model-stale-tag">{t('llmService.fetchModels.staleTag')}</span>
+                  </span>
+                ) : (
+                  content
+                )
               }}
               maxTagCount="responsive"
               status={modelsMissing ? 'error' : undefined}
             />
             {modelsMissing ? (
               <p className="llm-service-supported-models__hint">{t('llmService.supportedModelsRequired')}</p>
+            ) : null}
+            {staleIds.length > 0 ? (
+              <p className="llm-service-supported-models__hint llm-service-supported-models__hint--stale">
+                {t('llmService.fetchModels.staleHint', { count: staleIds.length })}
+                <Button size="small" type="link" onClick={removeStale}>
+                  {t('llmService.fetchModels.removeStale')}
+                </Button>
+              </p>
             ) : null}
           </div>
           <div className="llm-service-key-field">

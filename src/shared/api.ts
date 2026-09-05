@@ -364,7 +364,15 @@ export type SpaceAssistantApi = {
     baseUrl?: string
     /** 设置页草稿中的支持模型 id；未保存时须传入 */
     supportedModelIds?: string[]
+    /** 设置页草稿中的模型目录（含未保存的新拉取模型）；传入时优先于 DB 目录 */
+    models?: import('./domainTypes').ModelEntry[]
   }) => Promise<{ success: boolean; error?: string }>
+  /** 从 LLM 服务拉取其支持的模型列表（§5 试探式 GET {baseUrl}/v1/models，双认证头，分页拉全） */
+  llmFetchServiceModels: (options?: {
+    serviceId?: string
+    apiKey?: string
+    baseUrl?: string
+  }) => Promise<import('./llmModelConfig').FetchServiceModelsResult>
 
   dialogSelectDirectory: () => Promise<{ path: string } | { canceled: true } | { error: string }>
   configCheckWorkdirWritable: (dir: string) => Promise<{ writable: boolean; error?: string }>

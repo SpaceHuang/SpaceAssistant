@@ -5,6 +5,7 @@ import { resolveSessionModelBinding, listChatModelOptions } from './sessionModel
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const models = DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m }))
+  const proId = models.find((m) => m.name === 'deepseek-v4-pro')!.id
   return {
     locale: 'zh-CN',
     apiKeyPresent: true,
@@ -22,9 +23,9 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     activeLlmServiceIds: ['s1'],
     model: 'deepseek-v4-pro',
     defaultModel: 'deepseek-v4-pro',
-    preferredLanguageModelId: models.find((m) => m.name === 'deepseek-v4-pro')!.id,
+    preferredLanguageModelId: proId,
     preferredFastLanguageModelId: models.find((m) => m.name === 'deepseek-v4-flash')!.id,
-    preferredVisionModelId: models.find((m) => m.name === 'kimi-k2.6')!.id,
+    preferredVisionModelId: models.find((m) => m.name === 'kimi-k2.7-code')!.id,
     models,
     thinkingEnabled: true,
     workDir: '/tmp',
@@ -70,10 +71,11 @@ describe('sessionModelBinding', () => {
   })
 
   it('lists service-prefixed display names for all options', () => {
+    const proId = String(DEFAULT_MODELS.findIndex((m) => m.name === 'deepseek-v4-pro') + 1)
     const cfg = makeConfig({
       llmServices: [
-        { id: 's1', name: 'Deep', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['4'] },
-        { id: 's2', name: 'Volcano', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['4'] }
+        { id: 's1', name: 'Deep', baseUrl: '', apiKeyPresent: true, supportedModelIds: [proId] },
+        { id: 's2', name: 'Volcano', baseUrl: '', apiKeyPresent: true, supportedModelIds: [proId] }
       ],
       activeLlmServiceIds: ['s1', 's2']
     })
@@ -87,6 +89,6 @@ describe('sessionModelBinding', () => {
   it('prefixes single-service options as well', () => {
     const cfg = makeConfig()
     const options = listChatModelOptions(cfg)
-    expect(options.find((o) => o.modelName === 'glm-5.1')?.displayName).toBe('Default-glm-5.1')
+    expect(options.find((o) => o.modelName === 'glm-5.3')?.displayName).toBe('Default-glm-5.3')
   })
 })

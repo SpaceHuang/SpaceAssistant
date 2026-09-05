@@ -56,6 +56,8 @@ function normalizeLlmState(state: LlmServiceTabState) {
         baseUrl: d.baseUrl,
         apiKeyDraft: d.apiKeyDraft,
         supportedModelIds: [...d.supportedModelIds],
+        fetchedModelIds: d.fetchedModelIds ? [...d.fetchedModelIds] : undefined,
+        fetchedAt: d.fetchedAt,
         isNew: Boolean(d.isNew)
       }
     })

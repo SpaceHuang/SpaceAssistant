@@ -173,7 +173,25 @@
     "testConnectionNeedModels": "Select at least one supported model for this service before testing",
     "supportedModelsRequired": "Select at least one supported model to enable or save this service",
     "validationNeedModels": "Service \"{{name}}\" must support at least one model",
-    "activateNeedModels": "Service \"{{name}}\" must support at least one model before it can be enabled"
+    "activateNeedModels": "Service \"{{name}}\" must support at least one model before it can be enabled",
+    "fetchModels": {
+      "button": "Fetch from service",
+      "needKey": "Configure an API Key before fetching the model list",
+      "success": "Fetched {{total}} models ({{added}} new)",
+      "successRemoved": "Fetched {{total}} models ({{added}} new, {{removed}} stale selections removed)",
+      "incomplete": "The returned model list is incomplete ({{total}} fetched, {{added}} new): only new models were merged; selections and stale detection were left unchanged",
+      "empty": "Fetch succeeded, but the service returned an empty model list",
+      "errorUnauthorized": "Invalid API Key or insufficient permission. Please check and retry",
+      "errorNotFound": "This service does not provide a model list endpoint. Please add models manually",
+      "errorTimeout": "Fetch timed out. Check your network and retry",
+      "errorNetwork": "Network error. Fetch failed, please retry later",
+      "errorInvalidResponse": "The model list returned by the service could not be parsed",
+      "errorInvalidBaseUrl": "The Base URL is invalid. Please check and retry",
+      "errorNoApiKey": "No API Key configured, cannot fetch",
+      "staleTag": "Possibly unavailable",
+      "staleHint": "{{count}} selected model(s) are missing from the latest fetched list and may have been retired",
+      "removeStale": "Remove unavailable models"
+    }
   },
   "skills": {
     "autoDetect": "Let AI choose Skills to load based on their descriptions",

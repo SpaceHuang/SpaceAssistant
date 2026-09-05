@@ -173,7 +173,25 @@
     "testConnectionNeedModels": "请至少为该服务勾选一个支持模型后再测试连接",
     "supportedModelsRequired": "须至少选择一个支持模型，否则无法启用或保存该服务",
     "validationNeedModels": "服务「{{name}}」须至少支持一个模型",
-    "activateNeedModels": "服务「{{name}}」须至少支持一个模型后才能启用"
+    "activateNeedModels": "服务「{{name}}」须至少支持一个模型后才能启用",
+    "fetchModels": {
+      "button": "从服务拉取",
+      "needKey": "配置 API Key 后才能从服务拉取模型列表",
+      "success": "已拉取 {{total}} 个模型（新增 {{added}} 个）",
+      "successRemoved": "已拉取 {{total}} 个模型（新增 {{added}} 个，移除 {{removed}} 个已失效勾选）",
+      "incomplete": "服务返回的模型列表不完整（已获取 {{total}} 个，新增 {{added}} 个）：仅合并新增模型，未替换勾选、未更新失效判定",
+      "empty": "拉取成功，但该服务返回的模型列表为空",
+      "errorUnauthorized": "API Key 无效或无权限，请检查后重试",
+      "errorNotFound": "该服务未提供模型列表接口，请手动添加模型",
+      "errorTimeout": "拉取超时，请检查网络后重试",
+      "errorNetwork": "网络错误，拉取失败，请稍后重试",
+      "errorInvalidResponse": "服务返回的模型列表无法解析",
+      "errorInvalidBaseUrl": "Base URL 格式不正确，请检查后重试",
+      "errorNoApiKey": "尚未配置 API Key，无法拉取",
+      "staleTag": "可能已失效",
+      "staleHint": "{{count}} 个已勾选模型不在该服务最近一次拉取结果中，可能已下线",
+      "removeStale": "移除失效模型"
+    }
   },
   "skills": {
     "autoDetect": "由 AI 根据 Skill 描述自动选择要加载的 Skill",
