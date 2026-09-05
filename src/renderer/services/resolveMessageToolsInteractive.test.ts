@@ -155,7 +155,6 @@ describe('resolveMessageToolsInteractive', () => {
     const interactive = resolveMessageToolsInteractive({
       message: confirmingMessage,
       sessionId: 'sess-1',
-      toolsEnabled: true,
       confirmMode: 'diff',
       pendingItems: [pendingItem],
       streamingAssistantId: 'msg-2',
@@ -173,7 +172,6 @@ describe('resolveMessageToolsInteractive', () => {
       resolveMessageToolsInteractive({
         message: reloadedMessage,
         sessionId: 'sess-1',
-        toolsEnabled: true,
         confirmMode: 'diff',
         pendingItems: [pendingItem],
         streamingRequestId: null
@@ -199,7 +197,6 @@ describe('resolveMessageToolsInteractive', () => {
       resolveMessageToolsInteractive({
         message: executing,
         sessionId: 'sess-1',
-        toolsEnabled: true,
         confirmMode: 'diff',
         pendingItems: [],
         streamingAssistantId: 'msg-exec',

@@ -8,6 +8,8 @@ type Waiter = {
   timeoutId: ReturnType<typeof setTimeout>
   /** 本次待确认请求决策层给出的记忆档位（规范化键集合）；无档位时不接受任何 memoryTier。 */
   memoryKeys?: Set<string>
+  toolName?: string
+  lane?: string
 }
 
 const CONFIRM_MS = 5 * 60 * 1000
@@ -21,7 +23,8 @@ export function confirmKey(requestId: string, toolUseId: string): string {
 export function waitForToolConfirm(
   requestId: string,
   toolUseId: string,
-  memoryTiers?: MemoryTier[]
+  memoryTiers?: MemoryTier[],
+  scope?: { toolName: string; lane: string }
 ): Promise<ToolConfirmOutcome> {
   const key = confirmKey(requestId, toolUseId)
   return new Promise<ToolConfirmOutcome>((resolve) => {
@@ -34,9 +37,29 @@ export function waitForToolConfirm(
       timeoutId,
       ...(memoryTiers?.length
         ? { memoryKeys: new Set(memoryTiers.map((t) => canonicalKeyJson(t.key))) }
-        : {})
+        : {}),
+      ...(scope ? { toolName: scope.toolName, lane: scope.lane } : {})
     })
   })
+}
+
+export function rejectPendingConfirmsForTool(lane: string, toolName: string): number {
+  let rejected = 0
+  for (const [key, waiter] of pending) {
+    if (waiter.lane !== lane || waiter.toolName !== toolName) continue
+    clearTimeout(waiter.timeoutId)
+    pending.delete(key)
+    waiter.resolve('rejected')
+    rejected++
+  }
+  return rejected
+}
+
+export function rejectPendingConfirmsForToolAcrossLanes(toolName: string): number {
+  return ['desktop', 'feishu', 'wechat'].reduce(
+    (count, lane) => count + rejectPendingConfirmsForTool(lane, toolName),
+    0
+  )
 }
 
 /**

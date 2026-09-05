@@ -13,7 +13,6 @@ import {
   DEFAULT_WIKI_CONFIG
 } from '../../../shared/domainTypes'
 import { changeAppLocale } from '../../i18n/localeSync'
-import { runClaudeChatStream } from '../../services/chatStreamService'
 import { store } from '../../store'
 import { setMessages, setSession } from '../../store/chatSlice'
 import { setConfig } from '../../store/configSlice'
@@ -71,11 +70,6 @@ vi.mock('../../services/chatSearchAdapter', () => ({
   useChatSearchAdapter: vi.fn()
 }))
 
-vi.mock('../../services/chatStreamService', () => ({
-  runClaudeChatStream: vi.fn(async (_payload, callbacks) => {
-    callbacks.onDone({ usage: { input_tokens: 1, output_tokens: 1 } })
-  })
-}))
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -231,10 +225,10 @@ describe('ChatView auto-create session', () => {
     await waitFor(() => {
       expect(window.api.chatAppendMessage).toHaveBeenCalled()
     })
-    expect(runClaudeChatStream).toHaveBeenCalled()
-    const payload = vi.mocked(runClaudeChatStream).mock.calls[0]?.[0]
-    expect(payload?.messages?.length).toBeGreaterThan(0)
-    expect(payload?.messages?.some((m) => m.content === 'hello world')).toBe(true)
+    expect(window.api.claudeChatCreateWithTools).toHaveBeenCalled()
+    const payload = vi.mocked(window.api.claudeChatCreateWithTools).mock.calls[0]?.[0]
+    expect(payload?.sourceMessages?.length).toBeGreaterThan(0)
+    expect(payload?.sourceMessages?.some((m) => m.content === 'hello world')).toBe(true)
     expect(payload?.sessionId).toBe('new-session-id')
   })
 
@@ -258,10 +252,10 @@ describe('ChatView auto-create session', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
 
     await waitFor(() => {
-      expect(runClaudeChatStream).toHaveBeenCalled()
+      expect(window.api.claudeChatCreateWithTools).toHaveBeenCalled()
     })
-    const racePayload = vi.mocked(runClaudeChatStream).mock.calls[0]?.[0]
-    expect(racePayload?.messages?.some((m) => m.content === 'race test')).toBe(true)
+    const racePayload = vi.mocked(window.api.claudeChatCreateWithTools).mock.calls[0]?.[0]
+    expect(racePayload?.sourceMessages?.some((m) => m.content === 'race test')).toBe(true)
   })
 
   it('does not send when sessionCreate fails', async () => {

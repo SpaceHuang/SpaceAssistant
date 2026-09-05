@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
+import { isToolRevoked, registerToolRevocationRequest, clearToolRevocationRequest } from './toolRevocationRegistry'
+import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -21,6 +23,8 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn() }
 }))
 
+const { mockGetConfigValue } = vi.hoisted(() => ({ mockGetConfigValue: vi.fn(() => null) }))
+
 vi.mock('./database', () => ({
   listSessions: vi.fn(() => []),
   createSession: vi.fn(),
@@ -30,7 +34,8 @@ vi.mock('./database', () => ({
   getMessages: vi.fn(() => []),
   appendMessage: vi.fn(),
   updateMessageContent: vi.fn(),
-  getConfigValue: vi.fn(),
+  getConfigValue: mockGetConfigValue,
+  deleteConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
   appendSearchHistory: vi.fn(),
   listSearchHistory: vi.fn(() => []),
@@ -56,6 +61,8 @@ vi.mock('./windowRef', () => ({
 
 vi.mock('./toolsConfigRuntime', () => ({
   exposedToolNamesForLane: vi.fn(() => ['read_file'])
+  ,isToolEnabledByConfig: (name: string, cfg: typeof DEFAULT_TOOLS_CONFIG) =>
+    cfg.enabled && !cfg.deniedTools.includes(name) && (cfg.allowedTools.length === 0 || cfg.allowedTools.includes(name))
 }))
 
 const mockReadDisabledIds = vi.fn((): string[] => [])
@@ -156,5 +163,21 @@ describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail
     expect(r.ok).toBe(true)
     const pushes = mockSend.mock.calls.filter((c) => c[0] === 'exposure:tools-changed')
     expect(pushes.map((c) => (c[1] as { lane: string }).lane).sort()).toEqual(['desktop', 'feishu', 'wechat'])
+  })
+
+  it.each([
+    { name: 'deniedTools', tools: { deniedTools: ['list_work_dirs'] } },
+    { name: 'enabled=false', tools: { enabled: false } }
+  ])('全局工具配置变更会撤销远程专属工具（$name）', async ({ tools }) => {
+    registerToolRevocationRequest('feishu-request', 'feishu')
+    registerToolRevocationRequest('wechat-request', 'wechat')
+    try {
+      await ipc.getHandler('config:set')?.(null, { tools })
+      expect(isToolRevoked('feishu-request', 'list_work_dirs')).toBe(true)
+      expect(isToolRevoked('wechat-request', 'list_work_dirs')).toBe(true)
+    } finally {
+      clearToolRevocationRequest('feishu-request')
+      clearToolRevocationRequest('wechat-request')
+    }
   })
 })

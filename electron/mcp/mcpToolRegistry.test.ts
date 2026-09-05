@@ -8,6 +8,7 @@ import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import {
   buildMappedToolDescriptors,
   buildSnapshotTools,
+  mayBuildMcpToolSnapshot,
   cacheTools,
   clearCachedTools,
   getCachedTools,
@@ -227,6 +228,13 @@ rl.on('line', (line) => {
 })
 
 describe('buildSnapshotTools', () => {
+  it('only considers enabled profiles with a non-empty whitelist as snapshot candidates', () => {
+    expect(mayBuildMcpToolSnapshot([], false)).toBe(false)
+    expect(mayBuildMcpToolSnapshot([{ enabled: false, enabledToolNames: ['x'] } as McpServerProfile], false)).toBe(false)
+    expect(mayBuildMcpToolSnapshot([{ enabled: true, enabledToolNames: [] } as McpServerProfile], false)).toBe(false)
+    expect(mayBuildMcpToolSnapshot([{ enabled: true, enabledToolNames: ['x'] } as McpServerProfile], false)).toBe(true)
+    expect(mayBuildMcpToolSnapshot([{ enabled: true, enabledToolNames: ['x'] } as McpServerProfile], true)).toBe(false)
+  })
   const profileA = {
     id: 'a',
     name: 'Server A',

@@ -9,7 +9,6 @@ import { buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'
 import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
-import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getToolExecutor } from './tools/builtinExecutors'
@@ -19,7 +18,6 @@ import { appendDiagnostic, getDiagnostics } from './mcp/mcpDiagnostics'
 import { createMcpToolExecutor } from './mcp/mcpToolExecutor'
 import {
   buildSnapshotFromDb,
-  snapshotEntriesToAnthropicTools,
   type McpToolSnapshot
 } from './mcp/mcpToolRegistry'
 import { getSecret } from './mcp/mcpSecretStore'
@@ -152,6 +150,9 @@ import {
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
+import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
+import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
+import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -176,10 +177,6 @@ export type ClaudeContentBlockMessage = {
   content: string | Array<unknown>
   id?: string
   timestamp?: number
-}
-
-function sanitizeTools(tools: unknown[]): unknown[] {
-  return sanitizeAnthropicToolsPayloadForStrictGateways(tools)
 }
 
 function parseToolInput(baseInput: unknown, partialJson: string): unknown {
@@ -403,13 +400,25 @@ function failToolLoopWithLastUsage(
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
   const chatSignal = registerChatCancel(args.requestId)
-  const mcpConnectionManager = new McpConnectionManager({
-    appendDiagnostic: (serverId, entry) => {
-      if (args.appDb) void appendDiagnostic(args.appDb, serverId, entry)
+  const requestLane = args.remoteContext
+    ? args.remoteContext.source === 'feishu'
+      ? 'feishu'
+      : 'wechat'
+    : 'desktop'
+  registerToolRevocationRequest(args.requestId, requestLane)
+  let mcpConnectionManager: McpConnectionManager | undefined
+  const getMcpConnectionManager = (): McpConnectionManager => {
+    if (!mcpConnectionManager) {
+      mcpConnectionManager = new McpConnectionManager({
+        appendDiagnostic: (serverId, entry) => {
+          if (args.appDb) void appendDiagnostic(args.appDb, serverId, entry)
+        }
+      })
     }
-  })
+    return mcpConnectionManager
+  }
   try {
-    return await runToolChatSessionInner({ ...args, chatSignal, mcpConnectionManager })
+    return await runToolChatSessionInner({ ...args, chatSignal, getMcpConnectionManager })
   } catch (e) {
     if (e instanceof ChatCancelledError) return { ok: false, error: e.message }
     throw e
@@ -418,13 +427,14 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
       args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
     }
     clearChatCancel(args.requestId)
+    clearToolRevocationRequest(args.requestId)
     clearRequest(args.requestId)
-    await mcpConnectionManager.shutdown().catch(() => undefined)
+    await mcpConnectionManager?.shutdown().catch(() => undefined)
   }
 }
 
 async function runToolChatSessionInner(
-  args: RunToolChatSessionArgs & { chatSignal: AbortSignal; mcpConnectionManager: McpConnectionManager }
+  args: RunToolChatSessionArgs & { chatSignal: AbortSignal; getMcpConnectionManager: () => McpConnectionManager }
 ): Promise<RunToolChatSessionResult> {
   const {
     sender,
@@ -453,7 +463,7 @@ async function runToolChatSessionInner(
     projectMemoryEnabled,
     chatSignal,
     getBrowserDetectContext,
-    mcpConnectionManager,
+    getMcpConnectionManager,
     floatingNotificationManager,
     hasImageAttachments
   } = args
@@ -522,23 +532,21 @@ async function runToolChatSessionInner(
   // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）；默认 standard 时为零行为变化快路径
   const exposureLane = remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop'
   const exposureRules = appDb ? loadEffectivePolicyRules(appDb, exposureLane) : undefined
-  const builtinDefs = filterBuiltinToolsForApi(
-    toolsConfig,
-    feishuConfig,
-    browserConfig,
-    remoteContext,
-    shellConfig,
-    wechatConfig,
-    undefined,
-    exposureRules
-  )
   /** 请求级 MCP 工具快照：仅桌面会话注入（remoteContext 存在时为空）。 */
   const mcpSnapshot: McpToolSnapshot = appDb
     ? buildSnapshotFromDb(appDb, { remoteContext: Boolean(remoteContext) })
     : { entries: new Map(), budgetDropped: [] }
-  const mcpToolDefs = snapshotEntriesToAnthropicTools([...mcpSnapshot.entries.values()])
-  const tools = sanitizeTools([...(builtinDefs as unknown[]), ...mcpToolDefs])
-  const toolNames = (tools as Array<{ name?: string }>).map((t) => t.name).filter((n): n is string => typeof n === 'string')
+  const effectiveTools = computeEffectiveTools({
+    builtinConfig: toolsConfig,
+    feishuConfig,
+    browserConfig,
+    shellConfig,
+    wechatConfig,
+    remoteContext,
+    exposureRules,
+    mcpSnapshot
+  })
+  const { tools, toolNames, authorizedToolNames } = effectiveTools
   if (toolNames.includes('browser')) {
     stagehandService.resetInferenceCount(sessionId)
   }
@@ -616,6 +624,20 @@ async function runToolChatSessionInner(
 
       for await (const evt of stream) {
       throwIfChatCancelled(chatSignal)
+      const normalizedDelta = normalizeAnthropicEvent(evt, contentBlockTypes)
+      if (normalizedDelta?.type === 'tool_call_delta') {
+        const pending = pendingToolUseByIndex.get(normalizedDelta.index)
+        if (pending) pending.partialJson += normalizedDelta.partialJson
+      }
+      if (normalizedDelta?.type === 'reasoning_delta' && normalizedDelta.text.length > 0) {
+        safeWebContentsSend(sender, 'claude-chat-thinking-delta', { requestId, text: normalizedDelta.text })
+        if (remoteContext) onRemoteThinkingActive(buildRemoteProgressHookContext(sessionId, locale))
+      }
+      if (normalizedDelta?.type === 'text_delta' && normalizedDelta.text.length > 0) {
+        safeWebContentsSend(sender, 'claude-chat-delta', { requestId, text: normalizedDelta.text })
+        const prev = pendingTextByIndex.get(normalizedDelta.index) ?? ''
+        pendingTextByIndex.set(normalizedDelta.index, prev + normalizedDelta.text)
+      }
       if (evt?.type === 'content_block_start') {
         const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
         const blockType = (evt as { content_block?: { type?: string } }).content_block?.type
@@ -632,40 +654,6 @@ async function runToolChatSessionInner(
           } else if (blockType === 'text') {
             pendingTextByIndex.set(index, '')
           }
-        }
-      }
-      if (evt?.type === 'content_block_delta' && (evt as { delta?: { type?: string; partial_json?: string } }).delta?.type === 'input_json_delta') {
-        const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-        const pending = pendingToolUseByIndex.get(index)
-        const partialJson = (evt as { delta?: { partial_json?: string } }).delta?.partial_json
-        if (pending && typeof partialJson === 'string') {
-          pending.partialJson += partialJson
-        }
-      }
-      if (evt?.type === 'content_block_delta' && (evt as { delta?: { type?: string; thinking?: string } }).delta?.type === 'thinking_delta') {
-        const thinkingDelta = (evt as { delta?: { thinking?: string } }).delta?.thinking
-        if (typeof thinkingDelta === 'string' && thinkingDelta.length > 0) {
-          safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text: thinkingDelta })
-          if (remoteContext) {
-            onRemoteThinkingActive(buildRemoteProgressHookContext(sessionId, locale))
-          }
-        }
-      }
-      if (
-        evt?.type === 'content_block_delta' &&
-        (evt as { delta?: { type?: string; text?: string } }).delta?.type === 'text_delta' &&
-        typeof (evt as { delta: { text: string } }).delta.text === 'string' &&
-        (evt as { delta: { text: string } }).delta.text.length > 0
-      ) {
-        const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-        const blockType = contentBlockTypes.get(index)
-        const textDelta = (evt as { delta: { text: string } }).delta.text
-        if (blockType === 'thinking') {
-          safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text: textDelta })
-        } else if (blockType === 'text') {
-          safeWebContentsSend(sender,'claude-chat-delta', { requestId, text: textDelta })
-          const prev = pendingTextByIndex.get(index) ?? ''
-          pendingTextByIndex.set(index, prev + textDelta)
         }
       }
       if (evt?.type === 'message_start') {
@@ -806,6 +794,16 @@ async function runToolChatSessionInner(
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }) }
     }
 
+    if (toolNames.length === 0) {
+      return failToolLoopWithLastUsage(
+        sender,
+        requestId,
+        sessionId,
+        'unexpected_tool_call_with_no_tools',
+        lastValidUsage
+      )
+    }
+
     const toolResults: Anthropic.ToolResultBlockParam[] = []
     const fileCache = getFileStateCacheForSession(sessionId)
     let abortRepeatedToolError: string | null = null
@@ -817,7 +815,32 @@ async function runToolChatSessionInner(
       const toolName = tu.name
       const inputObj = normalizeToolUseInputRecord(tu.input)
 
-      const exec = getToolExecutor(toolName) ?? resolveMcpExecutor(toolName, mcpSnapshot, mcpConnectionManager, appDb)
+      const authorization = authorizeToolCall(toolName, authorizedToolNames)
+      if (!authorization.ok) {
+        const error = toolName.startsWith('mcp_')
+          ? `${authorization.error}: MCP 工具已变更或服务不可用`
+          : authorization.error
+        logAgentEvent('warn', 'tool.error', {
+          requestId,
+          sessionId,
+          loopRound,
+          toolUseId,
+          toolName
+        })
+        toolResults.push(buildToolErrorResult(toolUseId, error, { requestId, sessionId }))
+        continue
+      }
+      if (isToolRevoked(requestId, toolName)) {
+        toolResults.push(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }))
+        continue
+      }
+
+      const builtinExec = getToolExecutor(toolName)
+      const exec =
+        builtinExec ??
+        (mcpSnapshot.entries.has(toolName)
+          ? resolveMcpExecutor(toolName, mcpSnapshot, getMcpConnectionManager(), appDb)
+          : undefined)
       if (!exec) {
         const unknownToolError = toolName.startsWith('mcp_')
           ? 'MCP 工具已变更或服务不可用'
@@ -1614,6 +1637,10 @@ async function runToolChatSessionInner(
       let execThrew = false
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
+      if (isToolRevoked(requestId, toolName)) {
+        toolResults.push(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }))
+        continue
+      }
       if (remoteContext) {
         onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
           toolName,

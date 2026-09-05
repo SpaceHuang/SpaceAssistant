@@ -63,4 +63,16 @@ describe('toolConfirmRegistry', () => {
     submitToolConfirmResponse('req-notiers', 'tool-4', false)
     await pending
   })
+
+  it('only rejects confirmations in the matching lane and tool scope', async () => {
+    const desktopWrite = waitForToolConfirm('req-a', 'u-a', undefined, { lane: 'desktop', toolName: 'write_file' })
+    const remoteWrite = waitForToolConfirm('req-b', 'u-b', undefined, { lane: 'wechat', toolName: 'write_file' })
+    const desktopRead = waitForToolConfirm('req-c', 'u-c', undefined, { lane: 'desktop', toolName: 'read_file' })
+    const { rejectPendingConfirmsForTool, cancelAllPendingToolConfirms } = await import('./toolConfirmRegistry')
+    expect(rejectPendingConfirmsForTool('desktop', 'write_file')).toBe(1)
+    await expect(desktopWrite).resolves.toBe('rejected')
+    cancelAllPendingToolConfirms()
+    await expect(remoteWrite).resolves.toBe('rejected')
+    await expect(desktopRead).resolves.toBe('rejected')
+  })
 })
