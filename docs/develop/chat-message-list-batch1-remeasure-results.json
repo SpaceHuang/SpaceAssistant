@@ -1,11 +1,11 @@
 {
-  "collectedAt": "2026-09-04T01:27:19.391Z",
+  "collectedAt": "2026-09-05T04:58:11.311Z",
   "environment": "vitest+jsdom+React.Profiler",
   "note": "commit 时长来自 React Profiler actualDuration；Long Task 以单次 commit >50ms 近似。非浏览器 Performance 面板，但可在本机复现对比。",
   "machine": {
-    "platform": "win32",
-    "arch": "x64",
-    "node": "v24.19.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.4.0",
     "cpu": "Apple M2",
     "memoryGb": 16,
     "os": "macOS 26.5.2"
@@ -13,53 +13,53 @@
   "scenarios": {
     "small": {
       "messageCount": 20,
-      "mountMs": 44.15030000000115,
+      "mountMs": 19.41504200000054,
       "domNodes": 201,
-      "heapUsedMb": 0,
+      "heapUsedMb": 8.235610961914062,
       "streamCommits": {
         "count": 100,
-        "p50": 0.5426000000043132,
-        "p95": 0.749100000002727,
-        "max": 5.033899999993082,
+        "p50": 0.16253900000083377,
+        "p95": 0.30016600000271865,
+        "max": 3.11737599999924,
         "longTaskCount": 0,
         "longTaskShare": 0
       },
       "mountCommits": {
         "count": 1,
-        "p50": 35.50810000001911,
-        "p95": 35.50810000001911,
-        "max": 35.50810000001911,
+        "p50": 14.069586000008712,
+        "p95": 14.069586000008712,
+        "max": 14.069586000008712,
         "longTaskCount": 0,
         "longTaskShare": 0
       }
     },
     "large": {
       "messageCount": 500,
-      "mountMs": 544.1283000000003,
+      "mountMs": 238.29354200000034,
       "domNodes": 4682,
-      "heapUsedMb": 52.181846618652344,
+      "heapUsedMb": 48.17102813720703,
       "streamCommits": {
-        "count": 101,
-        "p50": 2.510099999999511,
-        "p95": 3.9235000000135187,
-        "max": 13.477899999976216,
+        "count": 100,
+        "p50": 1.3208100000083505,
+        "p95": 2.584695999986252,
+        "max": 3.7550570000021253,
         "longTaskCount": 0,
         "longTaskShare": 0
       },
       "mountCommits": {
         "count": 1,
-        "p50": 461.1123999999545,
-        "p95": 461.1123999999545,
-        "max": 461.1123999999545,
+        "p50": 197.74548299987237,
+        "p95": 197.74548299987237,
+        "max": 197.74548299987237,
         "longTaskCount": 1,
         "longTaskShare": 1
       }
     }
   },
   "ratios": {
-    "mountMs": 12.324453061473786,
+    "mountMs": 12.27365575619119,
     "domNodes": 23.29353233830846,
-    "streamCommitP95": 5.237618475502917
+    "streamCommitP95": 8.610888641494514
   },
   "gate": {
     "triggersBatch2": {

@@ -38,7 +38,7 @@ import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from './confirmati
 import { getSecurityAuditLog, setSecurityAuditRetentionDays } from './confirmation/audit'
 import { readSecurityAuditRetentionDays } from './confirmation/policyRulesRuntime'
 import { recordSettingsChange } from './confirmation/settingsAudit'
-import { recordUserAnswerToCache, scopeForCacheKey } from './confirmation/decisionCacheWriter'
+import { recordUserAnswerFromMemoryTiers, recordSystemManagedCacheEntry, scopeForCacheKey } from './confirmation/decisionCacheWriter'
 import type {
   AppConfig,
   FileInfo,
@@ -95,7 +95,7 @@ import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
-import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier } from './toolConfirmRegistry'
+import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers } from './toolConfirmRegistry'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
@@ -295,7 +295,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     sessionId?: string,
     scope: 'session' | 'persistent' = 'persistent'
   ): void => {
-    recordUserAnswerToCache({
+    recordSystemManagedCacheEntry({
       db: ctx.db,
       audit: getSecurityAuditLog(),
       lane: 'desktop',
@@ -426,14 +426,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         // B1：仅接受本次待确认请求决策层给出的档位（防渲染端伪造任意持久放行键）；
         // B2：scope 按键派生（带 sessionId 的会话级键不得错标为 persistent）。
         if (isPendingMemoryTier(payload.requestId, payload.toolUseId, payload.memoryTier)) {
-          recordUserAnswerToCache({
+          recordUserAnswerFromMemoryTiers({
             db: ctx.db,
             audit: getSecurityAuditLog(),
             lane: 'desktop',
             sessionId: payload.sessionId ?? 'desktop',
             key: payload.memoryTier,
-            decision: 'allow',
-            scope: scopeForCacheKey(payload.memoryTier),
+            memoryTiers: getPendingMemoryTiers(payload.requestId, payload.toolUseId),
             source: 'user-confirm'
           })
         } else {

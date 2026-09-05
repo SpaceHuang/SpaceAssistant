@@ -36,17 +36,12 @@ vi.mock('./sessionTitleSuggest', () => ({
   reachedCumulativeAssistantTurnsForTitleSuggest: vi.fn(() => false)
 }))
 
-vi.mock('./tools/builtinExecutors', () => ({
-  getToolExecutor: vi.fn((name: string) => {
-    if (name === 'read_file') {
-      return {
-        name: 'read_file',
-        execute: vi.fn(async () => ({ success: true, data: 'ok' }))
-      }
-    }
-    return undefined
-  })
-}))
+vi.mock('./tools/builtinExecutors', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./tools/builtinExecutors')>()
+  const { defineDirectTool } = await import('./tools/plannedToolRegistry')
+  const readFile = defineDirectTool({ name: 'read_file', parseInput: (raw) => raw, execute: async () => ({ success: true, data: 'ok' }) })
+  return { ...actual, getRegisteredTool: vi.fn(() => undefined), getToolExecutor: vi.fn() }
+})
 
 vi.mock('./browser/stagehandService', () => ({
   stagehandService: { resetInferenceCount: vi.fn() }
@@ -267,10 +262,7 @@ describe('runToolChatSession message_start usage', () => {
     const { getToolExecutor } = await import('./tools/builtinExecutors')
     vi.mocked(getToolExecutor).mockImplementation((name: string) => {
       if (name === 'read_file') {
-        return {
-          name: 'read_file',
-          execute: vi.fn(async () => ({ success: true, data: largeToolResult }))
-        }
+        return { name, execute: async () => ({ success: true, data: largeToolResult }) }
       }
       return undefined
     })
@@ -309,10 +301,7 @@ describe('runToolChatSession message_start usage', () => {
     const { getToolExecutor } = await import('./tools/builtinExecutors')
     vi.mocked(getToolExecutor).mockImplementation((name: string) => {
       if (name === 'read_file') {
-        return {
-          name: 'read_file',
-          execute: vi.fn(async () => ({ success: false, error: 'boom' }))
-        }
+        return { name, execute: async () => ({ success: false, error: 'boom' }) }
       }
       return undefined
     })

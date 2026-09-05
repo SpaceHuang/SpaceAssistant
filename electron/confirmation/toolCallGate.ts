@@ -86,7 +86,7 @@ export interface ToolCallGateResult {
   decision: Decision
   facts: ContentFacts
   /** run_shell 预检通过时的结构化结果（供日志/确认卡片 hints）。 */
-  shellPrecheck?: { analysis: ShellAnalysisResult; skipConfirm: boolean; hints: ShellSecurityHints }
+  shellPrecheck?: { analysis: ShellAnalysisResult; legacyAutoAllowEligible: boolean; legacyPolicy: import('../shell/legacyShellPolicyAdapter').LegacyShellPolicyInput; hints: ShellSecurityHints }
   /** run_shell 预检拒绝（validator 性质，gate 前置短路，不进引擎）。 */
   shellPrecheckDeny?: {
     error: string
@@ -128,7 +128,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   // ===== 前置 validator：run_shell 预检（deny 短路，不进引擎）=====
-  let shellSkipConfirm = false
+  let shellLegacyAutoAllowEligible = false
   if (args.toolName === 'run_shell') {
     const precheck = await (args.runShellPrecheck ?? precheckRunShellTool)({
       command: typeof args.toolInput.command === 'string' ? args.toolInput.command : '',
@@ -173,10 +173,11 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
     result.shellPrecheck = {
       analysis: precheck.analysis,
-      skipConfirm: precheck.skipConfirm,
+      legacyAutoAllowEligible: precheck.legacyAutoAllowEligible,
+      legacyPolicy: precheck.legacyPolicy,
       hints: precheck.hints
     }
-    shellSkipConfirm = precheck.skipConfirm
+    shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible
   }
 
   // ===== 生效规则集（套餐/覆盖，§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用 =====
@@ -334,7 +335,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     migrationComplete: isRemoteSecurityMigrationComplete(channelConfig),
     autoEvaluator: (f) => {
       if (f.toolName === 'run_shell') {
-        return shellSkipConfirm
+        return shellLegacyAutoAllowEligible
           ? { approve: true as const, reason: 'shell-precheck' }
           : { approve: false as const, reason: 'shell-precheck 未放行' }
       }

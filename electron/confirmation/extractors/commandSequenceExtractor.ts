@@ -1,3 +1,4 @@
+import path from 'path'
 import { parseShellCommandForTrust, parseShellSegments, tokenizeShellArgv } from '../../shell/shellCommandParser'
 import { commandHasShellMetasyntax } from '../../shell/shellCommandParser'
 import type { CommandFact, EnvFacts, FactSignal } from '../../../src/shared/confirmation/types'
@@ -22,10 +23,43 @@ export function normalizeShellSignature(command: string): string {
   return tokens.map(normalizeToken).filter(Boolean).join(' ')
 }
 
-function segmentFacts(segment: string, index: number): CommandFact {
+function extractConnectors(command: string): string[] {
+  const connectors: string[] = []
+  let quote: '"' | "'" | null = null
+  let escaped = false
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (ch === '\\' && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      continue
+    }
+    const two = command.slice(i, i + 2)
+    if (two === '&&' || two === '||') {
+      connectors.push(two)
+      i++
+    } else if (ch === '|' || ch === ';') {
+      connectors.push(ch)
+    }
+  }
+  return connectors
+}
+
+function segmentFacts(segment: string, index: number, connectors: string[], effectiveCwd: string): CommandFact {
   const argv = tokenizeShellArgv(segment) ?? []
   if (argv.length === 0) {
-    return { verb: '', args: [], signature: '' }
+    return { verb: '', args: [], signature: '', effectiveCwd }
   }
   const verb = argv[0]!
   const args = argv.slice(1)
@@ -34,8 +68,14 @@ function segmentFacts(segment: string, index: number): CommandFact {
     verb,
     args,
     signature,
+    effectiveCwd,
     // 简化：把 `<segment> && <segment>` 拆开后的相邻关系标注为 pipe 链
-    ...(index > 0 ? { pipesInto: `segment-${index - 1}` } : {})
+    ...(index > 0
+      ? {
+          pipesInto: `segment-${index - 1}`,
+          ...(connectors[index - 1] ? { connector: connectors[index - 1] } : {})
+        }
+      : {})
   }
 }
 
@@ -51,7 +91,19 @@ export function extractCommandSignals(command: string, _env: EnvFacts): {
     }
   }
 
-  const commands: CommandFact[] = segments.map((s, i) => segmentFacts(s, i))
+  const connectors = extractConnectors(command)
+  let effectiveCwd = _env.workDir
+  const commands: CommandFact[] = segments.map((s, i) => {
+    const fact = segmentFacts(s, i, connectors, effectiveCwd)
+    const verb = fact.verb.toLowerCase()
+    const next = fact.args[0]
+    if ((verb === 'cd' || verb === 'set-location' || verb === 'sl') && next) {
+      effectiveCwd = _env.os === 'win32'
+        ? path.win32.resolve(effectiveCwd, next)
+        : path.posix.resolve(effectiveCwd, next)
+    }
+    return fact
+  })
   // 仅单分段 + 无元语法的简单命令才允许派生信任缓存键（等价于现 parseShellCommandForTrust 的 persistable 判定）；
   // 复合命令（`a && b`、管道等）不得因任一分段被信任而放行整条命令（B1 / §5.2 变体绕过）。
   const persistable = segments.length === 1 && isPersistableTrustCommand(command)

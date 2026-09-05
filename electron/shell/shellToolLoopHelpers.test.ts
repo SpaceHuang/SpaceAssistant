@@ -62,7 +62,12 @@ describe('shellToolLoopHelpers', () => {
     })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.skipConfirm).toBe(true)
+    expect(result.legacyAutoAllowEligible).toBe(true)
+    expect(result.legacyPolicy.trustedCacheKeys).toEqual([{
+      kind: 'shell-command',
+      verb: expect.stringContaining(':echo hello'),
+      level: 'exact'
+    }])
   })
 
   it('does not skip confirm for untrusted safe command', async () => {
@@ -78,6 +83,43 @@ describe('shellToolLoopHelpers', () => {
     })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.skipConfirm).toBe(false)
+    expect(result.legacyAutoAllowEligible).toBe(false)
+  })
+
+  it('does not auto-allow a compound command even when a legacy rule allows it', async () => {
+    const result = await precheckRunShellTool({
+      command: 'echo one && echo two',
+      workDir,
+      userDataDir: os.tmpdir(),
+      shellConfig: {
+        enabled: true,
+        shellDefaultTimeoutSec: 300,
+        rules: [{ id: 'allow-echo', pattern: 'echo', decision: 'allow', note: '测试规则' }]
+      },
+      appDb: db
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.legacyAutoAllowEligible).toBe(false)
+  })
+
+  it('does not auto-allow an incompletely analyzed command even when trusted', async () => {
+    const entry = addTrustedCommand(db, 'echo')
+    expect(entry).not.toBeNull()
+    const result = await precheckRunShellTool({
+      command: 'echo $(pwd)',
+      workDir,
+      userDataDir: os.tmpdir(),
+      shellConfig: {
+        enabled: true,
+        shellDefaultTimeoutSec: 300,
+        trustedCommands: [entry!]
+      },
+      appDb: db
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.analysis.facts?.analysisCompleteness).toBe('partial')
+    expect(result.legacyAutoAllowEligible).toBe(false)
   })
 })

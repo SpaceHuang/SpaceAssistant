@@ -193,18 +193,20 @@ function PolicyPackageSection({
           title: t('toolsSecurity.policy.actionColumn'),
           width: 140,
           render: (_, r) => {
-            const actionLabel = (v: 'deny' | 'allow' | 'ask' | 'auto-evaluator') =>
+            const actionLabel = (v: 'deny' | 'allow' | 'ask' | 'auto-evaluator' | 'confirm-every-time') =>
               v === 'deny'
                 ? t('toolsSecurity.policy.actionDeny')
                 : v === 'allow'
                   ? t('toolsSecurity.policy.actionAllow')
                   : v === 'ask'
                     ? t('toolsSecurity.policy.actionAsk')
-                    : t('toolsSecurity.policy.actionAutoShort')
+                    : v === 'auto-evaluator'
+                      ? t('toolsSecurity.policy.actionAutoShort')
+                      : t('toolsSecurity.policy.actionAsk')
             if (r.locked) {
               return (
                 <span className={r.enabled ? undefined : 'config-field__hint'}>
-                  {actionLabel(r.action as 'deny' | 'allow' | 'ask' | 'auto-evaluator')}
+                  {actionLabel(r.action)}
                 </span>
               )
             }
@@ -222,7 +224,7 @@ function PolicyPackageSection({
                 style={{ width: '100%' }}
                 classNames={configModalSelectPopupClassNames}
                 options={options.map((v) => ({ value: v, label: actionLabel(v) }))}
-                onChange={(v) => changeRuleActionGuarded(r, v)}
+                onChange={(v) => changeRuleActionGuarded(r, v as 'deny' | 'allow' | 'ask' | 'auto-evaluator')}
               />
             )
           }

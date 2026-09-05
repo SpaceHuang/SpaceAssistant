@@ -2,6 +2,7 @@ import type { WebContents } from 'electron'
 import { isWebContentsAlive, safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
+import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
 import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
@@ -12,8 +13,14 @@ import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolP
 import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
-import { getToolExecutor } from './tools/builtinExecutors'
+import { getRegisteredTool, getToolExecutor } from './tools/builtinExecutors'
+import { executeRegisteredTool } from './tools/toolInvocationCoordinator'
+import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
+import { executePreparedShellExecution } from './tools/runShellExecutor'
+import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
+import type { PreparedShellExecution } from './shell/preparedShellExecution'
 import type { ToolExecutorResult } from './tools/types'
+import { shouldStopToolRetry } from './toolErrorRetryPolicy'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { appendDiagnostic, getDiagnostics } from './mcp/mcpDiagnostics'
 import { createMcpToolExecutor } from './mcp/mcpToolExecutor'
@@ -72,11 +79,12 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
-import { recordUserAnswerToCache } from './confirmation/decisionCacheWriter'
+import { recordUserAnswerFromDecision } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
+import { mapLegacyConfirmation } from './tools/coordinatorConfirmationAdapter'
 import type { ConfirmRequest } from '../src/shared/confirmation/types'
 import {
   formatScriptDenyUserMessage,
@@ -702,7 +710,8 @@ async function runToolChatSessionInner(
           const pending = pendingToolUseByIndex.get(index)
           pendingToolUseByIndex.delete(index)
           if (pending && pending.id && pending.name) {
-            const compatName = toolIdToOpenAiCompatibleApiToolName(pending.name)
+            const normalizedName = normalizeExternalToolName(pending.name)
+            const compatName = toolIdToOpenAiCompatibleApiToolName(normalizedName.canonicalName)
             const toolUseBlock = {
               type: 'tool_use',
               id: pending.id,
@@ -717,6 +726,7 @@ async function runToolChatSessionInner(
               toolUseId: pending.id,
               toolName: compatName,
               input: toolUseBlock.input
+              ,...(normalizedName.originalName ? { originalToolName: normalizedName.originalName } : {})
             })
             safeWebContentsSend(sender,'tool:use', {
               requestId,
@@ -724,6 +734,7 @@ async function runToolChatSessionInner(
                 id: pending.id,
                 name: compatName,
                 input: toolUseBlock.input,
+                ...(normalizedName.originalName ? { originalToolName: normalizedName.originalName } : {}),
                 ...(mcpSnapshot.entries.get(compatName)
                   ? {
                       mcp: {
@@ -817,8 +828,12 @@ async function runToolChatSessionInner(
       const toolName = tu.name
       const inputObj = normalizeToolUseInputRecord(tu.input)
 
-      const exec = getToolExecutor(toolName) ?? resolveMcpExecutor(toolName, mcpSnapshot, mcpConnectionManager, appDb)
-      if (!exec) {
+      const registeredTool = getRegisteredTool(toolName)
+      // builtin 主链路只消费 typed registry；legacy getter 仅保留迁移期外部兼容。
+      const exec = registeredTool
+        ? undefined
+        : getToolExecutor(toolName) ?? resolveMcpExecutor(toolName, mcpSnapshot, mcpConnectionManager, appDb)
+      if (!registeredTool && !exec) {
         const unknownToolError = toolName.startsWith('mcp_')
           ? 'MCP 工具已变更或服务不可用'
           : `未知工具: ${toolName}`
@@ -1027,9 +1042,46 @@ async function runToolChatSessionInner(
         continue
       }
       const shellPrecheck: RunShellPrecheckResult | null = gate.shellPrecheck
-        ? { ok: true, ...gate.shellPrecheck }
+        ? {
+            ok: true,
+            ...gate.shellPrecheck,
+            legacyAutoAllowEligible: gate.shellPrecheck.legacyAutoAllowEligible,
+            legacyPolicy: gate.shellPrecheck.legacyPolicy
+          }
         : null
       const shellSecurityHints: ShellSecurityHints | undefined = gate.shellPrecheck?.hints
+      let preparedShellExecution: PreparedShellExecution | undefined
+      const shellPolicyRevision = JSON.stringify({
+        type: gate.decision.type,
+        ruleId: gate.decision.ruleId,
+        riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : undefined,
+        memoryTiers: gate.decision.type === 'require-confirm' ? gate.decision.memoryTiers : []
+      })
+      if (toolName === 'run_shell') {
+        try {
+          preparedShellExecution = await planRunShellExecution(inputObj, {
+            workDir,
+            userDataDir,
+            shellConfig,
+            policyRevision: shellPolicyRevision
+          })
+        } catch (error) {
+          const code = error instanceof RunShellPlanError ? error.code : 'SHELL_PLAN_INVALID'
+          const message = error instanceof Error ? error.message : String(error)
+          logToolLoopError({ requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj }, message, message)
+          toolResults.push(buildToolErrorResult(toolUseId, code, { requestId, sessionId }))
+          safeWebContentsSend(sender, 'tool:result', {
+            requestId,
+            toolUseId,
+            result: { success: false, error: code }
+          })
+          if (toolErrorRepeat.noteFailure(toolName, code)) {
+            abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${code}`
+            break
+          }
+          continue
+        }
+      }
       if (gate.shellPrecheck) {
         logShellPrecheck({
           requestId,
@@ -1038,7 +1090,7 @@ async function runToolChatSessionInner(
           loopRound,
           command: typeof inputObj.command === 'string' ? inputObj.command : '',
           verdict: gate.shellPrecheck.analysis.verdict,
-          skipConfirm: gate.shellPrecheck.skipConfirm,
+          skipConfirm: gate.shellPrecheck.legacyAutoAllowEligible,
           hints: gate.shellPrecheck.hints
         })
       }
@@ -1230,8 +1282,7 @@ async function runToolChatSessionInner(
             toolUseId,
             toolName,
             input: inputObj,
-            riskLevel:
-              toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+            riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : gate.facts.baseRiskLevel,
             ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
             ...(mcpEntryForConfirm
               ? {
@@ -1272,10 +1323,7 @@ async function runToolChatSessionInner(
           // §5.5 统一通道分发：channelFor(lane)；confirm.* 审计由通道内部以同一 requestId 落
           const confirmReq: ConfirmRequest = {
             facts: gate.facts,
-            riskLevel:
-              toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell'
-                ? 'high'
-                : 'medium',
+            riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : gate.facts.baseRiskLevel,
             memoryTiers: confirmMemoryTiers,
             timeoutMs: null
           }
@@ -1431,11 +1479,14 @@ async function runToolChatSessionInner(
           toolUseId,
           loopRound,
           command,
-          outcome: shellPrecheck.skipConfirm && !needsConfirm ? 'skip_confirm' : outcome,
-          skipConfirm: shellPrecheck.skipConfirm,
+          outcome: shellPrecheck.legacyAutoAllowEligible && !needsConfirm ? 'skip_confirm' : outcome,
+          skipConfirm: shellPrecheck.legacyAutoAllowEligible,
           hints: shellSecurityHints
         })
       }
+
+      // 收窄 legacy confirm 状态为 coordinator 合同；下方仍保留既有文案和审计分支。
+      const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason })
 
       if (outcome === 'timeout') {
         const timeoutError =
@@ -1474,14 +1525,16 @@ async function runToolChatSessionInner(
         if (appDb) {
           const navHost = extractHostname(inputObj.url.trim())
           if (navHost) {
-            recordUserAnswerToCache({
+            if (gate.decision.type !== 'require-confirm') {
+              throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+            }
+            recordUserAnswerFromDecision({
               db: appDb,
               audit: getSecurityAuditLog(),
               lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
               sessionId,
               key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
-              decision: 'allow',
-              scope: 'session',
+              decision: gate.decision,
               source: 'user-confirm'
             })
           }
@@ -1500,14 +1553,16 @@ async function runToolChatSessionInner(
           if (appDb) {
             const actHost = extractHostname(actUrl)
             if (actHost) {
-              recordUserAnswerToCache({
+              if (gate.decision.type !== 'require-confirm') {
+                throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+              }
+              recordUserAnswerFromDecision({
                 db: appDb,
                 audit: getSecurityAuditLog(),
                 lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
                 sessionId,
                 key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
-                decision: 'allow',
-                scope: 'session',
+                decision: gate.decision,
                 source: 'user-confirm'
               })
             }
@@ -1534,11 +1589,11 @@ async function runToolChatSessionInner(
         })
       }
 
-      if (outcome === 'rejected') {
+      if (!confirmationDecision.approved) {
         const rejectedError =
-          rejectReason === 'remote_read_only'
+          confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
             ? '远程只读策略禁止执行需确认的工具。请在设置中将「远程写确认策略」改为「微信/飞书确认」，或开启「大模型生成的脚本自动允许执行」。'
-            : rejectReason === 'authorization_revoked'
+            : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
               ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
               : '用户拒绝执行此工具'
         logToolLoopError(
@@ -1631,14 +1686,14 @@ async function runToolChatSessionInner(
       }
       try {
         try {
-          execResult = await exec.execute(inputObj, {
+          const executionContext = {
             workDir,
             userDataDir,
             requestId,
             toolUseId,
             sessionId,
             sendProgress,
-            recordDiagnostic: (entry) => {
+            recordDiagnostic: (entry: { code: string; message: string }) => {
               logAgentEvent('info', 'tool.result', {
                 requestId,
                 sessionId,
@@ -1652,6 +1707,7 @@ async function runToolChatSessionInner(
             toolsConfig,
             browserConfig,
             shellConfig,
+            policyRevision: shellPolicyRevision,
             shellOutputMode,
             appDatabase: appDb,
             workDirManager,
@@ -1662,7 +1718,30 @@ async function runToolChatSessionInner(
             remoteContext,
             toolUserConfirmed,
             getBrowserDetectContext
-          })
+          }
+          execResult = preparedShellExecution
+            ? await executePreparedShellExecution(preparedShellExecution, executionContext, execStartedAt, {
+                requestId,
+                sessionId,
+                toolUseId,
+                command: preparedShellExecution.command,
+                cwd: preparedShellExecution.cwd,
+                shell: preparedShellExecution.spawnSpec.shellId,
+                timeoutSec: preparedShellExecution.timeoutMs / 1000,
+                ioMaxBytes: preparedShellExecution.ioMaxBytes,
+                environmentFingerprint: preparedShellExecution.dependencySnapshot.environmentFingerprint,
+                planDigest: preparedShellExecution.planDigest
+              })
+            : registeredTool
+              ? await executeRegisteredTool(registeredTool, inputObj, {
+                  requestId,
+                  toolUseId,
+                  signal,
+                  executionContext
+                }, {
+                  confirm: coordinatorConfirmHook({ outcome, needsConfirm, rejectReason })
+                }) as ToolExecutorResult
+            : await exec!.execute(inputObj, executionContext)
           if (toolName === 'browser' && browserConfig) {
             stagehandService.scheduleIdleClose(sessionId, browserConfig.idleTimeoutSec)
           }
@@ -1792,7 +1871,7 @@ async function runToolChatSessionInner(
       } else {
         const execError = execResult.error ?? '执行失败'
         toolResults.push(buildToolErrorResult(toolUseId, execError, { requestId, sessionId }))
-        if (toolErrorRepeat.noteFailure(toolName, execError)) {
+        if (shouldStopToolRetry(toolName, execError, execResult.data, toolErrorRepeat.noteFailure(toolName, execError))) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execError}`
         }
       }

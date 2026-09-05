@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process'
 import path from 'path'
+import type { ProcessKiller } from './shell/processSupervisor'
 
 const KILL_TREE_TIMEOUT_MS = 3000
+const KILL_TREE_GRACE_MS = 250
 
 /** 断开子进程 stdio，避免进程未退出时管道句柄阻止 Node 事件循环结束。 */
 export function detachChildProcessStreams(proc: ChildProcess): void {
@@ -24,6 +26,11 @@ export function detachChildProcessStreams(proc: ChildProcess): void {
 
 /** 终止进程及其子进程。Windows 上 SIGTERM 打到 cmd.exe 会弹出「终止批处理操作吗(Y/N)?」，需用 taskkill /T /F。 */
 export function killProcessTree(proc: ChildProcess): Promise<void> {
+  return killProcessTreeVerified(proc).then(() => undefined)
+}
+
+/** 终止并报告是否在 deadline 内收到树根进程的退出确认。 */
+export function killProcessTreeVerified(proc: ChildProcess): Promise<boolean> {
   return new Promise((resolve) => {
     const pid = proc.pid
     if (!pid) {
@@ -33,28 +40,37 @@ export function killProcessTree(proc: ChildProcess): Promise<void> {
         /* ignore */
       }
       detachChildProcessStreams(proc)
-      resolve()
+      resolve(true)
       return
     }
 
     let settled = false
-    const finish = () => {
+    const finish = (verified: boolean) => {
       if (settled) return
       settled = true
       detachChildProcessStreams(proc)
-      resolve()
+      resolve(verified)
     }
 
-    const timer = setTimeout(finish, KILL_TREE_TIMEOUT_MS)
+    const timer = setTimeout(() => finish(false), KILL_TREE_TIMEOUT_MS)
 
     if (process.platform === 'win32') {
       const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
         windowsHide: true,
         stdio: 'ignore'
       })
-      killer.on('close', () => {
+      killer.on('close', (code, signal) => {
         clearTimeout(timer)
-        finish()
+        if (code === 0 && signal == null) {
+          finish(true)
+          return
+        }
+        try {
+          proc.kill()
+        } catch {
+          /* ignore */
+        }
+        finish(false)
       })
       killer.on('error', () => {
         clearTimeout(timer)
@@ -63,28 +79,48 @@ export function killProcessTree(proc: ChildProcess): Promise<void> {
         } catch {
           /* ignore */
         }
-        finish()
+        finish(false)
       })
       return
     }
 
+    const groupPid = process.platform === 'darwin' ? -(pid as number) : undefined
     try {
-      proc.kill('SIGTERM')
+      if (groupPid) process.kill(groupPid, 'SIGTERM')
+      else proc.kill('SIGTERM')
     } catch {
       clearTimeout(timer)
-      finish()
+      finish(false)
       return
     }
 
+    const hardKillTimer = setTimeout(() => {
+      try {
+        if (groupPid) process.kill(groupPid, 'SIGKILL')
+        else proc.kill('SIGKILL')
+      } catch {
+        /* process already exited */
+      }
+    }, KILL_TREE_GRACE_MS)
     proc.once('close', () => {
       clearTimeout(timer)
-      finish()
+      clearTimeout(hardKillTimer)
+      finish(true)
     })
     proc.once('error', () => {
       clearTimeout(timer)
-      finish()
+      clearTimeout(hardKillTimer)
+      finish(false)
     })
   })
+}
+
+/** 将现有平台终止实现适配为统一 supervisor contract。 */
+export const processTreeKiller: ProcessKiller = {
+  async terminate(proc) {
+    const verified = await killProcessTreeVerified(proc)
+    return { signal: process.platform === 'win32' ? 'taskkill' : 'SIGTERM', verified }
+  }
 }
 
 /** Windows 上 spawn 非 .exe（.cmd/.bat 或无扩展名 npm shim）会 EINVAL，需经 cmd.exe。 */

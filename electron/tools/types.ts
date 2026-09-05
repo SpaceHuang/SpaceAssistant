@@ -75,6 +75,8 @@ export interface ToolExecutionContext {
   wechatConfig?: WeChatConfig
   browserConfig?: BrowserConfig
   shellConfig?: ShellConfig | null
+  /** gate/policy snapshot used to detect stale prepared shell plans. */
+  policyRevision?: string
   appDatabase?: AppDatabase
   workDirManager?: WorkDirManager
   larkCliRunner?: LarkCliRunner

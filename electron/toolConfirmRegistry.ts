@@ -8,6 +8,7 @@ type Waiter = {
   timeoutId: ReturnType<typeof setTimeout>
   /** 本次待确认请求决策层给出的记忆档位（规范化键集合）；无档位时不接受任何 memoryTier。 */
   memoryKeys?: Set<string>
+  memoryTiers?: readonly MemoryTier[]
 }
 
 const CONFIRM_MS = 5 * 60 * 1000
@@ -34,7 +35,8 @@ export function waitForToolConfirm(
       timeoutId,
       ...(memoryTiers?.length
         ? { memoryKeys: new Set(memoryTiers.map((t) => canonicalKeyJson(t.key))) }
-        : {})
+        : {}),
+      ...(memoryTiers?.length ? { memoryTiers: memoryTiers.map((tier) => ({ ...tier })) } : {})
     })
   })
 }
@@ -47,6 +49,10 @@ export function isPendingMemoryTier(requestId: string, toolUseId: string, key: C
   const w = pending.get(confirmKey(requestId, toolUseId))
   if (!w?.memoryKeys) return false
   return w.memoryKeys.has(canonicalKeyJson(key))
+}
+
+export function getPendingMemoryTiers(requestId: string, toolUseId: string): readonly MemoryTier[] {
+  return pending.get(confirmKey(requestId, toolUseId))?.memoryTiers ?? []
 }
 
 export function submitToolConfirmResponse(requestId: string, toolUseId: string, approved: boolean): void {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openSqliteDatabase, type AppDatabase } from '../database'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection } from '../database'
-import { recordUserAnswerToCache } from './decisionCacheWriter'
+import { recordSystemManagedCacheEntry } from './decisionCacheWriter'
 import type { CacheKey } from '../../src/shared/confirmation/types'
 import type { AuditSink } from './channels'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
@@ -24,11 +24,11 @@ function fakeAudit(): { sink: AuditSink; events: SecurityAuditEvent[] } {
   return { sink: { record: (e) => events.push(e) }, events }
 }
 
-describe('recordUserAnswerToCache', () => {
+describe('recordSystemManagedCacheEntry', () => {
   it('shell-command 键带 90 天 TTL 写入，可 lookup 命中', () => {
     const db = open()
     const key: CacheKey = { kind: 'shell-command', verb: 'npm test', level: 'exact' }
-    recordUserAnswerToCache({
+    recordSystemManagedCacheEntry({
       db,
       lane: 'desktop',
       sessionId: 's1',
@@ -49,7 +49,7 @@ describe('recordUserAnswerToCache', () => {
   it('remote-write 键带 30 分钟 TTL（等价旧 RemoteWriteGrant 租约期）', () => {
     const db = open()
     const key: CacheKey = { kind: 'remote-write', sessionId: 's-remote' }
-    recordUserAnswerToCache({
+    recordSystemManagedCacheEntry({
       db,
       lane: 'wechat',
       sessionId: 's-remote',
@@ -67,7 +67,7 @@ describe('recordUserAnswerToCache', () => {
   it('非 shell 键无 TTL', () => {
     const db = open()
     const key: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action' }
-    recordUserAnswerToCache({
+    recordSystemManagedCacheEntry({
       db,
       lane: 'desktop',
       sessionId: 's1',
@@ -90,7 +90,7 @@ describe('recordUserAnswerToCache', () => {
       toolName: 'tool',
       sessionId: 's1'
     }
-    recordUserAnswerToCache({
+    recordSystemManagedCacheEntry({
       db,
       audit: sink,
       lane: 'desktop',
@@ -109,7 +109,7 @@ describe('recordUserAnswerToCache', () => {
   it('deny 决定也能写入（IM 拒绝记忆预留）', () => {
     const db = open()
     const key: CacheKey = { kind: 'domain', domain: 'evil.com', level: 'domain+action' }
-    recordUserAnswerToCache({
+    recordSystemManagedCacheEntry({
       db,
       lane: 'feishu',
       sessionId: 's2',

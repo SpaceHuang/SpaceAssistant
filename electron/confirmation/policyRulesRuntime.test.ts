@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getConfigValue, openSqliteDatabase, type AppDatabase } from '../database'
+import { getConfigValue, openSqliteDatabase, setConfigValue, type AppDatabase } from '../database'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { PolicyRuleStore } from './policyRuleStore'
 import { getDbConnection } from '../database'
 import {
   DEFAULT_SECURITY_AUDIT_RETENTION_DAYS,
+  DISABLED_POLICY_RULE_IDS_CONFIG_KEY,
   listPolicyRulesWithOverrides,
   loadEffectivePolicyRules,
   readDisabledPolicyRuleIds,
@@ -46,20 +47,28 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
   })
 
-  it('「不启用」的系统保护规则被剔除（不再作为第 1 步硬拒）；未禁用时仍是 DEFAULT_POLICY_RULES 引用', () => {
+  it('普通规则可被禁用；locked 规则不允许进入 disabled 集合', () => {
     const d = db()
     // 未禁用：标准套餐返回 DEFAULT_POLICY_RULES 引用（快路径）
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
     expect(readDisabledPolicyRuleIds(d)).toEqual([])
-    // 禁用 script-network-deny-remote：该规则被剔除，返回新数组（不是引用）
-    writeDisabledPolicyRuleIds(d, ['script-network-deny-remote'])
+    // 禁用普通规则：该规则被剔除，返回新数组（不是引用）
+    writeDisabledPolicyRuleIds(d, ['im-write-ask'])
     const rules = loadEffectivePolicyRules(d, 'wechat')
     expect(rules).not.toBe(DEFAULT_POLICY_RULES)
-    expect(rules.find((r) => r.id === 'script-network-deny-remote')).toBeUndefined()
+    expect(rules.find((r) => r.id === 'im-write-ask')).toBeUndefined()
     expect(rules.find((r) => r.id === 'script-network-ask-desktop')).toBeTruthy()
     // disabled 集合读写往返
     writeDisabledPolicyRuleIds(d, ['a', 'b', 'a'])
     expect(readDisabledPolicyRuleIds(d)).toEqual(['a', 'b'])
+  })
+
+  it('历史 disabled locked id 会被 fail-safe 清理且 locked 规则继续生效', () => {
+    const d = db()
+    setConfigValue(d, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(['remote-shell-disabled', 'im-write-ask']))
+    const rules = loadEffectivePolicyRules(d, 'feishu')
+    expect(rules.find((r) => r.id === 'remote-shell-disabled')).toBeTruthy()
+    expect(readDisabledPolicyRuleIds(d)).toEqual(['im-write-ask'])
   })
 
   it('custom 套餐：policy_rules 覆盖生效；locked 覆盖被忽略', () => {

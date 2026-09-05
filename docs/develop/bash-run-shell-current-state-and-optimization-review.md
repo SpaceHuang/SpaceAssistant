@@ -849,3 +849,15 @@ npx vitest run electron/tools/runShellExecutor.test.ts electron/shell/shellExecP
 4. 最后按现有 validator 逐项迁移事实与规则，确保强拒绝位于缓存前；确认通过后先复核易变依赖，再执行同一份私有计划。
 
 完成前两步即可显著降低当前“运行不稳、取消不干净、Windows/macOS 行为飘”的问题；完成通用生命周期与 Shell 接入后，才能让唯一的 `run_shell` 能力成为后续 Background Mission、Builtin SubAgent 等场景可复用的 HostTerminalService，而不是通过新增第二个进程工具绕开现有缺陷。
+
+## 11. 当前实现事实与阶段状态（2026-09-05）
+
+本节记录本 worktree 中已落地、并由测试覆盖的实现事实；未列为完成的项目仍以本地执行清单为准，不用本机结果替代 Windows/CI/生产验收。
+
+- 输出、进度、artifact、摘要/hash、清理、取消/超时和 ProcessSupervisor 已完成本机实现；`npm run test:shell-lifecycle` 当前通过 39 个测试文件、288 个测试。
+- ShellProfile、PowerShell UTF-16LE 模拟、环境 allowlist/toolchain resolver、方言错配和重试熔断已有本机 contract 测试。
+- `tokenizeSimpleCommand()` 已复用唯一 `tokenizeShellArgv()`；统一 Analyzer、Shell trust 与 command-sequence extractor 的 token 解析。
+- 外部 `Bash`/`bash` 只在边界归一为 `run_shell`，原名仅作为诊断元数据保留。
+- Legacy precheck 只有在 Analyzer 完整、命令 persistable 且无风险确认要求时才允许自动放行；复合、partial、路径风险和不完整事实不能借助旧 trust/cache 绕过确认。
+- permit-limited memory writer 已接入浏览器、桌面 IPC、飞书和微信确认路径；设置/迁移系统 writer、完整 planned `run_shell` 注册和目标平台验收仍未完成。
+- 本机验证：`npm run typecheck:shared`、`npx tsc -p tsconfig.electron.json --noEmit` 通过；全量 `npm test` 仍受本机 MCP 监听/DNS 与 jsdom xterm/canvas 基础设施限制，需 CI 或单独修复基础设施后重跑。
