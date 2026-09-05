@@ -6,7 +6,7 @@ import type {
   PolicyEngineDeps
 } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
-import { buildMemoryTiers, decide, decideIngress } from './policyEngine'
+import { buildMemoryTiers, decide, decideIngress, deriveInvocationPolicyConstraints, signalTokenSet } from './policyEngine'
 
 function mkFacts(
   toolName: string,
@@ -435,6 +435,14 @@ describe('deriveCacheKeys/buildMemoryTiers：sensitive-file zone 不派生键（
     ], 'medium')
     expect(buildMemoryTiers(facts, 's1', 'desktop').length).toBeGreaterThan(0)
   })
+
+  it.each(['outside-workdir', 'system-dir'] as const)('%s 路径风险不消费已有缓存键', (zone) => {
+    const facts = mkFacts('write_file', 'write', [
+      { kind: 'path-target', path: '/risk', zone }
+    ], 'high')
+    const d = decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache: cacheWith('allow') }))
+    expect(d.type).not.toBe('auto-allow')
+  })
 })
 
 describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）', () => {
@@ -465,5 +473,61 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
       expect(d.type).toBe('require-confirm')
       expect(d.type === 'require-confirm' && d.ruleId).toBe('mcp-tool-ask')
     }
+  })
+})
+
+describe('confirm-every-time', () => {
+  it('locked rule wins over an existing allow cache', () => {
+    const rule = {
+      id: 'shell-confirm-every-time',
+      when: 'invocation' as const,
+      match: { toolName: 'run_shell' },
+      action: 'confirm-every-time' as const,
+      locked: true,
+      reason: '每次执行都需要确认'
+    }
+    const facts = mkFacts('run_shell', 'execute', [
+      { kind: 'command-sequence', commands: [{ verb: 'echo', args: [], signature: 'echo' }], persistable: true }
+    ])
+    const d = decide(facts, mkContext('desktop'), [rule], deps({ cache: cacheWith('allow') }))
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('shell-confirm-every-time')
+    expect(d.type === 'require-confirm' && d.memoryTiers).toEqual([])
+  })
+
+  it('统一推导 invocation 级 memory constraints，partial facts 不读/展示/写入记忆', () => {
+    const facts = mkFacts('run_shell', 'execute', [{ kind: 'extraction-failed', reason: 'partial' }])
+    const constraints = deriveInvocationPolicyConstraints(facts, mkContext('desktop'), [], deps())
+    expect(constraints).toEqual({
+      memory: { canRead: false, canOffer: false, canWrite: false, reason: 'analysis-incomplete' }
+    })
+    expect(buildMemoryTiers(facts, 's1', 'desktop', constraints)).toEqual([])
+  })
+})
+
+describe('profile/dialect exact signature migration', () => {
+  it('旧的无 namespace exact cache 不得命中新 namespace signature', () => {
+    const facts = mkFacts('run_shell', 'execute', [{
+      kind: 'command-sequence',
+      commands: [{ verb: 'echo', args: ['ok'], signature: 'echo ok', profileNamespace: 'builtin-macos-bash:posix-bash' }],
+      persistable: true
+    }])
+    const cache: DecisionCacheView = {
+      lookup: (key) => key.kind === 'shell-command' && key.verb === 'echo ok'
+        ? { id: 'legacy', key, decision: 'allow', lane: '*', scope: 'persistent', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'migration' }
+        : null
+    }
+    const decision = decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache }))
+    expect(decision.type).toBe('require-confirm')
+  })
+})
+
+describe('shell signal tokens', () => {
+  it('preserves the real connector for policy matching', () => {
+    const tokens = signalTokenSet(mkFacts('run_shell', 'execute', [{
+      kind: 'command-sequence',
+      commands: [{ verb: 'echo', args: [], connector: '&&' }]
+    }]))
+    expect(tokens).toContain('shell-connector:&&')
   })
 })

@@ -7,6 +7,7 @@ import { evaluateExposure, type ExposureResult } from './confirmation/exposure'
 import { getSecurityAuditLog } from './confirmation/audit'
 import type { AuditSink } from './confirmation/channels'
 import type { ExecutionLane, PolicyRule } from '../src/shared/confirmation/types'
+import { buildTerminalToolContract, type TerminalProfileSnapshot } from './shell/terminalToolContract'
 
 export function isShellToolEnabled(shellConfig: ShellConfig | null | undefined, cfg: ToolsConfig): boolean {
   if (!shellConfig?.enabled) return false
@@ -34,7 +35,9 @@ export function filterBuiltinToolsForApi(
   // exposure 规则拒绝回调（策略过滤落审计用，普通开关不记）
   onExposureDeny?: (toolName: string, result: ExposureResult) => void,
   // 测试可注入规则集；默认 DEFAULT_POLICY_RULES
-  rules?: PolicyRule[]
+  rules?: PolicyRule[],
+  // 可选的请求级 profile snapshot；存在时只重写 run_shell description，不改静态工具 schema。
+  terminalSnapshot?: TerminalProfileSnapshot
 ): typeof BUILTIN_TOOL_DEFINITIONS {
   let list = BUILTIN_TOOL_DEFINITIONS.filter((t) => isToolEnabledByConfig(t.name, cfg))
   if (!isShellToolEnabled(shellConfig, cfg)) {
@@ -75,7 +78,9 @@ export function filterBuiltinToolsForApi(
     if (!r.allowed) onExposureDeny?.(t.name, r)
     return r.allowed
   })
-  return list
+  if (!terminalSnapshot) return list
+  const contract = buildTerminalToolContract(terminalSnapshot)
+  return list.map((tool) => tool.name === 'run_shell' ? { ...tool, description: contract.description } : tool)
 }
 
 /**

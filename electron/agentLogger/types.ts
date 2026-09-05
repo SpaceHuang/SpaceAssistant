@@ -60,6 +60,7 @@ export type AgentLogEventName =
   | 'shell.precheck'
   | 'shell.confirm'
   | 'shell.exec.start'
+  | 'shell.exec.plan_failed'
   | 'shell.exec.spawned'
   | 'shell.exec.auto_background'
   | 'shell.exec.background'

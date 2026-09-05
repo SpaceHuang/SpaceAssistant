@@ -1,4 +1,5 @@
 import path from 'path'
+import { resolveNodeToolchainPath } from './toolchainResolver'
 
 /** Windows 上 process.env 可能是 Path 而非 PATH */
 export function resolveShellPathEnv(base: NodeJS.ProcessEnv): string {
@@ -9,12 +10,7 @@ export function resolveShellPathEnv(base: NodeJS.ProcessEnv): string {
 export function augmentShellPathEnv(base: NodeJS.ProcessEnv): string {
   const existing = resolveShellPathEnv(base)
   if (process.platform !== 'win32') return existing
-  const extra: string[] = []
-  if (base.APPDATA) extra.push(path.join(base.APPDATA, 'npm'))
-  if (base.ProgramFiles) extra.push(path.join(base.ProgramFiles, 'nodejs'))
-  if (base['ProgramFiles(x86)']) extra.push(path.join(base['ProgramFiles(x86)'], 'nodejs'))
-  if (base.LOCALAPPDATA) extra.push(path.join(base.LOCALAPPDATA, 'Programs', 'nodejs'))
-  return [...extra, existing].filter(Boolean).join(path.delimiter)
+  return resolveNodeToolchainPath(base, 'win32').pathEntries.join(path.delimiter)
 }
 
 /** 保留 TLS 相关的 NODE_OPTIONS，其余仍由 buildShellEnv 过滤 */

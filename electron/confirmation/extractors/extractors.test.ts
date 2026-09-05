@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EnvFacts } from '../../../src/shared/confirmation/types'
 import { extractCommandSignals, isPersistableTrustCommand } from './commandSequenceExtractor'
-import { classifyPath } from './pathClassifier'
+import { classifyPath, classifyPathWithSymlink } from './pathClassifier'
 import { extractScriptSignals } from './scriptAnalysisExtractor'
 import { extractBrowserSignals } from './browserDomainExtractor'
 import { extractOutboundTarget, extractLarkSubcommand } from './outboundExtractors'
@@ -68,6 +68,30 @@ describe('pathClassifier', () => {
   })
   it('系统目录归为 system-dir', () => {
     expect(classifyPath('C:\\Windows\\System32\\x.dll', env)).toBe('system-dir')
+  })
+  it('Windows drive 与 UNC 路径在非 Windows 主机上仍按 Windows 语义分类', () => {
+    expect(classifyPath('C:\\Windows\\System32\\x.dll', env)).toBe('system-dir')
+    expect(classifyPath('\\\\server\\share\\secret.txt', env)).toBe('outside-workdir')
+  })
+  it('POSIX 绝对敏感路径保持 sensitive-file 分类', () => {
+    expect(classifyPath('/root/.ssh/id_ed25519', env)).toBe('sensitive-file')
+  })
+  it('解析 symlink 后识别 workdir 外目标', async () => {
+    const fs = await import('fs/promises')
+    const os = await import('os')
+    const path = await import('path')
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'path-classifier-symlink-'))
+    try {
+      const outside = path.join(root, 'outside')
+      const work = path.join(root, 'work')
+      await fs.mkdir(outside)
+      await fs.mkdir(work)
+      await fs.writeFile(path.join(outside, 'secret.txt'), 'secret')
+      await fs.symlink(outside, path.join(work, 'link'), 'dir')
+      expect(await classifyPathWithSymlink('link/secret.txt', { os: 'darwin', workDir: work, sensitivePaths: [] })).toBe('outside-workdir')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 })
 

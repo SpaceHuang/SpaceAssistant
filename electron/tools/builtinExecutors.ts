@@ -20,7 +20,8 @@ import {
   throwIfAborted
 } from './toolExecutionResource'
 import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
-import { killProcessTree } from '../spawnUtil'
+import { processTreeKiller } from '../spawnUtil'
+import { ProcessSupervisor } from '../shell/processSupervisor'
 import { resolveRipgrepBinary } from './ripgrepBinary'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
@@ -28,6 +29,8 @@ import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
 import { browserExecutor } from './browserExecutor'
 import { browserDetectExecutor } from './browserDetectExecutor'
 import { runShellExecutor } from './runShellExecutor'
+import { TypedToolRegistry } from './plannedToolRegistry'
+import { runShellRegisteredTool } from './runShellRegisteredTool'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
@@ -1129,6 +1132,7 @@ export const runScriptExecutor: ToolExecutor = {
         windowsHide: true,
         shell: false
       })
+      const supervisor = new ProcessSupervisor(proc, processTreeKiller)
       const onDataOut = (b: Buffer) => {
         stdout += stdoutDecoder.write(b)
         if (stdout.length > SCRIPT_IO_MAX) stdout = stdout.slice(0, SCRIPT_IO_MAX) + '\n[输出被截断]'
@@ -1141,10 +1145,10 @@ export const runScriptExecutor: ToolExecutor = {
       proc.stdout?.on('data', onDataOut)
       proc.stderr?.on('data', onDataErr)
       const killTimer = setTimeout(() => {
-        void killProcessTree(proc)
+        void supervisor.terminate()
       }, timeoutSec * 1000)
       const onAbort = () => {
-        void killProcessTree(proc)
+        void supervisor.terminate()
       }
       ctx.signal.addEventListener('abort', onAbort)
       proc.on('error', (err) => {
@@ -1193,25 +1197,33 @@ export const runScriptExecutor: ToolExecutor = {
   }
 }
 
-const registry = new Map<string, ToolExecutor>([
-  [readFileExecutor.name, readFileExecutor],
-  [listDirectoryExecutor.name, listDirectoryExecutor],
-  [editFileExecutor.name, editFileExecutor],
-  [writeFileExecutor.name, writeFileExecutor],
-  [grepExecutor.name, grepExecutor],
-  [runScriptExecutor.name, runScriptExecutor],
-  [runLarkCliExecutor.name, runLarkCliExecutor],
-  [readFeishuAttachmentExecutor.name, readFeishuAttachmentExecutor],
-  [wechatReplyExecutor.name, wechatReplyExecutor],
-  [wechatSendExecutor.name, wechatSendExecutor],
-  [browserExecutor.name, browserExecutor],
-  [browserDetectExecutor.name, browserDetectExecutor],
-  [runShellExecutor.name, runShellExecutor],
-  [listWorkDirsExecutor.name, listWorkDirsExecutor],
-  [switchWorkDirExecutor.name, switchWorkDirExecutor],
-  [switchSessionExecutor.name, switchSessionExecutor]
-])
+const registry = new TypedToolRegistry()
+registry.register(runShellRegisteredTool)
+for (const executor of [
+  readFileExecutor,
+  listDirectoryExecutor,
+  editFileExecutor,
+  writeFileExecutor,
+  grepExecutor,
+  runScriptExecutor,
+  runLarkCliExecutor,
+  readFeishuAttachmentExecutor,
+  wechatReplyExecutor,
+  wechatSendExecutor,
+  browserExecutor,
+  browserDetectExecutor,
+  runShellExecutor,
+  listWorkDirsExecutor,
+  switchWorkDirExecutor,
+  switchSessionExecutor
+]) {
+  registry.registerLegacyExecutor(executor)
+}
 
 export function getToolExecutor(name: string): ToolExecutor | undefined {
+  return registry.getLegacyExecutor(name)
+}
+
+export function getRegisteredTool(name: string) {
   return registry.get(name)
 }

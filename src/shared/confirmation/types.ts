@@ -76,8 +76,14 @@ export interface CommandFact {
   args: string[]
   /** 规范化签名（与缓存键同源），不落原始输入。 */
   signature?: string
+  /** exact trust/cache namespace，避免不同 Shell profile/dialect 复用同一命令签名。 */
+  profileNamespace?: string
   redirectTarget?: string
   pipesInto?: string
+  /** 连接当前命令与前一段的真实 Shell connector（如 &&、|、;）。 */
+  connector?: string
+  /** 当前 segment 执行前的有效工作目录。 */
+  effectiveCwd?: string
 }
 
 export interface ConfirmSummarySection {
@@ -244,7 +250,7 @@ export type SecurityAuditEventKind =
   | `migration.${string}`
 
 // ===== 策略层（policyEngine / defaultRules 依赖）=====
-export type PolicyAction = 'deny' | 'allow' | 'ask' | 'auto-evaluator'
+export type PolicyAction = 'deny' | 'allow' | 'ask' | 'auto-evaluator' | 'confirm-every-time'
 export type PolicyWhen = 'ingress' | 'exposure' | 'invocation'
 
 export interface PolicyRuleMatch {

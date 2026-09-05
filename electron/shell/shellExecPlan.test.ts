@@ -1,39 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import { extractWindowsCdAnd, planShellExec } from './shellExecPlan'
-import { resolveShellSpawnSpec } from '../tools/runShellExecutor'
-
-describe('extractWindowsCdAnd', () => {
-  it('parses quoted path', () => {
-    const r = extractWindowsCdAnd('cd /d "E:\\app\\dir" && npx playwright install chromium')
-    expect(r).toEqual({
-      cwd: 'E:\\app\\dir',
-      rest: 'npx playwright install chromium'
-    })
-  })
-
-  it('parses unquoted path', () => {
-    const r = extractWindowsCdAnd('cd /d E:\\app\\dir && echo ok')
-    expect(r?.cwd).toBe('E:\\app\\dir')
-    expect(r?.rest).toBe('echo ok')
-  })
-
-  it('returns null when no cd prefix', () => {
-    expect(extractWindowsCdAnd('npx playwright install chromium')).toBeNull()
-  })
-})
+import { planShellExec } from './shellExecPlan'
+import { WINDOWS_POWERSHELL_PROFILE, WINDOWS_UTF8_OUTPUT_PRELUDE } from './shellProfiles'
 
 describe('planShellExec', () => {
-  it('uses spawn cwd instead of cd in cmd line on Windows', () => {
-    if (process.platform !== 'win32') return
-    const spec = resolveShellSpawnSpec(null)
-    const plan = planShellExec(
-      'cd /d "E:\\app\\dir" && npx --version',
-      'E:\\session\\work',
-      spec
+  it('requires an explicit command placeholder instead of inferring -c/-lc', () => {
+    expect(() => planShellExec('echo ok', '/tmp', {
+      executable: '/bin/bash', args: ['-c'], shellId: 'bash'
+    })).toThrow('SHELL_PROFILE_COMMAND_PLACEHOLDER_MISSING')
+  })
+
+  it('PowerShell profile 使用 UTF-16LE EncodedCommand，而不是追加裸命令', () => {
+    const plan = planShellExec('Write-Output "你好"', 'C:\\work', {
+      executable: WINDOWS_POWERSHELL_PROFILE.executable,
+      args: [...WINDOWS_POWERSHELL_PROFILE.commandArgsTemplate],
+      shellId: WINDOWS_POWERSHELL_PROFILE.id
+    })
+    expect(plan.spawnArgs).toEqual([
+      ...WINDOWS_POWERSHELL_PROFILE.commandArgsTemplate.slice(0, -1),
+      expect.any(String)
+    ])
+    expect(plan.spawnArgs.at(-1)).toBeTypeOf('string')
+    expect(Buffer.from(String(plan.spawnArgs.at(-1)), 'base64').toString('utf16le')).toBe(
+      `${WINDOWS_UTF8_OUTPUT_PRELUDE}Write-Output "你好"`
     )
-    expect(plan.cwd).toMatch(/app[\\/]dir$/i)
-    expect(plan.command).toBe('npx --version')
-    expect(plan.spawnArgs).toEqual(['/d', '/c', 'npx --version'])
-    expect(plan.spawnArgs).not.toContain('/s')
   })
 })

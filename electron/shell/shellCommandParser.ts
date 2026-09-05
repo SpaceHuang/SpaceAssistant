@@ -95,42 +95,8 @@ function pushSegment(segments: string[], raw: string): void {
  * shell metasyntax; this does NOT interpret operators.
  */
 export function tokenizeSimpleCommand(command: string): string[] | null {
-  const trimmed = command.trim()
-  if (!trimmed) return null
-  const tokens: string[] = []
-  let current = ''
-  let hasCurrent = false
-  let quote: '"' | "'" | null = null
-
-  for (let i = 0; i < trimmed.length; i++) {
-    const ch = trimmed[i]!
-    if (quote) {
-      if (ch === quote) {
-        quote = null
-      } else {
-        current += ch
-      }
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch
-      hasCurrent = true
-      continue
-    }
-    if (ch === ' ' || ch === '\t') {
-      if (hasCurrent) {
-        tokens.push(current)
-        current = ''
-        hasCurrent = false
-      }
-      continue
-    }
-    current += ch
-    hasCurrent = true
-  }
-  if (quote) return null
-  if (hasCurrent) tokens.push(current)
-  return tokens.length ? tokens : null
+  const tokens = tokenizeShellArgv(command)
+  return tokens && tokens.length > 0 ? tokens : null
 }
 
 export interface ParsedTrustCommand {

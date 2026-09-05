@@ -23,6 +23,7 @@ export function createStreamTextDecoder(encoding: 'utf-8' | 'gbk' = 'utf-8'): St
  * write/end 返回自上次调用以来的新增文本（便于累加至完整输出）。
  */
 export function createProcessOutputStreamDecoder(platform: NodeJS.Platform = process.platform): StreamTextDecoder {
+  if (platform !== 'win32') return createStreamTextDecoder('utf-8')
   const chunks: Buffer[] = []
   let lastText = ''
   const flush = (): string => {

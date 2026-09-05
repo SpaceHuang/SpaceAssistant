@@ -74,6 +74,7 @@ vi.mock('./sessionTitleSuggest', () => ({
 }))
 
 vi.mock('./tools/builtinExecutors', () => ({
+  getRegisteredTool: vi.fn(() => undefined),
   getToolExecutor: vi.fn((name: string) => {
     if (name === 'read_file' || name === 'write_file') {
       return {

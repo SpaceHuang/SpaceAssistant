@@ -369,7 +369,7 @@
     "sensitivePrefixesPlaceholder": "One path per line, e.g. D:\\secrets",
     "advancedSummary": "Advanced: custom Shell executable path",
     "executableLabel": "Executable path",
-    "executablePlaceholder": "Leave empty for platform default (Windows: cmd, Unix: bash)",
+    "executablePlaceholder": "Leave empty for platform default (Windows: PowerShell 5.1, macOS/Linux: Bash)",
     "test": "Test",
     "rulesTitle": "Command rules (allow skips confirmation)",
     "addRule": "Add rule",

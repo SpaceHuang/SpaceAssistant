@@ -11,6 +11,17 @@ import type {
   PolicyRule
 } from '../confirmation/types'
 import { memoryTierLabel } from '../confirmation/labels'
+import { deriveMemoryEligibility } from './memoryEligibility'
+
+export interface InvocationPolicyConstraints {
+  readonly mandatoryConfirmationRuleId?: string
+  readonly memory: {
+    readonly canRead: boolean
+    readonly canOffer: boolean
+    readonly canWrite: boolean
+    readonly reason?: string
+  }
+}
 
 /** 把事实集合映射为"信号 token 集合"，供 `match.signals` 的包含语义匹配。 */
 export function signalTokenSet(facts: ContentFacts): Set<string> {
@@ -33,6 +44,12 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(`browser-${signal.action}`)
         if (signal.action === 'act' && signal.dangerous) tokens.add('browser-act-dangerous')
         break
+      case 'command-sequence':
+        tokens.add(signal.kind)
+        for (const command of signal.commands) {
+          if (command.connector) tokens.add(`shell-connector:${command.connector}`)
+        }
+        break
       default:
         tokens.add(signal.kind)
     }
@@ -48,8 +65,10 @@ function hasDangerousSignal(facts: ContentFacts): boolean {
 export function deriveCacheKeys(
   facts: ContentFacts,
   sessionId?: string,
-  lane?: ExecutionLane
+  lane?: ExecutionLane,
+  constraints?: InvocationPolicyConstraints
 ): CacheKey[] {
+  if (constraints && !constraints.memory.canRead) return []
   const keys: CacheKey[] = []
   for (const signal of facts.signals) {
     switch (signal.kind) {
@@ -58,7 +77,10 @@ export function deriveCacheKeys(
         // 复合命令（`a && b`、管道）不得因任一分段被信任而放行整条命令（变体绕过硬性要求）。
         if (signal.persistable && signal.commands.length === 1) {
           const cmd = signal.commands[0]!
-          if (cmd.signature) keys.push({ kind: 'shell-command', verb: cmd.signature, level: 'exact' })
+          if (cmd.signature) {
+            const verb = cmd.profileNamespace ? `${cmd.profileNamespace}:${cmd.signature}` : cmd.signature
+            keys.push({ kind: 'shell-command', verb, level: 'exact' })
+          }
           else if (cmd.verb) keys.push({ kind: 'shell-command', verb: cmd.verb, level: 'exact' })
         }
         break
@@ -110,14 +132,19 @@ export function deriveCacheKeys(
  * 强制"仅此一次"、不开放任何记忆档位——这两条规则非 locked 且位于缓存检查之后，
  * 开放记忆会让"记住"绕过网络命中确认与未认证降级，属安全松动。
  */
-export function buildMemoryTiers(facts: ContentFacts, sessionId?: string, lane?: ExecutionLane): MemoryTier[] {
-  if (facts.signals.some((s) => s.kind === 'script-network' || s.kind === 'script-uncertified')) {
-    return []
-  }
+export function buildMemoryTiers(
+  facts: ContentFacts,
+  sessionId?: string,
+  lane?: ExecutionLane,
+  constraints?: InvocationPolicyConstraints
+): MemoryTier[] {
+  if (constraints && !constraints.memory.canOffer) return []
+  const eligibility = deriveMemoryEligibility(facts, lane ?? 'desktop')
+  if (eligibility.eligibility === 'none') return []
   let keys = deriveCacheKeys(facts, sessionId, lane)
   // B4：远程链路（IM 记N）不开放全局持久档——远程确认写出的持久 allow 会反向放行桌面与
   // 其他链路（lookup 只按 key_json 匹配），旧行为远程从不写域名/路径信任。仅保留会话级档位。
-  if (lane === 'wechat' || lane === 'feishu') {
+  if (eligibility.eligibility === 'session') {
     keys = keys.filter((k) => 'sessionId' in k && Boolean(k.sessionId))
   }
   return keys.map((key) => ({
@@ -178,14 +205,15 @@ function requireConfirm(
   rule: PolicyRule,
   facts: ContentFacts,
   sessionId?: string,
-  lane?: ExecutionLane
+  lane?: ExecutionLane,
+  constraints?: InvocationPolicyConstraints
 ): Decision {
   return {
     type: 'require-confirm',
     ruleId: rule.id,
     riskLevel: facts.baseRiskLevel,
     facts,
-    memoryTiers: buildMemoryTiers(facts, sessionId, lane),
+    memoryTiers: buildMemoryTiers(facts, sessionId, lane, constraints),
     timeoutMs: null
   }
 }
@@ -202,9 +230,11 @@ function lookupCache(
   facts: ContentFacts,
   cache: DecisionCacheView,
   sessionId?: string,
-  lane?: ExecutionLane
+  lane?: ExecutionLane,
+  constraints?: InvocationPolicyConstraints
 ): Decision | null {
-  for (const key of deriveCacheKeys(facts, sessionId, lane)) {
+  if (deriveMemoryEligibility(facts, lane ?? 'desktop').eligibility === 'none') return null
+  for (const key of deriveCacheKeys(facts, sessionId, lane, constraints)) {
     const entry = cache.lookup(key)
     if (entry && entry.decision === 'allow') return autoAllow('cache-hit', facts, key)
     if (entry && entry.decision === 'deny') return deny('cache-hit', '缓存记忆为拒绝')
@@ -234,6 +264,29 @@ function applyDefault(facts: ContentFacts, sessionId?: string, lane?: ExecutionL
   )
 }
 
+/** 在 invocation 层一次性推导确认与记忆约束，避免 cache/UI/writer 各自判断。 */
+export function deriveInvocationPolicyConstraints(
+  facts: ContentFacts,
+  context: ExecutionContext,
+  rules: readonly PolicyRule[],
+  deps: PolicyEngineDeps
+): InvocationPolicyConstraints {
+  const eligibility = deriveMemoryEligibility(facts, context.lane)
+  const memory = eligibility.eligibility === 'none'
+    ? { canRead: false, canOffer: false, canWrite: false, reason: eligibility.reasons.join(',') }
+    : { canRead: true, canOffer: true, canWrite: true, ...(eligibility.reasons.length ? { reason: eligibility.reasons.join(',') } : {}) }
+  const mandatory = rules
+    .filter((rule) => rule.when === 'invocation' && rule.locked && rule.action === 'confirm-every-time')
+    .find((rule) => ruleMatchesInvocation(rule, facts, context, deps))
+  if (mandatory) {
+    return {
+      mandatoryConfirmationRuleId: mandatory.id,
+      memory: { canRead: false, canOffer: false, canWrite: false, reason: 'confirm-every-time' }
+    }
+  }
+  return { memory }
+}
+
 /**
  * 工具调用时机（invocation）判定：纯函数，无副作用。
  *
@@ -247,6 +300,7 @@ export function decide(
   deps: PolicyEngineDeps
 ): Decision {
   const invocationRules = rules.filter((r) => r.when === 'invocation')
+  const constraints = deriveInvocationPolicyConstraints(facts, context, rules, deps)
 
   // 第 1 步：硬拒绝（先于任何缓存查询，安全不变量）
   if (hasDangerousSignal(facts)) return deny('dangerous-signal', '事实含危险信号，硬拒绝')
@@ -259,8 +313,14 @@ export function decide(
   )
   if (laneHardDeny) return deny(laneHardDeny.id, laneHardDeny.reason)
 
+  // 系统 locked confirm-every-time 规则位于缓存之前：即使存在旧 allow cache，也必须逐次确认。
+  const confirmEveryTime = invocationRules.find(
+    (r) => r.locked && r.action === 'confirm-every-time' && ruleMatchesInvocation(r, facts, context, deps)
+  )
+  if (confirmEveryTime) return requireConfirm(confirmEveryTime, facts, context.sessionId, context.lane, constraints)
+
   // 第 2 步：缓存命中（会话级键按 context.sessionId 绑定）
-  const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane)
+  const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
   if (cacheHit) return cacheHit
 
   // 第 3 步：能力声明放行（套餐 B 预留，本期无人写入）

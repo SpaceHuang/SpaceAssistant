@@ -47,3 +47,28 @@ jobs:
       # 不得设置 ELECTRON_RUN_AS_NODE，必须以真实 Electron 应用启动。
       - name: Probe node:sqlite under Electron
         run: npm run probe:sqlite
+
+  shell-contract:
+    name: Shell lifecycle contract (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+          - os: macos-15-intel
+            label: macos-x64
+          - os: macos-latest
+            label: macos-arm64
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run i18n:generate-types
+      - run: npm run test:shell-lifecycle
+      - run: npm run typecheck:shared
+      - run: npm run typecheck:renderer

@@ -52,14 +52,14 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(views[1]).toMatchObject({ id: 'b', action: 'deny', overridden: false, locked: true, enabled: true })
   })
 
-  it('disabled 规则集合中的规则 enabled=false（系统保护「不启用」状态）', async () => {
+  it('locked 规则即使出现在 disabled 集合中也始终 enabled', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [
       { id: 'script-network-deny-remote', when: 'invocation' as const, action: 'deny' as const, locked: true, reason: 'r1' },
       { id: 'im-write-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
     ]
     const views = toRuleViews(rules, [], undefined, ['script-network-deny-remote'])
-    expect(views[0]).toMatchObject({ id: 'script-network-deny-remote', enabled: false, locked: true })
+    expect(views[0]).toMatchObject({ id: 'script-network-deny-remote', enabled: true, locked: true })
     expect(views[1]).toMatchObject({ id: 'im-write-ask', enabled: true, locked: false })
   })
 
