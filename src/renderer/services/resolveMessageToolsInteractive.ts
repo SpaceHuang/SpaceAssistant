@@ -107,7 +107,6 @@ export function resolveRequestIdForConfirmingMessage(args: {
 export function resolveMessageToolsInteractive(args: {
   message: Message
   sessionId: string | null
-  toolsEnabled: boolean
   confirmMode: FileConfirmMode
   pendingItems: PendingConfirmItem[]
   streamingAssistantId?: string
@@ -116,14 +115,13 @@ export function resolveMessageToolsInteractive(args: {
   const {
     message,
     sessionId,
-    toolsEnabled,
     confirmMode,
     pendingItems,
     streamingAssistantId,
     streamingRequestId
   } = args
 
-  if (!sessionId || !toolsEnabled) return undefined
+  if (!sessionId) return undefined
 
   const pendingToolUseIds = new Set(
     pendingItems.filter((item) => item.sessionId === sessionId).map((item) => item.toolUseId)

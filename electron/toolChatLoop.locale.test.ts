@@ -6,8 +6,10 @@ import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 const mockLogAgentEvent = vi.fn()
 const mockGetCachedMemoryContent = vi.fn(() => null)
 const mockCreateAnthropicClient = vi.fn()
-const capturedStreamParams: Array<{ system?: string }> = []
+const capturedStreamParams: Array<{ system?: string; messages?: unknown[] }> = []
 let streamRound = 0
+const mockWriteFileExecute = vi.fn(async () => ({ success: true, data: 'ok' }))
+const mockChannelFor = vi.fn()
 
 function makeMockStream() {
   return {
@@ -18,7 +20,7 @@ function makeMockStream() {
       streamRound += 1
       if (streamRound === 1) {
         return {
-          content: [{ type: 'tool_use', id: 'tu1', name: 'read_file', input: { path: 'a.txt' } }],
+          content: [{ type: 'tool_use', id: 'tu1', name: 'write_file', input: { path: 'a.txt', content: 'x' } }],
           stop_reason: 'tool_use',
           usage: { input_tokens: 10, output_tokens: 5 }
         }
@@ -54,6 +56,11 @@ vi.mock('./safeWebContentsSend', () => ({
   safeWebContentsSend: vi.fn()
 }))
 
+vi.mock('./confirmation/channels', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./confirmation/channels')>()
+  return { ...actual, channelFor: (...args: unknown[]) => mockChannelFor(...args) }
+})
+
 vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
@@ -68,10 +75,10 @@ vi.mock('./sessionTitleSuggest', () => ({
 
 vi.mock('./tools/builtinExecutors', () => ({
   getToolExecutor: vi.fn((name: string) => {
-    if (name === 'read_file') {
+    if (name === 'read_file' || name === 'write_file') {
       return {
         name: 'read_file',
-        execute: vi.fn(async () => ({ success: true, data: 'ok' }))
+        execute: name === 'write_file' ? mockWriteFileExecute : vi.fn(async () => ({ success: true, data: 'ok' }))
       }
     }
     return undefined
@@ -112,16 +119,46 @@ describe('runToolChatSession locale injection', () => {
     vi.clearAllMocks()
     streamRound = 0
     capturedStreamParams.length = 0
+    mockWriteFileExecute.mockClear()
+    mockChannelFor.mockReset()
+    mockChannelFor.mockReturnValue({ request: vi.fn(async () => ({ kind: 'approved' })), cancel: vi.fn() })
     mockGetCachedMemoryContent.mockReturnValue(null)
     mockCreateAnthropicClient.mockImplementation(() => ({
       messages: {
-        stream: vi.fn((params: { system?: string }) => {
+        stream: vi.fn((params: { system?: string; messages?: unknown[] }) => {
           capturedStreamParams.push(params)
           return makeMockStream()
         })
       }
     }))
   })
+
+  it('桌面确认期间撤销工具后，即使确认返回 approved 也不执行 executor', async () => {
+    let releaseConfirm: ((value: { kind: 'approved' }) => void) | undefined
+    const confirmStarted = new Promise<void>((resolve) => {
+      mockChannelFor.mockReturnValueOnce({
+        request: () => new Promise((release) => {
+          releaseConfirm = release
+          resolve()
+        }),
+        cancel: vi.fn()
+      })
+    })
+    const run = runSession({
+      requestId: 'remote-race',
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'always' }
+    })
+    await confirmStarted
+    const { revokeToolForAllLanes } = await import('./toolRevocationRegistry')
+    revokeToolForAllLanes('write_file')
+    releaseConfirm?.({ kind: 'approved' })
+    const result = await run
+    expect(result.ok).toBe(true)
+    expect(mockWriteFileExecute).not.toHaveBeenCalled()
+    const secondRoundMessages = JSON.stringify(capturedStreamParams[1]?.messages ?? [])
+    expect(secondRoundMessages).toContain('tool_authorization_revoked')
+  })
+
 
   async function runSession(overrides: Partial<Parameters<typeof runToolChatSession>[0]> = {}) {
     return runToolChatSession({

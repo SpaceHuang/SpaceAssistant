@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppConfig, FileInfo, Message, SearchResult, Session } from '../src/shared/domainTypes'
-import type { ClaudeChatCreateWithToolsPayload, ClaudeChatSendStreamPayload, SpaceAssistantApi } from '../src/shared/api'
+import type { ClaudeChatCreateWithToolsPayload, SpaceAssistantApi } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
@@ -38,7 +38,6 @@ const api: SpaceAssistantApi = {
   chatDiscardStagedImage: (args) => ipcRenderer.invoke('chat:discard-staged-image', args),
   chatReadStagedImage: (args) => ipcRenderer.invoke('chat:read-staged-image', args),
 
-  claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => ipcRenderer.invoke('claude-chat-send-stream', payload),
   claudeChatCreateWithTools: (payload: ClaudeChatCreateWithToolsPayload) =>
     ipcRenderer.invoke('claude-chat-create-with-tools', payload),
   claudeChatOnDelta: (cb) => {

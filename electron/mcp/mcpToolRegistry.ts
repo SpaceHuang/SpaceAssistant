@@ -231,6 +231,10 @@ export type McpToolSnapshot = {
   budgetDropped: Array<{ mappedName: string; reason: 'count' | 'bytes' }>
 }
 
+export function mayBuildMcpToolSnapshot(profiles: McpServerProfile[], remoteContext = false): boolean {
+  return !remoteContext && profiles.some((profile) => profile.enabled && profile.enabledToolNames.length > 0)
+}
+
 /**
  * 构建请求级 MCP 工具快照：
  * - 远程 IM 会话（remoteContext 存在）一律不注入（需求 §4.6）。
@@ -300,6 +304,9 @@ export function buildSnapshotFromDb(
   options?: { remoteContext?: boolean }
 ): McpToolSnapshot {
   const profiles = listProfiles(db)
+  if (!mayBuildMcpToolSnapshot(profiles, options?.remoteContext)) {
+    return { entries: new Map(), budgetDropped: [] }
+  }
   const caches = new Map<string, McpToolCacheEntry>()
   for (const profile of profiles) {
     const cache = getCachedTools(db, profile.id)

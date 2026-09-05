@@ -1,20 +1,13 @@
 import type { IpcMain, WebContents } from 'electron'
 import { safeWebContentsSend } from './safeWebContentsSend'
-import Anthropic from '@anthropic-ai/sdk'
-import { normalizeToolLoopMaxTokens } from '../src/shared/llm/toolLoopMaxTokens'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
-import { createAnthropicClient } from './anthropicClientFactory'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
-import { buildClaudeChatSendStreamParams } from './claudeToolLoopStreamParams'
-import { CHAT_CANCELLED_MESSAGE, clearChatCancel, registerChatCancel, signalChatCancel } from './chatCancelRegistry'
+import { signalChatCancel } from './chatCancelRegistry'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import type { AgentLogFields } from './agentLogger/types'
-import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import type { AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { runToolChatSession } from './toolChatLoop'
-import { getCachedMemoryContent } from './projectMemory'
-import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import { isAppLocale } from '../src/shared/locale'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
@@ -23,6 +16,9 @@ import { ensureToolResultPairing } from '../src/shared/toolResultPairing'
 import { sanitizeForLog } from './logSanitize'
 import { historyHasImageAttachments } from '../src/shared/visionModelRouting'
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
+import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
+import { mayBuildMcpToolSnapshot } from './mcp/mcpToolRegistry'
+import { listProfiles } from './mcp/mcpConfigStore'
 import type { Message } from '../src/shared/domainTypes'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
@@ -44,25 +40,6 @@ export type ClaudeStreamDeps = {
 
 type ClaudeMessageRole = 'user' | 'assistant'
 
-type ClaudeChatMessage = {
-  role: ClaudeMessageRole
-  content: string
-  id?: string
-  timestamp?: number
-}
-
-type ClaudeChatSendPayload = {
-  requestId: string
-  sessionId: string
-  model: string
-  baseUrl?: string
-  messages: ClaudeChatMessage[]
-  system?: string
-  maxTokens?: number
-  projectMemoryEnabled?: boolean
-  locale?: string
-}
-
 type ClaudeChatMessageWithContentBlocks = {
   role: ClaudeMessageRole
   content: string | Array<unknown>
@@ -79,7 +56,6 @@ type ClaudeChatCreateWithToolsPayload = {
   sourceMessages?: Message[]
   currentUserMessageId?: string
   messages?: ClaudeChatMessageWithContentBlocks[]
-  tools: Array<unknown>
   system?: string
   options?: {
     maxTokens?: number
@@ -87,24 +63,6 @@ type ClaudeChatCreateWithToolsPayload = {
   }
   projectMemoryEnabled?: boolean
   locale?: string
-}
-
-function normalizeAndValidateClaudeMessages(messages: unknown): ClaudeChatMessage[] {
-  if (!Array.isArray(messages)) throw new Error('Invalid messages')
-
-  return messages.map((m, idx) => {
-    const msg = m as Partial<ClaudeChatMessage> | null
-    if (!msg || typeof msg !== 'object') throw new Error(`Invalid message at index ${idx}`)
-    if (msg.role !== 'user' && msg.role !== 'assistant') throw new Error(`Invalid role at index ${idx}`)
-    if (typeof msg.content !== 'string' || !msg.content.trim()) throw new Error(`Invalid content at index ${idx}`)
-
-    return {
-      role: msg.role,
-      content: msg.content,
-      id: typeof msg.id === 'string' ? msg.id : undefined,
-      timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : undefined
-    }
-  })
 }
 
 function assertValidClaudeContentBlocks(
@@ -225,45 +183,6 @@ export function normalizeAndValidateClaudeMessagesWithContentBlocks(
 
 export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): void {
   ipcMain.handle(
-    'claude-chat-send-stream',
-    async (event, payload: ClaudeChatSendPayload): Promise<{ ok: true } | { ok: false; error: string }> => {
-      const sender = event.sender
-
-      try {
-        const requestId = assertValidRequestId(payload.requestId)
-        const model = assertValidModel(payload.model)
-        const baseUrl = assertValidOptionalAnthropicBaseUrl(payload.baseUrl)
-        const messages = normalizeAndValidateClaudeMessages(payload.messages)
-
-        const system = typeof payload.system === 'string' ? payload.system : undefined
-        const maxTokens = typeof payload.maxTokens === 'number' && Number.isFinite(payload.maxTokens) ? payload.maxTokens : undefined
-        const payloadLocale =
-          typeof payload.locale === 'string' && isAppLocale(payload.locale) ? payload.locale : undefined
-        void runSendStream(sender, {
-          requestId,
-          sessionId: payload.sessionId,
-          model,
-          baseUrl,
-          messages,
-          system,
-          maxTokens,
-          projectMemoryEnabled: payload.projectMemoryEnabled,
-          locale: payloadLocale,
-          deps
-        })
-        return { ok: true }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        logAgentEvent('error', 'llm.error', {
-          requestId: typeof payload?.requestId === 'string' ? payload.requestId : undefined,
-          error: message
-        })
-        return { ok: false, error: message }
-      }
-    }
-  )
-
-  ipcMain.handle(
     'claude-chat-create-with-tools',
     async (event, payload: ClaudeChatCreateWithToolsPayload) => {
       const sender = event.sender
@@ -300,17 +219,16 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           ? historyHasImageAttachments(payload.sourceMessages)
           : false
 
-        const toolsRaw = Array.isArray(payload.tools) ? payload.tools : []
-        for (const t of toolsRaw) {
-          if (!t || typeof t !== 'object') throw new Error('Invalid tool spec')
-          if (typeof (t as { name?: unknown }).name !== 'string') throw new Error('Invalid tool name')
-          if (typeof (t as { description?: unknown }).description !== 'string') throw new Error('Invalid tool description')
-          if (!(t as { input_schema?: unknown }).input_schema || typeof (t as { input_schema?: unknown }).input_schema !== 'object') {
-            throw new Error('Invalid tool input_schema')
-          }
-        }
-
-        const sessionWorkDir = deps.resolveWorkDirForSession(sessionId)
+        const builtinCandidates = filterBuiltinToolsForApi(
+          deps.getToolsConfig(),
+          undefined,
+          deps.getBrowserConfig(),
+          undefined,
+          deps.getShellConfig(),
+          undefined
+        )
+        const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
+        const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
 
         const res = await runToolChatSession({
           sender,
@@ -377,154 +295,4 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
     signalChatCancel(requestId)
     deps.floatingNotificationManager?.onAllCancelledForRequest(requestId)
   })
-}
-
-async function runSendStream(
-  sender: WebContents,
-  args: {
-    requestId: string
-    sessionId: string
-    model: string
-    baseUrl: string | undefined
-    messages: ClaudeChatMessage[]
-    system?: string
-    maxTokens?: number
-    projectMemoryEnabled?: boolean
-    locale?: import('../src/shared/locale').AppLocale
-    deps: ClaudeStreamDeps
-  }
-): Promise<void> {
-  const { requestId, sessionId, model, baseUrl, messages, system, maxTokens: maxTokensRaw, deps } = args
-  const maxTokens = normalizeToolLoopMaxTokens(maxTokensRaw)
-  const chatSignal = registerChatCancel(requestId)
-  try {
-    const apiKey = await deps.getApiKey()
-    if (!apiKey) {
-      logAgentEvent('error', 'llm.error', { requestId, model, error: 'API key not configured' })
-      safeWebContentsSend(sender,'claude-chat-error', { requestId, message: 'API key not configured' })
-      return
-    }
-
-    if (chatSignal.aborted) {
-      logAgentEvent('error', 'llm.error', { requestId, model, error: CHAT_CANCELLED_MESSAGE })
-      safeWebContentsSend(sender,'claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
-      return
-    }
-
-    const client = createAnthropicClient(apiKey, baseUrl)
-    const messageParams: Anthropic.MessageParam[] = messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content
-    }))
-
-    const memoryContent = getCachedMemoryContent()
-    const memoryEnabled = args.projectMemoryEnabled ?? true
-    const locale = resolveRequestLocale(args.locale, deps.getAppDatabase())
-    const finalSystem = buildFinalSystemPrompt({
-      system,
-      memoryContent,
-      memoryEnabled,
-      locale
-    })
-
-    const streamInput = buildClaudeChatSendStreamParams({
-      model,
-      max_tokens: maxTokens,
-      messages: messageParams,
-      system: finalSystem,
-      thinking: { type: 'adaptive' as const }
-    })
-
-    logAgentEvent('info', 'llm.request', {
-      requestId,
-      model,
-      baseUrl,
-      locale,
-      system: finalSystem,
-      messages: messageParams,
-      maxTokens,
-      enableThinking: true
-    })
-
-    const stream = client.messages.stream(streamInput as Parameters<typeof client.messages.stream>[0])
-
-    const contentBlockTypes = new Map<number, string>()
-    for await (const evt of stream) {
-      if (chatSignal.aborted) {
-        safeWebContentsSend(sender,'claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
-        return
-      }
-      if (evt?.type === 'message_start') {
-        const startUsage = (evt as { message?: { usage?: unknown } }).message?.usage
-        if (startUsage && typeof startUsage === 'object') {
-          const partial = normalizeAnthropicMessageUsage({ usage: startUsage }, baseUrl)
-          if (partial) {
-            safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: partial })
-          }
-        }
-      }
-      if (evt?.type === 'content_block_start') {
-        const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-        const blockType = (evt as { content_block?: { type?: string } }).content_block?.type
-        if (index >= 0 && typeof blockType === 'string') {
-          contentBlockTypes.set(index, blockType)
-        }
-      }
-      if (evt?.type === 'content_block_delta' && (evt as { delta?: { type?: string; thinking?: string } }).delta?.type === 'thinking_delta') {
-        const thinking = (evt as { delta?: { thinking?: string } }).delta?.thinking
-        if (typeof thinking === 'string' && thinking.length > 0) {
-          safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text: thinking })
-        }
-      }
-      if (evt?.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
-        const text = evt.delta.text
-        const index = typeof (evt as { index?: number }).index === 'number' ? (evt as { index: number }).index : -1
-        const blockType = contentBlockTypes.get(index)
-        if (blockType === 'thinking') {
-          if (typeof text === 'string' && text.length > 0) {
-            safeWebContentsSend(sender,'claude-chat-thinking-delta', { requestId, text })
-          }
-          continue
-        }
-        if (typeof text === 'string' && text.length > 0) {
-          safeWebContentsSend(sender,'claude-chat-delta', { requestId, text })
-        }
-      }
-    }
-
-    if (chatSignal.aborted) {
-      logAgentEvent('error', 'llm.error', { requestId, model, error: CHAT_CANCELLED_MESSAGE })
-      safeWebContentsSend(sender,'claude-chat-error', { requestId, message: CHAT_CANCELLED_MESSAGE })
-      return
-    }
-
-    const res = await stream.finalMessage()
-    const content = Array.isArray(res?.content) ? res.content : []
-    const stopReason = typeof res?.stop_reason === 'string' ? res.stop_reason : undefined
-    const usage = normalizeAnthropicMessageUsage(res, baseUrl)
-
-    logAgentEvent('info', 'llm.response', {
-      requestId,
-      model,
-      stopReason,
-      content,
-      usage
-    })
-
-    if (usage) {
-      safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
-    }
-    safeWebContentsSend(sender,'claude-chat-done', { requestId, usage: usage ?? null })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    logAgentEvent('error', 'llm.error', {
-      requestId,
-      model,
-      error: message,
-      stack: err instanceof Error ? err.stack : undefined
-    })
-    safeWebContentsSend(sender,'claude-chat-error', { requestId, message })
-  } finally {
-    clearChatCancel(requestId)
-  }
 }

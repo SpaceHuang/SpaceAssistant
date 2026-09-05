@@ -14,6 +14,8 @@ import {
   saveProfiles,
   updateServerStatus
 } from './mcpConfigStore'
+import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
+import { revokeToolForAllLanes } from '../toolRevocationRegistry'
 import { clearSecret, getSecret } from './mcpSecretStore'
 import { appendDiagnostic, clearDiagnostics, getDiagnostics } from './mcpDiagnostics'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
@@ -65,6 +67,22 @@ function writeInputToProfile(input: McpServerWriteInput): McpServerProfile {
   }
 }
 
+function revokeMcpToolsThatBecameUnavailable(
+  previous: McpServerProfile[],
+  next: McpServerProfile[]
+): void {
+  const nextById = new Map(next.map((profile) => [profile.id, profile]))
+  for (const oldProfile of previous) {
+    const nextProfile = nextById.get(oldProfile.id)
+    const nextNames = nextProfile?.enabled ? new Set(nextProfile.enabledToolNames) : new Set<string>()
+    for (const toolName of oldProfile.enabledToolNames) {
+      if (nextNames.has(toolName)) continue
+      revokeToolForAllLanes(toolName)
+      rejectPendingConfirmsForToolAcrossLanes(toolName)
+    }
+  }
+}
+
 export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('mcp:list', () => {
     const servers = refreshProfilesSecretFlags(ctx.db)
@@ -83,6 +101,9 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         throw new Error('该服务正在授权中，暂不能编辑')
       }
     }
+    const previous = listProfiles(ctx.db)
+    const next = parsed.servers.map(writeInputToProfile)
+    revokeMcpToolsThatBecameUnavailable(previous, next)
     const servers = await saveProfiles(ctx.db, parsed.servers)
     return { servers }
   })
@@ -137,6 +158,12 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     if (!serverId) throw new Error('serverId 不能为空')
     if (isOAuthFlowActive(serverId)) {
       throw new Error('该服务正在授权中，暂不能删除')
+    }
+    const previous = listProfiles(ctx.db)
+    const deleted = previous.find((profile) => profile.id === serverId)
+    for (const toolName of deleted?.enabledToolNames ?? []) {
+      revokeToolForAllLanes(toolName)
+      rejectPendingConfirmsForToolAcrossLanes(toolName)
     }
     await deleteServer(ctx.db, serverId)
     return { ok: true }

@@ -12,9 +12,6 @@ import type {
 } from '../../shared/domainTypes'
 import { builtinToolRiskLevel } from '../../shared/domainTypes'
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
-import { filterBuiltinToolsForRenderer } from '../../shared/toolsConfigFilter'
-import { getCachedToolExposure } from './toolExposureService'
-import { sanitizeAnthropicToolsPayloadForStrictGateways } from '../../shared/anthropicToolSanitize'
 import type { ClaudeChatCreateWithToolsPayload } from '../../shared/api'
 
 export function buildToolChatPayload(args: {
@@ -34,9 +31,6 @@ export function buildToolChatPayload(args: {
   locale?: import('../../shared/locale').AppLocale
   effectiveModelForUsage?: string
 }): ClaudeChatCreateWithToolsPayload {
-  // 纯薄壳：只消费主进程下发的 exposure 清单；空窗（null）时不上行任何工具
-  const toolsFiltered = filterBuiltinToolsForRenderer(getCachedToolExposure() ?? [])
-  const tools = sanitizeAnthropicToolsPayloadForStrictGateways(toolsFiltered as unknown[])
   return {
     requestId: args.requestId,
     sessionId: args.sessionId,
@@ -45,7 +39,6 @@ export function buildToolChatPayload(args: {
     llmServiceId: args.llmServiceId,
     sourceMessages: args.messages,
     currentUserMessageId: args.currentUserMessageId,
-    tools: tools as Array<Record<string, unknown>>,
     system: args.system,
     locale: args.locale,
     effectiveModelForUsage: args.effectiveModelForUsage,

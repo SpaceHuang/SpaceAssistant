@@ -114,26 +114,6 @@ describe('claudeStreamHandlers locale', () => {
     })
   }
 
-  it('I6: send-stream with locale en-US includes English locale hint in system', async () => {
-    registerHandlers()
-    const sender = makeSender()
-    const handler = handlers.get('claude-chat-send-stream')
-    expect(handler).toBeDefined()
-
-    await handler!({ sender } as never, {
-      requestId: '00000000-0000-4000-8000-000000000001',
-      sessionId: 'sess-locale-1',
-      model: 'claude-sonnet-4-20250514',
-      messages: [{ role: 'user', content: 'hello' }],
-      locale: 'en-US'
-    })
-
-    await new Promise((r) => setTimeout(r, 100))
-    expect(capturedStreamSystems.length).toBeGreaterThan(0)
-    expect(capturedStreamSystems[0]).toContain('English (en-US)')
-    expect(capturedStreamSystems[0]).toContain('<ui_locale_preference>')
-  })
-
   it('I7: create-with-tools passes payload.locale to runToolChatSession', async () => {
     registerHandlers()
     const sender = makeSender()

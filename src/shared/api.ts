@@ -118,19 +118,6 @@ export type FileMetadata = {
   isText: boolean
 }
 
-export type ClaudeChatSendStreamPayload = {
-  requestId: string
-  sessionId: string
-  model: string
-  baseUrl?: string
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>
-  system?: string
-  /** 未传时主进程使用内置默认；建议传渲染侧解析后的有效值 */
-  maxTokens?: number
-  projectMemoryEnabled?: boolean
-  locale?: AppLocale
-}
-
 export type ClaudeChatMessageWithBlocks = {
   role: 'user' | 'assistant'
   content: string | unknown[]
@@ -151,7 +138,6 @@ export type ClaudeChatCreateWithToolsPayload = {
   currentUserMessageId: string
   /** @deprecated 渲染进程预 build；保留类型兼容，主进程不消费 */
   messages?: ClaudeChatMessageWithBlocks[]
-  tools: Array<Record<string, unknown>>
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   projectMemoryEnabled?: boolean
@@ -273,7 +259,6 @@ export type SpaceAssistantApi = {
     maxBytes?: number
   }) => Promise<{ mimeType: string; dataBase64: string } | { error: string }>
 
-  claudeChatSendStream: (payload: ClaudeChatSendStreamPayload) => Promise<{ ok: true } | { ok: false; error: string }>
   claudeChatCreateWithTools: (
     payload: ClaudeChatCreateWithToolsPayload
   ) => Promise<

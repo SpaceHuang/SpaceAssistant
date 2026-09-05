@@ -108,11 +108,6 @@ vi.mock('../../services/chatSearchAdapter', () => ({
   useChatSearchAdapter: vi.fn()
 }))
 
-vi.mock('../../services/chatStreamService', () => ({
-  runClaudeChatStream: vi.fn(async (_payload, callbacks) => {
-    callbacks.onDone({ usage: { input_tokens: 1, output_tokens: 1 } })
-  })
-}))
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
