@@ -387,7 +387,7 @@
     "sensitivePrefixesPlaceholder": "每行一个路径，例如：D:\\secrets",
     "advancedSummary": "高级：自定义 Shell 可执行路径",
     "executableLabel": "可执行文件路径",
-    "executablePlaceholder": "留空使用平台默认（Windows: cmd，Unix: bash）",
+    "executablePlaceholder": "留空使用平台默认（Windows: PowerShell 5.1，macOS/Linux: Bash）",
     "test": "测试",
     "rulesTitle": "命令规则（allow 可跳过确认）",
     "addRule": "添加规则",

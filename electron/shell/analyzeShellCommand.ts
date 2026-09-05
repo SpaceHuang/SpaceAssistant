@@ -11,8 +11,22 @@ import type { ShellAnalysisResult } from './shellTypes'
 import type { ShellConfig } from '../../src/shared/domainTypes'
 import { shouldSkipShellConfirmForTrust } from './shellCommandTrust'
 import type { ShellPathVerdict } from './shellTypes'
+import { analyzeShellFacts } from './shellAnalyzer'
+import { profileForPlatform } from './shellProfiles'
 
 export async function analyzeShellCommand(
+  workDir: string,
+  command: string,
+  platform: NodeJS.Platform,
+  shellConfig?: ShellConfig | null,
+  userDataDir?: string
+): Promise<ShellAnalysisResult> {
+  const result = await analyzeShellCommandWithPolicy(workDir, command, platform, shellConfig, userDataDir)
+  const dialect = profileForPlatform(platform).dialect
+  return { ...result, facts: analyzeShellFacts(command, dialect) }
+}
+
+async function analyzeShellCommandWithPolicy(
   workDir: string,
   command: string,
   platform: NodeJS.Platform,

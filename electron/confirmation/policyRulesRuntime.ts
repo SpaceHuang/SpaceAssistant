@@ -59,7 +59,8 @@ export function readDisabledPolicyRuleIds(db: AppDatabase): string[] {
 
 /** 写回被「不启用」的系统保护规则 id 集合（去重、保序）。 */
 export function writeDisabledPolicyRuleIds(db: AppDatabase, ids: string[]): void {
-  const uniq = Array.from(new Set(ids))
+  const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
+  const uniq = Array.from(new Set(ids)).filter((id) => !lockedIds.has(id))
   setConfigValue(db, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(uniq))
 }
 
@@ -75,13 +76,16 @@ export function isPolicyRuleDisabled(db: AppDatabase, ruleId: string): boolean {
 export function loadEffectivePolicyRules(db: AppDatabase, lane: ExecutionLane): PolicyRule[] {
   const packages = readPolicyPackages(db)
   const disabledRuleIds = readDisabledPolicyRuleIds(db)
+  const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
+  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !lockedIds.has(id))
+  if (safeDisabledRuleIds.length !== disabledRuleIds.length) writeDisabledPolicyRuleIds(db, safeDisabledRuleIds)
   const pkg = packages[lane] ?? 'standard'
   // 未被「不启用」的系统保护规则，拦截其作为第 1 步硬拒绝被评估。
-  const baseRules = disabledRuleIds.length
-    ? (DEFAULT_POLICY_RULES.filter((r) => !disabledRuleIds.includes(r.id)) as PolicyRule[])
+  const baseRules = safeDisabledRuleIds.length
+    ? (DEFAULT_POLICY_RULES.filter((r) => !safeDisabledRuleIds.includes(r.id)) as PolicyRule[])
     : DEFAULT_POLICY_RULES
   // 默认（standard 且无禁用规则）返回 DEFAULT_POLICY_RULES 引用，保持零行为变化快路径。
-  if (pkg === 'standard' && disabledRuleIds.length === 0) return DEFAULT_POLICY_RULES
+  if (pkg === 'standard' && safeDisabledRuleIds.length === 0) return DEFAULT_POLICY_RULES
   const overrides = pkg === 'custom' ? new PolicyRuleStore(getDbConnection(db)).listOverrides() : []
   return resolvePolicyRules({ lane, packages, overrides, rules: baseRules })
 }

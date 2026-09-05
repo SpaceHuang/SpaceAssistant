@@ -137,7 +137,8 @@ describe('evaluateToolCallGate', () => {
         runShellPrecheck: async () => ({
           ok: true,
           analysis: { verdict: 'allow' } as never,
-          skipConfirm: true,
+          legacyAutoAllowEligible: true,
+          legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] },
           hints: {} as never
         })
       })
@@ -154,7 +155,8 @@ describe('evaluateToolCallGate', () => {
         runShellPrecheck: async () => ({
           ok: true,
           analysis: { verdict: 'ask' } as never,
-          skipConfirm: false,
+          legacyAutoAllowEligible: false,
+          legacyPolicy: { permissionDecision: 'ask', trustedCacheKeys: [] },
           hints: {} as never
         })
       })
@@ -171,7 +173,8 @@ describe('evaluateToolCallGate', () => {
         runShellPrecheck: async () => ({
           ok: true,
           analysis: { verdict: 'allow' } as never,
-          skipConfirm: true,
+          legacyAutoAllowEligible: true,
+          legacyPolicy: { permissionDecision: 'allow', trustedCacheKeys: [] },
           hints: {} as never
         })
       })

@@ -10,6 +10,7 @@ type Waiter = {
   memoryKeys?: Set<string>
   toolName?: string
   lane?: string
+  memoryTiers?: readonly MemoryTier[]
 }
 
 const CONFIRM_MS = 5 * 60 * 1000
@@ -38,7 +39,8 @@ export function waitForToolConfirm(
       ...(memoryTiers?.length
         ? { memoryKeys: new Set(memoryTiers.map((t) => canonicalKeyJson(t.key))) }
         : {}),
-      ...(scope ? { toolName: scope.toolName, lane: scope.lane } : {})
+      ...(scope ? { toolName: scope.toolName, lane: scope.lane } : {}),
+      ...(memoryTiers?.length ? { memoryTiers: memoryTiers.map((tier) => ({ ...tier })) } : {})
     })
   })
 }
@@ -70,6 +72,10 @@ export function isPendingMemoryTier(requestId: string, toolUseId: string, key: C
   const w = pending.get(confirmKey(requestId, toolUseId))
   if (!w?.memoryKeys) return false
   return w.memoryKeys.has(canonicalKeyJson(key))
+}
+
+export function getPendingMemoryTiers(requestId: string, toolUseId: string): readonly MemoryTier[] {
+  return pending.get(confirmKey(requestId, toolUseId))?.memoryTiers ?? []
 }
 
 export function submitToolConfirmResponse(requestId: string, toolUseId: string, approved: boolean): void {

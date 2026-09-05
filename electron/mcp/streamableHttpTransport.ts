@@ -81,14 +81,13 @@ export async function createStreamableHttpTransport(
     throw new McpEndpointValidationError(validation.message)
   }
   const url = new URL(validation.normalized)
-  await assertResolvedIpsAllowed(url.hostname, options.onDiagnostic)
-
   const authHeaders = options.authHeaders ?? {}
   for (const name of Object.keys(authHeaders)) {
     if (!validateMcpHeaderName(name)) {
       throw new McpEndpointValidationError(`受控请求头不允许: ${name}`)
     }
   }
+  await assertResolvedIpsAllowed(url.hostname, options.onDiagnostic)
   const allowedExtraOrigins = new Set<string>()
   for (const origin of options.allowedExtraOrigins ?? []) {
     try {

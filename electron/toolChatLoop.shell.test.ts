@@ -48,7 +48,7 @@ describe('toolChatLoop shell integration helpers', () => {
     })
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.skipConfirm).toBe(true)
+      expect(result.legacyAutoAllowEligible).toBe(true)
       expect(canSkipShellConfirm(result.analysis)).toBe(true)
     }
   })
@@ -67,7 +67,7 @@ describe('toolChatLoop shell integration helpers', () => {
     })
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.skipConfirm).toBe(false)
+      expect(result.legacyAutoAllowEligible).toBe(false)
       expect(result.hints.requiresRiskAck).toBe(true)
     }
   })
@@ -115,7 +115,7 @@ describe('toolChatLoop shell integration helpers', () => {
     })
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.skipConfirm).toBe(false)
+      expect(result.legacyAutoAllowEligible).toBe(false)
       expect(result.hints.validatorId).toBe('dangerous_git')
       expect(result.hints.denyType).toBe('weak')
       expect(result.hints.securityWarning).toMatch(/数据丢失/)
@@ -146,7 +146,7 @@ describe('toolChatLoop shell integration helpers', () => {
     })
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.skipConfirm).toBe(true)
+      expect(result.legacyAutoAllowEligible).toBe(true)
       expect(result.hints.canTrust).toBe(true)
     }
   })

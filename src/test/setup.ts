@@ -104,34 +104,24 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
   })
 }
 
-// jsdom 不提供 canvas 2D 上下文；xterm 在 renderer 测试导入时会探测它。
+/** jsdom 不提供 canvas 2D context；xterm 只需测量和基础绘制 API 才能完成初始化。 */
 if (typeof window !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
   const canvasProto = HTMLCanvasElement.prototype as HTMLCanvasElement & {
-    getContext?: (contextId: string, options?: unknown) => unknown
+    getContext: (contextId: string, ...args: unknown[]) => unknown
   }
-  const originalGetContext = canvasProto.getContext
-  canvasProto.getContext = ((contextId: string, options?: unknown) => {
-    if (contextId !== '2d') return originalGetContext?.call(canvasProto, contextId, options) ?? null
+  canvasProto.getContext = (contextId: string) => {
+    if (contextId !== '2d') return null
     return {
-      canvas: canvasProto,
-      measureText: () => ({ width: 0 }),
-      fillText: () => {},
-      strokeText: () => {},
-      fillRect: () => {},
-      clearRect: () => {},
-      save: () => {},
-      restore: () => {},
-      translate: () => {},
-      scale: () => {},
-      setTransform: () => {},
-      resetTransform: () => {},
-      beginPath: () => {},
-      closePath: () => {},
-      moveTo: () => {},
-      lineTo: () => {},
-      stroke: () => {},
-      fill: () => {},
-      createLinearGradient: () => ({ addColorStop: () => {} })
-    } as unknown
-  }) as HTMLCanvasElement['getContext']
+      canvas: {},
+      measureText: (text: string) => ({ width: text.length * 8, actualBoundingBoxAscent: 8, actualBoundingBoxDescent: 2 }),
+      fillRect() {}, clearRect() {}, strokeRect() {}, fillText() {}, strokeText() {}, drawImage() {},
+      getImageData: () => ({ data: new Uint8ClampedArray(4), width: 1, height: 1 }),
+      putImageData() {}, createImageData: () => ({ data: new Uint8ClampedArray(4), width: 1, height: 1 }),
+      setTransform() {}, resetTransform() {}, translate() {}, scale() {}, rotate() {}, transform() {},
+      save() {}, restore() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, rect() {},
+      clip() {}, fill() {}, stroke() {}, arc() {},
+      globalAlpha: 1, globalCompositeOperation: 'source-over', fillStyle: '#000', strokeStyle: '#000',
+      lineWidth: 1, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic'
+    }
+}
 }

@@ -15,7 +15,7 @@ import {
 import { addTrustedCommand } from '../shell/shellCommandTrust'
 import { ImChannel, type ImPendingConfirm } from '../confirmation/imChannel'
 import { getSecurityAuditLog } from '../confirmation/audit'
-import { recordUserAnswerToCache, scopeForCacheKey } from '../confirmation/decisionCacheWriter'
+import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
 
 export interface FeishuImChannelDeps {
   auditLogger?: FeishuAuditLogger
@@ -59,14 +59,13 @@ export class FeishuImChannel extends ImChannel {
       // 记N：写 decision_cache（执行链路侧），落 cache.write 审计；无 db 时跳过
       onMemory: (entry, tier) => {
         if (!deps.db) return
-        recordUserAnswerToCache({
+        recordUserAnswerFromMemoryTiers({
           db: deps.db,
           audit: getSecurityAuditLog(),
           lane: 'feishu',
           sessionId: entry.sessionId,
           key: tier.key,
-          decision: 'allow',
-          scope: scopeForCacheKey(tier.key),
+          memoryTiers: entry.memoryTiers,
           source: 'user-confirm'
         })
       },

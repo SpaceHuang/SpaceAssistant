@@ -75,17 +75,12 @@ vi.mock('./sessionTitleSuggest', () => ({
   reachedCumulativeAssistantTurnsForTitleSuggest: vi.fn(() => false)
 }))
 
-vi.mock('./tools/builtinExecutors', () => ({
-  getToolExecutor: vi.fn((name: string) => {
-    if (name === 'read_file') {
-      return {
-        name: 'read_file',
-        execute: vi.fn(async () => executorResult)
-      }
-    }
-    return undefined
-  })
-}))
+vi.mock('./tools/builtinExecutors', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./tools/builtinExecutors')>()
+  const { defineDirectTool } = await import('./tools/plannedToolRegistry')
+  const readFile = defineDirectTool({ name: 'read_file', parseInput: (raw) => raw, execute: async () => executorResult })
+  return { ...actual, getRegisteredTool: vi.fn(() => undefined), getToolExecutor: vi.fn((name: string) => name === 'read_file' ? { name, execute: async () => executorResult } : undefined) }
+})
 
 vi.mock('./browser/stagehandService', () => ({
   stagehandService: { resetInferenceCount: vi.fn() }

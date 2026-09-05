@@ -102,6 +102,32 @@ describe('processOutputEncoding', () => {
     )
   })
 
+  it('macOS decoder 在跨 chunk UTF-8 字符时保持流式边界', () => {
+    const decoder = createProcessOutputStreamDecoder('darwin')
+    const bytes = Buffer.from('前缀🙂后缀', 'utf8')
+    const split = bytes.indexOf(0xf0) + 2
+    const first = decoder.write(bytes.subarray(0, split))
+    const second = decoder.write(bytes.subarray(split))
+    expect(first + second + decoder.end()).toBe('前缀🙂后缀')
+  })
+
+  it('stdout/stderr 独立维护跨 chunk UTF-8 解码状态，不互相污染', () => {
+    const stdout = createProcessOutputStreamDecoder('darwin')
+    const stderr = createProcessOutputStreamDecoder('darwin')
+    const outBytes = Buffer.from('stdout🙂', 'utf8')
+    const errBytes = Buffer.from('stderr目录', 'utf8')
+    const outSplit = outBytes.length - 2
+    const errSplit = 1
+    let outText = stdout.write(outBytes.subarray(0, outSplit))
+    let errText = stderr.write(errBytes.subarray(0, errSplit))
+    outText += stdout.write(outBytes.subarray(outSplit))
+    errText += stderr.write(errBytes.subarray(errSplit))
+    outText += stdout.end()
+    errText += stderr.end()
+    expect(outText).toContain('stdout🙂')
+    expect(errText).toContain('stderr目录')
+  })
+
   it('keeps UTF-8 Node CLI output on Windows', () => {
     const utf8 = Buffer.from('auth status: not logged in\n', 'utf8')
     expect(decodeProcessOutput(utf8, 'win32')).toBe('auth status: not logged in\n')

@@ -59,7 +59,8 @@ vi.mock('./confirmation/decisionCacheWriter', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./confirmation/decisionCacheWriter')>()
   return {
     ...actual,
-    recordUserAnswerToCache: (...args: unknown[]) => mockRecordUserAnswerToCache(...args)
+    recordSystemManagedCacheEntry: (...args: unknown[]) => mockRecordUserAnswerToCache(...args),
+    recordUserAnswerFromMemoryTiers: (...args: unknown[]) => mockRecordUserAnswerToCache(...args)
   }
 })
 
@@ -155,9 +156,9 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
       memoryTier: sessionTierKey
     })
     expect(mockRecordUserAnswerToCache).toHaveBeenCalledTimes(1)
-    const args = mockRecordUserAnswerToCache.mock.calls[0]![0] as { key: CacheKey; scope: string }
+    const args = mockRecordUserAnswerToCache.mock.calls[0]![0] as { key: CacheKey; memoryTiers: Array<{ key: CacheKey }> }
     expect(args.key).toEqual(sessionTierKey)
-    expect(args.scope).toBe('session')
+    expect(args.memoryTiers.map((tier) => tier.key)).toContainEqual(sessionTierKey)
     await pending
   })
 
@@ -171,8 +172,8 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
       memoryTier: persistentTierKey
     })
     expect(mockRecordUserAnswerToCache).toHaveBeenCalledTimes(1)
-    const args = mockRecordUserAnswerToCache.mock.calls[0]![0] as { scope: string }
-    expect(args.scope).toBe('persistent')
+    const args = mockRecordUserAnswerToCache.mock.calls[0]![0] as { memoryTiers: Array<{ key: CacheKey }> }
+    expect(args.memoryTiers).toHaveLength(1)
     await pending
   })
 

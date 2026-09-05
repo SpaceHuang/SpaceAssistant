@@ -1,13 +1,16 @@
 import { logShellAgentEvent } from './shellAgentLogger'
-import { analyzeShellCommand, canSkipShellConfirm } from './analyzeShellCommand'
+import { analyzeShellCommand } from './analyzeShellCommand'
 import {
   canShowShellTrustOption,
   matchesTrustedCommand,
-  touchTrustedCommand
+  touchTrustedCommand,
+  parseSimpleShellCommand
 } from './shellCommandTrust'
 import type { AppDatabase } from '../database'
 import type { ShellAnalysisResult } from './shellTypes'
 import type { ShellConfig, ShellSecurityHints } from '../../src/shared/domainTypes'
+import { adaptLegacyShellConfig, type LegacyShellPolicyInput } from './legacyShellPolicyAdapter'
+import { profileForPlatform } from './shellProfiles'
 
 export type RunShellPrecheckResult =
   | {
@@ -17,7 +20,7 @@ export type RunShellPrecheckResult =
       validatorId?: string
       denyType?: 'strong' | 'weak'
     }
-  | { ok: true; analysis: ShellAnalysisResult; skipConfirm: boolean; hints: ShellSecurityHints }
+  | { ok: true; analysis: ShellAnalysisResult; legacyAutoAllowEligible: boolean; legacyPolicy: LegacyShellPolicyInput; hints: ShellSecurityHints }
 
 export async function precheckRunShellTool(args: {
   command: string
@@ -44,8 +47,14 @@ export async function precheckRunShellTool(args: {
     }
   }
 
-  const skipConfirm = canSkipShellConfirm(analysis, args.command, args.shellConfig)
-  if (skipConfirm && args.appDb && matchesTrustedCommand(args.command, args.shellConfig?.trustedCommands)) {
+  const profile = profileForPlatform(process.platform)
+  const legacyPolicy = adaptLegacyShellConfig(args.command, analysis.segments, args.shellConfig, `${profile.id}:${profile.dialect}`)
+  const parsedCommand = parseSimpleShellCommand(args.command)
+  const analysisComplete = analysis.facts?.analysisCompleteness === 'complete'
+  const legacyAutoAllowEligible = analysisComplete && parsedCommand.persistable && !parsedCommand.hasMetasyntax &&
+    !analysis.shellSecurityHints.requiresRiskAck &&
+    (legacyPolicy.permissionDecision === 'allow' || legacyPolicy.trustedCacheKeys.length > 0)
+  if (legacyAutoAllowEligible && args.appDb && matchesTrustedCommand(args.command, args.shellConfig?.trustedCommands)) {
     touchTrustedCommand(args.appDb, args.command)
   }
   const hints: ShellSecurityHints = {
@@ -63,7 +72,8 @@ export async function precheckRunShellTool(args: {
   return {
     ok: true,
     analysis,
-    skipConfirm,
+    legacyAutoAllowEligible,
+    legacyPolicy,
     hints
   }
 }

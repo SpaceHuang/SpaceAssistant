@@ -175,4 +175,16 @@ describe('analyzeShellCommand integration', () => {
     expect(analysis.validatorId).toBe('dangerous_git')
     expect(analysis.shellSecurityHints.securityWarning).toMatch(/数据丢失/)
   })
+
+  it('同一分析结果同时提供无裁决的统一 facts 快照', async () => {
+    const analysis = await analyzeShellCommand('/app', 'cd ./src && cat ./index.ts', 'linux')
+    expect(analysis.facts).toMatchObject({
+      dialect: 'posix-bash',
+      connectors: ['&&'],
+      cwdChanges: ['./src'],
+      analysisCompleteness: 'complete'
+    })
+    expect(analysis.facts?.operations.map((operation) => operation.verb)).toEqual(['cd', 'cat'])
+    expect(analysis.facts).not.toHaveProperty('verdict')
+  })
 })

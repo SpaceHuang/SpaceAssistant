@@ -14,7 +14,7 @@ import { addTrustedCommand } from '../shell/shellCommandTrust'
 import type { AppDatabase } from '../database'
 import { ImChannel, type ImPendingConfirm } from '../confirmation/imChannel'
 import { getSecurityAuditLog } from '../confirmation/audit'
-import { recordUserAnswerToCache, scopeForCacheKey } from '../confirmation/decisionCacheWriter'
+import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
 import type { WeChatReplyBot } from './weChatReplyService'
 
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5 * 60_000
@@ -64,14 +64,13 @@ export class WeChatImChannel extends ImChannel {
       // 记N：写 decision_cache（执行链路侧），落 cache.write 审计；无 db 时跳过
       onMemory: (entry, tier) => {
         if (!deps.db) return
-        recordUserAnswerToCache({
+        recordUserAnswerFromMemoryTiers({
           db: deps.db,
           audit: getSecurityAuditLog(),
           lane: 'wechat',
           sessionId: entry.sessionId,
           key: tier.key,
-          decision: 'allow',
-          scope: scopeForCacheKey(tier.key),
+          memoryTiers: entry.memoryTiers,
           source: 'user-confirm'
         })
       },
