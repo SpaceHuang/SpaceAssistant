@@ -11,6 +11,7 @@ import { createFeishuProgressAdapter, pickFeishuProgressConfig } from '../remote
 import { FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { runImRemoteAgent } from '../remote/imRemoteAgent'
 import type { WorkDirManager } from '../workDirManager'
+import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 
 export async function runFeishuRemoteAgent(ctx: {
   db: AppDatabase
@@ -33,6 +34,7 @@ export async function runFeishuRemoteAgent(ctx: {
   getWikiConfig?: () => WikiConfig
   getShellConfig?: () => ShellConfig
   remoteContext: FeishuRemoteContext
+  emitFactEvent?: (event: AssistantFactEvent) => void
 }): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
   logFeishuCliEvent('info', 'feishu.agent.remote.start', {
     sessionId: ctx.sessionId,
@@ -91,5 +93,6 @@ export async function runFeishuRemoteAgent(ctx: {
     logError: (error) => {
       logFeishuCliEvent('error', 'feishu.agent.remote.error', { error, sessionId: ctx.sessionId })
     }
+    ,emitFactEvent: ctx.emitFactEvent
   })
 }

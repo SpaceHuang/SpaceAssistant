@@ -131,6 +131,9 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
       startedAt: c.startedAt,
       completedAt: c.completedAt,
       duration: c.duration,
+      processPid: c.processPid,
+      processGroupId: c.processGroupId,
+      processOwnerToken: c.processOwnerToken,
       corrupted: c.corrupted,
       interrupted: c.interrupted
     }))

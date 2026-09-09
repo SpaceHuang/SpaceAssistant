@@ -29,7 +29,7 @@ if (typeof window !== 'undefined' && !window.localStorage) {
 }
 
 import '../renderer/i18n'
-import { beforeEach, vi } from 'vitest'
+import { beforeEach } from 'vitest'
 import { changeAppLocale } from '../renderer/i18n/localeSync'
 import type { SpaceAssistantApi } from '../shared/api'
 import type { AppConfig } from '../shared/domainTypes'
@@ -49,16 +49,6 @@ if (typeof window !== 'undefined') {
     windowOnMaximizeChanged: api.windowOnMaximizeChanged ?? (() => () => {}),
     appQuit: api.appQuit ?? (async () => {}),
     appToggleDevTools: api.appToggleDevTools ?? (async () => {}),
-    claudeChatOnUsage: api.claudeChatOnUsage ?? (() => () => undefined),
-    claudeChatCreateWithTools: api.claudeChatCreateWithTools ?? vi.fn(async () => ({ ok: true, content: [], stopReason: 'end_turn' })),
-    claudeChatOnDelta: api.claudeChatOnDelta ?? (() => () => {}),
-    claudeChatOnThinkingDelta: api.claudeChatOnThinkingDelta ?? (() => () => {}),
-    claudeChatOnDone: api.claudeChatOnDone ?? (() => () => {}),
-    claudeChatOnError: api.claudeChatOnError ?? (() => () => {}),
-    toolOnUse: api.toolOnUse ?? (() => () => {}),
-    toolOnConfirmRequest: api.toolOnConfirmRequest ?? (() => () => {}),
-    toolOnProgress: api.toolOnProgress ?? (() => () => {}),
-    toolOnResult: api.toolOnResult ?? (() => () => {}),
     workdirSwitch: api.workdirSwitch ?? (async () => ({ success: true, sessions: [] })),
     configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig)),
     getToolExposureList: api.getToolExposureList ?? (async () => []),
@@ -123,5 +113,5 @@ if (typeof window !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
       globalAlpha: 1, globalCompositeOperation: 'source-over', fillStyle: '#000', strokeStyle: '#000',
       lineWidth: 1, font: '10px sans-serif', textAlign: 'start', textBaseline: 'alphabetic'
     }
-}
+  }
 }

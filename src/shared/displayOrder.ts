@@ -1,4 +1,5 @@
 import type { Message } from './domainTypes'
+import type { TurnStarted } from './turnCoordinator'
 
 export type DisplayOrder =
   | { kind: 'persisted'; sequence: number }
@@ -39,6 +40,7 @@ export type ChatMessagePage = {
 export type QueuedMessageEntry = {
   message: Message
   sequence: number
+  requestId?: string
 }
 
 export type RetryContextTarget = {
@@ -50,6 +52,7 @@ export type ApiContextRequest = {
   sessionId: string
   requiredCurrentUser: ApiContextEntry
   excludeMessageIds?: string[]
+  coordinatorTurn?: TurnStarted
 }
 
 /** persisted 按 sequence；optimistic 全部在 persisted 之后，按 ordinal。 */

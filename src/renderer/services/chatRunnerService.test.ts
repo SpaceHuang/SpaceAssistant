@@ -6,9 +6,6 @@ import {
   initLiveSessionFromStore,
   getLiveMessages,
   clearLiveSession,
-  registerToolChatController,
-  getToolChatController,
-  unregisterToolChatController,
   resolveSessionMessagesForApi
 } from './chatRunnerService'
 import { store } from '../store'
@@ -162,15 +159,5 @@ describe('resolveSessionMessagesForApi', () => {
     routeAddMessage('s1', baseMsg({ id: 'live-u2', sessionId: 's1', role: 'user', content: 'live', timestamp: 3 }))
     const rows = await resolveSessionMessagesForApi('s1')
     expect(rows.map((m) => m.id)).toEqual(['db-u1', 'db-a1', 'live-u2'])
-  })
-})
-
-describe('tool chat controller registry', () => {
-  it('register and resolve by requestId', () => {
-    const controller = { subscribe: vi.fn(), unsubscribe: vi.fn(), applyConfirmOutcome: vi.fn() }
-    registerToolChatController('req-a', controller)
-    expect(getToolChatController('req-a')).toBe(controller)
-    unregisterToolChatController('req-a')
-    expect(getToolChatController('req-a')).toBeUndefined()
   })
 })

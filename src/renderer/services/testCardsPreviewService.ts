@@ -48,7 +48,7 @@ export async function runTestCardsPreview(deps: RunTestCardsPreviewDeps): Promis
       schemaVersion: CURRENT_SCHEMA_VERSION
     }
     deps.dispatch(addMessage(userMsg))
-    await window.api.chatAppendMessage(userMsg)
+    await window.api.messageAppendNonTurn(userMsg)
 
     await deps.persistSystemHint(`[Dev] 开始展示 ${fixtures.length} 张测试卡片…`)
 
@@ -69,7 +69,7 @@ export async function runTestCardsPreview(deps: RunTestCardsPreviewDeps): Promis
       }
       deps.onPreviewMessageId(assistantMsg.id)
       deps.dispatch(addMessage(assistantMsg))
-      await window.api.chatAppendMessage(assistantMsg)
+      await window.api.messageAppendNonTurn(assistantMsg)
       deps.scrollBottom()
     }
 

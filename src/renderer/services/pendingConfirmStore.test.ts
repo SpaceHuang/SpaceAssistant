@@ -3,29 +3,36 @@ import { pendingConfirmStore } from './pendingConfirmStore'
 import { clearRunRequestIndex, registerRunRequest } from './runRequestIndex'
 
 describe('pendingConfirmStore', () => {
-  let confirmCb: ((data: {
+  const seedConfirm = (data: {
     requestId: string
     sessionId?: string
     toolUseId: string
     toolName: string
     input: unknown
     riskLevel: 'low' | 'medium' | 'high'
-  }) => void) | null = null
+  }): void => {
+    pendingConfirmStore.syncFromProjection({
+      sessionId: data.sessionId ?? 'seed-session',
+      requestId: data.requestId,
+      message: {
+        id: `assistant-${data.requestId}`,
+        sessionId: data.sessionId ?? 'seed-session',
+        role: 'assistant',
+        content: '',
+        timestamp: 1,
+        status: 'streaming',
+        schemaVersion: 1,
+        toolCalls: [{ id: data.toolUseId, toolName: data.toolName, input: data.input as Record<string, unknown>, riskLevel: data.riskLevel, status: 'confirming' }]
+      }
+    })
+  }
 
   beforeEach(() => {
     pendingConfirmStore.reset()
     pendingConfirmStore.dispose()
     clearRunRequestIndex()
-    confirmCb = null
     vi.stubGlobal('window', {
       api: {
-        toolOnConfirmRequest: (cb: typeof confirmCb) => {
-          confirmCb = cb
-          return () => {
-            confirmCb = null
-          }
-        },
-        toolOnResult: () => () => {},
         toolConfirmResponse: vi.fn()
       }
     })
@@ -34,8 +41,9 @@ describe('pendingConfirmStore', () => {
 
   it('queues confirm when session resolved from request index', () => {
     registerRunRequest('sess-a', 'req-1')
-    confirmCb?.({
+    seedConfirm({
       requestId: 'req-1',
+      sessionId: 'sess-a',
       toolUseId: 'tool-1',
       toolName: 'write_file',
       input: { path: 'a.ts' },
@@ -46,7 +54,7 @@ describe('pendingConfirmStore', () => {
   })
 
   it('queues confirm when sessionId is included in IPC payload', () => {
-    confirmCb?.({
+    seedConfirm({
       requestId: 'req-direct',
       sessionId: 'sess-direct',
       toolUseId: 'tool-1',
@@ -60,8 +68,9 @@ describe('pendingConfirmStore', () => {
 
   it('respond sends ipc and removes item', () => {
     registerRunRequest('sess-a', 'req-1')
-    confirmCb?.({
+    seedConfirm({
       requestId: 'req-1',
+      sessionId: 's1',
       toolUseId: 'tool-1',
       toolName: 'write_file',
       input: {},
@@ -79,15 +88,17 @@ describe('pendingConfirmStore', () => {
   it('rejectAllForSession rejects all pending for session', () => {
     registerRunRequest('s1', 'r1')
     registerRunRequest('s2', 'r2')
-    confirmCb?.({
+    seedConfirm({
       requestId: 'r1',
+      sessionId: 's1',
       toolUseId: 't1',
       toolName: 'write_file',
       input: {},
       riskLevel: 'medium'
     })
-    confirmCb?.({
+    seedConfirm({
       requestId: 'r2',
+      sessionId: 's2',
       toolUseId: 't2',
       toolName: 'write_file',
       input: {},
@@ -106,15 +117,17 @@ describe('pendingConfirmStore', () => {
   it('removeAllForRequest clears orphan items', () => {
     registerRunRequest('s1', 'r1')
     registerRunRequest('s1', 'r2')
-    confirmCb?.({
+    seedConfirm({
       requestId: 'r1',
+      sessionId: 's1',
       toolUseId: 't1',
       toolName: 'write_file',
       input: {},
       riskLevel: 'medium'
     })
-    confirmCb?.({
+    seedConfirm({
       requestId: 'r2',
+      sessionId: 's1',
       toolUseId: 't2',
       toolName: 'write_file',
       input: {},
@@ -123,5 +136,36 @@ describe('pendingConfirmStore', () => {
     pendingConfirmStore.removeAllForRequest('r1')
     expect(pendingConfirmStore.getItems()).toHaveLength(1)
     expect(pendingConfirmStore.getItems()[0]?.requestId).toBe('r2')
+  })
+
+  it('rebuilds confirmation cards from a Core projection snapshot', () => {
+    pendingConfirmStore.syncFromProjection({
+      sessionId: 's-core',
+      requestId: 'r-core',
+      message: {
+        id: 'a-core',
+        sessionId: 's-core',
+        role: 'assistant',
+        content: '',
+        timestamp: 1,
+        status: 'streaming',
+        schemaVersion: 1,
+        toolCalls: [{
+          id: 'tool-core',
+          toolName: 'run_shell',
+          input: { command: 'echo hi' },
+          status: 'confirming',
+          riskLevel: 'high',
+          confirmDiff: { oldContent: '', newContent: 'x', oldPath: 'a.txt' }
+        }]
+      }
+    })
+    expect(pendingConfirmStore.getItems()).toEqual([expect.objectContaining({
+      sessionId: 's-core',
+      requestId: 'r-core',
+      toolUseId: 'tool-core',
+      toolName: 'run_shell',
+      diff: { oldContent: '', newContent: 'x', oldPath: 'a.txt' }
+    })])
   })
 })

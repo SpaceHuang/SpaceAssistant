@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { randomUUID } from 'crypto'
-import { appendMessage, createSession } from './operations'
+import { appendMessage, createPersistedTurn, createSession } from './operations'
 import { createMemoryAppDb } from './testHelpers'
 import { cleanupStreamingResiduesOnStartup } from './streamingCleanup'
 import { getMessages } from './index'
@@ -56,5 +56,14 @@ describe('cleanupStreamingResiduesOnStartup', () => {
       status: 'completed'
     })
     expect(cleanupStreamingResiduesOnStartup(db)).toBe(0)
+  })
+
+  it('does not mutate a streaming assistant owned by a persisted turn', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'runtime-owned' })
+    appendMessage(db, { id: 'runtime-owned-assistant', sessionId: session.id, role: 'assistant', content: 'partial', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'runtime-owned-turn', requestId: 'runtime-owned-request', sessionId: session.id, assistantMessageId: 'runtime-owned-assistant', state: 'executing' })
+    expect(cleanupStreamingResiduesOnStartup(db)).toBe(0)
+    expect(getMessages(db, session.id).find((message) => message.id === 'runtime-owned-assistant')?.status).toBe('streaming')
   })
 })

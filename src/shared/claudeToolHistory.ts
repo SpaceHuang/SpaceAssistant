@@ -185,16 +185,54 @@ function isToolResultOnlyUserMessage(msg: ClaudeChatMessageWithBlocks): boolean 
   return msg.content.every((b) => b && typeof b === 'object' && (b as { type?: string }).type === 'tool_result')
 }
 
+function toolUseIds(msg: ClaudeChatMessageWithBlocks): string[] {
+  if (msg.role !== 'assistant' || !Array.isArray(msg.content)) return []
+  return msg.content.flatMap((block) => {
+    if (!block || typeof block !== 'object' || (block as { type?: string }).type !== 'tool_use') return []
+    const id = (block as { id?: unknown }).id
+    return typeof id === 'string' ? [id] : []
+  })
+}
+
+function toolResultIds(msg: ClaudeChatMessageWithBlocks): string[] {
+  if (msg.role !== 'user' || !Array.isArray(msg.content)) return []
+  return msg.content.flatMap((block) => {
+    if (!block || typeof block !== 'object' || (block as { type?: string }).type !== 'tool_result') return []
+    const id = (block as { tool_use_id?: unknown }).tool_use_id
+    return typeof id === 'string' ? [id] : []
+  })
+}
+
+function removeOrphanedToolMessages(messages: ClaudeChatMessageWithBlocks[]): ClaudeChatMessageWithBlocks[] {
+  const uses = new Set(messages.flatMap(toolUseIds))
+  const results = new Set(messages.flatMap(toolResultIds))
+  return messages.filter((message) => {
+    if (isToolResultOnlyUserMessage(message)) return toolResultIds(message).every((id) => uses.has(id))
+    if (message.role === 'assistant' && toolUseIds(message).length > 0) {
+      return toolUseIds(message).every((id) => results.has(id))
+    }
+    return true
+  })
+}
+
 /** 保留最近 N 条 API 消息；裁剪头部时丢弃孤立的 tool_result，保证以 user 文本消息开头。
  *  截断以 use+result 对为原子单元：切点落在 assistant(tool_use) 与紧邻 user(tool_result) 之间时，
  *  头部清理会丢弃孤立 assistant 或 tool_result-only user；中间孤立由 ensureToolResultPairing 兜底。 */
 export function trimClaudeToolChatMessages(
   messages: ClaudeChatMessageWithBlocks[],
-  maxMessages = MAX_CHAT_API_MESSAGES
+  maxMessages = MAX_CHAT_API_MESSAGES,
+  requiredUserMessageId?: string
 ): ClaudeChatMessageWithBlocks[] {
   if (messages.length <= maxMessages) return messages
 
+  const requiredIndex = requiredUserMessageId
+    ? messages.findIndex((message) => message.role === 'user' && message.id === requiredUserMessageId)
+    : -1
   let trimmed = messages.slice(-maxMessages)
+  if (requiredIndex >= 0 && !trimmed.some((message) => message.id === requiredUserMessageId)) {
+    const tail = messages.slice(-(maxMessages - 1))
+    trimmed = [messages[requiredIndex]!, ...tail]
+  }
   while (trimmed.length > 0) {
     const first = trimmed[0]
     if (first.role === 'assistant') {
@@ -207,7 +245,7 @@ export function trimClaudeToolChatMessages(
     }
     break
   }
-  return trimmed
+  return removeOrphanedToolMessages(trimmed)
 }
 
 export function messageHasImageAttachments(msg: Message): boolean {

@@ -21,6 +21,19 @@ import { REMOTE_SESSION_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessage
 const mockRunAgent = vi.fn()
 const mockResolveSession = vi.fn()
 
+const testTurnRuntime = {
+  prepare: vi.fn(() => ({
+    turnId: 'turn-test',
+    requestId: 'request-test',
+    sessionId: 'session-test',
+    assistantMessage: { id: 'assistant-test' },
+    version: 0,
+    startToken: 'token-test'
+  })),
+  executeWithSource: vi.fn(async (_turnId: string, _token: string, source: (a: unknown, b: string) => Promise<unknown>) => source({}, 'token-test')),
+  consumeForRequest: vi.fn()
+} as never
+
 vi.mock('./weChatRemoteAgent', () => ({
   runWeChatRemoteAgent: (...args: unknown[]) => mockRunAgent(...args)
 }))
@@ -73,6 +86,7 @@ describe('WeChatCommandRouter', () => {
 
     router = new WeChatCommandRouter({
       db,
+      turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
         getRawBot: () => null
@@ -114,6 +128,42 @@ describe('WeChatCommandRouter', () => {
     expect(reply).toHaveBeenCalled()
   })
 
+  it('remote agent 的非终态事实先进入 Runtime，终态由统一 adapter 消费', async () => {
+    mockRunAgent.mockImplementation(async ({ emitFactEvent }: { emitFactEvent?: (event: unknown) => void }) => {
+      emitFactEvent?.({ type: 'tool-use', id: 'tool-wechat-1', toolName: 'read_file', input: { path: 'README.md' } })
+      return { summary: 'done', pendingConfirm: false, ok: true }
+    })
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: 'read it' }))
+
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ type: 'tool-use', id: 'tool-wechat-1' })
+    )
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      { type: 'source-completed' }
+    )
+    const calls = testTurnRuntime.consumeForRequest.mock.calls
+    expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
+      .toBeLessThan(calls.findIndex(([, event]) => (event as { type: string }).type === 'source-completed'))
+  })
+
+  it('confirm-requested 进入 Core，并保留 WeChat pending-confirm 出站结果', async () => {
+    mockRunAgent.mockImplementation(async ({ emitFactEvent }: { emitFactEvent?: (event: unknown) => void }) => {
+      emitFactEvent?.({ type: 'confirm-requested', toolUseId: 'tool-wechat-confirm', toolName: 'run_shell' })
+      return { summary: 'waiting', pendingConfirm: true, ok: true }
+    })
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: 'confirm me' }))
+
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-wechat-confirm' })
+    )
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('已收到，正在处理'))
+  })
+
   it('deduplicates same messageId', async () => {
     const raw = makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'dup-1' } })
     await router.handleSdkInbound(raw)
@@ -125,6 +175,7 @@ describe('WeChatCommandRouter', () => {
     const raw = makeIncomingMessage({ userId: 'blocked@test' })
     const r2 = new WeChatCommandRouter({
       db,
+      turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
         getRawBot: () => null
@@ -163,6 +214,7 @@ describe('WeChatCommandRouter', () => {
     const raw = makeIncomingMessage({ userId: 'anyone@test' })
     const r2 = new WeChatCommandRouter({
       db,
+      turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
         getRawBot: () => null
@@ -232,6 +284,7 @@ describe('WeChatCommandRouter', () => {
 
     const r2 = new WeChatCommandRouter({
       db,
+      turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
         getRawBot: () => null
@@ -265,10 +318,6 @@ describe('WeChatCommandRouter', () => {
     const raw = makeIncomingMessage({ text: 'switch then reply' })
     await r2.handleSdkInbound(raw)
 
-    expect(wcSend).toHaveBeenCalledWith(
-      'wechat:agent-done',
-      expect.objectContaining({ sessionId })
-    )
     expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`会话$${target.id}$`))
   })
 })

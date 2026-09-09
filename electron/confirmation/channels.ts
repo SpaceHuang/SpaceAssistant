@@ -45,7 +45,7 @@ function eventBase(deps: {
 }
 
 /**
- * 桌面确认通道：包装现 `toolConfirmRegistry` + `tool:confirm-request` 卡片（P1 交互保持不变）。
+ * 桌面确认通道：包装现 `toolConfirmRegistry` 与 projection 驱动的确认卡片（P1 交互保持不变）。
  * 落 `confirm.request` / `confirm.outcome` 审计事件（同一 requestId 关联）。
  */
 export class DesktopChannel implements ConfirmationChannel {

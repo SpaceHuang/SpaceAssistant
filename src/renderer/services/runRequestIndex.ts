@@ -1,7 +1,7 @@
 /** requestId → sessionId，供 IPC 事件路由（多会话并行） */
 const requestToSession = new Map<string, string>()
 
-export function registerRunRequest(sessionId: string, requestId: string): void {
+export function registerRunRequest(sessionId: string, requestId: string, _turnId?: string): void {
   requestToSession.set(requestId, sessionId)
 }
 

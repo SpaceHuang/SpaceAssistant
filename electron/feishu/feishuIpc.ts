@@ -24,6 +24,7 @@ import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegist
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
+import type { TurnRuntime } from '../turnRuntime'
 import {
   FeishuOwnerBindController,
   ownerAllowlistFromOpenId,
@@ -100,6 +101,7 @@ export function createFeishuBundle(deps: {
   getModel: () => string
   getMaxParallel: () => number
   getToolsConfig: () => ReturnType<typeof mergeToolsConfig>
+  turnRuntime?: TurnRuntime
 }): FeishuServiceBundle {
   const userData = deps.getUserDataPath()
   const readCfg = () => readFeishuConfigFromDb(deps.db)
@@ -169,7 +171,8 @@ export function createFeishuBundle(deps: {
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
-    getShellConfig: () => readShellConfigFromDb(deps.db)
+    getShellConfig: () => readShellConfigFromDb(deps.db),
+    turnRuntime: deps.turnRuntime
   }
 
   const router = new RemoteCommandRouter(routerDeps)

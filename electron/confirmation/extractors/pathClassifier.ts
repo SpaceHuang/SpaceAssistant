@@ -2,42 +2,9 @@ import path from 'path'
 import fs from 'fs/promises'
 import type { EnvFacts, PathZone } from '../../../src/shared/confirmation/types'
 
-/**
- * 跨平台路径规范化：统一分隔符为 `/`，手工解析 `.` / `..`。
- * 不使用 Node `path` 模块——分类器语义由 env.os 决定，而 CI / 远端运行时
- * 的宿主平台可能与目标平台不同（如 Linux 上判定 Windows 路径）。
- */
-function normalizeSep(p: string): string {
-  return p.replace(/\\/g, '/')
-}
-
-function isAbsolutePath(p: string): boolean {
-  const norm = normalizeSep(p)
-  return norm.startsWith('/') || /^[a-zA-Z]:\//.test(norm) || norm.startsWith('//')
-}
-
-function resolvePath(base: string, p: string): string {
-  const raw = isAbsolutePath(p) ? normalizeSep(p) : `${normalizeSep(base)}/${normalizeSep(p)}`
-  const hasDrive = /^[a-zA-Z]:\//.test(raw)
-  const hasRoot = raw.startsWith('/')
-  const parts = raw.split('/')
-  const out: string[] = []
-  for (const part of parts) {
-    if (!part || part === '.') continue
-    if (part === '..') {
-      // 不允许弹出驱动器 / 根之外
-      if (out.length > (hasDrive ? 1 : 0)) out.pop()
-      continue
-    }
-    out.push(part)
-  }
-  const prefix = hasDrive ? '' : hasRoot ? '/' : ''
-  return prefix + out.join('/')
-}
-
 /** 定位目录前缀：路径落在系统根下即归为 system-dir。 */
 function isSystemDir(p: string): boolean {
-  const norm = normalizeSep(p).toLowerCase()
+  const norm = p.replace(/\\/g, '/').toLowerCase()
   // M9：允许无尾分隔符的 Windows 根（如 `C:\Windows`），并补 Program Files (x86)。
   const winRoot = /^[a-z]:\/(windows|program files|program files \(x86\)|programdata|system32)(\/|$)/
   const posixRoot = /^\/(etc|usr|bin|sbin|lib|var|system|library)(\/|$)/

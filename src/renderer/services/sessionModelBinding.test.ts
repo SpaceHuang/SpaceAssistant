@@ -70,6 +70,15 @@ describe('sessionModelBinding', () => {
     expect(binding.modelName).toBe('deepseek-v4-pro')
   })
 
+  it('keeps a model selected before the first session is created', () => {
+    const cfg = makeConfig()
+    const option = listChatModelOptions(cfg).find((item) => item.modelName === 'deepseek-v4-flash')!
+    const binding = resolveSessionModelBinding(cfg, undefined, option)
+    expect(binding.modelName).toBe('deepseek-v4-flash')
+    expect(binding.llmServiceId).toBe('s1')
+    expect(binding.displayName).toBe('Default-deepseek-v4-flash')
+  })
+
   it('lists service-prefixed display names for all options', () => {
     const proId = String(DEFAULT_MODELS.findIndex((m) => m.name === 'deepseek-v4-pro') + 1)
     const cfg = makeConfig({

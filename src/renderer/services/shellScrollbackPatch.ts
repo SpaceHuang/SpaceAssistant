@@ -43,7 +43,7 @@ export function patchShellTerminalScrollback(args: {
 }): void {
   const next = mergeToolCallScrollback(args.toolCalls, args.toolUseId, args.scrollback)
   routePatchMessage(args.sessionId, args.messageId, { toolCalls: next })
-  void window.api.chatPatchMessage({
+  void window.api.messagePatchNonTurn({
     sessionId: args.sessionId,
     messageId: args.messageId,
     patch: { toolCalls: next }

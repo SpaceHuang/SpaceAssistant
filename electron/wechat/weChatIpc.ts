@@ -26,6 +26,7 @@ import { getRemoteTaskController } from '../remote/remoteTaskController'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
+import type { TurnRuntime } from '../turnRuntime'
 
 const WECHAT_CONFIG_KEY = 'config.wechat'
 
@@ -69,6 +70,7 @@ export function createWeChatBundle(deps: {
   getMaxParallel: () => number
   getToolsConfig: () => ReturnType<typeof mergeToolsConfig>
   appVersion: string
+  turnRuntime?: TurnRuntime
 }): WeChatServiceBundle {
   const userData = deps.getUserDataPath()
   const storageDir = path.join(userData, 'wechatbot')
@@ -127,7 +129,8 @@ export function createWeChatBundle(deps: {
     getModel: deps.getModel,
     getToolsConfig: deps.getToolsConfig,
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
-    getShellConfig: () => readShellConfigFromDb(deps.db)
+    getShellConfig: () => readShellConfigFromDb(deps.db),
+    turnRuntime: deps.turnRuntime
   })
 
   const cfg = readCfg()

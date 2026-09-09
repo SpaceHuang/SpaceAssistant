@@ -67,6 +67,7 @@ export function createSkillManager(ctx: SkillManagerContext) {
       baseUrl?: string
       getApiKey: () => Promise<string | null>
       sessionId?: string
+      signal?: AbortSignal
     }): Promise<SkillRouteResult> {
       const skills = getCachedSkills(ctx.getUserDataPath(), ctx.getWorkDir())
       let config = ctx.getSkillsConfig()
@@ -110,7 +111,8 @@ export function createSkillManager(ctx: SkillManagerContext) {
         model: args.model,
         baseUrl: args.baseUrl,
         getApiKey: args.getApiKey,
-        sessionId: args.sessionId
+        sessionId: args.sessionId,
+        signal: args.signal
       })
 
       if (wikiConfig && !wikiConfig.enabled) {

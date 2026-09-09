@@ -172,6 +172,33 @@ describe('trimClaudeToolChatMessages', () => {
     expect(trimmed.map((m) => m.content)).toEqual(['m2', 'm3', 'm4'])
   })
 
+  it('retains a required older user message while preserving chronological order', () => {
+    const api = [
+      { role: 'user' as const, id: 'required-user', content: 'retry target' },
+      { role: 'assistant' as const, id: 'a1', content: 'old answer' },
+      { role: 'user' as const, id: 'u2', content: 'later question' },
+      { role: 'assistant' as const, id: 'a2', content: 'later answer' },
+      { role: 'user' as const, id: 'u3', content: 'latest question' }
+    ]
+    const trimmed = trimClaudeToolChatMessages(api, 3, 'required-user')
+    expect(trimmed.map((m) => m.id)).toEqual(['required-user', 'a2', 'u3'])
+  })
+
+  it('does not retain a tool_result whose tool_use was removed by required-user trimming', () => {
+    const api = [
+      { role: 'user' as const, id: 'required-user', content: 'retry target' },
+      {
+        role: 'assistant' as const,
+        id: 'tool-assistant',
+        content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }]
+      },
+      { role: 'user' as const, id: 'tool-result', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+      { role: 'user' as const, id: 'latest-user', content: 'latest' }
+    ]
+    const trimmed = trimClaudeToolChatMessages(api, 3, 'required-user')
+    expect(trimmed.map((m) => m.id)).toEqual(['required-user', 'latest-user'])
+  })
+
   it('drops leading assistant and orphaned tool_result after slice', () => {
     const api = [
       { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },

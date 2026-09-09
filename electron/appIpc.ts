@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import { existsSync, type Dirent } from 'fs'
 import path from 'path'
 import type { IpcMain } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { app, BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
 import {
@@ -9,6 +10,7 @@ import {
   appendSearchHistory,
   createSession,
   deleteQueuedUserMessage,
+  enqueueQueuedUserMessage,
   deleteSession,
   deleteSessionUsage,
   getApiContextBaseline,
@@ -17,13 +19,21 @@ import {
   getSearchCorpusPage,
   getConfigValue,
   getMessageSequence,
+  getMessage,
   getMessages,
+  getRecentTurnRoutingMessages,
+  hasVisionInTurnRoutingContext,
   getMessagesPage,
   getNextQueuedMessage,
   getSession,
   getSessionUsage,
+  getTurnByRequestId,
+  getPersistedTurn,
+  setPersistedTurnExecutionConfig,
+  failConfiguringTurn,
   listSearchHistory,
   listSessions,
+  listPersistedTurns,
   resolveRetryContext,
   searchMessages,
   setConfigValue,
@@ -43,6 +53,7 @@ import { BUILTIN_TOOL_DEFINITIONS } from '../src/shared/builtinToolDefinitions'
 import { rejectPendingConfirmsForToolAcrossLanes } from './toolConfirmRegistry'
 import { revokeToolForAllLanes } from './toolRevocationRegistry'
 import { recordUserAnswerFromMemoryTiers, recordSystemManagedCacheEntry, scopeForCacheKey } from './confirmation/decisionCacheWriter'
+import type { ClaudeChatCreateWithToolsPayload, ClaudeTurnExecution } from './claudeStreamHandlers'
 import type {
   AppConfig,
   FileInfo,
@@ -59,6 +70,14 @@ import type {
   ToolsConfig
 } from '../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../src/shared/chatParallelConfig'
+import type { TurnRuntime } from './turnRuntime'
+import { TurnRuntime as TurnRuntimeImpl } from './turnRuntime'
+import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
+import { resolveTrustedTurnExecutionConfig } from './turnExecutionConfig'
+import type { TurnIntent } from '../src/shared/assistantFactAggregator'
+import { normalizeTurnExecutionConfig } from '../src/shared/turnCoordinator'
+import { canonicalQueueInput } from '../src/shared/queueInputFingerprint'
+import type { TurnExecutePayload } from '../src/shared/api'
 import { ErrorCodes } from '../src/shared/errorCodes'
 import { isRemoteAgentRunning } from './remote/remoteAgentRegistry'
 import {
@@ -68,8 +87,6 @@ import {
 import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../src/shared/llmModelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
-import { fetchServiceModels } from './llmModelListFetcher'
-import type { FetchServiceModelsResult } from '../src/shared/llmModelConfig'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
@@ -173,6 +190,8 @@ export type AppIpcContext = {
   setApiKey: (value: string) => Promise<void>
   getBrowserDetectContext: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
+  turnRuntime?: TurnRuntime
+  executeTurn?: ClaudeTurnExecution
 }
 
 function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Session {
@@ -275,12 +294,27 @@ async function backupAfterMessagePatch(
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
+  const turnRuntime = ctx.turnRuntime ?? new TurnRuntimeImpl({ storage: createTurnCoordinatorStorage(ctx.db), deps: { now: Date.now, id: randomUUID } })
+  const turnCoordinator = turnRuntime.coordinator
+  if (ctx.turnRuntime && typeof listPersistedTurns === 'function') {
+    for (const state of ['configuring', 'prepared', 'executing', 'waiting-confirm']) {
+      for (const persisted of listPersistedTurns(ctx.db, state)) {
+        const assistant = getMessage(ctx.db, persisted.assistantMessageId)
+        if (assistant) turnCoordinator.restoreTurn(persisted, assistant)
+      }
+    }
+  }
+  if (ctx.turnRuntime) turnCoordinator.recover()
+
   const skillManager = createSkillManager({
     getUserDataPath: ctx.getUserDataPath,
     getWorkDir: ctx.getWorkDir,
     getSkillsConfig: () => readSkillsConfig(ctx.db),
     getWikiConfig: () => readWikiConfig(ctx.db)
   })
+  const configuringTurns = new Map<string, Promise<unknown>>()
+  const configuringTurnsById = new Map<string, Promise<unknown>>()
+  const configuringAbortControllers = new Map<string, AbortController>()
 
   ipcMain.handle('app:open-external', async (_e, url: unknown) => {
     if (typeof url !== 'string') {
@@ -760,6 +794,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     getNextQueuedMessage(ctx.db, payload.sessionId)
   )
 
+  ipcMain.handle('chat:enqueue-queued-message', (_e, payload: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }) =>
+    enqueueQueuedUserMessage(ctx.db, payload)
+  )
+
   ipcMain.handle(
     'chat:resolve-retry-context',
     (_e, payload: { sessionId: string; failedAssistantMessageId: string }) =>
@@ -773,7 +811,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   )
 
   ipcMain.handle(
-    'chat:append-message',
+    'message:append-non-turn',
     async (_e, msg: Message): Promise<{ messageId: string; sequence: number }> => {
       const { message, sequence } = appendMessage(ctx.db, msg)
       scheduleBackup(ctx, message.sessionId)
@@ -781,8 +819,152 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
   )
 
+  ipcMain.handle('chat:prepare-turn', async (_e, intent: TurnIntent) => {
+    const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
+    const existing = getTurnByRequestId(ctx.db, intent.sessionId, intent.requestId)
+    if (existing) {
+      if (existing.state === 'configuring') {
+        // 即使同进程单飞，也要先复用 Coordinator 的消息意图校验，拒绝同 requestId 的变形重试。
+        turnCoordinator.prepare({ ...intent, config: {} })
+        const configuring = configuringTurns.get(configuringKey)
+        if (configuring) return configuring
+        throw new Error('TURN_CONFIGURATION_INCOMPLETE')
+      }
+      const { executionConfig: _executionConfig, ...prepared } = turnCoordinator.prepare({ ...intent, config: existing.executionConfig ?? {} })
+      return prepared
+    }
+    // 先原子占有 session 并写入 H。立即交还 turnId，使配置/路由阶段可被 cancel-turn 打断。
+    const started = turnCoordinator.prepare({ ...intent, config: {} }, 'configuring')
+    const controller = new AbortController()
+    const configuring = (async () => {
+      try {
+        const persisted = getPersistedTurn(ctx.db, started.turnId)
+        if (!persisted?.userMessageId) throw new Error('TURN_PREPARE_PERSISTENCE_MISSING')
+        const session = getSession(ctx.db, intent.sessionId)
+        if (!session) throw new Error('TURN_SESSION_NOT_FOUND')
+        const reusedUserMessage = intent.mode === 'reuse-user'
+          ? getMessage(ctx.db, intent.userMessageId)
+          : undefined
+        const userInput = intent.mode === 'create-user' ? intent.input.text : reusedUserMessage?.content
+        if (userInput == null) throw new Error('TURN_USER_MESSAGE_MISSING')
+        const excludeMessageIds = intent.excludeMessageIds ?? []
+        const requiresVision = Boolean(
+          (intent.mode === 'create-user' && intent.input.attachments?.length) ||
+          (intent.mode === 'reuse-user' && reusedUserMessage?.attachments?.length) ||
+          hasVisionInTurnRoutingContext(ctx.db, intent.sessionId, persisted.contextBoundarySequence, excludeMessageIds)
+        )
+        const baseConfig = await resolveTrustedTurnExecutionConfig(
+          ctx.db,
+          intent.sessionId,
+          'desktop',
+          { projectMemoryEnabled: true },
+          { requiresVision }
+        )
+        const credentials = await resolveLlmCredentialsForModel(ctx.db, baseConfig.model!, { serviceId: baseConfig.llmServiceId })
+        const recentMessages: SkillRouteRecentMessage[] = getRecentTurnRoutingMessages(
+          ctx.db,
+          intent.sessionId,
+          50,
+          persisted.contextBoundarySequence,
+          excludeMessageIds
+        )
+        const route = await skillManager.route({
+          userInput,
+          sessionState: normalizeSessionSkillsState(session.skillsState),
+          sessionMetadata: session.metadata,
+          recentMessages,
+          model: baseConfig.model!,
+          baseUrl: baseConfig.baseUrl,
+          getApiKey: credentials.getApiKey,
+          sessionId: intent.sessionId,
+          signal: controller.signal
+        })
+        let system = skillManager.buildSystemPrompt(route.skills) || undefined
+        if (route.skills.some((skill) => skill.meta.name === 'llm-wiki')) {
+          const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db))?.trim()
+          if (schema) system = system ? `${system}\n\n## Wiki Schema（项目规范）\n\n${schema}` : `## Wiki Schema（项目规范）\n\n${schema}`
+        }
+        const config = { ...baseConfig, ...(system ? { system } : {}) }
+        const intentFingerprint = JSON.stringify({
+          mode: intent.mode,
+          userMessageId: intent.mode === 'reuse-user' ? intent.userMessageId : undefined,
+          input: intent.mode === 'create-user' ? canonicalQueueInput(intent.input) : undefined,
+          excludeMessageIds: [...excludeMessageIds].sort(),
+          config: normalizeTurnExecutionConfig(config)
+        })
+        if (!setPersistedTurnExecutionConfig(ctx.db, started.turnId, config, intentFingerprint)) throw new Error('TURN_EXECUTION_CONFIG_NOT_PREPARED')
+        const { executionConfig: _executionConfig, ...prepared } = started
+        return prepared
+      } catch (error) {
+        if (controller.signal.aborted) throw error
+        // 路由/配置阶段失败也必须终结已占有的 turn，不能留下永久 configuring 状态。
+        const failed = turnCoordinator.consume(started.turnId, { type: 'source-failed' })
+        failConfiguringTurn(ctx.db, started.turnId, failed.version, {
+          code: 'configuration-failed',
+          message: error instanceof Error ? error.message : String(error)
+        })
+        throw error
+      }
+    })()
+    configuringTurns.set(configuringKey, configuring)
+    configuringTurnsById.set(started.turnId, configuring)
+    configuringAbortControllers.set(started.turnId, controller)
+    void configuring.then(
+      () => {
+        if (configuringTurns.get(configuringKey) === configuring) configuringTurns.delete(configuringKey)
+        if (configuringTurnsById.get(started.turnId) === configuring) configuringTurnsById.delete(started.turnId)
+        if (configuringAbortControllers.get(started.turnId) === controller) configuringAbortControllers.delete(started.turnId)
+      },
+      () => {
+        if (configuringTurns.get(configuringKey) === configuring) configuringTurns.delete(configuringKey)
+        if (configuringTurnsById.get(started.turnId) === configuring) configuringTurnsById.delete(started.turnId)
+        if (configuringAbortControllers.get(started.turnId) === controller) configuringAbortControllers.delete(started.turnId)
+      }
+    )
+    const { executionConfig: _executionConfig, ...prepared } = started
+    return prepared
+  })
+  ipcMain.handle('chat:execute-turn', async (event, payload: TurnExecutePayload) => {
+    if (!ctx.executeTurn) throw new Error('TURN_EXECUTOR_NOT_CONFIGURED')
+    if (!payload || typeof payload !== 'object' || typeof payload.turnId !== 'string' || typeof payload.turnStartToken !== 'string') {
+      throw new Error('INVALID_TURN_EXECUTION_PAYLOAD')
+    }
+    const executionPayload = { requestId: payload.requestId, turnId: payload.turnId, turnStartToken: payload.turnStartToken, sessionId: payload.sessionId }
+    const configuring = configuringTurnsById.get(payload.turnId)
+    const persisted = getPersistedTurn(ctx.db, payload.turnId)
+    if (persisted?.state === 'terminal') return { ok: true as const, accepted: false as const, turnId: payload.turnId }
+    if (persisted?.state === 'configuring' && !configuring) throw new Error('TURN_CONFIGURATION_INCOMPLETE')
+    void (async () => {
+      try {
+        if (configuring) await configuring
+        await ctx.executeTurn!(event.sender, executionPayload)
+      } catch {
+        // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
+      }
+    })()
+    return { ok: true as const, accepted: true as const, turnId: payload.turnId }
+  })
+  ipcMain.handle('chat:cancel-turn', (_e, turnId: string) => {
+    const controller = configuringAbortControllers.get(turnId)
+    const cancelled = turnRuntime.cancel(turnId)
+    if (cancelled && controller) {
+      controller.abort()
+      configuringAbortControllers.delete(turnId)
+      const configuring = configuringTurnsById.get(turnId)
+      if (configuring) {
+        configuringTurnsById.delete(turnId)
+        for (const [key, promise] of configuringTurns) {
+          if (promise === configuring) configuringTurns.delete(key)
+        }
+      }
+    }
+    return cancelled
+  })
+  ipcMain.handle('chat:get-turn-terminal', (_e, turnId: string) => turnCoordinator.getTerminal(turnId))
+  ipcMain.handle('chat:list-active-turns', (_e, payload?: { sessionId?: string }) => turnRuntime.listActive(payload?.sessionId).map(({ executionConfig: _executionConfig, ...turn }) => turn))
+
   ipcMain.handle(
-    'chat:patch-message',
+    'message:patch-non-turn',
     async (_e, payload: {
       messageId: string
       patch: Partial<
@@ -1558,7 +1740,7 @@ function readExposureInputsFromDb(
     'config:test-connection',
     async (
       _e,
-      options?: { serviceId?: string; apiKey?: string; baseUrl?: string; supportedModelIds?: string[]; models?: ModelEntry[] }
+      options?: { serviceId?: string; apiKey?: string; baseUrl?: string; supportedModelIds?: string[] }
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         if (!options?.serviceId) {
@@ -1573,19 +1755,13 @@ function readExposureInputsFromDb(
           return { success: false, error: creds.error ?? ErrorCodes.API_KEY_NOT_CONFIGURED }
         }
 
-        // 草稿目录优先：拉取合并的新模型尚未保存时，测试连接也要能用上
-        let models: ModelEntry[]
-        if (options.models !== undefined) {
-          models = Array.isArray(options.models) ? options.models : []
-        } else {
-          const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
-          models = []
-          if (rawModels) {
-            try {
-              models = JSON.parse(rawModels) as ModelEntry[]
-            } catch {
-              models = []
-            }
+        const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
+        let models: ModelEntry[] = []
+        if (rawModels) {
+          try {
+            models = JSON.parse(rawModels) as ModelEntry[]
+          } catch {
+            models = []
           }
         }
         const enabledModel = resolveTestConnectionModel(ctx.db, models, options.serviceId, {
@@ -1607,41 +1783,6 @@ function readExposureInputsFromDb(
         return { success: true }
       } catch (e) {
         return { success: false, error: e instanceof Error ? e.message : String(e) }
-      }
-    }
-  )
-
-  ipcMain.handle(
-    'llm:fetch-service-models',
-    async (
-      _e,
-      options?: { serviceId?: string; apiKey?: string; baseUrl?: string }
-    ): Promise<FetchServiceModelsResult> => {
-      let creds: { apiKey: string | null; baseUrl: string | undefined; error?: string }
-      try {
-        creds = await resolveTestConnectionCredentials(ctx.db, options)
-      } catch (e) {
-        // baseUrl 草稿校验失败与网络无关，单独分类避免误导（P1-6）
-        const msg = e instanceof Error ? e.message : String(e)
-        const isBaseUrl = /baseurl/i.test(msg)
-        logAgentEvent('warn', 'llm.fetch_models', { success: false, error: msg })
-        return { ok: false, error: isBaseUrl ? 'invalid-base-url' : 'network' }
-      }
-      try {
-        if (creds.error || !creds.apiKey) {
-          return { ok: false, error: 'no-api-key' }
-        }
-        const result = await fetchServiceModels({ baseUrl: creds.baseUrl, apiKey: creds.apiKey })
-        logAgentEvent('info', 'llm.fetch_models', {
-          success: result.ok,
-          ...(result.ok
-            ? { modelCount: result.models.length, truncated: result.truncated }
-            : { error: result.error, status: 'status' in result ? result.status : undefined })
-        })
-        return result
-      } catch (e) {
-        logAgentEvent('warn', 'llm.fetch_models', { success: false, error: e instanceof Error ? e.message : String(e) })
-        return { ok: false, error: 'network' }
       }
     }
   )

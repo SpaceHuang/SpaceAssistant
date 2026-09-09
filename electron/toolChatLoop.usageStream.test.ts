@@ -2,10 +2,12 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 
 const mockGetCachedMemoryContent = vi.fn(() => null)
 const mockCreateAnthropicClient = vi.fn()
 let streamRound = 0
+let capturedFacts: Array<Record<string, unknown>> = []
 
 vi.mock('./agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn(),
@@ -80,21 +82,22 @@ function usagePayloads(
   usage: Record<string, number | undefined>
   projected?: boolean
 }> {
-  const send = sender.send as ReturnType<typeof vi.fn>
-  return send.mock.calls
-    .filter(([channel]) => channel === 'claude-chat-usage')
-    .map(([, payload]) => payload as {
-      requestId: string
-      sessionId: string
-      usage: Record<string, number | undefined>
-      projected?: boolean
-    })
+  void sender
+  return capturedFacts
+    .filter((event) => event.type === 'usage-updated')
+    .map((event) => ({
+      requestId: 'req-usage-1',
+      sessionId: 'sess-usage-1',
+      usage: event.usage as Record<string, number | undefined>,
+      ...(event.projected ? { projected: true } : {})
+    }))
 }
 
 describe('runToolChatSession message_start usage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     streamRound = 0
+    capturedFacts = []
     mockGetCachedMemoryContent.mockReturnValue(null)
   })
 
@@ -109,11 +112,29 @@ describe('runToolChatSession message_start usage', () => {
       workDir: '/tmp',
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
+      emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
       appDb: makeDb()
     })
   }
 
-  it('emits claude-chat-usage on message_start before finalMessage', async () => {
+  it('Core-owned/non-compatible invocation never emits legacy usage IPC', async () => {
+    const sender = makeSender()
+    await runToolChatSession({
+      sender,
+      requestId: 'req-no-legacy-usage',
+      sessionId: 'sess-no-legacy-usage',
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'hello' }],
+      toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp',
+      userDataDir: '/tmp',
+      getApiKey: async () => 'test-key',
+      appDb: makeDb()
+    })
+    expect(usagePayloads(sender)).toEqual([])
+  })
+
+  it('emits usage-updated fact on message_start before finalMessage', async () => {
     const sender = makeSender()
     mockCreateAnthropicClient.mockImplementation(() => ({
       messages: {
@@ -150,6 +171,43 @@ describe('runToolChatSession message_start usage', () => {
     expect(startSend?.usage.cache_read_input_tokens).toBe(200)
     const finalSend = sends.find((s) => s.usage.output_tokens === 42)
     expect(finalSend).toBeDefined()
+  })
+
+  it('Core sink 接管 usage fact 时不再发送 legacy usage event', async () => {
+    const sender = makeSender()
+    const facts: AssistantFactEvent[] = []
+    mockCreateAnthropicClient.mockImplementation(() => ({
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'message_start', message: { usage: { input_tokens: 10 } } }
+          },
+          finalMessage: vi.fn(async () => ({
+            content: [{ type: 'text', text: 'done' }],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 10, output_tokens: 2 }
+          }))
+        }))
+      }
+    }))
+
+    const res = await runToolChatSession({
+      sender,
+      requestId: 'req-usage-core',
+      sessionId: 'sess-usage-core',
+      model: 'claude-sonnet-4-20250514',
+      messages: [{ role: 'user', content: 'hello' }],
+      toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp',
+      userDataDir: '/tmp',
+      getApiKey: async () => 'test-key',
+      appDb: makeDb(),
+      emitFactEvent: (event) => facts.push(event)
+    })
+
+    expect(res.ok).toBe(true)
+    expect(facts.some((event) => event.type === 'usage-updated')).toBe(true)
+    expect(usagePayloads(sender)).toHaveLength(0)
   })
 
   it('second loop round message_start reflects higher input_tokens', async () => {
@@ -225,7 +283,7 @@ describe('runToolChatSession message_start usage', () => {
     expect(sends[0]?.usage.input_tokens).toBe(900)
   })
 
-  it('emits projected claude-chat-usage after tool results without polluting return usage', async () => {
+  it('emits projected usage-updated fact after tool results without polluting return usage', async () => {
     const sender = makeSender()
     const largeToolResult = 'z'.repeat(350)
     mockCreateAnthropicClient.mockImplementation(() => ({

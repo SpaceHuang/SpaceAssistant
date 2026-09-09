@@ -9,7 +9,7 @@ vi.mock('./chatRunnerService', () => ({
 describe('shellScrollbackPatch', () => {
   beforeEach(() => {
     vi.stubGlobal('window', {
-      api: { chatPatchMessage: vi.fn().mockResolvedValue(undefined) }
+      api: { messagePatchNonTurn: vi.fn().mockResolvedValue(undefined) }
     })
   })
 
@@ -51,7 +51,7 @@ describe('shellScrollbackPatch', () => {
     expect(next[0]?.progressSeq).toBe(3)
   })
 
-  it('invokes chatPatchMessage on patch', () => {
+  it('invokes messagePatchNonTurn on patch', () => {
     patchShellTerminalScrollback({
       sessionId: 's1',
       messageId: 'm1',
@@ -67,7 +67,7 @@ describe('shellScrollbackPatch', () => {
       ],
       scrollback: { cols: 80, rows: 24, ansiText: 'x' }
     })
-    expect(window.api.chatPatchMessage).toHaveBeenCalledWith(
+    expect(window.api.messagePatchNonTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 's1',
         messageId: 'm1',

@@ -9,7 +9,8 @@ import {
 
 export function resolveSessionModelBinding(
   cfg: AppConfig,
-  session: Session | undefined
+  session: Session | undefined,
+  draftOption?: ChatModelOption
 ): { modelName: string; llmServiceId?: string; displayName: string; option?: ChatModelOption } {
   const activeIds =
     cfg.activeLlmServiceIds?.length > 0
@@ -20,6 +21,17 @@ export function resolveSessionModelBinding(
 
   const options = buildChatModelOptions(cfg.models, cfg.llmServices, activeIds)
   const available = getAvailableModels(cfg.models, cfg.llmServices, activeIds)
+
+  // The composer is also rendered before the first session exists. Preserve a
+  // model selected there so the eventual session is created with that choice.
+  if (!session && draftOption) {
+    return {
+      modelName: draftOption.modelName,
+      llmServiceId: draftOption.serviceId,
+      displayName: draftOption.displayName,
+      option: draftOption
+    }
+  }
 
   if (session?.model) {
     const matched = findChatModelOption(options, session.llmServiceId, session.model)
