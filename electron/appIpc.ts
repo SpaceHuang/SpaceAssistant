@@ -85,8 +85,10 @@ import {
   REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE
 } from './remote/remoteSessionGuardMessages'
 import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../src/shared/llmModelConfig'
+import type { FetchServiceModelsResult } from '../src/shared/llmModelConfig'
 import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, normalizeSessionSkillsState, stripPlanFieldsFromAppConfig, stripPlanFieldsFromFeishuConfig } from '../src/shared/domainTypes'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../src/shared/planTypes'
+import { fetchServiceModels } from './llmModelListFetcher'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
@@ -1740,7 +1742,13 @@ function readExposureInputsFromDb(
     'config:test-connection',
     async (
       _e,
-      options?: { serviceId?: string; apiKey?: string; baseUrl?: string; supportedModelIds?: string[] }
+      options?: {
+        serviceId?: string
+        apiKey?: string
+        baseUrl?: string
+        supportedModelIds?: string[]
+        models?: ModelEntry[]
+      }
     ): Promise<{ success: boolean; error?: string }> => {
       try {
         if (!options?.serviceId) {
@@ -1755,13 +1763,18 @@ function readExposureInputsFromDb(
           return { success: false, error: creds.error ?? ErrorCodes.API_KEY_NOT_CONFIGURED }
         }
 
-        const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
-        let models: ModelEntry[] = []
-        if (rawModels) {
-          try {
-            models = JSON.parse(rawModels) as ModelEntry[]
-          } catch {
-            models = []
+        let models: ModelEntry[]
+        if (options.models !== undefined) {
+          models = Array.isArray(options.models) ? options.models : []
+        } else {
+          const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)
+          models = []
+          if (rawModels) {
+            try {
+              models = JSON.parse(rawModels) as ModelEntry[]
+            } catch {
+              models = []
+            }
           }
         }
         const enabledModel = resolveTestConnectionModel(ctx.db, models, options.serviceId, {
@@ -1783,6 +1796,40 @@ function readExposureInputsFromDb(
         return { success: true }
       } catch (e) {
         return { success: false, error: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'llm:fetch-service-models',
+    async (
+      _e,
+      options?: { serviceId?: string; apiKey?: string; baseUrl?: string }
+    ): Promise<FetchServiceModelsResult> => {
+      let creds: { apiKey: string | null; baseUrl: string | undefined; error?: string }
+      try {
+        creds = await resolveTestConnectionCredentials(ctx.db, options)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logAgentEvent('warn', 'llm.fetch_models', { success: false, error: message })
+        return { ok: false, error: /baseurl/i.test(message) ? 'invalid-base-url' : 'network' }
+      }
+      try {
+        if (creds.error || !creds.apiKey) return { ok: false, error: 'no-api-key' }
+        const result = await fetchServiceModels({ baseUrl: creds.baseUrl, apiKey: creds.apiKey })
+        logAgentEvent('info', 'llm.fetch_models', {
+          success: result.ok,
+          ...(result.ok
+            ? { modelCount: result.models.length, truncated: result.truncated }
+            : { error: result.error, status: 'status' in result ? result.status : undefined })
+        })
+        return result
+      } catch (error) {
+        logAgentEvent('warn', 'llm.fetch_models', {
+          success: false,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return { ok: false, error: 'network' }
       }
     }
   )

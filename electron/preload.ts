@@ -74,8 +74,11 @@ const api: SpaceAssistantApi = {
     apiKey?: string
     baseUrl?: string
     supportedModelIds?: string[]
+    models?: import('../src/shared/domainTypes').ModelEntry[]
   }) =>
     ipcRenderer.invoke('config:test-connection', options),
+  llmFetchServiceModels: (options?: { serviceId?: string; apiKey?: string; baseUrl?: string }) =>
+    ipcRenderer.invoke('llm:fetch-service-models', options),
 
   dialogSelectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
   configCheckWorkdirWritable: (dir) => ipcRenderer.invoke('config:check-workdir-writable', dir),
