@@ -36,6 +36,7 @@ import type {
   BrowserConfig,
   ShellConfig,
   ShellSecurityHints,
+  ToolCallResultPersisted,
   ToolsConfig,
   WikiConfig
 } from '../src/shared/domainTypes'
@@ -64,6 +65,7 @@ import {
   resolveDependencyRecoverySkill
 } from './browser/browserDependencyRecovery'
 import type { AppDatabase } from './database'
+import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
@@ -77,7 +79,7 @@ import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogg
 import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
-import { recordUserAnswerFromDecision } from './confirmation/decisionCacheWriter'
+import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
@@ -161,6 +163,7 @@ import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
+import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -373,6 +376,8 @@ export type RunToolChatSessionArgs = {
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
+  /** 统一消息事实迁移端口；Core-owned 请求可配合关闭 legacy IPC 事实发送。 */
+  emitFactEvent?: (event: AssistantFactEvent) => void
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -387,17 +392,18 @@ export function pickToolLoopReturnUsage(
 
 export type RunToolChatSessionResult =
   | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage }
-  | { ok: false; error: string; usage?: ToolLoopUsage }
+  | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
 function failToolLoopWithLastUsage(
   sender: WebContents,
   requestId: string,
   sessionId: string,
   error: string,
-  lastValidUsage?: ToolLoopUsage
+  lastValidUsage?: ToolLoopUsage,
+  emitFactEvent?: (event: AssistantFactEvent) => void
 ): Extract<RunToolChatSessionResult, { ok: false }> {
   if (lastValidUsage) {
-    safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: lastValidUsage })
+    emitFactEvent?.({ type: 'usage-updated', usage: lastValidUsage })
   }
   return {
     ok: false,
@@ -428,7 +434,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
   try {
     return await runToolChatSessionInner({ ...args, chatSignal, getMcpConnectionManager })
   } catch (e) {
-    if (e instanceof ChatCancelledError) return { ok: false, error: e.message }
+    if (e instanceof ChatCancelledError) return { ok: false, error: e.message, cancelled: true }
     throw e
   } finally {
     if (chatSignal.aborted) {
@@ -475,7 +481,6 @@ async function runToolChatSessionInner(
     floatingNotificationManager,
     hasImageAttachments
   } = args
-
   const apiKey = await getApiKey()
   if (!apiKey) {
     logAgentEvent('error', 'llm.error', {
@@ -533,7 +538,7 @@ async function runToolChatSessionInner(
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
     // thinking 开启时须保留 assistant 消息中的 thinking/redacted_thinking（含 signature），
     // 否则多轮 tool loop 会触发 Anthropic 400（final assistant 须以 thinking 块开头）。
-    if (toolLoopOptions.enableThinking) return msgs
+    if (toolLoopOptions.enableThinking) return sanitizeThinkingForReplay(msgs)
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
@@ -570,7 +575,7 @@ async function runToolChatSessionInner(
     throwIfChatCancelled(chatSignal)
     if (!isWebContentsAlive(sender)) {
       logAgentEvent('warn', 'llm.error', { requestId, sessionId, error: 'Window closed' })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage)
+      return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage, args.emitFactEvent)
     }
     const memoryContent = getCachedMemoryContent()
     const baseSystemWithRecovery = recoverySkillSystemSuffix
@@ -638,11 +643,11 @@ async function runToolChatSessionInner(
         if (pending) pending.partialJson += normalizedDelta.partialJson
       }
       if (normalizedDelta?.type === 'reasoning_delta' && normalizedDelta.text.length > 0) {
-        safeWebContentsSend(sender, 'claude-chat-thinking-delta', { requestId, text: normalizedDelta.text })
+        args.emitFactEvent?.({ type: 'thinking-delta', text: normalizedDelta.text })
         if (remoteContext) onRemoteThinkingActive(buildRemoteProgressHookContext(sessionId, locale))
       }
       if (normalizedDelta?.type === 'text_delta' && normalizedDelta.text.length > 0) {
-        safeWebContentsSend(sender, 'claude-chat-delta', { requestId, text: normalizedDelta.text })
+        args.emitFactEvent?.({ type: 'content-delta', text: normalizedDelta.text })
         const prev = pendingTextByIndex.get(normalizedDelta.index) ?? ''
         pendingTextByIndex.set(normalizedDelta.index, prev + normalizedDelta.text)
       }
@@ -671,7 +676,7 @@ async function runToolChatSessionInner(
           if (partial) {
             usage = { ...partial, output_tokens: usage?.output_tokens }
             lastValidUsage = usage
-            safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
+            args.emitFactEvent?.({ type: 'usage-updated', usage })
           }
         }
       }
@@ -706,6 +711,7 @@ async function runToolChatSessionInner(
               name: compatName,
               input: parseToolInput(pending.input, pending.partialJson)
             }
+            args.emitFactEvent?.({ type: 'tool-use', id: pending.id, toolName: compatName, input: normalizeToolUseInputRecord(toolUseBlock.input) })
             contentBlocks.push(toolUseBlock)
             logAgentEvent('info', 'tool.request', {
               requestId,
@@ -715,25 +721,6 @@ async function runToolChatSessionInner(
               toolName: compatName,
               input: toolUseBlock.input
               ,...(normalizedName.originalName ? { originalToolName: normalizedName.originalName } : {})
-            })
-            safeWebContentsSend(sender,'tool:use', {
-              requestId,
-              toolUse: {
-                id: pending.id,
-                name: compatName,
-                input: toolUseBlock.input,
-                ...(normalizedName.originalName ? { originalToolName: normalizedName.originalName } : {}),
-                ...(mcpSnapshot.entries.get(compatName)
-                  ? {
-                      mcp: {
-                        serverId: mcpSnapshot.entries.get(compatName)!.serverId,
-                        serverName: mcpSnapshot.entries.get(compatName)!.serverName,
-                        originalToolName: mcpSnapshot.entries.get(compatName)!.originalName,
-                        description: mcpSnapshot.entries.get(compatName)!.description
-                      }
-                    }
-                  : {})
-              }
             })
           }
         }
@@ -750,7 +737,7 @@ async function runToolChatSessionInner(
       usage = finalUsage ?? usage
       if (usage) {
         lastValidUsage = usage
-        safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage })
+        args.emitFactEvent?.({ type: 'usage-updated', usage })
       }
 
       logAgentEvent('info', 'llm.response', {
@@ -772,7 +759,7 @@ async function runToolChatSessionInner(
         error,
         stack: e instanceof Error ? e.stack : undefined
       })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage)
+      return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
     } finally {
       endLlm(sessionId, requestId)
     }
@@ -802,6 +789,7 @@ async function runToolChatSessionInner(
 
     if (toolUses.length === 0) {
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
+      args.emitFactEvent?.({ type: 'source-completed' })
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }) }
     }
 
@@ -811,11 +799,15 @@ async function runToolChatSessionInner(
         requestId,
         sessionId,
         'unexpected_tool_call_with_no_tools',
-        lastValidUsage
+        lastValidUsage,
+        args.emitFactEvent,
       )
     }
 
     const toolResults: Anthropic.ToolResultBlockParam[] = []
+    const emitToolResultFact = (toolUseId: string, result: ToolCallResultPersisted) => {
+      args.emitFactEvent?.({ type: 'tool-result', id: toolUseId, result })
+    }
     const fileCache = getFileStateCacheForSession(sessionId)
     let abortRepeatedToolError: string | null = null
 
@@ -863,11 +855,7 @@ async function runToolChatSessionInner(
           unknownToolError
         )
         toolResults.push(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: unknownToolError }
-        })
+        emitToolResultFact(toolUseId, { success: false, error: unknownToolError })
         if (toolErrorRepeat.noteFailure(toolName, unknownToolError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${unknownToolError}`
           break
@@ -894,11 +882,7 @@ async function runToolChatSessionInner(
           userMsg
         )
         toolResults.push(buildToolErrorResult(toolUseId, userMsg, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: userMsg }
-        })
+        emitToolResultFact(toolUseId, { success: false, error: userMsg })
         if (toolErrorRepeat.noteFailure(toolName, userMsg)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${userMsg}`
           break
@@ -929,11 +913,7 @@ async function runToolChatSessionInner(
             actor: 'system'
           })
           toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
-          safeWebContentsSend(sender, 'tool:result', {
-            requestId,
-            toolUseId,
-            result: { success: false, error: pauseMsg, blockedReason: 'remote_task_budget' }
-          })
+          emitToolResultFact(toolUseId, { success: false, error: pauseMsg })
           abortRepeatedToolError = pauseMsg
           break
         }
@@ -945,6 +925,9 @@ async function runToolChatSessionInner(
         let raw: string | undefined
         let rawDelta: string | undefined
         let seq: number | undefined
+        let processPid: number | undefined
+        let processGroupId: number | undefined
+        let processOwnerToken: string | undefined
         if (typeof payload === 'string') {
           message = payload
         } else if (payload) {
@@ -952,6 +935,9 @@ async function runToolChatSessionInner(
           raw = payload.raw
           rawDelta = payload.rawDelta
           seq = payload.seq
+          processPid = payload.processPid
+          processGroupId = payload.processGroupId
+          processOwnerToken = payload.processOwnerToken
         }
         if (status === 'error') {
           logAgentEvent('error', 'tool.progress', {
@@ -964,7 +950,9 @@ async function runToolChatSessionInner(
             message
           })
         }
-        safeWebContentsSend(sender,'tool:progress', { requestId, toolUseId, status, message, raw, rawDelta, seq })
+        if (message || rawDelta) {
+          args.emitFactEvent?.({ type: 'tool-progress', id: toolUseId, seq: seq ?? 0, text: message ?? rawDelta ?? '', ...(processPid !== undefined ? { processPid } : {}), ...(processGroupId !== undefined ? { processGroupId } : {}), ...(processOwnerToken !== undefined ? { processOwnerToken } : {}) })
+        }
         if (remoteContext && message?.trim()) {
           onRemoteToolProgress(
             buildRemoteProgressHookContext(sessionId, locale),
@@ -1050,11 +1038,7 @@ async function runToolChatSessionInner(
           gate.shellPrecheckDeny.error
         )
         toolResults.push(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: gate.shellPrecheckDeny.error }
-        })
+        emitToolResultFact(toolUseId, { success: false, error: gate.shellPrecheckDeny.error })
         if (toolErrorRepeat.noteFailure(toolName, gate.shellPrecheckDeny.error)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${gate.shellPrecheckDeny.error}`
           break
@@ -1090,11 +1074,7 @@ async function runToolChatSessionInner(
           const message = error instanceof Error ? error.message : String(error)
           logToolLoopError({ requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj }, message, message)
           toolResults.push(buildToolErrorResult(toolUseId, code, { requestId, sessionId }))
-          safeWebContentsSend(sender, 'tool:result', {
-            requestId,
-            toolUseId,
-            result: { success: false, error: code }
-          })
+          emitToolResultFact(toolUseId, { success: false, error: message })
           if (toolErrorRepeat.noteFailure(toolName, code)) {
             abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${code}`
             break
@@ -1136,11 +1116,7 @@ async function runToolChatSessionInner(
           actor: 'system'
         })
         toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
-        safeWebContentsSend(sender, 'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: pauseMsg, blockedReason: 'remote_task_budget' }
-        })
+        emitToolResultFact(toolUseId, { success: false, error: pauseMsg })
         abortRepeatedToolError = pauseMsg
         break
       }
@@ -1169,11 +1145,7 @@ async function runToolChatSessionInner(
             : denyMsg
         )
         toolResults.push(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: denyMsg, ...(blockedReason ? { blockedReason } : {}) }
-        })
+        emitToolResultFact(toolUseId, { success: false, error: denyMsg })
         if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
           break
@@ -1296,35 +1268,25 @@ async function runToolChatSessionInner(
                 ...(actDanger.fillPreview?.length ? { fillPreview: actDanger.fillPreview } : {})
               }
             : undefined
-          safeWebContentsSend(sender,'tool:confirm-request', {
-            requestId,
-            sessionId,
-            toolUseId,
-            toolName,
-            input: inputObj,
-            riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : gate.facts.baseRiskLevel,
+          args.emitFactEvent?.({
+            type: 'confirm-requested',
+            id: toolUseId,
+            riskLevel: toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
             ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
-            ...(mcpEntryForConfirm
-              ? {
-                  mcp: {
-                    serverId: mcpEntryForConfirm.serverId,
-                    serverName: mcpEntryForConfirm.serverName,
-                    originalToolName: mcpEntryForConfirm.originalName,
-                    description: mcpEntryForConfirm.description,
-                    maskedArgs: maskSensitiveArgs(inputObj) as Record<string, unknown>
-                  }
-                }
-              : {}),
-            ...(toolName === 'browser' && inputObj.action === 'act'
-              ? {
-                  ...(currentPageUrl ? { currentPageUrl } : {}),
-                  ...(dangerInfo ? { dangerInfo } : {}),
-                  ...(sessionTrustedHint ? { sessionTrustedHint } : {})
-                }
-              : {}),
-            ...(diff ? { diff } : {}),
+            ...(diff ? { confirmDiff: diff } : {}),
             ...(shellSecurityHints ? { shellSecurityHints } : {}),
-            ...(autoApproveFallback ? { autoApproveFallback } : {})
+            ...(autoApproveFallback ? { autoApproveFallback } : {}),
+            ...(currentPageUrl ? { currentPageUrl } : {}),
+            ...(dangerInfo ? { dangerInfo } : {}),
+            ...(sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
+            ...(mcpEntryForConfirm ? {
+              mcp: {
+                serverId: mcpEntryForConfirm.serverId,
+                serverName: mcpEntryForConfirm.serverName,
+                originalToolName: mcpEntryForConfirm.originalName,
+                ...(mcpEntryForConfirm.description ? { description: mcpEntryForConfirm.description } : {})
+              }
+            } : {})
           })
           // 通知浮动通知管理器
           if (floatingNotificationManager) {
@@ -1507,6 +1469,14 @@ async function runToolChatSessionInner(
 
       // 收窄 legacy confirm 状态为 coordinator 合同；下方仍保留既有文案和审计分支。
       const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason })
+      if (needsConfirm) {
+        args.emitFactEvent?.({
+          type: 'tool-confirmed',
+          id: toolUseId,
+          approved: outcome === 'approved',
+          ...(outcome !== 'approved' ? { reason: rejectReason ?? outcome } : {})
+        })
+      }
 
       if (outcome === 'timeout') {
         const timeoutError =
@@ -1520,11 +1490,7 @@ async function runToolChatSessionInner(
           timeoutError
         )
         toolResults.push(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: timeoutError }
-        })
+        emitToolResultFact(toolUseId, { success: false, error: timeoutError })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, timeoutError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${timeoutError}`
@@ -1622,11 +1588,7 @@ async function runToolChatSessionInner(
           rejectedError
         )
         toolResults.push(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }))
-        safeWebContentsSend(sender,'tool:result', {
-          requestId,
-          toolUseId,
-          result: { success: false, error: rejectedError }
-        })
+        emitToolResultFact(toolUseId, { success: false, error: rejectedError })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
@@ -1645,11 +1607,7 @@ async function runToolChatSessionInner(
             conflict
           )
           toolResults.push(buildToolErrorResult(toolUseId, conflict, { requestId, sessionId }))
-          safeWebContentsSend(sender,'tool:result', {
-            requestId,
-            toolUseId,
-            result: { success: false, error: conflict }
-          })
+          emitToolResultFact(toolUseId, { success: false, error: conflict })
           if (toolErrorRepeat.noteFailure(toolName, conflict)) {
             abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${conflict}`
             break
@@ -1899,16 +1857,17 @@ async function runToolChatSessionInner(
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execError}`
         }
       }
-      safeWebContentsSend(sender,'tool:result', {
-        requestId,
-        toolUseId,
-        result: {
-          success: execResult.success,
-          data: execResult.data,
-          error: execResult.error,
-          ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {}),
-          ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
-        }
+      emitToolResultFact(toolUseId, {
+        success: execResult.success,
+        data: execResult.data,
+        error: execResult.error,
+        ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {}),
+        ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
+      })
+      emitToolResultFact(toolUseId, {
+        success: execResult.success,
+        data: execResult.data,
+        error: execResult.error
       })
       if (execResult.success) {
         if (toolName === 'write_file' || toolName === 'edit_file') {
@@ -1925,10 +1884,10 @@ async function runToolChatSessionInner(
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]
     if (lastValidUsage && toolResults.length > 0) {
       const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
-      safeWebContentsSend(sender, 'claude-chat-usage', { requestId, sessionId, usage: projected, projected: true })
+      args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
     }
     if (abortRepeatedToolError) {
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage)
+      return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
     }
   }
 }

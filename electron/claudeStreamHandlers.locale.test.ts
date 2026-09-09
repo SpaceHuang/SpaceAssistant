@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import { openDatabase, setConfigValue, type AppDatabase } from './database'
+import { appendMessage, createPersistedTurn, createSession, openDatabase, setConfigValue, type AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -54,6 +54,7 @@ vi.mock('./chatCancelRegistry', () => ({
 
 import { ipcMain } from 'electron'
 import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { safeWebContentsSend } from './safeWebContentsSend'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
@@ -99,8 +100,8 @@ describe('claudeStreamHandlers locale', () => {
     })
   })
 
-  function registerHandlers() {
-    registerClaudeStreamHandlers(ipcMain, {
+  function registerHandlers(db = makeDb('zh-CN')) {
+    return registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key',
       getWorkDir: () => '/tmp',
       resolveWorkDirForSession: () => '/session-workdir',
@@ -109,28 +110,74 @@ describe('claudeStreamHandlers locale', () => {
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }),
-      getAppDatabase: () => makeDb('zh-CN'),
+      getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir: '/tmp' })
     })
   }
 
-  it('I7: create-with-tools passes payload.locale to runToolChatSession', async () => {
+  it('不再注册可绕过 Runtime 的 legacy create-with-tools 与 cancel IPC', () => {
     registerHandlers()
-    const sender = makeSender()
-    const handler = handlers.get('claude-chat-create-with-tools')
-    expect(handler).toBeDefined()
+    expect(handlers.has('claude-chat-create-with-tools')).toBe(false)
+    expect(handlers.has('claude-chat-cancel')).toBe(false)
+  })
 
-    await handler!({ sender } as never, {
-      requestId: '00000000-0000-4000-8000-000000000002',
-      sessionId: 'sess-1',
-      model: 'claude-sonnet-4-20250514',
-      messages: [{ role: 'user', content: 'hello' }],
-      tools: [{ name: 'read_file', description: 'read', input_schema: { type: 'object', properties: {} } }],
-      locale: 'en-US'
+  it('execute 忽略 renderer 伪造配置并使用 turn 冻结快照', async () => {
+    const db = makeDb('zh-CN')
+    const session = createSession(db, { name: 'frozen-execution', model: 'trusted-model', maxTokens: 2048 })
+    const user = appendMessage(db, { id: 'frozen-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'frozen-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'frozen-turn', requestId: 'frozen-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'frozen-token',
+      executionConfig: { lane: 'desktop', model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system', maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
+    })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getBrowserDetectContext: () => ({ workDir: '/tmp' }), turnRuntime: { bindRequest: vi.fn() } as never
     })
 
-    expect(mockRunToolChatSession).toHaveBeenCalledWith(
-      expect.objectContaining({ locale: 'en-US', workDir: '/session-workdir' })
-    )
+    await execute(makeSender(), {
+      requestId: 'frozen-request', turnId: 'frozen-turn', turnStartToken: 'frozen-token', sessionId: session.id,
+      model: 'forged-model', baseUrl: 'https://evil.example.com', llmServiceId: 'evil-service', system: 'evil system',
+      options: { maxTokens: 9999, enableThinking: true }, locale: 'en-US'
+    })
+
+    expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
+      options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN'
+    }))
+    db.close()
+  })
+
+  it('无执行快照的 legacy turn 只能恢复查看，不能用当前配置重新执行', async () => {
+    const db = makeDb('zh-CN')
+    const session = createSession(db, { name: 'legacy-read-only', model: 'current-model' })
+    const user = appendMessage(db, { id: 'legacy-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'legacy-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'legacy-turn', requestId: 'legacy-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'legacy-token'
+    })
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getBrowserDetectContext: () => ({ workDir: '/tmp' }), turnRuntime: { bindRequest: vi.fn() } as never
+    })
+
+    await expect(execute(makeSender(), {
+      requestId: 'legacy-request', turnId: 'legacy-turn', turnStartToken: 'legacy-token', sessionId: session.id,
+      model: 'current-model'
+    })).resolves.toEqual({ ok: false, error: 'TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE' })
+    expect(mockRunToolChatSession).not.toHaveBeenCalled()
+    db.close()
   })
 })

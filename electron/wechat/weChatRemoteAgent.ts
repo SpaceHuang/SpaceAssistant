@@ -12,6 +12,7 @@ import { createWeChatProgressAdapter, pickWeChatProgressConfig } from '../remote
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { runImRemoteAgent } from '../remote/imRemoteAgent'
 import type { WorkDirManager } from '../workDirManager'
+import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 
 export async function runWeChatRemoteAgent(ctx: {
   db: AppDatabase
@@ -34,6 +35,7 @@ export async function runWeChatRemoteAgent(ctx: {
   getWikiConfig?: () => WikiConfig
   getShellConfig?: () => ShellConfig
   remoteContext: WeChatRemoteContext
+  emitFactEvent?: (event: AssistantFactEvent) => void
   inboundRaw: IncomingMessage
   userId: string
 }): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
@@ -106,5 +108,6 @@ export async function runWeChatRemoteAgent(ctx: {
     logError: (error) => {
       logWeChatCliEvent('error', 'wechat.agent.remote.error', { sessionId: ctx.sessionId, error })
     }
+    ,emitFactEvent: ctx.emitFactEvent
   })
 }

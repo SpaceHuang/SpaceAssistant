@@ -31,7 +31,10 @@ function downgradeToolCall(tc: ToolCallRecord, now: number): ToolCallRecord {
 export function cleanupStreamingResiduesOnStartup(db: AppDatabase): number {
   const conn = getDbConnection(db)
   const rows = conn
-    .prepare(`SELECT id, tool_calls FROM messages WHERE role = 'assistant' AND status = 'streaming'`)
+    .prepare(`SELECT messages.id, messages.tool_calls
+      FROM messages
+      LEFT JOIN turns ON turns.assistant_message_id = messages.id
+      WHERE messages.role = 'assistant' AND messages.status = 'streaming' AND turns.turn_id IS NULL`)
     .all() as Array<{ id: string; tool_calls: string | null }>
 
   if (rows.length === 0) return 0

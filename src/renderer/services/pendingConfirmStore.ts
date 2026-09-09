@@ -1,6 +1,5 @@
-import type { AutoApproveFallback, BrowserActDangerInfo, ShellSecurityHints, ToolCallRecord, ToolRiskLevel } from '../../shared/domainTypes'
+import type { AutoApproveFallback, BrowserActDangerInfo, Message, ShellSecurityHints, ToolCallRecord, ToolRiskLevel } from '../../shared/domainTypes'
 import type { ToolConfirmOptions } from '../../shared/toolConfirm'
-import { resolveSessionIdForRequest } from './runRequestIndex'
 
 export type PendingConfirmItem = {
   sessionId: string
@@ -31,46 +30,13 @@ class PendingConfirmStore {
   private items: PendingConfirmItem[] = []
   private listeners = new Set<Listener>()
   private initialized = false
-  private unsubConfirm: (() => void) | null = null
-  private unsubResult: (() => void) | null = null
 
   init(): void {
     if (this.initialized) return
     this.initialized = true
-
-    this.unsubConfirm = window.api.toolOnConfirmRequest((d) => {
-      const sessionId = d.sessionId ?? resolveSessionIdForRequest(d.requestId)
-      if (!sessionId) return
-      if (this.items.some((i) => i.requestId === d.requestId && i.toolUseId === d.toolUseId)) return
-      this.items.push({
-        sessionId,
-        requestId: d.requestId,
-        toolUseId: d.toolUseId,
-        toolName: d.toolName,
-        input: d.input,
-        riskLevel: d.riskLevel,
-        diff: d.diff,
-        shellSecurityHints: d.shellSecurityHints,
-        autoApproveFallback: d.autoApproveFallback,
-        ...(d.currentPageUrl ? { currentPageUrl: d.currentPageUrl } : {}),
-        ...(d.dangerInfo ? { dangerInfo: d.dangerInfo } : {}),
-        ...(d.sessionTrustedHint ? { sessionTrustedHint: d.sessionTrustedHint } : {}),
-        ...(d.mcp ? { mcp: d.mcp } : {}),
-        createdAt: Date.now()
-      })
-      this.notify()
-    })
-
-    this.unsubResult = window.api.toolOnResult((d) => {
-      this.remove(d.requestId, d.toolUseId)
-    })
   }
 
   dispose(): void {
-    this.unsubConfirm?.()
-    this.unsubResult?.()
-    this.unsubConfirm = null
-    this.unsubResult = null
     this.initialized = false
     this.items = []
     this.listeners.clear()
@@ -78,6 +44,30 @@ class PendingConfirmStore {
 
   getItems(): PendingConfirmItem[] {
     return [...this.items]
+  }
+
+  /** 从 Core 的完整 assistant snapshot 重建确认展示，不依赖旧 tool IPC。 */
+  syncFromProjection(args: { sessionId: string; requestId: string; message: Message }): void {
+    const confirming = (args.message.toolCalls ?? []).filter((tool) => tool.status === 'confirming')
+    const next = confirming.map((tool) => ({
+      sessionId: args.sessionId,
+      requestId: args.requestId,
+      toolUseId: tool.id,
+      toolName: tool.toolName,
+      input: tool.input,
+      riskLevel: tool.riskLevel,
+      ...(tool.confirmDiff ? { diff: tool.confirmDiff } : {}),
+      ...(tool.shellSecurityHints ? { shellSecurityHints: tool.shellSecurityHints } : {}),
+      ...(tool.autoApproveFallback ? { autoApproveFallback: tool.autoApproveFallback } : {}),
+      ...(tool.currentPageUrl ? { currentPageUrl: tool.currentPageUrl } : {}),
+      ...(tool.dangerInfo ? { dangerInfo: tool.dangerInfo } : {}),
+      ...(tool.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
+      ...(tool.mcp ? { mcp: { ...tool.mcp, description: tool.mcp.description ?? '', maskedArgs: {} } } : {}),
+      createdAt: tool.startedAt ?? Date.now()
+    }))
+    const keep = this.items.filter((item) => item.requestId !== args.requestId)
+    this.items = [...keep, ...next]
+    this.notify()
   }
 
   countForSession(sessionId: string): number {

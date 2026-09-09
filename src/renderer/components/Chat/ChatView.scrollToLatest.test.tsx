@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { App, ConfigProvider } from 'antd'
 import React from 'react'
@@ -20,6 +20,7 @@ import { store } from '../../store'
 import { setChatStatus, setMessages, setSession } from '../../store/chatSlice'
 import { setConfig } from '../../store/configSlice'
 import { setSessions } from '../../store/sessionSlice'
+import { pendingConfirmStore } from '../../services/pendingConfirmStore'
 
 const scrollToIndexMock = vi.fn()
 
@@ -220,8 +221,8 @@ function pageFromStore(sessionId: string) {
   }
 }
 
-async function renderChatWithMessages(messages: Message[], session: Session = testSession) {
-  store.dispatch(setConfig(makeConfig()))
+async function renderChatWithMessages(messages: Message[], session: Session = testSession, config?: AppConfig) {
+  store.dispatch(setConfig(config ?? makeConfig()))
   store.dispatch(setSession(session.id))
   store.dispatch(setMessages(messages))
   store.dispatch(setSessions([session]))
@@ -291,8 +292,8 @@ describe('ChatView scroll to latest', () => {
         nextSequence: 0,
         hasMore: false
       }),
-      chatAppendMessage: vi.fn().mockResolvedValue({ messageId: 'x', sequence: 1 }),
-      chatPatchMessage: vi.fn().mockResolvedValue({ message: makeMessage({ id: 'x', role: 'user' }), sequence: 1 }),
+      messageAppendNonTurn: vi.fn().mockResolvedValue({ messageId: 'x', sequence: 1 }),
+      messagePatchNonTurn: vi.fn().mockResolvedValue({ message: makeMessage({ id: 'x', role: 'user' }), sequence: 1 }),
       chatGetNextQueuedMessage: vi.fn().mockResolvedValue(null),
       chatResolveRetryContext: vi.fn().mockResolvedValue(null),
       chatGetMessageSequence: vi.fn().mockResolvedValue(null),
@@ -413,6 +414,36 @@ describe('ChatView scroll to latest', () => {
 
     syncScrollState(container, { scrollHeight: 1000, clientHeight: 100, scrollTop: 880 })
     expectButtonHidden(getScrollToLatestButton(container))
+  })
+
+  it('刷新后从 projection pending store 恢复确认卡片，而不是依赖旧 confirm IPC', async () => {
+    const messages = [makeMessage({
+      id: 'assistant-confirm',
+      role: 'assistant',
+      status: 'streaming',
+      toolCalls: [{
+        id: 'tool-confirm',
+        toolName: 'run_shell',
+        input: { command: 'pwd' },
+        status: 'confirming',
+        riskLevel: 'high'
+      }]
+    })]
+    pendingConfirmStore.syncFromProjection({
+      sessionId: testSession.id,
+      requestId: 'request-confirm',
+      message: messages[0]!
+    })
+
+    const { unmount } = await renderChatWithMessages(messages, testSession, makeConfig({
+      tools: { ...DEFAULT_TOOLS_CONFIG, enabled: true }
+    }))
+    const confirmCard = document.querySelector('.shell-confirm-card')
+    expect(confirmCard).not.toBeNull()
+    expect(confirmCard?.textContent).toContain('pwd')
+
+    unmount()
+    pendingConfirmStore.reset()
   })
 
   it('resets button visibility when switching sessions', async () => {

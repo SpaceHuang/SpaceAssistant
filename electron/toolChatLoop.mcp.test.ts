@@ -307,19 +307,18 @@ describe('toolChatLoop MCP integration', () => {
         }
       ]
     ])
-    const { safeWebContentsSend } = await import('./safeWebContentsSend')
+    const facts: Array<Record<string, unknown>> = []
+    await runSession({ emitFactEvent: (event: Record<string, unknown>) => facts.push(event) })
 
-    await runSession()
-
-    const sends = (safeWebContentsSend as unknown as ReturnType<typeof vi.fn>).mock.calls
-    const confirmSend = sends.find((call) => call[1] === 'tool:confirm-request')
-    expect(confirmSend).toBeDefined()
-    const payload = confirmSend![2] as { mcp?: { serverId: string; serverName: string; originalToolName: string } }
-    expect(payload.mcp).toMatchObject({
+    const confirmFact = facts.find((event) => event.type === 'confirm-requested')
+    expect(confirmFact).toBeDefined()
+    expect(confirmFact).toMatchObject({
+      type: 'confirm-requested',
+      mcp: {
       serverId: 'server-1',
       serverName: 'GitHub',
       originalToolName: 'create_issue'
+      }
     })
-    expect(payload.mcp?.maskedArgs).toBeDefined()
   })
 })

@@ -178,4 +178,10 @@ describe('runImRemoteAgent', () => {
     expect(mockClearRemoteProgressSession).toHaveBeenCalledWith('sess-1')
     expect(onFinally).toHaveBeenCalledOnce()
   })
+
+  it('保留 tool loop 的 cancelled outcome 供上层 Runtime 映射 source-cancelled', async () => {
+    mockRunToolChatSession.mockResolvedValue({ ok: false, error: '用户取消执行', cancelled: true })
+    const result = await runImRemoteAgent(baseArgs())
+    expect(result).toMatchObject({ ok: false, pendingConfirm: false, outcome: 'cancelled' })
+  })
 })

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppConfig, FileInfo, Message, SearchResult, Session } from '../src/shared/domainTypes'
-import type { ClaudeChatCreateWithToolsPayload, SpaceAssistantApi } from '../src/shared/api'
+import type { SpaceAssistantApi, TurnExecutePayload } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
@@ -25,10 +25,21 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('chat:get-context-history-summary-baseline', payload),
   chatGetSearchCorpusPage: (payload) => ipcRenderer.invoke('chat:get-search-corpus-page', payload),
   chatGetNextQueuedMessage: (payload) => ipcRenderer.invoke('chat:get-next-queued-message', payload),
+  chatEnqueueQueuedMessage: (payload) => ipcRenderer.invoke('chat:enqueue-queued-message', payload),
   chatResolveRetryContext: (payload) => ipcRenderer.invoke('chat:resolve-retry-context', payload),
   chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
-  chatAppendMessage: (msg) => ipcRenderer.invoke('chat:append-message', msg),
-  chatPatchMessage: (payload) => ipcRenderer.invoke('chat:patch-message', payload),
+  messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
+  messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),
+  chatPrepareTurn: (intent) => ipcRenderer.invoke('chat:prepare-turn', intent),
+  chatExecuteTurn: (payload: TurnExecutePayload) => ipcRenderer.invoke('chat:execute-turn', payload),
+  chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
+  chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
+  chatListActiveTurns: (payload) => ipcRenderer.invoke('chat:list-active-turns', payload),
+  chatOnTurnProjection: (cb) => {
+    const fn = (_e: unknown, data: Parameters<typeof cb>[0]) => cb(data)
+    ipcRenderer.on('chat:turn-projection', fn)
+    return () => ipcRenderer.removeListener('chat:turn-projection', fn)
+  },
   chatDeleteQueuedMessage: (payload: { messageId: string; sessionId: string }) =>
     ipcRenderer.invoke('chat:delete-queued-message', payload) as Promise<
       { ok: true; sessionId: string } | { ok: false; error: string }
@@ -37,43 +48,6 @@ const api: SpaceAssistantApi = {
   chatStageImage: (args) => ipcRenderer.invoke('chat:stage-image', args),
   chatDiscardStagedImage: (args) => ipcRenderer.invoke('chat:discard-staged-image', args),
   chatReadStagedImage: (args) => ipcRenderer.invoke('chat:read-staged-image', args),
-
-  claudeChatCreateWithTools: (payload: ClaudeChatCreateWithToolsPayload) =>
-    ipcRenderer.invoke('claude-chat-create-with-tools', payload),
-  claudeChatOnDelta: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string; text: string }) => cb(data)
-    ipcRenderer.on('claude-chat-delta', fn)
-    return () => ipcRenderer.removeListener('claude-chat-delta', fn)
-  },
-  claudeChatOnThinkingDelta: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string; text: string }) => cb(data)
-    ipcRenderer.on('claude-chat-thinking-delta', fn)
-    return () => ipcRenderer.removeListener('claude-chat-thinking-delta', fn)
-  },
-  claudeChatOnDone: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string; usage?: unknown }) => cb(data)
-    ipcRenderer.on('claude-chat-done', fn)
-    return () => ipcRenderer.removeListener('claude-chat-done', fn)
-  },
-  claudeChatOnUsage: (cb) => {
-    const fn = (
-      _e: unknown,
-      data: {
-        requestId: string
-        sessionId: string
-        usage: import('../src/shared/sessionUsage').SessionUsage
-        projected?: boolean
-      }
-    ) => cb(data)
-    ipcRenderer.on('claude-chat-usage', fn)
-    return () => ipcRenderer.removeListener('claude-chat-usage', fn)
-  },
-  claudeChatOnError: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string; message: string }) => cb(data)
-    ipcRenderer.on('claude-chat-error', fn)
-    return () => ipcRenderer.removeListener('claude-chat-error', fn)
-  },
-  claudeChatCancel: (payload) => ipcRenderer.invoke('claude-chat-cancel', payload),
 
   configGet: () => ipcRenderer.invoke('config:get'),
   getToolExposureList: (payload) => ipcRenderer.invoke('exposure:get-tools', payload),
@@ -167,43 +141,6 @@ const api: SpaceAssistantApi = {
   toolConfirmResponse: (payload: import('../src/shared/api').ToolConfirmResponsePayload) =>
     ipcRenderer.invoke('tool:confirm-response', payload),
   toolCancel: (payload) => ipcRenderer.invoke('tool:cancel', payload),
-  toolOnUse: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => cb(data)
-    ipcRenderer.on('tool:use', fn)
-    return () => ipcRenderer.removeListener('tool:use', fn)
-  },
-  toolOnConfirmRequest: (cb) => {
-    const fn = (
-      _e: unknown,
-      data: {
-        requestId: string
-        sessionId?: string
-        toolUseId: string
-        toolName: string
-        input: unknown
-        riskLevel: 'low' | 'medium' | 'high'
-        diff?: { oldContent: string; newContent: string; oldPath: string }
-        shellSecurityHints?: import('../src/shared/domainTypes').ShellSecurityHints
-        autoApproveFallback?: import('../src/shared/domainTypes').AutoApproveFallback
-        currentPageUrl?: string
-        dangerInfo?: import('../src/shared/domainTypes').BrowserActDangerInfo
-        sessionTrustedHint?: true
-      }
-    ) => cb(data)
-    ipcRenderer.on('tool:confirm-request', fn)
-    return () => ipcRenderer.removeListener('tool:confirm-request', fn)
-  },
-  toolOnProgress: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string; toolUseId: string; status: string; message?: string }) => cb(data)
-    ipcRenderer.on('tool:progress', fn)
-    return () => ipcRenderer.removeListener('tool:progress', fn)
-  },
-  toolOnResult: (cb) => {
-    const fn = (_e: unknown, data: { requestId: string; toolUseId: string; result: { success: boolean; data?: unknown; error?: string } }) =>
-      cb(data)
-    ipcRenderer.on('tool:result', fn)
-    return () => ipcRenderer.removeListener('tool:result', fn)
-  },
   toolTestInterpreter: (payload) => ipcRenderer.invoke('tool:test-interpreter', payload),
   shellTestExecutable: (payload: { executable?: string; argsPrefix?: string[] }) =>
     ipcRenderer.invoke('shell:test-executable', payload),
@@ -289,23 +226,10 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('feishu:inbound-message', fn)
     return () => ipcRenderer.removeListener('feishu:inbound-message', fn)
   },
-  feishuOnRemoteAgentStart: (cb) => {
-    const fn = (_e: unknown, data: { sessionId: string; assistantMessageId: string; requestId: string }) => cb(data)
-    ipcRenderer.on('feishu:remote-agent-start', fn)
-    return () => ipcRenderer.removeListener('feishu:remote-agent-start', fn)
-  },
   feishuOnPendingConfirm: (cb) => {
     const fn = (_e: unknown, data: { sessionId: string; pendingConfirm: boolean }) => cb(data)
     ipcRenderer.on('feishu:pending-confirm', fn)
     return () => ipcRenderer.removeListener('feishu:pending-confirm', fn)
-  },
-  feishuOnAgentDone: (cb) => {
-    const fn = (
-      _e: unknown,
-      data: { sessionId: string; messageId: string; requestId: string; ok: boolean; summary?: string }
-    ) => cb(data)
-    ipcRenderer.on('feishu:agent-done', fn)
-    return () => ipcRenderer.removeListener('feishu:agent-done', fn)
   },
 
   wechatDetectSdk: () => ipcRenderer.invoke('wechat:detect-sdk'),
@@ -342,11 +266,6 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('wechat:inbound-message', fn)
     return () => ipcRenderer.removeListener('wechat:inbound-message', fn)
   },
-  wechatOnRemoteAgentStart: (cb) => {
-    const fn = (_e: unknown, data: { sessionId: string; assistantMessageId: string; requestId: string }) => cb(data)
-    ipcRenderer.on('wechat:remote-agent-start', fn)
-    return () => ipcRenderer.removeListener('wechat:remote-agent-start', fn)
-  },
   wechatOnConfirmRequest: (cb) => {
     const fn = (_e: unknown, data: unknown) => cb(data)
     ipcRenderer.on('wechat:confirm-request', fn)
@@ -356,14 +275,6 @@ const api: SpaceAssistantApi = {
     const fn = (_e: unknown, data: { count: number }) => cb(data)
     ipcRenderer.on('wechat:pending-confirm', fn)
     return () => ipcRenderer.removeListener('wechat:pending-confirm', fn)
-  },
-  wechatOnAgentDone: (cb) => {
-    const fn = (
-      _e: unknown,
-      data: { sessionId: string; messageId: string; requestId: string; ok: boolean; summary?: string }
-    ) => cb(data)
-    ipcRenderer.on('wechat:agent-done', fn)
-    return () => ipcRenderer.removeListener('wechat:agent-done', fn)
   },
   wechatOnPollingStats: (cb) => {
     const fn = (_e: unknown, data: unknown) => cb(data)

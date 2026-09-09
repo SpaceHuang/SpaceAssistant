@@ -540,6 +540,10 @@ export interface ToolCallRecord {
   /** run_shell terminal 模式 base64 raw 增量（executing 内存，完成后清除） */
   progressOutputRaw?: string
   progressSeq?: number
+  /** run_shell executing 期间用于重启恢复 cleanup 的进程身份；只允许本机 PID。 */
+  processPid?: number
+  processGroupId?: number
+  processOwnerToken?: string
   /** browser act 确认：当前页面 URL */
   currentPageUrl?: string
   /** browser act 危险信息（确认卡片展示） */

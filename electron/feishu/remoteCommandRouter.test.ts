@@ -24,6 +24,19 @@ const mockResolveFeishuSession = vi.fn()
 const mockSendFeishuRemoteOutbound = vi.fn()
 const mockShouldAcceptInbound = vi.fn()
 
+const testTurnRuntime = {
+  prepare: vi.fn(() => ({
+    turnId: 'turn-test',
+    requestId: 'request-test',
+    sessionId: 'session-test',
+    assistantMessage: { id: 'assistant-test' },
+    version: 0,
+    startToken: 'token-test'
+  })),
+  executeWithSource: vi.fn(async (_turnId: string, _token: string, source: (a: unknown, b: string) => Promise<unknown>) => source({}, 'token-test')),
+  consumeForRequest: vi.fn()
+} as never
+
 vi.mock('./feishuRemoteAgent', () => ({
   runFeishuRemoteAgent: (...args: unknown[]) => mockRunFeishuRemoteAgent(...args)
 }))
@@ -102,6 +115,7 @@ describe('RemoteCommandRouter workdir binding', () => {
     const auditAppend = vi.fn().mockResolvedValue(undefined)
     const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
+      turnRuntime: testTurnRuntime,
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
@@ -198,10 +212,6 @@ describe('RemoteCommandRouter workdir binding', () => {
     await router.handleInbound(makeInbound({ messageId: 'switch-1' }))
 
     expect(wcSend).toHaveBeenCalledWith(
-      'feishu:agent-done',
-      expect.objectContaining({ sessionId: origin.id })
-    )
-    expect(wcSend).toHaveBeenCalledWith(
       'feishu:pending-confirm',
       expect.objectContaining({ sessionId: origin.id })
     )
@@ -260,6 +270,7 @@ describe('RemoteCommandRouter busy guard', () => {
   ) {
     const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
+      turnRuntime: testTurnRuntime,
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
@@ -353,6 +364,53 @@ describe('RemoteCommandRouter busy guard', () => {
     await router.handleInbound(makeInbound({ content: 'Y', messageId: 'confirm-1' }))
     expect(mockResolveFeishuSession).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+  })
+
+  it('remote agent 的非终态事实经 Runtime 消费，终态由统一 adapter 收敛', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Fact pipeline' })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'run tool' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockImplementation(async ({ emitFactEvent }: { emitFactEvent?: (event: unknown) => void }) => {
+      emitFactEvent?.({ type: 'tool-use', id: 'tool-1', toolName: 'read_file', input: { path: 'README.md' } })
+      return { summary: 'done', pendingConfirm: false, ok: true }
+    })
+
+    const { router } = makeRouter(db, manager)
+    await router.handleInbound(makeInbound({ messageId: 'fact-pipeline-1' }))
+
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ type: 'tool-use', id: 'tool-1' })
+    )
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      { type: 'source-completed' }
+    )
+    const calls = testTurnRuntime.consumeForRequest.mock.calls
+    expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
+      .toBeLessThan(calls.findIndex(([, event]) => (event as { type: string }).type === 'source-completed'))
+  })
+
+  it('confirm-requested 进入 Core，并向 Feishu 出站 pending-confirm 提示', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Confirm pipeline' })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'confirm me' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockImplementation(async ({ emitFactEvent }: { emitFactEvent?: (event: unknown) => void }) => {
+      emitFactEvent?.({ type: 'confirm-requested', toolUseId: 'tool-feishu-confirm', toolName: 'run_shell' })
+      return { summary: 'waiting', pendingConfirm: true, ok: true }
+    })
+
+    const { router } = makeRouter(db, manager)
+    await router.handleInbound(makeInbound({ messageId: 'confirm-pipeline-1' }))
+
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-feishu-confirm' })
+    )
+    // pending-confirm 的桌面窗口通知已有 origin-session switch fixture 覆盖；此处锁定
+    // 远程确认事实不会被 adapter 过滤掉。
   })
 
   it('releases claim when bind fails so retry can succeed', async () => {

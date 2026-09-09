@@ -155,7 +155,7 @@ export async function executePreparedShellExecution(
     shellId: prepared.spawnSpec.shellId
   }
   const env = prepared.environment
-  const sendProgressSafely = (payload: string | { rawDelta: string; seq: number }): void => {
+  const sendProgressSafely = (payload: string | { rawDelta: string; seq: number } | { message: string; processPid: number; processGroupId?: number; processOwnerToken?: string }): void => {
     try {
       ctx.sendProgress('shell', payload)
     } catch (error) {
@@ -269,6 +269,7 @@ export async function executePreparedShellExecution(
       shell: false,
       detached: process.platform === 'darwin'
     })
+    if (proc.pid) sendProgressSafely({ message: '进程已启动', processPid: proc.pid, processGroupId: process.platform === 'darwin' ? proc.pid : undefined, processOwnerToken: `${ctx.requestId}:${ctx.toolUseId}` })
     const supervisor = new ProcessSupervisor(proc, processTreeKiller)
     terminateForOutputLimit = () => {
       void supervisor.terminate().then((result) => { terminationResult = result })

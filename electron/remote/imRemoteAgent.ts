@@ -19,6 +19,7 @@ import {
 } from './remoteProgressCoordinator'
 import { clearRemoteProgressSession } from './remoteProgressStore'
 import type { RemoteProgressConfig } from '../../src/shared/remoteProgressTypes'
+import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import {
   resolveFeishuBrowserRemoteHint,
   type FeishuBrowserRemoteHint
@@ -36,7 +37,7 @@ export function extractTextFromContent(content: unknown[]): string {
   return s.trim()
 }
 
-export type ImRemoteAgentResult = { summary: string; pendingConfirm: boolean; ok: boolean }
+export type ImRemoteAgentResult = { summary: string; pendingConfirm: boolean; ok: boolean; outcome?: 'cancelled' | 'timed-out' }
 
 export async function runImRemoteAgent(args: {
   db: AppDatabase
@@ -65,6 +66,7 @@ export async function runImRemoteAgent(args: {
   logSensitiveBlocked?: () => void
   logDone?: (result: ImRemoteAgentResult & { error?: string }) => void
   logError?: (error: string) => void
+  emitFactEvent?: (event: AssistantFactEvent) => void
 }): Promise<ImRemoteAgentResult> {
   const requestId = args.requestId
   const sender = args.getMainWebContents()
@@ -144,11 +146,12 @@ export async function runImRemoteAgent(args: {
       remoteContext: args.remoteContext,
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
+      ,emitFactEvent: args.emitFactEvent
     })
 
     if (!res.ok) {
       const pending = res.error.includes('确认')
-      const result = { summary: res.error, pendingConfirm: pending, ok: false as const }
+      const result = { summary: res.error, pendingConfirm: pending, ok: false as const, ...(res.cancelled ? { outcome: 'cancelled' as const } : {}) }
       args.logDone?.({ ...result, error: res.error })
       return result
     }

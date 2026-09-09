@@ -2,10 +2,9 @@ import type { IpcMain, WebContents } from 'electron'
 import { safeWebContentsSend } from './safeWebContentsSend'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
-import { signalChatCancel } from './chatCancelRegistry'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import type { AgentLogFields } from './agentLogger/types'
-import type { AppDatabase } from './database'
+import { getTurnContext, getPersistedTurn, type AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { runToolChatSession } from './toolChatLoop'
 import { isAppLocale } from '../src/shared/locale'
@@ -20,6 +19,8 @@ import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
 import { mayBuildMcpToolSnapshot } from './mcp/mcpToolRegistry'
 import { listProfiles } from './mcp/mcpConfigStore'
 import type { Message } from '../src/shared/domainTypes'
+import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assistantFactAggregator'
+import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
@@ -36,6 +37,8 @@ export type ClaudeStreamDeps = {
   getProjectMemoryEnabled?: () => boolean
   getBrowserDetectContext: () => import('../src/shared/browserTypes').BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
+  emitFactEvent?: (requestId: string, event: AssistantFactEvent) => void
+  turnRuntime?: TurnRuntime
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -47,15 +50,26 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-type ClaudeChatCreateWithToolsPayload = {
+export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string): { messages: Message[]; currentUserMessageId: string; executionConfig?: TurnExecutionConfig } {
+  const persisted = getPersistedTurn(db, turnId)
+  if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
+    throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
+  }
+  if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
+  if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
+  const messages = getTurnContext(db, sessionId, persisted.contextBoundarySequence, persisted.userMessageId, persisted.excludeMessageIds ?? [])
+  return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}) }
+}
+
+export type ClaudeChatCreateWithToolsPayload = {
   requestId: string
+  /** 迁移到统一 turn runtime 时由 prepare 返回；legacy 调用方可省略。 */
+  turnId?: string
+  turnStartToken?: string
   sessionId: string
-  model: string
+  model?: string
   baseUrl?: string
   llmServiceId?: string
-  sourceMessages?: Message[]
-  currentUserMessageId?: string
-  messages?: ClaudeChatMessageWithContentBlocks[]
   system?: string
   options?: {
     maxTokens?: number
@@ -148,11 +162,15 @@ function assertValidClaudeContentBlocks(
 
 export function normalizeAndValidateClaudeMessagesWithContentBlocks(
   messages: unknown,
-  logContext?: { sessionId?: string }
+  logContext?: { sessionId?: string; requiredUserMessageId?: string }
 ): ClaudeChatMessageWithContentBlocks[] {
   if (!Array.isArray(messages)) throw new Error('Invalid messages')
 
-  const trimmed = trimClaudeToolChatMessages(messages as ClaudeChatMessageWithContentBlocks[], MAX_CHAT_API_MESSAGES)
+  const trimmed = trimClaudeToolChatMessages(
+    messages as ClaudeChatMessageWithContentBlocks[],
+    MAX_CHAT_API_MESSAGES,
+    logContext?.requiredUserMessageId
+  )
   const { messages: paired, report } = ensureToolResultPairing(trimmed)
   if (report.repaired) {
     logAgentEvent('warn', 'tool.result.pairing.repaired', sanitizeForLog({
@@ -181,43 +199,49 @@ export function normalizeAndValidateClaudeMessagesWithContentBlocks(
   })
 }
 
-export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): void {
-  ipcMain.handle(
-    'claude-chat-create-with-tools',
-    async (event, payload: ClaudeChatCreateWithToolsPayload) => {
-      const sender = event.sender
+export type ClaudeTurnExecution = (
+  sender: WebContents,
+  payload: ClaudeChatCreateWithToolsPayload
+) => Promise<unknown>
+
+export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): ClaudeTurnExecution {
+  const executeClaudeRequest: ClaudeTurnExecution = async (sender, payload) => {
       let requestId = ''
       try {
         requestId = assertValidRequestId(payload.requestId)
+        const turnId = typeof payload.turnId === 'string' ? payload.turnId.trim() : ''
+        const turnStartToken = typeof payload.turnStartToken === 'string' ? payload.turnStartToken : ''
+        if (deps.turnRuntime && turnId && turnStartToken) {
+          deps.turnRuntime.bindRequest(requestId, turnId)
+        }
         const sessionId = typeof payload.sessionId === 'string' && payload.sessionId.trim().length > 0 ? payload.sessionId : ''
         if (!sessionId) throw new Error('Invalid sessionId')
-        const model = assertValidModel(payload.model)
-        const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(payload.baseUrl)
-        const llmServiceId = typeof payload.llmServiceId === 'string' ? payload.llmServiceId.trim() : undefined
         const db = deps.getAppDatabase()
+        if (!deps.turnRuntime || !turnId || !turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
+        const authoritative = loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken)
+        const frozen = authoritative.executionConfig
+        if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
+        const model = assertValidModel(frozen.model ?? '')
+        const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(frozen.baseUrl)
+        const llmServiceId = frozen.llmServiceId
         const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
         const baseUrl = baseUrlFromPayload ?? creds.baseUrl
         const getApiKey = creds.error ? deps.getApiKey : creds.getApiKey
         const userDataDir = deps.getUserDataPath()
-        const currentUserMessageId =
-          typeof payload.currentUserMessageId === 'string' ? payload.currentUserMessageId.trim() : ''
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
-        if (Array.isArray(payload.sourceMessages) && payload.sourceMessages.length > 0 && currentUserMessageId) {
-          builtMessages = await buildToolChatMessagesFromSource({
-            userDataDir,
-            sourceMessages: payload.sourceMessages,
-            currentUserMessageId,
-            sessionId
-          })
-        } else if (Array.isArray(payload.messages)) {
-          builtMessages = payload.messages
-        } else {
-          throw new Error('Invalid messages payload')
-        }
-        const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, { sessionId })
-        const hasImageAttachments = Array.isArray(payload.sourceMessages)
-          ? historyHasImageAttachments(payload.sourceMessages)
-          : false
+        const persistedMessages = authoritative.messages
+        builtMessages = await buildToolChatMessagesFromSource({
+          userDataDir,
+          sourceMessages: persistedMessages,
+          currentUserMessageId: authoritative.currentUserMessageId,
+          sessionId
+        })
+        const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, {
+          sessionId,
+          requiredUserMessageId: authoritative.currentUserMessageId
+        })
+        const hasImageAttachments = historyHasImageAttachments(persistedMessages)
+        const localeCandidate = frozen.locale
 
         const builtinCandidates = filterBuiltinToolsForApi(
           deps.getToolsConfig(),
@@ -237,11 +261,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           model,
           baseUrl,
           messages,
-          system: payload.system,
-          locale:
-            typeof payload.locale === 'string' && isAppLocale(payload.locale) ? payload.locale : undefined,
-          projectMemoryEnabled: payload.projectMemoryEnabled,
-          options: payload.options,
+          system: frozen.system,
+          locale: typeof localeCandidate === 'string' && isAppLocale(localeCandidate) ? localeCandidate : undefined,
+          projectMemoryEnabled: frozen.projectMemoryEnabled,
+          options: { maxTokens: frozen.maxTokens, enableThinking: frozen.enableThinking },
           toolsConfig: deps.getToolsConfig(),
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
@@ -250,10 +273,24 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),
-          currentUserMessageId: currentUserMessageId || undefined,
+          currentUserMessageId: authoritative.currentUserMessageId,
           hasImageAttachments,
           getBrowserDetectContext: deps.getBrowserDetectContext,
           floatingNotificationManager: deps.floatingNotificationManager
+          ,emitFactEvent: (fact) => {
+            if (deps.turnRuntime) {
+              // source terminal 由 executeTurn 适配器统一发出；tool loop 的 legacy
+              // terminal 事件不能与 Coordinator 的 finalize 竞争。
+              if (fact.type === 'source-completed' || fact.type === 'source-failed' || fact.type === 'source-cancelled' || fact.type === 'source-timeout') return
+              try {
+                deps.turnRuntime.consumeForRequest(requestId, fact)
+                return
+              } catch {
+                // 未迁移请求仍走 legacy callback，避免切换期间丢失 stream 事件。
+              }
+            }
+            deps.emitFactEvent?.(requestId, fact)
+          }
         })
 
         if (!res.ok) {
@@ -263,11 +300,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             model,
             error: res.error
           })
-          safeWebContentsSend(sender,'claude-chat-error', { requestId, message: res.error })
           return res
         }
-
-        safeWebContentsSend(sender,'claude-chat-done', { requestId })
 
         return {
           ok: true as const,
@@ -284,15 +318,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           error: message,
           stack: err instanceof Error ? err.stack : undefined
         })
-        if (requestId) safeWebContentsSend(sender,'claude-chat-error', { requestId, message })
         return { ok: false as const, error: message }
       }
-    }
-  )
+  }
 
-  ipcMain.handle('claude-chat-cancel', async (_event, payload: { requestId: string }): Promise<void> => {
-    const requestId = assertValidRequestId(payload.requestId)
-    signalChatCancel(requestId)
-    deps.floatingNotificationManager?.onAllCancelledForRequest(requestId)
-  })
+  return executeClaudeRequest
 }

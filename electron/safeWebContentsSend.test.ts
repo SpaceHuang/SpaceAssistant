@@ -8,7 +8,7 @@ describe('safeWebContentsSend', () => {
       send: vi.fn()
     }
     expect(isWebContentsAlive(sender as never)).toBe(false)
-    expect(safeWebContentsSend(sender as never, 'claude-chat-done', { requestId: 'r1' })).toBe(false)
+    expect(safeWebContentsSend(sender as never, 'app:notification', { requestId: 'r1' })).toBe(false)
     expect(sender.send).not.toHaveBeenCalled()
   })
 
@@ -17,8 +17,8 @@ describe('safeWebContentsSend', () => {
       isDestroyed: () => false,
       send: vi.fn()
     }
-    expect(safeWebContentsSend(sender as never, 'claude-chat-error', { requestId: 'r1', message: 'x' })).toBe(true)
-    expect(sender.send).toHaveBeenCalledWith('claude-chat-error', { requestId: 'r1', message: 'x' })
+    expect(safeWebContentsSend(sender as never, 'app:notification', { requestId: 'r1', message: 'x' })).toBe(true)
+    expect(sender.send).toHaveBeenCalledWith('app:notification', { requestId: 'r1', message: 'x' })
   })
 
   it('returns false when send throws', () => {
@@ -28,6 +28,6 @@ describe('safeWebContentsSend', () => {
         throw new Error('Object has been destroyed')
       })
     }
-    expect(safeWebContentsSend(sender as never, 'tool:progress', {})).toBe(false)
+    expect(safeWebContentsSend(sender as never, 'app:notification', {})).toBe(false)
   })
 })

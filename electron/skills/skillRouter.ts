@@ -173,6 +173,7 @@ export async function routeSkills(args: {
   baseUrl?: string
   getApiKey: () => Promise<string | null>
   sessionId?: string
+  signal?: AbortSignal
 }): Promise<SkillRouteResult> {
   const start = Date.now()
   const routingRequestId = crypto.randomUUID()
@@ -186,7 +187,8 @@ export async function routeSkills(args: {
     model,
     baseUrl,
     getApiKey,
-    sessionId
+    sessionId,
+    signal
   } = args
 
   const routing = config.routing
@@ -231,6 +233,9 @@ export async function routeSkills(args: {
       inFlightBySession.set(sessionKey, controller)
       const timeoutMs = routing.timeoutMs ?? 15000
       const timer = setTimeout(() => controller.abort(), timeoutMs)
+      const abortRouting = () => controller.abort()
+      signal?.addEventListener('abort', abortRouting, { once: true })
+      if (signal?.aborted) controller.abort()
 
       try {
         const client = createAnthropicClient(apiKey, baseUrl)
@@ -258,6 +263,7 @@ export async function routeSkills(args: {
           applyLlmRecommendations({ scored, llmRecommended, available, excluded })
         }
       } catch (e) {
+        if (signal?.aborted) throw e
         routingFailed = true
         routingError = e instanceof Error ? e.name === 'AbortError' ? 'timeout' : e.message : String(e)
         logAgentEvent('warn', 'skills.route.error', {
@@ -268,6 +274,7 @@ export async function routeSkills(args: {
         })
       } finally {
         clearTimeout(timer)
+        signal?.removeEventListener('abort', abortRouting)
         if (inFlightBySession.get(sessionKey) === controller) inFlightBySession.delete(sessionKey)
       }
     }

@@ -30,6 +30,14 @@ describe('chatSlice', () => {
     expect(completed.runningSessions['s1']).toBeUndefined()
   })
 
+  it('保留 prepare 返回的 turnId，且 reducer 不访问未解构变量', () => {
+    const state = chatReducer(
+      undefined,
+      setChatStatus({ status: 'streaming', requestId: 'req-1', sessionId: 's1', turnId: 'turn-1' })
+    )
+    expect(state.runningSessions['s1']?.turnId).toBe('turn-1')
+  })
+
   it('supports multiple concurrent running sessions', () => {
     let s = chatReducer(undefined, setChatStatus({ status: 'streaming', requestId: 'r1', sessionId: 'a' }))
     s = chatReducer(s, setChatStatus({ status: 'streaming', requestId: 'r2', sessionId: 'b' }))

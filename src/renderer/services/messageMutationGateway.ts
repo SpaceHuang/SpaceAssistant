@@ -5,6 +5,7 @@ import {
   ackApiContextMessagePersisted,
   getApiContextOverlaySnapshot,
   removeApiContextMessage,
+  routeAddApiContextMessageOptimistic,
   routeAddApiContextMessage,
   routePatchApiContextMessage
 } from './apiContextService'
@@ -13,7 +14,7 @@ import {
   summarizeContextMessage,
   upsertContextSummaryOverride
 } from './contextHistorySummaryService'
-import { routeAddMessage, removeLiveMessage } from './chatRunnerService'
+import { routeAddMessage, removeLiveMessage, routePatchMessage } from './chatRunnerService'
 import { store } from '../store'
 import {
   ackDisplayMessagePersisted,
@@ -34,6 +35,7 @@ export type SendContextIntent =
       kind: 'reuse-user'
       currentUser: ApiContextEntry
       excludeMessageIds?: string[]
+      requestId?: string
     }
 
 /**
@@ -57,7 +59,7 @@ export async function commitMessagePatch(args: {
     >
   >
 }): Promise<PersistedMessageEntry> {
-  const entry = await window.api.chatPatchMessage({
+  const entry = await window.api.messagePatchNonTurn({
     messageId: args.messageId,
     sessionId: args.sessionId,
     patch: args.patch
@@ -115,17 +117,54 @@ export async function commitMessageDelete(args: {
  */
 export async function prepareSendContext(
   sessionId: string,
-  intent: SendContextIntent
+  intent: SendContextIntent,
+  requestId = crypto.randomUUID()
 ): Promise<ApiContextRequest> {
   if (intent.kind === 'reuse-user') {
     const { currentUser, excludeMessageIds } = intent
-    if (currentUser.message.role !== 'user' || currentUser.message.status !== 'sent') {
-      throw new Error('prepareSendContext reuse-user requires sent user')
+    if (currentUser.message.role !== 'user' || (currentUser.message.status !== 'sent' && currentUser.message.status !== 'queued')) {
+      throw new Error('prepareSendContext reuse-user requires sent or queued user')
     }
+    const prepared = await window.api.chatPrepareTurn({
+      mode: 'reuse-user',
+      requestId,
+      sessionId,
+      userMessageId: currentUser.message.id,
+      excludeMessageIds: excludeMessageIds ?? [],
+      config: {}
+    })
+    if (!prepared?.userMessage) throw new Error('CORE_PREPARE_TURN_REQUIRED')
+    const user = prepared.userMessage
+    const displayHasUser = store.getState().chat.displayEntries.some(
+      (entry) => entry.message.id === user.id
+    )
+    if (displayHasUser) {
+      routePatchMessage(sessionId, user.id, user)
+    } else {
+      routeAddMessage(sessionId, user)
+    }
+    store.dispatch(patchDisplayMessage({
+      id: user.id,
+      patch: user,
+      order: currentUser.order
+    }))
+    const overlayHasUser = getApiContextOverlaySnapshot(sessionId).some(
+      (entry) => entry.message.id === user.id
+    )
+    if (overlayHasUser) {
+      routePatchApiContextMessage(sessionId, user.id, user)
+    } else {
+      routeAddApiContextMessage({ message: user, order: currentUser.order })
+    }
+    const sequence = await window.api.chatGetMessageSequence({ sessionId, messageId: user.id })
     return {
       sessionId,
-      requiredCurrentUser: currentUser,
-      excludeMessageIds
+      requiredCurrentUser: {
+        message: user,
+        order: { kind: 'persisted', sequence: sequence ?? (currentUser.order.kind === 'persisted' ? currentUser.order.sequence : 0) }
+      },
+      excludeMessageIds,
+      coordinatorTurn: prepared
     }
   }
 
@@ -140,22 +179,29 @@ export async function prepareSendContext(
     schemaVersion: CURRENT_SCHEMA_VERSION
   }
 
-  // routeAddMessage：display + API overlay 同路径；ordinal 由 API overlay 分配
-  routeAddMessage(sessionId, userMsg)
-  const overlayEntry = getApiContextOverlaySnapshot(sessionId).find((e) => e.message.id === userMsg.id)
-  const order = overlayEntry?.order ?? { kind: 'optimistic' as const, ordinal: 0 }
-  upsertContextSummaryOverride(sessionId, summarizeContextMessage(userMsg, order))
-
-  const ack = await window.api.chatAppendMessage(userMsg)
-  ackApiContextMessagePersisted(ack, sessionId)
-  store.dispatch(ackDisplayMessagePersisted({ messageId: ack.messageId, sequence: ack.sequence }))
-  ackContextSummaryPersisted(sessionId, ack.messageId, ack.sequence)
-
+  const prepared = await window.api.chatPrepareTurn({
+    mode: 'create-user',
+    requestId,
+    sessionId,
+    input: { text: userMsg.content, attachments: userMsg.attachments },
+    config: {}
+  })
+  if (!prepared?.userMessage) {
+    throw new Error('CORE_PREPARE_TURN_REQUIRED')
+  }
+  const user = prepared.userMessage
+  routeAddMessage(sessionId, user)
+  routeAddApiContextMessageOptimistic(user)
+  upsertContextSummaryOverride(sessionId, summarizeContextMessage(user, { kind: 'optimistic', ordinal: 0 }))
+  const sequence = await window.api.chatGetMessageSequence({ sessionId, messageId: user.id })
+  if (sequence != null) {
+    ackApiContextMessagePersisted({ messageId: user.id, sequence }, sessionId)
+    ackContextSummaryPersisted(sessionId, user.id, sequence)
+    store.dispatch(ackDisplayMessagePersisted({ messageId: user.id, sequence }))
+  }
   return {
     sessionId,
-    requiredCurrentUser: {
-      message: userMsg,
-      order: { kind: 'persisted', sequence: ack.sequence }
-    }
+    requiredCurrentUser: { message: user, order: { kind: 'persisted', sequence: sequence ?? 0 } },
+    coordinatorTurn: prepared
   }
 }

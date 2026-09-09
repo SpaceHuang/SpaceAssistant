@@ -1,6 +1,5 @@
 import { randomUUID } from 'crypto'
 import type { AppDatabase } from '../database'
-import { appendMessage, updateMessageContent } from '../database'
 import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { FeishuConfig, FeishuInboundMessage, WorkDirProfile } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
@@ -16,6 +15,7 @@ import { clearRemoteProgressSession } from '../remote/remoteProgressStore'
 import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
+import type { TurnRuntime } from '../turnRuntime'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
@@ -34,6 +34,8 @@ import { bindSessionWorkDir, SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
 import { FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
+import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
+import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import {
   maskOpenId,
   parseFeishuBindProtocol,
@@ -91,6 +93,7 @@ export type RemoteCommandRouterDeps = {
   getBrowserConfig?: () => import('../../src/shared/domainTypes').BrowserConfig
   getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
   getShellConfig?: () => import('../../src/shared/domainTypes').ShellConfig
+  turnRuntime?: TurnRuntime
 }
 
 export class RemoteCommandRouter {
@@ -597,14 +600,6 @@ export class RemoteCommandRouter {
           }
         }
 
-        appendMessage(this.deps.db, {
-          id: randomUUID(),
-          sessionId,
-          role: 'user',
-          content,
-          timestamp: Date.now(),
-          status: 'sent'
-        })
         touchRemoteSessionActivity(this.deps.db, sessionId)
 
         if (isNew || config.remoteNotifyOnReceive) {
@@ -663,18 +658,16 @@ export class RemoteCommandRouter {
           }
         }
 
-        const assistantMessageId = randomUUID()
-        const assistantTimestamp = Date.now()
-        appendMessage(this.deps.db, {
-          id: assistantMessageId,
+        const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, sessionId, 'feishu')
+        const prepared = this.deps.turnRuntime?.prepare({
+          mode: 'create-user',
+          requestId,
           sessionId,
-          role: 'assistant',
-          content: '',
-          timestamp: assistantTimestamp,
-          status: 'streaming',
-          schemaVersion: CURRENT_SCHEMA_VERSION
+          input: { text: content },
+          config: executionConfig
         })
-        wc?.send('feishu:remote-agent-start', { sessionId, assistantMessageId, requestId })
+        if (!prepared) throw new Error('REMOTE_TURN_PREPARE_REQUIRED')
+        const assistantMessageId = prepared.assistantMessage.id
 
         const remoteContext = {
           source: 'feishu' as const,
@@ -700,7 +693,11 @@ export class RemoteCommandRouter {
 
         let result: Awaited<ReturnType<typeof runFeishuRemoteAgent>>
         try {
-          result = await runFeishuRemoteAgent({
+          result = await executeRemoteTurn({
+            runtime: this.deps.turnRuntime,
+            prepared,
+            requestId,
+            run: () => runFeishuRemoteAgent({
             db: this.deps.db,
             sessionId,
             userMessage: content,
@@ -720,7 +717,12 @@ export class RemoteCommandRouter {
             getWikiConfig: this.deps.getWikiConfig,
             getShellConfig: this.deps.getShellConfig,
             userDataDir: this.deps.getUserDataPath(),
-            remoteContext
+            remoteContext,
+            emitFactEvent: this.deps.turnRuntime && prepared ? (event) => {
+              if (event.type === 'source-completed' || event.type === 'source-failed' || event.type === 'source-cancelled' || event.type === 'source-timeout') return
+              this.deps.turnRuntime!.consumeForRequest(requestId, event)
+            } : undefined
+            })
           })
         } catch (e) {
           const err = e instanceof Error ? e.message : String(e)
@@ -733,26 +735,10 @@ export class RemoteCommandRouter {
 
         await claimFinalizer.complete(result.ok ? 'ok' : 'failed')
 
-        // Completion (agent-done payload -> renderer DB patch + backup), progress cleanup, audit
-        // and pending-confirm all key off the *origin* session, which owns the assistant message
-        // and tool-call state for this request. Only IM continuation (outbound reply + activity
-        // touch) follows `outboundSessionId`, which may have moved via switch_session.
+        // Completion and tool state are owned by TurnRuntime; only IM continuation follows
+        // `outboundSessionId`, which may have moved via switch_session.
         const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
-        if (wc) {
-          wc.send('feishu:agent-done', {
-            sessionId,
-            messageId: assistantMessageId,
-            requestId,
-            ok: result.ok,
-            summary: result.summary
-          })
-        } else {
-          updateMessageContent(this.deps.db, assistantMessageId, {
-            content: result.summary,
-            status: result.ok ? 'completed' : 'failed'
-          })
-          touchRemoteSessionActivity(this.deps.db, outboundSessionId)
-        }
+        touchRemoteSessionActivity(this.deps.db, outboundSessionId)
 
         await sendFeishuRemoteOutbound({
           runner: this.deps.runner,

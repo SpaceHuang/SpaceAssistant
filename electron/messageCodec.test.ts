@@ -60,4 +60,13 @@ describe('deserializeToolCallsFromDb', () => {
     expect(restored![0]!.toolName).toBe('mcp_github_create_issue_12345678')
     expect(restored![0]!.result).toEqual({ success: true, data: { ok: true } })
   })
+
+  it('round-trips shell process identity for restart orphan cleanup', () => {
+    const call = {
+      id: 't-shell', toolName: 'run_shell', input: { command: 'sleep 30' }, status: 'executing' as const,
+      riskLevel: 'high' as const, processPid: 4321, processGroupId: 4321, processOwnerToken: 'request:t-shell'
+    }
+    const restored = deserializeToolCallsFromDb(serializeToolCallsForDb([call]))
+    expect(restored?.[0]).toMatchObject({ processPid: 4321, processGroupId: 4321, processOwnerToken: 'request:t-shell' })
+  })
 })

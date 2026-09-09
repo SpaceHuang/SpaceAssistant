@@ -39,7 +39,7 @@ export function waitForToolConfirm(
       ...(memoryTiers?.length
         ? { memoryKeys: new Set(memoryTiers.map((t) => canonicalKeyJson(t.key))) }
         : {}),
-      ...(scope ? { toolName: scope.toolName, lane: scope.lane } : {})
+      ...(scope ? { toolName: scope.toolName, lane: scope.lane } : {}),
       ...(memoryTiers?.length ? { memoryTiers: memoryTiers.map((tier) => ({ ...tier })) } : {})
     })
   })

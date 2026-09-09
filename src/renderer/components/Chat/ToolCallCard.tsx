@@ -217,40 +217,42 @@ export function ToolCallCard({
   }, [focus])
 
   useEffect(() => {
+    // 搜索定位是一次明确的用户意图，不能被下面按工具状态的自动收起规则覆盖。
+    if (focus) return
     if (fileWriteTool) {
       if (record.status === 'confirming') {
-        setExpanded(true)
+        setExpanded((prev) => (prev ? prev : true))
         return
       }
       if (record.status === 'completed' || record.status === 'executing') {
-        setExpanded(false)
+        setExpanded((prev) => (prev ? false : prev))
         return
       }
       if (isFailed) {
-        setExpanded(true)
+        setExpanded((prev) => (prev ? prev : true))
       }
       return
     }
     if (fileTool && record.status === 'completed') {
-      setExpanded(false)
+      setExpanded((prev) => (prev ? false : prev))
       return
     }
     if (isBrowserListRowCollapsed(record)) {
-      setExpanded(false)
+      setExpanded((prev) => (prev ? false : prev))
       return
     }
     if (shouldCollapseBrowserDetectRow(record)) {
-      setExpanded(false)
+      setExpanded((prev) => (prev ? false : prev))
       return
     }
     if (record.status === 'confirming' || isFailed) {
-      setExpanded(true)
+      setExpanded((prev) => (prev ? prev : true))
       return
     }
     if (shouldAutoExpandExecuting(record)) {
-      setExpanded(true)
+      setExpanded((prev) => (prev ? prev : true))
     }
-  }, [fileTool, fileWriteTool, isFailed, record.status, record.toolName, record.input, record.result?.data, record.progressOutput, record.progressOutputRaw])
+  }, [focus, fileTool, fileWriteTool, isFailed, record.status, record.toolName, record.progressOutput, record.progressOutputRaw])
 
   const showDetail =
     (expanded ||

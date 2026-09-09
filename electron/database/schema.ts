@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 4
+export const DB_SCHEMA_VERSION = 13
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -64,6 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, sequ
 CREATE INDEX IF NOT EXISTS idx_messages_content ON messages(content);
 CREATE INDEX IF NOT EXISTS idx_sessions_work_dir_profile ON sessions(work_dir_profile_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
+
 `
 
 /**
@@ -93,6 +94,70 @@ CREATE TABLE IF NOT EXISTS policy_rules (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+`
+
+export const MIGRATION_V5_TURN_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS turns (
+  turn_id TEXT PRIMARY KEY NOT NULL,
+  request_id TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  assistant_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  state TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(session_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_turns_session_state ON turns(session_id, state);
+`
+
+export const MIGRATION_V6_TURN_CHECKPOINT_SQL = `
+ALTER TABLE turns ADD COLUMN user_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL;
+ALTER TABLE turns ADD COLUMN context_boundary_sequence INTEGER;
+ALTER TABLE turns ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE turns ADD COLUMN outcome TEXT;
+ALTER TABLE turns ADD COLUMN usage_json TEXT;
+`
+
+export const MIGRATION_V7_QUEUE_RECEIPT_SQL = `
+CREATE TABLE IF NOT EXISTS queue_input_requests (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  request_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  queued_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  turn_id TEXT REFERENCES turns(turn_id) ON DELETE SET NULL,
+  state TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_queue_input_requests_message ON queue_input_requests(queued_message_id);
+`
+
+export const MIGRATION_V8_TURN_START_TOKEN_SQL = `
+ALTER TABLE turns ADD COLUMN start_token TEXT;
+`
+
+export const MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL = `
+ALTER TABLE turns ADD COLUMN error_json TEXT;
+ALTER TABLE turns ADD COLUMN intent_fingerprint TEXT;
+`
+
+export const MIGRATION_V10_TURN_TERMINAL_USAGE_SQL = `
+ALTER TABLE turns ADD COLUMN terminal_usage_json TEXT;
+`
+
+export const MIGRATION_V11_TURN_CONTEXT_SQL = `
+ALTER TABLE turns ADD COLUMN exclude_message_ids_json TEXT NOT NULL DEFAULT '[]';
+`
+
+export const MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL = `
+ALTER TABLE turns ADD COLUMN execution_config_json TEXT;
+`
+
+/** 路由上下文的 assistant 资格及 user 锚点查询均按 session 关联 turn。 */
+export const MIGRATION_V13_TURN_ROUTING_INDEXES_SQL = `
+CREATE INDEX IF NOT EXISTS idx_turns_session_assistant_state
+  ON turns(session_id, assistant_message_id, state);
 `
 
 export const SCHEMA_META_KEYS = {

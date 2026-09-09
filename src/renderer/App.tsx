@@ -13,9 +13,7 @@ import { collectToWiki } from './services/wikiImportService'
 import { ensureWorkDirForSession } from './services/workDirSessionSync'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
-import { initFeishuRemoteStreamBridge } from './services/feishuRemoteStreamService'
-import { initWeChatRemoteStreamBridge } from './services/wechatRemoteStreamService'
-import { initContextUsageStreamBridge } from './services/contextUsageStreamService'
+import { initTurnProjectionBridge } from './services/turnProjectionService'
 import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchService'
 import { initConfirmStores } from './services/confirmStoresInit'
 import { initToolExposure } from './services/toolExposureService'
@@ -169,17 +167,13 @@ function AppShellInner() {
     const offTitle = window.api.sessionOnTitleGenerated(({ session }) => {
       dispatch(upsertSession(session))
     })
-    const offFeishuStream = initFeishuRemoteStreamBridge()
-    const offWeChatStream = initWeChatRemoteStreamBridge()
-    const offContextUsage = initContextUsageStreamBridge()
+    const offTurnProjection = initTurnProjectionBridge()
     const offRemoteSessionSwitch = initRemoteSessionSwitchBridge()
     return () => {
       off1()
       off2()
       offTitle()
-      offFeishuStream()
-      offWeChatStream()
-      offContextUsage()
+      offTurnProjection()
       offRemoteSessionSwitch()
       offToolExposure()
     }

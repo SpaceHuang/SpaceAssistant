@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { ToolCallCard } from './ToolCallCard'
 
@@ -27,6 +27,27 @@ function writeRecord(status: ToolCallRecord['status'], extra: Partial<ToolCallRe
 }
 
 describe('ToolCallCard file write expand behavior', () => {
+  it('does not let automatic collapse fight search focus', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-focus',
+          toolName: 'run_shell',
+          input: { command: 'echo hello' },
+          status: 'completed',
+          riskLevel: 'low',
+          result: { success: true },
+          completedAt: Date.now()
+        }}
+        confirmMode="direct"
+        focus
+      />
+    )
+    await waitFor(() => expect(document.querySelector('.tool-row--expanded')).not.toBeNull())
+  })
+
   it('shows write confirm card with icon actions while confirming', () => {
     render(
       <ToolCallCard

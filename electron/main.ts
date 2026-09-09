@@ -3,7 +3,7 @@ import http from 'http'
 import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
-import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
@@ -21,9 +21,15 @@ import {
   registerWeChatIpcHandlers,
   shutdownWeChatServices
 } from './wechat/weChatIpc'
-import { getConfigValue, getDefaultDbPath, openDatabase, setConfigValue } from './database'
+import { getConfigValue, getDefaultDbPath, getMessage, listPersistedTurns, openDatabase, setConfigValue } from './database'
+import { randomUUID } from 'node:crypto'
+import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
+import { TurnRuntime } from './turnRuntime'
+import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
+import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
+import { cleanupPersistedOrphansOnStartup } from './shell/startupOrphanCleanup'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
@@ -196,7 +202,7 @@ export async function createMainWindow(): Promise<void> {
   win.on('restore', () => floatingManager?.onMainWindowRestore())
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const gotLock = app.requestSingleInstanceLock()
   if (!gotLock) {
     app.quit()
@@ -221,7 +227,14 @@ app.whenReady().then(() => {
     return
   }
   appDb = db
-  cleanupStreamingResiduesOnStartup(db)
+  // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
+  // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
+  await cleanupPersistedOrphansOnStartup({
+    listTurns: () => listPersistedTurns(db),
+    getMessage: (id) => getMessage(db, id),
+    cleanup: cleanupOrphanProcess,
+    audit: ({ turnId, toolUseId, result }) => logAgentEvent('info', 'shell.orphan_cleanup', { turnId, toolUseId, result })
+  })
   try {
     cleanupLegacyWorkspaceLayoutOnStartup(db)
   } catch (err) {
@@ -316,6 +329,17 @@ app.whenReady().then(() => {
   runStartupDecisionCacheCleanup(db)
 
   const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))
+  const turnRuntime = new TurnRuntime({
+    storage: createTurnCoordinatorStorage(db),
+    deps: { now: Date.now, id: randomUUID },
+    onCancel: (turn) => signalChatCancel(turn.requestId),
+    onEvent: (turn, event) => {
+      const { executionConfig: _executionConfig, ...publicTurn } = turn
+      getMainWindow()?.webContents.send('chat:turn-projection', { turn: publicTurn, event })
+    }
+  })
+  // Runtime 已建立后再处理无 turn 的孤儿消息，随后由 appIpc 的同一 recovery 装配继续恢复持久化 turn。
+  cleanupStreamingResiduesOnStartup(db)
 
   const getApiKey = async (): Promise<string | null> => {
     return getActiveLlmService(db).getApiKey()
@@ -342,7 +366,7 @@ app.whenReady().then(() => {
     db
   )
 
-  registerClaudeStreamHandlers(ipcMain, {
+  const executeClaudeRequest = registerClaudeStreamHandlers(ipcMain, {
     getApiKey,
     getWorkDir: () => workDirState,
     resolveWorkDirForSession: (sessionId) => {
@@ -383,8 +407,23 @@ app.whenReady().then(() => {
       appPath: app.getAppPath(),
       devRoot: path.join(__dirname, '..', '..')
     }),
-    floatingNotificationManager: floatingManager
+    floatingNotificationManager: floatingManager,
+    turnRuntime
   })
+
+  const executeTurn = async (sender: Electron.WebContents, payload: ClaudeChatCreateWithToolsPayload) => {
+    if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
+    turnRuntime.bindRequest(payload.requestId, payload.turnId)
+    return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {
+      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown }
+      if (result.ok) {
+        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' })
+        return { outcome: 'completed' as const, usage: result.usage }
+      }
+      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed' })
+      return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
+    })
+  }
 
   registerAppIpcHandlers(ipcMain, {
     db,
@@ -400,12 +439,15 @@ app.whenReady().then(() => {
       appPath: app.getAppPath(),
       devRoot: path.join(__dirname, '..', '..')
     }),
-    floatingNotificationManager: floatingManager
+    floatingNotificationManager: floatingManager,
+    turnRuntime,
+    executeTurn
   })
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
   createFeishuBundle({
     db,
+    turnRuntime,
     getUserDataPath: () => app.getPath('userData'),
     getWorkDir: () => workDirState,
     workDirManager: workDirManager!,
@@ -450,6 +492,7 @@ app.whenReady().then(() => {
   })
   createWeChatBundle({
     db,
+    turnRuntime,
     getUserDataPath: () => app.getPath('userData'),
     getWorkDir: () => workDirState,
     workDirManager: workDirManager!,

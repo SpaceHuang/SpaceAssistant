@@ -127,23 +127,26 @@ export type ClaudeChatMessageWithBlocks = {
 
 export type ClaudeChatCreateWithToolsPayload = {
   requestId: string
+  turnId?: string
+  turnStartToken?: string
   sessionId: string
-  model: string
+  model?: string
   baseUrl?: string
   /** 指定 API 服务 id，主进程据此解析 Key */
   llmServiceId?: string
-  /** 领域消息（含 attachments 元数据，无 base64）；主进程 build */
-  sourceMessages: Message[]
-  /** 本次 invoke 的当轮 user 消息 id */
-  currentUserMessageId: string
-  /** @deprecated 渲染进程预 build；保留类型兼容，主进程不消费 */
-  messages?: ClaudeChatMessageWithBlocks[]
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   projectMemoryEnabled?: boolean
   locale?: AppLocale
   /** P1：临时视觉路由时上下文环分母修正 */
   effectiveModelForUsage?: string
+}
+
+export type TurnExecutePayload = {
+  requestId: string
+  turnId: string
+  turnStartToken: string
+  sessionId: string
 }
 
 export type SpaceAssistantApi = {
@@ -211,6 +214,7 @@ export type SpaceAssistantApi = {
   chatGetNextQueuedMessage: (payload: {
     sessionId: string
   }) => Promise<import('./displayOrder').QueuedMessageEntry | null>
+  chatEnqueueQueuedMessage: (payload: { sessionId: string; requestId: string; content: string; attachments?: ChatImageAttachment[] }) => Promise<{ receipt: unknown; persisted: import('./displayOrder').PersistedMessageAck; duplicate: boolean }>
   chatResolveRetryContext: (payload: {
     sessionId: string
     failedAssistantMessageId: string
@@ -219,8 +223,8 @@ export type SpaceAssistantApi = {
     sessionId: string
     messageId: string
   }) => Promise<number | null>
-  chatAppendMessage: (msg: Message) => Promise<import('./displayOrder').PersistedMessageAck>
-  chatPatchMessage: (payload: {
+  messageAppendNonTurn: (msg: Message) => Promise<import('./displayOrder').PersistedMessageAck>
+  messagePatchNonTurn: (payload: {
     messageId: string
     sessionId: string
     patch: Partial<
@@ -238,6 +242,12 @@ export type SpaceAssistantApi = {
       >
     >
   }) => Promise<{ message: Message; sequence: number } | null>
+  chatPrepareTurn: (intent: import('./assistantFactAggregator').TurnIntent) => Promise<import('./turnCoordinator').TurnStarted>
+  chatExecuteTurn: (payload: TurnExecutePayload) => Promise<{ ok: true; accepted: true; turnId: string }>
+  chatCancelTurn: (turnId: string) => Promise<boolean>
+  chatGetTurnTerminal: (turnId: string) => Promise<import('./assistantFactAggregator').TurnTerminal | undefined>
+  chatListActiveTurns: (payload?: { sessionId?: string }) => Promise<import('./turnCoordinator').TurnStarted[]>
+  chatOnTurnProjection: (cb: (data: { turn: import('./turnCoordinator').TurnStarted; event: import('./assistantFactAggregator').AssistantFactEvent }) => void) => () => void
   chatDeleteQueuedMessage: (payload: {
     messageId: string
     sessionId: string
@@ -258,21 +268,6 @@ export type SpaceAssistantApi = {
     stagingKey: string
     maxBytes?: number
   }) => Promise<{ mimeType: string; dataBase64: string } | { error: string }>
-
-  claudeChatCreateWithTools: (
-    payload: ClaudeChatCreateWithToolsPayload
-  ) => Promise<
-    | { ok: true; content: unknown[]; stopReason: string; usage?: unknown }
-    | { ok: false; error: string; usage?: unknown }
-  >
-  claudeChatOnDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
-  claudeChatOnThinkingDelta: (cb: (data: { requestId: string; text: string }) => void) => () => void
-  claudeChatOnDone: (cb: (data: { requestId: string; usage?: unknown }) => void) => () => void
-  claudeChatOnUsage: (
-    cb: (data: { requestId: string; sessionId: string; usage: SessionUsage; projected?: boolean }) => void
-  ) => () => void
-  claudeChatOnError: (cb: (data: { requestId: string; message: string }) => void) => () => void
-  claudeChatCancel: (payload: { requestId: string }) => Promise<void>
 
   configGet: () => Promise<AppConfig>
   /** exposure 清单：主进程读 DB 按链路求值可见工具名（渲染端薄壳消费，不上行 config）。 */
@@ -393,47 +388,10 @@ export type SpaceAssistantApi = {
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
-  toolOnUse: (cb: (data: { requestId: string; toolUse: { id: string; name: string; input: unknown } }) => void) => () => void
-  toolOnConfirmRequest: (
-    cb: (data: {
-      requestId: string
-      sessionId?: string
-      toolUseId: string
-      toolName: string
-      input: unknown
-      riskLevel: ToolRiskLevel
-      diff?: { oldContent: string; newContent: string; oldPath: string }
-      shellSecurityHints?: ShellSecurityHints
-      autoApproveFallback?: AutoApproveFallback
-      currentPageUrl?: string
-      dangerInfo?: BrowserActDangerInfo
-      sessionTrustedHint?: true
-      mcp?: {
-        serverId: string
-        serverName: string
-        originalToolName: string
-        description: string
-        maskedArgs: Record<string, unknown>
-      }
-    }) => void
-  ) => () => void
-  toolOnProgress: (
-    cb: (data: {
-      requestId: string
-      toolUseId: string
-      status: string
-      message?: string
-      raw?: string
-      seq?: number
-    }) => void
-  ) => () => void
   shellOpenTerminal: (payload: { cwd: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   shellManageTrustedCommands: (
     payload: ShellManageTrustedCommandsAction
   ) => Promise<{ ok: true; commands: TrustedShellCommand[] } | { ok: false; error: string }>
-  toolOnResult: (
-    cb: (data: { requestId: string; toolUseId: string; result: ToolCallResultPersisted }) => void
-  ) => () => void
   toolTestInterpreter: (payload: { path: string }) => Promise<{ ok: true; version: string } | { ok: false; error: string }>
   shellTestExecutable: (payload: {
     executable?: string
@@ -515,19 +473,7 @@ export type SpaceAssistantApi = {
   feishuOnConfigChanged: (cb: (data: { feishu: FeishuConfig }) => void) => () => void
   feishuOnBindTimeout: (cb: () => void) => () => void
   feishuOnInboundMessage: (cb: (data: { sessionId: string; message: unknown }) => void) => () => void
-  feishuOnRemoteAgentStart: (cb: (data: {
-    sessionId: string
-    assistantMessageId: string
-    requestId: string
-  }) => void) => () => void
   feishuOnPendingConfirm: (cb: (data: { sessionId: string; pendingConfirm: boolean }) => void) => () => void
-  feishuOnAgentDone: (cb: (data: {
-    sessionId: string
-    messageId: string
-    requestId: string
-    ok: boolean
-    summary?: string
-  }) => void) => () => void
 
   wechatDetectSdk: () => Promise<WeChatSdkDetectResult>
   wechatLoginStart: (opts?: { force?: boolean }) => Promise<{ ok: boolean; error?: string }>
@@ -546,20 +492,8 @@ export type SpaceAssistantApi = {
   wechatOnQrUrl: (cb: (data: { url: string | null; expired?: boolean }) => void) => () => void
   wechatOnLoginProgress: (cb: (data: { stage: WeChatLoginProgress; code?: string; isRetry?: boolean }) => void) => () => void
   wechatOnInboundMessage: (cb: (data: { sessionId: string; message: unknown }) => void) => () => void
-  wechatOnRemoteAgentStart: (cb: (data: {
-    sessionId: string
-    assistantMessageId: string
-    requestId: string
-  }) => void) => () => void
   wechatOnConfirmRequest: (cb: (data: unknown) => void) => () => void
   wechatOnPendingConfirm: (cb: (data: { count: number }) => void) => () => void
-  wechatOnAgentDone: (cb: (data: {
-    sessionId: string
-    messageId: string
-    requestId: string
-    ok: boolean
-    summary?: string
-  }) => void) => () => void
   wechatOnPollingStats: (cb: (data: unknown) => void) => () => void
 
   workdirList: () => Promise<WorkDirProfile[]>

@@ -13,6 +13,7 @@ export type ChatStatus = 'idle' | 'sending' | 'streaming' | 'completed' | 'error
 
 export type RunningSessionMeta = {
   requestId: string
+  turnId?: string
   status: 'streaming' | 'error'
   updatedAt: number
 }
@@ -184,15 +185,17 @@ export const chatSlice = createSlice({
         error?: string | null
         requestId?: string | null
         sessionId?: string | null
+        turnId?: string
       }>
     ) {
-      const { status, error, requestId, sessionId } = action.payload
+      const { status, error, requestId, sessionId, turnId } = action.payload
       state.chatStatus = status
       state.error = error ?? null
 
       if (status === 'streaming' && sessionId && requestId) {
         state.runningSessions[sessionId] = {
           requestId,
+          ...(turnId ? { turnId } : {}),
           status: 'streaming',
           updatedAt: Date.now()
         }

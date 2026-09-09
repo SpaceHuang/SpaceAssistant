@@ -15,7 +15,12 @@ export type VisionRouteResult =
   | { ok: true; switched: boolean; modelName: string; llmServiceId: string | undefined; displayName: string }
   | { ok: false }
 
-function activeServiceIds(cfg: AppConfig): string[] {
+export type VisionModelConfig = Pick<
+  AppConfig,
+  'models' | 'llmServices' | 'activeLlmServiceIds' | 'activeLlmServiceId' | 'preferredVisionModelId'
+>
+
+function activeServiceIds(cfg: VisionModelConfig): string[] {
   if (cfg.activeLlmServiceIds?.length) return cfg.activeLlmServiceIds
   return cfg.activeLlmServiceId ? [cfg.activeLlmServiceId] : []
 }
@@ -37,7 +42,7 @@ export function findVisionModelOption(
 }
 
 export function resolveVisionModelBinding(
-  cfg: AppConfig,
+  cfg: VisionModelConfig,
   options: ChatModelOption[]
 ): { modelName: string; llmServiceId: string; displayName: string; model: ModelEntry } | null {
   const normalized = cfg.models.map((m) => normalizeModelEntry(m))
@@ -58,13 +63,13 @@ export function resolveVisionModelBinding(
   }
 }
 
-export function listChatModelOptionsFromConfig(cfg: AppConfig): ChatModelOption[] {
+export function listChatModelOptionsFromConfig(cfg: VisionModelConfig): ChatModelOption[] {
   return buildChatModelOptions(cfg.models, cfg.llmServices, activeServiceIds(cfg))
 }
 
 /** 带图发送时的视觉模型路由：已选手动视觉模型时不阻塞；非视觉 session 强制切视觉优选 */
 export function resolveVisionRouteForImageSend(
-  cfg: AppConfig,
+  cfg: VisionModelConfig,
   sessionModelName: string,
   sessionLlmServiceId: string | undefined
 ): VisionRouteResult {

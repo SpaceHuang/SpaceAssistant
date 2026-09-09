@@ -54,7 +54,7 @@ export interface RemoteContext {
 export type FeishuRemoteContext = RemoteContext & { source: 'feishu' }
 export type WeChatRemoteContext = RemoteContext & { source: 'wechat' }
 
-export type ToolProgressPayload = { message?: string; raw?: string; rawDelta?: string; seq?: number }
+export type ToolProgressPayload = { message?: string; raw?: string; rawDelta?: string; seq?: number; processPid?: number; processGroupId?: number; processOwnerToken?: string }
 
 export interface ToolExecutionContext {
   workDir: string

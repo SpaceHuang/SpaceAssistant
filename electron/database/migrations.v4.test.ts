@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { getDbConnection, openSqliteDatabase } from '../database'
 import { getSchemaMeta } from './sqliteStore'
-import { SCHEMA_META_KEYS } from './schema'
+import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 import { DatabaseUpgradeRequiredError, runMigrations } from './migrations'
 
 const V4_TABLES = ['decision_cache', 'policy_rules'] as const
@@ -21,7 +21,7 @@ describe('schema v4 migrations (确认框架表)', () => {
   it('全新库（v1 路径）迁移后落在 v4 并创建 decision_cache / policy_rules', () => {
     const db = openSqliteDatabase(':memory:')
     const conn = getDbConnection(db)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe(String(DB_SCHEMA_VERSION))
     const tables = tableNames(conn)
     expect(tables).toContain('decision_cache')
     expect(tables).toContain('policy_rules')
@@ -44,7 +44,7 @@ describe('schema v4 migrations (确认框架表)', () => {
 
     const db = openSqliteDatabase(dbPath)
     const conn = getDbConnection(db)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe(String(DB_SCHEMA_VERSION))
     expect((conn.prepare('SELECT COUNT(*) AS c FROM configs').get() as { c: number }).c).toBe(1)
     expect(tableNames(conn)).toEqual(expect.arrayContaining([...V4_TABLES]))
     db.close()
@@ -57,7 +57,7 @@ describe('schema v4 migrations (确认框架表)', () => {
     openSqliteDatabase(dbPath).close()
     const second = openSqliteDatabase(dbPath)
     const conn = getDbConnection(second)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe(String(DB_SCHEMA_VERSION))
     expect(tableNames(conn)).toEqual(expect.arrayContaining([...V4_TABLES]))
     second.close()
   })
@@ -69,7 +69,11 @@ describe('schema v4 migrations (确认框架表)', () => {
     const db = openSqliteDatabase(dbPath)
     const conn = getDbConnection(db)
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('4')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe(String(DB_SCHEMA_VERSION))
+
+    const turnColumns = (conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>).map((column) => column.name)
+    expect(turnColumns).toEqual(expect.arrayContaining(['user_message_id', 'context_boundary_sequence', 'version', 'outcome', 'usage_json', 'terminal_usage_json', 'error_json', 'intent_fingerprint']))
+    expect(tableNames(conn)).toContain('queue_input_requests')
     db.close()
   })
 
@@ -85,7 +89,7 @@ describe('schema v4 migrations (确认框架表)', () => {
       CREATE TABLE messages (id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, schema_version INTEGER NOT NULL, timestamp INTEGER NOT NULL, sequence INTEGER NOT NULL);
       CREATE TABLE search_history (id TEXT PRIMARY KEY NOT NULL, query TEXT NOT NULL, timestamp INTEGER NOT NULL);
       CREATE TABLE session_usages (session_id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL);
-      INSERT INTO schema_meta (key, value) VALUES ('schema_version', '7');
+      INSERT INTO schema_meta (key, value) VALUES ('schema_version', '${DB_SCHEMA_VERSION + 1}');
     `)
     future.close()
 

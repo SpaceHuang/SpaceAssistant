@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
-import { appendMessage, updateMessageContent } from '../database'
 import { CURRENT_SCHEMA_VERSION } from '../../src/shared/domainTypes'
 import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
@@ -27,6 +26,9 @@ import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
 import { WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
+import type { TurnRuntime } from '../turnRuntime'
+import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
+import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 
 
 const rateLimiter = createRateLimiter()
@@ -53,6 +55,7 @@ export type WeChatCommandRouterDeps = {
   getBrowserConfig?: () => import('../../src/shared/domainTypes').BrowserConfig
   getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
   getShellConfig?: () => import('../../src/shared/domainTypes').ShellConfig
+  turnRuntime?: TurnRuntime
 }
 
 
@@ -299,14 +302,6 @@ export class WeChatCommandRouter {
           }
         }
 
-        appendMessage(this.deps.db, {
-          id: randomUUID(),
-          sessionId,
-          role: 'user',
-          content: wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content,
-          timestamp: Date.now(),
-          status: 'sent'
-        })
         touchRemoteSessionActivity(this.deps.db, sessionId)
 
         if (config.remoteAckOnReceive && (isNew || config.remoteNotifyOnReceive) && bot) {
@@ -365,17 +360,16 @@ export class WeChatCommandRouter {
           }
         }
 
-        const assistantMessageId = randomUUID()
-        appendMessage(this.deps.db, {
-          id: assistantMessageId,
+        const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, sessionId, 'wechat')
+        const prepared = this.deps.turnRuntime?.prepare({
+          mode: 'create-user',
+          requestId,
           sessionId,
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now(),
-          status: 'streaming',
-          schemaVersion: CURRENT_SCHEMA_VERSION
+          input: { text: wasTruncated ? `${content}\n\n（指令过长，已截断处理）` : content },
+          config: executionConfig
         })
-        wc?.send('wechat:remote-agent-start', { sessionId, assistantMessageId, requestId })
+        if (!prepared) throw new Error('REMOTE_TURN_PREPARE_REQUIRED')
+        const assistantMessageId = prepared.assistantMessage.id
 
         const remoteContext = {
           source: 'wechat' as const,
@@ -401,7 +395,11 @@ export class WeChatCommandRouter {
 
         let result: { summary: string; pendingConfirm: boolean; ok: boolean }
         try {
-          result = await runWeChatRemoteAgent({
+          result = await executeRemoteTurn({
+            runtime: this.deps.turnRuntime,
+            prepared,
+            requestId,
+            run: () => runWeChatRemoteAgent({
             db: this.deps.db,
             sessionId,
             userMessage: content,
@@ -424,6 +422,11 @@ export class WeChatCommandRouter {
             remoteContext,
             inboundRaw,
             userId: msg.userId
+            ,emitFactEvent: this.deps.turnRuntime && prepared ? (event) => {
+              if (event.type === 'source-completed' || event.type === 'source-failed' || event.type === 'source-cancelled' || event.type === 'source-timeout') return
+              this.deps.turnRuntime!.consumeForRequest(requestId, event)
+            } : undefined
+            })
           })
         } catch (e) {
           const err = e instanceof Error ? e.message : String(e)
@@ -438,21 +441,7 @@ export class WeChatCommandRouter {
 
         const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
 
-        if (wc) {
-          wc.send('wechat:agent-done', {
-            sessionId,
-            messageId: assistantMessageId,
-            requestId,
-            ok: result.ok,
-            summary: result.summary
-          })
-        } else {
-          updateMessageContent(this.deps.db, assistantMessageId, {
-            content: result.summary,
-            status: result.ok ? 'completed' : 'failed'
-          })
-          touchRemoteSessionActivity(this.deps.db, outboundSessionId)
-        }
+        touchRemoteSessionActivity(this.deps.db, outboundSessionId)
 
         if (bot && !result.pendingConfirm) {
           await replyWeChatSummary(bot, inboundRaw, result.summary, {
