@@ -12,5 +12,7 @@ describe('WeChatProcessedStore', () => {
     expect(await store.has('m1')).toBe(true)
     await store.mark('m1')
     expect(await store.has('m2')).toBe(false)
+    expect(await fs.readdir(dir)).toContain('wechat-processed-messages.json')
+    await fs.rm(dir, { recursive: true, force: true })
   })
 })

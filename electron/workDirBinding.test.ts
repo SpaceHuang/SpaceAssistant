@@ -169,9 +169,9 @@ describe('workDirBinding', () => {
       expect(result.error).toBe(SENSITIVE_WORKDIR_ERROR)
     })
 
-    it('rejects non-writable directory', async () => {
+    it('rejects non-writable directory', async (ctx) => {
       if (process.platform === 'win32') {
-        return
+        ctx.skip()
       }
       const { db, manager } = setup()
       const added = manager.addProfile({ name: 'Bad', path: path.join(tempDir(), 'missing-nested', 'deep') })

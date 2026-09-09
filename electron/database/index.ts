@@ -88,7 +88,3 @@ export function openDatabase(inputPath: string): AppDatabase {
 export function getDefaultDbPath(userData: string): string {
   return path.join(userData, 'spaceassistant-data.db')
 }
-
-export function getLegacyJsonDbPath(userData: string): string {
-  return path.join(userData, 'spaceassistant-data.json')
-}

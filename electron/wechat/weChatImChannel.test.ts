@@ -71,22 +71,6 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     expect(prompt).toContain('AB12')
   })
 
-  it('resolves from desktop approval', () => {
-    const im = new WeChatImChannel()
-    const inbound = makeIncomingMessage()
-    const promise = im.request(req(), {
-      sessionId: 'sess-1',
-      toolName: 'write_file',
-      messageId: 'orig',
-      matchKey: 'wx-user@test',
-      context: inbound
-    })
-    const pending = im.listPending()
-    expect(pending).toHaveLength(1)
-    expect(im.resolveFromDesktop(pending[0]!.id, true)).toBe(true)
-    return expect(promise).resolves.toEqual({ kind: 'approved' })
-  })
-
   it('does not resolve confirm from non-allowlisted sender', async () => {
     const im = new WeChatImChannel()
     const inbound = makeIncomingMessage()

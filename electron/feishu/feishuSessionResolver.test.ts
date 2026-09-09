@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createSession, openDatabase, updateSession } from '../database'
+import { createSession, getSession, openDatabase } from '../database'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { resolveFeishuSession } from './feishuSessionResolver'
@@ -57,9 +57,10 @@ describe('resolveFeishuSession idle resume', () => {
         remoteSessionLastActivityAt: Date.now() - 3 * 60_000
       }
     })
-    const result = await resolveFeishuSession(db, makeMsg(), config, 'model')
+    const result = await resolveFeishuSession(db, makeMsg({ messageId: 'msg-2' }), config, 'model')
     expect(result.isNew).toBe(false)
     expect(result.sessionId).toBe(existing.id)
+    expect((getSession(db, existing.id)?.metadata as { feishuMessageId?: string }).feishuMessageId).toBe('msg-2')
   })
 
   it('creates new session after idle timeout', async () => {

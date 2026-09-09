@@ -94,6 +94,7 @@ describe('resolveWeChatSession workDirProfileId', () => {
     expect(isNew).toBe(false)
     expect(sessionId).toBe(existing.id)
     expect(getSession(db, sessionId)?.workDirProfileId).toBe(activeProfileId)
+    expect((getSession(db, sessionId)?.metadata as { wechatMessageId?: string }).wechatMessageId).toBe('m2')
   })
 
   it('creates new session after idle timeout', async () => {

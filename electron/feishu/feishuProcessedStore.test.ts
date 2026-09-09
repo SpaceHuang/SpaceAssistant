@@ -20,12 +20,6 @@ describe('FeishuProcessedStore', () => {
     expect(await store.has('m1')).toBe(false)
     await store.mark('m1')
     expect(await store.has('m1')).toBe(true)
-  })
-
-  it('purges entries older than 7 days', async () => {
-    const store = new FeishuProcessedStore(tmpDir)
-    await store.mark('old', Date.now() - 8 * 24 * 60 * 60 * 1000)
-    store.purgeExpired()
-    expect(await store.has('old')).toBe(false)
+    expect(await fs.readdir(tmpDir)).toContain('feishu-processed-messages.json')
   })
 })

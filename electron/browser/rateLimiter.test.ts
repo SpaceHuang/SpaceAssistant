@@ -71,8 +71,10 @@ describe('RateLimiter', () => {
     const limiter = new RateLimiter({ ...baseConfig, perMinute: 1, minIntervalMs: 0 })
     limiter.recordRequest(null)
     const wait = limiter.waitForAvailable(null, new AbortController().signal)
+    expect(limiter.checkLimit(null)).toMatchObject({ limited: true, limitType: 'minute' })
     vi.advanceTimersByTime(60_000)
     await wait
+    expect(limiter.checkLimit(null)).toEqual({ limited: false })
   })
 
   it('waitForAvailable throws timeout when maxWaitSec exceeded', async () => {

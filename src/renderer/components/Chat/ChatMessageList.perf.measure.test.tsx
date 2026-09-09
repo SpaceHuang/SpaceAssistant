@@ -2,7 +2,7 @@
  * 本机性能采集（非 CI 硬断言）：20 vs 500 混合 fixture。
  * 运行：npx vitest run src/renderer/components/Chat/ChatMessageList.perf.measure.test.tsx
  *
- * 产出：docs/develop/chat-message-list-batch1-remeasure-results.json
+ * 产出：PERF_OUTPUT_DIR（默认 docs/develop）/chat-message-list-batch1-remeasure-results.json
  */
 import { describe, expect, it, vi } from 'vitest'
 import { Profiler, useMemo, useState, type ReactNode } from 'react'
@@ -268,7 +268,7 @@ describe('ChatMessageList performance measure (local machine)', () => {
       }
     }
 
-    const outDir = path.resolve(process.cwd(), 'docs/develop')
+    const outDir = path.resolve(process.cwd(), process.env.PERF_OUTPUT_DIR ?? 'docs/develop')
     mkdirSync(outDir, { recursive: true })
     const outFile = path.join(outDir, 'chat-message-list-batch1-remeasure-results.json')
     writeFileSync(outFile, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')

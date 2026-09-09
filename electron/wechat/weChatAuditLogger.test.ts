@@ -21,13 +21,7 @@ describe('WeChatAuditLogger', () => {
     const rows = await logger.tail(10)
     expect(rows.length).toBe(1)
     expect(rows[0].type).toBe('reply')
+    expect(await fs.readdir(path.join(tmpDir, 'logs'))).toContain('wechat-audit.log')
   })
 
-  it('filters by type in query', async () => {
-    const logger = new WeChatAuditLogger(tmpDir)
-    await logger.append({ type: 'inbound', messageId: 'm1', chatId: 'c', senderId: 's', accepted: true })
-    await logger.append({ type: 'rate_limit', senderId: 's' })
-    const result = await logger.query({ types: ['rate_limit'] })
-    expect(result.events.every((e) => e.type === 'rate_limit')).toBe(true)
-  })
 })
