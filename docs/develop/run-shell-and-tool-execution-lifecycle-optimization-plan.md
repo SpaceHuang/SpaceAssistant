@@ -2,7 +2,8 @@
 
 > 方案日期：2026-09-04  
 > 方案范围：通用工具 `plan/execute` 生命周期，以及内置 `run_shell` 从模型工具定义、输入校验、策略门禁、命令分析、Shell 选择、进程执行、取消/超时、输出传输到跨平台测试的完整链路  
-> 文档性质：基于现状代码的架构优化方案，不包含代码实现  
+> 实施状态：**已实现并合入 main**（合并提交 `1f6e794`；本机执行清单见 [run-shell-lifecycle-local-execution-todo.md](../plan/run-shell-lifecycle-local-execution-todo.md)，283/299 完成）。剩余仅为目标机 / 生产验收项：Windows 实机（PowerShell 5.1 / 编码 / 进程树回收 / 打包 smoke）、macOS Intel 与 arm64 CI、提交后 CI matrix、生产方言错配率与渲染端 IPC 洪泛性能。  
+> 文档性质：基于现状代码的架构优化方案；设计已按此实现，本文保留作设计依据。  
 > 主要依据：当前工作区源码与 `docs/requirement/shell-command-tool-requirement.md`
 
 ## 1. 结论摘要
