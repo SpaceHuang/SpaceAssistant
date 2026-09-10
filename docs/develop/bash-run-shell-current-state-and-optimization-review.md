@@ -171,7 +171,7 @@ type ShellProfile = {
 }
 ```
 
-目标态只提供两个内置 profile：macOS 使用系统 Bash，Windows 使用系统内置 Windows PowerShell。Windows profile 固定使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}`；`encodedCommand` 是“UTF-8 输出初始化 prelude + Agent 原始命令”的 UTF-16LE Base64，避免 Windows native argv 对引号、多行和特殊字符再次解释。`Bypass` 仅作用于本次子进程，不修改用户或机器级策略，同时避免 npm 安装的 `.ps1` shim 被本机脚本策略意外阻断。本阶段不把 `cmd.exe`、PowerShell 7 的 `pwsh`、Git Bash 或 WSL 作为可选 profile。Windows 自定义 executable 若不能验证为同一 Windows PowerShell 方言则拒绝保存或迁移为“需用户重新选择”，避免从设置入口重新引入第二套解析与提示逻辑。
+目标态只提供两个内置 profile：macOS 使用系统 Bash，Windows 使用系统内置 Windows PowerShell。Windows profile 固定使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}`；`encodedCommand` 是“输出编码固定 + 进度流静默的 prelude + Agent 原始命令”的 UTF-16LE Base64，避免 Windows native argv 对引号、多行和特殊字符再次解释。prelude 先设 `$ProgressPreference = 'SilentlyContinue'` 再固定 UTF-8：非交互宿主否则会把 progress 记录序列化成 CLIXML 写进 stderr（首次启动的 "Preparing modules for first use." 就会命中），既污染 Agent 可见输出，也让 stdout/stderr 字节统计随系统语言漂移。`Bypass` 仅作用于本次子进程，不修改用户或机器级策略，同时避免 npm 安装的 `.ps1` shim 被本机脚本策略意外阻断。本阶段不把 `cmd.exe`、PowerShell 7 的 `pwsh`、Git Bash 或 WSL 作为可选 profile。Windows 自定义 executable 若不能验证为同一 Windows PowerShell 方言则拒绝保存或迁移为“需用户重新选择”，避免从设置入口重新引入第二套解析与提示逻辑。
 
 ### 3.5 P0：Agent 工具提示与真实 Shell dialect 脱节，导致跨平台语法误用
 
@@ -861,3 +861,14 @@ npx vitest run electron/tools/runShellExecutor.test.ts electron/shell/shellExecP
 - Legacy precheck 只有在 Analyzer 完整、命令 persistable 且无风险确认要求时才允许自动放行；复合、partial、路径风险和不完整事实不能借助旧 trust/cache 绕过确认。
 - permit-limited memory writer 已接入浏览器、桌面 IPC、飞书和微信确认路径；设置/迁移系统 writer、完整 planned `run_shell` 注册和目标平台验收仍未完成。
 - 本机验证：`npm run typecheck:shared`、`npx tsc -p tsconfig.electron.json --noEmit` 通过；全量 `npm test` 仍受本机 MCP 监听/DNS 与 jsdom xterm/canvas 基础设施限制，需 CI 或单独修复基础设施后重跑。
+
+### 11.1 Windows shell-contract CI 修复（2026-09-11）
+
+`main` 上 `test`（Ubuntu）与 `Shell lifecycle contract (windows-x64)` 两个 job 报红，根因是 Windows 代码路径从未在 Windows 上跑过。已修复的实现事实：
+
+- `orphanProcessCleanup`：Windows 命令行查询由 `wmic` 改为优先 PowerShell `Get-CimInstance Win32_Process`（Windows 11 24H2 起 WMIC 默认不再提供，原实现直接退化为 `already-exited`），wmic 仅作回退；POSIX 侧只在调用方显式给出 `processGroupId` 时按进程组终止，否则按 PID 终止（原实现对未 detached 的子进程发 `kill(-pid)`，在 Linux 上必然失败且可能命中无关进程组）。
+- `toolchainResolver`：path 语义改为跟随目标 `platform` 参数（`path.win32` / `path.posix`），不再使用宿主机 `path.join` / `path.delimiter`，跨平台 fixture 因此与真实平台一致。
+- Windows PowerShell prelude 增加 `$ProgressPreference = 'SilentlyContinue'`，消除 stderr 上的 CLIXML 进度流污染（见 §3.4 说明）。
+- Shell 测试按方言给出命令文本（PowerShell 5.1 / POSIX Bash），断言保持平台一致；Windows 侧补 PowerShell 预热以覆盖冷机首次启动成本。
+
+本机（Windows x64）验证：`npm run test:shell-lifecycle` 41 个测试文件、312 个测试通过；`npx tsc -p tsconfig.electron.json --noEmit` 通过。Ubuntu 与 macOS 结果仍以 CI 复跑为准。
