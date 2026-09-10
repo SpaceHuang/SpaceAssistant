@@ -872,3 +872,17 @@ npx vitest run electron/tools/runShellExecutor.test.ts electron/shell/shellExecP
 - Shell 测试按方言给出命令文本（PowerShell 5.1 / POSIX Bash），断言保持平台一致；Windows 侧补 PowerShell 预热以覆盖冷机首次启动成本。
 
 本机（Windows x64）验证：`npm run test:shell-lifecycle` 41 个测试文件、312 个测试通过；`npx tsc -p tsconfig.electron.json --noEmit` 通过。Ubuntu 与 macOS 结果仍以 CI 复跑为准。
+
+### 11.2 复审修复：孤儿清理不再阻塞启动（2026-09-11）
+
+`docs/review/dbfbb89-shell-contract-fix-review.md` 指出阻断项：启动路径上无超时的 `spawnSync('powershell.exe')` 可永久阻塞主进程。已按复审结论修复：
+
+- 命令行查询与终止改走异步 `runCommandWithTimeout()`（查询、终止各 5s 上限），超时按未完成收敛并显式 `SIGKILL` 子进程；`cleanupOrphanProcess` 不再使用任何无超时的 `spawnSync`，主进程事件循环不会因 powershell/wmic/taskkill 挂起而卡死。
+- `OrphanCleanupResult` 增加 `unverified`：区分"查询工具不可用/超时（不做任何终止）"与"进程已退出（`already-exited`）"，前者会在 `shell.orphan_cleanup` 审计里露出，不再伪装成进程已退出。
+- Windows CIM 查询串复用 `WINDOWS_POWERSHELL_PRELUDE` 固定 UTF-8 输出：PowerShell 5.1 默认按宿主 OEM 代码页写 stdout，按 utf8 解码会让含非 ASCII 的命令行变成替换字符（实测 `owner-中文-…` → `owner-����-…`）。
+- POSIX 进程组终止只在 `ESRCH`（进程组已不存在）时回退按 PID 终止；`EPERM` 等失败直接按 `failed` 收敛，避免 PID 复用竞态下的误杀。
+- 测试 helper `writeStdout` / `writeStderr` 转义 PowerShell 单引号字面量。
+
+清理仍保留在首窗之前：`main.ts` 明确要求孤儿清理先于 Runtime recovery，本次只解除事件循环阻塞，不调整该次序；若未来要消除这 0.5~3s/孤儿的串行等待，需要单独评估把清理移到首窗之后是否仍满足该不变量。
+
+本机（Windows x64）验证：`npm run test:shell-lifecycle` 41 个测试文件、317 个测试通过；其中新增 `runCommandWithTimeout` 超时/缺可执行文件/正常输出用例、非 ASCII owner token 归属校验用例、查询工具缺失返回 `unverified` 用例（POSIX）。

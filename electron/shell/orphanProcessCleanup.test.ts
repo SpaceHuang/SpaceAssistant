@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { cleanupOrphanProcess } from './orphanProcessCleanup'
+import os from 'node:os'
+import path from 'node:path'
+import { cleanupOrphanProcess, runCommandWithTimeout } from './orphanProcessCleanup'
 
 describe('cleanupOrphanProcess', () => {
   const nodeExecutable = process.env.npm_node_execpath ?? process.execPath
@@ -42,5 +44,50 @@ describe('cleanupOrphanProcess', () => {
     const token = `orphan-no-group-${process.pid}-${Date.now()}`
     const child = await spawnOwnerProcess(token, false)
     await expect(cleanupOrphanProcess({ pid: child.pid!, ownerToken: token })).resolves.toBe('cleaned')
+  })
+
+  it('命令行含非 ASCII 时仍能按 owner token 完成归属校验', async () => {
+    // 回归 Windows 上按 utf8 解码 PowerShell OEM 输出导致命令行乱码的问题。
+    const token = `owner-token-中文-${Date.now()}`
+    const child = await spawnOwnerProcess(token, detached)
+    await expect(cleanupOrphanProcess({ pid: child.pid!, ownerToken: token })).resolves.toBe('cleaned')
+  })
+
+  it('命令行查询不可用时返回 unverified 且不触碰目标进程', async () => {
+    // Windows 上 powershell.exe 仍会被系统目录解析到，这里只在 POSIX 覆盖查询工具缺失。
+    if (process.platform === 'win32') return
+    const token = `orphan-unverified-${process.pid}-${Date.now()}`
+    const child = await spawnOwnerProcess(token, false)
+    const originalPath = process.env.PATH
+    process.env.PATH = ''
+    try {
+      await expect(cleanupOrphanProcess({ pid: child.pid!, ownerToken: token })).resolves.toBe('unverified')
+    } finally {
+      process.env.PATH = originalPath
+    }
+    child.kill('SIGKILL')
+  })
+})
+
+describe('runCommandWithTimeout', () => {
+  it('查询命令挂起时按超时收敛，不阻塞调用方', async () => {
+    const started = Date.now()
+    const result = await runCommandWithTimeout(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 1_000)
+    expect(result).toEqual({ completed: false, code: null, stdout: '' })
+    expect(Date.now() - started).toBeLessThan(10_000)
+  })
+
+  it('可执行文件不可用时立即收敛为未完成', async () => {
+    const missing = path.join(os.tmpdir(), 'sa-missing-orphan-probe')
+    await expect(runCommandWithTimeout(missing, [], 5_000)).resolves.toEqual({ completed: false, code: null, stdout: '' })
+  })
+
+  it('命令正常结束时返回退出码与 stdout', async () => {
+    const result = await runCommandWithTimeout(
+      process.execPath,
+      ['-e', "process.stdout.write('orphan-probe-ok')"],
+      10_000
+    )
+    expect(result).toEqual({ completed: true, code: 0, stdout: 'orphan-probe-ok' })
   })
 })

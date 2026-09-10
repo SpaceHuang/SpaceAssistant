@@ -37,11 +37,16 @@ function escapePathForRegExp(target: string): string {
 
 /** 输出不上屏且不含换行的 stdout 写法，便于断言精确字节数。 */
 function writeStdout(text: string): string {
-  return `[Console]::Out.Write('${text}')`
+  return `[Console]::Out.Write('${escapePowerShellLiteral(text)}')`
 }
 
 function writeStderr(text: string): string {
-  return `[Console]::Error.Write('${text}')`
+  return `[Console]::Error.Write('${escapePowerShellLiteral(text)}')`
+}
+
+/** PowerShell 单引号字符串里 `'` 需写成 `''`，否则后续传入含引号的文本会变成语法错误。 */
+function escapePowerShellLiteral(text: string): string {
+  return text.replace(/'/g, "''")
 }
 
 function baseCtx(workDir: string, userDataDir: string) {
