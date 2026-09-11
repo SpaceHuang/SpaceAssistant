@@ -36,7 +36,7 @@ function makeService(
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const models: ModelEntry[] = [
     makeModel({ id: '1', name: 'deepseek-v4-pro' }),
-    makeModel({ id: '2', name: 'deepseek-v4-flash', isFast: true }),
+    makeModel({ id: '2', name: 'deepseek-flash', isFast: true }),
     makeModel({ id: '3', name: 'kimi-k2.6', isVision: true }),
     makeModel({ id: '4', name: 'claude-haiku-4-5', isFast: true, isVision: true })
   ]
@@ -75,7 +75,7 @@ describe('resolveVisionModelBinding', () => {
     const cfg = makeConfig({
       models: [
         makeModel({ id: '1', name: 'deepseek-v4-pro' }),
-        makeModel({ id: '2', name: 'deepseek-v4-flash', isFast: true })
+        makeModel({ id: '2', name: 'deepseek-flash', isFast: true })
       ],
       activeLlmServiceIds: ['s1']
     })
@@ -166,7 +166,7 @@ describe('resolveVisionRouteForImageSend', () => {
     const cfg = makeConfig({
       models: [
         makeModel({ id: '1', name: 'deepseek-v4-pro' }),
-        makeModel({ id: '2', name: 'deepseek-v4-flash', isFast: true })
+        makeModel({ id: '2', name: 'deepseek-flash', isFast: true })
       ],
       activeLlmServiceIds: ['s1']
     })

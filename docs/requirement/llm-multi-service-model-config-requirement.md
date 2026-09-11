@@ -664,6 +664,7 @@ export interface AppConfig {
 - [ ] 三个独立下拉框；快速下拉仅含 `isFast` 可用模型；视觉下拉仅含 `isVision` 可用模型
 - [ ] 恢复默认后：语言 → deepseek-v4-pro，快速 → deepseek-v4-flash，视觉 → kimi-k2.6
 - [ ] 取消某模型所有服务支持后，UI 显示不可用 hint，运行时按 §7.3 回退
+- [ ] 改动任一优选下拉（含把快速模型设为语言优选）后，设置页判为「有未保存的更改」，可保存生效
 
 ### 12.4 运行时
 

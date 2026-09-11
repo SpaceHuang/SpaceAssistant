@@ -38,7 +38,7 @@ function makeService(
 describe('llmModelConfig', () => {
   const models: ModelEntry[] = [
     makeModel({ id: '1', name: 'deepseek-v4-pro' }),
-    makeModel({ id: '2', name: 'deepseek-v4-flash', isFast: true }),
+    makeModel({ id: '2', name: 'deepseek-flash', isFast: true }),
     makeModel({ id: '3', name: 'kimi-k2.7-code', isVision: true }),
     makeModel({ id: '4', name: 'claude-haiku-4-5', isFast: true, isVision: true })
   ]
@@ -51,7 +51,7 @@ describe('llmModelConfig', () => {
   it('getAvailableModels returns union of active services supported models', () => {
     const available = getAvailableModels(models, services, ['s1', 's2'])
     expect(available.map((m) => m.name)).toEqual([
-      'deepseek-v4-flash',
+      'deepseek-flash',
       'deepseek-v4-pro',
       'kimi-k2.7-code'
     ])
@@ -86,6 +86,16 @@ describe('llmModelConfig', () => {
     expect(migrated.map((m) => m.name)).toEqual(['kimi-k2.6', 'kimi-k2.7-code'])
   })
 
+  it('migrateModelEntries renames deepseek flash to the new model name', () => {
+    const migrated = migrateModelEntries([
+      makeModel({ id: '2', name: 'deepseek-v4-flash', isFast: true })
+    ])
+    // 保留原 id，仅升级名称，优选/服务勾选引用不失效
+    expect(migrated[0]!.id).toBe('2')
+    expect(migrated[0]!.name).toBe('deepseek-flash')
+    expect(migrated[0]!.isFast).toBe(true)
+  })
+
   it('resolvePreferredModelId falls back through chain', () => {
     const available = getAvailableModels(models, services, ['s1'])
     expect(resolvePreferredModelId('language', available, 'missing')).toBe('1')
@@ -99,8 +109,8 @@ describe('llmModelConfig', () => {
     expect(pro).toHaveLength(2)
     expect(pro.map((o) => o.displayName).sort()).toEqual(['Deep-deepseek-v4-pro', 'Volcano-deepseek-v4-pro'])
 
-    const flash = options.find((o) => o.modelName === 'deepseek-v4-flash')
-    expect(flash?.displayName).toBe('Deep-deepseek-v4-flash')
+    const flash = options.find((o) => o.modelName === 'deepseek-flash')
+    expect(flash?.displayName).toBe('Deep-deepseek-flash')
   })
 
   it('pruneDisabledModelsFromServices removes disabled ids', () => {

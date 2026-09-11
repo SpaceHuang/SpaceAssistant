@@ -808,7 +808,7 @@ export const DEFAULT_MODELS: Omit<ModelEntry, 'id'>[] = [
   { name: 'glm-5.3-flash', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: true, isVision: true, enabled: true },
   { name: 'minimax-m2.7', maximumContext: 204800, maxTokens: 204800, isDefault: false, isFast: false, isVision: true, enabled: true },
   { name: 'deepseek-v4-pro', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: false, isVision: false, enabled: true },
-  { name: 'deepseek-v4-flash', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: true, isVision: false, enabled: true },
+  { name: 'deepseek-flash', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: true, isVision: false, enabled: true },
   { name: 'claude-sonnet-4-6', maximumContext: 1000000, maxTokens: 64000, isDefault: false, isFast: false, isVision: true, enabled: true },
   { name: 'claude-opus-4-7', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, isVision: true, enabled: true },
   { name: 'claude-haiku-4-5', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: true, isVision: true, enabled: true },

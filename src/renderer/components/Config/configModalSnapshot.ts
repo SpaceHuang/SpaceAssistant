@@ -27,6 +27,14 @@ export type ConfigModalSnapshotInput = {
   browser: BrowserConfig
   shell: ShellConfig
   shellEnabled: boolean
+  /**
+   * 优选默认模型（语言 / 快速 / 视觉）：与 `config:set` 一起落库，
+   * 必须进入快照，否则「设置 → 大模型服务 → 默认模型」的改动会被判为无改动，
+   * 应用 / 保存并返回 保持禁用，用户改选后无法保存生效。
+   */
+  preferredLanguageModelId: string
+  preferredFastLanguageModelId: string
+  preferredVisionModelId: string
 }
 
 function normalizeModels(models: ModelEntry[]): ModelEntry[] {
@@ -83,6 +91,9 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     thinkingEnabled: input.thinkingEnabled,
     models: normalizeModels(input.models),
     llm: normalizeLlmState(input.llmState),
+    preferredLanguageModelId: input.preferredLanguageModelId,
+    preferredFastLanguageModelId: input.preferredFastLanguageModelId,
+    preferredVisionModelId: input.preferredVisionModelId,
     toolUi: {
       confirmMode: input.toolUi.confirmMode,
       deniedTools: [...input.toolUi.deniedTools].sort(),
@@ -117,6 +128,9 @@ export function buildConfigModalSnapshotFromConfig(
     locale: cfg.locale,
     thinkingEnabled: cfg.thinkingEnabled,
     models: cfg.models,
+    preferredLanguageModelId: cfg.preferredLanguageModelId ?? '',
+    preferredFastLanguageModelId: cfg.preferredFastLanguageModelId ?? '',
+    preferredVisionModelId: cfg.preferredVisionModelId ?? '',
     llmState,
     toolUi: {
       confirmMode: cfg.tools.confirmMode,

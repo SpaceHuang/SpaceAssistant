@@ -8,7 +8,7 @@ export const BUILTIN_MODEL_TAG_DEFAULTS: Record<string, { isFast: boolean; isVis
   'glm-5.3-flash': { isFast: true, isVision: true },
   'minimax-m2.7': { isFast: false, isVision: true },
   'deepseek-v4-pro': { isFast: false, isVision: false },
-  'deepseek-v4-flash': { isFast: true, isVision: false },
+  'deepseek-flash': { isFast: true, isVision: false },
   'claude-sonnet-4-6': { isFast: false, isVision: true },
   'claude-opus-4-7': { isFast: false, isVision: true },
   'claude-haiku-4-5': { isFast: true, isVision: true },
@@ -17,14 +17,15 @@ export const BUILTIN_MODEL_TAG_DEFAULTS: Record<string, { isFast: boolean; isVis
 
 export const PREFERRED_BUILTIN_MODEL_NAMES = {
   language: 'deepseek-v4-pro',
-  fast: 'deepseek-v4-flash',
+  fast: 'deepseek-flash',
   vision: 'kimi-k2.7-code'
 } as const
 
 /** 内置模型名升级映射：迁移旧名到新名（保留原 id 与作者配置） */
 export const BUILTIN_MODEL_NAME_MIGRATIONS: Record<string, string> = {
   'kimi-k2.6': 'kimi-k2.7-code',
-  'glm-5.1': 'glm-5.3'
+  'glm-5.1': 'glm-5.3',
+  'deepseek-v4-flash': 'deepseek-flash'
 }
 
 export type PreferredModelKind = 'language' | 'fast' | 'vision'
