@@ -18,7 +18,7 @@ import {
   installSkillToUserDir,
   type InstallConflict
 } from './skillInstall'
-import { installSkillsFromGithub } from './skillGithubInstall'
+import { installSkillsFromGithub, probeGithubSkillUrl } from './skillGithubInstall'
 import { validateSkillSourceDir } from './skillParser'
 import { ensureSkillsDirs } from './skillPaths'
 
@@ -153,12 +153,13 @@ export function createSkillManager(ctx: SkillManagerContext) {
 
     async installFromUrl(
       sourceUrl: string,
-      options: { subPath?: string; installAll?: boolean; overwrite?: boolean } = {}
+      options: { subPath?: string; installAll?: boolean; overwrite?: boolean; onProgress?: (progress: { phase: string; completed?: number; total?: number }) => void; signal?: AbortSignal } = {}
     ): Promise<SkillDefinition[]> {
       const skills = await installSkillsFromGithub(ctx.getUserDataPath(), sourceUrl, options)
       invalidateSkillsCache()
       return skills
     },
+    probeFromUrl(sourceUrl: string) { return probeGithubSkillUrl(sourceUrl) },
 
     delete(name: string): void {
       const skill = getSkillByName(ctx.getUserDataPath(), ctx.getWorkDir(), name)

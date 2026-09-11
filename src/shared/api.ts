@@ -408,6 +408,10 @@ export type SpaceAssistantApi = {
   shellOpenOutputPath: (absPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
   skillList: () => Promise<SkillDefinition[]>
+  skillProbeFromUrl: (payload: { sourceUrl: string }) => Promise<{ ok: true; repo: { owner: string; repo: string; branch: string; subPath: string }; candidates: Array<{ name: string; description: string; subPath: string; totalBytes: number }> } | { ok: false; error: string }>
+  skillInstallOnProgress: (cb: (progress: { phase: string; completed?: number; total?: number }) => void) => () => void
+  skillCancelInstall: () => Promise<void>
+  skillScanStatus: () => Promise<{ skills: SkillDefinition[]; skipped: Array<{ dirName: string; scope: 'user' | 'project'; reason: string }> }>
   skillGet: (payload: { name: string }) => Promise<SkillDefinition | null>
   skillInstall: (payload: { sourcePath: string; overwrite?: boolean }) => Promise<{ ok: true; skill: SkillDefinition } | { ok: false; error: string }>
   skillInstallFromUrl: (payload: {

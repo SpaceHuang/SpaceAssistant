@@ -4,7 +4,7 @@ import { app } from 'electron'
 import fs from 'fs/promises'
 import path from 'path'
 import type { Dirent } from 'fs'
-import { resolveSafePath, resolveSafePathReal, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
+import { resolveSafePath, resolveSafePathReal, resolveSafeReadPath, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
 import {
   captureFileIdentity,
   identityFromStat,
@@ -187,7 +187,7 @@ export const readFileExecutor: ToolExecutor = {
     try {
       let abs: string
       try {
-        abs = await resolveSafePathReal(ctx.workDir, rel)
+        abs = await resolveSafeReadPath(ctx.workDir, rel, [path.join(ctx.userDataDir, 'skills')])
       } catch (e) {
         return { success: false, error: `路径超出工作目录范围: ${rel}`, duration: Date.now() - started }
       }
@@ -376,7 +376,7 @@ export const listDirectoryExecutor: ToolExecutor = {
     try {
       let target: string
       try {
-        target = rel === '' || rel === '.' ? path.resolve(ctx.workDir) : await resolveSafePathReal(ctx.workDir, rel)
+        target = rel === '' || rel === '.' ? path.resolve(ctx.workDir) : await resolveSafeReadPath(ctx.workDir, rel, [path.join(ctx.userDataDir, 'skills')])
       } catch (e) {
         return { success: false, error: `路径超出工作目录范围: ${rel}`, duration: Date.now() - started }
       }
@@ -1081,9 +1081,9 @@ export const grepExecutor: ToolExecutor = {
     let absSearch: string
     try {
       if (relPath && path.isAbsolute(relPath)) {
-        absSearch = await resolveSafeWorkDirPath(ctx.workDir, relPath)
+        absSearch = await resolveSafeReadPath(ctx.workDir, relPath, [path.join(ctx.userDataDir, 'skills')])
       } else {
-        absSearch = relPath ? await resolveSafePathReal(ctx.workDir, relPath) : path.resolve(ctx.workDir)
+        absSearch = relPath ? await resolveSafeReadPath(ctx.workDir, relPath, [path.join(ctx.userDataDir, 'skills')]) : path.resolve(ctx.workDir)
       }
     } catch {
       return { success: false, error: '路径超出工作目录范围', duration: Date.now() - started }

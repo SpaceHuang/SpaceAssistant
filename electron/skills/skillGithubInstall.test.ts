@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseGithubSkillUrl, resolveSkillSourceDirs, buildGithubArchiveExtractMembers, githubArchiveRootFolder } from './skillGithubInstall'
+import { parseGithubSkillUrl, resolveSkillSourceDirs, buildGithubArchiveExtractMembers, githubArchiveRootFolder, validateTarListing } from './skillGithubInstall'
 
 const tmpDirs: string[] = []
 
@@ -24,6 +24,39 @@ describe('skillGithubInstall', () => {
       branch: 'main',
       subPath: ''
     })
+  })
+
+  it('normalizes query/hash, www host and git suffix', () => {
+    expect(parseGithubSkillUrl(' https://www.github.com/acme/tools.git?tab=readme#x/')).toEqual({
+      owner: 'acme', repo: 'tools', branch: 'main', subPath: ''
+    })
+  })
+
+  it('rejects traversal subpaths', () => {
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/../secret')).toBeNull()
+  })
+
+  it('rejects blob file urls so callers can request a directory', () => {
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/blob/main/SKILL.md')).toBeNull()
+  })
+
+  it('uses coded errors when a requested repository path is missing', () => {
+    expect(() => resolveSkillSourceDirs(mkTmpDir(), 'missing', false)).toThrow('SKILL_PATH_NOT_FOUND')
+  })
+
+  it('does not reject ordinary paths in verbose tar listings', () => {
+    expect(() => validateTarListing([
+      '-rwxr-xr-x user/group 0 2026-09-12 00:00 lib/',
+      '-rw-r--r-- user/group 42 2026-09-12 00:00 help/SKILL.md'
+    ].join('\n'))).not.toThrow()
+  })
+
+  it('rejects links in verbose tar listings', () => {
+    expect(() => validateTarListing('lrwxrwxrwx user/group 0 2026-09-12 00:00 lib/out -> /tmp/out')).toThrow('SKILL_PATH_NOT_FOUND')
+  })
+
+  it('distinguishes unsupported hosts at the install boundary', async () => {
+    await expect(import('./skillGithubInstall').then(({ installSkillsFromGithub }) => installSkillsFromGithub('/tmp', 'https://gitlab.com/a/b'))).rejects.toThrow('SKILL_URL_UNSUPPORTED_HOST')
   })
 
   it('parses github tree urls with sub path', () => {

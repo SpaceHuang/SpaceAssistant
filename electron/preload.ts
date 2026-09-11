@@ -155,6 +155,14 @@ const api: SpaceAssistantApi = {
   browserOpenTerminal: () => ipcRenderer.invoke('browser:open-terminal'),
 
   skillList: () => ipcRenderer.invoke('skill:list'),
+  skillProbeFromUrl: (payload) => ipcRenderer.invoke('skill:probe-github-url', payload),
+  skillInstallOnProgress: (cb: (progress: { phase: string; completed?: number; total?: number }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { phase: string; completed?: number; total?: number }) => cb(data)
+    ipcRenderer.on('skill-install-progress', listener)
+    return () => ipcRenderer.removeListener('skill-install-progress', listener)
+  },
+  skillCancelInstall: () => ipcRenderer.invoke('skill:cancel-install'),
+  skillScanStatus: () => ipcRenderer.invoke('skill:scan-status'),
   skillGet: (payload) => ipcRenderer.invoke('skill:get', payload),
   skillInstall: (payload) => ipcRenderer.invoke('skill:install', payload),
   skillInstallFromUrl: (payload) => ipcRenderer.invoke('skill:install-from-url', payload),

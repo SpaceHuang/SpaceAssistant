@@ -4,6 +4,18 @@ import type { SkillDefinition } from '../../src/shared/domainTypes'
 import { assertInsideDir, getProjectSkillsDir, getUserSkillsDir } from './skillPaths'
 import { readSkillFromDirectory, validateSkillSourceDir } from './skillParser'
 
+export type SkillSourceMetadata = {
+  schemaVersion: 1
+  sourceType: 'github'
+  sourceUrl: string
+  owner: string
+  repo: string
+  ref: string
+  subPath: string
+  installedAt: string
+  appVersion: string
+}
+
 export type InstallConflict =
   | { type: 'user_exists'; existing: SkillDefinition; incoming: SkillDefinition }
   | { type: 'project_shadow'; projectSkill: SkillDefinition; incoming: SkillDefinition }
@@ -62,7 +74,8 @@ async function copyDirRecursive(src: string, dest: string): Promise<void> {
 export async function installSkillToUserDir(
   userDataPath: string,
   sourcePath: string,
-  overwrite = false
+  overwrite = false,
+  source?: SkillSourceMetadata
 ): Promise<SkillDefinition> {
   const resolvedSource = path.resolve(sourcePath)
   if (!fs.existsSync(resolvedSource) || !fs.statSync(resolvedSource).isDirectory()) {
@@ -83,6 +96,7 @@ export async function installSkillToUserDir(
   const tmpDir = path.join(userBase, `.tmp-${validated.meta.name}-${Date.now()}`)
   try {
     await copyDirRecursive(resolvedSource, tmpDir)
+    if (source) fs.writeFileSync(path.join(tmpDir, '.skill-source.json'), JSON.stringify(source, null, 2) + '\n', 'utf8')
     if (fs.existsSync(targetDir)) {
       fs.rmSync(targetDir, { recursive: true, force: true })
     }

@@ -391,6 +391,8 @@ export interface SkillDefinition {
   directoryPath: string
   filePath: string
   lastModified: number
+  totalBytes?: number
+  source?: { sourceType: 'github'; sourceUrl: string; owner: string; repo: string; ref: string; subPath: string }
 }
 
 export interface SessionSkillsState {
