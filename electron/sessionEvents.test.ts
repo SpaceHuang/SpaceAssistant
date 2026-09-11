@@ -74,6 +74,10 @@ describe('session events', () => {
     expect(() => parseSessionEvent({ seq: 1, time: 1, type: 'unknown', payload: {} })).toThrow()
   })
 
+  it('rejects unknown event schema versions so replay can degrade safely', () => {
+    expect(() => parseSessionEvent({ schemaVersion: 99, seq: 1, time: 1, type: 'request_header', payload: {} })).toThrow(/schema/i)
+  })
+
   it('ignores a torn final JSONL line while retaining valid events', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-torn-'))
     const writer = new SessionEventWriter(root, 's1', 1)

@@ -72,6 +72,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export function parseSessionEvent(value: unknown): SessionEvent {
   if (!isObject(value)) throw new Error('Invalid session event')
   const event = value as Partial<SessionEvent>
+  if (event.schemaVersion !== undefined && event.schemaVersion !== 1) throw new Error('Unsupported session event schema')
   if (typeof event.seq !== 'number' || !Number.isSafeInteger(event.seq) || event.seq < 1 || typeof event.time !== 'number' || typeof event.type !== 'string' || !EVENT_TYPES.has(event.type as SessionEventType) || !isObject(event.payload)) throw new Error('Invalid session event')
   return event as SessionEvent
 }
