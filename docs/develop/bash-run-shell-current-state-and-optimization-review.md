@@ -1,9 +1,8 @@
-# `run_shell` 与工具执行生命周期优化方案
+# `bash` / `run_shell` 现状与优化方案评审
 
-> 方案日期：2026-09-04  
-> 方案范围：通用工具 `plan/execute` 生命周期，以及内置 `run_shell` 从模型工具定义、输入校验、策略门禁、命令分析、Shell 选择、进程执行、取消/超时、输出传输到跨平台测试的完整链路  
-> 实施状态：**已实现并合入 main**（合并提交 `1f6e794`；本机执行清单见 [run-shell-lifecycle-local-execution-todo.md](../plan/run-shell-lifecycle-local-execution-todo.md)，283/299 完成）。剩余仅为目标机 / 生产验收项：Windows 实机（PowerShell 5.1 / 编码 / 进程树回收 / 打包 smoke）、macOS Intel 与 arm64 CI、提交后 CI matrix、生产方言错配率与渲染端 IPC 洪泛性能。  
-> 文档性质：基于现状代码的架构优化方案；设计已按此实现，本文保留作设计依据。  
+> 评审日期：2026-09-04  
+> 评审范围：内置 `run_shell` 从模型工具定义、输入校验、策略门禁、命令分析、Shell 选择、进程执行、取消/超时、输出传输到跨平台测试的完整链路  
+> 评审性质：现状审查与改造建议，不包含代码实现  
 > 主要依据：当前工作区源码与 `docs/requirement/shell-command-tool-requirement.md`
 
 ## 1. 结论摘要
@@ -172,7 +171,7 @@ type ShellProfile = {
 }
 ```
 
-目标态只提供两个内置 profile：macOS 使用系统 Bash，Windows 使用系统内置 Windows PowerShell。Windows profile 固定使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}`；`encodedCommand` 是“UTF-8 输出初始化 prelude + Agent 原始命令”的 UTF-16LE Base64，避免 Windows native argv 对引号、多行和特殊字符再次解释。`Bypass` 仅作用于本次子进程，不修改用户或机器级策略，同时避免 npm 安装的 `.ps1` shim 被本机脚本策略意外阻断。本阶段不把 `cmd.exe`、PowerShell 7 的 `pwsh`、Git Bash 或 WSL 作为可选 profile。Windows 自定义 executable 若不能验证为同一 Windows PowerShell 方言则拒绝保存或迁移为“需用户重新选择”，避免从设置入口重新引入第二套解析与提示逻辑。
+目标态只提供两个内置 profile：macOS 使用系统 Bash，Windows 使用系统内置 Windows PowerShell。Windows profile 固定使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}`；`encodedCommand` 是“输出编码固定 + 进度流静默的 prelude + Agent 原始命令”的 UTF-16LE Base64，避免 Windows native argv 对引号、多行和特殊字符再次解释。prelude 先设 `$ProgressPreference = 'SilentlyContinue'` 再固定 UTF-8：非交互宿主否则会把 progress 记录序列化成 CLIXML 写进 stderr（首次启动的 "Preparing modules for first use." 就会命中），既污染 Agent 可见输出，也让 stdout/stderr 字节统计随系统语言漂移。`Bypass` 仅作用于本次子进程，不修改用户或机器级策略，同时避免 npm 安装的 `.ps1` shim 被本机脚本策略意外阻断。本阶段不把 `cmd.exe`、PowerShell 7 的 `pwsh`、Git Bash 或 WSL 作为可选 profile。Windows 自定义 executable 若不能验证为同一 Windows PowerShell 方言则拒绝保存或迁移为“需用户重新选择”，避免从设置入口重新引入第二套解析与提示逻辑。
 
 ### 3.5 P0：Agent 工具提示与真实 Shell dialect 脱节，导致跨平台语法误用
 
@@ -610,16 +609,7 @@ locked deny
 → ordinary ask/allow
 ```
 
-`confirm-every-time` 直接返回 `require-confirm`，固定 `memoryTiers=[]`，不执行 `askUnless`；它是策略规则的裁决语义，不得由 Analyzer 或 `PreparedShellExecution` 输出。若同一调用同时命中 locked deny 和 `confirm-every-time`，必须 deny。该动作只能由系统默认的 `locked + when='invocation'` 规则声明，用户不能创建、覆盖、改动作或禁用；规则加载器必须拒绝将其用于 ingress/exposure，避免当前非 invocation 决策代码把未知的非 deny action 当成 allow。
-
-这里同时补全项目中 `locked` 的系统不变量：locked 不仅表示 action override 不可调松，也表示规则不可从有效规则集中删除。当前 `policyRulesRuntime` 会先按 `disabledPolicyRuleIds` 过滤 `DEFAULT_POLICY_RULES`，因此实施时必须同步修改以下边界：
-
-- `loadEffectivePolicyRules()` 过滤 disabled ids 时始终保留 locked rules；
-- 禁用规则的设置/持久化入口拒绝 locked rule id，不能只依赖 UI；
-- 设置页对 locked rules 展示只读启用状态；
-- 升级迁移清除数据库中历史遗留的 locked disabled ids，并记录 fail-safe 恢复审计；
-- strict/standard/loose/custom 套餐解析均原样保留 locked deny 与 locked `confirm-every-time`；
-- `validateRuleOverride()`、规则反序列化和运行时 schema 只允许系统默认 invocation rule 使用 `confirm-every-time`，拒绝自定义规则声明该动作。
+`confirm-every-time` 直接返回 `require-confirm`，固定 `memoryTiers=[]`，不执行 `askUnless`；它是策略规则的裁决语义，不得由 Analyzer 或 `PreparedShellExecution` 输出。若同一调用同时命中 locked deny 和 `confirm-every-time`，必须 deny。该动作默认视为系统保护规则，不允许用户 override 为 ask/allow/auto-evaluator。
 
 同时增加统一的调用级 `MemoryEligibility`，避免只禁止某一个 signal 产键、同一 facts 中其他 command/path signal 仍然命中缓存：
 
@@ -644,48 +634,7 @@ function deriveInvocationPolicyConstraints(
 ): InvocationPolicyConstraints
 ```
 
-该约束由策略层根据 facts 与实际命中的 `confirm-every-time` 规则一次性推导，不在 Shell Adapter 中硬编码裁决。只要命中任一此类规则，三项资格必须整体为 false。`decide()` 在查询缓存前先检查 `mandatoryConfirmationRuleId` 并返回无记忆档位的确认；若继续普通流程，`deriveCacheKeys()` 必须显式接收 constraints，并在 `canRead=false` 时为整个 invocation 返回空数组，`buildMemoryTiers()` 在 `canOffer=false` 时返回空数组。
-
-裸 `Decision` 不能充当缓存写入授权，因为它没有调用身份且可以跨调用重放。本方案将现有桌面 `requestId/toolUseId + pending memory tiers` 校验和 IM pending entry 收敛为主进程内统一的 `ConfirmationAuthorizationRegistry`。仅当最新 Decision 含非空 `memoryTiers` 且 `canOffer/canWrite` 均为 true 时，coordinator 才在进入 `awaiting-confirmation` 时按 sealed invocation 创建不可序列化、一次性的 `MemoryWritePermit`；`confirm-every-time` 调用根本不创建 permit：
-
-```ts
-interface MemoryWritePermit {
-  readonly permitId: string
-  readonly invocationId: string
-  readonly requestId: string
-  readonly toolUseId: string
-  readonly sessionId: string
-  readonly toolName: string
-  readonly planDigest?: string
-  readonly factsDigest: string
-  readonly allowedKeys: readonly CacheKey[]
-  readonly allowedDecisions: readonly ('allow' | 'deny')[]
-  readonly expiresAt: number
-  readonly decisionRevision: number
-}
-```
-
-permit 只保存在主进程 registry；renderer/IM 只能回传 tier index 或 key candidate，不能构造 permit。桌面与 IM 最终都调用同一个 `consumeMemoryWritePermit({ requestId, toolUseId, candidate, outcome })`：它原子校验 invocation 仍处于对应 confirmation、permit 未消费且未过期、Decision revision/digests/session/tool 均匹配、`canWrite=true`、candidate 属于 `allowedKeys`、outcome 属于允许结果，然后在同一临界区标记已消费并调用缓存 writer。writer 不再接受无来源的裸 key 写入。
-
-permit 在首次消费、批准但未选择记忆、拒绝、超时、取消、`PLAN_STALE`、重新 plan/重新决策或 invocation settled 时立即失效。`cache.write` 审计记录 permit/invocation/request/tool/session/facts digest，planned 工具再记录 plan digest。这样 key 成员校验、防跨调用错配和防重放由同一主进程能力完成，不修改共享 `Decision` 类型，也不把私有 permit 发送给确认通道。
-
-缓存写入 API 必须按授权来源分层，避免为了保留设置迁移、系统清理或浏览器会话信任等合法内部写入，又重新暴露可供工具确认链路调用的裸 key writer：
-
-```ts
-// 用户确认产生的记忆：只能消费一次性 permit。
-recordConfirmedMemory(permitId, candidate, outcome): CacheWriteResult
-
-// 系统管理写入：只对设置/迁移等明确模块开放，要求独立的系统来源和审计原因。
-recordSystemCacheMutation(systemAuthority, mutation, reason): CacheWriteResult
-```
-
-工具循环、desktop IPC 和 IM channel 只能依赖前一个 API；后一个 API 不接受 invocation confirmation 数据，也不能被 tool executor 导入。现有浏览器会话信任、设置迁移等写入在实施前逐项分类，不能简单全部改成 permit，也不能成为确认记忆的旁路。
-
-`allowedDecisions` 必须由产品实际支持的确认结果生成。当前共享 `ConfirmOutcome` 同时允许 approved/rejected 携带 memory，因此 permit 可以分别授权记住 allow 或 deny；若某个 channel 不提供“记住拒绝”，该 channel 创建的 permit 不得包含 deny。不能为了类型方便固定开放两种结果。
-
-permit 校验失败也要写安全审计，至少区分 `not-found`、`expired`、`already-consumed`、`identity-mismatch`、`digest-mismatch`、`decision-revision-mismatch`、`state-mismatch`、`key-not-allowed` 和 `outcome-not-allowed`；审计同时记录 `decisionRevision` 与 `toolUseId`，但不得记录原始命令、敏感路径内容或 permit secret。
-
-locked 语义、`confirm-every-time` action/schema、运行时规则加载、设置写入/UI 和历史 disabled-id 清理必须作为同一个兼容交付单元：在这些保护全部就绪前，不得启用新的 mandatory-confirm 默认规则。迁移应幂等、fail-safe；旧客户端或旧数据库出现未知 action/locked disabled id 时，应保留系统保护并要求确认，而不是丢弃规则或按 allow 解释。
+该约束由策略层根据 facts 与实际命中的 `confirm-every-time` 规则一次性推导，不在 Shell Adapter 中硬编码裁决。只要命中任一此类规则，三项资格必须整体为 false。`decide()` 在查询缓存前先检查 `mandatoryConfirmationRuleId` 并返回无记忆档位的确认；若继续普通流程，`deriveCacheKeys()` 必须显式接收 constraints，并在 `canRead=false` 时为整个 invocation 返回空数组，`buildMemoryTiers()` 在 `canOffer=false` 时返回空数组。缓存写入入口必须接收本次 `Decision`，只允许写入该 Decision 实际给出的 `memoryTiers` 成员；`canWrite=false`、空列表或伪造 key 一律拒绝并记录审计。不能继续只依赖调用方“保证有记忆档位时才写入”。
 
 Legacy `ShellRule allow`、`trustedCommands`、declared capability、auto-evaluator 和普通 allow 都位于 `confirm-every-time` 之后，命中该动作时不再求值。Shell Analyzer 只产出下表中的事实信号，策略规则负责裁决：
 
@@ -708,7 +657,7 @@ Legacy `ShellRule allow`、`trustedCommands`、declared capability、auto-evalua
 
 用户 `ShellRule` 在迁移期按当前语义编译：deny 规则作为本次调用的 locked deny；ask 不产生放行；allow 只有在没有 locked deny 或 `confirm-every-time` 时才可进入既有 auto-allow/缓存路径。旧 `trustedCommands` 只能转换为 exact decision-cache 候选，不能越过这两个缓存前阶段。
 
-这需要对共享事实做最小、明确的加法修改：`PolicyAction` 增加 `confirm-every-time`，并以 schema 约束它只能出现在系统 locked invocation rule；`CommandFact` 增加 `connectorFromPrevious: null | 'and' | 'or' | 'pipe' | 'sequence'` 和 `effectiveCwd?: string`，废弃语义错误的 `pipesInto`；`FactSignal` 增加上述 Shell 事实及 `shell-analysis-incomplete`。同步更新 `signalTokenSet`、规则禁用/覆盖校验、套餐解析、确认摘要、规范序列化、缓存读写和策略顺序测试。`Decision`、`ConfirmationChannel` 与 `CacheKey` 联合类型不做结构性变化；`MemoryWritePermit` 是主进程 registry 的私有能力。
+这需要对共享事实做最小、明确的加法修改：`PolicyAction` 增加 `confirm-every-time`；`CommandFact` 增加 `connectorFromPrevious: null | 'and' | 'or' | 'pipe' | 'sequence'` 和 `effectiveCwd?: string`，废弃语义错误的 `pipesInto`；`FactSignal` 增加上述 Shell 事实及 `shell-analysis-incomplete`。同步更新 `signalTokenSet`、规则覆盖校验、确认摘要、规范序列化、缓存读写和策略顺序测试。`Decision`、`ConfirmationChannel` 与 `CacheKey` 联合类型不做结构性变化。
 
 ### 5.5 执行前重验证与 TOCTOU 边界
 
@@ -799,16 +748,12 @@ Shell 内部的变量展开、命令替换、运行时创建的路径以及并�
 - 复用并修正 `command-sequence`：保留真实连接符和逐步 cwd，复合命令仍设置 `persistable=false`。
 - 按 5.4 的完整映射增加 Shell FactSignal 和规则：强拒绝进入缓存前 `locked deny`；弱风险、路径风险和 partial/unknown 进入紧随其后的 `confirm-every-time`。这是本方案对 `PolicyAction` 和 `decide()` 顺序的唯一必要扩展。
 - 增加 `InvocationPolicyConstraints/MemoryEligibility`，让同一次规则匹配结果统一约束缓存读取、记忆档位展示和确认结果写入；不得分别维护三套不可记忆判断。
-- 补全 locked 规则不可禁用合同：运行时加载保留 locked，设置写入拒绝 locked id，历史 disabled ids 迁移清理，设置 UI 只读，所有 policy package 原样保留；`confirm-every-time` 只能用于系统 locked invocation rule。
-- 将桌面 pending tier 校验和 IM pending entry 收敛为统一 `ConfirmationAuthorizationRegistry`；缓存写入必须原子消费绑定 invocation/request/tool/session/digests/revision/expiry 的 `MemoryWritePermit`，不再接受裸 Decision 或裸 key 作为授权。
-- 将缓存写入拆为 permit 限定的确认记忆 API 与受控系统管理 API；盘点并迁移 desktop、飞书、微信、浏览器信任、设置和数据迁移调用方，禁止工具链路导入系统 writer。
-- 将 action/schema、decide 顺序、locked runtime filter、设置写入/UI 和历史 disabled-id 清理作为同一兼容交付单元；保护未齐备前不注册 mandatory-confirm 默认规则。
 - 对 `CommandFact` 最小增加真实 connector/effective cwd，更新 token、摘要、规范序列化与缓存测试。
 - 迁移期由 Gate planned 分支中的唯一 `LegacyShellPolicyAdapter` 把 `ShellRule`/旧信任编译为 `decide()` 输入；不得直接返回 skip-confirm，也不得与 autoEvaluator 并存形成第二条放行路径。
 - profile/dialect 隔离通过 namespaced command signature 落入既有 `shell-command exact` 缓存，不修改通用 `CacheKey` 联合类型。
 - 确认请求使用 `gate.decision.riskLevel`，删除 `toolChatLoop.ts` 对 `run_shell='high'` 的重复硬编码；风险仍由现有 `BUILTIN_TOOL_METADATA + decide()` 所有。
 
-**Gate：** 无 `plan()` 的现有工具行为不变；planned 工具严格按一次性状态机运行，篡改、复用、跨工具计划和 stale plan 均在 spawn 前失败；强 validator 在预置 allow cache/旧 trusted command 时仍 deny；`confirm-every-time` 不能被 override 或 disabled，并在 cache/capability/auto-evaluator/ordinary allow 之前稳定返回无记忆确认；跨调用、重复、过期、stale 或篡改 identity/digest 的 memory permit 在 desktop/IM 均被同一 verifier 拒绝；确认 UI、策略审计、cache.write 和执行审计关联同一 identity/digest；`PreparedShellExecution` 不含风险或授权判断；除新增 `PolicyAction`、缓存前求值阶段和主进程私有 permit registry 外，`Decision`、`ConfirmationChannel` 和 `CacheKey` 无结构性重写。
+**Gate：** 无 `plan()` 的现有工具行为不变；planned 工具严格按一次性状态机运行，篡改、复用、跨工具计划和 stale plan 均在 spawn 前失败；强 validator 在预置 allow cache/旧 trusted command 时仍 deny；`confirm-every-time` 在 cache/capability/auto-evaluator/ordinary allow 之前稳定返回无记忆确认；确认 UI、策略审计和执行审计关联同一 identity/digest；`PreparedShellExecution` 不含风险或授权判断；`evaluateToolCallGate()` 仍是唯一 invocation 决策入口；除新增 `PolicyAction` 及其缓存前求值阶段外，`Decision`、`ConfirmationChannel` 和 `CacheKey` 无结构性重写。
 
 ## 7. 测试与验收建议
 
@@ -835,10 +780,6 @@ Shell 内部的变量展开、命令替换、运行时创建的路径以及并�
 | 强制逐次确认 | incomplete/弱风险分别叠加预置 exact/path cache、execute capability、autoEvaluator approve、Legacy ShellRule allow、trustedCommands、普通 allow/askUnless 时均为 `require-confirm` 且 `memoryTiers=[]` |
 | 决策优先级 | 同时命中 locked deny 与 `confirm-every-time` 时必须 deny；未命中强制确认的既有工具继续按原 cache/capability/auto-evaluator 顺序处理 |
 | 记忆闭环 | 同一 facts 同时含 incomplete 与可派生 command/path signal 时整体不可读、不可展示、不可写；确认响应携带伪造 memory key 时缓存写入层拒绝并审计 |
-| locked 不可禁用 | disabled ids 包含 mandatory rule 时仍生效；写入 locked id 被拒绝；历史 locked disabled id 被 fail-safe 清理；四种套餐和各 lane 均保留保护规则 |
-| action 范围 | 自定义规则不能创建 `confirm-every-time`；该 action 用于 ingress/exposure 时 schema/运行时加载失败，不能按 allow 处理 |
-| 写入许可 | 调用 A 的 permit 不能给调用 B 写同 key；permit 二次消费、过期、timeout/reject/cancel/settled、stale/replan 后使用均拒绝；修改任一 identity/digest/revision 字段均拒绝 |
-| 通道一致性 | desktop 与 IM 只回传候选 tier/key，共用同一 permit verifier 和 writer；两条路径的成功、拒绝与审计结果一致 |
 | 确认执行一致性 | 确认等待前后的 plan/facts/display digest 不变；执行冻结 argv/env；执行器不二次解析 `inputObj + shellConfig`；外部依赖执行前复核 |
 | 路径 | Windows drive/UNC/`..`/symlink；POSIX symlink、大小写边界 |
 | 信任与强拒绝 | 每个现有强 validator 在预置 allow cache 和旧 trusted command 时仍 deny；弱风险、路径风险、复合及 partial/unknown 不能被任何自动放行来源跳过，也不产生或消费缓存；profile/dialect 进入 namespaced exact 签名 |
@@ -878,8 +819,7 @@ Ubuntu job 可以继续承担通用单元测试，但不作为 `run_shell` 产�
 | P0 | Agent 工具面统一为唯一 `run_shell` 入口 | 消除“工具叫 Bash、实际方言不一致”的错误心智模型，并避免别名造成权限与审计分裂 |
 | P0 | Agent 工具提示动态绑定真实 dialect | 直接减少 Bash 与 Windows PowerShell 语法混用和无效重试循环 |
 | P1 | 通用 direct/planned 注册与一次性调用状态机 | 给可选 plan/必选 execute 提供类型安全、不可错用且可取消的框架合同 |
-| P1 | `confirm-every-time`、locked 不可禁用与统一 MemoryEligibility | 保证不完整/弱风险事实不能被 disabled rule、缓存、capability、auto-evaluator 或普通 allow 绕过 |
-| P1 | 一次性 MemoryWritePermit | 让桌面/IM 缓存写入绑定本次调用、事实和计划摘要，阻止伪造、错配与重放 |
+| P1 | `confirm-every-time` 与统一 MemoryEligibility | 保证不完整/弱风险事实不能被缓存、capability、auto-evaluator、普通 allow 或伪造记忆写入绕过 |
 | P1 | 统一 Analyzer、sealed PreparedInvocation 与执行前重验证 | 消除应用内语义漂移，并在确认后识别已变化的外部依赖 |
 | P1 | ShellConfirmationAdapter 等价接入现有 policy gate | 让事实与风险判断分工清晰，不重写 decide/确认通道/远程授权 |
 | P1 | 固定编码策略与 Environment Resolver | 降低 Windows 乱码和 GUI PATH 问题 |
@@ -909,3 +849,40 @@ npx vitest run electron/tools/runShellExecutor.test.ts electron/shell/shellExecP
 4. 最后按现有 validator 逐项迁移事实与规则，确保强拒绝位于缓存前；确认通过后先复核易变依赖，再执行同一份私有计划。
 
 完成前两步即可显著降低当前“运行不稳、取消不干净、Windows/macOS 行为飘”的问题；完成通用生命周期与 Shell 接入后，才能让唯一的 `run_shell` 能力成为后续 Background Mission、Builtin SubAgent 等场景可复用的 HostTerminalService，而不是通过新增第二个进程工具绕开现有缺陷。
+
+## 11. 当前实现事实与阶段状态（2026-09-05）
+
+本节记录本 worktree 中已落地、并由测试覆盖的实现事实；未列为完成的项目仍以本地执行清单为准，不用本机结果替代 Windows/CI/生产验收。
+
+- 输出、进度、artifact、摘要/hash、清理、取消/超时和 ProcessSupervisor 已完成本机实现；`npm run test:shell-lifecycle` 当前通过 39 个测试文件、288 个测试。
+- ShellProfile、PowerShell UTF-16LE 模拟、环境 allowlist/toolchain resolver、方言错配和重试熔断已有本机 contract 测试。
+- `tokenizeSimpleCommand()` 已复用唯一 `tokenizeShellArgv()`；统一 Analyzer、Shell trust 与 command-sequence extractor 的 token 解析。
+- 外部 `Bash`/`bash` 只在边界归一为 `run_shell`，原名仅作为诊断元数据保留。
+- Legacy precheck 只有在 Analyzer 完整、命令 persistable 且无风险确认要求时才允许自动放行；复合、partial、路径风险和不完整事实不能借助旧 trust/cache 绕过确认。
+- permit-limited memory writer 已接入浏览器、桌面 IPC、飞书和微信确认路径；设置/迁移系统 writer、完整 planned `run_shell` 注册和目标平台验收仍未完成。
+- 本机验证：`npm run typecheck:shared`、`npx tsc -p tsconfig.electron.json --noEmit` 通过；全量 `npm test` 仍受本机 MCP 监听/DNS 与 jsdom xterm/canvas 基础设施限制，需 CI 或单独修复基础设施后重跑。
+
+### 11.1 Windows shell-contract CI 修复（2026-09-11）
+
+`main` 上 `test`（Ubuntu）与 `Shell lifecycle contract (windows-x64)` 两个 job 报红，根因是 Windows 代码路径从未在 Windows 上跑过。已修复的实现事实：
+
+- `orphanProcessCleanup`：Windows 命令行查询由 `wmic` 改为优先 PowerShell `Get-CimInstance Win32_Process`（Windows 11 24H2 起 WMIC 默认不再提供，原实现直接退化为 `already-exited`），wmic 仅作回退；POSIX 侧只在调用方显式给出 `processGroupId` 时按进程组终止，否则按 PID 终止（原实现对未 detached 的子进程发 `kill(-pid)`，在 Linux 上必然失败且可能命中无关进程组）。
+- `toolchainResolver`：path 语义改为跟随目标 `platform` 参数（`path.win32` / `path.posix`），不再使用宿主机 `path.join` / `path.delimiter`，跨平台 fixture 因此与真实平台一致。
+- Windows PowerShell prelude 增加 `$ProgressPreference = 'SilentlyContinue'`，消除 stderr 上的 CLIXML 进度流污染（见 §3.4 说明）。
+- Shell 测试按方言给出命令文本（PowerShell 5.1 / POSIX Bash），断言保持平台一致；Windows 侧补 PowerShell 预热以覆盖冷机首次启动成本。
+
+本机（Windows x64）验证：`npm run test:shell-lifecycle` 41 个测试文件、312 个测试通过；`npx tsc -p tsconfig.electron.json --noEmit` 通过。Ubuntu 与 macOS 结果仍以 CI 复跑为准。
+
+### 11.2 复审修复：孤儿清理不再阻塞启动（2026-09-11）
+
+`docs/review/dbfbb89-shell-contract-fix-review.md` 指出阻断项：启动路径上无超时的 `spawnSync('powershell.exe')` 可永久阻塞主进程。已按复审结论修复：
+
+- 命令行查询与终止改走异步 `runCommandWithTimeout()`（查询、终止各 5s 上限），超时按未完成收敛并显式 `SIGKILL` 子进程；`cleanupOrphanProcess` 不再使用任何无超时的 `spawnSync`，主进程事件循环不会因 powershell/wmic/taskkill 挂起而卡死。
+- `OrphanCleanupResult` 增加 `unverified`：区分"查询工具不可用/超时（不做任何终止）"与"进程已退出（`already-exited`）"，前者会在 `shell.orphan_cleanup` 审计里露出，不再伪装成进程已退出。
+- Windows CIM 查询串复用 `WINDOWS_POWERSHELL_PRELUDE` 固定 UTF-8 输出：PowerShell 5.1 默认按宿主 OEM 代码页写 stdout，按 utf8 解码会让含非 ASCII 的命令行变成替换字符（实测 `owner-中文-…` → `owner-����-…`）。
+- POSIX 进程组终止只在 `ESRCH`（进程组已不存在）时回退按 PID 终止；`EPERM` 等失败直接按 `failed` 收敛，避免 PID 复用竞态下的误杀。
+- 测试 helper `writeStdout` / `writeStderr` 转义 PowerShell 单引号字面量。
+
+清理仍保留在首窗之前：`main.ts` 明确要求孤儿清理先于 Runtime recovery，本次只解除事件循环阻塞，不调整该次序；若未来要消除这 0.5~3s/孤儿的串行等待，需要单独评估把清理移到首窗之后是否仍满足该不变量。
+
+本机（Windows x64）验证：`npm run test:shell-lifecycle` 41 个测试文件、317 个测试通过；其中新增 `runCommandWithTimeout` 超时/缺可执行文件/正常输出用例、非 ASCII owner token 归属校验用例、查询工具缺失返回 `unverified` 用例（POSIX）。

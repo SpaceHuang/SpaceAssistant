@@ -81,7 +81,8 @@ function findAmbiguousPathResume(text: string, start: number): number {
 }
 
 function restoreUrls(text: string, urls: string[]): string {
-  return urls.reduce((result, url, index) => result.replace(`${URL_TOKEN}${index}`, url), text)
+  // 用函数式替换：字符串替换会把 url 里的 $&、$'、$` 当模式解释，重新注入占位符或复制整段文本。
+  return urls.reduce((result, url, index) => result.replace(`${URL_TOKEN}${index}`, () => url), text)
 }
 
 /** 对进入 Agent、日志或历史的自由文本执行统一脱敏。 */

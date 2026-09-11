@@ -172,4 +172,44 @@ describe('process result projections', () => {
     expect(projectAgentToolResultForSink(connectedResult, options)).toEqual(connectedResult)
     expect(projectLocalHistoryToolResult(connectedResult, options)).toEqual(connectedResult)
   })
+
+  it('只对真正像凭据的键脱敏，不误伤 key / keys / keyCode / monkey', () => {
+    const result = {
+      success: true,
+      data: {
+        key: 'Enter',
+        keys: ['Enter', 'Escape'],
+        keyCode: 13,
+        monkey: 'banana',
+        sessionId: 'session-123'
+      }
+    }
+    expect(projectAgentToolResultForSink(result, options)).toEqual(result)
+    expect(projectLocalHistoryToolResult(result, options)).toEqual(result)
+  })
+
+  it('凭据键名与看起来像凭据的裸 key 值仍被脱敏', () => {
+    const projected = projectAgentToolResultForSink({
+      success: true,
+      data: {
+        apiKey: 'sk-abcdefghijklmnop',
+        accessToken: 'opaque-access-token',
+        clientSecret: 'opaque-client-secret',
+        userPassword: 'hunter2',
+        'set-cookie': 'session=abc',
+        key: 'sk-live-abcdefghijklmnop',
+        keys: ['ghp_0123456789012345678901']
+      }
+    }, options) as { data: Record<string, unknown> }
+
+    expect(projected.data).toEqual({
+      apiKey: '<secret:redacted>',
+      accessToken: '<secret:redacted>',
+      clientSecret: '<secret:redacted>',
+      userPassword: '<secret:redacted>',
+      'set-cookie': '<secret:redacted>',
+      key: '<secret:redacted>',
+      keys: '<secret:redacted>'
+    })
+  })
 })

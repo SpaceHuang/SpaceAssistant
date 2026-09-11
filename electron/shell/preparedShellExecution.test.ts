@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import fs from 'fs/promises'
+import os from 'os'
+import path from 'path'
 import { assertPreparedShellExecutionCurrent, captureShellPathSnapshot, prepareShellExecution, PreparedShellStaleError, validatePreparedShellExecution } from './preparedShellExecution'
 
 const makeInput = () => ({
@@ -74,8 +77,15 @@ describe('PreparedShellExecution', () => {
   })
 
   it('captures realpath and falls back for missing paths', async () => {
-    const snapshot = await captureShellPathSnapshot(['/tmp', '/definitely/missing-shell-target'])
-    expect(snapshot['/tmp']).toMatch(/(?:^|\/)tmp$/)
-    expect(snapshot['/definitely/missing-shell-target']).toBe('/definitely/missing-shell-target')
+    // 用真实存在的临时目录代替硬编码 /tmp：Windows 上 /tmp 会解析到当前盘根目录，语义不确定。
+    const existing = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-path-snapshot-'))
+    const missing = path.join(existing, 'missing-shell-target')
+    try {
+      const snapshot = await captureShellPathSnapshot([existing, missing])
+      expect(snapshot[existing]).toBe(await fs.realpath(existing))
+      expect(snapshot[missing]).toBe(missing)
+    } finally {
+      await fs.rm(existing, { recursive: true, force: true })
+    }
   })
 })

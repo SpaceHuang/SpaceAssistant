@@ -46,7 +46,14 @@ export const WINDOWS_POWERSHELL_PROFILE: ShellProfile = {
   source: 'builtin'
 }
 
-export const WINDOWS_UTF8_OUTPUT_PRELUDE =
+/**
+ * Windows PowerShell 启动 prelude：先关闭进度流，再固定 UTF-8 输出编码。
+ * 非交互宿主会把 progress 记录序列化成 CLIXML 写进 stderr（首次启动的
+ * "Preparing modules for first use." 也会命中），既污染 Agent 可见输出，
+ * 又让 stdout/stderr 的字节统计随系统语言漂移，因此必须静默。
+ */
+export const WINDOWS_POWERSHELL_PRELUDE =
+  "$ProgressPreference = 'SilentlyContinue';" +
   '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new();'
 
 export function freezeShellProfileSnapshot(profile: ShellProfile): ShellProfile {
@@ -76,7 +83,7 @@ export function createShellAdapter(profile: ShellProfile): ShellAdapter {
   return {
     profile: snapshot,
     buildCommandArgs(command: string): string[] {
-      return buildShellArgs(snapshot, command, snapshot.dialect === 'windows-powershell' ? WINDOWS_UTF8_OUTPUT_PRELUDE : '')
+      return buildShellArgs(snapshot, command, snapshot.dialect === 'windows-powershell' ? WINDOWS_POWERSHELL_PRELUDE : '')
     },
     detectMismatch(command: string): ShellDialectMismatch | undefined {
       return detectShellDialectMismatch(command, snapshot)

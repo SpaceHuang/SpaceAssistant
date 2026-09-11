@@ -20,7 +20,7 @@ import {
   throwIfAborted
 } from './toolExecutionResource'
 import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
-import { processTreeKiller } from '../spawnUtil'
+import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
 import { ProcessSupervisor } from '../shell/processSupervisor'
 import {
   classifyRipgrepSpawnError,
@@ -1136,14 +1136,64 @@ export const grepExecutor: ToolExecutor = {
   }
 }
 
+/** 产品默认解释器命令，与 DEFAULT_TOOLS_CONFIG.pythonPath 保持一致。 */
+const DEFAULT_PYTHON_PATH = 'python'
+/** 默认解释器不可用时的候选顺序，按产品目标平台给出。 */
+const PYTHON_FALLBACK_CANDIDATES: Partial<Record<NodeJS.Platform, readonly string[]>> = {
+  win32: ['py', 'python3'],
+  darwin: ['python3'],
+  linux: ['python3']
+}
+const PYTHON_PROBE_TIMEOUT_MS = 5_000
+
+export type PythonInterpreterResolution = {
+  /** 本次实际使用的解释器命令 */
+  command: string
+  /** 发生回退时被替换掉的原始命令 */
+  fallbackFrom?: string
+}
+export type PythonInterpreterProbe = (command: string) => Promise<boolean>
+
+/** 只问版本、绝不执行用户代码：回退判定必须发生在运行脚本之前，避免二次执行副作用。 */
+async function probePythonInterpreter(command: string): Promise<boolean> {
+  const probe = await runCommandWithTimeout(command, ['--version'], PYTHON_PROBE_TIMEOUT_MS)
+  return probe.completed && probe.code === 0
+}
+
+/**
+ * 解析本次 run_script 使用的解释器。
+ *
+ * 只有"未配置或仍是产品默认值 python"时才启用回退：Windows 上 `python` 常被
+ * Microsoft Store 别名占用（stub 以 9009 退出且不会执行用户代码），真实解释器往往
+ * 只注册了 `py`；macOS 新版本则通常只有 `python3`。显式配置的自定义解释器失败时
+ * 按原样返回，让用户看到自己的配置问题，而不是被静默替换。
+ */
+export async function resolvePythonInterpreter(
+  configured?: string,
+  options: { platform?: NodeJS.Platform; probe?: PythonInterpreterProbe } = {}
+): Promise<PythonInterpreterResolution> {
+  const command = configured?.trim() || DEFAULT_PYTHON_PATH
+  if (command !== DEFAULT_PYTHON_PATH) return { command }
+  const probe = options.probe ?? probePythonInterpreter
+  if (await probe(command)) return { command }
+  for (const candidate of PYTHON_FALLBACK_CANDIDATES[options.platform ?? process.platform] ?? []) {
+    if (await probe(candidate)) return { command: candidate, fallbackFrom: command }
+  }
+  return { command }
+}
+
 export const runScriptExecutor: ToolExecutor = {
   name: 'run_script',
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const code = typeof input.code === 'string' ? input.code : ''
     const timeoutSec = typeof input.timeout === 'number' ? input.timeout : ctx.toolsConfig.scriptTimeout
-    const py = ctx.toolsConfig.pythonPath || 'python'
-    ctx.sendProgress('script', '启动 Python...')
+    const interpreter = await resolvePythonInterpreter(ctx.toolsConfig.pythonPath)
+    const py = interpreter.command
+    ctx.sendProgress(
+      'script',
+      interpreter.fallbackFrom ? `未找到 ${interpreter.fallbackFrom}，改用 ${py} 启动 Python...` : '启动 Python...'
+    )
     const env = buildPythonScriptEnv()
     const stdoutDecoder = createStreamTextDecoder('utf-8')
     const stderrDecoder = createStreamTextDecoder('utf-8')

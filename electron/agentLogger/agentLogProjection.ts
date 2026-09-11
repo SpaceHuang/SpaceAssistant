@@ -16,12 +16,13 @@ const COMMON_KEYS = new Set([
   'inputFingerprint', 'invocationFingerprint', 'commandFingerprint', 'cwdFingerprint', 'environmentFingerprint',
   'planDigest', 'caseId', 'convergenceCaseId', 'errorCode', 'reasonCode', 'errorRedacted', 'reasonRedacted',
   'userAction', 'validatorId', 'denyType', 'violationCodes', 'requiresRiskAck', 'outsideWorkDirRisk',
-  'warningsCount', 'scannedPathsCount', 'canTrust', 'skipConfirm', 'outcome', 'status', 'pid', 'shell',
+  'warningsCount', 'scannedPathsCount', 'canTrust', 'skipConfirm', 'outcome', 'verdict', 'type', 'status', 'pid', 'shell',
   'shellId', 'exitCode', 'signal', 'exitCodeHint', 'interrupted', 'timedOut', 'cancelled', 'truncated',
   'persistedOutput', 'artifactAvailable', 'outputArtifactBytes', 'outputArtifactSha256', 'stdoutBytes',
   'stderrBytes', 'stdoutSha256', 'stderrSha256', 'stdoutRedacted', 'stderrRedacted', 'outputPersistErrorCode',
   'terminationErrorCode', 'terminationSignal', 'treeKillVerified', 'outputLimitReached', 'captureCaseId',
-  'progressCaseId', 'terminationCaseId', 'retryCount', 'retryExhausted', 'terminationReason', 'redacted'
+  'progressCaseId', 'terminationCaseId', 'retryCount', 'retryExhausted', 'terminationReason', 'redacted',
+  'dataBytes', 'dataSha256', 'outputTruncated', 'outputRedacted'
 ])
 
 function hash(value: unknown): string {

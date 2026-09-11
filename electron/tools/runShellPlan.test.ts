@@ -21,7 +21,8 @@ describe('planRunShellExecution', () => {
     expect(prepared.command).toBe('echo planned')
     expect(prepared.timeoutMs).toBe(3000)
     expect(prepared.ioMaxBytes).toBe(4096)
-    expect(prepared.profile.dialect).toBe('posix-bash')
+    // 产品目标 profile 由宿主平台决定：Windows 固定 Windows PowerShell，其余平台为 POSIX Bash。
+    expect(prepared.profile.dialect).toBe(process.platform === 'win32' ? 'windows-powershell' : 'posix-bash')
     expect(Object.isFrozen(prepared)).toBe(true)
     expect(prepared.planDigest).toMatch(/^[0-9a-f]{64}$/)
   })

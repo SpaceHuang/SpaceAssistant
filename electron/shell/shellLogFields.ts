@@ -23,7 +23,7 @@ const ALLOWED_KEYS = new Set([
   'outputLimitReached', 'captureCaseId', 'progressCaseId', 'terminationCaseId',
   'caseId', 'convergenceCaseId', 'validatorId', 'denyType', 'userAction', 'violationCodes',
   'requiresRiskAck', 'outsideWorkDirRisk', 'warningsCount', 'scannedPathsCount', 'canTrust', 'skipConfirm',
-  'outcome', 'retryCount', 'retryExhausted', 'status', 'terminationReason', 'redacted',
+  'outcome', 'verdict', 'retryCount', 'retryExhausted', 'status', 'terminationReason', 'redacted',
   'errorCode', 'reasonCode', 'errorRedacted', 'reasonRedacted'
 ])
 

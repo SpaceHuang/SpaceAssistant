@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { planShellExec } from './shellExecPlan'
-import { WINDOWS_POWERSHELL_PROFILE, WINDOWS_UTF8_OUTPUT_PRELUDE } from './shellProfiles'
+import { WINDOWS_POWERSHELL_PROFILE, WINDOWS_POWERSHELL_PRELUDE } from './shellProfiles'
 
 describe('planShellExec', () => {
   it('requires an explicit command placeholder instead of inferring -c/-lc', () => {
@@ -21,7 +21,7 @@ describe('planShellExec', () => {
     ])
     expect(plan.spawnArgs.at(-1)).toBeTypeOf('string')
     expect(Buffer.from(String(plan.spawnArgs.at(-1)), 'base64').toString('utf16le')).toBe(
-      `${WINDOWS_UTF8_OUTPUT_PRELUDE}Write-Output "你好"`
+      `${WINDOWS_POWERSHELL_PRELUDE}Write-Output "你好"`
     )
   })
 })

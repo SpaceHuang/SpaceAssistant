@@ -63,6 +63,12 @@ describe('ShellOutputView', () => {
     expect(openOutputPath).toHaveBeenCalledWith('artifact-abc123')
   })
 
+  it('redacted artifact id 不渲染打开入口（主进程必然拒绝）', () => {
+    render(<ShellOutputView stdout="partial" truncated artifactId="artifact-redacted" />)
+    expect(screen.queryByRole('button', { name: /打开完整日志/ })).toBeNull()
+    expect(openOutputPath).not.toHaveBeenCalled()
+  })
+
   it('returns null when completed mode has no output', () => {
     const { container } = render(<ShellOutputView stdout="" stderr="" exitCode={0} />)
     expect(container.firstChild).toBeNull()

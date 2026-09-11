@@ -1,4 +1,5 @@
 import path from 'path'
+import { mkdirSync } from 'fs'
 import http from 'http'
 import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
@@ -265,6 +266,12 @@ app.whenReady().then(async () => {
   })
 
   workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+  // 默认 workDir 可能尚不存在，提前创建避免 file:list-directory 等处理器 ENOENT
+  try {
+    mkdirSync(workDirState, { recursive: true })
+  } catch (err) {
+    console.warn('[workDir] ensure default dir failed:', err instanceof Error ? err.message : String(err))
+  }
 
   const applyWorkDirSideEffects = (d: string) => {
     workDirState = d

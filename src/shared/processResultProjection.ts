@@ -34,7 +34,35 @@ const SAFE_STATUS = new Set(['succeeded', 'failed', 'spawn_failed', 'signalled',
 const SAFE_TERMINATION_REASONS = new Set(['process_exit', 'external_signal', 'timeout', 'user_cancel', 'output_limit', 'spawn_error', 'result_invalid'])
 const SAFE_SIGNAL_RE = /^SIG[A-Z0-9]+$/
 const SAFE_HASH_RE = /^[0-9a-f]{32,128}$/i
-const SECRET_KEY_RE = /(?:key|token|secret|cookie|password|passwd)/i
+/** 带凭据限定词的键名（apiKey / x-api-key / accessToken / clientSecret / sessionToken ...）。 */
+const QUALIFIED_SECRET_KEY_RE = /(?:api|access|secret|private|client|auth|bearer|signing|session)[_-]?(?:key|token|secret)s?$/i
+/** 独立凭据键名（token / secret / userPassword / set-cookie / authorization ...）。 */
+const STANDALONE_SECRET_KEY_RE = /(?:token|secret|cookie|password|passwd|credential|credentials|authorization|passphrase)s?$/i
+/** 裸 key / keys：只在值确实像凭据时才脱敏。 */
+const BARE_KEY_RE = /^keys?$/i
+const SECRET_LIKE_VALUE_RE =
+  /^(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{12,}|ASIA[0-9A-Z]{12,}|xox[baprs]-[A-Za-z0-9-]{8,}|AIza[0-9A-Za-z_-]{20,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|Bearer\s+\S+|[A-Za-z0-9+/]{40,}={0,2}|[A-Fa-f0-9]{32,})$/
+
+/**
+ * 判断某个键的值是否必须脱敏。
+ *
+ * 早先的实现只要键名包含 `key` 就整段替换成 `<secret:redacted>`，于是 `{keyCode: 13}`、
+ * `{key: 'Enter'}`、`{monkey: ...}`、`{keys: [...]}` 这类合法数据全部丢失，静默打断
+ * "工具 A 返回 token、模型传给工具 B"的流程。现在按三级判定：
+ * 限定词键名 → 独立凭据键名 → 裸 key/keys 仅在值看起来像凭据时脱敏。
+ */
+function shouldRedactValue(key: string, value: unknown): boolean {
+  if (QUALIFIED_SECRET_KEY_RE.test(key) || STANDALONE_SECRET_KEY_RE.test(key)) return true
+  if (!BARE_KEY_RE.test(key)) return false
+  return looksLikeSecretValue(value)
+}
+
+/** 裸 key/keys 的值形态不定（单值或数组），任一元素像凭据即整体脱敏。 */
+function looksLikeSecretValue(value: unknown): boolean {
+  if (typeof value === 'string') return SECRET_LIKE_VALUE_RE.test(value.trim())
+  if (Array.isArray(value)) return value.some((entry) => looksLikeSecretValue(entry))
+  return false
+}
 const PROCESS_KEYS = new Set([
   'status', 'code', 'errorCode', 'caseId', 'exitCode', 'signal', 'terminationReason', 'interrupted',
   'timedOut', 'cancelled', 'truncated', 'stdout', 'stderr', 'stdoutBytes', 'stderrBytes',
@@ -96,9 +124,12 @@ function basename(value: string): string {
   return path.slice(path.lastIndexOf('/') + 1) || 'unknown'
 }
 
+/** 无法安全暴露 artifact 主键时的兜底值；渲染层不得用它调用打开接口（主进程必然拒绝）。 */
+export const REDACTED_ARTIFACT_ID = 'artifact-redacted'
+
 function artifactIdForPersistedPath(filePath: string): string {
   const name = filePath.split(/[\\/]/).pop() ?? ''
-  return /^[0-9a-f]{64}\.log$/i.test(name) ? `artifact-${name.slice(0, -4)}` : 'artifact-redacted'
+  return /^[0-9a-f]{64}\.log$/i.test(name) ? `artifact-${name.slice(0, -4)}` : REDACTED_ARTIFACT_ID
 }
 
 function relativeToWorkspace(value: string, workspaceRoot: string): string {
@@ -242,7 +273,7 @@ function projectProcessDataForSink(
       out[key] = projectProcessDataForSink(entry as Record<string, unknown>, sink, options)
       continue
     }
-    if (typeof entry === 'string' && SECRET_KEY_RE.test(key)) {
+    if (typeof entry === 'string' && shouldRedactValue(key, entry)) {
       out[key] = '<secret:redacted>'
       continue
     }
@@ -306,7 +337,7 @@ function projectGenericData(
         out.artifactId = artifactIdForPersistedPath(entry)
         continue
       }
-      if (SECRET_KEY_RE.test(key)) {
+      if (shouldRedactValue(key, entry)) {
         out[key] = '<secret:redacted>'
         continue
       }

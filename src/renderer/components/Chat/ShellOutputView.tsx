@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { formatShellStderrDisplay, normalizeTerminalOutput } from '../../../shared/terminalOutputSanitize'
+import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
 
 type Props = {
   /** 实时模式：合并的 stdout+stderr 尾部 */
@@ -47,17 +48,19 @@ export function ShellOutputView({
   if (!out.trim() && !errDisplay.trim()) return null
 
   const hasFailure = Boolean(errDisplay.trim())
+  // 兜底 artifact id 一定打不开（主进程返回 INVALID_PATH），不要给出点了没反应的入口。
+  const openTarget = artifactId && artifactId !== REDACTED_ARTIFACT_ID ? artifactId : persistedOutputPath
 
   return (
     <div className={`shell-output-block${hasFailure ? ' shell-output-block--failed' : ''}`}>
       {out.trim() ? <pre className="shell-output">{out}</pre> : null}
       {out.trim() && errDisplay.trim() ? '\n' : null}
       {errDisplay.trim() ? <pre className="shell-output shell-output__stderr">{errDisplay}</pre> : null}
-      {truncated && (artifactId || persistedOutputPath) ? (
+      {truncated && openTarget ? (
         <button
           type="button"
           className="shell-output__truncated-hint"
-          onClick={() => void window.api.shellOpenOutputPath(artifactId ?? persistedOutputPath!)}
+          onClick={() => void window.api.shellOpenOutputPath(openTarget)}
         >
           输出已截断，打开完整日志 →
         </button>

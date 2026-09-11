@@ -18,8 +18,10 @@ describe('runShellRegisteredTool', () => {
   })
 
   it('在 plan 阶段生成 prepared plan，execute 不接受原始 command', async () => {
+    // 命令文本按宿主平台方言给出：Windows 只有 Windows PowerShell profile。
+    const command = process.platform === 'win32' ? 'Write-Output planned' : 'printf planned'
     const handle = await runShellRegisteredTool.begin(
-      { command: 'printf planned' },
+      { command },
       { requestId: 'r', toolUseId: 'u', signal: runtime.signal, executionContext: runtime }
     )
     expect(handle.prepared.kind).toBe('planned')

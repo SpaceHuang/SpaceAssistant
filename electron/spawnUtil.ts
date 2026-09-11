@@ -5,6 +5,55 @@ import type { ProcessKiller } from './shell/processSupervisor'
 const KILL_TREE_TIMEOUT_MS = 3000
 const KILL_TREE_GRACE_MS = 250
 
+export type CommandRun = {
+  /** 子进程是否在超时前自行退出 */
+  completed: boolean
+  code: number | null
+  stdout: string
+}
+
+/**
+ * 以有限超时运行外部命令，超时按 `completed: false` 收敛。
+ *
+ * 启动路径与工具执行路径都会用到：不能用无超时的 `spawnSync`，否则被查询/探测的
+ * 进程一旦挂起就会永久阻塞主进程事件循环。
+ */
+export function runCommandWithTimeout(
+  executable: string,
+  args: readonly string[],
+  timeoutMs: number
+): Promise<CommandRun> {
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: NodeJS.Timeout
+    const finish = (result: CommandRun): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    let child: ChildProcess
+    try {
+      child = spawn(executable, [...args], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+    } catch {
+      resolve({ completed: false, code: null, stdout: '' })
+      return
+    }
+    timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* 进程可能已退出 */
+      }
+      finish({ completed: false, code: null, stdout: '' })
+    }, timeoutMs)
+    const chunks: Buffer[] = []
+    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
+    child.once('error', () => finish({ completed: false, code: null, stdout: '' }))
+    child.once('close', (code) => finish({ completed: true, code, stdout: Buffer.concat(chunks).toString('utf8') }))
+  })
+}
+
 /** 断开子进程 stdio，避免进程未退出时管道句柄阻止 Node 事件循环结束。 */
 export function detachChildProcessStreams(proc: ChildProcess): void {
   try {

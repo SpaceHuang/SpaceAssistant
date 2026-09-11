@@ -27,8 +27,8 @@ describe('resolveNodeToolchainPath', () => {
     }, 'win32')
     expect(result.sources).toEqual(['windows-node', 'windows-npm'])
     expect(result.pathEntries.slice(0, 2)).toEqual([
-      'C:\\Program Files/nodejs',
-      'C:\\Users\\test\\AppData\\Roaming/npm'
+      'C:\\Program Files\\nodejs',
+      'C:\\Users\\test\\AppData\\Roaming\\npm'
     ])
     expect(result.pathEntries.slice(2)).toEqual(['C:\\Windows\\System32', 'C:\\Other'])
   })
