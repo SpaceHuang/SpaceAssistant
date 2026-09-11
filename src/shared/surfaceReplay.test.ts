@@ -38,4 +38,18 @@ describe('surface replay', () => {
     ])
     expect(applyCommittedSurfaceShadow([{ id: 'old-1' }, { id: 'tail' }], replay, [], 'w')).toEqual([{ id: 'checkpoint-1', role: 'user', content: 'summary' }, { id: 'tail' }])
   })
+
+  it('applies consecutive compactions in order using the prior checkpoint surface', () => {
+    const first = { checkpointMessage: { id: 'checkpoint-1', role: 'user', content: 'summary 1' }, shadowedRanges: [{ start: 'old-1', end: 'old-2' }] }
+    const second = { checkpointMessage: { id: 'checkpoint-2', role: 'user', content: 'summary 2' }, shadowedRanges: [{ start: 'checkpoint-1', end: 'new-1' }] }
+    const events = [
+      { seq: 1, type: 'compaction_start' as const, payload: { compactionId: 'c1', windowId: 'w', inputSurfaceFingerprint: 'in-1' } },
+      { seq: 2, type: 'compaction_summary' as const, payload: { compactionId: 'c1', windowId: 'w', candidate: first, summaryHash: computeCompactionSummaryHash(first), outputSurfaceFingerprint: 'out-1', shadowedRanges: first.shadowedRanges } },
+      { seq: 3, type: 'compaction_end' as const, payload: { compactionId: 'c1', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in-1', outputSurfaceFingerprint: 'out-1', summaryHash: computeCompactionSummaryHash(first) } },
+      { seq: 4, type: 'compaction_start' as const, payload: { compactionId: 'c2', windowId: 'w', inputSurfaceFingerprint: 'in-2' } },
+      { seq: 5, type: 'compaction_summary' as const, payload: { compactionId: 'c2', windowId: 'w', candidate: second, summaryHash: computeCompactionSummaryHash(second), outputSurfaceFingerprint: 'out-2', shadowedRanges: second.shadowedRanges } },
+      { seq: 6, type: 'compaction_end' as const, payload: { compactionId: 'c2', windowId: 'w', status: 'committed', startSeq: 4, summarySeq: 5, inputSurfaceFingerprint: 'in-2', outputSurfaceFingerprint: 'out-2', summaryHash: computeCompactionSummaryHash(second) } }
+    ]
+    expect(applyCommittedSurfaceShadow([{ id: 'old-1' }, { id: 'old-2' }, { id: 'new-1' }, { id: 'tail' }], foldCompactionEvents(events), [], 'w')).toEqual([{ id: 'checkpoint-2', role: 'user', content: 'summary 2' }, { id: 'tail' }])
+  })
 })

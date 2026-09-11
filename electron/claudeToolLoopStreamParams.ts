@@ -17,11 +17,13 @@ export function buildClaudeToolLoopStreamParams(args: {
   const thinking = args.thinking
   const hasSystem = typeof args.system === 'string' && args.system.trim().length > 0
   const cacheControl = { type: 'ephemeral' as const }
-  const messages = args.cacheControl && args.messages.length > 0
-    ? args.messages.map((message, index) => index === args.messages.length - 1 && typeof message === 'object' && message !== null && typeof (message as { content?: unknown }).content === 'string'
-      ? { ...(message as Record<string, unknown>), content: [{ type: 'text', text: (message as { content: string }).content, cache_control: cacheControl }] }
-      : message)
-    : args.messages
+  const messages = args.messages.map((message, index) => {
+    const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
+    const content = index === args.messages.length - 1 && typeof source.content === 'string'
+      ? [{ type: 'text', text: source.content, cache_control: cacheControl }]
+      : source.content
+    return { role: source.role, content }
+  })
   const system = args.cacheControl && hasSystem ? [{ type: 'text', text: args.system!.trim(), cache_control: cacheControl }] : args.system
 
   if (hasSystem) {

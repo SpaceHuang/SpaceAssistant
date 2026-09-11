@@ -26,30 +26,29 @@ export function computeShadowedRanges<T extends SurfaceReplayItem>(before: reado
 /** 将已提交压缩记录的 shadowedRanges 应用到模型面；调用方仍保留完整 facts。 */
 export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = [], windowId?: string): T[] {
   const required = new Set(requiredIds)
-  const shadowed = new Set<string>()
-  const checkpoints: T[] = []
+  let currentSurface = [...items]
   for (const committed of replay.committed) {
     const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
     if (windowId && committedWindowId !== windowId) continue
-    const candidate = committed.summary.payload.candidate
-    if (candidate && typeof candidate === 'object') {
-      const checkpointMessage = (candidate as { checkpointMessage?: unknown }).checkpointMessage
-      if (checkpointMessage && typeof checkpointMessage === 'object' && typeof (checkpointMessage as { id?: unknown }).id === 'string') {
-        const checkpointId = (checkpointMessage as { id: string }).id
-        if (!items.some((item) => item.id === checkpointId) && !checkpoints.some((item) => item.id === checkpointId)) checkpoints.push(checkpointMessage as T)
-      }
-    }
     const ranges = committed.summary.payload.shadowedRanges
     if (!Array.isArray(ranges)) continue
+    const shadowedIds = new Set<string>()
+    let insertionIndex = -1
     for (const range of ranges) {
-      if (!range || typeof range !== 'object') continue
+      if (!range || typeof range !== 'object') { shadowedIds.clear(); break }
       const start = (range as { start?: unknown }).start
       const end = (range as { end?: unknown }).end
-      const startIndex = items.findIndex((item) => item.id === start)
-      const endIndex = items.findIndex((item) => item.id === end)
-      if (startIndex < 0 || endIndex < startIndex) continue
-      for (const item of items.slice(startIndex, endIndex + 1)) shadowed.add(item.id)
+      const rangeStart = currentSurface.findIndex((item) => item.id === start)
+      const rangeEnd = currentSurface.findIndex((item) => item.id === end)
+      if (rangeStart < 0 || rangeEnd < rangeStart) { shadowedIds.clear(); break }
+      if (insertionIndex < 0) insertionIndex = rangeStart
+      for (const item of currentSurface.slice(rangeStart, rangeEnd + 1)) shadowedIds.add(item.id)
     }
+    if (shadowedIds.size === 0) continue
+    currentSurface = currentSurface.filter((item) => !shadowedIds.has(item.id) || item.required || required.has(item.id))
+    const candidate = committed.summary.payload.candidate
+    const checkpointMessage = candidate && typeof candidate === 'object' ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
+    if (checkpointMessage && typeof checkpointMessage === 'object' && typeof (checkpointMessage as { id?: unknown }).id === 'string') currentSurface.splice(Math.min(insertionIndex, currentSurface.length), 0, checkpointMessage as T)
   }
-  return [...checkpoints, ...items.filter((item) => !shadowed.has(item.id) || item.required || required.has(item.id))]
+  return currentSurface.filter((item) => item.required || required.has(item.id) || currentSurface.includes(item))
 }

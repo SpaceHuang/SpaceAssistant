@@ -6,6 +6,10 @@ import {
 } from './claudeToolLoopStreamParams'
 
 describe('buildClaudeToolLoopStreamParams', () => {
+  it('does not serialize local surface metadata to the provider', () => {
+    const p = buildClaudeToolLoopStreamParams({ model: 'm', max_tokens: 10, system: 'sys', messages: [{ id: 'local-id', timestamp: 1, role: 'user', content: 'hello' }], tools: [], thinking: { type: 'disabled' }, cacheControl: true })
+    expect(p.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hello', cache_control: { type: 'ephemeral' } }] }])
+  })
   it('adds cache breakpoints to system and deepest stable message when enabled', () => {
     const p = buildClaudeToolLoopStreamParams({ model: 'm', max_tokens: 10, system: 'sys', messages: [{ role: 'user', content: 'hello' }], tools: [], thinking: { type: 'disabled' }, cacheControl: true })
     expect(p.system).toEqual([{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }])
