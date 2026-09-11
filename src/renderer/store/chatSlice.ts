@@ -75,6 +75,7 @@ export const chatSlice = createSlice({
       state.currentSessionId = action.payload
       state.confirmFocusToolUseId = null
       state.scrollToMessageId = null
+      state.contextProjection = null
     },
     setConfirmFocusToolUseId(state, action: PayloadAction<string | null>) {
       state.confirmFocusToolUseId = action.payload
