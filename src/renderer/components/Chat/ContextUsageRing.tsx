@@ -74,6 +74,7 @@ export function ContextUsageRing({
   }, [config])
 
   const maximumContext = useMemo(() => {
+    if (contextProjection) return contextProjection.contextWindow.tokens
     if (!config || !currentModel) return undefined
     return resolveEffectiveMaximumContext(config.model, currentModel.maximumContext)
   }, [config, currentModel])
@@ -81,7 +82,7 @@ export function ContextUsageRing({
   const effectiveOutputMax =
     config != null
       ? resolveEffectiveOutputMaxTokens(config.model, config.models)
-      : undefined
+      : contextProjection ? 0 : undefined
 
   const hasData =
     (lastUsage != null || contextProjection != null) &&
