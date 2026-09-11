@@ -5,6 +5,8 @@ import { readAppLocale } from './appIpc'
 import type { AppDatabase } from './database'
 import { buildSystemPrompt } from './projectMemory'
 import { renderPrompt, type PromptSection } from '../src/shared/promptAssembly'
+import { buildSkillCatalogSection } from '../src/shared/skillPrompt'
+import type { SkillDefinition } from '../src/shared/domainTypes'
 
 export function resolveRequestLocale(payloadLocale: unknown, db?: AppDatabase): AppLocale {
   if (typeof payloadLocale === 'string' && isAppLocale(payloadLocale)) return payloadLocale
@@ -72,12 +74,15 @@ export function buildFinalSystemPrompt(args: {
   memoryEnabled: boolean
   locale: AppLocale
   hasImageAttachments?: boolean
+  skillCatalog?: SkillDefinition[]
+  contextWindow?: number
 }): string | undefined {
   const sections: PromptSection[] = [
     buildBaseSystemSection(args),
     buildToolConventionSection(args.locale),
     ...(args.hasImageAttachments ? [buildImageAttachmentsSection(args.locale)] : []),
-    buildUiLocaleSection(args.locale)
+    buildUiLocaleSection(args.locale),
+    ...(args.skillCatalog?.length ? [buildSkillCatalogSection(args.skillCatalog, args.contextWindow ?? 200_000)] : [])
   ]
   return renderPrompt({ sections, contexts: [], tools: [], variables: {} }) || undefined
 }

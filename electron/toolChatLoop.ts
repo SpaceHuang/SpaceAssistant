@@ -50,6 +50,7 @@ import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
 import { buildToolCapabilityConventionHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
+import { getCachedSkills } from './skills/skillCache'
 import { getSession, updateSession } from './database'
 import { listProfiles } from './mcp/mcpConfigStore'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
@@ -643,6 +644,8 @@ async function runToolChatSessionInner(
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
+      skillCatalog: getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
+      contextWindow: args.contextWindow
     })
     // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
     const attemptRequestId = `${requestId}:round:${loopRound}`
