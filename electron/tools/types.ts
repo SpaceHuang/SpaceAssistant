@@ -9,6 +9,7 @@ import type { WorkDirManager } from '../workDirManager'
 import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { ImChannel } from '../confirmation/imChannel'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
+import type { HistoryFact } from '../../src/shared/historyReader'
 
 export interface RemoteContext {
   source: 'feishu' | 'wechat'
@@ -57,6 +58,8 @@ export type WeChatRemoteContext = RemoteContext & { source: 'wechat' }
 export type ToolProgressPayload = { message?: string; raw?: string; rawDelta?: string; seq?: number; processPid?: number; processGroupId?: number; processOwnerToken?: string }
 
 export interface ToolExecutionContext {
+  /** 重开后的模型面可读取的、已授权会话事实快照。 */
+  historyFacts?: readonly HistoryFact[]
   workDir: string
   userDataDir: string
   requestId: string

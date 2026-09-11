@@ -37,6 +37,7 @@ import { runShellExecutor } from './runShellExecutor'
 import { TypedToolRegistry } from './plannedToolRegistry'
 import { runShellRegisteredTool } from './runShellRegisteredTool'
 import { skillsReadTool } from './skillsReadTool'
+import { historyReadTool } from './historyTool'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
@@ -1283,6 +1284,7 @@ export const runScriptExecutor: ToolExecutor = {
 const registry = new TypedToolRegistry()
 registry.register(runShellRegisteredTool)
 registry.register(skillsReadTool)
+registry.register(historyReadTool)
 for (const executor of [
   readFileExecutor,
   listDirectoryExecutor,
