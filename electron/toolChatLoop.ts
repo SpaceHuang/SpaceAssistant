@@ -70,6 +70,7 @@ import {
   resolveDependencyRecoverySkill
 } from './browser/browserDependencyRecovery'
 import type { AppDatabase } from './database'
+import type { HistoryFact } from '../src/shared/historyReader'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import type { FeishuConfig } from '../src/shared/feishuTypes'
@@ -416,6 +417,8 @@ export type RunToolChatSessionArgs = {
   projectMemoryEnabled?: boolean
   /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
+  /** 由 Core 从当前授权会话事实构造，供 history.read 只读回查。 */
+  historyFacts?: readonly HistoryFact[]
   assistantMessageId?: string
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
@@ -1771,7 +1774,8 @@ async function runToolChatSessionInner(
             larkCliRunner,
             remoteContext,
             toolUserConfirmed,
-            getBrowserDetectContext
+            getBrowserDetectContext,
+            historyFacts: args.historyFacts
           }
           execResult = preparedShellExecution
             ? await executePreparedShellExecution(preparedShellExecution, executionContext, execStartedAt, {
