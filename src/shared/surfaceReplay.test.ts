@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommittedSurfaceShadow, computeShadowedRanges, surfaceItemIdentity } from './surfaceReplay'
-import { foldCompactionEvents } from './compactionEvents'
+import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
   it('uses content identity when a surface item has no explicit id', () => {
@@ -27,5 +27,15 @@ describe('surface replay', () => {
       { seq: 3, type: 'compaction_end', payload: { compactionId: 'other', windowId: 'other', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: 'h' } }
     ])
     expect(applyCommittedSurfaceShadow([{ id: 'old-1' }], replay, [], 'current')).toEqual([{ id: 'old-1' }])
+  })
+
+  it('replays the committed checkpoint before the retained surface', () => {
+    const candidate = { checkpointMessage: { id: 'checkpoint-1', role: 'user', content: 'summary' }, shadowedRanges: [{ start: 'old-1', end: 'old-1' }] }
+    const replay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: { compactionId: 'checkpointed', windowId: 'w', inputSurfaceFingerprint: 'in' } },
+      { seq: 2, type: 'compaction_summary', payload: { compactionId: 'checkpointed', windowId: 'w', candidate, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: 'out', shadowedRanges: candidate.shadowedRanges } },
+      { seq: 3, type: 'compaction_end', payload: { compactionId: 'checkpointed', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: computeCompactionSummaryHash(candidate) } }
+    ])
+    expect(applyCommittedSurfaceShadow([{ id: 'old-1' }, { id: 'tail' }], replay, [], 'w')).toEqual([{ id: 'checkpoint-1', role: 'user', content: 'summary' }, { id: 'tail' }])
   })
 })

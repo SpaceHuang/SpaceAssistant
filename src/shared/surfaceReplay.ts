@@ -27,9 +27,18 @@ export function computeShadowedRanges<T extends SurfaceReplayItem>(before: reado
 export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = [], windowId?: string): T[] {
   const required = new Set(requiredIds)
   const shadowed = new Set<string>()
+  const checkpoints: T[] = []
   for (const committed of replay.committed) {
     const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
     if (windowId && committedWindowId !== windowId) continue
+    const candidate = committed.summary.payload.candidate
+    if (candidate && typeof candidate === 'object') {
+      const checkpointMessage = (candidate as { checkpointMessage?: unknown }).checkpointMessage
+      if (checkpointMessage && typeof checkpointMessage === 'object' && typeof (checkpointMessage as { id?: unknown }).id === 'string') {
+        const checkpointId = (checkpointMessage as { id: string }).id
+        if (!items.some((item) => item.id === checkpointId) && !checkpoints.some((item) => item.id === checkpointId)) checkpoints.push(checkpointMessage as T)
+      }
+    }
     const ranges = committed.summary.payload.shadowedRanges
     if (!Array.isArray(ranges)) continue
     for (const range of ranges) {
@@ -42,5 +51,5 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
       for (const item of items.slice(startIndex, endIndex + 1)) shadowed.add(item.id)
     }
   }
-  return items.filter((item) => !shadowed.has(item.id) || item.required || required.has(item.id))
+  return [...checkpoints, ...items.filter((item) => !shadowed.has(item.id) || item.required || required.has(item.id))]
 }
