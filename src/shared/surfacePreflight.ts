@@ -1,6 +1,21 @@
 export type SurfacePreflightInput = { ids: readonly string[]; requiredIds: readonly string[]; currentUserMessageId: string; fingerprint: string; expectedFingerprint: string; estimatedTotalInputTokens: number; totalInputBudget: number; toolUses: readonly string[]; toolResults: readonly string[] }
 export type SurfacePreflightResult = { ok: true; tokenCheckSource: 'default_estimator' | 'exact_provider' } | { ok: false; reason: 'required_ids_invalid' | 'current_input_missing' | 'fingerprint_mismatch' | 'tool_pair_invalid' | 'token_budget_exceeded'; tokenCheckSource: 'default_estimator' | 'exact_provider' }
 
+export function extractToolPairIds(messages: readonly { content?: unknown }[]): { toolUses: string[]; toolResults: string[] } {
+  const toolUses: string[] = []
+  const toolResults: string[] = []
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (!block || typeof block !== 'object') continue
+      const value = block as { type?: unknown; id?: unknown; tool_use_id?: unknown }
+      if (value.type === 'tool_use' && typeof value.id === 'string') toolUses.push(value.id)
+      if (value.type === 'tool_result' && typeof value.tool_use_id === 'string') toolResults.push(value.tool_use_id)
+    }
+  }
+  return { toolUses, toolResults }
+}
+
 export function validateSurfaceForSend(input: SurfacePreflightInput, tokenCheckSource: SurfacePreflightResult['tokenCheckSource'] = 'default_estimator'): SurfacePreflightResult {
   const counts = new Map<string, number>()
   for (const id of input.ids) counts.set(id, (counts.get(id) ?? 0) + 1)

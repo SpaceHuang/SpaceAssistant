@@ -170,7 +170,7 @@ import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
-import { validateSurfaceForSend } from '../src/shared/surfacePreflight'
+import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { computeContextPressure } from '../src/shared/contextMeter'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
@@ -667,6 +667,7 @@ async function runToolChatSessionInner(
     lastRequestHeader = requestHeader
     lastRequestContext = requestContext
     const surfaceIds = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => message.id ?? `message-${index}`)
+    const toolPairs = extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>)
     const preflight = validateSurfaceForSend({
       ids: surfaceIds,
       requiredIds: args.currentUserMessageId ? [args.currentUserMessageId] : [],
@@ -675,8 +676,8 @@ async function runToolChatSessionInner(
       expectedFingerprint: requestHeader.surfaceSnapshot.fingerprint,
       estimatedTotalInputTokens: requestHeader.surfaceSnapshot.surfaceTokens,
       totalInputBudget: requestContext.budget.totalInputBudget,
-      toolUses: [],
-      toolResults: []
+      toolUses: toolPairs.toolUses,
+      toolResults: toolPairs.toolResults
     })
     if (!preflight.ok) return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
     await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })

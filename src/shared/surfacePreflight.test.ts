@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { validateSurfaceForSend } from './surfacePreflight'
+import { extractToolPairIds, validateSurfaceForSend } from './surfacePreflight'
 
 describe('surface send preflight', () => {
   it('requires every required id exactly once and validates fingerprint/budget', () => {
@@ -12,5 +12,8 @@ describe('surface send preflight', () => {
     const base = { ids: ['current'], requiredIds: ['current'], currentUserMessageId: 'current', fingerprint: 'f', expectedFingerprint: 'f', estimatedTotalInputTokens: 101, totalInputBudget: 100, toolUses: ['tool-1'], toolResults: [] }
     expect(validateSurfaceForSend(base).reason).toBe('tool_pair_invalid')
     expect(validateSurfaceForSend({ ...base, toolResults: ['tool-1'] }).reason).toBe('token_budget_exceeded')
+  })
+  it('extracts protocol-neutral tool pair ids from the surface', () => {
+    expect(extractToolPairIds([{ content: [{ type: 'tool_use', id: 'u1' }] }, { content: [{ type: 'tool_result', tool_use_id: 'u1' }] }])).toEqual({ toolUses: ['u1'], toolResults: ['u1'] })
   })
 })
