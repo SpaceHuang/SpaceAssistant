@@ -22,7 +22,7 @@ export default defineConfig({
         test: {
           name: 'renderer',
           include: ['src/**/*.test.{ts,tsx}'],
-          exclude: ['src/**/*.perf.measure.test.tsx', '**/node_modules/**'],
+          exclude: ['src/**/*.perf.*.test.tsx', '**/node_modules/**'],
           environment: 'jsdom',
           globals: true,
           pool: 'threads',
@@ -34,7 +34,7 @@ export default defineConfig({
         // 性能采集测试：保留 jsdom/mock 生命周期，但不进入默认回归测试集
         test: {
           name: 'renderer-perf',
-          include: ['src/**/*.perf.measure.test.tsx'],
+          include: ['src/**/*.perf.*.test.tsx'],
           environment: 'jsdom',
           globals: true,
           pool: 'threads',
