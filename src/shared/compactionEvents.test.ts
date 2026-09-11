@@ -7,6 +7,10 @@ describe('compaction event replay', () => {
   it('hashes equivalent candidate objects deterministically', () => {
     expect(computeCompactionSummaryHash({ b: 2, a: { y: 1, x: 0 } })).toBe(computeCompactionSummaryHash({ a: { x: 0, y: 1 }, b: 2 }))
   })
+  it('hashes nullish candidates without throwing', () => {
+    expect(computeCompactionSummaryHash(undefined)).toMatch(/^[0-9a-f]{8}$/)
+    expect(computeCompactionSummaryHash(null)).toMatch(/^[0-9a-f]{8}$/)
+  })
   it('applies only a complete committed triplet', () => {
     const result = foldCompactionEvents([
       event(1, 'compaction_start', { compactionId: 'c1', inputSurfaceFingerprint: 'in', targetTokens: 10 }),
