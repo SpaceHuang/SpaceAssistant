@@ -141,6 +141,10 @@ export async function readCompactionMarkers(eventsPath: string, windowId?: strin
   return projectCompactionMarkers(replayCompactionEvents(await readSessionEvents(eventsPath)), windowId)
 }
 
+export async function readCompactionReplay(eventsPath: string): Promise<CompactionReplay> {
+  return replayCompactionEvents(await readSessionEvents(eventsPath))
+}
+
 /** 每个事件文件唯一的提交 owner；业务代码应通过 getSessionEventSink 获取。 */
 export class SessionEventWriter implements SessionEventSink {
   readonly directory: string

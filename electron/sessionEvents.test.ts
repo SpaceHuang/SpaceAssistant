@@ -17,6 +17,7 @@ import {
   appendCompactionTransaction,
   replayCompactionEvents,
   readCompactionMarkers,
+  readCompactionReplay,
   reconcileSessionEventFiles,
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
@@ -48,6 +49,13 @@ describe('session events', () => {
     const writer = new SessionEventWriter(root, 'markers')
     await appendCompactionTransaction(writer, { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', windowId: 'w1', summaryHash: 'out', outputSurfaceFingerprint: 'out', candidate: {} })
     expect(await readCompactionMarkers(writer.eventsPath, 'w1')).toEqual([{ compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'out' }])
+    await writer.close()
+  })
+  it('reads committed compaction replay for surface reconstruction', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-replay-'))
+    const writer = new SessionEventWriter(root, 'replay')
+    await appendCompactionTransaction(writer, { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', windowId: 'w1', summaryHash: 'out', outputSurfaceFingerprint: 'out', shadowedRanges: [{ start: 'old', end: 'old' }] })
+    expect((await readCompactionReplay(writer.eventsPath)).committed).toHaveLength(1)
     await writer.close()
   })
   it('writes schemaVersion 1 while accepting legacy events without it', async () => {

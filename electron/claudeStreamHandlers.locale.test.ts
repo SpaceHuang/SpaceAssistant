@@ -21,6 +21,7 @@ const mockRunToolChatSession = vi.fn()
 const mockCreateAnthropicClient = vi.fn()
 const mockGetSessionEventSink = vi.fn()
 const mockReadCompactionMarkers = vi.fn(async () => [])
+const mockReadCompactionReplay = vi.fn(async () => ({ committed: [], rejected: [] }))
 const capturedStreamSystems: (string | undefined)[] = []
 
 vi.mock('./toolChatLoop', () => ({
@@ -29,7 +30,8 @@ vi.mock('./toolChatLoop', () => ({
 
 vi.mock('./sessionEvents', () => ({
   getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args),
-  readCompactionMarkers: (...args: unknown[]) => mockReadCompactionMarkers(...args)
+  readCompactionMarkers: (...args: unknown[]) => mockReadCompactionMarkers(...args),
+  readCompactionReplay: (...args: unknown[]) => mockReadCompactionReplay(...args)
 }))
 
 vi.mock('./agentLogger/agentLogger', () => ({

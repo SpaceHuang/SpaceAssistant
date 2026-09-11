@@ -23,7 +23,8 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { applyCommittedSurfaceShadow } from '../src/shared/surfaceReplay'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -303,7 +304,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const getApiKey = creds.error ? deps.getApiKey : creds.getApiKey
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
-        const persistedMessages = authoritative.messages
+        const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
+        const persistedMessages = applyCommittedSurfaceShadow(authoritative.messages, compactionReplay, [authoritative.currentUserMessageId])
         builtMessages = await buildToolChatMessagesFromSource({
           userDataDir,
           workDir: deps.getWorkDir(),
