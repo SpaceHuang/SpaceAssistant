@@ -657,7 +657,7 @@ async function runToolChatSessionInner(
     await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
     await args.emitSessionEvent?.({
       type: 'request_context',
-      payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot })
+      payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     })
 
     logAgentEvent('info', 'llm.request', {

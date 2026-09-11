@@ -29,4 +29,10 @@ describe('request context payload', () => {
     const payload = buildRequestContextPayload({ requestId: 'r1', provider: 'a', model: 'm', contextWindow: 1000, maxTokensEffective: 100, surfaceSnapshot: header.surfaceSnapshot })
     expect(payload.budget.prefixTokens).toBe(header.surfaceSnapshot.systemTokens + header.surfaceSnapshot.toolsTokens)
   })
+  it('creates a stable fingerprint for the decision cycle', () => {
+    const a = buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, decision: { decisionId: 'd', phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'v1' } })
+    const b = buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, decision: { decisionId: 'd', phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'v1' } })
+    expect(a.decisionFingerprint).toBe(b.decisionFingerprint)
+    expect(a.decisionFingerprint).toMatch(/^[0-9a-f]+$/)
+  })
 })
