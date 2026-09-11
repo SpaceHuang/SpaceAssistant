@@ -36,19 +36,25 @@ describe('resolveRipgrepBinary', () => {
 
   it('开发态 staging 缺失时在启动前明确报告 not_found', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-missing-'))
-    const resolved = resolveRipgrepBinary({ packaged: false, resourcesPath: '/unused', developmentRoot: root, platform: 'darwin', arch: 'arm64' })
-    await expect(inspectRipgrepBinary(resolved)).resolves.toEqual({ available: false, reason: 'not_found' })
-    await fs.rm(root, { recursive: true, force: true })
+    try {
+      const resolved = resolveRipgrepBinary({ packaged: false, resourcesPath: '/unused', developmentRoot: root, platform: 'darwin', arch: 'arm64' })
+      await expect(inspectRipgrepBinary(resolved)).resolves.toEqual({ available: false, reason: 'not_found' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('开发态 staging 存在且可执行时通过启动前检查', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-ready-'))
-    const binary = path.join(root, 'resources', 'ripgrep', 'darwin-arm64', 'rg')
-    await fs.mkdir(path.dirname(binary), { recursive: true })
-    await fs.writeFile(binary, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
-    const resolved = resolveRipgrepBinary({ packaged: false, resourcesPath: '/unused', developmentRoot: root, platform: 'darwin', arch: 'arm64' })
-    await expect(inspectRipgrepBinary(resolved)).resolves.toEqual({ available: true })
-    await fs.rm(root, { recursive: true, force: true })
+    try {
+      const binary = path.join(root, 'resources', 'ripgrep', 'darwin-arm64', 'rg')
+      await fs.mkdir(path.dirname(binary), { recursive: true })
+      await fs.writeFile(binary, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      const resolved = resolveRipgrepBinary({ packaged: false, resourcesPath: '/unused', developmentRoot: root, platform: 'darwin', arch: 'arm64' })
+      await expect(inspectRipgrepBinary(resolved)).resolves.toEqual({ available: true })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it.each([
