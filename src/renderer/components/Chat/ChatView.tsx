@@ -69,7 +69,6 @@ import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
 import { parseTestPopCommand } from '../../services/testPopCommandService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
-import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
 import { ensureWorkDirForSession } from '../../services/workDirSessionSync'
@@ -79,11 +78,10 @@ import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../.
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
 import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
-import { buildSystemPromptFromSkills, buildSkillRouteSignature, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
+import { buildSkillRouteSignature, formatSkillRouteHint } from '../../../shared/skillPrompt'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
-import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
 import type { ChatMessageActions } from './ChatMessageActions'
@@ -698,8 +696,6 @@ export function ChatView() {
         return svc?.baseUrl || cfg.baseUrl || undefined
       })()
       const requestModelEntry = cfg.models.find((m) => m.name === requestModel) ?? modelEntry
-      const outputMaxTokens = resolveEffectiveOutputMaxTokens(requestModel, cfg.models)
-      const maxSystemChars = requestModelEntry ? Math.floor(requestModelEntry.maximumContext * 0.1) : undefined
 
       const lastUsage = store.getState().chat.lastUsage
       const pendingAttachments =
@@ -773,18 +769,6 @@ export function ChatView() {
         void window.api.sessionUpdate({ sessionId: runSessionId, metadata }).then((updated) => {
           if (updated) dispatch(upsertSession(updated))
         })
-      }
-
-      let systemPrompt = buildSystemPromptFromSkills(activeSkills)
-      const wikiSchemaActive =
-        wikiConfig.enabled &&
-        (wikiModeRun || activeSkills.some((s) => s.meta.name === 'llm-wiki'))
-      if (wikiSchemaActive) {
-        const schema = await window.api.wikiGetSchema()
-        systemPrompt = appendWikiSchemaToSystemPrompt(systemPrompt, schema?.content ?? null) ?? systemPrompt
-      }
-      if (maxSystemChars && systemPrompt) {
-        systemPrompt = truncateSystemPrompt(systemPrompt, maxSystemChars)
       }
 
       if (abortRequestedRef.current) {
