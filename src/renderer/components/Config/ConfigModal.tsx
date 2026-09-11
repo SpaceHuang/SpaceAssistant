@@ -427,6 +427,12 @@ export function ConfigSettingsPage() {
 
       models,
 
+      preferredLanguageModelId,
+
+      preferredFastLanguageModelId,
+
+      preferredVisionModelId,
+
       llmState: llmDrafts.state,
 
       toolUi,
@@ -462,6 +468,12 @@ export function ConfigSettingsPage() {
     thinkingEnabledWatch,
 
     models,
+
+    preferredLanguageModelId,
+
+    preferredFastLanguageModelId,
+
+    preferredVisionModelId,
 
     llmDrafts.state,
 
