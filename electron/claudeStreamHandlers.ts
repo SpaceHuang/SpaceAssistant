@@ -239,10 +239,14 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
       let finalizePromise: Promise<FinalizeResult> | undefined
+      // 台账写入失败必须可见，但不能把整轮对话打成 llm.error（瞬时 IO 错误会丢弃已流式输出的内容）。
+      // 这里只累计，由 finalizeTurn 统一上报为 eventPersistenceFailed。
+      const eventAppendFailures: EventPersistenceFailure[] = []
+      let droppedChunkEvents = 0
       const finalizeTurn = (turnId: string, reason: string, error?: string): Promise<FinalizeResult> => {
         if (finalizePromise) return finalizePromise
         finalizePromise = (async () => {
-          const failures: EventPersistenceFailure[] = []
+          const failures: EventPersistenceFailure[] = [...eventAppendFailures]
           try {
             await eventWriter?.appendCritical({ type: 'step_end', payload: { turnId, stepId: requestId, reason } })
           } catch (finalizeError) {
@@ -252,6 +256,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}) } })
           } catch (finalizeError) {
             failures.push(toEventPersistenceFailure(finalizeError))
+          }
+          if (droppedChunkEvents > 0) {
+            try {
+              logAgentEvent('warn', 'session.event.chunk_dropped', { requestId, turnId, droppedChunkEvents })
+            } catch { /* 诊断失败不得污染结构化错误返回 */ }
           }
           if (failures.length) {
             try {
@@ -295,6 +304,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const persistedMessages = authoritative.messages
         builtMessages = await buildToolChatMessagesFromSource({
           userDataDir,
+          workDir: deps.getWorkDir(),
           sourceMessages: persistedMessages,
           currentUserMessageId: authoritative.currentUserMessageId,
           sessionId
@@ -345,11 +355,20 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             if (!eventWriter) return
             const normalized = { ...event, payload: { ...event.payload, turnId } }
             if (event.type === 'assistant_chunk') {
-              await eventWriter.waitForCapacity()
-              eventWriter.appendChunk(normalized)
+              try {
+                await eventWriter.waitForCapacity()
+                eventWriter.appendChunk(normalized)
+              } catch {
+                // chunk 属可丢事件：sink 进入 fail-stop 后不再重试，只累计供 finalize 诊断。
+                droppedChunkEvents += 1
+              }
               return
             }
-            await eventWriter.appendCritical(normalized)
+            try {
+              await eventWriter.appendCritical(normalized)
+            } catch (appendError) {
+              eventAppendFailures.push(toEventPersistenceFailure(appendError))
+            }
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {
