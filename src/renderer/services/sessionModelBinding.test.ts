@@ -24,7 +24,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     model: 'deepseek-v4-pro',
     defaultModel: 'deepseek-v4-pro',
     preferredLanguageModelId: proId,
-    preferredFastLanguageModelId: models.find((m) => m.name === 'deepseek-v4-flash')!.id,
+    preferredFastLanguageModelId: models.find((m) => m.name === 'deepseek-flash')!.id,
     preferredVisionModelId: models.find((m) => m.name === 'kimi-k2.7-code')!.id,
     models,
     thinkingEnabled: true,
@@ -49,7 +49,7 @@ describe('sessionModelBinding', () => {
       id: '1',
       name: 'Test',
       preview: '',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       llmServiceId: 's1',
       temperature: 0.7,
       maxTokens: 4096,
@@ -60,8 +60,8 @@ describe('sessionModelBinding', () => {
       metadata: {},
       schemaVersion: 1
     })
-    expect(binding.modelName).toBe('deepseek-v4-flash')
-    expect(binding.displayName).toBe('Default-deepseek-v4-flash')
+    expect(binding.modelName).toBe('deepseek-flash')
+    expect(binding.displayName).toBe('Default-deepseek-flash')
   })
 
   it('falls back to language preferred for new sessions', () => {
@@ -72,11 +72,11 @@ describe('sessionModelBinding', () => {
 
   it('keeps a model selected before the first session is created', () => {
     const cfg = makeConfig()
-    const option = listChatModelOptions(cfg).find((item) => item.modelName === 'deepseek-v4-flash')!
+    const option = listChatModelOptions(cfg).find((item) => item.modelName === 'deepseek-flash')!
     const binding = resolveSessionModelBinding(cfg, undefined, option)
-    expect(binding.modelName).toBe('deepseek-v4-flash')
+    expect(binding.modelName).toBe('deepseek-flash')
     expect(binding.llmServiceId).toBe('s1')
-    expect(binding.displayName).toBe('Default-deepseek-v4-flash')
+    expect(binding.displayName).toBe('Default-deepseek-flash')
   })
 
   it('lists service-prefixed display names for all options', () => {

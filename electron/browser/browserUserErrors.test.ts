@@ -68,7 +68,7 @@ describe('toBrowserUserError', () => {
     })
     const msg = toBrowserUserError(err, 'extract')
     expect(msg).toMatch(/Thinking|思考/)
-    expect(msg).toMatch(/deepseek-v4-flash|设置/)
+    expect(msg).toMatch(/deepseek-flash|设置/)
     expect(msg).not.toMatch(/AI_APICallError/)
   })
 })

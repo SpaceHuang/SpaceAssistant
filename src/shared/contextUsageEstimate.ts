@@ -129,7 +129,7 @@ export function projectUsageAfterToolResults(
 /** 已知网关/提供商实际上下文上限（token）；展示分母取 min(模型配置, 此表) */
 const MODEL_PROVIDER_CONTEXT_LIMITS: Readonly<Record<string, number>> = {
   'deepseek-v4-pro': 1_048_565,
-  'deepseek-v4-flash': 1_048_565
+  'deepseek-flash': 1_048_565
 }
 
 const DEEPSEEK_PROVIDER_CONTEXT_LIMIT = 1_048_565

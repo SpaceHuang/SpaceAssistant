@@ -46,7 +46,7 @@ function mapKnownTechnicalError(msg: string, kind: BrowserUserErrorKind): string
     return (
       '浏览器 LLM 在 DeepSeek 思考（Thinking）模式下无法提取或分析页面内容。' +
       '请完全退出并重新启动应用（确保已执行 npm run build:electron）；' +
-      '若仍失败，请在设置 → 工具 → 网络访问 将 Stagehand 模型改为 deepseek-v4-flash。'
+      '若仍失败，请在设置 → 工具 → 网络访问 将 Stagehand 模型改为 deepseek-flash。'
     )
   }
 

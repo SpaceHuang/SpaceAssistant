@@ -279,11 +279,11 @@ describe('llmServiceResolver', () => {
     const models = makeModels()
     migrateMultiServiceModelConfig(db, models)
     const s = readLlmServices(db)[0]!
-    const flash = models.find((m) => m.name === 'deepseek-v4-flash')!
+    const flash = models.find((m) => m.name === 'deepseek-flash')!
     persistLlmServices(db, [{ ...s, supportedModelIds: ['1'] }], [s.id])
     expect(
       resolveTestConnectionModel(db, models, s.id, { supportedModelIds: [flash.id] })?.name
-    ).toBe('deepseek-v4-flash')
+    ).toBe('deepseek-flash')
   })
 
   it('resolveTestConnectionModel falls back when preferred not in this service', () => {
