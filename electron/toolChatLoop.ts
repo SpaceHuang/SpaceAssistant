@@ -867,20 +867,27 @@ async function runToolChatSessionInner(
       const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
       if (recovery.action === 'reset_and_retry_provider') {
         overflowRetries = recovery.nextRetry
-        const recoveryInputItems = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => ({ id: surfaceItemIdentity(message, index) }))
+          const recoveryInputMessages = [...messagesForApi]
+          const recoveryInputItems = (recoveryInputMessages as unknown as ClaudeContentBlockMessage[]).map((message, index) => ({ id: surfaceItemIdentity(message, index) }))
         messagesForApi = selectRecoveryMessages(messagesForApi as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as typeof messagesForApi
         if (args.appendCompactionTransaction && lastRequestHeader) {
+          const recoverySystem = lastRequestHeader.system
           const outputHeader = buildRequestHeaderPayload({ requestId: `${requestId}:recovery:${overflowRetries}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: messagesForApi, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: lastRequestHeader.toolExecutionCheckpoint.completedToolUseIds, replayForbidden: true } })
           const compactionId = `${requestId}:overflow:${overflowRetries}`
           const completedToolUseIds = messagesForApi.flatMap((message) => Array.isArray(message.content) ? message.content.flatMap((block) => {
             const value = block as unknown as { type?: unknown; id?: unknown }
             return value.type === 'tool_use' && typeof value.id === 'string' ? [value.id] : []
           }) : [])
-          const recoveryShadowedRanges = computeShadowedRanges(recoveryInputItems, messagesForApi.map((message, index) => ({ id: surfaceItemIdentity(message, index) })))
+          const recoveryOutputItems = messagesForApi.map((message, index) => ({ id: surfaceItemIdentity(message, index) }))
+          const recoveryShadowedRanges = computeShadowedRanges(recoveryInputItems, recoveryOutputItems)
+          const recoveryFingerprint = (surface: readonly unknown[]) => buildRequestHeaderPayload({ requestId: 'replay', system: recoverySystem, tools: [], messages: surface.map((message) => {
+            const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
+            return { role: source.role, content: source.content }
+          }) }).surfaceSnapshot.fingerprint
           const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges: recoveryShadowedRanges }
           await args.appendCompactionTransaction(
-            { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
-            { compactionId, windowId: contextWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: recoveryShadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
+            { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: recoveryFingerprint(recoveryInputMessages), surfaceBoundaryId: recoveryInputItems[recoveryInputItems.length - 1]?.id, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
+            { compactionId, windowId: contextWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: recoveryFingerprint(messagesForApi), shadowedRanges: recoveryShadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
           )
           args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: contextWindowId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
         }

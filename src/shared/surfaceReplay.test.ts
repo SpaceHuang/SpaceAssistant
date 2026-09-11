@@ -67,4 +67,19 @@ describe('surface replay', () => {
       { id: 'checkpoint-1', role: 'user', content: 'summary' }, { id: 'tail' }, { id: 'new-turn', status: 'pending' }
     ])
   })
+
+  it('keeps earlier valid compactions when a later record fails output validation', () => {
+    const first = { checkpointMessage: { id: 'checkpoint-1', role: 'user', content: 'summary 1' }, shadowedRanges: [{ start: 'old-1', end: 'old-1' }] }
+    const second = { checkpointMessage: { id: 'checkpoint-2', role: 'user', content: 'summary 2' }, shadowedRanges: [{ start: 'checkpoint-1', end: 'new-1' }] }
+    const events = [
+      { seq: 1, type: 'compaction_start' as const, payload: { compactionId: 'c1', windowId: 'w', inputSurfaceFingerprint: 'old-1|new-1', surfaceBoundaryId: 'new-1' } },
+      { seq: 2, type: 'compaction_summary' as const, payload: { compactionId: 'c1', windowId: 'w', candidate: first, summaryHash: computeCompactionSummaryHash(first), outputSurfaceFingerprint: 'checkpoint-1|new-1', shadowedRanges: first.shadowedRanges } },
+      { seq: 3, type: 'compaction_end' as const, payload: { compactionId: 'c1', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'old-1|new-1', outputSurfaceFingerprint: 'checkpoint-1|new-1', summaryHash: computeCompactionSummaryHash(first) } },
+      { seq: 4, type: 'compaction_start' as const, payload: { compactionId: 'c2', windowId: 'w', inputSurfaceFingerprint: 'checkpoint-1|new-1', surfaceBoundaryId: 'new-1' } },
+      { seq: 5, type: 'compaction_summary' as const, payload: { compactionId: 'c2', windowId: 'w', candidate: second, summaryHash: computeCompactionSummaryHash(second), outputSurfaceFingerprint: 'wrong', shadowedRanges: second.shadowedRanges } },
+      { seq: 6, type: 'compaction_end' as const, payload: { compactionId: 'c2', windowId: 'w', status: 'committed', startSeq: 4, summarySeq: 5, inputSurfaceFingerprint: 'checkpoint-1|new-1', outputSurfaceFingerprint: 'wrong', summaryHash: computeCompactionSummaryHash(second) } }
+    ]
+    const fingerprint = (items: readonly { id: string }[]) => items.map((item) => item.id).join('|')
+    expect(applyCommittedSurfaceShadow([{ id: 'old-1' }, { id: 'new-1' }], foldCompactionEvents(events), [], 'w', fingerprint)).toEqual([{ id: 'checkpoint-1', role: 'user', content: 'summary 1' }, { id: 'new-1' }])
+  })
 })

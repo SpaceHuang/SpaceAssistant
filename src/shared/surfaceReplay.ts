@@ -31,6 +31,7 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
     if (windowId && committedWindowId !== windowId) continue
     const expectedInput = committed.start.payload.inputSurfaceFingerprint
+    const surfaceBeforeRecord = [...currentSurface]
     const ranges = committed.summary.payload.shadowedRanges
     if (!Array.isArray(ranges)) continue
     const persistedBoundary = committed.start.payload.surfaceBoundaryId
@@ -62,7 +63,7 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     const expectedOutput = committed.summary.payload.outputSurfaceFingerprint ?? committed.end.payload.outputSurfaceFingerprint
     const outputSurface = boundaryIndex >= 0 ? currentSurface.filter((item) => historicalIds.has(item.id) || item.id === checkpointMessageId(committed)) : currentSurface
     if (fingerprint && typeof expectedOutput === 'string' && fingerprint(outputSurface) !== expectedOutput) {
-      currentSurface = [...items]
+      currentSurface = surfaceBeforeRecord
       break
     }
   }
