@@ -620,6 +620,8 @@ async function runToolChatSessionInner(
   }
   let loopRound = 0
   let lastValidUsage: ToolLoopUsage | undefined
+  let lastRequestContext: ReturnType<typeof buildRequestContextPayload> | undefined
+  let lastRequestHeader: ReturnType<typeof buildRequestHeaderPayload> | undefined
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -660,6 +662,8 @@ async function runToolChatSessionInner(
     })
     const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
+    lastRequestHeader = requestHeader
+    lastRequestContext = requestContext
     const surfaceIds = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => message.id ?? `message-${index}`)
     const preflight = validateSurfaceForSend({
       ids: surfaceIds,
@@ -2006,6 +2010,18 @@ async function runToolChatSessionInner(
     if (lastValidUsage && toolResults.length > 0) {
       const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
       args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
+      if (lastRequestHeader && lastRequestContext) {
+        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi] })
+        args.emitFactEvent?.({ type: 'context-projection-updated', projection: computeContextPressure({
+          currentSurface: nextHeader.surfaceSnapshot,
+          anchor: { requestId: lastRequestContext.requestId, surfaceTokens: lastRequestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, systemFingerprint: lastRequestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: lastRequestHeader.surfaceSnapshot.toolsFingerprint, provider: lastRequestContext.provider, model: lastRequestContext.model, estimatorVersion: lastRequestContext.budget.estimatorVersion, serializationVersion: lastRequestContext.budget.serializationVersion, realUsage: lastValidUsage, contextWindow: lastRequestContext.contextWindow.tokens },
+          budget: lastRequestContext.budget,
+          decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' },
+          contextWindow: lastRequestContext.contextWindow,
+          provider: lastRequestContext.provider,
+          model: lastRequestContext.model
+        }) })
+      }
     }
     if (abortRepeatedToolError) {
       return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
