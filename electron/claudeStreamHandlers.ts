@@ -30,6 +30,7 @@ import { computeCompactionSummaryHash, countCommittedCompactions } from '../src/
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { estimateTokensFromUtf8Text } from '../src/shared/contextUsageEstimate'
 import { planTurnBoundarySurfaceCompaction } from '../src/shared/turnBoundaryCompaction'
+import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -405,6 +406,19 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             const outputMessages = [checkpointMessage, ...messages.filter((message, index) => !shadowed.has(surfaceItemIdentity(message, index)))]
             const shadowedRanges = record.shadowedRanges
             const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: outputMessages })
+            const pairs = extractToolPairIds(outputMessages)
+            const preflight = validateSurfaceForSend({
+              ids: outputMessages.map((message, index) => surfaceItemIdentity(message, index)),
+              requiredIds: [surfaceItemIdentity(messages[0]!, 0)],
+              currentUserMessageId: authoritative.currentUserMessageId,
+              fingerprint: outputHeader.surfaceSnapshot.fingerprint,
+              expectedFingerprint: outputHeader.surfaceSnapshot.fingerprint,
+              estimatedTotalInputTokens: outputHeader.surfaceSnapshot.surfaceTokens,
+              totalInputBudget: budget.totalInputBudget,
+              toolUses: pairs.toolUses,
+              toolResults: pairs.toolResults
+            })
+            if (!preflight.ok) return
             const candidate = { kind: 'summary', checkpointMessage, shadowedRanges }
             const compactionId = `${boundaryRequestId}:boundary`
             await appendCompactionTransaction(eventWriter, { compactionId, windowId: boundaryRequestId, turnId, inputSurfaceFingerprint: surfaceSnapshot.fingerprint, targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId: boundaryRequestId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges, candidate, requiredSurfaceSet: [authoritative.currentUserMessageId] })
