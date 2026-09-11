@@ -3,6 +3,7 @@ import { estimateTokensFromUtf8Text } from './contextUsageEstimate'
 
 export type RequestContextPayload = {
   requestId: string
+  windowId: string
   provider: string
   model: string
   contextWindow: { tokens: number; source: 'config' | 'adapter' }
@@ -68,6 +69,7 @@ export function buildRequestContextPayload(args: {
   const decisionFingerprint = fingerprint(JSON.stringify({ ...decision, surfaceTokens, prefixTokens, totalInputBudget, bodyBudget, triggerRatio: 0.9, targetBodyRatio: 0.8, contextWindow, windowId: args.windowId ?? args.requestId }))
   return {
     requestId: args.requestId,
+    windowId: args.windowId ?? args.requestId,
     provider: args.provider,
     model: args.model,
     contextWindow: { tokens: contextWindow, source: hasConfiguredWindow ? 'config' : 'adapter' },

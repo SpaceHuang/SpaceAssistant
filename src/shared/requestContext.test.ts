@@ -52,4 +52,7 @@ describe('request context payload', () => {
     const base = { requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, decision: { decisionId: 'd', phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'v1' } }
     expect(buildRequestContextPayload({ ...base, windowId: 'w1' }).decisionFingerprint).not.toBe(buildRequestContextPayload({ ...base, windowId: 'w2' }).decisionFingerprint)
   })
+  it('persists the window identity for replay', () => {
+    expect(buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, windowId: 'window-1' }).windowId).toBe('window-1')
+  })
 })
