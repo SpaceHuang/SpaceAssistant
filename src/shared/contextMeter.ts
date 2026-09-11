@@ -87,3 +87,33 @@ export function shouldCompact(projection: ContextPressureProjection, budget: Con
   const projectedBodyTokens = Math.max(0, projection.projectedTokens - budget.prefixTokens)
   return projectedBodyTokens / budget.bodyBudget >= ratio
 }
+
+/** 唯一生产适配器：从 append-only 事件流重建可复用的 usage anchor。 */
+export function computeContextPressureFromEvents(
+  events: ReadonlyArray<{ seq: number; type: string; payload: Record<string, unknown> }>,
+  input: Omit<ContextInput, 'anchor'> & { anchor?: ContextInput['anchor'] }
+): ContextPressureProjection {
+  const requestId = typeof input.anchor?.requestId === 'string' ? input.anchor.requestId : undefined
+  const headers = events.filter((event) => event.type === 'request_header' && event.payload.schemaVersion === 1)
+  const candidates = headers
+    .map((header) => {
+      const id = typeof header.payload.requestId === 'string' ? header.payload.requestId : undefined
+      const snapshot = header.payload.surfaceSnapshot
+      if (!id || !snapshot || typeof snapshot !== 'object') return undefined
+      const context = events.find((event) => event.type === 'request_context' && event.payload.schemaVersion === 1 && event.payload.requestId === id)
+      const usage = events.find((event) => event.type === 'request_usage' && event.payload.schemaVersion === 1 && event.payload.requestId === id)
+      if (!context || !usage || !context.payload.contextWindow || !usage.payload.usage) return undefined
+      const contextWindow = context.payload.contextWindow
+      const windowTokens = typeof contextWindow === 'object' && contextWindow !== null && typeof (contextWindow as { tokens?: unknown }).tokens === 'number' ? (contextWindow as { tokens: number }).tokens : typeof contextWindow === 'number' ? contextWindow : undefined
+      if (!windowTokens) return undefined
+      const s = snapshot as Partial<SurfaceSnapshot> & { surfaceFingerprint?: string }
+      if (s.schemaVersion !== 1 || typeof s.surfaceFingerprint !== 'string' && typeof s.fingerprint !== 'string') return undefined
+      return { id, snapshot: { ...s, schemaVersion: 1, fingerprint: s.fingerprint ?? s.surfaceFingerprint!, systemFingerprint: s.systemFingerprint ?? '', toolsFingerprint: s.toolsFingerprint ?? '', surfaceTokens: s.surfaceTokens ?? 0, systemTokens: s.systemTokens ?? 0, toolsTokens: s.toolsTokens ?? 0, messageTokens: s.messageTokens ?? 0 } as SurfaceSnapshot, context, usage, windowTokens }
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
+  const candidate = requestId ? candidates.find((item) => item.id === requestId) : candidates[candidates.length - 1]
+  if (!candidate) return computeContextPressure({ ...input, anchor: undefined })
+  const contextWindow = candidate.context.payload.contextWindow
+  const anchor = { requestId: candidate.id, surfaceTokens: candidate.snapshot.surfaceTokens, surfaceFingerprint: candidate.snapshot.fingerprint, systemFingerprint: candidate.snapshot.systemFingerprint, toolsFingerprint: candidate.snapshot.toolsFingerprint, provider: String(candidate.context.payload.provider ?? ''), model: String(candidate.context.payload.model ?? ''), estimatorVersion: String(candidate.context.payload.estimatorVersion ?? input.budget.estimatorVersion), serializationVersion: String(candidate.context.payload.serializationVersion ?? input.budget.serializationVersion), realUsage: candidate.usage.payload.usage as ContextUsageRaw, contextWindow: typeof contextWindow === 'number' ? contextWindow : (contextWindow as { tokens: number }).tokens }
+  return computeContextPressure({ ...input, anchor })
+}

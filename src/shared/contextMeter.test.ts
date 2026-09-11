@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeContextBreakdown, computeContextPressure, shouldCompact } from './contextMeter'
+import { computeContextBreakdown, computeContextPressure, computeContextPressureFromEvents, shouldCompact } from './contextMeter'
 import type { ContextInput } from './contextMeter'
 
 const input = (overrides: Partial<ContextInput> = {}): ContextInput => ({
@@ -53,5 +53,17 @@ describe('ContextMeter pure projections', () => {
     expect(result.hardFit).toBe(true)
     expect(result.bodyFit).toBe(true)
     expect(shouldCompact({ ...result, projectedTokens: 920 }, input().budget)).toBe(true)
+  })
+
+  it('builds an anchor only from the same request event triplet', () => {
+    const base = input()
+    const snapshot = base.currentSurface
+    const events = [
+      { seq: 1, type: 'request_header', payload: { schemaVersion: 1, requestId: 'r1', surfaceSnapshot: snapshot } },
+      { seq: 2, type: 'request_context', payload: { schemaVersion: 1, requestId: 'r1', provider: 'anthropic', model: 'claude', contextWindow: { tokens: 1000, source: 'config' }, estimatorVersion: 'v1', serializationVersion: 's1' } },
+      { seq: 3, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'r1', usage: { input_tokens: 600 } } }
+    ]
+    expect(computeContextPressureFromEvents(events, { ...base, anchor: undefined, currentSurface: { ...snapshot, fingerprint: 'surface-3' } }).anchorStatus).toBe('matched')
+    expect(computeContextPressureFromEvents([{ ...events[2]!, payload: { ...events[2]!.payload, requestId: 'other' } }, ...events.slice(0, 2)], { ...base, anchor: undefined }).anchorStatus).toBe('missing')
   })
 })
