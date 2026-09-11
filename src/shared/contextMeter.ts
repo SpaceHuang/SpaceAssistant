@@ -109,6 +109,10 @@ export function computeContextPressureFromEvents(
       const contextWindow = context.payload.contextWindow
       const windowTokens = typeof contextWindow === 'object' && contextWindow !== null && typeof (contextWindow as { tokens?: unknown }).tokens === 'number' ? (contextWindow as { tokens: number }).tokens : typeof contextWindow === 'number' ? contextWindow : undefined
       if (!windowTokens) return undefined
+      const contextBudget = context.payload.budget
+      if (!contextBudget || typeof contextBudget !== 'object') return undefined
+      const budget = contextBudget as { estimatorVersion?: unknown; serializationVersion?: unknown }
+      if (budget.estimatorVersion !== input.budget.estimatorVersion || budget.serializationVersion !== input.budget.serializationVersion) return undefined
       const s = snapshot as Partial<SurfaceSnapshot> & { surfaceFingerprint?: string }
       if (s.schemaVersion !== 1 || typeof s.surfaceFingerprint !== 'string' && typeof s.fingerprint !== 'string') return undefined
       return { id, snapshot: { ...s, schemaVersion: 1, fingerprint: s.fingerprint ?? s.surfaceFingerprint!, systemFingerprint: s.systemFingerprint ?? '', toolsFingerprint: s.toolsFingerprint ?? '', surfaceTokens: s.surfaceTokens ?? 0, systemTokens: s.systemTokens ?? 0, toolsTokens: s.toolsTokens ?? 0, messageTokens: s.messageTokens ?? 0 } as SurfaceSnapshot, context, usage, windowTokens }
@@ -117,6 +121,7 @@ export function computeContextPressureFromEvents(
   const candidate = requestId ? candidates.find((item) => item.id === requestId) : candidates[candidates.length - 1]
   if (!candidate) return computeContextPressure({ ...input, anchor: undefined })
   const contextWindow = candidate.context.payload.contextWindow
-  const anchor = { requestId: candidate.id, surfaceTokens: candidate.snapshot.surfaceTokens, surfaceFingerprint: candidate.snapshot.fingerprint, systemFingerprint: candidate.snapshot.systemFingerprint, toolsFingerprint: candidate.snapshot.toolsFingerprint, provider: String(candidate.context.payload.provider ?? ''), model: String(candidate.context.payload.model ?? ''), estimatorVersion: String(candidate.context.payload.estimatorVersion ?? input.budget.estimatorVersion), serializationVersion: String(candidate.context.payload.serializationVersion ?? input.budget.serializationVersion), realUsage: candidate.usage.payload.usage as ContextUsageRaw, contextWindow: typeof contextWindow === 'number' ? contextWindow : (contextWindow as { tokens: number }).tokens }
+  const contextBudget = candidate.context.payload.budget as { estimatorVersion: string; serializationVersion: string }
+  const anchor = { requestId: candidate.id, surfaceTokens: candidate.snapshot.surfaceTokens, surfaceFingerprint: candidate.snapshot.fingerprint, systemFingerprint: candidate.snapshot.systemFingerprint, toolsFingerprint: candidate.snapshot.toolsFingerprint, provider: String(candidate.context.payload.provider ?? ''), model: String(candidate.context.payload.model ?? ''), estimatorVersion: contextBudget.estimatorVersion, serializationVersion: contextBudget.serializationVersion, realUsage: candidate.usage.payload.usage as ContextUsageRaw, contextWindow: typeof contextWindow === 'number' ? contextWindow : (contextWindow as { tokens: number }).tokens }
   return computeContextPressure({ ...input, anchor })
 }

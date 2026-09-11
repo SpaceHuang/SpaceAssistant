@@ -68,7 +68,18 @@ describe('ContextMeter pure projections', () => {
       { seq: 2, type: 'request_context', payload: { schemaVersion: 1, requestId: 'r1', provider: 'anthropic', model: 'claude', contextWindow: { tokens: 1000, source: 'config' }, estimatorVersion: 'v1', serializationVersion: 's1' } },
       { seq: 3, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'r1', usage: { input_tokens: 600 } } }
     ]
+    events[1]!.payload.budget = { estimatorVersion: 'v1', serializationVersion: 's1' }
     expect(computeContextPressureFromEvents(events, { ...base, anchor: undefined, currentSurface: { ...snapshot, fingerprint: 'surface-3' } }).anchorStatus).toBe('matched')
     expect(computeContextPressureFromEvents([{ ...events[2]!, payload: { ...events[2]!.payload, requestId: 'other' } }, ...events.slice(0, 2)], { ...base, anchor: undefined }).anchorStatus).toBe('missing')
+  })
+
+  it('does not anchor events with a mismatched serialization budget', () => {
+    const base = input()
+    const events = [
+      { seq: 1, type: 'request_header', payload: { schemaVersion: 1, requestId: 'r1', surfaceSnapshot: base.currentSurface } },
+      { seq: 2, type: 'request_context', payload: { schemaVersion: 1, requestId: 'r1', provider: 'anthropic', model: 'claude', contextWindow: { tokens: 1000 }, budget: { estimatorVersion: 'v1', serializationVersion: 'old' } } },
+      { seq: 3, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'r1', usage: { input_tokens: 600 } } }
+    ]
+    expect(computeContextPressureFromEvents(events, { ...base, anchor: undefined }).anchorStatus).toBe('missing')
   })
 })
