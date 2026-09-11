@@ -134,6 +134,22 @@ describe('runToolChatSession message_start usage', () => {
     expect(usagePayloads(sender)).toEqual([])
   })
 
+  it('在 provider 成功后调用 turn-boundary hook，并传递最终 surface', async () => {
+    const boundary = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    })) } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-boundary-hook', sessionId: 'sess-boundary-hook',
+      model: 'claude-sonnet-4-20250514', messages: [{ role: 'user', content: 'hello' }],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), onTurnBoundary: boundary
+    })
+    expect(res.ok).toBe(true)
+    expect(boundary).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'req-boundary-hook', messages: expect.any(Array), surfaceSnapshot: expect.any(Object) }))
+  })
+
   it('emits usage-updated fact on message_start before finalMessage', async () => {
     const sender = makeSender()
     mockCreateAnthropicClient.mockImplementation(() => ({

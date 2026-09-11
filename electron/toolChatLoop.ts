@@ -434,6 +434,8 @@ export type RunToolChatSessionArgs = {
   /** Core 事件台账写入口；与 UI fact 通道分离，保存原始 NormalizedDelta。 */
   emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
+  /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
+  onTurnBoundary?: (input: { requestId: string; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[] }) => Promise<void>
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -921,6 +923,9 @@ async function runToolChatSessionInner(
     if (toolUses.length === 0) {
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
       args.emitFactEvent?.({ type: 'source-completed' })
+      if (args.onTurnBoundary && lastRequestHeader) {
+        await args.onTurnBoundary({ requestId, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi })
+      }
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
     }
 
