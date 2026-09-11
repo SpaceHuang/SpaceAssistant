@@ -641,6 +641,8 @@ async function runToolChatSessionInner(
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
     })
+    // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
+    const attemptRequestId = `${requestId}:round:${loopRound}`
     const messagesStripped = stripThinking(messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,
@@ -650,8 +652,8 @@ async function runToolChatSessionInner(
       tools: tools as Anthropic.Tool[],
       thinking
     })
-    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', system: systemPrompt ?? '', tools } })
-    await args.emitSessionEvent?.({ type: 'request_context', payload: { provider: 'anthropic', model, contextWindow: undefined } })
+    await args.emitSessionEvent?.({ type: 'request_header', payload: { requestId: attemptRequestId, route: 'anthropic.messages.stream', system: systemPrompt ?? '', tools } })
+    await args.emitSessionEvent?.({ type: 'request_context', payload: { requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: undefined } })
 
     logAgentEvent('info', 'llm.request', {
       requestId,
@@ -797,7 +799,7 @@ async function runToolChatSessionInner(
       if (finalUsage) {
         await args.emitSessionEvent?.({
           type: 'request_usage',
-          payload: { requestId: `${requestId}:round:${loopRound}`, usage: finalUsage, source: 'api' }
+          payload: { requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
       }
       if (usage) {
