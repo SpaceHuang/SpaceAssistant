@@ -17,6 +17,14 @@ function stringField(payload: Record<string, unknown>, key: string): string | un
   return typeof payload[key] === 'string' ? payload[key] as string : undefined
 }
 
+function validShadowRanges(payload: Record<string, unknown>): boolean {
+  if (payload.shadowedRanges == null) return true
+  return Array.isArray(payload.shadowedRanges) && payload.shadowedRanges.every((range) => {
+    if (!range || typeof range !== 'object') return false
+    return typeof (range as { start?: unknown }).start === 'string' && typeof (range as { end?: unknown }).end === 'string'
+  })
+}
+
 export function foldCompactionEvents(events: readonly CompactionEvent[]): CompactionReplay {
   const starts = new Map<string, CompactionEvent>()
   const summaries = new Map<string, CompactionEvent>()
@@ -42,7 +50,7 @@ export function foldCompactionEvents(events: readonly CompactionEvent[]): Compac
     const summaryWindowId = stringField(summary?.payload ?? {}, 'windowId')
     const endWindowId = stringField(event.payload, 'windowId')
     const windowMatches = startWindowId == null || summaryWindowId == null || endWindowId == null || (startWindowId === summaryWindowId && summaryWindowId === endWindowId)
-    const valid = start && summary && windowMatches && event.payload.startSeq === start.seq && event.payload.summarySeq === summary.seq && event.payload.inputSurfaceFingerprint === start.payload.inputSurfaceFingerprint && event.payload.outputSurfaceFingerprint === summary.payload.outputSurfaceFingerprint && event.payload.summaryHash === summary.payload.summaryHash
+    const valid = start && summary && validShadowRanges(summary.payload) && windowMatches && event.payload.startSeq === start.seq && event.payload.summarySeq === summary.seq && event.payload.inputSurfaceFingerprint === start.payload.inputSurfaceFingerprint && event.payload.outputSurfaceFingerprint === summary.payload.outputSurfaceFingerprint && event.payload.summaryHash === summary.payload.summaryHash
     if (!valid) { rejected.push({ compactionId: id, reason: 'invalid-commit-references' }); continue }
     committed.set(id, { compactionId: id, start, summary, end: event })
   }

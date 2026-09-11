@@ -57,4 +57,13 @@ describe('compaction event replay', () => {
     expect(result.committed).toHaveLength(0)
     expect(result.rejected).toContainEqual({ compactionId: 'cross', reason: 'invalid-commit-references' })
   })
+
+  it('rejects committed records with malformed shadow ranges', () => {
+    const result = foldCompactionEvents([
+      event(1, 'compaction_start', { compactionId: 'bad-range', windowId: 'w', inputSurfaceFingerprint: 'a' }),
+      event(2, 'compaction_summary', { compactionId: 'bad-range', windowId: 'w', summaryHash: 'h', outputSurfaceFingerprint: 'b', shadowedRanges: [{ start: 'only' }, 'bad'] }),
+      event(3, 'compaction_end', { compactionId: 'bad-range', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'a', outputSurfaceFingerprint: 'b', summaryHash: 'h' })
+    ])
+    expect(result.committed).toHaveLength(0)
+  })
 })
