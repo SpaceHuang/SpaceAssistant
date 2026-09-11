@@ -863,9 +863,13 @@ async function runToolChatSessionInner(
         if (args.appendCompactionTransaction && lastRequestHeader) {
           const outputHeader = buildRequestHeaderPayload({ requestId: `${requestId}:recovery:${overflowRetries}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: messagesForApi })
           const compactionId = `${requestId}:overflow:${overflowRetries}`
+          const completedToolUseIds = messagesForApi.flatMap((message) => Array.isArray(message.content) ? message.content.flatMap((block) => {
+            const value = block as unknown as { type?: unknown; id?: unknown }
+            return value.type === 'tool_use' && typeof value.id === 'string' ? [value.id] : []
+          }) : [])
           await args.appendCompactionTransaction(
             { compactionId, windowId: requestId, inputSurfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
-            { compactionId, windowId: requestId, summaryHash: outputHeader.surfaceSnapshot.fingerprint, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, candidate: { kind: 'reset', replayForbidden: true, requiredMessageId: args.currentUserMessageId ?? null } }
+            { compactionId, windowId: requestId, summaryHash: outputHeader.surfaceSnapshot.fingerprint, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: [], requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate: { kind: 'reset' } }
           )
         }
         await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
