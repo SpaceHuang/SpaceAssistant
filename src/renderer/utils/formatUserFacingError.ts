@@ -8,9 +8,11 @@ export function formatUserFacingError(raw: string | undefined | null): string {
   if (!trimmed) return ''
 
   const pipe = trimmed.indexOf('|')
-  if (pipe > 0) {
-    const code = trimmed.slice(0, pipe)
-    const value = trimmed.slice(pipe + 1)
+  const colon = trimmed.indexOf(':')
+  const separator = pipe > 0 ? pipe : colon
+  if (separator > 0) {
+    const code = trimmed.slice(0, separator)
+    const value = trimmed.slice(separator + 1).trim()
     if (isErrorCode(code)) {
       if (code === ErrorCodes.BROWSER_RATE_LIMIT_REJECTED) {
         return translateError({ code, params: { perMinute: value } })

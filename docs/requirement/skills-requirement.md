@@ -152,7 +152,7 @@ author: "<作者或团队>"
 |------|------|
 | 单个 `SKILL.md` 最大体积 | 100 KB |
 | 单次会话最大并发加载 Skill 数 | 5 个 |
-| 单个 Skill 目录总体积 | 10 MB |
+| 单个 Skill 目录总体积 | 512 MB（仅守护磁盘/解压安全；不作为上下文预算） |
 
 ---
 
@@ -344,7 +344,7 @@ claudeChatSendStream({
 | description 非空 | `description` 不为空字符串 | "Skill 描述不能为空" |
 | triggers 非空 | `triggers` 数组至少包含一个关键词 | "Skill 触发关键词不能为空" |
 | SKILL.md 体积 | 不超过 100 KB | "SKILL.md 文件体积超过 100 KB 限制" |
-| 目录总体积 | 不超过 10 MB | "Skill 目录总体积超过 10 MB 限制" |
+| 目录总体积 | 不超过 512 MB | "Skill 目录体积超过 512 MB 安装上限" |
 
 校验失败时，在 Skill 列表上方显示红色错误提示条（Ant Design Alert 组件），包含具体失败原因，用户可重新选择目录。
 

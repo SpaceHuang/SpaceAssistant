@@ -16,6 +16,7 @@ export type AgentLogEventName =
   | 'tool.result'
   | 'tool.progress'
   | 'skills.load'
+  | 'skills.scan.skipped'
   | 'skills.match'
   | 'skills.route.start'
   | 'skills.route.done'

@@ -2215,6 +2215,173 @@
   margin-bottom: var(--sa-config-gap-substack);
 }
 
+.sa-skill-github-modal .ant-modal-content {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-lg);
+  background: var(--sa-bg-elevated);
+}
+
+.sa-skill-github-modal .ant-modal-header {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-bottom: 0;
+  padding: 12px 48px 12px 16px;
+  background: transparent;
+}
+
+.sa-skill-github-modal .ant-modal-title {
+  color: var(--sa-text);
+  font-size: var(--sa-config-font);
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+}
+
+.sa-skill-github-modal .ant-modal-body {
+  margin-top: 12px;
+  padding: 16px 16px 20px;
+  border-top: 1px solid var(--sa-border);
+}
+
+.sa-skill-github-modal .ant-modal-close {
+  top: 8px;
+  right: 16px;
+  width: 28px;
+  height: 28px;
+  color: var(--sa-icon);
+  border-radius: var(--sa-radius-sm);
+}
+
+.sa-skill-github-modal .ant-modal-close:hover {
+  color: var(--sa-icon-hover);
+  background: var(--sa-list-hover-bg);
+}
+
+.sa-skill-github-modal .ant-modal-close:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sa-primary) 20%, transparent);
+}
+
+.sa-skill-github-modal__intro {
+  position: relative;
+  margin-bottom: 14px;
+  padding-left: 14px;
+  line-height: 1.55;
+}
+
+.sa-skill-github-modal__intro::before {
+  position: absolute;
+  top: 0.55em;
+  left: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sa-primary);
+  content: '';
+}
+
+.sa-skill-github-modal__source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sa-skill-github-modal__source .ant-input {
+  min-width: 0;
+  height: 34px;
+  font-family: var(--sa-font-mono);
+}
+
+.sa-skill-github-modal__source .ant-btn {
+  flex: 0 0 auto;
+  height: 34px;
+}
+
+.sa-skill-github-modal__progress {
+  margin-top: 14px;
+}
+
+.sa-skill-github-modal__progress .ant-progress-text {
+  min-width: 44px;
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+}
+
+.sa-skill-github-modal__candidates {
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.sa-skill-github-modal__section-label {
+  margin-bottom: 10px;
+  color: var(--sa-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sa-skill-github-candidate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.sa-skill-github-candidate-list .ant-checkbox-wrapper {
+  align-items: flex-start;
+  min-height: 48px;
+  margin-inline-start: 0;
+  padding: 8px 10px;
+  border-radius: var(--sa-radius-sm);
+  line-height: 1.45;
+  transition: background 150ms ease;
+}
+
+.sa-skill-github-candidate-list .ant-checkbox-wrapper:hover {
+  background: var(--sa-list-hover-bg);
+}
+
+.sa-skill-github-candidate-list .ant-checkbox {
+  margin-top: 3px;
+}
+
+.sa-skill-github-candidate {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sa-skill-github-candidate__name {
+  color: var(--sa-text);
+  font-weight: 600;
+}
+
+.sa-skill-github-candidate__description {
+  overflow-wrap: anywhere;
+  color: var(--sa-text-secondary);
+  font-size: 12px;
+}
+
+.sa-skill-github-modal .ant-modal-footer {
+  margin-top: 0;
+  padding: 12px 16px 16px;
+}
+
+@media (max-width: 560px) {
+  .sa-skill-github-modal__source {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sa-skill-github-modal__source .ant-btn {
+    width: 100%;
+  }
+}
+
 .config-settings-page .config-field-label-block {
   display: block;
   margin-bottom: var(--sa-config-gap-tight);
@@ -2312,4 +2479,3 @@
   color: color-mix(in srgb, var(--sa-warning) 82%, var(--sa-text));
   font-weight: 500;
 }
-

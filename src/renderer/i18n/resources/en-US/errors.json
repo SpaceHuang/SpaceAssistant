@@ -20,5 +20,17 @@
   "SHELL_PROCESS_EXIT_CODE": "Process exited with code {{code}}",
   "TARGET_NOT_DIRECTORY": "Target path is not a directory",
   "WINDOW_NOT_READY": "Window is not ready",
-  "WORK_DIR_NOT_CONFIGURED": "Work directory not configured, cannot open project-level skill directory"
+  "WORK_DIR_NOT_CONFIGURED": "Work directory not configured, cannot open project-level skill directory",
+  "SKILL_URL_INVALID": "Invalid GitHub URL",
+  "SKILL_URL_UNSUPPORTED_HOST": "This host is not supported",
+  "SKILL_REPO_NOT_FOUND": "Repository not found or inaccessible",
+  "SKILL_NETWORK_FAILED": "Network request failed. Try again.",
+  "SKILL_ARCHIVE_TOO_LARGE": "GitHub archive exceeds the 512 MB limit",
+  "SKILL_TAR_UNAVAILABLE": "The system tar extractor is unavailable",
+  "SKILL_PATH_NOT_FOUND": "Repository path not found",
+  "SKILL_NOT_FOUND_IN_REPO": "No installable Skill was found in the directory",
+  "SKILL_NAME_CONFLICT": "A Skill with this name already exists",
+  "SKILL_MD_TOO_LARGE": "SKILL.md exceeds the 100 KB limit",
+  "SKILL_DIR_TOO_LARGE": "Skill directory exceeds the 512 MB installation limit",
+  "SKILL_FRONT_MATTER_INVALID": "SKILL.md front matter is invalid"
 }

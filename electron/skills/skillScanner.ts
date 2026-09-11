@@ -5,12 +5,15 @@ import { getBundledBrowserSetupGuideSkill } from './bundled/browserSetupGuideSki
 import { getBundledShellSetupGuideSkill } from './bundled/shellSetupGuideSkill'
 import { assertInsideDir, getProjectSkillsDir, getUserSkillsDir } from './skillPaths'
 import { readSkillFromDirectory } from './skillParser'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 
 function getBundledSkills(): SkillDefinition[] {
   return [getBundledBrowserSetupGuideSkill(), getBundledShellSetupGuideSkill()]
 }
 
-function scanScopeDir(baseDir: string, scope: 'project' | 'user'): SkillDefinition[] {
+export type SkippedSkill = { dirName: string; scope: 'project' | 'user'; reason: string }
+
+function scanScopeDir(baseDir: string, scope: 'project' | 'user', skipped: SkippedSkill[]): SkillDefinition[] {
   if (!fs.existsSync(baseDir)) return []
   const results: SkillDefinition[] = []
 
@@ -22,8 +25,8 @@ function scanScopeDir(baseDir: string, scope: 'project' | 'user'): SkillDefiniti
     try {
       assertInsideDir(baseDir, skillDir)
       results.push(readSkillFromDirectory(skillDir, scope))
-    } catch {
-      /* skip invalid skills */
+    } catch (error) {
+      skipped.push({ dirName: ent.name, scope, reason: error instanceof Error ? error.message : String(error) })
     }
   }
 
@@ -31,18 +34,24 @@ function scanScopeDir(baseDir: string, scope: 'project' | 'user'): SkillDefiniti
 }
 
 export function scanSkills(userDataPath: string, workDir: string): SkillDefinition[] {
+  return scanSkillsWithSkipped(userDataPath, workDir).skills
+}
+
+export function scanSkillsWithSkipped(userDataPath: string, workDir: string): { skills: SkillDefinition[]; skipped: SkippedSkill[] } {
   const userDir = getUserSkillsDir(userDataPath)
   const projectDir = getProjectSkillsDir(workDir)
 
-  const userSkills = scanScopeDir(userDir, 'user')
-  const projectSkills = projectDir ? scanScopeDir(projectDir, 'project') : []
+  const skipped: SkippedSkill[] = []
+  const userSkills = scanScopeDir(userDir, 'user', skipped)
+  const projectSkills = projectDir ? scanScopeDir(projectDir, 'project', skipped) : []
+  for (const item of skipped) logAgentEvent('warn', 'skills.scan.skipped', item)
 
   const byName = new Map<string, SkillDefinition>()
   for (const skill of userSkills) byName.set(skill.meta.name, skill)
   for (const skill of projectSkills) byName.set(skill.meta.name, skill)
   for (const skill of getBundledSkills()) byName.set(skill.meta.name, skill)
 
-  return [...byName.values()].sort((a, b) => a.meta.name.localeCompare(b.meta.name))
+  return { skills: [...byName.values()].sort((a, b) => a.meta.name.localeCompare(b.meta.name)), skipped }
 }
 
 export function getSkillByName(userDataPath: string, workDir: string, name: string): SkillDefinition | null {
