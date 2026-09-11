@@ -1,4 +1,5 @@
 import { sanitizeForLog } from './sanitize'
+import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 import { isAgentLogProductionMode } from './agentLogPaths'
 
 type AgentLogDepsLike = { isPackaged: boolean }
@@ -42,6 +43,20 @@ export type AgentLogErrorFields = {
   userError?: string
   /** 开发态：结构化错误详情（API 响应体、状态码等，已脱敏） */
   errorDetail?: Record<string, unknown>
+}
+
+/** 进程型工具专用：不把宿主 Error、stack 或 cause 送入通用 Agent logger。 */
+export function buildProcessToolLogErrorFields(
+  err: unknown,
+  userMessage: string
+): AgentLogErrorFields {
+  const errorCode = typeof err === 'string' && /^[A-Z][A-Z0-9_.-]{2,127}$/.test(err)
+    ? err
+    : 'TOOL_EXECUTION_FAILED'
+  return {
+    error: errorCode,
+    userError: sanitizeAgentText(userMessage).text
+  }
 }
 
 function truncateForDetail(value: string | undefined, max = 8000): string | undefined {

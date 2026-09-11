@@ -22,6 +22,7 @@ type Props = {
   stderr?: string
   exitCode?: number | null
   truncated?: boolean
+  artifactId?: string
   persistedOutputPath?: string
   expanded: boolean
 }
@@ -32,6 +33,7 @@ export function ShellScrollbackView({
   stderr,
   exitCode,
   truncated,
+  artifactId,
   persistedOutputPath,
   expanded
 }: Props) {
@@ -111,6 +113,7 @@ export function ShellScrollbackView({
         stderr={stderr}
         exitCode={exitCode}
         truncated={truncated}
+        artifactId={artifactId}
         persistedOutputPath={persistedOutputPath}
       />
     )
@@ -138,11 +141,11 @@ export function ShellScrollbackView({
       >
         <div ref={hostRef} className="shell-terminal-host" />
       </div>
-      {truncated && persistedOutputPath ? (
+      {truncated && (artifactId || persistedOutputPath) ? (
         <button
           type="button"
           className="shell-output__truncated-hint"
-          onClick={() => void window.api.shellOpenOutputPath(persistedOutputPath)}
+          onClick={() => void window.api.shellOpenOutputPath(artifactId ?? persistedOutputPath!)}
         >
           输出已截断，打开完整日志 →
         </button>

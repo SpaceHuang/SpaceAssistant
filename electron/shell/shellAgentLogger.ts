@@ -1,15 +1,14 @@
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { sanitizeForLog } from '../agentLogger/sanitize'
 import type { AgentLogEventName, AgentLogFields, AgentLogLevel } from '../agentLogger/types'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
-import { preprocessShellLogFields } from './shellLogFields'
+import { projectShellAgentLogFields, shellInvocationFingerprint } from './shellLogFields'
 
 export function logShellAgentEvent(
   level: AgentLogLevel,
   event: AgentLogEventName,
   fields: Record<string, unknown>
 ): void {
-  logAgentEvent(level, event, sanitizeForLog(preprocessShellLogFields(fields)) as AgentLogFields)
+  logAgentEvent(level, event, projectShellAgentLogFields(event, fields) as AgentLogFields)
 }
 
 export function logShellPrecheck(args: {
@@ -27,7 +26,7 @@ export function logShellPrecheck(args: {
     sessionId: args.sessionId,
     toolUseId: args.toolUseId,
     loopRound: args.loopRound,
-    command: args.command,
+    invocationFingerprint: shellInvocationFingerprint(args.command),
     verdict: args.verdict,
     skipConfirm: args.skipConfirm,
     requiresRiskAck: args.hints?.requiresRiskAck ?? false,
@@ -53,7 +52,7 @@ export function logShellConfirmOutcome(args: {
     sessionId: args.sessionId,
     toolUseId: args.toolUseId,
     loopRound: args.loopRound,
-    command: args.command,
+    invocationFingerprint: shellInvocationFingerprint(args.command),
     outcome: args.outcome,
     skipConfirm: args.skipConfirm ?? false,
     requiresRiskAck: args.hints?.requiresRiskAck ?? false,

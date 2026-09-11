@@ -13,7 +13,7 @@ import {
 } from '../safeAtomicWrite'
 import { isUnderWikiRaw } from '../wiki/wikiPaths'
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
-import { sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
+import { sanitizeToolOutput, sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
 import {
   combineUserAbortAndTimeout,
   outcomeFromFileToolSignal,
@@ -1125,6 +1125,7 @@ export const runScriptExecutor: ToolExecutor = {
     const stderrDecoder = createStreamTextDecoder('utf-8')
     let stdout = ''
     let stderr = ''
+    let timedOut = false
     return await new Promise((resolve) => {
       const proc = spawn(py, ['-c', code], {
         cwd: ctx.workDir,
@@ -1145,6 +1146,7 @@ export const runScriptExecutor: ToolExecutor = {
       proc.stdout?.on('data', onDataOut)
       proc.stderr?.on('data', onDataErr)
       const killTimer = setTimeout(() => {
+        timedOut = true
         void supervisor.terminate()
       }, timeoutSec * 1000)
       const onAbort = () => {
@@ -1156,41 +1158,47 @@ export const runScriptExecutor: ToolExecutor = {
         ctx.signal.removeEventListener('abort', onAbort)
         resolve({
           success: false,
-          error: toToolUserError(err, { toolName: 'run_script' }),
+          error: 'SCRIPT_SPAWN_ERROR',
+          userMessage: toToolUserError(err, { toolName: 'run_script' }),
+          data: { processResult: null, status: 'spawn_failed', executable: py, cwd: '<workdir>' },
           duration: Date.now() - started
         })
       })
-      proc.on('close', (code) => {
+      proc.on('close', (code, signal) => {
         clearTimeout(killTimer)
         ctx.signal.removeEventListener('abort', onAbort)
         stdout += stdoutDecoder.end()
         stderr += stderrDecoder.end()
+        const stdoutSafe = sanitizeToolOutput(stdout, 'run_script')
+        const stderrSafe = sanitizeToolOutput(stderr, 'run_script')
+        const status = ctx.signal.aborted ? 'cancelled' : timedOut ? 'timed_out' : signal ? 'signalled' : code === 0 ? 'succeeded' : 'failed'
+        const data = {
+          stdout: stdoutSafe.text,
+          stderr: stderrSafe.text,
+          exitCode: signal ? null : code,
+          signal: signal ?? undefined,
+          status,
+          terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : signal ? 'external_signal' : 'process_exit'
+        }
         if (ctx.signal.aborted) {
-          resolve({ success: false, error: '用户取消执行', duration: Date.now() - started })
+          resolve({ success: false, error: 'SCRIPT_CANCELLED', userMessage: '用户取消执行', data, duration: Date.now() - started })
           return
         }
-        if (code !== 0) {
+        if (timedOut) {
+          resolve({ success: false, error: 'SCRIPT_TIMEOUT', userMessage: `脚本执行超时（${timeoutSec} 秒）`, data, duration: Date.now() - started })
+          return
+        }
+        if (code !== 0 || signal) {
           const failMsg = `脚本执行失败（退出码: ${code}）\n${stderr}`
           resolve({
             success: false,
-            error: toToolUserError(new Error(failMsg), { toolName: 'run_script' }),
-            data: {
-              exitCode: code,
-              stdout: sanitizeToolOutputText(stdout, 'run_script'),
-              stderr: sanitizeToolOutputText(stderr, 'run_script')
-            },
+            error: 'SCRIPT_PROCESS_EXIT',
+            userMessage: toToolUserError(new Error(failMsg), { toolName: 'run_script' }),
+            data,
             duration: Date.now() - started
           })
         } else {
-          resolve({
-            success: true,
-            data: {
-              exitCode: code,
-              stdout: sanitizeToolOutputText(stdout, 'run_script'),
-              stderr: sanitizeToolOutputText(stderr, 'run_script')
-            },
-            duration: Date.now() - started
-          })
+          resolve({ success: true, data, duration: Date.now() - started })
         }
       })
     })

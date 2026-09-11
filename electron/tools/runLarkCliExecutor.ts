@@ -6,7 +6,7 @@ import { logFeishuCliEvent } from '../feishu/feishuCliLogger'
 import { isLarkCliWriteOperation } from '../feishu/larkCliSecurity'
 import { redactLarkCliArgsForLog } from '../feishu/feishuCliLogFields'
 import { getFeishuBundle } from '../feishu/feishuIpc'
-import { sanitizeToolErrorString, toToolUserError } from './toolUserErrors'
+import { sanitizeToolErrorString, sanitizeToolOutput, toToolUserError } from './toolUserErrors'
 
 export const runLarkCliExecutor: ToolExecutor = {
   name: 'run_lark_cli',
@@ -19,14 +19,16 @@ export const runLarkCliExecutor: ToolExecutor = {
       logFeishuCliEvent('warn', 'feishu.tool.run_lark_cli.rejected', { error: String(e) })
       return {
         success: false,
-        error: toToolUserError(e, { toolName: 'run_lark_cli' }),
+        error: 'LARK_INPUT_INVALID',
+        userMessage: toToolUserError(e, { toolName: 'run_lark_cli' }),
+        data: { processResult: null, status: 'validation_failed' },
         duration: Date.now() - started
       }
     }
 
     const runner = ctx.larkCliRunner as LarkCliRunner | undefined
     if (!runner) {
-      return { success: false, error: 'LarkCliRunner 未初始化', duration: Date.now() - started }
+      return { success: false, error: 'LARK_RUNNER_UNAVAILABLE', userMessage: 'LarkCliRunner 未初始化', data: { processResult: null, status: 'dependency_unavailable' }, duration: Date.now() - started }
     }
 
     const timeoutSec =
@@ -42,6 +44,8 @@ export const runLarkCliExecutor: ToolExecutor = {
     })
 
     const durationMs = Date.now() - started
+    const stdoutSafe = sanitizeToolOutput(r.stdout, 'run_lark_cli').text
+    const stderrSafe = sanitizeToolOutput(r.stderr, 'run_lark_cli').text
     const { argsRedacted } = redactLarkCliArgsForLog(args)
     const writeOp = isLarkCliWriteOperation(args)
     const shouldAudit = ctx.remoteContext?.source === 'feishu' || Boolean(ctx.feishuConfig)
@@ -64,7 +68,7 @@ export const runLarkCliExecutor: ToolExecutor = {
           writeOp
         })
       }
-      return { success: false, error: 'lark-cli 执行超时', duration: durationMs }
+      return { success: false, error: 'LARK_TIMEOUT', userMessage: 'lark-cli 执行超时', data: { stdout: stdoutSafe, stderr: stderrSafe, status: 'timed_out', terminationReason: 'timeout' }, duration: durationMs }
     }
 
     if (r.exitCode !== 0) {
@@ -88,8 +92,9 @@ export const runLarkCliExecutor: ToolExecutor = {
       }
       return {
         success: false,
-        error: sanitizeToolErrorString(parsed.message, 'run_lark_cli'),
-        data: { stdout: r.stdout, stderr: r.stderr, hint: parsed.hint },
+        error: 'LARK_PROCESS_EXIT',
+        userMessage: sanitizeToolErrorString(parsed.message, 'run_lark_cli'),
+        data: { stdout: stdoutSafe, stderr: stderrSafe, hint: parsed.hint, status: 'failed', exitCode: r.exitCode, terminationReason: 'process_exit' },
         duration: durationMs
       }
     }
@@ -111,7 +116,7 @@ export const runLarkCliExecutor: ToolExecutor = {
     }
     return {
       success: true,
-      data: { stdout: r.stdout, stderr: r.stderr },
+      data: { stdout: stdoutSafe, stderr: stderrSafe, status: 'succeeded', exitCode: r.exitCode, terminationReason: 'process_exit' },
       duration: durationMs
     }
   }

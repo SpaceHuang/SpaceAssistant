@@ -263,6 +263,27 @@ function toolCall(overrides: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id'
 }
 
 describe('buildToolResultBlock', () => {
+  it('失败历史结果保留结构化 Agent 诊断 data', () => {
+    const block = buildToolResultBlock(toolCall({
+      id: 't1',
+      toolName: 'run_shell',
+      result: { success: false, error: 'SHELL_PROCESS_EXIT', data: { exitCode: 1, stderr: 'bad', caseId: 'process_exit' } }
+    }))
+    expect(block.isError).toBe(true)
+    expect(JSON.parse(block.content)).toMatchObject({ ok: false, error: 'SHELL_PROCESS_EXIT', data: { exitCode: 1, stderr: 'bad', caseId: 'process_exit' } })
+  })
+
+  it('失败历史结果保留 userMessage，不向 UI 泄露机器错误码', () => {
+    const block = buildToolResultBlock(toolCall({
+      id: 't-user-message',
+      toolName: 'run_script',
+      result: { success: false, error: 'SCRIPT_PROCESS_EXIT', userMessage: '脚本执行失败，请检查代码后重试', data: { status: 'failed' } }
+    }))
+    expect(JSON.parse(block.content)).toMatchObject({
+      error: 'SCRIPT_PROCESS_EXIT',
+      userMessage: '脚本执行失败，请检查代码后重试'
+    })
+  })
   it('9: marks missing result as synthetic error placeholder', () => {
     const block = buildToolResultBlock(toolCall({ id: 't1' }))
     expect(block.content).toBe(SYNTHETIC_TOOL_RESULT_PLACEHOLDER)
@@ -273,7 +294,7 @@ describe('buildToolResultBlock', () => {
     const block = buildToolResultBlock(
       toolCall({ id: 't1', result: { success: false, error: 'permission denied' } })
     )
-    expect(block.content).toBe('permission denied')
+    expect(JSON.parse(block.content)).toMatchObject({ ok: false, error: 'permission denied', data: null })
     expect(block.isError).toBe(true)
   })
 

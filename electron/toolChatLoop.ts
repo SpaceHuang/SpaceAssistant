@@ -18,8 +18,11 @@ import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { executePreparedShellExecution } from './tools/runShellExecutor'
 import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
-import type { ToolExecutorResult } from './tools/types'
-import { shouldStopToolRetry } from './toolErrorRetryPolicy'
+import { validateToolExecutorResultForTool, type ToolExecutorResult } from './tools/types'
+import { projectAgentToolResult, serializeAgentToolResult } from '../src/shared/agentToolResult'
+import { projectProcessResultForAgentLog } from '../src/shared/agentSafeProjection'
+import { isProcessToolName } from '../src/shared/processResultProjection'
+import { buildCommandRetryKey, shouldStopToolRetry } from './toolErrorRetryPolicy'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { getDiagnostics, safeAppendDiagnostic } from './mcp/mcpDiagnostics'
 import { createMcpToolExecutor } from './mcp/mcpToolExecutor'
@@ -29,6 +32,7 @@ import {
 } from './mcp/mcpToolRegistry'
 import { getSecret } from './mcp/mcpSecretStore'
 import { createMcpOAuthClientProvider } from './mcp/mcpOauthService'
+import { createHash } from 'crypto'
 import { maskSensitiveArgs } from '../src/shared/mcpTypes'
 import type {
   AutoApproveFallback,
@@ -145,7 +149,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { resolveSafePathReal } from './pathSecurity'
 import { assertSafeToolInput } from './toolInputGuards'
-import { logAgentEvent, logAgentError } from './agentLogger/agentLogger'
+import { buildProcessToolLogErrorFields, logAgentEvent, logAgentError } from './agentLogger/agentLogger'
 import { sanitizeToolErrorString, toToolUserError } from './tools/toolUserErrors'
 import { mergeStreamedToolInputsIntoContent, normalizeToolUseInputRecord } from './toolUseInputMerge'
 import {
@@ -235,18 +239,46 @@ function logToolLoopError(
     (typeof err === 'string'
       ? sanitizeToolErrorString(err, toolName)
       : toToolUserError(err, { toolName }))
-  logAgentError('tool.error', fields, err, user)
+  const safeFields = { ...fields }
+  if ((toolName === 'run_shell' || toolName === 'run_script') && safeFields.input && typeof safeFields.input === 'object') {
+    const input = safeFields.input as Record<string, unknown>
+    safeFields.inputFingerprint = createHash('sha256').update(String(input.command ?? input.code ?? '')).digest('hex')
+    delete safeFields.input
+  }
+  if (toolName === 'run_shell' || toolName === 'run_script') {
+    logAgentEvent('error', 'tool.error', {
+      ...safeFields,
+      ...buildProcessToolLogErrorFields(err, user)
+    })
+    return
+  }
+  logAgentError('tool.error', safeFields, err, user)
 }
 
-function formatToolResultPayload(r: { success: boolean; data?: unknown; error?: string }): string {
-  if (!r.success) return r.error ?? '执行失败'
-  if (r.data === undefined) return '{}'
-  if (typeof r.data === 'string') return r.data
+function processResultLogData(result: ToolExecutorResult): Record<string, unknown> {
+  const data = result.data as Record<string, unknown> | null | undefined
+  let serialized = 'null'
   try {
-    return JSON.stringify(r.data)
+    serialized = JSON.stringify(data ?? null)
   } catch {
-    return String(r.data)
+    serialized = '[unserializable]'
   }
+  return {
+    ...projectProcessResultForAgentLog(data, {
+      fingerprint: (value) => createHash('sha256').update(value).digest('hex')
+    }),
+    dataBytes: data ? Buffer.byteLength(serialized, 'utf8') : 0,
+    dataSha256: createHash('sha256').update(serialized).digest('hex'),
+    outputTruncated: Boolean(data && typeof data === 'object' && 'truncated' in data && data.truncated),
+    outputRedacted: Boolean(data && typeof data === 'object' && ('stdoutRedaction' in data || 'stderrRedaction' in data))
+  }
+}
+
+function formatToolResultPayload(
+  r: ToolExecutorResult,
+  options: { workspaceRoot?: string; processTool?: boolean } = {}
+): string {
+  return serializeAgentToolResult(r, options)
 }
 
 const MAX_CONSECUTIVE_SAME_TOOL_ERROR = 3
@@ -272,12 +304,19 @@ function compactToolResultContentForApi(
 function buildToolErrorResult(
   toolUseId: string,
   error: string,
-  logCtx?: { requestId: string; sessionId: string }
+  logCtx?: { requestId: string; sessionId: string },
+  result?: ToolExecutorResult,
+  options: { workspaceRoot?: string; processTool?: boolean } = {}
 ): Anthropic.ToolResultBlockParam {
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
-    content: compactToolResultContentForApi(error, {
+    content: compactToolResultContentForApi(result ? formatToolResultPayload(result, options) : serializeAgentToolResult({
+      success: false,
+      error,
+      userMessage: error,
+      data: { processResult: null }
+    }, options), {
       requestId: logCtx?.requestId,
       sessionId: logCtx?.sessionId,
       toolUseId
@@ -290,8 +329,8 @@ function makeToolErrorRepeatTracker() {
   let lastKey: string | null = null
   let count = 0
   return {
-    noteFailure(toolName: string, error: string): boolean {
-      const key = `${toolName}\0${error}`
+    noteFailure(toolName: string, error: string, identity?: string): boolean {
+      const key = `${toolName}\0${error}\0${identity ?? ''}`
       if (key === lastKey) count++
       else {
         lastKey = key
@@ -853,6 +892,7 @@ async function runToolChatSessionInner(
       const workDir = resolveWorkDir ? resolveWorkDir() : initialWorkDir
       const toolUseId = tu.id
       const toolName = tu.name
+      const processTool = isProcessToolName(toolName)
       const inputObj = normalizeToolUseInputRecord(tu.input)
 
       const authorization = authorizeToolCall(toolName, authorizedToolNames)
@@ -1782,6 +1822,8 @@ async function runToolChatSessionInner(
         }
       }
 
+      execResult = validateToolExecutorResultForTool(toolName, execResult)
+
       const durationMs = Date.now() - execStartedAt
       if (execResult.success && fileAutoApproved && (toolName === 'write_file' || toolName === 'edit_file')) {
         logAgentEvent('info', 'file.auto_approve', {
@@ -1803,15 +1845,15 @@ async function runToolChatSessionInner(
           toolUseId,
           toolName,
           success: true,
-          data: execResult.data,
+          ...((toolName === 'run_shell' || toolName === 'run_script') ? processResultLogData(execResult) : { data: execResult.data }),
           durationMs
         })
         toolErrorRepeat.noteSuccess(toolName)
       } else {
         const rawError = execResult.error ?? '执行失败'
-        const userErr = execThrew ? (execResult.error ?? '执行失败') : sanitizeToolErrorString(rawError, toolName)
+        const userErr = execResult.userMessage ?? (execThrew ? (execResult.error ?? '执行失败') : sanitizeToolErrorString(rawError, toolName))
         if (!execThrew) {
-          execResult = { ...execResult, error: userErr }
+          execResult = { ...execResult, userMessage: userErr }
           logToolLoopError(
             {
               requestId,
@@ -1819,7 +1861,7 @@ async function runToolChatSessionInner(
               loopRound,
               toolUseId,
               toolName,
-              input: inputObj,
+          ...((toolName === 'run_shell' || toolName === 'run_script') ? { inputFingerprint: createHash('sha256').update(String(inputObj.command ?? inputObj.code ?? '')).digest('hex') } : { input: inputObj }),
               durationMs
             },
             rawError,
@@ -1833,12 +1875,18 @@ async function runToolChatSessionInner(
           toolUseId,
           toolName,
           success: false,
-          error: userErr,
+          ...(toolName === 'run_shell' || toolName === 'run_script'
+            ? { errorCode: buildProcessToolLogErrorFields(rawError, userErr).error }
+            : { error: userErr }),
+          ...((toolName === 'run_shell' || toolName === 'run_script') ? processResultLogData(execResult) : {}),
           durationMs
         })
       }
 
-      let payload = compactToolResultContentForApi(formatToolResultPayload(execResult), {
+      let payload = compactToolResultContentForApi(formatToolResultPayload(execResult, {
+        workspaceRoot: workDir,
+        processTool
+      }), {
         requestId,
         sessionId,
         toolUseId
@@ -1880,16 +1928,34 @@ async function runToolChatSessionInner(
         }
       } else {
         const execError = execResult.error ?? '执行失败'
-        toolResultBlock = buildToolErrorResult(toolUseId, execError, { requestId, sessionId })
-        const repeatedFailure = toolErrorRepeat.noteFailure(toolName, execError)
-        if (shouldStopToolRetry(toolName, execError, execResult.data, repeatedFailure)) {
+        toolResultBlock = buildToolErrorResult(toolUseId, execError, { requestId, sessionId }, execResult, {
+          workspaceRoot: workDir,
+          processTool
+        })
+        const processData = execResult.data && typeof execResult.data === 'object' ? execResult.data as Record<string, unknown> : undefined
+        const retryIdentity = toolName === 'run_shell' && processData
+          ? buildCommandRetryKey({
+            toolName,
+            errorCode: execError,
+            status: typeof processData.status === 'string' ? processData.status : undefined,
+            exitCode: typeof processData.exitCode === 'number' || processData.exitCode === null ? processData.exitCode : undefined,
+            signal: typeof processData.signal === 'string' ? processData.signal : undefined,
+            shellProfile: typeof processData.shell === 'string' ? processData.shell : undefined,
+            planDigest: typeof processData.planDigest === 'string' ? processData.planDigest : undefined
+          })
+          : undefined
+        if (shouldStopToolRetry(toolName, execError, execResult.data, toolErrorRepeat.noteFailure(toolName, execError, retryIdentity))) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execError}`
         }
       }
-      await recordToolResult(toolResultBlock, {
+      const factResult = projectAgentToolResult({
         success: execResult.success,
         data: execResult.data,
         error: execResult.error,
+        userMessage: execResult.userMessage,
+      }, { workspaceRoot: workDir, processTool }) as ToolCallResultPersisted
+      await recordToolResult(toolResultBlock, {
+        ...factResult,
         ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {}),
         ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
       })
