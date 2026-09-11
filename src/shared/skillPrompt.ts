@@ -21,6 +21,14 @@ export function buildSkillCatalogSection(skills: SkillDefinition[], contextWindo
   return { name: 'skills:catalog', order: 50, text: `${header}${body}` }
 }
 
+export function readSkillForTool(skills: readonly SkillDefinition[], name: string, maxChars: number): string {
+  if (!Number.isFinite(maxChars) || maxChars <= 0) throw new Error('skills.read budget must be positive')
+  const skill = skills.find((candidate) => candidate.meta.name === name)
+  if (!skill) throw new Error(`Skill not found: ${name}`)
+  if (skill.content.length > maxChars) throw new Error(`skills.read budget exceeded for ${name}`)
+  return skill.content
+}
+
 export function buildSystemPromptFromSkills(skills: SkillDefinition[]): string {
   if (skills.length === 0) return ''
 
