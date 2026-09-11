@@ -45,4 +45,8 @@ describe('request context payload', () => {
     const payload = buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', contextWindow: 100, maxTokensEffective: 10, contextUsage: { pressureTokens: 20, projectedTokens: 22, surfaceTokens: 22, hardFit: true, bodyFit: true } })
     expect(payload.contextUsage).toMatchObject({ pressureTokens: 20, projectedTokens: 22 })
   })
+  it('isolates decision fingerprints by window', () => {
+    const base = { requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, decision: { decisionId: 'd', phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'v1' } }
+    expect(buildRequestContextPayload({ ...base, windowId: 'w1' }).decisionFingerprint).not.toBe(buildRequestContextPayload({ ...base, windowId: 'w2' }).decisionFingerprint)
+  })
 })

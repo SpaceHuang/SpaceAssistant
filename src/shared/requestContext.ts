@@ -54,6 +54,7 @@ export function buildRequestContextPayload(args: {
   surfaceSnapshot?: { surfaceTokens: number; systemTokens: number; toolsTokens?: number }
   decision?: { decisionId: string; phase: string; reason: string; ruleVersion: string }
   contextUsage?: RequestContextPayload['contextUsage']
+  windowId?: string
 }): RequestContextPayload {
   const outputAccounting = args.outputAccounting ?? 'shared'
   const contextWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0 ? args.contextWindow! : DEFAULT_MODEL_MAX_CONTEXT
@@ -63,7 +64,7 @@ export function buildRequestContextPayload(args: {
   const bodyBudget = Math.max(0, totalInputBudget - prefixTokens)
   const surfaceTokens = args.surfaceSnapshot?.surfaceTokens ?? prefixTokens
   const decision = args.decision ?? { decisionId: args.requestId, phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'adaptive-v1' }
-  const decisionFingerprint = fingerprint(JSON.stringify({ ...decision, surfaceTokens, prefixTokens, totalInputBudget, bodyBudget, triggerRatio: 0.9, targetBodyRatio: 0.8, contextWindow }))
+  const decisionFingerprint = fingerprint(JSON.stringify({ ...decision, surfaceTokens, prefixTokens, totalInputBudget, bodyBudget, triggerRatio: 0.9, targetBodyRatio: 0.8, contextWindow, windowId: args.windowId ?? args.requestId }))
   return {
     requestId: args.requestId,
     provider: args.provider,
