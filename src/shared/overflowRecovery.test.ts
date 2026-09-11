@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decideOverflowRecovery } from './overflowRecovery'
+import { decideOverflowRecovery, selectRecoveryMessages } from './overflowRecovery'
 
 describe('provider overflow recovery', () => {
   it('retries only the provider after a safe boundary', () => {
@@ -11,5 +11,9 @@ describe('provider overflow recovery', () => {
   it('does not retry unrelated errors or exceed the retry budget', () => {
     expect(decideOverflowRecovery({ error: 'network unavailable', retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true }).action).toBe('ignore')
     expect(decideOverflowRecovery({ error: 'context length exceeded', retries: 1, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })).toEqual({ action: 'ignore', reason: 'retry_limit' })
+  })
+  it('keeps current input and completed tool results in the recovery surface', () => {
+    const messages = [{ id: 'old', role: 'user', content: 'old' }, { id: 'current', role: 'user', content: 'current' }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1' }] }] as const
+    expect(selectRecoveryMessages(messages, 'current').map((message) => message.id ?? 'tool-results')).toEqual(['current', 'tool-results'])
   })
 })

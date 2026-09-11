@@ -21,3 +21,13 @@ export function decideOverflowRecovery(input: OverflowRecoveryInput): OverflowRe
   if (input.inFlightToolCount > 0 || !input.safeBoundary) return { action: 'wait_for_tools', reason: 'in_flight' }
   return { action: 'reset_and_retry_provider', nextRetry: input.retries + 1 }
 }
+
+export function selectRecoveryMessages<T extends { role: string; id?: string; content?: unknown }>(messages: readonly T[], currentUserMessageId?: string): T[] {
+  const current = currentUserMessageId ? messages.find((message) => message.id === currentUserMessageId) : undefined
+  const toolResultMessages = messages.filter((message) => message.role === 'user' && Array.isArray(message.content) && message.content.some((block) => Boolean(block && typeof block === 'object' && (block as { type?: string }).type === 'tool_result')))
+  const result: T[] = []
+  if (current) result.push(current)
+  for (const message of toolResultMessages) if (!result.includes(message)) result.push(message)
+  if (!result.length && messages.length) result.push(messages[messages.length - 1]!)
+  return result
+}

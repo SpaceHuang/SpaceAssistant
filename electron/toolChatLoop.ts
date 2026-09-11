@@ -172,7 +172,7 @@ import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationReques
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { computeContextPressure } from '../src/shared/contextMeter'
-import { decideOverflowRecovery } from '../src/shared/overflowRecovery'
+import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -855,8 +855,7 @@ async function runToolChatSessionInner(
       const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
       if (recovery.action === 'reset_and_retry_provider') {
         overflowRetries = recovery.nextRetry
-        const lastUserIndex = [...messagesForApi].map((message) => message.role).lastIndexOf('user')
-        if (lastUserIndex >= 0) messagesForApi = [messagesForApi[lastUserIndex]!]
+        messagesForApi = selectRecoveryMessages(messagesForApi as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as typeof messagesForApi
         await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
       }
