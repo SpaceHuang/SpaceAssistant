@@ -53,6 +53,7 @@ describe('request context payload', () => {
     expect(buildRequestContextPayload({ ...base, windowId: 'w1' }).decisionFingerprint).not.toBe(buildRequestContextPayload({ ...base, windowId: 'w2' }).decisionFingerprint)
   })
   it('persists the window identity for replay', () => {
-    expect(buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, windowId: 'window-1' }).windowId).toBe('window-1')
+  expect(buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, windowId: 'window-1' }).windowId).toBe('window-1')
+  expect(buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, planningStatus: 'target_reached' }).planningStatus).toBe('target_reached')
   })
 })

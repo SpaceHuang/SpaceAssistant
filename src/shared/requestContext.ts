@@ -18,6 +18,7 @@ export type RequestContextPayload = {
   reason: string
   ruleVersion: string
   decisionFingerprint: string
+  planningStatus: 'target_reached' | 'fits_without_headroom' | 'exhausted' | 'uncompressible'
 }
 
 export type RequestHeaderPayload = {
@@ -56,6 +57,7 @@ export function buildRequestContextPayload(args: {
   decision?: { decisionId: string; phase: string; reason: string; ruleVersion: string }
   contextUsage?: RequestContextPayload['contextUsage']
   windowId?: string
+  planningStatus?: RequestContextPayload['planningStatus']
 }): RequestContextPayload {
   const outputAccounting = args.outputAccounting ?? 'shared'
   const hasConfiguredWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0
@@ -80,6 +82,7 @@ export function buildRequestContextPayload(args: {
     budget: { totalInputBudget, bodyBudget, inputBudget: bodyBudget, prefixTokens, requiredTokens: 0, outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0, safetyReserveTokens: 0, triggerRatio: 0.9, targetBodyRatio: 0.8, estimatorVersion: 'default-v1', serializationVersion: 'anthropic-wire-v1' },
     contextUsage: args.contextUsage ?? { pressureTokens: null, projectedTokens: null, surfaceTokens, hardFit: surfaceTokens <= totalInputBudget, bodyFit: Math.max(0, surfaceTokens - prefixTokens) <= bodyBudget },
     ...decision,
-    decisionFingerprint
+    decisionFingerprint,
+    planningStatus: args.planningStatus ?? 'fits_without_headroom'
   }
 }
