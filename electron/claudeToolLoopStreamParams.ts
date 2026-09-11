@@ -4,6 +4,14 @@
 
 export type ToolLoopThinkingConfig = { type: 'adaptive' } | { type: 'disabled' }
 
+/** provider 边界 DTO：内部 surface 元数据不得穿过此函数。 */
+export function serializeProviderMessages(messages: unknown[]): Array<{ role: unknown; content: unknown }> {
+  return messages.map((message) => {
+    const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
+    return { role: source.role, content: source.content }
+  })
+}
+
 export function buildClaudeToolLoopStreamParams(args: {
   model: string
   max_tokens: number
@@ -17,12 +25,11 @@ export function buildClaudeToolLoopStreamParams(args: {
   const thinking = args.thinking
   const hasSystem = typeof args.system === 'string' && args.system.trim().length > 0
   const cacheControl = { type: 'ephemeral' as const }
-  const messages = args.messages.map((message, index) => {
-    const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
-    const content = index === args.messages.length - 1 && typeof source.content === 'string'
-      ? [{ type: 'text', text: source.content, cache_control: cacheControl }]
-      : source.content
-    return { role: source.role, content }
+  const messages = serializeProviderMessages(args.messages).map((message, index) => {
+    const content = index === args.messages.length - 1 && typeof message.content === 'string'
+      ? [{ type: 'text', text: message.content, cache_control: cacheControl }]
+      : message.content
+    return { role: message.role, content }
   })
   const system = args.cacheControl && hasSystem ? [{ type: 'text', text: args.system!.trim(), cache_control: cacheControl }] : args.system
 
@@ -56,19 +63,20 @@ export function buildClaudeChatSendStreamParams(args: {
   thinking: { type: 'adaptive' }
 }): Record<string, unknown> {
   const hasSystem = typeof args.system === 'string' && args.system.trim().length > 0
+  const messages = serializeProviderMessages(args.messages)
   if (hasSystem) {
     return {
       model: args.model,
       max_tokens: args.max_tokens,
       system: args.system,
-      messages: args.messages,
+      messages,
       thinking: args.thinking
     }
   }
   return {
     model: args.model,
     max_tokens: args.max_tokens,
-    messages: args.messages,
+    messages,
     thinking: args.thinking
   }
 }
@@ -84,12 +92,13 @@ export function buildClaudeNarrativeCompletionParams(args: {
 }): Record<string, unknown> {
   const thinking = args.thinking
   const hasSystem = typeof args.system === 'string' && args.system.trim().length > 0
+  const messages = serializeProviderMessages(args.messages)
   const base: Record<string, unknown> = hasSystem
     ? {
         model: args.model,
         max_tokens: args.max_tokens,
         system: args.system!.trim(),
-        messages: args.messages,
+      messages,
         thinking
       }
     : {

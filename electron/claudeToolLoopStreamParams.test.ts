@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildClaudeChatSendStreamParams,
   buildClaudeNarrativeCompletionParams,
+  serializeProviderMessages,
   buildClaudeToolLoopStreamParams
 } from './claudeToolLoopStreamParams'
 
@@ -51,6 +52,12 @@ describe('buildClaudeToolLoopStreamParams', () => {
     ])
     expect(p.system).toBe('  you are helpful  ')
     expect(p.thinking).toEqual({ type: 'adaptive' })
+  })
+})
+
+describe('provider message serialization', () => {
+  it('whitelists role and content for every Anthropic message path', () => {
+    expect(serializeProviderMessages([{ id: 'local', timestamp: 1, role: 'user', content: 'hello' }])).toEqual([{ role: 'user', content: 'hello' }])
   })
 })
 

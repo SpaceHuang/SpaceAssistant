@@ -50,5 +50,5 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     const checkpointMessage = candidate && typeof candidate === 'object' ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
     if (checkpointMessage && typeof checkpointMessage === 'object' && typeof (checkpointMessage as { id?: unknown }).id === 'string') currentSurface.splice(Math.min(insertionIndex, currentSurface.length), 0, checkpointMessage as T)
   }
-  return currentSurface.filter((item) => item.required || required.has(item.id) || currentSurface.includes(item))
+  return currentSurface
 }
