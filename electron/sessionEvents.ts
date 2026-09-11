@@ -5,7 +5,7 @@ import type { SessionUsage } from '../src/shared/sessionUsage'
 
 export type SessionEventPayload = Record<string, unknown>
 export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
-export type SessionEvent = { seq: number; time: number; type: SessionEventType; payload: SessionEventPayload }
+export type SessionEvent = { schemaVersion?: number; seq: number; time: number; type: SessionEventType; payload: SessionEventPayload }
 export type SessionEventInput = { type: SessionEventType; payload: SessionEventPayload }
 export type SessionEventSinkOptions = {
   maxBatchEvents: number
@@ -324,7 +324,7 @@ export class SessionEventWriter implements SessionEventSink {
     if (!inputs.length) return []
     this.assertHealthy()
     await this.ensureInitialized()
-    const events = inputs.map((input, index) => ({ seq: this.seq + index + 1, time: Date.now(), type: input.type, payload: input.payload }))
+    const events = inputs.map((input, index) => ({ schemaVersion: 1, seq: this.seq + index + 1, time: Date.now(), type: input.type, payload: input.payload }))
     const data = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
     let lineState: { bytes: number; terminated: boolean }
     try {

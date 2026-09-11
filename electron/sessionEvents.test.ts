@@ -21,6 +21,15 @@ import {
 } from './sessionEvents'
 
 describe('session events', () => {
+  it('writes schemaVersion 1 while accepting legacy events without it', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-schema-'))
+    const writer = new SessionEventWriter(root, 'schema')
+    await writer.appendCritical({ type: 'turn_start', payload: {} })
+    const raw = JSON.parse((await fs.readFile(writer.eventsPath, 'utf8')).trim())
+    expect(raw.schemaVersion).toBe(1)
+    await writer.close()
+  })
+
   it('appends JSONL with monotonic sequence and atomic index', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-'))
     const writer = new SessionEventWriter(root, 's1', new Date('2026-01-02T00:00:00Z').getTime())
