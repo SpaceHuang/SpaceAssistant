@@ -2,6 +2,23 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd() } }))
+
+const ripgrep = vi.hoisted(() => ({
+  inspect: vi.fn(),
+  resolve: vi.fn()
+}))
+
+vi.mock('./ripgrepBinary', async (importActual) => {
+  const actual = await importActual<typeof import('./ripgrepBinary')>()
+  return {
+    ...actual,
+    inspectRipgrepBinary: ripgrep.inspect,
+    resolveRipgrepBinary: ripgrep.resolve
+  }
+})
+
 import { FileStateCache } from '../fileStateCache'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import type { ToolExecutionContext } from './types'
@@ -34,9 +51,13 @@ describe('path field alias normalization', () => {
   beforeEach(async () => {
     tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-path-alias-')))
     cache = new FileStateCache()
+    ripgrep.resolve.mockReturnValue({ path: '/usr/bin/true', source: 'development', platform: 'darwin', arch: 'arm64' })
+    ripgrep.inspect.mockResolvedValue({ available: true })
   })
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
+    ripgrep.resolve.mockReset()
+    ripgrep.inspect.mockReset()
   })
 
   it('read_file accepts filePath', async () => {
@@ -124,6 +145,40 @@ describe('path field alias normalization', () => {
       makeCtx(tmpDir, cache)
     )
     expect(res.success).toBe(true)
+  })
+
+  it('开发态 staging 缺失时明确失败，不返回假阴性或 degraded 结果', async () => {
+    ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'development', platform: 'darwin', arch: 'arm64' })
+    ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })
+    const diagnostic = vi.fn()
+    const ctx = { ...makeCtx(tmpDir, cache), recordDiagnostic: diagnostic }
+
+    const res = await grepExecutor.execute({ pattern: 'needle', path: '.' }, ctx)
+
+    expect(res).toMatchObject({ success: false })
+    expect(res.error).toContain('npm run prepare:rg -- --target=darwin-arm64')
+    expect(JSON.stringify(res.data ?? {})).not.toContain('No matches found')
+    expect(JSON.stringify(res.data ?? {})).not.toContain('degraded')
+    expect(diagnostic).toHaveBeenCalledWith({
+      code: 'grep-ripgrep-unavailable',
+      message: 'source=development;platform=darwin;arch=arm64;status=unavailable;reason=not_found'
+    })
+  })
+
+  it('打包态内置 rg 不可用时返回安装完整性错误而非 fallback', async () => {
+    ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'bundled', platform: 'darwin', arch: 'arm64' })
+    ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })
+    const diagnostic = vi.fn()
+    const ctx = { ...makeCtx(tmpDir, cache), recordDiagnostic: diagnostic }
+
+    const res = await grepExecutor.execute({ pattern: 'needle', path: '.' }, ctx)
+
+    expect(res).toMatchObject({ success: false, error: '内置 ripgrep 不可用（not_found）。请重新安装应用后重试。' })
+    expect(JSON.stringify(res.data ?? {})).not.toContain('degraded')
+    expect(diagnostic).toHaveBeenCalledWith({
+      code: 'grep-ripgrep-unavailable',
+      message: 'source=bundled;platform=darwin;arch=arm64;status=unavailable;reason=not_found'
+    })
   })
 
   // -- 回归：原 path 字段仍可用 --

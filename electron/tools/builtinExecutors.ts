@@ -22,7 +22,12 @@ import {
 import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
 import { processTreeKiller } from '../spawnUtil'
 import { ProcessSupervisor } from '../shell/processSupervisor'
-import { resolveRipgrepBinary } from './ripgrepBinary'
+import {
+  classifyRipgrepSpawnError,
+  inspectRipgrepBinary,
+  resolveRipgrepBinary,
+  type RipgrepUnavailableReason
+} from './ripgrepBinary'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
@@ -719,7 +724,7 @@ export type GrepExecArgs = {
 export type RipgrepRunResult =
   | { kind: 'success'; output: string }
   | { kind: 'no_match'; output: 'No matches found' }
-  | { kind: 'unavailable'; reason: 'missing' | 'permission' | 'load_failed' }
+  | { kind: 'unavailable'; reason: Exclude<RipgrepUnavailableReason, 'unsupported' | 'not_file'> }
   | { kind: 'invalid_request'; message: string }
   | { kind: 'timeout'; partialOutput: string }
   | { kind: 'cancelled'; partialOutput: string }
@@ -738,6 +743,23 @@ export function validateGrepInput(input: Record<string, unknown>): string | null
 
 export function createGrepRipgrepDiagnostic(resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch' | 'path'>): string {
   return `source=${resolved.source};platform=${resolved.platform};arch=${resolved.arch};status=${resolved.path ? 'ready' : 'unavailable'}`
+}
+
+export function createGrepRipgrepUnavailableDiagnostic(
+  resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch'>,
+  reason: RipgrepUnavailableReason
+): string {
+  return `source=${resolved.source};platform=${resolved.platform};arch=${resolved.arch};status=unavailable;reason=${reason}`
+}
+
+export function grepRipgrepUnavailableUserMessage(
+  resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch'>,
+  reason: RipgrepUnavailableReason
+): string {
+  if (resolved.source === 'development') {
+    return `开发态内置 ripgrep 未准备（${reason}）。请执行 npm run prepare:rg -- --target=${resolved.platform}-${resolved.arch} 后重启应用。`
+  }
+  return `内置 ripgrep 不可用（${reason}）。请重新安装应用后重试。`
 }
 
 export async function grepWithRg(
@@ -809,8 +831,7 @@ export async function grepWithRg(
       resolve(result)
     }
     proc.on('error', (err) => {
-      const errorCode = (err as NodeJS.ErrnoException).code
-      finish({ kind: 'unavailable', reason: errorCode === 'EACCES' ? 'permission' : 'missing' })
+      finish({ kind: 'unavailable', reason: classifyRipgrepSpawnError(err as NodeJS.ErrnoException) })
     })
     proc.on('close', (code) => {
       if (signal.aborted) finish({ kind: 'cancelled', partialOutput: out.trimEnd() })
@@ -1072,7 +1093,8 @@ export const grepExecutor: ToolExecutor = {
     const resolved = resolveRipgrepBinary({
       packaged: app?.isPackaged ?? false,
       resourcesPath: process.resourcesPath,
-      developmentRoot: path.resolve(__dirname, '../../..'),
+      // Electron 开发态的 app path 是 worktree 根目录；不要依赖测试/打包转换后的 __dirname 形态。
+      developmentRoot: app?.isPackaged ? undefined : app?.getAppPath?.() ?? path.resolve(__dirname, '../../..'),
       platform: process.platform,
       arch: process.arch
     })
@@ -1082,13 +1104,18 @@ export const grepExecutor: ToolExecutor = {
     })
     if (!resolved.path) {
       void ctx.recordDiagnostic?.({
-        code: 'grep-ripgrep-fallback',
-        message: 'source=' + resolved.source + ';platform=' + resolved.platform + ';arch=' + resolved.arch + ';status=fallback;reason=' + (resolved.reason ?? 'unavailable')
+        code: 'grep-ripgrep-unavailable',
+        message: createGrepRipgrepUnavailableDiagnostic(resolved, resolved.reason ?? 'unsupported')
       })
-      const fallbackOutput = await grepFallbackJs(ctx.workDir, absSearch, pattern, gargs, ctx.signal, (m) =>
-        ctx.sendProgress('grep', m)
-      )
-      return { success: true, data: { output: fallbackOutput, degraded: true }, duration: Date.now() - started }
+      return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, resolved.reason ?? 'unsupported'), duration: Date.now() - started }
+    }
+    const availability = await inspectRipgrepBinary(resolved)
+    if (!availability.available) {
+      void ctx.recordDiagnostic?.({
+        code: 'grep-ripgrep-unavailable',
+        message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
+      })
+      return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), duration: Date.now() - started }
     }
     const text = await grepWithRg(resolved.path, ctx.workDir, absSearch, pattern, gargs, timeoutMs, ctx.signal, (m) =>
       ctx.sendProgress('grep', m)
@@ -1098,13 +1125,10 @@ export const grepExecutor: ToolExecutor = {
     }
     if (text.kind === 'unavailable') {
       void ctx.recordDiagnostic?.({
-        code: 'grep-ripgrep-fallback',
-        message: 'source=' + resolved.source + ';platform=' + resolved.platform + ';arch=' + resolved.arch + ';status=fallback;reason=' + text.reason
+        code: 'grep-ripgrep-unavailable',
+        message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
       })
-      const fallbackOutput = await grepFallbackJs(ctx.workDir, absSearch, pattern, gargs, ctx.signal, (m) =>
-        ctx.sendProgress('grep', m)
-      )
-      return { success: true, data: { output: fallbackOutput, degraded: true }, duration: Date.now() - started }
+      return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), duration: Date.now() - started }
     }
     if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
     if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
