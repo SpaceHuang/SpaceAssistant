@@ -171,6 +171,7 @@ import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { validateSurfaceForSend } from '../src/shared/surfacePreflight'
+import { computeContextPressure } from '../src/shared/contextMeter'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -819,6 +820,15 @@ async function runToolChatSessionInner(
           type: 'request_usage',
           payload: { requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
+        args.emitFactEvent?.({ type: 'context-projection-updated', projection: computeContextPressure({
+          currentSurface: requestHeader.surfaceSnapshot,
+          anchor: { requestId: attemptRequestId, surfaceTokens: requestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: requestHeader.surfaceSnapshot.fingerprint, systemFingerprint: requestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: requestHeader.surfaceSnapshot.toolsFingerprint, provider: 'anthropic', model, estimatorVersion: requestContext.budget.estimatorVersion, serializationVersion: requestContext.budget.serializationVersion, realUsage: finalUsage, contextWindow: requestContext.contextWindow.tokens },
+          budget: requestContext.budget,
+          decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' },
+          contextWindow: requestContext.contextWindow,
+          provider: 'anthropic',
+          model
+        }) })
       }
       if (usage) {
         lastValidUsage = usage

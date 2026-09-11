@@ -3,7 +3,7 @@ import { routePatchMessage } from './chatRunnerService'
 import { pendingConfirmStore } from './pendingConfirmStore'
 import type { SessionUsage } from '../../shared/sessionUsage'
 import { store } from '../store'
-import { setChatStatus, setLastUsage } from '../store/chatSlice'
+import { setChatStatus, setContextProjection, setLastUsage } from '../store/chatSlice'
 
 function applyProjectedUsage(sessionId: string, usage: SessionUsage, projected: boolean): void {
   if (!projected) void window.api.usageSet({ sessionId, usage }).catch(() => {})
@@ -51,6 +51,10 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
     if (payload.event.type === 'usage-updated') {
       const usage = (payload.event as { usage?: unknown }).usage
       if (usage && typeof usage === 'object') applyProjectedUsage(payload.turn.sessionId, usage as SessionUsage, Boolean((payload.event as { projected?: boolean }).projected))
+    }
+    if (payload.event.type === 'context-projection-updated') {
+      const projection = (payload.event as { projection?: unknown }).projection
+      if (projection && typeof projection === 'object') store.dispatch(setContextProjection(projection as any))
     }
     onMetric?.({ kind: 'projection', turnId: payload.turn.turnId, version: payload.turn.version, eventType: payload.event.type, durationMs: Math.max(0, (typeof performance !== 'undefined' ? performance.now() : 0) - startedAt) })
   }

@@ -47,6 +47,7 @@ type AssistantFactEventPayload =
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
   | { type: 'usage-updated'; usage: unknown; projected?: boolean }
+  | { type: 'context-projection-updated'; projection: import('./contextMeter').ContextPressureProjection }
   | { type: 'skill-hint'; text: string }
   | { type: 'source-completed' }
   | { type: 'source-failed' }

@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { Message } from '../../shared/domainTypes'
 import type { DisplayMessageEntry, DisplayOrder } from '../../shared/displayOrder'
 import type { SessionUsage } from '../../shared/sessionUsage'
+import type { ContextPressureProjection } from '../../shared/contextMeter'
 import {
   ackDisplayEntryPersisted,
   appendOptimisticDisplayEntry,
@@ -39,6 +40,7 @@ interface ChatState {
   /** 搜索结果跳转后滚动定位的消息 ID */
   scrollToMessageId: string | null
   lastUsage: LastUsage
+  contextProjection: ContextPressureProjection | null
   projectMemoryEnabled: boolean
 }
 
@@ -61,6 +63,7 @@ const initialState: ChatState = {
   confirmFocusToolUseId: null,
   scrollToMessageId: null,
   lastUsage: null,
+  contextProjection: null,
   projectMemoryEnabled: true
 }
 
@@ -84,6 +87,9 @@ export const chatSlice = createSlice({
     },
     restoreLastUsage(state, action: PayloadAction<LastUsage>) {
       state.lastUsage = action.payload
+    },
+    setContextProjection(state, action: PayloadAction<ContextPressureProjection | null>) {
+      state.contextProjection = action.payload
     },
     setMessages(state, action: PayloadAction<Message[]>) {
       state.messages = action.payload
@@ -225,6 +231,7 @@ export const chatSlice = createSlice({
       state.confirmFocusToolUseId = null
       state.scrollToMessageId = null
       state.lastUsage = null
+      state.contextProjection = null
       state.projectMemoryEnabled = true
     },
     setProjectMemoryEnabled(state, action: PayloadAction<boolean>) {
@@ -252,6 +259,7 @@ export const {
   resetChatUi,
   setLastUsage,
   restoreLastUsage,
+  setContextProjection,
   setProjectMemoryEnabled
 } = chatSlice.actions
 export default chatSlice.reducer
