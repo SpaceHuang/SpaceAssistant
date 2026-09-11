@@ -445,7 +445,7 @@ export function pickToolLoopReturnUsage(
 }
 
 export type RunToolChatSessionResult =
-  | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage; finalSurfaceSnapshot?: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot'] }
+  | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage; finalSurfaceSnapshot?: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; finalSurfaceMessages?: ClaudeContentBlockMessage[] }
   | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
 function failToolLoopWithLastUsage(
@@ -916,7 +916,7 @@ async function runToolChatSessionInner(
     if (toolUses.length === 0) {
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
       args.emitFactEvent?.({ type: 'source-completed' })
-      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot } : {}) }
+      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
     }
 
     if (toolNames.length === 0) {
