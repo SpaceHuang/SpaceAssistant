@@ -243,7 +243,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       // 这里只累计，由 finalizeTurn 统一上报为 eventPersistenceFailed。
       const eventAppendFailures: EventPersistenceFailure[] = []
       let droppedChunkEvents = 0
-      const finalizeTurn = (turnId: string, reason: string, error?: string): Promise<FinalizeResult> => {
+      const finalizeTurn = (turnId: string, reason: string, error?: string, finalSurfaceSnapshot?: unknown): Promise<FinalizeResult> => {
         if (finalizePromise) return finalizePromise
         finalizePromise = (async () => {
           const failures: EventPersistenceFailure[] = [...eventAppendFailures]
@@ -253,7 +253,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             failures.push(toEventPersistenceFailure(finalizeError))
           }
           try {
-            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}) } })
+            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}), ...(finalSurfaceSnapshot ? { finalSurfaceSnapshot } : {}) } })
           } catch (finalizeError) {
             failures.push(toEventPersistenceFailure(finalizeError))
           }
@@ -402,7 +402,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           return finalized.ok ? res : { ...res, eventPersistenceFailed: true, eventPersistenceErrors: finalized.eventPersistenceErrors }
         }
 
-        const finalized = await finalizeTurn(turnId, 'completed')
+        const finalized = await finalizeTurn(turnId, 'completed', undefined, res.finalSurfaceSnapshot)
         if (!finalized.ok) {
           return {
             ok: false as const,
