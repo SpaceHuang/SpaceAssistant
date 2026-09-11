@@ -98,6 +98,10 @@ describe('AssistantFactAggregator', () => {
     expect(result.status).toBe('failed')
     expect(result.content).toBe('')
   })
+  it('上下文投影事件不改变 assistant 消息状态', () => {
+    const result = apply([{ type: 'context-projection-updated', projection: { pressureTokens: 1, projectedTokens: 2, anchorStatus: 'matched', surfaceTokens: 2, bodyTokens: 2, bodyRatio: 0.1, hardFit: true, bodyFit: true, contextWindow: { tokens: 100, source: 'config' } } }])
+    expect(result.status).toBe('streaming')
+  })
 
   it('usage fact 不改变消息内容，但可以进入统一事实流', () => {
     const result = apply([{ type: 'usage-updated', usage: { input_tokens: 12, output_tokens: 3 } }])
