@@ -14,4 +14,10 @@ describe('surface projection', () => {
   it('returns uncompressible_input when required content exceeds body budget', () => {
     expect(projectSurface({ facts: [msg('current', 101)], currentUserMessageId: 'current', prefixTokens: 0, bodyBudget: 100, maxRetainedUserMessages: 10 }).status).toBe('uncompressible_input')
   })
+  it('uses the plan defaults when history limits are omitted', () => {
+    const facts = Array.from({ length: 130 }, (_, i) => msg(`old-${i}`, 1))
+    const result = projectSurface({ facts: [...facts, msg('current', 1)], currentUserMessageId: 'current', prefixTokens: 0, bodyBudget: 300 })
+    expect(result.history).toHaveLength(128)
+    expect(result.history.reduce((sum, item) => sum + item.tokens, 0)).toBe(128)
+  })
 })
