@@ -13,6 +13,19 @@ export type CommittedCompaction = {
 
 export type CompactionReplay = { committed: CommittedCompaction[]; rejected: Array<{ compactionId?: string; reason: string }> }
 
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonicalize(entry)]))
+  return value
+}
+
+export function computeCompactionSummaryHash(candidate: unknown): string {
+  const text = JSON.stringify(canonicalize(candidate))
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
 function stringField(payload: Record<string, unknown>, key: string): string | undefined {
   return typeof payload[key] === 'string' ? payload[key] as string : undefined
 }

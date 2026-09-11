@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { countCommittedCompactions, foldCompactionEvents, projectCompactionMarkers } from './compactionEvents'
+import { computeCompactionSummaryHash, countCommittedCompactions, foldCompactionEvents, projectCompactionMarkers } from './compactionEvents'
 
 const event = (seq: number, type: 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: Record<string, unknown>) => ({ seq, type, payload })
 
 describe('compaction event replay', () => {
+  it('hashes equivalent candidate objects deterministically', () => {
+    expect(computeCompactionSummaryHash({ b: 2, a: { y: 1, x: 0 } })).toBe(computeCompactionSummaryHash({ a: { x: 0, y: 1 }, b: 2 }))
+  })
   it('applies only a complete committed triplet', () => {
     const result = foldCompactionEvents([
       event(1, 'compaction_start', { compactionId: 'c1', inputSurfaceFingerprint: 'in', targetTokens: 10 }),

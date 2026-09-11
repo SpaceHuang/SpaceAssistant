@@ -175,6 +175,7 @@ import { computeContextPressure, shouldCompact } from '../src/shared/contextMete
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { computeShadowedRanges } from '../src/shared/surfaceReplay'
+import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -870,9 +871,10 @@ async function runToolChatSessionInner(
             const value = block as unknown as { type?: unknown; id?: unknown }
             return value.type === 'tool_use' && typeof value.id === 'string' ? [value.id] : []
           }) : [])
+          const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges: computeShadowedRanges(recoveryInputItems, messagesForApi.map((message, index) => ({ id: (message as unknown as { id?: string }).id ?? `message-${index}` }))) }
           await args.appendCompactionTransaction(
             { compactionId, windowId: requestId, inputSurfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
-            { compactionId, windowId: requestId, summaryHash: outputHeader.surfaceSnapshot.fingerprint, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: computeShadowedRanges(recoveryInputItems, messagesForApi.map((message, index) => ({ id: (message as unknown as { id?: string }).id ?? `message-${index}` }))), requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate: { kind: 'reset' } }
+            { compactionId, windowId: requestId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: candidate.shadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
           )
           args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: requestId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
         }
