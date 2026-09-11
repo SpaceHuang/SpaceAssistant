@@ -170,6 +170,7 @@ import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
+import { validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -658,10 +659,24 @@ async function runToolChatSessionInner(
     })
     const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped })
     await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
+    const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     await args.emitSessionEvent?.({
       type: 'request_context',
-      payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
+      payload: requestContext
     })
+    const surfaceIds = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => message.id ?? `message-${index}`)
+    const preflight = validateSurfaceForSend({
+      ids: surfaceIds,
+      requiredIds: args.currentUserMessageId ? [args.currentUserMessageId] : [],
+      currentUserMessageId: args.currentUserMessageId ?? surfaceIds[surfaceIds.length - 1] ?? '',
+      fingerprint: requestHeader.surfaceSnapshot.fingerprint,
+      expectedFingerprint: requestHeader.surfaceSnapshot.fingerprint,
+      estimatedTotalInputTokens: requestHeader.surfaceSnapshot.surfaceTokens,
+      totalInputBudget: requestContext.budget.totalInputBudget,
+      toolUses: [],
+      toolResults: []
+    })
+    if (!preflight.ok) return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
 
     logAgentEvent('info', 'llm.request', {
       requestId,
