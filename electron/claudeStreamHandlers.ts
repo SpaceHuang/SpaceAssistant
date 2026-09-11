@@ -419,7 +419,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           ok: true as const,
           content: res.content,
           stopReason: res.stopReason,
-          ...('usage' in res && res.usage ? { usage: res.usage } : {})
+          ...('usage' in res && res.usage ? { usage: res.usage } : {}),
+          ...('finalSurfaceSnapshot' in res && res.finalSurfaceSnapshot ? { finalSurfaceSnapshot: res.finalSurfaceSnapshot } : {}),
+          ...('finalSurfaceMessages' in res && res.finalSurfaceMessages ? { finalSurfaceMessages: res.finalSurfaceMessages } : {})
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
