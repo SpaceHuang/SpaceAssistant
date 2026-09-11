@@ -27,7 +27,8 @@ vi.mock('./toolChatLoop', () => ({
 }))
 
 vi.mock('./sessionEvents', () => ({
-  getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args)
+  getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args),
+  readCompactionMarkers: vi.fn(async () => [])
 }))
 
 vi.mock('./agentLogger/agentLogger', () => ({

@@ -23,7 +23,7 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, type SessionEventInput, type SessionEventSink } from './sessionEvents'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -289,6 +289,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         if (session) {
           eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
           await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
+          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath)
+          for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker })
         }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')

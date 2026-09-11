@@ -16,6 +16,7 @@ import {
   readSessionEventsDetailed,
   appendCompactionTransaction,
   replayCompactionEvents,
+  readCompactionMarkers,
   reconcileSessionEventFiles,
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
@@ -41,6 +42,13 @@ describe('session events', () => {
     ])
     expect(replay.committed).toHaveLength(1)
     expect(replay.rejected).toContainEqual({ compactionId: 'broken', reason: 'invalid-commit-references' })
+  })
+  it('reads only committed compaction markers from the event log', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-markers-'))
+    const writer = new SessionEventWriter(root, 'markers')
+    await appendCompactionTransaction(writer, { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', windowId: 'w1', summaryHash: 'out', outputSurfaceFingerprint: 'out', candidate: {} })
+    expect(await readCompactionMarkers(writer.eventsPath, 'w1')).toEqual([{ compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'out' }])
+    await writer.close()
   })
   it('writes schemaVersion 1 while accepting legacy events without it', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-schema-'))
