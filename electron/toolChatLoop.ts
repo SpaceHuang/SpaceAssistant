@@ -947,6 +947,7 @@ async function runToolChatSessionInner(
     }
     const fileCache = getFileStateCacheForSession(sessionId)
     let abortRepeatedToolError: string | null = null
+    let toolResultCompacted = false
 
     for (const tu of toolUses) {
       throwIfChatCancelled(chatSignal)
@@ -1945,14 +1946,16 @@ async function runToolChatSessionInner(
         })
       }
 
-      let payload = compactToolResultContentForApi(formatToolResultPayload(execResult, {
+      const rawPayload = formatToolResultPayload(execResult, {
         workspaceRoot: workDir,
         processTool
-      }), {
+      })
+      let payload = compactToolResultContentForApi(rawPayload, {
         requestId,
         sessionId,
         toolUseId
       })
+      if (payload !== rawPayload) toolResultCompacted = true
       const recoverySkill =
         execResult.dependencyError &&
         resolveDependencyRecoverySkill(execResult.dependencyError.errorCode)
@@ -2051,7 +2054,7 @@ async function runToolChatSessionInner(
         const toolLoopPlan = planToolLoopCompaction({
           projection: { surfaceTokens: nextProjection.surfaceTokens, bodyTokens: nextProjection.bodyTokens, requiredTokens: lastRequestContext.budget.requiredTokens, totalInputBudget: lastRequestContext.budget.totalInputBudget, bodyBudget: lastRequestContext.budget.bodyBudget, targetBodyRatio: lastRequestContext.budget.targetBodyRatio },
           shouldCompact: shouldCompact(nextProjection, lastRequestContext.budget),
-          prune: (projection) => ({ projection, status: 'no-op' })
+          prune: (projection) => ({ projection, status: toolResultCompacted ? 'applied' : 'no-op' })
         })
         args.emitFactEvent?.({ type: 'context-projection-updated', projection: nextProjection })
         await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: `${requestId}:surface:${loopRound}`, provider: lastRequestContext.provider, model: lastRequestContext.model, contextWindow: lastRequestContext.contextWindow.tokens, maxTokensEffective: lastRequestContext.maxTokensEffective, surfaceSnapshot: nextHeader.surfaceSnapshot, contextUsage: nextProjection, planningStatus: toolLoopPlan.status, windowId: requestId, decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
