@@ -62,7 +62,7 @@ export function buildRequestContextPayload(args: {
   const bodyBudget = Math.max(0, totalInputBudget - prefixTokens)
   const surfaceTokens = args.surfaceSnapshot?.surfaceTokens ?? prefixTokens
   const decision = args.decision ?? { decisionId: args.requestId, phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'adaptive-v1' }
-  const decisionFingerprint = fingerprint(JSON.stringify(decision))
+  const decisionFingerprint = fingerprint(JSON.stringify({ ...decision, surfaceTokens, prefixTokens, totalInputBudget, bodyBudget, triggerRatio: 0.9, targetBodyRatio: 0.8, contextWindow }))
   return {
     requestId: args.requestId,
     provider: args.provider,

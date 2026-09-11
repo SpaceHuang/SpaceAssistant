@@ -35,4 +35,10 @@ describe('request context payload', () => {
     expect(a.decisionFingerprint).toBe(b.decisionFingerprint)
     expect(a.decisionFingerprint).toMatch(/^[0-9a-f]+$/)
   })
+  it('changes the decision fingerprint when the projected surface changes', () => {
+    const base = { requestId: 'r', provider: 'p', model: 'm', contextWindow: 1000, maxTokensEffective: 100, surfaceSnapshot: { surfaceTokens: 20, systemTokens: 2, toolsTokens: 2 }, decision: { decisionId: 'd', phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'v1' } }
+    const a = buildRequestContextPayload(base)
+    const b = buildRequestContextPayload({ ...base, surfaceSnapshot: { ...base.surfaceSnapshot, surfaceTokens: 21 } })
+    expect(a.decisionFingerprint).not.toBe(b.decisionFingerprint)
+  })
 })
