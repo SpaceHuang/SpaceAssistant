@@ -44,3 +44,7 @@ export function foldCompactionEvents(events: readonly CompactionEvent[]): Compac
   }
   return { committed: [...committed.values()].sort((a, b) => a.end.seq - b.end.seq), rejected }
 }
+
+export function countCommittedCompactions(replay: CompactionReplay, windowId: string): number {
+  return replay.committed.filter((item) => item.start.payload.windowId === windowId || item.summary.payload.windowId === windowId || item.end.payload.windowId === windowId).length
+}

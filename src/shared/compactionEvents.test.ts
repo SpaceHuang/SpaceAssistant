@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { foldCompactionEvents } from './compactionEvents'
+import { countCommittedCompactions, foldCompactionEvents } from './compactionEvents'
 
 const event = (seq: number, type: 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: Record<string, unknown>) => ({ seq, type, payload })
 
@@ -23,5 +23,18 @@ describe('compaction event replay', () => {
     const result = foldCompactionEvents([...base, base[2]!, event(5, 'compaction_end', { compactionId: 'unknown', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: 'h1' })])
     expect(result.committed).toHaveLength(1)
     expect(result.rejected.length).toBe(2)
+  })
+
+  it('counts only committed summaries within the current window', () => {
+    const replay = foldCompactionEvents([
+      event(1, 'compaction_start', { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'a' }),
+      event(2, 'compaction_summary', { compactionId: 'c1', windowId: 'w1', summaryHash: 'h', outputSurfaceFingerprint: 'b' }),
+      event(3, 'compaction_end', { compactionId: 'c1', windowId: 'w1', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'a', outputSurfaceFingerprint: 'b', summaryHash: 'h' }),
+      event(4, 'compaction_start', { compactionId: 'c2', windowId: 'w2', inputSurfaceFingerprint: 'c' }),
+      event(5, 'compaction_summary', { compactionId: 'c2', windowId: 'w2', summaryHash: 'i', outputSurfaceFingerprint: 'd' }),
+      event(6, 'compaction_end', { compactionId: 'c2', windowId: 'w2', status: 'committed', startSeq: 4, summarySeq: 5, inputSurfaceFingerprint: 'c', outputSurfaceFingerprint: 'd', summaryHash: 'i' })
+    ])
+    expect(countCommittedCompactions(replay, 'w1')).toBe(1)
+    expect(countCommittedCompactions(replay, 'w3')).toBe(0)
   })
 })
