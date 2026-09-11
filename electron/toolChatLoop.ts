@@ -658,12 +658,7 @@ async function runToolChatSessionInner(
       cacheControl: true
     })
     const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped })
-    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
-    await args.emitSessionEvent?.({
-      type: 'request_context',
-      payload: requestContext
-    })
     const surfaceIds = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => message.id ?? `message-${index}`)
     const preflight = validateSurfaceForSend({
       ids: surfaceIds,
@@ -677,6 +672,8 @@ async function runToolChatSessionInner(
       toolResults: []
     })
     if (!preflight.ok) return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
+    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
+    await args.emitSessionEvent?.({ type: 'request_context', payload: requestContext })
 
     logAgentEvent('info', 'llm.request', {
       requestId,
