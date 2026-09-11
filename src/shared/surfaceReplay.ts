@@ -3,6 +3,13 @@ import type { CompactionReplay } from './compactionEvents'
 export type SurfaceReplayItem = { id: string; required?: boolean }
 
 export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
+  if (value && typeof value === 'object' && 'role' in value && 'content' in value) {
+    const message = value as { role?: unknown; content?: unknown }
+    const text = JSON.stringify({ role: message.role, content: message.content })
+    let hash = 2166136261
+    for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
+    return `surface-${(hash >>> 0).toString(16).padStart(8, '0')}`
+  }
   const explicit = value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
   if (explicit) return explicit
   const text = JSON.stringify(value) ?? `index:${fallbackIndex}`
@@ -35,11 +42,15 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     const ranges = committed.summary.payload.shadowedRanges
     if (!Array.isArray(ranges)) continue
     const persistedBoundary = committed.start.payload.surfaceBoundaryId
-    const boundaryEnd = typeof persistedBoundary === 'string' ? persistedBoundary : ranges.reduce<string | undefined>((last, range) => {
+    const rangeBoundary = ranges.reduce<string | undefined>((last, range) => {
       if (!range || typeof range !== 'object') return last
       return typeof (range as { end?: unknown }).end === 'string' ? (range as { end: string }).end : last
     }, undefined)
-    const boundaryIndex = boundaryEnd ? currentSurface.findIndex((item) => item.id === boundaryEnd) : -1
+    const expectedBoundaryIndex = fingerprint && typeof expectedInput === 'string'
+      ? currentSurface.findIndex((_, index) => fingerprint(currentSurface.slice(0, index + 1)) === expectedInput)
+      : -1
+    const boundaryEnd = expectedBoundaryIndex >= 0 ? currentSurface[expectedBoundaryIndex]?.id : (typeof persistedBoundary === 'string' ? persistedBoundary : rangeBoundary)
+    const boundaryIndex = boundaryEnd ? currentSurface.findIndex((item, index) => item.id === boundaryEnd || surfaceItemIdentity(item, index) === boundaryEnd) : -1
     const inputSurface = boundaryIndex >= 0 ? currentSurface.slice(0, boundaryIndex + 1) : currentSurface
     const historicalIds = new Set(inputSurface.map((item) => item.id))
     if (fingerprint && typeof expectedInput === 'string' && fingerprint(inputSurface) !== expectedInput) continue
@@ -49,8 +60,8 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
       if (!range || typeof range !== 'object') { shadowedIds.clear(); break }
       const start = (range as { start?: unknown }).start
       const end = (range as { end?: unknown }).end
-      const rangeStart = currentSurface.findIndex((item) => item.id === start)
-      const rangeEnd = currentSurface.findIndex((item) => item.id === end)
+      const rangeStart = currentSurface.findIndex((item, index) => item.id === start || surfaceItemIdentity(item, index) === start)
+      const rangeEnd = currentSurface.findIndex((item, index) => item.id === end || surfaceItemIdentity(item, index) === end)
       if (rangeStart < 0 || rangeEnd < rangeStart) { shadowedIds.clear(); break }
       if (insertionIndex < 0) insertionIndex = rangeStart
       for (const item of currentSurface.slice(rangeStart, rangeEnd + 1)) shadowedIds.add(item.id)

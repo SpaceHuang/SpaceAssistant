@@ -82,4 +82,19 @@ describe('surface replay', () => {
     const fingerprint = (items: readonly { id: string }[]) => items.map((item) => item.id).join('|')
     expect(applyCommittedSurfaceShadow([{ id: 'old-1' }, { id: 'new-1' }], foldCompactionEvents(events), [], 'w', fingerprint)).toEqual([{ id: 'checkpoint-1', role: 'user', content: 'summary 1' }, { id: 'new-1' }])
   })
+
+  it('locates a boundary by normalized content when a transient API id becomes a database id', () => {
+    const candidate = { checkpointMessage: { id: 'checkpoint-1', role: 'user', content: 'summary' }, shadowedRanges: [{ start: surfaceItemIdentity({ role: 'user', content: 'user' }, 0), end: surfaceItemIdentity({ role: 'assistant', content: 'assistant' }, 1) }] }
+    const replay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: { compactionId: 'c', windowId: 'w', inputSurfaceFingerprint: 'user|assistant|tail', surfaceBoundaryId: 'temp-assistant' } },
+      { seq: 2, type: 'compaction_summary', payload: { compactionId: 'c', windowId: 'w', candidate, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: 'summary|tail', shadowedRanges: candidate.shadowedRanges } },
+      { seq: 3, type: 'compaction_end', payload: { compactionId: 'c', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'user|assistant|tail', outputSurfaceFingerprint: 'summary|tail', summaryHash: computeCompactionSummaryHash(candidate) } }
+    ])
+    const fingerprint = (items: readonly { role?: string; content?: string }[]) => items.map((item) => item.content ?? item.role ?? '').join('|')
+    expect(applyCommittedSurfaceShadow([
+      { id: 'db-user', role: 'user', content: 'user' }, { id: 'db-assistant', role: 'assistant', content: 'assistant' }, { id: 'db-tail', role: 'user', content: 'tail' }, { id: 'new-turn', role: 'user', content: 'new' }
+    ], replay, [], 'w', fingerprint)).toEqual([
+      { id: 'checkpoint-1', role: 'user', content: 'summary' }, { id: 'db-tail', role: 'user', content: 'tail' }, { id: 'new-turn', role: 'user', content: 'new' }
+    ])
+  })
 })
