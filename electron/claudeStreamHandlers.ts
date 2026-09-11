@@ -296,12 +296,13 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         if (session) {
           eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
           await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
-          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath, requestId)
+          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath, sessionId)
           for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker })
         }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
         const model = assertValidModel(frozen.model ?? '')
+        const contextWindowId = sessionId
         await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
         const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(frozen.baseUrl)
         const llmServiceId = frozen.llmServiceId
@@ -311,7 +312,12 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
-        const persistedMessages = applyCommittedSurfaceShadow(authoritative.messages, compactionReplay, [authoritative.currentUserMessageId], requestId)
+        const persistedMessages = applyCommittedSurfaceShadow(authoritative.messages, compactionReplay, [authoritative.currentUserMessageId], contextWindowId)
+        const historyFacts = authoritative.messages.map((message) => {
+          const rawContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
+          const text = rawContent ?? ''
+          return { id: message.id, sessionId, windowId: contextWindowId, text, tokens: estimateTokensFromUtf8Text(text) }
+        })
         builtMessages = await buildToolChatMessagesFromSource({
           userDataDir,
           workDir: deps.getWorkDir(),
@@ -341,6 +347,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           sender,
           requestId,
           sessionId,
+          windowId: contextWindowId,
           model,
           baseUrl,
           messages,
@@ -357,6 +364,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           getApiKey,
           appDb: deps.getAppDatabase(),
           currentUserMessageId: authoritative.currentUserMessageId,
+          historyFacts,
           assistantMessageId: authoritative.assistantMessageId,
           hasImageAttachments,
           getBrowserDetectContext: deps.getBrowserDetectContext,
@@ -383,7 +391,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             if (!eventWriter) return
             await appendCompactionTransaction(eventWriter, { ...start, turnId }, { ...summary, turnId })
           }
-          ,onTurnBoundary: async ({ requestId: boundaryRequestId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
+          ,onTurnBoundary: async ({ requestId: boundaryRequestId, windowId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
             const projection = contextUsage && {
               ...contextUsage,
               anchorStatus: contextUsage.projectedTokens == null ? 'missing' as const : 'matched' as const,
@@ -420,8 +428,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             })
             if (!preflight.ok) return
             const candidate = { kind: 'summary', checkpointMessage, shadowedRanges }
-            const compactionId = `${boundaryRequestId}:boundary`
-            await appendCompactionTransaction(eventWriter, { compactionId, windowId: boundaryRequestId, turnId, inputSurfaceFingerprint: surfaceSnapshot.fingerprint, targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId: boundaryRequestId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
+            const compactionId = `${windowId}:boundary:${boundaryRequestId}`
+            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: surfaceSnapshot.fingerprint, targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {

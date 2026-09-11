@@ -150,6 +150,21 @@ describe('runToolChatSession message_start usage', () => {
     expect(boundary).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'req-boundary-hook', messages: expect.any(Array), surfaceSnapshot: expect.any(Object) }))
   })
 
+  it('保留真实消息 id，使带 currentUserMessageId 的请求通过 provider preflight', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-stable-id', sessionId: 'sess-stable-id', model: 'claude-sonnet-4-20250514',
+      messages: [{ id: 'current-user-id', role: 'user', content: 'hello' }], currentUserMessageId: 'current-user-id',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb()
+    })
+    expect(res.ok).toBe(true)
+    expect(stream).toHaveBeenCalled()
+  })
+
   it('emits usage-updated fact on message_start before finalMessage', async () => {
     const sender = makeSender()
     mockCreateAnthropicClient.mockImplementation(() => ({

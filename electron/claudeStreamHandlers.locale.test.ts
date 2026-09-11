@@ -172,9 +172,11 @@ describe('claudeStreamHandlers locale', () => {
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({
       model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
-      options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN'
+      options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
+      windowId: session.id,
+      historyFacts: expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
     }))
-    expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String), 'frozen-request')
+    expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String), session.id)
     db.close()
   })
 

@@ -398,6 +398,7 @@ export type RunToolChatSessionArgs = {
   sender: WebContents
   requestId: string
   sessionId: string
+  windowId?: string
   model: string
   contextWindow?: number
   baseUrl?: string
@@ -435,7 +436,7 @@ export type RunToolChatSessionArgs = {
   emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
-  onTurnBoundary?: (input: { requestId: string; system: string; tools: unknown[]; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage']; toolExecutionCheckpoint: ReturnType<typeof buildRequestHeaderPayload>['toolExecutionCheckpoint']; requiredSurfaceSet: string[] }) => Promise<void>
+  onTurnBoundary?: (input: { requestId: string; windowId: string; system: string; tools: unknown[]; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage']; toolExecutionCheckpoint: ReturnType<typeof buildRequestHeaderPayload>['toolExecutionCheckpoint']; requiredSurfaceSet: string[] }) => Promise<void>
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -539,6 +540,7 @@ async function runToolChatSessionInner(
     floatingNotificationManager,
     hasImageAttachments
   } = args
+  const contextWindowId = args.windowId ?? requestId
   const apiKey = await getApiKey()
   if (!apiKey) {
     logAgentEvent('error', 'llm.error', {
@@ -590,9 +592,10 @@ async function runToolChatSessionInner(
   }
 
   let messagesForApi: Anthropic.MessageParam[] = initialMessages.map((m) => ({
+    ...(('id' in m && typeof m.id === 'string') ? { id: m.id } : {}),
     role: m.role,
     content: m.content as Anthropic.MessageParam['content']
-  }))
+  })) as Anthropic.MessageParam[]
 
   /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
   const historicalAssistantApiMessageCount = initialMessages.filter((m) => m.role === 'assistant').length
@@ -669,7 +672,7 @@ async function runToolChatSessionInner(
       cacheControl: true
     })
     const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
-    const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: requestId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
+    const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
     lastRequestContext = requestContext
     const surfaceIds = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => message.id ?? `message-${index}`)
@@ -843,7 +846,7 @@ async function runToolChatSessionInner(
           model
         })
         args.emitFactEvent?.({ type: 'context-projection-updated', projection: finalProjection })
-        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, contextUsage: finalProjection, planningStatus: finalProjection.surfaceTokens <= requestContext.budget.totalInputBudget ? 'fits_without_headroom' : 'exhausted', windowId: requestId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
+        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, contextUsage: finalProjection, planningStatus: finalProjection.surfaceTokens <= requestContext.budget.totalInputBudget ? 'fits_without_headroom' : 'exhausted', windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
       }
       if (usage) {
         lastValidUsage = usage
@@ -876,10 +879,10 @@ async function runToolChatSessionInner(
           const recoveryShadowedRanges = computeShadowedRanges(recoveryInputItems, messagesForApi.map((message, index) => ({ id: surfaceItemIdentity(message, index) })))
           const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges: recoveryShadowedRanges }
           await args.appendCompactionTransaction(
-            { compactionId, windowId: requestId, inputSurfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
-            { compactionId, windowId: requestId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: recoveryShadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
+            { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
+            { compactionId, windowId: contextWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: recoveryShadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
           )
-          args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: requestId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
+          args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: contextWindowId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
         }
         await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
@@ -924,7 +927,7 @@ async function runToolChatSessionInner(
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
       args.emitFactEvent?.({ type: 'source-completed' })
       if (args.onTurnBoundary && lastRequestHeader && lastRequestContext) {
-        await args.onTurnBoundary({ requestId, system: lastRequestHeader.system, tools: lastRequestHeader.tools, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: lastRequestHeader.toolExecutionCheckpoint, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
+        await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system, tools: lastRequestHeader.tools, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: lastRequestHeader.toolExecutionCheckpoint, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
       }
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
     }
@@ -2067,7 +2070,7 @@ async function runToolChatSessionInner(
           prune: (projection) => ({ projection, status: toolResultCompacted ? 'applied' : 'no-op' })
         })
         args.emitFactEvent?.({ type: 'context-projection-updated', projection: nextProjection })
-        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: `${requestId}:surface:${loopRound}`, provider: lastRequestContext.provider, model: lastRequestContext.model, contextWindow: lastRequestContext.contextWindow.tokens, maxTokensEffective: lastRequestContext.maxTokensEffective, surfaceSnapshot: nextHeader.surfaceSnapshot, contextUsage: nextProjection, planningStatus: toolLoopPlan.status, windowId: requestId, decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
+        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: `${requestId}:surface:${loopRound}`, provider: lastRequestContext.provider, model: lastRequestContext.model, contextWindow: lastRequestContext.contextWindow.tokens, maxTokensEffective: lastRequestContext.maxTokensEffective, surfaceSnapshot: nextHeader.surfaceSnapshot, contextUsage: nextProjection, planningStatus: toolLoopPlan.status, windowId: contextWindowId, decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
       }
     }
     if (abortRepeatedToolError) {
