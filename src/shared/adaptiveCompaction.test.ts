@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { adaptiveRules, getCompactionRules, pruneSurface } from './adaptiveCompaction'
+import { adaptiveRules, getCompactionRules, pruneSurface, selectCompactionRules } from './adaptiveCompaction'
 
 describe('adaptive compaction preset', () => {
   it('keeps active tool loop at prune-only and exposes data-only rules', () => {
@@ -19,5 +19,9 @@ describe('adaptive compaction preset', () => {
   it('switches behavior by replacing rule data, without changing the engine', () => {
     expect(getCompactionRules('classic').map((r) => r.action)).toEqual(['prune', 'summarize'])
     expect(getCompactionRules('reset-first')[0]?.action).toBe('reset')
+  })
+  it('selects only rules applicable to the current phase and reason', () => {
+    expect(selectCompactionRules(adaptiveRules, { phase: 'tool_loop', reason: 'should_compact' }).map((r) => r.action)).toEqual(['prune'])
+    expect(selectCompactionRules(adaptiveRules, { phase: 'turn_boundary', reason: 'provider_overflow' }).map((r) => r.action)).toEqual(['reset'])
   })
 })

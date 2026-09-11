@@ -26,6 +26,17 @@ export function getCompactionRules(preset: keyof typeof compactionPresets = 'ada
   return compactionPresets[preset]
 }
 
+export function selectCompactionRules(
+  rules: readonly AdaptiveRule[],
+  context: { phase: Exclude<CompactionPhase, 'any'>; reason: CompactionReason; summaryCount?: number }
+): readonly AdaptiveRule[] {
+  return rules.filter((rule) =>
+    (rule.phase === 'any' || rule.phase === context.phase) &&
+    rule.reason === context.reason &&
+    (rule.minSummaryCount == null || (context.summaryCount ?? 0) >= rule.minSummaryCount)
+  )
+}
+
 export type PrunableSurfaceItem = { id: string; tokens: number; cacheBoundary: boolean }
 export type PruneResult = { status: 'applied' | 'no-op'; items: PrunableSurfaceItem[]; projection: CompactionProjection }
 
