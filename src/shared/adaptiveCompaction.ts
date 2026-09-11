@@ -1,4 +1,4 @@
-import type { CompactionProjection } from './contextCompaction'
+import { planCompaction, type CompactionActionResult, type CompactionPlanResult, type CompactionProjection } from './contextCompaction'
 
 export type CompactionPhase = 'tool_loop' | 'turn_boundary' | 'any'
 export type CompactionReason = 'provider_overflow' | 'user_reset' | 'user_compact' | 'should_compact'
@@ -35,6 +35,23 @@ export function selectCompactionRules(
     rule.reason === context.reason &&
     (rule.minSummaryCount == null || (context.summaryCount ?? 0) >= rule.minSummaryCount)
   )
+}
+
+export function planAdaptiveCompaction(args: {
+  projection: CompactionProjection
+  preset?: keyof typeof compactionPresets
+  phase: Exclude<CompactionPhase, 'any'>
+  reason: CompactionReason
+  summaryCount?: number
+  actions: Record<'prune' | 'summarize' | 'reset', (projection: CompactionProjection) => CompactionActionResult>
+  maxSteps: number
+}): CompactionPlanResult {
+  return planCompaction({
+    projection: args.projection,
+    rules: selectCompactionRules(getCompactionRules(args.preset), { phase: args.phase, reason: args.reason, summaryCount: args.summaryCount }),
+    actions: args.actions,
+    maxSteps: args.maxSteps
+  })
 }
 
 export type PrunableSurfaceItem = { id: string; tokens: number; cacheBoundary: boolean }

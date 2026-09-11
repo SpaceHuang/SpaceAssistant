@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { adaptiveRules, getCompactionRules, pruneSurface, selectCompactionRules } from './adaptiveCompaction'
+import { adaptiveRules, getCompactionRules, planAdaptiveCompaction, pruneSurface, selectCompactionRules } from './adaptiveCompaction'
 
 describe('adaptive compaction preset', () => {
   it('keeps active tool loop at prune-only and exposes data-only rules', () => {
@@ -23,5 +23,15 @@ describe('adaptive compaction preset', () => {
   it('selects only rules applicable to the current phase and reason', () => {
     expect(selectCompactionRules(adaptiveRules, { phase: 'tool_loop', reason: 'should_compact' }).map((r) => r.action)).toEqual(['prune'])
     expect(selectCompactionRules(adaptiveRules, { phase: 'turn_boundary', reason: 'provider_overflow' }).map((r) => r.action)).toEqual(['reset'])
+  })
+  it('runs the selected rule set through the generic engine', () => {
+    const actions = {
+      prune: (p: any) => ({ projection: p, status: 'no-op' as const }),
+      summarize: (p: any) => ({ projection: { ...p, surfaceTokens: 400, bodyTokens: 400 }, status: 'applied' as const }),
+      reset: (p: any) => ({ projection: { ...p, surfaceTokens: 300, bodyTokens: 300 }, status: 'applied' as const })
+    }
+    const result = planAdaptiveCompaction({ projection: { surfaceTokens: 900, bodyTokens: 900, requiredTokens: 10, totalInputBudget: 1000, bodyBudget: 1000, targetBodyRatio: .5 }, phase: 'tool_loop', reason: 'should_compact', actions, maxSteps: 3 })
+    expect(result.actions.map((a) => a.action)).toEqual(['prune'])
+    expect(result.status).toBe('fits_without_headroom')
   })
 })
