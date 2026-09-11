@@ -4,6 +4,8 @@ import { MAX_CHAT_API_MESSAGES } from './chatApiMessageLimits'
 import { toolIdToOpenAiCompatibleApiToolName } from './anthropicToolSanitize'
 import { compactOversizedToolResultContent } from './oversizedToolResult'
 import { SYNTHETIC_TOOL_RESULT_PLACEHOLDER } from './toolResultPairing'
+import { serializeAgentToolResult } from './agentToolResult'
+import { isProcessToolName } from './processResultProjection'
 
 export type ClaudeUserContentBlock =
   | { type: 'text'; text: string }
@@ -37,11 +39,10 @@ export function buildToolResultBlock(
     return { content: SYNTHETIC_TOOL_RESULT_PLACEHOLDER, isError: true }
   }
   if (tc.result.success === false) {
-    return compactToolResultBuild(tc.result.error ?? '失败', true, options)
+    return compactToolResultBuild(serializeAgentToolResult(tc.result, { processTool: isProcessToolName(tc.toolName) }), true, options)
   }
   if (tc.result.data === undefined) return { content: '{}', isError: false }
-  const content =
-    typeof tc.result.data === 'string' ? tc.result.data : JSON.stringify(tc.result.data)
+  const content = serializeAgentToolResult(tc.result, { processTool: isProcessToolName(tc.toolName) })
   return compactToolResultBuild(content, false, options)
 }
 

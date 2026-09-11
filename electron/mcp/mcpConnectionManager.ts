@@ -217,6 +217,19 @@ export class McpConnectionManager {
     this.appendDiagnostic = options?.appendDiagnostic
   }
 
+  private reportDiagnostic(serverId: string, entry: { code: string; message: string }): void {
+    try {
+      const result = this.appendDiagnostic?.(serverId, entry)
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        void (result as Promise<void>).catch((error) => {
+          console.warn('[mcp] diagnostic append failed:', error instanceof Error ? error.message : error)
+        })
+      }
+    } catch (error) {
+      console.warn('[mcp] diagnostic append failed:', error instanceof Error ? error.message : error)
+    }
+  }
+
   isSessionAlive(serverId: string): boolean {
     const entry = this.sessions.get(serverId)
     return Boolean(entry && !entry.dead)
@@ -279,7 +292,7 @@ export class McpConnectionManager {
         {
           onStderr: (line) => {
             lastTransportLine = line
-            void this.appendDiagnostic?.(profile.id, { code: 'stdio-stderr', message: line })
+            this.reportDiagnostic(profile.id, { code: 'stdio-stderr', message: line })
           }
         }
       )
@@ -305,7 +318,7 @@ export class McpConnectionManager {
         ...(allowedExtraOrigins?.length ? { allowedExtraOrigins } : {}),
         onDiagnostic: (line) => {
           lastTransportLine = line
-          void this.appendDiagnostic?.(profile.id, { code: 'http-diagnostic', message: line })
+          this.reportDiagnostic(profile.id, { code: 'http-diagnostic', message: line })
         }
       })
     } else if (profile.transport === 'sse') {
@@ -319,7 +332,7 @@ export class McpConnectionManager {
         authHeaders,
         onDiagnostic: (line) => {
           lastTransportLine = line
-          void this.appendDiagnostic?.(profile.id, { code: 'sse-diagnostic', message: line })
+          this.reportDiagnostic(profile.id, { code: 'sse-diagnostic', message: line })
         }
       })
     } else {
@@ -346,7 +359,7 @@ export class McpConnectionManager {
       rawCapabilities ?? ((client.getServerCapabilities() ?? {}) as Record<string, unknown>)
     for (const unsupported of ['sampling', 'elicitation', 'roots']) {
       if (capabilities[unsupported]) {
-        void this.appendDiagnostic?.(profile.id, {
+        this.reportDiagnostic(profile.id, {
           code: 'capability-unsupported',
           message: `Server 声明了本期不支持的能力: ${unsupported}`
         })
@@ -365,7 +378,7 @@ export class McpConnectionManager {
       const entry = this.sessions.get(profile.id)
       if (entry && entry.session.client === client) {
         if (!entry.dead) {
-          void this.appendDiagnostic?.(profile.id, {
+          this.reportDiagnostic(profile.id, {
             code: 'transport-closed',
             message: lastTransportLine
               ? `传输意外关闭，最近输出：${lastTransportLine}`

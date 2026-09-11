@@ -17,7 +17,7 @@ import {
 import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
 import { revokeToolForAllLanes } from '../toolRevocationRegistry'
 import { clearSecret, getSecret } from './mcpSecretStore'
-import { appendDiagnostic, clearDiagnostics, getDiagnostics } from './mcpDiagnostics'
+import { clearDiagnostics, getDiagnostics, safeAppendDiagnostic } from './mcpDiagnostics'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
 import { buildMappedToolDescriptors, discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
 import {
@@ -206,7 +206,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     if (!profile) return { ok: false, code: 'not-found', message: '服务不存在' }
 
     const manager = new McpConnectionManager({
-      appendDiagnostic: (id, entry) => appendDiagnostic(ctx.db, id, entry)
+      appendDiagnostic: (id, entry) => safeAppendDiagnostic(ctx.db, id, entry)
     })
     try {
       const secretProvider = async (kind: string): Promise<string | null> => getSecret(ctx.db, serverId, kind)
@@ -230,7 +230,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       return { ok: true, serverName: discovery.serverName, tools: discovery.tools }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      void appendDiagnostic(ctx.db, serverId, { code: 'refresh-failed', message })
+      safeAppendDiagnostic(ctx.db, serverId, { code: 'refresh-failed', message })
       updateServerStatus(ctx.db, serverId, {
         status: 'failed',
         lastError: { code: 'refresh-failed', message, occurredAt: new Date().toISOString() }

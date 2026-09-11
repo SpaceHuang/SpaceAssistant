@@ -10,12 +10,13 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --project electron --project renderer",
     "test:watch": "vitest",
     "test:related": "vitest related --run",
     "test:electron": "vitest run --project electron",
     "test:shell-lifecycle": "vitest run electron/shell electron/tools/runShellExecutor.test.ts electron/tools/plannedToolRegistry.test.ts electron/tools/toolInvocationCoordinator.test.ts electron/spawnUtil.test.ts",
     "test:renderer": "vitest run --project renderer",
+    "perf:chat-list": "vitest run --project renderer-perf",
     "i18n:generate-types": "tsx scripts/generate-i18n-types.ts",
     "i18n:check": "tsx scripts/i18n-check.ts",
     "i18n:check:strict": "tsx scripts/i18n-check.ts --strict-hardcoded",

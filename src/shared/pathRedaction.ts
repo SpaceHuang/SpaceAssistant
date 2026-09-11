@@ -1,0 +1,1 @@
+export { redactAbsolutePathFragments } from './agentSafeText'

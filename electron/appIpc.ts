@@ -591,7 +591,16 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     async (_e, absPath: string): Promise<{ ok: true } | { ok: false; error: string }> => {
       const target = typeof absPath === 'string' ? absPath.trim() : ''
       if (!target) return { ok: false, error: ErrorCodes.INVALID_PATH }
-      const err = await shell.openPath(target)
+      let resolvedTarget = target
+      if (target.startsWith('artifact-')) {
+        const artifactStem = target.slice('artifact-'.length)
+        if (!/^[0-9a-f]{64}$/i.test(artifactStem)) return { ok: false, error: ErrorCodes.INVALID_PATH }
+        resolvedTarget = path.join(ctx.getUserDataPath(), 'shell-output', `${artifactStem}.log`)
+      }
+      const artifactRoot = path.resolve(ctx.getUserDataPath(), 'shell-output')
+      const resolved = path.resolve(resolvedTarget)
+      if (!resolved.startsWith(`${artifactRoot}${path.sep}`)) return { ok: false, error: ErrorCodes.INVALID_PATH }
+      const err = await shell.openPath(resolved)
       return err ? { ok: false, error: err } : { ok: true }
     }
   )

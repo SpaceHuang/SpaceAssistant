@@ -172,7 +172,7 @@ describe('runShellExecutor', () => {
     expect(result.data?.exitCode).toBe(0)
     expect(result.data?.planDigest).toMatch(/^[0-9a-f]{64}$/)
     expect(result.data?.environmentFingerprint).toBeTruthy()
-    expect(logShellAgentEvent).toHaveBeenCalledWith('info', 'shell.exec.start', expect.objectContaining({ command: 'echo hello' }))
+    expect(logShellAgentEvent).toHaveBeenCalledWith('info', 'shell.exec.start', expect.objectContaining({ commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) }))
     expect(logShellAgentEvent).toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.any(Object))
     expect(logShellAgentEvent).toHaveBeenCalledWith(
       'info',
@@ -181,6 +181,48 @@ describe('runShellExecutor', () => {
     )
     await expect(fs.stat(path.join(userDataDir, 'shell-output'))).rejects.toThrow()
   }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('保留包含 node_modules 的成功 stdout，不伪造成失败', async () => {
+    const payload = 'node_modules dist-electron'
+    const result = await runShellExecutor.execute(
+      { command: shellCommand(`printf '${payload}\\n'`, writeStdout(payload)) },
+      baseCtx(workDir, userDataDir)
+    )
+    expect(result).toMatchObject({ success: true, data: { exitCode: 0, status: 'succeeded' } })
+    expect(String(result.data?.stdout)).toContain('node_modules')
+    expect(result.error).toBeUndefined()
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('失败时保留结构化 stderr 与稳定错误码', async () => {
+    const cmd = shellCommand(
+      "printf 'Traceback: /tmp/x.py:3\\nValueError: bad\\n' >&2; exit 1",
+      `${writeStderr('Traceback: /tmp/x.py:3')}; [Console]::Error.Write([char]10); ${writeStderr('ValueError: bad')}; exit 1`
+    )
+    const result = await runShellExecutor.execute({ command: cmd }, baseCtx(workDir, userDataDir))
+    expect(result).toMatchObject({ success: false, error: 'SHELL_PROCESS_EXIT', data: { exitCode: 1, status: 'failed' } })
+    expect(String(result.data?.stderr)).toContain('ValueError: bad')
+    expect(String(result.data?.stderr)).toContain('<path:redacted>')
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('外部 signal 终止不降级为普通 exit code 失败', async () => {
+    if (isWindows) return
+    const result = await runShellExecutor.execute({ command: 'kill -TERM $$' }, baseCtx(workDir, userDataDir))
+    expect(result).toMatchObject({ success: false, error: 'SHELL_PROCESS_EXIT', data: { status: 'signalled', exitCode: null, terminationReason: 'external_signal', signal: 'SIGTERM' } })
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('executable 不可用时返回稳定错误码与无进程结果', async () => {
+    // Windows 自定义 executable 在 plan 阶段即被拒绝（见下一条用例），这条契约只在 POSIX 可复现。
+    if (isWindows) return
+    const ctx = { ...baseCtx(workDir, userDataDir), shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, executable: path.join(workDir, 'missing-shell') } }
+    const result = await runShellExecutor.execute({ command: 'echo never' }, ctx)
+    expect(result).toMatchObject({ success: false, error: 'SHELL_EXECUTABLE_UNAVAILABLE', data: { processResult: null } })
+    expect(logShellAgentEvent).toHaveBeenCalledWith(
+      'error',
+      'shell.exec.plan_failed',
+      expect.objectContaining({ commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) })
+    )
+    expect(logShellAgentEvent).not.toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.anything())
+  })
 
   it('正常结束时成对移除 AbortSignal 监听器', async () => {
     const controller = new AbortController()
@@ -212,8 +254,39 @@ describe('runShellExecutor', () => {
     expect(fields.stdout).toBeUndefined()
     expect(fields.stderr).toBeUndefined()
     expect(fields.stdoutBytes).toBe(secret.length)
-    expect(String(fields.stdoutSummary)).toContain('xxxxxxxx')
-    expect(String(fields.stdoutSummary)).not.toBe(secret)
+    expect(fields.stdoutSummary).toBeUndefined()
+    expect(fields.stderrSummary).toBeUndefined()
+    expect(String(fields.stdoutSha256)).toMatch(/^[0-9a-f]{64}$/)
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('生命周期日志不记录原始命令、工作目录或敏感输出', async () => {
+    const payload = 'API_KEY=secret-token /Users/alice/private.txt Bearer abc.def'
+    const command = shellCommand(`printf '${payload}'`, writeStdout(payload))
+    await runShellExecutor.execute({ command, description: '/Users/alice/private description' }, baseCtx(workDir, userDataDir))
+    for (const [, event, fields] of vi.mocked(logShellAgentEvent).mock.calls) {
+      if (!event.startsWith('shell.exec.')) continue
+      const serialized = JSON.stringify(fields)
+      expect(serialized).not.toContain(command)
+      expect(serialized).not.toContain(workDir)
+      expect(serialized).not.toContain('secret-token')
+      expect(serialized).not.toContain('abc.def')
+      expect(serialized).not.toContain('/Users/alice/private.txt')
+    }
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('生命周期日志不记录自定义 shell 可执行文件绝对路径或裸秘密', async () => {
+    const executable = path.join(workDir, 'private-shell')
+    const ctx = { ...baseCtx(workDir, userDataDir), shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, executable } }
+    await runShellExecutor.execute(
+      { command: shellCommand("printf 'hunter2'", writeStdout('hunter2')) },
+      ctx
+    )
+    for (const [, event, fields] of vi.mocked(logShellAgentEvent).mock.calls) {
+      if (!event.startsWith('shell.exec.')) continue
+      const serialized = JSON.stringify(fields)
+      expect(serialized).not.toContain(executable)
+      expect(serialized).not.toContain('hunter2')
+    }
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('waits for long command to finish in foreground', async () => {
@@ -233,8 +306,8 @@ describe('runShellExecutor', () => {
       ctx
     )
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/命令执行超时（1 秒）/)
-    expect(result.error).not.toBe('用户取消执行')
+    expect(result.error).toBe('SHELL_TIMEOUT')
+    expect(result.userMessage).toMatch(/命令执行超时（1 秒）/)
     expect(result.data?.interrupted).toBe(true)
     expect(result.data?.terminationSignal).toBe(isWindows ? 'taskkill' : 'SIGTERM')
     expect(result.data?.treeKillVerified).toBe(true)
@@ -250,7 +323,8 @@ describe('runShellExecutor', () => {
       command: `sleep 30 & echo $! > '${pidFile}'; wait`,
       timeout: 1
     }, baseCtx(workDir, userDataDir))
-    expect(result.error).toMatch(/命令执行超时/)
+    expect(result.error).toBe('SHELL_TIMEOUT')
+    expect(result.userMessage).toMatch(/命令执行超时/)
     const childPid = Number((await fs.readFile(pidFile, 'utf8')).trim())
     expect(childPid).toBeGreaterThan(0)
     expect(() => process.kill(childPid, 0)).toThrow()
@@ -270,7 +344,8 @@ describe('runShellExecutor', () => {
     controller.abort()
     const result = await pending
     expect(result.success).toBe(false)
-    expect(result.error).toBe('用户取消执行')
+    expect(result.error).toBe('SHELL_CANCELLED')
+    expect(result.userMessage).toBe('用户取消执行')
     expect(addEventListener).toHaveBeenCalledTimes(1)
     expect(removeEventListener).toHaveBeenCalledTimes(1)
   }, SPAWN_TEST_TIMEOUT_MS)
@@ -293,29 +368,6 @@ describe('runShellExecutor', () => {
     expect(result.duration).toBeGreaterThanOrEqual(0)
   }, SPAWN_TEST_TIMEOUT_MS)
 
-  it('带路径的 executable 不可用时在 spawn 前返回 SHELL_EXECUTABLE_UNAVAILABLE', async () => {
-    // Windows 侧自定义 executable 不走这条分支（见下一条用例），POSIX 侧仍要求计划期拒绝。
-    if (isWindows) return
-    const ctx = {
-      ...baseCtx(workDir, userDataDir),
-      shellConfig: {
-        ...baseCtx(workDir, userDataDir).shellConfig,
-        executable: path.join(workDir, 'missing-shell-executable')
-      }
-    }
-    const result = await runShellExecutor.execute({ command: 'echo never-runs' }, ctx)
-    expect(result.success).toBe(false)
-    expect(result.error).toBe('SHELL_EXECUTABLE_UNAVAILABLE')
-    expect(result.data).toMatchObject({ code: 'SHELL_EXECUTABLE_UNAVAILABLE', caseId: 'SHELL-CAPABILITY-002' })
-    expect(logShellAgentEvent).toHaveBeenCalledWith(
-      'error',
-      'shell.exec.plan_failed',
-      expect.objectContaining({ executable: ctx.shellConfig.executable })
-    )
-    expect(logShellAgentEvent).not.toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.anything())
-    expect(result.duration).toBeGreaterThanOrEqual(0)
-  })
-
   it('Windows 上自定义非 PowerShell executable 在 spawn 前被拒绝为需重新选择', async () => {
     if (!isWindows) return
     const ctx = {
@@ -328,11 +380,19 @@ describe('runShellExecutor', () => {
     const result = await runShellExecutor.execute({ command: 'echo never-runs' }, ctx)
     expect(result.success).toBe(false)
     expect(result.error).toBe('SHELL_PLAN_INVALID')
-    expect(result.data).toMatchObject({ code: 'SHELL_PLAN_INVALID', reason: 'custom-executable', caseId: 'SHELL-PLAN-001' })
+    expect(result.data).toMatchObject({
+      code: 'SHELL_PLAN_INVALID',
+      reason: 'custom-executable',
+      caseId: 'SHELL-PLAN-001',
+      processResult: null
+    })
     expect(logShellAgentEvent).toHaveBeenCalledWith(
       'error',
       'shell.exec.plan_failed',
-      expect.objectContaining({ error: 'SHELL_LEGACY_CONFIG_UNSUPPORTED' })
+      expect.objectContaining({
+        error: 'SHELL_LEGACY_CONFIG_UNSUPPORTED',
+        commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/)
+      })
     )
     expect(logShellAgentEvent).not.toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.anything())
   })

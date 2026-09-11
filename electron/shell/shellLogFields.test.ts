@@ -1,39 +1,36 @@
 import { describe, expect, it } from 'vitest'
-import { preprocessShellLogFields, redactShellCommandForLog, shellIoPreviewForLog } from './shellLogFields'
+import { projectShellAgentLogFields } from './shellLogFields'
 
 describe('shellLogFields', () => {
-  it('redacts inline secrets in command', () => {
-    const redacted = redactShellCommandForLog('curl -u admin:secret --token abc123 deploy')
-    expect(String(redacted)).toContain('--token ***')
-    expect(String(redacted)).toContain('-u ***')
-    expect(String(redacted)).not.toContain('abc123')
-  })
-
-  it('redacts env-style secrets in command', () => {
-    const redacted = redactShellCommandForLog('export API_KEY=sk-ant-test && npm run build')
-    expect(String(redacted)).toContain('API_KEY=***')
-    expect(String(redacted)).not.toContain('sk-ant-test')
-  })
-
-  it('preprocessShellLogFields converts command and io to previews', () => {
-    const out = preprocessShellLogFields({
-      command: 'echo hello',
-      stdout: 'hello\n',
-      stderr: '',
+  it('只保留指纹和元数据，不保留命令或输出预览', () => {
+    const out = projectShellAgentLogFields('shell.exec.start', {
+      command: 'curl --token raw-secret /Users/Alice/private file',
+      stdout: 'token=raw-secret',
+      stderr: '/etc/passwd:1:2',
+      cwd: '/Users/Alice/private project',
       description: 'test run'
     })
     expect(out.command).toBeUndefined()
-    expect(out.commandRedacted).toBe('echo hello')
+    expect(out.invocationFingerprint).toMatch(/^[0-9a-f]{64}$/)
     expect(out.stdout).toBeUndefined()
-    expect(out.stdoutLen).toBe(6)
-    expect(out.stdoutPreview).toBe('hello\n')
-    expect(out.description).toBe('test run')
+    expect(out.stdoutPreview).toBeUndefined()
+    expect(out.stdoutBytes).toBe(16)
+    expect(out.stdoutSha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(out.cwd).toBeUndefined()
+    expect(JSON.stringify(out)).not.toContain('raw-secret')
+    expect(JSON.stringify(out)).not.toContain('/etc/passwd')
   })
 
-  it('shellIoPreviewForLog marks long output truncated', () => {
-    const long = 'x'.repeat(5000)
-    const preview = shellIoPreviewForLog(long, 'stderr')
-    expect(preview.stderrLen).toBe(5000)
-    expect(preview.stderrPreviewTruncated).toBe(true)
+  it('拒绝、确认和路径事件中的原始命令只变为 invocationFingerprint', () => {
+    const out = projectShellAgentLogFields('shell.security.deny', {
+      command: 'echo raw-secret /Users/Alice/private project',
+      reason: '危险命令包含原始诊断文本',
+      userAction: 'blocked'
+    })
+    expect(out.command).toBeUndefined()
+    expect(out.invocationFingerprint).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.stringify(out)).not.toContain('raw-secret')
+    expect(JSON.stringify(out)).not.toContain('/Users/Alice')
+    expect(out.reason).toBeUndefined()
   })
 })

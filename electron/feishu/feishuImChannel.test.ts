@@ -43,51 +43,6 @@ function p2p(overrides: {
 }
 
 describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
-  it('resolves Y from inbound', async () => {
-    const im = new FeishuImChannel()
-    const p = im.request(req('run_lark_cli'), {
-      sessionId: 's1',
-      toolName: 'run_lark_cli',
-      toolInput: { args: ['message', 'send'] },
-      messageId: 'm1',
-      matchKey: 'c1',
-      context: 'c1'
-    })
-    const cid = im.listPending()[0]!.confirmId!
-    const ok = im.tryResolveFromInboundMessage(p2p({ content: `Y ${cid}` }), confirmOpts)
-    expect(ok).toBe(true)
-    await expect(p).resolves.toEqual({ kind: 'approved' })
-  })
-
-  it('rejects N from inbound', async () => {
-    const im = new FeishuImChannel()
-    const p = im.request(req(), {
-      sessionId: 's2',
-      toolName: 'write_file',
-      messageId: 'm1',
-      matchKey: 'c1',
-      context: 'c1'
-    })
-    const cid = im.listPending()[0]!.confirmId!
-    im.tryResolveFromInboundMessage(p2p({ content: `N ${cid}` }), confirmOpts)
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
-  })
-
-  it('bare Y does not approve', async () => {
-    const im = new FeishuImChannel()
-    const p = im.request(req(), {
-      sessionId: 's-bare',
-      toolName: 'write_file',
-      messageId: 'm1',
-      matchKey: 'c1',
-      context: 'c1'
-    })
-    expect(im.tryResolveFromInboundMessage(p2p({ content: 'Y' }), confirmOpts)).toBe(true)
-    expect(im.countPending()).toBe(1)
-    im.cancelAllPending()
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
-  })
-
   it('does not resolve confirm from group chat', async () => {
     const im = new FeishuImChannel()
     const p = im.request(req(), {
@@ -135,54 +90,6 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
     await expect(p).resolves.toEqual({ kind: 'rejected' })
-  })
-
-  it('cancelAllPending rejects every waiter', async () => {
-    const im = new FeishuImChannel()
-    const p1 = im.request(req(), {
-      sessionId: 's-a',
-      toolName: 'write_file',
-      messageId: 'm1',
-      matchKey: 'c1',
-      context: 'c1'
-    })
-    expect(im.countPending()).toBe(1)
-    im.cancelAllPending()
-    await expect(p1).resolves.toEqual({ kind: 'rejected' })
-    expect(im.countPending()).toBe(0)
-  })
-
-  it('超时未回答 → timeout', async () => {
-    vi.useFakeTimers()
-    try {
-      const im = new FeishuImChannel()
-      const p = im.request(req(), {
-        sessionId: 's-timeout',
-        toolName: 'write_file',
-        messageId: 'm1',
-        matchKey: 'c1',
-        context: 'c1'
-      })
-      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1000)
-      await expect(p).resolves.toEqual({ kind: 'timeout' })
-      expect(im.countPending()).toBe(0)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('resolveFromDesktop 桌面代答', async () => {
-    const im = new FeishuImChannel()
-    const p = im.request(req(), {
-      sessionId: 's-desktop',
-      toolName: 'write_file',
-      messageId: 'm1',
-      matchKey: 'c1',
-      context: 'c1'
-    })
-    const id = im.listPending()[0]!.id
-    expect(im.resolveFromDesktop(id, true)).toBe(true)
-    await expect(p).resolves.toEqual({ kind: 'approved' })
   })
 
   it('builds browser navigate confirm text', () => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_BROWSER_CONFIG } from '../../src/shared/domainTypes'
 import { RateLimitService } from './rateLimitService'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 
 vi.mock('../agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn()
@@ -24,6 +25,7 @@ describe('RateLimitService', () => {
     const cfg = { ...DEFAULT_BROWSER_CONFIG, rateLimitEnabled: false, rateLimitPerMinute: 1 }
     await svc.acquire('s1', cfg, 'example.com', new AbortController().signal)
     await svc.acquire('s1', cfg, 'example.com', new AbortController().signal)
+    expect(vi.mocked(logAgentEvent)).not.toHaveBeenCalled()
   })
 
   it('isolates limits per session', async () => {

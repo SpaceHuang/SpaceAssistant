@@ -21,5 +21,6 @@ describe('FeishuAuditLogger', () => {
     const rows = await logger.tail(10)
     expect(rows.length).toBe(1)
     expect(rows[0].type).toBe('reply')
+    expect(await fs.readdir(path.join(tmpDir, 'logs'))).toContain('feishu-audit.log')
   })
 })

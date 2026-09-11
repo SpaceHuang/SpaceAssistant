@@ -2,7 +2,7 @@
  * Batch2 本机复测：全量 500 vs 最新页 60（窗口化数据面）。
  * 运行：npx vitest run src/renderer/components/Chat/ChatMessageList.perf.batch2.measure.test.tsx
  *
- * 产出：docs/develop/chat-message-list-batch2-remeasure-results.json
+ * 产出：PERF_OUTPUT_DIR（默认 docs/develop）/chat-message-list-batch2-remeasure-results.json
  */
 import { describe, expect, it, vi } from 'vitest'
 import { Profiler, useMemo, useState, type ReactNode } from 'react'
@@ -215,7 +215,7 @@ describe('ChatMessageList batch2 remasure', () => {
     const full500 = await measureScenario('full-500', 500)
     const page60 = await measureScenario('latest-page-60', 60)
 
-    const outDir = path.join(process.cwd(), 'docs/develop')
+    const outDir = path.join(process.cwd(), process.env.PERF_OUTPUT_DIR ?? 'docs/develop')
     mkdirSync(outDir, { recursive: true })
     const payload = {
       measuredAt: new Date().toISOString(),

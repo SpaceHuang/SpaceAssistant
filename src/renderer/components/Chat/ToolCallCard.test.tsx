@@ -27,6 +27,20 @@ function writeRecord(status: ToolCallRecord['status'], extra: Partial<ToolCallRe
 }
 
 describe('ToolCallCard file write expand behavior', () => {
+  it('失败结果优先显示 userMessage 而非机器错误码', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-failure-message', toolName: 'run_script', input: { code: 'raise' },
+          status: 'failed', riskLevel: 'high',
+          result: { success: false, error: 'SCRIPT_PROCESS_EXIT', userMessage: '脚本执行失败，请检查代码后重试' }
+        }}
+        confirmMode="direct"
+      />
+    )
+    expect(screen.getByText('脚本执行失败，请检查代码后重试')).toBeDefined()
+    expect(screen.queryByText('SCRIPT_PROCESS_EXIT')).toBeNull()
+  })
   it('does not let automatic collapse fight search focus', async () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })

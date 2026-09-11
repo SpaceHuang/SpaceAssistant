@@ -1,7 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeToolErrorString, toToolUserError } from './toolUserErrors'
+import { containsInternalDetails, sanitizeToolErrorString, sanitizeToolOutput, toToolUserError } from './toolUserErrors'
 
 describe('toToolUserError', () => {
+  it('does not classify ordinary dependency directory names as internal details', () => {
+    expect(containsInternalDetails('node_modules dist-electron')).toBe(false)
+    expect(sanitizeToolOutput('node_modules dist-electron').text).toBe('node_modules dist-electron')
+  })
+
+  it('redacts path fragments while preserving traceback context', () => {
+    const result = sanitizeToolOutput('Traceback: /tmp/project/app.py:3\nValueError: bad')
+    expect(result.text).toContain('Traceback: <path:redacted>')
+    expect(result.text).toContain('ValueError: bad')
+    expect(result.redacted).toBe(true)
+  })
+
+  it('传播 ambiguous_path，并移除无法归类的路径后缀', () => {
+    const result = sanitizeToolOutput('/tmp/private file')
+    expect(result.text).not.toContain('file')
+    expect(result.redactionReason).toBe('ambiguous_path')
+  })
+
+  it('遮盖常见 secret 与 Bearer token，但保留错误上下文', () => {
+    const result = sanitizeToolOutput('ValueError: bad API_KEY=abc123 Bearer eyJtoken')
+    expect(result.text).toContain('ValueError: bad')
+    expect(result.text).not.toContain('abc123')
+    expect(result.text).not.toContain('eyJtoken')
+    expect(result.redacted).toBe(true)
+  })
   it('sanitizes node_modules paths for generic tools', () => {
     const msg = toToolUserError(
       new Error('ENOENT: E:\\proj\\node_modules\\foo\\bar.js'),

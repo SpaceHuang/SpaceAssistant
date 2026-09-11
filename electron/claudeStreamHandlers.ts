@@ -4,7 +4,7 @@ import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import type { AgentLogFields } from './agentLogger/types'
-import { getTurnContext, getPersistedTurn, type AppDatabase } from './database'
+import { getTurnContext, getPersistedTurn, getSession, type AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { runToolChatSession } from './toolChatLoop'
 import { isAppLocale } from '../src/shared/locale'
@@ -23,6 +23,7 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
+import { getSessionEventSink, type SessionEventInput, type SessionEventSink } from './sessionEvents'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -50,7 +51,7 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string): { messages: Message[]; currentUserMessageId: string; executionConfig?: TurnExecutionConfig } {
+export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig } {
   const persisted = getPersistedTurn(db, turnId)
   if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
     throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
@@ -58,7 +59,7 @@ export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, se
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
   const messages = getTurnContext(db, sessionId, persisted.contextBoundarySequence, persisted.userMessageId, persisted.excludeMessageIds ?? [])
-  return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}) }
+  return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}), ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}) }
 }
 
 export type ClaudeChatCreateWithToolsPayload = {
@@ -204,9 +205,64 @@ export type ClaudeTurnExecution = (
   payload: ClaudeChatCreateWithToolsPayload
 ) => Promise<unknown>
 
+type EventPersistenceFailure = {
+  code: string
+  message: string
+  eventsPath?: string
+  dataLossPossible?: boolean
+  cause?: { name: string; message: string }
+}
+
+type FinalizeResult =
+  | { ok: true }
+  | {
+      ok: false
+      code: 'EVENT_FINALIZE_FAILED'
+      eventPersistenceFailed: true
+      eventPersistenceErrors: EventPersistenceFailure[]
+    }
+
+function toEventPersistenceFailure(error: unknown): EventPersistenceFailure {
+  const candidate = error as { code?: unknown; eventsPath?: unknown; jsonlCommitted?: unknown }
+  return {
+    code: typeof candidate.code === 'string' ? candidate.code : 'EVENT_PERSISTENCE_FAILED',
+    message: error instanceof Error ? error.message : String(error),
+    ...(typeof candidate.eventsPath === 'string' ? { eventsPath: candidate.eventsPath } : {}),
+    ...(typeof candidate.jsonlCommitted === 'boolean' ? { dataLossPossible: !candidate.jsonlCommitted } : {}),
+    ...(error instanceof Error ? { cause: { name: error.name, message: error.message } } : {})
+  }
+}
+
 export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): ClaudeTurnExecution {
   const executeClaudeRequest: ClaudeTurnExecution = async (sender, payload) => {
       let requestId = ''
+      let eventWriter: SessionEventSink | undefined
+      let eventTurnId = ''
+      let finalizePromise: Promise<FinalizeResult> | undefined
+      const finalizeTurn = (turnId: string, reason: string, error?: string): Promise<FinalizeResult> => {
+        if (finalizePromise) return finalizePromise
+        finalizePromise = (async () => {
+          const failures: EventPersistenceFailure[] = []
+          try {
+            await eventWriter?.appendCritical({ type: 'step_end', payload: { turnId, stepId: requestId, reason } })
+          } catch (finalizeError) {
+            failures.push(toEventPersistenceFailure(finalizeError))
+          }
+          try {
+            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}) } })
+          } catch (finalizeError) {
+            failures.push(toEventPersistenceFailure(finalizeError))
+          }
+          if (failures.length) {
+            try {
+              logAgentEvent('error', 'session.event.finalize_failed', { requestId, turnId, errors: failures })
+            } catch { /* 诊断失败不得污染结构化错误返回 */ }
+            return { ok: false as const, code: 'EVENT_FINALIZE_FAILED', eventPersistenceFailed: true, eventPersistenceErrors: failures }
+          }
+          return { ok: true as const }
+        })()
+        return finalizePromise
+      }
       try {
         requestId = assertValidRequestId(payload.requestId)
         const turnId = typeof payload.turnId === 'string' ? payload.turnId.trim() : ''
@@ -219,9 +275,16 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const db = deps.getAppDatabase()
         if (!deps.turnRuntime || !turnId || !turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
         const authoritative = loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken)
+        eventTurnId = turnId
+        const session = getSession(db, sessionId)
+        if (session) {
+          eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
+          await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
+        }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
         const model = assertValidModel(frozen.model ?? '')
+        await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
         const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(frozen.baseUrl)
         const llmServiceId = frozen.llmServiceId
         const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
@@ -274,9 +337,20 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           getApiKey,
           appDb: deps.getAppDatabase(),
           currentUserMessageId: authoritative.currentUserMessageId,
+          assistantMessageId: authoritative.assistantMessageId,
           hasImageAttachments,
           getBrowserDetectContext: deps.getBrowserDetectContext,
           floatingNotificationManager: deps.floatingNotificationManager
+          ,emitSessionEvent: async (event: SessionEventInput) => {
+            if (!eventWriter) return
+            const normalized = { ...event, payload: { ...event.payload, turnId } }
+            if (event.type === 'assistant_chunk') {
+              await eventWriter.waitForCapacity()
+              eventWriter.appendChunk(normalized)
+              return
+            }
+            await eventWriter.appendCritical(normalized)
+          }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {
               // source terminal 由 executeTurn 适配器统一发出；tool loop 的 legacy
@@ -294,13 +368,25 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         })
 
         if (!res.ok) {
+          const finalized = await finalizeTurn(turnId, 'error', res.error)
           logAgentEvent('error', 'llm.error', {
             requestId,
             sessionId,
             model,
             error: res.error
           })
-          return res
+          return finalized.ok ? res : { ...res, eventPersistenceFailed: true, eventPersistenceErrors: finalized.eventPersistenceErrors }
+        }
+
+        const finalized = await finalizeTurn(turnId, 'completed')
+        if (!finalized.ok) {
+          return {
+            ok: false as const,
+            error: '事件终态持久化失败',
+            code: finalized.code,
+            eventPersistenceFailed: true,
+            eventPersistenceErrors: finalized.eventPersistenceErrors
+          }
         }
 
         return {
@@ -311,6 +397,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
+        let finalized: FinalizeResult | undefined
+        if (eventWriter && eventTurnId) {
+          finalized = await finalizeTurn(eventTurnId, 'error', message)
+        }
         logAgentEvent('error', 'llm.error', {
           requestId: requestId || undefined,
           sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
@@ -318,7 +408,13 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           error: message,
           stack: err instanceof Error ? err.stack : undefined
         })
-        return { ok: false as const, error: message }
+        return {
+          ok: false as const,
+          error: message,
+          ...(finalized && !finalized.ok
+            ? { eventPersistenceFailed: true, eventPersistenceErrors: finalized.eventPersistenceErrors }
+            : {})
+        }
       }
   }
 

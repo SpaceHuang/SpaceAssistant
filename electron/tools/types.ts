@@ -87,13 +87,78 @@ export interface ToolExecutionContext {
 }
 
 import type { BrowserDependencyToolError } from '../../src/shared/browserTypes'
+import { isProcessToolName } from '../../src/shared/processResultProjection'
 
 export interface ToolExecutorResult {
   success: boolean
   data?: unknown
   error?: string
+  userMessage?: string
+  diagnostic?: {
+    caseId: string
+    retryable: boolean
+    category: 'command' | 'environment' | 'executor' | 'transport' | 'policy'
+  }
   duration?: number
   dependencyError?: BrowserDependencyToolError
+}
+
+export function validateToolExecutorResult(result: unknown): ToolExecutorResult {
+  if (!result || typeof result !== 'object' || typeof (result as { success?: unknown }).success !== 'boolean') {
+    return {
+      success: false,
+      error: 'SHELL_RESULT_CONTRACT_VIOLATION',
+      userMessage: '执行器返回结果异常，请稍后重试',
+      data: { processResult: null, status: 'result_invalid' },
+      diagnostic: { caseId: 'SHELL_RESULT_CONTRACT_VIOLATION', retryable: false, category: 'executor' }
+    }
+  }
+  const normalized = result as ToolExecutorResult
+  const status = normalized.data && typeof normalized.data === 'object'
+    ? (normalized.data as { status?: unknown }).status
+    : undefined
+  if ((normalized.success && status === 'failed') || (!normalized.success && status === 'succeeded')) {
+    return {
+      ...normalized,
+      success: false,
+      error: 'SHELL_RESULT_CONTRACT_VIOLATION',
+      data: { ...(normalized.data as Record<string, unknown>), status: 'result_invalid' },
+      diagnostic: { caseId: 'SHELL_RESULT_CONTRACT_VIOLATION', retryable: false, category: 'executor' }
+    }
+  }
+  if (!normalized.success && !normalized.error) {
+    return {
+      ...normalized,
+      success: false,
+      error: 'SHELL_RESULT_CONTRACT_VIOLATION',
+      data: normalized.data ?? { processResult: null, status: 'result_invalid' }
+    }
+  }
+  return normalized
+}
+
+function validateGenericToolExecutorResult(result: unknown): ToolExecutorResult {
+  if (!result || typeof result !== 'object' || typeof (result as { success?: unknown }).success !== 'boolean') {
+    return {
+      success: false,
+      error: 'TOOL_RESULT_CONTRACT_VIOLATION',
+      userMessage: '工具返回结果异常，请稍后重试',
+      data: null,
+      diagnostic: { caseId: 'TOOL_RESULT_CONTRACT_VIOLATION', retryable: false, category: 'executor' }
+    }
+  }
+  const normalized = result as ToolExecutorResult
+  if (!normalized.success && !normalized.error) {
+    return { ...normalized, error: 'TOOL_RESULT_CONTRACT_VIOLATION' }
+  }
+  return normalized
+}
+
+/** 按工具类型选择结果契约；进程终态规则不得污染普通/MCP 工具。 */
+export function validateToolExecutorResultForTool(toolName: string, result: unknown): ToolExecutorResult {
+  return isProcessToolName(toolName)
+    ? validateToolExecutorResult(result)
+    : validateGenericToolExecutorResult(result)
 }
 
 export interface ToolExecutor {

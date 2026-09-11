@@ -4,12 +4,14 @@ import { bindAgentLogErrorDeps, buildAgentLogErrorFields } from './agentLogError
 import type { AgentLogEventName, AgentLogFields, AgentLogLevel } from './types'
 import { formatAgentLogDateKey, formatAgentLogFileName, resolveAgentLogDir } from './agentLogPaths'
 import { sanitizeForLog } from './sanitize'
+import { projectAgentLogFields } from './agentLogProjection'
 
 export {
   bindAgentLogErrorDeps,
   buildAgentLogErrorFields,
   errorDetailForLog,
   extractDevErrorDetail,
+  buildProcessToolLogErrorFields,
   isAgentLogProductionModeActive
 } from './agentLogError'
 export { isAgentLogProductionMode } from './agentLogPaths'
@@ -81,11 +83,12 @@ async function appendLine(line: string): Promise<void> {
 export function logAgentEvent(level: AgentLogLevel, event: AgentLogEventName, fields: AgentLogFields = {}): void {
   if (!deps) return
 
+  const projectedFields = projectAgentLogFields(event, fields)
   const payload = sanitizeForLog({
     ts: new Date().toISOString(),
     level,
     event,
-    ...fields
+    ...projectedFields
   }) as Record<string, unknown>
 
   let line: string

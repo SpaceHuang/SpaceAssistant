@@ -68,3 +68,20 @@ describe('feishuProgressAdapter', () => {
     expect(adapter.sendTyping).toBeUndefined()
   })
 })
+
+describe('weChatProgressAdapter', () => {
+  it('wires wechat channel and typing callback when a bot exists', async () => {
+    const { createWeChatProgressAdapter } = await import('./weChatProgressAdapter')
+    const bot = { sendMessage: vi.fn() }
+    const adapter = createWeChatProgressAdapter({
+      botService: { getBot: () => bot } as never,
+      userId: 'u1',
+      inboundRaw: {} as never,
+      getSessionId: () => 's1',
+      config: { enabled: true } as never,
+      db: {} as never
+    })
+    expect(adapter.channel).toBe('wechat')
+    expect(adapter.sendTyping).toEqual(expect.any(Function))
+  })
+})
