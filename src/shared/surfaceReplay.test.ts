@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeShadowedRanges } from './surfaceReplay'
 import { foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
+  it('computes contiguous shadow ranges for reset output', () => {
+    expect(computeShadowedRanges([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }], [{ id: 'a' }, { id: 'c' }, { id: 'e' }])).toEqual([{ start: 'b', end: 'b' }, { start: 'd', end: 'd' }])
+  })
   it('hides committed shadow ranges without deleting facts or required input', () => {
     const replay = foldCompactionEvents([
       { seq: 1, type: 'compaction_start', payload: { compactionId: 'c', windowId: 'w', inputSurfaceFingerprint: 'in' } },

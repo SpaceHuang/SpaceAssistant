@@ -2,6 +2,18 @@ import type { CompactionReplay } from './compactionEvents'
 
 export type SurfaceReplayItem = { id: string; required?: boolean }
 
+export function computeShadowedRanges<T extends SurfaceReplayItem>(before: readonly T[], after: readonly T[]): Array<{ start: string; end: string }> {
+  const retained = new Set(after.map((item) => item.id))
+  const removed = before.filter((item) => !retained.has(item.id))
+  const ranges: Array<{ start: string; end: string }> = []
+  for (const item of removed) {
+    const previous = ranges[ranges.length - 1]
+    if (previous && before.findIndex((candidate) => candidate.id === item.id) === before.findIndex((candidate) => candidate.id === previous.end) + 1) previous.end = item.id
+    else ranges.push({ start: item.id, end: item.id })
+  }
+  return ranges
+}
+
 /** 将已提交压缩记录的 shadowedRanges 应用到模型面；调用方仍保留完整 facts。 */
 export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = []): T[] {
   const required = new Set(requiredIds)

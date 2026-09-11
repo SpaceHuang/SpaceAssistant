@@ -174,6 +174,7 @@ import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfac
 import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
+import { computeShadowedRanges } from '../src/shared/surfaceReplay'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -860,6 +861,7 @@ async function runToolChatSessionInner(
       const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
       if (recovery.action === 'reset_and_retry_provider') {
         overflowRetries = recovery.nextRetry
+        const recoveryInputItems = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => ({ id: message.id ?? `message-${index}` }))
         messagesForApi = selectRecoveryMessages(messagesForApi as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as typeof messagesForApi
         if (args.appendCompactionTransaction && lastRequestHeader) {
           const outputHeader = buildRequestHeaderPayload({ requestId: `${requestId}:recovery:${overflowRetries}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: messagesForApi, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: lastRequestHeader.toolExecutionCheckpoint.completedToolUseIds, replayForbidden: true } })
@@ -870,7 +872,7 @@ async function runToolChatSessionInner(
           }) : [])
           await args.appendCompactionTransaction(
             { compactionId, windowId: requestId, inputSurfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
-            { compactionId, windowId: requestId, summaryHash: outputHeader.surfaceSnapshot.fingerprint, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: [], requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate: { kind: 'reset' } }
+            { compactionId, windowId: requestId, summaryHash: outputHeader.surfaceSnapshot.fingerprint, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: computeShadowedRanges(recoveryInputItems, messagesForApi.map((message, index) => ({ id: (message as unknown as { id?: string }).id ?? `message-${index}` }))), requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate: { kind: 'reset' } }
           )
           args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: requestId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
         }
