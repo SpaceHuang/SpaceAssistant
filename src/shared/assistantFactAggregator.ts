@@ -116,7 +116,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
       : tool)
   } else if (event.type === 'skill-hint') {
     next.skillHints = [...(next.skillHints ?? []), { id: deps.createId(), text: event.text, shownAt: deps.now }]
-  } else if (event.type === 'usage-updated') {
+  } else if (event.type === 'usage-updated' || event.type === 'context-projection-updated') {
     // usage 属于会话级投影数据，不改变 assistant message 本身。
   } else {
     closeSegments(next, deps.now)
