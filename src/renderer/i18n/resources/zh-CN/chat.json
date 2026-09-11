@@ -4,6 +4,10 @@
     "expandHint": "展开思考过程",
     "collapseHint": "收起思考过程"
   },
+  "compaction": {
+    "compressed": "以上内容已压缩为模型上下文摘要",
+    "count": "已压缩 {{count}} 次"
+  },
   "batch": {
     "count": "等 {{count}} 项",
     "thinkingCount": "思考中 等 {{count}} 项",

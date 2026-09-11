@@ -84,6 +84,7 @@ import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRec
 import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
+import { CompactionMarker } from './CompactionMarker'
 import type { ChatMessageActions } from './ChatMessageActions'
 import { ChatMessageViewport, type ChatMessageViewportHandle } from './ChatMessageViewport'
 import { ChatRunningElapsed, resolveChatRunningLabels } from './ChatRunningStatus'
@@ -133,6 +134,7 @@ export function ChatView() {
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
   const displayEntries = useTypedSelector((s) => s.chat.displayEntries)
+  const compactionMarkers = useTypedSelector((s) => s.chat.compactionMarkers)
   const [contextSummaryTick, setContextSummaryTick] = useState(0)
   const contextScalars = useMemo(() => {
     void contextSummaryTick
@@ -1164,6 +1166,7 @@ export function ChatView() {
       messages={messages}
       displayEntries={displayEntries}
     >
+      {compactionMarkers.length > 0 ? <CompactionMarker count={compactionMarkers.length} /> : null}
       <ChatMessageViewport
         ref={viewportRef}
         messages={messages}

@@ -545,6 +545,23 @@
   min-width: 0;
 }
 
+.chat-compaction-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 8px 24px 0;
+  padding: 8px 12px;
+  color: var(--sa-text-secondary);
+  border: 1px dashed var(--sa-border-subtle);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.chat-compaction-marker-count {
+  opacity: .75;
+}
+
 .chat-scroll {
   flex: 1;
   min-height: 0;

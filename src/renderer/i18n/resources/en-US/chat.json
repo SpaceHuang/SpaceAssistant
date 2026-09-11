@@ -4,6 +4,10 @@
     "expandHint": "Expand thinking",
     "collapseHint": "Collapse thinking"
   },
+  "compaction": {
+    "compressed": "Earlier content was compacted into the model context",
+    "count": "Compacted {{count}} times"
+  },
   "batch": {
     "count": "and {{count}} more",
     "thinkingCount": "Thinking and {{count}} more",
