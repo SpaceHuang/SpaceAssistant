@@ -28,6 +28,8 @@ export type RequestHeaderPayload = {
   stablePrefixFingerprint: string
   system: string
   tools: unknown[]
+  requiredSurfaceSet: string[]
+  toolExecutionCheckpoint: { completedToolUseIds: string[]; replayForbidden: boolean }
 }
 
 function fingerprint(value: string): string {
@@ -36,14 +38,14 @@ function fingerprint(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-export function buildRequestHeaderPayload(args: { requestId: string; system: string; tools: unknown[]; messages: unknown[] }): RequestHeaderPayload {
+export function buildRequestHeaderPayload(args: { requestId: string; system: string; tools: unknown[]; messages: unknown[]; requiredSurfaceSet?: string[]; toolExecutionCheckpoint?: { completedToolUseIds: string[]; replayForbidden: boolean } }): RequestHeaderPayload {
   const systemTokens = estimateTokensFromUtf8Text(args.system)
   const toolsTokens = estimateTokensFromUtf8Text(JSON.stringify(args.tools))
   const messageTokens = estimateTokensFromUtf8Text(JSON.stringify(args.messages))
   const systemFingerprint = fingerprint(args.system)
   const toolsFingerprint = fingerprint(JSON.stringify(args.tools))
   const surfaceFingerprint = fingerprint(JSON.stringify({ system: args.system, tools: args.tools, messages: args.messages }))
-  return { schemaVersion: 1, requestId: args.requestId, system: args.system, tools: args.tools, stablePrefixFingerprint: fingerprint(`${systemFingerprint}:${toolsFingerprint}`), surfaceSnapshot: { schemaVersion: 1, fingerprint: surfaceFingerprint, systemFingerprint, toolsFingerprint, surfaceTokens: systemTokens + toolsTokens + messageTokens, systemTokens, toolsTokens, messageTokens } }
+  return { schemaVersion: 1, requestId: args.requestId, system: args.system, tools: args.tools, requiredSurfaceSet: [...(args.requiredSurfaceSet ?? [])], toolExecutionCheckpoint: args.toolExecutionCheckpoint ?? { completedToolUseIds: [], replayForbidden: false }, stablePrefixFingerprint: fingerprint(`${systemFingerprint}:${toolsFingerprint}`), surfaceSnapshot: { schemaVersion: 1, fingerprint: surfaceFingerprint, systemFingerprint, toolsFingerprint, surfaceTokens: systemTokens + toolsTokens + messageTokens, systemTokens, toolsTokens, messageTokens } }
 }
 
 export function buildRequestContextPayload(args: {

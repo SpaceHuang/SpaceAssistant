@@ -664,7 +664,7 @@ async function runToolChatSessionInner(
       thinking,
       cacheControl: true
     })
-    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped })
+    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: requestId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
     lastRequestContext = requestContext
@@ -862,7 +862,7 @@ async function runToolChatSessionInner(
         overflowRetries = recovery.nextRetry
         messagesForApi = selectRecoveryMessages(messagesForApi as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as typeof messagesForApi
         if (args.appendCompactionTransaction && lastRequestHeader) {
-          const outputHeader = buildRequestHeaderPayload({ requestId: `${requestId}:recovery:${overflowRetries}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: messagesForApi })
+          const outputHeader = buildRequestHeaderPayload({ requestId: `${requestId}:recovery:${overflowRetries}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: messagesForApi, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: lastRequestHeader.toolExecutionCheckpoint.completedToolUseIds, replayForbidden: true } })
           const compactionId = `${requestId}:overflow:${overflowRetries}`
           const completedToolUseIds = messagesForApi.flatMap((message) => Array.isArray(message.content) ? message.content.flatMap((block) => {
             const value = block as unknown as { type?: unknown; id?: unknown }
@@ -2038,7 +2038,7 @@ async function runToolChatSessionInner(
       const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
       args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
       if (lastRequestHeader && lastRequestContext) {
-        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi] })
+        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi], requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
         const nextProjection = computeContextPressure({
           currentSurface: nextHeader.surfaceSnapshot,
           anchor: { requestId: lastRequestContext.requestId, surfaceTokens: lastRequestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, systemFingerprint: lastRequestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: lastRequestHeader.surfaceSnapshot.toolsFingerprint, provider: lastRequestContext.provider, model: lastRequestContext.model, estimatorVersion: lastRequestContext.budget.estimatorVersion, serializationVersion: lastRequestContext.budget.serializationVersion, realUsage: lastValidUsage, contextWindow: lastRequestContext.contextWindow.tokens },

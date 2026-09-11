@@ -56,4 +56,9 @@ describe('request context payload', () => {
   expect(buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, windowId: 'window-1' }).windowId).toBe('window-1')
   expect(buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', maxTokensEffective: 1, planningStatus: 'target_reached' }).planningStatus).toBe('target_reached')
   })
+  it('persists required surface and tool checkpoint in the request header', () => {
+    const header = buildRequestHeaderPayload({ requestId: 'r', system: '', tools: [], messages: [], requiredSurfaceSet: ['current'], toolExecutionCheckpoint: { completedToolUseIds: ['tool-1'], replayForbidden: true } })
+    expect(header.requiredSurfaceSet).toEqual(['current'])
+    expect(header.toolExecutionCheckpoint).toEqual({ completedToolUseIds: ['tool-1'], replayForbidden: true })
+  })
 })
