@@ -48,6 +48,7 @@ type AssistantFactEventPayload =
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
   | { type: 'usage-updated'; usage: unknown; projected?: boolean }
   | { type: 'context-projection-updated'; projection: import('./contextMeter').ContextPressureProjection }
+  | { type: 'compaction-committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }
   | { type: 'skill-hint'; text: string }
   | { type: 'source-completed' }
   | { type: 'source-failed' }

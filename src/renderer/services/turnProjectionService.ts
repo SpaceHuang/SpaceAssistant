@@ -3,7 +3,7 @@ import { routePatchMessage } from './chatRunnerService'
 import { pendingConfirmStore } from './pendingConfirmStore'
 import type { SessionUsage } from '../../shared/sessionUsage'
 import { store } from '../store'
-import { setChatStatus, setContextProjection, setLastUsage } from '../store/chatSlice'
+import { addCompactionMarker, setChatStatus, setContextProjection, setLastUsage } from '../store/chatSlice'
 
 function applyProjectedUsage(sessionId: string, usage: SessionUsage, projected: boolean): void {
   if (!projected) void window.api.usageSet({ sessionId, usage }).catch(() => {})
@@ -55,6 +55,12 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
     if (payload.event.type === 'context-projection-updated') {
       const projection = (payload.event as { projection?: unknown }).projection
       if (projection && typeof projection === 'object') store.dispatch(setContextProjection(projection as any))
+    }
+    if (payload.event.type === 'compaction-committed') {
+      const event = payload.event as { compactionId?: unknown; windowId?: unknown; outputSurfaceFingerprint?: unknown }
+      if (typeof event.compactionId === 'string' && typeof event.windowId === 'string' && typeof event.outputSurfaceFingerprint === 'string') {
+        store.dispatch(addCompactionMarker({ compactionId: event.compactionId, windowId: event.windowId, outputSurfaceFingerprint: event.outputSurfaceFingerprint }))
+      }
     }
     onMetric?.({ kind: 'projection', turnId: payload.turn.turnId, version: payload.turn.version, eventType: payload.event.type, durationMs: Math.max(0, (typeof performance !== 'undefined' ? performance.now() : 0) - startedAt) })
   }

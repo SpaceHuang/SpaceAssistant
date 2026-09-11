@@ -871,6 +871,7 @@ async function runToolChatSessionInner(
             { compactionId, windowId: requestId, inputSurfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
             { compactionId, windowId: requestId, summaryHash: outputHeader.surfaceSnapshot.fingerprint, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges: [], requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate: { kind: 'reset' } }
           )
+          args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: requestId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
         }
         await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
