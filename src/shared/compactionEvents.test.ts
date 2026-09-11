@@ -21,15 +21,16 @@ describe('compaction event replay', () => {
     expect(result.committed[0]?.compactionId).toBe('c1')
   })
 
-  it('ignores torn, out-of-order, conflicting, and duplicate commits', () => {
+  it('ignores torn and out-of-order commits, idempotently ignores equal ends, and rejects conflicts', () => {
     const base = [
       event(1, 'compaction_start', { compactionId: 'c1', inputSurfaceFingerprint: 'in', targetTokens: 10 }),
       event(2, 'compaction_summary', { compactionId: 'c1', summaryHash: computeCompactionSummaryHash({}), outputSurfaceFingerprint: 'out', candidate: {} }),
       event(3, 'compaction_end', { compactionId: 'c1', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: computeCompactionSummaryHash({}) })
     ]
-    const result = foldCompactionEvents([...base, base[2]!, event(5, 'compaction_end', { compactionId: 'unknown', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: 'h1' })])
+    const result = foldCompactionEvents([...base, base[2]!, event(4, 'compaction_end', { ...base[2]!.payload, summaryHash: 'conflicting' }), event(5, 'compaction_end', { compactionId: 'unknown', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: 'h1' })])
     expect(result.committed).toHaveLength(1)
     expect(result.rejected.length).toBe(2)
+    expect(result.rejected).toContainEqual({ compactionId: 'c1', reason: 'conflicting-duplicate-end' })
   })
 
   it('counts only committed summaries within the current window', () => {

@@ -56,7 +56,13 @@ export function foldCompactionEvents(events: readonly CompactionEvent[]): Compac
       else summaries.set(id, event)
       continue
     }
-    if (event.payload.status !== 'committed' || committed.has(id)) { rejected.push({ compactionId: id, reason: 'not-committed-or-duplicate' }); continue }
+    if (event.payload.status !== 'committed') { rejected.push({ compactionId: id, reason: 'not-committed-or-duplicate' }); continue }
+    const existing = committed.get(id)
+    if (existing) {
+      if (JSON.stringify(existing.end.payload) === JSON.stringify(event.payload)) continue
+      rejected.push({ compactionId: id, reason: 'conflicting-duplicate-end' })
+      continue
+    }
     const start = starts.get(id)
     const summary = summaries.get(id)
     const startWindowId = stringField(start?.payload ?? {}, 'windowId')
