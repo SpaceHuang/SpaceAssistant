@@ -104,7 +104,7 @@ export function computeContextPressureFromEvents(
       const snapshot = header.payload.surfaceSnapshot
       if (!id || !snapshot || typeof snapshot !== 'object') return undefined
       const context = [...events].reverse().find((event) => event.type === 'request_context' && event.payload.schemaVersion === 1 && event.payload.requestId === id)
-      const usage = events.find((event) => event.type === 'request_usage' && event.payload.schemaVersion === 1 && event.payload.requestId === id)
+      const usage = [...events].reverse().find((event) => event.type === 'request_usage' && event.payload.schemaVersion === 1 && event.payload.requestId === id)
       if (!context || !usage || !context.payload.contextWindow || !usage.payload.usage) return undefined
       const contextWindow = context.payload.contextWindow
       const windowTokens = typeof contextWindow === 'object' && contextWindow !== null && typeof (contextWindow as { tokens?: unknown }).tokens === 'number' ? (contextWindow as { tokens: number }).tokens : typeof contextWindow === 'number' ? contextWindow : undefined

@@ -82,4 +82,15 @@ describe('ContextMeter pure projections', () => {
     ]
     expect(computeContextPressureFromEvents(events, { ...base, anchor: undefined }).anchorStatus).toBe('missing')
   })
+
+  it('uses the latest usage event for the same request anchor', () => {
+    const base = input()
+    const events = [
+      { seq: 1, type: 'request_header', payload: { schemaVersion: 1, requestId: 'r1', surfaceSnapshot: base.currentSurface } },
+      { seq: 2, type: 'request_context', payload: { schemaVersion: 1, requestId: 'r1', provider: 'anthropic', model: 'claude', contextWindow: { tokens: 1000 }, budget: { estimatorVersion: 'v1', serializationVersion: 's1' } } },
+      { seq: 3, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'r1', usage: { input_tokens: 600 } } },
+      { seq: 4, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'r1', usage: { input_tokens: 650 } } }
+    ]
+    expect(computeContextPressureFromEvents(events, { ...base, anchor: undefined }).pressureTokens).toBe(650)
+  })
 })
