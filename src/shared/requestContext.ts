@@ -57,7 +57,8 @@ export function buildRequestContextPayload(args: {
   windowId?: string
 }): RequestContextPayload {
   const outputAccounting = args.outputAccounting ?? 'shared'
-  const contextWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0 ? args.contextWindow! : DEFAULT_MODEL_MAX_CONTEXT
+  const hasConfiguredWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0
+  const contextWindow = hasConfiguredWindow ? args.contextWindow! : DEFAULT_MODEL_MAX_CONTEXT
   const prefixTokens = Math.max(0, (args.surfaceSnapshot?.systemTokens ?? 0) + (args.surfaceSnapshot?.toolsTokens ?? 0))
   const rawInputWindow = Math.max(0, contextWindow - (outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0))
   const totalInputBudget = Math.max(0, Math.floor(rawInputWindow * 0.95))
@@ -69,7 +70,7 @@ export function buildRequestContextPayload(args: {
     requestId: args.requestId,
     provider: args.provider,
     model: args.model,
-    contextWindow: { tokens: contextWindow, source: 'config' },
+    contextWindow: { tokens: contextWindow, source: hasConfiguredWindow ? 'config' : 'adapter' },
     maxTokensEffective: Math.max(0, args.maxTokensEffective),
     outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0,
     outputAccounting,

@@ -11,6 +11,9 @@ describe('request context payload', () => {
   it('uses separate accounting when the provider window excludes output', () => {
     expect(buildRequestContextPayload({ requestId: 'r1', provider: 'x', model: 'm', contextWindow: 100, maxTokensEffective: 20, outputAccounting: 'separate' }).outputReserveTokens).toBe(0)
   })
+  it('marks the provider fallback window as adapter-sourced', () => {
+    expect(buildRequestContextPayload({ requestId: 'r1', provider: 'x', model: 'm', maxTokensEffective: 20 }).contextWindow.source).toBe('adapter')
+  })
   it('persists a protocol-neutral surface snapshot with stable fingerprints', () => {
     const header = buildRequestHeaderPayload({ requestId: 'r1', system: 'system', tools: [{ name: 'z' }], messages: [{ role: 'user', content: 'hello' }] })
     expect(header.schemaVersion).toBe(1)
