@@ -1,4 +1,25 @@
 import type { SkillDefinition, SkillActivationSource } from './domainTypes'
+import { skillCatalogBudget, type PromptSection } from './promptAssembly'
+
+/** 仅暴露稳定元数据；正文通过 user fragment 或 skills.read 按需取得。 */
+export function buildSkillCatalogSection(skills: SkillDefinition[], contextWindow: number): PromptSection {
+  const budget = skillCatalogBudget(contextWindow)
+  const header = '## Skills\n\n### Available skills\n\n'
+  const entries = skills
+    .slice()
+    .sort((a, b) => a.meta.name < b.meta.name ? -1 : a.meta.name > b.meta.name ? 1 : 0)
+    .map((skill) => `- **${skill.meta.name}**: ${skill.meta.description || 'No description'} (read: ${skill.filePath})`)
+  let body = ''
+  for (const entry of entries) {
+    const candidate = body ? `${body}\n${entry}` : entry
+    if (candidate.length > Math.max(0, budget * 3.5)) break
+    body = candidate
+  }
+  if (entries.length > body.split('\n').filter(Boolean).length) {
+    body += `${body ? '\n' : ''}- Additional skills are available through skills.read.`
+  }
+  return { name: 'skills:catalog', order: 50, text: `${header}${body}` }
+}
 
 export function buildSystemPromptFromSkills(skills: SkillDefinition[]): string {
   if (skills.length === 0) return ''

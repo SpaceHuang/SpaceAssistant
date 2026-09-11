@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import type { SkillDefinition } from './domainTypes'
-import { buildAvailableToolsHint, buildSkillRouteSignature, buildSystemPromptFromSkills, truncateSystemPrompt } from './skillPrompt'
+import { buildAvailableToolsHint, buildSkillCatalogSection, buildSkillRouteSignature, buildSystemPromptFromSkills, truncateSystemPrompt } from './skillPrompt'
 
 describe('skillPrompt', () => {
+  it('builds a bounded catalog without skill bodies', () => {
+    const skills: SkillDefinition[] = [{
+      meta: { name: 'demo', description: 'Use this for demos', triggers: ['x'], version: '1', author: '' },
+      content: 'SECRET BODY', scope: 'user', directoryPath: '/a', filePath: '/a/SKILL.md', lastModified: 0
+    }]
+    const section = buildSkillCatalogSection(skills, 10_000)
+    expect(section.name).toBe('skills:catalog')
+    expect(section.text).toContain('### Available skills')
+    expect(section.text).toContain('demo')
+    expect(section.text).not.toContain('SECRET BODY')
+  })
   it('builds system prompt from skills', () => {
     const skills: SkillDefinition[] = [
       {
