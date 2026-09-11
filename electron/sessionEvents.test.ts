@@ -23,12 +23,13 @@ import {
   reconcileSessionEvents,
   type SessionEvent
 } from './sessionEvents'
+import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 
 describe('session events', () => {
   it('commits compaction start, summary, and end in order', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-compaction-'))
     const writer = new SessionEventWriter(root, 'compaction')
-    const end = await appendCompactionTransaction(writer, { compactionId: 'c1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', summaryHash: 'h', outputSurfaceFingerprint: 'out', candidate: {} })
+    const end = await appendCompactionTransaction(writer, { compactionId: 'c1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', summaryHash: computeCompactionSummaryHash({}), outputSurfaceFingerprint: 'out', candidate: {} })
     expect(end.seq).toBe(3)
     expect((await readSessionEvents(writer.eventsPath)).map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
     await writer.close()
@@ -47,7 +48,7 @@ describe('session events', () => {
   it('reads only committed compaction markers from the event log', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-markers-'))
     const writer = new SessionEventWriter(root, 'markers')
-    await appendCompactionTransaction(writer, { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', windowId: 'w1', summaryHash: 'out', outputSurfaceFingerprint: 'out', candidate: {} })
+    await appendCompactionTransaction(writer, { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', windowId: 'w1', summaryHash: computeCompactionSummaryHash({}), outputSurfaceFingerprint: 'out', candidate: {} })
     expect(await readCompactionMarkers(writer.eventsPath, 'w1')).toEqual([{ compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'out' }])
     await writer.close()
   })
