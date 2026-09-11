@@ -403,7 +403,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '已压缩早期上下文。需要旧明细时请使用 history.read。' }
             const items = messages.map((message, index) => ({ id: surfaceItemIdentity(message, index), tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(surfaceItemIdentity(message, index)) || surfaceItemIdentity(message, index) === authoritative.currentUserMessageId }))
             const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, surfaceSnapshot.surfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
-            const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, boundaryRequestId), checkpointId: checkpointMessage.id, checkpointTokens: estimateTokensFromUtf8Text(checkpointMessage.content) })
+            const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: estimateTokensFromUtf8Text(checkpointMessage.content) })
             const record = plan.record
             if (!record || plan.status === 'uncompressible' || !record.shadowedRanges.length) return
             const shadowed = new Set(record.shadowedRanges.flatMap((range) => {
