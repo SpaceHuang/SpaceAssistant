@@ -71,6 +71,25 @@ export function planToolLoopCompaction(args: {
   })
 }
 
+/** turn boundary 使用完整 adaptive 规则；摘要达到 K=3 时优先重开。 */
+export function planTurnBoundaryCompaction(args: {
+  projection: CompactionProjection
+  shouldCompact: boolean
+  summaryCount?: number
+  maxSteps?: number
+  actions: Record<'prune' | 'summarize' | 'reset', (projection: CompactionProjection) => CompactionActionResult>
+}): CompactionPlanResult {
+  if (!args.shouldCompact) return { status: 'fits_without_headroom', projection: args.projection, actions: [] }
+  return planAdaptiveCompaction({
+    projection: args.projection,
+    phase: 'turn_boundary',
+    reason: 'should_compact',
+    summaryCount: args.summaryCount,
+    actions: args.actions,
+    maxSteps: args.maxSteps ?? 3
+  })
+}
+
 export type PrunableSurfaceItem = { id: string; tokens: number; cacheBoundary: boolean }
 export type PruneResult = { status: 'applied' | 'no-op'; items: PrunableSurfaceItem[]; projection: CompactionProjection }
 

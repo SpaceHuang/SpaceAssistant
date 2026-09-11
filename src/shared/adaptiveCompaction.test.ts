@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { adaptiveRules, getCompactionRules, planAdaptiveCompaction, planToolLoopCompaction, pruneSurface, selectCompactionRules } from './adaptiveCompaction'
+import { adaptiveRules, getCompactionRules, planAdaptiveCompaction, planToolLoopCompaction, planTurnBoundaryCompaction, pruneSurface, selectCompactionRules } from './adaptiveCompaction'
 
 describe('adaptive compaction preset', () => {
   it('routes tool-loop pressure through prune only', () => {
@@ -13,6 +13,17 @@ describe('adaptive compaction preset', () => {
     const projection = { surfaceTokens: 400, bodyTokens: 400, requiredTokens: 10, totalInputBudget: 1000, bodyBudget: 1000, targetBodyRatio: .5 }
     const result = planToolLoopCompaction({ projection, shouldCompact: false, prune: () => { throw new Error('must not prune') } })
     expect(result).toEqual({ status: 'fits_without_headroom', projection, actions: [] })
+  })
+  it('prefers reset at turn boundary after three committed summaries', () => {
+    const projection = { surfaceTokens: 900, bodyTokens: 900, requiredTokens: 10, totalInputBudget: 1000, bodyBudget: 1000, targetBodyRatio: .5 }
+    const actions = {
+      prune: (p: typeof projection) => ({ projection: p, status: 'no-op' as const }),
+      summarize: (p: typeof projection) => ({ projection: p, status: 'no-op' as const }),
+      reset: (p: typeof projection) => ({ projection: { ...p, surfaceTokens: 300, bodyTokens: 300 }, status: 'applied' as const })
+    }
+    const result = planTurnBoundaryCompaction({ projection, shouldCompact: true, summaryCount: 3, actions })
+    expect(result.actions[0]?.action).toBe('reset')
+    expect(result.status).toBe('target_reached')
   })
   it('keeps active tool loop at prune-only and exposes data-only rules', () => {
     expect(adaptiveRules.filter((r) => r.phase === 'tool_loop').map((r) => r.action)).toEqual(['prune'])
