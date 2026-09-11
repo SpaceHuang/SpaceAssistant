@@ -102,6 +102,14 @@ export function buildAvailableToolsHint(toolNames: string[]): string {
   ].join('\n')
 }
 
+/** 工具能力由 API tools 数组表达；system 只保留最小的调用约定。 */
+export function buildToolCapabilityConventionHint(toolNames: readonly string[]): string {
+  const shell = toolNames.includes('run_shell')
+    ? 'run_shell 可执行 shell 命令；run_script 用于 Python 脚本，两者不可互相替代。'
+    : 'run_shell 当前未启用；需要执行 shell 时请遵循 Skill 的 fallback，不要编造或调用该工具。'
+  return `工具能力以当前请求的 tools 定义为准，不要调用未定义的工具。${shell}`
+}
+
 export function appendAvailableToolsHint(system: string | undefined, toolNames: string[]): string | undefined {
   const hint = buildAvailableToolsHint(toolNames)
   if (!hint) return system

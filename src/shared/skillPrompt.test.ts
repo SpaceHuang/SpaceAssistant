@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { SkillDefinition } from './domainTypes'
-import { buildAvailableToolsHint, buildSkillCatalogSection, buildSkillRouteSignature, buildSystemPromptFromSkills, readSkillForTool, truncateSystemPrompt } from './skillPrompt'
+import { buildAvailableToolsHint, buildSkillCatalogSection, buildSkillRouteSignature, buildSystemPromptFromSkills, buildToolCapabilityConventionHint, readSkillForTool, truncateSystemPrompt } from './skillPrompt'
 
 describe('skillPrompt', () => {
+  it('renders tool capability conventions without enumerating tool names', () => {
+    const hint = buildToolCapabilityConventionHint(['run_shell'])
+    expect(hint).toContain('run_shell')
+    expect(hint).toContain('run_script')
+    expect(hint).not.toContain('当前可用工具')
+    expect(hint).not.toContain('仅可调用以下工具名称')
+  })
   it('reads a registered skill by name with a bounded response', () => {
     const skill = { meta: { name: 'demo', description: '', triggers: [], version: '1', author: '' }, content: 'content', scope: 'user' as const, directoryPath: '/a', filePath: '/a/SKILL.md', lastModified: 0 }
     expect(readSkillForTool([skill], 'demo', 100)).toBe('content')

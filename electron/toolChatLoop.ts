@@ -48,7 +48,7 @@ import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
-import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
+import { buildToolCapabilityConventionHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
 import { getSession, updateSession } from './database'
 import { listProfiles } from './mcp/mcpConfigStore'
@@ -634,7 +634,8 @@ async function runToolChatSessionInner(
       : typeof system === 'string' && system.trim().length > 0
         ? system
         : undefined
-    const systemWithTools = appendAvailableToolsHint(baseSystemWithRecovery, toolNames)
+    const capabilityHint = buildToolCapabilityConventionHint(toolNames)
+    const systemWithTools = baseSystemWithRecovery ? `${baseSystemWithRecovery}\n\n${capabilityHint}` : capabilityHint
     const locale = resolveRequestLocale(payloadLocale, appDb)
     const systemPrompt = buildFinalSystemPrompt({
       system: systemWithTools,
