@@ -37,6 +37,24 @@ export type SessionEventSink = {
   readonly indexPath: string
 }
 
+export async function appendCompactionTransaction(
+  sink: SessionEventSink,
+  start: SessionEventPayload,
+  summary: SessionEventPayload
+): Promise<CommittedEvent> {
+  const startEvent = await sink.appendCritical({ type: 'compaction_start', payload: start })
+  const summaryEvent = await sink.appendCritical({ type: 'compaction_summary', payload: summary })
+  return sink.appendCritical({ type: 'compaction_end', payload: {
+    compactionId: summary.compactionId,
+    status: 'committed',
+    startSeq: startEvent.seq,
+    summarySeq: summaryEvent.seq,
+    inputSurfaceFingerprint: start.inputSurfaceFingerprint,
+    outputSurfaceFingerprint: summary.outputSurfaceFingerprint,
+    summaryHash: summary.summaryHash
+  } })
+}
+
 const DEFAULT_OPTIONS: SessionEventSinkOptions = {
   maxBatchEvents: 32,
   maxBatchBytes: 64 * 1024,

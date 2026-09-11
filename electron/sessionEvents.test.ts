@@ -14,6 +14,7 @@ import {
   parseSessionEvent,
   readSessionEvents,
   readSessionEventsDetailed,
+  appendCompactionTransaction,
   reconcileSessionEventFiles,
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
@@ -21,6 +22,14 @@ import {
 } from './sessionEvents'
 
 describe('session events', () => {
+  it('commits compaction start, summary, and end in order', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-compaction-'))
+    const writer = new SessionEventWriter(root, 'compaction')
+    const end = await appendCompactionTransaction(writer, { compactionId: 'c1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', summaryHash: 'h', outputSurfaceFingerprint: 'out', candidate: {} })
+    expect(end.seq).toBe(3)
+    expect((await readSessionEvents(writer.eventsPath)).map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
+    await writer.close()
+  })
   it('writes schemaVersion 1 while accepting legacy events without it', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-schema-'))
     const writer = new SessionEventWriter(root, 'schema')
