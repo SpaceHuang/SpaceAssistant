@@ -48,7 +48,7 @@ import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
-import { buildToolCapabilityConventionHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
+import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
 import { getCachedSkills } from './skills/skillCache'
 import { getSession, updateSession } from './database'
@@ -618,7 +618,7 @@ async function runToolChatSessionInner(
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
-  let recoverySkillSystemSuffix = ''
+  let recoverySkillFragment = ''
 
   while (true) {
     loopRound++
@@ -628,13 +628,7 @@ async function runToolChatSessionInner(
       return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage, args.emitFactEvent)
     }
     const memoryContent = getCachedMemoryContent()
-    const baseSystemWithRecovery = recoverySkillSystemSuffix
-      ? [typeof system === 'string' && system.trim().length > 0 ? system : undefined, recoverySkillSystemSuffix]
-          .filter(Boolean)
-          .join('\n\n')
-      : typeof system === 'string' && system.trim().length > 0
-        ? system
-        : undefined
+    const baseSystemWithRecovery = typeof system === 'string' && system.trim().length > 0 ? system : undefined
     const capabilityHint = buildToolCapabilityConventionHint(toolNames)
     const systemWithTools = baseSystemWithRecovery ? `${baseSystemWithRecovery}\n\n${capabilityHint}` : capabilityHint
     const locale = resolveRequestLocale(payloadLocale, appDb)
@@ -649,7 +643,7 @@ async function runToolChatSessionInner(
     })
     // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
     const attemptRequestId = `${requestId}:round:${loopRound}`
-    const messagesStripped = stripThinking(messagesForApi)
+    const messagesStripped = stripThinking(recoverySkillFragment ? [...messagesForApi, { role: 'user', content: recoverySkillFragment }] : messagesForApi)
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,
       max_tokens: maxTokensEffective,
@@ -1914,7 +1908,7 @@ async function runToolChatSessionInner(
           content: payload
         }
       } else if (recoverySkill && execResult.dependencyError) {
-        if (!recoverySkillSystemSuffix && appDb) {
+        if (!recoverySkillFragment && appDb) {
           const cur = getSession(appDb, sessionId)
           if (cur) {
             updateSession(appDb, sessionId, {
@@ -1922,7 +1916,7 @@ async function runToolChatSessionInner(
             })
             const skill = getSkillByName(userDataDir, workDir, recoverySkill)
             if (skill) {
-              recoverySkillSystemSuffix = buildSystemPromptFromSkills([skill])
+              recoverySkillFragment = `<skill name="${skill.meta.name}" path="${skill.filePath}">\n${skill.content.trim()}\n</skill>`
             }
           }
         }
