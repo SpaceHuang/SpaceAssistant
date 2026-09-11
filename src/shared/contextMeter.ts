@@ -41,6 +41,8 @@ export type ContextInput = {
   }
   decision: { decisionId: string; phase: 'tool_loop' | 'turn_boundary' | 'recovery'; reason: 'proactive' | 'provider_overflow' | 'user_compact' | 'user_reset'; ruleVersion: string }
   contextWindow: ContextWindow
+  provider?: string
+  model?: string
 }
 
 export type ContextPressureProjection = {
@@ -61,6 +63,7 @@ function anchorStatus(input: ContextInput): ContextPressureProjection['anchorSta
   const anchor = input.anchor
   if (!anchor) return 'missing'
   if (!Number.isFinite(anchor.surfaceTokens) || anchor.contextWindow !== input.contextWindow.tokens) return 'mismatch'
+  if ((input.provider && input.provider !== anchor.provider) || (input.model && input.model !== anchor.model)) return 'mismatch'
   if (anchor.systemFingerprint === input.currentSurface.systemFingerprint && anchor.toolsFingerprint === input.currentSurface.toolsFingerprint && anchor.estimatorVersion === input.budget.estimatorVersion && anchor.serializationVersion === input.budget.serializationVersion) return 'matched'
   if (anchor.systemFingerprint !== input.currentSurface.systemFingerprint || anchor.toolsFingerprint !== input.currentSurface.toolsFingerprint) return 'prefix-changed'
   return 'mismatch'

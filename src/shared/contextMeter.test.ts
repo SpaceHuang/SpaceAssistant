@@ -45,6 +45,11 @@ describe('ContextMeter pure projections', () => {
     expect(result.anchorStatus).toBe('missing')
     expect(shouldCompact(result, input().budget)).toBe(false)
   })
+  it('rejects an anchor from a different provider or model', () => {
+    const result = computeContextPressure({ ...input(), provider: 'openai', model: 'other' })
+    expect(result.anchorStatus).toBe('mismatch')
+    expect(result.projectedTokens).toBeNull()
+  })
 
   it('uses body budget for the sole trigger and total budget for hard fit', () => {
     const result = computeContextPressure(input({ currentSurface: { ...input().currentSurface, surfaceTokens: 900, messageTokens: 700 } }))
