@@ -26,6 +26,8 @@ export interface OversizedCompactedInfo {
 export interface BuildToolResultBlockOptions {
   /** 超长压缩发生时回调（供 electron 侧打 warn 日志） */
   onOversizedCompacted?: (info: OversizedCompactedInfo) => void
+  /** 与实时链路一致的工作目录根：历史重建的 process 结果也要能判定 workspace 内路径 */
+  workspaceRoot?: string
 }
 
 export function buildToolResultBlock(
@@ -39,10 +41,14 @@ export function buildToolResultBlock(
     return { content: SYNTHETIC_TOOL_RESULT_PLACEHOLDER, isError: true }
   }
   if (tc.result.success === false) {
-    return compactToolResultBuild(serializeAgentToolResult(tc.result, { processTool: isProcessToolName(tc.toolName) }), true, options)
+    // 失败结果缺 error/userMessage 时必须给稳定兜底码，否则模型只看到 {"ok":false,"data":null}，读不到失败原因。
+    const failure = tc.result.error || tc.result.userMessage
+      ? tc.result
+      : { ...tc.result, error: 'TOOL_EXECUTION_FAILED' }
+    return compactToolResultBuild(serializeAgentToolResult(failure, { processTool: isProcessToolName(tc.toolName), workspaceRoot: options?.workspaceRoot }), true, options)
   }
   if (tc.result.data === undefined) return { content: '{}', isError: false }
-  const content = serializeAgentToolResult(tc.result, { processTool: isProcessToolName(tc.toolName) })
+  const content = serializeAgentToolResult(tc.result, { processTool: isProcessToolName(tc.toolName), workspaceRoot: options?.workspaceRoot })
   return compactToolResultBuild(content, false, options)
 }
 
@@ -117,6 +123,8 @@ export type BuildClaudeToolChatMessagesOptions = {
   resolveImage?: (a: ChatImageAttachment) => { mimeType: string; data: string } | null
   /** 历史 tool_result 超长被压缩时回调（供调用方打 warn 日志） */
   onOversizedToolResult?: (info: OversizedCompactedInfo & { toolUseId: string }) => void
+  /** 会话工作目录根；缺省时历史重建无法把 cwd 判定为 workspace 内相对路径 */
+  workspaceRoot?: string
 }
 
 /** 将本地消息列表转为带 content blocks 的 API 消息（含历史 tool_use / tool_result） */
@@ -163,6 +171,7 @@ export function buildClaudeToolChatMessages(
       for (const tc of m.toolCalls) {
         if (tc.status === 'calling' || tc.status === 'confirming' || tc.status === 'executing') continue
         const block = buildToolResultBlock(tc, {
+          workspaceRoot: options?.workspaceRoot,
           onOversizedCompacted: (info) =>
             options?.onOversizedToolResult?.({ ...info, toolUseId: tc.id })
         })

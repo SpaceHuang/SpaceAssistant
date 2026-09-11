@@ -93,6 +93,7 @@ export async function runImRemoteAgent(args: {
     const toolsConfig = args.getToolsConfig()
     const rawMessages = getMessages(args.db, args.sessionId)
     const built = buildClaudeToolChatMessages(rawMessages, {
+      workspaceRoot: resolved?.workDir,
       onOversizedToolResult: (info) => {
         logHistoryOversizedToolResult({
           sessionId: args.sessionId,

@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { ShellTerminalScrollback } from '../../../shared/domainTypes'
+import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
 import { pickScrollbackRestorePayload } from '../../../shared/terminalScrollback'
 import { buildShellTerminalOptions } from './terminalTheme'
 import { ShellOutputView } from './ShellOutputView'
@@ -42,6 +43,8 @@ export function ShellScrollbackView({
 
   const restore = pickScrollbackRestorePayload(scrollback)
   const showExitCode = typeof exitCode === 'number' && exitCode !== 0
+  // 兜底 artifact id 一定打不开（主进程返回 INVALID_PATH），不要给出点了没反应的入口。
+  const openTarget = artifactId && artifactId !== REDACTED_ARTIFACT_ID ? artifactId : persistedOutputPath
 
   useEffect(() => {
     if (!expanded || restore.kind === 'none' || restore.kind === 'plain') return
@@ -141,11 +144,11 @@ export function ShellScrollbackView({
       >
         <div ref={hostRef} className="shell-terminal-host" />
       </div>
-      {truncated && (artifactId || persistedOutputPath) ? (
+      {truncated && openTarget ? (
         <button
           type="button"
           className="shell-output__truncated-hint"
-          onClick={() => void window.api.shellOpenOutputPath(artifactId ?? persistedOutputPath!)}
+          onClick={() => void window.api.shellOpenOutputPath(openTarget)}
         >
           输出已截断，打开完整日志 →
         </button>

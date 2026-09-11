@@ -26,7 +26,9 @@ export function buildCommandRetryKey(input: {
 }
 
 export function isInfrastructureError(errorCode: string): boolean {
-  return /^(SHELL_SPAWN_ERROR|SHELL_RESULT_|SHELL_OUTPUT_CAPTURE_LOST|SHELL_EXECUTOR_)/.test(errorCode)
+  // 基础设施类失败（进程/依赖起不来、结果无法序列化）不值得按工具语义重试，
+  // 一次即熔断；此前只覆盖 SHELL_*，SCRIPT_*/LARK_* 仍走"连续 3 次"的通用路径。
+  return /^(SHELL_SPAWN_ERROR|SHELL_RESULT_|SHELL_OUTPUT_CAPTURE_LOST|SHELL_EXECUTOR_|SCRIPT_SPAWN_ERROR|LARK_RUNNER_UNAVAILABLE)/.test(errorCode)
 }
 
 export function shouldStopToolRetry(
