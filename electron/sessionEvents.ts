@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto'
 import type { SessionUsage } from '../src/shared/sessionUsage'
 
 export type SessionEventPayload = Record<string, unknown>
-export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'session_end_seed'
+export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
 export type SessionEvent = { seq: number; time: number; type: SessionEventType; payload: SessionEventPayload }
 export type SessionEventInput = { type: SessionEventType; payload: SessionEventPayload }
 export type SessionEventSinkOptions = {
@@ -45,7 +45,7 @@ const DEFAULT_OPTIONS: SessionEventSinkOptions = {
   hardPendingEvents: 512,
   hardPendingBytes: 1024 * 1024
 }
-const EVENT_TYPES = new Set<SessionEventType>(['turn_start', 'turn_end', 'step_start', 'step_end', 'assistant_chunk', 'tool_call', 'tool_result', 'request_header', 'request_context', 'request_usage', 'request_retry', 'session_end_seed'])
+const EVENT_TYPES = new Set<SessionEventType>(['turn_start', 'turn_end', 'step_start', 'step_end', 'assistant_chunk', 'tool_call', 'tool_result', 'request_header', 'request_context', 'request_usage', 'request_retry', 'compaction_start', 'compaction_summary', 'compaction_end', 'session_end_seed'])
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object')

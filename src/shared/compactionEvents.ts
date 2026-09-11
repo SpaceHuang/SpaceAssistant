@@ -1,0 +1,46 @@
+export type CompactionEvent = {
+  seq: number
+  type: 'compaction_start' | 'compaction_summary' | 'compaction_end'
+  payload: Record<string, unknown>
+}
+
+export type CommittedCompaction = {
+  compactionId: string
+  start: CompactionEvent
+  summary: CompactionEvent
+  end: CompactionEvent
+}
+
+export type CompactionReplay = { committed: CommittedCompaction[]; rejected: Array<{ compactionId?: string; reason: string }> }
+
+function stringField(payload: Record<string, unknown>, key: string): string | undefined {
+  return typeof payload[key] === 'string' ? payload[key] as string : undefined
+}
+
+export function foldCompactionEvents(events: readonly CompactionEvent[]): CompactionReplay {
+  const starts = new Map<string, CompactionEvent>()
+  const summaries = new Map<string, CompactionEvent>()
+  const committed = new Map<string, CommittedCompaction>()
+  const rejected: CompactionReplay['rejected'] = []
+  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+    const id = stringField(event.payload, 'compactionId')
+    if (!id) { rejected.push({ reason: 'missing-compaction-id' }); continue }
+    if (event.type === 'compaction_start') {
+      if (starts.has(id)) rejected.push({ compactionId: id, reason: 'duplicate-start' })
+      else starts.set(id, event)
+      continue
+    }
+    if (event.type === 'compaction_summary') {
+      if (!starts.has(id) || summaries.has(id)) rejected.push({ compactionId: id, reason: 'summary-without-unique-start' })
+      else summaries.set(id, event)
+      continue
+    }
+    if (event.payload.status !== 'committed' || committed.has(id)) { rejected.push({ compactionId: id, reason: 'not-committed-or-duplicate' }); continue }
+    const start = starts.get(id)
+    const summary = summaries.get(id)
+    const valid = start && summary && event.payload.startSeq === start.seq && event.payload.summarySeq === summary.seq && event.payload.inputSurfaceFingerprint === start.payload.inputSurfaceFingerprint && event.payload.outputSurfaceFingerprint === summary.payload.outputSurfaceFingerprint && event.payload.summaryHash === summary.payload.summaryHash
+    if (!valid) { rejected.push({ compactionId: id, reason: 'invalid-commit-references' }); continue }
+    committed.set(id, { compactionId: id, start, summary, end: event })
+  }
+  return { committed: [...committed.values()].sort((a, b) => a.end.seq - b.end.seq), rejected }
+}
