@@ -305,7 +305,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
-        const persistedMessages = applyCommittedSurfaceShadow(authoritative.messages, compactionReplay, [authoritative.currentUserMessageId])
+        const persistedMessages = applyCommittedSurfaceShadow(authoritative.messages, compactionReplay, [authoritative.currentUserMessageId], requestId)
         builtMessages = await buildToolChatMessagesFromSource({
           userDataDir,
           workDir: deps.getWorkDir(),

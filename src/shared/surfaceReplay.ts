@@ -15,10 +15,12 @@ export function computeShadowedRanges<T extends SurfaceReplayItem>(before: reado
 }
 
 /** 将已提交压缩记录的 shadowedRanges 应用到模型面；调用方仍保留完整 facts。 */
-export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = []): T[] {
+export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = [], windowId?: string): T[] {
   const required = new Set(requiredIds)
   const shadowed = new Set<string>()
   for (const committed of replay.committed) {
+    const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
+    if (windowId && committedWindowId !== windowId) continue
     const ranges = committed.summary.payload.shadowedRanges
     if (!Array.isArray(ranges)) continue
     for (const range of ranges) {
