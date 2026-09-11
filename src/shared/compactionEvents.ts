@@ -38,7 +38,11 @@ export function foldCompactionEvents(events: readonly CompactionEvent[]): Compac
     if (event.payload.status !== 'committed' || committed.has(id)) { rejected.push({ compactionId: id, reason: 'not-committed-or-duplicate' }); continue }
     const start = starts.get(id)
     const summary = summaries.get(id)
-    const valid = start && summary && event.payload.startSeq === start.seq && event.payload.summarySeq === summary.seq && event.payload.inputSurfaceFingerprint === start.payload.inputSurfaceFingerprint && event.payload.outputSurfaceFingerprint === summary.payload.outputSurfaceFingerprint && event.payload.summaryHash === summary.payload.summaryHash
+    const startWindowId = stringField(start?.payload ?? {}, 'windowId')
+    const summaryWindowId = stringField(summary?.payload ?? {}, 'windowId')
+    const endWindowId = stringField(event.payload, 'windowId')
+    const windowMatches = startWindowId == null || summaryWindowId == null || endWindowId == null || (startWindowId === summaryWindowId && summaryWindowId === endWindowId)
+    const valid = start && summary && windowMatches && event.payload.startSeq === start.seq && event.payload.summarySeq === summary.seq && event.payload.inputSurfaceFingerprint === start.payload.inputSurfaceFingerprint && event.payload.outputSurfaceFingerprint === summary.payload.outputSurfaceFingerprint && event.payload.summaryHash === summary.payload.summaryHash
     if (!valid) { rejected.push({ compactionId: id, reason: 'invalid-commit-references' }); continue }
     committed.set(id, { compactionId: id, start, summary, end: event })
   }

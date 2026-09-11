@@ -47,4 +47,14 @@ describe('compaction event replay', () => {
     expect(projectCompactionMarkers(replay, 'w1')).toEqual([{ compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'b' }])
     expect(projectCompactionMarkers(replay, 'w2')).toEqual([])
   })
+
+  it('rejects a transaction whose window identity changes mid-commit', () => {
+    const result = foldCompactionEvents([
+      event(1, 'compaction_start', { compactionId: 'cross', windowId: 'w1', inputSurfaceFingerprint: 'a' }),
+      event(2, 'compaction_summary', { compactionId: 'cross', windowId: 'w2', summaryHash: 'h', outputSurfaceFingerprint: 'b' }),
+      event(3, 'compaction_end', { compactionId: 'cross', windowId: 'w2', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'a', outputSurfaceFingerprint: 'b', summaryHash: 'h' })
+    ])
+    expect(result.committed).toHaveLength(0)
+    expect(result.rejected).toContainEqual({ compactionId: 'cross', reason: 'invalid-commit-references' })
+  })
 })
