@@ -53,6 +53,7 @@ export function buildRequestContextPayload(args: {
   outputAccounting?: 'shared' | 'separate'
   surfaceSnapshot?: { surfaceTokens: number; systemTokens: number; toolsTokens?: number }
   decision?: { decisionId: string; phase: string; reason: string; ruleVersion: string }
+  contextUsage?: RequestContextPayload['contextUsage']
 }): RequestContextPayload {
   const outputAccounting = args.outputAccounting ?? 'shared'
   const contextWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0 ? args.contextWindow! : DEFAULT_MODEL_MAX_CONTEXT
@@ -73,7 +74,7 @@ export function buildRequestContextPayload(args: {
     outputAccounting,
     schemaVersion: 1,
     budget: { totalInputBudget, bodyBudget, inputBudget: bodyBudget, prefixTokens, requiredTokens: 0, outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0, safetyReserveTokens: 0, triggerRatio: 0.9, targetBodyRatio: 0.8, estimatorVersion: 'default-v1', serializationVersion: 'anthropic-wire-v1' },
-    contextUsage: { pressureTokens: null, projectedTokens: null, surfaceTokens, hardFit: surfaceTokens <= totalInputBudget, bodyFit: Math.max(0, surfaceTokens - prefixTokens) <= bodyBudget },
+    contextUsage: args.contextUsage ?? { pressureTokens: null, projectedTokens: null, surfaceTokens, hardFit: surfaceTokens <= totalInputBudget, bodyFit: Math.max(0, surfaceTokens - prefixTokens) <= bodyBudget },
     ...decision,
     decisionFingerprint
   }

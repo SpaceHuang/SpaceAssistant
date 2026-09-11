@@ -41,4 +41,8 @@ describe('request context payload', () => {
     const b = buildRequestContextPayload({ ...base, surfaceSnapshot: { ...base.surfaceSnapshot, surfaceTokens: 21 } })
     expect(a.decisionFingerprint).not.toBe(b.decisionFingerprint)
   })
+  it('accepts a replayable anchored context usage update', () => {
+    const payload = buildRequestContextPayload({ requestId: 'r', provider: 'p', model: 'm', contextWindow: 100, maxTokensEffective: 10, contextUsage: { pressureTokens: 20, projectedTokens: 22, surfaceTokens: 22, hardFit: true, bodyFit: true } })
+    expect(payload.contextUsage).toMatchObject({ pressureTokens: 20, projectedTokens: 22 })
+  })
 })

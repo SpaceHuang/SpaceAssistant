@@ -826,7 +826,7 @@ async function runToolChatSessionInner(
           type: 'request_usage',
           payload: { requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
-        args.emitFactEvent?.({ type: 'context-projection-updated', projection: computeContextPressure({
+        const finalProjection = computeContextPressure({
           currentSurface: requestHeader.surfaceSnapshot,
           anchor: { requestId: attemptRequestId, surfaceTokens: requestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: requestHeader.surfaceSnapshot.fingerprint, systemFingerprint: requestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: requestHeader.surfaceSnapshot.toolsFingerprint, provider: 'anthropic', model, estimatorVersion: requestContext.budget.estimatorVersion, serializationVersion: requestContext.budget.serializationVersion, realUsage: finalUsage, contextWindow: requestContext.contextWindow.tokens },
           budget: requestContext.budget,
@@ -834,7 +834,9 @@ async function runToolChatSessionInner(
           contextWindow: requestContext.contextWindow,
           provider: 'anthropic',
           model
-        }) })
+        })
+        args.emitFactEvent?.({ type: 'context-projection-updated', projection: finalProjection })
+        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, contextUsage: finalProjection, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
       }
       if (usage) {
         lastValidUsage = usage
