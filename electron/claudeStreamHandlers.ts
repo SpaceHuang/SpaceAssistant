@@ -24,7 +24,10 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventInput, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeShadowedRanges, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { shouldCompact } from '../src/shared/contextMeter'
+import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
+import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -376,6 +379,25 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }, appendCompactionTransaction: async (start, summary) => {
             if (!eventWriter) return
             await appendCompactionTransaction(eventWriter, { ...start, turnId }, { ...summary, turnId })
+          }
+          ,onTurnBoundary: async ({ requestId: boundaryRequestId, system, tools, surfaceSnapshot, messages, budget, contextUsage }) => {
+            const projection = contextUsage && {
+              ...contextUsage,
+              anchorStatus: contextUsage.projectedTokens == null ? 'missing' as const : 'matched' as const,
+              bodyTokens: Math.max(0, (contextUsage.projectedTokens ?? surfaceSnapshot.surfaceTokens) - budget.prefixTokens),
+              bodyRatio: budget.bodyBudget > 0 ? Math.max(0, (contextUsage.projectedTokens ?? surfaceSnapshot.surfaceTokens) - budget.prefixTokens) / budget.bodyBudget : 0,
+              contextWindow: { tokens: budget.totalInputBudget + budget.outputReserveTokens, source: 'config' as const }
+            }
+            if (!eventWriter || !projection || !shouldCompact(projection, budget) || messages.length < 3) return
+            const items = messages.map((message, index) => ({ id: surfaceItemIdentity(message, index) }))
+            const retained = [items[0]!, items[items.length - 1]!]
+            const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '已压缩早期上下文。需要旧明细时请使用 history.read。' }
+            const shadowedRanges = computeShadowedRanges(items, [{ id: checkpointMessage.id }, ...retained])
+            if (!shadowedRanges.length) return
+            const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: [checkpointMessage, messages[0]!, messages[messages.length - 1]!] })
+            const candidate = { kind: 'summary', checkpointMessage, shadowedRanges }
+            const compactionId = `${boundaryRequestId}:boundary`
+            await appendCompactionTransaction(eventWriter, { compactionId, windowId: boundaryRequestId, turnId, inputSurfaceFingerprint: surfaceSnapshot.fingerprint, targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId: boundaryRequestId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges, candidate, requiredSurfaceSet: [authoritative.currentUserMessageId] })
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {

@@ -435,7 +435,7 @@ export type RunToolChatSessionArgs = {
   emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
-  onTurnBoundary?: (input: { requestId: string; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage'] }) => Promise<void>
+  onTurnBoundary?: (input: { requestId: string; system: string; tools: unknown[]; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage'] }) => Promise<void>
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -924,7 +924,7 @@ async function runToolChatSessionInner(
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
       args.emitFactEvent?.({ type: 'source-completed' })
       if (args.onTurnBoundary && lastRequestHeader && lastRequestContext) {
-        await args.onTurnBoundary({ requestId, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage })
+        await args.onTurnBoundary({ requestId, system: lastRequestHeader.system, tools: lastRequestHeader.tools, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage })
       }
       return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
     }
