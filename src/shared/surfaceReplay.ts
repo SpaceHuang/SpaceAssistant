@@ -2,6 +2,15 @@ import type { CompactionReplay } from './compactionEvents'
 
 export type SurfaceReplayItem = { id: string; required?: boolean }
 
+export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
+  const explicit = value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
+  if (explicit) return explicit
+  const text = JSON.stringify(value) ?? `index:${fallbackIndex}`
+  let hash = 2166136261
+  for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
+  return `surface-${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+
 export function computeShadowedRanges<T extends SurfaceReplayItem>(before: readonly T[], after: readonly T[]): Array<{ start: string; end: string }> {
   const retained = new Set(after.map((item) => item.id))
   const removed = before.filter((item) => !retained.has(item.id))
