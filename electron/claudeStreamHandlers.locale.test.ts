@@ -20,6 +20,7 @@ vi.mock('electron', () => ({
 const mockRunToolChatSession = vi.fn()
 const mockCreateAnthropicClient = vi.fn()
 const mockGetSessionEventSink = vi.fn()
+const mockReadCompactionMarkers = vi.fn(async () => [])
 const capturedStreamSystems: (string | undefined)[] = []
 
 vi.mock('./toolChatLoop', () => ({
@@ -28,7 +29,7 @@ vi.mock('./toolChatLoop', () => ({
 
 vi.mock('./sessionEvents', () => ({
   getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args),
-  readCompactionMarkers: vi.fn(async () => [])
+  readCompactionMarkers: (...args: unknown[]) => mockReadCompactionMarkers(...args)
 }))
 
 vi.mock('./agentLogger/agentLogger', () => ({
@@ -171,6 +172,7 @@ describe('claudeStreamHandlers locale', () => {
       model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
       options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN'
     }))
+    expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String), 'frozen-request')
     db.close()
   })
 

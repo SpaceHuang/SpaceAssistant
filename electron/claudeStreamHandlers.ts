@@ -289,7 +289,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         if (session) {
           eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
           await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
-          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath)
+          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath, requestId)
           for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker })
         }
         const frozen = authoritative.executionConfig
