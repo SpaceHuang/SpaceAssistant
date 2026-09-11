@@ -171,7 +171,8 @@ import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
-import { computeContextPressure } from '../src/shared/contextMeter'
+import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
+import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -2038,7 +2039,7 @@ async function runToolChatSessionInner(
       args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
       if (lastRequestHeader && lastRequestContext) {
         const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi] })
-        args.emitFactEvent?.({ type: 'context-projection-updated', projection: computeContextPressure({
+        const nextProjection = computeContextPressure({
           currentSurface: nextHeader.surfaceSnapshot,
           anchor: { requestId: lastRequestContext.requestId, surfaceTokens: lastRequestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, systemFingerprint: lastRequestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: lastRequestHeader.surfaceSnapshot.toolsFingerprint, provider: lastRequestContext.provider, model: lastRequestContext.model, estimatorVersion: lastRequestContext.budget.estimatorVersion, serializationVersion: lastRequestContext.budget.serializationVersion, realUsage: lastValidUsage, contextWindow: lastRequestContext.contextWindow.tokens },
           budget: lastRequestContext.budget,
@@ -2046,7 +2047,14 @@ async function runToolChatSessionInner(
           contextWindow: lastRequestContext.contextWindow,
           provider: lastRequestContext.provider,
           model: lastRequestContext.model
-        }) })
+        })
+        const toolLoopPlan = planToolLoopCompaction({
+          projection: { surfaceTokens: nextProjection.surfaceTokens, bodyTokens: nextProjection.bodyTokens, requiredTokens: lastRequestContext.budget.requiredTokens, totalInputBudget: lastRequestContext.budget.totalInputBudget, bodyBudget: lastRequestContext.budget.bodyBudget, targetBodyRatio: lastRequestContext.budget.targetBodyRatio },
+          shouldCompact: shouldCompact(nextProjection, lastRequestContext.budget),
+          prune: (projection) => ({ projection, status: 'no-op' })
+        })
+        args.emitFactEvent?.({ type: 'context-projection-updated', projection: nextProjection })
+        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: `${requestId}:surface:${loopRound}`, provider: lastRequestContext.provider, model: lastRequestContext.model, contextWindow: lastRequestContext.contextWindow.tokens, maxTokensEffective: lastRequestContext.maxTokensEffective, surfaceSnapshot: nextHeader.surfaceSnapshot, contextUsage: nextProjection, planningStatus: toolLoopPlan.status, windowId: requestId, decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
       }
     }
     if (abortRepeatedToolError) {
