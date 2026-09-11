@@ -24,12 +24,14 @@ export function computeShadowedRanges<T extends SurfaceReplayItem>(before: reado
 }
 
 /** 将已提交压缩记录的 shadowedRanges 应用到模型面；调用方仍保留完整 facts。 */
-export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = [], windowId?: string): T[] {
+export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = [], windowId?: string, fingerprint?: (items: readonly T[]) => string): T[] {
   const required = new Set(requiredIds)
   let currentSurface = [...items]
   for (const committed of replay.committed) {
     const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
     if (windowId && committedWindowId !== windowId) continue
+    const expectedInput = committed.start.payload.inputSurfaceFingerprint
+    if (fingerprint && typeof expectedInput === 'string' && fingerprint(currentSurface) !== expectedInput) continue
     const ranges = committed.summary.payload.shadowedRanges
     if (!Array.isArray(ranges)) continue
     const shadowedIds = new Set<string>()
@@ -49,6 +51,11 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     const candidate = committed.summary.payload.candidate
     const checkpointMessage = candidate && typeof candidate === 'object' ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
     if (checkpointMessage && typeof checkpointMessage === 'object' && typeof (checkpointMessage as { id?: unknown }).id === 'string') currentSurface.splice(Math.min(insertionIndex, currentSurface.length), 0, checkpointMessage as T)
+    const expectedOutput = committed.summary.payload.outputSurfaceFingerprint ?? committed.end.payload.outputSurfaceFingerprint
+    if (fingerprint && typeof expectedOutput === 'string' && fingerprint(currentSurface) !== expectedOutput) {
+      currentSurface = [...items]
+      break
+    }
   }
   return currentSurface
 }
