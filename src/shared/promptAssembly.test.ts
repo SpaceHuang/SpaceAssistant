@@ -9,6 +9,7 @@ import {
   renderSkillFragments,
   skillCatalogBudget
 } from './promptAssembly'
+import { buildPromptAssembly } from './promptAssembly'
 import type { PromptAssembly } from './promptAssembly'
 
 const assembly = (overrides: Partial<PromptAssembly> = {}): PromptAssembly => ({
@@ -21,6 +22,11 @@ const assembly = (overrides: Partial<PromptAssembly> = {}): PromptAssembly => ({
 })
 
 describe('prompt assembly rendering', () => {
+  it('builds a protocol-neutral assembly without rendering it', () => {
+    const result = buildPromptAssembly({ sections: [{ name: 'base', order: 1, text: 'base' }], contexts: [], tools: [{ name: 'z' }] })
+    expect(result.sections).toHaveLength(1)
+    expect(result.tools[0]?.name).toBe('z')
+  })
   it('sorts sections, drops empty text, and interpolates variables deterministically', () => {
     expect(
       renderPrompt(

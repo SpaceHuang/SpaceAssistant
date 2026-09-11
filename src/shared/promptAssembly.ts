@@ -52,6 +52,21 @@ export type ContextBreakdownProjection = {
 export const TOOL_ORDER_REST = '<unlisted-tools>'
 const SKILL_CATALOG_UPPER_BOUND = 10_000
 
+export function buildPromptAssembly(args: {
+  sections: readonly PromptSection[]
+  contexts?: readonly ContextSection[]
+  tools?: readonly PromptTool[]
+  skillFragments?: readonly SkillFragment[]
+  variables?: Record<string, string | undefined>
+}): PromptAssembly {
+  const names = new Set<string>()
+  for (const section of args.sections) {
+    if (names.has(section.name)) throw new Error(`Duplicate prompt section: ${section.name}`)
+    names.add(section.name)
+  }
+  return { sections: [...args.sections], contexts: [...(args.contexts ?? [])], tools: orderTools(args.tools ?? []), skillFragments: [...(args.skillFragments ?? [])], variables: { ...(args.variables ?? {}) } }
+}
+
 function resolveText(text: PromptText, assembly: PromptAssembly): string {
   return typeof text === 'function' ? text(assembly) : text
 }
