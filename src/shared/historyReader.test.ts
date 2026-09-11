@@ -12,4 +12,7 @@ describe('history reader', () => {
   it('rejects cross-session entry lookup', () => {
     expect(() => readHistory(facts, { sessionId: 's1', windowId: 'w1', entryId: 'x' })).toThrow(/not found|not authorized/i)
   })
+  it('applies the default single-entry token limit', () => {
+    expect(() => readHistory([{ id: 'huge', sessionId: 's1', windowId: 'w1', text: 'huge', tokens: 4001 }], { sessionId: 's1', entryId: 'huge' })).toThrow(/budget/i)
+  })
 })

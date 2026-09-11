@@ -6,7 +6,8 @@ export function readHistory(facts: readonly HistoryFact[], args: { sessionId: st
   if (args.entryId) {
     const entry = scoped.find((fact) => fact.id === args.entryId)
     if (!entry) throw new Error('History entry not found or not authorized')
-    if (args.maxTokens != null && entry.tokens > args.maxTokens) throw new Error('History entry exceeds token budget')
+    const entryBudget = Math.max(0, args.maxTokens ?? 4_000)
+    if (entry.tokens > entryBudget) throw new Error('History entry exceeds token budget')
     return { entries: [entry], nextCursor: null }
   }
   const filtered = args.query ? scoped.filter((fact) => fact.text.toLowerCase().includes(args.query!.toLowerCase())) : scoped
