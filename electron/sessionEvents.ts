@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { SessionUsage } from '../src/shared/sessionUsage'
+import { foldCompactionEvents, type CompactionReplay } from '../src/shared/compactionEvents'
 
 export type SessionEventPayload = Record<string, unknown>
 export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
@@ -130,6 +131,11 @@ export type SessionRecoverySummary = {
   failures: SessionRecoveryFailure[]
 }
 export type SessionRetentionSummary = { removed: number; failures: SessionRecoveryFailure[] }
+
+/** 事件流唯一的压缩重放入口；未提交候选不会改变模型面。 */
+export function replayCompactionEvents(events: readonly SessionEvent[]): CompactionReplay {
+  return foldCompactionEvents(events.filter((event) => event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end').map((event) => ({ seq: event.seq, type: event.type as 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: event.payload })))
+}
 
 /** 每个事件文件唯一的提交 owner；业务代码应通过 getSessionEventSink 获取。 */
 export class SessionEventWriter implements SessionEventSink {

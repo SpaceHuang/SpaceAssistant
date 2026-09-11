@@ -15,6 +15,7 @@ import {
   readSessionEvents,
   readSessionEventsDetailed,
   appendCompactionTransaction,
+  replayCompactionEvents,
   reconcileSessionEventFiles,
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
@@ -29,6 +30,17 @@ describe('session events', () => {
     expect(end.seq).toBe(3)
     expect((await readSessionEvents(writer.eventsPath)).map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
     await writer.close()
+  })
+
+  it('replays only a fully committed compaction transaction', () => {
+    const replay = replayCompactionEvents([
+      { schemaVersion: 1, seq: 1, time: 1, type: 'compaction_start', payload: { compactionId: 'c', inputSurfaceFingerprint: 'in' } },
+      { schemaVersion: 1, seq: 2, time: 2, type: 'compaction_summary', payload: { compactionId: 'c', outputSurfaceFingerprint: 'out', summaryHash: 'h' } },
+      { schemaVersion: 1, seq: 3, time: 3, type: 'compaction_end', payload: { compactionId: 'c', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: 'h' } },
+      { schemaVersion: 1, seq: 4, time: 4, type: 'compaction_end', payload: { compactionId: 'broken', status: 'committed' } }
+    ])
+    expect(replay.committed).toHaveLength(1)
+    expect(replay.rejected).toContainEqual({ compactionId: 'broken', reason: 'invalid-commit-references' })
   })
   it('writes schemaVersion 1 while accepting legacy events without it', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-schema-'))
