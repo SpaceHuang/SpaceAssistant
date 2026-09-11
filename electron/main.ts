@@ -28,6 +28,7 @@ import { TurnRuntime } from './turnRuntime'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
+import { beginSessionEventShutdown, enforceSessionEventRetentionDetailed, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
 import { cleanupPersistedOrphansOnStartup } from './shell/startupOrphanCleanup'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
@@ -61,6 +62,7 @@ import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunn
 import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
+import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdownCleanup'
 
 let floatingManager: FloatingNotificationManager | null = null
 
@@ -126,10 +128,25 @@ let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
 
-async function runShutdownCleanup(): Promise<void> {
-  await stagehandService.closeAll()
-  await shutdownFeishuServices()
-  await shutdownWeChatServices()
+export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<ShutdownCleanupResult> {
+  // 让该函数自身也具备 shutdown 原子边界，避免未来其他退出入口只调用
+  // cleanup 而遗漏 before-quit 的生产闸门。
+  beginSessionEventShutdown()
+  const tasks: Array<[string, () => Promise<unknown>]> = [
+    ['session-event-flush', flushAllSessionEventSinks],
+    ['stagehand-close', () => stagehandService.closeAll()],
+    ['feishu-shutdown', shutdownFeishuServices],
+    ['wechat-shutdown', shutdownWeChatServices]
+  ]
+  const tracked = tasks.map(([task, run]) => [task, async () => {
+    pendingTasks?.add(task)
+    try {
+      return await run()
+    } finally {
+      pendingTasks?.delete(task)
+    }
+  }] as const)
+  return runAllShutdownCleanupTasks(tracked)
 }
 
 export function getIsQuitting(): boolean {
@@ -340,6 +357,41 @@ app.whenReady().then(async () => {
   })
   // Runtime 已建立后再处理无 turn 的孤儿消息，随后由 appIpc 的同一 recovery 装配继续恢复持久化 turn。
   cleanupStreamingResiduesOnStartup(db)
+  try {
+    const recovery = await reconcileSessionEventFilesDetailed(workDirState)
+    for (const session of recovery.sessions) {
+      for (const issue of session.issues) {
+        console.warn('[sessionEvents] startup event integrity issue:', {
+          sessionName: session.sessionName,
+          eventsPath: issue.eventsPath,
+          line: issue.line,
+          code: issue.code,
+          truncated: issue.truncated,
+          dataLossPossible: issue.dataLossPossible,
+          message: issue.message
+        })
+      }
+    }
+    for (const failure of recovery.failures) {
+      console.warn('[sessionEvents] startup recovery degraded:', {
+        sessionName: failure.sessionName,
+        phase: failure.phase,
+        eventsPath: failure.eventsPath,
+        jsonlCommitted: failure.jsonlCommitted,
+        error: failure.error instanceof Error ? failure.error.message : String(failure.error)
+      })
+    }
+    const retention = await enforceSessionEventRetentionDetailed(workDirState, 100)
+    for (const failure of retention.failures) {
+      console.warn('[sessionEvents] retention cleanup failed:', {
+        sessionName: failure.sessionName,
+        error: failure.error instanceof Error ? failure.error.message : String(failure.error)
+      })
+    }
+  } catch (error) {
+    // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
+    console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
+  }
 
   const getApiKey = async (): Promise<string | null> => {
     return getActiveLlmService(db).getApiKey()
@@ -558,6 +610,9 @@ app.on('before-quit', (event) => {
   if (quitCleanupDone) return
   event.preventDefault()
   isQuitting = true
+  // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
+  // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
+  beginSessionEventShutdown()
   destroyTray()
   floatingManager?.destroy()
   stopMemoryWatcher()
@@ -566,20 +621,27 @@ app.on('before-quit', (event) => {
   }
   void (async () => {
     let timedOut = false
-    const timeout = new Promise<void>((resolve) => {
-      setTimeout(() => {
+    const pendingTasks = new Set<string>()
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<undefined>((resolve) => {
+      timeoutHandle = setTimeout(() => {
         timedOut = true
         console.warn(`[shutdown] cleanup exceeded ${SHUTDOWN_TIMEOUT_MS}ms, forcing quit`)
-        resolve()
+        resolve(undefined)
       }, SHUTDOWN_TIMEOUT_MS)
     })
     try {
-      await Promise.race([runShutdownCleanup(), timeout])
-    } catch (err) {
-      console.warn('[shutdown] cleanup failed:', err instanceof Error ? err.message : err)
+      const result = await Promise.race([runShutdownCleanup(pendingTasks), timeout])
+      if (result && result.failures.length > 0) {
+        console.warn('[shutdown] cleanup completed with failures:', result.failures.map(({ task, error }) => ({
+          task,
+          error: error instanceof Error ? error.message : String(error)
+        })))
+      }
     } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
       if (timedOut) {
-        console.warn('[shutdown] some resources may not have been released cleanly')
+        console.warn('[shutdown] resources not settled before timeout:', Array.from(pendingTasks))
       }
       appDb?.flushSave()
       appDb?.close()

@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import type { Message, Session } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION } from '../src/shared/domainTypes'
 import { writeAllBytes } from './safeAtomicWrite'
+import { readSessionEventsDetailed, type SessionEvent } from './sessionEvents'
 
 export interface MessagesPage {
   messages: Message[]
@@ -131,6 +132,26 @@ export class SessionBackupManager {
   async deleteBackup(session: Session): Promise<void> {
     const dir = this.dirFor(session)
     await fs.rm(dir, { recursive: true, force: true })
+  }
+
+  /** 只读审计事件；事件流与消息备份共享目录生命周期，但不参与消息恢复。 */
+  async readEvents(sessionId: string): Promise<SessionEvent[]> {
+    const dirs = await this.findSessionDirs(sessionId)
+    if (dirs.length === 0) return []
+    const eventsPath = path.join(dirs[dirs.length - 1]!, 'events.jsonl')
+    const result = await readSessionEventsDetailed(eventsPath, {
+      onIssue: (issue) => {
+        console.warn('[SessionBackupManager] event stream issue:', {
+          sessionId,
+          eventsPath,
+          line: issue.line,
+          code: issue.code,
+          truncated: issue.truncated,
+          dataLossPossible: issue.dataLossPossible
+        })
+      }
+    })
+    return result.events
   }
 
   private async findSessionDirs(sessionId: string): Promise<string[]> {

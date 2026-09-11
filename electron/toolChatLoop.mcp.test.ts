@@ -228,6 +228,38 @@ describe('toolChatLoop MCP integration', () => {
     expect(tools.find((t) => t.name === 'mcp_github_create_issue_12345678')?.description).toContain('外部 MCP 服务')
   })
 
+  it('records exactly one tool_result audit event for one tool execution', async () => {
+    const auditEvents: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const result = await runSession({
+      emitSessionEvent: (event: { type: string; payload: Record<string, unknown> }) => {
+        auditEvents.push(event)
+      }
+    })
+    expect(result.ok).toBe(true)
+    expect(auditEvents.filter((event) => event.type === 'tool_result')).toHaveLength(1)
+    expect(auditEvents.find((event) => event.type === 'tool_result')?.payload).toMatchObject({ toolUseId: 'tu-mcp-1' })
+  })
+
+  it('does not start the next model request before tool_result is committed', async () => {
+    let releaseResult!: () => void
+    const resultCommitted = new Promise<void>((resolve) => { releaseResult = resolve })
+    let markResultSeen!: () => void
+    const resultSeen = new Promise<void>((resolve) => { markResultSeen = resolve })
+    const result = runSession({
+      emitSessionEvent: async (event: { type: string }) => {
+        if (event.type === 'tool_result') {
+          markResultSeen()
+          await resultCommitted
+        }
+      }
+    })
+    await resultSeen
+    expect(streamRound).toBe(1)
+    releaseResult()
+    await expect(result).resolves.toMatchObject({ ok: true })
+    expect(streamRound).toBe(2)
+  })
+
   it('does not inject MCP tools for remote IM sessions', async () => {
     mcpSnapshotEntries = new Map([
       [

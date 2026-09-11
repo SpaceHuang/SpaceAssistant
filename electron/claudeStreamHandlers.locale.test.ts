@@ -19,10 +19,15 @@ vi.mock('electron', () => ({
 
 const mockRunToolChatSession = vi.fn()
 const mockCreateAnthropicClient = vi.fn()
+const mockGetSessionEventSink = vi.fn()
 const capturedStreamSystems: (string | undefined)[] = []
 
 vi.mock('./toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
+}))
+
+vi.mock('./sessionEvents', () => ({
+  getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args)
 }))
 
 vi.mock('./agentLogger/agentLogger', () => ({
@@ -60,6 +65,18 @@ function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
 }
 
+function makeEventSink() {
+  return {
+    appendCritical: vi.fn(async (input: { type: string; payload: Record<string, unknown> }) => ({ seq: 1, time: 1, type: input.type, payload: input.payload })),
+    appendChunk: vi.fn(),
+    waitForCapacity: vi.fn(async () => undefined),
+    flush: vi.fn(async () => ({ committedEvents: 0, seq: 0, pendingEvents: 0, pendingBytes: 0 })),
+    close: vi.fn(async () => ({ committedEvents: 0, seq: 0, pendingEvents: 0, pendingBytes: 0 })),
+    eventsPath: '/tmp/events.jsonl',
+    indexPath: '/tmp/events.index.json'
+  }
+}
+
 function makeDb(locale: 'zh-CN' | 'en-US' = 'en-US'): AppDatabase {
   const db = openDatabase(':memory:')
   setConfigValue(db, 'config.locale', locale)
@@ -71,6 +88,7 @@ describe('claudeStreamHandlers locale', () => {
     vi.clearAllMocks()
     handlers.clear()
     capturedStreamSystems.length = 0
+    mockGetSessionEventSink.mockReturnValue(makeEventSink())
 
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
@@ -100,7 +118,7 @@ describe('claudeStreamHandlers locale', () => {
     })
   })
 
-  function registerHandlers(db = makeDb('zh-CN')) {
+  function registerHandlers(db = makeDb('zh-CN'), withRuntime = false) {
     return registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key',
       getWorkDir: () => '/tmp',
@@ -111,7 +129,8 @@ describe('claudeStreamHandlers locale', () => {
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }),
       getAppDatabase: () => db,
-      getBrowserDetectContext: () => ({ workDir: '/tmp' })
+      getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      ...(withRuntime ? { turnRuntime: { bindRequest: vi.fn() } as never } : {})
     })
   }
 
@@ -178,6 +197,65 @@ describe('claudeStreamHandlers locale', () => {
       model: 'current-model'
     })).resolves.toEqual({ ok: false, error: 'TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE' })
     expect(mockRunToolChatSession).not.toHaveBeenCalled()
+    db.close()
+  })
+
+  it('关键事件持久化失败时，错误处理路径仍返回结构化结果且不再次抛出', async () => {
+    const db = makeDb('zh-CN')
+    const session = createSession(db, { name: 'event-failure', model: 'trusted-model' })
+    const user = appendMessage(db, { id: 'event-failure-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'event-failure-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'event-failure-turn', requestId: 'event-failure-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'event-failure-token',
+      executionConfig: { lane: 'desktop', model: 'trusted-model', maxTokens: 1024, enableThinking: false, locale: 'zh-CN' }
+    })
+    const sink = makeEventSink()
+    sink.appendCritical.mockRejectedValue(new Error('JSONL append failed'))
+    mockGetSessionEventSink.mockReturnValue(sink)
+    const execute = registerHandlers(db, true)
+
+    await expect(execute(makeSender(), {
+      requestId: 'event-failure-request', turnId: 'event-failure-turn', turnStartToken: 'event-failure-token', sessionId: session.id
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'JSONL append failed',
+      eventPersistenceFailed: true,
+      eventPersistenceErrors: expect.any(Array)
+    })
+    expect(sink.appendCritical).toHaveBeenCalledTimes(3)
+    db.close()
+  })
+
+  it('同时保留模型错误与 finalize 持久化错误', async () => {
+    const db = makeDb('zh-CN')
+    const session = createSession(db, { name: 'dual-failure', model: 'trusted-model' })
+    const user = appendMessage(db, { id: 'dual-failure-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'dual-failure-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'dual-failure-turn', requestId: 'dual-failure-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'dual-failure-token',
+      executionConfig: { lane: 'desktop', model: 'trusted-model', maxTokens: 1024, enableThinking: false, locale: 'zh-CN' }
+    })
+    const sink = makeEventSink()
+    sink.appendCritical
+      .mockResolvedValueOnce({ seq: 1, time: 1, type: 'turn_start', payload: {} })
+      .mockResolvedValueOnce({ seq: 2, time: 2, type: 'step_start', payload: {} })
+      .mockRejectedValue(new Error('finalize write failed'))
+    mockGetSessionEventSink.mockReturnValue(sink)
+    mockRunToolChatSession.mockResolvedValue({ ok: false, error: 'model request failed' })
+    const execute = registerHandlers(db, true)
+
+    await expect(execute(makeSender(), {
+      requestId: 'dual-failure-request', turnId: 'dual-failure-turn', turnStartToken: 'dual-failure-token', sessionId: session.id
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'model request failed',
+      eventPersistenceFailed: true,
+      eventPersistenceErrors: expect.any(Array)
+    })
     db.close()
   })
 })

@@ -80,6 +80,27 @@ export async function appendDiagnostic(
   setConfigValue(db, mcpDiagnosticsKey(serverId), JSON.stringify(entries))
 }
 
+/**
+ * 诊断属于 best-effort 派生数据，不能让数据库写入失败反向污染 transport/工具主链。
+ * 这里集中接管同步 throw 和异步 rejection，并且故意只写 stderr，避免诊断失败递归写诊断。
+ */
+export function safeAppendDiagnostic(
+  db: AppDatabase,
+  serverId: string,
+  entry: { code: string; message: string },
+  fallbackLogger: (error: unknown) => void = (error) => {
+    console.warn('[mcpDiagnostics] append failed:', error instanceof Error ? error.message : error)
+  }
+): void {
+  try {
+    void appendDiagnostic(db, serverId, entry).catch((error) => {
+      try { fallbackLogger(error) } catch { /* fallback logger 也不得制造未处理 rejection */ }
+    })
+  } catch (error) {
+    try { fallbackLogger(error) } catch { /* ignore */ }
+  }
+}
+
 export function getDiagnostics(db: AppDatabase, serverId: string): McpDiagnosticEntry[] {
   return readEntries(db, serverId, Date.now())
 }

@@ -235,6 +235,29 @@ describe('McpConnectionManager', () => {
     )
   })
 
+  it('contains asynchronous diagnostic failures without unhandled rejection', async () => {
+    const dir = makeTempDir()
+    const script = writeServerScript(dir, 'diagnostic-failure.js', '{ tools: {}, elicitation: {} }')
+    const appendDiagnostic = vi.fn().mockRejectedValue(new Error('diagnostic storage unavailable'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    const manager = new McpConnectionManager({ appendDiagnostic })
+    try {
+      const profile = makeProfile({ stdio: { command: process.execPath, args: [script], env: [] } })
+      await manager.connect(profile, {})
+      await manager.disconnect(profile.id)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(appendDiagnostic).toHaveBeenCalled()
+      expect(unhandled).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      process.removeListener('unhandledRejection', unhandled)
+      warn.mockRestore()
+      await manager.shutdown()
+    }
+  })
+
   it('reuses a live session and restarts after process exit', async () => {
     const dir = makeTempDir()
     const scriptPath = path.join(dir, 'shortlived.js')

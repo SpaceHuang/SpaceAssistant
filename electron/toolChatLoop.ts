@@ -21,7 +21,7 @@ import type { PreparedShellExecution } from './shell/preparedShellExecution'
 import type { ToolExecutorResult } from './tools/types'
 import { shouldStopToolRetry } from './toolErrorRetryPolicy'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
-import { appendDiagnostic, getDiagnostics } from './mcp/mcpDiagnostics'
+import { getDiagnostics, safeAppendDiagnostic } from './mcp/mcpDiagnostics'
 import { createMcpToolExecutor } from './mcp/mcpToolExecutor'
 import {
   buildSnapshotFromDb,
@@ -78,6 +78,7 @@ import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
 import { logShellConfirmOutcome, logShellPrecheck } from './shell/shellAgentLogger'
 import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
+import type { SessionEventInput } from './sessionEvents'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
@@ -373,11 +374,14 @@ export type RunToolChatSessionArgs = {
   projectMemoryEnabled?: boolean
   /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
+  assistantMessageId?: string
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   /** 统一消息事实迁移端口；Core-owned 请求可配合关闭 legacy IPC 事实发送。 */
   emitFactEvent?: (event: AssistantFactEvent) => void
+  /** Core 事件台账写入口；与 UI fact 通道分离，保存原始 NormalizedDelta。 */
+  emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -425,7 +429,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     if (!mcpConnectionManager) {
       mcpConnectionManager = new McpConnectionManager({
         appendDiagnostic: (serverId, entry) => {
-          if (args.appDb) void appendDiagnostic(args.appDb, serverId, entry)
+          if (args.appDb) safeAppendDiagnostic(args.appDb, serverId, entry)
         }
       })
     }
@@ -492,7 +496,11 @@ async function runToolChatSessionInner(
     return { ok: false, error: 'API key not configured' }
   }
 
-  const client = createAnthropicClient(apiKey, baseUrl)
+  const client = createAnthropicClient(apiKey, baseUrl, {
+    onRetry: async ({ attempt, backoffMs, code }) => {
+      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt, backoffMs, code } })
+    }
+  })
   const sessionMeta = appDb ? getSession(appDb, sessionId)?.metadata : undefined
   const remoteBudgetState: RemoteTaskBudgetState | null = remoteContext
     ? createRemoteTaskBudgetState(
@@ -603,6 +611,8 @@ async function runToolChatSessionInner(
       tools: tools as Anthropic.Tool[],
       thinking
     })
+    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', system: systemPrompt ?? '', tools } })
+    await args.emitSessionEvent?.({ type: 'request_context', payload: { provider: 'anthropic', model, contextWindow: undefined } })
 
     logAgentEvent('info', 'llm.request', {
       requestId,
@@ -638,6 +648,12 @@ async function runToolChatSessionInner(
       for await (const evt of stream) {
       throwIfChatCancelled(chatSignal)
       const normalizedDelta = normalizeAnthropicEvent(evt, contentBlockTypes)
+      if (normalizedDelta) {
+        await args.emitSessionEvent?.({
+          type: 'assistant_chunk',
+          payload: { turnId: sessionId, stepId: requestId, messageId: args.assistantMessageId, delta: normalizedDelta }
+        })
+      }
       if (normalizedDelta?.type === 'tool_call_delta') {
         const pending = pendingToolUseByIndex.get(normalizedDelta.index)
         if (pending) pending.partialJson += normalizedDelta.partialJson
@@ -711,6 +727,10 @@ async function runToolChatSessionInner(
               name: compatName,
               input: parseToolInput(pending.input, pending.partialJson)
             }
+            await args.emitSessionEvent?.({
+              type: 'tool_call',
+              payload: { turnId: sessionId, stepId: requestId, toolUseId: pending.id, name: compatName, args: normalizeToolUseInputRecord(toolUseBlock.input) }
+            })
             args.emitFactEvent?.({ type: 'tool-use', id: pending.id, toolName: compatName, input: normalizeToolUseInputRecord(toolUseBlock.input) })
             contentBlocks.push(toolUseBlock)
             logAgentEvent('info', 'tool.request', {
@@ -735,6 +755,12 @@ async function runToolChatSessionInner(
       stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
       const finalUsage = normalizeAnthropicMessageUsage(res, baseUrl)
       usage = finalUsage ?? usage
+      if (finalUsage) {
+        await args.emitSessionEvent?.({
+          type: 'request_usage',
+          payload: { requestId: `${requestId}:round:${loopRound}`, usage: finalUsage, source: 'api' }
+        })
+      }
       if (usage) {
         lastValidUsage = usage
         args.emitFactEvent?.({ type: 'usage-updated', usage })
@@ -808,6 +834,17 @@ async function runToolChatSessionInner(
     const emitToolResultFact = (toolUseId: string, result: ToolCallResultPersisted) => {
       args.emitFactEvent?.({ type: 'tool-result', id: toolUseId, result })
     }
+    const recordToolResult = async (
+      block: Anthropic.ToolResultBlockParam,
+      result: ToolCallResultPersisted
+    ): Promise<void> => {
+      toolResults.push(block)
+      await args.emitSessionEvent?.({
+        type: 'tool_result',
+        payload: { turnId: sessionId, stepId: requestId, toolUseId: block.tool_use_id, result }
+      })
+      emitToolResultFact(block.tool_use_id, result)
+    }
     const fileCache = getFileStateCacheForSession(sessionId)
     let abortRepeatedToolError: string | null = null
 
@@ -830,11 +867,11 @@ async function runToolChatSessionInner(
           toolUseId,
           toolName
         })
-        toolResults.push(buildToolErrorResult(toolUseId, error, { requestId, sessionId }))
+        await recordToolResult(buildToolErrorResult(toolUseId, error, { requestId, sessionId }), { success: false, error })
         continue
       }
       if (isToolRevoked(requestId, toolName)) {
-        toolResults.push(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }))
+        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
         continue
       }
 
@@ -854,8 +891,7 @@ async function runToolChatSessionInner(
           unknownToolError,
           unknownToolError
         )
-        toolResults.push(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }))
-        emitToolResultFact(toolUseId, { success: false, error: unknownToolError })
+        await recordToolResult(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }), { success: false, error: unknownToolError })
         if (toolErrorRepeat.noteFailure(toolName, unknownToolError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${unknownToolError}`
           break
@@ -881,8 +917,7 @@ async function runToolChatSessionInner(
           e,
           userMsg
         )
-        toolResults.push(buildToolErrorResult(toolUseId, userMsg, { requestId, sessionId }))
-        emitToolResultFact(toolUseId, { success: false, error: userMsg })
+        await recordToolResult(buildToolErrorResult(toolUseId, userMsg, { requestId, sessionId }), { success: false, error: userMsg })
         if (toolErrorRepeat.noteFailure(toolName, userMsg)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${userMsg}`
           break
@@ -912,8 +947,7 @@ async function runToolChatSessionInner(
             reason: budgetCheck.reason,
             actor: 'system'
           })
-          toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
-          emitToolResultFact(toolUseId, { success: false, error: pauseMsg })
+          await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg })
           abortRepeatedToolError = pauseMsg
           break
         }
@@ -1037,8 +1071,7 @@ async function runToolChatSessionInner(
           gate.shellPrecheckDeny.error,
           gate.shellPrecheckDeny.error
         )
-        toolResults.push(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }))
-        emitToolResultFact(toolUseId, { success: false, error: gate.shellPrecheckDeny.error })
+        await recordToolResult(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }), { success: false, error: gate.shellPrecheckDeny.error })
         if (toolErrorRepeat.noteFailure(toolName, gate.shellPrecheckDeny.error)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${gate.shellPrecheckDeny.error}`
           break
@@ -1073,8 +1106,7 @@ async function runToolChatSessionInner(
           const code = error instanceof RunShellPlanError ? error.code : 'SHELL_PLAN_INVALID'
           const message = error instanceof Error ? error.message : String(error)
           logToolLoopError({ requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj }, message, message)
-          toolResults.push(buildToolErrorResult(toolUseId, code, { requestId, sessionId }))
-          emitToolResultFact(toolUseId, { success: false, error: message })
+          await recordToolResult(buildToolErrorResult(toolUseId, code, { requestId, sessionId }), { success: false, error: message })
           if (toolErrorRepeat.noteFailure(toolName, code)) {
             abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${code}`
             break
@@ -1115,8 +1147,7 @@ async function runToolChatSessionInner(
           reason: gate.budgetPause.reason,
           actor: 'system'
         })
-        toolResults.push(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }))
-        emitToolResultFact(toolUseId, { success: false, error: pauseMsg })
+        await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg })
         abortRepeatedToolError = pauseMsg
         break
       }
@@ -1144,8 +1175,7 @@ async function runToolChatSessionInner(
             ? `script deny patterns=${gate.rawScriptAnalysis.patterns.join(',')}`
             : denyMsg
         )
-        toolResults.push(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }))
-        emitToolResultFact(toolUseId, { success: false, error: denyMsg })
+        await recordToolResult(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }), { success: false, error: denyMsg })
         if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
           break
@@ -1489,8 +1519,7 @@ async function runToolChatSessionInner(
           timeoutError,
           timeoutError
         )
-        toolResults.push(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }))
-        emitToolResultFact(toolUseId, { success: false, error: timeoutError })
+        await recordToolResult(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }), { success: false, error: timeoutError })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, timeoutError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${timeoutError}`
@@ -1587,8 +1616,7 @@ async function runToolChatSessionInner(
           rejectedError,
           rejectedError
         )
-        toolResults.push(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }))
-        emitToolResultFact(toolUseId, { success: false, error: rejectedError })
+        await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
@@ -1606,8 +1634,7 @@ async function runToolChatSessionInner(
             conflict,
             conflict
           )
-          toolResults.push(buildToolErrorResult(toolUseId, conflict, { requestId, sessionId }))
-          emitToolResultFact(toolUseId, { success: false, error: conflict })
+          await recordToolResult(buildToolErrorResult(toolUseId, conflict, { requestId, sessionId }), { success: false, error: conflict })
           if (toolErrorRepeat.noteFailure(toolName, conflict)) {
             abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${conflict}`
             break
@@ -1648,7 +1675,7 @@ async function runToolChatSessionInner(
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
       if (isToolRevoked(requestId, toolName)) {
-        toolResults.push(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }))
+        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
         continue
       }
       if (remoteContext) {
@@ -1820,12 +1847,13 @@ async function runToolChatSessionInner(
         execResult.dependencyError &&
         resolveDependencyRecoverySkill(execResult.dependencyError.errorCode)
 
+      let toolResultBlock: Anthropic.ToolResultBlockParam
       if (execResult.success) {
-        toolResults.push({
+        toolResultBlock = {
           type: 'tool_result',
           tool_use_id: toolUseId,
           content: payload
-        })
+        }
       } else if (recoverySkill && execResult.dependencyError) {
         if (!recoverySkillSystemSuffix && appDb) {
           const cur = getSession(appDb, sessionId)
@@ -1839,35 +1867,31 @@ async function runToolChatSessionInner(
             }
           }
         }
-        toolResults.push({
+        toolResultBlock = {
           type: 'tool_result',
           tool_use_id: toolUseId,
           content: compactToolResultContentForApi(
             formatDependencyRecoveryToolContent(execResult.dependencyError),
             { requestId, sessionId, toolUseId }
           )
-        })
+        }
         if (toolErrorRepeat.noteFailure(toolName, execResult.error ?? 'dependency')) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execResult.error ?? '依赖未就绪'}`
         }
       } else {
         const execError = execResult.error ?? '执行失败'
-        toolResults.push(buildToolErrorResult(toolUseId, execError, { requestId, sessionId }))
-        if (shouldStopToolRetry(toolName, execError, execResult.data, toolErrorRepeat.noteFailure(toolName, execError))) {
+        toolResultBlock = buildToolErrorResult(toolUseId, execError, { requestId, sessionId })
+        const repeatedFailure = toolErrorRepeat.noteFailure(toolName, execError)
+        if (shouldStopToolRetry(toolName, execError, execResult.data, repeatedFailure)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${execError}`
         }
       }
-      emitToolResultFact(toolUseId, {
+      await recordToolResult(toolResultBlock, {
         success: execResult.success,
         data: execResult.data,
         error: execResult.error,
         ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {}),
         ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
-      })
-      emitToolResultFact(toolUseId, {
-        success: execResult.success,
-        data: execResult.data,
-        error: execResult.error
       })
       if (execResult.success) {
         if (toolName === 'write_file' || toolName === 'edit_file') {
