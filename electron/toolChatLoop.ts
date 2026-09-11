@@ -655,10 +655,11 @@ async function runToolChatSessionInner(
       thinking,
       cacheControl: true
     })
-    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped }) } })
+    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped })
+    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
     await args.emitSessionEvent?.({
       type: 'request_context',
-      payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective })
+      payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot })
     })
 
     logAgentEvent('info', 'llm.request', {

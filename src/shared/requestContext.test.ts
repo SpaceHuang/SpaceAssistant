@@ -18,4 +18,10 @@ describe('request context payload', () => {
     expect(header.surfaceSnapshot.systemFingerprint).not.toBe(header.stablePrefixFingerprint)
     expect(buildRequestHeaderPayload({ requestId: 'r1', system: 'system', tools: [{ name: 'z' }], messages: [{ role: 'user', content: 'hello' }] }).surfaceSnapshot.fingerprint).toBe(header.surfaceSnapshot.fingerprint)
   })
+  it('records one budget object and an unanchored preflight context usage', () => {
+    const header = buildRequestHeaderPayload({ requestId: 'r1', system: 'sys', tools: [], messages: [{ role: 'user', content: 'hi' }] })
+    const payload = buildRequestContextPayload({ requestId: 'r1', provider: 'anthropic', model: 'm', contextWindow: 1000, maxTokensEffective: 100, surfaceSnapshot: header.surfaceSnapshot })
+    expect(payload.budget).toMatchObject({ totalInputBudget: 855, bodyBudget: 855 - header.surfaceSnapshot.systemTokens, inputBudget: 855 - header.surfaceSnapshot.systemTokens })
+    expect(payload.contextUsage).toMatchObject({ projectedTokens: null, surfaceTokens: header.surfaceSnapshot.surfaceTokens, hardFit: true })
+  })
 })

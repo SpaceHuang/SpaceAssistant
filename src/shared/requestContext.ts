@@ -10,6 +10,8 @@ export type RequestContextPayload = {
   outputReserveTokens: number
   outputAccounting: 'shared' | 'separate'
   schemaVersion: 1
+  budget: { totalInputBudget: number; bodyBudget: number; inputBudget: number; prefixTokens: number; requiredTokens: number; outputReserveTokens: number; safetyReserveTokens: number; triggerRatio: number; targetBodyRatio: number; estimatorVersion: string; serializationVersion: string }
+  contextUsage: { pressureTokens: number | null; projectedTokens: number | null; surfaceTokens: number; hardFit: boolean; bodyFit: boolean }
 }
 
 export type RequestHeaderPayload = {
@@ -44,9 +46,15 @@ export function buildRequestContextPayload(args: {
   contextWindow?: number
   maxTokensEffective: number
   outputAccounting?: 'shared' | 'separate'
+  surfaceSnapshot?: { surfaceTokens: number; systemTokens: number }
 }): RequestContextPayload {
   const outputAccounting = args.outputAccounting ?? 'shared'
   const contextWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0 ? args.contextWindow! : DEFAULT_MODEL_MAX_CONTEXT
+  const prefixTokens = Math.max(0, args.surfaceSnapshot?.systemTokens ?? 0)
+  const rawInputWindow = Math.max(0, contextWindow - (outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0))
+  const totalInputBudget = Math.max(0, Math.floor(rawInputWindow * 0.95))
+  const bodyBudget = Math.max(0, totalInputBudget - prefixTokens)
+  const surfaceTokens = args.surfaceSnapshot?.surfaceTokens ?? prefixTokens
   return {
     requestId: args.requestId,
     provider: args.provider,
@@ -55,6 +63,8 @@ export function buildRequestContextPayload(args: {
     maxTokensEffective: Math.max(0, args.maxTokensEffective),
     outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0,
     outputAccounting,
-    schemaVersion: 1
+    schemaVersion: 1,
+    budget: { totalInputBudget, bodyBudget, inputBudget: bodyBudget, prefixTokens, requiredTokens: 0, outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0, safetyReserveTokens: 0, triggerRatio: 0.9, targetBodyRatio: 0.8, estimatorVersion: 'default-v1', serializationVersion: 'anthropic-wire-v1' },
+    contextUsage: { pressureTokens: null, projectedTokens: null, surfaceTokens, hardFit: surfaceTokens <= totalInputBudget, bodyFit: Math.max(0, surfaceTokens - prefixTokens) <= bodyBudget }
   }
 }
