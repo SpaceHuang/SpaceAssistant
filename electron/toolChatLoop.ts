@@ -172,6 +172,7 @@ import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationReques
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { computeContextPressure } from '../src/shared/contextMeter'
+import { decideOverflowRecovery } from '../src/shared/overflowRecovery'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -622,6 +623,7 @@ async function runToolChatSessionInner(
   let lastValidUsage: ToolLoopUsage | undefined
   let lastRequestContext: ReturnType<typeof buildRequestContextPayload> | undefined
   let lastRequestHeader: ReturnType<typeof buildRequestHeaderPayload> | undefined
+  let overflowRetries = 0
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -850,6 +852,14 @@ async function runToolChatSessionInner(
     } catch (e) {
       if (e instanceof ChatCancelledError) throw e
       const error = e instanceof Error ? e.message : String(e)
+      const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
+      if (recovery.action === 'reset_and_retry_provider') {
+        overflowRetries = recovery.nextRetry
+        const lastUserIndex = [...messagesForApi].map((message) => message.role).lastIndexOf('user')
+        if (lastUserIndex >= 0) messagesForApi = [messagesForApi[lastUserIndex]!]
+        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
+        continue
+      }
       logAgentEvent('error', 'llm.error', {
         requestId,
         sessionId,
