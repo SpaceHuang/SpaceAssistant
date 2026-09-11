@@ -10,6 +10,7 @@ type Props = {
   stderr?: string
   exitCode?: number | null
   truncated?: boolean
+  artifactId?: string
   persistedOutputPath?: string
 }
 
@@ -20,6 +21,7 @@ export function ShellOutputView({
   stderr,
   exitCode,
   truncated,
+  artifactId,
   persistedOutputPath
 }: Props) {
   const preRef = useRef<HTMLPreElement>(null)
@@ -51,11 +53,11 @@ export function ShellOutputView({
       {out.trim() ? <pre className="shell-output">{out}</pre> : null}
       {out.trim() && errDisplay.trim() ? '\n' : null}
       {errDisplay.trim() ? <pre className="shell-output shell-output__stderr">{errDisplay}</pre> : null}
-      {truncated && persistedOutputPath ? (
+      {truncated && (artifactId || persistedOutputPath) ? (
         <button
           type="button"
           className="shell-output__truncated-hint"
-          onClick={() => void window.api.shellOpenOutputPath(persistedOutputPath)}
+          onClick={() => void window.api.shellOpenOutputPath(artifactId ?? persistedOutputPath!)}
         >
           输出已截断，打开完整日志 →
         </button>

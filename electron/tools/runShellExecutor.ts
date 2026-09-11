@@ -9,7 +9,7 @@ import { planShellExec, type ShellSpawnSpec } from '../shell/shellExecPlan'
 import type { ShellConfig } from '../../src/shared/domainTypes'
 import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
 import { buildShellEnv, decodeProcessOutput } from '../processOutputEncoding'
-import { sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
+import { sanitizeToolOutput, toToolUserError } from './toolUserErrors'
 import { normalizeTerminalOutput } from '../../src/shared/terminalOutputSanitize'
 import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
 import { shellTuiFallbackHintLines } from '../../src/shared/shellInteractiveTui'
@@ -38,6 +38,10 @@ export function appendRawTailBuffer(prev: Buffer, chunk: Buffer): Buffer {
 
 function shellProgressMessage(stdout: string, stderr: string): string {
   return normalizeTerminalOutput((stdout + stderr).slice(-PROGRESS_TAIL))
+}
+
+function stableFingerprint(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 export type { ShellSpawnSpec } from '../shell/shellExecPlan'
@@ -69,7 +73,6 @@ export const runShellExecutor: ToolExecutor = {
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const command = typeof input.command === 'string' ? input.command : ''
-    const description = typeof input.description === 'string' ? input.description : undefined
     let prepared: PreparedShellExecution
     try {
       prepared = await planRunShellExecution(input, ctx)
@@ -84,16 +87,15 @@ export const runShellExecutor: ToolExecutor = {
         requestId: ctx.requestId,
         sessionId: ctx.sessionId,
         toolUseId: ctx.toolUseId,
-        command,
-        ...(planError?.details.executable ? { executable: planError.details.executable } : {}),
-        shell: String(planError?.details.executable ?? ctx.shellConfig?.executable ?? profileForPlatform(process.platform).id),
-        error: message,
+        commandFingerprint: stableFingerprint(command),
+        shell: planError?.details.shellProfileId ?? profileForPlatform(process.platform).id,
+        error: sanitizeToolOutput(message, 'run_shell').text,
         caseId: SHELL_CASE_IDS.planInvalid
       })
       return {
         success: false,
         error: code,
-        data: { code, reason: message, ...planError?.details, ...(retry ? { retryCount: retry.count, retryExhausted: retry.tripped } : {}), caseId: code === 'SHELL_EXECUTABLE_UNAVAILABLE' ? SHELL_CASE_IDS.executableUnavailable : code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? SHELL_CASE_IDS.tuiRequiresTerminal : code === 'SHELL_DIALECT_MISMATCH' ? SHELL_CASE_IDS.dialectMismatch : SHELL_CASE_IDS.planInvalid, ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? { hints: shellTuiFallbackHintLines() } : {}) },
+        data: { code, reason: message, processResult: null, ...planError?.details, ...(retry ? { retryCount: retry.count, retryExhausted: retry.tripped } : {}), caseId: code === 'SHELL_EXECUTABLE_UNAVAILABLE' ? SHELL_CASE_IDS.executableUnavailable : code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? SHELL_CASE_IDS.tuiRequiresTerminal : code === 'SHELL_DIALECT_MISMATCH' ? SHELL_CASE_IDS.dialectMismatch : SHELL_CASE_IDS.planInvalid, ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? { hints: shellTuiFallbackHintLines() } : {}) },
         duration: Date.now() - started
       }
     }
@@ -106,9 +108,8 @@ export const runShellExecutor: ToolExecutor = {
       requestId: ctx.requestId,
       sessionId: ctx.sessionId,
       toolUseId: ctx.toolUseId,
-      command,
-      description,
-      cwd: prepared.cwd,
+      commandFingerprint: stableFingerprint(command),
+      cwdFingerprint: stableFingerprint(prepared.cwd),
       shell: prepared.spawnSpec.shellId,
       timeoutSec,
       ioMaxBytes: ioMax,
@@ -278,7 +279,7 @@ export async function executePreparedShellExecution(
     logShellAgentEvent('info', 'shell.exec.spawned', {
       ...baseLog,
       pid: proc.pid ?? null,
-      executable: spec.executable
+      shell: spec.shellId
     })
 
     const onDataOut = (b: Buffer) => {
@@ -335,16 +336,19 @@ export async function executePreparedShellExecution(
       logShellAgentEvent('error', 'shell.exec.error', {
         ...baseLog,
         pid: proc.pid ?? null,
-        spawnError: err.message,
+        spawnError: sanitizeToolOutput(err.message, 'run_shell').text,
         caseId: SHELL_CASE_IDS.spawnError,
         durationMs: Date.now() - started
       })
       void artifactWriter.close().catch(() => undefined).finally(() => {
         settle('transport_error', {
           success: false,
-          error: toToolUserError(err, { toolName: 'run_shell' }),
+          error: 'SHELL_SPAWN_ERROR',
+          userMessage: toToolUserError(err, { toolName: 'run_shell' }),
           data: {
             code: 'SHELL_SPAWN_ERROR',
+            status: 'spawn_failed',
+            processResult: null,
             caseId: SHELL_CASE_IDS.spawnError,
             convergenceCaseId: SHELL_CASE_IDS.promiseConvergence
           },
@@ -353,7 +357,7 @@ export async function executePreparedShellExecution(
       })
     })
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
       if (terminalHandled) return
       terminalHandled = true
       cleanupProcessResources()
@@ -399,7 +403,8 @@ export async function executePreparedShellExecution(
         const errTrunc = outputPipeline.stderr
         const truncated = outputPipeline.truncated
 
-        const exitCode = code ?? (interrupted ? null : 1)
+        const exitCode = code ?? (signal ? null : interrupted ? null : 1)
+        const externalSignal = signal ?? undefined
         const exitCodeHint = describeExitCode(typeof exitCode === 'number' ? exitCode : undefined)
         const durationMs = Date.now() - started
         const cancelled = ctx.signal.aborted || (interrupted && !timedOut)
@@ -410,26 +415,37 @@ export async function executePreparedShellExecution(
           ...baseLog,
           pid: proc.pid ?? null,
           exitCode,
+          signal: externalSignal,
           exitCodeHint,
           interrupted,
           timedOut,
           cancelled,
           truncated,
-          persistedOutputPath,
+          persistedOutput: Boolean(persistedOutputPath),
           outputArtifactBytes: artifact?.bytes ?? 0,
           outputArtifactSha256: artifact?.sha256,
-          outputPersistError: artifactOpenError?.message ?? artifactCloseError?.message,
+          outputPersistError: (artifactOpenError?.message ?? artifactCloseError?.message)
+            ? sanitizeToolOutput(artifactOpenError?.message ?? artifactCloseError?.message ?? '', 'run_shell').text
+            : undefined,
           stdoutBytes: stdoutBounded.snapshot().bytes,
           stderrBytes: stderrBounded.snapshot().bytes,
-          stdoutSummary: normalizeTerminalOutput(outTrunc.text).slice(-256),
-          stderrSummary: normalizeTerminalOutput(errTrunc.text).slice(-256),
+          stdoutSha256: stableFingerprint(outTrunc.text),
+          stderrSha256: stableFingerprint(errTrunc.text),
+          stdoutRedacted: sanitizeToolOutput(normalizeTerminalOutput(outTrunc.text), 'run_shell').redacted,
+          stderrRedacted: sanitizeToolOutput(normalizeTerminalOutput(errTrunc.text), 'run_shell').redacted,
           durationMs,
           success
         })
 
+        const stdoutSafe = sanitizeToolOutput(normalizeTerminalOutput(outTrunc.text), 'run_shell')
+        const stderrSafe = sanitizeToolOutput(normalizeTerminalOutput(errTrunc.text), 'run_shell')
         const data = {
-          stdout: sanitizeToolOutputText(normalizeTerminalOutput(outTrunc.text), 'run_shell'),
-          stderr: sanitizeToolOutputText(normalizeTerminalOutput(errTrunc.text), 'run_shell'),
+          stdout: stdoutSafe.text,
+          stderr: stderrSafe.text,
+          stdoutBytes: outSnapshot.bytes,
+          stderrBytes: errSnapshot.bytes,
+          stdoutRedaction: stdoutSafe.redacted ? { redacted: true, redactionReason: stdoutSafe.redactionReason, originalBytes: stdoutSafe.originalBytes, visibleBytes: stdoutSafe.visibleBytes } : undefined,
+          stderrRedaction: stderrSafe.redacted ? { redacted: true, redactionReason: stderrSafe.redactionReason, originalBytes: stderrSafe.originalBytes, visibleBytes: stderrSafe.visibleBytes } : undefined,
           exitCode,
           interrupted: interrupted || ctx.signal.aborted,
           truncated,
@@ -449,9 +465,12 @@ export async function executePreparedShellExecution(
           terminationErrorCode: terminationResult && !terminationResult.treeKillVerified ? 'TERMINATION_UNCONFIRMED' : undefined,
           terminationCaseId: terminationResult && !terminationResult.treeKillVerified ? SHELL_CASE_IDS.terminationUnconfirmed : undefined,
           outputLimitReached: outputLimited,
-          status: ctx.signal.aborted ? 'cancelled' : timedOut ? 'timed_out' : outputLimited ? 'output_limited' : code === 0 ? 'succeeded' : 'failed',
-          terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : outputLimited ? 'output_limit' : 'process_exit',
-          signal: terminationResult?.signal,
+          captureCaseId: (outSnapshot.bytes > 0 && stdoutSafe.text.length === 0) || (errSnapshot.bytes > 0 && stderrSafe.text.length === 0)
+            ? 'SHELL_OUTPUT_CAPTURE_LOST'
+            : undefined,
+          status: ctx.signal.aborted ? 'cancelled' : timedOut ? 'timed_out' : outputLimited ? 'output_limited' : externalSignal ? 'signalled' : code === 0 ? 'succeeded' : 'failed',
+          terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : outputLimited ? 'output_limit' : externalSignal ? 'external_signal' : 'process_exit',
+          signal: externalSignal ?? terminationResult?.signal,
           durationMs,
           shell: spec.shellId,
           exitCodeHint,
@@ -462,7 +481,8 @@ export async function executePreparedShellExecution(
         if (ctx.signal.aborted) {
           settle('user_cancel', {
             success: false,
-            error: '用户取消执行',
+            error: 'SHELL_CANCELLED',
+            userMessage: '用户取消执行',
             data,
             duration: Date.now() - started
           })
@@ -471,7 +491,8 @@ export async function executePreparedShellExecution(
         if (timedOut) {
           settle('timeout', {
             success: false,
-            error: `命令执行超时（${timeoutSec} 秒）`,
+            error: 'SHELL_TIMEOUT',
+            userMessage: `命令执行超时（${timeoutSec} 秒）`,
             data,
             duration: Date.now() - started
           })
@@ -486,12 +507,11 @@ export async function executePreparedShellExecution(
           })
           return
         }
-        if (code !== 0) {
+        if (code !== 0 || externalSignal) {
           settle('process_exit', {
             success: false,
-            error: toToolUserError(new Error(`命令执行失败（退出码: ${code}）\n${errTrunc.text}`), {
-              toolName: 'run_shell'
-            }),
+            error: 'SHELL_PROCESS_EXIT',
+            userMessage: toToolUserError(new Error(`命令执行失败（退出码: ${code ?? 'signal'}）`), { toolName: 'run_shell' }),
             data,
             duration: Date.now() - started
           })

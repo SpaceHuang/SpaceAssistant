@@ -14,6 +14,7 @@ export interface ShellResultData {
   exitCode?: number | null
   interrupted?: boolean
   truncated?: boolean
+  artifactId?: string
   persistedOutputPath?: string
   shell?: string
   exitCodeHint?: string
@@ -42,6 +43,7 @@ export function parseShellResultData(data: unknown): ShellResultData | undefined
     exitCode: typeof d.exitCode === 'number' || d.exitCode === null ? d.exitCode : undefined,
     interrupted: typeof d.interrupted === 'boolean' ? d.interrupted : undefined,
     truncated: typeof d.truncated === 'boolean' ? d.truncated : undefined,
+    artifactId: typeof d.artifactId === 'string' ? d.artifactId : undefined,
     persistedOutputPath: typeof d.persistedOutputPath === 'string' ? d.persistedOutputPath : undefined,
     shell: typeof d.shell === 'string' ? d.shell : undefined,
     exitCodeHint: typeof d.exitCodeHint === 'string' ? d.exitCodeHint : undefined,

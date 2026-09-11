@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   bindAgentLogErrorDeps,
+  buildProcessToolLogErrorFields,
   buildAgentLogErrorFields,
   errorDetailForLog,
   extractDevErrorDetail
@@ -23,6 +24,21 @@ describe('agent log error fields', () => {
     err.stack = 'Error: secret stack\n    at E:\\app\\node_modules\\x.js:1:1'
     const fields = buildAgentLogErrorFields(err, '用户可见错误')
     expect(fields).toEqual({ error: '用户可见错误' })
+  })
+
+  it('进程工具错误在开发态也不携带宿主 Error 详情', () => {
+    bindAgentLogErrorDeps(() => ({ isPackaged: false }))
+    const cause = new Error('/Users/Alice/private/token=raw-secret')
+    const err = new Error('spawn failed', { cause })
+    err.stack = `Error: spawn failed\n    at /usr/local/bin/python:1:2\n token=raw-secret`
+    const fields = buildProcessToolLogErrorFields(err, 'cwd:/Users/Alice/private project 失败')
+    expect(fields.error).toBe('TOOL_EXECUTION_FAILED')
+    expect(fields.userError).toContain('cwd:<path:redacted>')
+    expect(fields.userError).toContain('ambiguous_path')
+    expect(fields.userError).not.toContain('失败')
+    expect(JSON.stringify(fields)).not.toContain('/Users/Alice')
+    expect(JSON.stringify(fields)).not.toContain('raw-secret')
+    expect(JSON.stringify(fields)).not.toContain('stack')
   })
 
   it('dev mode logs full detail and userError', () => {

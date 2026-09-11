@@ -34,7 +34,7 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   enabled: true,
   confirmMode: 'diff',
   allowedTools: [],
-  deniedTools: ['run_shell'],
+  deniedTools: [],
   pythonPath: 'python',
   scriptTimeout: 300,
   fileCheckpointingEnabled: true,
@@ -245,7 +245,7 @@ export interface ShellConfig {
 }
 
 export const DEFAULT_SHELL_CONFIG: ShellConfig = {
-  enabled: false,
+  enabled: true,
   shellDefaultTimeoutSec: 300,
   maxInlineOutputBytes: 102400,
   outputMode: 'terminal'
@@ -511,6 +511,7 @@ export interface ToolCallResultPersisted {
   success: boolean
   data?: unknown
   error?: string
+  userMessage?: string
   dependencyRecovery?: BrowserDependencyToolError
   autoApprovedWrite?: AutoApprovedWriteMeta
 }

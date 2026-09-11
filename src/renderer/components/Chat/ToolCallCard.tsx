@@ -517,7 +517,7 @@ export function ToolCallCard({
 
           {showGenericFailureMessage ? (
             <span className="tool-row-detail__message">
-              {record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
+              {record.result?.userMessage ?? record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
             </span>
           ) : null}
 
@@ -529,6 +529,7 @@ export function ToolCallCard({
                 stderr={shellResultData.stderr}
                 exitCode={shellResultData.exitCode}
                 truncated={shellResultData.truncated}
+                artifactId={shellResultData.artifactId}
                 persistedOutputPath={shellResultData.persistedOutputPath}
                 expanded={expanded}
               />
@@ -542,6 +543,7 @@ export function ToolCallCard({
                 stderr={shellResultData.stderr}
                 exitCode={shellResultData.exitCode}
                 truncated={shellResultData.truncated}
+                artifactId={shellResultData.artifactId}
                 persistedOutputPath={shellResultData.persistedOutputPath}
               />
             </div>

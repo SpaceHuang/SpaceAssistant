@@ -122,7 +122,7 @@ describe('runShellExecutor', () => {
     expect(result.data?.exitCode).toBe(0)
     expect(result.data?.planDigest).toMatch(/^[0-9a-f]{64}$/)
     expect(result.data?.environmentFingerprint).toBeTruthy()
-    expect(logShellAgentEvent).toHaveBeenCalledWith('info', 'shell.exec.start', expect.objectContaining({ command: 'echo hello' }))
+    expect(logShellAgentEvent).toHaveBeenCalledWith('info', 'shell.exec.start', expect.objectContaining({ commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) }))
     expect(logShellAgentEvent).toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.any(Object))
     expect(logShellAgentEvent).toHaveBeenCalledWith(
       'info',
@@ -130,6 +130,32 @@ describe('runShellExecutor', () => {
       expect.objectContaining({ success: true, exitCode: 0 })
     )
     await expect(fs.stat(path.join(userDataDir, 'shell-output'))).rejects.toThrow()
+  }, 20_000)
+
+  it('保留包含 node_modules 的成功 stdout，不伪造成失败', async () => {
+    const result = await runShellExecutor.execute({ command: "printf 'node_modules dist-electron\\n'" }, baseCtx(workDir, userDataDir))
+    expect(result).toMatchObject({ success: true, data: { exitCode: 0, status: 'succeeded' } })
+    expect(String(result.data?.stdout)).toContain('node_modules')
+    expect(result.error).toBeUndefined()
+  }, 20_000)
+
+  it('失败时保留结构化 stderr 与稳定错误码', async () => {
+    const result = await runShellExecutor.execute({ command: "printf 'Traceback: /tmp/x.py:3\\nValueError: bad\\n' >&2; exit 1" }, baseCtx(workDir, userDataDir))
+    expect(result).toMatchObject({ success: false, error: 'SHELL_PROCESS_EXIT', data: { exitCode: 1, status: 'failed' } })
+    expect(String(result.data?.stderr)).toContain('ValueError: bad')
+    expect(String(result.data?.stderr)).toContain('<path:redacted>')
+  }, 20_000)
+
+  it('外部 signal 终止不降级为普通 exit code 失败', async () => {
+    if (process.platform === 'win32') return
+    const result = await runShellExecutor.execute({ command: 'kill -TERM $$' }, baseCtx(workDir, userDataDir))
+    expect(result).toMatchObject({ success: false, error: 'SHELL_PROCESS_EXIT', data: { status: 'signalled', exitCode: null, terminationReason: 'external_signal', signal: 'SIGTERM' } })
+  }, 20_000)
+
+  it('spawn 失败返回稳定错误码与无进程结果', async () => {
+    const ctx = { ...baseCtx(workDir, userDataDir), shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, executable: path.join(workDir, 'missing-shell') } }
+    const result = await runShellExecutor.execute({ command: 'echo never' }, ctx)
+    expect(result).toMatchObject({ success: false, error: 'SHELL_EXECUTABLE_UNAVAILABLE', data: { processResult: null } })
   }, 20_000)
 
   it('正常结束时成对移除 AbortSignal 监听器', async () => {
@@ -159,8 +185,35 @@ describe('runShellExecutor', () => {
     expect(fields.stdout).toBeUndefined()
     expect(fields.stderr).toBeUndefined()
     expect(fields.stdoutBytes).toBe(secret.length)
-    expect(String(fields.stdoutSummary)).toContain('xxxxxxxx')
-    expect(String(fields.stdoutSummary)).not.toBe(secret)
+    expect(fields.stdoutSummary).toBeUndefined()
+    expect(fields.stderrSummary).toBeUndefined()
+    expect(String(fields.stdoutSha256)).toMatch(/^[0-9a-f]{64}$/)
+  }, 20_000)
+
+  it('生命周期日志不记录原始命令、工作目录或敏感输出', async () => {
+    const command = "printf 'API_KEY=secret-token /Users/alice/private.txt Bearer abc.def'"
+    await runShellExecutor.execute({ command, description: '/Users/alice/private description' }, baseCtx(workDir, userDataDir))
+    for (const [, event, fields] of vi.mocked(logShellAgentEvent).mock.calls) {
+      if (!event.startsWith('shell.exec.')) continue
+      const serialized = JSON.stringify(fields)
+      expect(serialized).not.toContain(command)
+      expect(serialized).not.toContain(workDir)
+      expect(serialized).not.toContain('secret-token')
+      expect(serialized).not.toContain('abc.def')
+      expect(serialized).not.toContain('/Users/alice/private.txt')
+    }
+  }, 20_000)
+
+  it('生命周期日志不记录自定义 shell 可执行文件绝对路径或裸秘密', async () => {
+    const executable = path.join(workDir, 'private-shell')
+    const ctx = { ...baseCtx(workDir, userDataDir), shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, executable } }
+    await runShellExecutor.execute({ command: "printf 'hunter2'" }, ctx)
+    for (const [, event, fields] of vi.mocked(logShellAgentEvent).mock.calls) {
+      if (!event.startsWith('shell.exec.')) continue
+      const serialized = JSON.stringify(fields)
+      expect(serialized).not.toContain(executable)
+      expect(serialized).not.toContain('hunter2')
+    }
   }, 20_000)
 
   it('waits for long command to finish in foreground', async () => {
@@ -181,8 +234,8 @@ describe('runShellExecutor', () => {
       ctx
     )
     expect(result.success).toBe(false)
-    expect(result.error).toMatch(/命令执行超时（1 秒）/)
-    expect(result.error).not.toBe('用户取消执行')
+    expect(result.error).toBe('SHELL_TIMEOUT')
+    expect(result.userMessage).toMatch(/命令执行超时（1 秒）/)
     expect(result.data?.interrupted).toBe(true)
     expect(result.data?.terminationSignal).toBe(process.platform === 'win32' ? 'taskkill' : 'SIGTERM')
     expect(result.data?.treeKillVerified).toBe(true)
@@ -198,7 +251,8 @@ describe('runShellExecutor', () => {
       command: `sleep 30 & echo $! > '${pidFile}'; wait`,
       timeout: 1
     }, baseCtx(workDir, userDataDir))
-    expect(result.error).toMatch(/命令执行超时/)
+    expect(result.error).toBe('SHELL_TIMEOUT')
+    expect(result.userMessage).toMatch(/命令执行超时/)
     const childPid = Number((await fs.readFile(pidFile, 'utf8')).trim())
     expect(childPid).toBeGreaterThan(0)
     expect(() => process.kill(childPid, 0)).toThrow()
@@ -219,7 +273,8 @@ describe('runShellExecutor', () => {
     controller.abort()
     const result = await pending
     expect(result.success).toBe(false)
-    expect(result.error).toBe('用户取消执行')
+    expect(result.error).toBe('SHELL_CANCELLED')
+    expect(result.userMessage).toBe('用户取消执行')
     expect(addEventListener).toHaveBeenCalledTimes(1)
     expect(removeEventListener).toHaveBeenCalledTimes(1)
   }, 20_000)
@@ -239,7 +294,7 @@ describe('runShellExecutor', () => {
     expect(logShellAgentEvent).toHaveBeenCalledWith(
       'error',
       'shell.exec.plan_failed',
-      expect.objectContaining({ executable: ctx.shellConfig.executable })
+      expect.objectContaining({ commandFingerprint: expect.stringMatching(/^[0-9a-f]{64}$/) })
     )
     expect(logShellAgentEvent).not.toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.anything())
     expect(result.duration).toBeGreaterThanOrEqual(0)

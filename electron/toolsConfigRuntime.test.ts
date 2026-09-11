@@ -1,8 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { filterBuiltinToolsForApi } from './toolsConfigRuntime'
 import { MACOS_BASH_PROFILE } from './shell/shellProfiles'
+import { DEFAULT_SHELL_CONFIG, DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 describe('toolsConfigRuntime shell profile snapshot', () => {
+  it('桌面默认配置暴露 run_shell', () => {
+    const tools = filterBuiltinToolsForApi(
+      DEFAULT_TOOLS_CONFIG,
+      undefined,
+      undefined,
+      undefined,
+      DEFAULT_SHELL_CONFIG
+    )
+
+    expect(tools.some((tool) => tool.name === 'run_shell')).toBe(true)
+  })
+
   it('uses the request snapshot to generate run_shell description', () => {
     const tools = filterBuiltinToolsForApi(
       { enabled: true, deniedTools: [], allowedTools: [] } as never,

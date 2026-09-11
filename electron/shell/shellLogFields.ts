@@ -1,69 +1,86 @@
-import { sanitizeForLog } from '../logSanitize'
+import { createHash } from 'crypto'
+import type { AgentLogEventName } from '../agentLogger/types'
 
-export const SHELL_COMMAND_LOG_MAX = 2048
-export const SHELL_OUTPUT_PREVIEW_MAX = 4096
-export const SHELL_DESCRIPTION_LOG_MAX = 500
+const FINGERPRINT_KEYS = new Set(['command', 'code', 'input'])
+const DROP_KEYS = new Set([
+  'description',
+  'cwd',
+  'executable',
+  'path',
+  'persistedOutputPath',
+  'stdoutPreview',
+  'stderrPreview',
+  'summary'
+])
+const ALLOWED_KEYS = new Set([
+  'requestId', 'sessionId', 'toolUseId', 'loopRound',
+  'invocationFingerprint', 'commandFingerprint', 'cwdFingerprint', 'environmentFingerprint', 'planDigest',
+  'shell', 'shellId', 'pid', 'timeoutSec', 'ioMaxBytes', 'durationMs',
+  'exitCode', 'signal', 'exitCodeHint', 'interrupted', 'timedOut', 'cancelled', 'truncated', 'success',
+  'persistedOutput', 'artifactAvailable', 'outputArtifactBytes', 'outputArtifactSha256',
+  'stdoutBytes', 'stderrBytes', 'stdoutSha256', 'stderrSha256', 'stdoutRedacted', 'stderrRedacted',
+  'outputPersistErrorCode', 'terminationErrorCode', 'terminationSignal', 'treeKillVerified',
+  'outputLimitReached', 'captureCaseId', 'progressCaseId', 'terminationCaseId',
+  'caseId', 'convergenceCaseId', 'validatorId', 'denyType', 'userAction', 'violationCodes',
+  'requiresRiskAck', 'outsideWorkDirRisk', 'warningsCount', 'scannedPathsCount', 'canTrust', 'skipConfirm',
+  'outcome', 'retryCount', 'retryExhausted', 'status', 'terminationReason', 'redacted',
+  'errorCode', 'reasonCode', 'errorRedacted', 'reasonRedacted'
+])
 
-/** 命令行内联敏感参数脱敏（环境变量名、CLI flag 等） */
-export function redactShellCommandForLog(command: string): unknown {
-  let s = command
-  s = s.replace(/(--?(?:secret|token|password|api[_-]?key|passwd|auth))\s+\S+/gi, '$1 ***')
-  s = s.replace(/\b([A-Za-z_][A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|KEY|PASSWD))\s*=\s*\S+/gi, '$1=***')
-  s = s.replace(/(-u|--user)\s+\S+/gi, '$1 ***')
-  return sanitizeForLog(s, { maxStringLength: SHELL_COMMAND_LOG_MAX })
+function fingerprint(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
-export function shellIoPreviewForLog(text: string, prefix: 'stdout' | 'stderr'): Record<string, unknown> {
-  const sanitized = sanitizeForLog(text, { maxStringLength: SHELL_OUTPUT_PREVIEW_MAX })
-  if (typeof sanitized === 'string') {
-    return {
-      [`${prefix}Len`]: text.length,
-      [`${prefix}Preview`]: sanitized
+function safeFingerprint(value: unknown): string {
+  try {
+    return fingerprint(typeof value === 'string' ? value : JSON.stringify(value ?? null))
+  } catch {
+    return fingerprint('[unserializable]')
+  }
+}
+
+export function shellInvocationFingerprint(command: string): string {
+  return fingerprint(command)
+}
+
+function isStableCode(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_.-]{2,127}$/.test(value)
+}
+
+function addOutputMetadata(out: Record<string, unknown>, key: 'stdout' | 'stderr', value: unknown): void {
+  if (typeof value !== 'string') return
+  out[`${key}Bytes`] = Buffer.byteLength(value, 'utf8')
+  out[`${key}Sha256`] = fingerprint(value)
+  out[`${key}Redacted`] = true
+}
+
+/** Shell/Script 共用的 Agent 日志 allowlist；未知字段默认丢弃。 */
+export function projectShellAgentLogFields(
+  _event: AgentLogEventName,
+  fields: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === 'stdout' || key === 'stderr') {
+      addOutputMetadata(out, key, value)
+      continue
     }
+    if (FINGERPRINT_KEYS.has(key)) {
+      out[key === 'command' ? 'invocationFingerprint' : `${key}Fingerprint`] = safeFingerprint(value)
+      continue
+    }
+    if (key === 'error' || key === 'spawnError') {
+      if (isStableCode(value)) out.errorCode = value
+      else out.errorRedacted = true
+      continue
+    }
+    if (key === 'reason' || key === 'securityWarning') {
+      if (isStableCode(value)) out.reasonCode = value
+      else out.reasonRedacted = true
+      continue
+    }
+    if (DROP_KEYS.has(key) || !ALLOWED_KEYS.has(key)) continue
+    out[key] = value
   }
-  const obj = sanitized as { _value: string; _truncated?: boolean; _originalLength?: number }
-  return {
-    [`${prefix}Len`]: text.length,
-    [`${prefix}Preview`]: obj._value,
-    ...(obj._truncated
-      ? {
-          [`${prefix}PreviewTruncated`]: true,
-          [`${prefix}OriginalLen`]: obj._originalLength ?? text.length
-        }
-      : {})
-  }
-}
-
-/** 将 run_shell 日志字段转为可安全写入 Agent 日志的形态 */
-export function preprocessShellLogFields(fields: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...fields }
-
-  if (typeof out.command === 'string') {
-    out.commandRedacted = redactShellCommandForLog(out.command)
-    delete out.command
-  }
-
-  if (typeof out.description === 'string') {
-    out.description = sanitizeForLog(out.description, { maxStringLength: SHELL_DESCRIPTION_LOG_MAX })
-  }
-
-  if (typeof out.stdout === 'string') {
-    Object.assign(out, shellIoPreviewForLog(out.stdout, 'stdout'))
-    delete out.stdout
-  }
-
-  if (typeof out.stderr === 'string') {
-    Object.assign(out, shellIoPreviewForLog(out.stderr, 'stderr'))
-    delete out.stderr
-  }
-
-  if (typeof out.error === 'string') {
-    out.error = sanitizeForLog(out.error, { maxStringLength: SHELL_OUTPUT_PREVIEW_MAX })
-  }
-
-  if (typeof out.spawnError === 'string') {
-    out.spawnError = sanitizeForLog(out.spawnError, { maxStringLength: SHELL_OUTPUT_PREVIEW_MAX })
-  }
-
   return out
 }

@@ -57,6 +57,12 @@ describe('ShellOutputView', () => {
     expect(openOutputPath).toHaveBeenCalledWith('/tmp/shell-output/tool-1.log')
   }, 15_000)
 
+  it('opens a truncated log by opaque artifact id', () => {
+    render(<ShellOutputView stdout="partial" truncated artifactId="artifact-abc123" />)
+    fireEvent.click(screen.getByRole('button', { name: /打开完整日志/ }))
+    expect(openOutputPath).toHaveBeenCalledWith('artifact-abc123')
+  })
+
   it('returns null when completed mode has no output', () => {
     const { container } = render(<ShellOutputView stdout="" stderr="" exitCode={0} />)
     expect(container.firstChild).toBeNull()

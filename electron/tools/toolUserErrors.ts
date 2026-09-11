@@ -4,6 +4,7 @@ import {
   type BrowserUserErrorKind
 } from '../browser/browserUserErrors'
 import { containsInternalDetails, isIntentionalUserHint } from './toolErrorCommon'
+import { sanitizeAgentText, type SanitizedAgentText } from '../../src/shared/agentSafeText'
 
 export type ToolUserErrorOptions = {
   toolName?: string
@@ -105,13 +106,33 @@ export function browserKindFromBrowserAction(action: string | undefined): Browse
 
 /** 工具返回 data 中的长文本（如 stderr）脱敏 */
 export function sanitizeToolOutputText(text: string, toolName?: string): string {
-  if (!text || !containsInternalDetails(text)) return text
-  if (toolName === 'run_script') {
-    const lines = text.split(/\r?\n/).filter((l) => !containsInternalDetails(l))
-    if (lines.length > 0 && lines.join('\n').length <= 2000) {
-      return lines.join('\n')
-    }
-    return '[脚本输出含内部路径，已省略]'
+  return sanitizeToolOutput(text, toolName).text
+}
+
+export interface SanitizedToolOutput {
+  text: string
+  redacted: boolean
+  redactionReason?: SanitizedAgentText['redactionReason']
+  originalBytes: number
+  visibleBytes: number
+}
+
+/** 面向 Agent 的输出脱敏：保留错误类型、行号和上下文，不把普通目录名当作错误。 */
+export function sanitizeToolOutput(text: string, _toolName?: string): SanitizedToolOutput {
+  const originalBytes = Buffer.byteLength(text, 'utf8')
+  if (!text) return { text, redacted: false, originalBytes, visibleBytes: 0 }
+  const agentSafeText = sanitizeAgentText(text)
+  const redactedText = agentSafeText.text
+    .replace(/((?:API[_-]?KEY|TOKEN|SECRET|COOKIE|PASSWORD)\s*[=:]\s*)([^\s,;]+)/gi, '$1<secret:redacted>')
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1<secret:redacted>')
+    .replace(/-----BEGIN [A-Z ]+-----[\s\S]*?-----END [A-Z ]+-----/g, '<secret:redacted>')
+    .replace(/ERR_REQUIRE_ESM/g, '<module-error>')
+  const redacted = redactedText !== text
+  return {
+    text: redactedText,
+    redacted,
+    ...(redacted && agentSafeText.redactionReason ? { redactionReason: agentSafeText.redactionReason } : {}),
+    originalBytes,
+    visibleBytes: Buffer.byteLength(redactedText, 'utf8')
   }
-  return sanitizeToolErrorString(text.slice(0, 500), toolName)
 }
