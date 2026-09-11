@@ -383,7 +383,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             if (!eventWriter) return
             await appendCompactionTransaction(eventWriter, { ...start, turnId }, { ...summary, turnId })
           }
-          ,onTurnBoundary: async ({ requestId: boundaryRequestId, system, tools, surfaceSnapshot, messages, budget, contextUsage }) => {
+          ,onTurnBoundary: async ({ requestId: boundaryRequestId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
             const projection = contextUsage && {
               ...contextUsage,
               anchorStatus: contextUsage.projectedTokens == null ? 'missing' as const : 'matched' as const,
@@ -405,7 +405,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             }))
             const outputMessages = [checkpointMessage, ...messages.filter((message, index) => !shadowed.has(surfaceItemIdentity(message, index)))]
             const shadowedRanges = record.shadowedRanges
-            const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: outputMessages })
+            const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: outputMessages, requiredSurfaceSet, toolExecutionCheckpoint })
             const pairs = extractToolPairIds(outputMessages)
             const preflight = validateSurfaceForSend({
               ids: outputMessages.map((message, index) => surfaceItemIdentity(message, index)),
@@ -421,7 +421,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             if (!preflight.ok) return
             const candidate = { kind: 'summary', checkpointMessage, shadowedRanges }
             const compactionId = `${boundaryRequestId}:boundary`
-            await appendCompactionTransaction(eventWriter, { compactionId, windowId: boundaryRequestId, turnId, inputSurfaceFingerprint: surfaceSnapshot.fingerprint, targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId: boundaryRequestId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges, candidate, requiredSurfaceSet: [authoritative.currentUserMessageId] })
+            await appendCompactionTransaction(eventWriter, { compactionId, windowId: boundaryRequestId, turnId, inputSurfaceFingerprint: surfaceSnapshot.fingerprint, targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId: boundaryRequestId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint, shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {
