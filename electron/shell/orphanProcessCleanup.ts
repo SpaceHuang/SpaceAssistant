@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { runCommandWithTimeout } from '../spawnUtil'
 import { WINDOWS_POWERSHELL_PRELUDE } from './shellProfiles'
 
 export type OrphanProcessIdentity = { pid: number; processGroupId?: number; ownerToken: string }
@@ -6,55 +6,6 @@ export type OrphanCleanupResult = 'cleaned' | 'not-owned' | 'already-exited' | '
 
 const QUERY_TIMEOUT_MS = 5_000
 const TERMINATION_TIMEOUT_MS = 5_000
-
-export type CommandRun = {
-  /** 子进程是否在超时前自行退出 */
-  completed: boolean
-  code: number | null
-  stdout: string
-}
-
-/**
- * 以有限超时运行外部命令，超时按 `completed: false` 收敛。
- *
- * 本模块在 `main.ts` 的启动路径上被 await（早于建窗），因此这里不能用无超时的
- * `spawnSync`：查询工具一旦挂起就会永久阻塞主进程事件循环，用户表现为双击无反应。
- */
-export function runCommandWithTimeout(
-  executable: string,
-  args: readonly string[],
-  timeoutMs: number
-): Promise<CommandRun> {
-  return new Promise((resolve) => {
-    let settled = false
-    let timer: NodeJS.Timeout
-    const finish = (result: CommandRun): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve(result)
-    }
-    let child: ChildProcess
-    try {
-      child = spawn(executable, [...args], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
-    } catch {
-      resolve({ completed: false, code: null, stdout: '' })
-      return
-    }
-    timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* 进程可能已退出 */
-      }
-      finish({ completed: false, code: null, stdout: '' })
-    }, timeoutMs)
-    const chunks: Buffer[] = []
-    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
-    child.once('error', () => finish({ completed: false, code: null, stdout: '' }))
-    child.once('close', (code) => finish({ completed: true, code, stdout: Buffer.concat(chunks).toString('utf8') }))
-  })
-}
 
 function normalizeCommandLine(stdout: string): string | null {
   const text = stdout.trim()

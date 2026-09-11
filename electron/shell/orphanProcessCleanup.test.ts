@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
-import { cleanupOrphanProcess, runCommandWithTimeout } from './orphanProcessCleanup'
+import { cleanupOrphanProcess } from './orphanProcessCleanup'
+import { runCommandWithTimeout } from '../spawnUtil'
 
 describe('cleanupOrphanProcess', () => {
   const nodeExecutable = process.env.npm_node_execpath ?? process.execPath
