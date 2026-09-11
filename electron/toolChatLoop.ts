@@ -652,7 +652,8 @@ async function runToolChatSessionInner(
       system: systemPrompt,
       messages: messagesStripped as Anthropic.MessageParam[],
       tools: tools as Anthropic.Tool[],
-      thinking
+      thinking,
+      cacheControl: true
     })
     await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped }) } })
     await args.emitSessionEvent?.({
@@ -681,9 +682,7 @@ async function runToolChatSessionInner(
 
     try {
       const stream = client.messages.stream({
-        ...toolLoopStreamParams,
-        messages: messagesStripped as Anthropic.MessageParam[],
-        tools: tools as Anthropic.Tool[]
+        ...toolLoopStreamParams
       } as Parameters<typeof client.messages.stream>[0])
 
       const contentBlockTypes = new Map<number, string>()

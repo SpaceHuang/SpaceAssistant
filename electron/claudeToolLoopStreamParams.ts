@@ -11,17 +11,25 @@ export function buildClaudeToolLoopStreamParams(args: {
   messages: unknown[]
   tools: unknown[]
   thinking: ToolLoopThinkingConfig
+  cacheControl?: boolean
 }): Record<string, unknown> {
   const tool_choice = { type: 'auto' as const }
   const thinking = args.thinking
   const hasSystem = typeof args.system === 'string' && args.system.trim().length > 0
+  const cacheControl = { type: 'ephemeral' as const }
+  const messages = args.cacheControl && args.messages.length > 0
+    ? args.messages.map((message, index) => index === args.messages.length - 1 && typeof message === 'object' && message !== null && typeof (message as { content?: unknown }).content === 'string'
+      ? { ...(message as Record<string, unknown>), content: [{ type: 'text', text: (message as { content: string }).content, cache_control: cacheControl }] }
+      : message)
+    : args.messages
+  const system = args.cacheControl && hasSystem ? [{ type: 'text', text: args.system!.trim(), cache_control: cacheControl }] : args.system
 
   if (hasSystem) {
     return {
       model: args.model,
       max_tokens: args.max_tokens,
-      system: args.system,
-      messages: args.messages,
+      system,
+      messages,
       tools: args.tools,
       tool_choice,
       thinking
@@ -31,7 +39,7 @@ export function buildClaudeToolLoopStreamParams(args: {
   return {
     model: args.model,
     max_tokens: args.max_tokens,
-    messages: args.messages,
+    messages,
     tools: args.tools,
     tool_choice,
     thinking

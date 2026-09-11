@@ -6,6 +6,11 @@ import {
 } from './claudeToolLoopStreamParams'
 
 describe('buildClaudeToolLoopStreamParams', () => {
+  it('adds cache breakpoints to system and deepest stable message when enabled', () => {
+    const p = buildClaudeToolLoopStreamParams({ model: 'm', max_tokens: 10, system: 'sys', messages: [{ role: 'user', content: 'hello' }], tools: [], thinking: { type: 'disabled' }, cacheControl: true })
+    expect(p.system).toEqual([{ type: 'text', text: 'sys', cache_control: { type: 'ephemeral' } }])
+    expect(p.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'hello', cache_control: { type: 'ephemeral' } }] }])
+  })
   const messages = [{ role: 'user', content: 'hi' }]
   const tools = [{ name: 't', description: 'd', input_schema: { type: 'object', properties: {} } }]
 
