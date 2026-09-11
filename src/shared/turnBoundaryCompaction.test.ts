@@ -16,4 +16,14 @@ describe('turn boundary surface compaction', () => {
     expect(result.facts.map((item) => item.id)).toEqual(['old', 'current', 'tail'])
     expect(result.record?.shadowedRanges).toEqual([{ start: 'old', end: 'old' }])
   })
+
+  it('uses reset as the first action after three committed summaries', () => {
+    const result = planTurnBoundarySurfaceCompaction({
+      projection: { surfaceTokens: 1000, bodyTokens: 1000, requiredTokens: 100, totalInputBudget: 1200, bodyBudget: 1000, targetBodyRatio: .8 },
+      items: [{ id: 'current', tokens: 100, required: true }, { id: 'old-1', tokens: 300, required: false }, { id: 'old-2', tokens: 300, required: false }, { id: 'tail', tokens: 300, required: false }],
+      shouldCompact: true, summaryCount: 3, checkpointId: 'checkpoint-reset', checkpointTokens: 20
+    })
+    expect(result.actions[0]?.action).toBe('reset')
+    expect(result.items.map((item) => item.id)).toEqual(['checkpoint-reset', 'current', 'tail'])
+  })
 })
