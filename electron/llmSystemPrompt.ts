@@ -4,7 +4,7 @@ import { detectLocaleFromSystem, isAppLocale, type AppLocale } from '../src/shar
 import { readAppLocale } from './appIpc'
 import type { AppDatabase } from './database'
 import { buildSystemPrompt } from './projectMemory'
-import { renderPrompt, type PromptSection } from '../src/shared/promptAssembly'
+import { buildPromptAssembly, renderPrompt, type PromptSection } from '../src/shared/promptAssembly'
 import { buildSkillCatalogSection } from '../src/shared/skillPrompt'
 import type { SkillDefinition } from '../src/shared/domainTypes'
 
@@ -84,5 +84,5 @@ export function buildFinalSystemPrompt(args: {
     buildUiLocaleSection(args.locale),
     ...(args.skillCatalog?.length ? [buildSkillCatalogSection(args.skillCatalog, args.contextWindow ?? 200_000)] : [])
   ]
-  return renderPrompt({ sections, contexts: [], tools: [], variables: {} }) || undefined
+  return renderPrompt(buildPromptAssembly({ sections })) || undefined
 }
