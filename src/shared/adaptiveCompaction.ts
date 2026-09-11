@@ -54,6 +54,23 @@ export function planAdaptiveCompaction(args: {
   })
 }
 
+/** 工具循环安全边界的统一规划入口；此阶段只允许执行精简规则。 */
+export function planToolLoopCompaction(args: {
+  projection: CompactionProjection
+  shouldCompact: boolean
+  maxSteps?: number
+  prune: (projection: CompactionProjection) => CompactionActionResult
+}): CompactionPlanResult {
+  if (!args.shouldCompact) return { status: 'fits_without_headroom', projection: args.projection, actions: [] }
+  return planAdaptiveCompaction({
+    projection: args.projection,
+    phase: 'tool_loop',
+    reason: 'should_compact',
+    actions: { prune: args.prune, summarize: () => ({ projection: args.projection, status: 'no-op' }), reset: () => ({ projection: args.projection, status: 'no-op' }) },
+    maxSteps: args.maxSteps ?? 1
+  })
+}
+
 export type PrunableSurfaceItem = { id: string; tokens: number; cacheBoundary: boolean }
 export type PruneResult = { status: 'applied' | 'no-op'; items: PrunableSurfaceItem[]; projection: CompactionProjection }
 
