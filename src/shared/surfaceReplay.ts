@@ -31,9 +31,17 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
     if (windowId && committedWindowId !== windowId) continue
     const expectedInput = committed.start.payload.inputSurfaceFingerprint
-    if (fingerprint && typeof expectedInput === 'string' && fingerprint(currentSurface) !== expectedInput) continue
     const ranges = committed.summary.payload.shadowedRanges
     if (!Array.isArray(ranges)) continue
+    const persistedBoundary = committed.start.payload.surfaceBoundaryId
+    const boundaryEnd = typeof persistedBoundary === 'string' ? persistedBoundary : ranges.reduce<string | undefined>((last, range) => {
+      if (!range || typeof range !== 'object') return last
+      return typeof (range as { end?: unknown }).end === 'string' ? (range as { end: string }).end : last
+    }, undefined)
+    const boundaryIndex = boundaryEnd ? currentSurface.findIndex((item) => item.id === boundaryEnd) : -1
+    const inputSurface = boundaryIndex >= 0 ? currentSurface.slice(0, boundaryIndex + 1) : currentSurface
+    const historicalIds = new Set(inputSurface.map((item) => item.id))
+    if (fingerprint && typeof expectedInput === 'string' && fingerprint(inputSurface) !== expectedInput) continue
     const shadowedIds = new Set<string>()
     let insertionIndex = -1
     for (const range of ranges) {
@@ -52,10 +60,17 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     const checkpointMessage = candidate && typeof candidate === 'object' ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
     if (checkpointMessage && typeof checkpointMessage === 'object' && typeof (checkpointMessage as { id?: unknown }).id === 'string') currentSurface.splice(Math.min(insertionIndex, currentSurface.length), 0, checkpointMessage as T)
     const expectedOutput = committed.summary.payload.outputSurfaceFingerprint ?? committed.end.payload.outputSurfaceFingerprint
-    if (fingerprint && typeof expectedOutput === 'string' && fingerprint(currentSurface) !== expectedOutput) {
+    const outputSurface = boundaryIndex >= 0 ? currentSurface.filter((item) => historicalIds.has(item.id) || item.id === checkpointMessageId(committed)) : currentSurface
+    if (fingerprint && typeof expectedOutput === 'string' && fingerprint(outputSurface) !== expectedOutput) {
       currentSurface = [...items]
       break
     }
   }
   return currentSurface
+}
+
+function checkpointMessageId(committed: CompactionReplay['committed'][number]): string | undefined {
+  const candidate = committed.summary.payload.candidate
+  const checkpoint = candidate && typeof candidate === 'object' ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
+  return checkpoint && typeof checkpoint === 'object' && typeof (checkpoint as { id?: unknown }).id === 'string' ? (checkpoint as { id: string }).id : undefined
 }

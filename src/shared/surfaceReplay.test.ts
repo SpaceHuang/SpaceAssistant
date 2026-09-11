@@ -52,4 +52,19 @@ describe('surface replay', () => {
     ]
     expect(applyCommittedSurfaceShadow([{ id: 'old-1' }, { id: 'old-2' }, { id: 'new-1' }, { id: 'tail' }], foldCompactionEvents(events), [], 'w')).toEqual([{ id: 'checkpoint-2', role: 'user', content: 'summary 2' }, { id: 'tail' }])
   })
+
+  it('validates the historical boundary while allowing a later turn to append messages', () => {
+    const candidate = { checkpointMessage: { id: 'checkpoint-1', role: 'user', content: 'summary' }, shadowedRanges: [{ start: 'old-1', end: 'old-2' }] }
+    const replay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: { compactionId: 'c', windowId: 'w', inputSurfaceFingerprint: 'old-1|old-2|tail', surfaceBoundaryId: 'tail' } },
+      { seq: 2, type: 'compaction_summary', payload: { compactionId: 'c', windowId: 'w', candidate, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: 'checkpoint-1|tail' , shadowedRanges: candidate.shadowedRanges } },
+      { seq: 3, type: 'compaction_end', payload: { compactionId: 'c', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'old-1|old-2|tail', outputSurfaceFingerprint: 'checkpoint-1|tail', summaryHash: computeCompactionSummaryHash(candidate) } }
+    ])
+    const fingerprint = (items: readonly { id: string }[]) => items.map((item) => item.id).join('|')
+    expect(applyCommittedSurfaceShadow([
+      { id: 'old-1', status: 'sent' }, { id: 'old-2', status: 'sent' }, { id: 'tail' }, { id: 'new-turn', status: 'pending' }
+    ], replay, [], 'w', fingerprint)).toEqual([
+      { id: 'checkpoint-1', role: 'user', content: 'summary' }, { id: 'tail' }, { id: 'new-turn', status: 'pending' }
+    ])
+  })
 })
