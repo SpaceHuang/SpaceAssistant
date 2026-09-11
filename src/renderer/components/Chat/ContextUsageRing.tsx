@@ -60,6 +60,7 @@ export function ContextUsageRing({
   const { t } = useTypedTranslation('contextUsage')
   const { i18n } = useTranslation()
   const lastUsage = useTypedSelector((s) => s.chat.lastUsage)
+  const contextProjection = useTypedSelector((s) => s.chat.contextProjection)
   const config = useTypedSelector((s) => s.config.config)
 
   const pendingImageTokens = useMemo(() => {
@@ -83,17 +84,18 @@ export function ContextUsageRing({
       : undefined
 
   const hasData =
-    lastUsage != null &&
+    (lastUsage != null || contextProjection != null) &&
     maximumContext != null &&
     maximumContext > 0 &&
     effectiveOutputMax != null
 
   const display = useMemo(() => {
-    if (!hasData || !lastUsage || !maximumContext || effectiveOutputMax == null) return null
-    return computeContextUsageDisplay(lastUsage, maximumContext, effectiveOutputMax, {
+    if (!hasData || !maximumContext || effectiveOutputMax == null) return null
+    const usage = lastUsage ?? { input_tokens: contextProjection?.projectedTokens ?? contextProjection?.surfaceTokens ?? 0, output_tokens: 0 }
+    return computeContextUsageDisplay(usage, contextProjection?.contextWindow.tokens ?? maximumContext, effectiveOutputMax, {
       thinkingTokensToExclude
     })
-  }, [hasData, lastUsage, maximumContext, effectiveOutputMax, thinkingTokensToExclude])
+  }, [hasData, lastUsage, contextProjection, maximumContext, effectiveOutputMax, thinkingTokensToExclude])
 
   const circumference = 2 * Math.PI * RADIUS
 
@@ -103,7 +105,7 @@ export function ContextUsageRing({
   }, [display, circumference])
 
   const tooltipTitle = useMemo(() => {
-    if (!hasData || !lastUsage || !display) {
+    if (!hasData || !display) {
       if (pendingImageTokens > 0 || historyImageTokens > 0) {
         const lines: string[] = []
         if (pendingImageTokens > 0) {
@@ -135,10 +137,10 @@ export function ContextUsageRing({
         t('tooltip.thinkingExcluded', { count: formatNum(thinkingTokensToExclude, locale) })
       )
     }
-    if (lastUsage.cache_read_input_tokens && lastUsage.cache_read_input_tokens > 0) {
+    if (lastUsage?.cache_read_input_tokens && lastUsage.cache_read_input_tokens > 0) {
       lines.push(`${t('tooltip.cacheRead')}　${formatNum(lastUsage.cache_read_input_tokens, locale)}`)
     }
-    if (lastUsage.cache_creation_input_tokens && lastUsage.cache_creation_input_tokens > 0) {
+    if (lastUsage?.cache_creation_input_tokens && lastUsage.cache_creation_input_tokens > 0) {
       lines.push(`${t('tooltip.cacheWrite')}　${formatNum(lastUsage.cache_creation_input_tokens, locale)}`)
     }
     lines.push(`${t('tooltip.outputReserve')}　${formatNum(display.effectiveOutputMax, locale)}`)
