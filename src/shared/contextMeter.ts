@@ -119,7 +119,11 @@ export function computeContextPressureFromEvents(
     })
     .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
   const candidate = requestId ? candidates.find((item) => item.id === requestId) : candidates[candidates.length - 1]
-  if (!candidate) return computeContextPressure({ ...input, anchor: undefined })
+  if (!candidate) {
+    const hasMatchingHeader = requestId ? headers.some((header) => header.payload.requestId === requestId) : headers.length > 0
+    const fallback = computeContextPressure({ ...input, anchor: undefined })
+    return hasMatchingHeader ? { ...fallback, anchorStatus: 'invalid' } : fallback
+  }
   const contextWindow = candidate.context.payload.contextWindow
   const contextBudget = candidate.context.payload.budget as { estimatorVersion: string; serializationVersion: string }
   const anchor = { requestId: candidate.id, surfaceTokens: candidate.snapshot.surfaceTokens, surfaceFingerprint: candidate.snapshot.fingerprint, systemFingerprint: candidate.snapshot.systemFingerprint, toolsFingerprint: candidate.snapshot.toolsFingerprint, provider: String(candidate.context.payload.provider ?? ''), model: String(candidate.context.payload.model ?? ''), estimatorVersion: contextBudget.estimatorVersion, serializationVersion: contextBudget.serializationVersion, realUsage: candidate.usage.payload.usage as ContextUsageRaw, contextWindow: typeof contextWindow === 'number' ? contextWindow : (contextWindow as { tokens: number }).tokens }
