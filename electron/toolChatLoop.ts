@@ -167,6 +167,7 @@ import { compactOversizedToolResultContent } from '../src/shared/oversizedToolRe
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
+import { buildRequestContextPayload } from '../src/shared/requestContext'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -390,6 +391,7 @@ export type RunToolChatSessionArgs = {
   requestId: string
   sessionId: string
   model: string
+  contextWindow?: number
   baseUrl?: string
   messages: ClaudeContentBlockMessage[]
   system?: string
@@ -653,7 +655,10 @@ async function runToolChatSessionInner(
       thinking
     })
     await args.emitSessionEvent?.({ type: 'request_header', payload: { requestId: attemptRequestId, route: 'anthropic.messages.stream', system: systemPrompt ?? '', tools } })
-    await args.emitSessionEvent?.({ type: 'request_context', payload: { requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: undefined } })
+    await args.emitSessionEvent?.({
+      type: 'request_context',
+      payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective })
+    })
 
     logAgentEvent('info', 'llm.request', {
       requestId,
