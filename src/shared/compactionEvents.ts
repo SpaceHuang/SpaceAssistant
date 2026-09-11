@@ -48,3 +48,15 @@ export function foldCompactionEvents(events: readonly CompactionEvent[]): Compac
 export function countCommittedCompactions(replay: CompactionReplay, windowId: string): number {
   return replay.committed.filter((item) => item.start.payload.windowId === windowId || item.summary.payload.windowId === windowId || item.end.payload.windowId === windowId).length
 }
+
+export type CompactionMarker = { compactionId: string; windowId: string; outputSurfaceFingerprint: string }
+
+/** 从唯一 replay 结果派生 UI marker；未提交/失配事务不会进入界面。 */
+export function projectCompactionMarkers(replay: CompactionReplay, windowId?: string): CompactionMarker[] {
+  return replay.committed.flatMap((item) => {
+    const candidateWindowId = [item.end, item.summary, item.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
+    const output = item.end.payload.outputSurfaceFingerprint
+    if ((windowId && candidateWindowId !== windowId) || typeof candidateWindowId !== 'string' || typeof output !== 'string') return []
+    return [{ compactionId: item.compactionId, windowId: candidateWindowId, outputSurfaceFingerprint: output }]
+  })
+}

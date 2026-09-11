@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { countCommittedCompactions, foldCompactionEvents } from './compactionEvents'
+import { countCommittedCompactions, foldCompactionEvents, projectCompactionMarkers } from './compactionEvents'
 
 const event = (seq: number, type: 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: Record<string, unknown>) => ({ seq, type, payload })
 
@@ -36,5 +36,15 @@ describe('compaction event replay', () => {
     ])
     expect(countCommittedCompactions(replay, 'w1')).toBe(1)
     expect(countCommittedCompactions(replay, 'w3')).toBe(0)
+  })
+
+  it('projects only committed replay records into UI markers', () => {
+    const replay = foldCompactionEvents([
+      event(1, 'compaction_start', { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'a' }),
+      event(2, 'compaction_summary', { compactionId: 'c1', windowId: 'w1', summaryHash: 'h', outputSurfaceFingerprint: 'b' }),
+      event(3, 'compaction_end', { compactionId: 'c1', windowId: 'w1', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'a', outputSurfaceFingerprint: 'b', summaryHash: 'h' })
+    ])
+    expect(projectCompactionMarkers(replay, 'w1')).toEqual([{ compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'b' }])
+    expect(projectCompactionMarkers(replay, 'w2')).toEqual([])
   })
 })
