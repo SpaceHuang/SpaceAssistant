@@ -23,7 +23,7 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { getSessionEventSink, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, type SessionEventInput, type SessionEventSink } from './sessionEvents'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -369,6 +369,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             } catch (appendError) {
               eventAppendFailures.push(toEventPersistenceFailure(appendError))
             }
+          }, appendCompactionTransaction: async (start, summary) => {
+            if (!eventWriter) return
+            await appendCompactionTransaction(eventWriter, { ...start, turnId }, { ...summary, turnId })
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {
