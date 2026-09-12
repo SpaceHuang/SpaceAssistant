@@ -339,7 +339,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           contextWindowId,
           replayFingerprint
         )
-        builtMessages = replayedMessages
+        // projection 只服务于匹配；没有成功应用压缩时，必须继续发送完整工具历史。
+        // 仅比较 replay surface，避免其有损投影本身触发误切换。
+        const replayApplied = JSON.stringify(replayedMessages) !== JSON.stringify(replaySurface)
+        if (replayApplied) builtMessages = replayedMessages
         const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, {
           sessionId,
           requiredUserMessageId: authoritative.currentUserMessageId

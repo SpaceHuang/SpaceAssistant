@@ -25,6 +25,14 @@ describe('surface replay', () => {
     const live = [{ role: 'assistant', content: [{ type: 'text', text: 'before ' }, { type: 'tool_use', id: 't', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }, { role: 'assistant', content: [{ type: 'text', text: 'after' }] }]
     expect(projectReplaySurface(live)).toEqual([{ role: 'assistant', content: 'before after' }])
   })
+  it('does not use the lossy projection as the send surface without a replay change', () => {
+    const full = [{ role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }]
+    const projected = projectReplaySurface(full)
+    const replayed = applyCommittedSurfaceShadow(projected.map((message, index) => ({ ...message, id: surfaceItemIdentities(projected)[index]! })), { committed: [], rejected: [] }, [], 'w', (items) => computeReplaySurfaceFingerprint('system', items))
+    expect(JSON.stringify(replayed)).toBe(JSON.stringify(projected.map((message, index) => ({ ...message, id: surfaceItemIdentities(projected)[index]! }))))
+    expect(full[0]!.content).toEqual([{ type: 'tool_use', id: 't', name: 'read', input: {} }])
+    expect(full[1]!.content).toEqual([{ type: 'tool_result', tool_use_id: 't', content: 'ok' }])
+  })
   it('disambiguates repeated normalized messages by occurrence', () => {
     const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])
     expect(new Set(identities).size).toBe(4)
