@@ -47,6 +47,17 @@ export function projectReplaySurface<T>(messages: readonly T[]): T[] {
   return projected
 }
 
+/** 将 replay 结果映射回原始 API surface，保留未被压缩的工具协议块。 */
+export function restoreReplaySurface<T extends { id?: string }>(original: readonly T[], replayed: readonly T[]): T[] {
+  const identities = surfaceItemIdentities(original)
+  const byKey = new Map<string, T>()
+  original.forEach((item, index) => {
+    byKey.set(item.id ?? identities[index]!, item)
+    byKey.set(identities[index]!, item)
+  })
+  return replayed.map((item) => byKey.get(item.id ?? '') ?? item)
+}
+
 export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
   if (value && typeof value === 'object' && 'role' in value && 'content' in value) {
     const message = value as { role?: unknown; content?: unknown }

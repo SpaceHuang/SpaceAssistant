@@ -24,7 +24,7 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventInput, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurface, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { computeCompactionSummaryHash, countCommittedCompactions } from '../src/shared/compactionEvents'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
@@ -342,7 +342,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         // projection 只服务于匹配；没有成功应用压缩时，必须继续发送完整工具历史。
         // 仅比较 replay surface，避免其有损投影本身触发误切换。
         const replayApplied = JSON.stringify(replayedMessages) !== JSON.stringify(replaySurface)
-        if (replayApplied) builtMessages = replayedMessages
+        if (replayApplied) builtMessages = restoreReplaySurface(builtMessages, replayedMessages)
         const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, {
           sessionId,
           requiredUserMessageId: authoritative.currentUserMessageId

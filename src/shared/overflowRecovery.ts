@@ -23,11 +23,19 @@ export function decideOverflowRecovery(input: OverflowRecoveryInput): OverflowRe
 }
 
 export function selectRecoveryMessages<T extends { role: string; id?: string; content?: unknown }>(messages: readonly T[], currentUserMessageId?: string): T[] {
-  const current = currentUserMessageId ? messages.find((message) => message.id === currentUserMessageId) : undefined
+  const retained = new Set<T>()
   const toolResultMessages = messages.filter((message) => message.role === 'user' && Array.isArray(message.content) && message.content.some((block) => Boolean(block && typeof block === 'object' && (block as { type?: string }).type === 'tool_result')))
-  const result: T[] = []
-  if (current) result.push(current)
-  for (const message of toolResultMessages) if (!result.includes(message)) result.push(message)
+  for (const result of toolResultMessages) {
+    const ids = new Set((result.content as Array<{ tool_use_id?: unknown }>).map((block) => block.tool_use_id))
+    for (const message of messages) {
+      if (message.role !== 'assistant' || !Array.isArray(message.content)) continue
+      if (message.content.some((block) => Boolean(block && typeof block === 'object' && (block as { type?: string; id?: unknown }).type === 'tool_use' && ids.has((block as { id?: unknown }).id)))) retained.add(message)
+    }
+    retained.add(result)
+  }
+  const current = currentUserMessageId ? messages.find((message) => message.id === currentUserMessageId) : undefined
+  if (current) retained.add(current)
+  const result = messages.filter((message) => retained.has(message))
   if (!result.length && messages.length) result.push(messages[messages.length - 1]!)
   return result
 }

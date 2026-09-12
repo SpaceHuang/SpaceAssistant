@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
 import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
@@ -32,6 +32,11 @@ describe('surface replay', () => {
     expect(JSON.stringify(replayed)).toBe(JSON.stringify(projected.map((message, index) => ({ ...message, id: surfaceItemIdentities(projected)[index]! }))))
     expect(full[0]!.content).toEqual([{ type: 'tool_use', id: 't', name: 'read', input: {} }])
     expect(full[1]!.content).toEqual([{ type: 'tool_result', tool_use_id: 't', content: 'ok' }])
+  })
+  it('restores retained ordinary messages by their canonical identity', () => {
+    const original = [{ id: 'u', role: 'user', content: 'question' }, { id: 'tail', role: 'user', content: 'next' }]
+    const projected = projectReplaySurface(original)
+    expect(restoreReplaySurface(original, projected)).toEqual(original)
   })
   it('disambiguates repeated normalized messages by occurrence', () => {
     const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])
