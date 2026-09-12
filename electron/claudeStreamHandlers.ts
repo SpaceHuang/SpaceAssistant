@@ -422,12 +422,17 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             const messageIdentities = surfaceItemIdentities(replayMessages)
             const items = replayMessages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
             const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, surfaceSnapshot.surfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
-            const shadowSource = replayMessages.slice(0, Math.max(1, Math.floor(replayMessages.length / 2)))
-            const summaryText = JSON.stringify({ kind: 'context_checkpoint', task: shadowSource.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), decisions: shadowSource.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), pending: '如需完整历史，使用 history.read 查询被压缩消息。' })
-            const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: summaryText }
+            const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '' }
             const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: estimateTokensFromUtf8Text(checkpointMessage.content) })
             const record = plan.record
             if (!record || plan.status === 'uncompressible' || !record.shadowedRanges.length) return
+            const shadowedIds = new Set(record.shadowedRanges.flatMap((range) => {
+              const start = items.findIndex((item) => item.id === range.start)
+              const end = items.findIndex((item) => item.id === range.end)
+              return start >= 0 && end >= start ? items.slice(start, end + 1).map((item) => item.id) : []
+            }))
+            const shadowSource = replayMessages.filter((message, index) => shadowedIds.has(messageIdentities[index]!))
+            checkpointMessage.content = JSON.stringify({ kind: 'context_checkpoint', task: shadowSource.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), decisions: shadowSource.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), pending: '如需完整历史，使用 history.read 查询被压缩消息。' })
             const shadowed = new Set(record.shadowedRanges.flatMap((range) => {
               const start = items.findIndex((item) => item.id === range.start)
               const end = items.findIndex((item) => item.id === range.end)

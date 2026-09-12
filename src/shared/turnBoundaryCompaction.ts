@@ -1,5 +1,6 @@
 import { resetSurface, summarizeSurface, type CompactableItem } from './compactionActions'
 import { planTurnBoundaryCompaction } from './adaptiveCompaction'
+import { computeShadowedRanges } from './surfaceReplay'
 import type { CompactionProjection } from './contextCompaction'
 
 export type TurnBoundaryCompactionInput = {
@@ -44,5 +45,7 @@ export function planTurnBoundarySurfaceCompaction(input: TurnBoundaryCompactionI
     },
     maxSteps: 3
   })
-  return { ...result, items: currentItems, facts, ...(record ? { record } : {}) }
+  const finalRanges = computeShadowedRanges(input.items, currentItems)
+  const finalRecord = finalRanges.length && record ? { checkpointId: input.checkpointId, shadowedRanges: finalRanges } : record
+  return { ...result, items: currentItems, facts, ...(finalRecord ? { record: finalRecord } : {}) }
 }
