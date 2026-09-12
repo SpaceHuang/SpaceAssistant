@@ -313,7 +313,6 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
         const replayFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(frozen.system ?? '', surface)
-        const persistedMessages = applyCommittedSurfaceShadow(authoritative.messages, compactionReplay, [authoritative.currentUserMessageId], contextWindowId, replayFingerprint)
         const historyFacts = authoritative.messages.map((message) => {
           const rawContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
           const text = rawContent ?? ''
@@ -322,15 +321,30 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         builtMessages = await buildToolChatMessagesFromSource({
           userDataDir,
           workDir: deps.getWorkDir(),
-          sourceMessages: persistedMessages,
+          sourceMessages: authoritative.messages,
           currentUserMessageId: authoritative.currentUserMessageId,
           sessionId
         })
+        // 压缩提交端记录的是已展开的 API surface；回放必须在同一层执行，
+        // 否则数据库的一条 assistant(toolCalls) 与 API 的 assistant/tool_result
+        // 多条消息无法共享 boundary、range 和 fingerprint。
+        const replaySurface = builtMessages.map((message, index) => ({
+          ...message,
+          id: message.id ?? surfaceItemIdentities(builtMessages)[index]!
+        }))
+        const replayedMessages = applyCommittedSurfaceShadow(
+          replaySurface,
+          compactionReplay,
+          [authoritative.currentUserMessageId],
+          contextWindowId,
+          replayFingerprint
+        )
+        builtMessages = replayedMessages
         const messages = normalizeAndValidateClaudeMessagesWithContentBlocks(builtMessages, {
           sessionId,
           requiredUserMessageId: authoritative.currentUserMessageId
         })
-        const hasImageAttachments = historyHasImageAttachments(persistedMessages)
+        const hasImageAttachments = historyHasImageAttachments(authoritative.messages)
         const localeCandidate = frozen.locale
 
         const builtinCandidates = filterBuiltinToolsForApi(
