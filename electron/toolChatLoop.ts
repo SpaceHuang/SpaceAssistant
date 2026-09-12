@@ -174,7 +174,7 @@ import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfac
 import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
-import { computeReplaySurfaceFingerprint, computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -867,7 +867,7 @@ async function runToolChatSessionInner(
       const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
       if (recovery.action === 'reset_and_retry_provider') {
         overflowRetries = recovery.nextRetry
-          const recoveryInputMessages = [...messagesForApi]
+          const recoveryInputMessages = projectReplaySurface(messagesForApi)
           const recoveryInputItems = surfaceItemIdentities(recoveryInputMessages).map((id) => ({ id }))
         messagesForApi = selectRecoveryMessages(messagesForApi as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as typeof messagesForApi
         if (args.appendCompactionTransaction && lastRequestHeader) {
@@ -878,13 +878,14 @@ async function runToolChatSessionInner(
             const value = block as unknown as { type?: unknown; id?: unknown }
             return value.type === 'tool_use' && typeof value.id === 'string' ? [value.id] : []
           }) : [])
-          const recoveryOutputItems = surfaceItemIdentities(messagesForApi).map((id) => ({ id }))
+          const recoveryOutputMessages = projectReplaySurface(messagesForApi)
+          const recoveryOutputItems = surfaceItemIdentities(recoveryOutputMessages).map((id) => ({ id }))
           const recoveryShadowedRanges = computeShadowedRanges(recoveryInputItems, recoveryOutputItems)
           const recoveryFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(recoverySystem, surface)
           const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges: recoveryShadowedRanges }
           await args.appendCompactionTransaction(
             { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: recoveryFingerprint(recoveryInputMessages), surfaceBoundaryId: recoveryInputItems[recoveryInputItems.length - 1]?.id, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
-            { compactionId, windowId: contextWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: recoveryFingerprint(messagesForApi), shadowedRanges: recoveryShadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
+            { compactionId, windowId: contextWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: recoveryFingerprint(recoveryOutputMessages), shadowedRanges: recoveryShadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
           )
           args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: contextWindowId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
         }
