@@ -21,6 +21,10 @@ describe('surface replay', () => {
     expect(projectReplaySurface(live).map((m) => ({ role: m.role, content: m.content }))).toEqual(projectReplaySurface(persisted).map((m) => ({ role: m.role, content: m.content })))
     expect(computeReplaySurfaceFingerprint('system', projectReplaySurface(live))).toBe(computeReplaySurfaceFingerprint('system', projectReplaySurface(persisted)))
   })
+  it('merges text before and after a tool call into the persisted assistant turn', () => {
+    const live = [{ role: 'assistant', content: [{ type: 'text', text: 'before ' }, { type: 'tool_use', id: 't', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }, { role: 'assistant', content: [{ type: 'text', text: 'after' }] }]
+    expect(projectReplaySurface(live)).toEqual([{ role: 'assistant', content: 'before after' }])
+  })
   it('disambiguates repeated normalized messages by occurrence', () => {
     const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])
     expect(new Set(identities).size).toBe(4)

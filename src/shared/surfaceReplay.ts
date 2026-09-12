@@ -15,22 +15,36 @@ export function canonicalSurfaceContent(role: unknown, content: unknown): unknow
 
 /** 将工具协议消息投影为可由数据库稳定重建的 turn surface。 */
 export function projectReplaySurface<T>(messages: readonly T[]): T[] {
-  return messages.filter((message) => {
-    if (!message || typeof message !== 'object') return true
+  const projected: T[] = []
+  let toolTurnAssistantIndex = -1
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') { projected.push(message); continue }
     const source = message as { role?: unknown; content?: unknown }
     if (source.role === 'user' && Array.isArray(source.content)) {
-      return !source.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')
+      if (source.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) continue
     }
     if (source.role === 'assistant' && Array.isArray(source.content)) {
-      return source.content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string' && (block as { text: string }).text.length > 0)
+      const hasToolUse = source.content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
+      const text = canonicalSurfaceContent(source.role, source.content)
+      if (hasToolUse) {
+        if (typeof text === 'string' && text.length > 0) {
+          projected.push({ ...(message as object), content: text } as T)
+          toolTurnAssistantIndex = projected.length - 1
+        } else {
+          toolTurnAssistantIndex = -1
+        }
+        continue
+      }
+      if (toolTurnAssistantIndex >= 0 && typeof text === 'string') {
+        const previous = projected[toolTurnAssistantIndex] as unknown as { content?: unknown }
+        projected[toolTurnAssistantIndex] = { ...(previous as object), content: `${typeof previous.content === 'string' ? previous.content : ''}${text}` } as T
+        toolTurnAssistantIndex = -1
+        continue
+      }
     }
-    return true
-  }).map((message) => {
-    if (!message || typeof message !== 'object') return message
-    const source = message as { role?: unknown; content?: unknown }
-    if (source.role !== 'assistant') return message
-    return { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T
-  })
+    projected.push(source.role === 'assistant' ? { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T : message)
+  }
+  return projected
 }
 
 export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
