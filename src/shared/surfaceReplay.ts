@@ -1,4 +1,5 @@
 import type { CompactionReplay } from './compactionEvents'
+import { buildRequestHeaderPayload } from './requestContext'
 
 export type SurfaceReplayItem = { id: string; required?: boolean }
 
@@ -26,6 +27,13 @@ export function surfaceItemIdentities(values: readonly unknown[]): string[] {
     counts.set(base, occurrence + 1)
     return occurrence === 0 ? base : `${base}#${occurrence}`
   })
+}
+
+export function computeReplaySurfaceFingerprint(system: string, surface: readonly unknown[]): string {
+  return buildRequestHeaderPayload({ requestId: 'replay', system, tools: [], messages: surface.map((message) => {
+    const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
+    return { role: source.role, content: source.content }
+  }) }).surfaceSnapshot.fingerprint
 }
 
 export function computeShadowedRanges<T extends SurfaceReplayItem>(before: readonly T[], after: readonly T[]): Array<{ start: string; end: string }> {

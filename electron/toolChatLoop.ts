@@ -174,7 +174,7 @@ import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfac
 import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
-import { computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -880,10 +880,7 @@ async function runToolChatSessionInner(
           }) : [])
           const recoveryOutputItems = surfaceItemIdentities(messagesForApi).map((id) => ({ id }))
           const recoveryShadowedRanges = computeShadowedRanges(recoveryInputItems, recoveryOutputItems)
-          const recoveryFingerprint = (surface: readonly unknown[]) => buildRequestHeaderPayload({ requestId: 'replay', system: recoverySystem, tools: [], messages: surface.map((message) => {
-            const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
-            return { role: source.role, content: source.content }
-          }) }).surfaceSnapshot.fingerprint
+          const recoveryFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(recoverySystem, surface)
           const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges: recoveryShadowedRanges }
           await args.appendCompactionTransaction(
             { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: recoveryFingerprint(recoveryInputMessages), surfaceBoundaryId: recoveryInputItems[recoveryInputItems.length - 1]?.id, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },

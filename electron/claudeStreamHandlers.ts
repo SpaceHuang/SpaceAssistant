@@ -24,7 +24,7 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventInput, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { computeCompactionSummaryHash, countCommittedCompactions } from '../src/shared/compactionEvents'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
@@ -312,10 +312,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
-        const replayFingerprint = (surface: readonly unknown[]) => buildRequestHeaderPayload({ requestId: 'replay', system: frozen.system ?? '', tools: [], messages: surface.map((message) => {
-          const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
-          return { role: source.role, content: source.content }
-        }) }).surfaceSnapshot.fingerprint
+        const replayFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(frozen.system ?? '', surface)
         const persistedMessages = applyCommittedSurfaceShadow(authoritative.messages, compactionReplay, [authoritative.currentUserMessageId], contextWindowId, replayFingerprint)
         const historyFacts = authoritative.messages.map((message) => {
           const rawContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content)

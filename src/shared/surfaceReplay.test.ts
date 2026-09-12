@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow, computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
 import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
   it('uses content identity when a surface item has no explicit id', () => {
     expect(surfaceItemIdentity({ role: 'user', content: 'same' }, 0)).toBe(surfaceItemIdentity({ role: 'user', content: 'same' }, 9))
+  })
+  it('uses the same canonical fingerprint for provider and persisted message shapes', () => {
+    expect(computeReplaySurfaceFingerprint('system', [{ role: 'user', content: 'hello' }])).toBe(computeReplaySurfaceFingerprint('system', [{ id: 'u1', role: 'user', content: 'hello', status: 'sent' }]))
   })
   it('disambiguates repeated normalized messages by occurrence', () => {
     const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])
