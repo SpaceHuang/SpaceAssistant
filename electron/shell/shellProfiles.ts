@@ -47,14 +47,16 @@ export const WINDOWS_POWERSHELL_PROFILE: ShellProfile = {
 }
 
 /**
- * Windows PowerShell 启动 prelude：先关闭进度流，再固定 UTF-8 输出编码。
- * 非交互宿主会把 progress 记录序列化成 CLIXML 写进 stderr（首次启动的
- * "Preparing modules for first use." 也会命中），既污染 Agent 可见输出，
- * 又让 stdout/stderr 的字节统计随系统语言漂移，因此必须静默。
+ * Windows PowerShell 启动 prelude。
+ *
+ * 只保留进度流静默：非交互宿主会把 progress 记录序列化成 CLIXML 写进 stderr
+ * （首次启动的 "Preparing modules for first use." 也会命中）。
+ *
+ * **不再**设置 `$OutputEncoding` / `[Console]::OutputEncoding`（D1 决策，§7.3 方案 C）：
+ * 实测对硬编码自身编码的 native 工具毫无影响（字节透传），却在「native 输出 → PS 字符串」
+ * 路径上把 OEM 字节按 UTF-8 严格解码成不可逆的 U+FFFD。
  */
-export const WINDOWS_POWERSHELL_PRELUDE =
-  "$ProgressPreference = 'SilentlyContinue';" +
-  '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new();'
+export const WINDOWS_POWERSHELL_PRELUDE = "$ProgressPreference = 'SilentlyContinue';"
 
 export function freezeShellProfileSnapshot(profile: ShellProfile): ShellProfile {
   return Object.freeze({

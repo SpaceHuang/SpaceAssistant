@@ -10,6 +10,13 @@ import {
 } from './shellProfiles'
 
 describe('ShellProfile', () => {
+  it('Windows prelude 只保留 progress 静默（D1）', () => {
+    const args = createShellAdapter(WINDOWS_POWERSHELL_PROFILE).buildCommandArgs('Write-Output ok').at(-1)
+    const decoded = Buffer.from(String(args), 'base64').toString('utf16le')
+    expect(decoded).toContain("$ProgressPreference = 'SilentlyContinue'")
+    expect(decoded).not.toContain('OutputEncoding')
+  })
+
   it('macOS 使用显式非 login Bash 模板', () => {
     expect(MACOS_BASH_PROFILE.commandArgsTemplate).toEqual(['--noprofile', '--norc', '-c', '{command}'])
     expect(profileForPlatform('darwin')).toMatchObject(MACOS_BASH_PROFILE)
@@ -23,7 +30,7 @@ describe('ShellProfile', () => {
 
   it('使用 UTF-16LE Base64 编码命令且可还原 Unicode', () => {
     const command = 'Write-Output "你好"'
-    const payload = encodePowerShellCommand(command, '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new();')
+    const payload = encodePowerShellCommand(command, "$ProgressPreference = 'SilentlyContinue';")
     const decoded = Buffer.from(payload, 'base64').toString('utf16le')
     expect(decoded).toContain(command)
     expect(buildShellArgs(WINDOWS_POWERSHELL_PROFILE, command)).toContain(
