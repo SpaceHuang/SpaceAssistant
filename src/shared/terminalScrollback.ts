@@ -11,6 +11,14 @@ export type TerminalExportSource = {
   getPlainText?: () => string
 }
 
+/** 取尾部 keep 个码元；起点若落在低位代理上则丢掉它（避免孤立代理渲染成 U+FFFD）。 */
+export function tailWithoutLoneSurrogate(value: string, keep: number): string {
+  if (keep <= 0) return ''
+  const tail = value.slice(-keep)
+  const first = tail.charCodeAt(0)
+  return first >= 0xdc00 && first <= 0xdfff ? tail.slice(1) : tail
+}
+
 export function truncateScrollbackExport(
   scrollback: ShellTerminalScrollback
 ): ShellTerminalScrollback & { truncated?: boolean } {
@@ -37,7 +45,9 @@ export function truncateScrollbackExport(
     const v = scrollback[key]
     if (typeof v !== 'string') continue
     const keep = Math.max(0, Math.floor(v.length * ratio))
-    out[key] = keep > 0 ? v.slice(-keep) : undefined
+    // MINOR：起点若落在低位代理上，丢掉它，避免留下孤立代理对半（渲染成 U+FFFD）。
+    const tail = tailWithoutLoneSurrogate(v, keep)
+    out[key] = tail.length > 0 ? tail : undefined
   }
   return out
 }
@@ -116,10 +126,24 @@ export function normalizeXtermPipeInput(text: string): string {
   return out
 }
 
-export function decodeProgressRawTailForXterm(rawB64: string | undefined): string {
+/**
+ * 终端文本投影（§12-#11）：终端本体始终是「原始字节 → xterm」，本函数只服务
+ * 需要文本投影的调用方（回滚/长度统计）。编码标签由调用方按当前 shell 契约传入，
+ * 缺省 utf-8 只作为无契约信息时的兼容值。
+ */
+export function decodeProgressRawTailForXterm(rawB64: string | undefined, label = 'utf-8'): string {
   const bytes = decodeProgressRawTail(rawB64)
   if (bytes.length === 0) return ''
-  return normalizeXtermPipeInput(new TextDecoder('utf-8', { fatal: false }).decode(bytes))
+  return normalizeXtermPipeInput(decodeBytesForXterm(bytes, label))
+}
+
+/** 非法/未知标签不允许打断终端渲染：退回 UTF-8（与 xterm 默认一致）。 */
+function decodeBytesForXterm(bytes: Uint8Array, label: string): string {
+  try {
+    return new TextDecoder(label || 'utf-8', { fatal: false }).decode(bytes)
+  } catch {
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  }
 }
 
 export function pickScrollbackRestorePayload(

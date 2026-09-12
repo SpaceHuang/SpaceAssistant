@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { killProcessTree, spawnCommandSafe } from './spawnUtil'
+import { killProcessTree, runCommandWithTimeout, spawnCommandSafe } from './spawnUtil'
 
 describe('spawnUtil', () => {
   it('spawns npm on Windows without EINVAL', async () => {
@@ -21,6 +21,18 @@ describe('spawnUtil', () => {
 
     expect(version.length).toBeGreaterThan(0)
   })
+
+  it('MINOR：超时被 kill 时仍交付已收集的 stdout/stderr（不再整体丢弃留档）', async () => {
+    const run = await runCommandWithTimeout(
+      process.execPath,
+      ['-e', 'process.stdout.write("partial-out");process.stderr.write("partial-err");setInterval(()=>{},1000)'],
+      1500
+    )
+    expect(run.completed).toBe(false)
+    expect(run.stdout).toContain('partial-out')
+    expect(run.stderr).toContain('partial-err')
+    expect(run.meta.stderrRawBytes).toBeGreaterThan(0)
+  }, 15_000)
 
   it('killProcessTree terminates a child process', async () => {
     const spawned = spawnCommandSafe(process.execPath, ['-e', 'setInterval(() => {}, 1000)'])

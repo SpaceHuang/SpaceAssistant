@@ -1,21 +1,25 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { createHash } from 'crypto'
 import path from 'path'
-import { createProcessOutputStreamDecoder } from '../processOutputEncoding'
 import { processTreeKiller, spawnCommandSafe } from '../spawnUtil'
-import { describeExitCode } from '../shell/shellExitCodes'
+import { describeExitCode, describeExitCodeDetails, describeHresult } from '../shell/shellExitCodes'
 import { logShellAgentEvent } from '../shell/shellAgentLogger'
 import { planShellExec, type ShellSpawnSpec } from '../shell/shellExecPlan'
 import type { ShellConfig } from '../../src/shared/domainTypes'
 import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
-import { buildShellEnv, decodeProcessOutput } from '../processOutputEncoding'
+import { buildShellEnv } from '../processOutputEncoding'
+import { defaultContractForPlatform, expectedLabelForContract } from '../processOutput/contracts'
+import { createChildStreamDecoder, decodeChildOutput } from '../processOutput/decodeChildOutput'
+import { buildStreamDiagnostics, formatOutputDiagLine, resolveLossStage, resolveOutputTrust } from '../processOutput/diagnostics'
 import { sanitizeToolOutput, toToolUserError } from './toolUserErrors'
+import { SHELL_OUTPUT_TRUST_SUSPECT_NOTICE } from '../../src/shared/shellToolDisplay'
 import { normalizeTerminalOutput } from '../../src/shared/terminalOutputSanitize'
 import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
 import { shellTuiFallbackHintLines } from '../../src/shared/shellInteractiveTui'
-import { BoundedOutputBuffer } from '../shell/boundedOutput'
+import { RawByteBuffer, type RawByteSnapshot } from '../shell/boundedOutput'
 import { OutputArtifactWriter } from '../shell/outputArtifactWriter'
 import { createOutputPipelineSnapshot } from '../shell/outputPipeline'
+import { stripClixmlWrapper } from '../processOutput/clixml'
 import { ProgressThrottle } from '../shell/progressThrottle'
 import { ExecutionLifecycle } from '../shell/executionLifecycle'
 import { ProcessSupervisor } from '../shell/processSupervisor'
@@ -27,6 +31,8 @@ import { type PreparedShellExecution } from '../shell/preparedShellExecution'
 import { planRunShellExecution, revalidatePreparedShellExecution, RunShellPlanError } from './runShellPlan'
 
 const PROGRESS_TAIL = 4000
+/** 进度用滚动文本窗口：只需覆盖 PROGRESS_TAIL，避免为进度保留全量文本。 */
+const PROGRESS_TEXT_KEEP = 8 * 1024
 const DEFAULT_IO_MAX = 100 * 1024
 const dialectRetryBreaker = new DialectRetryBreaker()
 
@@ -42,6 +48,14 @@ function shellProgressMessage(stdout: string, stderr: string): string {
 
 function stableFingerprint(value: string): string {
   return createHash('sha256').update(value).digest('hex')
+}
+
+/** §9.5：对实际保留（head+tail，即落盘范围）的原始字节取 sha256，与文本 sha256 并存。 */
+function rawBytesSha256(snapshot: RawByteSnapshot): string {
+  const hash = createHash('sha256')
+  hash.update(snapshot.head)
+  hash.update(snapshot.tail)
+  return hash.digest('hex')
 }
 
 export type { ShellSpawnSpec } from '../shell/shellExecPlan'
@@ -61,11 +75,6 @@ export function resolveShellSpawnSpec(shellConfig?: ShellConfig | null): ShellSp
     args: ['--noprofile', '--norc', '-c', ''],
     shellId: 'bash'
   }
-}
-
-function truncateIo(text: string, max: number): { text: string; truncated: boolean } {
-  if (text.length <= max) return { text, truncated: false }
-  return { text: text.slice(0, max) + '\n[输出被截断]', truncated: true }
 }
 
 export const runShellExecutor: ToolExecutor = {
@@ -150,13 +159,14 @@ export async function executePreparedShellExecution(
   const command = prepared.command
   const timeoutSec = prepared.timeoutMs / 1000
   const ioMax = prepared.ioMaxBytes
+  const contract = prepared.profile.outputEncoding
   const spec: ShellSpawnSpec = {
     executable: prepared.spawnSpec.executable,
     args: [...prepared.spawnSpec.args],
     shellId: prepared.spawnSpec.shellId
   }
   const env = prepared.environment
-  const sendProgressSafely = (payload: string | { rawDelta: string; seq: number } | { message: string; processPid: number; processGroupId?: number; processOwnerToken?: string }): void => {
+  const sendProgressSafely = (payload: string | { rawDelta: string; seq: number; rawEncoding: string } | { message: string; processPid: number; processGroupId?: number; processOwnerToken?: string }): void => {
     try {
       ctx.sendProgress('shell', payload)
     } catch (error) {
@@ -165,10 +175,10 @@ export async function executePreparedShellExecution(
     }
   }
   sendProgressSafely('启动命令…')
-  const stdoutDecoder = createProcessOutputStreamDecoder()
-  const stderrDecoder = createProcessOutputStreamDecoder()
-  let stdout = ''
-  let stderr = ''
+  const stdoutDecoder = createChildStreamDecoder({ contract })
+  const stderrDecoder = createChildStreamDecoder({ contract })
+  let progressStdoutTail = ''
+  let progressStderrTail = ''
   let interrupted = false
   let proc: ChildProcess
   let timedOut = false
@@ -181,9 +191,11 @@ export async function executePreparedShellExecution(
   let progressEventCount = 0
   let rawTailBuf: Buffer = Buffer.alloc(0)
   let pendingRawDelta: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+  let spawnAtMs = 0
   const progressThrottle = new ProgressThrottle({ minIntervalMs: 50, maxEventsPerSecond: 20, minBytes: 16 * 1024 })
-  const stdoutBounded = new BoundedOutputBuffer(ioMax)
-  const stderrBounded = new BoundedOutputBuffer(ioMax)
+  // 事实层：原始字节 head/tail（§9.2），文本只是它的投影。
+  const stdoutRaw = new RawByteBuffer(ioMax)
+  const stderrRaw = new RawByteBuffer(ioMax)
   const artifactMaxBytes = Math.max(ioMax * 20, 2 * 1024 * 1024)
   const artifactRoot = path.resolve(ctx.userDataDir, 'shell-output')
   const artifactName = `${createHash('sha256').update(ctx.toolUseId).digest('hex')}.log`
@@ -196,13 +208,10 @@ export async function executePreparedShellExecution(
       duration: Date.now() - started
     }
   }
-  const artifactWriter = new OutputArtifactWriter(
-    artifactPath,
-    artifactMaxBytes
-  )
+  const artifactWriter = new OutputArtifactWriter(artifactPath, artifactMaxBytes)
   let artifactStarted = false
   let artifactOpenError: Error | undefined
-  let artifactPrefix: string[] = []
+  let artifactPrefix: Buffer[] = []
   let artifactPrefixBytes = 0
   const activateArtifact = (): void => {
     if (artifactStarted) return
@@ -210,20 +219,37 @@ export async function executePreparedShellExecution(
     void artifactWriter.open().catch((error) => {
       artifactOpenError = error instanceof Error ? error : new Error(String(error))
     })
-    for (const prefix of artifactPrefix) artifactWriter.append(prefix)
+    for (const prefix of artifactPrefix) artifactWriter.appendBytes(prefix)
     artifactPrefix = []
   }
-  const recordArtifact = (text: string): void => {
-    if (!text) return
+  /** 原始字节直存（§9.2）：解码之前先留存事实。 */
+  const recordArtifactBytes = (bytes: Buffer): void => {
+    if (bytes.length === 0) return
     if (artifactStarted) {
-      artifactWriter.append(text)
+      artifactWriter.appendBytes(bytes)
       return
     }
-    artifactPrefix.push(text)
-    artifactPrefixBytes += Buffer.byteLength(text, 'utf8')
+    artifactPrefix.push(Buffer.from(bytes))
+    artifactPrefixBytes += bytes.length
     if (artifactPrefixBytes > ioMax) activateArtifact()
   }
 
+  /**
+   * §12-#11：终端回放必须用与主通道一致的编码标签。
+   * 解码器锁定前用契约期望标签（不会拿到 'unknown'），锁定后用检测结果。
+   *
+   * MINOR（评审 v2 #3）已知限制：raw tail 把 stdout/stderr 原始字节合并在同一条流里，
+   * 这里只能下发一个标签；两流锁定到不同编码时，另一流的字节在 executing 期 live 终端视图里
+   * 会按本标签解码成乱码。模型/历史/完成态通道按流分别解码，不受影响；
+   * 彻底修复需要 fan-out 协议改造（每流各自的 rawDelta + 标签），留待后续迭代。
+   */
+  const terminalRawEncoding = (): string => {
+    const stdoutMeta = stdoutDecoder.meta
+    if (stdoutMeta.provisional !== true) return stdoutMeta.encoding
+    const stderrMeta = stderrDecoder.meta
+    if (stderrMeta.provisional !== true) return stderrMeta.encoding
+    return expectedLabelForContract(contract) ?? 'utf-8'
+  }
   const pushProgress = (stdoutSnap: string, stderrSnap: string, rawChunk?: Buffer) => {
     if (terminalMode && rawChunk && rawChunk.length > 0) {
       rawTailBuf = appendRawTailBuffer(rawTailBuf, rawChunk)
@@ -233,7 +259,7 @@ export async function executePreparedShellExecution(
       progressEventCount += 1
       const rawDelta = pendingRawDelta
       pendingRawDelta = Buffer.alloc(0)
-      sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq })
+      sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq, rawEncoding: terminalRawEncoding() })
       return
     }
     if (!progressThrottle.shouldSend(Date.now(), Buffer.byteLength(stdoutSnap + stderrSnap))) return
@@ -246,11 +272,12 @@ export async function executePreparedShellExecution(
     progressEventCount += 1
     const rawDelta = pendingRawDelta
     pendingRawDelta = Buffer.alloc(0)
-    sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq })
+    sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq, rawEncoding: terminalRawEncoding() })
   }
 
   const enforceOutputLimit = () => {
-    const total = stdoutBounded.snapshot().bytes + stderrBounded.snapshot().bytes
+    // MINOR：上限判定只需计数，不能每个 chunk 构造两次 O(ioMax) 字节拷贝。
+    const total = stdoutRaw.totalBytes + stderrRaw.totalBytes
     const limit = Math.max(ioMax * 20, 2 * 1024 * 1024)
     if (total < limit || outputLimited) return
     outputLimited = true
@@ -263,6 +290,7 @@ export async function executePreparedShellExecution(
     const settle = (reason: Parameters<ExecutionLifecycle<ToolExecutorResult>['finalize']>[0], result: ToolExecutorResult): void => {
       if (lifecycle.finalize(reason, result)) resolve(result)
     }
+    spawnAtMs = Date.now()
     proc = spawn(spec.executable, spec.args, {
       cwd: prepared.cwd,
       env,
@@ -284,23 +312,19 @@ export async function executePreparedShellExecution(
 
     const onDataOut = (b: Buffer) => {
       const chunk = stdoutDecoder.write(b)
-      stdoutBounded.append(chunk)
+      stdoutRaw.appendBytes(b)
       enforceOutputLimit()
-      recordArtifact(chunk)
-      stdout += chunk
-      const t = truncateIo(stdout, ioMax)
-      stdout = t.text
-      pushProgress(stdout, stderr, terminalMode ? b : undefined)
+      recordArtifactBytes(b)
+      if (chunk) progressStdoutTail = (progressStdoutTail + chunk).slice(-PROGRESS_TEXT_KEEP)
+      pushProgress(progressStdoutTail, progressStderrTail, terminalMode ? b : undefined)
     }
     const onDataErr = (b: Buffer) => {
       const chunk = stderrDecoder.write(b)
-      stderrBounded.append(chunk)
+      stderrRaw.appendBytes(b)
       enforceOutputLimit()
-      recordArtifact(chunk)
-      stderr += chunk
-      const t = truncateIo(stderr, ioMax)
-      stderr = t.text
-      pushProgress(stdout, stderr, terminalMode ? b : undefined)
+      recordArtifactBytes(b)
+      if (chunk) progressStderrTail = (progressStderrTail + chunk).slice(-PROGRESS_TEXT_KEEP)
+      pushProgress(progressStdoutTail, progressStderrTail, terminalMode ? b : undefined)
     }
 
     proc.stdout?.on('data', onDataOut)
@@ -340,7 +364,10 @@ export async function executePreparedShellExecution(
         caseId: SHELL_CASE_IDS.spawnError,
         durationMs: Date.now() - started
       })
-      void artifactWriter.close().catch(() => undefined).finally(() => {
+      const spawnErrorMessage = err.message
+      void (async () => {
+        if (artifactPrefixBytes > 0) activateArtifact()
+        await artifactWriter.close().catch(() => undefined)
         settle('transport_error', {
           success: false,
           error: 'SHELL_SPAWN_ERROR',
@@ -354,26 +381,31 @@ export async function executePreparedShellExecution(
           },
           duration: Date.now() - started
         })
-      })
+      })()
     })
 
     proc.on('close', (code, signal) => {
       if (terminalHandled) return
       terminalHandled = true
       cleanupProcessResources()
+      const exitAtMs = Date.now()
       const tailOut = stdoutDecoder.end()
       const tailErr = stderrDecoder.end()
-      stdout += tailOut
-      stderr += tailErr
-
-      stdoutBounded.append(tailOut)
-      stderrBounded.append(tailErr)
-      enforceOutputLimit()
-      recordArtifact(tailOut)
-      recordArtifact(tailErr)
+      if (tailOut) progressStdoutTail = (progressStdoutTail + tailOut).slice(-PROGRESS_TEXT_KEEP)
+      if (tailErr) progressStderrTail = (progressStderrTail + tailErr).slice(-PROGRESS_TEXT_KEEP)
       flushPendingRawDelta()
-      const outSnapshot = stdoutBounded.snapshot()
-      const errSnapshot = stderrBounded.snapshot()
+
+      const stdoutMeta = stdoutDecoder.meta
+      const stderrMeta = stderrDecoder.meta
+      const rawOut = stdoutRaw.snapshotBytes()
+      const rawErr = stderrRaw.snapshotBytes()
+      const truncated = rawOut.truncated || rawErr.truncated
+      const exitCode = code ?? (signal ? null : interrupted ? null : 1)
+      const externalSignal = signal ?? undefined
+      const cancelled = ctx.signal.aborted || (interrupted && !timedOut)
+      const success = !cancelled && code === 0
+      const failed = !success
+      const contractConflict = stderrMeta.contractConflict ?? stdoutMeta.contractConflict
 
       void (async () => {
         if (interrupted && !terminationResult) {
@@ -382,34 +414,60 @@ export async function executePreparedShellExecution(
         let persistedOutputPath: string | undefined
         let artifact: { path: string; bytes: number; sha256: string } | undefined
         let artifactCloseError: Error | undefined
+
+        const outputPipeline = createOutputPipelineSnapshot({
+          stdout: rawOut,
+          stderr: rawErr,
+          stdoutLabel: stdoutMeta.encoding,
+          stderrLabel: stderrMeta.encoding,
+          terminalRaw: rawTailBuf,
+          inlineMaxBytes: ioMax,
+          artifactMaxBytes
+        })
+        const outText = outputPipeline.stdoutText
+        // §5 S5：PowerShell 非交互宿主会把 progress / 错误序列化成 CLIXML 写进 stderr。
+        // 只剥壳取回消息正文；未命中前缀（截断、非 CLIXML）时原样交付。
+        // 注意：步进/终端回放仍走原始字节投影，这里只影响最终交付文本。
+        const errText = stripClixmlWrapper(outputPipeline.stderrText)
+        // §8.4：截断切片的字符对齐无法自证（多字节非自同步编码）等价于弱证据：
+        // 拿不到可靠文本就不能当真值交付。
+        const stdoutDiag = buildStreamDiagnostics(stdoutMeta, outText, stdoutDecoder.weakEvidence || outputPipeline.stdoutAlignmentUncertain)
+        const stderrDiag = buildStreamDiagnostics(stderrMeta, errText, stderrDecoder.weakEvidence || outputPipeline.stderrAlignmentUncertain)
+        const outputTrust = resolveOutputTrust(stdoutDiag, stderrDiag)
+        const lossStage = resolveLossStage({ contract, meta: stderrMeta, text: errText })
+          ?? resolveLossStage({ contract, meta: stdoutMeta, text: outText })
+        const hresult = describeHresult(errText) ?? describeHresult(outText)
+
+        // §9.4 自动产出条件：失败 / 解码可疑 / 截断 / （既有）超过 ioMaxBytes
+        const artifactReason = failed
+          ? 'failed'
+          : outputTrust === 'suspect' || contractConflict !== undefined
+            ? 'suspect'
+            : truncated
+              ? 'truncated'
+              : artifactStarted
+                ? 'size'
+                : undefined
+        if (!artifactStarted && artifactReason && !artifactOpenError) activateArtifact()
         try {
           if (artifactStarted && !artifactOpenError) artifact = await artifactWriter.close()
         } catch (error) {
           artifactCloseError = error instanceof Error ? error : new Error(String(error))
         }
-        if ((outSnapshot.truncated || errSnapshot.truncated) && !artifactOpenError) {
-          persistedOutputPath = artifact?.path
-        }
+        if (artifact) persistedOutputPath = artifact.path
 
-        const outputPipeline = createOutputPipelineSnapshot({
-          stdout: outSnapshot,
-          stderr: errSnapshot,
-          terminalRaw: rawTailBuf,
-          inlineMaxBytes: ioMax,
-          artifactMaxBytes,
-          artifact
-        })
-        const outTrunc = outputPipeline.stdout
-        const errTrunc = outputPipeline.stderr
-        const truncated = outputPipeline.truncated
-
-        const exitCode = code ?? (signal ? null : interrupted ? null : 1)
-        const externalSignal = signal ?? undefined
+        const exitDetails = describeExitCodeDetails(typeof exitCode === 'number' ? exitCode : undefined)
         const exitCodeHint = describeExitCode(typeof exitCode === 'number' ? exitCode : undefined)
-        const durationMs = Date.now() - started
-        const cancelled = ctx.signal.aborted || (interrupted && !timedOut)
-        const success = !cancelled && code === 0
+        const totalMs = Date.now() - started
+        const planMs = spawnAtMs - started
+        const spawnToExitMs = exitMs(spawnAtMs, exitAtMs)
         const logLevel = success ? 'info' : timedOut || (typeof exitCode === 'number' && exitCode !== 0) ? 'warn' : 'info'
+        const outputDiag = [
+          formatOutputDiagLine({ stream: 'stdout', diagnostics: stdoutDiag, contract, contractConflict: stdoutMeta.contractConflict, rawArtifactPath: artifact?.path }),
+          formatOutputDiagLine({ stream: 'stderr', diagnostics: stderrDiag, contract, contractConflict: stderrMeta.contractConflict, rawArtifactPath: artifact?.path })
+        ]
+        const stdoutBytes = Buffer.byteLength(outText, 'utf8')
+        const stderrBytes = Buffer.byteLength(errText, 'utf8')
 
         logShellAgentEvent(logLevel, 'shell.exec.finish', {
           ...baseLog,
@@ -417,6 +475,8 @@ export async function executePreparedShellExecution(
           exitCode,
           signal: externalSignal,
           exitCodeHint,
+          exitCodeFamily: exitDetails?.family,
+          exitCodeSemantics: exitDetails?.semantics,
           interrupted,
           timedOut,
           cancelled,
@@ -424,34 +484,94 @@ export async function executePreparedShellExecution(
           persistedOutput: Boolean(persistedOutputPath),
           outputArtifactBytes: artifact?.bytes ?? 0,
           outputArtifactSha256: artifact?.sha256,
+          outputArtifactReason: artifactReason,
+          rawArtifactReason: artifactReason,
+          rawArtifactPath: artifact?.path,
+          rawArtifactBytes: artifact?.bytes ?? 0,
+          rawArtifactSha256: artifact?.sha256,
           outputPersistError: (artifactOpenError?.message ?? artifactCloseError?.message)
             ? sanitizeToolOutput(artifactOpenError?.message ?? artifactCloseError?.message ?? '', 'run_shell').text
             : undefined,
-          stdoutBytes: stdoutBounded.snapshot().bytes,
-          stderrBytes: stderrBounded.snapshot().bytes,
-          stdoutSha256: stableFingerprint(outTrunc.text),
-          stderrSha256: stableFingerprint(errTrunc.text),
-          stdoutRedacted: sanitizeToolOutput(normalizeTerminalOutput(outTrunc.text), 'run_shell').redacted,
-          stderrRedacted: sanitizeToolOutput(normalizeTerminalOutput(errTrunc.text), 'run_shell').redacted,
-          durationMs,
+          stdoutBytes,
+          stderrBytes,
+          stdoutRawBytes: rawOut.totalBytes,
+          stderrRawBytes: rawErr.totalBytes,
+          stdoutTextBytes: stdoutBytes,
+          stderrTextBytes: stderrBytes,
+          stdoutSha256: stableFingerprint(outText),
+          stderrSha256: stableFingerprint(errText),
+          stdoutRawSha256: rawBytesSha256(rawOut),
+          stderrRawSha256: rawBytesSha256(rawErr),
+          decodeReplacements: stdoutDiag.replacements + stderrDiag.replacements,
+          stdoutEncoding: stdoutMeta.encoding,
+          stderrEncoding: stderrMeta.encoding,
+          encodingSource: stderrMeta.source,
+          encodingConfidence: stderrMeta.confidence,
+          contractKind: contract.kind,
+          contractConflict,
+          lossStage,
+          planMs,
+          spawnToExitMs,
+          outputTrust,
+          outputDiag,
+          stdoutRedacted: sanitizeToolOutput(normalizeTerminalOutput(outText), 'run_shell').redacted,
+          stderrRedacted: sanitizeToolOutput(normalizeTerminalOutput(errText), 'run_shell').redacted,
+          durationMs: totalMs,
           success
         })
 
-        const stdoutSafe = sanitizeToolOutput(normalizeTerminalOutput(outTrunc.text), 'run_shell')
-        const stderrSafe = sanitizeToolOutput(normalizeTerminalOutput(errTrunc.text), 'run_shell')
+        const stdoutSafe = sanitizeToolOutput(normalizeTerminalOutput(outText), 'run_shell')
+        const stderrSafe = sanitizeToolOutput(normalizeTerminalOutput(errText), 'run_shell')
         const data = {
           stdout: stdoutSafe.text,
           stderr: stderrSafe.text,
-          stdoutBytes: outSnapshot.bytes,
-          stderrBytes: errSnapshot.bytes,
+          stdoutBytes,
+          stderrBytes,
+          stdoutRawBytes: rawOut.totalBytes,
+          stderrRawBytes: rawErr.totalBytes,
+          stdoutTextBytes: stdoutBytes,
+          stderrTextBytes: stderrBytes,
+          decodeReplacements: stdoutDiag.replacements + stderrDiag.replacements,
+          // §10.4：hints 走 processResultProjection 的 hints 白名单，模型/远程 IM 都能读到同一句提示。
+          hints: outputTrust === 'suspect' ? [SHELL_OUTPUT_TRUST_SUSPECT_NOTICE] : undefined,
+          decode: {
+            stdout: stdoutDiag,
+            stderr: stderrDiag,
+            contractConflict,
+            lossStage
+          },
+          outputTrust,
+          outputDiag,
+          contract: contract.kind === 'oem' ? { kind: 'oem', codepage: contract.codepage } : { kind: contract.kind },
           stdoutRedaction: stdoutSafe.redacted ? { redacted: true, redactionReason: stdoutSafe.redactionReason, originalBytes: stdoutSafe.originalBytes, visibleBytes: stdoutSafe.visibleBytes } : undefined,
           stderrRedaction: stderrSafe.redacted ? { redacted: true, redactionReason: stderrSafe.redactionReason, originalBytes: stderrSafe.originalBytes, visibleBytes: stderrSafe.visibleBytes } : undefined,
           exitCode,
+          exitCodeHint,
+          exitCodeFamily: exitDetails?.family,
+          exitCodeSemantics: exitDetails?.semantics,
+          exitCodeAdvice: exitDetails?.advice,
+          hresult,
           interrupted: interrupted || ctx.signal.aborted,
           truncated,
           persistedOutputPath,
           outputArtifactBytes: artifact?.bytes ?? 0,
           outputArtifactSha256: artifact?.sha256,
+          outputArtifactReason: artifactReason,
+          stdoutRawSha256: rawBytesSha256(rawOut),
+          stderrRawSha256: rawBytesSha256(rawErr),
+          // §9.4：artifact 内容为原始字节；path 在投影层降级为 artifactId（与 persistedOutputPath 同规则）
+          rawArtifact: artifact
+            ? {
+                path: artifact.path,
+                bytes: artifact.bytes,
+                rawBytes: rawOut.totalBytes + rawErr.totalBytes,
+                omittedBytes: rawOut.omittedBytes + rawErr.omittedBytes,
+                truncated,
+                sha256: artifact.sha256,
+                suspect: outputTrust === 'suspect',
+                note: 'unredacted' as const
+              }
+            : undefined,
           outputPersistError: artifactOpenError?.message ?? artifactCloseError?.message,
           outputPersistErrorCode: artifactOpenError || artifactCloseError ? 'OUTPUT_PERSIST_FAILED' : undefined,
           caseId: outputLimited
@@ -465,15 +585,16 @@ export async function executePreparedShellExecution(
           terminationErrorCode: terminationResult && !terminationResult.treeKillVerified ? 'TERMINATION_UNCONFIRMED' : undefined,
           terminationCaseId: terminationResult && !terminationResult.treeKillVerified ? SHELL_CASE_IDS.terminationUnconfirmed : undefined,
           outputLimitReached: outputLimited,
-          captureCaseId: (outSnapshot.bytes > 0 && stdoutSafe.text.length === 0) || (errSnapshot.bytes > 0 && stderrSafe.text.length === 0)
+          captureCaseId: (rawOut.totalBytes > 0 && stdoutSafe.text.length === 0) || (rawErr.totalBytes > 0 && stderrSafe.text.length === 0)
             ? 'SHELL_OUTPUT_CAPTURE_LOST'
             : undefined,
           status: ctx.signal.aborted ? 'cancelled' : timedOut ? 'timed_out' : outputLimited ? 'output_limited' : externalSignal ? 'signalled' : code === 0 ? 'succeeded' : 'failed',
           terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : outputLimited ? 'output_limit' : externalSignal ? 'external_signal' : 'process_exit',
           signal: externalSignal ?? terminationResult?.signal,
-          durationMs,
+          durationMs: totalMs,
+          planMs,
+          spawnToExitMs,
           shell: spec.shellId,
-          exitCodeHint,
           planDigest: prepared.planDigest,
           environmentFingerprint: prepared.environmentFingerprint
         }
@@ -508,10 +629,11 @@ export async function executePreparedShellExecution(
           return
         }
         if (code !== 0 || externalSignal) {
+          const reason = exitCodeHint ? `命令执行失败（${exitCodeHint}）` : `命令执行失败（退出码: ${code ?? 'signal'}）`
           settle('process_exit', {
             success: false,
             error: 'SHELL_PROCESS_EXIT',
-            userMessage: toToolUserError(new Error(`命令执行失败（退出码: ${code ?? 'signal'}）`), { toolName: 'run_shell' }),
+            userMessage: toToolUserError(new Error(reason), { toolName: 'run_shell' }),
             data,
             duration: Date.now() - started
           })
@@ -521,6 +643,10 @@ export async function executePreparedShellExecution(
       })()
     })
   })
+}
+
+function exitMs(spawnAtMs: number, exitAtMs: number): number {
+  return Math.max(0, exitAtMs - spawnAtMs)
 }
 
 /** 测试 shell 可执行路径 */
@@ -543,8 +669,8 @@ export async function testShellExecutable(
       outBufs.push(b)
     })
     spawned.proc.on('close', (code) => {
-      const out = decodeProcessOutput(Buffer.concat(outBufs))
-      resolve(code === 0 && out.includes('ok') ? { ok: true } : { ok: false, error: `退出码 ${code}` })
+      const { text } = decodeChildOutput(Buffer.concat(outBufs), { contract: defaultContractForPlatform() })
+      resolve(code === 0 && text.includes('ok') ? { ok: true } : { ok: false, error: `退出码 ${code}` })
     })
     spawned.proc.on('error', (e) => resolve({ ok: false, error: e.message }))
   })

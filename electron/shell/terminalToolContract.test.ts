@@ -15,6 +15,7 @@ describe('buildTerminalToolContract', () => {
     expect(contract.description).toContain('«/tmp/project›name»')
     expect(contract.description).toContain('不要使用 $env:NAME')
     expect(contract.capabilityBlock).toContain('shell_profile_id: builtin-macos-bash')
+    expect(contract.capabilityBlock).toContain('output_encoding: utf8')
   })
 
   it('为 PowerShell 明确禁止 Bash 方言并保留结构化环境字段', () => {
@@ -26,7 +27,18 @@ describe('buildTerminalToolContract', () => {
     expect(contract.description).toContain('当前 OS=win32')
     expect(contract.description).toContain('$env:NODE_ENV')
     expect(contract.capabilityBlock).toContain('dialect: windows-powershell')
+    expect(contract.capabilityBlock).toMatch(/output_encoding: (utf8|auto|oem:\d+)/)
     expect(contract.capabilityBlock).toContain('executable: «powershell.exe»')
+    // 决策点 D7：native 输出的中文不得用 PS 变量/管道承接
+    expect(contract.description).toContain('native 工具')
+    expect(contract.description).toContain('不可逆')
+  })
+
+  it('D7：POSIX 方言不注入 native 文本规则（避免无关噪声）', () => {
+    const contract = buildTerminalToolContract({
+      profile: MACOS_BASH_PROFILE, os: 'darwin', cwd: '/tmp', pathSeparator: '/', supportsAnsi: true, supportsTty: false
+    })
+    expect(contract.description).not.toContain('native 工具')
   })
 
   it('terminal contract 使用冻结的 profile snapshot', () => {

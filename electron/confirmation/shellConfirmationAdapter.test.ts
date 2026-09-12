@@ -5,7 +5,7 @@ import { projectPreparedShellExecution } from './shellConfirmationAdapter'
 const env = { os: 'darwin', workDir: '/tmp/project', sensitivePaths: ['/tmp/project/.env'] }
 const prepared = (command: string, facts?: unknown) => prepareShellExecution({
   command,
-  profile: { id: 'builtin-macos-bash', dialect: 'posix-bash', executable: '/bin/bash', encoding: 'utf8' },
+  profile: { id: 'builtin-macos-bash', dialect: 'posix-bash', executable: '/bin/bash', outputEncoding: { kind: 'utf8' } },
   spawnSpec: { executable: '/bin/bash', args: ['--noprofile', '--norc', '-c', command], shellId: 'bash' },
   cwd: env.workDir,
   timeoutMs: 30_000,

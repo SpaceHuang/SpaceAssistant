@@ -1,4 +1,5 @@
 import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
+import { appendProgressOutputRaw } from './terminalScrollback'
 
 export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered'
 
@@ -29,7 +30,7 @@ type AssistantFactEventPayload =
   | { type: 'content-delta'; text: string }
   | { type: 'thinking-delta'; text: string }
   | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel'] }
-  | { type: 'tool-progress'; id: string; seq: number; text: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
+  | { type: 'tool-progress'; id: string; seq: number; text: string; rawDelta?: string; rawEncoding?: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
   | {
       type: 'confirm-requested'
       id: string
@@ -89,7 +90,18 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     const validProcessPid = typeof processPid === 'number' && Number.isInteger(processPid) && processPid > 0 ? processPid : undefined
     const validProcessGroupId = typeof event.processGroupId === 'number' && Number.isInteger(event.processGroupId) && event.processGroupId > 0 ? event.processGroupId : undefined
     const validOwnerToken = typeof event.processOwnerToken === 'string' && event.processOwnerToken.length > 0 && event.processOwnerToken.length <= 256 ? event.processOwnerToken : undefined
-    next.toolCalls = next.toolCalls?.map((tool) => tool.id !== event.id || tool.status === 'completed' || tool.status === 'failed' || (tool.progressSeq ?? -1) >= event.seq ? tool : { ...tool, status: 'executing', progressOutput: event.text, progressSeq: event.seq, ...(validProcessPid === undefined ? {} : { processPid: validProcessPid }), ...(validProcessGroupId === undefined ? {} : { processGroupId: validProcessGroupId }), ...(validOwnerToken === undefined ? {} : { processOwnerToken: validOwnerToken }) })
+    const rawDelta = typeof event.rawDelta === 'string' && event.rawDelta.length > 0 ? event.rawDelta : undefined
+    // terminal 模式的 raw 增量不能当成明文进度（是 base64）：累加进 progressOutputRaw，
+    // 并保留主进程下发的编码标签供终端回放使用。
+    const progressFieldsFor = (tool: ToolCallRecord) =>
+      rawDelta === undefined
+        ? { progressOutput: event.text, progressOutputRaw: undefined, progressOutputRawLabel: undefined }
+        : {
+            progressOutput: undefined,
+            progressOutputRaw: appendProgressOutputRaw(tool.progressOutputRaw, rawDelta),
+            progressOutputRawLabel: typeof event.rawEncoding === 'string' && event.rawEncoding.length > 0 ? event.rawEncoding : undefined
+          }
+    next.toolCalls = next.toolCalls?.map((tool) => tool.id !== event.id || tool.status === 'completed' || tool.status === 'failed' || (tool.progressSeq ?? -1) >= event.seq ? tool : { ...tool, status: 'executing', ...progressFieldsFor(tool), progressSeq: event.seq, ...(validProcessPid === undefined ? {} : { processPid: validProcessPid }), ...(validProcessGroupId === undefined ? {} : { processGroupId: validProcessGroupId }), ...(validOwnerToken === undefined ? {} : { processOwnerToken: validOwnerToken }) })
   } else if (event.type === 'tool-result') {
     next.toolCalls = next.toolCalls?.map((tool) => tool.id !== event.id || terminalTool(tool.status) ? tool : { ...tool, result: event.result, status: event.result.success ? 'completed' : 'failed', completedAt: deps.now, duration: tool.startedAt == null ? undefined : deps.now - tool.startedAt })
   } else if (event.type === 'confirm-requested') {

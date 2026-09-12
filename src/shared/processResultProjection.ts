@@ -70,7 +70,15 @@ const PROCESS_KEYS = new Set([
   'outputArtifactSha256', 'outputPersistErrorCode', 'terminationErrorCode', 'terminationSignal',
   'treeKillVerified', 'outputLimitReached', 'captureCaseId', 'progressCaseId', 'terminationCaseId',
   'artifactId', 'persistedOutputPath', 'shell', 'planDigest', 'retryCount', 'retryExhausted',
-  'processResult', 'cwd', 'executable', 'durationMs', 'artifactAvailable', 'redacted'
+  'processResult', 'cwd', 'executable', 'durationMs', 'artifactAvailable', 'redacted',
+  // 需求 §9.4-§9.6 / §10.4：编码契约、字节口径与解码诊断
+  'stdoutEncoding', 'stderrEncoding', 'encodingSource', 'encodingConfidence', 'contractKind',
+  'contractConflict', 'lossStage', 'outputTrust', 'outputDiag', 'decodeReplacements', 'decode', 'contract',
+  'stdoutRawBytes', 'stderrRawBytes', 'stdoutTextBytes', 'stderrTextBytes', 'stdoutRawSha256', 'stderrRawSha256',
+  'rawArtifact', 'outputArtifactReason', 'exitCodeHint', 'exitCodeFamily', 'exitCodeSemantics', 'exitCodeAdvice',
+  'hresult', 'planMs', 'spawnToExitMs',
+  // §10.3：方言错配等计划错误的结构化 data（signals/hints 必须到达模型）
+  'signals', 'hints', 'detectedSyntax', 'expectedDialect', 'shellProfileId', 'reason'
 ])
 const DIAGNOSTIC_KEYS = new Set(['caseId', 'retryable', 'category', 'code', 'phase', 'attempt'])
 
@@ -127,9 +135,26 @@ function basename(value: string): string {
 /** 无法安全暴露 artifact 主键时的兜底值；渲染层不得用它调用打开接口（主进程必然拒绝）。 */
 export const REDACTED_ARTIFACT_ID = 'artifact-redacted'
 
-function artifactIdForPersistedPath(filePath: string): string {
+export function artifactIdForPersistedPath(filePath: string): string {
   const name = filePath.split(/[\\/]/).pop() ?? ''
   return /^[0-9a-f]{64}\.log$/i.test(name) ? `artifact-${name.slice(0, -4)}` : REDACTED_ARTIFACT_ID
+}
+
+/** [output-diag] 行允许的 artifact 引用形态。 */
+const SAFE_ARTIFACT_REF_RE = /^(?:none|artifact-(?:redacted|[0-9a-f]{64}))$/
+
+/**
+ * 诊断行里的 artifact 引用只允许 `none` / `artifact-<64hex>` / `artifact-redacted`。
+ * 传入持久化绝对路径（含 OS 用户名）时按同一规则降级：只有 basename 命中
+ * `<64hex>.log` 才保留可追溯 id，否则一律 `artifact-redacted`。
+ */
+export function sanitizeArtifactRef(value: string | undefined): string {
+  if (value === undefined) return 'none'
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return 'none'
+  const normalized = trimmed.toLowerCase()
+  if (SAFE_ARTIFACT_REF_RE.test(normalized)) return normalized
+  return artifactIdForPersistedPath(trimmed)
 }
 
 function relativeToWorkspace(value: string, workspaceRoot: string): string {
@@ -161,6 +186,140 @@ function safeRedaction(value: unknown): Record<string, unknown> | undefined {
   if (typeof source.originalBytes === 'number') out.originalBytes = source.originalBytes
   if (typeof source.visibleBytes === 'number') out.visibleBytes = source.visibleBytes
   return Object.keys(out).length ? out : undefined
+}
+
+const SAFE_ENCODING_LABEL_RE = /^[A-Za-z0-9_.:-]{1,32}$/
+const SAFE_ENCODING_SOURCES = new Set(['bom', 'utf16-pattern', 'utf16-structure', 'strict-utf8', 'contract', 'oem-codepage', 'fallback-latin1'])
+const SAFE_CONFIDENCE = new Set(['exact', 'high', 'medium', 'low'])
+const SAFE_CONTRACT_KINDS = new Set(['auto', 'utf8', 'oem', 'utf16le'])
+const SAFE_EXIT_CODE_FAMILIES = new Set(['success', 'posix', 'windows-host', 'unknown-windows-host'])
+const SAFE_LOSS_STAGES = new Set(['host'])
+const SAFE_ARTIFACT_REASONS = new Set(['failed', 'suspect', 'truncated', 'size'])
+const SAFE_ENCODING_SOURCE_KEYS = new Set(['encodingSource', 'encodingConfidence', 'contractConflict', 'lossStage', 'outputTrust', 'exitCodeFamily', 'contractKind'])
+
+/** 单条流的解码诊断（§10.4）：只放行结构化的枚举与计数，不携带任何文本。 */
+function projectDecodeBlock(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const out: Record<string, unknown> = {}
+  for (const key of ['stdout', 'stderr'] as const) {
+    const stream = (value as Record<string, unknown>)[key]
+    if (!stream || typeof stream !== 'object' || Array.isArray(stream)) continue
+    const source = stream as Record<string, unknown>
+    const projected: Record<string, unknown> = {}
+    if (typeof source.encoding === 'string' && SAFE_ENCODING_LABEL_RE.test(source.encoding)) projected.encoding = source.encoding
+    if (typeof source.source === 'string' && SAFE_ENCODING_SOURCES.has(source.source)) projected.source = source.source
+    if (typeof source.confidence === 'string' && SAFE_CONFIDENCE.has(source.confidence)) projected.confidence = source.confidence
+    if (typeof source.replacements === 'number') projected.replacements = source.replacements
+    if (typeof source.suspect === 'boolean') projected.suspect = source.suspect
+    if (Object.keys(projected).length > 0) out[key] = projected
+  }
+  const root = value as Record<string, unknown>
+  if (root.contractConflict === 'contract-mismatch') out.contractConflict = root.contractConflict
+  if (typeof root.lossStage === 'string' && SAFE_LOSS_STAGES.has(root.lossStage)) out.lossStage = root.lossStage
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 生效契约（§7.1）：只放行判别式与代码页。 */
+function projectContractBlock(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  if (typeof source.kind !== 'string' || !SAFE_CONTRACT_KINDS.has(source.kind)) return undefined
+  const out: Record<string, unknown> = { kind: source.kind }
+  if (source.kind === 'oem' && typeof source.codepage === 'number') out.codepage = source.codepage
+  return out
+}
+
+/** 原始字节留档（§9.4）：绝对路径一律降级为 artifactId，与 persistedOutputPath 同规则。 */
+function projectRawArtifactBlock(value: unknown, sink: ProcessProjectionSink): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  if (typeof source.path === 'string') out.artifactId = artifactIdForPersistedPath(source.path)
+  for (const key of ['bytes', 'rawBytes', 'omittedBytes'] as const) {
+    if (typeof source[key] === 'number') out[key] = source[key]
+  }
+  if (typeof source.truncated === 'boolean') out.truncated = source.truncated
+  if (typeof source.suspect === 'boolean') out.suspect = source.suspect
+  if (typeof source.sha256 === 'string' && SAFE_HASH_RE.test(source.sha256)) out.sha256 = source.sha256
+  if (source.note === 'unredacted') out.note = source.note
+  if (Object.keys(out).length === 0) return undefined
+  if (sink === 'telemetry' && out.artifactId === REDACTED_ARTIFACT_ID) delete out.artifactId
+  return out
+}
+
+/** HRESULT 解释（§10.2）：name/semantics 是稳定常量，advice 必须逐条脱敏。 */
+function projectHresultBlock(value: unknown, sink: ProcessProjectionSink): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  if (typeof source.code === 'string' && /^0x[0-9A-F]{8}$/.test(source.code)) out.code = source.code
+  if (typeof source.name === 'string' && STABLE_CODE_RE.test(source.name)) out.name = source.name
+  // MINOR：指令性文本与 hints 口径一致，telemetry 只留 code/name 这类稳定枚举。
+  if (sink !== 'telemetry') {
+    const meaning = sanitizeAdviceText(source.meaning)
+    if (meaning) out.meaning = meaning
+    const advice = sanitizeAdviceList(source.advice)
+    if (advice) out.advice = advice
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 按 UTF-16 码元截断时不要把代理对切成孤立高代理（否则渲染成 U+FFFD）。 */
+function sliceWithoutSplittingSurrogate(text: string, limit: number): string {
+  const cut = text.slice(0, limit)
+  const last = cut.charCodeAt(cut.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut
+}
+
+function sanitizeAdviceText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = sanitizeAgentText(value).text
+  return text.length > 0 && text.length <= 512 ? text : undefined
+}
+
+function sanitizeAdviceList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: string[] = []
+  for (const entry of value.slice(0, 8)) {
+    const text = sanitizeAdviceText(entry)
+    if (text) out.push(text)
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/** 稳定代码列表（如方言错配 signals）：逐项校验形态，不携带自由文本。 */
+function sanitizeCodeList(value: unknown, pattern: RegExp): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out = value
+    .filter((entry): entry is string => typeof entry === 'string' && pattern.test(entry))
+    .slice(0, 16)
+  return out.length > 0 ? out : undefined
+}
+
+const DIAG_ARTIFACT_TOKEN = ' rawArtifact='
+
+/**
+ * [output-diag] 行是纯 ASCII 机器可读诊断；只放行前缀正确且长度受限的行。
+ * 额外把 `rawArtifact=` 值降级为 artifactId：即使生成端未来回退成拼绝对路径，
+ * 绝对路径（含 OS 用户名）也不会抵达模型上下文、历史与遥测。
+ */
+function sanitizeDiagnosticLines(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const out: string[] = []
+  for (const entry of value.slice(0, 4)) {
+    if (typeof entry !== 'string') continue
+    if (!entry.startsWith('[output-diag] ') || entry.length > 1024) continue
+    out.push(sanitizeDiagnosticLine(entry))
+  }
+  return out.length > 0 ? out : undefined
+}
+
+function sanitizeDiagnosticLine(entry: string): string {
+  const index = entry.indexOf(DIAG_ARTIFACT_TOKEN)
+  if (index < 0) return entry
+  const head = entry.slice(0, index)
+  const rawValue = entry.slice(index + DIAG_ARTIFACT_TOKEN.length)
+  return `${head}${DIAG_ARTIFACT_TOKEN}${sanitizeArtifactRef(rawValue)}`
 }
 
 function projectDiagnostic(value: unknown, sink: ProcessProjectionSink): Record<string, unknown> | undefined {
@@ -197,6 +356,22 @@ function projectPathValue(
   return { scope }
 }
 
+/**
+ * §10.3：`reason` 是计划期诊断的自由文本，只允许随计划错误 payload（稳定 SHELL_* code）
+ * 或方言错配标记一起转发。普通进程结果里的未知 `reason`（例如 spawn 失败的原始诊断）
+ * 必须被丢弃，否则会绕开「未知字段不进 Agent payload」的既有契约。
+ */
+function hasPlanDiagnosticMarker(source: Record<string, unknown>): boolean {
+  if (typeof source.detectedSyntax === 'string' || typeof source.expectedDialect === 'string') return true
+  if (source.signals !== undefined) {
+    // MINOR：signals 必须是「合法且非空」的 code 列表，才为 reason 放行自由文本；
+    // 否则任意数组（例如 [{ injected: true }]）都能成为绕开白名单的通道。
+    const signals = sanitizeCodeList(source.signals, /^[a-z0-9:_-]{1,32}$/)
+    if (signals && signals.length > 0) return true
+  }
+  return typeof source.code === 'string' && /^SHELL_[A-Z0-9_]{1,48}$/.test(source.code)
+}
+
 function projectProcessDataForSink(
   source: Record<string, unknown>,
   sink: ProcessProjectionSink,
@@ -230,9 +405,104 @@ function projectProcessDataForSink(
         const safe = sanitizeAgentText(entry).text
         out[key] = safe.length <= maxOutputChars
           ? safe
-          : `${safe.slice(0, maxOutputChars)}…[output truncated]`
+          : `${sliceWithoutSplittingSurrogate(safe, maxOutputChars)}…[output truncated]`
         if (safe.length > maxOutputChars) out.truncated = true
       }
+      continue
+    }
+    if (key === 'decode') {
+      const projected = projectDecodeBlock(entry)
+      if (projected) out[key] = projected
+      continue
+    }
+    if (key === 'contract') {
+      const projected = projectContractBlock(entry)
+      if (projected) out[key] = projected
+      continue
+    }
+    if (key === 'rawArtifact') {
+      const projected = projectRawArtifactBlock(entry, sink)
+      if (projected) out[key] = projected
+      continue
+    }
+    if (key === 'hresult') {
+      const projected = projectHresultBlock(entry, sink)
+      if (projected) out[key] = projected
+      continue
+    }
+    if (key === 'signals') {
+      const signals = sanitizeCodeList(entry, /^[a-z0-9:_-]{1,32}$/)
+      if (signals) out[key] = signals
+      continue
+    }
+    if (key === 'hints') {
+      // 指令性文本：逐条脱敏（§10.3 注），telemetry 不落文本
+      if (sink !== 'telemetry') {
+        const hints = sanitizeAdviceList(entry)
+        if (hints) out[key] = hints
+      }
+      continue
+    }
+    if (key === 'detectedSyntax' || key === 'expectedDialect' || key === 'shellProfileId') {
+      if (typeof entry === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(entry)) out[key] = entry
+      continue
+    }
+    if (key === 'reason') {
+      if (sink !== 'telemetry' && hasPlanDiagnosticMarker(source)) {
+        const text = sanitizeAdviceText(entry)
+        if (text) out[key] = text
+      }
+      continue
+    }
+    if (key === 'outputDiag') {
+      const lines = sanitizeDiagnosticLines(entry)
+      if (lines) out[key] = lines
+      continue
+    }
+    if (key === 'exitCodeAdvice') {
+      if (sink !== 'telemetry') {
+        const advice = sanitizeAdviceList(entry)
+        if (advice) out[key] = advice
+      }
+      continue
+    }
+    if (key === 'exitCodeHint' || key === 'exitCodeSemantics') {
+      if (key === 'exitCodeSemantics' && typeof entry === 'string' && STABLE_CODE_RE.test(entry)) {
+        out[key] = entry
+        continue
+      }
+      const text = key === 'exitCodeHint' ? sanitizeAdviceText(entry) : undefined
+      if (text && sink !== 'telemetry') out[key] = text
+      continue
+    }
+    if (key === 'outputArtifactReason') {
+      if (typeof entry === 'string' && SAFE_ARTIFACT_REASONS.has(entry)) out[key] = entry
+      continue
+    }
+    if (SAFE_ENCODING_SOURCE_KEYS.has(key)) {
+      const allowed =
+        key === 'encodingSource' ? SAFE_ENCODING_SOURCES
+        : key === 'encodingConfidence' ? SAFE_CONFIDENCE
+        : key === 'contractKind' ? SAFE_CONTRACT_KINDS
+        : key === 'exitCodeFamily' ? SAFE_EXIT_CODE_FAMILIES
+        : key === 'lossStage' ? SAFE_LOSS_STAGES
+        : undefined
+      if (allowed) {
+        if (typeof entry === 'string' && allowed.has(entry)) out[key] = entry
+        continue
+      }
+      if (key === 'contractConflict') {
+        if (entry === 'contract-mismatch') out[key] = entry
+        continue
+      }
+      if (key === 'outputTrust') {
+        if (entry === 'ok' || entry === 'suspect') out[key] = entry
+        continue
+      }
+      continue
+    }
+    if (key === 'stdoutEncoding' || key === 'stderrEncoding') {
+      if (typeof entry === 'string' && SAFE_ENCODING_LABEL_RE.test(entry)) out[key] = entry
       continue
     }
     if (key === 'stdoutRedaction' || key === 'stderrRedaction') {

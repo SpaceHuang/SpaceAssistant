@@ -8,13 +8,19 @@ import { ExecutionLifecycle } from './executionLifecycle'
 import { ProgressThrottle } from './progressThrottle'
 
 describe('shell lifecycle local benchmark fixture', () => {
+  // §9.2：缓冲区现在只处理原始字节，文本是快照之上的投影（不再由缓冲自行拼接文本）。
   it('100MB output remains bounded while bytes are fully counted', () => {
     const buffer = new BoundedOutputBuffer(4096)
-    const chunk = Buffer.alloc(64 * 1024, 65).toString('utf8')
-    for (let i = 0; i < 1600; i++) buffer.append(chunk)
-    const snapshot = buffer.snapshot()
-    expect(snapshot.bytes).toBe(100 * 1024 * 1024)
-    expect(Buffer.byteLength(snapshot.text)).toBeLessThanOrEqual(4096)
+    const chunk = Buffer.alloc(64 * 1024, 65)
+    for (let i = 0; i < 1600; i++) buffer.appendBytes(chunk)
+    const snapshot = buffer.snapshotBytes()
+    expect(snapshot.totalBytes).toBe(100 * 1024 * 1024)
+    // head=limit、tail=limit/2（§9.2），保留量上界为 1.5 * limit
+    expect(snapshot.retainedBytes).toBeLessThanOrEqual(4096 + 2048)
+    expect(snapshot.head.length).toBe(4096)
+    expect(snapshot.tail.length).toBe(2048)
+    expect(snapshot.omittedBytes).toBe(100 * 1024 * 1024 - snapshot.retainedBytes)
+    expect(snapshot.truncated).toBe(true)
   })
 
   it('progress 事件受时间和每秒预算限制', () => {

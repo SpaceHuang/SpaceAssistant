@@ -46,6 +46,8 @@ import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { clearDecisionCacheOnSessionDelete } from './confirmation/cacheMaintenanceHooks'
 import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from './confirmation/legacyTrustRevocation'
 import { getSecurityAuditLog, setSecurityAuditRetentionDays } from './confirmation/audit'
+import { AUTO_CONTRACT } from './processOutput/contracts'
+import { decodeChildOutput } from './processOutput/decodeChildOutput'
 import { readSecurityAuditRetentionDays } from './confirmation/policyRulesRuntime'
 import { recordSettingsChange } from './confirmation/settingsAudit'
 import { isToolEnabledByConfig } from './toolsConfigRuntime'
@@ -556,18 +558,16 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const py = typeof payload.path === 'string' && payload.path.trim() ? payload.path.trim() : 'python'
       return await new Promise((resolve) => {
         const proc = spawn(py, ['--version'], { windowsHide: true, shell: false })
-        let out = ''
-        proc.stdout?.on('data', (d: Buffer) => {
-          out += d.toString('utf8')
-        })
-        proc.stderr?.on('data', (d: Buffer) => {
-          out += d.toString('utf8')
-        })
+        // §12-#9：与 shell / script 通道共用同一解码入口（契约 auto：解释器自行决定）。
+        const chunks: Buffer[] = []
+        const appendChunk = (d: Buffer) => chunks.push(d)
+        proc.stdout?.on('data', appendChunk)
+        proc.stderr?.on('data', appendChunk)
         proc.on('error', (err) => {
           resolve({ ok: false, error: err.message })
         })
         proc.on('close', (code) => {
-          const v = out.trim()
+          const v = decodeChildOutput(Buffer.concat(chunks), { contract: AUTO_CONTRACT }).text.trim()
           if (code === 0 && v) resolve({ ok: true, version: v })
           else resolve({ ok: false, error: v || `${ErrorCodes.SHELL_PROCESS_EXIT_CODE}|${code ?? ''}` })
         })
