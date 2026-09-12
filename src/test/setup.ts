@@ -53,6 +53,10 @@ if (typeof window !== 'undefined') {
     configGet: api.configGet ?? (async () => ({ workDir: '' } as AppConfig)),
     getToolExposureList: api.getToolExposureList ?? (async () => []),
     onToolExposureChanged: api.onToolExposureChanged ?? (() => () => {})
+    ,skillInstallOnProgress: api.skillInstallOnProgress ?? (() => () => {})
+    ,skillCancelInstall: api.skillCancelInstall ?? (async () => {})
+    ,skillProbeFromUrl: api.skillProbeFromUrl ?? (async () => ({ ok: false, error: 'mock' }))
+    ,skillScanStatus: api.skillScanStatus ?? (async () => ({ skills: [], skipped: [] }))
   } as SpaceAssistantApi
 }
 

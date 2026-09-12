@@ -70,6 +70,28 @@ export async function resolveSafeWorkDirPath(workDir: string, pathInput: string)
   }
 }
 
+/** 读类工具允许的附加只读根；每个根仍经过 realpath 校验，且不影响写入路径策略。 */
+export async function resolveSafeReadPath(workDir: string, pathInput: string, extraRoots: string[] = []): Promise<string> {
+  try {
+    return await resolveSafeWorkDirPath(workDir, pathInput)
+  } catch (error) {
+    const trimmed = pathInput.trim()
+    if (!isAbsolutePathInput(trimmed)) throw error
+    const candidate = path.resolve(trimmed)
+    for (const root of extraRoots) {
+      try {
+        const rootReal = await fs.realpath(path.resolve(root))
+        const candidateReal = await fs.realpath(candidate)
+        assertInsideBase(rootReal, candidateReal)
+        return candidateReal
+      } catch (rootError) {
+        if (rootError instanceof Error && rootError.message.includes('路径超出')) continue
+      }
+    }
+    throw error
+  }
+}
+
 export type SafeWriteTarget = {
   /** 词法解析后的目标绝对路径（不跟随符号链接） */
   targetPath: string

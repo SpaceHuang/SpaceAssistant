@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App, Button, Collapse, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
+import { App, Button, Checkbox, Collapse, Input, Modal, Progress, Select, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from 'antd'
 import { ConfigResultAlert } from './ConfigResultAlert'
 import {
   isProductBuiltinSkill,
@@ -109,13 +109,24 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
   const [alwaysLoad, setAlwaysLoad] = useState<string[]>(config.skills.alwaysLoad)
   const [managementTab, setManagementTab] = useState<'installed' | 'recommended'>('installed')
   const [installingRecommendedId, setInstallingRecommendedId] = useState<string | null>(null)
+  const [githubUrl, setGithubUrl] = useState('')
+  const [githubModalOpen, setGithubModalOpen] = useState(false)
+  const [githubInstalling, setGithubInstalling] = useState(false)
+  const [githubProbing, setGithubProbing] = useState(false)
+  const [githubCandidates, setGithubCandidates] = useState<Array<{ name: string; description: string; subPath: string; totalBytes: number }>>([])
+  const [githubSelectedPaths, setGithubSelectedPaths] = useState<string[]>([])
+  const [githubProgress, setGithubProgress] = useState<{ phase: string; completed?: number; total?: number } | null>(null)
+
+  useEffect(() => window.api.skillInstallOnProgress((progress) => setGithubProgress(progress)), [])
+  const [skippedSkills, setSkippedSkills] = useState<Array<{ dirName: string; scope: 'user' | 'project'; reason: string }>>([])
 
   const loadSkills = useCallback(async () => {
     setLoading(true)
     try {
       await window.api.skillInvalidateCache()
-      const list = await window.api.skillList()
-      setSkills(list)
+      const status = await window.api.skillScanStatus()
+      setSkills(status.skills)
+      setSkippedSkills(status.skipped)
     } finally {
       setLoading(false)
     }
@@ -213,6 +224,31 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     } finally {
       setInstallingRecommendedId(null)
     }
+  }
+
+  const onInstallGithub = async () => {
+    setGithubInstalling(true)
+    setGithubProgress({ phase: 'install' })
+    try {
+      const paths = githubSelectedPaths.length ? githubSelectedPaths : [undefined]
+      const installed = []
+      for (const subPath of paths) {
+        const res = await window.api.skillInstallFromUrl({ sourceUrl: githubUrl, subPath, installAll: !subPath })
+        if (!res.ok) { setAlert({ type: 'error', text: formatUserFacingError(res.error) }); return }
+        installed.push(...res.skills)
+      }
+      setGithubModalOpen(false); setGithubUrl(''); setGithubCandidates([]); setGithubProgress(null); showInstallSuccess(installed.map((s) => s.meta.name)); await loadSkills()
+    } finally { setGithubInstalling(false) }
+  }
+
+  const onProbeGithub = async () => {
+    setGithubProbing(true)
+    try {
+      const res = await window.api.skillProbeFromUrl({ sourceUrl: githubUrl })
+      if (!res.ok) { setAlert({ type: 'error', text: formatUserFacingError(res.error) }); return }
+      setGithubCandidates(res.candidates)
+      setGithubSelectedPaths(res.candidates.map((c) => c.subPath))
+    } finally { setGithubProbing(false) }
   }
 
   const onDelete = (skill: SkillDefinition) => {
@@ -315,6 +351,9 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
               />
             </Tooltip>
           ) : null}
+          <Tooltip title={t('skills.installFromUrl')}>
+            <Button size="small" icon={<DownloadIcon />} aria-label={t('skills.installFromUrlAria')} onClick={() => setGithubModalOpen(true)} />
+          </Tooltip>
           <Tooltip title={t('skills.openDirectory')}>
             <Button
               size="small"
@@ -325,6 +364,18 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
           </Tooltip>
         </Space>
       </div>
+
+      <Modal className="sa-skill-github-modal" width={560} title={t('skills.urlModalTitle')} open={githubModalOpen} confirmLoading={githubInstalling} onCancel={() => { if (githubInstalling) void window.api.skillCancelInstall(); setGithubModalOpen(false) }} onOk={() => void onInstallGithub()} okButtonProps={{ disabled: !githubUrl.trim() }} cancelText={githubInstalling ? t('skills.urlCancel') : undefined}>
+        <div className="sa-skill-github-modal__intro">
+          <Typography.Text type="secondary">{t('skills.urlTrustWarning')}</Typography.Text>
+        </div>
+        <div className="sa-skill-github-modal__source">
+          <Input value={githubUrl} onChange={(e) => setGithubUrl(e.target.value)} placeholder={t('skills.urlPlaceholder')} autoFocus aria-label={t('skills.urlPlaceholder')} />
+          <Button loading={githubProbing} disabled={!githubUrl.trim()} onClick={() => void onProbeGithub()}>{t('skills.urlProbe')}</Button>
+        </div>
+        {githubInstalling && githubProgress ? <div className="sa-skill-github-modal__progress"><Progress percent={githubProgress.total ? Math.round((githubProgress.completed ?? 0) / githubProgress.total * 100) : undefined} status="active" format={() => githubProgress.phase} /></div> : null}
+        {githubCandidates.length > 0 ? <div className="sa-skill-github-modal__candidates"><div className="sa-skill-github-modal__section-label">{t('skills.urlProbeFound', { count: githubCandidates.length })}</div><Checkbox.Group className="sa-skill-github-candidate-list" value={githubSelectedPaths} onChange={(v) => setGithubSelectedPaths(v as string[])}>{githubCandidates.map((c) => <Checkbox key={c.subPath} value={c.subPath}><span className="sa-skill-github-candidate"><span className="sa-skill-github-candidate__name">{c.name}</span><span className="sa-skill-github-candidate__description">{c.description}</span></span></Checkbox>)}</Checkbox.Group></div> : null}
+      </Modal>
 
       <Tabs
         size="small"
@@ -370,6 +421,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
                         <Typography.Text type="secondary" className="config-field__hint">
                           {skill.meta.description}
                         </Typography.Text>
+                        {skill.source?.sourceUrl ? <Typography.Link href={skill.source.sourceUrl} target="_blank" rel="noreferrer">GitHub</Typography.Link> : null}
                       </div>
                     )
                   },
@@ -454,6 +506,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
           }
         ]}
       />
+      {skippedSkills.length > 0 ? <Collapse items={[{ key: 'skipped', label: t('skills.scanSkippedTitle', { count: skippedSkills.length }), children: skippedSkills.map((s) => <div key={`${s.scope}-${s.dirName}`}>{s.dirName}: {s.reason}</div>) }]} /> : null}
 
       {activationLog.length > 0 ? (
         <Collapse

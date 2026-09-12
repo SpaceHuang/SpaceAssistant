@@ -94,6 +94,7 @@ import { fetchServiceModels } from './llmModelListFetcher'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getCachedMemoryState, loadProjectMemory, writeProjectMemory, generateProjectMemory } from './projectMemory'
 import { createSkillManager } from './skills/skillManager'
+import { scanSkillsWithSkipped } from './skills/skillScanner'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from './skills/skillPaths'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { rebuildAppMenu } from './menu'
@@ -316,6 +317,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     getSkillsConfig: () => readSkillsConfig(ctx.db),
     getWikiConfig: () => readWikiConfig(ctx.db)
   })
+  let activeSkillInstallAbort: AbortController | null = null
   const configuringTurns = new Map<string, Promise<unknown>>()
   const configuringTurnsById = new Map<string, Promise<unknown>>()
   const configuringAbortControllers = new Map<string, AbortController>()
@@ -384,7 +386,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   ipcMain.handle(
     'tool:confirm-response',
     async (
-      _e,
+      event,
       payload: {
         requestId: string
         toolUseId: string
@@ -576,7 +578,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   ipcMain.handle(
     'shell:test-executable',
     async (
-      _e,
+      event,
       payload: { executable?: string; argsPrefix?: string[] }
     ): Promise<{ ok: boolean; error?: string }> => {
       const { testShellExecutable } = await import('./tools/runShellExecutor')
@@ -2056,6 +2058,11 @@ function readExposureInputsFromDb(
   })
 
   ipcMain.handle('skill:list', async (): Promise<SkillDefinition[]> => skillManager.list(true))
+  ipcMain.handle('skill:probe-github-url', async (_e, payload: { sourceUrl: string }) => {
+    try { return { ok: true as const, ...(await skillManager.probeFromUrl(payload.sourceUrl)) } }
+    catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
+  })
+  ipcMain.handle('skill:scan-status', async () => scanSkillsWithSkipped(ctx.getUserDataPath(), ctx.getWorkDir()))
 
   ipcMain.handle('skill:get', async (_e, payload: { name: string }): Promise<SkillDefinition | null> => {
     return skillManager.get(payload.name)
@@ -2158,21 +2165,25 @@ function readExposureInputsFromDb(
   ipcMain.handle(
     'skill:install-from-url',
     async (
-      _e,
+      event,
       payload: { sourceUrl: string; subPath?: string; installAll?: boolean; overwrite?: boolean }
     ): Promise<{ ok: true; skills: SkillDefinition[] } | { ok: false; error: string }> => {
       try {
+        activeSkillInstallAbort = new AbortController()
         const skills = await skillManager.installFromUrl(payload.sourceUrl, {
           subPath: payload.subPath,
           installAll: payload.installAll === true,
-          overwrite: payload.overwrite === true
+          overwrite: payload.overwrite === true,
+          onProgress: (progress) => event.sender.send('skill-install-progress', progress),
+          signal: activeSkillInstallAbort.signal
         })
         return { ok: true, skills }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) }
-      }
+      } finally { activeSkillInstallAbort = null }
     }
   )
+  ipcMain.handle('skill:cancel-install', async () => { activeSkillInstallAbort?.abort() })
 
   ipcMain.handle('skill:delete', async (_e, payload: { name: string }): Promise<void> => {
     skillManager.delete(payload.name)

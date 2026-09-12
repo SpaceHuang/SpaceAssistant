@@ -1,232 +1,253 @@
 # 消息事实落库归 Core 重构方案（第二场战役）
 
-> 状态：方案（待评审）
-> 基线：`main` 当前代码（建议在 Agent Loop 单路径重构、会话记录事件流之后实施）
+> 状态：v2，已吸收阻断性评审意见，待复审后实施
+> 基线：`main` 当前代码；应在 Agent Loop 单路径重构后实施
+> 评审输入：[message-fact-persistence-core-refactor-plan-review.md](../review/message-fact-persistence-core-refactor-plan-review.md)
 >
-> **一句话结论**：现在一条 assistant 消息的内容、思考、工具调用、分段，全是由渲染层订阅原始文本流后自己拼出来的，
-> 再经 IPC `chatAppendMessage`/`chatPatchMessage` 写进 `messages` 表——组装事实、生成消息 id、落库都在渲染层，
-> Core 只是个"发流/确认"的被动方，连"这条消息叫什么"（`messageId`）都不是 Core 说的算。
->
-> 这场把它翻过来：**Core 是消息事实的唯一生产者**。Core 自己生成 `messageId`、组装完整消息、自己写库、自己推
-> 增量流；渲染层**只订阅这份流做展示**，不发明 id、不回写库、不维护任何映射。
+> **结论**：新增独立于模型和渠道适配器的 `TurnCoordinator`。它在模型调用前原子创建/解析 user、创建
+> assistant `streaming` 占位，再用同一领域聚合器消费普通流、工具流和远程 IM 的规范化事件，checkpoint 并统一
+> 完成 success/error/cancel/recovery。渲染层和远程渠道只提交意图、消费权威投影，不再生成消息 id 或补写事实。
 
----
+## 1. 目标、不变量与边界
 
-## 1. 这场要解决什么
+当前所有权分裂：桌面生成 user/assistant id 并拼 `contentSegments`、`thinking`、`toolCalls`、`skillHints`；
+`runToolChatSession` 只产生 API block/工具事件；`ToolCallRecord[]` 在 renderer 私有状态机中；微信、飞书又各自创建
+user/streaming assistant；无工具桌面路径还绕过工具 loop。故不能简单在 `runToolChatSession` 结束时 append。
 
-### 1.1 病根：组装事实、生成 id、落库全在渲染层
+完成后必须满足：
 
-一条 assistant 消息的生命周期，现在是这样走的：
+1. 每个 turn 恰有一个权威 `userMessageId` 和 `assistantMessageId`；reuse-user 不复制 user。
+2. assistant 在任何模型 delta 前已以 `streaming` 状态落库。
+3. `content/thinking/contentSegments/toolCalls/skillHints/status` 只由 Core 聚合器产生。
+4. 桌面工具/无工具、微信、飞书共享同一个 owner；模型执行器不直接写消息。
+5. success/error/cancel/timeout/recovery 共用终止状态机；终态幂等且不被迟到事件改写。
+6. UI 可即时展示，但 terminal 必须携带权威 `Message` 和版本，原子校准投影。
+7. 每条消息仅 append 一次；checkpoint 只能 update 既有 assistant 行。
 
-1. Core 拿到模型返回，逐段发 `claude-chat-delta`（只有 `{ requestId, text }`）、
-   `claude-chat-thinking-delta`（只有 `{ requestId, text }`）——**纯文本增量，不带结构、不带消息 id**。
-2. 渲染层在 [ChatView.tsx:973](../../src/renderer/components/Chat/ChatView.tsx#L973) 订阅这些事件，用
-   `createContentState`/`createThinkingState` 把碎片自己拼成一条消息。
-3. 渲染层自己发明 `assistantId = crypto.randomUUID()`（[ChatView.tsx:888](../../src/renderer/components/Chat/ChatView.tsx#L888)），
-   组装 `assistantMsg`（[:892](../../src/renderer/components/Chat/ChatView.tsx#L892)），在
-   [:907](../../src/renderer/components/Chat/ChatView.tsx#L907) 调 `chatAppendMessage` 落库，再由
-   `chatPatchMessage`（[:946](../../src/renderer/components/Chat/ChatView.tsx#L946)、[:1050](../../src/renderer/components/Chat/ChatView.tsx#L1050)、
-   [:1085](../../src/renderer/components/Chat/ChatView.tsx#L1085)、[:1172](../../src/renderer/components/Chat/ChatView.tsx#L1172) 等）
-   在流式过程中反复更新 `content`/`thinking`/`contentSegments`/`toolCalls`/`status`。
-4. 而 Core 侧（[toolChatLoop.ts:785](../../electron/toolChatLoop.ts#L785)）**根本不构造 `Message`**——
-   它只把 API 返回的内容块重新塞回 `messagesForApi` 供下一轮调用，`messages` 表对它而言是"渲染层的领地"。
+不改工具授权、确认、远程权限和工作目录决策；不实现通用事件溯源；不新增 message usage 字段；保留用户主动编辑、
+删除所需的通用 patch IPC。
 
-结果：**"这条消息的事实"的权威在渲染层，连 `messageId` 的归属也在渲染层。** 这带来一连串连锁：
+前置：优先完成 Agent Loop 单路径重构。若尚未完成，本方案须同时提供普通 stream 和 tool loop 两个
+`ModelEventSource` 适配器，不能遗漏无工具路径。
 
-- Core 明明知道 usage（`stream.finalMessage().usage`，[claudeStreamHandlers.ts:504](../../electron/claudeStreamHandlers.ts#L504)），
-  却没法把它挂到某条消息上——它不知道那条消息的 id（那是渲染层生成的）。这正是上一份事件流方案里
-  `request_usage` 事件只能带 `requestId`、不带 `messageId` 的根本原因。
-- 流式期间对 `messages` 表做几十上百次 `chatPatchMessage`（每次一个 IPC + 一次 UPDATE），写库频繁、且写库由
-  渲染层异步驱动，Core 无法判断"何时算完整"。
-- 渲染层自己 `createContentState` 拼消息，等于把 Core 已经做过的聚合再重演一遍，状态机分散在 UI 侧。
-- `messageId` 由渲染层发明，Core 只是被动接受去落库——"这条消息是谁"的权威在渲染层，与"事实归 Core"相悖。
+## 2. 目标架构与所有权
 
-### 1.2 目标
+```text
+Desktop / WeChat / Feishu adapter
+              │ TurnIntent
+              ▼
+        TurnCoordinator ───── checkpoint/finalize ───► messages table
+              │
+              ▼
+       ModelEventSource
+   (unified loop / temporary adapters)
+              │ normalized events
+              ▼
+   AssistantFactAggregator
+       ├──► DB checkpoint
+       ├──► desktop projection
+       └──► remote progress/reply
+```
 
-- **`messageId` 归 Core**：Core 生成、随发送接口下发给渲染层；渲染层从不发明 id。
-- **组装事实归 Core**：Core 在流式聚合完成后自己构造 `Message`（`content`/`thinking`/`toolCalls`/
-  `contentSegments`/`status`），自己写 `messages` 表。
-- **落库归 Core**：渲染层移除对 assistant / user 消息的 `chatAppendMessage`/`chatPatchMessage` 调用。
-- **渲染层只消费**：渲染层订阅 Core 推的结构化消息流做展示，不发明 id、不拼事实、不回写库、不维护映射。
-- 之前因为"消息归渲染层"而被迫做的映射（`requestId → messageId`）**不存在**——因为 `messageId` 由 Core 在发送
-  时就给到渲染层了，两者天然对应。
-
-> 这里有个硬约束：**对话可重建的前提是"事实完整"。** user 是对话链的起点，assistant 是模型输出，二者任一
-> 缺失都无法重建一个会话。所以"user 归 Core、assistant 归 Core"必须一起做，没有"只收 assistant、user 留在
-> 渲染层"这种管一半的做法。
-
-### 1.3 本次不改的
-
-- 不改 `runToolChatSession` / 工具循环 / 确认机制本身的决策逻辑——只改"消息事实由谁组装落库"。
-- 不改上下文注入三段式（那是第三块，见另一份方案），但要确认它产出的 `system`/`tools` 是 Core 在组装请求时
-  就确定的，渲染层不参与。
-- 不新建独立的"事件流"重放语义——本场用的"增量 delta + 最终事实"与外部设计的 ASCII 事件溯源字面不同，
-  但精神一致（delta 过程 + message 事实分离）。
-
----
-
-## 2. 核心设计决定
-
-| 范围 | 决定 |
-| --- | --- |
-| 消息事实来源 | 只有 Core。Core 在流式聚合完成后构造完整 `Message`，自己写 `messages` 表。 |
-| `messageId` 归属 | **Core 生成**，在发送接口（`claudeChatCreateWithTools` 返回）时带 `{ requestId, messageId }` 下发给渲染层；渲染层从不发明 id。 |
-| 渲染层消费的流 | 核心不变的仍是 **Core↔大模型同一份** `NormalizedDelta`——它不是新协议，是同一个流式业务模型两侧（Core↔LLM 与 Core↔渲染层）的镜像。 |
-| 增量流粒度 | **保留现状（逐 token）**：Core 每接到一个文本/思考/工具增量就推一条增量事件，渲染层保持"打字机"展示。本机 IPC 每条极小，不因此改粗。 |
-| 事件契约 | 发送接口返回 `{ requestId, messageId, usage? }`（`usage` 为最终口径）；流中推增量 delta；流结束推 `done{ requestId, messageId }`。**不新增完整消息推送事件。** |
-| 为什么 `done` 带 `messageId` | `messageId` 只是几十字节的 UUID，不肥。带着它，渲染层收到 `done` 直接就定位到那条消息，不需要任何 requestId↔messageId 关联。现状渲染层是在闭包里显式持有 `assistantId`（`finishSessionRun(sessionId, requestId, assistantMessageId)`），并非建表查表——本方案延续这个"显式持有"、但把 id 来源改为 Core。 |
-| usage 分发 | **三层分工**：① `claude-chat-usage` 事件负责**中间态实时更新**——`message_start`（输入权）与新的 `message_delta` 增量（thinking 期间输出 token 增长）；② 复用 `projected: true` 事件做工具后估算；③ **最终口径走发送接口返回的 `usage`**，不再经 `claude-chat-usage` 的 `final` 分支重复发。 |
-| `done` 不带 `usage` | 现状 `done` 携带 `usage` 但渲染层从不消费（`onDone` 不读 `d.usage`，见 [ChatView.tsx:1161](../../src/renderer/components/Chat/ChatView.tsx#L1161)）——是死负载。改为只带 `{ requestId, messageId }`。 |
-| 消息写入 | Core 在流结束时一次 `appendMessage`；若 `usage`/`toolCalls` 在聚合完成后才确定，则补一次 `updateMessageContent`。不再有流式期间几十上百次 patch。 |
-| usage 归属 | Core 在写行时天然持有 usage（现场聚合），无需跨进程映射。用量留在会话级用量表（`session_usages`）作展示与可追溯数据源；是否在消息行加 usage 列留到后续按需评估，本场不做。 |
-| 修复 thinking 期间环形图卡住 | 现状 `message_delta`（[toolChatLoop.ts:682](../../electron/toolChatLoop.ts#L682)）只更新本地 `usage` 变量、**不广播**，导致模型长时间思考时环形图在"输入权"上僵住。本次把 `message_delta` 的增量 usage 也推给渲染层，让环形图随输出 token 增长实时刷新。 |
-| 渲染层状态 | 渲染层保留 `createContentState` 作**即时展示**用（订阅增量流），但**不再回写库**；`done` 带 `messageId`，渲染层直接按 id 收尾。 |
-| user 消息 | 也归 Core。渲染层只发原始输入，Core 生成 user 消息、落库、推送展示。 |
-
----
-
-## 3. 改之前的一些事实
-
-- Core 现在发的流式事件（[claudeStreamHandlers.ts](../../electron/claudeStreamHandlers.ts) +
-  [toolChatLoop.ts](../../electron/toolChatLoop.ts)）：
-  - `claude-chat-delta` { requestId, text } —— 纯文本增量；
-  - `claude-chat-thinking-delta` { requestId, text } —— 纯文本思考增量；
-  - `claude-chat-usage` { requestId, sessionId, usage, projected? } —— 现状只在 `message_start`（输入权）、`final`（最终权）、
-    工具后 `projected` 时发；`message_delta` 虽捕获 usage 增量但**不发送**；
-  - `claude-chat-done` { requestId, usage? } —— 现状带 `usage` 但渲染层不消费（死负载）；
-  - `claude-chat-error` { requestId, message }。
-- 渲染层订阅入口（[ChatView.tsx:973](../../src/renderer/components/Chat/ChatView.tsx#L973)）用
-  `window.api.claudeChatOnDelta` 等，收到的是**原始文本**，靠 `createContentState`/`createThinkingState` 拼接。
-- assistant 消息 id 由渲染层发明（[ChatView.tsx:888](../../src/renderer/components/Chat/ChatView.tsx#L888)
-  `assistantId = crypto.randomUUID()`），落库（[:892](../../src/renderer/components/Chat/ChatView.tsx#L892)、
-  `chatAppendMessage` [:907](../../src/renderer/components/Chat/ChatView.tsx#L907)）→ 主进程
-  `chat:append-message`/`chat:patch-message`（[appIpc.ts:772](../../electron/appIpc.ts#L772)、[:781](../../electron/appIpc.ts#L781)）→
-  `appendMessage`/`updateMessageContent`（[operations.ts:347](../../electron/database/operations.ts#L347)、[:668](../../electron/database/operations.ts#L668)）。
-- user 消息落库：渲染层 `prepareSendContext` → `chatAppendMessage(userMsg)`
-  （[messageMutationGateway.ts:149](../../src/renderer/services/messageMutationGateway.ts#L149)）、
-  [ChatView.tsx:544](../../src/renderer/components/Chat/ChatView.tsx#L544)。
-- Core 侧不构造 `Message`（[toolChatLoop.ts:785](../../electron/toolChatLoop.ts#L785)）。
-- `Message` 领域类型（[domainTypes.ts:646](../../src/shared/domainTypes.ts#L646)）含
-  `content`/`toolUse`/`toolCalls`/`thinking`/`contentSegments`/`skillHints`/`attachments`/`imagesDeliveredToApi`/`status`/`schemaVersion`。
-
----
-
-## 4. 工作包
-
-> 每个 WP 拆成能独立验证的提交。每阶段收尾跑定向测试 + `npm run build:electron:incremental`；
-> 全量 `npm test` 只在阶段收尾 / 提交前跑（遵循 AGENTS.md 的会话成本纪律）。
-
-### WP0：消息事实归 Core —— 生成 id、组装、落库
-
-**做什么**
-
-1. 在 `runToolChatSession`（或流式聚合 `aggregateDeltas` 收尾处）构造完整 `Message`：`messageId` 由 Core 生成，
-   `content`/`thinking`/`toolCalls`/`contentSegments`/`status` 从聚合结果填。
-2. 发送入口返回 `{ requestId, messageId }`，让渲染层从一开始就知道这条消息的 id。
-3. 流结束时一次 `appendMessage`；`usage` 在聚合完成时随行写入或补一次 `updateMessageContent`。
-
-**怎么验收**
-
-- `runToolChatSession` 结束后 `messages` 表里已有完整 assistant 消息，`messageId` 由 Core 生成。
-- 一次模型调用只 `appendMessage` 一次 + 至多一次补 `usage` 的 `updateMessageContent`，不再有几十次 patch。
-
-### WP1：统一流式事件为结构化 delta + done 带 messageId
-
-**做什么**
-
-1. 在 `src/shared/` 定义 `NormalizedDelta`（复用 Agent Loop WP1 的 `StreamClient` 产物），把 `claude-chat-delta`/
-   `claude-chat-thinking-delta` 的负载从 `{ requestId, text }` 升级为结构化 delta（必要时向后兼容或改签名）。
-2. 把 `claude-chat-done` 负载改为 `{ requestId, messageId }`（去掉无人消费的 `usage`）。
-3. 给 `message_delta` 补上 usage 增量广播：把 [toolChatLoop.ts:682](../../electron/toolChatLoop.ts#L682) 捕获的
-   `message_delta.usage` 也经 `claude-chat-usage` 推给渲染层（现状只更新本地 `usage`、不发送），
-   让 thinking 期间环形图随输出 token 增长实时刷新。
-4. `claude-chat-usage` 的 `final` 分支（[toolChatLoop.ts:754](../../electron/toolChatLoop.ts#L754) /
-   [claudeStreamHandlers.ts:514](../../electron/claudeStreamHandlers.ts#L514)）不再重复发最终 usage——
-   该最终口径由发送接口返回负载承担，避免与 invoke 返回值双份。
-
-**怎么验收**
-
-- 渲染层能拿到结构化 delta；`done` 带 `messageId`，渲染层直接按 id 收尾；`done` 不再带 `usage`。
-- `claude-chat-done` 单测：负载为 `{ requestId, messageId }`。
-- 大模型长时间 thinking 期间，`message_delta` 触发多次 `claude-chat-usage` 事件，环形图随输出 token 增长实时刷新。
-- 最终 usage 只经发送接口返回给到渲染层一次；`claude-chat-usage` 不再在 `final` 时重复发。
-
-### WP2：渲染层改为只消费
-
-**做什么**
-
-1. 渲染层保留订阅增量流（`claudeChatOnDelta`）做即时展示，但 `createContentState` 只维护**内存展示态**，
-   不再回写库。
-2. 移除渲染层对 assistant 消息的 `chatAppendMessage`/`chatPatchMessage` 调用（[ChatView.tsx:907](../../src/renderer/components/Chat/ChatView.tsx#L907)、
-   [:946](../../src/renderer/components/Chat/ChatView.tsx#L946)、[:1050](../../src/renderer/components/Chat/ChatView.tsx#L1050)、
-   [:1085](../../src/renderer/components/Chat/ChatView.tsx#L1085)、[:1172](../../src/renderer/components/Chat/ChatView.tsx#L1172) 等）。
-3. 删除渲染层 `assistantId = crypto.randomUUID()`（[:888](../../src/renderer/components/Chat/ChatView.tsx#L888)），改用发送接口返回的 `messageId`。
-4. 在 `done` 处理里用 Core 带来的 `messageId` 收尾，不再自己生成。
-
-**怎么验收**
-
-- 渲染层不再向 `messages` 表写消息（user / assistant 都归 Core）；渲染层只订阅做展示。
-- UI 流式展示不变：增量流驱动即时显示，`done` 到达后按 `messageId` 收尾。
-
-### WP3：user 消息写库也归 Core
-
-**做什么**
-
-1. 把 user 消息落库从渲染层 `prepareSendContext`（[messageMutationGateway.ts:149](../../src/renderer/services/messageMutationGateway.ts#L149)）
-   的 `chatAppendMessage(userMsg)` 移到 Core：Core 在收到发送请求时落库 user 消息 + 广播。
-2. 渲染层不再 `chatAppendMessage(userMsg)`（[ChatView.tsx:544](../../src/renderer/components/Chat/ChatView.tsx#L544)），
-   只负责把用户原始输入发给 Core（经 `claudeChatCreateWithTools`），由 Core 生成 user 消息、写库、再推送展示。
-
-**怎么验收**
-
-- user / assistant 消息的落库入口一致（都在 Core），渲染层只订阅做展示。
-- 一次对话从 user 到 assistant 的完整事实链都能在 `messages` 表中还原，无需渲染层参与。
-
-### WP4：收敛完结——确认无映射、清理多余 IPC
-
-**做什么**
-
-1. **确认无 requestId↔messageId 映射**：现状渲染层是在闭包里显式持有 `assistantId`（`finishSessionRun(sessionId, requestId, assistantMessageId)`），
-   并未建表查表；messageId 归 Core 后，渲染层改为持有 Core 下发的 id，仍显式传递，无需新增映射。
-2. 清理 `chat:patch-message` 中用于流式更新 assistant 消息的路径（保留用户编辑/删除所需的 patch）。
-3. 迁移受影响测试（直测 `chatStreamService`、`ChatView` 里 patch assistant 消息的用例）。
-
-**怎么验收**
-
-- `rg` 全仓无残留的"渲染层补写 assistant 消息"调用；`registerSessionRun`/`finishSessionRun` 的 `assistantMessageId`
-  参数来源改为 Core 下发值；typecheck/定向测试通过。
-
----
-
-## 5. 测试策略
-
-- 共享层（`NormalizedDelta`/聚合）归 `src/shared` 纯函数测试。
-- 主进程（Core 生成 id / 组装 / 落库消息）归 `electron` 项目，定向 `npm exec vitest run ...`。
-- 渲染层「只消费、不回写」验证：`ChatView` 测试断言不再调用 `chatAppendMessage`/`chatPatchMessage`（assistant 消息），
-  且使用发送接口返回的 `messageId`。
-- 全量 `npm test` 仅在 WP 阶段收尾与提交前跑。
-
----
-
-## 6. 风险与残留
-
-| 风险 / 残留 | 影响 | 怎么缓解 |
+| 组件 | 负责 | 不负责 |
 | --- | --- | --- |
-| 渲染层展示态与库中事实短暂不一致 | 流式中途 UI 与最终落库有差 | 明确"展示走增量、落库走最终态"；渲染层无需用 Core 的完整 Message 校准，本地 `createContentState` 即事实 |
-| 移除渲染层回写后，用户手动编辑/删除 assistant 消息受影响 | 编辑/删除可能仍走 patch | 保留 `chat:patch-message` 的编辑/删除路径，仅移除"流式自动 patch" |
-| Core 落库时机晚于展示 | 崩溃时可能"展示了但没落库" | 加大 `appendMessage` 的原子性；配合事件流补闭（见会话记录方案） |
-| 渲染层仍保留 `createContentState` | 双份状态（内存 + 库） | 明确其仅作即时展示，属"投影"而非事实；收敛到非持久 |
-| 增量流升级为结构化 delta 的兼容性 | 渲染层既有调用方可能失效 | 向后兼容或分段改签名，配套迁移测试 |
+| Coordinator | intent 校验、id/顺序、占位、串行事件、checkpoint、finalize、恢复 | 供应商 SSE、UI、IM 文案 |
+| Aggregator | 纯规约完整 `Message`、版本和状态机 | IO、随机数、授权决策 |
+| ModelEventSource | 把普通流/工具 loop 转为规范化事件 | id、append/patch 消息 |
+| 渠道适配器 | 提交输入、呈现投影/终态 | 构造 ToolCallRecord、完成消息 |
+| renderer | 订阅投影、发送确认/取消/编辑命令 | 发明 id、拼权威事实、流式写库 |
 
----
+`runToolChatSession` 只是 ModelEventSource。微信/飞书进度钩子也消费同一投影，不能维护平行消息事实。
 
-## 7. 待确认项
+## 3. 启动契约与严格时序
 
-1. **`message_delta` 增量广播的频率**：thinking 期间 token 增长快，`message_delta` 可能高频触发。是否做节流/合并，
-   避免环形图刷新过密。建议按现 `usage` 事件频率抛出即可（本机 IPC，代价极小），如刷屏再考虑节流。
+### 3.1 TurnIntent
 
----
+```ts
+type TurnIntent =
+  | { mode: 'create-user'; requestId: string; sessionId: string;
+      input: { text: string; attachments?: ChatImageAttachment[] }; excludeMessageIds?: string[]; config: TurnConfig }
+  | { mode: 'reuse-user'; requestId: string; sessionId: string;
+      userMessageId: string; excludeMessageIds: string[]; config: TurnConfig }
+```
 
-> 参考：外部设计 `tech-design-v3.md` 第 7.4「流式聚合与 chunk 落盘」、第 11「壳（Host）」、第 3.1「ID」。
-> 核心立场是**组装事实 + 落盘 + 生成 id 都归 Loop（Core），视图只是订阅事实的普通消费者**；且渲染层消费的是
-> Core↔LLM 同一份 `NormalizedDelta` 流，两者是同一个流式业务模型的两个侧面。
+`TurnConfig` 含 model、llmServiceId、options、projectMemoryEnabled、locale 等现有请求配置。Core 从数据库和
+`excludeMessageIds` 构建上下文；新契约不再接收 renderer 的 `sourceMessages`。
+
+create-user 在 session 级串行事务中 append `sent` user，再 append 空 `streaming` assistant；reuse-user 要求目标属于同
+session、role=user、status=sent 且未被排除，只 append assistant。两者返回数据库真实 sequence。
+
+附件保留 staging 引用，由主进程水合；只有供应商请求确已接受图片 block 后才置 `imagesDeliveredToApi=true`。凭据或
+上下文构建失败发生在 prepare 后时，user 保留、assistant 统一 finalize 为 failed；prepare 前的表单失败不产生消息。
+
+### 3.2 桌面采用 prepare/execute 两阶段
+
+当前长时 `invoke` 在所有 delta 后才 resolve，不可能提供首包 id。拆成：
+
+```ts
+chatPrepareTurn(intent): Promise<TurnStarted>
+chatExecuteTurn({ turnId, startToken }): Promise<TurnTerminal>
+```
+
+`TurnStarted` 含 `{turnId, requestId, sessionId, userMessage, assistantMessage, version, startToken}`。`startToken` 一次性、短期
+有效且绑定 turn；重复 execute 返回同一运行/终态，不启动第二次模型调用。
+
+```text
+Renderer               Core/DB                    Model source
+  |--建立全部订阅-------->|                            |
+  |--prepare------------>|--原子创建 user?/assistant-->| DB
+  |<--TurnStarted--------|                            |
+  |--按快照展示-----------|                            |
+  |--execute------------>|--此时才启动---------------->|
+  |<--progress(v+1)------|<--首个规范化事件-------------|
+  |       ...            |--checkpoint--------------->| DB
+  |<--terminal(vN,msg)---|--finalize------------------>| DB
+  |<--execute resolve----|                            |
+```
+
+prepare resolve 前绝不启动模型，因此同步首 delta 也不会早于 id/占位。远程入口在主进程直接依次调用相同方法。
+`requestId` 在 session 内幂等；相同 intent 返回原 turn，不同 intent 拒绝。prepare 后未 execute 的孤儿由短超时 finalizer
+和启动恢复置 failed。startToken 不记录到日志或持久 UI 状态。
+
+## 4. 运行协议与领域聚合
+
+每个事件信封含 `{turnId, requestId, sessionId, assistantMessageId, version, occurredAt, event}`；version 单调递增。
+renderer 不维护 requestId→messageId 映射，丢弃旧版本。progress 建议携带聚合后的 `message`；高频文本可另带 delta
+优化，但快照/version 才是权威。版本跳跃或 terminal 时用快照校准。
+
+```ts
+type TurnTerminal = {
+  turnId: string; requestId: string; assistantMessageId: string; version: number
+  outcome: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered'
+  message: Message; usage?: SessionUsage; error?: { code: string; message: string }
+}
+```
+
+现有 `MessageStatus` 无 cancelled/timed-out，数据库暂存 failed，terminal outcome 保留精确原因。最终 usage 只随 terminal/
+execute 返回一次；实时 usage 仍可广播，但必须关联 turn/message id，保留 projected 语义。
+
+### 4.1 聚合字段表
+
+| 输入 | 字段 | 规则 |
+| --- | --- | --- |
+| text delta/segment-end | content、contentSegments | 工具/思考边界关闭当前段；多轮按发生顺序追加 |
+| thinking delta/segment-end | thinking.content/segments | 跨工具轮保留分段；终止关闭开放段 |
+| skill-hint | skillHints | Core 生成 id/shownAt；路由、恢复提示均走此事件 |
+| tool-use | toolCalls | 首次出现顺序创建 calling，记录规范名/input/MCP/startedAt |
+| confirm-requested | 对应 tool | confirming，写 risk、tiers、diff、安全/页面/危险信息 |
+| tool-confirmed | 对应 tool | confirmedAt，转 executing |
+| tool-progress | 对应 tool | 按 seq 去重，维护有界文本/raw 输出，转 executing |
+| tool-result | 对应 tool | success→completed；拒绝/确认超时/取消→rejected；其余→failed；记录 result/时间/duration |
+| dependency-recovery/file-auto-approved | tool、diff、hint | 统一并入 reducer，不由 renderer 回调补写 |
+| source completed/failed/cancelled/timeout | 全消息 | 关闭开放段；降级活动工具；完成或 failed |
+
+聚合器放 `src/shared/`，是 `(state,event) => state` 的纯 reducer；时间、id、截断参数由 Coordinator 注入。未知 tool id、
+倒退 seq、重复/终态后事件只记诊断并忽略。API content blocks 与领域 Message 分别从同一规范化事件派生，禁止强转。
+
+状态只允许 `prepared → executing ↔ waiting-confirm → terminal`。取消先 abort 模型/工具/确认等待，再消费 cancelled 并
+finalize。窗口销毁只停止投影投递，不能天然改变 Core turn。终态 DB 更新须带期望状态/version，迟到事件不得复活。
+
+## 5. 持久化、失败与恢复
+
+1. prepare：在事务/串行临界区完成 create/reuse 校验和占位；若 DB 封装无事务，先补事务 API。
+2. checkpoint：只 update assistant；采用“最多每 100–250ms 一次 + 语义边界强制 flush”。边界包括分段关闭、确认请求/
+   结果、工具结果、终止。阈值以测试和写入测量确定，禁止逐 token 写库。
+3. finalize：强制 flush 全字段和 status，再写 usage/活动；DB 完成后才广播 terminal。所有 outcome 共用一个实现。
+
+| 场景 | 权威结果 |
+| --- | --- |
+| 零 delta 失败 | user 保留，空 assistant failed |
+| 部分文本/thinking 失败或取消 | 保留并关闭部分段，assistant failed，outcome 精确区分 |
+| 确认中取消/退出 | tool rejected/interrupted，assistant failed，清理 registry |
+| 工具结果后失败 | 已完成工具与部分正文保留，assistant failed |
+| 窗口销毁 | Core 继续或按既有显式取消策略结束；重开从 DB 读投影 |
+| 主进程崩溃 | 启动恢复关闭开放段、降级活动工具、assistant failed |
+
+增强 `streamingCleanup` 并复用 recovery reducer/finalizer：关闭 content/thinking 段，清除不可持久 raw progress，给活动
+工具补 completedAt/interrupted；重复清理不得再次改变行。
+
+## 6. 全入口迁移矩阵
+
+| 入口 | 迁移后 | 删除的旧所有权 |
+| --- | --- | --- |
+| 桌面工具 | prepare→execute→Coordinator→统一 source | ChatView ids、records、hints、流式 patch |
+| 桌面无工具 | 单路径前置完成后同上；否则临时普通 source | `claudeChatSendStream` 的独立聚合/落库 |
+| reuse/重试 | Core 校验 DB user/exclude 并构建上下文 | sourceMessages/currentUserMessageId 作为真相 |
+| 微信 | router 提交 intent，IM adapter 消费投影/terminal | router 两次 append、agent-done 补写、外层 assistant id |
+| 飞书 | 同微信 | 同微信 |
+
+远程 start/done 若暂留兼容，id 必须来自 TurnStarted/Terminal，且只能更新内存投影。turn 永久绑定 origin session；仅出站
+回复和 activity touch 跟随 outbound session。迁移清单至少覆盖 ChatView、messageMutationGateway、chatStreamService、
+chatToolSessionService、claudeStreamHandlers、toolChatLoop、imRemoteAgent、微信/飞书 router 和 remote stream service。
+
+## 7. 工作包（每个提交均可运行）
+
+### WP0：契约、纯聚合器、基线（不切所有权）
+
+- 定义 intent/started/events/projection/terminal；实现完整 reducer。
+- 用当前普通流、工具 controller 行为建立 golden fixtures；固化全仓 append/patch 调用点计数。
+- 验收：多轮工具、确认、进度、recovery、skill hint、重复/迟到事件测试通过，生产行为不变。
+
+### WP1：Coordinator prepare 与持久化状态机
+
+- 实现 session 串行化、requestId 幂等、create/reuse、事务占位、条件版本更新、recovery finalizer。
+- 暂不替换旧发送入口，独立测试 prepare/checkpoint/finalize。
+- 验收：create 要么两行全有要么全无；reuse 不复制；重复请求/execute 不新增；重启可恢复残留。
+
+### WP2：统一模型事件源，完整事实迁入 Core
+
+- 将统一 loop（或两个过渡 adapter）改为只发规范化事件。
+- 迁移 renderer 的 tool use/confirm/progress/result、skill hint、content/thinking 规约。
+- Coordinator 驱动 checkpoint/finalize/usage/投影。
+- 验收：source 不访问消息表；快照字段完整；同步首 delta 不丢；每种失败有同 id 终态。
+
+### WP3：桌面切换 prepare/execute，只消费投影
+
+- preload/API 增加两阶段 IPC；prepare 前订阅，started 后展示，再 execute。
+- 删除新发送路径的 user/assistant id、sourceMessages、事实 reducer 和流式 DB patch。
+- overlay 消费 Core sequence；terminal 按 version 原子替换。保留主动编辑/删除。
+- 验收：工具/无工具、create/reuse、附件、exclude、发送前失败、取消通过；renderer 新发送不写消息。
+
+### WP4：迁移微信、飞书和其他调用方
+
+- router 提交 intent，删除 user/assistant append 和有/无窗口两套 final patch。
+- imRemoteAgent 仅负责配置/远程呈现；start/done id 来自 Coordinator。
+- 验收：每入口每 turn 一 user/一 assistant；有无 WebContents、确认、取消、session switch、失败/恢复均不重复。
+
+### WP5：删除旧协议与所有权
+
+- 删除旧普通入口（若已统一）、长时 create 契约、renderer ToolCallRecord controller、远程补写服务。
+- 收紧 append/patch IPC，保留导入/编辑/删除明确用途。
+- 验收：新 turn id 只在 Coordinator 生成；所有入口共用 reducer/finalizer；全量测试/typecheck/i18n/build 通过。
+
+## 8. 测试与最终门禁
+
+- 时序：订阅→prepare resolve→execute→首 delta→terminal→execute resolve；fake source 同步发首 delta。
+- 幂等：重复 prepare/execute/event/finalize、迟到 tool result 不新增行、不覆写终态。
+- 聚合：文本/thinking 多段、多轮工具全状态全字段、skill/recovery hint、progress seq。
+- 故障：零 delta、部分输出、thinking 取消、确认中退出、工具后失败、prepared 未执行、启动恢复。
+- 跨入口参数化 desktop-tools/no-tools/wechat/feishu：id 在 started/progress/terminal/DB/远程事件一致；create-user
+  append 恰两次、reuse 恰一次，之后只 update；有无 WebContents 结果一致。
+- terminal 测试故意漏一个 progress，验证最终 Message 能校准 renderer。
+
+每阶段先跑定向 Vitest，再跑相关 `typecheck:shared`、`typecheck:renderer`、`i18n:check`、
+`build:electron:incremental`；阶段收尾和提交前跑 `npm test`。最终以明确白名单审查 randomUUID、append/chatAppend、
+update/chatPatch 调用点，不能粗暴要求字符串为零（导入、编辑、删除仍合法）。
+
+## 9. 风险与缓解
+
+| 风险 | 缓解 |
+| --- | --- |
+| prepare 后未 execute | startToken、幂等 execute、短超时、启动恢复 |
+| checkpoint 过密/过疏 | 节流 + 阶段边界 flush，以写入计数和故障注入定阈值 |
+| 完整 progress 快照偏大 | 高频文本允许 delta 优化；边界/terminal 带快照；先测量后优化 |
+| 迁移期双写 | 按入口切换且单入口只能有一个 owner；DB 幂等/条件更新兜底 |
+| API history 与 Message 漂移 | 消费同一规范化事件但分别建模，以多轮工具 golden fixture 对照 |
+| origin/outbound 混淆 | turn 固定 origin；仅回复/touch 使用 outbound，专门回归 |
+| status 无取消/超时 | DB 暂记 failed，terminal outcome/error code 精确保留，schema 后续独立演进 |
+
+## 10. 复审通过标准
+
+复审须能明确回答：首 delta 前 id 如何可靠可见；完整工具/提示事实由谁规约；create/reuse/exclude/附件语义如何保留；
+四类入口怎样进入同一 owner；各失败/恢复留下什么；哪些测试证明每 turn 只有一对 id、一次创建、一个不可逆权威终态。
+任一项未由实现计划和测试闭合，不得删除 renderer/remote 旧写路径。

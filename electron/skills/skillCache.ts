@@ -6,6 +6,7 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { scanSkills } from './skillScanner'
 
 let cache: SkillsCache | null = null
+const IGNORED_DIRS = new Set(['.git', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build', '.next', 'target'])
 
 function dirSignature(dir: string | null): string {
   if (!dir || !fs.existsSync(dir)) return ''
@@ -14,6 +15,7 @@ function dirSignature(dir: string | null): string {
   while (stack.length > 0) {
     const cur = stack.pop()!
     for (const ent of fs.readdirSync(cur, { withFileTypes: true })) {
+      if (ent.isDirectory() && IGNORED_DIRS.has(ent.name)) continue
       const full = path.join(cur, ent.name)
       const st = fs.statSync(full)
       maxMtime = Math.max(maxMtime, st.mtimeMs)

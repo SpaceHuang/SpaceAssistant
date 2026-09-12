@@ -3,7 +3,12 @@ import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import { describe, expect, it } from 'vitest'
-import { grepWithRg, type GrepExecArgs } from './builtinExecutors'
+import {
+  createGrepRipgrepUnavailableDiagnostic,
+  grepRipgrepUnavailableUserMessage,
+  grepWithRg,
+  type GrepExecArgs
+} from './builtinExecutors'
 
 const args = (overrides: Partial<GrepExecArgs> = {}): GrepExecArgs => ({ outputMode: 'content', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100, ...overrides })
 
@@ -65,7 +70,16 @@ describe('bundled ripgrep process contract', () => {
   it('区分缺失二进制，并且进程错误只结算一次', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-process-error-'))
     const result = await grepWithRg(path.join(root, 'missing-rg'), root, root, 'Needle', args(), 5000, new AbortController().signal, () => undefined)
-    expect(result).toEqual({ kind: 'unavailable', reason: 'missing' })
+    expect(result).toEqual({ kind: 'unavailable', reason: 'not_found' })
     await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('开发态不可用时给出准备指引，诊断不包含路径或 pattern', () => {
+    const resolved = { source: 'development' as const, platform: 'darwin' as const, arch: 'arm64' }
+    expect(grepRipgrepUnavailableUserMessage(resolved, 'not_found'))
+      .toBe('开发态内置 ripgrep 未准备（not_found）。请执行 npm run prepare:rg -- --target=darwin-arm64 后重启应用。')
+    const diagnostic = createGrepRipgrepUnavailableDiagnostic(resolved, 'not_found')
+    expect(diagnostic).toBe('source=development;platform=darwin;arch=arm64;status=unavailable;reason=not_found')
+    expect(diagnostic).not.toMatch(/pattern|cwd|workdir|path/i)
   })
 })

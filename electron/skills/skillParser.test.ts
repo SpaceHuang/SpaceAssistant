@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseFrontMatter, readSkillFromDirectory, validateSkillMeta } from './skillParser'
+import { computeSkillDirSize, parseFrontMatter, readSkillFromDirectory, validateSkillMeta } from './skillParser'
 
 const tmpDirs: string[] = []
 
@@ -17,6 +17,30 @@ afterEach(() => {
 })
 
 describe('skillParser', () => {
+  it('parses YAML block scalars without leaking nested metadata', () => {
+    const { frontMatter } = parseFrontMatter(`---
+name: demo-skill
+description: >
+  First line
+  second line
+metadata:
+  name: should-not-win
+triggers:
+  - demo
+---
+body`)
+    expect(frontMatter.description).toBe('First line second line\n')
+    expect(frontMatter.name).toBe('demo-skill')
+    expect(frontMatter.metadata).toEqual({ name: 'should-not-win' })
+  })
+
+  it('counts regular files but not symbolic links and stops at a limit', () => {
+    const dir = mkTmpDir()
+    fs.writeFileSync(path.join(dir, 'a.bin'), '12345')
+    fs.symlinkSync(path.join(dir, 'a.bin'), path.join(dir, 'link.bin'))
+    expect(computeSkillDirSize(dir, 5)).toEqual({ ok: true, totalBytes: 5, exceeded: false })
+    expect(computeSkillDirSize(dir, 4).exceeded).toBe(true)
+  })
   it('parses front matter and content', () => {
     const raw = `---
 name: code-review

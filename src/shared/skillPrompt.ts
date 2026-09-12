@@ -5,7 +5,8 @@ export function buildSystemPromptFromSkills(skills: SkillDefinition[]): string {
 
   const parts = skills.map((skill) => {
     const version = skill.meta.version || '1.0.0'
-    return `--- Skill: ${skill.meta.name} (v${version}) ---\n${skill.content.trim()}`
+    const pathHint = skill.scope === 'user' ? `\nSkill 目录：${skill.directoryPath}\n附带文件请使用该目录下的相对路径读取；只读访问允许，禁止写入。` : ''
+    return `--- Skill: ${skill.meta.name} (v${version}) ---${pathHint}\n${skill.content.trim()}`
   })
 
   return `以下是由用户激活的 Skill 规范，请在生成回复时严格遵循：\n\n${parts.join('\n\n')}\n\n---`
