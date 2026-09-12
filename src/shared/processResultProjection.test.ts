@@ -273,6 +273,28 @@ describe('process result projections', () => {
     expect(JSON.stringify(projected.data.rawArtifact)).not.toContain('/tmp/')
   })
 
+  it('M2：outputDiag 行里的 rawArtifact 绝对路径在投影层再次降级', () => {
+    const result = {
+      success: true,
+      data: {
+        status: 'succeeded',
+        processResult: null,
+        stdout: 'ok',
+        outputDiag: [
+          '[output-diag] stream=stdout encoding=gbk source=contract confidence=high replacements=0 contract=oem:936 conflict=none suspect=false rawArtifact=C:\\Users\\alice\\AppData\\Roaming\\SpaceAssistant\\shell-output\\' + 'c'.repeat(64) + '.log',
+          '[output-diag] stream=stderr encoding=gbk source=contract confidence=high replacements=0 contract=oem:936 conflict=none suspect=false rawArtifact=/home/alice/tmp.log'
+        ]
+      }
+    }
+    const projected = projectAgentToolResultForSink(result, { processTool: true }) as { data: Record<string, any> }
+    const lines = projected.data.outputDiag as string[]
+    expect(lines.length).toBe(2)
+    expect(lines[0]).toContain('rawArtifact=artifact-' + 'c'.repeat(64))
+    expect(lines[1]).toContain('rawArtifact=artifact-redacted')
+    expect(JSON.stringify(lines)).not.toContain('alice')
+    expect(JSON.stringify(lines)).not.toContain('C:\\')
+  })
+
   it('不可信的编码/诊断字段被丢弃（枚举与哈希白名单）', () => {
     const result = {
       success: true,
@@ -300,6 +322,47 @@ describe('process result projections', () => {
     expect(projected.data.rawArtifact).toEqual({ bytes: 1, artifactId: 'artifact-redacted' })
   })
 
+
+  it('MINOR：telemetry sink 不落 hresult/exitCodeAdvice 的自由文本', () => {
+    const result = {
+      success: true,
+      data: {
+        status: 'failed',
+        processResult: null,
+        exitCodeAdvice: ['检查 PATH 是否包含目标目录'],
+        hresult: {
+          code: '0x80070002',
+          meaning: '系统找不到指定的文件',
+          advice: ['确认路径拼写']
+        }
+      }
+    }
+    const telemetry = projectTelemetryToolResult(result, { ...options, processTool: true }) as { data: Record<string, any> }
+    expect(telemetry.data.exitCodeAdvice).toBeUndefined()
+    expect(telemetry.data.hresult).toMatchObject({ code: '0x80070002' })
+    expect(telemetry.data.hresult.meaning).toBeUndefined()
+    expect(telemetry.data.hresult.advice).toBeUndefined()
+
+    const agent = projectAgentToolResultForSink(result, { ...options, processTool: true }) as { data: Record<string, any> }
+    expect(agent.data.exitCodeAdvice).toEqual(['检查 PATH 是否包含目标目录'])
+    expect(agent.data.hresult.meaning).toBe('系统找不到指定的文件')
+  })
+
+  it('MINOR：非法形态的 signals 不再为 reason 打开通道', () => {
+    const result = {
+      success: true,
+      data: {
+        status: 'succeeded',
+        processResult: null,
+        stdout: 'x',
+        signals: [{ injected: true }],
+        reason: '不该进模型的自由文本'
+      }
+    }
+    const projected = projectAgentToolResultForSink(result, { processTool: true }) as { data: Record<string, any> }
+    expect(projected.data.signals).toBeUndefined()
+    expect(projected.data.reason).toBeUndefined()
+  })
 
   it('方言错配计划错误的 signals/hints 能到达模型，且 telemetry 不落自由文本（§10.3 / T17）', () => {
     const result = {

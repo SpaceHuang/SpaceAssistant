@@ -6,6 +6,7 @@ import path from 'path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appendRawTailBuffer, executePreparedShellExecution, runShellExecutor, resolveShellSpawnSpec } from './runShellExecutor'
 import { planRunShellExecution } from './runShellPlan'
+import { prepareShellExecution } from '../shell/preparedShellExecution'
 import { appendProgressOutputRaw, decodeProgressRawTail } from '../../src/shared/terminalScrollback'
 import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
 import { ACCIDENT_HEX } from '../processOutput/testFixtures'
@@ -449,6 +450,54 @@ describe('runShellExecutor', () => {
     expect(rawArtifact.omittedBytes).toBe(totalRawBytes - 48)
   }, SPAWN_TEST_TIMEOUT_MS)
 
+  /** GBK「中文测试ABC」重复 5 次的原始字节（55 字节：超过 head+tail 且 tail 起点为奇数）。 */
+  function gbkReplayCommand(): string {
+    const bytes = Buffer.from('D6D0CEC4B2E2CAD4414243'.repeat(5), 'hex')
+    if (isWindows) {
+      const literals = Array.from(bytes).map((b) => '0x' + b.toString(16).padStart(2, '0')).join(',')
+      return '[byte[]]$a=(' + literals + ');$e=[Console]::OpenStandardOutput();$e.Write($a,0,$a.Length);$e.Flush()'
+    }
+    const escapes = Array.from(bytes).map((b) => '\\x' + b.toString(16).padStart(2, '0')).join('')
+    return "printf '" + escapes + "'"
+  }
+
+  /**
+   * M1（评审）：多字节非自同步编码（GBK）的 tail 切片起点无法自证对齐，
+   * 旧实现会静默交付「合法但错误」的错位文本；现在必须升级为可疑输出并保留原始字节。
+   */
+  it('M1 截断的 GBK 输出不再静默：对齐不确定 → outputTrust=suspect + 提示 + rawArtifact', async () => {
+    const ctx = baseCtx(workDir, userDataDir)
+    const planned = await planRunShellExecution({ command: gbkReplayCommand() }, ctx)
+    const prepared = prepareShellExecution({
+      command: planned.command,
+      profile: { ...planned.profile, outputEncoding: { kind: 'oem', codepage: 936 } },
+      spawnSpec: planned.spawnSpec,
+      cwd: planned.cwd,
+      timeoutMs: planned.timeoutMs,
+      ioMaxBytes: 32,
+      environment: { ...planned.environment },
+      facts: planned.facts,
+      configRevision: planned.configRevision,
+      policyRevision: planned.policyRevision,
+      dependencySnapshot: { ...planned.dependencySnapshot },
+      pathSnapshot: { ...planned.pathSnapshot }
+    })
+    const result = await executePreparedShellExecution(prepared, ctx, Date.now(), {
+      requestId: ctx.requestId,
+      sessionId: ctx.sessionId,
+      toolUseId: ctx.toolUseId,
+      command: prepared.command
+    })
+    const data = result.data as Record<string, any>
+    expect(data.decode.stdout.encoding).toBe('gbk')
+    expect(data.truncated).toBe(true)
+    expect(data.decode.stdout.replacements).toBe(0)
+    expect(data.outputTrust).toBe('suspect')
+    expect(data.hints).toContain(SHELL_OUTPUT_TRUST_SUSPECT_NOTICE)
+    expect(data.rawArtifact).toBeTruthy()
+    expect(data.outputArtifactReason).toBe('suspect')
+  }, SPAWN_TEST_TIMEOUT_MS)
+
   it('恶意 toolUseId 只能生成 shell-output 根目录内的 hash artifact 文件', async () => {
     const maliciousId = '../outside/absolute\\name'
     const ctx = {
@@ -587,12 +636,16 @@ describe('runShellExecutor', () => {
     expect(data.decode.stdout).toMatchObject({ encoding: 'utf-16le', source: 'utf16-pattern', replacements: 0 })
     expect(String(data.stdout)).toContain('内部错误')
     // 终端通道保持 raw：进程原始字节逐字节直达 xterm，文本层不得反写原始字节
-    const rawDeltas = vi.mocked(ctx.sendProgress).mock.calls.flatMap(([, payload]) => {
+    const rawPayloads = vi.mocked(ctx.sendProgress).mock.calls.flatMap(([, payload]) => {
       if (!payload || typeof payload !== 'object' || !('rawDelta' in payload)) return []
       const rawDelta = (payload as { rawDelta?: unknown }).rawDelta
-      return typeof rawDelta === 'string' ? [rawDelta] : []
+      const rawEncoding = (payload as { rawEncoding?: unknown }).rawEncoding
+      return typeof rawDelta === 'string' ? [{ rawDelta, rawEncoding }] : []
     })
+    const rawDeltas = rawPayloads.map((item) => item.rawDelta)
     expect(rawDeltas.length).toBeGreaterThan(0)
+    // M4：终端回放必须拿到与主通道一致的编码标签，否则 GBK/UTF-16 会按 UTF-8 解成乱码
+    expect(rawPayloads.every((item) => item.rawEncoding === 'utf-16le')).toBe(true)
     const accumulated = rawDeltas.reduce((acc, delta) => appendProgressOutputRaw(acc, delta), '')
     const terminalBytes = decodeProgressRawTail(accumulated)
     expect(Buffer.compare(Buffer.from(terminalBytes), Buffer.from(ACCIDENT_HEX, 'hex'))).toBe(0)

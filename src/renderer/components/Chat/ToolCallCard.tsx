@@ -485,6 +485,7 @@ export function ToolCallCard({
           {showShellLiveTerminal ? (
             <ShellTerminalView
               progressOutputRaw={record.progressOutputRaw}
+              outputEncodingLabel={record.progressOutputRawLabel}
               visible={showDetail}
               onBeforeDispose={handleTerminalBeforeDispose}
               onInitFailed={() => setTerminalFallbackPlain(true)}
@@ -531,6 +532,7 @@ export function ToolCallCard({
                 truncated={shellResultData.truncated}
                 artifactId={shellResultData.artifactId}
                 persistedOutputPath={shellResultData.persistedOutputPath}
+                outputTrust={shellResultData.outputTrust}
                 expanded={expanded}
               />
             </div>

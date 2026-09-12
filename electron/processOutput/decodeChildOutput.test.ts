@@ -19,6 +19,18 @@ function split(buf: Buffer, size: number): Buffer[] {
   return chunks
 }
 
+describe('createChildStreamDecoder fallback meta', () => {
+  it('MINOR：所有候选解码器都失败时按可逆兜底标记 fallback-latin1/low（不再误标 utf16-structure）', () => {
+    // CP437 没有内置解码器（oemLabel=undefined），候选只剩 utf-8 / utf-16le；
+    // 这组字节在两者下都非法（孤住高位代理项），且无零字节偶模信号。
+    const decoder = createChildStreamDecoder({ contract: oemContract(437) })
+    decoder.write(Buffer.from([0x41, 0xd8, 0xd8, 0x41]))
+    expect(decoder.meta.encoding).toBe('windows-1252')
+    expect(decoder.meta.source).toBe('fallback-latin1')
+    expect(decoder.meta.confidence).toBe('low')
+  })
+})
+
 describe('createChildStreamDecoder', () => {
   it('T2 任意切分（1/3/7/64 字节）与整块解码逐字符一致', () => {
     const expected = decodeChildOutput(ACCIDENT_BYTES, { contract: AUTO_CONTRACT, oemCodepage: 936, platform: WIN })

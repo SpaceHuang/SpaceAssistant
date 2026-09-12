@@ -155,6 +155,10 @@ export function createChildStreamDecoder(options: CreateChildStreamDecoderOption
     if (oemLabel !== undefined && label === oemLabel) {
       return { ...shared, encoding: label, source: 'oem-codepage', confidence: 'high', contractConflict: conflict }
     }
+    if (label === FALLBACK_ENCODING_LABEL) {
+      // §8.6：所有候选解码器都失败时的可逆兜底语义是 low confidence，不能误标为结构推断。
+      return { ...shared, encoding: label, source: 'fallback-latin1', confidence: 'low', contractConflict: conflict }
+    }
     return { ...shared, encoding: label, source: 'utf16-structure', confidence: 'medium', contractConflict: conflict }
   }
 

@@ -24,7 +24,7 @@ const ALLOWED_KEYS = new Set([
   'stdoutRawBytes', 'stderrRawBytes', 'stdoutTextBytes', 'stderrTextBytes', 'stdoutRawSha256', 'stderrRawSha256',
   'exitCodeFamily', 'exitCodeSemantics', 'planMs', 'spawnToExitMs',
   'stdoutBytes', 'stderrBytes', 'stdoutSha256', 'stderrSha256', 'stdoutRedacted', 'stderrRedacted',
-  'outputPersistErrorCode', 'terminationErrorCode', 'terminationSignal', 'treeKillVerified',
+  'outputPersistError', 'outputPersistErrorCode', 'terminationErrorCode', 'terminationSignal', 'treeKillVerified',
   'outputLimitReached', 'captureCaseId', 'progressCaseId', 'terminationCaseId',
   'caseId', 'convergenceCaseId', 'validatorId', 'denyType', 'userAction', 'violationCodes',
   'requiresRiskAck', 'outsideWorkDirRisk', 'warningsCount', 'scannedPathsCount', 'canTrust', 'skipConfirm',

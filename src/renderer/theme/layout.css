@@ -2257,19 +2257,6 @@
   color: var(--sa-primary);
 }
 
-/* §10.4：outputTrust=suspect 时的显式提示（文本可能不可信，原始字节已留档） */
-.shell-output__trust-warning {
-  margin-top: 4px;
-  padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--sa-warning) 45%, transparent);
-  border-radius: var(--sa-radius-sm);
-  background: var(--sa-warning-subtle);
-  color: var(--sa-warning);
-  font-size: 11px;
-  line-height: 1.5;
-  text-align: left;
-}
-
 .browser-setup-guide {
   margin-top: 0;
   padding: 12px;

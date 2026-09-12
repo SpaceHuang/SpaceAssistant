@@ -3,6 +3,7 @@ import type {
   OutputEncodingContract,
   StreamDecodeDiagnostics
 } from '../../src/shared/outputEncoding'
+import { sanitizeArtifactRef } from '../../src/shared/processResultProjection'
 import { countNulChars, countReplacements, isDecodeSuspect } from './detectEncoding'
 
 export interface LossStageInput {
@@ -51,6 +52,7 @@ export interface OutputDiagLineInput {
   diagnostics: StreamDecodeDiagnostics
   contract: OutputEncodingContract
   contractConflict?: 'contract-mismatch'
+  /** artifact 引用：传入持久化绝对路径也会被降级为 artifactId（同投影层规则）。 */
   rawArtifactPath?: string
 }
 
@@ -67,7 +69,7 @@ export function formatOutputDiagLine(input: OutputDiagLineInput): string {
     `contract=${contractText}`,
     `conflict=${input.contractConflict ?? 'none'}`,
     `suspect=${input.diagnostics.suspect}`,
-    `rawArtifact=${input.rawArtifactPath ?? 'none'}`
+    `rawArtifact=${sanitizeArtifactRef(input.rawArtifactPath)}`
   ].join(' ')
 }
 

@@ -19,6 +19,8 @@ import {
 
 type Props = {
   progressOutputRaw?: string
+  /** §12-#11：终端回放必须用与主通道一致的编码标签，否则 GBK/UTF-16 会按 UTF-8 解成乱码 */
+  outputEncodingLabel?: string
   /** 卡片展开时为 true；收起时保持挂载但隐藏，展开后需 refit/重绘 */
   visible?: boolean
   onExportReady?: (exporter: () => ShellTerminalScrollback | null) => void
@@ -29,6 +31,7 @@ type Props = {
 
 export function ShellTerminalView({
   progressOutputRaw,
+  outputEncodingLabel,
   visible = true,
   onExportReady,
   onBeforeDispose,
@@ -39,6 +42,7 @@ export function ShellTerminalView({
   const fitRef = useRef<FitAddon | null>(null)
   const serializeRef = useRef<SerializeAddon | null>(null)
   const latestRawRef = useRef('')
+  const outputEncodingLabelRef = useRef<string | undefined>(undefined)
   const writeStateRef = useRef<TerminalRawWriteState>({ writtenTextLen: 0, cols: SHELL_TERMINAL_COLS })
   const followRef = useRef(true)
   const disposedRef = useRef(false)
@@ -62,7 +66,7 @@ export function ShellTerminalView({
       term,
       latestRawRef.current,
       writeStateRef.current,
-      { followBottom: followRef.current }
+      { followBottom: followRef.current, label: outputEncodingLabelRef.current }
     )
   }, [])
 
@@ -200,8 +204,9 @@ export function ShellTerminalView({
 
   useEffect(() => {
     latestRawRef.current = progressOutputRaw ?? ''
+    outputEncodingLabelRef.current = outputEncodingLabel
     syncOutput()
-  }, [progressOutputRaw, syncOutput])
+  }, [progressOutputRaw, outputEncodingLabel, syncOutput])
 
   useEffect(() => {
     if (!visible || !readyRef.current) return
@@ -211,10 +216,12 @@ export function ShellTerminalView({
     requestAnimationFrame(() => {
       if (disposedRef.current || !readyRef.current) return
       safeFitTerminalRows(term, fit, hostRef.current)
-      replayTerminalRaw(term, latestRawRef.current)
+      const label = outputEncodingLabelRef.current
+      replayTerminalRaw(term, latestRawRef.current, { label })
       writeStateRef.current = {
-        writtenTextLen: latestRawRef.current ? decodeProgressRawTailForXterm(latestRawRef.current).length : 0,
-        cols: term.cols
+        writtenTextLen: latestRawRef.current ? decodeProgressRawTailForXterm(latestRawRef.current, label).length : 0,
+        cols: term.cols,
+        label
       }
     })
   }, [visible])

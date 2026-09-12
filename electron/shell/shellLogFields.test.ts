@@ -56,6 +56,7 @@ describe('shellLogFields', () => {
       rawArtifactBytes: 136,
       rawArtifactSha256: 'c'.repeat(64),
       rawArtifactReason: 'failed',
+      outputPersistError: 'artifact directory is not writable',
       outputArtifactReason: 'failed',
       exitCodeFamily: 'windows-host',
       exitCodeSemantics: 'WINDOWS_HOST_INIT_FAILED',
@@ -69,6 +70,8 @@ describe('shellLogFields', () => {
     expect(out.contractConflict).toBe('contract-mismatch')
     expect(out.outputTrust).toBe('ok')
     expect(out.rawArtifactReason).toBe('failed')
+    // MINOR: artifact 落盘失败的原因不能被白名单静默丢弃
+    expect(out.outputPersistError).toBe('artifact directory is not writable')
     expect(out.spawnToExitMs).toBe(124)
     expect(out.lossStage).toBeUndefined()
     expect(Array.isArray(out.outputDiag)).toBe(true)

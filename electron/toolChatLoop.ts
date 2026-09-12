@@ -998,6 +998,7 @@ async function runToolChatSessionInner(
         let message: string | undefined
         let raw: string | undefined
         let rawDelta: string | undefined
+        let rawEncoding: string | undefined
         let seq: number | undefined
         let processPid: number | undefined
         let processGroupId: number | undefined
@@ -1008,6 +1009,7 @@ async function runToolChatSessionInner(
           message = payload.message
           raw = payload.raw
           rawDelta = payload.rawDelta
+          rawEncoding = payload.rawEncoding
           seq = payload.seq
           processPid = payload.processPid
           processGroupId = payload.processGroupId
@@ -1025,7 +1027,7 @@ async function runToolChatSessionInner(
           })
         }
         if (message || rawDelta) {
-          args.emitFactEvent?.({ type: 'tool-progress', id: toolUseId, seq: seq ?? 0, text: message ?? rawDelta ?? '', ...(processPid !== undefined ? { processPid } : {}), ...(processGroupId !== undefined ? { processGroupId } : {}), ...(processOwnerToken !== undefined ? { processOwnerToken } : {}) })
+          args.emitFactEvent?.({ type: 'tool-progress', id: toolUseId, seq: seq ?? 0, text: message ?? '', ...(rawDelta === undefined ? {} : { rawDelta }), ...(rawEncoding === undefined ? {} : { rawEncoding }), ...(processPid !== undefined ? { processPid } : {}), ...(processGroupId !== undefined ? { processGroupId } : {}), ...(processOwnerToken !== undefined ? { processOwnerToken } : {}) })
         }
         if (remoteContext && message?.trim()) {
           onRemoteToolProgress(

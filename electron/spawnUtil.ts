@@ -95,7 +95,8 @@ export function runCommandWithTimeout(
       } catch {
         /* 进程可能已退出 */
       }
-      finish(empty())
+      // MINOR：超时 kill 也要交付已收集的部分输出（挂死前写出的错误信息最有价值）。
+      finish({ completed: false, code: null, ...decode() })
     }, timeoutMs)
     child.stdout?.on('data', (chunk: Buffer) => stdoutChunks.push(chunk))
     child.stderr?.on('data', (chunk: Buffer) => stderrRaw.appendBytes(chunk))

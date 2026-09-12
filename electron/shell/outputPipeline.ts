@@ -1,11 +1,14 @@
 import type { RawByteSnapshot } from './boundedOutput'
-import { projectRawText } from './rawTextProjection'
+import { projectRawTextWithAlignment } from './rawTextProjection'
 
 export interface OutputPipelineSnapshot {
   readonly stdout: RawByteSnapshot
   readonly stderr: RawByteSnapshot
   readonly stdoutText: string
   readonly stderrText: string
+  /** 截断切片的字符对齐无法确认（多字节非自同步编码）：上层必须把该流降级为可疑输出。 */
+  readonly stdoutAlignmentUncertain: boolean
+  readonly stderrAlignmentUncertain: boolean
   readonly terminalRawBytes: number
   readonly terminalRawBase64?: string
   readonly inlineMaxBytes: number
@@ -32,11 +35,15 @@ export function createOutputPipelineSnapshot(input: {
   const terminalRaw = input.terminalRaw ? Buffer.from(input.terminalRaw) : Buffer.alloc(0)
   const stdout = Object.freeze({ ...input.stdout })
   const stderr = Object.freeze({ ...input.stderr })
+  const stdoutProjection = projectRawTextWithAlignment(stdout, input.stdoutLabel)
+  const stderrProjection = projectRawTextWithAlignment(stderr, input.stderrLabel)
   return Object.freeze({
     stdout,
     stderr,
-    stdoutText: projectRawText(stdout, input.stdoutLabel),
-    stderrText: projectRawText(stderr, input.stderrLabel),
+    stdoutText: stdoutProjection.text,
+    stderrText: stderrProjection.text,
+    stdoutAlignmentUncertain: stdoutProjection.alignmentUncertain,
+    stderrAlignmentUncertain: stderrProjection.alignmentUncertain,
     terminalRawBytes: terminalRaw.length,
     terminalRawBase64: terminalRaw.length ? terminalRaw.toString('base64') : undefined,
     inlineMaxBytes: input.inlineMaxBytes,

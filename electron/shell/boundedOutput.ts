@@ -26,7 +26,7 @@ export class RawByteBuffer {
   private readonly tailChunks: Buffer[] = []
   private headBytes = 0
   private tailBytes = 0
-  private totalBytes = 0
+  private totalBytesWritten = 0
   private didTruncate = false
 
   constructor(
@@ -41,9 +41,14 @@ export class RawByteBuffer {
     }
   }
 
+  /** 累计写入的原始字节数（不构造快照、不拷贝），用于逐 chunk 的上限判定。 */
+  get totalBytes(): number {
+    return this.totalBytesWritten
+  }
+
   appendBytes(chunk: Buffer): void {
     if (chunk.length === 0) return
-    this.totalBytes += chunk.length
+    this.totalBytesWritten += chunk.length
     let offset = 0
     if (this.headBytes < this.headLimitBytes) {
       const take = Math.min(this.headLimitBytes - this.headBytes, chunk.length)
@@ -79,11 +84,11 @@ export class RawByteBuffer {
     const head = Buffer.concat(this.headChunks)
     const tail = Buffer.concat(this.tailChunks)
     const retainedBytes = head.length + tail.length
-    const omittedBytes = Math.max(0, this.totalBytes - retainedBytes)
+    const omittedBytes = Math.max(0, this.totalBytesWritten - retainedBytes)
     return {
       head,
       tail,
-      totalBytes: this.totalBytes,
+      totalBytes: this.totalBytesWritten,
       retainedBytes,
       omittedBytes,
       truncated: omittedBytes > 0 || this.didTruncate

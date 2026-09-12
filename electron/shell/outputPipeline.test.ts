@@ -41,6 +41,15 @@ describe('RawByteBuffer', () => {
     expect(snapshot.truncated).toBe(true)
   })
 
+  it('MINOR：totalBytes getter 不构造快照即可读取累计字节数', () => {
+    const buffer = new RawByteBuffer(8)
+    buffer.appendBytes(bytesOf('0123456789'))
+    buffer.appendBytes(bytesOf('abc'))
+    expect(buffer.totalBytes).toBe(13)
+    // getter 与快照口径必须一致
+    expect(buffer.totalBytes).toBe(buffer.snapshotBytes().totalBytes)
+  })
+
   it('多字节字符跨截断边界时不会在投影里产生 U+FFFD', () => {
     const snapshot = snapshotOf(['前缀', '中间内容', '尾部'], 8)
     const text = projectRawText(snapshot, 'utf-8')
@@ -73,5 +82,34 @@ describe('createOutputPipelineSnapshot', () => {
     expect(snapshot.artifact?.bytes).toBe(103)
     expect(Object.isFrozen(snapshot)).toBe(true)
     expect(Object.isFrozen(snapshot.stdout)).toBe(true)
+  })
+
+  it('GBK 截断切片的对齐不确定会透传给上层（M1：不再静默交付错位文本）', () => {
+    const gbk = Buffer.from('D6D0CEC4B2E2CAD4414243'.repeat(5), 'hex')
+    const snapshot = createOutputPipelineSnapshot({
+      stdout: { head: gbk.subarray(0, 32), tail: gbk.subarray(39), totalBytes: gbk.length, retainedBytes: 48, omittedBytes: 7, truncated: true },
+      stderr: snapshotOf(['err'], 1024),
+      stdoutLabel: 'gbk',
+      stderrLabel: 'utf-8',
+      inlineMaxBytes: 32,
+      artifactMaxBytes: 2048
+    })
+    expect(snapshot.stdoutAlignmentUncertain).toBe(true)
+    expect(snapshot.stderrAlignmentUncertain).toBe(false)
+    expect(snapshot.stdoutText).toContain('[… output truncated …]')
+  })
+
+  it('UTF-8 截断切片的对齐可精确恢复，不标记不确定', () => {
+    const bytes = Buffer.from('中文测试ABC'.repeat(5), 'utf8')
+    const snapshot = createOutputPipelineSnapshot({
+      stdout: { head: bytes.subarray(0, 32), tail: bytes.subarray(39), totalBytes: bytes.length, retainedBytes: 48, omittedBytes: bytes.length - 48, truncated: true },
+      stderr: snapshotOf([], 1024),
+      stdoutLabel: 'utf-8',
+      stderrLabel: 'utf-8',
+      inlineMaxBytes: 32,
+      artifactMaxBytes: 2048
+    })
+    expect(snapshot.stdoutAlignmentUncertain).toBe(false)
+    expect(snapshot.stdoutText).not.toContain('\uFFFD')
   })
 })

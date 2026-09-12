@@ -124,7 +124,16 @@ export function normalizeXtermPipeInput(text: string): string {
 export function decodeProgressRawTailForXterm(rawB64: string | undefined, label = 'utf-8'): string {
   const bytes = decodeProgressRawTail(rawB64)
   if (bytes.length === 0) return ''
-  return normalizeXtermPipeInput(new TextDecoder(label, { fatal: false }).decode(bytes))
+  return normalizeXtermPipeInput(decodeBytesForXterm(bytes, label))
+}
+
+/** 非法/未知标签不允许打断终端渲染：退回 UTF-8（与 xterm 默认一致）。 */
+function decodeBytesForXterm(bytes: Uint8Array, label: string): string {
+  try {
+    return new TextDecoder(label || 'utf-8', { fatal: false }).decode(bytes)
+  } catch {
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  }
 }
 
 export function pickScrollbackRestorePayload(

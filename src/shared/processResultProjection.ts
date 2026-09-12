@@ -135,9 +135,26 @@ function basename(value: string): string {
 /** 无法安全暴露 artifact 主键时的兜底值；渲染层不得用它调用打开接口（主进程必然拒绝）。 */
 export const REDACTED_ARTIFACT_ID = 'artifact-redacted'
 
-function artifactIdForPersistedPath(filePath: string): string {
+export function artifactIdForPersistedPath(filePath: string): string {
   const name = filePath.split(/[\\/]/).pop() ?? ''
   return /^[0-9a-f]{64}\.log$/i.test(name) ? `artifact-${name.slice(0, -4)}` : REDACTED_ARTIFACT_ID
+}
+
+/** [output-diag] 行允许的 artifact 引用形态。 */
+const SAFE_ARTIFACT_REF_RE = /^(?:none|artifact-(?:redacted|[0-9a-f]{64}))$/
+
+/**
+ * 诊断行里的 artifact 引用只允许 `none` / `artifact-<64hex>` / `artifact-redacted`。
+ * 传入持久化绝对路径（含 OS 用户名）时按同一规则降级：只有 basename 命中
+ * `<64hex>.log` 才保留可追溯 id，否则一律 `artifact-redacted`。
+ */
+export function sanitizeArtifactRef(value: string | undefined): string {
+  if (value === undefined) return 'none'
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return 'none'
+  const normalized = trimmed.toLowerCase()
+  if (SAFE_ARTIFACT_REF_RE.test(normalized)) return normalized
+  return artifactIdForPersistedPath(trimmed)
 }
 
 function relativeToWorkspace(value: string, workspaceRoot: string): string {
@@ -231,16 +248,19 @@ function projectRawArtifactBlock(value: unknown, sink: ProcessProjectionSink): R
 }
 
 /** HRESULT 解释（§10.2）：name/semantics 是稳定常量，advice 必须逐条脱敏。 */
-function projectHresultBlock(value: unknown): Record<string, unknown> | undefined {
+function projectHresultBlock(value: unknown, sink: ProcessProjectionSink): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const source = value as Record<string, unknown>
   const out: Record<string, unknown> = {}
   if (typeof source.code === 'string' && /^0x[0-9A-F]{8}$/.test(source.code)) out.code = source.code
   if (typeof source.name === 'string' && STABLE_CODE_RE.test(source.name)) out.name = source.name
-  const meaning = sanitizeAdviceText(source.meaning)
-  if (meaning) out.meaning = meaning
-  const advice = sanitizeAdviceList(source.advice)
-  if (advice) out.advice = advice
+  // MINOR：指令性文本与 hints 口径一致，telemetry 只留 code/name 这类稳定枚举。
+  if (sink !== 'telemetry') {
+    const meaning = sanitizeAdviceText(source.meaning)
+    if (meaning) out.meaning = meaning
+    const advice = sanitizeAdviceList(source.advice)
+    if (advice) out.advice = advice
+  }
   return Object.keys(out).length > 0 ? out : undefined
 }
 
@@ -269,16 +289,30 @@ function sanitizeCodeList(value: unknown, pattern: RegExp): string[] | undefined
   return out.length > 0 ? out : undefined
 }
 
-/** [output-diag] 行是纯 ASCII 机器可读诊断；只放行前缀正确且长度受限的行。 */
+const DIAG_ARTIFACT_TOKEN = ' rawArtifact='
+
+/**
+ * [output-diag] 行是纯 ASCII 机器可读诊断；只放行前缀正确且长度受限的行。
+ * 额外把 `rawArtifact=` 值降级为 artifactId：即使生成端未来回退成拼绝对路径，
+ * 绝对路径（含 OS 用户名）也不会抵达模型上下文、历史与遥测。
+ */
 function sanitizeDiagnosticLines(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
   const out: string[] = []
   for (const entry of value.slice(0, 4)) {
     if (typeof entry !== 'string') continue
     if (!entry.startsWith('[output-diag] ') || entry.length > 1024) continue
-    out.push(entry)
+    out.push(sanitizeDiagnosticLine(entry))
   }
   return out.length > 0 ? out : undefined
+}
+
+function sanitizeDiagnosticLine(entry: string): string {
+  const index = entry.indexOf(DIAG_ARTIFACT_TOKEN)
+  if (index < 0) return entry
+  const head = entry.slice(0, index)
+  const rawValue = entry.slice(index + DIAG_ARTIFACT_TOKEN.length)
+  return `${head}${DIAG_ARTIFACT_TOKEN}${sanitizeArtifactRef(rawValue)}`
 }
 
 function projectDiagnostic(value: unknown, sink: ProcessProjectionSink): Record<string, unknown> | undefined {
@@ -322,7 +356,12 @@ function projectPathValue(
  */
 function hasPlanDiagnosticMarker(source: Record<string, unknown>): boolean {
   if (typeof source.detectedSyntax === 'string' || typeof source.expectedDialect === 'string') return true
-  if (Array.isArray(source.signals)) return true
+  if (source.signals !== undefined) {
+    // MINOR：signals 必须是「合法且非空」的 code 列表，才为 reason 放行自由文本；
+    // 否则任意数组（例如 [{ injected: true }]）都能成为绕开白名单的通道。
+    const signals = sanitizeCodeList(source.signals, /^[a-z0-9:_-]{1,32}$/)
+    if (signals && signals.length > 0) return true
+  }
   return typeof source.code === 'string' && /^SHELL_[A-Z0-9_]{1,48}$/.test(source.code)
 }
 
@@ -380,7 +419,7 @@ function projectProcessDataForSink(
       continue
     }
     if (key === 'hresult') {
-      const projected = projectHresultBlock(entry)
+      const projected = projectHresultBlock(entry, sink)
       if (projected) out[key] = projected
       continue
     }
@@ -414,8 +453,10 @@ function projectProcessDataForSink(
       continue
     }
     if (key === 'exitCodeAdvice') {
-      const advice = sanitizeAdviceList(entry)
-      if (advice) out[key] = advice
+      if (sink !== 'telemetry') {
+        const advice = sanitizeAdviceList(entry)
+        if (advice) out[key] = advice
+      }
       continue
     }
     if (key === 'exitCodeHint' || key === 'exitCodeSemantics') {

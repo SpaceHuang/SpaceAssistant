@@ -16,6 +16,7 @@ const pattern = a[a.indexOf('--regexp') + 1]
 if (pattern === '[') process.exit(2)
 const file = a[a.length - 1]
 if (pattern === 'Needle') process.stdout.write(file + ':1:Needle\\n')
+if (pattern === 'BigTruncated') { process.stdout.write('x'.repeat(500 * 1024)); process.stderr.write(Buffer.from([0xe4])); process.exitCode = 2 }
 `, 'utf8')
   return fixture
 }
@@ -48,6 +49,16 @@ describe('bundled ripgrep process contract', () => {
     const pending = run(5000, controller.signal)
     setTimeout(() => controller.abort(), 20)
     await expect(pending).resolves.toMatchObject({ kind: 'cancelled' })
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('MINOR：stdout 触发截断时 stderr 仍必须 flush（诊断信息不丢）', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-process-truncated-'))
+    const binary = await createFixture(root)
+    const result = await grepWithRg(binary, root, root, 'BigTruncated', args(), 5000, new AbortController().signal, () => undefined, fixtureSpawn(binary))
+    expect(result).toMatchObject({ kind: 'failed', exitCode: 2 })
+    // stderr 尾部是领字节（未完成的多字节序列）：stdout 截断不能连带把 stderr 的 flush 一起跳过。
+    expect(String((result as { message?: string }).message)).toContain('\uFFFD')
     await fs.rm(root, { recursive: true, force: true })
   })
 

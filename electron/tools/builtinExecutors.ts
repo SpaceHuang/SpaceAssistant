@@ -826,8 +826,10 @@ export async function grepWithRg(
     proc.on('close', (code) => {
       if (!truncated) {
         out += stdoutDecoder.end()
-        stderr += stderrDecoder.end()
       }
+      // MINOR：stdout 截断只应影响 stdout；stderr 的尾部仍必须 flush，
+      // 否则「挂死/超限前写出的错误信息」会丢掉未完成的多字节尾巴。
+      stderr += stderrDecoder.end()
       if (signal.aborted) finish({ kind: 'cancelled', partialOutput: out.trimEnd() })
       else if (killed) finish({ kind: 'timeout', partialOutput: out.trimEnd() })
       else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })

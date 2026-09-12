@@ -84,6 +84,11 @@ describe('ShellOutputView', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  it('M3：无输出文本但 outputTrust=suspect 时仍必须渲染提示', () => {
+    render(<ShellOutputView stdout="" stderr="" exitCode={0} outputTrust="suspect" />)
+    expect(screen.getByRole('status').textContent).toContain('输出编码可疑')
+  })
+
   it('returns null when completed mode has no output', () => {
     const { container } = render(<ShellOutputView stdout="" stderr="" exitCode={0} />)
     expect(container.firstChild).toBeNull()

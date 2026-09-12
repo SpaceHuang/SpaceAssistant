@@ -51,7 +51,9 @@ export function ShellOutputView({
 
   const out = normalizeTerminalOutput(stdout ?? '')
   const errDisplay = formatShellStderrDisplay(stderr ?? '', exitCode)
-  if (!out.trim() && !errDisplay.trim()) return null
+  const suspect = needsOutputTrustNotice({ outputTrust })
+  // §10.4：可疑提示不能因为文本为空而被吞掉——“看不到字”正是最需要提示的情形。
+  if (!out.trim() && !errDisplay.trim() && !suspect) return null
 
   const hasFailure = Boolean(errDisplay.trim())
   // 兜底 artifact id 一定打不开（主进程返回 INVALID_PATH），不要给出点了没反应的入口。
@@ -62,7 +64,7 @@ export function ShellOutputView({
       {out.trim() ? <pre className="shell-output">{out}</pre> : null}
       {out.trim() && errDisplay.trim() ? '\n' : null}
       {errDisplay.trim() ? <pre className="shell-output shell-output__stderr">{errDisplay}</pre> : null}
-      {needsOutputTrustNotice({ outputTrust }) ? (
+      {suspect ? (
         <div className="shell-output__trust-warning" role="status">
           {t('shell.outputTrustSuspect')}
         </div>

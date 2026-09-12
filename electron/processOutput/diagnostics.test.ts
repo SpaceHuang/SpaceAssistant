@@ -18,6 +18,37 @@ describe('diagnostics', () => {
     )
   })
 
+  it('M2：rawArtifact 只输出 artifactId，绝不输出绝对路径', () => {
+    const { meta } = detectEncoding(ACCIDENT_BYTES, { contract: AUTO_CONTRACT, oemCodepage: 936, platform: WIN })
+    const diagnostics = buildStreamDiagnostics(meta, 'Windows PowerShell 内部错误。', false)
+    const hashed = formatOutputDiagLine({
+      stream: 'stderr',
+      diagnostics,
+      contract: oemContract(936),
+      rawArtifactPath: 'C:\\Users\\alice\\AppData\\Roaming\\SpaceAssistant\\shell-output\\' + 'a'.repeat(64) + '.log'
+    })
+    expect(hashed).toContain('rawArtifact=artifact-' + 'a'.repeat(64))
+    expect(hashed).not.toContain('Users')
+    expect(hashed).not.toContain(':\\')
+
+    const unhashed = formatOutputDiagLine({
+      stream: 'stderr',
+      diagnostics,
+      contract: oemContract(936),
+      rawArtifactPath: '/home/alice/.config/SpaceAssistant/shell-output/tmp.log'
+    })
+    expect(unhashed).toContain('rawArtifact=artifact-redacted')
+    expect(unhashed).not.toContain('alice')
+
+    const alreadyAnId = formatOutputDiagLine({
+      stream: 'stderr',
+      diagnostics,
+      contract: oemContract(936),
+      rawArtifactPath: 'artifact-' + 'b'.repeat(64)
+    })
+    expect(alreadyAnId).toContain('rawArtifact=artifact-' + 'b'.repeat(64))
+  })
+
   it('解码器层面的损坏（GBK 被按 UTF-8 解）不误报为 host 损失', () => {
     const buf = Buffer.from(GBK_ZH_TEST_BARE_HEX, 'hex')
     const { meta } = detectEncoding(buf, { contract: AUTO_CONTRACT, oemCodepage: 936, platform: WIN })

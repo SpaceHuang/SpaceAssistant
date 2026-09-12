@@ -8,7 +8,7 @@ import { planShellExec, type ShellSpawnSpec } from '../shell/shellExecPlan'
 import type { ShellConfig } from '../../src/shared/domainTypes'
 import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
 import { buildShellEnv } from '../processOutputEncoding'
-import { defaultContractForPlatform } from '../processOutput/contracts'
+import { defaultContractForPlatform, expectedLabelForContract } from '../processOutput/contracts'
 import { createChildStreamDecoder, decodeChildOutput } from '../processOutput/decodeChildOutput'
 import { buildStreamDiagnostics, formatOutputDiagLine, resolveLossStage, resolveOutputTrust } from '../processOutput/diagnostics'
 import { sanitizeToolOutput, toToolUserError } from './toolUserErrors'
@@ -165,7 +165,7 @@ export async function executePreparedShellExecution(
     shellId: prepared.spawnSpec.shellId
   }
   const env = prepared.environment
-  const sendProgressSafely = (payload: string | { rawDelta: string; seq: number } | { message: string; processPid: number; processGroupId?: number; processOwnerToken?: string }): void => {
+  const sendProgressSafely = (payload: string | { rawDelta: string; seq: number; rawEncoding: string } | { message: string; processPid: number; processGroupId?: number; processOwnerToken?: string }): void => {
     try {
       ctx.sendProgress('shell', payload)
     } catch (error) {
@@ -233,6 +233,17 @@ export async function executePreparedShellExecution(
     if (artifactPrefixBytes > ioMax) activateArtifact()
   }
 
+  /**
+   * §12-#11：终端回放必须用与主通道一致的编码标签。
+   * 解码器锁定前用契约期望标签（不会拿到 'unknown'），锁定后用检测结果。
+   */
+  const terminalRawEncoding = (): string => {
+    const stdoutMeta = stdoutDecoder.meta
+    if (stdoutMeta.provisional !== true) return stdoutMeta.encoding
+    const stderrMeta = stderrDecoder.meta
+    if (stderrMeta.provisional !== true) return stderrMeta.encoding
+    return expectedLabelForContract(contract) ?? 'utf-8'
+  }
   const pushProgress = (stdoutSnap: string, stderrSnap: string, rawChunk?: Buffer) => {
     if (terminalMode && rawChunk && rawChunk.length > 0) {
       rawTailBuf = appendRawTailBuffer(rawTailBuf, rawChunk)
@@ -242,7 +253,7 @@ export async function executePreparedShellExecution(
       progressEventCount += 1
       const rawDelta = pendingRawDelta
       pendingRawDelta = Buffer.alloc(0)
-      sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq })
+      sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq, rawEncoding: terminalRawEncoding() })
       return
     }
     if (!progressThrottle.shouldSend(Date.now(), Buffer.byteLength(stdoutSnap + stderrSnap))) return
@@ -255,11 +266,12 @@ export async function executePreparedShellExecution(
     progressEventCount += 1
     const rawDelta = pendingRawDelta
     pendingRawDelta = Buffer.alloc(0)
-    sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq })
+    sendProgressSafely({ rawDelta: rawDelta.toString('base64'), seq: progressSeq, rawEncoding: terminalRawEncoding() })
   }
 
   const enforceOutputLimit = () => {
-    const total = stdoutRaw.snapshotBytes().totalBytes + stderrRaw.snapshotBytes().totalBytes
+    // MINOR：上限判定只需计数，不能每个 chunk 构造两次 O(ioMax) 字节拷贝。
+    const total = stdoutRaw.totalBytes + stderrRaw.totalBytes
     const limit = Math.max(ioMax * 20, 2 * 1024 * 1024)
     if (total < limit || outputLimited) return
     outputLimited = true
@@ -408,8 +420,10 @@ export async function executePreparedShellExecution(
         })
         const outText = outputPipeline.stdoutText
         const errText = outputPipeline.stderrText
-        const stdoutDiag = buildStreamDiagnostics(stdoutMeta, outText, stdoutDecoder.weakEvidence)
-        const stderrDiag = buildStreamDiagnostics(stderrMeta, errText, stderrDecoder.weakEvidence)
+        // §8.4：截断切片的字符对齐无法自证（多字节非自同步编码）等价于弱证据：
+        // 拿不到可靠文本就不能当真值交付。
+        const stdoutDiag = buildStreamDiagnostics(stdoutMeta, outText, stdoutDecoder.weakEvidence || outputPipeline.stdoutAlignmentUncertain)
+        const stderrDiag = buildStreamDiagnostics(stderrMeta, errText, stderrDecoder.weakEvidence || outputPipeline.stderrAlignmentUncertain)
         const outputTrust = resolveOutputTrust(stdoutDiag, stderrDiag)
         const lossStage = resolveLossStage({ contract, meta: stderrMeta, text: errText })
           ?? resolveLossStage({ contract, meta: stdoutMeta, text: outText })
