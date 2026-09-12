@@ -5,7 +5,7 @@ import { decodeStrictTolerant, decodeWithLabel, hasNonAscii } from '../processOu
 export type DecoderFamily = 'utf-8' | 'utf-16' | 'single-byte' | 'multibyte'
 
 /** 单字节编码：任何字节边界都是字符边界，截断切片不可能错位。 */
-const SINGLE_BYTE_LABEL_RE = /^(?:windows-125\d|windows-874|ibm866|iso-8859-\d+|ascii|us-ascii|latin1)$/
+const SINGLE_BYTE_LABEL_RE = /^(?:windows-125\d|windows-874|ibm866|koi8-[ru]|iso-8859-\d+|ascii|us-ascii|latin1)$/
 
 /**
  * 解码器族分类（§9.3）。未知标签按 `multibyte` 保守处理：

@@ -20,6 +20,8 @@ export interface DecodedChildOutput {
   text: string
   meta: DecodedStreamMeta
   replacements: number
+  /** §8.5 弱证据：样本不足以给出可靠结论，调用方必须按可疑处理（与流式解码器的 weakEvidence 同源）。 */
+  weakEvidence: boolean
 }
 
 /**
@@ -29,16 +31,24 @@ export interface DecodedChildOutput {
 export function decodeChildOutput(buf: Buffer, options: DecodeChildOutputOptions): DecodedChildOutput {
   const contractKind = options.contract.kind
   if (buf.length === 0) {
-    const label = expectedLabelForContract(options.contract) ?? 'utf-8'
+    // MINOR：没有字节就没有「契约解码成功」这回事，auto 契约下不能自称 contract。
+    const contractLabel = expectedLabelForContract(options.contract)
     return {
       text: '',
-      meta: { encoding: label, source: 'contract', confidence: 'high', bomBytes: 0, contractKind },
-      replacements: 0
+      meta: {
+        encoding: contractLabel ?? 'utf-8',
+        source: contractLabel ? 'contract' : 'strict-utf8',
+        confidence: 'high',
+        bomBytes: 0,
+        contractKind
+      },
+      replacements: 0,
+      weakEvidence: false
     }
   }
-  const { meta } = detectEncoding(buf, options)
+  const { meta, weakEvidence } = detectEncoding(buf, options)
   const text = decodeWithLabel(meta.encoding, buf.subarray(meta.bomBytes))
-  return { text, meta, replacements: countReplacements(text) }
+  return { text, meta, replacements: countReplacements(text), weakEvidence }
 }
 
 export interface CreateChildStreamDecoderOptions extends DecodeChildOutputOptions {
@@ -79,6 +89,19 @@ function longestCommonPrefix(values: readonly string[]): string {
     prefix = prefix.slice(0, length)
   }
   return prefix
+}
+
+/**
+ * MINOR（评审 v2 #6）：守卫兜底补偿。
+ * 已交付前缀与兜底解码不一致时，补发分歧点之后的部分——接缝处文字可能重复/跳变（已标可疑），
+ * 但绝不静默 return ''（那会让交付流中间缺一段，且无任何标记）。
+ * 一致时等价于 `emit(fallbackText)`（只补发增量，不重复已交付内容）。
+ */
+function resolveGuardFallbackDelta(delivered: string, fallbackText: string): string {
+  const limit = Math.min(delivered.length, fallbackText.length)
+  let common = 0
+  while (common < limit && delivered[common] === fallbackText[common]) common += 1
+  return fallbackText.slice(common)
 }
 
 function buildCandidateLabels(contract: OutputEncodingContract, oemLabel: string | undefined): string[] {
@@ -179,7 +202,9 @@ export function createChildStreamDecoder(options: CreateChildStreamDecoderOption
         codepage: oemCodepage
       }
       lockedWeakEvidence = true
-      return emit(fallbackText)
+      const delta = resolveGuardFallbackDelta(delivered, fallbackText)
+      delivered = fallbackText
+      return delta
     }
     lockedDecoder = decoder
     lockedMeta = meta

@@ -348,6 +348,20 @@ describe('process result projections', () => {
     expect(agent.data.hresult.meaning).toBe('系统找不到指定的文件')
   })
 
+  it('MINOR：投影截断不产生孤立高代理', () => {
+    const result = {
+      success: true,
+      data: { status: 'succeeded', processResult: null, stdout: '中中中😀尾巴' }
+    }
+    const projected = projectAgentToolResultForSink(result, { ...options, processTool: true, maxOutputChars: 4 }) as { data: Record<string, any> }
+    const stdout = projected.data.stdout as string
+    expect(stdout.endsWith('…[output truncated]')).toBe(true)
+    const head = stdout.replace('…[output truncated]', '')
+    expect(head).toBe('中中中')
+    const last = head.charCodeAt(head.length - 1)
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false)
+  })
+
   it('MINOR：非法形态的 signals 不再为 reason 打开通道', () => {
     const result = {
       success: true,

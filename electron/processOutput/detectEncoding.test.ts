@@ -2,15 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { TextDecoder } from 'util'
 import { AUTO_CONTRACT, UTF16LE_CONTRACT, UTF8_CONTRACT, labelForOemCodepage, oemContract } from './contracts'
 import { decodeChildOutput, createChildStreamDecoder } from './decodeChildOutput'
-import { detectEncoding, isDecodeSuspect } from './detectEncoding'
+import { detectEncoding, isDecodeSuspect, textScore } from './detectEncoding'
 import {
   ACCIDENT_BYTES,
   ACCIDENT_TEXT,
+  GBK_ZH_LONG_HEX,
   GBK_ZH_TEST_BARE_HEX,
   GBK_ZH_TEST_HEX,
   UTF16BE_BOM_HEX,
   UTF16BE_PURE_CJK_HEX,
   UTF16BE_PURE_CJK_SHORT_HEX,
+  UTF16LE_PURE_CJK_HEX,
   UTF8_ZH_TEST_BOM_HEX,
   UTF8_ZH_TEST_HEX
 } from './testFixtures'
@@ -98,6 +100,57 @@ describe('detectEncoding 判定链', () => {
     expect(meta.source).not.toBe('utf16-structure')
     expect(meta.encoding).toBe('gbk')
     expect(isDecodeSuspect(meta, { weakEvidence })).toBe(true)
+  })
+
+  it('T5d 无 BOM 纯 CJK UTF-16LE：GBK 解释同分，靠字节层高字节对齐仲裁为 utf-16le（M5）', () => {
+    const buf = Buffer.from(UTF16LE_PURE_CJK_HEX, 'hex')
+    expect(buf.length).toBe(24)
+    // 前提复现：GBK 解释产出「ASCII+CJK 交替」伪文本（-N噀Km諎penc…），文本分与 UTF-16 解释并列
+    expect(textScore(new TextDecoder('gbk').decode(buf))).toBe(1)
+
+    const result = decodeChildOutput(buf, { contract: AUTO_CONTRACT, oemCodepage: 936, platform: WIN })
+    expect(result.text).toBe('中文测试数据中文测试数据')
+    expect(result.meta.encoding).toBe('utf-16le')
+    expect(result.meta.source).toBe('utf16-structure')
+    expect(result.meta.confidence).toBe('medium')
+
+    // 并列仲裁是弱证据：必须标可疑（留原始字节），不能静默当成可信输出交付
+    const detect = detectEncoding(buf, { contract: AUTO_CONTRACT, oemCodepage: 936, platform: WIN })
+    expect(detect.weakEvidence).toBe(true)
+    expect(isDecodeSuspect(detect.meta, { weakEvidence: detect.weakEvidence })).toBe(true)
+  })
+
+  it('T5e OEM CP936 契约下的 LE 纯 CJK：契约严格解码不掩盖 UTF-16 结构证据（M5）', () => {
+    const buf = Buffer.from(UTF16LE_PURE_CJK_HEX, 'hex')
+    const result = decodeChildOutput(buf, { contract: oemContract(936), oemCodepage: 936, platform: WIN })
+    expect(result.text).toBe('中文测试数据中文测试数据')
+    expect(result.meta.encoding).toBe('utf-16le')
+    expect(result.meta.source).toBe('utf16-structure')
+    expect(result.meta.confidence).toBe('medium')
+    expect(result.meta.contractConflict).toBe('contract-mismatch')
+  })
+
+  it('T5f 真实 GBK 长样本不被结构仲裁误翻（负分单元 + 对齐不成立）', () => {
+    const buf = Buffer.from(GBK_ZH_LONG_HEX, 'hex')
+    expect(buf.length).toBe(24)
+    const result = decodeChildOutput(buf, { contract: AUTO_CONTRACT, oemCodepage: 936, platform: WIN })
+    expect(result.text).toBe('中文测试数据中文测试数据')
+    expect(result.meta.encoding).toBe('gbk')
+    expect(result.meta.source).toBe('oem-codepage')
+    expect(result.meta.confidence).toBe('high')
+    expect(isDecodeSuspect(result.meta, { replacements: result.replacements })).toBe(false)
+  })
+
+  it('T5g 数据本身歧义（GBK/3 生僻字）：保留 OEM 解释，但绝不静默交付', () => {
+    // 81 40 既可读作 GBK「丂」也可读作 UTF-16BE「腀」，两种读法都是通顺的纯 CJK，
+    // 字节层没有能区分二者的证据：此时不覆盖 OEM 解释，但必须降级为可疑。
+    const buf = Buffer.from('8140'.repeat(10), 'hex')
+    expect(buf.length).toBe(20)
+    const detect = detectEncoding(buf, { contract: AUTO_CONTRACT, oemCodepage: 936, platform: WIN })
+    expect(detect.meta.encoding).toBe('gbk')
+    expect(detect.meta.source).toBe('oem-codepage')
+    expect(detect.weakEvidence).toBe(true)
+    expect(isDecodeSuspect(detect.meta, { weakEvidence: detect.weakEvidence })).toBe(true)
   })
 
   it('T6 非 GBK 的 OEM CP：Big5 / Shift_JIS 解对，CP437 走可逆兜底', () => {

@@ -119,12 +119,16 @@ export class LarkCliRunner {
           stdoutText += delta
           if (stdoutConsumed > MAX_OUTPUT_BYTES) {
             stdoutTruncated = true
+            // MINOR（评审 v2 #8）：截断点先 flush 解码器，别把「已收到但尚未交付」的前导窗口
+            // 文本连同后缀一起丢掉；口径与 builtinExecutors 的 ripgrep 截断一致。
+            stdoutText += decoder.end()
             stdoutText += TRUNC_SUFFIX
           }
         } else {
           stderrText += delta
           if (stderrConsumed > MAX_OUTPUT_BYTES) {
             stderrTruncated = true
+            stderrText += decoder.end()
             stderrText += TRUNC_SUFFIX
           }
         }

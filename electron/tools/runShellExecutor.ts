@@ -19,6 +19,7 @@ import { shellTuiFallbackHintLines } from '../../src/shared/shellInteractiveTui'
 import { RawByteBuffer, type RawByteSnapshot } from '../shell/boundedOutput'
 import { OutputArtifactWriter } from '../shell/outputArtifactWriter'
 import { createOutputPipelineSnapshot } from '../shell/outputPipeline'
+import { stripClixmlWrapper } from '../processOutput/clixml'
 import { ProgressThrottle } from '../shell/progressThrottle'
 import { ExecutionLifecycle } from '../shell/executionLifecycle'
 import { ProcessSupervisor } from '../shell/processSupervisor'
@@ -236,6 +237,11 @@ export async function executePreparedShellExecution(
   /**
    * §12-#11：终端回放必须用与主通道一致的编码标签。
    * 解码器锁定前用契约期望标签（不会拿到 'unknown'），锁定后用检测结果。
+   *
+   * MINOR（评审 v2 #3）已知限制：raw tail 把 stdout/stderr 原始字节合并在同一条流里，
+   * 这里只能下发一个标签；两流锁定到不同编码时，另一流的字节在 executing 期 live 终端视图里
+   * 会按本标签解码成乱码。模型/历史/完成态通道按流分别解码，不受影响；
+   * 彻底修复需要 fan-out 协议改造（每流各自的 rawDelta + 标签），留待后续迭代。
    */
   const terminalRawEncoding = (): string => {
     const stdoutMeta = stdoutDecoder.meta
@@ -419,7 +425,10 @@ export async function executePreparedShellExecution(
           artifactMaxBytes
         })
         const outText = outputPipeline.stdoutText
-        const errText = outputPipeline.stderrText
+        // §5 S5：PowerShell 非交互宿主会把 progress / 错误序列化成 CLIXML 写进 stderr。
+        // 只剥壳取回消息正文；未命中前缀（截断、非 CLIXML）时原样交付。
+        // 注意：步进/终端回放仍走原始字节投影，这里只影响最终交付文本。
+        const errText = stripClixmlWrapper(outputPipeline.stderrText)
         // §8.4：截断切片的字符对齐无法自证（多字节非自同步编码）等价于弱证据：
         // 拿不到可靠文本就不能当真值交付。
         const stdoutDiag = buildStreamDiagnostics(stdoutMeta, outText, stdoutDecoder.weakEvidence || outputPipeline.stdoutAlignmentUncertain)

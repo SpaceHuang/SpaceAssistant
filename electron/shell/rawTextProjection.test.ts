@@ -26,6 +26,8 @@ describe('decoderFamily', () => {
     expect(decoderFamily('utf-16le')).toBe('utf-16')
     expect(decoderFamily('utf-16be')).toBe('utf-16')
     expect(decoderFamily('windows-1252')).toBe('single-byte')
+    expect(decoderFamily('koi8-r')).toBe('single-byte')
+    expect(decoderFamily('koi8-u')).toBe('single-byte')
     expect(decoderFamily('gbk')).toBe('multibyte')
     expect(decoderFamily('shift_jis')).toBe('multibyte')
     expect(decoderFamily('some-future-codec')).toBe('multibyte')

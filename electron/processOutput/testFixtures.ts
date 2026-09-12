@@ -24,3 +24,9 @@ export const UTF16BE_BOM_HEX = 'feff' + '4e2d6587'.repeat(5)
 export const UTF16BE_PURE_CJK_HEX = '4e2d6587'.repeat(5)
 /** UTF-16BE 无 BOM 纯 CJK，12 字节（T5c：样本不足，不猜）。 */
 export const UTF16BE_PURE_CJK_SHORT_HEX = '4e2d6587'.repeat(3)
+
+/** UTF-16LE 无 BOM 纯 CJK：「中文测试数据」×2，24 字节（M5：GBK 解释同分）。 */
+export const UTF16LE_PURE_CJK_HEX = '2d4e87654b6dd58b70656e63'.repeat(2)
+
+/** GBK「中文测试数据」×2，24 字节（真实 GBK 长样本，用于确认结构仲裁不误翻）。 */
+export const GBK_ZH_LONG_HEX = 'd6d0cec4b2e2cad4cafdbedd'.repeat(2)

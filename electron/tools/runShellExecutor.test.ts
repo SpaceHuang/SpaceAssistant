@@ -450,15 +450,25 @@ describe('runShellExecutor', () => {
     expect(rawArtifact.omittedBytes).toBe(totalRawBytes - 48)
   }, SPAWN_TEST_TIMEOUT_MS)
 
-  /** GBK「中文测试ABC」重复 5 次的原始字节（55 字节：超过 head+tail 且 tail 起点为奇数）。 */
-  function gbkReplayCommand(): string {
-    const bytes = Buffer.from('D6D0CEC4B2E2CAD4414243'.repeat(5), 'hex')
+  /** 把原始字节直接写到宿主 stdout/stderr（Windows 用 .NET 流，POSIX 用 printf）。 */
+  function byteReplayCommand(bytes: Buffer, stream: 'out' | 'err' = 'out'): string {
     if (isWindows) {
       const literals = Array.from(bytes).map((b) => '0x' + b.toString(16).padStart(2, '0')).join(',')
-      return '[byte[]]$a=(' + literals + ');$e=[Console]::OpenStandardOutput();$e.Write($a,0,$a.Length);$e.Flush()'
+      const handle = stream === 'out' ? '[Console]::OpenStandardOutput()' : '[Console]::OpenStandardError()'
+      return '[byte[]]$a=(' + literals + ');$e=' + handle + ';$e.Write($a,0,$a.Length);$e.Flush()'
     }
     const escapes = Array.from(bytes).map((b) => '\\x' + b.toString(16).padStart(2, '0')).join('')
-    return "printf '" + escapes + "'"
+    return "printf '" + escapes + "'" + (stream === 'err' ? ' >&2' : '')
+  }
+
+  /** GBK「中文测试ABC」重复 5 次的原始字节（55 字节：超过 head+tail 且 tail 起点为奇数）。 */
+  function gbkReplayCommand(): string {
+    return byteReplayCommand(Buffer.from('D6D0CEC4B2E2CAD4414243'.repeat(5), 'hex'))
+  }
+
+  /** 无 BOM 纯 CJK UTF-16LE「中文测试数据」×2（24 字节）。 */
+  function utf16leCjkReplayCommand(): string {
+    return byteReplayCommand(Buffer.from('2d4e87654b6dd58b70656e63'.repeat(2), 'hex'))
   }
 
   /**
@@ -496,6 +506,83 @@ describe('runShellExecutor', () => {
     expect(data.hints).toContain(SHELL_OUTPUT_TRUST_SUSPECT_NOTICE)
     expect(data.rawArtifact).toBeTruthy()
     expect(data.outputArtifactReason).toBe('suspect')
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  /**
+   * MINOR（评审 v2 #1）：clixml.ts 之前只有测试引用，属于「以为已防护」的死代码。
+   * 现在按 §5 S5 接线到 stderr 交付边界：CLIXML 包装剥掉，只把消息正文交给模型。
+   */
+  it('MINOR：PowerShell CLIXML stderr 剥壳后交付正文（S5 接线）', async () => {
+    const payload = Buffer.from(
+      '#< CLIXML\n<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04">' +
+        '<Obj S="progress" RefId="0"><S S="Error">boom_x000D__x000A_</S></Obj></Objs>',
+      'utf8'
+    )
+    const ctx = baseCtx(workDir, userDataDir)
+    const planned = await planRunShellExecution({ command: byteReplayCommand(payload, 'err') }, ctx)
+    const prepared = prepareShellExecution({
+      command: planned.command,
+      profile: { ...planned.profile, outputEncoding: { kind: 'utf8' } },
+      spawnSpec: planned.spawnSpec,
+      cwd: planned.cwd,
+      timeoutMs: planned.timeoutMs,
+      ioMaxBytes: planned.ioMaxBytes,
+      environment: { ...planned.environment },
+      facts: planned.facts,
+      configRevision: planned.configRevision,
+      policyRevision: planned.policyRevision,
+      dependencySnapshot: { ...planned.dependencySnapshot },
+      pathSnapshot: { ...planned.pathSnapshot }
+    })
+    const result = await executePreparedShellExecution(prepared, ctx, Date.now(), {
+      requestId: ctx.requestId,
+      sessionId: ctx.sessionId,
+      toolUseId: ctx.toolUseId,
+      command: prepared.command
+    })
+    const data = result.data as Record<string, any>
+    expect(data.decode.stderr.encoding).toBe('utf-8')
+    // 交付文本是「剥壳 + normalizeTerminalOutput」后的展示文本：CRLF 归一为 LF、ANSI 剥离。
+    // CR 原样保留在 rawArtifact 与步进/终端回放的原始字节投影里（stderrTextBytes 仍按原始字节计）。
+    expect(data.stderr).toBe('boom\n')
+    expect(data.stderr).not.toContain('CLIXML')
+    expect(data.stderrTextBytes).toBe(Buffer.byteLength('boom\r\n', 'utf8'))
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  /**
+   * M5（评审 v2）：无 BOM 纯 CJK 的 UTF-16LE 流在 CP936 下也是合法 GBK 序列，
+   * 旧实现静默按 GBK 交付「ASCII+CJK 交替」伪文本且 trust=ok；现在必须解对 + 标可疑。
+   */
+  it('M5 无 BOM 纯 CJK UTF-16LE：解对并标可疑（不再静默交付 GBK 伪文本）', async () => {
+    const ctx = baseCtx(workDir, userDataDir)
+    const planned = await planRunShellExecution({ command: utf16leCjkReplayCommand() }, ctx)
+    const prepared = prepareShellExecution({
+      command: planned.command,
+      profile: { ...planned.profile, outputEncoding: { kind: 'oem', codepage: 936 } },
+      spawnSpec: planned.spawnSpec,
+      cwd: planned.cwd,
+      timeoutMs: planned.timeoutMs,
+      ioMaxBytes: planned.ioMaxBytes,
+      environment: { ...planned.environment },
+      facts: planned.facts,
+      configRevision: planned.configRevision,
+      policyRevision: planned.policyRevision,
+      dependencySnapshot: { ...planned.dependencySnapshot },
+      pathSnapshot: { ...planned.pathSnapshot }
+    })
+    const result = await executePreparedShellExecution(prepared, ctx, Date.now(), {
+      requestId: ctx.requestId,
+      sessionId: ctx.sessionId,
+      toolUseId: ctx.toolUseId,
+      command: prepared.command
+    })
+    const data = result.data as Record<string, any>
+    expect(data.stdout).toBe('中文测试数据中文测试数据')
+    expect(data.decode.stdout.encoding).toBe('utf-16le')
+    expect(data.decode.stdout.source).toBe('utf16-structure')
+    expect(data.outputTrust).toBe('suspect')
+    expect(data.hints).toContain(SHELL_OUTPUT_TRUST_SUSPECT_NOTICE)
+    expect(data.rawArtifact).toBeTruthy()
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('恶意 toolUseId 只能生成 shell-output 根目录内的 hash artifact 文件', async () => {

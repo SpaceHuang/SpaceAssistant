@@ -264,6 +264,13 @@ function projectHresultBlock(value: unknown, sink: ProcessProjectionSink): Recor
   return Object.keys(out).length > 0 ? out : undefined
 }
 
+/** 按 UTF-16 码元截断时不要把代理对切成孤立高代理（否则渲染成 U+FFFD）。 */
+function sliceWithoutSplittingSurrogate(text: string, limit: number): string {
+  const cut = text.slice(0, limit)
+  const last = cut.charCodeAt(cut.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut
+}
+
 function sanitizeAdviceText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const text = sanitizeAgentText(value).text
@@ -398,7 +405,7 @@ function projectProcessDataForSink(
         const safe = sanitizeAgentText(entry).text
         out[key] = safe.length <= maxOutputChars
           ? safe
-          : `${safe.slice(0, maxOutputChars)}…[output truncated]`
+          : `${sliceWithoutSplittingSurrogate(safe, maxOutputChars)}…[output truncated]`
         if (safe.length > maxOutputChars) out.truncated = true
       }
       continue

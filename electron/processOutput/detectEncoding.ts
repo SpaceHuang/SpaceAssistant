@@ -21,6 +21,10 @@ export const FALLBACK_ENCODING_LABEL = 'windows-1252'
 const STRUCTURE_MIN_BYTES = 16
 const STRUCTURE_SCORE_FLOOR = 0.5
 const STRUCTURE_SCORE_MARGIN = 0.1
+/** CJK 码元高字节区间（U+4E00–U+9FFF 的高字节），用于并列仲裁的字节层证据。 */
+const CJK_HIGH_BYTE_MIN = 0x4e
+const CJK_HIGH_BYTE_MAX = 0x9f
+const CJK_HIGH_BYTE_ALIGN_RATIO = 0.9
 const CONTROL_RATIO_LIMIT = 0.05
 const UTF16_ZERO_PARITY_HIGH_RATIO = 0.5
 const UTF16_ZERO_PARITY_LOW_RATIO = 0.1
@@ -147,11 +151,55 @@ export function detectUtf16ZeroParity(buf: Buffer): 'le' | 'be' | undefined {
   return undefined
 }
 
+export type Utf16StructureVerdict =
+  /** 文本分明显优于 OEM 解释：直接采用结构解释（medium）。 */
+  | 'strong'
+  /**
+   * 文本分与 OEM 解释并列，但字节层对齐成立、且 OEM 解释呈「ASCII/CJK 交替」伪文本特征
+   * （GBK 错解 UTF-16LE 纯 CJK 的签名）：采用结构解释，但必须按弱证据标可疑。
+   */
+  | 'override'
+  /**
+   * 文本分并列、字节层对齐也成立，但两种读法都是通顺的纯 CJK（数据本身歧义，例如
+   * GBK/3 生僻字）：保留 OEM/契约解释，同时标可疑，绝不当成可信输出交付。
+   */
+  | 'ambiguous'
+
+export interface Utf16StructureResult {
+  encoding: 'utf-16le' | 'utf-16be'
+  verdict: Utf16StructureVerdict
+}
+
+/** 「ASCII 与 CJK 混排」：GBK 错解 UTF-16LE 纯 CJK 时特有的伪文本签名。 */
+function mixesAsciiAndCjk(text: string): boolean {
+  return /[一-鿿]/.test(text) && /[ -~]/.test(text)
+}
+
+/**
+ * CJK 高字节对齐（§8.1 判据 5 的补充证据，只用于「文本分并列」的仲裁）。
+ *
+ * 纯 CJK 的 UTF-16 流里，码元高字节（LE 在奇数位、BE 在偶数位）必然落在
+ * U+4E00–U+9FFF 的高字节区间 [0x4E,0x9F]；而同一批字节按 GBK 等 CJK 多字节编码
+ * 解释时，这些位置是 trail byte（0x40–0xFE），命中该区间的比例接近随机。
+ * 实测（24 字节样本）：LE 纯 CJK 为 1.00，真实 GBK「中文测试数据」×2 为 0.00。
+ */
+function hasCjkHighByteAlignment(buf: Buffer, encoding: 'utf-16le' | 'utf-16be'): boolean {
+  const units = Math.floor(buf.length / 2)
+  if (units * 2 < STRUCTURE_MIN_BYTES) return false
+  const offset = encoding === 'utf-16le' ? 1 : 0
+  let aligned = 0
+  for (let index = 0; index < units; index += 1) {
+    const high = buf[index * 2 + offset]
+    if (high !== undefined && high >= CJK_HIGH_BYTE_MIN && high <= CJK_HIGH_BYTE_MAX) aligned += 1
+  }
+  return aligned / units >= CJK_HIGH_BYTE_ALIGN_RATIO
+}
+
 /**
  * UTF-16 结构启发式（§8.1 判据 5）：仅在契约未给出、或契约 fatal 校验失败时参与。
- * `oemText` 用非严格解码：尾部坏字节应作为 U+FFFD 计入负分，否则 OEM 解释会被高估。
+ * oemText 用非严格解码：尾部坏字节应作为 U+FFFD 计入负分，否则 OEM 解释会被高估。
  */
-export function tryUtf16Structure(sample: Buffer, oemText: string | undefined): 'utf-16le' | 'utf-16be' | undefined {
+export function tryUtf16Structure(sample: Buffer, oemText: string | undefined): Utf16StructureResult | undefined {
   if (sample.length < STRUCTURE_MIN_BYTES || sample.length % 2 !== 0) return undefined
   const oemScore = oemText === undefined ? undefined : textScore(oemText)
   let best: { encoding: 'utf-16le' | 'utf-16be'; score: number } | undefined
@@ -164,8 +212,19 @@ export function tryUtf16Structure(sample: Buffer, oemText: string | undefined): 
     if (!best || score > best.score) best = { encoding, score }
   }
   if (!best || best.score < STRUCTURE_SCORE_FLOOR) return undefined
-  if (oemScore !== undefined && best.score < oemScore + STRUCTURE_SCORE_MARGIN) return undefined
-  return best.encoding
+  if (oemScore !== undefined && best.score < oemScore + STRUCTURE_SCORE_MARGIN) {
+    // 并列仲裁（M5）：无 BOM 纯 CJK 的 UTF-16LE 流被 GBK 解释成「ASCII+CJK 交替」伪文本时，
+    // 两种解释的文本分完全并列（OEM 侧 1.0），margin 判据会永远否决结构启发式，
+    // 于是貌似可读的乱码被当成可信输出交付。此时改用字节层证据仲裁：只有高字节对齐成立
+    // 才让结构启发式优先，并按并列语义降级为弱证据（suspect + 原始字节留档）。
+    // 纯 ASCII 样本不存在歧义（ASCII 与所有 ASCII 兼容编码一致），不进入并列仲裁。
+    if (!hasNonAscii(sample)) return undefined
+    if (best.score < oemScore || !hasCjkHighByteAlignment(sample, best.encoding)) return undefined
+    // OEM 解释是「ASCII+CJK 交替」的伪文本 → 结构解释才是真值；否则两种读法都通顺，保留 OEM 解释只标可疑。
+    const verdict: Utf16StructureVerdict = oemText !== undefined && mixesAsciiAndCjk(oemText) ? 'override' : 'ambiguous'
+    return { encoding: best.encoding, verdict }
+  }
+  return { encoding: best.encoding, verdict: 'strong' }
 }
 
 function conflictFor(contractLabel: string | undefined, actualLabel: string): 'contract-mismatch' | undefined {
@@ -214,6 +273,12 @@ export function detectEncoding(sample: Buffer, options: DetectEncodingOptions): 
     }
   }
 
+  const oemStrictOk = oemLabel !== undefined && decodeStrictTolerant(oemLabel, sample) !== undefined
+  const oemSampleText = oemLabel === undefined ? undefined : decodeWithLabel(oemLabel, sample)
+  const structure = tryUtf16Structure(sample, oemSampleText)
+  const structureOverridesOem = structure?.verdict === 'override'
+  const structureAmbiguous = structure?.verdict === 'ambiguous'
+
   let contractFailed = false
   if (options.contract.kind !== 'auto' && contractLabel !== undefined) {
     // OEM 契约的已知例外（§3.3 结论 3 / §5 S4）：native 工具自决编码，UTF-8 字节优先。
@@ -230,7 +295,11 @@ export function detectEncoding(sample: Buffer, options: DetectEncodingOptions): 
         weakEvidence: false
       }
     }
-    if (decodeStrictTolerant(contractLabel, sample) !== undefined) {
+    const contractStrictOk = decodeStrictTolerant(contractLabel, sample) !== undefined
+    // 契约严格解码成功才默认优先；但并列仲裁（verdict=override）说明字节层有更强的
+    // UTF-16 证据，此时不能让契约掩盖它，继续往下走结构启发式（M5）；
+    // verdict=ambiguous 则保留契约解释，只把结果降级为可疑。
+    if (contractStrictOk && !structureOverridesOem) {
       return {
         meta: {
           ...baseMeta,
@@ -240,10 +309,10 @@ export function detectEncoding(sample: Buffer, options: DetectEncodingOptions): 
           codepage: oemCodepage,
           contractConflict: undefined
         },
-        weakEvidence: false
+        weakEvidence: structureAmbiguous
       }
     }
-    contractFailed = true
+    contractFailed = !contractStrictOk
   }
 
   const conflict: 'contract-mismatch' | undefined = contractFailed ? 'contract-mismatch' : undefined
@@ -255,13 +324,17 @@ export function detectEncoding(sample: Buffer, options: DetectEncodingOptions): 
     }
   }
 
-  const oemStrictOk = oemLabel !== undefined && decodeStrictTolerant(oemLabel, sample) !== undefined
-  const oemSampleText = oemLabel === undefined ? undefined : decodeWithLabel(oemLabel, sample)
-  const structure = tryUtf16Structure(sample, oemSampleText)
-  if (structure) {
+  if (structure && !structureAmbiguous) {
     return {
-      meta: { ...baseMeta, encoding: structure, source: 'utf16-structure', confidence: 'medium', codepage: oemCodepage, contractConflict: conflict },
-      weakEvidence: false
+      meta: {
+        ...baseMeta,
+        encoding: structure.encoding,
+        source: 'utf16-structure',
+        confidence: 'medium',
+        codepage: oemCodepage,
+        contractConflict: conflictFor(contractLabel, structure.encoding)
+      },
+      weakEvidence: structureOverridesOem
     }
   }
   const structureInconclusive = sample.length < STRUCTURE_MIN_BYTES || sample.length % 2 !== 0
@@ -269,7 +342,7 @@ export function detectEncoding(sample: Buffer, options: DetectEncodingOptions): 
   if (oemLabel !== undefined && oemStrictOk) {
     return {
       meta: { ...baseMeta, encoding: oemLabel, source: 'oem-codepage', confidence: 'high', codepage: oemCodepage, contractConflict: conflict },
-      weakEvidence: structureInconclusive
+      weakEvidence: structureInconclusive || structureAmbiguous
     }
   }
 

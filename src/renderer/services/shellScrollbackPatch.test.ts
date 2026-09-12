@@ -25,6 +25,8 @@ describe('shellScrollbackPatch', () => {
         input: { command: 'echo hi' },
         status: 'completed',
         riskLevel: 'medium',
+        progressOutputRaw: 'cmF3',
+        progressOutputRawLabel: 'gbk',
         result: { success: true, data: { stdout: 'hi', exitCode: 0 } }
       }
     ]
@@ -32,6 +34,8 @@ describe('shellScrollbackPatch', () => {
     const data = next[0]?.result?.data as { terminalScrollback?: { serialized?: string } }
     expect(data.terminalScrollback?.serialized).toBe('snap')
     expect(next[0]?.progressOutputRaw).toBeUndefined()
+    // MINOR：编码标签属于 executing 内存字段，完成后必须一并清除
+    expect(next[0]?.progressOutputRawLabel).toBeUndefined()
   })
 
   it('preserves progress fields while tool is still executing', () => {
@@ -43,11 +47,13 @@ describe('shellScrollbackPatch', () => {
         status: 'executing',
         riskLevel: 'medium',
         progressOutputRaw: 'cmF3',
+        progressOutputRawLabel: 'utf-16le',
         progressSeq: 3
       }
     ]
     const next = mergeToolCallScrollback(toolCalls, 't1', { cols: 80, rows: 24, serialized: 'snap' })
     expect(next[0]?.progressOutputRaw).toBe('cmF3')
+    expect(next[0]?.progressOutputRawLabel).toBe('utf-16le')
     expect(next[0]?.progressSeq).toBe(3)
   })
 

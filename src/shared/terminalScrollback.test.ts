@@ -8,6 +8,7 @@ import {
   exportTerminalScrollback,
   normalizeXtermPipeInput,
   pickScrollbackRestorePayload,
+  tailWithoutLoneSurrogate,
   truncateScrollbackExport,
   SCROLLBACK_MAX_BYTES,
   PROGRESS_RAW_MAX_BYTES
@@ -37,6 +38,16 @@ describe('terminalScrollback', () => {
     })
     expect(out.truncated).toBe(true)
     expect((out.serialized?.length ?? 0)).toBeLessThan(big.length)
+  })
+
+  it('MINOR：尾部截断不留下孤立低位代理', () => {
+    const value = 'abc😀def'
+    expect(tailWithoutLoneSurrogate(value, 6)).toBe('c😀def')
+    // 起点落在高位代理上：代理对完整，保留
+    expect(tailWithoutLoneSurrogate(value, 5)).toBe('😀def')
+    // 起点落在低位代理上：丢掉它，否则渲染成 U+FFFD
+    expect(tailWithoutLoneSurrogate(value, 4)).toBe('def')
+    expect(tailWithoutLoneSurrogate(value, 0)).toBe('')
   })
 
   it('appends raw tail with byte cap', () => {
