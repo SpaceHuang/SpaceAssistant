@@ -148,3 +148,41 @@
 - **D4 已否决（不给用户编码选项）**：编码在不同层归属不同 —— 系统 CP（老工具往管道里写什么字节）、PowerShell 自身输出（含内部报错的 UTF-16LE）、被调用工具自带编码（git / npm 多为 UTF-8）；同一命令的同一路输出可能同时混有以上来源，因此任何"用户选择一个编码"的全局配置都会解错一部分，而且用户既看不懂也无从判断。编码正确性改由应用内部三件事闭环：①契约按 spawn 点声明（`run_script` 的 UTF-8 是我们自己钉的；第三方 CLI 用 `auto`）②实际编码按字节判定一次并锁定 ③混合/不可解时标 `suspect` 并留原始字节。若将来要提高某类宿主的覆盖度，方向是调整应用的启动方式或宿主 profile（应用内部决策），不新增用户开关。
 - 措辞澄清：Windows 上 profile 的契约取自注册表 `OEMCP`，语义是"按我们当前启动方式推断的先验"，不是对 native 工具输出的保证；最终以字节判定为准，冲突按 §3 偏差 5/6 处理。
 - 若将来要统一到“原始字节”单一口径，需按 §9.6 约束 4 独立立项（双写 → 消费方迁移 → 删旧字段），不在本需求范围内。
+
+## 11. 评审修复（2026-09-12，针对 `docs/review/shell-output-encoding-review.md`）
+
+### 11.1 MAJOR（4/4 已修，均带回归用例）
+
+| # | 问题 | 修复口径 | 回归用例 |
+|---|---|---|---|
+| M1 | tail 截断乱码静默放行 | 新增 `decoderFamily()` 按族对齐：UTF-8 跳续字节、UTF-16 按流内绝对偏移做 2 字节对齐、单字节编码不存在错位；**多字节非自同步编码与未知标签**在切片含非 ASCII 时标 `uncertain`（纯 ASCII 不误标）。`projectRawTextWithAlignment` 汇总为 `alignmentUncertain`，经 `OutputPipelineSnapshot` 与弱证据同权进 `buildStreamDiagnostics`，输出 `outputTrust='suspect'` + hints + rawArtifact | `electron/shell/rawTextProjection.test.ts`（12 例）、`electron/shell/outputPipeline.test.ts`、`electron/tools/runShellExecutor.test.ts`（OEM CP936 截断用例；实测 GBK 偏移 1 得到的 `形牟馐訟BC` 不再被当作真实输出交付） |
+| M2 | 诊断行泄漏绝对路径 | 新增导出 `sanitizeArtifactRef()`（白名单：`none` / `artifact-<64hex>` / `artifact-redacted`）；`formatOutputDiagLine` 与 `sanitizeDiagnosticLines` 逐行把 ` rawArtifact=` 之后的值降级，绝对路径（含 OS 用户名）不再进诊断行 | `electron/processOutput/diagnostics.test.ts`、`src/shared/processResultProjection.test.ts` |
+| M3 | 终端模式不显示 `outputTrust` 警告 | `ShellScrollbackView` 新增 `outputTrust` prop，终端 scrollback 分支渲染 `.shell-output__trust-warning`（role=status）；`ToolCallCard` 终端分支透传；`ShellOutputView` 在「无输出文本」与收起态也保留提示 | `ShellScrollbackView.test.tsx`、`ShellOutputView.test.tsx`、`ToolCallCard.test.tsx` |
+| M4 | `decodeProgressRawTailForXterm` 的 label 是死参数 | 进度事件新增 `rawDelta` / `rawEncoding`（`toolChatLoop` 不再把 base64 当明文进度），`ToolCallRecord` 新增 `progressOutputRawLabel`；`xtermHelpers` 按 label 解码且 **label 变化强制重放**；`ShellTerminalView` 三处调用全链路传标签 | `src/shared/assistantFactAggregator.test.ts`、`src/shared/terminalScrollback.test.ts`、`ShellTerminalView.test.tsx`、`runShellExecutor.test.ts`（T13 断言 `rawEncoding`） |
+
+### 11.2 MINOR（11 项处置）
+
+| # | 结论 | 说明 |
+|---|---|---|
+| 1 | 不可复现，未改动 | Node `TextDecoder` 默认 `ignoreBOM: false`，会自行剥离 BOM：实测 utf-8 / utf-16le / utf-16 带 BOM 的全量与截断投影均不含 U+FEFF，`lock()` 的 `subarray(bomBytes)` 与最终投影一致；「最终文本以 U+FEFF 开头」在本机 Node 上不成立 |
+| 2 | 已修 | 超时 kill 后改走 `decode()`，交付已收集的部分 stdout/stderr；`electron/spawnUtil.test.ts` 补真机用例 |
+| 3 | 已修 | `RawByteBuffer` 暴露不拷贝的 `totalBytes` getter，`enforceOutputLimit` 不再每个 chunk 两次 `snapshotBytes()` |
+| 4 | 已修 | `builtinExecutors` 的 `if (!truncated)` 只跳过 stdout 的 `end()`，stderr 尾部照常 flush；`ripgrepExecutorProcess.test.ts` 补「大输出 + 单字节 stderr」用例 |
+| 5 | 已修 | 兜底解码 meta 由 `utf16-structure/medium` 改为 `fallback-latin1/low` |
+| 6 | 已修 | `hresult.meaning` / `hresult.advice` / `exitCodeAdvice` 对齐 `hints` 口径，telemetry 只留 `code` / `name` |
+| 7 | 已修 | `hasPlanDiagnosticMarker` 不再「见数组即放行」，`signals` 必须通过 `sanitizeCodeList` 校验且非空 |
+| 8 | 接受现状 | 与本评审结论一致：`reg query` 同步读取只发生在首次创建解码器时，有进程级缓存，风险可接受 |
+| 9 | 已修 | 删除 `src/renderer/theme/layout.css` 中重复的 `.shell-output__trust-warning` 定义 |
+| 10 | 已修 | `electron/shell/shellLogFields.ts` 的 `ALLOWED_KEYS` 补 `outputPersistError`（此前被静默丢弃） |
+| 11 | 已修 | 工作区行尾统一为 CRLF（`w/mixed` / `w/lf` 文件）并补齐缺失的末尾换行；`core.autocrlf=true`，`git diff` 内容零差异 |
+
+### 11.3 定向验证
+
+- `npx tsc -p tsconfig.electron.json --noEmit`、`npm run typecheck:renderer`：通过。
+- 定向用例（8 个 electron + 7 个 renderer 测试文件）：**15 文件 / 171 用例全通过**（含真机 powershell 的 `runShellExecutor.test.ts`）。
+
+## 12. 评审修复后的全量验收（2026-09-12）
+
+- `npm test`：525 个测试文件 / 3410 个用例，**521 文件 / 3398 用例通过**（另有 3 例 skipped）；4 文件 / 9 用例失败，与 §8 Gate 3 基线**同一组**环境性失败（Windows 符号链接 `EPERM`：`extractors.test.ts`、`ripgrepPrepareSecurity.test.ts`；ripgrep staging 缺失：`ripgrepBinary.test.ts`、`afterPackRipgrep.test.ts`）。相对基线的增量为本次新增的 `rawTextProjection.test.ts` 与评审回归用例。
+- `npm run build`：通过（托盘图标 + renderer + electron 全量构建）。
+- `npm run typecheck:renderer` / `npm run typecheck:shared` / `npm run i18n:check`：通过。
