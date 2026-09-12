@@ -186,3 +186,48 @@
 - `npm test`：525 个测试文件 / 3410 个用例，**521 文件 / 3398 用例通过**（另有 3 例 skipped）；4 文件 / 9 用例失败，与 §8 Gate 3 基线**同一组**环境性失败（Windows 符号链接 `EPERM`：`extractors.test.ts`、`ripgrepPrepareSecurity.test.ts`；ripgrep staging 缺失：`ripgrepBinary.test.ts`、`afterPackRipgrep.test.ts`）。相对基线的增量为本次新增的 `rawTextProjection.test.ts` 与评审回归用例。
 - `npm run build`：通过（托盘图标 + renderer + electron 全量构建）。
 - `npm run typecheck:renderer` / `npm run typecheck:shared` / `npm run i18n:check`：通过。
+
+## 13. 评审修复（2026-09-12，针对 `docs/review/shell-output-encoding-review-v2.md`）
+
+### 13.1 MAJOR：M5 无 BOM 纯 CJK UTF-16LE 被静默错解为 GBK
+
+| 项 | 内容 |
+|---|---|
+| 症状 | `cmd /u`、部分 native 工具的中文输出（无 BOM UTF-16LE）在 CP936 契约下被判为 `gbk / contract / high`，交付 `-N噀Km諎penc-N噀Km諎penc` 这类「合法但错误」的伪文本，`outputTrust=ok`、`replacements=0`，比 main 基线的 U+FFFD 更隐蔽 |
+| 根因 | LE CJK 码元的高字节落在 GBK trail byte 区，两侧都是合法解读：`textScore(gbk)` 与结构解释同分（`oemScore=1.0`），margin 判据 `best.score < oemScore + STRUCTURE_SCORE_MARGIN` 永远否决结构启发式 |
+| 判定 | `tryUtf16Structure` 由「只返回编码」改为 `{ encoding, verdict }` 三分：`strong`（绝对多数）/ `override`（采结构解释）/ `ambiguous`（无法裁决） |
+| 结构证据 | 新增 `hasCjkHighByteAlignment(buf, encoding)`：LE 取奇数位、BE 取偶数位的高字节落在 `U+4E00–U+9FFF` 的比例 ≥ 0.9（`CJK_HIGH_BYTE_MIN/MAX/ALIGN_RATIO`）。实测 LE 纯 CJK = 1.00、真实 GBK「中文测试数据」= 0.00 |
+| 并列仲裁 | OEM 解释与结构解释同分（差值 < `STRUCTURE_SCORE_MARGIN`）时：① 纯 ASCII 样本不介入；② 结构证据不足或 OEM 分更高 → 不介入；③ OEM 解释呈「ASCII+CJK 交替」（伪文本特征）→ `override`，采结构解释并 `weakEvidence=true`；④ 其余 → `ambiguous`，**保留 OEM 解释但同样 `weakEvidence=true`**（绝不静默交付） |
+| 契约收口 | OEM 严格解成功时不再无条件采契约结果：只有 `contractStrictOk && !structureOverridesOem` 才返回契约结论；`ambiguous` 时契约分支让位给保守分支并带 `weakEvidence`（`oemStrictOk` / 结构判定因此提前到契约分支之前计算） |
+| 回归用例 | `detectEncoding.test.ts` T5d–T5g（LE 纯 CJK 并列仲裁、真实 GBK 长样本不误翻、BE 既有行为不回归）；`decodeChildOutput.test.ts` 流式分块（7 / 24 字节）锁定 utf-16le + 弱证据；`runShellExecutor.test.ts` 真机端到端：stdout 解对、`decode.stdout.encoding` 为 utf-16le、`source` 为 utf16-structure、`outputTrust=suspect` + hints + rawArtifact |
+
+### 13.2 MINOR（9 项处置）
+
+| # | 结论 | 说明 |
+|---|---|---|
+| 1 | 已接线（非删除） | `stripClixmlWrapper` 接入 `runShellExecutor` 的 stderr 交付边界（§5 S5）：PowerShell 非交互宿主写进 stderr 的 CLIXML 包装剥掉，只把消息正文交给模型；未命中前缀（截断、非 CLIXML）原样交付。步进 / 终端回放仍走原始字节投影 |
+| 2 | 已修 | `decodeChildOutput` 一次性入口新增 `weakEvidence` 返回值，`spawnUtil` / `appIpc` / `runShellExecutor` 等调用点才能落地 §8.5 |
+| 3 | 接受现状（后续迭代） | `terminalRawEncoding()` 对 stdout+stderr 合并后的 raw tail 只能下发一个标签，两流锁定到不同编码时另一流在 executing 期 live 终端视图会乱码。模型 / 历史 / 完成态通道按流分别解码不受影响；彻底修复需 fan-out 协议改造（每流各自 `rawDelta` + 标签），已在代码处留注释说明 |
+| 4 | 已修 | `shellScrollbackPatch` 完成时清除 `progressOutputRawLabel`，与 `domainTypes` 注释一致 |
+| 5 | 已修 | 空缓冲时不再无条件标 `source: contract`：无契约标签的 `auto` 契约返回 `strict-utf8`，只有契约标签存在时才用 `contract` |
+| 6 | 已修（防御性） | 守卫兜底与已交付前缀分歧时不再静默 `return ''`：改为补发分歧点之后的兜底文本（接缝可能重复 / 跳变，但绝不丢字节，且已标可疑）。**实测该分歧在当前判定链下不可达**（30000 随机样本 / 1706 次兜底 / 0 次分歧：已交付前缀只可能来自多候选共识，必然是 win-1252 能忠实还原的 ASCII），故属防御性修复，配套「兜底交付 = 整段字节可逆解码」的不变式用例锁定 |
+| 7 | 已修 | `processResultProjection` 新增 `sliceWithoutSplittingSurrogate`、`terminalScrollback` 导出 `tailWithoutLoneSurrogate`，截断切片不再产出孤立代理项 |
+| 8 | 已修 | `larkCliRunner` 输出超限时先 `decoder.end()` 再追加截断后缀，不再把「已收到但尚未交付」的前导窗口文本连同后缀一起丢掉（口径与 `builtinExecutors` 的 ripgrep 截断一致）；未截断的另一条流照常 flush。新增 `electron/feishu/larkCliRunner.test.ts`（mock spawn）用例，反向验证过：去掉 flush 该用例即红 |
+| 9 | 已修 | `SINGLE_BYTE_LABEL_RE` 补 `koi8-r` / `koi8-u`，少见单字节编码不再走多字节保守分支被多标一次 suspect |
+
+### 13.3 定向验证（本次改动）
+
+- `npx tsc -p tsconfig.electron.json --noEmit`、`npm run typecheck:renderer`：通过。
+- 定向用例：electron 侧 `electron/processOutput`（全目录）+ `electron/shell`（全目录）+ `runShellExecutor.test.ts` + 新增 `electron/feishu/larkCliRunner.test.ts`（43 文件 / 372 用例通过）；renderer 侧 `processResultProjection` / `terminalScrollback` / `assistantFactAggregator` / `shellScrollbackPatch`（4 文件 / 43 用例通过）。
+- 环境性失败（非本次回归）：`runShellExecutor.test.ts` 的「高频输出时 progress IPC 事件数量受每秒预算限制」在本机稳定得到 42（期望 ≤ 22）；已用 `git stash` 回到 HEAD 同命令复跑，同样 42 → 与本次改动无关（powershell 启动慢使节流窗口跨 2 个 1 秒预算），计入环境性失败清单。
+
+### 13.4 全量验收（评审 v2 修复后）
+
+- `npm test`：526 文件 / 3423 用例（3 例 skipped），**517 文件 / 3402 用例通过**；9 文件 / 18 用例失败，全部可归为环境性：
+  - 与 §8 / §12 基线同一组的 4 文件 / 9 用例（Windows 符号链接 `EPERM`：`extractors`、`ripgrepPrepareSecurity`；ripgrep staging 缺失：`ripgrepBinary`、`afterPackRipgrep`）。
+  - 额外 5 文件 / 9 用例全部是 5s 级 spawn 超时或 50ms 级性能门限（`sessionEvents` 2、`orphanProcessCleanup` 4、`runShellRegisteredTool` 1、`runShellExecutor` 进度预算 1、`toolResultPairing` 1）。本轮机器负载极高：`npm test` 总耗时 1398s，其中 import 阶段 940s、setup 220s。
+  - 反证：把本次改动的 9 个源文件回退到父提交 `343df72` 后复跑 `sessionEvents` / `orphanProcessCleanup` / `runShellRegisteredTool`，失败完全一致（2 / 4 / 1）；`runShellExecutor` 进度预算用例在改动前用 `git stash` 复跑同为 42；`toolResultPairing` 单独复跑 12 例全绿。
+- `npm run build`：通过（托盘图标 + renderer + electron 全量构建）。
+- `npx tsc -p tsconfig.electron.json --noEmit` / `npm run typecheck:renderer`：通过。
+
+
