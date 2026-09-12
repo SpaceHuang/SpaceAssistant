@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
 import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
@@ -14,6 +14,12 @@ describe('surface replay', () => {
     const persisted = { id: 'db-assistant', role: 'assistant', content: 'answer', status: 'completed' }
     expect(surfaceItemIdentity(provider, 0)).toBe(surfaceItemIdentity(persisted, 0))
     expect(computeReplaySurfaceFingerprint('system', [provider])).toBe(computeReplaySurfaceFingerprint('system', [persisted]))
+  })
+  it('projects live tool turns to the same stable message sequence as persisted history', () => {
+    const live = [{ role: 'user', content: 'question' }, { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'result' }] }, { role: 'assistant', content: [{ type: 'text', text: 'answer' }] }]
+    const persisted = [{ role: 'user', content: 'question' }, { role: 'assistant', content: 'answer', toolCalls: [{ id: 'tool-1' }] }]
+    expect(projectReplaySurface(live).map((m) => ({ role: m.role, content: m.content }))).toEqual(projectReplaySurface(persisted).map((m) => ({ role: m.role, content: m.content })))
+    expect(computeReplaySurfaceFingerprint('system', projectReplaySurface(live))).toBe(computeReplaySurfaceFingerprint('system', projectReplaySurface(persisted)))
   })
   it('disambiguates repeated normalized messages by occurrence', () => {
     const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])

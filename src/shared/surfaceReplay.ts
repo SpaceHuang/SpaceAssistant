@@ -13,6 +13,26 @@ export function canonicalSurfaceContent(role: unknown, content: unknown): unknow
     .join('')
 }
 
+/** 将工具协议消息投影为可由数据库稳定重建的 turn surface。 */
+export function projectReplaySurface<T>(messages: readonly T[]): T[] {
+  return messages.filter((message) => {
+    if (!message || typeof message !== 'object') return true
+    const source = message as { role?: unknown; content?: unknown }
+    if (source.role === 'user' && Array.isArray(source.content)) {
+      return !source.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')
+    }
+    if (source.role === 'assistant' && Array.isArray(source.content)) {
+      return source.content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string' && (block as { text: string }).text.length > 0)
+    }
+    return true
+  }).map((message) => {
+    if (!message || typeof message !== 'object') return message
+    const source = message as { role?: unknown; content?: unknown }
+    if (source.role !== 'assistant') return message
+    return { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T
+  })
+}
+
 export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
   if (value && typeof value === 'object' && 'role' in value && 'content' in value) {
     const message = value as { role?: unknown; content?: unknown }

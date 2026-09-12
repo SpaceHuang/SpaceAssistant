@@ -24,7 +24,7 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventInput, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { computeCompactionSummaryHash, countCommittedCompactions } from '../src/shared/compactionEvents'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
@@ -328,7 +328,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         // 压缩提交端记录的是已展开的 API surface；回放必须在同一层执行，
         // 否则数据库的一条 assistant(toolCalls) 与 API 的 assistant/tool_result
         // 多条消息无法共享 boundary、range 和 fingerprint。
-        const replaySurface = builtMessages.map((message, index) => ({
+        const replaySurface = projectReplaySurface(builtMessages).map((message, index) => ({
           ...message,
           id: message.id ?? surfaceItemIdentities(builtMessages)[index]!
         }))
@@ -415,10 +415,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               contextWindow: { tokens: budget.totalInputBudget + budget.outputReserveTokens, source: 'config' as const }
             }
             if (!eventWriter || !projection || !shouldCompact(projection, budget) || messages.length < 3) return
-            const messageIdentities = surfaceItemIdentities(messages)
-            const items = messages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
+            const replayMessages = projectReplaySurface(messages)
+            const messageIdentities = surfaceItemIdentities(replayMessages)
+            const items = replayMessages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
             const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, surfaceSnapshot.surfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
-            const shadowSource = messages.slice(0, Math.max(1, Math.floor(messages.length / 2)))
+            const shadowSource = replayMessages.slice(0, Math.max(1, Math.floor(replayMessages.length / 2)))
             const summaryText = JSON.stringify({ kind: 'context_checkpoint', task: shadowSource.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), decisions: shadowSource.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), pending: '如需完整历史，使用 history.read 查询被压缩消息。' })
             const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: summaryText }
             const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: estimateTokensFromUtf8Text(checkpointMessage.content) })
@@ -429,7 +430,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               const end = items.findIndex((item) => item.id === range.end)
               return start >= 0 && end >= start ? items.slice(start, end + 1).map((item) => item.id) : []
             }))
-            const outputMessages = [checkpointMessage, ...messages.filter((message, index) => !shadowed.has(messageIdentities[index]!))]
+            const outputMessages = [checkpointMessage, ...replayMessages.filter((message, index) => !shadowed.has(messageIdentities[index]!))]
             const shadowedRanges = record.shadowedRanges
             const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: outputMessages, requiredSurfaceSet, toolExecutionCheckpoint })
             const pairs = extractToolPairIds(outputMessages)
@@ -447,7 +448,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             if (!preflight.ok) return
             const candidate = { kind: 'summary', checkpointMessage, checkpointReplayIdentity: surfaceItemIdentities(outputMessages)[0], shadowedRanges }
             const compactionId = `${windowId}:boundary:${boundaryRequestId}`
-            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(messages), surfaceBoundaryId: messageIdentities[messages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
+            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {
