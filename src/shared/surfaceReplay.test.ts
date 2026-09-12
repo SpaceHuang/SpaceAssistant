@@ -25,6 +25,17 @@ describe('surface replay', () => {
     expect(applyCommittedSurfaceShadow([{ id: 'db-1', role: 'user', content: 'same' }, { id: 'db-2', role: 'user', content: 'same' }], replay, [], 'w', fingerprint)).toEqual([{ id: 'db-2', role: 'user', content: 'same' }])
     expect(second).not.toBe(first)
   })
+  it('uses the persisted identity for a checkpoint that duplicates an existing message', () => {
+    const checkpoint = { id: 'checkpoint', role: 'user', content: 'same' }
+    const candidate = { checkpointMessage: checkpoint, checkpointReplayIdentity: 'checkpoint-identity', shadowedRanges: [{ start: 'old', end: 'old' }] }
+    const replay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: { compactionId: 'c', windowId: 'w', inputSurfaceFingerprint: 'same|tail', surfaceBoundaryId: 'tail' } },
+      { seq: 2, type: 'compaction_summary', payload: { compactionId: 'c', windowId: 'w', candidate, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: 'same|tail', shadowedRanges: candidate.shadowedRanges } },
+      { seq: 3, type: 'compaction_end', payload: { compactionId: 'c', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'same|tail', outputSurfaceFingerprint: 'same|tail', summaryHash: computeCompactionSummaryHash(candidate) } }
+    ])
+    const fingerprint = (values: readonly { content?: string }[]) => values.map((value) => value.content ?? '').join('|')
+    expect(applyCommittedSurfaceShadow([{ id: 'old', role: 'user', content: 'same' }, { id: 'tail', role: 'user', content: 'tail' }], replay, [], 'w', fingerprint)).toEqual([checkpoint, { id: 'tail', role: 'user', content: 'tail' }])
+  })
   it('computes contiguous shadow ranges for reset output', () => {
     expect(computeShadowedRanges([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }], [{ id: 'a' }, { id: 'c' }, { id: 'e' }])).toEqual([{ start: 'b', end: 'b' }, { start: 'd', end: 'd' }])
   })

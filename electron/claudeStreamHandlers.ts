@@ -434,7 +434,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               toolResults: pairs.toolResults
             })
             if (!preflight.ok) return
-            const candidate = { kind: 'summary', checkpointMessage, shadowedRanges }
+            const candidate = { kind: 'summary', checkpointMessage, checkpointReplayIdentity: surfaceItemIdentities(outputMessages)[0], shadowedRanges }
             const compactionId = `${windowId}:boundary:${boundaryRequestId}`
             await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(messages), surfaceBoundaryId: messageIdentities[messages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
           }
