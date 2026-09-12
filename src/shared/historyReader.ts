@@ -1,4 +1,4 @@
-export type HistoryFact = { id: string; sessionId: string; windowId: string; text: string; tokens: number }
+export type HistoryFact = { id: string; sessionId: string; windowId: string; text: string; tokens: number; role?: 'user' | 'assistant'; details?: { toolCalls?: unknown[]; toolUse?: unknown; attachments?: unknown[] } }
 export type HistoryReadResult = { entries: HistoryFact[]; nextCursor: string | null }
 
 export function readHistory(facts: readonly HistoryFact[], args: { sessionId: string; windowId?: string; entryId?: string; query?: string; cursor?: string; limit?: number; maxTokens?: number }): HistoryReadResult {

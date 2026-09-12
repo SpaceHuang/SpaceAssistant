@@ -314,9 +314,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
         const replayFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(frozen.system ?? '', surface)
         const historyFacts = authoritative.messages.map((message) => {
-          const rawContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
-          const text = rawContent ?? ''
-          return { id: message.id, sessionId, windowId: contextWindowId, text, tokens: estimateTokensFromUtf8Text(text) }
+          const rawContent = message.content ?? ''
+          const details = { toolCalls: message.toolCalls, toolUse: message.toolUse, attachments: message.attachments }
+          const detailText = message.toolCalls?.length || message.toolUse || message.attachments?.length ? `\n[结构化详情] ${JSON.stringify(details)}` : ''
+          const text = `${typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent) ?? ''}${detailText}`
+          return { id: message.id, sessionId, windowId: contextWindowId, role: message.role === 'assistant' ? 'assistant' as const : 'user' as const, text, tokens: estimateTokensFromUtf8Text(text), details }
         })
         builtMessages = await buildToolChatMessagesFromSource({
           userDataDir,
