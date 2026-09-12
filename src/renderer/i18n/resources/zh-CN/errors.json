@@ -20,5 +20,17 @@
   "SHELL_PROCESS_EXIT_CODE": "进程退出码 {{code}}",
   "TARGET_NOT_DIRECTORY": "目标路径不是目录",
   "WINDOW_NOT_READY": "窗口未就绪",
-  "WORK_DIR_NOT_CONFIGURED": "工作目录未配置，无法打开项目级 Skill 目录"
+  "WORK_DIR_NOT_CONFIGURED": "工作目录未配置，无法打开项目级 Skill 目录",
+  "SKILL_URL_INVALID": "GitHub 地址无效",
+  "SKILL_URL_UNSUPPORTED_HOST": "暂不支持该地址的主机",
+  "SKILL_REPO_NOT_FOUND": "仓库不存在或无访问权限",
+  "SKILL_NETWORK_FAILED": "网络请求失败，请重试",
+  "SKILL_ARCHIVE_TOO_LARGE": "GitHub 归档超过 512 MB 限制",
+  "SKILL_TAR_UNAVAILABLE": "系统缺少 tar 解压工具",
+  "SKILL_PATH_NOT_FOUND": "仓库路径不存在",
+  "SKILL_NOT_FOUND_IN_REPO": "目录下未找到可安装的 Skill",
+  "SKILL_NAME_CONFLICT": "Skill 名称已存在",
+  "SKILL_MD_TOO_LARGE": "SKILL.md 文件超过 100 KB 限制",
+  "SKILL_DIR_TOO_LARGE": "Skill 目录超过 512 MB 安装上限",
+  "SKILL_FRONT_MATTER_INVALID": "SKILL.md front matter 格式无效"
 }

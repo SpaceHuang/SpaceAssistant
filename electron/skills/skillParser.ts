@@ -1,9 +1,10 @@
 import fs from 'fs'
 import path from 'path'
 import type { SkillDefinition, SkillMeta, SkillScope } from '../../src/shared/domainTypes'
+import { parse as parseYaml } from 'yaml'
 
 export const SKILL_MD_MAX_BYTES = 100 * 1024
-export const SKILL_DIR_MAX_BYTES = 10 * 1024 * 1024
+export const SKILL_DIR_HARD_MAX_BYTES = 512 * 1024 * 1024
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/
 
 export type SkillValidationError = { ok: false; error: string }
@@ -14,7 +15,14 @@ export function parseFrontMatter(raw: string): { frontMatter: Record<string, unk
   if (!match) throw new Error('SKILL.md 缺少 front matter')
   const yamlText = match[1]
   const content = match[2]
-  const frontMatter = parseSimpleYaml(yamlText)
+  let frontMatter: Record<string, unknown>
+  try {
+    const parsed = parseYaml(yamlText)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('front matter must be a mapping')
+    frontMatter = parsed as Record<string, unknown>
+  } catch (error) {
+    throw new Error(`SKILL_FRONT_MATTER_INVALID: ${error instanceof Error ? error.message : String(error)}`)
+  }
   return { frontMatter, content }
 }
 
@@ -102,7 +110,7 @@ export function validateSkillMeta(frontMatter: Record<string, unknown>): SkillVa
   return { ok: true, meta, content: '' }
 }
 
-export function validateSkillDirectorySize(dirPath: string): SkillValidationError | { ok: true } {
+export function computeSkillDirSize(dirPath: string, limitBytes = SKILL_DIR_HARD_MAX_BYTES): { ok: boolean; totalBytes: number; exceeded: boolean } {
   let total = 0
   const stack = [dirPath]
   while (stack.length > 0) {
@@ -112,14 +120,19 @@ export function validateSkillDirectorySize(dirPath: string): SkillValidationErro
       if (ent.isDirectory()) {
         stack.push(full)
       } else if (ent.isFile()) {
-        total += fs.statSync(full).size
-        if (total > SKILL_DIR_MAX_BYTES) {
-          return { ok: false, error: 'Skill 目录总体积超过 10 MB 限制' }
-        }
+        total += fs.lstatSync(full).size
+        if (total > limitBytes) return { ok: false, totalBytes: total, exceeded: true }
       }
     }
   }
-  return { ok: true }
+  return { ok: true, totalBytes: total, exceeded: false }
+}
+
+export function validateSkillDirectorySize(dirPath: string): SkillValidationError | { ok: true } {
+  const result = computeSkillDirSize(dirPath)
+  return result.exceeded
+    ? { ok: false, error: `SKILL_DIR_TOO_LARGE: Skill 目录体积 ${result.totalBytes} 超过 ${SKILL_DIR_HARD_MAX_BYTES} 安装上限` }
+    : { ok: true }
 }
 
 export function readSkillFromDirectory(
@@ -152,13 +165,20 @@ export function readSkillFromDirectory(
   const sizeCheck = validateSkillDirectorySize(dirPath)
   if (!sizeCheck.ok) throw new Error(sizeCheck.error)
 
+  let source: SkillDefinition['source']
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(dirPath, '.skill-source.json'), 'utf8')) as Partial<NonNullable<SkillDefinition['source']>>
+    if (parsed.sourceType === 'github' && typeof parsed.sourceUrl === 'string' && typeof parsed.owner === 'string' && typeof parsed.repo === 'string' && typeof parsed.ref === 'string' && typeof parsed.subPath === 'string') source = parsed as SkillDefinition['source']
+  } catch { /* 本地安装或旧版本 Skill 无来源文件 */ }
+
   return {
     meta: validated.meta,
     content: content.trim(),
     scope,
     directoryPath: path.resolve(dirPath),
     filePath: path.resolve(filePath),
-    lastModified: stat.mtimeMs
+    lastModified: stat.mtimeMs,
+    source
   }
 }
 

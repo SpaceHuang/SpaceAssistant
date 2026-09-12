@@ -1,0 +1,62 @@
+{
+  "measuredAt": "2026-09-11T01:18:05.198Z",
+  "machine": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.4.0"
+  },
+  "scenarios": [
+    {
+      "label": "full-500",
+      "messageCount": 500,
+      "mountMs": 293.657833,
+      "domNodes": 4680,
+      "heapUsedMb": -90.50821685791016,
+      "streamCommits": {
+        "count": 100,
+        "p50": 1.3760829999973794,
+        "p95": 1.9760870000022805,
+        "max": 7.930755000001909,
+        "longTaskCount": 0,
+        "longTaskShare": 0
+      },
+      "mountCommits": {
+        "count": 1,
+        "p50": 222.72430200000053,
+        "p95": 222.72430200000053,
+        "max": 222.72430200000053,
+        "longTaskCount": 1,
+        "longTaskShare": 1
+      }
+    },
+    {
+      "label": "latest-page-60",
+      "messageCount": 60,
+      "mountMs": 32.83229200000005,
+      "domNodes": 580,
+      "heapUsedMb": 16.071456909179688,
+      "streamCommits": {
+        "count": 100,
+        "p50": 0.2227079999979651,
+        "p95": 0.33312999999725434,
+        "max": 0.5639120000023468,
+        "longTaskCount": 0,
+        "longTaskShare": 0
+      },
+      "mountCommits": {
+        "count": 1,
+        "p50": 24.294057000000976,
+        "p95": 24.294057000000976,
+        "max": 24.294057000000976,
+        "longTaskCount": 0,
+        "longTaskShare": 0
+      }
+    }
+  ],
+  "ratios": {
+    "mountMsPageOverFull": 0.11180458448727998,
+    "domNodesPageOverFull": 0.12393162393162394,
+    "mountCommitMaxPage": 24.294057000000976,
+    "mountCommitMaxFull": 222.72430200000053
+  }
+}

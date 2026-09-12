@@ -21,6 +21,11 @@ describe('formatUserFacingError', () => {
     expect(formatUserFacingError(`${ErrorCodes.SHELL_PROCESS_EXIT_CODE}|42`)).toBe('Process exited with code 42')
   })
 
+  it('parses skill errors with code prefix and context', async () => {
+    await changeAppLocale('en-US')
+    expect(formatUserFacingError(`${ErrorCodes.SKILL_DIR_TOO_LARGE}: details`)).toBe('Skill directory exceeds the 512 MB installation limit')
+  })
+
   it('returns legacy free text unchanged', async () => {
     await changeAppLocale('en-US')
     expect(formatUserFacingError('自定义错误')).toBe('自定义错误')

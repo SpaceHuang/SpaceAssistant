@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
-import { normalizeRelPathInput, resolveSafePath, resolveSafeWorkDirPath } from './pathSecurity'
+import { normalizeRelPathInput, resolveSafePath, resolveSafeReadPath, resolveSafeWorkDirPath } from './pathSecurity'
 
 describe('pathSecurity', () => {
   it('normalizeRelPathInput converts backslashes', () => {
@@ -16,6 +16,20 @@ describe('pathSecurity', () => {
   })
 
   describe('resolveSafeWorkDirPath', () => {
+    it('allows absolute paths only under an extra read-only root', async () => {
+      const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-workdir-')))
+      const skillsRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-skills-')))
+      const skillFile = path.join(skillsRoot, 'demo', 'references', 'guide.md')
+      await fs.mkdir(path.dirname(skillFile), { recursive: true })
+      await fs.writeFile(skillFile, 'guide')
+      expect(await resolveSafeReadPath(workDir, skillFile, [skillsRoot])).toBe(skillFile)
+    })
+
+    it('rejects paths outside workDir and extra read-only roots', async () => {
+      const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-workdir-')))
+      const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-outside-')))
+      await expect(resolveSafeReadPath(workDir, outside, [])).rejects.toThrow('路径超出工作目录范围')
+    })
     it('keeps absolute in-workdir paths without nesting under workDir again', async () => {
       const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-workdir-')))
       const target = path.join(workDir, 'docs', 'analyze')
