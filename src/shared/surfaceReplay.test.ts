@@ -12,6 +12,19 @@ describe('surface replay', () => {
     expect(identities[1]).toBe(`${identities[0]}#1`)
     expect(identities[3]).toBe(`${identities[0]}#2`)
   })
+  it('keeps repeated-message identities stable after an earlier duplicate is shadowed', () => {
+    const [first, second] = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }])
+    const replay = foldCompactionEvents([{
+      seq: 1, type: 'compaction_start', payload: { compactionId: 'c', windowId: 'w', inputSurfaceFingerprint: 'same|same', surfaceBoundaryId: 'db-2' }
+    }, {
+      seq: 2, type: 'compaction_summary', payload: { compactionId: 'c', windowId: 'w', candidate: { shadowedRanges: [{ start: first, end: first }] }, summaryHash: computeCompactionSummaryHash({ shadowedRanges: [{ start: first, end: first }] }), outputSurfaceFingerprint: 'same', shadowedRanges: [{ start: first, end: first }] }
+    }, {
+      seq: 3, type: 'compaction_end', payload: { compactionId: 'c', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'same|same', outputSurfaceFingerprint: 'same', summaryHash: computeCompactionSummaryHash({ shadowedRanges: [{ start: first, end: first }] }) }
+    }])
+    const fingerprint = (values: readonly { content?: string }[]) => values.map((value) => value.content ?? '').join('|')
+    expect(applyCommittedSurfaceShadow([{ id: 'db-1', role: 'user', content: 'same' }, { id: 'db-2', role: 'user', content: 'same' }], replay, [], 'w', fingerprint)).toEqual([{ id: 'db-2', role: 'user', content: 'same' }])
+    expect(second).not.toBe(first)
+  })
   it('computes contiguous shadow ranges for reset output', () => {
     expect(computeShadowedRanges([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }], [{ id: 'a' }, { id: 'c' }, { id: 'e' }])).toEqual([{ start: 'b', end: 'b' }, { start: 'd', end: 'd' }])
   })

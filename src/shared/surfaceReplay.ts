@@ -44,6 +44,8 @@ export function computeShadowedRanges<T extends SurfaceReplayItem>(before: reado
 export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = [], windowId?: string, fingerprint?: (items: readonly T[]) => string): T[] {
   const required = new Set(requiredIds)
   let currentSurface = [...items]
+  const initialIdentities = surfaceItemIdentities(items)
+  const stableIdentities = new Map(items.map((item, index) => [item.id, initialIdentities[index] ?? surfaceItemIdentity(item, index)]))
   for (const committed of replay.committed) {
     const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
     if (windowId && committedWindowId !== windowId) continue
@@ -60,7 +62,7 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
       ? currentSurface.findIndex((_, index) => fingerprint(currentSurface.slice(0, index + 1)) === expectedInput)
       : -1
     const boundaryEnd = expectedBoundaryIndex >= 0 ? currentSurface[expectedBoundaryIndex]?.id : (typeof persistedBoundary === 'string' ? persistedBoundary : rangeBoundary)
-    const currentIdentities = surfaceItemIdentities(currentSurface)
+    const currentIdentities = currentSurface.map((item, index) => stableIdentities.get(item.id) ?? surfaceItemIdentity(item, index))
     const boundaryIndex = boundaryEnd ? currentSurface.findIndex((item, index) => item.id === boundaryEnd || currentIdentities[index] === boundaryEnd) : -1
     const inputSurface = boundaryIndex >= 0 ? currentSurface.slice(0, boundaryIndex + 1) : currentSurface
     const historicalIds = new Set(inputSurface.map((item) => item.id))
