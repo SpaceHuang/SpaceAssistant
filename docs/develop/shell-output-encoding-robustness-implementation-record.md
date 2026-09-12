@@ -122,7 +122,11 @@
 
 - **Gate 1（事故可诊断）**：`electron/tools/runShellExecutor.test.ts` 的 Gate 1 用例把附录 A 的 136 字节原样写进 stderr 并复现宿主失败退出码，断言：`utf-16le` / `utf16-pattern` / `high` / `replacements=0`、文本含“内部错误”与 `8009001d`、**不含 NUL**、`stderrRawBytes=136`、`stderrBytes=104`、`hresult=NTE_PROVIDER_DLL_FAIL (0x8009001D)`、artifact 为原始字节且 sha256 只覆盖落盘字节、日志含 `stderrEncoding` / `encodingSource` / `rawArtifactReason` / `outputTrust`。
 - **Gate 2（统一入口）**：`rg "toString\('utf8'\)"` 在子进程输出路径零命中（剩余命中全部是文件内容读取路径，§3.1 已排除）；`tsc -p tsconfig.electron.json --noEmit`、`npm run typecheck:renderer` 通过。
-- **Gate 3（全量验收）**：`npm test`（§11 的 19 个用例全部通过）+ `npm run build`。
+- **Gate 3（全量验收，2026-09-12 本机 Windows x64 实测）**：
+  - `npm test`：524 个测试文件 / 3378 个用例，**520 文件 / 3366 用例通过**；4 文件 / 9 用例失败，与 Phase 0 基线**完全一致**，且全部是与本需求无关的环境性失败（Windows 符号链接 `EPERM`：`electron/confirmation/extractors/extractors.test.ts`；ripgrep staging 缺失：`electron/tools/ripgrepBinary.test.ts`、`ripgrepPrepareSecurity.test.ts`、`afterPackRipgrep.test.ts`）。
+  - `npm run build`：通过（托盘图标 + renderer + electron 全量构建）。
+  - `npm run typecheck:renderer` / `npm run typecheck:shared` / `npm run i18n:check`：通过。
+  - 全量首跑曾暴露一处回归（`reason` 进入通用进程投影白名单后，spawn 失败的原始诊断文本会漏进 Agent payload）；已改为「仅计划期诊断 payload（含 `SHELL_*` code / 方言错配标记）才转发 `reason`」，并补 `src/shared/processResultProjection.test.ts` 回归用例。
 
 ## 9. 新增 spawn 点的 code review checklist（§10.1）
 
