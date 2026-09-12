@@ -71,6 +71,18 @@ export const BUILTIN_TOOL_METADATA: Record<string, ToolActionDescriptor> = {
     actionClass: 'outbound',
     riskLevel: 'medium',
     extractors: ['outbound-target']
+  },
+  'history.read': {
+    toolName: 'history.read',
+    actionClass: 'read',
+    riskLevel: 'low',
+    extractors: []
+  },
+  'skills.read': {
+    toolName: 'skills.read',
+    actionClass: 'read',
+    riskLevel: 'low',
+    extractors: []
   }
 }
 
