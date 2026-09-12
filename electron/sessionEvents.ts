@@ -47,6 +47,8 @@ export async function appendCompactionTransaction(
   const summaryEvent = await sink.appendCritical({ type: 'compaction_summary', payload: summary })
   return sink.appendCritical({ type: 'compaction_end', payload: {
     compactionId: summary.compactionId,
+    ...(typeof start.windowId === 'string' ? { windowId: start.windowId } : {}),
+    ...(typeof start.turnId === 'string' ? { turnId: start.turnId } : {}),
     status: 'committed',
     startSeq: startEvent.seq,
     summarySeq: summaryEvent.seq,
