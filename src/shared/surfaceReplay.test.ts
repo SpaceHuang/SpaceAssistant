@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow, computeShadowedRanges, surfaceItemIdentity } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
 import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
   it('uses content identity when a surface item has no explicit id', () => {
     expect(surfaceItemIdentity({ role: 'user', content: 'same' }, 0)).toBe(surfaceItemIdentity({ role: 'user', content: 'same' }, 9))
+  })
+  it('disambiguates repeated normalized messages by occurrence', () => {
+    const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])
+    expect(new Set(identities).size).toBe(4)
+    expect(identities[1]).toBe(`${identities[0]}#1`)
+    expect(identities[3]).toBe(`${identities[0]}#2`)
   })
   it('computes contiguous shadow ranges for reset output', () => {
     expect(computeShadowedRanges([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }], [{ id: 'a' }, { id: 'c' }, { id: 'e' }])).toEqual([{ start: 'b', end: 'b' }, { start: 'd', end: 'd' }])

@@ -18,6 +18,16 @@ export function surfaceItemIdentity(value: unknown, fallbackIndex: number): stri
   return `surface-${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
 
+export function surfaceItemIdentities(values: readonly unknown[]): string[] {
+  const counts = new Map<string, number>()
+  return values.map((value, index) => {
+    const base = surfaceItemIdentity(value, index)
+    const occurrence = counts.get(base) ?? 0
+    counts.set(base, occurrence + 1)
+    return occurrence === 0 ? base : `${base}#${occurrence}`
+  })
+}
+
 export function computeShadowedRanges<T extends SurfaceReplayItem>(before: readonly T[], after: readonly T[]): Array<{ start: string; end: string }> {
   const retained = new Set(after.map((item) => item.id))
   const removed = before.filter((item) => !retained.has(item.id))
@@ -50,7 +60,8 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
       ? currentSurface.findIndex((_, index) => fingerprint(currentSurface.slice(0, index + 1)) === expectedInput)
       : -1
     const boundaryEnd = expectedBoundaryIndex >= 0 ? currentSurface[expectedBoundaryIndex]?.id : (typeof persistedBoundary === 'string' ? persistedBoundary : rangeBoundary)
-    const boundaryIndex = boundaryEnd ? currentSurface.findIndex((item, index) => item.id === boundaryEnd || surfaceItemIdentity(item, index) === boundaryEnd) : -1
+    const currentIdentities = surfaceItemIdentities(currentSurface)
+    const boundaryIndex = boundaryEnd ? currentSurface.findIndex((item, index) => item.id === boundaryEnd || currentIdentities[index] === boundaryEnd) : -1
     const inputSurface = boundaryIndex >= 0 ? currentSurface.slice(0, boundaryIndex + 1) : currentSurface
     const historicalIds = new Set(inputSurface.map((item) => item.id))
     if (fingerprint && typeof expectedInput === 'string' && fingerprint(inputSurface) !== expectedInput) continue
@@ -60,8 +71,8 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
       if (!range || typeof range !== 'object') { shadowedIds.clear(); break }
       const start = (range as { start?: unknown }).start
       const end = (range as { end?: unknown }).end
-      const rangeStart = currentSurface.findIndex((item, index) => item.id === start || surfaceItemIdentity(item, index) === start)
-      const rangeEnd = currentSurface.findIndex((item, index) => item.id === end || surfaceItemIdentity(item, index) === end)
+      const rangeStart = currentSurface.findIndex((item, index) => item.id === start || currentIdentities[index] === start)
+      const rangeEnd = currentSurface.findIndex((item, index) => item.id === end || currentIdentities[index] === end)
       if (rangeStart < 0 || rangeEnd < rangeStart) { shadowedIds.clear(); break }
       if (insertionIndex < 0) insertionIndex = rangeStart
       for (const item of currentSurface.slice(rangeStart, rangeEnd + 1)) shadowedIds.add(item.id)

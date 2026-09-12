@@ -24,7 +24,7 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventInput, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { computeCompactionSummaryHash, countCommittedCompactions } from '../src/shared/compactionEvents'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
@@ -404,7 +404,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               contextWindow: { tokens: budget.totalInputBudget + budget.outputReserveTokens, source: 'config' as const }
             }
             if (!eventWriter || !projection || !shouldCompact(projection, budget) || messages.length < 3) return
-            const items = messages.map((message, index) => ({ id: surfaceItemIdentity(message, index), tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(surfaceItemIdentity(message, index)) || surfaceItemIdentity(message, index) === authoritative.currentUserMessageId }))
+            const messageIdentities = surfaceItemIdentities(messages)
+            const items = messages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
             const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, surfaceSnapshot.surfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
             const shadowSource = messages.slice(0, Math.max(1, Math.floor(messages.length / 2)))
             const summaryText = JSON.stringify({ kind: 'context_checkpoint', task: shadowSource.filter((message) => message.role === 'user').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), decisions: shadowSource.filter((message) => message.role === 'assistant').map((message) => typeof message.content === 'string' ? message.content : '').join('\n').slice(0, 1200), pending: '如需完整历史，使用 history.read 查询被压缩消息。' })
@@ -417,12 +418,12 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               const end = items.findIndex((item) => item.id === range.end)
               return start >= 0 && end >= start ? items.slice(start, end + 1).map((item) => item.id) : []
             }))
-            const outputMessages = [checkpointMessage, ...messages.filter((message, index) => !shadowed.has(surfaceItemIdentity(message, index)))]
+            const outputMessages = [checkpointMessage, ...messages.filter((message, index) => !shadowed.has(messageIdentities[index]!))]
             const shadowedRanges = record.shadowedRanges
             const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: outputMessages, requiredSurfaceSet, toolExecutionCheckpoint })
             const pairs = extractToolPairIds(outputMessages)
             const preflight = validateSurfaceForSend({
-              ids: outputMessages.map((message, index) => surfaceItemIdentity(message, index)),
+              ids: surfaceItemIdentities(outputMessages),
               requiredIds: requiredSurfaceSet,
               currentUserMessageId: authoritative.currentUserMessageId,
               fingerprint: outputHeader.surfaceSnapshot.fingerprint,
@@ -435,7 +436,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             if (!preflight.ok) return
             const candidate = { kind: 'summary', checkpointMessage, shadowedRanges }
             const compactionId = `${windowId}:boundary:${boundaryRequestId}`
-            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(messages), surfaceBoundaryId: surfaceItemIdentity(messages[messages.length - 1]!, messages.length - 1), targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
+            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(messages), surfaceBoundaryId: messageIdentities[messages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {

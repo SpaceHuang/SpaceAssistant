@@ -174,7 +174,7 @@ import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfac
 import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
-import { computeShadowedRanges, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { computeShadowedRanges, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -868,7 +868,7 @@ async function runToolChatSessionInner(
       if (recovery.action === 'reset_and_retry_provider') {
         overflowRetries = recovery.nextRetry
           const recoveryInputMessages = [...messagesForApi]
-          const recoveryInputItems = (recoveryInputMessages as unknown as ClaudeContentBlockMessage[]).map((message, index) => ({ id: surfaceItemIdentity(message, index) }))
+          const recoveryInputItems = surfaceItemIdentities(recoveryInputMessages).map((id) => ({ id }))
         messagesForApi = selectRecoveryMessages(messagesForApi as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as typeof messagesForApi
         if (args.appendCompactionTransaction && lastRequestHeader) {
           const recoverySystem = lastRequestHeader.system
@@ -878,7 +878,7 @@ async function runToolChatSessionInner(
             const value = block as unknown as { type?: unknown; id?: unknown }
             return value.type === 'tool_use' && typeof value.id === 'string' ? [value.id] : []
           }) : [])
-          const recoveryOutputItems = messagesForApi.map((message, index) => ({ id: surfaceItemIdentity(message, index) }))
+          const recoveryOutputItems = surfaceItemIdentities(messagesForApi).map((id) => ({ id }))
           const recoveryShadowedRanges = computeShadowedRanges(recoveryInputItems, recoveryOutputItems)
           const recoveryFingerprint = (surface: readonly unknown[]) => buildRequestHeaderPayload({ requestId: 'replay', system: recoverySystem, tools: [], messages: surface.map((message) => {
             const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
