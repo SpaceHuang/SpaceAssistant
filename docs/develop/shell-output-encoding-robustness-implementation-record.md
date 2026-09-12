@@ -76,7 +76,7 @@
 | D1 | prelude 只静默 progress，不再固定 UTF-8 | `WINDOWS_POWERSHELL_PRELUDE = "$ProgressPreference = 'SilentlyContinue';"`；**独立 commit** |
 | D2 | `ShellProfile.encoding` 替换为有消费者的契约字段 | `outputEncoding: OutputEncodingContract` + `encodingSource: 'builtin' \| 'user' \| 'detected'`；冻结断言同步更新 |
 | D3 | 8 KiB 窗口、判定一次并锁死 | `createChildStreamDecoder` 的 `windowBytes`（默认 8 KiB）；纯 ASCII 前缀可先行交付，`windowBytes=0` 退化为“首块即判定” |
-| D4 | 用户级 `shellConfig.outputEncoding` 覆盖延后 | **未实现**（按需求延后，避免引入配置迁移面）；启用路径见 §10 |
+| D4 | 用户级 `shellConfig.outputEncoding` 覆盖 | **已否决**（需求 §14，2026-09-12）：不提供任何用户级编码配置 —— 用户无法判断也不应承担该决策；编码分层归属不同，任何单一取值都会解错一部分，正确性由应用内部闭环 |
 | D5 | 内存负责当场重解、文件负责事后可查 | `RawByteBuffer`（内存 head/tail）+ artifact 原始字节直存；失败/可疑/截断自动落盘，`note: 'unredacted'` |
 | D6 | 终端保持 raw 直达 xterm | 终端通道零文本解码；文本回滚/日志投影复用同一契约（`src/shared/terminalScrollback.ts`） |
 | D7 | 把“禁止用 PS 承接 native 文本”写进 shell 使用说明 | `electron/shell/terminalToolContract.ts` 仅在 Windows PowerShell 方言注入该规则（不污染 POSIX 描述） |
@@ -145,5 +145,6 @@
 
 - `contractConflict` 按流写入 `shell.exec.finish`（字段 + 诊断行 `conflict=`），并进入工具结果 `data.decode.contractConflict`；已知例外是“OEM 契约 + 合法 UTF-8 + 非 ASCII”（见 §3 偏差 5），这类冲突是**预期内**的第三方 CLI 行为。
 - 度量口径：按 profile 统计 `conflict != none` 的占比；若某 profile 长期高频冲突，按需求 §15 R3 的处置把该 profile 契约改为 `auto`（`shellProfiles.ts` 一处改动，解码器无需改动）。
-- **D4 未落地**：用户级 `shellConfig.outputEncoding` 覆盖仍延后。启用时的最小改造面：`AppConfig.shellConfig` 增加可选字段 → `shellProfiles` 解析优先级 `user > detected > builtin` → `encodingSource='user'`；因为契约已是类型化的，解码侧无需改动。
+- **D4 已否决（不给用户编码选项）**：编码在不同层归属不同 —— 系统 CP（老工具往管道里写什么字节）、PowerShell 自身输出（含内部报错的 UTF-16LE）、被调用工具自带编码（git / npm 多为 UTF-8）；同一命令的同一路输出可能同时混有以上来源，因此任何"用户选择一个编码"的全局配置都会解错一部分，而且用户既看不懂也无从判断。编码正确性改由应用内部三件事闭环：①契约按 spawn 点声明（`run_script` 的 UTF-8 是我们自己钉的；第三方 CLI 用 `auto`）②实际编码按字节判定一次并锁定 ③混合/不可解时标 `suspect` 并留原始字节。若将来要提高某类宿主的覆盖度，方向是调整应用的启动方式或宿主 profile（应用内部决策），不新增用户开关。
+- 措辞澄清：Windows 上 profile 的契约取自注册表 `OEMCP`，语义是"按我们当前启动方式推断的先验"，不是对 native 工具输出的保证；最终以字节判定为准，冲突按 §3 偏差 5/6 处理。
 - 若将来要统一到“原始字节”单一口径，需按 §9.6 约束 4 独立立项（双写 → 消费方迁移 → 删旧字段），不在本需求范围内。
