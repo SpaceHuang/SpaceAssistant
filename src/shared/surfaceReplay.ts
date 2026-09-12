@@ -3,10 +3,20 @@ import { buildRequestHeaderPayload } from './requestContext'
 
 export type SurfaceReplayItem = { id: string; required?: boolean }
 
+/** 将 provider 的 assistant content blocks 投影成数据库持久化的正文表示。 */
+export function canonicalSurfaceContent(role: unknown, content: unknown): unknown {
+  if (role !== 'assistant' || !Array.isArray(content)) return content
+  return content
+    .filter((block): block is { type?: unknown; text?: unknown } => Boolean(block) && typeof block === 'object')
+    .filter((block) => block.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('')
+}
+
 export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
   if (value && typeof value === 'object' && 'role' in value && 'content' in value) {
     const message = value as { role?: unknown; content?: unknown }
-    const text = JSON.stringify({ role: message.role, content: message.content })
+    const text = JSON.stringify({ role: message.role, content: canonicalSurfaceContent(message.role, message.content) })
     let hash = 2166136261
     for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619)
     return `surface-${(hash >>> 0).toString(16).padStart(8, '0')}`
@@ -32,7 +42,7 @@ export function surfaceItemIdentities(values: readonly unknown[]): string[] {
 export function computeReplaySurfaceFingerprint(system: string, surface: readonly unknown[]): string {
   return buildRequestHeaderPayload({ requestId: 'replay', system, tools: [], messages: surface.map((message) => {
     const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
-    return { role: source.role, content: source.content }
+    return { role: source.role, content: canonicalSurfaceContent(source.role, source.content) }
   }) }).surfaceSnapshot.fingerprint
 }
 

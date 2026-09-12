@@ -9,6 +9,12 @@ describe('surface replay', () => {
   it('uses the same canonical fingerprint for provider and persisted message shapes', () => {
     expect(computeReplaySurfaceFingerprint('system', [{ role: 'user', content: 'hello' }])).toBe(computeReplaySurfaceFingerprint('system', [{ id: 'u1', role: 'user', content: 'hello', status: 'sent' }]))
   })
+  it('uses the same identity and fingerprint for assistant blocks and persisted text', () => {
+    const provider = { role: 'assistant', content: [{ type: 'text', text: 'answer' }] }
+    const persisted = { id: 'db-assistant', role: 'assistant', content: 'answer', status: 'completed' }
+    expect(surfaceItemIdentity(provider, 0)).toBe(surfaceItemIdentity(persisted, 0))
+    expect(computeReplaySurfaceFingerprint('system', [provider])).toBe(computeReplaySurfaceFingerprint('system', [persisted]))
+  })
   it('disambiguates repeated normalized messages by occurrence', () => {
     const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])
     expect(new Set(identities).size).toBe(4)
@@ -129,5 +135,19 @@ describe('surface replay', () => {
     ], replay, [], 'w', fingerprint)).toEqual([
       { id: 'checkpoint-1', role: 'user', content: 'summary' }, { id: 'db-tail', role: 'user', content: 'tail' }, { id: 'new-turn', role: 'user', content: 'new' }
     ])
+  })
+
+  it('replays a committed range after assistant blocks are persisted as text', () => {
+    const assistantApi = { role: 'assistant', content: [{ type: 'text', text: 'answer' }] }
+    const user = { role: 'user', content: 'question' }
+    const candidate = { checkpointMessage: { id: 'checkpoint-1', role: 'user', content: 'summary' }, shadowedRanges: [{ start: surfaceItemIdentity(user, 0), end: surfaceItemIdentity(assistantApi, 1) }] }
+    const inputFingerprint = computeReplaySurfaceFingerprint('system', [user, assistantApi])
+    const outputFingerprint = computeReplaySurfaceFingerprint('system', [candidate.checkpointMessage])
+    const replay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: { compactionId: 'c', windowId: 'w', inputSurfaceFingerprint: inputFingerprint, surfaceBoundaryId: surfaceItemIdentity(assistantApi, 1) } },
+      { seq: 2, type: 'compaction_summary', payload: { compactionId: 'c', windowId: 'w', candidate, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputFingerprint, shadowedRanges: candidate.shadowedRanges } },
+      { seq: 3, type: 'compaction_end', payload: { compactionId: 'c', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: inputFingerprint, outputSurfaceFingerprint: outputFingerprint, summaryHash: computeCompactionSummaryHash(candidate) } }
+    ])
+    expect(applyCommittedSurfaceShadow([{ id: 'db-user', ...user }, { id: 'db-assistant', role: 'assistant', content: 'answer' }, { id: 'new', role: 'user', content: 'next' }], replay, [], 'w', (items) => computeReplaySurfaceFingerprint('system', items))).toEqual([{ id: 'checkpoint-1', role: 'user', content: 'summary' }, { id: 'new', role: 'user', content: 'next' }])
   })
 })
