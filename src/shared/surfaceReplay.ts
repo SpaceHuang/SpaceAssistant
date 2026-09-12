@@ -55,7 +55,19 @@ export function restoreReplaySurface<T extends { id?: string }>(original: readon
     byKey.set(item.id ?? identities[index]!, item)
     byKey.set(identities[index]!, item)
   })
-  return replayed.map((item) => byKey.get(item.id ?? '') ?? item)
+  const restored: T[] = []
+  for (const item of replayed) {
+    const source = byKey.get(item.id ?? '')
+    if (!source) { restored.push(item); continue }
+    restored.push(source)
+    const index = original.indexOf(source)
+    const content = source && typeof source === 'object' ? (source as { content?: unknown }).content : undefined
+    const hasToolUse = Array.isArray(content) && content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
+    const result = original[index + 1]
+    const resultContent = result && typeof result === 'object' ? (result as { role?: unknown; content?: unknown }).content : undefined
+    if (hasToolUse && result && typeof result === 'object' && (result as { role?: unknown }).role === 'user' && Array.isArray(resultContent) && resultContent.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) restored.push(result)
+  }
+  return restored
 }
 
 export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
