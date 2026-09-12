@@ -1146,7 +1146,19 @@ async function runToolChatSessionInner(
           const code = error instanceof RunShellPlanError ? error.code : 'SHELL_PLAN_INVALID'
           const message = error instanceof Error ? error.message : String(error)
           logToolLoopError({ requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj }, message, message)
-          await recordToolResult(buildToolErrorResult(toolUseId, code, { requestId, sessionId }), { success: false, error: message })
+          // §10.3：不传 result 时内容会退化成「只有错误码」，模型必须再试错一轮才知道哪条语法错了。
+          // 这里把计划错误的结构化 data（signals/hints/expectedDialect…）交给同一投影管道。
+          const planDetails = error instanceof RunShellPlanError ? error.details : undefined
+          const planResult: ToolExecutorResult | undefined = planDetails
+            ? { success: false, error: code, userMessage: message, data: { code, ...planDetails } }
+            : undefined
+          await recordToolResult(
+            buildToolErrorResult(toolUseId, code, { requestId, sessionId }, planResult, {
+              workspaceRoot: workDir,
+              processTool: true
+            }),
+            { success: false, error: message }
+          )
           if (toolErrorRepeat.noteFailure(toolName, code)) {
             abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${code}`
             break

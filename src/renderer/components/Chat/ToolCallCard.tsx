@@ -545,6 +545,7 @@ export function ToolCallCard({
                 truncated={shellResultData.truncated}
                 artifactId={shellResultData.artifactId}
                 persistedOutputPath={shellResultData.persistedOutputPath}
+                outputTrust={shellResultData.outputTrust}
               />
             </div>
           ) : null}

@@ -8,6 +8,9 @@ import { appendRawTailBuffer, executePreparedShellExecution, runShellExecutor, r
 import { planRunShellExecution } from './runShellPlan'
 import { appendProgressOutputRaw, decodeProgressRawTail } from '../../src/shared/terminalScrollback'
 import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
+import { ACCIDENT_HEX } from '../processOutput/testFixtures'
+import { SHELL_OUTPUT_TRUST_SUSPECT_NOTICE } from '../../src/shared/shellToolDisplay'
+import { projectAgentToolResultForSink } from '../../src/shared/processResultProjection'
 
 vi.mock('../shell/shellAgentLogger', () => ({
   logShellAgentEvent: vi.fn()
@@ -430,10 +433,20 @@ describe('runShellExecutor', () => {
     expect(result.success).toBe(true)
     expect(result.data?.truncated).toBe(true)
     expect(result.data?.persistedOutputPath).toBeTruthy()
-    const content = await fs.readFile(String(result.data?.persistedOutputPath), 'utf8')
-    expect(content).toContain(big)
-    expect(result.data?.outputArtifactBytes).toBe(content.length)
-    expect(result.data?.outputArtifactSha256).toBe(createHash('sha256').update(content).digest('hex'))
+    const artifactBytes = await fs.readFile(String(result.data?.persistedOutputPath))
+    expect(artifactBytes.toString('utf8')).toContain(big)
+    expect(result.data?.outputArtifactBytes).toBe(artifactBytes.length)
+    expect(result.data?.outputArtifactSha256).toBe(createHash('sha256').update(artifactBytes).digest('hex'))
+    // T14（truncated）：artifact 必产出、sha256 只覆盖落盘字节、omittedBytes 反映内存窗口丢弃量（§9.3/§9.4）
+    expect(result.data?.outputArtifactReason).toBe('truncated')
+    const rawArtifact = result.data?.rawArtifact as Record<string, unknown>
+    expect(rawArtifact).toMatchObject({ bytes: artifactBytes.length, truncated: true, note: 'unredacted' })
+    expect(rawArtifact.sha256).toBe(createHash('sha256').update(artifactBytes).digest('hex'))
+    // 原始字节数含命令自身追加的换行（cat/Get-Content -Raw 的 200 字符 + 行尾）
+    const totalRawBytes = Number(rawArtifact.rawBytes)
+    expect(totalRawBytes).toBe(artifactBytes.length)
+    // 内存窗口 = head(ioMax=32) + tail(ioMax/2=16)；artifact 侧完整保存
+    expect(rawArtifact.omittedBytes).toBe(totalRawBytes - 48)
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('恶意 toolUseId 只能生成 shell-output 根目录内的 hash artifact 文件', async () => {
@@ -562,6 +575,29 @@ describe('runShellExecutor', () => {
     expect(decoded.match(/chunk2/g)?.length).toBe(1)
   }, SPAWN_TEST_TIMEOUT_MS)
 
+  it('T13 终端与文本一致：raw 回放字节 = 原始字节，文本投影按契约解码（§10.1 #11）', async () => {
+    const ctx = {
+      ...baseCtx(workDir, userDataDir),
+      shellOutputMode: 'terminal' as const,
+      shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, outputMode: 'terminal' as const }
+    }
+    const result = await runShellExecutor.execute({ command: accidentReplayCommand('stdout') }, ctx)
+    const data = result.data as Record<string, any>
+    // 文本投影复用同一契约：事故字节还原为中文，而不是 GBK 乱码
+    expect(data.decode.stdout).toMatchObject({ encoding: 'utf-16le', source: 'utf16-pattern', replacements: 0 })
+    expect(String(data.stdout)).toContain('内部错误')
+    // 终端通道保持 raw：进程原始字节逐字节直达 xterm，文本层不得反写原始字节
+    const rawDeltas = vi.mocked(ctx.sendProgress).mock.calls.flatMap(([, payload]) => {
+      if (!payload || typeof payload !== 'object' || !('rawDelta' in payload)) return []
+      const rawDelta = (payload as { rawDelta?: unknown }).rawDelta
+      return typeof rawDelta === 'string' ? [rawDelta] : []
+    })
+    expect(rawDeltas.length).toBeGreaterThan(0)
+    const accumulated = rawDeltas.reduce((acc, delta) => appendProgressOutputRaw(acc, delta), '')
+    const terminalBytes = decodeProgressRawTail(accumulated)
+    expect(Buffer.compare(Buffer.from(terminalBytes), Buffer.from(ACCIDENT_HEX, 'hex'))).toBe(0)
+  }, SPAWN_TEST_TIMEOUT_MS)
+
   it('terminal pending raw delta 在节流期间保持 64 KiB 上限', async () => {
     const ctx = {
       ...baseCtx(workDir, userDataDir),
@@ -606,4 +642,127 @@ describe('runShellExecutor', () => {
     const second = await runShellExecutor.execute({ command }, baseCtx(workDir, userDataDir))
     expect(second.data).toMatchObject({ retryCount: 2, retryExhausted: true })
   })
+
+  /** 事故重放：把 136 字节原样写进指定流，并复现宿主失败退出码（§2.2 / Gate 1）。 */
+  function accidentReplayCommand(stream: 'stdout' | 'stderr' = 'stderr'): string {
+    const bytes = Buffer.from(ACCIDENT_HEX, 'hex')
+    if (isWindows) {
+      const literals = Array.from(bytes).map((b) => '0x' + b.toString(16).padStart(2, '0')).join(',')
+      const writer = stream === 'stdout' ? '[Console]::OpenStandardOutput()' : '[Console]::OpenStandardError()'
+      return (
+        '$b=[byte[]](' + literals + ');$e=' + writer + ';'
+        + '$e.Write($b,0,$b.Length);$e.Flush();exit -65536'
+      )
+    }
+    const escapes = Array.from(bytes).map((b) => '\\x' + b.toString(16).padStart(2, '0')).join('')
+    return "printf '" + escapes + "'" + (stream === 'stderr' ? ' >&2' : '') + '; exit 1'
+  }
+
+  it('T15 字节口径：*RawBytes 与 *Bytes/*TextBytes 并存且各自口径正确（G8/M3）', async () => {
+    const ascii = 'plain-ascii-line'
+    const cmd = shellCommand("printf '" + ascii + "'", writeStdout(ascii))
+    const result = await runShellExecutor.execute({ command: cmd }, baseCtx(workDir, userDataDir))
+    const data = result.data as Record<string, any>
+    // 旧字段语义不变：*Bytes = *TextBytes = 解码后文本的 UTF-8 长度
+    expect(data.stdoutTextBytes).toBe(data.stdoutBytes)
+    expect(data.stdoutBytes).toBe(Buffer.byteLength(String(data.stdout), 'utf8'))
+    // 新字段：原始字节数（与文本长度是两个不同事实）
+    expect(data.stdoutRawBytes).toBe(Buffer.byteLength(ascii, 'utf8'))
+    expect(data.stderrRawBytes).toBe(0)
+    expect(data.stdoutRawSha256).toBe(createHash('sha256').update(Buffer.from(ascii, 'utf8')).digest('hex'))
+    expect(data.decodeReplacements).toBe(0)
+    expect(data.decode.stdout).toMatchObject({ replacements: 0, suspect: false })
+    expect(data.outputTrust).toBe('ok')
+    // §10.5：编码/字节口径必须出现在 shell.exec.finish 日志字段里
+    const finish = vi.mocked(logShellAgentEvent).mock.calls.find(([, event]) => event === 'shell.exec.finish')
+    const fields = finish?.[2] as Record<string, unknown>
+    expect(fields.stdoutEncoding).toBe(data.decode.stdout.encoding)
+    expect(fields.stderrEncoding).toBe(data.decode.stderr.encoding)
+    expect(fields.stdoutRawBytes).toBe(data.stdoutRawBytes)
+    expect(fields.stderrRawBytes).toBe(0)
+    expect(fields.stdoutTextBytes).toBe(data.stdoutBytes)
+    expect(fields.decodeReplacements).toBe(0)
+    expect(fields.outputTrust).toBe('ok')
+    // durationMs(totalMs) >= planMs + spawnToExitMs（中途还包含解码/落盘耗时）
+    expect(Number(fields.planMs)).toBeGreaterThanOrEqual(0)
+    expect(Number(fields.spawnToExitMs)).toBeGreaterThanOrEqual(0)
+    expect(Number(fields.planMs) + Number(fields.spawnToExitMs)).toBeLessThanOrEqual(Number(fields.durationMs))
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('Gate 1：重放事故字节 → UTF-16LE 还原 + HRESULT + 原始字节留档，且不再出现 NUL', async () => {
+    const result = await runShellExecutor.execute({ command: accidentReplayCommand() }, baseCtx(workDir, userDataDir))
+    const data = result.data as Record<string, any>
+    // 判定链：UTF-16 零字节奇偶先于契约与严格 UTF-8（§8.1）
+    expect(data.decode.stderr).toMatchObject({
+      encoding: 'utf-16le',
+      source: 'utf16-pattern',
+      confidence: 'high',
+      replacements: 0,
+      suspect: false
+    })
+    // 文本投影：还原中文 + HRESULT，且 50 个 NUL 消失（§2.2 事故症状）
+    expect(String(data.stderr)).toContain('内部错误')
+    expect(String(data.stderr)).toContain('8009001d')
+    expect(String(data.stderr)).not.toContain('\u0000')
+    // 字节口径：原始 136，与文本 UTF-8 长度是两个不同事实（§9.5 G8）
+    expect(data.stderrRawBytes).toBe(136)
+    expect(data.stderrTextBytes).toBe(data.stderrBytes)
+    // 104 = 还原后文本（含 CRLF）的 UTF-8 长度；需求 §9.5 举例的 154 是乱码文本的长度，
+    // 解码修正后必然变化，但旧字段「解码后文本长度」的语义未变（仍是归一化前的投影文本）
+    expect(data.stderrBytes).toBe(104)
+    expect(data.decodeReplacements).toBe(0)
+    // 文本层 HRESULT 解释（§10.2）
+    expect(data.hresult).toMatchObject({ code: '0x8009001D', name: 'NTE_PROVIDER_DLL_FAIL' })
+    // §9.4 失败自动留档原始字节
+    expect(data.outputArtifactReason).toBe('failed')
+    expect(data.outputArtifactBytes).toBe(136)
+    expect(data.rawArtifact).toMatchObject({ bytes: 136, rawBytes: 136, omittedBytes: 0, truncated: false, note: 'unredacted' })
+    expect(result.success).toBe(false)
+    const artifactBytes = await fs.readFile(String(data.persistedOutputPath))
+    expect(artifactBytes.length).toBe(136)
+    expect(artifactBytes.toString('utf16le')).toContain('内部错误')
+    // T14（failed）：sha256 只覆盖真正落盘的那 136 字节，而不是内存里保留的 head/tail
+    expect(data.rawArtifact.sha256).toBe(createHash('sha256').update(artifactBytes).digest('hex'))
+    expect(data.stderrRawSha256).toBe(createHash('sha256').update(Buffer.from(ACCIDENT_HEX, 'hex')).digest('hex'))
+    const finish = vi.mocked(logShellAgentEvent).mock.calls.find(([, event]) => event === 'shell.exec.finish')
+    const fields = finish?.[2] as Record<string, unknown>
+    expect(fields.stderrEncoding).toBe('utf-16le')
+    expect(fields.encodingSource).toBe('utf16-pattern')
+    expect(fields.stderrRawBytes).toBe(136)
+    expect(fields.rawArtifactReason).toBe('failed')
+    expect(String(fields.rawArtifactPath)).toContain('shell-output')
+    expect(fields.outputTrust).toBe('ok')
+    expect(typeof fields.spawnToExitMs).toBe('number')
+    if (isWindows) {
+      // 双解释：Node 上报无符号值，Windows 语义为有符号 -65536
+      expect(data.exitCode).toBe(4294901760)
+      expect(data.exitCodeFamily).toBe('windows-host')
+      expect(data.exitCodeSemantics).toBe('WINDOWS_HOST_INIT_FAILED')
+      expect(String(data.exitCodeHint)).toContain('0xFFFF0000')
+      expect(data.exitCodeAdvice.length).toBeGreaterThan(0)
+    }
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('T14 rawArtifact(suspect) + §10.4 hints 可达模型与远程 IM', async () => {
+    // 0x81 既不是合法 UTF-8，也解不出可信的 OEM 文本 ⇒ 必须走 suspect 路径而不是静默兜底
+    const cmd = shellCommand("printf '\\201'", '[Console]::OpenStandardOutput().Write([byte[]](0x81),0,1)')
+    const result = await runShellExecutor.execute({ command: cmd }, baseCtx(workDir, userDataDir))
+    const data = result.data as Record<string, any>
+    expect(data.outputTrust).toBe('suspect')
+    // T14（suspect）：可疑时自动留档原始字节，并标记 suspect
+    expect(data.outputArtifactReason).toBe('suspect')
+    const artifactBytes = await fs.readFile(String(data.persistedOutputPath))
+    expect(data.rawArtifact).toMatchObject({ bytes: artifactBytes.length, suspect: true, note: 'unredacted' })
+    expect(data.rawArtifact.sha256).toBe(createHash('sha256').update(artifactBytes).digest('hex'))
+    expect(artifactBytes.length).toBe(data.stdoutRawBytes)
+    // §10.4：文本不可信必须显式告知，且该提示原文进入 data.hints
+    expect(data.hints).toEqual([SHELL_OUTPUT_TRUST_SUSPECT_NOTICE])
+    const projected = projectAgentToolResultForSink(
+      { success: result.success, data },
+      { processTool: true, workspaceRoot: workDir, maxOutputChars: 4000 }
+    )
+    const projectedData = projected.data as Record<string, unknown>
+    expect(projectedData.hints).toEqual([SHELL_OUTPUT_TRUST_SUSPECT_NOTICE])
+    expect(projectedData.outputTrust).toBe('suspect')
+  }, SPAWN_TEST_TIMEOUT_MS)
 })

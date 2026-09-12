@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import fs from 'fs/promises'
 import type { ShellDialect } from './shellProfiles'
+import type { OutputEncodingContract } from '../../src/shared/outputEncoding'
 
 export interface PreparedShellExecution {
   readonly command: string
@@ -8,7 +9,7 @@ export interface PreparedShellExecution {
     readonly id: string
     readonly dialect: ShellDialect
     readonly executable: string
-    readonly encoding: string
+    readonly outputEncoding: OutputEncodingContract
   }
   readonly spawnSpec: {
     readonly executable: string

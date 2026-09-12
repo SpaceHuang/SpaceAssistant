@@ -6,7 +6,7 @@ import { assertPreparedShellExecutionCurrent, captureShellPathSnapshot, prepareS
 
 const makeInput = () => ({
   command: 'echo ok',
-  profile: { id: 'bash', dialect: 'posix-bash' as const, executable: '/bin/bash', encoding: 'utf8' },
+  profile: { id: 'bash', dialect: 'posix-bash' as const, executable: '/bin/bash', outputEncoding: { kind: 'utf8' } },
   spawnSpec: { executable: '/bin/bash', args: ['-c', 'echo ok'], shellId: 'bash' },
   cwd: '/tmp/project', timeoutMs: 30000, ioMaxBytes: 102400, environment: { PATH: '/usr/bin', LANG: 'C.UTF-8' },
   facts: { operations: [{ verb: 'echo' }], analysisCompleteness: 'complete' as const },

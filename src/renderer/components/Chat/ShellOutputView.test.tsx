@@ -69,6 +69,21 @@ describe('ShellOutputView', () => {
     expect(openOutputPath).not.toHaveBeenCalled()
   })
 
+  it('outputTrust=suspect 时提示输出编码可疑且原始字节已保存', () => {
+    render(<ShellOutputView stdout="乱码" outputTrust="suspect" />)
+    const notice = screen.getByRole('status')
+    expect(notice.textContent).toContain('输出编码可疑')
+    expect(notice.textContent).toContain('原始字节')
+  })
+
+  it('outputTrust 为 ok 或未提供时不渲染可疑提示', () => {
+    const { unmount } = render(<ShellOutputView stdout="正常输出" outputTrust="ok" />)
+    expect(screen.queryByRole('status')).toBeNull()
+    unmount()
+    render(<ShellOutputView stdout="正常输出" />)
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
   it('returns null when completed mode has no output', () => {
     const { container } = render(<ShellOutputView stdout="" stderr="" exitCode={0} />)
     expect(container.firstChild).toBeNull()

@@ -1,15 +1,32 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'child_process'
 import path from 'path'
 import type { ProcessKiller } from './shell/processSupervisor'
+import type { DecodedStreamMeta } from '../src/shared/outputEncoding'
+import { RawByteBuffer, rawSnapshotBuffer } from './shell/boundedOutput'
+import { AUTO_CONTRACT } from './processOutput/contracts'
+import { decodeChildOutput } from './processOutput/decodeChildOutput'
 
 const KILL_TREE_TIMEOUT_MS = 3000
 const KILL_TREE_GRACE_MS = 250
+
+/** stderr 留档上限：head+tail 投影足够定位「宿主为什么失败」，不无限占用内存。 */
+const STDERR_CAPTURE_MAX_BYTES = 64 * 1024
 
 export type CommandRun = {
   /** 子进程是否在超时前自行退出 */
   completed: boolean
   code: number | null
   stdout: string
+  /** §12-#8：stderr 不再丢弃（保留 head+tail 投影），子进程失败原因不再消失 */
+  stderr: string
+  /** 解码事实：判定来源/置信度/替换字符数与原始字节口径 */
+  meta: {
+    stdout: DecodedStreamMeta
+    stderr: DecodedStreamMeta
+    stdoutRawBytes: number
+    stderrRawBytes: number
+    stderrTruncated: boolean
+  }
 }
 
 /**
@@ -26,6 +43,39 @@ export function runCommandWithTimeout(
   return new Promise((resolve) => {
     let settled = false
     let timer: NodeJS.Timeout
+    const stdoutChunks: Buffer[] = []
+    const stderrRaw = new RawByteBuffer(STDERR_CAPTURE_MAX_BYTES)
+    const emptyMeta = decodeChildOutput(Buffer.alloc(0), { contract: AUTO_CONTRACT })
+    const empty = (): CommandRun => ({
+      completed: false,
+      code: null,
+      stdout: '',
+      stderr: '',
+      meta: {
+        stdout: emptyMeta.meta,
+        stderr: emptyMeta.meta,
+        stdoutRawBytes: 0,
+        stderrRawBytes: 0,
+        stderrTruncated: false
+      }
+    })
+    const decode = () => {
+      const stdoutDecoded = decodeChildOutput(Buffer.concat(stdoutChunks), { contract: AUTO_CONTRACT })
+      const snapshot = stderrRaw.snapshotBytes()
+      const stderrBuf = rawSnapshotBuffer(snapshot) ?? Buffer.concat([snapshot.head, snapshot.tail])
+      const stderrDecoded = decodeChildOutput(stderrBuf, { contract: AUTO_CONTRACT })
+      return {
+        stdout: stdoutDecoded.text,
+        stderr: stderrDecoded.text,
+        meta: {
+          stdout: stdoutDecoded.meta,
+          stderr: stderrDecoded.meta,
+          stdoutRawBytes: stdoutChunks.reduce((sum, chunk) => sum + chunk.length, 0),
+          stderrRawBytes: snapshot.totalBytes,
+          stderrTruncated: snapshot.truncated
+        }
+      }
+    }
     const finish = (result: CommandRun): void => {
       if (settled) return
       settled = true
@@ -34,9 +84,9 @@ export function runCommandWithTimeout(
     }
     let child: ChildProcess
     try {
-      child = spawn(executable, [...args], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+      child = spawn(executable, [...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     } catch {
-      resolve({ completed: false, code: null, stdout: '' })
+      resolve(empty())
       return
     }
     timer = setTimeout(() => {
@@ -45,12 +95,12 @@ export function runCommandWithTimeout(
       } catch {
         /* 进程可能已退出 */
       }
-      finish({ completed: false, code: null, stdout: '' })
+      finish(empty())
     }, timeoutMs)
-    const chunks: Buffer[] = []
-    child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
-    child.once('error', () => finish({ completed: false, code: null, stdout: '' }))
-    child.once('close', (code) => finish({ completed: true, code, stdout: Buffer.concat(chunks).toString('utf8') }))
+    child.stdout?.on('data', (chunk: Buffer) => stdoutChunks.push(chunk))
+    child.stderr?.on('data', (chunk: Buffer) => stderrRaw.appendBytes(chunk))
+    child.once('error', () => finish(empty()))
+    child.once('close', (code) => finish({ completed: true, code, ...decode() }))
   })
 }
 

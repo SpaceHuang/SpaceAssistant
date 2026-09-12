@@ -204,7 +204,8 @@
     "tuiLine1": "run_shell in SpaceAssistant is read-only and cannot run full-screen or interactive programs such as less, vim, top, or interactive npm init.",
     "tuiLine2": "Run this command in an external terminal at the working directory; use the button below to open one.",
     "openTerminal": "Open terminal at working directory",
-    "workDirNotConfigured": "Working directory is not configured. Set it in Settings first."
+    "workDirNotConfigured": "Working directory is not configured. Set it in Settings first.",
+    "outputTrustSuspect": "Output encoding is suspect and the raw bytes were saved: the text may not be the real output — check the raw-bytes artifact to verify."
   },
   "writeSuccess": {}
 }

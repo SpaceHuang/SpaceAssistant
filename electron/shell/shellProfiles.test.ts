@@ -10,7 +10,16 @@ import {
 } from './shellProfiles'
 
 describe('ShellProfile', () => {
-  it('Windows prelude 只保留 progress 静默（D1）', () => {
+  it('编码契约来自决定而非猜测，且 prelude 不再改动 [Console]::OutputEncoding（D1/D2）', () => {
+    expect(MACOS_BASH_PROFILE.outputEncoding).toEqual({ kind: 'utf8' })
+    expect(MACOS_BASH_PROFILE.encodingSource).toBe('builtin')
+    const windows = WINDOWS_POWERSHELL_PROFILE.outputEncoding
+    expect(['oem', 'auto']).toContain(windows.kind)
+    if (windows.kind === 'oem') expect(windows.codepage).toBeGreaterThan(0)
+    expect(WINDOWS_POWERSHELL_PROFILE.encodingSource).toBe('detected')
+  })
+
+  it('Windows prelude 只保留 progress 静默', () => {
     const args = createShellAdapter(WINDOWS_POWERSHELL_PROFILE).buildCommandArgs('Write-Output ok').at(-1)
     const decoded = Buffer.from(String(args), 'base64').toString('utf16le')
     expect(decoded).toContain("$ProgressPreference = 'SilentlyContinue'")
@@ -62,8 +71,8 @@ describe('ShellProfile', () => {
     const mutable = { ...WINDOWS_POWERSHELL_PROFILE, commandArgsTemplate: [...WINDOWS_POWERSHELL_PROFILE.commandArgsTemplate] }
     const adapter = createShellAdapter(mutable)
     mutable.commandArgsTemplate[0] = '-NoProfile-MUTATED'
-    mutable.encoding = 'utf8'
-    expect(adapter.profile.encoding).toBe('utf16le')
+    mutable.outputEncoding = { kind: 'utf8' }
+    expect(adapter.profile.outputEncoding).toEqual(WINDOWS_POWERSHELL_PROFILE.outputEncoding)
     const encoded = adapter.buildCommandArgs('Write-Output "你好"').at(-1)
     expect(Buffer.from(String(encoded), 'base64').toString('utf16le')).toContain('你好')
     expect(adapter.buildCommandArgs('Write-Output "你好"')[0]).toBe('-NoLogo')

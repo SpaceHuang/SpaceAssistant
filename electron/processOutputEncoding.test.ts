@@ -1,12 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  buildPythonScriptEnv,
-  buildShellEnv,
-  createProcessOutputStreamDecoder,
-  createStreamTextDecoder,
-  decodeProcessOutput
-} from './processOutputEncoding'
-
+import { buildPythonScriptEnv, buildShellEnv } from './processOutputEncoding'
 describe('processOutputEncoding', () => {
   it('buildShellEnv strips API keys and keeps PATH', () => {
     const env = buildShellEnv({
@@ -55,81 +48,4 @@ describe('processOutputEncoding', () => {
     }
   })
 
-  it('decodes UTF-8 across chunk boundaries', () => {
-    const text = '目录已存在\n'
-    const buf = Buffer.from(text, 'utf8')
-    const mid = Math.floor(buf.length / 2)
-    const dec = createStreamTextDecoder('utf-8')
-    expect(dec.write(buf.subarray(0, mid)) + dec.write(buf.subarray(mid)) + dec.end()).toBe(text)
-  })
-
-  it('decodes GBK bytes produced by default Windows Python stdout', () => {
-    const gbk = Buffer.from([0xc4, 0xbf, 0xc2, 0xbc, 0xd2, 0xd1, 0xb4, 0xe6, 0xd4, 0xda, 0x0d, 0x0a])
-    const dec = createStreamTextDecoder('gbk')
-    expect(dec.write(gbk) + dec.end()).toBe('目录已存在\r\n')
-  })
-
-  it('falls back to GBK when Windows cmd error was misread as UTF-8', () => {
-    const gbk = Buffer.from(
-      "'lark-cli.cmd' \xb2\xbb\xca\xc7\xc4\xda\xb2\xbf\xbb\xf2\xcd\xe2\xb2\xbf\xc3\xfc\xc1\xee\r\n",
-      'binary'
-    )
-    const misread = new TextDecoder('utf-8').decode(gbk)
-    expect(misread).toContain('\uFFFD')
-    expect(decodeProcessOutput(gbk, 'win32')).toBe("'lark-cli.cmd' 不是内部或外部命令\r\n")
-  })
-
-  it('falls back to GBK when UTF-8 decode lacks CJK but GBK has Chinese', () => {
-    const gbk = Buffer.from([
-      0xce, 0xc4, 0xbc, 0xfe, 0xc3, 0xfb, 0xa1, 0xa2, 0xc4, 0xbf, 0xc2, 0xbc, 0xc3, 0xfb, 0xbb, 0xf2,
-      0xbe, 0xed, 0xb1, 0xea, 0xd3, 0xef, 0xb7, 0xa8, 0xb2, 0xbb, 0xd5, 0xfd, 0xc8, 0xb7, 0xa1, 0xa3,
-      0x0d, 0x0a
-    ])
-    const misread = new TextDecoder('utf-8').decode(gbk)
-    expect(/[\u4e00-\u9fff]/.test(misread)).toBe(false)
-    expect(decodeProcessOutput(gbk, 'win32')).toBe('文件名、目录名或卷标语法不正确。\r\n')
-  })
-
-  it('createProcessOutputStreamDecoder decodes GBK cmd errors across chunks', () => {
-    const gbk = Buffer.from(
-      "'lark-cli.cmd' \xb2\xbb\xca\xc7\xc4\xda\xb2\xbf\xbb\xf2\xcd\xe2\xb2\xbf\xc3\xfc\xc1\xee\r\n",
-      'binary'
-    )
-    const dec = createProcessOutputStreamDecoder('win32')
-    const mid = Math.floor(gbk.length / 2)
-    expect(dec.write(gbk.subarray(0, mid)) + dec.write(gbk.subarray(mid)) + dec.end()).toBe(
-      "'lark-cli.cmd' 不是内部或外部命令\r\n"
-    )
-  })
-
-  it('macOS decoder 在跨 chunk UTF-8 字符时保持流式边界', () => {
-    const decoder = createProcessOutputStreamDecoder('darwin')
-    const bytes = Buffer.from('前缀🙂后缀', 'utf8')
-    const split = bytes.indexOf(0xf0) + 2
-    const first = decoder.write(bytes.subarray(0, split))
-    const second = decoder.write(bytes.subarray(split))
-    expect(first + second + decoder.end()).toBe('前缀🙂后缀')
-  })
-
-  it('stdout/stderr 独立维护跨 chunk UTF-8 解码状态，不互相污染', () => {
-    const stdout = createProcessOutputStreamDecoder('darwin')
-    const stderr = createProcessOutputStreamDecoder('darwin')
-    const outBytes = Buffer.from('stdout🙂', 'utf8')
-    const errBytes = Buffer.from('stderr目录', 'utf8')
-    const outSplit = outBytes.length - 2
-    const errSplit = 1
-    let outText = stdout.write(outBytes.subarray(0, outSplit))
-    let errText = stderr.write(errBytes.subarray(0, errSplit))
-    outText += stdout.write(outBytes.subarray(outSplit))
-    errText += stderr.write(errBytes.subarray(errSplit))
-    outText += stdout.end()
-    errText += stderr.end()
-    expect(outText).toContain('stdout🙂')
-    expect(errText).toContain('stderr目录')
-  })
-
-  it('keeps UTF-8 Node CLI output on Windows', () => {
-    const utf8 = Buffer.from('auth status: not logged in\n', 'utf8')
-    expect(decodeProcessOutput(utf8, 'win32')).toBe('auth status: not logged in\n')
-  })
 })

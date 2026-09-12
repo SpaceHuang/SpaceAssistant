@@ -116,10 +116,15 @@ export function normalizeXtermPipeInput(text: string): string {
   return out
 }
 
-export function decodeProgressRawTailForXterm(rawB64: string | undefined): string {
+/**
+ * 终端文本投影（§12-#11）：终端本体始终是「原始字节 → xterm」，本函数只服务
+ * 需要文本投影的调用方（回滚/长度统计）。编码标签由调用方按当前 shell 契约传入，
+ * 缺省 utf-8 只作为无契约信息时的兼容值。
+ */
+export function decodeProgressRawTailForXterm(rawB64: string | undefined, label = 'utf-8'): string {
   const bytes = decodeProgressRawTail(rawB64)
   if (bytes.length === 0) return ''
-  return normalizeXtermPipeInput(new TextDecoder('utf-8', { fatal: false }).decode(bytes))
+  return normalizeXtermPipeInput(new TextDecoder(label, { fatal: false }).decode(bytes))
 }
 
 export function pickScrollbackRestorePayload(

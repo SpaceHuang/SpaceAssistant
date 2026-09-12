@@ -1,5 +1,4 @@
 import { runCommandWithTimeout } from '../spawnUtil'
-import { WINDOWS_POWERSHELL_PRELUDE } from './shellProfiles'
 
 export type OrphanProcessIdentity = { pid: number; processGroupId?: number; ownerToken: string }
 export type OrphanCleanupResult = 'cleaned' | 'not-owned' | 'already-exited' | 'unverified' | 'failed'
@@ -20,12 +19,12 @@ type CommandLineLookup = { status: 'read'; command: string | null } | { status: 
  * Windows 11 24H2 起 WMIC 默认不再随系统提供，命令行必须优先走 PowerShell CIM，
  * wmic 仅作为 PowerShell 不可用时的回退。
  *
- * 查询串复用 Shell profile 的 prelude 固定 UTF-8 输出编码：PowerShell 5.1 默认按宿主
- * OEM 代码页写 stdout，按 utf8 解码会让含非 ASCII 的命令行变成替换字符。owner token 是
- * ASCII 不受影响，但审计证据会失真。wmic 回退仍按其控制台代码页输出，只用于 ASCII token 匹配。
+ * 不再改写宿主输出编码（§12-#9）：PowerShell 5.1 按宿主 OEM 代码页写 stdout，交给
+ * runCommandWithTimeout 的统一解码器按宿主 OEM CP 还原，因此含非 ASCII 的命令行不再退化成
+ * 替换字符（历史事故：owner-中文-… → owner-????-…）。wmic 回退同理由同一解码器处理。
  */
 async function windowsCommandLineForPid(pid: number): Promise<CommandLineLookup> {
-  const query = `${WINDOWS_POWERSHELL_PRELUDE}(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`
+  const query = `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`
   const cim = await runCommandWithTimeout(
     'powershell.exe',
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', query],

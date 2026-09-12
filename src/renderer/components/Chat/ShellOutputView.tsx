@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { formatShellStderrDisplay, normalizeTerminalOutput } from '../../../shared/terminalOutputSanitize'
 import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
+import { needsOutputTrustNotice } from '../../../shared/shellToolDisplay'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   /** 实时模式：合并的 stdout+stderr 尾部 */
@@ -13,6 +15,8 @@ type Props = {
   truncated?: boolean
   artifactId?: string
   persistedOutputPath?: string
+  /** §10.4：outputTrust=suspect 时显式提示「文本可能不可信」 */
+  outputTrust?: 'ok' | 'suspect'
 }
 
 export function ShellOutputView({
@@ -23,8 +27,10 @@ export function ShellOutputView({
   exitCode,
   truncated,
   artifactId,
-  persistedOutputPath
+  persistedOutputPath,
+  outputTrust
 }: Props) {
+  const { t } = useTypedTranslation('chat')
   const preRef = useRef<HTMLPreElement>(null)
 
   useEffect(() => {
@@ -56,6 +62,11 @@ export function ShellOutputView({
       {out.trim() ? <pre className="shell-output">{out}</pre> : null}
       {out.trim() && errDisplay.trim() ? '\n' : null}
       {errDisplay.trim() ? <pre className="shell-output shell-output__stderr">{errDisplay}</pre> : null}
+      {needsOutputTrustNotice({ outputTrust }) ? (
+        <div className="shell-output__trust-warning" role="status">
+          {t('shell.outputTrustSuspect')}
+        </div>
+      ) : null}
       {truncated && openTarget ? (
         <button
           type="button"

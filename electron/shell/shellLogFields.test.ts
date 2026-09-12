@@ -33,4 +33,45 @@ describe('shellLogFields', () => {
     expect(JSON.stringify(out)).not.toContain('/Users/Alice')
     expect(out.reason).toBeUndefined()
   })
+
+  it('shell.exec.finish 的编码/字节/留档字段不被 allowlist 静默丢弃（§10.5）', () => {
+    const out = projectShellAgentLogFields('shell.exec.finish', {
+      exitCode: 4294901760,
+      stdoutEncoding: 'gbk',
+      stderrEncoding: 'utf-16le',
+      encodingSource: 'utf16-pattern',
+      encodingConfidence: 'high',
+      contractKind: 'oem',
+      contractConflict: 'contract-mismatch',
+      outputTrust: 'ok',
+      outputDiag: ['[output-diag] stream=stderr encoding=utf-16le source=utf16-pattern confidence=high replacements=0 contract=oem conflict=contract-mismatch suspect=false rawArtifact=none'],
+      decodeReplacements: 0,
+      stdoutRawBytes: 10,
+      stderrRawBytes: 136,
+      stdoutTextBytes: 10,
+      stderrTextBytes: 104,
+      stdoutRawSha256: 'a'.repeat(64),
+      stderrRawSha256: 'b'.repeat(64),
+      rawArtifactPath: 'C:\\\\d\\\\shell-output\\\\deadbeef.log',
+      rawArtifactBytes: 136,
+      rawArtifactSha256: 'c'.repeat(64),
+      rawArtifactReason: 'failed',
+      outputArtifactReason: 'failed',
+      exitCodeFamily: 'windows-host',
+      exitCodeSemantics: 'WINDOWS_HOST_INIT_FAILED',
+      planMs: 3,
+      spawnToExitMs: 124,
+      lossStage: undefined
+    })
+    expect(out.stderrRawBytes).toBe(136)
+    expect(out.stderrEncoding).toBe('utf-16le')
+    expect(out.encodingSource).toBe('utf16-pattern')
+    expect(out.contractConflict).toBe('contract-mismatch')
+    expect(out.outputTrust).toBe('ok')
+    expect(out.rawArtifactReason).toBe('failed')
+    expect(out.spawnToExitMs).toBe(124)
+    expect(out.lossStage).toBeUndefined()
+    expect(Array.isArray(out.outputDiag)).toBe(true)
+  })
+
 })

@@ -2,8 +2,9 @@ import { type ChildProcess } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { decodeProcessOutput } from '../processOutputEncoding'
 import { spawnCommandSafe } from '../spawnUtil'
+import { AUTO_CONTRACT } from '../processOutput/contracts'
+import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import type { FeishuCliDetectResult } from '../../src/shared/feishuTypes'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import { redactLarkCliArgsForLog } from './feishuCliLogFields'
@@ -25,16 +26,6 @@ export interface LarkCliRunResult {
   stdout: string
   stderr: string
   timedOut: boolean
-}
-
-function appendBufferWithLimit(
-  current: Buffer<ArrayBufferLike>,
-  chunk: Buffer<ArrayBufferLike>,
-  maxBytes: number
-): Buffer<ArrayBufferLike> {
-  const next = Buffer.concat([current, chunk])
-  if (next.length <= maxBytes) return next
-  return Buffer.concat([next.subarray(0, maxBytes), Buffer.from(TRUNC_SUFFIX, 'utf8')])
 }
 
 async function runWhich(cmd: string): Promise<string | null> {
@@ -101,10 +92,45 @@ export class LarkCliRunner {
     }
 
     return new Promise((resolve) => {
-      let stdoutBuf: Buffer<ArrayBufferLike> = Buffer.alloc(0)
-      let stderrBuf: Buffer<ArrayBufferLike> = Buffer.alloc(0)
+      // §12-#7：回调与返回值共用同一个流式解码器（契约 auto：第三方 CLI 自行决定编码），
+      // 不再出现「UI 看到一份、业务拿到另一份」的两条解码路径。
+      const stdoutDecoder = createChildStreamDecoder({ contract: AUTO_CONTRACT })
+      const stderrDecoder = createChildStreamDecoder({ contract: AUTO_CONTRACT })
+      let stdoutText = ''
+      let stderrText = ''
+      let stdoutConsumed = 0
+      let stderrConsumed = 0
+      let stdoutTruncated = false
+      let stderrTruncated = false
       let timedOut = false
       let settled = false
+
+      const feed = (
+        decoder: ReturnType<typeof createChildStreamDecoder>,
+        chunk: Buffer<ArrayBufferLike>,
+        target: 'stdout' | 'stderr'
+      ): string => {
+        const truncated = target === 'stdout' ? stdoutTruncated : stderrTruncated
+        if (truncated) return ''
+        if (target === 'stdout') stdoutConsumed += chunk.length
+        else stderrConsumed += chunk.length
+        const delta = decoder.write(chunk)
+        if (target === 'stdout') {
+          stdoutText += delta
+          if (stdoutConsumed > MAX_OUTPUT_BYTES) {
+            stdoutTruncated = true
+            stdoutText += TRUNC_SUFFIX
+          }
+        } else {
+          stderrText += delta
+          if (stderrConsumed > MAX_OUTPUT_BYTES) {
+            stderrTruncated = true
+            stderrText += TRUNC_SUFFIX
+          }
+        }
+        return delta
+      }
+
 
       const finish = (result: LarkCliRunResult) => {
         if (settled) return
@@ -139,20 +165,19 @@ export class LarkCliRunner {
       signal?.addEventListener('abort', onAbort, { once: true })
 
       proc.stdout?.on('data', (d: Buffer<ArrayBufferLike>) => {
-        stdoutBuf = appendBufferWithLimit(stdoutBuf, d, MAX_OUTPUT_BYTES)
-        onStdout?.(d.toString('utf8'))
+        const delta = feed(stdoutDecoder, d, 'stdout')
+        if (delta) onStdout?.(delta)
       })
       proc.stderr?.on('data', (d: Buffer<ArrayBufferLike>) => {
-        stderrBuf = appendBufferWithLimit(stderrBuf, d, MAX_OUTPUT_BYTES)
-        onStderr?.(d.toString('utf8'))
+        const delta = feed(stderrDecoder, d, 'stderr')
+        if (delta) onStderr?.(delta)
       })
 
-      const buildResult = (exitCode: number): LarkCliRunResult => ({
-        exitCode,
-        stdout: decodeProcessOutput(stdoutBuf),
-        stderr: decodeProcessOutput(stderrBuf),
-        timedOut
-      })
+      const buildResult = (exitCode: number): LarkCliRunResult => {
+        if (!stdoutTruncated) stdoutText += stdoutDecoder.end()
+        if (!stderrTruncated) stderrText += stderrDecoder.end()
+        return { exitCode, stdout: stdoutText, stderr: stderrText, timedOut }
+      }
 
       const logDone = (result: LarkCliRunResult) => {
         logFeishuCliEvent(result.exitCode === 0 && !result.timedOut ? 'info' : 'warn', 'feishu.cli.run.done', {
@@ -172,7 +197,7 @@ export class LarkCliRunner {
       })
       proc.on('error', (err) => {
         signal?.removeEventListener('abort', onAbort)
-        stderrBuf = appendBufferWithLimit(stderrBuf, Buffer.from(`${err.message}\n`, 'utf8'), MAX_OUTPUT_BYTES)
+        if (!stderrTruncated) stderrText += err.message + '\n'
         const result = buildResult(1)
         logDone(result)
         finish(result)
