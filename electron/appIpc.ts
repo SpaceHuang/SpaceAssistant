@@ -66,6 +66,7 @@ import type {
   Session,
   SessionSkillsState,
   SkillDefinition,
+  SkippedCandidate,
   SkillsConfig,
   SkillRouteRecentMessage,
   SkillRouteResult,
@@ -2166,18 +2167,22 @@ function readExposureInputsFromDb(
     'skill:install-from-url',
     async (
       event,
-      payload: { sourceUrl: string; subPath?: string; installAll?: boolean; overwrite?: boolean }
-    ): Promise<{ ok: true; skills: SkillDefinition[] } | { ok: false; error: string }> => {
+      payload: { sourceUrl: string; subPath?: string; subPaths?: string[]; installAll?: boolean; overwrite?: boolean }
+    ): Promise<
+      | { ok: true; skills: SkillDefinition[]; skipped: SkippedCandidate[]; overwritten: string[] }
+      | { ok: false; error: string }
+    > => {
       try {
         activeSkillInstallAbort = new AbortController()
-        const skills = await skillManager.installFromUrl(payload.sourceUrl, {
+        const result = await skillManager.installFromUrl(payload.sourceUrl, {
           subPath: payload.subPath,
+          subPaths: payload.subPaths,
           installAll: payload.installAll === true,
           overwrite: payload.overwrite === true,
           onProgress: (progress) => event.sender.send('skill-install-progress', progress),
           signal: activeSkillInstallAbort.signal
         })
-        return { ok: true, skills }
+        return { ok: true, skills: result.installed, skipped: result.skipped, overwritten: result.overwritten }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) }
       } finally { activeSkillInstallAbort = null }

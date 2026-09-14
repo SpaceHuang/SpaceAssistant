@@ -22,6 +22,7 @@ export type AgentLogEventName =
   | 'skills.route.done'
   | 'skills.route.error'
   | 'skills.invoke'
+  | 'skills.install.sub_paths_override'
   | 'projectMemory.loaded'
   | 'projectMemory.loadError'
   | 'projectMemory.watcherError'
