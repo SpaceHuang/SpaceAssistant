@@ -119,13 +119,24 @@ export function computeShadowedRanges<T extends SurfaceReplayItem>(before: reado
 
 /** 将已提交压缩记录的 shadowedRanges 应用到模型面；调用方仍保留完整 facts。 */
 export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: readonly T[], replay: CompactionReplay, requiredIds: readonly string[] = [], windowId?: string, fingerprint?: (items: readonly T[]) => string): T[] {
+  // 从当前输出窗口沿 inputWindowId 反向找出同一条窗口链；这样既能排除
+  // 不相关分支，又不会在 reset 后误丢掉旧窗口上的 checkpoint。
+  const applicable = new Set<string>()
+  if (windowId) {
+    let activeWindow = windowId
+    for (const committed of [...replay.committed].reverse()) {
+      const outputWindow = [committed.summary, committed.end].map((event) => event.payload.outputWindowId).find((value): value is string => typeof value === 'string') ?? [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
+      if (outputWindow !== activeWindow) continue
+      applicable.add(committed.compactionId)
+      activeWindow = (typeof committed.summary.payload.inputWindowId === 'string' ? committed.summary.payload.inputWindowId : undefined) ?? (typeof committed.start.payload.windowId === 'string' ? committed.start.payload.windowId : activeWindow)
+    }
+  }
   const required = new Set(requiredIds)
   let currentSurface = [...items]
   const initialIdentities = surfaceItemIdentities(items)
   const stableIdentities = new Map(items.map((item, index) => [item.id, initialIdentities[index] ?? surfaceItemIdentity(item, index)]))
   for (const committed of replay.committed) {
-    const committedWindowId = [committed.end, committed.summary, committed.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string')
-    if (windowId && committedWindowId !== windowId) continue
+    if (windowId && !applicable.has(committed.compactionId)) continue
     const expectedInput = committed.start.payload.inputSurfaceFingerprint
     const surfaceBeforeRecord = [...currentSurface]
     const ranges = committed.summary.payload.shadowedRanges

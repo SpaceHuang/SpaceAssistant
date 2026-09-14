@@ -50,13 +50,33 @@ function fingerprint(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
+/** 指纹比较的是模型可见语义，不把 serializer 的缓存控制元数据当成消息内容。 */
+function canonicalizeSurfaceMessages(messages: readonly unknown[]): unknown[] {
+  return messages.map((message) => {
+    if (!message || typeof message !== 'object') return message
+    const source = message as { role?: unknown; content?: unknown }
+    const content = source.content
+    if (Array.isArray(content) && content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string')) {
+      return { role: source.role, content: content.map((block) => (block as { text: string }).text).join('') }
+    }
+    if (Array.isArray(content)) {
+      return { role: source.role, content: content.map((block) => {
+        if (!block || typeof block !== 'object') return block
+        const { cache_control: _cacheControl, ...withoutCacheControl } = block as Record<string, unknown>
+        return withoutCacheControl
+      }) }
+    }
+    return { role: source.role, content }
+  })
+}
+
 export function buildRequestHeaderPayload(args: { requestId: string; system: string; tools: unknown[]; messages: unknown[]; requiredSurfaceSet?: string[]; toolExecutionCheckpoint?: { completedToolUseIds: string[]; replayForbidden: boolean } }): RequestHeaderPayload {
   const systemTokens = estimateTokensFromUtf8Text(args.system)
   const toolsTokens = estimateTokensFromUtf8Text(JSON.stringify(args.tools))
   const messageTokens = estimateProtocolTokens(args.messages)
   const systemFingerprint = fingerprint(args.system)
   const toolsFingerprint = fingerprint(JSON.stringify(args.tools))
-  const surfaceFingerprint = fingerprint(JSON.stringify({ system: args.system, tools: args.tools, messages: args.messages }))
+  const surfaceFingerprint = fingerprint(JSON.stringify({ system: args.system, tools: args.tools, messages: canonicalizeSurfaceMessages(args.messages) }))
   return { schemaVersion: 1, requestId: args.requestId, system: args.system, tools: args.tools, requiredSurfaceSet: [...(args.requiredSurfaceSet ?? [])], toolExecutionCheckpoint: args.toolExecutionCheckpoint ?? { completedToolUseIds: [], replayForbidden: false }, stablePrefixFingerprint: fingerprint(`${systemFingerprint}:${toolsFingerprint}`), surfaceSnapshot: { schemaVersion: 1, fingerprint: surfaceFingerprint, systemFingerprint, toolsFingerprint, surfaceTokens: systemTokens + toolsTokens + messageTokens, systemTokens, toolsTokens, messageTokens } }
 }
 

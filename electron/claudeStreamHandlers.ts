@@ -23,10 +23,11 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventInput, type SessionEventSink } from './sessionEvents'
 import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurface, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
-import { computeCompactionSummaryHash, countCommittedCompactions } from '../src/shared/compactionEvents'
+import { ContextMeter } from '../src/shared/contextMeterService'
+import { computeCompactionSummaryHash, countCommittedCompactions, currentCompactionWindowId } from '../src/shared/compactionEvents'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { estimateTokensFromUtf8Text } from '../src/shared/contextUsageEstimate'
 import { planTurnBoundarySurfaceCompaction } from '../src/shared/turnBoundaryCompaction'
@@ -296,13 +297,13 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         if (session) {
           eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
           await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
-          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath, sessionId)
+          // reset 后 marker 的 output window 不再等于 sessionId；台账读取必须消费完整提交链。
+          const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath)
           for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker })
         }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
         const model = assertValidModel(frozen.model ?? '')
-        const contextWindowId = sessionId
         await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
         const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(frozen.baseUrl)
         const llmServiceId = frozen.llmServiceId
@@ -312,6 +313,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
+        const contextWindowId = currentCompactionWindowId(compactionReplay, sessionId)
+        const contextEventLedger = eventWriter
+          ? (await readSessionEvents(eventWriter.eventsPath)).map((event) => ({ seq: event.seq, type: event.type, payload: event.payload }))
+          : []
+        const contextMeter = new ContextMeter(() => contextEventLedger)
         const replayFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(frozen.system ?? '', surface)
         const historyFacts = authoritative.messages.map((message) => {
           const rawContent = message.content ?? ''
@@ -390,6 +396,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           historyFacts,
           assistantMessageId: authoritative.assistantMessageId,
           hasImageAttachments,
+          contextMeter,
           getBrowserDetectContext: deps.getBrowserDetectContext,
           floatingNotificationManager: deps.floatingNotificationManager
           ,emitSessionEvent: async (event: SessionEventInput) => {
@@ -406,7 +413,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               return
             }
             try {
-              await eventWriter.appendCritical(normalized)
+              const committed = await eventWriter.appendCritical(normalized)
+              contextEventLedger.push({ seq: committed.seq, type: committed.type, payload: committed.payload })
             } catch (appendError) {
               eventAppendFailures.push(toEventPersistenceFailure(appendError))
             }

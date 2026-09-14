@@ -13,6 +13,13 @@ export type CommittedCompaction = {
 
 export type CompactionReplay = { committed: CommittedCompaction[]; rejected: Array<{ compactionId?: string; reason: string }> }
 
+/** 当前模型窗口由最后一条已提交记录的输出窗口决定；旧记录兼容 windowId。 */
+export function currentCompactionWindowId(replay: CompactionReplay, fallback: string): string {
+  const latest = replay.committed[replay.committed.length - 1]
+  const output = latest && [latest.summary, latest.end].map((event) => event.payload.outputWindowId).find((value): value is string => typeof value === 'string' && value.length > 0)
+  return output ?? (latest && [latest.summary, latest.end, latest.start].map((event) => event.payload.windowId).find((value): value is string => typeof value === 'string' && value.length > 0)) ?? fallback
+}
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize)
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => [key, canonicalize(entry)]))
@@ -68,7 +75,9 @@ export function foldCompactionEvents(events: readonly CompactionEvent[]): Compac
     const startWindowId = stringField(start?.payload ?? {}, 'windowId')
     const summaryWindowId = stringField(summary?.payload ?? {}, 'windowId')
     const endWindowId = stringField(event.payload, 'windowId')
-    const windowMatches = startWindowId == null || summaryWindowId == null || endWindowId == null || (startWindowId === summaryWindowId && summaryWindowId === endWindowId)
+    const inputWindowId = stringField(summary?.payload ?? {}, 'inputWindowId') ?? startWindowId
+    const outputWindowId = stringField(summary?.payload ?? {}, 'outputWindowId') ?? endWindowId ?? summaryWindowId
+    const windowMatches = (inputWindowId == null || startWindowId == null || inputWindowId === startWindowId) && (outputWindowId == null || endWindowId == null || outputWindowId === endWindowId) && (summaryWindowId == null || startWindowId == null || summaryWindowId === startWindowId)
     const candidateHashMatches = summary && summary.payload.candidate !== undefined ? computeCompactionSummaryHash(summary.payload.candidate) === summary.payload.summaryHash : true
     const valid = start && summary && candidateHashMatches && validShadowRanges(summary.payload) && windowMatches && event.payload.startSeq === start.seq && event.payload.summarySeq === summary.seq && event.payload.inputSurfaceFingerprint === start.payload.inputSurfaceFingerprint && event.payload.outputSurfaceFingerprint === summary.payload.outputSurfaceFingerprint && event.payload.summaryHash === summary.payload.summaryHash
     if (!valid) { rejected.push({ compactionId: id, reason: 'invalid-commit-references' }); continue }

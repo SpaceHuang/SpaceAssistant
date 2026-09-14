@@ -26,6 +26,13 @@ describe('request context payload', () => {
     expect(header.surfaceSnapshot.systemFingerprint).not.toBe(header.stablePrefixFingerprint)
     expect(buildRequestHeaderPayload({ requestId: 'r1', system: 'system', tools: [{ name: 'z' }], messages: [{ role: 'user', content: 'hello' }] }).surfaceSnapshot.fingerprint).toBe(header.surfaceSnapshot.fingerprint)
   })
+  it('matches planned text with provider cache-control serialization but rejects semantic drift', () => {
+    const planned = buildRequestHeaderPayload({ requestId: 'planned', system: '', tools: [], messages: [{ role: 'user', content: 'hello' }] })
+    const wire = buildRequestHeaderPayload({ requestId: 'wire', system: '', tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'hello', cache_control: { type: 'ephemeral' } }] }] })
+    const drifted = buildRequestHeaderPayload({ requestId: 'wire-drift', system: '', tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'changed', cache_control: { type: 'ephemeral' } }] }] })
+    expect(wire.surfaceSnapshot.fingerprint).toBe(planned.surfaceSnapshot.fingerprint)
+    expect(drifted.surfaceSnapshot.fingerprint).not.toBe(planned.surfaceSnapshot.fingerprint)
+  })
   it('records one budget object and an unanchored preflight context usage', () => {
     const header = buildRequestHeaderPayload({ requestId: 'r1', system: 'sys', tools: [], messages: [{ role: 'user', content: 'hi' }] })
     const payload = buildRequestContextPayload({ requestId: 'r1', provider: 'anthropic', model: 'm', contextWindow: 1000, maxTokensEffective: 100, surfaceSnapshot: header.surfaceSnapshot })

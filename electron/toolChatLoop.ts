@@ -172,6 +172,7 @@ import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationReques
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
+import type { ContextMeter } from '../src/shared/contextMeterService'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
@@ -422,6 +423,7 @@ export type RunToolChatSessionArgs = {
   appDb?: AppDatabase
   locale?: AppLocale
   projectMemoryEnabled?: boolean
+  skillFragments?: string[]
   /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
   /** 由 Core 从当前授权会话事实构造，供 history.read 只读回查。 */
@@ -435,6 +437,8 @@ export type RunToolChatSessionArgs = {
   /** Core 事件台账写入口；与 UI fact 通道分离，保存原始 NormalizedDelta。 */
   emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
+  /** Core 以 session event ledger 提供的唯一上下文测量适配器。 */
+  contextMeter?: ContextMeter
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
   onTurnBoundary?: (input: { requestId: string; windowId: string; system: string; tools: unknown[]; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage']; toolExecutionCheckpoint: ReturnType<typeof buildRequestHeaderPayload>['toolExecutionCheckpoint']; requiredSurfaceSet: string[] }) => Promise<void>
 }
@@ -540,7 +544,7 @@ async function runToolChatSessionInner(
     floatingNotificationManager,
     hasImageAttachments
   } = args
-  const contextWindowId = args.windowId ?? requestId
+  let contextWindowId = args.windowId ?? requestId
   const apiKey = await getApiKey()
   if (!apiKey) {
     logAgentEvent('error', 'llm.error', {
@@ -643,6 +647,65 @@ async function runToolChatSessionInner(
   const toolErrorRepeat = makeToolErrorRepeatTracker()
   let recoverySkillFragment = ''
 
+  /**
+   * Preflight 恢复必须和 provider overflow 使用同一套事务语义：先以最终 wire
+   * surface 计算输入指纹，再生成可回放的保留面，提交 start/summary/end，最后
+   * 才允许下一轮重新序列化并发送。这样 preflight 不会绕过压缩台账直接删历史。
+   */
+  const recoverBeforeSend = async (
+    inputHeader: ReturnType<typeof buildRequestHeaderPayload>,
+    inputMessages: Anthropic.MessageParam[],
+    retry: number,
+    totalInputBudget: number
+  ): Promise<boolean> => {
+    const inputSurface = projectReplaySurface(inputMessages)
+    const recoveredMessages = selectRecoveryMessages(inputMessages as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as Anthropic.MessageParam[]
+    const outputSurface = projectReplaySurface(recoveredMessages)
+    if (outputSurface.length === 0 || JSON.stringify(outputSurface) === JSON.stringify(inputSurface)) return false
+
+    const outputHeader = buildRequestHeaderPayload({
+      requestId: `${requestId}:recovery:${retry}`,
+      system: inputHeader.system,
+      tools: inputHeader.tools,
+      messages: recoveredMessages,
+      requiredSurfaceSet: inputHeader.requiredSurfaceSet,
+      toolExecutionCheckpoint: { ...inputHeader.toolExecutionCheckpoint, replayForbidden: true }
+    })
+    const outputPairs = extractToolPairIds(recoveredMessages as unknown as Array<{ content?: unknown }>)
+    const outputIds = recoveredMessages.map((message, index) => (message as unknown as { id?: string }).id ?? surfaceItemIdentity(message, index))
+    const outputPreflight = validateSurfaceForSend({
+      ids: outputIds,
+      requiredIds: inputHeader.requiredSurfaceSet,
+      currentUserMessageId: args.currentUserMessageId ?? '',
+      fingerprint: outputHeader.surfaceSnapshot.fingerprint,
+      expectedFingerprint: outputHeader.surfaceSnapshot.fingerprint,
+      estimatedTotalInputTokens: outputHeader.surfaceSnapshot.surfaceTokens,
+      totalInputBudget,
+      toolUses: outputPairs.toolUses,
+      toolResults: outputPairs.toolResults
+    })
+    if (!outputPreflight.ok && outputPreflight.reason === 'token_budget_exceeded') return false
+    if (!outputPreflight.ok) return false
+
+    const inputItems = surfaceItemIdentities(inputSurface).map((id) => ({ id }))
+    const outputItems = surfaceItemIdentities(outputSurface).map((id) => ({ id }))
+    const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, inputSurface)
+    const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, outputSurface)
+    const shadowedRanges = computeShadowedRanges(inputItems, outputItems)
+    if (!shadowedRanges.length || !args.appendCompactionTransaction) return false
+    const compactionId = `${contextWindowId}:preflight:${requestId}:${retry}`
+    const outputWindowId = `${contextWindowId}:reset:${requestId}:${retry}`
+    const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges }
+    await args.appendCompactionTransaction(
+      { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: inputFingerprint, surfaceBoundaryId: inputItems[inputItems.length - 1]?.id, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
+      { compactionId, windowId: contextWindowId, inputWindowId: contextWindowId, outputWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputFingerprint, shadowedRanges, requiredSurfaceSet: inputHeader.requiredSurfaceSet, toolExecutionCheckpoint: { ...outputHeader.toolExecutionCheckpoint }, candidate }
+    )
+    messagesForApi = recoveredMessages
+    contextWindowId = outputWindowId
+    args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: contextWindowId, outputSurfaceFingerprint: outputFingerprint })
+    return true
+  }
+
   while (true) {
     loopRound++
     throwIfChatCancelled(chatSignal)
@@ -676,8 +739,14 @@ async function runToolChatSessionInner(
       thinking,
       cacheControl: true
     })
-    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: toolLoopStreamParams.messages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
-    const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: toolLoopStreamParams.messages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
+    // 计划面先冻结为不含内部 id 的协议中立表示；wire 面只接受 serializer 最终产物。
+    // 两者必须独立计算，才能捕获 serializer 在发送前改变消息/工具的漂移。
+    const plannedMessages = messagesStripped.map((message) => {
+      const { id: _internalId, ...wireShape } = message as Anthropic.MessageParam & { id?: string }
+      return wireShape
+    })
+    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+    const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: toolLoopStreamParams.messages as unknown[], requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
     lastRequestContext = requestContext
@@ -694,7 +763,17 @@ async function runToolChatSessionInner(
       toolUses: toolPairs.toolUses,
       toolResults: toolPairs.toolResults
     })
-    if (!preflight.ok) return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
+    if (!preflight.ok) {
+      if (preflight.reason === 'token_budget_exceeded' && overflowRetries < 1) {
+        overflowRetries += 1
+        const recovered = await recoverBeforeSend(requestHeader, messagesStripped, overflowRetries, requestContext.budget.totalInputBudget)
+        if (recovered) {
+          await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'preflight_context_overflow' } })
+          continue
+        }
+      }
+      return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
+    }
     await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
     await args.emitSessionEvent?.({ type: 'request_context', payload: requestContext })
 
@@ -876,27 +955,11 @@ async function runToolChatSessionInner(
       const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
       if (recovery.action === 'reset_and_retry_provider') {
         overflowRetries = recovery.nextRetry
-          const recoveryInputMessages = projectReplaySurface(messagesForApi)
-          const recoveryInputItems = surfaceItemIdentities(recoveryInputMessages).map((id) => ({ id }))
-        messagesForApi = selectRecoveryMessages(messagesForApi as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as typeof messagesForApi
-        if (args.appendCompactionTransaction && lastRequestHeader) {
-          const recoverySystem = lastRequestHeader.system
-          const outputHeader = buildRequestHeaderPayload({ requestId: `${requestId}:recovery:${overflowRetries}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: messagesForApi, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: lastRequestHeader.toolExecutionCheckpoint.completedToolUseIds, replayForbidden: true } })
-          const compactionId = `${requestId}:overflow:${overflowRetries}`
-          const completedToolUseIds = messagesForApi.flatMap((message) => Array.isArray(message.content) ? message.content.flatMap((block) => {
-            const value = block as unknown as { type?: unknown; id?: unknown }
-            return value.type === 'tool_use' && typeof value.id === 'string' ? [value.id] : []
-          }) : [])
-          const recoveryOutputMessages = projectReplaySurface(messagesForApi)
-          const recoveryOutputItems = surfaceItemIdentities(recoveryOutputMessages).map((id) => ({ id }))
-          const recoveryShadowedRanges = computeShadowedRanges(recoveryInputItems, recoveryOutputItems)
-          const recoveryFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(recoverySystem, surface)
-          const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges: recoveryShadowedRanges }
-          await args.appendCompactionTransaction(
-            { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: recoveryFingerprint(recoveryInputMessages), surfaceBoundaryId: recoveryInputItems[recoveryInputItems.length - 1]?.id, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
-            { compactionId, windowId: contextWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: recoveryFingerprint(recoveryOutputMessages), shadowedRanges: recoveryShadowedRanges, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds, replayForbidden: true }, candidate }
-          )
-          args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: contextWindowId, outputSurfaceFingerprint: outputHeader.surfaceSnapshot.fingerprint })
+        const recovered = lastRequestHeader && lastRequestContext
+          ? await recoverBeforeSend(lastRequestHeader, messagesForApi, overflowRetries, lastRequestContext.budget.totalInputBudget)
+          : false
+        if (!recovered) {
+          return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
         }
         await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
@@ -2069,14 +2132,17 @@ async function runToolChatSessionInner(
       args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
       if (lastRequestHeader && lastRequestContext) {
         const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi], requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
-        const nextProjection = computeContextPressure({
+        const nextProjectionInput = {
           currentSurface: nextHeader.surfaceSnapshot,
-          anchor: { requestId: lastRequestContext.requestId, surfaceTokens: lastRequestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, systemFingerprint: lastRequestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: lastRequestHeader.surfaceSnapshot.toolsFingerprint, provider: lastRequestContext.provider, model: lastRequestContext.model, estimatorVersion: lastRequestContext.budget.estimatorVersion, serializationVersion: lastRequestContext.budget.serializationVersion, realUsage: lastValidUsage, contextWindow: lastRequestContext.contextWindow.tokens },
           budget: lastRequestContext.budget,
-          decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' },
+          decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop' as const, reason: 'proactive' as const, ruleVersion: 'adaptive-v1' },
           contextWindow: lastRequestContext.contextWindow,
           provider: lastRequestContext.provider,
           model: lastRequestContext.model
+        }
+        const nextProjection = args.contextMeter?.measure(nextProjectionInput) ?? computeContextPressure({
+          ...nextProjectionInput,
+          anchor: { requestId: lastRequestContext.requestId, surfaceTokens: lastRequestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, systemFingerprint: lastRequestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: lastRequestHeader.surfaceSnapshot.toolsFingerprint, provider: lastRequestContext.provider, model: lastRequestContext.model, estimatorVersion: lastRequestContext.budget.estimatorVersion, serializationVersion: lastRequestContext.budget.serializationVersion, realUsage: lastValidUsage, contextWindow: lastRequestContext.contextWindow.tokens }
         })
         const toolLoopPlan = planToolLoopCompaction({
           projection: { surfaceTokens: nextProjection.surfaceTokens, bodyTokens: nextProjection.bodyTokens, requiredTokens: lastRequestContext.budget.requiredTokens, totalInputBudget: lastRequestContext.budget.totalInputBudget, bodyBudget: lastRequestContext.budget.bodyBudget, targetBodyRatio: lastRequestContext.budget.targetBodyRatio },

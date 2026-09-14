@@ -165,6 +165,30 @@ describe('runToolChatSession message_start usage', () => {
     expect(stream).toHaveBeenCalled()
   })
 
+  it('preflight 超预算时先提交恢复事务，再用恢复后的 surface 重试 provider', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-preflight-recovery', sessionId: 'sess-preflight-recovery',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000,
+      messages: [
+        { id: 'old-user', role: 'user', content: 'x'.repeat(120_000) },
+        { id: 'current-user', role: 'user', content: '当前问题' }
+      ], currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
+    expect(stream).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(stream.mock.calls[0]?.[0]?.messages ?? [])).toContain('当前问题')
+    expect(JSON.stringify(stream.mock.calls[0]?.[0]?.messages ?? [])).not.toContain('x'.repeat(12_000))
+  })
+
   it('emits usage-updated fact on message_start before finalMessage', async () => {
     const sender = makeSender()
     mockCreateAnthropicClient.mockImplementation(() => ({

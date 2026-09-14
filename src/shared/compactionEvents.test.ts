@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeCompactionSummaryHash, countCommittedCompactions, foldCompactionEvents, projectCompactionMarkers } from './compactionEvents'
+import { computeCompactionSummaryHash, countCommittedCompactions, currentCompactionWindowId, foldCompactionEvents, projectCompactionMarkers } from './compactionEvents'
 
 const event = (seq: number, type: 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: Record<string, unknown>) => ({ seq, type, payload })
 
@@ -45,6 +45,18 @@ describe('compaction event replay', () => {
     ])
     expect(countCommittedCompactions(replay, 'w1')).toBe(1)
     expect(countCommittedCompactions(replay, 'w3')).toBe(0)
+  })
+
+  it('derives a new active window from a committed reset output', () => {
+    const candidate = { kind: 'reset', shadowedRanges: [{ start: 'old', end: 'old' }] }
+    const events = [
+      event(1, 'compaction_start', { compactionId: 'reset', windowId: 'session', inputSurfaceFingerprint: 'in' }),
+      event(2, 'compaction_summary', { compactionId: 'reset', windowId: 'session', inputWindowId: 'session', outputWindowId: 'session:reset', summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: 'out', candidate, shadowedRanges: candidate.shadowedRanges }),
+      event(3, 'compaction_end', { compactionId: 'reset', windowId: 'session:reset', inputWindowId: 'session', outputWindowId: 'session:reset', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: computeCompactionSummaryHash(candidate) })
+    ]
+    const replay = foldCompactionEvents(events)
+    expect(replay.committed).toHaveLength(1)
+    expect(currentCompactionWindowId(replay, 'session')).toBe('session:reset')
   })
 
   it('counts only committed summary candidates, not reset candidates', () => {
