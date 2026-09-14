@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { buildRequestContextPayload, buildRequestHeaderPayload } from './requestContext'
 
 describe('request context payload', () => {
+  it('estimates image blocks without counting base64 as text tokens', () => {
+    const payload = buildRequestHeaderPayload({ requestId: 'img', system: '', tools: [], messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x'.repeat(700_000) } }] }] })
+    expect(payload.surfaceSnapshot.messageTokens).toBeLessThan(1_000)
+    expect(payload.surfaceSnapshot.messageTokens).toBeGreaterThan(85)
+  })
   it('records the effective output reserve and shared-window accounting', () => {
     expect(buildRequestContextPayload({ requestId: 'r1', provider: 'anthropic', model: 'claude', contextWindow: 10000, maxTokensEffective: 2000 })).toMatchObject({
       requestId: 'r1', contextWindow: { tokens: 10000, source: 'config' }, maxTokensEffective: 2000,

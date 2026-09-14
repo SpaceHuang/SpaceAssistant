@@ -1,6 +1,18 @@
 import { DEFAULT_MODEL_MAX_CONTEXT } from './domainTypes'
 import { estimateTokensFromUtf8Text } from './contextUsageEstimate'
 
+function estimateProtocolTokens(value: unknown): number {
+  if (typeof value === 'string') return estimateTokensFromUtf8Text(value)
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + estimateProtocolTokens(item), 0)
+  if (!value || typeof value !== 'object') return 0
+  const record = value as Record<string, unknown>
+  if (record.type === 'image' && record.source && typeof record.source === 'object') {
+    const source = record.source as Record<string, unknown>
+    return typeof source.data === 'string' ? Math.max(85, Math.ceil(source.data.length / 2_000)) : 85
+  }
+  return Object.entries(record).reduce((sum, [key, entry]) => key === 'data' && typeof entry === 'string' ? sum : sum + estimateProtocolTokens(entry), 0)
+}
+
 export type RequestContextPayload = {
   requestId: string
   windowId: string
@@ -41,7 +53,7 @@ function fingerprint(value: string): string {
 export function buildRequestHeaderPayload(args: { requestId: string; system: string; tools: unknown[]; messages: unknown[]; requiredSurfaceSet?: string[]; toolExecutionCheckpoint?: { completedToolUseIds: string[]; replayForbidden: boolean } }): RequestHeaderPayload {
   const systemTokens = estimateTokensFromUtf8Text(args.system)
   const toolsTokens = estimateTokensFromUtf8Text(JSON.stringify(args.tools))
-  const messageTokens = estimateTokensFromUtf8Text(JSON.stringify(args.messages))
+  const messageTokens = estimateProtocolTokens(args.messages)
   const systemFingerprint = fingerprint(args.system)
   const toolsFingerprint = fingerprint(JSON.stringify(args.tools))
   const surfaceFingerprint = fingerprint(JSON.stringify({ system: args.system, tools: args.tools, messages: args.messages }))
