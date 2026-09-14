@@ -21,7 +21,6 @@ const api: SpaceAssistantApi = {
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
   chatGetApiContextBaseline: (payload) => ipcRenderer.invoke('chat:get-api-context-baseline', payload),
   chatGetMessagePage: (payload) => ipcRenderer.invoke('chat:get-message-page', payload),
-  chatGetDisplayMessagePage: (payload) => ipcRenderer.invoke('chat:get-display-message-page', payload),
   chatGetContextHistorySummaryBaseline: (payload) =>
     ipcRenderer.invoke('chat:get-context-history-summary-baseline', payload),
   chatGetSearchCorpusPage: (payload) => ipcRenderer.invoke('chat:get-search-corpus-page', payload),
@@ -35,7 +34,6 @@ const api: SpaceAssistantApi = {
   chatExecuteTurn: (payload: TurnExecutePayload) => ipcRenderer.invoke('chat:execute-turn', payload),
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
   chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
-  chatRetryTurnCheckpoint: (turnId) => ipcRenderer.invoke('chat:retry-turn-checkpoint', turnId),
   chatListActiveTurns: (payload) => ipcRenderer.invoke('chat:list-active-turns', payload),
   chatGetTurnDisplays: (payload) => ipcRenderer.invoke('chat:get-turn-displays', payload),
   chatGetToolCallDetails: (payload) => ipcRenderer.invoke('chat:get-tool-call-details', payload),
@@ -44,16 +42,6 @@ const api: SpaceAssistantApi = {
     const fn = (_e: unknown, data: Parameters<typeof cb>[0]) => cb(data)
     ipcRenderer.on('chat:turn-projection', fn)
     return () => ipcRenderer.removeListener('chat:turn-projection', fn)
-  },
-  chatOnTurnDisplay: (cb) => {
-    const fn = (_e: unknown, data: Parameters<typeof cb>[0]) => cb(data)
-    ipcRenderer.on('chat:turn-display', fn)
-    return () => ipcRenderer.removeListener('chat:turn-display', fn)
-  },
-  chatOnTurnUsage: (cb) => {
-    const fn = (_e: unknown, data: Parameters<typeof cb>[0]) => cb(data)
-    ipcRenderer.on('chat:turn-usage', fn)
-    return () => ipcRenderer.removeListener('chat:turn-usage', fn)
   },
   chatDeleteQueuedMessage: (payload: { messageId: string; sessionId: string }) =>
     ipcRenderer.invoke('chat:delete-queued-message', payload) as Promise<
