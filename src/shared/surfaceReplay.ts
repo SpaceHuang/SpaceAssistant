@@ -29,8 +29,13 @@ export function projectReplaySurface<T>(messages: readonly T[]): T[] {
       if (hasToolUse) {
         // 空正文的 tool-use assistant 仍是一个可持久化的轮次锚点；否则 reset
         // 删除历史工具对后，projection 前后看起来完全相同，压缩范围无法回放。
-        projected.push({ ...(message as object), content: typeof text === 'string' ? text : '' } as T)
-        toolTurnAssistantIndex = projected.length - 1
+        if (toolTurnAssistantIndex < 0) {
+          projected.push({ ...(message as object), content: typeof text === 'string' ? text : '' } as T)
+          toolTurnAssistantIndex = projected.length - 1
+        } else if (typeof text === 'string' && text.length > 0) {
+          const previous = projected[toolTurnAssistantIndex] as unknown as { content?: unknown }
+          projected[toolTurnAssistantIndex] = { ...(previous as object), content: `${typeof previous.content === 'string' ? previous.content : ''}${text}` } as T
+        }
         continue
       }
       if (toolTurnAssistantIndex >= 0 && typeof text === 'string') {
@@ -40,6 +45,7 @@ export function projectReplaySurface<T>(messages: readonly T[]): T[] {
         continue
       }
     }
+    if (source.role === 'user') toolTurnAssistantIndex = -1
     projected.push(source.role === 'assistant' ? { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T : message)
   }
   return projected
@@ -57,15 +63,27 @@ export function restoreReplaySurface<T extends { id?: string }>(original: readon
   for (const item of replayed) {
     const source = byKey.get(item.id ?? '')
     if (!source) { restored.push(item); continue }
-    restored.push(source)
     const index = original.indexOf(source)
-    const content = source && typeof source === 'object' ? (source as { content?: unknown }).content : undefined
-    const hasToolUse = Array.isArray(content) && content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
-    const result = original[index + 1]
-    const resultContent = result && typeof result === 'object' ? (result as { role?: unknown; content?: unknown }).content : undefined
-    if (hasToolUse && result && typeof result === 'object' && (result as { role?: unknown }).role === 'user' && Array.isArray(resultContent) && resultContent.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) restored.push(result)
+    let start = index
+    while (start >= 2 && isToolResultMessage(original[start - 1]!) && isToolUseMessage(original[start - 2]!)) start -= 2
+    let end = index
+    while (end + 2 < original.length && isToolResultMessage(original[end + 1]!) && isToolUseMessage(original[end + 2]!)) end += 2
+    if (end + 1 < original.length && isToolResultMessage(original[end + 1]!)) end += 1
+    for (let cursor = start; cursor <= end; cursor++) restored.push(original[cursor]!)
   }
   return restored
+}
+
+function isToolUseMessage(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const source = value as { role?: unknown; content?: unknown }
+  return source.role === 'assistant' && Array.isArray(source.content) && source.content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
+}
+
+function isToolResultMessage(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const source = value as { role?: unknown; content?: unknown }
+  return source.role === 'user' && Array.isArray(source.content) && source.content.length > 0 && source.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')
 }
 
 export function surfaceItemIdentity(value: unknown, fallbackIndex: number): string {
@@ -91,6 +109,44 @@ export function surfaceItemIdentities(values: readonly unknown[]): string[] {
     const occurrence = counts.get(base) ?? 0
     counts.set(base, occurrence + 1)
     return occurrence === 0 ? base : `${base}#${occurrence}`
+  })
+}
+
+/** 为同一 source 的 retained 子集复用原 occurrence identity，避免删除前置重复项后重新编号。 */
+export function surfaceItemIdentitiesForSubset(sourceValues: readonly unknown[], retainedValues: readonly unknown[]): string[] {
+  const sourceIdentities = surfaceItemIdentities(sourceValues)
+  const byReference = new Map<unknown, string>()
+  const byExplicitId = new Map<string, string>()
+  const byCanonicalBase = new Map<string, string[]>()
+  sourceValues.forEach((value, index) => {
+    const identity = sourceIdentities[index]!
+    byReference.set(value, identity)
+    if (value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string') byExplicitId.set((value as { id: string }).id, identity)
+    const base = surfaceItemIdentity(value, index)
+    const identities = byCanonicalBase.get(base) ?? []
+    identities.push(identity)
+    byCanonicalBase.set(base, identities)
+  })
+  const used = new Set<string>()
+  const allocate = (identity: string): string => {
+    if (!used.has(identity)) {
+      used.add(identity)
+      return identity
+    }
+    let occurrence = 1
+    while (used.has(`${identity}#${occurrence}`)) occurrence += 1
+    const disambiguated = `${identity}#${occurrence}`
+    used.add(disambiguated)
+    return disambiguated
+  }
+  return retainedValues.map((value, index) => {
+    if (byReference.has(value)) return allocate(byReference.get(value)!)
+    const explicitId = value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string' ? (value as { id: string }).id : undefined
+    if (explicitId && byExplicitId.has(explicitId)) return allocate(byExplicitId.get(explicitId)!)
+    const base = surfaceItemIdentity(value, index)
+    const candidates = byCanonicalBase.get(base)
+    const matchingIdentity = candidates?.find((candidate) => !used.has(candidate))
+    return allocate(matchingIdentity ?? base)
   })
 }
 

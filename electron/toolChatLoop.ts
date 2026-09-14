@@ -175,7 +175,7 @@ import { computeContextPressure, shouldCompact } from '../src/shared/contextMete
 import type { ContextMeter } from '../src/shared/contextMeterService'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
-import { computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -698,7 +698,7 @@ async function runToolChatSessionInner(
     if (!outputPreflight.ok) return false
 
     const inputItems = surfaceItemIdentities(inputSurface).map((id) => ({ id }))
-    const outputItems = surfaceItemIdentities(outputSurface).map((id) => ({ id }))
+    const outputItems = surfaceItemIdentitiesForSubset(inputSurface, outputSurface).map((id) => ({ id }))
     const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, inputSurface)
     const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, outputSurface)
     const shadowedRanges = computeShadowedRanges(inputItems, outputItems)

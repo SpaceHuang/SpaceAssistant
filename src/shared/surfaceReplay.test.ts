@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentity } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from './surfaceReplay'
 import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
@@ -42,6 +42,41 @@ describe('surface replay', () => {
       { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'read', input: {} }] },
       { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }
     ])).toEqual([{ role: 'assistant', content: '' }])
+  })
+  it('collapses multiple live tool rounds to the single persisted assistant turn', () => {
+    const live = [
+      { role: 'user', content: 'question' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'result 1' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-2', name: 'read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-2', content: 'result 2' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'answer' }] }
+    ]
+    const persisted = [
+      { role: 'user', content: 'question' },
+      { role: 'assistant', content: 'answer', toolCalls: [{ id: 'tool-1' }, { id: 'tool-2' }] }
+    ]
+    const liveProjection = projectReplaySurface(live)
+    const persistedProjection = projectReplaySurface(persisted)
+    expect(liveProjection.map((message) => ({ role: message.role, content: message.content }))).toEqual(persistedProjection.map((message) => ({ role: message.role, content: message.content })))
+    expect(computeReplaySurfaceFingerprint('system', liveProjection)).toBe(computeReplaySurfaceFingerprint('system', persistedProjection))
+    const replayed = liveProjection.map((message, index) => ({ ...message, id: surfaceItemIdentitiesForSubset(live, liveProjection)[index]! }))
+    expect(restoreReplaySurface(live, replayed)).toEqual(live)
+  })
+  it('reuses source identities when reset removes a preceding duplicate message', () => {
+    const before = [{ id: 'old', role: 'user', content: 'same question' }, { id: 'current', role: 'user', content: 'same question' }]
+    const after = [before[1]!]
+    const beforeIdentities = surfaceItemIdentities(before)
+    const afterIdentities = surfaceItemIdentitiesForSubset(before, after)
+    const ranges = computeShadowedRanges(before.map((_, index) => ({ id: beforeIdentities[index]! })), after.map((_, index) => ({ id: afterIdentities[index]! })))
+    expect(ranges).toEqual([{ start: beforeIdentities[0], end: beforeIdentities[0] }])
+    const candidate = { kind: 'reset', requiredMessageId: 'current', shadowedRanges: ranges }
+    const replay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: { compactionId: 'reset-duplicate', windowId: 'w', inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', before), surfaceBoundaryId: beforeIdentities[1] } },
+      { seq: 2, type: 'compaction_summary', payload: { compactionId: 'reset-duplicate', windowId: 'w', candidate, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', after), shadowedRanges: ranges } },
+      { seq: 3, type: 'compaction_end', payload: { compactionId: 'reset-duplicate', windowId: 'w', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', before), outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', after), summaryHash: computeCompactionSummaryHash(candidate) } }
+    ])
+    expect(applyCommittedSurfaceShadow(before, replay, ['current'], 'w', (items) => computeReplaySurfaceFingerprint('', items))).toEqual(after)
   })
   it('restores retained ordinary messages by their canonical identity', () => {
     const original = [{ id: 'u', role: 'user', content: 'question' }, { id: 'tail', role: 'user', content: 'next' }]
