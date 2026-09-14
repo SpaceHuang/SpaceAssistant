@@ -395,6 +395,44 @@ export interface SkillDefinition {
   source?: { sourceType: 'github'; sourceUrl: string; owner: string; repo: string; ref: string; subPath: string }
 }
 
+/** GitHub Skill 探测候选状态：ok 可安装；invalid 校验不通过；name-conflict 用户级目录已存在同名 */
+export type GithubSkillCandidateStatus = 'ok' | 'invalid' | 'name-conflict'
+
+export interface GithubSkillCandidate {
+  name: string
+  description: string
+  /** 相对仓库根的真实目录路径，如 skills/brainstorming */
+  subPath: string
+  totalBytes: number
+  status: GithubSkillCandidateStatus
+  /** status !== 'ok' 时的原因（错误码 + 说明） */
+  reason?: string
+}
+
+/** 安装时被跳过的候选（非法 / 同名未覆盖 / 路径不存在） */
+export interface SkippedCandidate {
+  subPath: string
+  name?: string
+  /** 错误码 + 说明，供 UI 翻译展示 */
+  reason: string
+}
+
+export interface GithubSkillProbeResult {
+  repo: { owner: string; repo: string; branch: string; subPath: string }
+  candidates: GithubSkillCandidate[]
+  /** true = 候选数达到上限被截断 */
+  truncated: boolean
+  /** true = 目录访问数达到上限被截断 */
+  visitedTruncated: boolean
+}
+
+export interface GithubInstallResult {
+  installed: SkillDefinition[]
+  skipped: SkippedCandidate[]
+  /** 本次实际被覆盖（既有目录被删除后重装）的 Skill 名称清单 */
+  overwritten: string[]
+}
+
 export interface SessionSkillsState {
   manualActivated: string[]
   manualDisabled: string[]
