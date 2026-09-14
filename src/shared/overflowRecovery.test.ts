@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decideOverflowRecovery, selectRecoveryMessages } from './overflowRecovery'
+import { decideOverflowRecovery, isProviderContextOverflow, selectRecoveryMessages } from './overflowRecovery'
 
 describe('provider overflow recovery', () => {
   it('retries only the provider after a safe boundary', () => {
@@ -15,6 +15,10 @@ describe('provider overflow recovery', () => {
   it('does not classify rate and quota limits as context overflow', () => {
     expect(decideOverflowRecovery({ error: 'rate limit exceeded: 30000 input tokens per minute', retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true }).action).toBe('ignore')
     expect(decideOverflowRecovery({ error: 'quota exceeded for tokens', retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true }).action).toBe('ignore')
+  })
+  it('prefers structured provider status and error type', () => {
+    expect(isProviderContextOverflow({ status: 429, type: 'context_length_exceeded', message: 'retry later' })).toBe(false)
+    expect(isProviderContextOverflow({ status: 400, type: 'context_length_exceeded', message: 'input too long' })).toBe(true)
   })
   it('keeps current input and completed tool results in the recovery surface', () => {
     const messages = [{ id: 'old', role: 'user', content: 'old' }, { id: 'current', role: 'user', content: 'current' }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1' }] }] as const
