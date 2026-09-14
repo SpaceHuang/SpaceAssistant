@@ -316,7 +316,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const historyFacts = authoritative.messages.map((message) => {
           const rawContent = message.content ?? ''
           const details = { toolCalls: message.toolCalls, toolUse: message.toolUse, attachments: message.attachments }
-          const detailText = message.toolCalls?.length || message.toolUse || message.attachments?.length ? `\n[结构化详情] ${JSON.stringify(details)}` : ''
+          const serializedDetails = JSON.stringify(details)
+          const boundedDetails = serializedDetails.length > 8_000 ? `${serializedDetails.slice(0, 7_999)}…` : serializedDetails
+          const detailText = message.toolCalls?.length || message.toolUse || message.attachments?.length ? `\n[结构化详情] ${boundedDetails}` : ''
           const text = `${typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent) ?? ''}${detailText}`
           return { id: message.id, sessionId, windowId: contextWindowId, role: message.role === 'assistant' ? 'assistant' as const : 'user' as const, text, tokens: estimateTokensFromUtf8Text(text), details }
         })
