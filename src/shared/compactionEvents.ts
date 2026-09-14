@@ -78,7 +78,11 @@ export function foldCompactionEvents(events: readonly CompactionEvent[]): Compac
 }
 
 export function countCommittedCompactions(replay: CompactionReplay, windowId: string): number {
-  return replay.committed.filter((item) => item.start.payload.windowId === windowId || item.summary.payload.windowId === windowId || item.end.payload.windowId === windowId).length
+  return replay.committed.filter((item) => {
+    const sameWindow = item.start.payload.windowId === windowId || item.summary.payload.windowId === windowId || item.end.payload.windowId === windowId
+    const candidate = item.summary.payload.candidate
+    return sameWindow && candidate !== null && typeof candidate === 'object' && (candidate as { kind?: unknown }).kind === 'summary'
+  }).length
 }
 
 export type CompactionMarker = { compactionId: string; windowId: string; outputSurfaceFingerprint: string }
