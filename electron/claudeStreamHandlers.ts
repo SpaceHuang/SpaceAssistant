@@ -426,7 +426,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             const items = replayMessages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
             const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, surfaceSnapshot.surfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
             const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '' }
-            const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: estimateTokensFromUtf8Text(checkpointMessage.content) })
+            // 摘要正文在规划后组装；这里必须为固定 envelope 预留非零预算，
+            // 否则 planner 会把 summarize 错判为没有收益。
+            const checkpointPlanningTokens = estimateTokensFromUtf8Text(JSON.stringify({ kind: 'context_checkpoint', task: '', decisions: '', pending: '' }))
+            const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: checkpointPlanningTokens })
             const record = plan.record
             if (!record || plan.status === 'uncompressible' || !record.shadowedRanges.length) return
             const shadowedIds = new Set(record.shadowedRanges.flatMap((range) => {
