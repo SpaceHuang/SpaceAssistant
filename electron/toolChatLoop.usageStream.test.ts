@@ -165,6 +165,24 @@ describe('runToolChatSession message_start usage', () => {
     expect(stream).toHaveBeenCalled()
   })
 
+  it('把 Core 冻结的 Skill fragment 注入实际 provider 请求且位于当前输入之前', async () => {
+    const stream = vi.fn((params: { messages?: unknown[] }) => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-skill-fragment', sessionId: 'sess-skill-fragment',
+      model: 'claude-sonnet-4-20250514', messages: [{ id: 'current-user', role: 'user', content: 'current question' }], currentUserMessageId: 'current-user',
+      skillFragments: ['## Skill: review\n\nreview instructions'],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb()
+    })
+    expect(res.ok).toBe(true)
+    const messages = stream.mock.calls[0]?.[0]?.messages as Array<{ content?: unknown }> | undefined
+    expect(messages?.[0]?.content).toBe('## Skill: review\n\nreview instructions')
+    expect(messages?.[1]?.content).toEqual([{ type: 'text', text: 'current question', cache_control: { type: 'ephemeral' } }])
+  })
+
   it('preflight 超预算时先提交恢复事务，再用恢复后的 surface 重试 provider', async () => {
     const stream = vi.fn(() => ({
       async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
@@ -187,6 +205,29 @@ describe('runToolChatSession message_start usage', () => {
     expect(stream).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(stream.mock.calls[0]?.[0]?.messages ?? [])).toContain('当前问题')
     expect(JSON.stringify(stream.mock.calls[0]?.[0]?.messages ?? [])).not.toContain('x'.repeat(12_000))
+  })
+
+  it('turn-boundary snapshot includes the newly generated assistant content', async () => {
+    const boundary = vi.fn(async () => undefined)
+    const longReply = 'assistant reply '.repeat(5_000)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: longReply }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    })) } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-final-surface', sessionId: 'sess-final-surface',
+      model: 'claude-sonnet-4-20250514', contextWindow: 100_000,
+      messages: [{ id: 'current-user', role: 'user', content: 'hello' }], currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), onTurnBoundary: boundary
+    })
+    expect(res.ok).toBe(true)
+    expect(boundary).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([expect.objectContaining({ role: 'assistant', content: expect.arrayContaining([expect.objectContaining({ type: 'text', text: longReply })]) })]),
+      surfaceSnapshot: expect.objectContaining({ messageTokens: expect.any(Number) })
+    }))
+    const input = boundary.mock.calls[0]?.[0]
+    expect(input?.surfaceSnapshot.messageTokens).toBeGreaterThan(1_000)
   })
 
   it('emits usage-updated fact on message_start before finalMessage', async () => {

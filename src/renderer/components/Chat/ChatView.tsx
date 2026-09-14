@@ -72,15 +72,13 @@ import { parseWikiCommand } from '../../services/wikiCommandService'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
 import { ensureWorkDirForSession } from '../../services/workDirSessionSync'
-import { appendSkillActivationLog } from '../../services/skillActivationLog'
 import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserRecoverySkillService'
 import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
 import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
-import { buildSkillRouteSignature, formatSkillRouteHint } from '../../../shared/skillPrompt'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
-import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
+import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
@@ -168,7 +166,6 @@ export function ChatView() {
   const stickToBottomRef = useRef(true)
   const composerRef = useRef<MessageInputHandle>(null)
   const abortRequestedRef = useRef(false)
-  const lastSkillRouteSignatureRef = useRef('')
   const prevRunningSessionsRef = useRef<Record<string, true>>({})
   const drainingQueueRef = useRef(false)
   const sendInternalRef = useRef<
@@ -191,7 +188,6 @@ export function ChatView() {
   const enterMessageId = useChatMessageEnter(sessionId, messageIds)
 
   useEffect(() => {
-    lastSkillRouteSignatureRef.current = ''
     setTestPreviewMessageIds(new Set())
     stickToBottomRef.current = true
     setShowScrollToLatest(false)
@@ -732,46 +728,6 @@ export function ChatView() {
       registerSessionRun(runSessionId, requestId)
       abortRequestedRef.current = false
       dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
-
-      const recentMessages: SkillRouteRecentMessage[] = filterMessagesForChatApi(historyForApi)
-        .filter((m) => m.content.trim())
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
-
-      const routeResult = await window.api.skillRoute({
-        userInput: chatText,
-        sessionSkillsState,
-        sessionId: runSessionId,
-        sessionMetadata: runSession?.metadata,
-        recentMessages,
-        model: chatModelName
-      })
-      const activeSkills = routeResult.skills
-      let skillHintTimestamp: number | undefined
-      let routeSkillHintText: string | undefined
-      if (activeSkills.length > 0) {
-        const routeSignature = buildSkillRouteSignature(activeSkills, routeResult.meta.sources)
-        if (routeSignature !== lastSkillRouteSignatureRef.current) {
-          lastSkillRouteSignatureRef.current = routeSignature
-          skillHintTimestamp = Date.now()
-          routeSkillHintText = formatSkillRouteHint(activeSkills, routeResult.meta.sources)
-        }
-        const logSource: SkillActivationSource =
-          activeSkills.map((s) => routeResult.meta.sources[s.meta.name]).find((src) => src === 'llm') ??
-          routeResult.meta.sources[activeSkills[0]!.meta.name] ??
-          'llm'
-        const metadata = appendSkillActivationLog(runSession?.metadata ?? {}, {
-          skillNames: activeSkills.map((s) => s.meta.name),
-          source: logSource,
-          userInput: chatText,
-          llmRecommended: routeResult.meta.llmRecommended,
-          routingFailed: routeResult.meta.routingFailed,
-          routingError: routeResult.meta.routingError,
-          routingRequestId: routeResult.meta.routingRequestId
-        })
-        void window.api.sessionUpdate({ sessionId: runSessionId, metadata }).then((updated) => {
-          if (updated) dispatch(upsertSession(updated))
-        })
-      }
 
       if (abortRequestedRef.current) {
         dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))

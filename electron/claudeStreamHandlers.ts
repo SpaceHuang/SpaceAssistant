@@ -383,6 +383,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           system: frozen.system,
           locale: typeof localeCandidate === 'string' && isAppLocale(localeCandidate) ? localeCandidate : undefined,
           projectMemoryEnabled: frozen.projectMemoryEnabled,
+          skillFragments: frozen.skillFragments,
           options: { maxTokens: frozen.maxTokens, enableThinking: frozen.enableThinking },
           toolsConfig: deps.getToolsConfig(),
           browserConfig: deps.getBrowserConfig(),
@@ -442,6 +443,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             const plan = planTurnBoundarySurfaceCompaction({ projection: projectionForPlanner, items, shouldCompact: true, summaryCount: countCommittedCompactions(compactionReplay, windowId), checkpointId: checkpointMessage.id, checkpointTokens: checkpointPlanningTokens })
             const record = plan.record
             if (!record || plan.status === 'uncompressible' || !record.shadowedRanges.length) return
+            const appliedAction = [...plan.actions].reverse().find((action) => action.status === 'applied')?.action
+            const isReset = appliedAction === 'reset'
             const shadowedIds = new Set(record.shadowedRanges.flatMap((range) => {
               const start = items.findIndex((item) => item.id === range.start)
               const end = items.findIndex((item) => item.id === range.end)
@@ -475,9 +478,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               toolResults: pairs.toolResults
             })
             if (!preflight.ok) return
-            const candidate = { kind: 'summary', checkpointMessage, checkpointReplayIdentity: surfaceItemIdentities(outputMessages)[0], shadowedRanges }
             const compactionId = `${windowId}:boundary:${boundaryRequestId}`
-            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
+            const outputWindowId = isReset ? `${windowId}:reset:${boundaryRequestId}` : undefined
+            const candidate = { kind: isReset ? 'reset' as const : 'summary' as const, checkpointMessage, checkpointReplayIdentity: surfaceItemIdentities(outputMessages)[0], shadowedRanges }
+            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, ...(outputWindowId ? { inputWindowId: windowId, outputWindowId } : {}), summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {

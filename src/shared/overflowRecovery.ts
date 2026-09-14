@@ -19,6 +19,8 @@ export function isProviderContextOverflow(error: unknown): boolean {
     if (/context[_ -]?length|prompt[_ -]?too[_ -]?long|input[_ -]?too[_ -]?large/i.test(type)) return true
   }
   const text = error instanceof Error ? error.message : String(error)
+  // 输出预算参数错误无法通过缩短输入修复，禁止触发破坏性 reset。
+  if (/max[_ -]?tokens?|maximum.{0,24}tokens?|invalid.{0,24}(?:max|output).{0,24}tokens?/i.test(text)) return false
   if (/rate\s*limit|too many requests|quota|requests?\s+per\s+(minute|second)|tokens?\s+per\s+(minute|second)/i.test(text)) return false
   return /context|prompt|token|window/i.test(text) && /limit|length|exceed|overflow|too large|max/i.test(text)
 }

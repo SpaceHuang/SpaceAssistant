@@ -20,6 +20,11 @@ describe('provider overflow recovery', () => {
     expect(isProviderContextOverflow({ status: 429, type: 'context_length_exceeded', message: 'retry later' })).toBe(false)
     expect(isProviderContextOverflow({ status: 400, type: 'context_length_exceeded', message: 'input too long' })).toBe(true)
   })
+  it('does not reset for max_tokens parameter errors', () => {
+    expect(isProviderContextOverflow({ status: 400, type: 'invalid_request_error', message: 'max_tokens: 64000 exceeds model limit of 8192' })).toBe(false)
+    expect(isProviderContextOverflow('invalid max tokens, maximum is 8192')).toBe(false)
+    expect(decideOverflowRecovery({ error: 'invalid max tokens, maximum is 8192', retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true }).action).toBe('ignore')
+  })
   it('keeps current input and completed tool results in the recovery surface', () => {
     const messages = [{ id: 'old', role: 'user', content: 'old' }, { id: 'current', role: 'user', content: 'current' }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1' }] }] as const
     expect(selectRecoveryMessages(messages, 'current').map((message) => message.id ?? 'tool-results')).toEqual(['current', 'tool-results'])
