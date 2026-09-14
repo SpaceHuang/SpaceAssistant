@@ -369,6 +369,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           sessionId,
           windowId: contextWindowId,
           model,
+          contextWindow: frozen.maximumContext,
           baseUrl,
           messages,
           system: frozen.system,

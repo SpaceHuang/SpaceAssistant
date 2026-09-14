@@ -48,10 +48,12 @@ export async function resolveTrustedTurnExecutionConfig(
     llmServiceId = vision.llmServiceId
   }
   const credentials = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId, models })
+  const modelEntry = models.find((entry) => entry.name === model)
   const locale = getConfigValue(db, 'config.locale')
   return normalizeTurnExecutionConfig({
     lane,
     model,
+    ...(modelEntry?.maximumContext ? { maximumContext: modelEntry.maximumContext } : {}),
     llmServiceId: credentials.serviceId || llmServiceId,
     baseUrl: credentials.baseUrl,
     maxTokens: session.maxTokens,

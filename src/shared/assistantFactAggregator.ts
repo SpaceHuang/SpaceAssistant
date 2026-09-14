@@ -6,6 +6,7 @@ export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | '
 export type TurnExecutionConfig = {
   lane?: 'desktop' | 'feishu' | 'wechat'
   model?: string
+  maximumContext?: number
   llmServiceId?: string
   baseUrl?: string
   system?: string
