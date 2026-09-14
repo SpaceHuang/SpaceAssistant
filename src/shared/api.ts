@@ -43,6 +43,7 @@ export type ToolConfirmResponsePayload = {
   sessionId?: string
   trustMcpServerId?: string
   trustMcpToolName?: string
+  memoryTierOptionId?: number
 }
 
 export type ShellManageTrustedCommandsAction =
@@ -190,6 +191,7 @@ export type SpaceAssistantApi = {
     beforeSequence?: number
     limit?: number
   }) => Promise<import('./displayOrder').ChatMessagePage>
+  chatGetDisplayMessagePage: (payload: { sessionId: string; beforeSequence?: number; limit?: number }) => Promise<{ entries: Array<{ display: import('./turnDisplayProtocol').TurnDisplay; sequence: number }>; oldestSequence: number | null; hasMoreBefore: boolean }>
   chatGetContextHistorySummaryBaseline: (payload: {
     sessionId: string
   }) => Promise<{
@@ -245,12 +247,15 @@ export type SpaceAssistantApi = {
   chatPrepareTurn: (intent: import('./assistantFactAggregator').TurnIntent) => Promise<import('./turnCoordinator').TurnStarted>
   chatExecuteTurn: (payload: TurnExecutePayload) => Promise<{ ok: true; accepted: true; turnId: string }>
   chatCancelTurn: (turnId: string) => Promise<boolean>
-  chatGetTurnTerminal: (turnId: string) => Promise<import('./assistantFactAggregator').TurnTerminal | undefined>
+  chatGetTurnTerminal: (turnId: string) => Promise<(import('./assistantFactAggregator').TurnTerminal & { committedVersion?: number; commitStatus?: 'pending' | 'committed' | 'failed' }) | undefined>
+  chatRetryTurnCheckpoint: (turnId: string) => Promise<boolean>
   chatListActiveTurns: (payload?: { sessionId?: string }) => Promise<import('./turnCoordinator').TurnStarted[]>
   chatGetTurnDisplays: (payload: { known: Array<{ turnId: string; version: number }>; sessionId?: string }) => Promise<{ changed: import('./turnDisplayProtocol').TurnDisplay[] }>
   chatGetToolCallDetails: (payload: { sessionId: string; turnId: string; messageId: string; toolCallId: string }) => Promise<import('./domainTypes').ToolCallRecord | undefined>
   chatGetPendingConfirmation: (payload: { sessionId: string; turnId: string; requestId: string; turnVersion: number; toolCallId: string }) => Promise<import('./turnDisplayProtocol').ConfirmationSnapshot | { status: 'not-awaiting' | 'stale' }>
   chatOnTurnProjection: (cb: (data: { turn: import('./turnCoordinator').TurnStarted; event: import('./assistantFactAggregator').AssistantFactEvent }) => void) => () => void
+  chatOnTurnDisplay: (cb: (data: { display: import('./turnDisplayProtocol').TurnDisplay }) => void) => () => void
+  chatOnTurnUsage: (cb: (data: { sessionId: string; usage: SessionUsage; projected: boolean }) => void) => () => void
   chatDeleteQueuedMessage: (payload: {
     messageId: string
     sessionId: string
