@@ -27,12 +27,10 @@ export function projectReplaySurface<T>(messages: readonly T[]): T[] {
       const hasToolUse = source.content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
       const text = canonicalSurfaceContent(source.role, source.content)
       if (hasToolUse) {
-        if (typeof text === 'string' && text.length > 0) {
-          projected.push({ ...(message as object), content: text } as T)
-          toolTurnAssistantIndex = projected.length - 1
-        } else {
-          toolTurnAssistantIndex = -1
-        }
+        // 空正文的 tool-use assistant 仍是一个可持久化的轮次锚点；否则 reset
+        // 删除历史工具对后，projection 前后看起来完全相同，压缩范围无法回放。
+        projected.push({ ...(message as object), content: typeof text === 'string' ? text : '' } as T)
+        toolTurnAssistantIndex = projected.length - 1
         continue
       }
       if (toolTurnAssistantIndex >= 0 && typeof text === 'string') {

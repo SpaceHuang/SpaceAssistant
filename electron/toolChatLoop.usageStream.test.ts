@@ -207,6 +207,33 @@ describe('runToolChatSession message_start usage', () => {
     expect(JSON.stringify(stream.mock.calls[0]?.[0]?.messages ?? [])).not.toContain('x'.repeat(12_000))
   })
 
+  it('工具密集历史超窗时 reset 只保留当前 invoke 的消息', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const messages = [{ id: 'old-user', role: 'user' as const, content: 'old question' }]
+    for (let i = 0; i < 5; i++) {
+      messages.push({ id: `old-tool-${i}`, role: 'assistant', content: [{ type: 'tool_use', id: `tool-${i}`, name: 'read', input: {} }] } as never)
+      messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `tool-${i}`, content: 'x'.repeat(20_000) }] } as never)
+    }
+    messages.push({ id: 'current-user', role: 'user', content: 'current question' })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-tool-history-recovery', sessionId: 'sess-tool-history-recovery',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages, currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
+    const sentMessages = stream.mock.calls[0]?.[0]?.messages as Array<{ id?: string; content?: unknown }> | undefined
+    expect(sentMessages).toHaveLength(1)
+    expect(JSON.stringify(sentMessages)).not.toContain('tool-0')
+    expect(JSON.stringify(sentMessages)).toContain('current question')
+  })
+
   it('turn-boundary snapshot includes the newly generated assistant content', async () => {
     const boundary = vi.fn(async () => undefined)
     const longReply = 'assistant reply '.repeat(5_000)

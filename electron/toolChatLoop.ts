@@ -667,8 +667,11 @@ async function runToolChatSessionInner(
     const recoveredMessages = skillFragmentMessage && !selectedMessages.includes(skillFragmentMessage)
       ? [skillFragmentMessage, ...selectedMessages]
       : selectedMessages
+    // 是否发生缩减必须比较真实 provider surface；replay projection 会隐藏工具消息，
+    // 不能据此把“已删除旧工具对”误判成 no-op。
+    if (JSON.stringify(recoveredMessages) === JSON.stringify(inputMessages)) return false
     const outputSurface = projectReplaySurface(recoveredMessages)
-    if (outputSurface.length === 0 || JSON.stringify(outputSurface) === JSON.stringify(inputSurface)) return false
+    if (outputSurface.length === 0) return false
 
     const outputHeader = buildRequestHeaderPayload({
       requestId: `${requestId}:recovery:${retry}`,

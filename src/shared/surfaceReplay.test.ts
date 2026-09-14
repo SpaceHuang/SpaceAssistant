@@ -37,6 +37,12 @@ describe('surface replay', () => {
     expect(full[0]!.content).toEqual([{ type: 'tool_use', id: 't', name: 'read', input: {} }])
     expect(full[1]!.content).toEqual([{ type: 'tool_result', tool_use_id: 't', content: 'ok' }])
   })
+  it('keeps an empty tool-use assistant as a stable replay anchor', () => {
+    expect(projectReplaySurface([
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'read', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }
+    ])).toEqual([{ role: 'assistant', content: '' }])
+  })
   it('restores retained ordinary messages by their canonical identity', () => {
     const original = [{ id: 'u', role: 'user', content: 'question' }, { id: 'tail', role: 'user', content: 'next' }]
     const projected = projectReplaySurface(original)
