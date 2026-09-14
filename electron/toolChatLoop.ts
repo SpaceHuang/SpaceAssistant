@@ -672,7 +672,8 @@ async function runToolChatSessionInner(
       thinking,
       cacheControl: true
     })
-    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: messagesStripped, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: toolLoopStreamParams.messages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+    const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools, messages: toolLoopStreamParams.messages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
     lastRequestContext = requestContext
@@ -682,9 +683,9 @@ async function runToolChatSessionInner(
       ids: surfaceIds,
       requiredIds: args.currentUserMessageId ? [args.currentUserMessageId] : [],
       currentUserMessageId: args.currentUserMessageId ?? '',
-      fingerprint: requestHeader.surfaceSnapshot.fingerprint,
+      fingerprint: wireHeader.surfaceSnapshot.fingerprint,
       expectedFingerprint: requestHeader.surfaceSnapshot.fingerprint,
-      estimatedTotalInputTokens: requestHeader.surfaceSnapshot.surfaceTokens,
+      estimatedTotalInputTokens: wireHeader.surfaceSnapshot.surfaceTokens,
       totalInputBudget: requestContext.budget.totalInputBudget,
       toolUses: toolPairs.toolUses,
       toolResults: toolPairs.toolResults
