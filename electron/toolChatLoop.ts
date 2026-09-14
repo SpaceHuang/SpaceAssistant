@@ -596,7 +596,11 @@ async function runToolChatSessionInner(
     role: m.role,
     content: m.content as Anthropic.MessageParam['content']
   })) as Anthropic.MessageParam[]
-  if (args.skillFragments?.length) messagesForApi.push({ role: 'user', content: args.skillFragments.join('\n\n') })
+  if (args.skillFragments?.length) {
+    const fragmentMessage: Anthropic.MessageParam = { role: 'user', content: args.skillFragments.join('\n\n') }
+    const lastUserIndex = messagesForApi.map((message) => message.role).lastIndexOf('user')
+    messagesForApi.splice(lastUserIndex >= 0 ? lastUserIndex : messagesForApi.length, 0, fragmentMessage)
+  }
 
   /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
   const historicalAssistantApiMessageCount = initialMessages.filter((m) => m.role === 'assistant').length
