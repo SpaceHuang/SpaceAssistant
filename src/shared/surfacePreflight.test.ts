@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { extractToolPairIds, validateSurfaceForSend } from './surfacePreflight'
 
 describe('surface send preflight', () => {
+  it('rejects a missing current input instead of using the last surface item', () => {
+    expect(validateSurfaceForSend({ ids: ['old', 'assistant'], requiredIds: ['current'], currentUserMessageId: 'current', fingerprint: 'f', expectedFingerprint: 'f', estimatedTotalInputTokens: 1, totalInputBudget: 10, toolUses: [], toolResults: [] })).toMatchObject({ ok: false, reason: 'required_ids_invalid' })
+  })
   it('requires every required id exactly once and validates fingerprint/budget', () => {
     const base = { ids: ['current', 'tool-result'], requiredIds: ['current', 'tool-result'], currentUserMessageId: 'current', fingerprint: 'f', expectedFingerprint: 'f', estimatedTotalInputTokens: 90, totalInputBudget: 100, toolUses: ['tool-1'], toolResults: ['tool-1'] }
     expect(validateSurfaceForSend(base)).toMatchObject({ ok: true, tokenCheckSource: 'default_estimator' })

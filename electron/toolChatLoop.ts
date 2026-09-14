@@ -680,7 +680,7 @@ async function runToolChatSessionInner(
     const preflight = validateSurfaceForSend({
       ids: surfaceIds,
       requiredIds: args.currentUserMessageId ? [args.currentUserMessageId] : [],
-      currentUserMessageId: args.currentUserMessageId ?? surfaceIds[surfaceIds.length - 1] ?? '',
+      currentUserMessageId: args.currentUserMessageId ?? '',
       fingerprint: requestHeader.surfaceSnapshot.fingerprint,
       expectedFingerprint: requestHeader.surfaceSnapshot.fingerprint,
       estimatedTotalInputTokens: requestHeader.surfaceSnapshot.surfaceTokens,
