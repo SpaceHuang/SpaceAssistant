@@ -33,7 +33,7 @@ describe('prompt assembly rendering', () => {
         assembly({
           variables: { name: 'Ada' },
           sections: [
-            { name: 'late', order: 20, text: 'Hello {{name}}' },
+            { name: 'late', order: 20, text: 'Hello {{name}}', template: true },
             { name: 'empty', order: 1, text: '   ' },
             { name: 'early', order: 10, text: 'System' }
           ]
@@ -43,7 +43,7 @@ describe('prompt assembly rendering', () => {
   })
 
   it('rejects unknown variables and conflicting complete sections', () => {
-    expect(() => renderPrompt(assembly({ sections: [{ name: 'x', order: 1, text: '{{missing}}' }] }))).toThrow(
+    expect(() => renderPrompt(assembly({ sections: [{ name: 'x', order: 1, text: '{{missing}}', template: true }] }))).toThrow(
       /unknown variable/i
     )
     expect(() =>
@@ -56,6 +56,9 @@ describe('prompt assembly rendering', () => {
         })
       )
     ).toThrow(/complete/i)
+  })
+  it('preserves ordinary double-brace text unless explicitly marked as a template', () => {
+    expect(renderPrompt(assembly({ sections: [{ name: 'memory', order: 1, text: 'Hello {{name}}' }] }))).toBe('Hello {{name}}')
   })
 
   it('renders context sections and snapshot with the replacement banner', () => {

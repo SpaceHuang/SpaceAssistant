@@ -444,10 +444,15 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             const shadowedRanges = record.shadowedRanges
             const outputHeader = buildRequestHeaderPayload({ requestId: `${boundaryRequestId}:boundary`, system, tools, messages: outputMessages, requiredSurfaceSet, toolExecutionCheckpoint })
             const pairs = extractToolPairIds(outputMessages)
+            const outputIdentities = surfaceItemIdentities(outputMessages)
+            const outputRequiredIds = outputMessages.flatMap((message, index) => {
+              const messageId = (message as { id?: unknown }).id
+              return requiredSurfaceSet.includes(outputIdentities[index]!) || (typeof messageId === 'string' && requiredSurfaceSet.includes(messageId)) ? [outputIdentities[index]!] : []
+            })
             const preflight = validateSurfaceForSend({
-              ids: surfaceItemIdentities(outputMessages),
-              requiredIds: requiredSurfaceSet,
-              currentUserMessageId: authoritative.currentUserMessageId,
+              ids: outputIdentities,
+              requiredIds: outputRequiredIds,
+              currentUserMessageId: outputIdentities[outputMessages.findIndex((message) => (message as { id?: unknown }).id === authoritative.currentUserMessageId)] ?? outputIdentities[outputIdentities.length - 1] ?? '',
               fingerprint: outputHeader.surfaceSnapshot.fingerprint,
               expectedFingerprint: outputHeader.surfaceSnapshot.fingerprint,
               estimatedTotalInputTokens: outputHeader.surfaceSnapshot.surfaceTokens,

@@ -97,7 +97,9 @@ export function surfaceItemIdentities(values: readonly unknown[]): string[] {
 }
 
 export function computeReplaySurfaceFingerprint(system: string, surface: readonly unknown[]): string {
-  return buildRequestHeaderPayload({ requestId: 'replay', system, tools: [], messages: surface.map((message) => {
+  // replay 指纹描述历史消息，不应受每轮动态 system prompt 影响。
+  void system
+  return buildRequestHeaderPayload({ requestId: 'replay', system: '', tools: [], messages: surface.map((message) => {
     const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
     return { role: source.role, content: canonicalSurfaceContent(source.role, source.content) }
   }) }).surfaceSnapshot.fingerprint

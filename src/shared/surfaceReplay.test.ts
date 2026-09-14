@@ -9,6 +9,10 @@ describe('surface replay', () => {
   it('uses the same canonical fingerprint for provider and persisted message shapes', () => {
     expect(computeReplaySurfaceFingerprint('system', [{ role: 'user', content: 'hello' }])).toBe(computeReplaySurfaceFingerprint('system', [{ id: 'u1', role: 'user', content: 'hello', status: 'sent' }]))
   })
+  it('keeps replay fingerprints stable across dynamic system prompts', () => {
+    const surface = [{ role: 'user', content: 'hello' }]
+    expect(computeReplaySurfaceFingerprint('base', surface)).toBe(computeReplaySurfaceFingerprint('base\n\nupdated skills', surface))
+  })
   it('uses the same identity and fingerprint for assistant blocks and persisted text', () => {
     const provider = { role: 'assistant', content: [{ type: 'text', text: 'answer' }] }
     const persisted = { id: 'db-assistant', role: 'assistant', content: 'answer', status: 'completed' }

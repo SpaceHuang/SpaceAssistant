@@ -5,12 +5,14 @@ export type PromptSection = {
   order: number
   text: PromptText
   complete?: boolean
+  template?: boolean
 }
 
 export type ContextSection = {
   name: string
   order: number
   text: PromptText
+  template?: boolean
 }
 
 export type SkillFragment = {
@@ -90,7 +92,7 @@ export function renderPrompt(assembly: PromptAssembly): string {
       const order = a.order - b.order
       return order || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
     })
-    .map((section) => renderVariables(resolveText(section.text, assembly), assembly.variables).trim())
+    .map((section) => (section.template ? renderVariables(resolveText(section.text, assembly), assembly.variables) : resolveText(section.text, assembly)).trim())
     .filter(Boolean)
     .join('\n\n')
 }
@@ -99,7 +101,7 @@ export function renderContextSections(assembly: PromptAssembly): string {
   return assembly.contexts
     .slice()
     .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
-    .map((section) => renderVariables(resolveText(section.text, assembly), assembly.variables).trim())
+    .map((section) => (section.template ? renderVariables(resolveText(section.text, assembly), assembly.variables) : resolveText(section.text, assembly)).trim())
     .filter(Boolean)
     .join('\n\n')
 }
