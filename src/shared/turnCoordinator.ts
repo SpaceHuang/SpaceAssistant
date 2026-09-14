@@ -59,6 +59,9 @@ export class TurnCoordinator {
   private readonly terminals = new Map<string, TurnTerminal>()
   private readonly checkpointTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly checkpointRetries = new Map<string, number>()
+  private readonly committedVersions = new Map<string, number>()
+  private readonly checkpointInFlight = new Set<string>()
+  private readonly checkpointFailed = new Set<string>()
   private readonly checkpointQueue = new CheckpointQueue()
   private readonly finishing = new Map<string, { outcome: 'cancelled' | 'timed-out'; timer: ReturnType<typeof setTimeout> }>()
   constructor(private readonly storage: TurnStorage, private readonly deps: CoordinatorDeps, private readonly checkpoint: Checkpoint = (turnId, version, message) => this.storage.checkpoint(turnId, version, message), private readonly cancelHook: CancelHook = () => {}) {}
@@ -281,6 +284,7 @@ export class TurnCoordinator {
   }
 
   private persistCheckpoint(turnId: string, turn: TurnStarted): void {
+    this.checkpointInFlight.add(turnId)
     const metricStart = typeof performance !== 'undefined' ? performance.now() : 0
     let result: boolean | void | Promise<boolean | void>
     try {
@@ -291,27 +295,30 @@ export class TurnCoordinator {
     if (result && typeof result === 'object' && 'then' in result) {
       void result.then((accepted) => {
         this.deps.onMetric?.({ kind: 'checkpoint', turnId, version: turn.version, durationMs: Math.max(0, (typeof performance !== 'undefined' ? performance.now() : 0) - metricStart), accepted: accepted !== false })
-        this.finishCheckpoint(turnId, accepted)
+        this.finishCheckpoint(turnId, accepted, turn.version)
       }, () => {
         this.deps.onMetric?.({ kind: 'checkpoint', turnId, version: turn.version, durationMs: Math.max(0, (typeof performance !== 'undefined' ? performance.now() : 0) - metricStart), accepted: false })
-        this.finishCheckpoint(turnId, false)
+        this.finishCheckpoint(turnId, false, turn.version)
       })
       return
     }
     this.deps.onMetric?.({ kind: 'checkpoint', turnId, version: turn.version, durationMs: Math.max(0, (typeof performance !== 'undefined' ? performance.now() : 0) - metricStart), accepted: result !== false })
-    this.finishCheckpoint(turnId, result)
+    this.finishCheckpoint(turnId, result, turn.version)
   }
 
-  private finishCheckpoint(turnId: string, accepted: boolean | void): void {
+  private finishCheckpoint(turnId: string, accepted: boolean | void, committedVersion: number): void {
+    this.checkpointInFlight.delete(turnId)
     if (accepted !== false) {
+      this.committedVersions.set(turnId, Math.max(this.committedVersions.get(turnId) ?? -1, committedVersion))
       this.checkpointRetries.delete(turnId)
+      this.checkpointFailed.delete(turnId)
       return
     }
     const current = this.turns.get(turnId)
     if (current && (current.assistantMessage.status === 'completed' || current.assistantMessage.status === 'failed')) {
-      // 旧的异步 checkpoint 在 terminal 已经提交/排队后才失败，不得重新
-      // 安排 retry timer 覆盖终态；terminal 路径拥有最后一次写入责任。
-      this.checkpointRetries.delete(turnId)
+      const retries = this.checkpointRetries.get(turnId) ?? 0
+      if (retries >= 3) this.checkpointFailed.add(turnId)
+      else { this.checkpointRetries.set(turnId, retries + 1); this.checkpointTimers.set(turnId, setTimeout(() => { this.checkpointTimers.delete(turnId); this.persistCheckpoint(turnId, current) }, 100)) }
       return
     }
     const retries = this.checkpointRetries.get(turnId) ?? 0
@@ -374,6 +381,13 @@ export class TurnCoordinator {
       if (this.recovered.has(turn.assistantMessageId)) continue
       if (this.storage.recoverTurn(turn.turnId, turn.assistantMessageId)) {
         this.recovered.add(turn.assistantMessageId)
+        const inMemory = this.turns.get(turn.turnId)
+        if (inMemory) {
+          const failedMessage = { ...inMemory.assistantMessage, status: 'failed' as const }
+          const recoveredTurn = { ...inMemory, assistantMessage: failedMessage, persistedOutcome: 'recovered' as const }
+          this.turns.set(turn.turnId, recoveredTurn)
+          this.terminals.set(turn.turnId, { turnId: turn.turnId, requestId: inMemory.requestId, sessionId: inMemory.sessionId, assistantMessageId: failedMessage.id, version: inMemory.version, outcome: 'recovered', message: failedMessage })
+        }
         recovered++
       }
     }
@@ -419,6 +433,15 @@ export class TurnCoordinator {
   }
 
   getTerminal(turnId: string): TurnTerminal | undefined { return this.terminals.get(turnId) }
+  getCommittedVersion(turnId: string): number | undefined { return this.committedVersions.get(turnId) }
+  getCheckpointStatus(turnId: string, targetVersion?: number): 'pending' | 'committed' | 'failed' {
+    if (this.checkpointFailed.has(turnId)) return 'failed'
+    const committedVersion = this.committedVersions.get(turnId)
+    if (committedVersion === undefined) return 'pending'
+    return targetVersion === undefined || committedVersion >= targetVersion ? 'committed' : 'pending'
+  }
+  retryCheckpoint(turnId: string): void { const turn = this.turns.get(turnId); if (turn && !this.checkpointInFlight.has(turnId)) this.persistCheckpoint(turnId, turn) }
+  listTerminals(sessionId?: string): TurnTerminal[] { return [...this.terminals.values()].filter((terminal) => !sessionId || terminal.sessionId === sessionId) }
   getTurn(turnId: string): TurnStarted | undefined { return this.turns.get(turnId) }
   listActive(sessionId?: string): TurnStarted[] {
     return [...this.turns.values()].filter((turn) => (!sessionId || turn.sessionId === sessionId) && turn.assistantMessage.status !== 'completed' && turn.assistantMessage.status !== 'failed')

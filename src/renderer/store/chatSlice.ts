@@ -203,7 +203,8 @@ export const chatSlice = createSlice({
 
       const terminal = status === 'completed' || status === 'error' || status === 'idle'
       if (terminal && sessionId) {
-        delete state.runningSessions[sessionId]
+        const running = state.runningSessions[sessionId]
+        if (!turnId || !running || (running.turnId === turnId && (!requestId || running.requestId === requestId))) delete state.runningSessions[sessionId]
       } else if (terminal && !sessionId && requestId === null) {
         state.runningSessions = {}
       }

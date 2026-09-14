@@ -60,9 +60,13 @@ export class TurnRuntime {
     const before = this.coordinator.getTurn(turnId)?.version
     const turn = this.coordinator.consume(turnId, event)
     if (before === turn.version) return turn
-    this.onEvent?.(turn, event)
-    for (const listener of this.listeners) listener(turn, event)
+    this.publishSafely(turn, event)
     return turn
+  }
+
+  private publishSafely(turn: TurnStarted, event: AssistantFactEvent): void {
+    try { this.onEvent?.(turn, event) } catch (error) { console.warn('[turn-display] projection failed', { turnId: turn.turnId, version: turn.version, error }) }
+    for (const listener of this.listeners) { try { listener(turn, event) } catch (error) { console.warn('[turn-runtime] listener failed', { turnId: turn.turnId, version: turn.version, error }) } }
   }
 
   async execute(turnId: string, token: string): Promise<ModelResult | void> {
@@ -107,8 +111,7 @@ export class TurnRuntime {
     const turn = this.coordinator.getTurn(turnId)
     if (!turn || before === turn.version) return
     const event: AssistantFactEvent = { type }
-    this.onEvent?.(turn, event)
-    for (const listener of this.listeners) listener(turn, event)
+    this.publishSafely(turn, event)
   }
 
   private publishTerminalResultProjection(turnId: string, before: number | undefined, result: ModelResult | void): void {
@@ -117,5 +120,9 @@ export class TurnRuntime {
   }
   recover(): number { return this.coordinator.recover() }
   terminal(turnId: string): TurnTerminal | undefined { return this.coordinator.getTerminal(turnId) }
+  listTerminals(sessionId?: string): TurnTerminal[] { return this.coordinator.listTerminals(sessionId) }
+  retryCheckpoint(turnId: string): void { this.coordinator.retryCheckpoint(turnId) }
+  checkpointStatus(turnId: string, targetVersion?: number): 'pending' | 'committed' | 'failed' { return this.coordinator.getCheckpointStatus(turnId, targetVersion) }
+  getTurn(turnId: string): TurnStarted | undefined { return this.coordinator.getTurn(turnId) }
   listActive(sessionId?: string): ReturnType<TurnRuntime['coordinator']['listActive']> { return this.coordinator.listActive(sessionId) }
 }

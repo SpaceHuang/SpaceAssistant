@@ -1,5 +1,7 @@
 import type { AutoApproveFallback, BrowserActDangerInfo, Message, ShellSecurityHints, ToolCallRecord, ToolRiskLevel } from '../../shared/domainTypes'
 import type { ToolConfirmOptions } from '../../shared/toolConfirm'
+import type { MemoryTier } from '../../shared/confirmation/types'
+import type { ConfirmationSnapshot } from '../../shared/turnDisplayProtocol'
 
 export type PendingConfirmItem = {
   sessionId: string
@@ -22,6 +24,11 @@ export type PendingConfirmItem = {
     maskedArgs: Record<string, unknown>
   }
   createdAt: number
+  confirmationReady?: boolean
+  confirmationSnapshot?: ConfirmationSnapshot
+  memoryTiers?: MemoryTier[]
+  turnId?: string
+  turnVersion?: number
 }
 
 type Listener = () => void
@@ -29,6 +36,7 @@ type Listener = () => void
 class PendingConfirmStore {
   private items: PendingConfirmItem[] = []
   private listeners = new Set<Listener>()
+  private readonly latestProjections = new Map<string, Parameters<PendingConfirmStore['syncFromProjection']>[0]>()
   private initialized = false
 
   init(): void {
@@ -40,6 +48,7 @@ class PendingConfirmStore {
     this.initialized = false
     this.items = []
     this.listeners.clear()
+    this.latestProjections.clear()
   }
 
   getItems(): PendingConfirmItem[] {
@@ -47,14 +56,17 @@ class PendingConfirmStore {
   }
 
   /** 从 Core 的完整 assistant snapshot 重建确认展示，不依赖旧 tool IPC。 */
-  syncFromProjection(args: { sessionId: string; requestId: string; message: Message }): void {
+  syncFromProjection(args: { sessionId: string; requestId: string; message: Message; turnId?: string; turnVersion?: number; retryAttempt?: number }): void {
     const confirming = (args.message.toolCalls ?? []).filter((tool) => tool.status === 'confirming')
+    if (args.turnId && confirming.length === 0) this.latestProjections.delete(args.turnId)
+    else if (args.turnId) this.latestProjections.set(args.turnId, args)
     const next = confirming.map((tool) => ({
       sessionId: args.sessionId,
       requestId: args.requestId,
       toolUseId: tool.id,
       toolName: tool.toolName,
       input: tool.input,
+      ...(tool.memoryTiers ? { memoryTiers: tool.memoryTiers } : {}),
       riskLevel: tool.riskLevel,
       ...(tool.confirmDiff ? { diff: tool.confirmDiff } : {}),
       ...(tool.shellSecurityHints ? { shellSecurityHints: tool.shellSecurityHints } : {}),
@@ -64,10 +76,57 @@ class PendingConfirmStore {
       ...(tool.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
       ...(tool.mcp ? { mcp: { ...tool.mcp, description: tool.mcp.description ?? '', maskedArgs: {} } } : {}),
       createdAt: tool.startedAt ?? Date.now()
+      ,...(args.turnId ? { turnId: args.turnId } : {})
+      ,...(args.turnVersion !== undefined ? { turnVersion: args.turnVersion } : {})
+      ,...(args.turnId && args.turnVersion !== undefined ? { confirmationReady: false } : {})
     }))
     const keep = this.items.filter((item) => item.requestId !== args.requestId)
-    this.items = [...keep, ...next]
+    const updated = [...keep, ...next]
+    if (JSON.stringify(this.items) === JSON.stringify(updated) && !args.retryAttempt) return
+    this.items = updated
     this.notify()
+    if (args.turnId && args.turnVersion !== undefined && typeof window.api.chatGetPendingConfirmation === 'function') {
+      for (const item of next) {
+        void window.api.chatGetPendingConfirmation({ sessionId: args.sessionId, turnId: args.turnId, requestId: args.requestId, turnVersion: args.turnVersion, toolCallId: item.toolUseId }).then((result) => {
+          if ('status' in result) return
+          const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.turnId === args.turnId && candidate.requestId === args.requestId && candidate.turnVersion === args.turnVersion && candidate.toolUseId === item.toolUseId)
+          if (!current) return
+          current.confirmationReady = true
+          current.confirmationSnapshot = result
+          if (result.confirmation.input && typeof result.confirmation.input === 'object') current.input = result.confirmation.input
+          if (result.confirmation.diff) {
+            try {
+              const diff = JSON.parse(result.confirmation.diff) as ToolCallRecord['confirmDiff']
+              if (diff && typeof diff === 'object') current.diff = diff
+            } catch { /* malformed detail remains non-authoritative and cannot enable approval */ }
+          }
+          current.riskLevel = result.confirmation.riskLevel
+          if (!current.memoryTiers?.length && result.confirmation.memoryTiers.length) current.memoryTiers = result.confirmation.memoryTiers.map((tier) => ({ label: tier.label, key: { kind: 'path', path: '', level: 'zone' } }))
+          if (result.confirmation.shellSecurityHints) current.shellSecurityHints = result.confirmation.shellSecurityHints
+          if (result.confirmation.autoApproveFallback) current.autoApproveFallback = result.confirmation.autoApproveFallback
+          if (result.confirmation.browser.currentPageUrl) current.currentPageUrl = result.confirmation.browser.currentPageUrl
+          if (result.confirmation.browser.dangerInfo) current.dangerInfo = result.confirmation.browser.dangerInfo
+          if (result.confirmation.browser.sessionTrustedHint) current.sessionTrustedHint = true
+          if (result.confirmation.mcp) current.mcp = { ...result.confirmation.mcp, description: result.confirmation.mcp.description ?? '', maskedArgs: {} }
+          this.notify()
+        }).catch(() => {
+          if ((args.retryAttempt ?? 0) >= 3) return
+          setTimeout(() => {
+            const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.turnId === args.turnId && candidate.requestId === args.requestId && candidate.turnVersion === args.turnVersion && candidate.toolUseId === item.toolUseId)
+            if (current?.confirmationReady !== false) return
+            this.syncFromProjection({ ...args, retryAttempt: (args.retryAttempt ?? 0) + 1 })
+          }, 500 * 2 ** (args.retryAttempt ?? 0))
+        })
+      }
+    }
+  }
+
+  retryUnready(): void {
+    for (const item of this.items) {
+      if (item.confirmationReady !== false || !item.turnId) continue
+      const args = this.latestProjections.get(item.turnId)
+      if (args) this.syncFromProjection({ ...args, retryAttempt: 1 })
+    }
   }
 
   countForSession(sessionId: string): number {
@@ -84,6 +143,8 @@ class PendingConfirmStore {
   }
 
   respond(requestId: string, toolUseId: string, approved: boolean, options?: ToolConfirmOptions): void {
+    const current = this.items.find((item) => item.requestId === requestId && item.toolUseId === toolUseId)
+    if (approved && current?.confirmationReady !== undefined && (!current.confirmationReady || !current.confirmationSnapshot || current.confirmationSnapshot.sessionId !== current.sessionId || current.confirmationSnapshot.requestId !== current.requestId || current.confirmationSnapshot.toolCallId !== current.toolUseId || (current.turnId !== undefined && current.confirmationSnapshot.turnId !== current.turnId) || (current.turnVersion !== undefined && current.confirmationSnapshot.turnVersion !== current.turnVersion))) return
     void window.api.toolConfirmResponse({
       requestId,
       toolUseId,
@@ -94,6 +155,7 @@ class PendingConfirmStore {
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
       ...(options?.trustMcpServerId ? { trustMcpServerId: options.trustMcpServerId } : {}),
       ...(options?.trustMcpToolName ? { trustMcpToolName: options.trustMcpToolName } : {})
+      ,...(options?.memoryTierOptionId !== undefined ? { memoryTierOptionId: options.memoryTierOptionId } : {})
     })
     this.remove(requestId, toolUseId)
   }
@@ -134,6 +196,7 @@ class PendingConfirmStore {
   /** 测试用 */
   reset(): void {
     this.items = []
+    this.latestProjections.clear()
     this.notify()
   }
 

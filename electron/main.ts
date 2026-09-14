@@ -26,6 +26,7 @@ import { getConfigValue, getDefaultDbPath, getMessage, listPersistedTurns, openD
 import { randomUUID } from 'node:crypto'
 import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
 import { TurnRuntime } from './turnRuntime'
+import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
@@ -358,8 +359,16 @@ app.whenReady().then(async () => {
     deps: { now: Date.now, id: randomUUID },
     onCancel: (turn) => signalChatCancel(turn.requestId),
     onEvent: (turn, event) => {
-      const { executionConfig: _executionConfig, ...publicTurn } = turn
-      getMainWindow()?.webContents.send('chat:turn-projection', { turn: publicTurn, event })
+      const display = turnToDisplay(turn)
+      if (event.type === 'source-cancelled') display.outcome = 'cancelled'
+      else if (event.type === 'source-timeout') display.outcome = 'timed-out'
+      else if (event.type === 'source-failed') display.outcome = 'failed'
+      else if (event.type === 'source-completed') display.outcome = 'completed'
+      getMainWindow()?.webContents.send('chat:turn-display', { display })
+      if (event.type === 'usage-updated') {
+        const usage = (event as { usage?: unknown }).usage
+        if (usage && typeof usage === 'object') getMainWindow()?.webContents.send('chat:turn-usage', { sessionId: turn.sessionId, usage, projected: Boolean((event as { projected?: boolean }).projected) })
+      }
     }
   })
   // Runtime 已建立后再处理无 turn 的孤儿消息，随后由 appIpc 的同一 recovery 装配继续恢复持久化 turn。

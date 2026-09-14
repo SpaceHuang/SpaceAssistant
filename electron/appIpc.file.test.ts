@@ -350,6 +350,66 @@ describe('file IPC handlers', () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(0)
   })
 
+  it('renderer 无 known 重载时仍返回 checkpoint 尚未提交的 terminal', async () => {
+    const terminal = {
+      turnId: 'terminal-pending-1', requestId: 'request-1', sessionId: 'session-1',
+      assistantMessageId: 'assistant-1', version: 4, outcome: 'completed' as const,
+      message: { id: 'assistant-1', sessionId: 'session-1', role: 'assistant' as const, content: 'done', timestamp: 1, status: 'completed' as const, schemaVersion: 1 }
+    }
+    ctx.turnRuntime = {
+      coordinator: { recover: vi.fn() },
+      listActive: vi.fn().mockReturnValue([]),
+      listTerminals: vi.fn().mockReturnValue([terminal]),
+      checkpointStatus: vi.fn().mockReturnValue('pending')
+    } as unknown as AppIpcContext['turnRuntime']
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    const changed = await ipc.getHandler('chat:get-turn-displays')!({}, { known: [] }) as { changed: Array<{ turnId: string; lifecycle: string }> }
+    expect(changed.changed).toHaveLength(1)
+    expect(changed.changed[0]).toMatchObject({ turnId: terminal.turnId, lifecycle: 'completed' })
+  })
+
+  it('已提交的历史 terminal 不会在 renderer 无 known 重载时重新注入', async () => {
+    const terminal = {
+      turnId: 'terminal-committed-1', requestId: 'request-1', sessionId: 'session-1',
+      assistantMessageId: 'assistant-1', version: 4, outcome: 'completed' as const,
+      message: { id: 'assistant-1', sessionId: 'session-1', role: 'assistant' as const, content: 'done', timestamp: 1, status: 'completed' as const, schemaVersion: 1 }
+    }
+    ctx.turnRuntime = {
+      coordinator: { recover: vi.fn() },
+      listActive: vi.fn().mockReturnValue([]),
+      listTerminals: vi.fn().mockReturnValue([terminal]),
+      checkpointStatus: vi.fn().mockReturnValue('committed')
+    } as unknown as AppIpcContext['turnRuntime']
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    const changed = await ipc.getHandler('chat:get-turn-displays')!({}, { known: [] }) as { changed: unknown[] }
+    expect(changed.changed).toEqual([])
+  })
+
+  it('低版本 checkpoint 已提交时仍恢复更高版本的 terminal', async () => {
+    const terminal = {
+      turnId: 'terminal-versioned-1', requestId: 'request-1', sessionId: 'session-1',
+      assistantMessageId: 'assistant-1', version: 4, outcome: 'completed' as const,
+      message: { id: 'assistant-1', sessionId: 'session-1', role: 'assistant' as const, content: 'done', timestamp: 1, status: 'completed' as const, schemaVersion: 1 }
+    }
+    const checkpointStatus = vi.fn((_turnId: string, targetVersion?: number) => targetVersion !== undefined && targetVersion > 3 ? 'pending' as const : 'committed' as const)
+    ctx.turnRuntime = {
+      coordinator: { recover: vi.fn() },
+      listActive: vi.fn().mockReturnValue([]),
+      listTerminals: vi.fn().mockReturnValue([terminal]),
+      checkpointStatus
+    } as unknown as AppIpcContext['turnRuntime']
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    const changed = await ipc.getHandler('chat:get-turn-displays')!({}, { known: [] }) as { changed: Array<{ turnId: string }> }
+    expect(changed.changed).toHaveLength(1)
+    expect(checkpointStatus).toHaveBeenCalledWith(terminal.turnId, terminal.version)
+  })
+
   describe('file:create-file', () => {
     it('creates an empty file', async () => {
       const handler = ipc.getHandler('file:create-file')!

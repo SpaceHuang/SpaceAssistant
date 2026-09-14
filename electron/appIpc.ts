@@ -5,6 +5,7 @@ import type { IpcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { app, BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
+import { toConfirmationSnapshot, turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import {
   appendMessage,
   appendSearchHistory,
@@ -396,6 +397,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         trustMcpServerId?: string
         trustMcpToolName?: string
         memoryTier?: import('../src/shared/confirmation/types').CacheKey
+        memoryTierOptionId?: number
       }
     ): Promise<void> => {
       if (payload.approved && payload.trustCommand?.trim()) {
@@ -464,6 +466,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           payload.sessionId,
           'session'
         )
+      }
+      if (payload.approved && payload.memoryTierOptionId !== undefined) {
+        const tier = getPendingMemoryTiers(payload.requestId, payload.toolUseId)?.[payload.memoryTierOptionId - 1]
+        if (tier) payload.memoryTier = tier.key
       }
       if (payload.approved && payload.memoryTier) {
         // 记忆档位：用户选中的“记住”写入 decision_cache（执行链路侧写缓存），落 cache.write 审计。
@@ -787,6 +793,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     ) =>
       getChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
   )
+  ipcMain.handle('chat:get-display-message-page', (_e, payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
+    const page = getChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
+    return { ...page, entries: page.entries.filter(({ message }) => message.role === 'assistant').map(({ message, sequence }) => ({ display: turnToDisplay({ turnId: message.id, requestId: '', version: 0, assistantMessage: message }), sequence })) }
+  })
 
   ipcMain.handle(
     'chat:get-context-history-summary-baseline',
@@ -973,8 +983,43 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     return cancelled
   })
-  ipcMain.handle('chat:get-turn-terminal', (_e, turnId: string) => turnCoordinator.getTerminal(turnId))
+  ipcMain.handle('chat:get-turn-terminal', (_e, turnId: string) => {
+    const terminal = turnCoordinator.getTerminal(turnId)
+    return terminal ? { ...terminal, committedVersion: turnCoordinator.getCommittedVersion(turnId), commitStatus: turnCoordinator.getCheckpointStatus(turnId) } : undefined
+  })
+  ipcMain.handle('chat:retry-turn-checkpoint', (_e, turnId: string) => { turnRuntime.retryCheckpoint(turnId); return true })
   ipcMain.handle('chat:list-active-turns', (_e, payload?: { sessionId?: string }) => turnRuntime.listActive(payload?.sessionId).map(({ executionConfig: _executionConfig, ...turn }) => turn))
+  ipcMain.handle('chat:get-turn-displays', (_e, payload: { known: Array<{ turnId: string; version: number }>; sessionId?: string }) => {
+    const known = new Map((payload?.known ?? []).map((item) => [item.turnId, item.version]))
+    const active = turnRuntime.listActive(payload?.sessionId)
+    const changed = active
+      .filter((turn) => turn.version > (known.get(turn.turnId) ?? -1))
+      .map((turn) => turnToDisplay(turn))
+    // terminal 只用于接管 renderer 仍认为活动中的 turn，或 renderer 重载时仍在 checkpoint 窗口内的 turn。
+    for (const terminal of turnRuntime.listTerminals(payload?.sessionId)) {
+      const knownVersion = known.get(terminal.turnId)
+      const checkpointStatus = turnRuntime.checkpointStatus(terminal.turnId, terminal.version)
+      const shouldRecoverCheckpoint = checkpointStatus !== 'committed'
+      if ((knownVersion !== undefined && terminal.version > knownVersion) || (knownVersion === undefined && shouldRecoverCheckpoint)) {
+        changed.push(turnToDisplay({ turnId: terminal.turnId, requestId: terminal.requestId, version: terminal.version, outcome: terminal.outcome === 'recovered' ? 'completed' : terminal.outcome, assistantMessage: terminal.message }))
+      }
+    }
+    return { changed }
+  })
+  ipcMain.handle('chat:get-tool-call-details', (_e, payload: { sessionId: string; turnId: string; messageId: string; toolCallId: string }) => {
+    const turn = turnRuntime.getTurn(payload.turnId)
+    const terminal = turnRuntime.terminal(payload.turnId)
+    const message = turn?.assistantMessage ?? terminal?.message
+    if (!message || message.sessionId !== payload.sessionId || message.id !== payload.messageId) return undefined
+    return message.toolCalls?.find((tool) => tool.id === payload.toolCallId)
+  })
+  ipcMain.handle('chat:get-pending-confirmation', (_e, payload: { sessionId: string; turnId: string; requestId: string; turnVersion: number; toolCallId: string }) => {
+    const turn = turnRuntime.getTurn(payload.turnId)
+    if (!turn || turn.sessionId !== payload.sessionId || turn.requestId !== payload.requestId || turn.version !== payload.turnVersion) return { status: 'stale' as const }
+    const tool = turn.assistantMessage.toolCalls?.find((candidate) => candidate.id === payload.toolCallId && candidate.status === 'confirming')
+    if (!tool) return { status: 'not-awaiting' as const }
+    return toConfirmationSnapshot({ sessionId: payload.sessionId, turnId: payload.turnId, requestId: payload.requestId, turnVersion: payload.turnVersion, tool })
+  })
 
   ipcMain.handle(
     'message:patch-non-turn',

@@ -21,9 +21,9 @@ export function LarkCliConfirmCard({ record, onConfirm }: Props) {
   const memoryTierOptions = (record.memoryTiers ?? []).map((mt, i) => ({ label: mt.label, tier: i + 1 }))
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
     const sel = memoryTier
-    const selected = approved && sel != null ? record.memoryTiers?.[sel - 1]?.key : undefined
-    if (selected) {
-      onConfirm(approved, { ...options, memoryTier: selected })
+    const selected = approved && sel != null ? { memoryTierOptionId: sel } : {}
+    if (Object.keys(selected).length > 0) {
+      onConfirm(approved, { ...options, ...selected })
       return
     }
     if (options && Object.keys(options).length > 0) {

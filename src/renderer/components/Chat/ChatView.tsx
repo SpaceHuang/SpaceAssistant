@@ -1118,6 +1118,7 @@ export function ChatView() {
     (_index: number, m: Message) => (
       <ChatMessageList
         messages={[m]}
+        turnId={sessionId && streamingAssistant?.id === m.id ? runningSessions[sessionId]?.turnId : undefined}
         enterMessageId={enterMessageId}
         actions={messageActions}
         resolveToolsInteractive={resolveToolsInteractive}
@@ -1141,6 +1142,8 @@ export function ChatView() {
       canRetryMessage,
       canCancelQueuedMessage,
       confirmFocusToolUseId,
+      sessionId,
+      runningSessions,
       pendingConfirmItems,
       cfg?.workDir,
       cfg?.shell,
