@@ -1,0 +1,4 @@
+# 生成产物固定用 LF：生成器（scripts/generate-i18n-types.ts）写的是 LF，
+# 而 core.autocrlf=true 的机器上 git 检出为 CRLF，导致每次 build/pack 触发
+# prebuild:renderer 重新生成后，git status 显示「已修改」但 diff 为空（内容其实一致）。
+src/renderer/i18n/types.ts text eol=lf
