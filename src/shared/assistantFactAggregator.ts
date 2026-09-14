@@ -22,7 +22,7 @@ export type TurnIntent =
 
 export type TurnTerminal = {
   turnId: string; requestId: string; sessionId: string; assistantMessageId: string; version: number
-  outcome: TurnOutcome; message: Message; usage?: unknown; error?: { code: string; message: string }
+  outcome: TurnOutcome; message: Message; commitStatus?: 'pending' | 'committed' | 'failed'; usage?: unknown; error?: { code: string; message: string }
 }
 
 type AssistantFactEventPayload =
@@ -47,6 +47,7 @@ type AssistantFactEventPayload =
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
   | { type: 'usage-updated'; usage: unknown; projected?: boolean }
+  | { type: 'context-projection-updated' }
   | { type: 'skill-hint'; text: string }
   | { type: 'source-completed' }
   | { type: 'source-failed' }

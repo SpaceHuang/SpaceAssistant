@@ -14,6 +14,8 @@ import { ensureWorkDirForSession } from './services/workDirSessionSync'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { initTurnProjectionBridge } from './services/turnProjectionService'
+import { initTurnDisplayBridge } from './services/turnDisplayStore'
+import { turnDisplayReconciliation } from './services/turnDisplayReconciliation'
 import { initRemoteSessionSwitchBridge } from './services/remoteSessionSwitchService'
 import { initConfirmStores } from './services/confirmStoresInit'
 import { initToolExposure } from './services/toolExposureService'
@@ -168,12 +170,21 @@ function AppShellInner() {
       dispatch(upsertSession(session))
     })
     const offTurnProjection = initTurnProjectionBridge()
+    const offTurnDisplay = initTurnDisplayBridge()
+    void turnDisplayReconciliation.reconcile().catch(() => {})
+    const onFocus = () => { void turnDisplayReconciliation.reconcile().catch(() => {}) }
+    window.addEventListener('focus', onFocus)
+    const recoveryTimer = window.setInterval(() => { void turnDisplayReconciliation.reconcile().catch(() => {}) }, 5000)
     const offRemoteSessionSwitch = initRemoteSessionSwitchBridge()
     return () => {
       off1()
       off2()
       offTitle()
       offTurnProjection()
+      offTurnDisplay()
+      turnDisplayReconciliation.clear()
+      window.removeEventListener('focus', onFocus)
+      window.clearInterval(recoveryTimer)
       offRemoteSessionSwitch()
       offToolExposure()
     }

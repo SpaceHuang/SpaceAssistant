@@ -10,10 +10,13 @@ describe('pendingConfirmStore', () => {
     toolName: string
     input: unknown
     riskLevel: 'low' | 'medium' | 'high'
+    turnId?: string
+    turnVersion?: number
   }): void => {
     pendingConfirmStore.syncFromProjection({
       sessionId: data.sessionId ?? 'seed-session',
       requestId: data.requestId,
+      ...(data.turnId ? { turnId: data.turnId, turnVersion: data.turnVersion ?? 1 } : {}),
       message: {
         id: `assistant-${data.requestId}`,
         sessionId: data.sessionId ?? 'seed-session',
@@ -37,6 +40,17 @@ describe('pendingConfirmStore', () => {
       }
     })
     pendingConfirmStore.init()
+  })
+
+  it('独立确认快照未 ready 前拒绝批准，ready 后允许批准', async () => {
+    const response = vi.fn().mockResolvedValue({ sessionId: 's1', turnId: 't1', requestId: 'r1', turnVersion: 2, toolCallId: 'tool-1', confirmation: { complete: true } })
+    vi.stubGlobal('window', { api: { chatGetPendingConfirmation: response, toolConfirmResponse: vi.fn() } })
+    seedConfirm({ requestId: 'r1', sessionId: 's1', toolUseId: 'tool-1', toolName: 'write_file', input: {}, riskLevel: 'medium', turnId: 't1', turnVersion: 2 })
+    pendingConfirmStore.respond('r1', 'tool-1', true)
+    expect(window.api.toolConfirmResponse).not.toHaveBeenCalled()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    pendingConfirmStore.respond('r1', 'tool-1', true)
+    expect(window.api.toolConfirmResponse).toHaveBeenCalled()
   })
 
   it('queues confirm when session resolved from request index', () => {

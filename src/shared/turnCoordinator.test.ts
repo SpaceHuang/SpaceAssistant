@@ -604,6 +604,17 @@ describe('TurnCoordinator', () => {
     expect(db.update).toHaveBeenCalledWith('a1', expect.objectContaining({ status: 'failed' }))
   })
 
+  it('recover 同步收敛 coordinator 内存 turn，避免 SQLite failed 后仍被列为 active', () => {
+    const db = storage()
+    db.listUnfinishedTurns = vi.fn().mockReturnValue([{ turnId: 'turn-recover', assistantMessageId: 'a1' }])
+    db.recoverTurn = vi.fn().mockReturnValue(true)
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
+    coordinator.restoreTurn({ turnId: 'turn-recover', requestId: 'request-recover', sessionId: 's1', assistantMessageId: 'a1', state: 'executing', version: 4, startToken: 'token' }, assistant)
+    expect(coordinator.recover()).toBe(1)
+    expect(coordinator.listActive('s1')).toEqual([])
+    expect(coordinator.getTerminal('turn-recover')).toMatchObject({ outcome: 'recovered', version: 4, message: { status: 'failed' } })
+  })
+
   it('restoreTurn 保留持久 turn 的 version 和 startToken', () => {
     const db = storage()
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `new-${++n}` })() })
@@ -612,5 +623,18 @@ describe('TurnCoordinator', () => {
     expect(restored.version).toBe(8)
     expect(restored.assistantMessage).toBe(assistant)
     expect(coordinator.getTerminal(restored.turnId)).toBeUndefined()
+  })
+
+  it('checkpoint 状态按目标版本判断，较早提交不能覆盖较高版本 terminal', () => {
+    vi.useFakeTimers()
+    const db = storage()
+    const checkpoint = vi.fn().mockReturnValue(true)
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' }, checkpoint)
+    const started = coordinator.prepare({ mode: 'create-user', requestId: 'checkpoint-version', sessionId: 's1', input: { text: 'version' }, config: {} })
+    coordinator.consume(started.turnId, { type: 'content-delta', text: 'v3' })
+    vi.advanceTimersByTime(2_000)
+    expect(coordinator.getCheckpointStatus(started.turnId, 1)).toBe('committed')
+    expect(coordinator.getCheckpointStatus(started.turnId, 2)).toBe('pending')
+    vi.useRealTimers()
   })
 })

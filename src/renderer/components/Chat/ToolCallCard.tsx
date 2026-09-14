@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { FileConfirmMode, ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
@@ -12,6 +12,7 @@ import {
 import { resolveEffectiveShellOutputMode } from '../../../shared/shellOutputMode'
 import { isInteractiveShellTuiCommand } from '../../../shared/shellInteractiveTui'
 import { patchShellTerminalScrollback } from '../../services/shellScrollbackPatch'
+import { toolCallDetailsLoader } from '../../services/toolCallDetailsLoader'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import {
   formatToolLabel,
@@ -40,6 +41,7 @@ import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildFragmentId } from '../../../shared/chatSearchFragments'
 import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
+import type { ToolCallDisplaySummary } from '../../../shared/turnDisplayProtocol'
 
 type Props = {
   record: ToolCallRecord
@@ -47,6 +49,9 @@ type Props = {
   focus?: boolean
   workDir?: string
   messageId?: string
+  turnId?: string
+  displaySummary?: ToolCallDisplaySummary
+  confirmationReady?: boolean
   sessionId?: string
   shellConfig?: ShellConfig
   sessionMetadata?: Record<string, unknown>
@@ -86,12 +91,15 @@ function defaultExpanded(record: ToolCallRecord): boolean {
   return false
 }
 
-export function ToolCallCard({
-  record,
+export const ToolCallCard = memo(function ToolCallCard({
+  record: sourceRecord,
   confirmMode,
   focus,
   workDir,
   messageId,
+  turnId,
+  displaySummary,
+  confirmationReady,
   sessionId,
   shellConfig,
   sessionMetadata,
@@ -102,6 +110,13 @@ export function ToolCallCard({
   activeSearchTarget = null
 }: Props) {
   const { t } = useTypedTranslation('chat')
+  const [loadedDetail, setLoadedDetail] = useState<ToolCallRecord | undefined>()
+  // 详情是补充数据；只有它对应当前 source 快照时才允许参与展示。
+  const [loadedForSource, setLoadedForSource] = useState<ToolCallRecord | undefined>()
+  const record = loadedDetail && loadedForSource === sourceRecord
+    ? { ...loadedDetail, ...sourceRecord, input: Object.keys(sourceRecord.input).length ? sourceRecord.input : loadedDetail.input, result: sourceRecord.result ?? loadedDetail.result }
+    : sourceRecord
+  const currentLoadedDetail = loadedDetail && loadedForSource === sourceRecord ? loadedDetail : undefined
   const cardRef = useRef<HTMLDivElement>(null)
   const [executingHint, setExecutingHint] = useState(false)
   const [terminalFallbackPlain, setTerminalFallbackPlain] = useState(false)
@@ -151,7 +166,8 @@ export function ToolCallCard({
         record.toolName !== 'grep'))
   const hasDetail =
     !silentShellComplete &&
-    (isFailed ||
+    (Boolean(displaySummary?.hasDetails) || Boolean(displaySummary?.resultPreviewTruncated) ||
+      isFailed ||
       pendingHasDetail ||
       Boolean(record.result?.success && record.result.data !== undefined) ||
       Boolean(record.confirmDiff) ||
@@ -165,6 +181,20 @@ export function ToolCallCard({
     Boolean(activeSearchTarget?.revealPath?.toolUseId) &&
     activeSearchTarget?.revealPath?.toolUseId === record.id
   const searchSection = searchReveal ? activeSearchTarget?.revealPath?.toolSection : undefined
+
+  useEffect(() => {
+    if (!expanded || !sessionId || !turnId || !messageId || sourceRecord.result || sourceRecord.status === 'confirming') return
+    let alive = true
+    const sourceAtRequest = sourceRecord
+    const revision = `${sourceRecord.status}:${sourceRecord.completedAt ?? ''}:${sourceRecord.result ? 'result' : 'preview'}`
+    void toolCallDetailsLoader.load({ sessionId, turnId, messageId, toolCallId: sourceRecord.id, revision }).then((detail) => {
+      if (alive && detail) {
+        setLoadedDetail(detail)
+        setLoadedForSource(sourceAtRequest)
+      }
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [expanded, messageId, sourceRecord, sourceRecord.result, sourceRecord.status, sessionId, turnId])
 
   useEffect(() => {
     if (searchReveal) {
@@ -285,17 +315,18 @@ export function ToolCallCard({
   }, [showDetail, record.input])
 
   const resultStr = useMemo(() => {
-    if (!showDetail || !record.result) return ''
-    if (record.toolName === 'run_shell' && (shellHasFormattedOutput || isShellSilentResult(record.result.data))) {
+    const result = currentLoadedDetail?.result ?? record.result
+    if (!showDetail || !result) return ''
+    if (record.toolName === 'run_shell' && (shellHasFormattedOutput || isShellSilentResult(result.data))) {
       return ''
     }
     if (record.toolName === 'run_script') return ''
-    if (record.result.success) {
-      if (record.result.data === undefined) return ''
-      return typeof record.result.data === 'string' ? record.result.data : JSON.stringify(record.result.data, null, 2)
+    if (result.success) {
+      if (result.data === undefined) return ''
+      return typeof result.data === 'string' ? result.data : JSON.stringify(result.data, null, 2)
     }
-    return formatUserFacingError(record.result.error ?? '')
-  }, [showDetail, record.result, record.toolName, shellHasFormattedOutput])
+    return formatUserFacingError(result.error ?? '')
+  }, [showDetail, currentLoadedDetail?.result, record.result, record.toolName, shellHasFormattedOutput])
 
   const labelFragmentId =
     messageId != null ? buildFragmentId(messageId, { kind: 'tool-label', toolUseId: record.id }) : undefined
@@ -358,7 +389,7 @@ export function ToolCallCard({
 
   const mcpConfirming = Boolean(record.mcp && record.status === 'confirming')
 
-  if (mcpConfirming && onConfirm) {
+  if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <McpConfirmCard record={record} onConfirm={onConfirm} sessionId={sessionId} />
@@ -367,7 +398,7 @@ export function ToolCallCard({
     )
   }
 
-  if (writeConfirming && onConfirm) {
+  if (writeConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
@@ -376,7 +407,7 @@ export function ToolCallCard({
     )
   }
 
-  if (browserConfirming && onConfirm) {
+  if (browserConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <BrowserConfirmCard record={record} onConfirm={onConfirm} />
@@ -385,7 +416,7 @@ export function ToolCallCard({
     )
   }
 
-  if (shellConfirming && onConfirm) {
+  if (shellConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <ShellConfirmCard record={record} workDir={workDir} onConfirm={onConfirm} />
@@ -394,7 +425,7 @@ export function ToolCallCard({
     )
   }
 
-  if (scriptConfirming && onConfirm) {
+  if (scriptConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <ScriptConfirmCard record={record} onConfirm={onConfirm} />
@@ -403,7 +434,7 @@ export function ToolCallCard({
     )
   }
 
-  if (larkCliConfirming && onConfirm) {
+  if (larkCliConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <LarkCliConfirmCard record={record} onConfirm={onConfirm} />
@@ -605,4 +636,4 @@ export function ToolCallCard({
       ) : null}
     </div>
   )
-}
+})

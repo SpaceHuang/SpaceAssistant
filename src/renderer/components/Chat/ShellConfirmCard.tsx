@@ -50,12 +50,12 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
 
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
     const sel = memoryTier
-    const selected = approved && sel != null ? record.memoryTiers?.[sel - 1]?.key : undefined
+    const selected = approved && sel != null ? { memoryTierOptionId: sel } : {}
     if (approved && trustChecked && canTrust && command.trim()) {
-      onConfirm(approved, { ...options, trustCommand: command.trim(), ...(selected ? { memoryTier: selected } : {}) })
+      onConfirm(approved, { ...options, trustCommand: command.trim(), ...selected })
       return
     }
-    onConfirm(approved, { ...options, ...(selected ? { memoryTier: selected } : {}) })
+    onConfirm(approved, { ...options, ...selected })
   }
 
   return (
@@ -151,4 +151,3 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
     </div>
   )
 }
-

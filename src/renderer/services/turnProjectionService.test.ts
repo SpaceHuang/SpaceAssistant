@@ -14,6 +14,25 @@ describe('turn projection bridge', () => {
     dispatch.mockReset()
   })
 
+  it('同一帧只应用同一 turn 的最新 projection', () => {
+    let listener: ((data: any) => void) | undefined
+    let frame: (() => void) | undefined
+    vi.stubGlobal('window', {
+      requestAnimationFrame: vi.fn((cb) => { frame = cb; return 1 }),
+      cancelAnimationFrame: vi.fn(),
+      api: { usageSet: vi.fn().mockResolvedValue(undefined), chatListActiveTurns: vi.fn().mockResolvedValue([]), chatOnTurnProjection: vi.fn((cb) => { listener = cb; return () => undefined }) }
+    })
+    const off = initTurnProjectionBridge()
+    const message = { id: 'a1', sessionId: 's1', role: 'assistant', content: '', timestamp: 1, status: 'streaming', schemaVersion: 1 }
+    listener?.({ turn: { turnId: 't1', requestId: 'r1', sessionId: 's1', assistantMessage: message, version: 1 }, event: { type: 'content-delta' } })
+    listener?.({ turn: { turnId: 't1', requestId: 'r1', sessionId: 's1', assistantMessage: { ...message, content: 'latest' }, version: 2 }, event: { type: 'content-delta' } })
+    expect(patch).not.toHaveBeenCalled()
+    frame?.()
+    expect(patch).toHaveBeenCalledTimes(1)
+    expect(patch).toHaveBeenCalledWith('s1', 'a1', expect.objectContaining({ content: 'latest' }))
+    off()
+  })
+
   it('只投影单调版本的完整 assistant snapshot', () => {
     let listener: ((data: any) => void) | undefined
     vi.stubGlobal('window', { api: { usageSet: vi.fn().mockResolvedValue(undefined), chatListActiveTurns: vi.fn().mockResolvedValue([]), chatOnTurnProjection: vi.fn((cb) => { listener = cb; return () => undefined }) } })
@@ -23,7 +42,7 @@ describe('turn projection bridge', () => {
     listener?.({ turn: { turnId: 't1', requestId: 'r1', sessionId: 's1', assistantMessage: { ...message, content: 'old' }, version: 1 }, event: { type: 'content-delta' } })
     expect(patch).toHaveBeenCalledTimes(1)
     expect(patch).toHaveBeenCalledWith('s1', 'a1', message)
-    expect(sync).toHaveBeenCalledWith({ sessionId: 's1', requestId: 'r1', message })
+    expect(sync).not.toHaveBeenCalled()
     off()
   })
 

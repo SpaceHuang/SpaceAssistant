@@ -35,6 +35,7 @@ import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import type { ChatMessageActions } from './ChatMessageActions'
 import type { ToolsInteractiveScalars } from '../../services/resolveMessageToolsInteractive'
 import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
+import type { ToolCallDisplaySummary } from '../../../shared/turnDisplayProtocol'
 
 /** @deprecated 使用 ToolsInteractiveScalars；保留别名兼容旧导入 */
 export type ToolsInteractiveProps = ToolsInteractiveScalars & {
@@ -44,6 +45,10 @@ export type ToolsInteractiveProps = ToolsInteractiveScalars & {
 
 type Props = {
   message: Message
+  turnId?: string
+  displayActivity?: AssistantActivityItem[]
+  displayToolSummaries?: Record<string, ToolCallDisplaySummary>
+  confirmationReadyByToolId?: Record<string, boolean | undefined>
   /** 新追加的消息行入场动效（由 ChatView 按条数增量判定） */
   enter?: boolean
   /** 工具交互标量；confirm/cancel 优先用 override，否则用 actions */
@@ -211,6 +216,10 @@ function MessageMeta({
 
 export const ChatBubble = memo(function ChatBubble({
   message,
+  turnId,
+  displayActivity,
+  displayToolSummaries,
+  confirmationReadyByToolId,
   enter = false,
   toolsInteractive,
   focusToolUseId,
@@ -240,7 +249,7 @@ export const ChatBubble = memo(function ChatBubble({
     const skillById = new Map((message.skillHints ?? []).map((h) => [h.id, h]))
     const timeline =
       message.role !== 'user' && message.role !== 'system'
-        ? buildAssistantActivityTimeline(message)
+        ? (displayActivity ?? buildAssistantActivityTimeline(message))
         : []
     const getTimestamp = buildActivityItemTimestampResolver(message)
     return {
@@ -262,6 +271,7 @@ export const ChatBubble = memo(function ChatBubble({
     message.id,
     message.sessionId,
     message.status
+    ,displayActivity
   ])
 
   const {
@@ -387,6 +397,9 @@ export const ChatBubble = memo(function ChatBubble({
         key={key}
         record={tc}
         messageId={message.id}
+        turnId={turnId}
+        displaySummary={displayToolSummaries?.[tc.id]}
+        confirmationReady={confirmationReadyByToolId?.[tc.id]}
         sessionId={message.sessionId}
         toolCalls={message.toolCalls}
         workDir={workDir}

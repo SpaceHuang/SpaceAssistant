@@ -69,8 +69,7 @@ export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
   const memoryTierOptions = (record.memoryTiers ?? []).map((mt, i) => ({ label: mt.label, tier: i + 1 }))
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
     const sel = memoryTier
-    const selected = approved && sel != null ? record.memoryTiers?.[sel - 1]?.key : undefined
-    onConfirm(approved, { ...options, ...(selected ? { memoryTier: selected } : {}) })
+    onConfirm(approved, { ...options, ...(approved && sel != null ? { memoryTierOptionId: sel } : {}) })
   }
 
   return (

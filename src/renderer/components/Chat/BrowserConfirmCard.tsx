@@ -88,16 +88,16 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
 
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
     const sel = memoryTier
-    const selected = approved && sel != null ? record.memoryTiers?.[sel - 1]?.key : undefined
+    const selected = approved && sel != null ? { memoryTierOptionId: sel } : {}
     if (approved && trustChecked && canTrustDomain && trustableDomain) {
       if (action === 'act') {
-        onConfirm(approved, { ...options, trustActDomain: trustableDomain, ...(selected ? { memoryTier: selected } : {}) })
+        onConfirm(approved, { ...options, trustActDomain: trustableDomain, ...selected })
       } else {
-        onConfirm(approved, { ...options, trustDomain: trustableDomain, ...(selected ? { memoryTier: selected } : {}) })
+        onConfirm(approved, { ...options, trustDomain: trustableDomain, ...selected })
       }
       return
     }
-    onConfirm(approved, { ...options, ...(selected ? { memoryTier: selected } : {}) })
+    onConfirm(approved, { ...options, ...selected })
   }
 
   const allowLabel =
