@@ -45,6 +45,7 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.llmServiceId?.trim() ? { llmServiceId: config.llmServiceId.trim() } : {}),
     ...(config.baseUrl?.trim() ? { baseUrl: config.baseUrl.trim().replace(/\/+$/, '') } : {}),
     ...(config.system?.trim() ? { system: config.system.trim() } : {}),
+    ...(config.skillFragments?.length ? { skillFragments: config.skillFragments.filter((fragment) => typeof fragment === 'string' && fragment.trim()).map((fragment) => fragment.trim()) } : {}),
     ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens } : {}),
     ...(config.enableThinking !== undefined ? { enableThinking: config.enableThinking } : {}),
     ...(config.locale?.trim() ? { locale: config.locale.trim() } : {}),

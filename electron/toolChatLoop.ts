@@ -596,6 +596,7 @@ async function runToolChatSessionInner(
     role: m.role,
     content: m.content as Anthropic.MessageParam['content']
   })) as Anthropic.MessageParam[]
+  if (args.skillFragments?.length) messagesForApi.push({ role: 'user', content: args.skillFragments.join('\n\n') })
 
   /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
   const historicalAssistantApiMessageCount = initialMessages.filter((m) => m.role === 'assistant').length

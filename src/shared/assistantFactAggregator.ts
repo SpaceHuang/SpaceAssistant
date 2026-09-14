@@ -10,6 +10,7 @@ export type TurnExecutionConfig = {
   llmServiceId?: string
   baseUrl?: string
   system?: string
+  skillFragments?: string[]
   maxTokens?: number
   enableThinking?: boolean
   locale?: string
