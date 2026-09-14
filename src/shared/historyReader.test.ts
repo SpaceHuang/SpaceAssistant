@@ -15,4 +15,12 @@ describe('history reader', () => {
   it('applies the default single-entry token limit', () => {
     expect(() => readHistory([{ id: 'huge', sessionId: 's1', windowId: 'w1', text: 'huge', tokens: 4001 }], { sessionId: 's1', entryId: 'huge' })).toThrow(/budget/i)
   })
+  it('advances past an oversized entry instead of returning a stuck cursor', () => {
+    const result = readHistory([
+      { id: 'huge', sessionId: 's1', windowId: 'w1', text: 'huge', tokens: 5_000 },
+      { id: 'small', sessionId: 's1', windowId: 'w1', text: 'small', tokens: 1 }
+    ], { sessionId: 's1', windowId: 'w1', maxTokens: 4_000 })
+    expect(result.entries.map((entry) => entry.id)).toEqual(['small'])
+    expect(result.nextCursor).toBeNull()
+  })
 })

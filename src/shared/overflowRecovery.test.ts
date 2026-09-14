@@ -12,6 +12,10 @@ describe('provider overflow recovery', () => {
     expect(decideOverflowRecovery({ error: 'network unavailable', retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true }).action).toBe('ignore')
     expect(decideOverflowRecovery({ error: 'context length exceeded', retries: 1, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })).toEqual({ action: 'ignore', reason: 'retry_limit' })
   })
+  it('does not classify rate and quota limits as context overflow', () => {
+    expect(decideOverflowRecovery({ error: 'rate limit exceeded: 30000 input tokens per minute', retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true }).action).toBe('ignore')
+    expect(decideOverflowRecovery({ error: 'quota exceeded for tokens', retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true }).action).toBe('ignore')
+  })
   it('keeps current input and completed tool results in the recovery surface', () => {
     const messages = [{ id: 'old', role: 'user', content: 'old' }, { id: 'current', role: 'user', content: 'current' }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1' }] }] as const
     expect(selectRecoveryMessages(messages, 'current').map((message) => message.id ?? 'tool-results')).toEqual(['current', 'tool-results'])

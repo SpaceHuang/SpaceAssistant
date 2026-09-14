@@ -3,10 +3,12 @@ import { readSkillForTool } from '../../src/shared/skillPrompt'
 import { defineDirectTool } from './plannedToolRegistry'
 import type { ToolExecutorResult } from './types'
 import type { ToolExecutionContext } from './types'
+const SKILLS_READ_MAX_CHARS = 32_000
 
 export const readSkillsToolExecutor = async (input: Record<string, unknown>, context: ToolExecutionContext): Promise<ToolExecutorResult> => {
   const name = typeof input.name === 'string' ? input.name : ''
-  const maxChars = typeof input.max_chars === 'number' ? input.max_chars : 32_000
+  const requestedMaxChars = typeof input.max_chars === 'number' ? input.max_chars : SKILLS_READ_MAX_CHARS
+  const maxChars = Math.min(SKILLS_READ_MAX_CHARS, requestedMaxChars)
   try {
     const content = readSkillForTool(getCachedSkills(context.userDataDir, context.workDir), name, maxChars)
     return { success: true, data: { name, content } }

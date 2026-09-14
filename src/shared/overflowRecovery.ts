@@ -12,6 +12,7 @@ export type OverflowRecoveryDecision =
 
 export function isProviderContextOverflow(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error)
+  if (/rate\s*limit|too many requests|quota|requests?\s+per\s+(minute|second)|tokens?\s+per\s+(minute|second)/i.test(text)) return false
   return /context|prompt|token|window/i.test(text) && /limit|length|exceed|overflow|too large|max/i.test(text)
 }
 
