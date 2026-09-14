@@ -834,7 +834,7 @@ async function runToolChatSessionInner(
       if (finalUsage) {
         await args.emitSessionEvent?.({
           type: 'request_usage',
-          payload: { requestId: attemptRequestId, usage: finalUsage, source: 'api' }
+          payload: { schemaVersion: 1, requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
         const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system, tools: requestHeader.tools, messages: messagesForApi, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
         const finalProjection = computeContextPressure({
