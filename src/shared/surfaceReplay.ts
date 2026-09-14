@@ -5,20 +5,38 @@ export type SurfaceReplayItem = { id: string; required?: boolean }
 
 /** 将 provider 的 assistant content blocks 投影成数据库持久化的正文表示。 */
 export function canonicalSurfaceContent(role: unknown, content: unknown): unknown {
-  if (role !== 'assistant' || !Array.isArray(content)) return content
-  return content
+  if (role !== 'assistant') return content
+  if (typeof content === 'string') return canonicalPersistedAssistantText(content)
+  if (!Array.isArray(content)) return content
+  const hasToolUse = content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
+  const text = content
     .filter((block): block is { type?: unknown; text?: unknown } => Boolean(block) && typeof block === 'object')
     .filter((block) => block.type === 'text' && typeof block.text === 'string')
     .map((block) => block.text)
     .join('')
+  // 带 tool_use 的 assistant 正文由数据库的 toolCalls 重建，原文空白需要保留；
+  // 普通 assistant 则会经过 ensureApiTextContent（trim，空正文变成单空格）。
+  return hasToolUse ? text : canonicalPersistedAssistantText(text)
+}
+
+function canonicalPersistedAssistantText(content: string): string {
+  const trimmed = content.trim()
+  return trimmed.length > 0 ? trimmed : ' '
+}
+
+export interface ReplaySurfaceProjection<T> {
+  messages: T[]
+  /** 每个 projected message 对应的原始消息；合并工具轮时指向首个 assistant。 */
+  sources: T[]
 }
 
 /** 将工具协议消息投影为可由数据库稳定重建的 turn surface。 */
-export function projectReplaySurface<T>(messages: readonly T[]): T[] {
+export function projectReplaySurfaceWithSources<T>(messages: readonly T[]): ReplaySurfaceProjection<T> {
   const projected: T[] = []
+  const sources: T[] = []
   let toolTurnAssistantIndex = -1
   for (const message of messages) {
-    if (!message || typeof message !== 'object') { projected.push(message); continue }
+    if (!message || typeof message !== 'object') { projected.push(message); sources.push(message); continue }
     const source = message as { role?: unknown; content?: unknown }
     if (source.role === 'user' && Array.isArray(source.content)) {
       if (source.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) continue
@@ -31,6 +49,7 @@ export function projectReplaySurface<T>(messages: readonly T[]): T[] {
         // 删除历史工具对后，projection 前后看起来完全相同，压缩范围无法回放。
         if (toolTurnAssistantIndex < 0) {
           projected.push({ ...(message as object), content: typeof text === 'string' ? text : '' } as T)
+          sources.push(message)
           toolTurnAssistantIndex = projected.length - 1
         } else if (typeof text === 'string' && text.length > 0) {
           const previous = projected[toolTurnAssistantIndex] as unknown as { content?: unknown }
@@ -47,8 +66,13 @@ export function projectReplaySurface<T>(messages: readonly T[]): T[] {
     }
     if (source.role === 'user') toolTurnAssistantIndex = -1
     projected.push(source.role === 'assistant' ? { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T : message)
+    sources.push(message)
   }
-  return projected
+  return { messages: projected, sources }
+}
+
+export function projectReplaySurface<T>(messages: readonly T[]): T[] {
+  return projectReplaySurfaceWithSources(messages).messages
 }
 
 /** 将 replay 结果映射回原始 API surface，保留未被压缩的工具协议块。 */
@@ -148,6 +172,14 @@ export function surfaceItemIdentitiesForSubset(sourceValues: readonly unknown[],
     const matchingIdentity = candidates?.find((candidate) => !used.has(candidate))
     return allocate(matchingIdentity ?? base)
   })
+}
+
+/** 为保留投影按原始 source 复用 input projection identity，避免克隆 assistant 重新领取首个 occurrence。 */
+export function surfaceItemIdentitiesForProjectionSubset<T>(source: ReplaySurfaceProjection<T>, retained: ReplaySurfaceProjection<T>): string[] {
+  const sourceIdentities = surfaceItemIdentities(source.messages)
+  const bySource = new Map<unknown, string>()
+  source.sources.forEach((value, index) => bySource.set(value, sourceIdentities[index]!))
+  return retained.sources.map((value, index) => bySource.get(value) ?? surfaceItemIdentity(retained.messages[index], index))
 }
 
 export function computeReplaySurfaceFingerprint(system: string, surface: readonly unknown[]): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from './surfaceReplay'
 import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
@@ -18,6 +18,15 @@ describe('surface replay', () => {
     const persisted = { id: 'db-assistant', role: 'assistant', content: 'answer', status: 'completed' }
     expect(surfaceItemIdentity(provider, 0)).toBe(surfaceItemIdentity(persisted, 0))
     expect(computeReplaySurfaceFingerprint('system', [provider])).toBe(computeReplaySurfaceFingerprint('system', [persisted]))
+  })
+  it('preserves the persisted assistant whitespace canonical form', () => {
+    const provider = { role: 'assistant', content: [{ type: 'text', text: '\nanswer\n' }] }
+    const persisted = { role: 'assistant', content: 'answer' }
+    const emptyProvider = { role: 'assistant', content: [{ type: 'text', text: '\n\t' }] }
+    const emptyPersisted = { role: 'assistant', content: ' ' }
+    expect(projectReplaySurface([provider])).toEqual([{ role: 'assistant', content: 'answer' }])
+    expect(computeReplaySurfaceFingerprint('system', [provider])).toBe(computeReplaySurfaceFingerprint('system', [persisted]))
+    expect(computeReplaySurfaceFingerprint('system', [emptyProvider])).toBe(computeReplaySurfaceFingerprint('system', [emptyPersisted]))
   })
   it('projects live tool turns to the same stable message sequence as persisted history', () => {
     const live = [{ role: 'user', content: 'question' }, { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'result' }] }, { role: 'assistant', content: [{ type: 'text', text: 'answer' }] }]
@@ -60,7 +69,8 @@ describe('surface replay', () => {
     const persistedProjection = projectReplaySurface(persisted)
     expect(liveProjection.map((message) => ({ role: message.role, content: message.content }))).toEqual(persistedProjection.map((message) => ({ role: message.role, content: message.content })))
     expect(computeReplaySurfaceFingerprint('system', liveProjection)).toBe(computeReplaySurfaceFingerprint('system', persistedProjection))
-    const replayed = liveProjection.map((message, index) => ({ ...message, id: surfaceItemIdentitiesForSubset(live, liveProjection)[index]! }))
+    const liveProjectionWithSources = projectReplaySurfaceWithSources(live)
+    const replayed = liveProjection.map((message, index) => ({ ...message, id: surfaceItemIdentitiesForProjectionSubset(liveProjectionWithSources, liveProjectionWithSources)[index]! }))
     expect(restoreReplaySurface(live, replayed)).toEqual(live)
   })
   it('reuses source identities when reset removes a preceding duplicate message', () => {

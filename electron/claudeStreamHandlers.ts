@@ -24,7 +24,7 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventInput, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurface, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
 import { computeCompactionSummaryHash, countCommittedCompactions, currentCompactionWindowId } from '../src/shared/compactionEvents'
@@ -338,8 +338,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         // 压缩提交端记录的是已展开的 API surface；回放必须在同一层执行，
         // 否则数据库的一条 assistant(toolCalls) 与 API 的 assistant/tool_result
         // 多条消息无法共享 boundary、range 和 fingerprint。
-        const projectedMessages = projectReplaySurface(builtMessages)
-        const projectedIdentities = surfaceItemIdentitiesForSubset(builtMessages, projectedMessages)
+        const replayProjection = projectReplaySurfaceWithSources(builtMessages)
+        const projectedMessages = replayProjection.messages
+        const projectedIdentities = surfaceItemIdentitiesForProjectionSubset(replayProjection, replayProjection)
         const replaySurface = projectedMessages.map((message, index) => ({
           ...message,
           id: message.id ?? projectedIdentities[index]!

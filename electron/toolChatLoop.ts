@@ -175,7 +175,7 @@ import { computeContextPressure, shouldCompact } from '../src/shared/contextMete
 import type { ContextMeter } from '../src/shared/contextMeterService'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
-import { computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, projectReplaySurfaceWithSources, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -658,7 +658,8 @@ async function runToolChatSessionInner(
     retry: number,
     totalInputBudget: number
   ): Promise<boolean> => {
-    const inputSurface = projectReplaySurface(inputMessages)
+    const inputProjection = projectReplaySurfaceWithSources(inputMessages)
+    const inputSurface = inputProjection.messages
     const selectedMessages = selectRecoveryMessages(inputMessages as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as Anthropic.MessageParam[]
     const skillFragmentText = args.skillFragments?.join('\n\n')
     const skillFragmentMessage = skillFragmentText
@@ -670,7 +671,8 @@ async function runToolChatSessionInner(
     // 是否发生缩减必须比较真实 provider surface；replay projection 会隐藏工具消息，
     // 不能据此把“已删除旧工具对”误判成 no-op。
     if (JSON.stringify(recoveredMessages) === JSON.stringify(inputMessages)) return false
-    const outputSurface = projectReplaySurface(recoveredMessages)
+    const outputProjection = projectReplaySurfaceWithSources(recoveredMessages)
+    const outputSurface = outputProjection.messages
     if (outputSurface.length === 0) return false
 
     const outputHeader = buildRequestHeaderPayload({
@@ -698,7 +700,7 @@ async function runToolChatSessionInner(
     if (!outputPreflight.ok) return false
 
     const inputItems = surfaceItemIdentities(inputSurface).map((id) => ({ id }))
-    const outputItems = surfaceItemIdentitiesForSubset(inputSurface, outputSurface).map((id) => ({ id }))
+    const outputItems = surfaceItemIdentitiesForProjectionSubset(inputProjection, outputProjection).map((id) => ({ id }))
     const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, inputSurface)
     const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, outputSurface)
     const shadowedRanges = computeShadowedRanges(inputItems, outputItems)

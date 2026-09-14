@@ -65,6 +65,7 @@ vi.mock('./database', async (importOriginal) => {
 
 import { runToolChatSession } from './toolChatLoop'
 import { createMemoryAppDb } from './database/testHelpers'
+import { projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
@@ -232,6 +233,40 @@ describe('runToolChatSession message_start usage', () => {
     expect(sentMessages).toHaveLength(1)
     expect(JSON.stringify(sentMessages)).not.toContain('tool-0')
     expect(JSON.stringify(sentMessages)).toContain('current question')
+  })
+
+  it('overflow reset 为当前无正文工具轮保留正确 occurrence identity', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const messages = [
+      { role: 'user' as const, content: 'old question' },
+      { role: 'assistant' as const, content: [{ type: 'tool_use', id: 'old-tool', name: 'read', input: {} }] },
+      { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'old-tool', content: 'x'.repeat(120_000) }] },
+      { id: 'current-user', role: 'user' as const, content: 'current question' },
+      { role: 'assistant' as const, content: [{ type: 'tool_use', id: 'current-tool', name: 'read', input: {} }] },
+      { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'current-tool', content: 'current result' }] }
+    ]
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-empty-tool-identity', sessionId: 'sess-empty-tool-identity',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages, currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    const projected = projectReplaySurface(messages)
+    const identities = surfaceItemIdentities(projected)
+    const summary = appendCompactionTransaction.mock.calls[0]?.[1] as { shadowedRanges?: Array<{ start: string; end: string }> } | undefined
+    expect(summary?.shadowedRanges).toEqual([{ start: identities[0], end: identities[1] }])
+    expect(summary?.shadowedRanges).not.toContainEqual(expect.objectContaining({ start: identities[3], end: identities[3] }))
+    const sentMessages = stream.mock.calls[0]?.[0]?.messages as Array<{ role?: string; content?: unknown }> | undefined
+    expect(sentMessages).toHaveLength(3)
+    expect(sentMessages?.[0]).toMatchObject({ role: 'user', content: 'current question' })
+    expect(sentMessages?.[1]?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'tool_use', id: 'current-tool' })]))
+    expect(sentMessages?.[2]?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'tool_result', tool_use_id: 'current-tool', content: 'current result' })]))
   })
 
   it('turn-boundary snapshot includes the newly generated assistant content', async () => {
