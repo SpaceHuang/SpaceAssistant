@@ -61,6 +61,9 @@ export async function downloadGithubArchive(
       await new Promise<void>((resolve, reject) => { file.end(() => resolve()); file.on('error', reject) })
 
       const extractDir = path.join(destDir, 'extract')
+      // 每轮 ref 尝试都从干净的解压目录开始：否则上一轮（如 main 解压半途失败）的残留
+      // 会被 resolveExtractedRepoRoot 的唯一目录回退误当成本次结果（m3）
+      fs.rmSync(extractDir, { recursive: true, force: true })
       fs.mkdirSync(extractDir, { recursive: true })
       const members = buildGithubArchiveExtractMembers(repo, ref, subPath)
       onProgress?.({ phase: 'extract', completed: 0, total: 1 })
@@ -71,6 +74,8 @@ export async function downloadGithubArchive(
       validateExtractedTree(extractedRepoRoot)
       return extractedRepoRoot
     } catch (err) {
+      // 调用方主动取消：立即结束，不再回退到下一个分支，也不把取消报成下载失败
+      if (signal?.aborted) throw new Error('SKILL_INSTALL_CANCELLED: 安装已取消')
       lastError = err instanceof Error ? err.message : String(err)
     }
   }

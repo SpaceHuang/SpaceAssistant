@@ -44,6 +44,7 @@ export const ErrorCodes = {
   ,SKILL_MD_MISSING: 'SKILL_MD_MISSING'
   ,SKILL_MD_UNREADABLE: 'SKILL_MD_UNREADABLE'
   ,SKILL_NO_INSTALLABLE_CANDIDATE: 'SKILL_NO_INSTALLABLE_CANDIDATE'
+  ,SKILL_INSTALL_CANCELLED: 'SKILL_INSTALL_CANCELLED'
 } as const
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes]
@@ -64,13 +65,16 @@ export function splitCodedError(raw: string | undefined | null): { code: ErrorCo
   if (!trimmed) return null
   if (isErrorCode(trimmed)) return { code: trimmed, detail: '' }
 
-  const pipe = trimmed.indexOf('|')
-  const colon = trimmed.indexOf(':')
-  const separator = pipe > 0 ? pipe : colon
-  if (separator <= 0) return null
-
-  const code = trimmed.slice(0, separator).trim()
-  return isErrorCode(code) ? { code, detail: trimmed.slice(separator + 1).trim() } : null
+  // 分隔符按位置顺序尝试，取第一个「左侧确实是已知错误码」的位置：
+  // 详情文本自身含 `|`（如 `SKILL_X: a | b`）或含 `:`（如 `SKILL_X|a: b`）都能正确切分
+  const separators = [trimmed.indexOf(':'), trimmed.indexOf('|')]
+    .filter((index) => index > 0)
+    .sort((a, b) => a - b)
+  for (const separator of separators) {
+    const code = trimmed.slice(0, separator).trim()
+    if (isErrorCode(code)) return { code, detail: trimmed.slice(separator + 1).trim() }
+  }
+  return null
 }
 
 /** 只取错误码；调用方据此判定，不再依赖文案子串匹配 */

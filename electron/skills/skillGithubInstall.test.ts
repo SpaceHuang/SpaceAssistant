@@ -94,6 +94,26 @@ describe('skillGithubInstall', () => {
     expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/../secret')).toBeNull()
   })
 
+  it('rejects percent-encoded traversal subpaths after decoding', () => {
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/%2e%2e/secret')).toBeNull()
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/skills/%2e%2e%2f..')).toBeNull()
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/skills/%2E%2E/alpha')).toBeNull()
+  })
+
+  it('rejects malformed percent escapes instead of throwing a URIError', () => {
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/skills/%zz')).toBeNull()
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/skills/%e0%a4')).toBeNull()
+  })
+
+  it('keeps accepting ordinary nested subpaths with spaces and unicode', () => {
+    expect(parseGithubSkillUrl('https://github.com/acme/tools/tree/main/skills/%E4%B8%AD%E6%96%87%20skill')).toEqual({
+      owner: 'acme',
+      repo: 'tools',
+      branch: 'main',
+      subPath: 'skills/中文 skill'
+    })
+  })
+
   it('rejects blob file urls so callers can request a directory', () => {
     expect(parseGithubSkillUrl('https://github.com/acme/tools/blob/main/SKILL.md')).toBeNull()
   })
@@ -493,6 +513,43 @@ describe('installSkillsFromGithub', () => {
     expect(result.skipped[0]!.reason).toContain('SKILL_NAME_CONFLICT')
   })
 
+  it('deduplicates candidates that declare the same skill name inside one batch', async () => {
+    const repo = mkTmpDir()
+    writeSkillMd(path.join(repo, 'skills', 'a'), 'dup')
+    writeSkillMd(path.join(repo, 'skills', 'b'), 'dup')
+    writeSkillMd(path.join(repo, 'skills', 'c'))
+    stubArchiveDownload(repo)
+    const userData = mkTmpDir()
+
+    const result = await installSkillsFromGithub(userData, 'https://github.com/acme/tools', {
+      subPaths: ['skills/a', 'skills/b', 'skills/c']
+    })
+
+    expect(installNames(result)).toEqual(['dup', 'c'])
+    expect(result.skipped).toHaveLength(1)
+    expect(result.skipped[0]!.subPath).toBe('skills/b')
+    expect(result.skipped[0]!.reason).toContain('SKILL_NAME_CONFLICT')
+    expect(result.overwritten).toEqual([])
+    expect(fs.existsSync(path.join(userData, 'skills', 'dup', 'SKILL.md'))).toBe(true)
+  })
+
+  it('never reports batch-internal duplicates as overwritten', async () => {
+    const repo = mkTmpDir()
+    writeSkillMd(path.join(repo, 'skills', 'a'), 'dup')
+    writeSkillMd(path.join(repo, 'skills', 'b'), 'dup')
+    stubArchiveDownload(repo)
+    const userData = mkTmpDir()
+
+    const result = await installSkillsFromGithub(userData, 'https://github.com/acme/tools', {
+      subPaths: ['skills/a', 'skills/b'],
+      overwrite: true
+    })
+
+    expect(installNames(result)).toEqual(['dup'])
+    expect(result.skipped.map((item) => item.subPath)).toEqual(['skills/b'])
+    expect(result.overwritten).toEqual([])
+  })
+
   it('throws SKILL_NO_INSTALLABLE_CANDIDATE when every candidate is invalid', async () => {
     const repo = mkTmpDir()
     writeBrokenSkill(path.join(repo, 'skills', 'broken'))
@@ -501,6 +558,25 @@ describe('installSkillsFromGithub', () => {
     await expect(
       installSkillsFromGithub(mkTmpDir(), 'https://github.com/acme/tools', { subPaths: ['skills/broken'] })
     ).rejects.toThrow('SKILL_NO_INSTALLABLE_CANDIDATE')
+  })
+
+  it('stops installing and rolls back when the caller cancels mid batch', async () => {
+    const repo = mkTmpDir()
+    for (const name of ['alpha', 'beta']) writeSkillMd(path.join(repo, 'skills', name))
+    stubArchiveDownload(repo)
+    const userData = mkTmpDir()
+    const controller = new AbortController()
+
+    await expect(
+      installSkillsFromGithub(userData, 'https://github.com/acme/tools', {
+        subPaths: ['skills/alpha', 'skills/beta'],
+        signal: controller.signal,
+        onProgress: () => controller.abort()
+      })
+    ).rejects.toThrow('SKILL_INSTALL_CANCELLED')
+
+    expect(fs.existsSync(path.join(userData, 'skills', 'alpha'))).toBe(false)
+    expect(fs.existsSync(path.join(userData, 'skills', 'beta'))).toBe(false)
   })
 
   it('rejects an unsafe sub path payload as a whole', async () => {

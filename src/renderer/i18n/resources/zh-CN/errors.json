@@ -39,5 +39,6 @@
   "SKILL_DESCRIPTION_EMPTY": "Skill 描述不能为空",
   "SKILL_MD_MISSING": "目录中未找到 SKILL.md",
   "SKILL_MD_UNREADABLE": "SKILL.md 无法读取",
-  "SKILL_NO_INSTALLABLE_CANDIDATE": "没有可安装的 Skill：{{code}}"
+  "SKILL_NO_INSTALLABLE_CANDIDATE": "没有可安装的 Skill：{{code}}",
+  "SKILL_INSTALL_CANCELLED": "安装已取消"
 }

@@ -65,17 +65,36 @@ export function isIgnoredDirName(name: string): boolean {
 const GITHUB_URL_RE =
   /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\/tree\/(.+?)(?:\/(.+))?)?\/?$/i
 
+/**
+ * 相对路径安全校验：非空段、无 `.` / `..` 段、无反斜杠、非绝对路径 / 盘符。
+ * URL 解析与批量入参共用同一套规则，避免两者校验强度不一致。
+ */
+function isSafeRelativePath(value: string): boolean {
+  if (value.includes('\\') || path.posix.isAbsolute(value) || /^[a-zA-Z]:/.test(value)) return false
+  return value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')
+}
+
 export function parseGithubSkillUrl(url: string): ParsedGithubSource | null {
   const trimmed = url.trim().split(/[?#]/, 1)[0].replace(/\/$/, '')
   if (/^https?:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/blob\//i.test(trimmed)) return null
   const match = trimmed.match(GITHUB_URL_RE)
   if (!match) return null
-  if (match[4]?.includes('..')) return null
+  let subPath = ''
+  if (match[4]) {
+    // 先解码再按段校验：`..` 的子串检查会被 %2e%2e 绕过（m1）；
+    // 畸形 % 序列按无效地址处理，不再抛出无错误码的原生 URIError（m2）
+    try {
+      subPath = decodeURIComponent(match[4])
+    } catch {
+      return null
+    }
+    if (!isSafeRelativePath(subPath)) return null
+  }
   return {
     owner: match[1],
     repo: match[2].replace(/\.git$/i, ''),
     branch: match[3] || 'main',
-    subPath: match[4] ? decodeURIComponent(match[4]) : ''
+    subPath
   }
 }
 
@@ -242,6 +261,11 @@ function nameConflictReason(name: string): string {
   return `SKILL_NAME_CONFLICT: 用户级目录下已存在 Skill「${name}」`
 }
 
+/** 同批候选中后到者的重名原因：目标目录按 name 唯一，同一批只能落盘一次 */
+function batchDuplicateReason(name: string): string {
+  return `SKILL_NAME_CONFLICT: 同批候选中已存在同名 Skill「${name}」，已跳过（先到的候选生效）`
+}
+
 /**
  * 校验批量候选子路径（新增 IPC 入参，不经过 parseGithubSkillUrl 的 URL 语义）：
  * 必须是非空相对路径、不含 `..` 段、不含绝对路径 / 盘符 / 反斜杠；重复项去重。
@@ -252,13 +276,7 @@ function normalizeSubPaths(raw: string[]): string[] {
   const seen = new Set<string>()
   for (const item of raw) {
     if (typeof item !== 'string') throw new Error('SKILL_URL_INVALID: 候选子路径必须是字符串')
-    const segments = item.split('/')
-    const unsafe =
-      item.trim() === '' ||
-      item.includes('\\') ||
-      /^[a-zA-Z]:/.test(item) ||
-      path.posix.isAbsolute(item) ||
-      segments.some((segment) => segment === '' || segment === '.' || segment === '..')
+    const unsafe = item.trim() === '' || !isSafeRelativePath(item)
     if (unsafe) throw new Error('SKILL_URL_INVALID: 候选子路径不合法：' + item)
     if (seen.has(item)) continue
     seen.add(item)
@@ -325,6 +343,7 @@ export async function installSkillsFromGithub(
 
     const skipped: SkippedCandidate[] = []
     const installable: Array<{ sourceDir: string; subPath: string; name: string }> = []
+    const claimedNames = new Set<string>()
     const total = candidates.length
     let completed = 0
 
@@ -350,6 +369,14 @@ export async function installSkillsFromGithub(
         completed += 1
         continue
       }
+      // M1：批内同名（monorepo 中同一 Skill 的多份拷贝）也必须逐候选降级，
+      // 否则后到者会在安装循环里抛错并触发整体回滚，或静默覆盖先到者
+      if (claimedNames.has(meta.name)) {
+        skipped.push({ subPath: candidate.subPath, name: meta.name, reason: batchDuplicateReason(meta.name) })
+        completed += 1
+        continue
+      }
+      claimedNames.add(meta.name)
       installable.push({ sourceDir: candidate.sourceDir, subPath: candidate.subPath, name: meta.name })
     }
 
@@ -365,8 +392,11 @@ export async function installSkillsFromGithub(
     const installed: SkillDefinition[] = []
     const overwritten: string[] = []
     const createdTargets: string[] = []
+    // 降级语义只覆盖「定位 / 校验 / 同名冲突」三类（见上面的候选预检）；
+    // 安装阶段（拷贝 / 落盘）出错属意外错误，中止整批并按 createdTargets 回滚（m4）
     try {
       for (const item of installable) {
+        if (options.signal?.aborted) throw new Error('SKILL_INSTALL_CANCELLED: 安装已取消')
         options.onProgress?.({ phase: 'install', completed, total })
         const targetDir = path.join(getUserSkillsDir(userDataPath), item.name)
         const existed = fs.existsSync(targetDir)

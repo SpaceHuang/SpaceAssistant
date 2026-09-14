@@ -50,4 +50,18 @@ describe('splitCodedError', () => {
     expect(splitCodedError('NOT_A_REAL_CODE: x')).toBeNull()
     expect(splitCodedError('   ')).toBeNull()
   })
+
+  it('keeps a detail that itself contains a pipe', () => {
+    expect(splitCodedError('SKILL_URL_INVALID: 详情 a | b')).toEqual({
+      code: ErrorCodes.SKILL_URL_INVALID,
+      detail: '详情 a | b'
+    })
+  })
+
+  it('accepts a pipe separator whose code comes after a colon is not a code', () => {
+    expect(splitCodedError('SKILL_URL_INVALID|a: b')).toEqual({
+      code: ErrorCodes.SKILL_URL_INVALID,
+      detail: 'a: b'
+    })
+  })
 })

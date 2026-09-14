@@ -39,5 +39,6 @@
   "SKILL_DESCRIPTION_EMPTY": "The Skill description cannot be empty",
   "SKILL_MD_MISSING": "No SKILL.md was found in the directory",
   "SKILL_MD_UNREADABLE": "SKILL.md cannot be read",
-  "SKILL_NO_INSTALLABLE_CANDIDATE": "No installable Skill found: {{code}}"
+  "SKILL_NO_INSTALLABLE_CANDIDATE": "No installable Skill found: {{code}}",
+  "SKILL_INSTALL_CANCELLED": "Installation cancelled"
 }
