@@ -66,6 +66,14 @@ This project uses the following open-source libraries. Our gratitude goes to the
 | [shiki](https://github.com/shikijs/shiki) | MIT |
 | [zod](https://github.com/colinhacks/zod) | MIT |
 
+### Bundled Tools
+
+| Tool | License |
+|------|---------|
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | MIT / Unlicense |
+
+A copy of ripgrep's licenses is distributed with the application in [`resources/licenses/ripgrep/`](../../resources/licenses/ripgrep/). We thank the ripgrep authors and contributors for providing a high-performance text search tool.
+
 ### Major Transitive Dependencies
 
 | Library | License |

@@ -83,6 +83,14 @@ xattr -cr /Applications/SpaceAssistant.app
 | [shiki](https://github.com/shikijs/shiki) | MIT |
 | [zod](https://github.com/colinhacks/zod) | MIT |
 
+### 随应用分发的工具
+
+| 工具 | 许可证 |
+|------|--------|
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | MIT / Unlicense |
+
+ripgrep 的许可证副本随应用保存在 [`resources/licenses/ripgrep/`](resources/licenses/ripgrep/)。感谢 ripgrep 作者及其贡献者提供了高性能的文本搜索工具。
+
 ### 主要间接依赖
 
 | 库 | 许可证 |
