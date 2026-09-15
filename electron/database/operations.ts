@@ -599,6 +599,41 @@ export function listPersistedTurns(db: AppDatabase, state?: string): PersistedTu
   return rows.map(decodeTurnContextRow)
 }
 
+/** 单次查询的 id 上限：渲染层一页最多 60 条消息，这里只是防止误用把 SQL 变量数撑爆。 */
+const TURN_ERROR_LOOKUP_LIMIT = 200
+
+/**
+ * 重开页面时按 assistantMessageId 回查终态失败原因（turn_error 事实只落在 turns 表里）。
+ * 输入顺序即输出顺序，重复 id 只返回一次，没有 error 记录或消息为空的 turn 直接跳过。
+ */
+export function listTurnErrorsByAssistantMessageIds(
+  db: AppDatabase,
+  assistantMessageIds: readonly string[]
+): Array<{ assistantMessageId: string; message: string }> {
+  const ids: string[] = []
+  for (const raw of assistantMessageIds) {
+    if (typeof raw !== 'string') continue
+    const id = raw.trim()
+    if (!id || ids.includes(id)) continue
+    ids.push(id)
+    if (ids.length >= TURN_ERROR_LOOKUP_LIMIT) break
+  }
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(', ')
+  const rows = getDbConnection(db)
+    .prepare(`SELECT assistant_message_id AS assistantMessageId, error_json AS errorJson FROM turns WHERE assistant_message_id IN (${placeholders}) AND error_json IS NOT NULL`)
+    .all(...ids) as Array<{ assistantMessageId: string; errorJson: string }>
+  const found = new Map<string, string>()
+  for (const row of rows) {
+    const message = parseJsonObject<{ message?: string }>(row.errorJson, {})?.message?.trim()
+    if (message) found.set(row.assistantMessageId, message)
+  }
+  return ids.flatMap((id) => {
+    const message = found.get(id)
+    return message ? [{ assistantMessageId: id, message }] : []
+  })
+}
+
 export function hasActiveTurn(db: AppDatabase, sessionId: string): boolean {
   const row = getDbConnection(db).prepare("SELECT 1 FROM turns WHERE session_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm') LIMIT 1").get(sessionId)
   return Boolean(row)

@@ -2,7 +2,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { Message } from '../../shared/domainTypes'
 import type { DisplayMessageEntry, DisplayOrder } from '../../shared/displayOrder'
 import type { SessionUsage } from '../../shared/sessionUsage'
-import type { TurnFailureEntry } from '../services/turnFailureDisplay'
+import type { TurnFailureReasons } from '../services/turnFailureDisplay'
 import {
   ackDisplayEntryPersisted,
   appendOptimisticDisplayEntry,
@@ -41,8 +41,8 @@ interface ChatState {
   scrollToMessageId: string | null
   lastUsage: LastUsage
   projectMemoryEnabled: boolean
-  /** 按会话记录最近一次失败的 assistant 消息与真实原因（供失败气泡展示） */
-  turnFailures: Record<string, TurnFailureEntry>
+  /** 按 assistantMessageId 记录失败原因（供失败气泡展示）；键天然唯一，重开页面可整体回溯覆盖 */
+  turnFailures: TurnFailureReasons
 }
 
 function syncMessagesFromEntries(state: ChatState): void {
@@ -217,11 +217,14 @@ export const chatSlice = createSlice({
     },
     setTurnFailure(
       state,
-      action: PayloadAction<{ sessionId: string; messageId: string; reason: string }>
+      action: PayloadAction<{ messageId: string; reason: string }>
     ) {
-      state.turnFailures[action.payload.sessionId] = {
-        messageId: action.payload.messageId,
-        reason: action.payload.reason
+      state.turnFailures[action.payload.messageId] = action.payload.reason
+    },
+    /** 重开页面回溯：把主进程按 assistantMessageId 查到的历史原因并入缓存（空白原因不写入） */
+    mergeTurnFailures(state, action: PayloadAction<TurnFailureReasons>) {
+      for (const [messageId, reason] of Object.entries(action.payload)) {
+        if (reason?.trim()) state.turnFailures[messageId] = reason
       }
     },
     resetChatUi(state) {
@@ -239,6 +242,7 @@ export const chatSlice = createSlice({
       state.scrollToMessageId = null
       state.lastUsage = null
       state.projectMemoryEnabled = true
+      state.turnFailures = {}
     },
     setProjectMemoryEnabled(state, action: PayloadAction<boolean>) {
       state.projectMemoryEnabled = action.payload
@@ -260,6 +264,7 @@ export const {
   removeMessage,
   setChatStatus,
   setTurnFailure,
+  mergeTurnFailures,
   setConfirmFocusToolUseId,
   setScrollToMessageId,
   removeRunningSession,

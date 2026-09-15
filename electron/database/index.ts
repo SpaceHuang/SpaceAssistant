@@ -43,6 +43,7 @@ export {
   setPersistedTurnExecutionConfig,
   failConfiguringTurn,
   listPersistedTurns,
+  listTurnErrorsByAssistantMessageIds,
   hasActiveTurn,
   createPersistedTurn,
   getQueueInputReceipt,

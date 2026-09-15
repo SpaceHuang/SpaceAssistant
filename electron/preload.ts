@@ -34,6 +34,7 @@ const api: SpaceAssistantApi = {
   chatExecuteTurn: (payload: TurnExecutePayload) => ipcRenderer.invoke('chat:execute-turn', payload),
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
   chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
+  chatGetTurnErrors: (payload) => ipcRenderer.invoke('chat:get-turn-errors', payload),
   chatListActiveTurns: (payload) => ipcRenderer.invoke('chat:list-active-turns', payload),
   chatOnTurnProjection: (cb) => {
     const fn = (_e: unknown, data: Parameters<typeof cb>[0]) => cb(data)

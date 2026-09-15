@@ -32,7 +32,6 @@ async function projectTurnFailure(payload: TurnProjectionPayload): Promise<void>
   const reported = payload.event.message?.trim()
   if (reported) {
     store.dispatch(setTurnFailure({
-      sessionId: turn.sessionId,
       messageId: turn.assistantMessage.id,
       reason: reported
     }))
@@ -45,7 +44,6 @@ async function projectTurnFailure(payload: TurnProjectionPayload): Promise<void>
     const reason = terminal?.error?.message?.trim()
     if (!reason) return
     store.dispatch(setTurnFailure({
-      sessionId: terminal?.sessionId ?? turn.sessionId,
       messageId: terminal?.assistantMessageId ?? turn.assistantMessage.id,
       reason
     }))

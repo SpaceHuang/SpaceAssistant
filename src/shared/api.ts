@@ -249,6 +249,8 @@ export type SpaceAssistantApi = {
   chatExecuteTurn: (payload: TurnExecutePayload) => Promise<{ ok: true; accepted: true; turnId: string }>
   chatCancelTurn: (turnId: string) => Promise<boolean>
   chatGetTurnTerminal: (turnId: string) => Promise<import('./assistantFactAggregator').TurnTerminal | undefined>
+  /** 重开页面时按 assistantMessageId 回查历史失败原因（无记录的消息不会出现在结果里） */
+  chatGetTurnErrors: (payload: { assistantMessageIds: string[] }) => Promise<Array<{ assistantMessageId: string; message: string }>>
   chatListActiveTurns: (payload?: { sessionId?: string }) => Promise<import('./turnCoordinator').TurnStarted[]>
   chatOnTurnProjection: (cb: (data: { turn: import('./turnCoordinator').TurnStarted; event: import('./assistantFactAggregator').AssistantFactEvent }) => void) => () => void
   chatDeleteQueuedMessage: (payload: {

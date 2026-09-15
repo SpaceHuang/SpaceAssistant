@@ -34,6 +34,7 @@ vi.mock('./database', () => ({
   getSession: vi.fn(),
   getTurnByRequestId: vi.fn(),
   getPersistedTurn: vi.fn(),
+  listTurnErrorsByAssistantMessageIds: vi.fn((): Array<{ assistantMessageId: string; message: string }> => []),
   setPersistedTurnExecutionConfig: vi.fn(() => true),
   failConfiguringTurn: vi.fn(() => true),
   getMessage: vi.fn(),
@@ -404,6 +405,50 @@ describe('file IPC handlers', () => {
     const elapsedMs = performance.now() - startedAt
     console.log('[chat-ipc-dispatch-perf]', JSON.stringify({ sampleCount, elapsedMs, p50ApproxMs: elapsedMs / sampleCount }))
     expect(elapsedMs).toBeGreaterThanOrEqual(0)
+  })
+
+  describe('chat:get-turn-errors', () => {
+    it('按 assistantMessageId 返回持久化失败原因', async () => {
+      vi.mocked(database.listTurnErrorsByAssistantMessageIds).mockReturnValue([
+        { assistantMessageId: 'a1', message: '会话模型「x」当前不可用（未知模型）' }
+      ])
+      const handler = ipc.getHandler('chat:get-turn-errors')!
+
+      expect(await handler({}, { assistantMessageIds: ['a1', 'a2'] })).toEqual([
+        { assistantMessageId: 'a1', message: '会话模型「x」当前不可用（未知模型）' }
+      ])
+      expect(database.listTurnErrorsByAssistantMessageIds).toHaveBeenCalledWith(ctx.db, ['a1', 'a2'])
+    })
+
+    it('内存终态优先于持久化记录', async () => {
+      vi.mocked(database.listTurnErrorsByAssistantMessageIds).mockReturnValue([
+        { assistantMessageId: 'a1', message: '旧的持久化原因' }
+      ])
+      const getTerminalByAssistantMessageId = vi.fn((messageId: string) =>
+        messageId === 'a1' ? { error: { code: 'source-failed', message: '内存里的最新原因' } } : undefined
+      )
+      ctx.turnRuntime = {
+        coordinator: { getTerminalByAssistantMessageId, recover: vi.fn(), listActive: vi.fn(() => []) },
+        listActive: vi.fn(() => []),
+        cancel: vi.fn()
+      } as unknown as AppIpcContext['turnRuntime']
+      ipc = mockIpcMain()
+      registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+      const handler = ipc.getHandler('chat:get-turn-errors')!
+
+      expect(await handler({}, { assistantMessageIds: ['a1'] })).toEqual([
+        { assistantMessageId: 'a1', message: '内存里的最新原因' }
+      ])
+      expect(getTerminalByAssistantMessageId).toHaveBeenCalledWith('a1')
+    })
+
+    it('没有可查 id 时不查库', async () => {
+      const handler = ipc.getHandler('chat:get-turn-errors')!
+
+      expect(await handler({}, { assistantMessageIds: [] })).toEqual([])
+      expect(await handler({}, undefined)).toEqual([])
+      expect(database.listTurnErrorsByAssistantMessageIds).not.toHaveBeenCalled()
+    })
   })
 
   describe('file:create-file', () => {

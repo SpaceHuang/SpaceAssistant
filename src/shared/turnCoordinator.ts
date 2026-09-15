@@ -419,6 +419,13 @@ export class TurnCoordinator {
   }
 
   getTerminal(turnId: string): TurnTerminal | undefined { return this.terminals.get(turnId) }
+  /** 重开页面只能拿到消息，拿不到 turnId：按 assistantMessageId 回查内存终态（失败原因只在这里和 turns 表里）。 */
+  getTerminalByAssistantMessageId(assistantMessageId: string): TurnTerminal | undefined {
+    for (const terminal of this.terminals.values()) {
+      if (terminal.assistantMessageId === assistantMessageId) return terminal
+    }
+    return undefined
+  }
   getTurn(turnId: string): TurnStarted | undefined { return this.turns.get(turnId) }
   listActive(sessionId?: string): TurnStarted[] {
     return [...this.turns.values()].filter((turn) => (!sessionId || turn.sessionId === sessionId) && turn.assistantMessage.status !== 'completed' && turn.assistantMessage.status !== 'failed')

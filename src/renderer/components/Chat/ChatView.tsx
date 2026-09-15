@@ -4,6 +4,7 @@ import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import {
   ackDisplayMessagePersisted,
+  mergeTurnFailures,
   prependDisplayPage,
   removeMessage,
   restoreLastUsage,
@@ -64,6 +65,7 @@ import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelPicker } from './ComposerModelPicker'
 import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
+import { loadTurnFailureReasons } from '../../services/turnFailureHydration'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
@@ -210,6 +212,21 @@ export function ChatView() {
     viewportRef.current?.scrollToBottom('smooth')
   }, [])
 
+  /**
+   * 消息页统一入口：终态失败原因只存在主进程 turn 记录里，重开页面/切换会话拿不到 projection 事实，
+   * 所以每次拉页都按 assistantMessageId 回查一次，历史失败气泡才不会只剩通用提示。
+   * 回溯按 messageId 归并，晚到的结果也不会串到别的会话。
+   */
+  const fetchMessagePage = useCallback(
+    async (payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
+      const page = await window.api.chatGetMessagePage(payload)
+      const reasons = await loadTurnFailureReasons(page.entries.map((entry) => entry.message))
+      if (Object.keys(reasons).length > 0) dispatch(mergeTurnFailures(reasons))
+      return page
+    },
+    [dispatch]
+  )
+
   useEffect(() => {
     if (!sessionId) {
       dispatch(setMessages([]))
@@ -218,7 +235,7 @@ export function ChatView() {
     let cancelled = false
     const generation = beginContextSummarySession(sessionId)
     void (async () => {
-      const page = await window.api.chatGetMessagePage({ sessionId, limit: 60 })
+      const page = await fetchMessagePage({ sessionId, limit: 60 })
       if (cancelled) return
       dispatch(
         setDisplayPage({
@@ -241,7 +258,7 @@ export function ChatView() {
     return () => {
       cancelled = true
     }
-  }, [sessionId, dispatch, bumpContextSummary])
+  }, [sessionId, dispatch, bumpContextSummary, fetchMessagePage])
 
   const loadPreviousPage = useCallback(async () => {
     if (!sessionId) return { loaded: false as const, beforeSequence: null as number | null }
@@ -257,11 +274,11 @@ export function ChatView() {
           displayGeneration: s.displayGeneration
         }
       },
-      fetchPage: (payload) => window.api.chatGetMessagePage(payload),
+      fetchPage: (payload) => fetchMessagePage(payload),
       setLoading: (loading) => dispatch(setLoadingBefore(loading)),
       prepend: (payload) => dispatch(prependDisplayPage(payload))
     })
-  }, [sessionId, dispatch])
+  }, [sessionId, dispatch, fetchMessagePage])
 
   useEffect(() => {
     if (!sessionId) {
@@ -320,7 +337,7 @@ export function ChatView() {
     async (targetSessionId: string) => {
       if (store.getState().chat.currentSessionId !== targetSessionId) return
       const generation = store.getState().chat.displayGeneration + 1
-      const page = await window.api.chatGetMessagePage({ sessionId: targetSessionId, limit: 60 })
+      const page = await fetchMessagePage({ sessionId: targetSessionId, limit: 60 })
       dispatch(
         setDisplayPage({
           entries: page.entries,
@@ -330,7 +347,7 @@ export function ChatView() {
         })
       )
     },
-    [dispatch]
+    [dispatch, fetchMessagePage]
   )
 
   useEffect(() => {

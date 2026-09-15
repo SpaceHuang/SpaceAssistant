@@ -183,7 +183,6 @@ describe('turn projection bridge', () => {
       const off = initTurnProjectionBridge()
       emit({ turn: { turnId: 'fail-turn', requestId: 'r1', sessionId: 's1', assistantMessage: failedMessage, version: 1 }, event: { type: 'source-failed' } })
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledWith(setTurnFailure({
-        sessionId: 's1',
         messageId: 'a-fail',
         reason: '会话模型「claude-sonnet-4-20250514」当前不可用'
       })))
@@ -199,7 +198,6 @@ describe('turn projection bridge', () => {
         event: { type: 'source-failed', message: '会话模型「x」当前不可用' }
       })
       expect(dispatch).toHaveBeenCalledWith(setTurnFailure({
-        sessionId: 's1',
         messageId: 'a-fail',
         reason: '会话模型「x」当前不可用'
       }))

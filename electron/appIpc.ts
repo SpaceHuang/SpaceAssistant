@@ -34,6 +34,7 @@ import {
   listSearchHistory,
   listSessions,
   listPersistedTurns,
+  listTurnErrorsByAssistantMessageIds,
   resolveRetryContext,
   searchMessages,
   setConfigValue,
@@ -978,6 +979,19 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     return cancelled
   })
   ipcMain.handle('chat:get-turn-terminal', (_e, turnId: string) => turnCoordinator.getTerminal(turnId))
+  // 重开页面时渲染层只有消息 id：按 assistantMessageId 回查终态失败原因，
+  // 否则历史失败气泡永远只剩通用提示。内存终态比持久化记录新，优先采纳。
+  ipcMain.handle('chat:get-turn-errors', (_e, payload?: { assistantMessageIds?: unknown }) => {
+    const requested = Array.isArray(payload?.assistantMessageIds) ? payload.assistantMessageIds : []
+    const ids = requested.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    if (ids.length === 0) return []
+    const errors = new Map(listTurnErrorsByAssistantMessageIds(ctx.db, ids).map((entry) => [entry.assistantMessageId, entry.message]))
+    for (const id of ids) {
+      const live = turnCoordinator.getTerminalByAssistantMessageId(id)?.error?.message?.trim()
+      if (live) errors.set(id, live)
+    }
+    return [...errors].map(([assistantMessageId, message]) => ({ assistantMessageId, message }))
+  })
   ipcMain.handle('chat:list-active-turns', (_e, payload?: { sessionId?: string }) => turnRuntime.listActive(payload?.sessionId).map(({ executionConfig: _executionConfig, ...turn }) => turn))
 
   ipcMain.handle(
