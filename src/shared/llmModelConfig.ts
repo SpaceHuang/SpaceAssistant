@@ -64,6 +64,24 @@ export function migrateModelEntries(models: ModelEntry[]): ModelEntry[] {
   })
 }
 
+/**
+ * 单个模型名（含持久化在会话上的旧名）的内置改名归一：deepseek-v4-flash → deepseek-flash。
+ * 支持链式改名；未命中的名字（用户自定义、已下架模型）原样返回，由调用方决定如何处置。
+ */
+export function migrateBuiltinModelName(
+  name: string,
+  migrations: Record<string, string> = BUILTIN_MODEL_NAME_MIGRATIONS
+): string {
+  let next = name.trim()
+  const seen = new Set<string>([next])
+  for (;;) {
+    const target = migrations[next]
+    if (!target || seen.has(target)) return next
+    seen.add(target)
+    next = target
+  }
+}
+
 export function getEnabledModelIds(models: ModelEntry[]): string[] {
   return models.filter((m) => m.enabled).map((m) => m.id)
 }

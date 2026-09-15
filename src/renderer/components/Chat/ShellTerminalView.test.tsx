@@ -67,6 +67,16 @@ describe('ShellTerminalView', () => {
     await waitFor(() => expect(write).toHaveBeenCalled())
   })
 
+  it('M4：按 outputEncodingLabel 解码 raw progress（GBK 终端不再按 UTF-8 解成乱码）', async () => {
+    const raw = Buffer.from('D6D0CEC4B2E2CAD4414243', 'hex').toString('base64')
+    render(<ShellTerminalView progressOutputRaw={raw} outputEncodingLabel="gbk" />)
+    await flushRaf(8)
+    await waitFor(() => expect(write).toHaveBeenCalled())
+    const written = write.mock.calls.map((call) => String(call[0])).join('')
+    expect(written).toContain('中文测试ABC')
+    expect(written).not.toContain('\uFFFD')
+  })
+
   it('exports scrollback on dispose', async () => {
     const onBeforeDispose = vi.fn()
     const { unmount } = render(<ShellTerminalView onBeforeDispose={onBeforeDispose} />)

@@ -4,8 +4,10 @@ import { ConfigResultAlert } from './ConfigResultAlert'
 import {
   isProductBuiltinSkill,
   type AppConfig,
+  type GithubSkillCandidate,
   type SkillActivationLogEntry,
-  type SkillDefinition
+  type SkillDefinition,
+  type SkippedCandidate
 } from '../../../shared/domainTypes'
 import {
   getRecommendedSkillAuthor,
@@ -14,7 +16,9 @@ import {
   type RecommendedSkillEntry
 } from '../../../shared/recommendedSkills'
 import { configModalSelectPopupClassNames } from './configModalUi'
+import { ErrorCodes, errorCodeOf } from '../../../shared/errorCodes'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { overwriteConflictNames, planGithubInstall } from '../../utils/planGithubInstall'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 function FolderOpenIcon() {
@@ -113,8 +117,12 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
   const [githubModalOpen, setGithubModalOpen] = useState(false)
   const [githubInstalling, setGithubInstalling] = useState(false)
   const [githubProbing, setGithubProbing] = useState(false)
-  const [githubCandidates, setGithubCandidates] = useState<Array<{ name: string; description: string; subPath: string; totalBytes: number }>>([])
+  const [githubCandidates, setGithubCandidates] = useState<GithubSkillCandidate[]>([])
   const [githubSelectedPaths, setGithubSelectedPaths] = useState<string[]>([])
+  const [githubProbedUrl, setGithubProbedUrl] = useState<string | null>(null)
+  const [githubTruncated, setGithubTruncated] = useState(false)
+  const [githubSkipped, setGithubSkipped] = useState<SkippedCandidate[]>([])
+  const [githubOverwritten, setGithubOverwritten] = useState<string[]>([])
   const [githubProgress, setGithubProgress] = useState<{ phase: string; completed?: number; total?: number } | null>(null)
 
   useEffect(() => window.api.skillInstallOnProgress((progress) => setGithubProgress(progress)), [])
@@ -173,13 +181,28 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     new Promise<boolean>((resolve) => {
       modal.confirm({
         title: t('skills.existsTitle'),
-        content: t('skills.existsContent', { error }),
+        content: t('skills.existsContent', { error: formatUserFacingError(error) }),
         okText: tCommon('confirm'),
         cancelText: tCommon('cancel'),
         onOk: () => resolve(true),
         onCancel: () => resolve(false)
       })
     })
+
+  /** 同名冲突按错误码判定，不再依赖文案子串匹配（需求 §5.9） */
+  const isNameConflictError = (raw: string) => errorCodeOf(raw) === ErrorCodes.SKILL_NAME_CONFLICT
+
+  /** 覆盖是大范围破坏性操作：N > 1 列出名单二次确认，N = 1 沿用单条确认（需求 §5.7） */
+  const confirmOverwriteBatch = async (names: string[]) => {
+    if (names.length > 1) {
+      return confirmDialog(
+        t('skills.urlOverwriteConfirmTitle', { count: names.length }),
+        t('skills.urlOverwriteConfirmContent', { names: names.join('、') })
+      )
+    }
+    const conflict = githubCandidates.find((c) => c.status === 'name-conflict' && names.includes(c.name))
+    return confirmOverwrite(conflict?.reason ?? ErrorCodes.SKILL_NAME_CONFLICT)
+  }
 
   const onInstall = async () => {
     setAlert(null)
@@ -191,13 +214,13 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     }
     if (!('path' in picked)) return
     let res = await window.api.skillInstall({ sourcePath: picked.path })
-    if (!res.ok && res.error.includes('已存在')) {
+    if (!res.ok && isNameConflictError(res.error)) {
       const ok = await confirmOverwrite(res.error)
       if (!ok) return
       res = await window.api.skillInstall({ sourcePath: picked.path, overwrite: true })
     }
     if (!res.ok) {
-      setAlert({ type: 'error', text: res.error })
+      setAlert({ type: 'error', text: formatUserFacingError(res.error) })
       return
     }
     showInstallSuccess([res.skill.meta.name])
@@ -209,13 +232,28 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     setInstallingRecommendedId(entry.id)
     try {
       let res = await installFromUrl(entry)
-      if (!res.ok && res.error.includes('已存在')) {
+      if (!res.ok && isNameConflictError(res.error)) {
         const ok = await confirmOverwrite(res.error)
         if (!ok) return
         res = await installFromUrl(entry, true)
       }
       if (!res.ok) {
-        setAlert({ type: 'error', text: res.error })
+        setAlert({ type: 'error', text: formatUserFacingError(res.error) })
+        return
+      }
+      // 降级路径不再整体抛错：全部同名时询问是否覆盖重装（需求 §5.7）
+      if (res.skills.length === 0 && res.skipped.some((item) => isNameConflictError(item.reason))) {
+        const conflict = res.skipped.find((item) => isNameConflictError(item.reason))!
+        const ok = await confirmOverwrite(conflict.reason)
+        if (!ok) return
+        res = await installFromUrl(entry, true)
+        if (!res.ok) {
+          setAlert({ type: 'error', text: formatUserFacingError(res.error) })
+          return
+        }
+      }
+      if (res.skills.length === 0) {
+        message.warning(t('skills.urlNothingInstalled', { count: res.skipped.length }))
         return
       }
       showInstallSuccess(res.skills.map((skill) => skill.meta.name))
@@ -226,28 +264,119 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
     }
   }
 
-  const onInstallGithub = async () => {
+  const resetGithubInstallState = () => {
+    setGithubModalOpen(false)
+    setGithubUrl('')
+    setGithubCandidates([])
+    setGithubSelectedPaths([])
+    setGithubProbedUrl(null)
+    setGithubTruncated(false)
+    setGithubSkipped([])
+    setGithubOverwritten([])
+    setGithubProgress(null)
+  }
+
+  const confirmDialog = (title: string, content: string) =>
+    new Promise<boolean>((resolve) => {
+      modal.confirm({
+        title,
+        content,
+        okText: tCommon('confirm'),
+        cancelText: tCommon('cancel'),
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      })
+    })
+
+  const runGithubInstall = async (payload: {
+    sourceUrl: string
+    subPaths?: string[]
+    installAll?: boolean
+    overwrite: boolean
+  }) => {
     setGithubInstalling(true)
     setGithubProgress({ phase: 'install' })
+    setGithubSkipped([])
+    setGithubOverwritten([])
     try {
-      const paths = githubSelectedPaths.length ? githubSelectedPaths : [undefined]
-      const installed = []
-      for (const subPath of paths) {
-        const res = await window.api.skillInstallFromUrl({ sourceUrl: githubUrl, subPath, installAll: !subPath })
-        if (!res.ok) { setAlert({ type: 'error', text: formatUserFacingError(res.error) }); return }
-        installed.push(...res.skills)
+      const res = await window.api.skillInstallFromUrl(payload)
+      if (!res.ok) {
+        setAlert({ type: 'error', text: formatUserFacingError(res.error) })
+        return
       }
-      setGithubModalOpen(false); setGithubUrl(''); setGithubCandidates([]); setGithubProgress(null); showInstallSuccess(installed.map((s) => s.meta.name)); await loadSkills()
-    } finally { setGithubInstalling(false) }
+      setGithubSkipped(res.skipped)
+      setGithubOverwritten(res.overwritten)
+      const names = res.skills.map((skill) => skill.meta.name)
+      if (names.length > 0) showInstallSuccess(names)
+      else message.warning(t('skills.urlNothingInstalled', { count: res.skipped.length }))
+      if (res.overwritten.length > 0) {
+        message.warning(t('skills.urlOverwritten', { count: res.overwritten.length, names: res.overwritten.join('、') }))
+      }
+      await loadSkills()
+      if (res.skipped.length === 0) resetGithubInstallState()
+    } finally {
+      setGithubInstalling(false)
+    }
+  }
+
+  const onInstallGithub = async () => {
+    setAlert(null)
+    const plan = planGithubInstall({
+      url: githubUrl,
+      probedUrl: githubProbedUrl,
+      candidates: githubCandidates,
+      selectedPaths: githubSelectedPaths
+    })
+    if (plan.mode === 'blocked') {
+      setAlert({
+        type: 'error',
+        text:
+          plan.reason === 'stale-probe'
+            ? t('skills.urlStaleProbe')
+            : t('skills.urlNoSelection', { count: githubCandidates.filter((c) => c.status === 'name-conflict').length })
+      })
+      return
+    }
+    if (plan.mode === 'whole-repo') {
+      const ok = await confirmDialog(t('skills.urlWholeRepoConfirmTitle'), t('skills.urlWholeRepoConfirmContent'))
+      if (!ok) return
+      await runGithubInstall({ sourceUrl: githubUrl, installAll: true, overwrite: false })
+      return
+    }
+    if (plan.overwrite) {
+      const ok = await confirmOverwriteBatch(overwriteConflictNames(githubCandidates, plan.subPaths))
+      if (!ok) return
+    }
+    // 安装请求以探测时的 URL 为准（plan 已校验与当前输入一致）
+    await runGithubInstall({ sourceUrl: githubProbedUrl!, subPaths: plan.subPaths, overwrite: plan.overwrite })
+  }
+
+  const onOverwriteConflicts = async () => {
+    setAlert(null)
+    if (!githubProbedUrl || githubProbedUrl !== githubUrl.trim()) {
+      setAlert({ type: 'error', text: t('skills.urlStaleProbe') })
+      return
+    }
+    const conflicts = githubCandidates.filter((c) => c.status === 'name-conflict').map((c) => c.subPath)
+    const paths = Array.from(new Set([...githubSelectedPaths, ...conflicts]))
+    setGithubSelectedPaths(paths)
+    const ok = await confirmOverwriteBatch(overwriteConflictNames(githubCandidates, paths))
+    if (!ok) return
+    await runGithubInstall({ sourceUrl: githubProbedUrl, subPaths: paths, overwrite: true })
   }
 
   const onProbeGithub = async () => {
     setGithubProbing(true)
+    setAlert(null)
     try {
       const res = await window.api.skillProbeFromUrl({ sourceUrl: githubUrl })
       if (!res.ok) { setAlert({ type: 'error', text: formatUserFacingError(res.error) }); return }
       setGithubCandidates(res.candidates)
-      setGithubSelectedPaths(res.candidates.map((c) => c.subPath))
+      setGithubProbedUrl(githubUrl.trim())
+      setGithubTruncated(res.truncated || res.visitedTruncated)
+      setGithubSelectedPaths(res.candidates.filter((c) => c.status === 'ok').map((c) => c.subPath))
+      setGithubSkipped([])
+      setGithubOverwritten([])
     } finally { setGithubProbing(false) }
   }
 
@@ -284,6 +413,10 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
   const visibleSkills = skills.filter((s) => !isProductBuiltinSkill(s.meta.name))
   const skillOptions = visibleSkills.map((s) => ({ label: s.meta.name, value: s.meta.name }))
   const installedSkillNames = useMemo(() => new Set(visibleSkills.map((s) => s.meta.name)), [visibleSkills])
+
+  const githubOkCount = githubCandidates.filter((c) => c.status === 'ok').length
+  const githubInvalidCount = githubCandidates.filter((c) => c.status === 'invalid').length
+  const githubConflictCount = githubCandidates.filter((c) => c.status === 'name-conflict').length
 
   const { widths, headerTitle } = useResizableColumns({
     enable: 64,
@@ -365,7 +498,7 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
         </Space>
       </div>
 
-      <Modal className="sa-skill-github-modal" width={560} title={t('skills.urlModalTitle')} open={githubModalOpen} confirmLoading={githubInstalling} onCancel={() => { if (githubInstalling) void window.api.skillCancelInstall(); setGithubModalOpen(false) }} onOk={() => void onInstallGithub()} okButtonProps={{ disabled: !githubUrl.trim() }} cancelText={githubInstalling ? t('skills.urlCancel') : undefined}>
+      <Modal className="sa-skill-github-modal" width={560} title={t('skills.urlModalTitle')} open={githubModalOpen} confirmLoading={githubInstalling} onCancel={() => { if (githubInstalling) void window.api.skillCancelInstall(); resetGithubInstallState() }} onOk={() => void onInstallGithub()} okButtonProps={{ disabled: !githubUrl.trim() }} cancelText={githubInstalling ? t('skills.urlCancel') : undefined}>
         <div className="sa-skill-github-modal__intro">
           <Typography.Text type="secondary">{t('skills.urlTrustWarning')}</Typography.Text>
         </div>
@@ -374,7 +507,66 @@ export function SkillsTab({ active, config, onConfigSaved, activationLog = [] }:
           <Button loading={githubProbing} disabled={!githubUrl.trim()} onClick={() => void onProbeGithub()}>{t('skills.urlProbe')}</Button>
         </div>
         {githubInstalling && githubProgress ? <div className="sa-skill-github-modal__progress"><Progress percent={githubProgress.total ? Math.round((githubProgress.completed ?? 0) / githubProgress.total * 100) : undefined} status="active" format={() => githubProgress.phase} /></div> : null}
-        {githubCandidates.length > 0 ? <div className="sa-skill-github-modal__candidates"><div className="sa-skill-github-modal__section-label">{t('skills.urlProbeFound', { count: githubCandidates.length })}</div><Checkbox.Group className="sa-skill-github-candidate-list" value={githubSelectedPaths} onChange={(v) => setGithubSelectedPaths(v as string[])}>{githubCandidates.map((c) => <Checkbox key={c.subPath} value={c.subPath}><span className="sa-skill-github-candidate"><span className="sa-skill-github-candidate__name">{c.name}</span><span className="sa-skill-github-candidate__description">{c.description}</span></span></Checkbox>)}</Checkbox.Group></div> : null}
+        {githubCandidates.length === 0 && githubUrl.trim() ? (
+          <Typography.Text type="secondary">{t('skills.urlWholeRepoHint')}</Typography.Text>
+        ) : null}
+        {githubCandidates.length > 0 ? (
+          <div className="sa-skill-github-modal__candidates">
+            <div className="sa-skill-github-modal__section-label">{t('skills.urlProbeFound', { count: githubCandidates.length })}</div>
+            <div className="sa-skill-github-modal__summary">
+              <Typography.Text type="secondary">
+                {t('skills.urlProbeSummary', { ok: githubOkCount, invalid: githubInvalidCount, conflict: githubConflictCount })}
+              </Typography.Text>
+              {githubTruncated ? (
+                <Typography.Text type="warning">{t('skills.urlProbeTruncated', { count: githubCandidates.length })}</Typography.Text>
+              ) : null}
+            </div>
+            <Checkbox.Group className="sa-skill-github-candidate-list" value={githubSelectedPaths} onChange={(v) => setGithubSelectedPaths(v as string[])}>
+              {githubCandidates.map((c) => (
+                <Checkbox key={c.subPath} value={c.subPath} disabled={c.status === 'invalid'}>
+                  <span className="sa-skill-github-candidate">
+                    <span className="sa-skill-github-candidate__name">
+                      {c.name}
+                      {c.status === 'invalid' ? (
+                        <Tooltip title={formatUserFacingError(c.reason)}>
+                          <Tag>{t('skills.urlStatusInvalid')}</Tag>
+                        </Tooltip>
+                      ) : null}
+                      {c.status === 'name-conflict' ? (
+                        <Tooltip title={formatUserFacingError(c.reason)}>
+                          <Tag color="warning">{t('skills.urlStatusConflict')}</Tag>
+                        </Tooltip>
+                      ) : null}
+                    </span>
+                    <span className="sa-skill-github-candidate__path">{c.subPath}</span>
+                    <span className="sa-skill-github-candidate__description">{c.description}</span>
+                  </span>
+                </Checkbox>
+              ))}
+            </Checkbox.Group>
+          </div>
+        ) : null}
+        {githubSkipped.length > 0 ? (
+          <div className="sa-skill-github-modal__result">
+            <div className="sa-skill-github-modal__section-label">{t('skills.urlSkippedSummary', { count: githubSkipped.length })}</div>
+            <ul className="sa-skill-github-skipped">
+              {githubSkipped.map((item) => (
+                <li key={item.subPath}>
+                  <code>{item.subPath}</code>
+                  <span>{formatUserFacingError(item.reason)}</span>
+                </li>
+              ))}
+            </ul>
+            {githubConflictCount > 0 ? (
+              <Button size="small" onClick={() => void onOverwriteConflicts()}>{t('skills.urlOverwriteAction')}</Button>
+            ) : null}
+          </div>
+        ) : null}
+        {githubOverwritten.length > 0 ? (
+          <Typography.Text type="warning">
+            {t('skills.urlOverwritten', { count: githubOverwritten.length, names: githubOverwritten.join('、') })}
+          </Typography.Text>
+        ) : null}
       </Modal>
 
       <Tabs

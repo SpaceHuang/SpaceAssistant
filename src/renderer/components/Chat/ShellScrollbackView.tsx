@@ -4,7 +4,9 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { ShellTerminalScrollback } from '../../../shared/domainTypes'
 import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
+import { needsOutputTrustNotice } from '../../../shared/shellToolDisplay'
 import { pickScrollbackRestorePayload } from '../../../shared/terminalScrollback'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildShellTerminalOptions } from './terminalTheme'
 import { ShellOutputView } from './ShellOutputView'
 import {
@@ -25,6 +27,8 @@ type Props = {
   truncated?: boolean
   artifactId?: string
   persistedOutputPath?: string
+  /** §10.4：outputTrust=suspect 时必须在终端回滚分支同样显示可疑提示 */
+  outputTrust?: 'ok' | 'suspect'
   expanded: boolean
 }
 
@@ -36,8 +40,10 @@ export function ShellScrollbackView({
   truncated,
   artifactId,
   persistedOutputPath,
+  outputTrust,
   expanded
 }: Props) {
+  const { t } = useTypedTranslation('chat')
   const hostRef = useRef<HTMLDivElement>(null)
   const restoredRef = useRef(false)
 
@@ -118,14 +124,14 @@ export function ShellScrollbackView({
         truncated={truncated}
         artifactId={artifactId}
         persistedOutputPath={persistedOutputPath}
+        outputTrust={outputTrust}
       />
     )
   }
 
   if (!expanded) {
-    return showExitCode ? (
-      <ShellOutputView stdout="" stderr="" exitCode={exitCode} />
-    ) : null
+    // 收起态也要能看到可疑提示：ShellOutputView 在“无文本但可疑”时仍会渲染警告。
+    return <ShellOutputView stdout="" stderr="" exitCode={exitCode} outputTrust={outputTrust} />
   }
 
   return (
@@ -137,6 +143,11 @@ export function ShellScrollbackView({
       ) : null}
       {scrollback?.truncated ? (
         <div className="shell-output__meta">终端记录已截断（超过 256KB）</div>
+      ) : null}
+      {needsOutputTrustNotice({ outputTrust }) ? (
+        <div className="shell-output__trust-warning" role="status">
+          {t('shell.outputTrustSuspect')}
+        </div>
       ) : null}
       <div
         className="shell-terminal-wrap shell-terminal-wrap--static sa-code-scrollbar"

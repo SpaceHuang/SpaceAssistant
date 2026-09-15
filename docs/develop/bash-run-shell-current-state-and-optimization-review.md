@@ -166,12 +166,14 @@ type ShellProfile = {
   executable: string
   commandArgsTemplate: string[] // 必须且仅有一个 {command} 或 {encodedCommand}
   loginMode: 'none' | 'login'
-  encoding: 'utf8' | 'gbk' | 'oem' | 'auto'
+  // 已落地（D2）：契约是类型化判别式，唯一消费者是 electron/processOutput/ 的解码器
+  outputEncoding: OutputEncodingContract // 'auto' | 'utf8' | { kind: 'oem'; codepage } | 'utf16le'
+  encodingSource: 'builtin' | 'user' | 'detected'
   source: 'builtin' | 'user'
 }
 ```
 
-目标态只提供两个内置 profile：macOS 使用系统 Bash，Windows 使用系统内置 Windows PowerShell。Windows profile 固定使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}`；`encodedCommand` 是“输出编码固定 + 进度流静默的 prelude + Agent 原始命令”的 UTF-16LE Base64，避免 Windows native argv 对引号、多行和特殊字符再次解释。prelude 先设 `$ProgressPreference = 'SilentlyContinue'` 再固定 UTF-8：非交互宿主否则会把 progress 记录序列化成 CLIXML 写进 stderr（首次启动的 "Preparing modules for first use." 就会命中），既污染 Agent 可见输出，也让 stdout/stderr 字节统计随系统语言漂移。`Bypass` 仅作用于本次子进程，不修改用户或机器级策略，同时避免 npm 安装的 `.ps1` shim 被本机脚本策略意外阻断。本阶段不把 `cmd.exe`、PowerShell 7 的 `pwsh`、Git Bash 或 WSL 作为可选 profile。Windows 自定义 executable 若不能验证为同一 Windows PowerShell 方言则拒绝保存或迁移为“需用户重新选择”，避免从设置入口重新引入第二套解析与提示逻辑。
+目标态只提供两个内置 profile：macOS 使用系统 Bash，Windows 使用系统内置 Windows PowerShell。Windows profile 固定使用 `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedCommand}`；`encodedCommand` 是“进度流静默的 prelude + Agent 原始命令”的 UTF-16LE Base64，避免 Windows native argv 对引号、多行和特殊字符再次解释。prelude 只保留 `$ProgressPreference = 'SilentlyContinue'`（D1：**不再**设置 `$OutputEncoding` / `[Console]::OutputEncoding`）：非交互宿主否则会把 progress 记录序列化成 CLIXML 写进 stderr（首次启动的 "Preparing modules for first use." 就会命中），既污染 Agent 可见输出，也让 stdout/stderr 字节统计随系统语言漂移。宿主默认编码（Windows 为 OEM CP）由 profile 的 `outputEncoding` 契约表达，期望编码不再靠“改写控制台编码”实现；详见 `shell-output-encoding-robustness-implementation-record.md`。`Bypass` 仅作用于本次子进程，不修改用户或机器级策略，同时避免 npm 安装的 `.ps1` shim 被本机脚本策略意外阻断。本阶段不把 `cmd.exe`、PowerShell 7 的 `pwsh`、Git Bash 或 WSL 作为可选 profile。Windows 自定义 executable 若不能验证为同一 Windows PowerShell 方言则拒绝保存或迁移为“需用户重新选择”，避免从设置入口重新引入第二套解析与提示逻辑。
 
 ### 3.5 P0：Agent 工具提示与真实 Shell dialect 脱节，导致跨平台语法误用
 
@@ -323,7 +325,7 @@ macOS 当前固定 `/bin/bash -lc`。登录 Shell 会读取 profile 文件，可
 
 建议改为“最小 allowlist + 显式扩展”：基础 OS 变量、HOME/USERPROFILE、TMP、PATH、locale、证书相关变量；项目所需额外变量由用户或任务授权明确加入。工具链发现统一由 Environment Resolver 提供，并记录 `environmentFingerprint` 便于复现。
 
-### 3.8 P1：编码探测可能在流式过程中反复改判
+### 3.8 P1：编码探测可能在流式过程中反复改判（**已实现**，见 §11.3）
 
 `createProcessOutputStreamDecoder()` 每次收到 chunk 都重新拼接全部 Buffer，并分别按 UTF-8/GBK 解码，再通过是否包含 CJK/U+FFFD 决定编码。问题包括：
 
@@ -333,6 +335,8 @@ macOS 当前固定 `/bin/bash -lc`。登录 Shell 会读取 profile 文件，可
 - terminal raw delta 与最终文本解码路径不同，用户看到的实时结果与最终结果可能不一致。
 
 建议在进程启动时确定编码：Windows PowerShell profile 通过统一启动 prelude 固定控制台与管道输出编码，macOS Bash profile 固定 locale/UTF-8；无法确定时仅在有限前导缓冲区内探测一次，然后锁定增量 decoder。不要每个 chunk 重解历史。Windows 目标态不再保留 cmd code page 分支。
+
+> **落地（2026-09-12）**：本条已按需求 `docs/requirement/shell-output-encoding-robustness-requirement.md` 实现，但与上面的建议有两处不同：prelude **不再**固定 UTF-8（D1），期望编码改为 profile 的 `outputEncoding` 契约 + OEMCP 探测；探测窗口固定 8 KiB、判定一次后锁定（§8.2 交付与锁定分离）。落地细节与偏差清单见 `shell-output-encoding-robustness-implementation-record.md`。
 
 ### 3.9 P1：取消、超时和退出结果缺少严格竞态模型
 
@@ -395,15 +399,26 @@ type TerminalResult = {
   dialect: 'posix-bash' | 'windows-powershell'
   cwd: string
   durationMs: number
-  stdoutBytes: number
+  stdoutBytes: number          // 旧口径保留：解码后文本的 UTF-8 长度
   stderrBytes: number
+  stdoutRawBytes: number       // 新口径：原始字节数（唯一原始事实）
+  stderrRawBytes: number
+  stdoutTextBytes: number      // = stdoutBytes（语义明确的新字段名）
+  stderrTextBytes: number
+  decodeReplacements: number   // 解码产生的 U+FFFD 计数
+  decode: { stdout: StreamDecodeDiagnostics; stderr: StreamDecodeDiagnostics; contractConflict?: 'contract-mismatch'; lossStage?: 'host' }
+  contract: OutputEncodingContract
+  outputTrust: 'ok' | 'suspect'
+  rawArtifact?: { path: string; bytes: number; rawBytes: number; omittedBytes: number; truncated: boolean; sha256: string; reason: string; note: 'unredacted' }
+  planMs: number
+  spawnToExitMs: number
   inlineTruncated: boolean
   outputArtifact?: { path: string; bytes: number; sha256: string }
   treeKillVerified?: boolean
 }
 ```
 
-错误使用机器可判定 code，用户文案在 renderer i18n 映射，避免主进程散落中文字符串。
+错误使用机器可判定 code，用户文案在 renderer i18n 映射，避免主进程散落中文字符串。上述字段已于 2026-09-12 落地（字段一律可选、旧字段语义不变），并配机器可读诊断行 `[output-diag] …`；口径说明见 `shell-output-encoding-robustness-implementation-record.md` §4。
 
 ## 4. 当前跨平台差异矩阵与目标收敛
 
@@ -718,7 +733,7 @@ Shell 内部的变量展开、命令替换、运行时创建的路径以及并�
 - 权限、信任、审计、指标和重试状态全部使用规范化 `run_shell` tool id，防止兼容别名形成第二套策略或绕过既有授权。
 - 从 profile snapshot 动态生成 `run_shell` 工具描述和 system capability block，替换当前静态、泛化的 Shell 提示。
 - 增加高置信 dialect mismatch 预检与结构化纠错错误；连续同类错配触发重试熔断。
-- 编码在 profile/启动期确定并锁定。
+- 编码在 profile/启动期确定并锁定（**已落地**：`outputEncoding` 契约 + `electron/processOutput/` 唯一入口，见 §11.3）。
 - Environment Resolver 统一 GUI/终端工具链发现，取消依靠登录 profile 补 PATH。
 - 设置页显示当前 dialect、真实 executable、命令模板、环境诊断结果。
 
@@ -879,10 +894,25 @@ npx vitest run electron/tools/runShellExecutor.test.ts electron/shell/shellExecP
 
 - 命令行查询与终止改走异步 `runCommandWithTimeout()`（查询、终止各 5s 上限），超时按未完成收敛并显式 `SIGKILL` 子进程；`cleanupOrphanProcess` 不再使用任何无超时的 `spawnSync`，主进程事件循环不会因 powershell/wmic/taskkill 挂起而卡死。
 - `OrphanCleanupResult` 增加 `unverified`：区分"查询工具不可用/超时（不做任何终止）"与"进程已退出（`already-exited`）"，前者会在 `shell.orphan_cleanup` 审计里露出，不再伪装成进程已退出。
-- Windows CIM 查询串复用 `WINDOWS_POWERSHELL_PRELUDE` 固定 UTF-8 输出：PowerShell 5.1 默认按宿主 OEM 代码页写 stdout，按 utf8 解码会让含非 ASCII 的命令行变成替换字符（实测 `owner-中文-…` → `owner-����-…`）。
+- Windows CIM 查询串的输出编码改走显式契约：`runCommandWithTimeout` 返回 stderr 与 `{ stdoutRawBytes, stderrRawBytes, … }` meta，字节由 `decodeChildOutput()` 按 `AUTO_CONTRACT` 判定，不再复用 prelude 固定 UTF-8 的绕法（该绕法在 D1 之后已失效；实测 `owner-中文-…` 不再变成 `owner-����-…`）。
 - POSIX 进程组终止只在 `ESRCH`（进程组已不存在）时回退按 PID 终止；`EPERM` 等失败直接按 `failed` 收敛，避免 PID 复用竞态下的误杀。
 - 测试 helper `writeStdout` / `writeStderr` 转义 PowerShell 单引号字面量。
 
 清理仍保留在首窗之前：`main.ts` 明确要求孤儿清理先于 Runtime recovery，本次只解除事件循环阻塞，不调整该次序；若未来要消除这 0.5~3s/孤儿的串行等待，需要单独评估把清理移到首窗之后是否仍满足该不变量。
 
 本机（Windows x64）验证：`npm run test:shell-lifecycle` 41 个测试文件、317 个测试通过；其中新增 `runCommandWithTimeout` 超时/缺可执行文件/正常输出用例、非 ASCII owner token 归属校验用例、查询工具缺失返回 `unverified` 用例（POSIX）。
+
+### 11.3 编码健壮性落地（2026-09-12）
+
+需求 `docs/requirement/shell-output-encoding-robustness-requirement.md`（事故：PowerShell 宿主初始化失败时 136 字节 UTF-16LE stderr 被按 GBK 解成 126 字符乱码 + 50 个 NUL）已按 Phase 0-3 全量落地，本文档相应小节同步如下：
+
+| 本文档位置 | 原目标态 | 落地后 |
+|---|---|---|
+| §3.2 ShellProfile 字段 | `encoding: 'utf8' \| 'gbk' \| 'oem' \| 'auto'` | `outputEncoding: OutputEncodingContract` + `encodingSource`（D2，替换而非并存） |
+| §3.3 prelude | `$ProgressPreference` + 固定 UTF-8 | 只保留 `$ProgressPreference`（D1）；期望编码由契约表达 |
+| §3.4 原始字节 | 未保留 | `RawByteBuffer`（内存 head/tail）+ artifact 原始字节直存（D5） |
+| §3.8 编码反复改判 | 建议前导窗口内探测一次 | 已实现：8 KiB 窗口、判定一次并锁定；兜底/可疑必标 `suspect` 并留档 |
+| §3.13 结果合同 | 缺 `signal` / executable / 字节数 / 编码 | 已补齐结构化字段 + 机器可读诊断行；`*RawBytes` 与旧 `*Bytes` 并存 |
+| §6 目标态"诊断能定位 encoding" | 目标 | Gate 1 用事故字节重放验收（UTF-16LE 还原 + HRESULT + 原始字节 artifact + 无 NUL） |
+
+实现细节、与需求正文的 8 条偏差（含 `stderrBytes` 154 → 104 的口径解释）与新增 spawn 点的 review checklist，全部记录在 `docs/develop/shell-output-encoding-robustness-implementation-record.md`。

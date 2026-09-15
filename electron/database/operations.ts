@@ -20,6 +20,7 @@ import {
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { changesToNumber, runInTransaction } from './transaction'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
+import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import {
   estimateThinkingTokensFromMessage,
@@ -127,6 +128,15 @@ export function getSession(db: AppDatabase, sessionId: string): Session | undefi
   return row ? rowToSession(row) : undefined
 }
 
+/**
+ * 新建会话的兜底模型：取配置里的默认模型并归一到当前内置名。
+ * 不能再回退到写死的历史模型名（claude-sonnet-4-20250514 之类）——那样的会话首次发送
+ * 就会因为「未知模型」被解析失败，最终以「回复未能完成」收场。
+ */
+function resolveDefaultSessionModel(db: AppDatabase): string {
+  return migrateBuiltinModelName(getConfigValue(db, 'config.defaultModel') ?? '')
+}
+
 export function createSession(
   db: AppDatabase,
   input: {
@@ -141,7 +151,7 @@ export function createSession(
 ): Session {
   const now = Date.now()
   const id = randomUUID()
-  const model = input.model ?? 'claude-sonnet-4-20250514'
+  const model = input.model ?? resolveDefaultSessionModel(db)
   const temperature = input.temperature ?? DEFAULT_LLM_TEMPERATURE
   const maxTokens = input.maxTokens ?? 4096
   const session: Session = {
@@ -587,6 +597,41 @@ export function listPersistedTurns(db: AppDatabase, state?: string): PersistedTu
   const conn = getDbConnection(db)
   const rows = (state == null ? conn.prepare(`SELECT ${TURN_SELECT} FROM turns ORDER BY created_at ASC`).all() : conn.prepare(`SELECT ${TURN_SELECT} FROM turns WHERE state = ? ORDER BY created_at ASC`).all(state)) as unknown as Array<PersistedTurnRow & { excludeMessageIdsJson?: string; executionConfigJson?: string }>
   return rows.map(decodeTurnContextRow)
+}
+
+/** 单次查询的 id 上限：渲染层一页最多 60 条消息，这里只是防止误用把 SQL 变量数撑爆。 */
+const TURN_ERROR_LOOKUP_LIMIT = 200
+
+/**
+ * 重开页面时按 assistantMessageId 回查终态失败原因（turn_error 事实只落在 turns 表里）。
+ * 输入顺序即输出顺序，重复 id 只返回一次，没有 error 记录或消息为空的 turn 直接跳过。
+ */
+export function listTurnErrorsByAssistantMessageIds(
+  db: AppDatabase,
+  assistantMessageIds: readonly string[]
+): Array<{ assistantMessageId: string; message: string }> {
+  const ids: string[] = []
+  for (const raw of assistantMessageIds) {
+    if (typeof raw !== 'string') continue
+    const id = raw.trim()
+    if (!id || ids.includes(id)) continue
+    ids.push(id)
+    if (ids.length >= TURN_ERROR_LOOKUP_LIMIT) break
+  }
+  if (ids.length === 0) return []
+  const placeholders = ids.map(() => '?').join(', ')
+  const rows = getDbConnection(db)
+    .prepare(`SELECT assistant_message_id AS assistantMessageId, error_json AS errorJson FROM turns WHERE assistant_message_id IN (${placeholders}) AND error_json IS NOT NULL`)
+    .all(...ids) as Array<{ assistantMessageId: string; errorJson: string }>
+  const found = new Map<string, string>()
+  for (const row of rows) {
+    const message = parseJsonObject<{ message?: string }>(row.errorJson, {})?.message?.trim()
+    if (message) found.set(row.assistantMessageId, message)
+  }
+  return ids.flatMap((id) => {
+    const message = found.get(id)
+    return message ? [{ assistantMessageId: id, message }] : []
+  })
 }
 
 export function hasActiveTurn(db: AppDatabase, sessionId: string): boolean {

@@ -22,6 +22,7 @@ export function mergeToolCallScrollback(
       : {
           progressOutput: undefined,
           progressOutputRaw: undefined,
+          progressOutputRawLabel: undefined,
           progressSeq: undefined
         }),
     result: prev.result

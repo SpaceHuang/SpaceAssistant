@@ -13,6 +13,7 @@ import { validateShellExecutionConfig } from '../shell/shellExecutionConfigValid
 import { detectShellDialectMismatch } from '../shell/shellDialectMismatch'
 import { isInteractiveShellTuiCommand } from '../../src/shared/shellInteractiveTui'
 import { migrateLegacyShellConfig } from '../shell/legacyShellConfigMigration'
+import { AUTO_CONTRACT } from '../processOutput/contracts'
 
 const DEFAULT_IO_MAX = 100 * 1024
 
@@ -115,9 +116,18 @@ export async function planRunShellExecution(
   const env = buildShellEnv(resolved.env)
   applyPlaywrightInstallShellEnv(env, command)
   const pathSnapshot = await captureShellPathSnapshot([spec.executable, execPlan.cwd])
+  // 契约必须进入 plan（§7.1）：内置 profile 用我们请求的编码；
+  // 用户自定义可执行文件一律 `auto`（承认不知道），由 L2 探测兜底。
+  const usesBuiltinProfile = spec.shellId === profile.id
+  const planProfile = {
+    ...profile,
+    executable: spec.executable,
+    outputEncoding: usesBuiltinProfile ? profile.outputEncoding : AUTO_CONTRACT,
+    encodingSource: usesBuiltinProfile ? profile.encodingSource : ('user' as const)
+  }
   return prepareShellExecution({
     command,
-    profile: { ...profile, executable: spec.executable },
+    profile: planProfile,
     spawnSpec: { executable: spec.executable, args: execPlan.spawnArgs, shellId: spec.shellId },
     cwd: execPlan.cwd,
     timeoutMs: timeoutSec * 1000,

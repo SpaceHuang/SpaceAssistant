@@ -10,7 +10,7 @@ import fs from 'fs/promises'
 import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
-import { openDatabase, createSession } from '../database'
+import { openDatabase, createSession, setConfigValue } from '../database'
 import {
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession,
@@ -51,6 +51,50 @@ vi.mock('../database', async (importOriginal) => {
   }
 })
 
+const TEST_MODEL_NAME = 'm1'
+const TEST_SERVICE_ID = 'svc-test'
+
+/**
+ * 可信 turn 快照会真的解析「会话模型 → 活跃服务 → Key」。不 seed 一份可用配置，
+ * router 会在 prepare 阶段被模型解析 fail-fast 拦下，这些用例就测不到编排本身了。
+ */
+function seedLlmConfig(db: ReturnType<typeof openDatabase>, modelName = TEST_MODEL_NAME): void {
+  setConfigValue(db, 'config.defaultModel', modelName)
+  setConfigValue(
+    db,
+    'config.models',
+    JSON.stringify([
+      {
+        id: modelName,
+        name: modelName,
+        maximumContext: 200000,
+        maxTokens: 64000,
+        isDefault: true,
+        isFast: false,
+        isVision: false,
+        enabled: true
+      }
+    ])
+  )
+  setConfigValue(
+    db,
+    'config.llmServices',
+    JSON.stringify([
+      {
+        id: TEST_SERVICE_ID,
+        name: 'Test Service',
+        baseUrl: 'https://api.example.com',
+        supportedModelIds: [modelName],
+        createdAt: '1',
+        updatedAt: '1'
+      }
+    ])
+  )
+  setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify([TEST_SERVICE_ID]))
+  setConfigValue(db, 'config.preferredLanguageModelId', modelName)
+  setConfigValue(db, 'secrets.llmServiceKeys', JSON.stringify({ [TEST_SERVICE_ID]: 'enc:sk-test' }))
+}
+
 describe('WeChatCommandRouter', () => {
   let tmpDir: string
   let processed: WeChatProcessedStore
@@ -72,6 +116,7 @@ describe('WeChatCommandRouter', () => {
 
     const dbPath = path.join(tmpDir, 'test.db')
     db = openDatabase(dbPath)
+    seedLlmConfig(db)
     closeDb = () => db.close()
     const session = createSession(db, { name: 'WeChat Session' })
     sessionId = session.id

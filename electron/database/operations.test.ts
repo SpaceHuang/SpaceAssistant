@@ -30,9 +30,36 @@ import {
   getNextQueuedMessage,
   getSearchCorpusPage,
   resolveRetryContext,
-  setPersistedTurnExecutionConfig
+  setPersistedTurnExecutionConfig,
+  updatePersistedTurnState,
+  listTurnErrorsByAssistantMessageIds
 } from './operations'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
+import { setConfigValue } from './operations'
+
+describe('createSession 默认模型', () => {
+  it('回退到配置里的默认模型，而不是写死的历史模型名', () => {
+    const db = createMemoryAppDb()
+    setConfigValue(db, 'config.defaultModel', 'deepseek-v4-flash')
+
+    const session = createSession(db, { name: 'no-model' })
+
+    // 默认值必须来自配置（并归一到当前内置名），不能是已下线的 claude-sonnet-4-20250514
+    expect(session.model).toBe('deepseek-flash')
+  })
+
+  it('显式传入的模型优先', () => {
+    const db = createMemoryAppDb()
+    setConfigValue(db, 'config.defaultModel', 'deepseek-flash')
+
+    expect(createSession(db, { name: 'explicit', model: 'deepseek-v4-pro' }).model).toBe('deepseek-v4-pro')
+  })
+
+  it('配置缺失时不写入任何历史模型名', () => {
+    const db = createMemoryAppDb()
+    expect(createSession(db, { name: 'empty-config' }).model).toBe('')
+  })
+})
 
 describe('getMessagesPage', () => {
   let db: AppDatabase
@@ -686,5 +713,74 @@ describe('getSearchCorpusPage', () => {
     const second = getSearchCorpusPage(db, sessionId, first.nextSequence, 100)
     expect(second.entries[0]?.message.id).toBe('m100')
     expect(second.hasMore).toBe(false)
+  })
+})
+
+describe('listTurnErrorsByAssistantMessageIds', () => {
+  function seedTurn(
+    db: AppDatabase,
+    sessionId: string,
+    suffix: string,
+    error?: { code: string; message: string }
+  ): string {
+    const assistantId = `a-${suffix}`
+    appendMessage(db, {
+      id: assistantId,
+      sessionId,
+      role: 'assistant',
+      content: '',
+      timestamp: 1,
+      status: error ? 'failed' : 'completed'
+    })
+    createPersistedTurn(db, {
+      turnId: `t-${suffix}`,
+      requestId: `r-${suffix}`,
+      sessionId,
+      assistantMessageId: assistantId,
+      state: 'terminal',
+      outcome: error ? 'failed' : 'completed'
+    })
+    if (error) updatePersistedTurnState(db, `t-${suffix}`, 'terminal', { outcome: 'failed', error })
+    return assistantId
+  }
+
+  it('按 assistantMessageId 返回持久化的失败原因', () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'errors' }).id
+    const a1 = seedTurn(db, sessionId, '1', { code: 'source-failed', message: '会话模型「x」当前不可用' })
+    const a2 = seedTurn(db, sessionId, '2', { code: 'source-failed', message: 'Request not allowed' })
+
+    expect(listTurnErrorsByAssistantMessageIds(db, [a1, a2])).toEqual([
+      { assistantMessageId: a1, message: '会话模型「x」当前不可用' },
+      { assistantMessageId: a2, message: 'Request not allowed' }
+    ])
+  })
+
+  it('无错误记录的 turn 与未知 id 都不返回', () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'errors-mixed' }).id
+    const withError = seedTurn(db, sessionId, 'ok', { code: 'x', message: 'r' })
+    const withoutError = seedTurn(db, sessionId, 'none')
+
+    expect(listTurnErrorsByAssistantMessageIds(db, [withError, withoutError, 'a-unknown'])).toEqual([
+      { assistantMessageId: withError, message: 'r' }
+    ])
+  })
+
+  it('空输入不查库并返回空数组', () => {
+    const db = createMemoryAppDb()
+    expect(listTurnErrorsByAssistantMessageIds(db, [])).toEqual([])
+    expect(listTurnErrorsByAssistantMessageIds(db, ['', '   '])).toEqual([])
+  })
+
+  it('忽略空白错误消息并对重复 id 只返回一次', () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'errors-blank' }).id
+    const blank = seedTurn(db, sessionId, 'blank', { code: 'x', message: '   ' })
+    const real = seedTurn(db, sessionId, 'real', { code: 'x', message: ' 真实原因 ' })
+
+    expect(listTurnErrorsByAssistantMessageIds(db, [blank, real, real])).toEqual([
+      { assistantMessageId: real, message: '真实原因' }
+    ])
   })
 })

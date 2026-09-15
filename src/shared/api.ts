@@ -20,8 +20,11 @@ import type {
   SkillRouteRecentMessage,
   SkillRouteResult,
   SessionSkillsState,
+  GithubSkillCandidate,
+  GithubSkillProbeResult,
   SkillDefinition,
   SkillsConfig,
+  SkippedCandidate,
   ToolCallResultPersisted,
   ToolRiskLevel,
   ToolsConfig,
@@ -249,6 +252,8 @@ export type SpaceAssistantApi = {
   chatCancelTurn: (turnId: string) => Promise<boolean>
   chatGetTurnTerminal: (turnId: string) => Promise<(import('./assistantFactAggregator').TurnTerminal & { committedVersion?: number; commitStatus?: 'pending' | 'committed' | 'failed' }) | undefined>
   chatRetryTurnCheckpoint: (turnId: string) => Promise<boolean>
+  /** 重开页面时按 assistantMessageId 回查历史失败原因（无记录的消息不会出现在结果里） */
+  chatGetTurnErrors: (payload: { assistantMessageIds: string[] }) => Promise<Array<{ assistantMessageId: string; message: string }>>
   chatListActiveTurns: (payload?: { sessionId?: string }) => Promise<import('./turnCoordinator').TurnStarted[]>
   chatGetTurnDisplays: (payload: { known: Array<{ turnId: string; version: number }>; sessionId?: string }) => Promise<{ changed: import('./turnDisplayProtocol').TurnDisplay[] }>
   chatGetToolCallDetails: (payload: { sessionId: string; turnId: string; messageId: string; toolCallId: string }) => Promise<import('./domainTypes').ToolCallRecord | undefined>
@@ -416,7 +421,10 @@ export type SpaceAssistantApi = {
   shellOpenOutputPath: (absPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
   skillList: () => Promise<SkillDefinition[]>
-  skillProbeFromUrl: (payload: { sourceUrl: string }) => Promise<{ ok: true; repo: { owner: string; repo: string; branch: string; subPath: string }; candidates: Array<{ name: string; description: string; subPath: string; totalBytes: number }> } | { ok: false; error: string }>
+  skillProbeFromUrl: (payload: { sourceUrl: string }) => Promise<
+    | ({ ok: true } & GithubSkillProbeResult)
+    | { ok: false; error: string }
+  >
   skillInstallOnProgress: (cb: (progress: { phase: string; completed?: number; total?: number }) => void) => () => void
   skillCancelInstall: () => Promise<void>
   skillScanStatus: () => Promise<{ skills: SkillDefinition[]; skipped: Array<{ dirName: string; scope: 'user' | 'project'; reason: string }> }>
@@ -425,9 +433,13 @@ export type SpaceAssistantApi = {
   skillInstallFromUrl: (payload: {
     sourceUrl: string
     subPath?: string
+    subPaths?: string[]
     installAll?: boolean
     overwrite?: boolean
-  }) => Promise<{ ok: true; skills: SkillDefinition[] } | { ok: false; error: string }>
+  }) => Promise<
+    | { ok: true; skills: SkillDefinition[]; skipped: SkippedCandidate[]; overwritten: string[] }
+    | { ok: false; error: string }
+  >
   skillDelete: (payload: { name: string }) => Promise<void>
   skillToggleDisable: (payload: { name: string; disabled: boolean }) => Promise<void>
   skillOpenDirectory: (payload: { scope: 'user' | 'project' }) => Promise<void>

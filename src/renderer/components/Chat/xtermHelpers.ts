@@ -115,15 +115,16 @@ export function safeWriteTerminal(term: Terminal, data: string | Uint8Array): vo
   }
 }
 
-export type TerminalRawWriteState = { writtenTextLen: number; cols: number }
+/** label 参与匹配：编码标签变化时必须按新标签重放，否则旧字节的错位文本会沉淀在终端里。 */
+export type TerminalRawWriteState = { writtenTextLen: number; cols: number; label?: string }
 
 /** 清空并重放 live progress（base64 raw tail） */
 export function replayTerminalRaw(
   term: Terminal,
   rawB64: string | undefined,
-  options?: { followBottom?: boolean }
+  options?: { followBottom?: boolean; label?: string }
 ): void {
-  const payload = decodeProgressRawTailForXterm(rawB64)
+  const payload = decodeProgressRawTailForXterm(rawB64, options?.label)
   try {
     term.clear()
     if (payload.length > 0) safeWriteTerminal(term, payload)
@@ -140,14 +141,15 @@ export function appendTerminalRawProgress(
   term: Terminal,
   rawB64: string | undefined,
   state: TerminalRawWriteState,
-  options?: { followBottom?: boolean }
+  options?: { followBottom?: boolean; label?: string }
 ): TerminalRawWriteState {
-  const full = decodeProgressRawTailForXterm(rawB64)
+  const label = options?.label
+  const full = decodeProgressRawTailForXterm(rawB64, label)
   const cols = term.cols
 
-  if (cols !== state.cols || full.length < state.writtenTextLen) {
+  if (cols !== state.cols || state.label !== label || full.length < state.writtenTextLen) {
     replayTerminalRaw(term, rawB64, options)
-    return { writtenTextLen: full.length, cols }
+    return { writtenTextLen: full.length, cols, label }
   }
 
   if (full.length > state.writtenTextLen) {
@@ -159,10 +161,10 @@ export function appendTerminalRawProgress(
         /* disposed */
       }
     }
-    return { writtenTextLen: full.length, cols }
+    return { writtenTextLen: full.length, cols, label }
   }
 
-  return { ...state, cols }
+  return { ...state, cols, label }
 }
 
 /** 恢复完成态 scrollback（serialized / ansi 明文，非 base64） */

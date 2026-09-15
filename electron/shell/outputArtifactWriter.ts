@@ -30,10 +30,11 @@ export class OutputArtifactWriter {
     await this.openPromise
   }
 
-  append(text: string): void {
-    if (!text || this.bytes >= this.maxBytes) return
+  /** 原始字节直存（§9.2）：artifact 的字节数与 sha256 都以此为准。 */
+  appendBytes(buf: Buffer): void {
+    if (buf.length === 0 || this.bytes >= this.maxBytes) return
     const remaining = this.maxBytes - this.bytes
-    const data = Buffer.from(text, 'utf8').subarray(0, remaining)
+    const data = Buffer.from(buf.subarray(0, remaining))
     this.bytes += data.length
     this.hash.update(data)
     if (this.handle) {
@@ -41,6 +42,12 @@ export class OutputArtifactWriter {
     } else {
       this.pending.push(data)
     }
+  }
+
+  /** 文本路径（非原始字节）：仅供仍持有解码后文本的调用方使用。 */
+  append(text: string): void {
+    if (!text) return
+    this.appendBytes(Buffer.from(text, 'utf8'))
   }
 
   async close(): Promise<{ path: string; bytes: number; sha256: string }> {

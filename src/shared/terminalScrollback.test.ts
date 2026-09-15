@@ -8,6 +8,7 @@ import {
   exportTerminalScrollback,
   normalizeXtermPipeInput,
   pickScrollbackRestorePayload,
+  tailWithoutLoneSurrogate,
   truncateScrollbackExport,
   SCROLLBACK_MAX_BYTES,
   PROGRESS_RAW_MAX_BYTES
@@ -37,6 +38,16 @@ describe('terminalScrollback', () => {
     })
     expect(out.truncated).toBe(true)
     expect((out.serialized?.length ?? 0)).toBeLessThan(big.length)
+  })
+
+  it('MINOR：尾部截断不留下孤立低位代理', () => {
+    const value = 'abc😀def'
+    expect(tailWithoutLoneSurrogate(value, 6)).toBe('c😀def')
+    // 起点落在高位代理上：代理对完整，保留
+    expect(tailWithoutLoneSurrogate(value, 5)).toBe('😀def')
+    // 起点落在低位代理上：丢掉它，否则渲染成 U+FFFD
+    expect(tailWithoutLoneSurrogate(value, 4)).toBe('def')
+    expect(tailWithoutLoneSurrogate(value, 0)).toBe('')
   })
 
   it('appends raw tail with byte cap', () => {
@@ -72,6 +83,15 @@ describe('terminalScrollback', () => {
   it('decodes raw tail as xterm-safe string', () => {
     const raw = Buffer.from('pw:install\nnext').toString('base64')
     expect(decodeProgressRawTailForXterm(raw)).toBe('pw:install\r\nnext')
+  })
+
+  it('M4：按传入的编码标签解码 raw tail，未知标签回退 UTF-8 且不抛错', () => {
+    const bytes = Buffer.from('D6D0CEC4B2E2CAD4414243', 'hex')
+    const raw = bytes.toString('base64')
+    expect(decodeProgressRawTailForXterm(raw, 'gbk')).toBe('中文测试ABC')
+    expect(decodeProgressRawTailForXterm(raw)).toBe(new TextDecoder('utf-8').decode(bytes))
+    expect(decodeProgressRawTailForXterm(raw, 'not-a-real-codec')).toBe(new TextDecoder('utf-8').decode(bytes))
+    expect(decodeProgressRawTailForXterm(raw, '')).toBe(new TextDecoder('utf-8').decode(bytes))
   })
 
   it('picks restore payload priority', () => {

@@ -6,6 +6,8 @@ import {
 } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { detectSensitiveParamValue } from '../../src/shared/mcpTypes'
 import { sanitizeForLog } from '../logSanitize'
+import { createLineSplitter } from '../processOutput/lineSplitter'
+import { AUTO_CONTRACT } from '../processOutput/contracts'
 
 /**
  * stdio 传输安全封装：
@@ -170,16 +172,17 @@ export function createStdioTransport(
   if (options?.onStderr) {
     const stream = transport.stderr
     if (stream) {
-      let buffer = ''
-      stream.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString('utf8')
-        const lines = buffer.split(/\r?\n/)
-        buffer = lines.pop() ?? ''
+      // §12-#10：行协议走统一 lineSplitter，避免逐 chunk toString('utf8') 把多字节字符切断。
+      // MCP server 是第三方进程，自行决定 stderr 编码，契约用 auto 交给探测。
+      const splitter = createLineSplitter({ contract: AUTO_CONTRACT })
+      const emitLines = (lines: readonly string[]): void => {
         for (const line of lines) {
           const sanitized = sanitizeForLog(line)
           options.onStderr!(typeof sanitized === 'string' ? sanitized : String(sanitized))
         }
-      })
+      }
+      stream.on('data', (chunk: Buffer) => emitLines(splitter.write(chunk)))
+      stream.on('close', () => emitLines(splitter.end()))
     }
   }
   return transport

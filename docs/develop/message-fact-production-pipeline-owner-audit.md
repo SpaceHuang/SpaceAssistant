@@ -123,6 +123,8 @@ Coordinator prepare 现在校验 `excludeMessageIds` 的 session 归属，并拒
 
 `turnProjectionService` 启动时先调用 `chatListActiveTurns` 校准已有 snapshot，再订阅增量 projection；统一按 turn version 去重，覆盖订阅建立前的事件窗口。
 
+新增 `chatGetTurnErrors` 查询面：按 `assistantMessageId` 回查终态失败原因（内存终态优先，缺失时回落到 `turns.error_json`）。渲染层每次拉取消息页后回溯一次，重开页面、切换会话或应用重启后历史失败气泡不再只剩通用提示；`chat.turnFailures` 同步改为按 messageId 存储，同一会话的多条失败消息各留各的原因，不再互相覆盖。
+
 这些验证证明的是局部行为和类型契约，不能替代完整生产链路验收。
 
 ## 4. 最终验收门槛

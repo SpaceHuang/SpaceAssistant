@@ -10,6 +10,22 @@ import {
 } from './shellProfiles'
 
 describe('ShellProfile', () => {
+  it('编码契约来自决定而非猜测，且 prelude 不再改动 [Console]::OutputEncoding（D1/D2）', () => {
+    expect(MACOS_BASH_PROFILE.outputEncoding).toEqual({ kind: 'utf8' })
+    expect(MACOS_BASH_PROFILE.encodingSource).toBe('builtin')
+    const windows = WINDOWS_POWERSHELL_PROFILE.outputEncoding
+    expect(['oem', 'auto']).toContain(windows.kind)
+    if (windows.kind === 'oem') expect(windows.codepage).toBeGreaterThan(0)
+    expect(WINDOWS_POWERSHELL_PROFILE.encodingSource).toBe('detected')
+  })
+
+  it('Windows prelude 只保留 progress 静默', () => {
+    const args = createShellAdapter(WINDOWS_POWERSHELL_PROFILE).buildCommandArgs('Write-Output ok').at(-1)
+    const decoded = Buffer.from(String(args), 'base64').toString('utf16le')
+    expect(decoded).toContain("$ProgressPreference = 'SilentlyContinue'")
+    expect(decoded).not.toContain('OutputEncoding')
+  })
+
   it('macOS 使用显式非 login Bash 模板', () => {
     expect(MACOS_BASH_PROFILE.commandArgsTemplate).toEqual(['--noprofile', '--norc', '-c', '{command}'])
     expect(profileForPlatform('darwin')).toMatchObject(MACOS_BASH_PROFILE)
@@ -23,7 +39,7 @@ describe('ShellProfile', () => {
 
   it('使用 UTF-16LE Base64 编码命令且可还原 Unicode', () => {
     const command = 'Write-Output "你好"'
-    const payload = encodePowerShellCommand(command, '$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new();')
+    const payload = encodePowerShellCommand(command, "$ProgressPreference = 'SilentlyContinue';")
     const decoded = Buffer.from(payload, 'base64').toString('utf16le')
     expect(decoded).toContain(command)
     expect(buildShellArgs(WINDOWS_POWERSHELL_PROFILE, command)).toContain(
@@ -55,8 +71,8 @@ describe('ShellProfile', () => {
     const mutable = { ...WINDOWS_POWERSHELL_PROFILE, commandArgsTemplate: [...WINDOWS_POWERSHELL_PROFILE.commandArgsTemplate] }
     const adapter = createShellAdapter(mutable)
     mutable.commandArgsTemplate[0] = '-NoProfile-MUTATED'
-    mutable.encoding = 'utf8'
-    expect(adapter.profile.encoding).toBe('utf16le')
+    mutable.outputEncoding = { kind: 'utf8' }
+    expect(adapter.profile.outputEncoding).toEqual(WINDOWS_POWERSHELL_PROFILE.outputEncoding)
     const encoded = adapter.buildCommandArgs('Write-Output "你好"').at(-1)
     expect(Buffer.from(String(encoded), 'base64').toString('utf16le')).toContain('你好')
     expect(adapter.buildCommandArgs('Write-Output "你好"')[0]).toBe('-NoLogo')

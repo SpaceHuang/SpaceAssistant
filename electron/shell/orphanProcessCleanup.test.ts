@@ -4,6 +4,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { cleanupOrphanProcess } from './orphanProcessCleanup'
 import { runCommandWithTimeout } from '../spawnUtil'
+import { detectOemCodepageSync } from '../processOutput/contracts'
+
+/**
+ * 宿主 OEM 代码页能否承载 CJK 探针。
+ *
+ * Windows 上 PowerShell 5.1 与 cmd 内建命令都按宿主 OEM CP 写 stdout（需求 §7.3 决策点 D1 取方案 C：
+ * 不再用 prelude 钉 UTF-8，改为按宿主 CP 解码）。因此在 437/850 这类非 CJK 宿主上，中文在「写出」
+ * 这一步就已降级成 '?'，本机不存在可断言的「非 ASCII 原样往返」事实，下面两条集成用例在这类宿主上
+ * 跳过；解码链本身由 electron/processOutput 的固定字节样本覆盖。
+ */
+const CJK_OEM_CODEPAGES = new Set([932, 936, 949, 950])
+const hostOemCarriesCjk = process.platform === 'win32' && CJK_OEM_CODEPAGES.has(detectOemCodepageSync() ?? -1)
 
 describe('cleanupOrphanProcess', () => {
   const nodeExecutable = process.env.npm_node_execpath ?? process.execPath
@@ -47,7 +59,7 @@ describe('cleanupOrphanProcess', () => {
     await expect(cleanupOrphanProcess({ pid: child.pid!, ownerToken: token })).resolves.toBe('cleaned')
   })
 
-  it('命令行含非 ASCII 时仍能按 owner token 完成归属校验', async () => {
+  it.skipIf(process.platform === 'win32' && !hostOemCarriesCjk)('命令行含非 ASCII 时仍能按 owner token 完成归属校验', async () => {
     // 回归 Windows 上按 utf8 解码 PowerShell OEM 输出导致命令行乱码的问题。
     const token = `owner-token-中文-${Date.now()}`
     const child = await spawnOwnerProcess(token, detached)
@@ -74,13 +86,13 @@ describe('runCommandWithTimeout', () => {
   it('查询命令挂起时按超时收敛，不阻塞调用方', async () => {
     const started = Date.now()
     const result = await runCommandWithTimeout(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 1_000)
-    expect(result).toEqual({ completed: false, code: null, stdout: '' })
+    expect(result).toMatchObject({ completed: false, code: null, stdout: '' })
     expect(Date.now() - started).toBeLessThan(10_000)
   })
 
   it('可执行文件不可用时立即收敛为未完成', async () => {
     const missing = path.join(os.tmpdir(), 'sa-missing-orphan-probe')
-    await expect(runCommandWithTimeout(missing, [], 5_000)).resolves.toEqual({ completed: false, code: null, stdout: '' })
+    await expect(runCommandWithTimeout(missing, [], 5_000)).resolves.toMatchObject({ completed: false, code: null, stdout: '' })
   })
 
   it('命令正常结束时返回退出码与 stdout', async () => {
@@ -89,6 +101,28 @@ describe('runCommandWithTimeout', () => {
       ['-e', "process.stdout.write('orphan-probe-ok')"],
       10_000
     )
-    expect(result).toEqual({ completed: true, code: 0, stdout: 'orphan-probe-ok' })
+    expect(result).toMatchObject({ completed: true, code: 0, stdout: 'orphan-probe-ok', stderr: '' })
+    expect(result.meta.stdout.encoding).toBe('utf-8')
+    expect(result.meta.stdoutRawBytes).toBe(Buffer.byteLength('orphan-probe-ok'))
+  })
+
+  it('stderr 不再被丢弃，并带原始字节与解码元信息（§12-#8）', async () => {
+    const result = await runCommandWithTimeout(
+      process.execPath,
+      ['-e', "process.stdout.write('probe-stdout');process.stderr.write('probe-stderr')"],
+      10_000
+    )
+    expect(result.stdout).toBe('probe-stdout')
+    expect(result.stderr).toBe('probe-stderr')
+    expect(result.meta.stderrRawBytes).toBe(Buffer.byteLength('probe-stderr'))
+    expect(result.meta.stderr.encoding).toBe('utf-8')
+    expect(result.meta.stderrTruncated).toBe(false)
+  })
+
+  it.skipIf(process.platform !== 'win32' || !hostOemCarriesCjk)('宿主 OEM 输出（cmd 中文）不再变成替换字符（§12-#9）', async () => {
+    const result = await runCommandWithTimeout('cmd.exe', ['/d', '/s', '/c', 'echo 中文'], 10_000)
+    expect(result.stdout).toContain('中文')
+    expect(result.stdout).not.toContain('\uFFFD')
+    expect(result.meta.stdout.source).toBe('oem-codepage')
   })
 })

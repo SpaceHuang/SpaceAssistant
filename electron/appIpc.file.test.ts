@@ -34,6 +34,7 @@ vi.mock('./database', () => ({
   getSession: vi.fn(),
   getTurnByRequestId: vi.fn(),
   getPersistedTurn: vi.fn(),
+  listTurnErrorsByAssistantMessageIds: vi.fn((): Array<{ assistantMessageId: string; message: string }> => []),
   setPersistedTurnExecutionConfig: vi.fn(() => true),
   failConfiguringTurn: vi.fn(() => true),
   getMessage: vi.fn(),
@@ -263,6 +264,62 @@ describe('file IPC handlers', () => {
     expect(database.setPersistedTurnExecutionConfig).toHaveBeenCalledTimes(1)
   })
 
+  it('配置阶段失败时把 source-failed 事实（含真实原因）交给 projection，渲染层才能标失败并显示原因', async () => {
+    const started = {
+      turnId: 'failed-configuring-turn', requestId: 'failed-configuring-request', sessionId: 'session-1',
+      userMessage: { id: 'user-1', sessionId: 'session-1', role: 'user' as const, content: 'hello', timestamp: 1, status: 'sent' as const, schemaVersion: 1 },
+      assistantMessage: { id: 'assistant-1', sessionId: 'session-1', role: 'assistant' as const, content: '', timestamp: 2, status: 'streaming' as const, schemaVersion: 1 },
+      version: 0, startToken: 'failed-token', intentFingerprint: '{}', executionConfig: {}
+    }
+    const runtimeConsume = vi.fn(() => ({
+      ...started,
+      version: 3,
+      assistantMessage: { ...started.assistantMessage, status: 'failed' as const }
+    }))
+    ctx.turnRuntime = {
+      coordinator: {
+        prepare: vi.fn().mockReturnValue(started),
+        consume: vi.fn(),
+        restoreTurn: vi.fn(),
+        recover: vi.fn(),
+        getTerminal: vi.fn()
+      },
+      consume: runtimeConsume,
+      cancel: vi.fn(),
+      listActive: vi.fn(() => [])
+    } as unknown as AppIpcContext['turnRuntime']
+    vi.mocked(database.getTurnByRequestId).mockReturnValue(undefined)
+    vi.mocked(database.getPersistedTurn).mockReturnValue({
+      turnId: started.turnId, requestId: started.requestId, sessionId: started.sessionId,
+      assistantMessageId: started.assistantMessage.id, userMessageId: started.userMessage.id,
+      contextBoundarySequence: 0, state: 'configuring', version: 0, startToken: started.startToken
+    })
+    vi.mocked(database.getSession).mockReturnValue({ id: 'session-1', model: 'deepseek-chat', skillsState: {}, metadata: {} } as never)
+    mockSkillManager.route.mockRejectedValueOnce(new Error('会话模型「claude-sonnet-4-20250514」当前不可用'))
+
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+    const handler = ipc.getHandler('chat:prepare-turn')!
+
+    // prepare 只交还已占有的 turn，配置在后台继续；失败必须经由 projection 出口通知渲染层。
+    await expect(handler({}, {
+      mode: 'create-user', requestId: 'failed-configuring-request', sessionId: 'session-1', input: { text: 'hello' }, config: {}
+    })).resolves.toMatchObject({ turnId: 'failed-configuring-turn' })
+
+    // 直接调用 coordinator.consume 不会经过 runtime 的 projection 出口，渲染层会一直停在「生成中」。
+    await vi.waitFor(() => expect(runtimeConsume).toHaveBeenCalled())
+    expect(runtimeConsume).toHaveBeenCalledWith('failed-configuring-turn', {
+      type: 'source-failed',
+      message: '会话模型「claude-sonnet-4-20250514」当前不可用'
+    })
+    expect(database.failConfiguringTurn).toHaveBeenCalledWith(
+      expect.anything(),
+      'failed-configuring-turn',
+      3,
+      expect.objectContaining({ code: 'configuration-failed' })
+    )
+  })
+
   it('取消 configuring turn 会中止技能路由，且 execute 不启动 provider', async () => {
     let routeSignal: AbortSignal | undefined
     mockSkillManager.route.mockImplementationOnce(({ signal }: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
@@ -408,6 +465,49 @@ describe('file IPC handlers', () => {
     const changed = await ipc.getHandler('chat:get-turn-displays')!({}, { known: [] }) as { changed: Array<{ turnId: string }> }
     expect(changed.changed).toHaveLength(1)
     expect(checkpointStatus).toHaveBeenCalledWith(terminal.turnId, terminal.version)
+  })
+  describe('chat:get-turn-errors', () => {
+    it('按 assistantMessageId 返回持久化失败原因', async () => {
+      vi.mocked(database.listTurnErrorsByAssistantMessageIds).mockReturnValue([
+        { assistantMessageId: 'a1', message: '会话模型「x」当前不可用（未知模型）' }
+      ])
+      const handler = ipc.getHandler('chat:get-turn-errors')!
+
+      expect(await handler({}, { assistantMessageIds: ['a1', 'a2'] })).toEqual([
+        { assistantMessageId: 'a1', message: '会话模型「x」当前不可用（未知模型）' }
+      ])
+      expect(database.listTurnErrorsByAssistantMessageIds).toHaveBeenCalledWith(ctx.db, ['a1', 'a2'])
+    })
+
+    it('内存终态优先于持久化记录', async () => {
+      vi.mocked(database.listTurnErrorsByAssistantMessageIds).mockReturnValue([
+        { assistantMessageId: 'a1', message: '旧的持久化原因' }
+      ])
+      const getTerminalByAssistantMessageId = vi.fn((messageId: string) =>
+        messageId === 'a1' ? { error: { code: 'source-failed', message: '内存里的最新原因' } } : undefined
+      )
+      ctx.turnRuntime = {
+        coordinator: { getTerminalByAssistantMessageId, recover: vi.fn(), listActive: vi.fn(() => []) },
+        listActive: vi.fn(() => []),
+        cancel: vi.fn()
+      } as unknown as AppIpcContext['turnRuntime']
+      ipc = mockIpcMain()
+      registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+      const handler = ipc.getHandler('chat:get-turn-errors')!
+
+      expect(await handler({}, { assistantMessageIds: ['a1'] })).toEqual([
+        { assistantMessageId: 'a1', message: '内存里的最新原因' }
+      ])
+      expect(getTerminalByAssistantMessageId).toHaveBeenCalledWith('a1')
+    })
+
+    it('没有可查 id 时不查库', async () => {
+      const handler = ipc.getHandler('chat:get-turn-errors')!
+
+      expect(await handler({}, { assistantMessageIds: [] })).toEqual([])
+      expect(await handler({}, undefined)).toEqual([])
+      expect(database.listTurnErrorsByAssistantMessageIds).not.toHaveBeenCalled()
+    })
   })
 
   describe('file:create-file', () => {

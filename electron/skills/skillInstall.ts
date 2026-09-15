@@ -79,7 +79,7 @@ export async function installSkillToUserDir(
 ): Promise<SkillDefinition> {
   const resolvedSource = path.resolve(sourcePath)
   if (!fs.existsSync(resolvedSource) || !fs.statSync(resolvedSource).isDirectory()) {
-    throw new Error('所选路径不是有效目录')
+    throw new Error('SKILL_PATH_NOT_FOUND: 所选路径不是有效目录')
   }
 
   const validated = validateSkillSourceDir(resolvedSource)
@@ -90,7 +90,7 @@ export async function installSkillToUserDir(
   assertInsideDir(userBase, targetDir)
 
   if (fs.existsSync(targetDir) && !overwrite) {
-    throw new Error(`用户级目录下已存在 Skill「${validated.meta.name}」`)
+    throw new Error(`SKILL_NAME_CONFLICT: 用户级目录下已存在 Skill「${validated.meta.name}」`)
   }
 
   const tmpDir = path.join(userBase, `.tmp-${validated.meta.name}-${Date.now()}`)

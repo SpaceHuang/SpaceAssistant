@@ -6,6 +6,7 @@ vi.mock('./pendingConfirmStore', () => ({ pendingConfirmStore: { syncFromProject
 vi.mock('../store', () => ({ store: { getState: vi.fn(() => ({ chat: { currentSessionId: 's1' } })), dispatch } }))
 
 import { initTurnProjectionBridge } from './turnProjectionService'
+import { setTurnFailure } from '../store/chatSlice'
 
 describe('turn projection bridge', () => {
   beforeEach(() => {
@@ -163,5 +164,82 @@ describe('turn projection bridge', () => {
     await Promise.resolve()
     expect(patch).toHaveBeenCalledTimes(1)
     off()
+  })
+
+  describe('失败原因投影', () => {
+    function stubApi(over: Record<string, unknown> = {}) {
+      let listener: ((data: any) => void) | undefined
+      const chatGetTurnTerminal = vi.fn()
+      vi.stubGlobal('window', { api: {
+        usageSet: vi.fn().mockResolvedValue(undefined),
+        chatListActiveTurns: vi.fn().mockResolvedValue([]),
+        chatGetTurnTerminal,
+        chatOnTurnProjection: vi.fn((cb) => { listener = cb; return () => undefined }),
+        ...over
+      } })
+      return { emit: (data: any) => listener?.(data), chatGetTurnTerminal }
+    }
+
+    const failedMessage = {
+      id: 'a-fail',
+      sessionId: 's1',
+      role: 'assistant',
+      content: '',
+      timestamp: 1,
+      status: 'failed',
+      schemaVersion: 1
+    }
+
+    it('终态失败时按 turnId 取回真实错误详情并写入失败原因', async () => {
+      const { emit, chatGetTurnTerminal } = stubApi()
+      chatGetTurnTerminal.mockResolvedValue({
+        turnId: 'fail-turn',
+        sessionId: 's1',
+        assistantMessageId: 'a-fail',
+        outcome: 'failed',
+        error: { code: 'source-failed', message: '会话模型「claude-sonnet-4-20250514」当前不可用' }
+      })
+      const off = initTurnProjectionBridge()
+      emit({ turn: { turnId: 'fail-turn', requestId: 'r1', sessionId: 's1', assistantMessage: failedMessage, version: 1 }, event: { type: 'source-failed' } })
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledWith(setTurnFailure({
+        messageId: 'a-fail',
+        reason: '会话模型「claude-sonnet-4-20250514」当前不可用'
+      })))
+      expect(chatGetTurnTerminal).toHaveBeenCalledWith('fail-turn')
+      off()
+    })
+
+    it('事实自带原因时直接采用，不再额外回查终态', () => {
+      const { emit, chatGetTurnTerminal } = stubApi()
+      const off = initTurnProjectionBridge()
+      emit({
+        turn: { turnId: 'fact-turn', requestId: 'r1', sessionId: 's1', assistantMessage: failedMessage, version: 1 },
+        event: { type: 'source-failed', message: '会话模型「x」当前不可用' }
+      })
+      expect(dispatch).toHaveBeenCalledWith(setTurnFailure({
+        messageId: 'a-fail',
+        reason: '会话模型「x」当前不可用'
+      }))
+      expect(chatGetTurnTerminal).not.toHaveBeenCalled()
+      off()
+    })
+
+    it('终态没有错误详情时不写入失败原因，保留通用提示', async () => {
+      const { emit, chatGetTurnTerminal } = stubApi()
+      chatGetTurnTerminal.mockResolvedValue({ turnId: 'timeout-turn', sessionId: 's1', assistantMessageId: 'a-fail', outcome: 'timed-out' })
+      const off = initTurnProjectionBridge()
+      emit({ turn: { turnId: 'timeout-turn', requestId: 'r1', sessionId: 's1', assistantMessage: failedMessage, version: 1 }, event: { type: 'source-timeout' } })
+      await vi.waitFor(() => expect(chatGetTurnTerminal).toHaveBeenCalledWith('timeout-turn'))
+      expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'chat/setTurnFailure' }))
+      off()
+    })
+
+    it('成功终态不查询失败详情', () => {
+      const { emit, chatGetTurnTerminal } = stubApi()
+      const off = initTurnProjectionBridge()
+      emit({ turn: { turnId: 'ok-turn', requestId: 'r1', sessionId: 's1', assistantMessage: { ...failedMessage, status: 'completed' }, version: 1 }, event: { type: 'source-completed' } })
+      expect(chatGetTurnTerminal).not.toHaveBeenCalled()
+      off()
+    })
   })
 })

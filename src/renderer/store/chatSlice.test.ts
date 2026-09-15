@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId } from './chatSlice'
+import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setTurnFailure, mergeTurnFailures } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
@@ -114,6 +114,40 @@ describe('chatSlice', () => {
       let state = chatReducer(undefined, setProjectMemoryEnabled(false))
       state = chatReducer(state, resetChatUi())
       expect(state.projectMemoryEnabled).toBe(true)
+    })
+  })
+
+  describe('turnFailures', () => {
+    it('按 assistantMessageId 记录失败原因', () => {
+      const state = chatReducer(
+        undefined,
+        setTurnFailure({ messageId: 'a1', reason: '会话模型「x」当前不可用' })
+      )
+      expect(state.turnFailures).toEqual({ a1: '会话模型「x」当前不可用' })
+    })
+
+    it('同一会话的多次失败各留各的原因，不复用最近一条', () => {
+      let state = chatReducer(undefined, setTurnFailure({ messageId: 'a1', reason: 'old' }))
+      state = chatReducer(state, setTurnFailure({ messageId: 'a2', reason: 'new' }))
+      expect(state.turnFailures).toEqual({ a1: 'old', a2: 'new' })
+    })
+
+    it('回溯结果并入已有记录', () => {
+      let state = chatReducer(undefined, setTurnFailure({ messageId: 'a1', reason: 'live' }))
+      state = chatReducer(state, mergeTurnFailures({ a2: '历史原因' }))
+      expect(state.turnFailures).toEqual({ a1: 'live', a2: '历史原因' })
+    })
+
+    it('回溯的空原因不写入，也不覆盖已有记录', () => {
+      let state = chatReducer(undefined, setTurnFailure({ messageId: 'a1', reason: 'live' }))
+      state = chatReducer(state, mergeTurnFailures({ a1: '   ', a2: '' }))
+      expect(state.turnFailures).toEqual({ a1: 'live' })
+    })
+
+    it('resetChatUi 清空失败原因缓存', () => {
+      let state = chatReducer(undefined, setTurnFailure({ messageId: 'a1', reason: 'r' }))
+      state = chatReducer(state, resetChatUi())
+      expect(state.turnFailures).toEqual({})
     })
   })
 })

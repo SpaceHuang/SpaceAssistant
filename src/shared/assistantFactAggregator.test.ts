@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Message } from './domainTypes'
 import { reduceAssistantFact, type AssistantFactEvent } from './assistantFactAggregator'
 import { buildAssistantActivityTimeline } from './assistantActivityTimeline'
+import { decodeProgressRawTail } from './terminalScrollback'
 
 const base: Message = {
   id: 'a1', sessionId: 's1', role: 'assistant', content: '', timestamp: 1,
@@ -53,6 +54,30 @@ describe('AssistantFactAggregator', () => {
     expect(valid.toolCalls?.[0]).toMatchObject({ processPid: 10, processGroupId: 10, processOwnerToken: 'request:tool' })
     const invalid = reduceAssistantFact(valid, { type: 'tool-progress', id: 'identity-tool', seq: 2, text: 'running', processPid: 11, processGroupId: 0, processOwnerToken: '' }, { now: 10, createId: () => 'hint-1' })
     expect(invalid.toolCalls?.[0]).toMatchObject({ processPid: 11, processGroupId: 10, processOwnerToken: 'request:tool' })
+  })
+
+  it('M4：terminal rawDelta 累加进 progressOutputRaw 并带上编码标签，base64 不再当成明文进度', () => {
+    const started = apply([{ type: 'tool-use', id: 'raw-tool', toolName: 'run_shell', input: {} }])
+    const first = Buffer.from('D6D0', 'hex').toString('base64')
+    const second = Buffer.from('CEC4B2E2CAD4414243', 'hex').toString('base64')
+    const deps = { now: 10, createId: () => 'hint-1' }
+    const step1 = reduceAssistantFact(started, { type: 'tool-progress', id: 'raw-tool', seq: 1, text: '', rawDelta: first, rawEncoding: 'gbk' }, deps)
+    expect(step1.toolCalls?.[0]).toMatchObject({ status: 'executing', progressOutputRaw: first, progressOutputRawLabel: 'gbk', progressSeq: 1 })
+    expect(step1.toolCalls?.[0]?.progressOutput).toBeUndefined()
+
+    const step2 = reduceAssistantFact(step1, { type: 'tool-progress', id: 'raw-tool', seq: 2, text: '', rawDelta: second, rawEncoding: 'gbk' }, deps)
+    const accumulated = step2.toolCalls?.[0]?.progressOutputRaw ?? ''
+    expect(new TextDecoder('gbk').decode(decodeProgressRawTail(accumulated))).toBe('中文测试ABC')
+    expect(step2.toolCalls?.[0]?.progressOutput).toBeUndefined()
+  })
+
+  it('M4：后续升级的编码标签会覆盖旧值（实例：先占位后锁定）', () => {
+    const started = apply([{ type: 'tool-use', id: 'raw-tool-2', toolName: 'run_shell', input: {} }])
+    const deps = { now: 10, createId: () => 'hint-1' }
+    const delta = Buffer.from('41', 'hex').toString('base64')
+    const first = reduceAssistantFact(started, { type: 'tool-progress', id: 'raw-tool-2', seq: 1, text: '', rawDelta: delta, rawEncoding: 'utf-8' }, deps)
+    const second = reduceAssistantFact(first, { type: 'tool-progress', id: 'raw-tool-2', seq: 2, text: '', rawDelta: delta, rawEncoding: 'utf-16le' }, deps)
+    expect(second.toolCalls?.[0]?.progressOutputRawLabel).toBe('utf-16le')
   })
 
   it('工具调用会切断前一段 thinking，工具之后的新 thinking 排在工具之后', () => {

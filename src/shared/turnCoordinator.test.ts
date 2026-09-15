@@ -637,4 +637,28 @@ describe('TurnCoordinator', () => {
     expect(coordinator.getCheckpointStatus(started.turnId, 2)).toBe('pending')
     vi.useRealTimers()
   })
+  it('按 assistantMessageId 回查内存终态，供重开页面回溯失败原因', async () => {
+    const db = storage()
+    db.prepareAtomic = vi.fn((input) => ({
+      user: { message: { ...input.user, schemaVersion: 1 } as Message, sequence: 1 },
+      assistant: { message: { ...input.assistant, schemaVersion: 1 } as Message, sequence: 2 }
+    }))
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `id-${++n}` })() })
+    const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-lookup', sessionId: 's1', input: { text: 'hi' }, config: {} })
+
+    await expect(
+      coordinator.execute(started.turnId, started.startToken, async () => {
+        throw new Error('会话模型「claude-sonnet-4-20250514」当前不可用（未知模型）')
+      })
+    ).rejects.toThrow('未知模型')
+
+    expect(coordinator.getTerminalByAssistantMessageId(started.assistantMessage.id)).toMatchObject({
+      turnId: started.turnId,
+      sessionId: 's1',
+      assistantMessageId: started.assistantMessage.id,
+      outcome: 'failed',
+      error: { code: 'source-failed', message: '会话模型「claude-sonnet-4-20250514」当前不可用（未知模型）' }
+    })
+    expect(coordinator.getTerminalByAssistantMessageId('a-unknown')).toBeUndefined()
+  })
 })

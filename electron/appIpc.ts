@@ -35,6 +35,7 @@ import {
   listSearchHistory,
   listSessions,
   listPersistedTurns,
+  listTurnErrorsByAssistantMessageIds,
   resolveRetryContext,
   searchMessages,
   setConfigValue,
@@ -47,6 +48,8 @@ import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { clearDecisionCacheOnSessionDelete } from './confirmation/cacheMaintenanceHooks'
 import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from './confirmation/legacyTrustRevocation'
 import { getSecurityAuditLog, setSecurityAuditRetentionDays } from './confirmation/audit'
+import { AUTO_CONTRACT } from './processOutput/contracts'
+import { decodeChildOutput } from './processOutput/decodeChildOutput'
 import { readSecurityAuditRetentionDays } from './confirmation/policyRulesRuntime'
 import { recordSettingsChange } from './confirmation/settingsAudit'
 import { isToolEnabledByConfig } from './toolsConfigRuntime'
@@ -65,6 +68,7 @@ import type {
   Session,
   SessionSkillsState,
   SkillDefinition,
+  SkippedCandidate,
   SkillsConfig,
   SkillRouteRecentMessage,
   SkillRouteResult,
@@ -563,18 +567,16 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const py = typeof payload.path === 'string' && payload.path.trim() ? payload.path.trim() : 'python'
       return await new Promise((resolve) => {
         const proc = spawn(py, ['--version'], { windowsHide: true, shell: false })
-        let out = ''
-        proc.stdout?.on('data', (d: Buffer) => {
-          out += d.toString('utf8')
-        })
-        proc.stderr?.on('data', (d: Buffer) => {
-          out += d.toString('utf8')
-        })
+        // §12-#9：与 shell / script 通道共用同一解码入口（契约 auto：解释器自行决定）。
+        const chunks: Buffer[] = []
+        const appendChunk = (d: Buffer) => chunks.push(d)
+        proc.stdout?.on('data', appendChunk)
+        proc.stderr?.on('data', appendChunk)
         proc.on('error', (err) => {
           resolve({ ok: false, error: err.message })
         })
         proc.on('close', (code) => {
-          const v = out.trim()
+          const v = decodeChildOutput(Buffer.concat(chunks), { contract: AUTO_CONTRACT }).text.trim()
           if (code === 0 && v) resolve({ ok: true, version: v })
           else resolve({ ok: false, error: v || `${ErrorCodes.SHELL_PROCESS_EXIT_CODE}|${code ?? ''}` })
         })
@@ -941,10 +943,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       } catch (error) {
         if (controller.signal.aborted) throw error
         // 路由/配置阶段失败也必须终结已占有的 turn，不能留下永久 configuring 状态。
-        const failed = turnCoordinator.consume(started.turnId, { type: 'source-failed' })
+        // 必须走 runtime 的 consume（而不是 coordinator.consume）才会发出 projection：
+        // 否则渲染层收不到终态事实，消息会一直停在「生成中」，用户也看不到失败原因。
+        const failureMessage = error instanceof Error ? error.message : String(error)
+        const failed = turnRuntime.consume(started.turnId, { type: 'source-failed', message: failureMessage })
         failConfiguringTurn(ctx.db, started.turnId, failed.version, {
           code: 'configuration-failed',
-          message: error instanceof Error ? error.message : String(error)
+          message: failureMessage
         })
         throw error
       }
@@ -1008,6 +1013,19 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     return terminal ? { ...terminal, committedVersion: turnCoordinator.getCommittedVersion(turnId), commitStatus: turnCoordinator.getCheckpointStatus(turnId) } : undefined
   })
   ipcMain.handle('chat:retry-turn-checkpoint', (_e, turnId: string) => { turnRuntime.retryCheckpoint(turnId); return true })
+  // 重开页面时渲染层只有消息 id：按 assistantMessageId 回查终态失败原因，
+  // 否则历史失败气泡永远只剩通用提示。内存终态比持久化记录新，优先采纳。
+  ipcMain.handle('chat:get-turn-errors', (_e, payload?: { assistantMessageIds?: unknown }) => {
+    const requested = Array.isArray(payload?.assistantMessageIds) ? payload.assistantMessageIds : []
+    const ids = requested.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    if (ids.length === 0) return []
+    const errors = new Map(listTurnErrorsByAssistantMessageIds(ctx.db, ids).map((entry) => [entry.assistantMessageId, entry.message]))
+    for (const id of ids) {
+      const live = turnCoordinator.getTerminalByAssistantMessageId(id)?.error?.message?.trim()
+      if (live) errors.set(id, live)
+    }
+    return [...errors].map(([assistantMessageId, message]) => ({ assistantMessageId, message }))
+  })
   ipcMain.handle('chat:list-active-turns', (_e, payload?: { sessionId?: string }) => turnRuntime.listActive(payload?.sessionId).map(({ executionConfig: _executionConfig, ...turn }) => turn))
   ipcMain.handle('chat:get-turn-displays', (_e, payload: { known: Array<{ turnId: string; version: number }>; sessionId?: string }) => {
     const known = new Map((payload?.known ?? []).map((item) => [item.turnId, item.version]))
@@ -2231,18 +2249,22 @@ function readExposureInputsFromDb(
     'skill:install-from-url',
     async (
       event,
-      payload: { sourceUrl: string; subPath?: string; installAll?: boolean; overwrite?: boolean }
-    ): Promise<{ ok: true; skills: SkillDefinition[] } | { ok: false; error: string }> => {
+      payload: { sourceUrl: string; subPath?: string; subPaths?: string[]; installAll?: boolean; overwrite?: boolean }
+    ): Promise<
+      | { ok: true; skills: SkillDefinition[]; skipped: SkippedCandidate[]; overwritten: string[] }
+      | { ok: false; error: string }
+    > => {
       try {
         activeSkillInstallAbort = new AbortController()
-        const skills = await skillManager.installFromUrl(payload.sourceUrl, {
+        const result = await skillManager.installFromUrl(payload.sourceUrl, {
           subPath: payload.subPath,
+          subPaths: payload.subPaths,
           installAll: payload.installAll === true,
           overwrite: payload.overwrite === true,
           onProgress: (progress) => event.sender.send('skill-install-progress', progress),
           signal: activeSkillInstallAbort.signal
         })
-        return { ok: true, skills }
+        return { ok: true, skills: result.installed, skipped: result.skipped, overwritten: result.overwritten }
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) }
       } finally { activeSkillInstallAbort = null }

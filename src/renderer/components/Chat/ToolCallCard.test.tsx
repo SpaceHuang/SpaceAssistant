@@ -636,6 +636,37 @@ vi.mock('@xterm/addon-serialize', () => {
   return { SerializeAddon }
 })
 
+describe('ToolCallCard run_shell terminal trust notice (M3)', () => {
+  const suspectTerminalRecord = () =>
+    shellRecord('completed', {
+      result: {
+        success: true,
+        data: {
+          stdout: '乱码',
+          stderr: '',
+          exitCode: 0,
+          outputTrust: 'suspect',
+          terminalScrollback: { cols: 80, rows: 24, serialized: 'snap' }
+        }
+      },
+      completedAt: Date.now()
+    })
+
+  it('终端模式完成态必须展示 outputTrust=suspect 警告', async () => {
+    render(
+      <ToolCallCard
+        record={suspectTerminalRecord()}
+        confirmMode="direct"
+        messageId="msg-shell"
+        {...terminalShellCardProps}
+      />
+    )
+    fireEvent.click(document.querySelector('.tool-row__main')!)
+    expect(screen.getByRole('status').textContent).toContain('输出编码可疑')
+    await waitFor(() => expect(document.querySelector('.shell-terminal-host')).not.toBeNull())
+  })
+})
+
 describe('ToolCallCard run_shell terminal collapse', () => {
   it('keeps live terminal mounted when collapsed during execution', () => {
     terminalWrite.mockClear()

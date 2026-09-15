@@ -83,6 +83,18 @@ function makeDb(locale: 'zh-CN' | 'en-US' = 'en-US'): AppDatabase {
   return db
 }
 
+/** trusted-model 必须真能解析出服务与 Key，否则执行层会按「模型不可用」fail-fast */
+function seedTrustedModel(db: AppDatabase): void {
+  setConfigValue(db, 'config.models', JSON.stringify([
+    { id: 'trusted', name: 'trusted-model', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: false, isVision: false, enabled: true }
+  ]))
+  setConfigValue(db, 'config.llmServices', JSON.stringify([
+    { id: 'svc-trusted', name: 'Trusted', baseUrl: 'https://trusted.example.com', supportedModelIds: ['trusted'], createdAt: '1', updatedAt: '1' }
+  ]))
+  setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify(['svc-trusted']))
+  setConfigValue(db, 'secrets.llmServiceKeys', JSON.stringify({ 'svc-trusted': 'enc:sk-test' }))
+}
+
 describe('claudeStreamHandlers locale', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -142,6 +154,7 @@ describe('claudeStreamHandlers locale', () => {
 
   it('execute 忽略 renderer 伪造配置并使用 turn 冻结快照', async () => {
     const db = makeDb('zh-CN')
+    seedTrustedModel(db)
     const session = createSession(db, { name: 'frozen-execution', model: 'trusted-model', maxTokens: 2048 })
     const user = appendMessage(db, { id: 'frozen-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'frozen-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
@@ -202,6 +215,7 @@ describe('claudeStreamHandlers locale', () => {
 
   it('关键事件持久化失败时，错误处理路径仍返回结构化结果且不再次抛出', async () => {
     const db = makeDb('zh-CN')
+    seedTrustedModel(db)
     const session = createSession(db, { name: 'event-failure', model: 'trusted-model' })
     const user = appendMessage(db, { id: 'event-failure-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'event-failure-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
@@ -230,6 +244,7 @@ describe('claudeStreamHandlers locale', () => {
 
   it('同时保留模型错误与 finalize 持久化错误', async () => {
     const db = makeDb('zh-CN')
+    seedTrustedModel(db)
     const session = createSession(db, { name: 'dual-failure', model: 'trusted-model' })
     const user = appendMessage(db, { id: 'dual-failure-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'dual-failure-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })

@@ -6,6 +6,7 @@ import {
   getAvailableModels,
   mergeFetchedModels,
   migrateModelEntries,
+  migrateBuiltinModelName,
   pruneDisabledModelsFromServices,
   resolvePreferredModelId,
   resolveServiceForModel,
@@ -94,6 +95,22 @@ describe('llmModelConfig', () => {
     expect(migrated[0]!.id).toBe('2')
     expect(migrated[0]!.name).toBe('deepseek-flash')
     expect(migrated[0]!.isFast).toBe(true)
+  })
+
+  it('migrateBuiltinModelName 把旧内置名映射到当前名', () => {
+    expect(migrateBuiltinModelName('deepseek-v4-flash')).toBe('deepseek-flash')
+    expect(migrateBuiltinModelName('kimi-k2.6')).toBe('kimi-k2.7-code')
+    expect(migrateBuiltinModelName('  glm-5.1  ')).toBe('glm-5.3')
+  })
+
+  it('migrateBuiltinModelName 对未命中的名字原样返回（含用户自定义/已删除模型）', () => {
+    expect(migrateBuiltinModelName('claude-sonnet-4-20250514')).toBe('claude-sonnet-4-20250514')
+    expect(migrateBuiltinModelName('my-custom-model')).toBe('my-custom-model')
+  })
+
+  it('migrateBuiltinModelName 支持链式改名，并在出现环时停止', () => {
+    expect(migrateBuiltinModelName('a', { a: 'b', b: 'c' })).toBe('c')
+    expect(migrateBuiltinModelName('a', { a: 'b', b: 'a' })).toBe('b')
   })
 
   it('resolvePreferredModelId falls back through chain', () => {

@@ -5,6 +5,7 @@ import type { SessionUsage } from '../../shared/sessionUsage'
 import { store } from '../store'
 import { setChatStatus, setLastUsage } from '../store/chatSlice'
 import { turnDisplayToMessage } from '../../shared/turnDisplayProtocol'
+import { setTurnFailure } from '../store/chatSlice'
 
 function applyProjectedUsage(sessionId: string, usage: SessionUsage, projected: boolean): void {
   if (!projected) void window.api.usageSet({ sessionId, usage }).catch(() => {})
@@ -22,11 +23,42 @@ function applyTerminalStatus(payload: TurnProjectionPayload): void {
     ...(type === 'source-failed' ? { error: 'source-failed' } : {}),
     ...(type === 'source-timeout' ? { error: 'TURN_TIMEOUT' } : {})
   }))
+  if (type === 'source-failed' || type === 'source-timeout') void projectTurnFailure(payload)
+}
+
+/**
+ * 终态事实本身不带错误详情（详情只存在于主进程 terminal 记录里），所以按 turnId 回查一次，
+ * 把真实原因投给失败气泡——否则用户只会看到一句没信息量的「回复未能完成」。
+ */
+async function projectTurnFailure(payload: TurnProjectionPayload): Promise<void> {
+  const { turn } = payload
+  const reported = payload.event.message?.trim()
+  if (reported) {
+    store.dispatch(setTurnFailure({
+      messageId: turn.assistantMessage.id,
+      reason: reported
+    }))
+    return
+  }
+  const api = typeof window !== 'undefined' ? window.api : undefined
+  if (typeof api?.chatGetTurnTerminal !== 'function') return
+  try {
+    const terminal = await api.chatGetTurnTerminal(turn.turnId)
+    const reason = terminal?.error?.message?.trim()
+    if (!reason) return
+    store.dispatch(setTurnFailure({
+      messageId: terminal?.assistantMessageId ?? turn.assistantMessage.id,
+      reason
+    }))
+  } catch {
+    // 失败原因属于诊断增强：取不到就退回通用提示，不能反过来影响终态投影本身。
+  }
 }
 
 export type TurnProjectionPayload = {
   turn: { turnId: string; requestId: string; sessionId: string; assistantMessage: Message; version: number }
-  event: { type: string }
+  /** message：终态事实自带的失败原因（诊断文本） */
+  event: { type: string; message?: string }
 }
 
 export type TurnProjectionMetric = {

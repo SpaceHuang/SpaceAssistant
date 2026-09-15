@@ -36,6 +36,7 @@ const api: SpaceAssistantApi = {
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
   chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
   chatRetryTurnCheckpoint: (turnId) => ipcRenderer.invoke('chat:retry-turn-checkpoint', turnId),
+  chatGetTurnErrors: (payload) => ipcRenderer.invoke('chat:get-turn-errors', payload),
   chatListActiveTurns: (payload) => ipcRenderer.invoke('chat:list-active-turns', payload),
   chatGetTurnDisplays: (payload) => ipcRenderer.invoke('chat:get-turn-displays', payload),
   chatGetToolCallDetails: (payload) => ipcRenderer.invoke('chat:get-tool-call-details', payload),

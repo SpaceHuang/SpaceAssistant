@@ -297,8 +297,15 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(frozen.baseUrl)
         const llmServiceId = frozen.llmServiceId
         const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
+        if (creds.error) {
+          // 凭据解析不出来就不发请求：宁可显式失败，也不能带着空 baseURL 退回 SDK 默认端点，
+          // 用一个不相干的服务地址把「模型不可用」伪装成远端 403。
+          throw new Error(
+            `会话模型「${model}」当前不可用（${creds.error}），请重新选择模型或补齐 API 服务配置`
+          )
+        }
         const baseUrl = baseUrlFromPayload ?? creds.baseUrl
-        const getApiKey = creds.error ? deps.getApiKey : creds.getApiKey
+        const getApiKey = creds.getApiKey
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const persistedMessages = authoritative.messages

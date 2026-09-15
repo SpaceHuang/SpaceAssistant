@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { formatShellStderrDisplay, normalizeTerminalOutput } from '../../../shared/terminalOutputSanitize'
 import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
+import { needsOutputTrustNotice } from '../../../shared/shellToolDisplay'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   /** 实时模式：合并的 stdout+stderr 尾部 */
@@ -13,6 +15,8 @@ type Props = {
   truncated?: boolean
   artifactId?: string
   persistedOutputPath?: string
+  /** §10.4：outputTrust=suspect 时显式提示「文本可能不可信」 */
+  outputTrust?: 'ok' | 'suspect'
 }
 
 export function ShellOutputView({
@@ -23,8 +27,10 @@ export function ShellOutputView({
   exitCode,
   truncated,
   artifactId,
-  persistedOutputPath
+  persistedOutputPath,
+  outputTrust
 }: Props) {
+  const { t } = useTypedTranslation('chat')
   const preRef = useRef<HTMLPreElement>(null)
 
   useEffect(() => {
@@ -45,7 +51,9 @@ export function ShellOutputView({
 
   const out = normalizeTerminalOutput(stdout ?? '')
   const errDisplay = formatShellStderrDisplay(stderr ?? '', exitCode)
-  if (!out.trim() && !errDisplay.trim()) return null
+  const suspect = needsOutputTrustNotice({ outputTrust })
+  // §10.4：可疑提示不能因为文本为空而被吞掉——“看不到字”正是最需要提示的情形。
+  if (!out.trim() && !errDisplay.trim() && !suspect) return null
 
   const hasFailure = Boolean(errDisplay.trim())
   // 兜底 artifact id 一定打不开（主进程返回 INVALID_PATH），不要给出点了没反应的入口。
@@ -56,6 +64,11 @@ export function ShellOutputView({
       {out.trim() ? <pre className="shell-output">{out}</pre> : null}
       {out.trim() && errDisplay.trim() ? '\n' : null}
       {errDisplay.trim() ? <pre className="shell-output shell-output__stderr">{errDisplay}</pre> : null}
+      {suspect ? (
+        <div className="shell-output__trust-warning" role="status">
+          {t('shell.outputTrustSuspect')}
+        </div>
+      ) : null}
       {truncated && openTarget ? (
         <button
           type="button"

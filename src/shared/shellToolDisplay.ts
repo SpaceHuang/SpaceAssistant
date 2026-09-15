@@ -30,8 +30,29 @@ export interface ShellResultData {
   outputPersistErrorCode?: string
   terminationErrorCode?: string
   caseId?: string
+  /** §10.4：文本是否可信；suspect 时 UI 与远程都必须显式提示 */
+  outputTrust?: 'ok' | 'suspect'
+  stdoutEncoding?: string
+  stderrEncoding?: string
+  stdoutRawBytes?: number
+  stderrRawBytes?: number
+  stdoutTextBytes?: number
+  stderrTextBytes?: number
+  decodeReplacements?: number
+  lossStage?: 'host'
+  outputArtifactReason?: string
+  exitCodeFamily?: string
+  exitCodeSemantics?: string
+  hresult?: { code: string; name: string; meaning?: string; advice?: string[] }
   /** terminal 模式完成态 UI scrollback */
   terminalScrollback?: ShellTerminalScrollback
+}
+
+/** §10.4：文本不可信时必须显式告知（远程 IM 由模型转述该 hints 文案）。 */
+export const SHELL_OUTPUT_TRUST_SUSPECT_NOTICE = '输出编码可疑，原始字节已保存：文本可能不是真实输出，如需核对请查看原始字节 artifact。'
+
+export function needsOutputTrustNotice(data: ShellResultData | undefined): boolean {
+  return data?.outputTrust === 'suspect'
 }
 
 export function parseShellResultData(data: unknown): ShellResultData | undefined {
@@ -59,6 +80,29 @@ export function parseShellResultData(data: unknown): ShellResultData | undefined
     outputPersistErrorCode: typeof d.outputPersistErrorCode === 'string' ? d.outputPersistErrorCode : undefined,
     terminationErrorCode: typeof d.terminationErrorCode === 'string' ? d.terminationErrorCode : undefined,
     caseId: typeof d.caseId === 'string' ? d.caseId : undefined,
+    outputTrust: d.outputTrust === 'ok' || d.outputTrust === 'suspect' ? d.outputTrust : undefined,
+    stdoutEncoding: typeof d.stdoutEncoding === 'string' ? d.stdoutEncoding : undefined,
+    stderrEncoding: typeof d.stderrEncoding === 'string' ? d.stderrEncoding : undefined,
+    stdoutRawBytes: typeof d.stdoutRawBytes === 'number' ? d.stdoutRawBytes : undefined,
+    stderrRawBytes: typeof d.stderrRawBytes === 'number' ? d.stderrRawBytes : undefined,
+    stdoutTextBytes: typeof d.stdoutTextBytes === 'number' ? d.stdoutTextBytes : undefined,
+    stderrTextBytes: typeof d.stderrTextBytes === 'number' ? d.stderrTextBytes : undefined,
+    decodeReplacements: typeof d.decodeReplacements === 'number' ? d.decodeReplacements : undefined,
+    lossStage: d.lossStage === 'host' ? d.lossStage : undefined,
+    outputArtifactReason: typeof d.outputArtifactReason === 'string' ? d.outputArtifactReason : undefined,
+    exitCodeFamily: typeof d.exitCodeFamily === 'string' ? d.exitCodeFamily : undefined,
+    exitCodeSemantics: typeof d.exitCodeSemantics === 'string' ? d.exitCodeSemantics : undefined,
+    hresult:
+      d.hresult && typeof d.hresult === 'object' && typeof (d.hresult as { code?: unknown }).code === 'string'
+        ? {
+            code: String((d.hresult as { code: string }).code),
+            name: typeof (d.hresult as { name?: unknown }).name === 'string' ? String((d.hresult as { name: string }).name) : '',
+            meaning: typeof (d.hresult as { meaning?: unknown }).meaning === 'string' ? String((d.hresult as { meaning: string }).meaning) : undefined,
+            advice: Array.isArray((d.hresult as { advice?: unknown }).advice)
+              ? (d.hresult as { advice: unknown[] }).advice.filter((item): item is string => typeof item === 'string')
+              : undefined
+          }
+        : undefined,
     terminalScrollback:
       d.terminalScrollback && typeof d.terminalScrollback === 'object'
         ? (d.terminalScrollback as ShellTerminalScrollback)

@@ -28,9 +28,17 @@
   "SKILL_ARCHIVE_TOO_LARGE": "GitHub archive exceeds the 512 MB limit",
   "SKILL_TAR_UNAVAILABLE": "The system tar extractor is unavailable",
   "SKILL_PATH_NOT_FOUND": "Repository path not found",
-  "SKILL_NOT_FOUND_IN_REPO": "No installable Skill was found in the directory",
+  "SKILL_NOT_FOUND_IN_REPO": "No installable Skill was found in the repository ({{code}})",
   "SKILL_NAME_CONFLICT": "A Skill with this name already exists",
   "SKILL_MD_TOO_LARGE": "SKILL.md exceeds the 100 KB limit",
   "SKILL_DIR_TOO_LARGE": "Skill directory exceeds the 512 MB installation limit",
-  "SKILL_FRONT_MATTER_INVALID": "SKILL.md front matter is invalid"
+  "SKILL_FRONT_MATTER_INVALID": "SKILL.md front matter is invalid",
+  "SKILL_FRONT_MATTER_MISSING": "SKILL.md is missing its front matter",
+  "SKILL_FIELD_MISSING": "SKILL.md is missing required fields",
+  "SKILL_NAME_INVALID": "The Skill name is invalid",
+  "SKILL_DESCRIPTION_EMPTY": "The Skill description cannot be empty",
+  "SKILL_MD_MISSING": "No SKILL.md was found in the directory",
+  "SKILL_MD_UNREADABLE": "SKILL.md cannot be read",
+  "SKILL_NO_INSTALLABLE_CANDIDATE": "No installable Skill found: {{code}}",
+  "SKILL_INSTALL_CANCELLED": "Installation cancelled"
 }

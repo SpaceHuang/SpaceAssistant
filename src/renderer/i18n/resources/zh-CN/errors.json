@@ -28,9 +28,17 @@
   "SKILL_ARCHIVE_TOO_LARGE": "GitHub 归档超过 512 MB 限制",
   "SKILL_TAR_UNAVAILABLE": "系统缺少 tar 解压工具",
   "SKILL_PATH_NOT_FOUND": "仓库路径不存在",
-  "SKILL_NOT_FOUND_IN_REPO": "目录下未找到可安装的 Skill",
+  "SKILL_NOT_FOUND_IN_REPO": "未在仓库中发现可安装的 Skill（{{code}}）",
   "SKILL_NAME_CONFLICT": "Skill 名称已存在",
   "SKILL_MD_TOO_LARGE": "SKILL.md 文件超过 100 KB 限制",
   "SKILL_DIR_TOO_LARGE": "Skill 目录超过 512 MB 安装上限",
-  "SKILL_FRONT_MATTER_INVALID": "SKILL.md front matter 格式无效"
+  "SKILL_FRONT_MATTER_INVALID": "SKILL.md front matter 格式无效",
+  "SKILL_FRONT_MATTER_MISSING": "SKILL.md 缺少 front matter",
+  "SKILL_FIELD_MISSING": "SKILL.md 缺少必填字段",
+  "SKILL_NAME_INVALID": "Skill 名称不合法",
+  "SKILL_DESCRIPTION_EMPTY": "Skill 描述不能为空",
+  "SKILL_MD_MISSING": "目录中未找到 SKILL.md",
+  "SKILL_MD_UNREADABLE": "SKILL.md 无法读取",
+  "SKILL_NO_INSTALLABLE_CANDIDATE": "没有可安装的 Skill：{{code}}",
+  "SKILL_INSTALL_CANCELLED": "安装已取消"
 }

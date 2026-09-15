@@ -12,7 +12,7 @@ export type SkillValidationOk = { ok: true; meta: SkillMeta; content: string }
 
 export function parseFrontMatter(raw: string): { frontMatter: Record<string, unknown>; content: string } {
   const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/)
-  if (!match) throw new Error('SKILL.md 缺少 front matter')
+  if (!match) throw new Error('SKILL_FRONT_MATTER_MISSING: SKILL.md 缺少 front matter')
   const yamlText = match[1]
   const content = match[2]
   let frontMatter: Record<string, unknown>
@@ -78,18 +78,18 @@ export function validateSkillMeta(frontMatter: Record<string, unknown>): SkillVa
   const missing: string[] = []
   if (frontMatter.name === undefined) missing.push('name')
   if (frontMatter.description === undefined) missing.push('description')
-  if (missing.length > 0) return { ok: false, error: `SKILL.md 缺少必填字段：${missing.join('、')}` }
+  if (missing.length > 0) return { ok: false, error: `SKILL_FIELD_MISSING: SKILL.md 缺少必填字段：${missing.join('、')}` }
 
   const name = String(frontMatter.name).trim()
   if (!NAME_PATTERN.test(name)) {
-    return { ok: false, error: 'Skill 名称格式不合法：仅允许小写字母、数字和连字符，且以字母开头' }
+    return { ok: false, error: 'SKILL_NAME_INVALID: Skill 名称格式不合法：仅允许小写字母、数字和连字符，且以字母开头' }
   }
   if (name.length < 1 || name.length > 64) {
-    return { ok: false, error: 'Skill 名称长度不合法：需为 1~64 个字符' }
+    return { ok: false, error: 'SKILL_NAME_INVALID: Skill 名称长度不合法：需为 1~64 个字符' }
   }
 
   const description = String(frontMatter.description).trim()
-  if (!description) return { ok: false, error: 'Skill 描述不能为空' }
+  if (!description) return { ok: false, error: 'SKILL_DESCRIPTION_EMPTY: Skill 描述不能为空' }
 
   const triggersRaw = frontMatter.triggers
   const triggers =
@@ -141,21 +141,21 @@ export function readSkillFromDirectory(
   skillMdPath?: string
 ): SkillDefinition {
   const filePath = skillMdPath ?? path.join(dirPath, 'SKILL.md')
-  if (!fs.existsSync(filePath)) throw new Error('所选目录中未找到 SKILL.md 文件，请选择一个合法的 Skill 目录')
+  if (!fs.existsSync(filePath)) throw new Error('SKILL_MD_MISSING: 所选目录中未找到 SKILL.md 文件，请选择一个合法的 Skill 目录')
 
   let stat: fs.Stats
   try {
     stat = fs.statSync(filePath)
   } catch {
-    throw new Error('SKILL.md 文件无法读取，请检查文件是否损坏')
+    throw new Error('SKILL_MD_UNREADABLE: SKILL.md 文件无法读取，请检查文件是否损坏')
   }
-  if (stat.size > SKILL_MD_MAX_BYTES) throw new Error('SKILL.md 文件体积超过 100 KB 限制')
+  if (stat.size > SKILL_MD_MAX_BYTES) throw new Error('SKILL_MD_TOO_LARGE: SKILL.md 文件体积超过 100 KB 限制')
 
   let raw: string
   try {
     raw = fs.readFileSync(filePath, 'utf8')
   } catch {
-    throw new Error('SKILL.md 文件无法读取，请检查文件是否损坏')
+    throw new Error('SKILL_MD_UNREADABLE: SKILL.md 文件无法读取，请检查文件是否损坏')
   }
 
   const { frontMatter, content } = parseFrontMatter(raw)
@@ -185,7 +185,7 @@ export function readSkillFromDirectory(
 export function validateSkillSourceDir(sourcePath: string): SkillValidationOk & { content: string } {
   const resolved = path.resolve(sourcePath)
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-    throw new Error('所选路径不是有效目录')
+    throw new Error('SKILL_PATH_NOT_FOUND: 所选路径不是有效目录')
   }
   const skill = readSkillFromDirectory(resolved, 'user')
   return { ok: true, meta: skill.meta, content: skill.content }

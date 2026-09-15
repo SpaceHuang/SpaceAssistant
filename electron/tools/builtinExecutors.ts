@@ -19,7 +19,9 @@ import {
   outcomeFromFileToolSignal,
   throwIfAborted
 } from './toolExecutionResource'
-import { buildPythonScriptEnv, createStreamTextDecoder } from '../processOutputEncoding'
+import { buildPythonScriptEnv } from '../processOutputEncoding'
+import { UTF8_CONTRACT } from '../processOutput/contracts'
+import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
 import { ProcessSupervisor } from '../shell/processSupervisor'
 import {
@@ -797,6 +799,14 @@ export async function grepWithRg(
     let stderr = ''
     let killed = false
     let truncated = false
+    // §12-#5：ripgrep 输出其自身决定编码（正常为 UTF-8），契约显式声明为 utf8 并保留探测兜底；
+    // 跨 chunk 的多字节字符由流式解码器保状态，不再逐 chunk toString('utf8')。
+    const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
+    const stderrDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
+    let stdoutRawBytes = 0
+    const STDOUT_RAW_LIMIT = 400 * 1024
+    const STDERR_RAW_LIMIT = 16 * 1024
+    let stderrRawBytes = 0
     const t = setTimeout(() => {
       if (settled) return
       killed = true
@@ -810,18 +820,19 @@ export async function grepWithRg(
     }
     signal.addEventListener('abort', onAbort, { once: true })
     proc.stdout?.on('data', (ch: Buffer) => {
-      out += ch.toString('utf8')
-      if (Buffer.byteLength(out, 'utf8') > 512 * 1024) {
-        out = Buffer.from(out, 'utf8').subarray(0, 400 * 1024).toString('utf8')
+      stdoutRawBytes += ch.length
+      // 截断发生在原始字节层：超出上限后不再继续交付，避免把多字节字符切成 U+FFFD。
+      if (stdoutRawBytes <= STDOUT_RAW_LIMIT) {
+        out += stdoutDecoder.write(ch)
+      } else if (!truncated) {
         truncated = true
+        out += stdoutDecoder.end()
       }
       onProgress(`搜索中...`)
     })
     proc.stderr?.on('data', (ch: Buffer) => {
-      if (Buffer.byteLength(stderr, 'utf8') < 16 * 1024) {
-        stderr += ch.toString('utf8')
-        if (Buffer.byteLength(stderr, 'utf8') > 16 * 1024) stderr = Buffer.from(stderr).subarray(0, 16 * 1024).toString('utf8')
-      }
+      stderrRawBytes += ch.length
+      if (stderrRawBytes <= STDERR_RAW_LIMIT) stderr += stderrDecoder.write(ch)
     })
     const finish = (result: RipgrepRunResult) => {
       if (settled) return
@@ -834,9 +845,15 @@ export async function grepWithRg(
       finish({ kind: 'unavailable', reason: classifyRipgrepSpawnError(err as NodeJS.ErrnoException) })
     })
     proc.on('close', (code) => {
+      if (!truncated) {
+        out += stdoutDecoder.end()
+      }
+      // MINOR：stdout 截断只应影响 stdout；stderr 的尾部仍必须 flush，
+      // 否则「挂死/超限前写出的错误信息」会丢掉未完成的多字节尾巴。
+      stderr += stderrDecoder.end()
       if (signal.aborted) finish({ kind: 'cancelled', partialOutput: out.trimEnd() })
       else if (killed) finish({ kind: 'timeout', partialOutput: out.trimEnd() })
-      else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(Buffer.from(stderr.trim(), 'utf8').subarray(0, 4000).toString('utf8') || 'ripgrep 返回非成功状态', 'grep') })
+      else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
         if (args.headLimit > 0) {
@@ -1195,8 +1212,9 @@ export const runScriptExecutor: ToolExecutor = {
       interpreter.fallbackFrom ? `未找到 ${interpreter.fallbackFrom}，改用 ${py} 启动 Python...` : '启动 Python...'
     )
     const env = buildPythonScriptEnv()
-    const stdoutDecoder = createStreamTextDecoder('utf-8')
-    const stderrDecoder = createStreamTextDecoder('utf-8')
+    // §7.5 / §12-#6：宿主侧已用 PYTHONUTF8=1 与 PYTHONIOENCODING=utf-8 钉死契约，这里显式登记同一契约。
+    const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
+    const stderrDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
     let stdout = ''
     let stderr = ''
     let timedOut = false
