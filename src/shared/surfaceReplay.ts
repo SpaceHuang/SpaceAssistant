@@ -5,18 +5,34 @@ export type SurfaceReplayItem = { id: string; required?: boolean }
 
 /** 将 provider 的 assistant content blocks 投影成数据库持久化的正文表示。 */
 export function canonicalSurfaceContent(role: unknown, content: unknown): unknown {
+  if (role === 'user' && Array.isArray(content)) {
+    const hasToolResult = content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')
+    if (!hasToolResult) return content
+    const retained = content.filter((block) => !block || typeof block !== 'object' || (block as { type?: unknown }).type !== 'tool_result')
+    if (retained.length > 0 && retained.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string')) {
+      return canonicalPersistedAssistantText(retained.map((block) => (block as { text: string }).text).join(''))
+    }
+    return retained
+  }
   if (role !== 'assistant') return content
-  if (typeof content === 'string') return canonicalPersistedAssistantText(content)
+  // `''` is the deliberate replay anchor for a tool-use assistant without text;
+  // ordinary persisted empty assistant messages are normalized by the DB builder
+  // to `' '` before reaching this layer.
+  if (typeof content === 'string') return content.length === 0 ? '' : canonicalPersistedAssistantText(content)
   if (!Array.isArray(content)) return content
   const hasToolUse = content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
-  const text = content
+  const text = extractAssistantText(content)
+  // 带 tool_use 的 assistant 正文由数据库的 toolCalls 重建，原文空白需要保留；
+  // 普通 assistant 则会经过 ensureApiTextContent（trim，空正文变成单空格）。
+  return hasToolUse ? text : canonicalPersistedAssistantText(text)
+}
+
+function extractAssistantText(content: unknown[]): string {
+  return content
     .filter((block): block is { type?: unknown; text?: unknown } => Boolean(block) && typeof block === 'object')
     .filter((block) => block.type === 'text' && typeof block.text === 'string')
     .map((block) => block.text)
     .join('')
-  // 带 tool_use 的 assistant 正文由数据库的 toolCalls 重建，原文空白需要保留；
-  // 普通 assistant 则会经过 ensureApiTextContent（trim，空正文变成单空格）。
-  return hasToolUse ? text : canonicalPersistedAssistantText(text)
 }
 
 function canonicalPersistedAssistantText(content: string): string {
@@ -28,21 +44,29 @@ export interface ReplaySurfaceProjection<T> {
   messages: T[]
   /** 每个 projected message 对应的原始消息；合并工具轮时指向首个 assistant。 */
   sources: T[]
+  /** 每个 projected message 合并了哪些原始消息，用于跨轮稳定 identity。 */
+  sourceGroups: T[][]
+}
+
+type ReplaySurfaceProjectionOptions<T> = {
+  mergeAdjacentUsers?: boolean | ((left: T, right: T) => boolean)
 }
 
 /** 将工具协议消息投影为可由数据库稳定重建的 turn surface。 */
-export function projectReplaySurfaceWithSources<T>(messages: readonly T[]): ReplaySurfaceProjection<T> {
+export function projectReplaySurfaceWithSources<T>(messages: readonly T[], options: ReplaySurfaceProjectionOptions<T> = {}): ReplaySurfaceProjection<T> {
   const projected: T[] = []
   const sources: T[] = []
+  const sourceGroups: T[][] = []
   let toolTurnAssistantIndex = -1
   for (const message of messages) {
-    if (!message || typeof message !== 'object') { projected.push(message); sources.push(message); continue }
+    if (!message || typeof message !== 'object') { projected.push(message); sources.push(message); sourceGroups.push([message]); continue }
     const source = message as { role?: unknown; content?: unknown }
     if (source.role === 'user' && Array.isArray(source.content)) {
       if (source.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) continue
     }
     if (source.role === 'assistant' && Array.isArray(source.content)) {
       const hasToolUse = source.content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_use')
+      const rawText = extractAssistantText(source.content)
       const text = canonicalSurfaceContent(source.role, source.content)
       if (hasToolUse) {
         // 空正文的 tool-use assistant 仍是一个可持久化的轮次锚点；否则 reset
@@ -50,29 +74,63 @@ export function projectReplaySurfaceWithSources<T>(messages: readonly T[]): Repl
         if (toolTurnAssistantIndex < 0) {
           projected.push({ ...(message as object), content: typeof text === 'string' ? text : '' } as T)
           sources.push(message)
+          sourceGroups.push([message])
           toolTurnAssistantIndex = projected.length - 1
         } else if (typeof text === 'string' && text.length > 0) {
           const previous = projected[toolTurnAssistantIndex] as unknown as { content?: unknown }
           projected[toolTurnAssistantIndex] = { ...(previous as object), content: `${typeof previous.content === 'string' ? previous.content : ''}${text}` } as T
+          sourceGroups[toolTurnAssistantIndex]!.push(message)
         }
         continue
       }
-      if (toolTurnAssistantIndex >= 0 && typeof text === 'string') {
+      if (toolTurnAssistantIndex >= 0) {
         const previous = projected[toolTurnAssistantIndex] as unknown as { content?: unknown }
-        projected[toolTurnAssistantIndex] = { ...(previous as object), content: `${typeof previous.content === 'string' ? previous.content : ''}${text}` } as T
+        projected[toolTurnAssistantIndex] = { ...(previous as object), content: `${typeof previous.content === 'string' ? previous.content : ''}${rawText}` } as T
+        sourceGroups[toolTurnAssistantIndex]!.push(message)
         toolTurnAssistantIndex = -1
         continue
       }
     }
     if (source.role === 'user') toolTurnAssistantIndex = -1
-    projected.push(source.role === 'assistant' ? { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T : message)
-    sources.push(message)
+    const projectedMessage = source.role === 'assistant' ? { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T : { ...(message as object), content: canonicalSurfaceContent(source.role, source.content) } as T
+    const previous = projected[projected.length - 1]
+    const shouldMergeAdjacentUsers = previous && isUserMessage(previous) && isUserMessage(projectedMessage) && (typeof options.mergeAdjacentUsers === 'function'
+      ? options.mergeAdjacentUsers(previous, projectedMessage)
+      : options.mergeAdjacentUsers === true)
+    if (shouldMergeAdjacentUsers) {
+      projected[projected.length - 1] = mergeReplayUserMessages(previous, projectedMessage)
+      sources[sources.length - 1] = message
+      sourceGroups[sourceGroups.length - 1]!.push(message)
+    } else {
+      projected.push(projectedMessage)
+      sources.push(message)
+      sourceGroups.push([message])
+    }
   }
-  return { messages: projected, sources }
+  return { messages: projected, sources, sourceGroups }
 }
 
 export function projectReplaySurface<T>(messages: readonly T[]): T[] {
   return projectReplaySurfaceWithSources(messages).messages
+}
+
+function isUserMessage(value: unknown): value is { role?: unknown; content?: unknown; id?: string; timestamp?: number } {
+  return Boolean(value && typeof value === 'object' && (value as { role?: unknown }).role === 'user')
+}
+
+function mergeReplayUserMessages<T>(left: T, right: T): T {
+  const leftMessage = left as unknown as { content?: unknown; id?: string; timestamp?: number }
+  const rightMessage = right as unknown as { content?: unknown; id?: string; timestamp?: number }
+  const leftContent = leftMessage.content
+  const rightContent = rightMessage.content
+  let content: unknown
+  if (typeof leftContent === 'string' && typeof rightContent === 'string') content = `${leftContent}\n${rightContent}`.trim()
+  else {
+    const leftBlocks = typeof leftContent === 'string' ? [{ type: 'text', text: leftContent }] : Array.isArray(leftContent) ? leftContent : []
+    const rightBlocks = typeof rightContent === 'string' ? [{ type: 'text', text: rightContent }] : Array.isArray(rightContent) ? rightContent : []
+    content = [...leftBlocks, ...rightBlocks]
+  }
+  return { ...(left as object), content, ...(rightMessage.id ? { id: rightMessage.id } : {}), ...(rightMessage.timestamp != null ? { timestamp: rightMessage.timestamp } : {}) } as T
 }
 
 /** 将 replay 结果映射回原始 API surface，保留未被压缩的工具协议块。 */
@@ -182,10 +240,24 @@ export function surfaceItemIdentitiesForProjectionSubset<T>(source: ReplaySurfac
   return retained.sources.map((value, index) => bySource.get(value) ?? surfaceItemIdentity(retained.messages[index], index))
 }
 
+/** 从 replay 域剔除无法由下一轮事实重建的请求级 Skill 消息。 */
+export function excludeReplayOnlyMessages<T>(messages: readonly T[], skillFragments: readonly string[] | undefined): T[] {
+  const fragments = (skillFragments ?? []).filter((fragment) => typeof fragment === 'string' && fragment.length > 0)
+  const replayOnlyContents = new Set(fragments)
+  if (fragments.length > 1) replayOnlyContents.add(fragments.join('\n\n'))
+  if (replayOnlyContents.size === 0) return [...messages]
+  return messages.filter((message) => {
+    if (!message || typeof message !== 'object') return true
+    const source = message as { role?: unknown; id?: unknown; content?: unknown }
+    return !(source.role === 'user' && typeof source.id !== 'string' && typeof source.content === 'string' && replayOnlyContents.has(source.content))
+  })
+}
+
 export function computeReplaySurfaceFingerprint(system: string, surface: readonly unknown[]): string {
   // replay 指纹描述历史消息，不应受每轮动态 system prompt 影响。
   void system
-  return buildRequestHeaderPayload({ requestId: 'replay', system: '', tools: [], messages: surface.map((message) => {
+  const canonicalSurface = projectReplaySurfaceWithSources(surface, { mergeAdjacentUsers: true }).messages
+  return buildRequestHeaderPayload({ requestId: 'replay', system: '', tools: [], messages: canonicalSurface.map((message) => {
     const source = message && typeof message === 'object' ? message as { role?: unknown; content?: unknown } : {}
     return { role: source.role, content: canonicalSurfaceContent(source.role, source.content) }
   }) }).surfaceSnapshot.fingerprint
@@ -221,6 +293,27 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
   let currentSurface = [...items]
   const initialIdentities = surfaceItemIdentities(items)
   const stableIdentities = new Map(items.map((item, index) => [item.id, initialIdentities[index] ?? surfaceItemIdentity(item, index)]))
+  const canonicalizeCurrentSurface = (): void => {
+    const checkpointIds = new Set(replay.committed.flatMap((committed) => {
+      const candidate = committed.summary.payload.candidate
+      const checkpoint = candidate && typeof candidate === 'object' ? (candidate as { checkpointMessage?: unknown }).checkpointMessage : undefined
+      const checkpointId = checkpoint && typeof checkpoint === 'object' ? (checkpoint as { id?: unknown }).id : undefined
+      return typeof checkpointId === 'string' ? [checkpointId] : []
+    }))
+    const projection = projectReplaySurfaceWithSources(currentSurface, { mergeAdjacentUsers: (left, right) => {
+      const leftId = left && typeof left === 'object' ? (left as { id?: unknown }).id : undefined
+      const rightId = right && typeof right === 'object' ? (right as { id?: unknown }).id : undefined
+      return (typeof leftId === 'string' && checkpointIds.has(leftId)) || (typeof rightId === 'string' && checkpointIds.has(rightId))
+    } })
+    const identities = surfaceItemIdentities(projection.messages)
+    projection.sourceGroups.forEach((group, index) => {
+      for (const source of group) {
+        const sourceId = source && typeof source === 'object' ? (source as { id?: unknown }).id : undefined
+        if (typeof sourceId === 'string') stableIdentities.set(sourceId, identities[index]!)
+      }
+    })
+  }
+  canonicalizeCurrentSurface()
   for (const committed of replay.committed) {
     if (windowId && !applicable.has(committed.compactionId)) continue
     const expectedInput = committed.start.payload.inputSurfaceFingerprint
@@ -263,6 +356,7 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
       const replayIdentity = candidate && typeof candidate === 'object' ? (candidate as { checkpointReplayIdentity?: unknown }).checkpointReplayIdentity : undefined
       stableIdentities.set(checkpoint.id, typeof replayIdentity === 'string' ? replayIdentity : surfaceItemIdentity(checkpoint, insertionIndex))
     }
+    canonicalizeCurrentSurface()
     const expectedOutput = committed.summary.payload.outputSurfaceFingerprint ?? committed.end.payload.outputSurfaceFingerprint
     const outputSurface = boundaryIndex >= 0 ? currentSurface.filter((item) => historicalIds.has(item.id) || item.id === checkpointMessageId(committed)) : currentSurface
     if (fingerprint && typeof expectedOutput === 'string' && fingerprint(outputSurface) !== expectedOutput) {
@@ -271,6 +365,12 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     }
   }
   return currentSurface
+}
+
+function replayCanonicalPayload(value: unknown): string {
+  if (!value || typeof value !== 'object') return JSON.stringify(value) ?? ''
+  const source = value as { role?: unknown; content?: unknown }
+  return JSON.stringify({ role: source.role, content: canonicalSurfaceContent(source.role, source.content) })
 }
 
 function checkpointMessageId(committed: CompactionReplay['committed'][number]): string | undefined {

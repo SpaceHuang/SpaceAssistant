@@ -59,7 +59,18 @@ export function selectRecoveryMessages<T extends { role: string; id?: string; co
       }
     }
   }
-  if (currentIndex >= 0) return messages.slice(currentIndex)
+  if (currentIndex >= 0) return messages.slice(currentIndex).map((message, index) => index === 0 ? stripHistoricalToolResults(message) : message)
   if (!messages.length) return []
   return [messages[messages.length - 1]!]
+}
+
+function stripHistoricalToolResults<T extends { role: string; content?: unknown }>(message: T): T {
+  if (message.role !== 'user' || !Array.isArray(message.content)) return message
+  const retained = message.content.filter((block) => !block || typeof block !== 'object' || (block as { type?: unknown }).type !== 'tool_result')
+  if (retained.length === message.content.length) return message
+  if (retained.length === 0) return { ...message, content: ' ' }
+  if (retained.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string')) {
+    return { ...message, content: retained.map((block) => (block as { text: string }).text).join('') }
+  }
+  return { ...message, content: retained }
 }

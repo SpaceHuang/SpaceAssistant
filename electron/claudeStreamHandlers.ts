@@ -24,7 +24,7 @@ import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventInput, type SessionEventSink } from './sessionEvents'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
 import { computeCompactionSummaryHash, countCommittedCompactions, currentCompactionWindowId } from '../src/shared/compactionEvents'
@@ -341,6 +341,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const replayProjection = projectReplaySurfaceWithSources(builtMessages)
         const projectedMessages = replayProjection.messages
         const projectedIdentities = surfaceItemIdentitiesForProjectionSubset(replayProjection, replayProjection)
+        const replayIdentityByMessageId = new Map<string, string>()
+        projectedMessages.forEach((message, index) => {
+          const messageId = (message as { id?: unknown }).id
+          if (typeof messageId === 'string') replayIdentityByMessageId.set(messageId, projectedIdentities[index]!)
+        })
         const replaySurface = projectedMessages.map((message, index) => ({
           ...message,
           id: message.id ?? projectedIdentities[index]!
@@ -435,8 +440,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               contextWindow: { tokens: budget.totalInputBudget + budget.outputReserveTokens, source: 'config' as const }
             }
             if (!eventWriter || !projection || !shouldCompact(projection, budget) || messages.length < 3) return
-            const replayMessages = projectReplaySurface(messages)
-            const messageIdentities = surfaceItemIdentities(replayMessages)
+            const replayMessages = projectReplaySurface(excludeReplayOnlyMessages(messages, frozen.skillFragments))
+            const messageIdentities = surfaceItemIdentities(replayMessages).map((identity, index) => {
+              const messageId = (replayMessages[index] as { id?: unknown }).id
+              return typeof messageId === 'string' && replayIdentityByMessageId.has(messageId) ? replayIdentityByMessageId.get(messageId)! : identity
+            })
             const items = replayMessages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
             const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, surfaceSnapshot.surfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
             const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '' }
@@ -483,7 +491,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             if (!preflight.ok) return
             const compactionId = `${windowId}:boundary:${boundaryRequestId}`
             const outputWindowId = isReset ? `${windowId}:reset:${boundaryRequestId}` : undefined
-            const candidate = { kind: isReset ? 'reset' as const : 'summary' as const, checkpointMessage, checkpointReplayIdentity: surfaceItemIdentities(outputMessages)[0], shadowedRanges }
+            const candidate = { kind: isReset ? 'reset' as const : 'summary' as const, checkpointMessage, checkpointReplayIdentity: outputIdentities[0], shadowedRanges }
             await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, ...(outputWindowId ? { inputWindowId: windowId, outputWindowId } : {}), summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
           }
           ,emitFactEvent: (fact) => {

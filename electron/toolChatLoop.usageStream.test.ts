@@ -164,6 +164,7 @@ describe('runToolChatSession message_start usage', () => {
     })
     expect(res.ok).toBe(true)
     expect(stream).toHaveBeenCalled()
+    expect(stream.mock.calls[0]?.[0]?.messages?.[0]).not.toHaveProperty('id')
   })
 
   it('把 Core 冻结的 Skill fragment 注入实际 provider 请求且位于当前输入之前', async () => {

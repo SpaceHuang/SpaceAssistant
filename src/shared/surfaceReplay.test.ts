@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from './surfaceReplay'
+import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, computeShadowedRanges, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from './surfaceReplay'
 import { computeCompactionSummaryHash, foldCompactionEvents } from './compactionEvents'
 
 describe('surface replay', () => {
@@ -37,6 +37,17 @@ describe('surface replay', () => {
   it('merges text before and after a tool call into the persisted assistant turn', () => {
     const live = [{ role: 'assistant', content: [{ type: 'text', text: 'before ' }, { type: 'tool_use', id: 't', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }, { role: 'assistant', content: [{ type: 'text', text: 'after' }] }]
     expect(projectReplaySurface(live)).toEqual([{ role: 'assistant', content: 'before after' }])
+  })
+  it('preserves whitespace at the start of the final tool-turn text segment', () => {
+    const live = [{ role: 'assistant', content: [{ type: 'text', text: 'before' }, { type: 'tool_use', id: 't', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }, { role: 'assistant', content: [{ type: 'text', text: ' after' }] }]
+    const persisted = [{ role: 'assistant', content: 'before after', toolCalls: [{ id: 't' }] }]
+    expect(projectReplaySurface(live).map(({ role, content }) => ({ role, content }))).toEqual(projectReplaySurface(persisted).map(({ role, content }) => ({ role, content })))
+    expect(computeReplaySurfaceFingerprint('system', live)).toBe(computeReplaySurfaceFingerprint('system', persisted))
+  })
+  it('excludes the joined request skill fragment from replay-only history', () => {
+    const skill = ['## Skill: review', 'review instructions']
+    const messages = [{ role: 'user', content: 'old' }, { role: 'user', content: skill.join('\n\n') }, { role: 'user', content: 'question' }]
+    expect(excludeReplayOnlyMessages(messages, skill)).toEqual([messages[0], messages[2]])
   })
   it('does not use the lossy projection as the send surface without a replay change', () => {
     const full = [{ role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'read', input: {} }] }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }]
@@ -173,6 +184,32 @@ describe('surface replay', () => {
       { seq: 6, type: 'compaction_end' as const, payload: { compactionId: 'c2', windowId: 'w', status: 'committed', startSeq: 4, summarySeq: 5, inputSurfaceFingerprint: 'in-2', outputSurfaceFingerprint: 'out-2', summaryHash: computeCompactionSummaryHash(second) } }
     ]
     expect(applyCommittedSurfaceShadow([{ id: 'old-1' }, { id: 'old-2' }, { id: 'new-1' }, { id: 'tail' }], foldCompactionEvents(events), [], 'w')).toEqual([{ id: 'checkpoint-2', role: 'user', content: 'summary 2' }, { id: 'tail' }])
+  })
+  it('replays a second compaction after provider role normalization merged checkpoint and user', () => {
+    const firstCheckpoint = { id: 'checkpoint-1', role: 'user', content: 'summary one' }
+    const firstTail = { id: 'tail-user', role: 'user', content: 'question one' }
+    const firstAssistant = { id: 'answer-one', role: 'assistant', content: 'answer one' }
+    const secondCheckpoint = { id: 'checkpoint-2', role: 'user', content: 'summary two' }
+    const mergedCheckpointIdentity = surfaceItemIdentity({ role: 'user', content: 'summary one\nquestion one' }, 0)
+    const first = { checkpointMessage: firstCheckpoint, shadowedRanges: [{ start: 'old', end: 'old' }] }
+    const second = { checkpointMessage: secondCheckpoint, shadowedRanges: [{ start: mergedCheckpointIdentity, end: surfaceItemIdentity(firstAssistant, 2) }] }
+    const afterFirst = [firstCheckpoint, firstTail, firstAssistant, { id: 'next-user', role: 'user', content: 'next' }, { id: 'next-answer', role: 'assistant', content: 'next answer' }]
+    const afterSecond = [secondCheckpoint, afterFirst[3]!, afterFirst[4]!]
+    const inputTwo = [
+      { role: 'user', content: 'summary one\nquestion one' },
+      { role: 'assistant', content: 'answer one' },
+      { role: 'user', content: 'next' },
+      { role: 'assistant', content: 'next answer' }
+    ]
+    const events = [
+      { seq: 1, type: 'compaction_start' as const, payload: { compactionId: 'c1', windowId: 'w', inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', [{ id: 'old', role: 'user', content: 'old' }, ...afterFirst.slice(1)]), surfaceBoundaryId: 'next-answer' } },
+      { seq: 2, type: 'compaction_summary' as const, payload: { compactionId: 'c1', windowId: 'w', candidate: first, summaryHash: computeCompactionSummaryHash(first), outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', afterFirst), shadowedRanges: first.shadowedRanges } },
+      { seq: 3, type: 'compaction_end' as const, payload: { compactionId: 'c1', windowId: 'w', status: 'committed' as const, startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', [{ id: 'old', role: 'user', content: 'old' }, ...afterFirst.slice(1)]), outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', afterFirst), summaryHash: computeCompactionSummaryHash(first) } },
+      { seq: 4, type: 'compaction_start' as const, payload: { compactionId: 'c2', windowId: 'w', inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', inputTwo), surfaceBoundaryId: 'next-answer' } },
+      { seq: 5, type: 'compaction_summary' as const, payload: { compactionId: 'c2', windowId: 'w', candidate: second, summaryHash: computeCompactionSummaryHash(second), outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', afterSecond), shadowedRanges: second.shadowedRanges } },
+      { seq: 6, type: 'compaction_end' as const, payload: { compactionId: 'c2', windowId: 'w', status: 'committed' as const, startSeq: 4, summarySeq: 5, inputSurfaceFingerprint: computeReplaySurfaceFingerprint('', inputTwo), outputSurfaceFingerprint: computeReplaySurfaceFingerprint('', afterSecond), summaryHash: computeCompactionSummaryHash(second) } }
+    ]
+    expect(applyCommittedSurfaceShadow([{ id: 'old', role: 'user', content: 'old' }, ...afterFirst.slice(1)], foldCompactionEvents(events), [], 'w', (items) => computeReplaySurfaceFingerprint('', items))).toEqual(afterSecond)
   })
 
   it('validates the historical boundary while allowing a later turn to append messages', () => {

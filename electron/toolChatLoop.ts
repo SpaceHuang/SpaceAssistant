@@ -175,7 +175,7 @@ import { computeContextPressure, shouldCompact } from '../src/shared/contextMete
 import type { ContextMeter } from '../src/shared/contextMeterService'
 import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
 import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
-import { computeReplaySurfaceFingerprint, computeShadowedRanges, projectReplaySurface, projectReplaySurfaceWithSources, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, computeShadowedRanges, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -658,7 +658,8 @@ async function runToolChatSessionInner(
     retry: number,
     totalInputBudget: number
   ): Promise<boolean> => {
-    const inputProjection = projectReplaySurfaceWithSources(inputMessages)
+    const replayInputMessages = excludeReplayOnlyMessages(inputMessages, args.skillFragments)
+    const inputProjection = projectReplaySurfaceWithSources(replayInputMessages)
     const inputSurface = inputProjection.messages
     const selectedMessages = selectRecoveryMessages(inputMessages as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as Anthropic.MessageParam[]
     const skillFragmentText = args.skillFragments?.join('\n\n')
@@ -671,7 +672,8 @@ async function runToolChatSessionInner(
     // 是否发生缩减必须比较真实 provider surface；replay projection 会隐藏工具消息，
     // 不能据此把“已删除旧工具对”误判成 no-op。
     if (JSON.stringify(recoveredMessages) === JSON.stringify(inputMessages)) return false
-    const outputProjection = projectReplaySurfaceWithSources(recoveredMessages)
+    const replayOutputMessages = excludeReplayOnlyMessages(recoveredMessages, args.skillFragments)
+    const outputProjection = projectReplaySurfaceWithSources(replayOutputMessages)
     const outputSurface = outputProjection.messages
     if (outputSurface.length === 0) return false
 
@@ -742,21 +744,22 @@ async function runToolChatSessionInner(
     // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
     const attemptRequestId = `${requestId}:round:${loopRound}`
     const messagesStripped = stripThinking(recoverySkillFragment ? [...messagesForApi, { role: 'user', content: recoverySkillFragment }] : messagesForApi)
+    const wireMessages = messagesStripped.map((message) => {
+      const { id: _internalId, ...wireShape } = message as Anthropic.MessageParam & { id?: string }
+      return wireShape
+    })
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,
       max_tokens: maxTokensEffective,
       system: systemPrompt,
-      messages: messagesStripped as Anthropic.MessageParam[],
+      messages: wireMessages as Anthropic.MessageParam[],
       tools: tools as Anthropic.Tool[],
       thinking,
       cacheControl: true
     })
     // 计划面先冻结为不含内部 id 的协议中立表示；wire 面只接受 serializer 最终产物。
     // 两者必须独立计算，才能捕获 serializer 在发送前改变消息/工具的漂移。
-    const plannedMessages = messagesStripped.map((message) => {
-      const { id: _internalId, ...wireShape } = message as Anthropic.MessageParam & { id?: string }
-      return wireShape
-    })
+    const plannedMessages = wireMessages
     const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
     const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: toolLoopStreamParams.messages as unknown[], requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
