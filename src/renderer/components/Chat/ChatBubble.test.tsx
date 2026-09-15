@@ -145,6 +145,28 @@ describe('ChatBubble streaming render', () => {
     fireEvent.click(screen.getByRole('button', { name: '重试回复' }))
     expect(actions.retryAssistant).toHaveBeenCalledWith('a1')
   })
+
+  it('失败气泡在拿到失败原因时展示真实原因，而不是只留通用提示', () => {
+    render(
+      <ChatBubble
+        message={assistantMessage({ status: 'failed' })}
+        failureReason={'会话模型「claude-sonnet-4-20250514」当前不可用（未知模型），请在设置中重新选择模型'}
+      />
+    )
+    expect(screen.getByText('失败原因')).toBeDefined()
+    expect(screen.getByText(/会话模型「claude-sonnet-4-20250514」当前不可用/)).toBeDefined()
+  })
+
+  it('没有失败原因时只显示通用提示，不渲染空的原因行', () => {
+    render(<ChatBubble message={assistantMessage({ status: 'failed' })} />)
+    expect(screen.queryByText('失败原因')).toBeNull()
+  })
+
+  it('成功气泡即便带着失败原因也不展示', () => {
+    render(<ChatBubble message={assistantMessage({ status: 'completed' })} failureReason="stale" />)
+    expect(screen.queryByText('失败原因')).toBeNull()
+    expect(screen.queryByText('stale')).toBeNull()
+  })
 })
 
 describe('ChatBubble activity batch', () => {

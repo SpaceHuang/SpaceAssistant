@@ -25,6 +25,7 @@
     "archiveToWiki": "归档到 Wiki",
     "assistantReply": "助手回复",
     "retryFailedMessage": "回复未能完成。你可以重试生成，或基于已有上下文继续对话。",
+    "failureReason": "失败原因",
     "retry": "重试回复"
   },
   "scrollToLatest": {

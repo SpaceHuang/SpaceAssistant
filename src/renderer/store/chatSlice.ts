@@ -2,6 +2,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { Message } from '../../shared/domainTypes'
 import type { DisplayMessageEntry, DisplayOrder } from '../../shared/displayOrder'
 import type { SessionUsage } from '../../shared/sessionUsage'
+import type { TurnFailureEntry } from '../services/turnFailureDisplay'
 import {
   ackDisplayEntryPersisted,
   appendOptimisticDisplayEntry,
@@ -40,6 +41,8 @@ interface ChatState {
   scrollToMessageId: string | null
   lastUsage: LastUsage
   projectMemoryEnabled: boolean
+  /** 按会话记录最近一次失败的 assistant 消息与真实原因（供失败气泡展示） */
+  turnFailures: Record<string, TurnFailureEntry>
 }
 
 function syncMessagesFromEntries(state: ChatState): void {
@@ -61,7 +64,8 @@ const initialState: ChatState = {
   confirmFocusToolUseId: null,
   scrollToMessageId: null,
   lastUsage: null,
-  projectMemoryEnabled: true
+  projectMemoryEnabled: true,
+  turnFailures: {}
 }
 
 export const chatSlice = createSlice({
@@ -211,6 +215,15 @@ export const chatSlice = createSlice({
     removeRunningSession(state, action: PayloadAction<string>) {
       delete state.runningSessions[action.payload]
     },
+    setTurnFailure(
+      state,
+      action: PayloadAction<{ sessionId: string; messageId: string; reason: string }>
+    ) {
+      state.turnFailures[action.payload.sessionId] = {
+        messageId: action.payload.messageId,
+        reason: action.payload.reason
+      }
+    },
     resetChatUi(state) {
       state.messages = []
       state.displayEntries = []
@@ -246,6 +259,7 @@ export const {
   patchMessage,
   removeMessage,
   setChatStatus,
+  setTurnFailure,
   setConfirmFocusToolUseId,
   setScrollToMessageId,
   removeRunningSession,

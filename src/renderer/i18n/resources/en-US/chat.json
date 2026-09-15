@@ -25,6 +25,7 @@
     "archiveToWiki": "Archive to Wiki",
     "assistantReply": "Assistant reply",
     "retryFailedMessage": "The reply could not be completed. You can retry or continue from the existing context.",
+    "failureReason": "Reason",
     "retry": "Retry reply"
   },
   "scrollToLatest": {

@@ -62,6 +62,8 @@ type Props = {
   onRenderProbe?: (messageId: string) => void
   /** 当前搜索命中目标（仅目标消息传入） */
   activeSearchTarget?: ChatSearchActiveTarget | null
+  /** 主进程 turn 终态的真实失败原因（仅失败消息传入） */
+  failureReason?: string
 }
 
 
@@ -224,13 +226,16 @@ export const ChatBubble = memo(function ChatBubble({
   showCancelQueued = false,
   actions,
   onRenderProbe,
-  activeSearchTarget = null
+  activeSearchTarget = null,
+  failureReason
 }: Props) {
   onRenderProbe?.(message.id)
   const { t } = useTypedTranslation('chat')
   const isUser = message.role === 'user'
   const streaming = message.status === 'streaming'
   const failed = message.status === 'failed'
+  // 只在失败消息上展示原因：成功/进行中的气泡即便残留旧原因也不能显示。
+  const visibleFailureReason = failed ? failureReason?.trim() || undefined : undefined
   const searchRevealPath = activeSearchTarget?.revealPath
 
   const activityModel = useMemo(() => {
@@ -503,6 +508,12 @@ export const ChatBubble = memo(function ChatBubble({
         {failed ? (
           <div className="chat-message-error" role="alert">
             <span className="chat-message-error__text">{t('bubble.retryFailedMessage')}</span>
+            {visibleFailureReason ? (
+              <span className="chat-message-error__reason">
+                <span className="chat-message-error__reason-label">{t('bubble.failureReason')}</span>
+                {visibleFailureReason}
+              </span>
+            ) : null}
             {showRetry && handleRetry ? (
               <button type="button" className="chat-message-error__retry" onClick={handleRetry}>
                 {t('bubble.retry')}
@@ -539,5 +550,6 @@ export const ChatBubble = memo(function ChatBubble({
   prev.showCancelQueued === next.showCancelQueued &&
   prev.actions === next.actions &&
   prev.onRenderProbe === next.onRenderProbe &&
-  prev.activeSearchTarget === next.activeSearchTarget
+  prev.activeSearchTarget === next.activeSearchTarget &&
+  prev.failureReason === next.failureReason
 )

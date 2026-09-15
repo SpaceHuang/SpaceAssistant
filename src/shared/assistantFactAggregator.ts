@@ -50,7 +50,8 @@ type AssistantFactEventPayload =
   | { type: 'usage-updated'; usage: unknown; projected?: boolean }
   | { type: 'skill-hint'; text: string }
   | { type: 'source-completed' }
-  | { type: 'source-failed' }
+  /** message：失败原因（诊断文本），随事实透出到渲染层，避免只剩一句「回复未能完成」 */
+  | { type: 'source-failed'; message?: string }
   | { type: 'source-cancelled' }
   | { type: 'source-timeout' }
 

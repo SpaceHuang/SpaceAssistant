@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId } from './chatSlice'
+import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setTurnFailure } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
@@ -114,6 +114,32 @@ describe('chatSlice', () => {
       let state = chatReducer(undefined, setProjectMemoryEnabled(false))
       state = chatReducer(state, resetChatUi())
       expect(state.projectMemoryEnabled).toBe(true)
+    })
+  })
+
+  describe('turnFailures', () => {
+    it('记录每个会话最近一次失败的 assistant 消息与真实原因', () => {
+      const state = chatReducer(
+        undefined,
+        setTurnFailure({ sessionId: 's1', messageId: 'a1', reason: '会话模型「x」当前不可用' })
+      )
+      expect(state.turnFailures['s1']).toEqual({
+        messageId: 'a1',
+        reason: '会话模型「x」当前不可用'
+      })
+    })
+
+    it('同一会话再次失败时覆盖为新消息，避免旧原因串到新气泡', () => {
+      let state = chatReducer(undefined, setTurnFailure({ sessionId: 's1', messageId: 'a1', reason: 'old' }))
+      state = chatReducer(state, setTurnFailure({ sessionId: 's1', messageId: 'a2', reason: 'new' }))
+      expect(state.turnFailures['s1']).toEqual({ messageId: 'a2', reason: 'new' })
+    })
+
+    it('按会话隔离，不跨会话串原因', () => {
+      let state = chatReducer(undefined, setTurnFailure({ sessionId: 's1', messageId: 'a1', reason: 'r1' }))
+      state = chatReducer(state, setTurnFailure({ sessionId: 's2', messageId: 'b1', reason: 'r2' }))
+      expect(state.turnFailures['s1']?.reason).toBe('r1')
+      expect(state.turnFailures['s2']?.reason).toBe('r2')
     })
   })
 })

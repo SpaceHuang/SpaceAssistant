@@ -912,10 +912,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       } catch (error) {
         if (controller.signal.aborted) throw error
         // 路由/配置阶段失败也必须终结已占有的 turn，不能留下永久 configuring 状态。
-        const failed = turnCoordinator.consume(started.turnId, { type: 'source-failed' })
+        // 必须走 runtime 的 consume（而不是 coordinator.consume）才会发出 projection：
+        // 否则渲染层收不到终态事实，消息会一直停在「生成中」，用户也看不到失败原因。
+        const failureMessage = error instanceof Error ? error.message : String(error)
+        const failed = turnRuntime.consume(started.turnId, { type: 'source-failed', message: failureMessage })
         failConfiguringTurn(ctx.db, started.turnId, failed.version, {
           code: 'configuration-failed',
-          message: error instanceof Error ? error.message : String(error)
+          message: failureMessage
         })
         throw error
       }

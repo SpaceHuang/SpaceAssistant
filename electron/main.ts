@@ -479,7 +479,7 @@ app.whenReady().then(async () => {
         turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' })
         return { outcome: 'completed' as const, usage: result.usage }
       }
-      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed' })
+      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error })
       return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
     })
   }

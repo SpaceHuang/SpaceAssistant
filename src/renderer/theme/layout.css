@@ -903,6 +903,20 @@
   min-width: 0;
 }
 
+.chat-message-error__reason {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--sa-text-secondary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-message-error__reason-label {
+  margin-right: 6px;
+  color: var(--sa-chat-failed-fg);
+  font-weight: 500;
+}
+
 .chat-message-error__retry {
   flex-shrink: 0;
   border: 1px solid var(--sa-chat-failed-border);

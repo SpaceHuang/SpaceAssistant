@@ -15,6 +15,8 @@ export type ChatMessageListProps = {
   showArchiveToWiki: (message: Message) => boolean
   canRetry: (message: Message) => boolean
   canCancelQueued: (message: Message) => boolean
+  /** 解析该消息对应的真实失败原因（无则返回 undefined） */
+  resolveFailureReason?: (message: Message) => string | undefined
   focusToolUseId?: string | null
   pendingConfirmItems?: PendingConfirmItem[]
   workDir?: string
@@ -37,6 +39,7 @@ export function ChatMessageList({
   showArchiveToWiki,
   canRetry,
   canCancelQueued,
+  resolveFailureReason,
   focusToolUseId,
   pendingConfirmItems = [],
   workDir,
@@ -78,6 +81,7 @@ export function ChatMessageList({
             showArchiveToWiki={showArchiveToWiki(m)}
             showRetry={canRetry(m)}
             showCancelQueued={canCancelQueued(m)}
+            {...(resolveFailureReason ? { failureReason: resolveFailureReason(m) } : {})}
             onRenderProbe={onBubbleRender}
             activeSearchTarget={activeTarget?.messageId === m.id ? activeTarget : null}
           />

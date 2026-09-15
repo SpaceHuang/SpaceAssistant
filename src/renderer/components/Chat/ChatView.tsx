@@ -63,6 +63,7 @@ import { buildToolChatPayload } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelPicker } from './ComposerModelPicker'
 import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
+import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { parseSkillCommand } from '../../services/skillCommandService'
 import { parseTestCardsCommand } from '../../services/testCardsCommandService'
@@ -145,6 +146,7 @@ export function ChatView() {
   const runningSessions = useTypedSelector((s) => s.chat.runningSessions)
   const confirmFocusToolUseId = useTypedSelector((s) => s.chat.confirmFocusToolUseId)
   const scrollToMessageId = useTypedSelector((s) => s.chat.scrollToMessageId)
+  const turnFailures = useTypedSelector((s) => s.chat.turnFailures)
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
   const [draftModelOption, setDraftModelOption] = useState<ChatModelOption | undefined>(undefined)
@@ -1105,6 +1107,11 @@ export function ChatView() {
 
   const scrollToLatestLabel = t('scrollToLatest.label')
 
+  const resolveFailureReason = useCallback(
+    (m: Message) => resolveFailureReasonForMessage(turnFailures, m),
+    [turnFailures]
+  )
+
   const runningLabels = useMemo(
     () => resolveChatRunningLabels(streamingAssistant, t),
     [streamingAssistant, t]
@@ -1124,6 +1131,7 @@ export function ChatView() {
         showArchiveToWiki={showArchiveToWikiFor}
         canRetry={canRetryMessage}
         canCancelQueued={canCancelQueuedMessage}
+        resolveFailureReason={resolveFailureReason}
         focusToolUseId={confirmFocusToolUseId}
         pendingConfirmItems={pendingConfirmItems}
         workDir={cfg?.workDir}
@@ -1140,6 +1148,7 @@ export function ChatView() {
       showArchiveToWikiFor,
       canRetryMessage,
       canCancelQueuedMessage,
+      resolveFailureReason,
       confirmFocusToolUseId,
       pendingConfirmItems,
       cfg?.workDir,
