@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import chatReducer, { addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setTurnFailure, mergeTurnFailures } from './chatSlice'
+import chatReducer, { addCompactionMarker, addMessage, setChatStatus, setSession, removeRunningSession, setLastUsage, restoreLastUsage, resetChatUi, setProjectMemoryEnabled, setScrollToMessageId, setContextProjection } from './chatSlice'
+import { setTurnFailure, mergeTurnFailures } from './chatSlice'
 import type { Message } from '../../shared/domainTypes'
 
 describe('chatSlice', () => {
+  it('stores committed compaction markers idempotently and clears them on session switch', () => {
+    const marker = { compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'out' }
+    const once = chatReducer(undefined, addCompactionMarker(marker))
+    const twice = chatReducer(once, addCompactionMarker(marker))
+    expect(twice.compactionMarkers).toEqual([marker])
+    const switched = chatReducer(twice, setSession('s2'))
+    expect(switched.compactionMarkers).toEqual([])
+  })
   it('adds a message', () => {
     const base = chatReducer(undefined, setSession('s1'))
     const msg: Message = {
@@ -71,6 +80,11 @@ describe('chatSlice', () => {
     const withData = chatReducer(base, setLastUsage({ sessionId: 's1', usage: { input_tokens: 5000 } }))
     const switched = chatReducer(withData, setSession('s2'))
     expect(switched.lastUsage).toEqual({ input_tokens: 5000 })
+  })
+
+  it('setSession clears the previous session context projection', () => {
+    const base = chatReducer(undefined, setContextProjection({ pressureTokens: 1, projectedTokens: 2, anchorStatus: 'matched', surfaceTokens: 2, bodyTokens: 2, bodyRatio: 0.1, hardFit: true, bodyFit: true, contextWindow: { tokens: 100, source: 'config' } }))
+    expect(chatReducer(base, setSession('s2')).contextProjection).toBeNull()
   })
 
   it('restoreLastUsage restores usage from persistence', () => {

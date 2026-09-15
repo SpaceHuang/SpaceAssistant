@@ -25,6 +25,7 @@ vi.mock('./toolChatLoop', () => ({
 }))
 
 vi.mock('./sessionEvents', () => ({
+  readCompactionMarkers: vi.fn(async () => []),
   getSessionEventSink: () => ({
     appendCritical: vi.fn(async (input: { type: string; payload: Record<string, unknown> }) => ({
       seq: 1,

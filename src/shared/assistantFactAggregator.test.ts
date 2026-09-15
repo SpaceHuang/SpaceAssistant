@@ -14,6 +14,16 @@ function apply(events: AssistantFactEvent[]) {
 }
 
 describe('AssistantFactAggregator', () => {
+  it('压缩提交标记不会阻断后续 assistant 正文写入', () => {
+    const result = apply([
+      { type: 'content-delta', text: 'before' },
+      { type: 'compaction-committed', compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'out' },
+      { type: 'content-delta', text: ' after' },
+      { type: 'source-completed' }
+    ])
+    expect(result.status).toBe('completed')
+    expect(result.content).toBe('before after')
+  })
   it('按顺序规约正文和 thinking 分段，并在终止时关闭开放段', () => {
     const result = apply([
       { type: 'content-delta', text: 'hello' },
@@ -122,6 +132,10 @@ describe('AssistantFactAggregator', () => {
     const result = apply([{ type: 'source-failed' }, { type: 'content-delta', text: 'late' }, { type: 'source-completed' }])
     expect(result.status).toBe('failed')
     expect(result.content).toBe('')
+  })
+  it('上下文投影事件不改变 assistant 消息状态', () => {
+    const result = apply([{ type: 'context-projection-updated', projection: { pressureTokens: 1, projectedTokens: 2, anchorStatus: 'matched', surfaceTokens: 2, bodyTokens: 2, bodyRatio: 0.1, hardFit: true, bodyFit: true, contextWindow: { tokens: 100, source: 'config' } } }])
+    expect(result.status).toBe('streaming')
   })
 
   it('usage fact 不改变消息内容，但可以进入统一事实流', () => {

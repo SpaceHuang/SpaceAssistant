@@ -4,6 +4,9 @@ import { detectLocaleFromSystem, isAppLocale, type AppLocale } from '../src/shar
 import { readAppLocale } from './appIpc'
 import type { AppDatabase } from './database'
 import { buildSystemPrompt } from './projectMemory'
+import { buildPromptAssembly, renderPrompt, type PromptSection } from '../src/shared/promptAssembly'
+import { buildSkillCatalogSection } from '../src/shared/skillPrompt'
+import type { SkillDefinition } from '../src/shared/domainTypes'
 
 export function resolveRequestLocale(payloadLocale: unknown, db?: AppDatabase): AppLocale {
   if (typeof payloadLocale === 'string' && isAppLocale(payloadLocale)) return payloadLocale
@@ -41,19 +44,45 @@ export function buildToolConventionHint(locale: AppLocale): string {
   ].join('\n')
 }
 
+export function buildBaseSystemSection(args: {
+  system?: string
+  memoryContent: string | null
+  memoryEnabled: boolean
+}): PromptSection {
+  return {
+    name: 'system:base',
+    order: 10,
+    text: buildSystemPrompt(args.system, args.memoryContent, args.memoryEnabled) ?? ''
+  }
+}
+
+export function buildToolConventionSection(locale: AppLocale): PromptSection {
+  return { name: 'system:tool-conventions', order: 20, text: buildToolConventionHint(locale) }
+}
+
+export function buildImageAttachmentsSection(locale: AppLocale): PromptSection {
+  return { name: 'system:image-attachments', order: 30, text: buildImageAttachmentsSystemHint(locale) }
+}
+
+export function buildUiLocaleSection(locale: AppLocale): PromptSection {
+  return { name: 'system:ui-locale', order: 40, text: appendUiLocaleSystemHint(undefined, locale) ?? '' }
+}
+
 export function buildFinalSystemPrompt(args: {
   system?: string
   memoryContent: string | null
   memoryEnabled: boolean
   locale: AppLocale
   hasImageAttachments?: boolean
+  skillCatalog?: SkillDefinition[]
+  contextWindow?: number
 }): string | undefined {
-  let withMemory = buildSystemPrompt(args.system, args.memoryContent, args.memoryEnabled)
-  if (args.hasImageAttachments) {
-    const hint = buildImageAttachmentsSystemHint(args.locale)
-    withMemory = withMemory ? `${withMemory}\n\n${hint}` : hint
-  }
-  const toolConventionHint = buildToolConventionHint(args.locale)
-  withMemory = withMemory ? `${withMemory}\n\n${toolConventionHint}` : toolConventionHint
-  return appendUiLocaleSystemHint(withMemory, args.locale)
+  const sections: PromptSection[] = [
+    buildBaseSystemSection(args),
+    buildToolConventionSection(args.locale),
+    ...(args.hasImageAttachments ? [buildImageAttachmentsSection(args.locale)] : []),
+    buildUiLocaleSection(args.locale),
+    ...(args.skillCatalog?.length ? [buildSkillCatalogSection(args.skillCatalog, args.contextWindow ?? 200_000)] : [])
+  ]
+  return renderPrompt(buildPromptAssembly({ sections })) || undefined
 }

@@ -3,6 +3,7 @@ import type { Message } from '../../shared/domainTypes'
 import type { DisplayMessageEntry, DisplayOrder } from '../../shared/displayOrder'
 import type { SessionUsage } from '../../shared/sessionUsage'
 import type { TurnFailureReasons } from '../services/turnFailureDisplay'
+import type { ContextPressureProjection } from '../../shared/contextMeter'
 import {
   ackDisplayEntryPersisted,
   appendOptimisticDisplayEntry,
@@ -20,6 +21,7 @@ export type RunningSessionMeta = {
 }
 
 export type LastUsage = SessionUsage | null
+export type CompactionMarker = { compactionId: string; windowId: string; outputSurfaceFingerprint: string }
 
 interface ChatState {
   /** @deprecated 由 displayEntries 派生；过渡期双写 */
@@ -40,6 +42,8 @@ interface ChatState {
   /** 搜索结果跳转后滚动定位的消息 ID */
   scrollToMessageId: string | null
   lastUsage: LastUsage
+  contextProjection: ContextPressureProjection | null
+  compactionMarkers: CompactionMarker[]
   projectMemoryEnabled: boolean
   /** 按 assistantMessageId 记录失败原因（供失败气泡展示）；键天然唯一，重开页面可整体回溯覆盖 */
   turnFailures: TurnFailureReasons
@@ -65,7 +69,9 @@ const initialState: ChatState = {
   scrollToMessageId: null,
   lastUsage: null,
   projectMemoryEnabled: true,
-  turnFailures: {}
+  turnFailures: {},
+  contextProjection: null,
+  compactionMarkers: []
 }
 
 export const chatSlice = createSlice({
@@ -76,6 +82,8 @@ export const chatSlice = createSlice({
       state.currentSessionId = action.payload
       state.confirmFocusToolUseId = null
       state.scrollToMessageId = null
+      state.contextProjection = null
+      state.compactionMarkers = []
     },
     setConfirmFocusToolUseId(state, action: PayloadAction<string | null>) {
       state.confirmFocusToolUseId = action.payload
@@ -88,6 +96,12 @@ export const chatSlice = createSlice({
     },
     restoreLastUsage(state, action: PayloadAction<LastUsage>) {
       state.lastUsage = action.payload
+    },
+    setContextProjection(state, action: PayloadAction<ContextPressureProjection | null>) {
+      state.contextProjection = action.payload
+    },
+    addCompactionMarker(state, action: PayloadAction<CompactionMarker>) {
+      if (!state.compactionMarkers.some((marker) => marker.compactionId === action.payload.compactionId)) state.compactionMarkers.push(action.payload)
     },
     setMessages(state, action: PayloadAction<Message[]>) {
       state.messages = action.payload
@@ -242,6 +256,8 @@ export const chatSlice = createSlice({
       state.confirmFocusToolUseId = null
       state.scrollToMessageId = null
       state.lastUsage = null
+      state.contextProjection = null
+      state.compactionMarkers = []
       state.projectMemoryEnabled = true
       state.turnFailures = {}
     },
@@ -272,6 +288,8 @@ export const {
   resetChatUi,
   setLastUsage,
   restoreLastUsage,
+  setContextProjection,
+  addCompactionMarker,
   setProjectMemoryEnabled
 } = chatSlice.actions
 export default chatSlice.reducer

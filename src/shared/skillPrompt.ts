@@ -1,4 +1,33 @@
 import type { SkillDefinition, SkillActivationSource } from './domainTypes'
+import { skillCatalogBudget, type PromptSection } from './promptAssembly'
+
+/** 仅暴露稳定元数据；正文通过 user fragment 或 skills.read 按需取得。 */
+export function buildSkillCatalogSection(skills: SkillDefinition[], contextWindow: number): PromptSection {
+  const budget = skillCatalogBudget(contextWindow)
+  const header = '## Skills\n\n### Available skills\n\n'
+  const entries = skills
+    .slice()
+    .sort((a, b) => a.meta.name < b.meta.name ? -1 : a.meta.name > b.meta.name ? 1 : 0)
+    .map((skill) => `- **${skill.meta.name}**: ${skill.meta.description || 'No description'} (read: ${skill.filePath})`)
+  let body = ''
+  for (const entry of entries) {
+    const candidate = body ? `${body}\n${entry}` : entry
+    if (candidate.length > Math.max(0, budget * 3.5)) break
+    body = candidate
+  }
+  if (entries.length > body.split('\n').filter(Boolean).length) {
+    body += `${body ? '\n' : ''}- Additional skills are available through skills.read.`
+  }
+  return { name: 'skills:catalog', order: 50, text: `${header}${body}` }
+}
+
+export function readSkillForTool(skills: readonly SkillDefinition[], name: string, maxChars: number): string {
+  if (!Number.isFinite(maxChars) || maxChars <= 0) throw new Error('skills.read budget must be positive')
+  const skill = skills.find((candidate) => candidate.meta.name === name)
+  if (!skill) throw new Error(`Skill not found: ${name}`)
+  if (skill.content.length > maxChars) throw new Error(`skills.read budget exceeded for ${name}`)
+  return skill.content
+}
 
 export function buildSystemPromptFromSkills(skills: SkillDefinition[]): string {
   if (skills.length === 0) return ''
@@ -72,6 +101,14 @@ export function buildAvailableToolsHint(toolNames: string[]): string {
     '注意：run_shell（shell 命令）与 run_script（Python 脚本）是完全不同的工具，不可互相替代。',
     shellNote
   ].join('\n')
+}
+
+/** 工具能力由 API tools 数组表达；system 只保留最小的调用约定。 */
+export function buildToolCapabilityConventionHint(toolNames: readonly string[]): string {
+  const shell = toolNames.includes('run_shell')
+    ? 'run_shell 可执行 shell 命令；run_script 用于 Python 脚本，两者不可互相替代。'
+    : 'run_shell 当前未启用；需要执行 shell 时请遵循 Skill 的 fallback，不要编造或调用该工具。'
+  return `工具能力以当前请求的 tools 定义为准，不要调用未定义的工具。${shell}`
 }
 
 export function appendAvailableToolsHint(system: string | undefined, toolNames: string[]): string | undefined {

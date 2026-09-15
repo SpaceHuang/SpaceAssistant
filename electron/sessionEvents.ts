@@ -2,10 +2,11 @@ import fs from 'fs/promises'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { SessionUsage } from '../src/shared/sessionUsage'
+import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
 
 export type SessionEventPayload = Record<string, unknown>
-export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'session_end_seed'
-export type SessionEvent = { seq: number; time: number; type: SessionEventType; payload: SessionEventPayload }
+export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
+export type SessionEvent = { schemaVersion?: number; seq: number; time: number; type: SessionEventType; payload: SessionEventPayload }
 export type SessionEventInput = { type: SessionEventType; payload: SessionEventPayload }
 export type SessionEventSinkOptions = {
   maxBatchEvents: number
@@ -37,6 +38,28 @@ export type SessionEventSink = {
   readonly indexPath: string
 }
 
+export async function appendCompactionTransaction(
+  sink: SessionEventSink,
+  start: SessionEventPayload,
+  summary: SessionEventPayload
+): Promise<CommittedEvent> {
+  const startEvent = await sink.appendCritical({ type: 'compaction_start', payload: start })
+  const summaryEvent = await sink.appendCritical({ type: 'compaction_summary', payload: summary })
+  return sink.appendCritical({ type: 'compaction_end', payload: {
+    compactionId: summary.compactionId,
+    ...(typeof (summary.outputWindowId ?? start.windowId) === 'string' ? { windowId: summary.outputWindowId ?? start.windowId } : {}),
+    ...(typeof summary.inputWindowId === 'string' ? { inputWindowId: summary.inputWindowId } : {}),
+    ...(typeof summary.outputWindowId === 'string' ? { outputWindowId: summary.outputWindowId } : {}),
+    ...(typeof start.turnId === 'string' ? { turnId: start.turnId } : {}),
+    status: 'committed',
+    startSeq: startEvent.seq,
+    summarySeq: summaryEvent.seq,
+    inputSurfaceFingerprint: start.inputSurfaceFingerprint,
+    outputSurfaceFingerprint: summary.outputSurfaceFingerprint,
+    summaryHash: summary.summaryHash
+  } })
+}
+
 const DEFAULT_OPTIONS: SessionEventSinkOptions = {
   maxBatchEvents: 32,
   maxBatchBytes: 64 * 1024,
@@ -45,7 +68,7 @@ const DEFAULT_OPTIONS: SessionEventSinkOptions = {
   hardPendingEvents: 512,
   hardPendingBytes: 1024 * 1024
 }
-const EVENT_TYPES = new Set<SessionEventType>(['turn_start', 'turn_end', 'step_start', 'step_end', 'assistant_chunk', 'tool_call', 'tool_result', 'request_header', 'request_context', 'request_usage', 'request_retry', 'session_end_seed'])
+const EVENT_TYPES = new Set<SessionEventType>(['turn_start', 'turn_end', 'step_start', 'step_end', 'assistant_chunk', 'tool_call', 'tool_result', 'request_header', 'request_context', 'request_usage', 'request_retry', 'compaction_start', 'compaction_summary', 'compaction_end', 'session_end_seed'])
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object')
@@ -54,6 +77,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export function parseSessionEvent(value: unknown): SessionEvent {
   if (!isObject(value)) throw new Error('Invalid session event')
   const event = value as Partial<SessionEvent>
+  if (event.schemaVersion !== undefined && event.schemaVersion !== 1) throw new Error('Unsupported session event schema')
   if (typeof event.seq !== 'number' || !Number.isSafeInteger(event.seq) || event.seq < 1 || typeof event.time !== 'number' || typeof event.type !== 'string' || !EVENT_TYPES.has(event.type as SessionEventType) || !isObject(event.payload)) throw new Error('Invalid session event')
   return event as SessionEvent
 }
@@ -111,6 +135,19 @@ export type SessionRecoverySummary = {
   failures: SessionRecoveryFailure[]
 }
 export type SessionRetentionSummary = { removed: number; failures: SessionRecoveryFailure[] }
+
+/** 事件流唯一的压缩重放入口；未提交候选不会改变模型面。 */
+export function replayCompactionEvents(events: readonly SessionEvent[]): CompactionReplay {
+  return foldCompactionEvents(events.filter((event) => event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end').map((event) => ({ seq: event.seq, type: event.type as 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: event.payload })))
+}
+
+export async function readCompactionMarkers(eventsPath: string, windowId?: string): Promise<CompactionMarker[]> {
+  return projectCompactionMarkers(replayCompactionEvents(await readSessionEvents(eventsPath)), windowId)
+}
+
+export async function readCompactionReplay(eventsPath: string): Promise<CompactionReplay> {
+  return replayCompactionEvents(await readSessionEvents(eventsPath))
+}
 
 /** 每个事件文件唯一的提交 owner；业务代码应通过 getSessionEventSink 获取。 */
 export class SessionEventWriter implements SessionEventSink {
@@ -324,7 +361,7 @@ export class SessionEventWriter implements SessionEventSink {
     if (!inputs.length) return []
     this.assertHealthy()
     await this.ensureInitialized()
-    const events = inputs.map((input, index) => ({ seq: this.seq + index + 1, time: Date.now(), type: input.type, payload: input.payload }))
+    const events = inputs.map((input, index) => ({ schemaVersion: 1, seq: this.seq + index + 1, time: Date.now(), type: input.type, payload: input.payload }))
     const data = events.map((event) => JSON.stringify(event)).join('\n') + '\n'
     let lineState: { bytes: number; terminated: boolean }
     try {

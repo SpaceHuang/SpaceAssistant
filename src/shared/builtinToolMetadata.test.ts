@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { BUILTIN_TOOL_DEFINITIONS, getBuiltinToolMetadata } from './builtinToolDefinitions'
 import { builtinToolNeedsConfirmation, builtinToolRiskLevel } from './domainTypes'
 
-/** 16 个内置工具名（与 §3.2.1 防遗漏基线一致） */
+/** 内置工具名（与 builtin definitions 保持一致） */
 const ALL_TOOLS = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
 
 describe('builtin tool metadata（P0 概念收敛）', () => {
   it('每个内置工具都注册了 actionClass / riskLevel / extractors 元数据', () => {
-    expect(ALL_TOOLS).toHaveLength(16)
+    expect(ALL_TOOLS).toHaveLength(18)
     for (const name of ALL_TOOLS) {
       const meta = getBuiltinToolMetadata(name)
       expect(meta, `${name} 缺元数据`).toBeDefined()

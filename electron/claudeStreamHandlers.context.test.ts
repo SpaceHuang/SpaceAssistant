@@ -2,8 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { appendMessage, createPersistedTurn, createSession, openDatabase } from './database'
 import { loadAuthoritativeTurnContext, normalizeAndValidateClaudeMessagesWithContentBlocks } from './claudeStreamHandlers'
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
+import { selectRecoveryMessages } from '../src/shared/overflowRecovery'
 
 describe('loadAuthoritativeTurnContext', () => {
+  it('超窗恢复会从真实归一化的混合 user 中移除历史 tool_result 并保留当前问题', () => {
+    const normalized = normalizeAndValidateClaudeMessagesWithContentBlocks([
+      { id: 'old-user', role: 'user', content: 'old question' },
+      { id: 'old-assistant', role: 'assistant', content: [{ type: 'tool_use', id: 'old-tool', name: 'read', input: {} }] },
+      { id: 'current-user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'old-tool', content: 'old result' }, { type: 'text', text: 'current question' }] }
+    ], { requiredUserMessageId: 'current-user' })
+    const recovered = selectRecoveryMessages(normalized, 'current-user')
+    expect(recovered).toHaveLength(1)
+    expect(recovered[0]).toMatchObject({ id: 'current-user', role: 'user', content: 'current question' })
+  })
+
   it('忽略 renderer 可能提交的伪造历史，只按持久化 turn boundary 返回上下文', () => {
     const db = openDatabase(':memory:')
     const session = createSession(db, { name: 'authoritative-context' })

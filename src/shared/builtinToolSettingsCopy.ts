@@ -86,6 +86,16 @@ const TOOL_I18N_KEYS: Record<string, BuiltinToolI18nKeys> = {
     displayName: 'tools.builtin.switchSession.displayName' as NamespaceKeyMap['config'],
     summary: 'tools.builtin.switchSession.summary' as NamespaceKeyMap['config'],
     disabledHint: 'tools.builtin.switchSession.disabledHint' as NamespaceKeyMap['config']
+  },
+  'history.read': {
+    displayName: 'tools.builtin.historyRead.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.historyRead.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.historyRead.disabledHint' as NamespaceKeyMap['config']
+  },
+  'skills.read': {
+    displayName: 'tools.builtin.skillsRead.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.skillsRead.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.skillsRead.disabledHint' as NamespaceKeyMap['config']
   }
 }
 

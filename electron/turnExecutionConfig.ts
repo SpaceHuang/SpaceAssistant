@@ -55,7 +55,6 @@ export async function resolveTrustedTurnExecutionConfig(
     model = vision.modelName
     llmServiceId = vision.llmServiceId
   }
-
   let credentials = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId, models })
 
   // ② 模型被下架 / 已无可用服务时，重绑到当前优选模型并回写，避免历史会话永久失败。
@@ -104,10 +103,12 @@ export async function resolveTrustedTurnExecutionConfig(
     )
   }
 
+  const modelEntry = models.find((entry) => entry.name === model)
   const locale = getConfigValue(db, 'config.locale')
   return normalizeTurnExecutionConfig({
     lane,
     model,
+    ...(modelEntry?.maximumContext ? { maximumContext: modelEntry.maximumContext } : {}),
     llmServiceId: credentials.serviceId || llmServiceId,
     baseUrl: credentials.baseUrl,
     maxTokens: session.maxTokens,

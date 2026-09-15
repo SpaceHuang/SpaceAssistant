@@ -274,7 +274,17 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
       required: ['session_id']
     }
   }
-]
+] as Array<{
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+}>
+
+// 恢复工具由主进程 executor 注册；schema 必须同时进入 provider exposure/authorization。
+BUILTIN_TOOL_DEFINITIONS.push(
+  { name: 'history.read', description: '读取被压缩的历史事实，支持按窗口、条目或关键词查询。', input_schema: { type: 'object', properties: { window_id: { type: 'string' }, entry_id: { type: 'string' }, query: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'integer' }, max_tokens: { type: 'integer' } } } },
+  { name: 'skills.read', description: '读取技能目录中指定技能的完整说明。', input_schema: { type: 'object', properties: { name: { type: 'string' }, max_chars: { type: 'integer' } }, required: ['name'] } }
+)
 
 export const ALL_BUILTIN_TOOL_NAMES = BUILTIN_TOOL_DEFINITIONS.map((t) => t.name)
 

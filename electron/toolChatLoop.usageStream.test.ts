@@ -65,6 +65,7 @@ vi.mock('./database', async (importOriginal) => {
 
 import { runToolChatSession } from './toolChatLoop'
 import { createMemoryAppDb } from './database/testHelpers'
+import { computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
@@ -132,6 +133,200 @@ describe('runToolChatSession message_start usage', () => {
       appDb: makeDb()
     })
     expect(usagePayloads(sender)).toEqual([])
+  })
+
+  it('在 provider 成功后调用 turn-boundary hook，并传递最终 surface', async () => {
+    const boundary = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    })) } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-boundary-hook', sessionId: 'sess-boundary-hook',
+      model: 'claude-sonnet-4-20250514', messages: [{ role: 'user', content: 'hello' }],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), onTurnBoundary: boundary
+    })
+    expect(res.ok).toBe(true)
+    expect(boundary).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'req-boundary-hook', messages: expect.any(Array), surfaceSnapshot: expect.any(Object) }))
+  })
+
+  it('保留真实消息 id，使带 currentUserMessageId 的请求通过 provider preflight', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-stable-id', sessionId: 'sess-stable-id', model: 'claude-sonnet-4-20250514',
+      messages: [{ id: 'current-user-id', role: 'user', content: 'hello' }], currentUserMessageId: 'current-user-id',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb()
+    })
+    expect(res.ok).toBe(true)
+    expect(stream).toHaveBeenCalled()
+    expect(stream.mock.calls[0]?.[0]?.messages?.[0]).not.toHaveProperty('id')
+  })
+
+  it('把 Core 冻结的 Skill fragment 注入实际 provider 请求且位于当前输入之前', async () => {
+    const stream = vi.fn((params: { messages?: unknown[] }) => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-skill-fragment', sessionId: 'sess-skill-fragment',
+      model: 'claude-sonnet-4-20250514', messages: [{ id: 'current-user', role: 'user', content: 'current question' }], currentUserMessageId: 'current-user',
+      skillFragments: ['## Skill: review\n\nreview instructions'],
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb()
+    })
+    expect(res.ok).toBe(true)
+    const messages = stream.mock.calls[0]?.[0]?.messages as Array<{ content?: unknown }> | undefined
+    expect(messages?.[0]?.content).toBe('## Skill: review\n\nreview instructions')
+    expect(messages?.[1]?.content).toEqual([{ type: 'text', text: 'current question', cache_control: { type: 'ephemeral' } }])
+  })
+
+  it('preflight 超预算时先提交恢复事务，再用恢复后的 surface 重试 provider', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-preflight-recovery', sessionId: 'sess-preflight-recovery',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000,
+      messages: [
+        { id: 'old-user', role: 'user', content: 'x'.repeat(120_000) },
+        { id: 'current-user', role: 'user', content: '当前问题' }
+      ], currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
+    expect(stream).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(stream.mock.calls[0]?.[0]?.messages ?? [])).toContain('当前问题')
+    expect(JSON.stringify(stream.mock.calls[0]?.[0]?.messages ?? [])).not.toContain('x'.repeat(12_000))
+  })
+
+  it('工具密集历史超窗时 reset 只保留当前 invoke 的消息', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const messages = [{ id: 'old-user', role: 'user' as const, content: 'old question' }]
+    for (let i = 0; i < 5; i++) {
+      messages.push({ id: `old-tool-${i}`, role: 'assistant', content: [{ type: 'tool_use', id: `tool-${i}`, name: 'read', input: {} }] } as never)
+      messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `tool-${i}`, content: 'x'.repeat(20_000) }] } as never)
+    }
+    messages.push({ id: 'current-user', role: 'user', content: 'current question' })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-tool-history-recovery', sessionId: 'sess-tool-history-recovery',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages, currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
+    const sentMessages = stream.mock.calls[0]?.[0]?.messages as Array<{ id?: string; content?: unknown }> | undefined
+    expect(sentMessages).toHaveLength(1)
+    expect(JSON.stringify(sentMessages)).not.toContain('tool-0')
+    expect(JSON.stringify(sentMessages)).toContain('current question')
+  })
+
+  it('overflow reset 为当前无正文工具轮保留正确 occurrence identity', async () => {
+    const stream = vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    }))
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const messages = [
+      { role: 'user' as const, content: 'old question' },
+      { role: 'assistant' as const, content: [{ type: 'tool_use', id: 'old-tool', name: 'read', input: {} }] },
+      { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'old-tool', content: 'x'.repeat(120_000) }] },
+      { id: 'current-user', role: 'user' as const, content: 'current question' },
+      { role: 'assistant' as const, content: [{ type: 'tool_use', id: 'current-tool', name: 'read', input: {} }] },
+      { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'current-tool', content: 'current result' }] }
+    ]
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-empty-tool-identity', sessionId: 'sess-empty-tool-identity',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages, currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    const projected = projectReplaySurface(messages)
+    const identities = surfaceItemIdentities(projected)
+    const summary = appendCompactionTransaction.mock.calls[0]?.[1] as { shadowedRanges?: Array<{ start: string; end: string }> } | undefined
+    expect(summary?.shadowedRanges).toEqual([{ start: identities[0], end: identities[1] }])
+    expect(summary?.shadowedRanges).not.toContainEqual(expect.objectContaining({ start: identities[3], end: identities[3] }))
+    const sentMessages = stream.mock.calls[0]?.[0]?.messages as Array<{ role?: string; content?: unknown }> | undefined
+    expect(sentMessages).toHaveLength(3)
+    expect(sentMessages?.[0]).toMatchObject({ role: 'user', content: 'current question' })
+    expect(sentMessages?.[1]?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'tool_use', id: 'current-tool' })]))
+    expect(sentMessages?.[2]?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'tool_result', tool_use_id: 'current-tool', content: 'current result' })]))
+  })
+
+  it('工具中途超窗只为稳定当前 user 提交 replay 指纹，但 retry 仍保留完整工具轮', async () => {
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => {
+      streamRound += 1
+      if (streamRound === 2) throw new Error('maximum context length exceeded')
+      return {
+        async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+        finalMessage: vi.fn(async () => streamRound === 1
+          ? { content: [{ type: 'tool_use', id: 'current-tool', name: 'read_file', input: { path: 'a.txt' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } }
+          : { content: [{ type: 'text', text: 'answer after reset' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } })
+      }
+    }) } })
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'read_file'
+      ? { name, execute: async () => ({ success: true, data: 'tool result' }) }
+      : undefined)
+    const old = { id: 'old-user', role: 'user' as const, content: 'x'.repeat(2_000) }
+    const current = { id: 'current-user', role: 'user' as const, content: 'current question' }
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-mid-reset', sessionId: 'sess-mid-reset',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages: [old, current], currentUserMessageId: current.id,
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
+    const start = appendCompactionTransaction.mock.calls[0]?.[0] as { inputSurfaceFingerprint?: string } | undefined
+    const summary = appendCompactionTransaction.mock.calls[0]?.[1] as { outputSurfaceFingerprint?: string; shadowedRanges?: unknown[] } | undefined
+    expect(start?.inputSurfaceFingerprint).toBe(computeReplaySurfaceFingerprint('', [old, current]))
+    expect(summary?.outputSurfaceFingerprint).toBe(computeReplaySurfaceFingerprint('', [current]))
+    expect(summary?.shadowedRanges).toHaveLength(1)
+    const retryMessages = mockCreateAnthropicClient.mock.results[0]?.value?.messages?.stream?.mock?.calls?.[2]?.[0]?.messages as Array<{ content?: unknown }> | undefined
+    expect(JSON.stringify(retryMessages)).toContain('current-tool')
+    expect(JSON.stringify(retryMessages)).toContain('tool result')
+    expect(JSON.stringify(retryMessages)).not.toContain('x'.repeat(1_000))
+  })
+
+  it('turn-boundary snapshot includes the newly generated assistant content', async () => {
+    const boundary = vi.fn(async () => undefined)
+    const longReply = 'assistant reply '.repeat(5_000)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: longReply }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+    })) } })
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-final-surface', sessionId: 'sess-final-surface',
+      model: 'claude-sonnet-4-20250514', contextWindow: 100_000,
+      messages: [{ id: 'current-user', role: 'user', content: 'hello' }], currentUserMessageId: 'current-user',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', appDb: makeDb(), onTurnBoundary: boundary
+    })
+    expect(res.ok).toBe(true)
+    expect(boundary).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([expect.objectContaining({ role: 'assistant', content: expect.arrayContaining([expect.objectContaining({ type: 'text', text: longReply })]) })]),
+      surfaceSnapshot: expect.objectContaining({ messageTokens: expect.any(Number) })
+    }))
+    const input = boundary.mock.calls[0]?.[0]
+    expect(input?.surfaceSnapshot.messageTokens).toBeGreaterThan(1_000)
   })
 
   it('emits usage-updated fact on message_start before finalMessage', async () => {

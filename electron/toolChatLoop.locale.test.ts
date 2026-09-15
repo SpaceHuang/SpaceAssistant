@@ -193,8 +193,8 @@ describe('runToolChatSession locale injection', () => {
     const res = await runSession({ locale: 'zh-CN' })
     expect(res.ok).toBe(true)
     const system = capturedStreamParams[0]?.system ?? ''
-    expect(system).toContain('<ui_locale_preference>')
-    expect(system).toContain('Simplified Chinese')
+    expect(JSON.stringify(system)).toContain('<ui_locale_preference>')
+    expect(JSON.stringify(system)).toContain('Simplified Chinese')
   })
 
   it('I2: locale en-US injects English ui_locale_preference into API system', async () => {
@@ -219,8 +219,8 @@ describe('runToolChatSession locale injection', () => {
     const res = await runSession({ locale: 'en-US' })
     expect(res.ok).toBe(true)
     const system = capturedStreamParams[0]?.system ?? ''
-    expect(system).toContain('<ui_locale_preference>')
-    expect(system).toContain('English (en-US)')
+    expect(JSON.stringify(system)).toContain('<ui_locale_preference>')
+    expect(JSON.stringify(system)).toContain('English (en-US)')
   })
 
   it('I3: missing locale falls back to readAppLocale from appDb', async () => {
@@ -244,7 +244,7 @@ describe('runToolChatSession locale injection', () => {
 
     const res = await runSession({ locale: undefined, appDb: makeDb('zh-CN') })
     expect(res.ok).toBe(true)
-    expect(capturedStreamParams[0]?.system).toContain('Simplified Chinese')
+    expect(JSON.stringify(capturedStreamParams[0]?.system)).toContain('Simplified Chinese')
   })
 
   it('I4: each loop round system includes locale hint', async () => {
@@ -252,8 +252,8 @@ describe('runToolChatSession locale injection', () => {
     expect(res.ok).toBe(true)
     expect(capturedStreamParams.length).toBeGreaterThanOrEqual(2)
     for (const params of capturedStreamParams) {
-      expect(params.system).toContain('<ui_locale_preference>')
-      expect(params.system).toContain('English (en-US)')
+      expect(JSON.stringify(params.system)).toContain('<ui_locale_preference>')
+      expect(JSON.stringify(params.system)).toContain('English (en-US)')
     }
   })
 
@@ -280,7 +280,7 @@ describe('runToolChatSession locale injection', () => {
     const res = await runSession({ locale: 'zh-CN', projectMemoryEnabled: false })
     expect(res.ok).toBe(true)
     const system = capturedStreamParams[0]?.system ?? ''
-    expect(system).toContain('<ui_locale_preference>')
+    expect(JSON.stringify(system)).toContain('<ui_locale_preference>')
     expect(system).not.toContain('<project_memory>')
   })
 })

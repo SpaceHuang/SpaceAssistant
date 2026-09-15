@@ -924,12 +924,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           sessionId: intent.sessionId,
           signal: controller.signal
         })
-        let system = skillManager.buildSystemPrompt(route.skills) || undefined
+        const skillFragments = route.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
+        let system: string | undefined
         if (route.skills.some((skill) => skill.meta.name === 'llm-wiki')) {
           const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db))?.trim()
           if (schema) system = system ? `${system}\n\n## Wiki Schema（项目规范）\n\n${schema}` : `## Wiki Schema（项目规范）\n\n${schema}`
         }
-        const config = { ...baseConfig, ...(system ? { system } : {}) }
+        const config = { ...baseConfig, ...(system ? { system } : {}), ...(skillFragments.length ? { skillFragments } : {}) }
         const intentFingerprint = JSON.stringify({
           mode: intent.mode,
           userMessageId: intent.mode === 'reuse-user' ? intent.userMessageId : undefined,

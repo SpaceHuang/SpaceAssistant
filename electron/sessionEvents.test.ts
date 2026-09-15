@@ -14,13 +14,60 @@ import {
   parseSessionEvent,
   readSessionEvents,
   readSessionEventsDetailed,
+  appendCompactionTransaction,
+  replayCompactionEvents,
+  readCompactionMarkers,
+  readCompactionReplay,
   reconcileSessionEventFiles,
   reconcileSessionEventFilesDetailed,
   reconcileSessionEvents,
   type SessionEvent
 } from './sessionEvents'
+import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 
 describe('session events', () => {
+  it('commits compaction start, summary, and end in order', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-compaction-'))
+    const writer = new SessionEventWriter(root, 'compaction')
+    const end = await appendCompactionTransaction(writer, { compactionId: 'c1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', summaryHash: computeCompactionSummaryHash({}), outputSurfaceFingerprint: 'out', candidate: {} })
+    expect(end.seq).toBe(3)
+    expect((await readSessionEvents(writer.eventsPath)).map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
+    await writer.close()
+  })
+
+  it('replays only a fully committed compaction transaction', () => {
+    const replay = replayCompactionEvents([
+      { schemaVersion: 1, seq: 1, time: 1, type: 'compaction_start', payload: { compactionId: 'c', inputSurfaceFingerprint: 'in' } },
+      { schemaVersion: 1, seq: 2, time: 2, type: 'compaction_summary', payload: { compactionId: 'c', outputSurfaceFingerprint: 'out', summaryHash: 'h' } },
+      { schemaVersion: 1, seq: 3, time: 3, type: 'compaction_end', payload: { compactionId: 'c', status: 'committed', startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: 'in', outputSurfaceFingerprint: 'out', summaryHash: 'h' } },
+      { schemaVersion: 1, seq: 4, time: 4, type: 'compaction_end', payload: { compactionId: 'broken', status: 'committed' } }
+    ])
+    expect(replay.committed).toHaveLength(1)
+    expect(replay.rejected).toContainEqual({ compactionId: 'broken', reason: 'invalid-commit-references' })
+  })
+  it('reads only committed compaction markers from the event log', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-markers-'))
+    const writer = new SessionEventWriter(root, 'markers')
+    await appendCompactionTransaction(writer, { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', windowId: 'w1', summaryHash: computeCompactionSummaryHash({}), outputSurfaceFingerprint: 'out', candidate: {} })
+    expect(await readCompactionMarkers(writer.eventsPath, 'w1')).toEqual([{ compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'out' }])
+    await writer.close()
+  })
+  it('reads committed compaction replay for surface reconstruction', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-replay-'))
+    const writer = new SessionEventWriter(root, 'replay')
+    await appendCompactionTransaction(writer, { compactionId: 'c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }, { compactionId: 'c1', windowId: 'w1', summaryHash: 'out', outputSurfaceFingerprint: 'out', shadowedRanges: [{ start: 'old', end: 'old' }] })
+    expect((await readCompactionReplay(writer.eventsPath)).committed).toHaveLength(1)
+    await writer.close()
+  })
+  it('writes schemaVersion 1 while accepting legacy events without it', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-schema-'))
+    const writer = new SessionEventWriter(root, 'schema')
+    await writer.appendCritical({ type: 'turn_start', payload: {} })
+    const raw = JSON.parse((await fs.readFile(writer.eventsPath, 'utf8')).trim())
+    expect(raw.schemaVersion).toBe(1)
+    await writer.close()
+  })
+
   it('appends JSONL with monotonic sequence and atomic index', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-'))
     const writer = new SessionEventWriter(root, 's1', new Date('2026-01-02T00:00:00Z').getTime())
@@ -54,6 +101,10 @@ describe('session events', () => {
 
   it('rejects malformed or unknown event types', () => {
     expect(() => parseSessionEvent({ seq: 1, time: 1, type: 'unknown', payload: {} })).toThrow()
+  })
+
+  it('rejects unknown event schema versions so replay can degrade safely', () => {
+    expect(() => parseSessionEvent({ schemaVersion: 99, seq: 1, time: 1, type: 'request_header', payload: {} })).toThrow(/schema/i)
   })
 
   it('ignores a torn final JSONL line while retaining valid events', async () => {

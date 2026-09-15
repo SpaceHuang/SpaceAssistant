@@ -3,7 +3,8 @@ import type { ComponentProps } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
-import chatReducer, { restoreLastUsage } from '../../store/chatSlice'
+import chatReducer, { restoreLastUsage, setContextProjection } from '../../store/chatSlice'
+import type { ContextPressureProjection } from '../../../shared/contextMeter'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SessionUsage } from '../../../shared/sessionUsage'
 import configReducer, { setConfig } from '../../store/configSlice'
@@ -48,7 +49,8 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
 function renderRing(
   lastUsage?: SessionUsage | null,
   configOverrides?: Partial<AppConfig>,
-  ringProps?: ComponentProps<typeof ContextUsageRing>
+  ringProps?: ComponentProps<typeof ContextUsageRing>,
+  projection?: ContextPressureProjection
 ) {
   const store = configureStore({
     reducer: { chat: chatReducer, config: configReducer }
@@ -57,6 +59,7 @@ function renderRing(
   if (lastUsage !== undefined) {
     store.dispatch(restoreLastUsage(lastUsage))
   }
+  if (projection) store.dispatch(setContextProjection(projection))
   return {
     store,
     ...render(
@@ -105,6 +108,10 @@ describe('ContextUsageRing', () => {
     const colors = Array.from(circles).map((c) => c.getAttribute('stroke'))
     expect(colors).toContain('var(--sa-primary)')
     expect(colors).toContain('var(--sa-context-ring-reserved)')
+  })
+  it('renders from a Core meter projection without last usage', () => {
+    renderRing(undefined, undefined, undefined, { pressureTokens: 100, projectedTokens: 120, anchorStatus: 'matched', surfaceTokens: 120, bodyTokens: 80, bodyRatio: 0.4, hardFit: true, bodyFit: true, contextWindow: { tokens: 200, source: 'adapter' } })
+    expect(document.querySelectorAll('circle')).toHaveLength(3)
   })
 
   it('offsets reserved segment after used segment', () => {

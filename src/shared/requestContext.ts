@@ -1,0 +1,122 @@
+import { DEFAULT_MODEL_MAX_CONTEXT } from './domainTypes'
+import { estimateTokensFromUtf8Text } from './contextUsageEstimate'
+
+function estimateProtocolTokens(value: unknown): number {
+  if (typeof value === 'string') return estimateTokensFromUtf8Text(value)
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + estimateProtocolTokens(item), 0)
+  if (!value || typeof value !== 'object') return 0
+  const record = value as Record<string, unknown>
+  if (record.type === 'image' && record.source && typeof record.source === 'object') {
+    const source = record.source as Record<string, unknown>
+    return typeof source.data === 'string' ? Math.max(85, Math.ceil(source.data.length / 2_000)) : 85
+  }
+  return Object.entries(record).reduce((sum, [key, entry]) => key === 'data' && typeof entry === 'string' ? sum : sum + estimateProtocolTokens(entry), 0)
+}
+
+export type RequestContextPayload = {
+  requestId: string
+  windowId: string
+  provider: string
+  model: string
+  contextWindow: { tokens: number; source: 'config' | 'adapter' }
+  maxTokensEffective: number
+  outputReserveTokens: number
+  outputAccounting: 'shared' | 'separate'
+  schemaVersion: 1
+  budget: { totalInputBudget: number; bodyBudget: number; inputBudget: number; prefixTokens: number; requiredTokens: number; outputReserveTokens: number; safetyReserveTokens: number; triggerRatio: number; targetBodyRatio: number; estimatorVersion: string; serializationVersion: string }
+  contextUsage: { pressureTokens: number | null; projectedTokens: number | null; surfaceTokens: number; hardFit: boolean; bodyFit: boolean }
+  decisionId: string
+  phase: string
+  reason: string
+  ruleVersion: string
+  decisionFingerprint: string
+  planningStatus: 'target_reached' | 'fits_without_headroom' | 'exhausted' | 'uncompressible'
+}
+
+export type RequestHeaderPayload = {
+  schemaVersion: 1
+  requestId: string
+  surfaceSnapshot: { schemaVersion: 1; fingerprint: string; systemFingerprint: string; toolsFingerprint: string; surfaceTokens: number; systemTokens: number; toolsTokens: number; messageTokens: number }
+  stablePrefixFingerprint: string
+  system: string
+  tools: unknown[]
+  requiredSurfaceSet: string[]
+  toolExecutionCheckpoint: { completedToolUseIds: string[]; replayForbidden: boolean }
+}
+
+function fingerprint(value: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619)
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+/** 指纹比较的是模型可见语义，不把 serializer 的缓存控制元数据当成消息内容。 */
+function canonicalizeSurfaceMessages(messages: readonly unknown[]): unknown[] {
+  return messages.map((message) => {
+    if (!message || typeof message !== 'object') return message
+    const source = message as { role?: unknown; content?: unknown }
+    const content = source.content
+    if (Array.isArray(content) && content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text' && typeof (block as { text?: unknown }).text === 'string')) {
+      return { role: source.role, content: content.map((block) => (block as { text: string }).text).join('') }
+    }
+    if (Array.isArray(content)) {
+      return { role: source.role, content: content.map((block) => {
+        if (!block || typeof block !== 'object') return block
+        const { cache_control: _cacheControl, ...withoutCacheControl } = block as Record<string, unknown>
+        return withoutCacheControl
+      }) }
+    }
+    return { role: source.role, content }
+  })
+}
+
+export function buildRequestHeaderPayload(args: { requestId: string; system: string; tools: unknown[]; messages: unknown[]; requiredSurfaceSet?: string[]; toolExecutionCheckpoint?: { completedToolUseIds: string[]; replayForbidden: boolean } }): RequestHeaderPayload {
+  const systemTokens = estimateTokensFromUtf8Text(args.system)
+  const toolsTokens = estimateTokensFromUtf8Text(JSON.stringify(args.tools))
+  const messageTokens = estimateProtocolTokens(args.messages)
+  const systemFingerprint = fingerprint(args.system)
+  const toolsFingerprint = fingerprint(JSON.stringify(args.tools))
+  const surfaceFingerprint = fingerprint(JSON.stringify({ system: args.system, tools: args.tools, messages: canonicalizeSurfaceMessages(args.messages) }))
+  return { schemaVersion: 1, requestId: args.requestId, system: args.system, tools: args.tools, requiredSurfaceSet: [...(args.requiredSurfaceSet ?? [])], toolExecutionCheckpoint: args.toolExecutionCheckpoint ?? { completedToolUseIds: [], replayForbidden: false }, stablePrefixFingerprint: fingerprint(`${systemFingerprint}:${toolsFingerprint}`), surfaceSnapshot: { schemaVersion: 1, fingerprint: surfaceFingerprint, systemFingerprint, toolsFingerprint, surfaceTokens: systemTokens + toolsTokens + messageTokens, systemTokens, toolsTokens, messageTokens } }
+}
+
+export function buildRequestContextPayload(args: {
+  requestId: string
+  provider: string
+  model: string
+  contextWindow?: number
+  maxTokensEffective: number
+  outputAccounting?: 'shared' | 'separate'
+  surfaceSnapshot?: { surfaceTokens: number; systemTokens: number; toolsTokens?: number }
+  decision?: { decisionId: string; phase: string; reason: string; ruleVersion: string }
+  contextUsage?: RequestContextPayload['contextUsage']
+  windowId?: string
+  planningStatus?: RequestContextPayload['planningStatus']
+}): RequestContextPayload {
+  const outputAccounting = args.outputAccounting ?? 'shared'
+  const hasConfiguredWindow = Number.isFinite(args.contextWindow) && args.contextWindow! > 0
+  const contextWindow = hasConfiguredWindow ? args.contextWindow! : DEFAULT_MODEL_MAX_CONTEXT
+  const prefixTokens = Math.max(0, (args.surfaceSnapshot?.systemTokens ?? 0) + (args.surfaceSnapshot?.toolsTokens ?? 0))
+  const rawInputWindow = Math.max(0, contextWindow - (outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0))
+  const totalInputBudget = Math.max(0, Math.floor(rawInputWindow * 0.95))
+  const bodyBudget = Math.max(0, totalInputBudget - prefixTokens)
+  const surfaceTokens = args.surfaceSnapshot?.surfaceTokens ?? prefixTokens
+  const decision = args.decision ?? { decisionId: args.requestId, phase: 'turn_boundary', reason: 'proactive', ruleVersion: 'adaptive-v1' }
+  const decisionFingerprint = fingerprint(JSON.stringify({ ...decision, surfaceTokens, prefixTokens, totalInputBudget, bodyBudget, triggerRatio: 0.9, targetBodyRatio: 0.8, contextWindow, windowId: args.windowId ?? args.requestId }))
+  return {
+    requestId: args.requestId,
+    windowId: args.windowId ?? args.requestId,
+    provider: args.provider,
+    model: args.model,
+    contextWindow: { tokens: contextWindow, source: hasConfiguredWindow ? 'config' : 'adapter' },
+    maxTokensEffective: Math.max(0, args.maxTokensEffective),
+    outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0,
+    outputAccounting,
+    schemaVersion: 1,
+    budget: { totalInputBudget, bodyBudget, inputBudget: bodyBudget, prefixTokens, requiredTokens: 0, outputReserveTokens: outputAccounting === 'shared' ? Math.max(0, args.maxTokensEffective) : 0, safetyReserveTokens: 0, triggerRatio: 0.9, targetBodyRatio: 0.8, estimatorVersion: 'default-v1', serializationVersion: 'anthropic-wire-v1' },
+    contextUsage: args.contextUsage ?? { pressureTokens: null, projectedTokens: null, surfaceTokens, hardFit: surfaceTokens <= totalInputBudget, bodyFit: Math.max(0, surfaceTokens - prefixTokens) <= bodyBudget },
+    ...decision,
+    decisionFingerprint,
+    planningStatus: args.planningStatus ?? 'fits_without_headroom'
+  }
+}

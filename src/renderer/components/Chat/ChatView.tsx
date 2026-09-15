@@ -72,23 +72,20 @@ import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
 import { parseTestPopCommand } from '../../services/testPopCommandService'
 import { parseWikiCommand } from '../../services/wikiCommandService'
-import { appendWikiSchemaToSystemPrompt } from '../../services/wikiPrompt'
 import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
 import { ensureWorkDirForSession } from '../../services/workDirSessionSync'
-import { appendSkillActivationLog } from '../../services/skillActivationLog'
 import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserRecoverySkillService'
 import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
 import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
-import { buildSystemPromptFromSkills, buildSkillRouteSignature, formatSkillRouteHint, truncateSystemPrompt } from '../../../shared/skillPrompt'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
-import type { ChatImageAttachment, Message, SkillActivationSource, SkillRouteRecentMessage } from '../../../shared/domainTypes'
+import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
-import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
+import { CompactionMarker } from './CompactionMarker'
 import type { ChatMessageActions } from './ChatMessageActions'
 import { ChatMessageViewport, type ChatMessageViewportHandle } from './ChatMessageViewport'
 import { ChatRunningElapsed, resolveChatRunningLabels } from './ChatRunningStatus'
@@ -138,6 +135,7 @@ export function ChatView() {
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
   const displayEntries = useTypedSelector((s) => s.chat.displayEntries)
+  const compactionMarkers = useTypedSelector((s) => s.chat.compactionMarkers)
   const [contextSummaryTick, setContextSummaryTick] = useState(0)
   const contextScalars = useMemo(() => {
     void contextSummaryTick
@@ -172,7 +170,6 @@ export function ChatView() {
   const stickToBottomRef = useRef(true)
   const composerRef = useRef<MessageInputHandle>(null)
   const abortRequestedRef = useRef(false)
-  const lastSkillRouteSignatureRef = useRef('')
   const prevRunningSessionsRef = useRef<Record<string, true>>({})
   const drainingQueueRef = useRef(false)
   const sendInternalRef = useRef<
@@ -195,7 +192,6 @@ export function ChatView() {
   const enterMessageId = useChatMessageEnter(sessionId, messageIds)
 
   useEffect(() => {
-    lastSkillRouteSignatureRef.current = ''
     setTestPreviewMessageIds(new Set())
     stickToBottomRef.current = true
     setShowScrollToLatest(false)
@@ -717,8 +713,6 @@ export function ChatView() {
         return svc?.baseUrl || cfg.baseUrl || undefined
       })()
       const requestModelEntry = cfg.models.find((m) => m.name === requestModel) ?? modelEntry
-      const outputMaxTokens = resolveEffectiveOutputMaxTokens(requestModel, cfg.models)
-      const maxSystemChars = requestModelEntry ? Math.floor(requestModelEntry.maximumContext * 0.1) : undefined
 
       const lastUsage = store.getState().chat.lastUsage
       const pendingAttachments =
@@ -753,58 +747,6 @@ export function ChatView() {
       registerSessionRun(runSessionId, requestId)
       abortRequestedRef.current = false
       dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
-
-      const recentMessages: SkillRouteRecentMessage[] = filterMessagesForChatApi(historyForApi)
-        .filter((m) => m.content.trim())
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
-
-      const routeResult = await window.api.skillRoute({
-        userInput: chatText,
-        sessionSkillsState,
-        sessionId: runSessionId,
-        sessionMetadata: runSession?.metadata,
-        recentMessages,
-        model: chatModelName
-      })
-      const activeSkills = routeResult.skills
-      let skillHintTimestamp: number | undefined
-      let routeSkillHintText: string | undefined
-      if (activeSkills.length > 0) {
-        const routeSignature = buildSkillRouteSignature(activeSkills, routeResult.meta.sources)
-        if (routeSignature !== lastSkillRouteSignatureRef.current) {
-          lastSkillRouteSignatureRef.current = routeSignature
-          skillHintTimestamp = Date.now()
-          routeSkillHintText = formatSkillRouteHint(activeSkills, routeResult.meta.sources)
-        }
-        const logSource: SkillActivationSource =
-          activeSkills.map((s) => routeResult.meta.sources[s.meta.name]).find((src) => src === 'llm') ??
-          routeResult.meta.sources[activeSkills[0]!.meta.name] ??
-          'llm'
-        const metadata = appendSkillActivationLog(runSession?.metadata ?? {}, {
-          skillNames: activeSkills.map((s) => s.meta.name),
-          source: logSource,
-          userInput: chatText,
-          llmRecommended: routeResult.meta.llmRecommended,
-          routingFailed: routeResult.meta.routingFailed,
-          routingError: routeResult.meta.routingError,
-          routingRequestId: routeResult.meta.routingRequestId
-        })
-        void window.api.sessionUpdate({ sessionId: runSessionId, metadata }).then((updated) => {
-          if (updated) dispatch(upsertSession(updated))
-        })
-      }
-
-      let systemPrompt = buildSystemPromptFromSkills(activeSkills)
-      const wikiSchemaActive =
-        wikiConfig.enabled &&
-        (wikiModeRun || activeSkills.some((s) => s.meta.name === 'llm-wiki'))
-      if (wikiSchemaActive) {
-        const schema = await window.api.wikiGetSchema()
-        systemPrompt = appendWikiSchemaToSystemPrompt(systemPrompt, schema?.content ?? null) ?? systemPrompt
-      }
-      if (maxSystemChars && systemPrompt) {
-        systemPrompt = truncateSystemPrompt(systemPrompt, maxSystemChars)
-      }
 
       if (abortRequestedRef.current) {
         dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
@@ -1209,6 +1151,7 @@ export function ChatView() {
       messages={messages}
       displayEntries={displayEntries}
     >
+      {compactionMarkers.length > 0 ? <CompactionMarker count={compactionMarkers.length} /> : null}
       <ChatMessageViewport
         ref={viewportRef}
         messages={messages}

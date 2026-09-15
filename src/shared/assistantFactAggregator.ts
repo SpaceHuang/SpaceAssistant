@@ -7,9 +7,11 @@ export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | '
 export type TurnExecutionConfig = {
   lane?: 'desktop' | 'feishu' | 'wechat'
   model?: string
+  maximumContext?: number
   llmServiceId?: string
   baseUrl?: string
   system?: string
+  skillFragments?: string[]
   maxTokens?: number
   enableThinking?: boolean
   locale?: string
@@ -48,7 +50,8 @@ type AssistantFactEventPayload =
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
   | { type: 'usage-updated'; usage: unknown; projected?: boolean }
-  | { type: 'context-projection-updated' }
+  | { type: 'context-projection-updated'; projection: import('./contextMeter').ContextPressureProjection }
+  | { type: 'compaction-committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }
   | { type: 'skill-hint'; text: string }
   | { type: 'source-completed' }
   /** message：失败原因（诊断文本），随事实透出到渲染层，避免只剩一句「回复未能完成」 */
@@ -130,7 +133,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
       : tool)
   } else if (event.type === 'skill-hint') {
     next.skillHints = [...(next.skillHints ?? []), { id: deps.createId(), text: event.text, shownAt: deps.now }]
-  } else if (event.type === 'usage-updated') {
+  } else if (event.type === 'usage-updated' || event.type === 'context-projection-updated' || event.type === 'compaction-committed') {
     // usage 属于会话级投影数据，不改变 assistant message 本身。
   } else {
     closeSegments(next, deps.now)

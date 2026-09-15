@@ -20,6 +20,9 @@ vi.mock('electron', () => ({
 const mockRunToolChatSession = vi.fn()
 const mockCreateAnthropicClient = vi.fn()
 const mockGetSessionEventSink = vi.fn()
+const mockReadCompactionMarkers = vi.fn(async () => [])
+const mockReadCompactionReplay = vi.fn(async () => ({ committed: [], rejected: [] }))
+const mockReadSessionEvents = vi.fn(async () => [])
 const capturedStreamSystems: (string | undefined)[] = []
 
 vi.mock('./toolChatLoop', () => ({
@@ -27,7 +30,10 @@ vi.mock('./toolChatLoop', () => ({
 }))
 
 vi.mock('./sessionEvents', () => ({
-  getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args)
+  getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args),
+  readCompactionMarkers: (...args: unknown[]) => mockReadCompactionMarkers(...args),
+  readCompactionReplay: (...args: unknown[]) => mockReadCompactionReplay(...args),
+  readSessionEvents: (...args: unknown[]) => mockReadSessionEvents(...args)
 }))
 
 vi.mock('./agentLogger/agentLogger', () => ({
@@ -162,7 +168,7 @@ describe('claudeStreamHandlers locale', () => {
       turnId: 'frozen-turn', requestId: 'frozen-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'frozen-token',
-      executionConfig: { lane: 'desktop', model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system', maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
+      executionConfig: { lane: 'desktop', model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system', skillFragments: ['## Skill: review\n\nreview instructions'], maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
@@ -181,8 +187,12 @@ describe('claudeStreamHandlers locale', () => {
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({
       model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
-      options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN'
+      options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
+      windowId: session.id,
+      skillFragments: ['## Skill: review\n\nreview instructions'],
+      historyFacts: expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
     }))
+    expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String))
     db.close()
   })
 

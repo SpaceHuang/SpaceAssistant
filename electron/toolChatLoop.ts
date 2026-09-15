@@ -48,8 +48,9 @@ import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { activateRecoverySkillInState } from '../src/shared/browserDependencyRecovery'
-import { appendAvailableToolsHint, buildSystemPromptFromSkills } from '../src/shared/skillPrompt'
+import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
+import { getCachedSkills } from './skills/skillCache'
 import { getSession, updateSession } from './database'
 import { listProfiles } from './mcp/mcpConfigStore'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
@@ -69,6 +70,7 @@ import {
   resolveDependencyRecoverySkill
 } from './browser/browserDependencyRecovery'
 import type { AppDatabase } from './database'
+import type { HistoryFact } from '../src/shared/historyReader'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import type { FeishuConfig } from '../src/shared/feishuTypes'
@@ -167,6 +169,14 @@ import { compactOversizedToolResultContent } from '../src/shared/oversizedToolRe
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
+import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
+import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
+import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
+import type { ContextMeter } from '../src/shared/contextMeterService'
+import { planToolLoopCompaction } from '../src/shared/adaptiveCompaction'
+import { decideOverflowRecovery, selectRecoveryMessages } from '../src/shared/overflowRecovery'
+import { computeReplaySurfaceFingerprint, computeShadowedRanges, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
+import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 
@@ -389,7 +399,9 @@ export type RunToolChatSessionArgs = {
   sender: WebContents
   requestId: string
   sessionId: string
+  windowId?: string
   model: string
+  contextWindow?: number
   baseUrl?: string
   messages: ClaudeContentBlockMessage[]
   system?: string
@@ -411,8 +423,11 @@ export type RunToolChatSessionArgs = {
   appDb?: AppDatabase
   locale?: AppLocale
   projectMemoryEnabled?: boolean
+  skillFragments?: string[]
   /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
+  /** 由 Core 从当前授权会话事实构造，供 history.read 只读回查。 */
+  historyFacts?: readonly HistoryFact[]
   assistantMessageId?: string
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
@@ -421,6 +436,11 @@ export type RunToolChatSessionArgs = {
   emitFactEvent?: (event: AssistantFactEvent) => void
   /** Core 事件台账写入口；与 UI fact 通道分离，保存原始 NormalizedDelta。 */
   emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
+  appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
+  /** Core 以 session event ledger 提供的唯一上下文测量适配器。 */
+  contextMeter?: ContextMeter
+  /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
+  onTurnBoundary?: (input: { requestId: string; windowId: string; system: string; tools: unknown[]; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage']; toolExecutionCheckpoint: ReturnType<typeof buildRequestHeaderPayload>['toolExecutionCheckpoint']; requiredSurfaceSet: string[] }) => Promise<void>
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -434,7 +454,7 @@ export function pickToolLoopReturnUsage(
 }
 
 export type RunToolChatSessionResult =
-  | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage }
+  | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage; finalSurfaceSnapshot?: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; finalSurfaceMessages?: ClaudeContentBlockMessage[] }
   | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
 function failToolLoopWithLastUsage(
@@ -524,6 +544,7 @@ async function runToolChatSessionInner(
     floatingNotificationManager,
     hasImageAttachments
   } = args
+  let contextWindowId = args.windowId ?? requestId
   const apiKey = await getApiKey()
   if (!apiKey) {
     logAgentEvent('error', 'llm.error', {
@@ -575,9 +596,15 @@ async function runToolChatSessionInner(
   }
 
   let messagesForApi: Anthropic.MessageParam[] = initialMessages.map((m) => ({
+    ...(('id' in m && typeof m.id === 'string') ? { id: m.id } : {}),
     role: m.role,
     content: m.content as Anthropic.MessageParam['content']
-  }))
+  })) as Anthropic.MessageParam[]
+  if (args.skillFragments?.length) {
+    const fragmentMessage: Anthropic.MessageParam = { role: 'user', content: args.skillFragments.join('\n\n') }
+    const lastUserIndex = messagesForApi.map((message) => message.role).lastIndexOf('user')
+    messagesForApi.splice(lastUserIndex >= 0 ? lastUserIndex : messagesForApi.length, 0, fragmentMessage)
+  }
 
   /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
   const historicalAssistantApiMessageCount = initialMessages.filter((m) => m.role === 'assistant').length
@@ -612,10 +639,103 @@ async function runToolChatSessionInner(
   }
   let loopRound = 0
   let lastValidUsage: ToolLoopUsage | undefined
+  let lastRequestContext: ReturnType<typeof buildRequestContextPayload> | undefined
+  let lastRequestHeader: ReturnType<typeof buildRequestHeaderPayload> | undefined
+  let overflowRetries = 0
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
-  let recoverySkillSystemSuffix = ''
+  let recoverySkillFragment = ''
+
+  /**
+   * Preflight 恢复必须和 provider overflow 使用同一套事务语义：先以最终 wire
+   * surface 计算输入指纹，再生成可回放的保留面，提交 start/summary/end，最后
+   * 才允许下一轮重新序列化并发送。这样 preflight 不会绕过压缩台账直接删历史。
+   */
+  const recoverBeforeSend = async (
+    inputHeader: ReturnType<typeof buildRequestHeaderPayload>,
+    inputMessages: Anthropic.MessageParam[],
+    retry: number,
+    totalInputBudget: number
+  ): Promise<boolean> => {
+    const stableReplayPrefix = (messages: readonly Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
+      const replayable = excludeReplayOnlyMessages(messages, args.skillFragments)
+      let currentIndex = args.currentUserMessageId
+        ? replayable.findIndex((message) => (message as Anthropic.MessageParam & { id?: string }).id === args.currentUserMessageId)
+        : -1
+      if (currentIndex < 0) {
+        for (let index = replayable.length - 1; index >= 0; index--) {
+          const message = replayable[index]!
+          if (message.role !== 'user' || !Array.isArray(message.content) || !message.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) {
+            if (message.role === 'user') { currentIndex = index; break }
+          }
+        }
+      }
+      return currentIndex >= 0 ? replayable.slice(0, currentIndex + 1) : replayable
+    }
+    // 中途工具轮的 assistant 仍会继续增长，不能进入跨轮 replay 指纹；
+    // provider retry 仍使用完整 recoveredMessages，只有持久化匹配面截到当前 user。
+    const replayInputMessages = stableReplayPrefix(inputMessages)
+    const inputProjection = projectReplaySurfaceWithSources(replayInputMessages)
+    const inputSurface = inputProjection.messages
+    const selectedMessages = selectRecoveryMessages(inputMessages as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as Anthropic.MessageParam[]
+    const skillFragmentText = args.skillFragments?.join('\n\n')
+    const skillFragmentMessage = skillFragmentText
+      ? inputMessages.find((message) => message.role === 'user' && message.content === skillFragmentText)
+      : undefined
+    const recoveredMessages = skillFragmentMessage && !selectedMessages.includes(skillFragmentMessage)
+      ? [skillFragmentMessage, ...selectedMessages]
+      : selectedMessages
+    // 是否发生缩减必须比较真实 provider surface；replay projection 会隐藏工具消息，
+    // 不能据此把“已删除旧工具对”误判成 no-op。
+    if (JSON.stringify(recoveredMessages) === JSON.stringify(inputMessages)) return false
+    const replayOutputMessages = stableReplayPrefix(recoveredMessages)
+    const outputProjection = projectReplaySurfaceWithSources(replayOutputMessages)
+    const outputSurface = outputProjection.messages
+    if (outputSurface.length === 0) return false
+
+    const outputHeader = buildRequestHeaderPayload({
+      requestId: `${requestId}:recovery:${retry}`,
+      system: inputHeader.system,
+      tools: inputHeader.tools,
+      messages: recoveredMessages,
+      requiredSurfaceSet: inputHeader.requiredSurfaceSet,
+      toolExecutionCheckpoint: { ...inputHeader.toolExecutionCheckpoint, replayForbidden: true }
+    })
+    const outputPairs = extractToolPairIds(recoveredMessages as unknown as Array<{ content?: unknown }>)
+    const outputIds = recoveredMessages.map((message, index) => (message as unknown as { id?: string }).id ?? surfaceItemIdentity(message, index))
+    const outputPreflight = validateSurfaceForSend({
+      ids: outputIds,
+      requiredIds: inputHeader.requiredSurfaceSet,
+      currentUserMessageId: args.currentUserMessageId ?? '',
+      fingerprint: outputHeader.surfaceSnapshot.fingerprint,
+      expectedFingerprint: outputHeader.surfaceSnapshot.fingerprint,
+      estimatedTotalInputTokens: outputHeader.surfaceSnapshot.surfaceTokens,
+      totalInputBudget,
+      toolUses: outputPairs.toolUses,
+      toolResults: outputPairs.toolResults
+    })
+    if (!outputPreflight.ok && outputPreflight.reason === 'token_budget_exceeded') return false
+    if (!outputPreflight.ok) return false
+
+    const inputItems = surfaceItemIdentities(inputSurface).map((id) => ({ id }))
+    const outputItems = surfaceItemIdentitiesForProjectionSubset(inputProjection, outputProjection).map((id) => ({ id }))
+    const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, inputSurface)
+    const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, outputSurface)
+    const shadowedRanges = computeShadowedRanges(inputItems, outputItems)
+    if (!shadowedRanges.length || !args.appendCompactionTransaction) return false
+    const compactionId = `${contextWindowId}:preflight:${requestId}:${retry}`
+    const outputWindowId = `${contextWindowId}:reset:${requestId}:${retry}`
+    const candidate = { kind: 'reset', requiredMessageId: args.currentUserMessageId ?? null, shadowedRanges }
+    await args.appendCompactionTransaction(
+      { compactionId, windowId: contextWindowId, inputSurfaceFingerprint: inputFingerprint, surfaceBoundaryId: inputItems[inputItems.length - 1]?.id, targetTokens: outputHeader.surfaceSnapshot.surfaceTokens },
+      { compactionId, windowId: contextWindowId, inputWindowId: contextWindowId, outputWindowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: outputFingerprint, shadowedRanges, requiredSurfaceSet: inputHeader.requiredSurfaceSet, toolExecutionCheckpoint: { ...outputHeader.toolExecutionCheckpoint }, candidate }
+    )
+    messagesForApi = recoveredMessages
+    contextWindowId = outputWindowId
+    args.emitFactEvent?.({ type: 'compaction-committed', compactionId, windowId: contextWindowId, outputSurfaceFingerprint: outputFingerprint })
+    return true
+  }
 
   while (true) {
     loopRound++
@@ -625,14 +745,9 @@ async function runToolChatSessionInner(
       return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage, args.emitFactEvent)
     }
     const memoryContent = getCachedMemoryContent()
-    const baseSystemWithRecovery = recoverySkillSystemSuffix
-      ? [typeof system === 'string' && system.trim().length > 0 ? system : undefined, recoverySkillSystemSuffix]
-          .filter(Boolean)
-          .join('\n\n')
-      : typeof system === 'string' && system.trim().length > 0
-        ? system
-        : undefined
-    const systemWithTools = appendAvailableToolsHint(baseSystemWithRecovery, toolNames)
+    const baseSystemWithRecovery = typeof system === 'string' && system.trim().length > 0 ? system : undefined
+    const capabilityHint = buildToolCapabilityConventionHint(toolNames)
+    const systemWithTools = baseSystemWithRecovery ? `${baseSystemWithRecovery}\n\n${capabilityHint}` : capabilityHint
     const locale = resolveRequestLocale(payloadLocale, appDb)
     const systemPrompt = buildFinalSystemPrompt({
       system: systemWithTools,
@@ -640,18 +755,59 @@ async function runToolChatSessionInner(
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
+      skillCatalog: getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
+      contextWindow: args.contextWindow
     })
-    const messagesStripped = stripThinking(messagesForApi)
+    // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
+    const attemptRequestId = `${requestId}:round:${loopRound}`
+    const messagesStripped = stripThinking(recoverySkillFragment ? [...messagesForApi, { role: 'user', content: recoverySkillFragment }] : messagesForApi)
+    const wireMessages = messagesStripped.map((message) => {
+      const { id: _internalId, ...wireShape } = message as Anthropic.MessageParam & { id?: string }
+      return wireShape
+    })
     const toolLoopStreamParams = buildClaudeToolLoopStreamParams({
       model,
       max_tokens: maxTokensEffective,
       system: systemPrompt,
-      messages: messagesStripped as Anthropic.MessageParam[],
+      messages: wireMessages as Anthropic.MessageParam[],
       tools: tools as Anthropic.Tool[],
-      thinking
+      thinking,
+      cacheControl: true
     })
-    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', system: systemPrompt ?? '', tools } })
-    await args.emitSessionEvent?.({ type: 'request_context', payload: { provider: 'anthropic', model, contextWindow: undefined } })
+    // 计划面先冻结为不含内部 id 的协议中立表示；wire 面只接受 serializer 最终产物。
+    // 两者必须独立计算，才能捕获 serializer 在发送前改变消息/工具的漂移。
+    const plannedMessages = wireMessages
+    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+    const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: toolLoopStreamParams.messages as unknown[], requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
+    const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
+    lastRequestHeader = requestHeader
+    lastRequestContext = requestContext
+    const surfaceIds = (messagesForApi as unknown as ClaudeContentBlockMessage[]).map((message, index) => message.id ?? `message-${index}`)
+    const toolPairs = extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>)
+    const preflight = validateSurfaceForSend({
+      ids: surfaceIds,
+      requiredIds: args.currentUserMessageId ? [args.currentUserMessageId] : [],
+      currentUserMessageId: args.currentUserMessageId ?? '',
+      fingerprint: wireHeader.surfaceSnapshot.fingerprint,
+      expectedFingerprint: requestHeader.surfaceSnapshot.fingerprint,
+      estimatedTotalInputTokens: wireHeader.surfaceSnapshot.surfaceTokens,
+      totalInputBudget: requestContext.budget.totalInputBudget,
+      toolUses: toolPairs.toolUses,
+      toolResults: toolPairs.toolResults
+    })
+    if (!preflight.ok) {
+      if (preflight.reason === 'token_budget_exceeded' && overflowRetries < 1) {
+        overflowRetries += 1
+        const recovered = await recoverBeforeSend(requestHeader, messagesStripped, overflowRetries, requestContext.budget.totalInputBudget)
+        if (recovered) {
+          await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'preflight_context_overflow' } })
+          continue
+        }
+      }
+      return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
+    }
+    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
+    await args.emitSessionEvent?.({ type: 'request_context', payload: requestContext })
 
     logAgentEvent('info', 'llm.request', {
       requestId,
@@ -674,9 +830,7 @@ async function runToolChatSessionInner(
 
     try {
       const stream = client.messages.stream({
-        ...toolLoopStreamParams,
-        messages: messagesStripped as Anthropic.MessageParam[],
-        tools: tools as Anthropic.Tool[]
+        ...toolLoopStreamParams
       } as Parameters<typeof client.messages.stream>[0])
 
       const contentBlockTypes = new Map<number, string>()
@@ -797,8 +951,23 @@ async function runToolChatSessionInner(
       if (finalUsage) {
         await args.emitSessionEvent?.({
           type: 'request_usage',
-          payload: { requestId: `${requestId}:round:${loopRound}`, usage: finalUsage, source: 'api' }
+          payload: { schemaVersion: 1, requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
+        const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: content as Anthropic.ContentBlock[] }]
+        const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system, tools: requestHeader.tools, messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
+        const finalProjection = computeContextPressure({
+          currentSurface: finalHeader.surfaceSnapshot,
+          anchor: { requestId: attemptRequestId, surfaceTokens: requestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: requestHeader.surfaceSnapshot.fingerprint, systemFingerprint: requestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: requestHeader.surfaceSnapshot.toolsFingerprint, provider: 'anthropic', model, estimatorVersion: requestContext.budget.estimatorVersion, serializationVersion: requestContext.budget.serializationVersion, realUsage: finalUsage, contextWindow: requestContext.contextWindow.tokens },
+          budget: requestContext.budget,
+          decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' },
+          contextWindow: requestContext.contextWindow,
+          provider: 'anthropic',
+          model
+        })
+        lastRequestHeader = finalHeader
+        lastRequestContext = { ...lastRequestContext, contextUsage: finalProjection }
+        args.emitFactEvent?.({ type: 'context-projection-updated', projection: finalProjection })
+        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: finalHeader.surfaceSnapshot, contextUsage: finalProjection, planningStatus: finalProjection.surfaceTokens <= requestContext.budget.totalInputBudget ? 'fits_without_headroom' : 'exhausted', windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
       }
       if (usage) {
         lastValidUsage = usage
@@ -816,6 +985,18 @@ async function runToolChatSessionInner(
     } catch (e) {
       if (e instanceof ChatCancelledError) throw e
       const error = e instanceof Error ? e.message : String(e)
+      const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
+      if (recovery.action === 'reset_and_retry_provider') {
+        overflowRetries = recovery.nextRetry
+        const recovered = lastRequestHeader && lastRequestContext
+          ? await recoverBeforeSend(lastRequestHeader, messagesForApi, overflowRetries, lastRequestContext.budget.totalInputBudget)
+          : false
+        if (!recovered) {
+          return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
+        }
+        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
+        continue
+      }
       logAgentEvent('error', 'llm.error', {
         requestId,
         sessionId,
@@ -855,7 +1036,10 @@ async function runToolChatSessionInner(
     if (toolUses.length === 0) {
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
       args.emitFactEvent?.({ type: 'source-completed' })
-      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }) }
+      if (args.onTurnBoundary && lastRequestHeader && lastRequestContext) {
+        await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system, tools: lastRequestHeader.tools, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: lastRequestHeader.toolExecutionCheckpoint, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
+      }
+      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
     }
 
     if (toolNames.length === 0) {
@@ -886,6 +1070,7 @@ async function runToolChatSessionInner(
     }
     const fileCache = getFileStateCacheForSession(sessionId)
     let abortRepeatedToolError: string | null = null
+    let toolResultCompacted = false
 
     for (const tu of toolUses) {
       throwIfChatCancelled(chatSignal)
@@ -1780,7 +1965,8 @@ async function runToolChatSessionInner(
             larkCliRunner,
             remoteContext,
             toolUserConfirmed,
-            getBrowserDetectContext
+            getBrowserDetectContext,
+            historyFacts: args.historyFacts
           }
           execResult = preparedShellExecution
             ? await executePreparedShellExecution(preparedShellExecution, executionContext, execStartedAt, {
@@ -1897,14 +2083,16 @@ async function runToolChatSessionInner(
         })
       }
 
-      let payload = compactToolResultContentForApi(formatToolResultPayload(execResult, {
+      const rawPayload = formatToolResultPayload(execResult, {
         workspaceRoot: workDir,
         processTool
-      }), {
+      })
+      let payload = compactToolResultContentForApi(rawPayload, {
         requestId,
         sessionId,
         toolUseId
       })
+      if (payload !== rawPayload) toolResultCompacted = true
       const recoverySkill =
         execResult.dependencyError &&
         resolveDependencyRecoverySkill(execResult.dependencyError.errorCode)
@@ -1917,7 +2105,7 @@ async function runToolChatSessionInner(
           content: payload
         }
       } else if (recoverySkill && execResult.dependencyError) {
-        if (!recoverySkillSystemSuffix && appDb) {
+        if (!recoverySkillFragment && appDb) {
           const cur = getSession(appDb, sessionId)
           if (cur) {
             updateSession(appDb, sessionId, {
@@ -1925,7 +2113,7 @@ async function runToolChatSessionInner(
             })
             const skill = getSkillByName(userDataDir, workDir, recoverySkill)
             if (skill) {
-              recoverySkillSystemSuffix = buildSystemPromptFromSkills([skill])
+              recoverySkillFragment = `<skill name="${skill.meta.name}" path="${skill.filePath}">\n${skill.content.trim()}\n</skill>`
             }
           }
         }
@@ -1989,6 +2177,28 @@ async function runToolChatSessionInner(
     if (lastValidUsage && toolResults.length > 0) {
       const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
       args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
+      if (lastRequestHeader && lastRequestContext) {
+        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi], requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+        const nextProjectionInput = {
+          currentSurface: nextHeader.surfaceSnapshot,
+          budget: lastRequestContext.budget,
+          decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop' as const, reason: 'proactive' as const, ruleVersion: 'adaptive-v1' },
+          contextWindow: lastRequestContext.contextWindow,
+          provider: lastRequestContext.provider,
+          model: lastRequestContext.model
+        }
+        const nextProjection = args.contextMeter?.measure(nextProjectionInput) ?? computeContextPressure({
+          ...nextProjectionInput,
+          anchor: { requestId: lastRequestContext.requestId, surfaceTokens: lastRequestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: lastRequestHeader.surfaceSnapshot.fingerprint, systemFingerprint: lastRequestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: lastRequestHeader.surfaceSnapshot.toolsFingerprint, provider: lastRequestContext.provider, model: lastRequestContext.model, estimatorVersion: lastRequestContext.budget.estimatorVersion, serializationVersion: lastRequestContext.budget.serializationVersion, realUsage: lastValidUsage, contextWindow: lastRequestContext.contextWindow.tokens }
+        })
+        const toolLoopPlan = planToolLoopCompaction({
+          projection: { surfaceTokens: nextProjection.surfaceTokens, bodyTokens: nextProjection.bodyTokens, requiredTokens: lastRequestContext.budget.requiredTokens, totalInputBudget: lastRequestContext.budget.totalInputBudget, bodyBudget: lastRequestContext.budget.bodyBudget, targetBodyRatio: lastRequestContext.budget.targetBodyRatio },
+          shouldCompact: shouldCompact(nextProjection, lastRequestContext.budget),
+          prune: (projection) => ({ projection, status: toolResultCompacted ? 'applied' : 'no-op' })
+        })
+        args.emitFactEvent?.({ type: 'context-projection-updated', projection: nextProjection })
+        await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: `${requestId}:surface:${loopRound}`, provider: lastRequestContext.provider, model: lastRequestContext.model, contextWindow: lastRequestContext.contextWindow.tokens, maxTokensEffective: lastRequestContext.maxTokensEffective, surfaceSnapshot: nextHeader.surfaceSnapshot, contextUsage: nextProjection, planningStatus: toolLoopPlan.status, windowId: contextWindowId, decision: { decisionId: `${requestId}:round:${loopRound}`, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
+      }
     }
     if (abortRepeatedToolError) {
       return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)

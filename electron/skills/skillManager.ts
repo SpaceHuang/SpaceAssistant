@@ -7,7 +7,7 @@ import type {
   SkillsConfig,
   WikiConfig
 } from '../../src/shared/domainTypes'
-import { buildSystemPromptFromSkills, truncateSystemPrompt } from '../../src/shared/skillPrompt'
+import { buildSystemPromptFromSkills, readSkillForTool, truncateSystemPrompt } from '../../src/shared/skillPrompt'
 import { getCachedSkills, invalidateSkillsCache } from './skillCache'
 import { matchSkills } from './skillMatcher'
 import { routeSkills } from './skillRouter'
@@ -40,6 +40,10 @@ export function createSkillManager(ctx: SkillManagerContext) {
 
     get(name: string): SkillDefinition | null {
       return getSkillByName(ctx.getUserDataPath(), ctx.getWorkDir(), name)
+    },
+
+    readForTool(name: string, maxChars = 32_000): string {
+      return readSkillForTool(this.list(), name, maxChars)
     },
 
     match(userInput: string, sessionState: SessionSkillsState, sessionMetadata?: Record<string, unknown>): SkillDefinition[] {

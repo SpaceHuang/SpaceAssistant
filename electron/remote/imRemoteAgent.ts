@@ -1,10 +1,11 @@
 import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
-import { getMessages } from '../database'
+import { getMessages, getConfigValue } from '../database'
 import { runToolChatSession, type RunToolChatSessionArgs } from '../toolChatLoop'
 import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
+import type { ModelEntry } from '../../src/shared/domainTypes'
 import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
@@ -116,6 +117,11 @@ export async function runImRemoteAgent(args: {
     })
 
     const routeModelName = args.getModel()
+    let contextWindow: number | undefined
+    try {
+      const models = JSON.parse(getConfigValue(args.db, 'config.models') ?? '[]') as ModelEntry[]
+      contextWindow = models.find((entry) => entry.name === routeModelName)?.maximumContext
+    } catch { /* use adapter fallback */ }
     const creds = await resolveLlmCredentialsForModel(args.db, routeModelName, {})
     const baseUrl = creds.baseUrl ?? args.getBaseUrl()
     const getApiKey = creds.error ? args.getApiKey : creds.getApiKey
@@ -125,10 +131,12 @@ export async function runImRemoteAgent(args: {
       requestId,
       sessionId: args.sessionId,
       model: routeModelName,
+      contextWindow,
       baseUrl,
       messages,
       system: appendix,
       options: { maxTokens: 8192 },
+      currentUserMessageId: [...rawMessages].reverse().find((message) => message.role === 'user')?.id,
       toolsConfig,
       browserConfig: args.getBrowserConfig?.(),
       wikiConfig: args.getWikiConfig?.(),
