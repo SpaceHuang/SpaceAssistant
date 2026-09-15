@@ -1,0 +1,1868 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>SpaceAssistant 产品架构设计（理想态）</title>
+<meta name="description" content="SpaceAssistant 架构理想态：六块主干、六条不变量、驱动源与投递、准入与装配、内核契约、安全门控、存储边界、23 条偏差排期与 Agent SDK 化缺口的覆盖对照。">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&family=Noto+Serif+SC:wght@400&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --paper:#f5f5f5; --paper-2:#ececec;
+  --ink:#2d3142; --muted:#4f5d75; --soft:#7a8399;
+  --rule:rgba(45,49,66,0.12); --rule-2:rgba(45,49,66,0.08); --rule-solid:#bfc0c0;
+  --accent:#eb6c36; --accent-tint:rgba(235,108,54,0.08); --accent-ink:#a2521f;
+  --link:#2e5aa8;
+  --sans:'Geist','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+  --serif:'Instrument Serif','Noto Serif SC','Songti SC',Georgia,serif;
+  --mono:'Geist Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+}
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.6;-webkit-font-smoothing:antialiased}
+.shell{max-width:1320px;margin:0 auto;padding:40px 32px 96px;display:grid;grid-template-columns:236px minmax(0,1fr);gap:56px;align-items:start}
+.shell>*{min-width:0}
+@media (max-width:1040px){.shell{grid-template-columns:minmax(0,1fr);gap:24px;padding:24px 20px 64px}}
+.nav{position:sticky;top:40px;font-size:0.8125rem}
+@media (max-width:1040px){.nav{position:static}}
+.nav .nav-eyebrow{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.18em;text-transform:uppercase;color:var(--soft);margin-bottom:12px}
+.nav ol{list-style:none;border-left:1px solid var(--rule);margin-bottom:20px}
+.nav li a{display:block;padding:5px 0 5px 14px;margin-left:-1px;border-left:2px solid transparent;color:var(--muted);text-decoration:none;transition:color .15s,border-color .15s}
+.nav li a:hover{color:var(--ink)}
+.nav li a.on{color:var(--ink);font-weight:600;border-left-color:var(--accent)}
+.nav li a .num{font-family:var(--mono);font-size:0.6875rem;color:var(--soft);margin-right:8px}
+.nav li a.on .num{color:var(--accent)}
+.toggle{display:flex;align-items:center;gap:10px;font-size:0.75rem;color:var(--muted);padding:10px 0;cursor:pointer;user-select:none;border-top:1px solid var(--rule)}
+.toggle input{appearance:none;width:28px;height:16px;border-radius:8px;background:var(--rule-solid);position:relative;cursor:pointer;transition:background .15s;flex:none}
+.toggle input::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform .15s}
+.toggle input:checked{background:var(--accent)}
+.toggle input:checked::after{transform:translateX(12px)}
+.nav .hint{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.06em;color:var(--soft);line-height:1.6}
+.head{margin-bottom:44px;padding-bottom:28px;border-bottom:1px solid var(--rule)}
+.head .eyebrow{font-family:var(--mono);font-size:0.6875rem;font-weight:500;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+h1{font-family:var(--serif);font-size:clamp(1.875rem,3.4vw + 0.6rem,2.75rem);font-weight:400;letter-spacing:-0.02em;line-height:1.12;margin-bottom:12px}
+.head .lede{font-size:1.0625rem;color:var(--muted);max-width:68ch}
+.head .meta{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:20px;font-family:var(--mono);font-size:0.6875rem;color:var(--soft);letter-spacing:0.04em}
+.head .meta b{color:var(--muted);font-weight:500}
+section{margin-bottom:64px;scroll-margin-top:24px}
+h2{font-family:var(--serif);font-size:1.625rem;font-weight:400;letter-spacing:-0.01em;line-height:1.2;margin-bottom:6px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+h2 .sec-num{font-family:var(--mono);font-size:0.75rem;letter-spacing:0.12em;color:var(--accent)}
+h2 .src{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.08em;color:var(--soft);font-weight:400}
+h3{font-size:0.9375rem;font-weight:600;letter-spacing:-0.005em;margin:26px 0 10px}
+h4{font-family:var(--mono);font-size:0.6875rem;font-weight:500;letter-spacing:0.14em;text-transform:uppercase;color:var(--soft);margin:22px 0 8px}
+p{color:var(--muted);font-size:0.9375rem;max-width:74ch}
+p + p{margin-top:10px}
+p strong,li strong{color:var(--ink);font-weight:600}
+ul.plain,ol.plain{list-style:none;margin:10px 0 0}
+ul.plain li,ol.plain li{position:relative;padding-left:16px;margin-bottom:6px;color:var(--muted);font-size:0.9375rem;max-width:74ch}
+ul.plain li::before{content:'—';position:absolute;left:0;color:rgba(45,49,66,0.28)}
+ol.plain{counter-reset:o}
+ol.plain li{padding-left:24px;counter-increment:o}
+ol.plain li::before{content:counter(o)'.';font-family:var(--mono);font-size:0.75rem;color:var(--soft);top:2px}
+code{font-family:var(--mono);font-size:0.8125em;color:var(--ink);background:rgba(45,49,66,0.05);padding:1px 5px;border-radius:3px;white-space:nowrap}
+a.ref{color:var(--link);text-decoration:none;border-bottom:1px solid rgba(46,90,168,0.3)}
+a.ref:hover{border-bottom-color:var(--link)}
+.anchor{opacity:0;font-family:var(--mono);font-size:0.8125rem;color:var(--soft);text-decoration:none;transition:opacity .15s}
+h2:hover .anchor,h3:hover .anchor{opacity:1}
+.cards{display:grid;grid-template-columns:1.05fr 1fr 0.95fr;gap:16px;margin-top:20px}
+.cards.two{grid-template-columns:1fr 1fr}
+@media (max-width:900px){.cards,.cards.two{grid-template-columns:1fr}}
+.card{background:#fff;border:1px solid var(--rule);border-radius:6px;padding:20px}
+.card .eyebrow{font-family:var(--mono);font-size:0.5625rem;letter-spacing:0.18em;text-transform:uppercase;color:var(--soft);margin-bottom:10px}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--rule-2)}
+.card-head h3{margin:0;font-size:0.875rem}
+.dot{width:7px;height:7px;border-radius:50%;flex:none}
+.dot.ink{background:var(--ink)}.dot.muted{background:var(--muted)}.dot.coral{background:var(--accent)}.dot.soft{background:var(--soft)}.dot.link{background:var(--link)}
+.card p,.card li{font-size:0.8125rem;line-height:1.6}
+.card ul{list-style:none}
+.card li{position:relative;padding-left:14px;margin-bottom:4px}
+.card li::before{content:'—';position:absolute;left:0;color:rgba(45,49,66,0.25);font-size:0.75rem}
+.card .kv{font-family:var(--mono);font-size:0.6875rem;color:var(--soft);margin-top:10px;display:block}
+.tbl-wrap{overflow-x:auto;margin-top:16px;border:1px solid var(--rule);border-radius:6px;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:0.8125rem;min-width:560px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--rule-2);vertical-align:top;line-height:1.55}
+th{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);font-weight:500;background:rgba(45,49,66,0.02);white-space:nowrap}
+td{color:var(--muted)}
+td strong{color:var(--ink);font-weight:600}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:rgba(45,49,66,0.015)}
+td code{background:transparent;padding:0}
+figure{margin-top:22px}
+.figframe{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:10px;flex-wrap:wrap}
+.figframe .ft{font-size:0.875rem;font-weight:600;color:var(--ink)}
+.figframe .fk{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--soft)}
+.figbox{background:var(--paper-2);border:1px solid var(--rule);border-radius:8px;padding:20px;overflow-x:auto}
+.figcap{font-size:0.75rem;color:var(--soft);margin-top:10px;max-width:82ch}
+.dgm{width:100%;min-width:880px;height:auto;display:block}
+.dgm text{font-family:var(--sans)}
+.dgm .nm{font-size:12px;font-weight:600;fill:var(--ink)}
+.dgm .dl{font-size:12px;fill:var(--muted)}
+.dgm .dl2{font-size:12px;fill:var(--soft)}
+.dgm .mn{font-family:var(--mono);font-size:9px;fill:var(--muted)}
+.dgm .ey{font-family:var(--mono);font-size:7px;font-weight:500;fill:#8f95a6;letter-spacing:.18em}
+.dgm .zl{font-size:12px;fill:#8a90a1}
+.dgm .al{font-family:var(--mono);font-size:8px;fill:var(--soft);letter-spacing:.06em}
+.dgm .alc{font-size:12px;fill:var(--muted)}
+.dgm .hlw{font-family:var(--mono);font-size:8px;fill:var(--accent-ink);letter-spacing:.06em}
+.dgm .mask{fill:var(--paper)}
+.dgm .zone{fill:rgba(45,49,66,0.02);stroke:rgba(45,49,66,0.10);stroke-width:0.8}
+.dgm .zone.warn{fill:rgba(235,108,54,0.035);stroke:rgba(235,108,54,0.30);stroke-dasharray:5 3}
+.dgm .box{fill:#fff;stroke:var(--ink);stroke-width:1}
+.dgm .box.focal{fill:var(--accent-tint);stroke:var(--accent);stroke-width:1.2}
+.dgm .box.store{fill:rgba(45,49,66,0.05);stroke:var(--muted)}
+.dgm .box.ext{fill:rgba(45,49,66,0.03);stroke:rgba(45,49,66,0.30)}
+.dgm .box.input{fill:rgba(79,93,117,0.10);stroke:var(--soft)}
+.dgm .box.sec{fill:rgba(235,108,54,0.05);stroke:rgba(235,108,54,0.50);stroke-dasharray:4 4}
+.dgm .box.util{fill:rgba(45,49,66,0.02);stroke:rgba(45,49,66,0.20);stroke-dasharray:4 3}
+.dgm .nd{transition:opacity .15s}
+.dgm .nd[data-note]{cursor:pointer}
+.dgm.dimmed .nd:not(:hover):not(.on){opacity:.26}
+.dgm .nd.on .box{stroke-width:2}
+.dgm .tag{fill:transparent}
+.note{margin-top:12px;background:#fff;border:1px solid var(--rule);border-left:2px solid var(--accent);border-radius:0 6px 6px 0;padding:14px 18px;min-height:78px}
+.note .nt{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.14em;text-transform:uppercase;color:var(--soft);margin-bottom:6px}
+.note .nh{font-size:0.875rem;font-weight:600;color:var(--ink);margin-bottom:4px}
+.note p{font-size:0.8125rem;max-width:80ch}
+.stager{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px}
+.btn{font-family:var(--mono);font-size:0.6875rem;letter-spacing:0.06em;color:var(--muted);background:#fff;border:1px solid var(--rule);border-radius:4px;padding:5px 12px;cursor:pointer;transition:border-color .15s,color .15s}
+.btn:hover{border-color:var(--rule-solid);color:var(--ink)}
+.btn.on{border-color:var(--accent);color:var(--accent)}
+.stager .sep{width:1px;height:18px;background:var(--rule)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px}
+.search{font-family:var(--sans);font-size:0.8125rem;padding:5px 12px;border:1px solid var(--rule);border-radius:4px;background:#fff;color:var(--ink);min-width:190px}
+.search:focus{outline:none;border-color:var(--soft)}
+#s13 td:nth-child(3){white-space:nowrap}
+#devtable td:nth-child(3) code{white-space:normal;overflow-wrap:anywhere}
+.rev{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.06em;color:var(--muted);border:1px dashed rgba(45,49,66,0.32);border-radius:3px;padding:1px 6px;white-space:nowrap}
+.st{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.06em;border-radius:3px;padding:1px 6px;white-space:nowrap}
+.st-open{color:var(--soft);border:1px solid var(--rule)}
+.st-part{color:var(--accent-ink);background:rgba(235,108,54,0.08);border:1px solid rgba(235,108,54,0.28)}
+.st-done{color:#fff;background:var(--link);border:1px solid var(--link)}
+#devtable td:last-child{white-space:nowrap}
+#devreview{table-layout:fixed;width:100%}
+#devreview th,#devreview td{word-break:break-word;overflow-wrap:anywhere}
+#devreview td:nth-child(1){width:34px}
+#devreview td:nth-child(2){width:132px}
+#devreview td:nth-child(4){width:38%}
+#devreview code{white-space:normal;overflow-wrap:anywhere}
+tr.hide{display:none}
+details{border:1px solid var(--rule);border-radius:6px;background:#fff;padding:12px 16px;margin-bottom:8px}
+details summary{cursor:pointer;font-size:0.875rem;font-weight:600;color:var(--ink);list-style:none;display:flex;gap:10px;align-items:baseline}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:'+';font-family:var(--mono);color:var(--accent);font-size:0.875rem;line-height:1}
+details[open] summary::before{content:'−'}
+details p,details ul{margin-top:8px}
+details summary .tag-id{font-family:var(--mono);font-size:0.6875rem;color:var(--soft);font-weight:400}
+.callout{border-left:2px solid var(--accent);padding:2px 0 2px 16px;margin:18px 0}
+.callout p{color:var(--ink)}
+.term{background:#fff;border:1px solid var(--rule);border-radius:6px;padding:16px 18px;overflow-x:auto;margin-top:14px}
+.term pre{font-family:var(--mono);font-size:0.75rem;line-height:1.65;color:var(--muted);white-space:pre}
+.term pre b{color:var(--ink);font-weight:600}
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.pill{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.06em;color:var(--muted);border:1px solid var(--rule);border-radius:3px;padding:2px 8px;background:#fff}
+.dev{font-family:var(--mono);font-size:0.625rem;letter-spacing:0.06em;color:var(--accent-ink);background:rgba(235,108,54,0.08);border:1px solid rgba(235,108,54,0.28);border-radius:3px;padding:1px 6px}
+body.hide-dev .dev{display:none}
+.foot{margin-top:64px;padding-top:24px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:0.6875rem;letter-spacing:0.05em;color:var(--soft);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .dgm .nd{transition:none}
+  .btn,.toggle input::after{transition:none}
+}
+@media print{
+  .nav,.stager,.filters{display:none!important}
+  .shell{display:block;max-width:none;padding:0}
+  .figbox,.tbl-wrap,.card{break-inside:avoid}
+  .dgm{min-width:0}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+<noscript><p class="figcap" style="margin:0 0 24px">本页七张图均为内联 SVG，未启用 JavaScript 时静态即可完整阅读；图注与说明文本展示默认内容，点选节点、阶段步进与偏差筛选等交互不可用。</p></noscript>
+<aside class="nav" aria-label="目录">
+  <p class="nav-eyebrow">目录</p>
+  <ol id="navlist">
+    <li><a href="#s1"><span class="num">01</span>目标与不变量</a></li>
+    <li><a href="#s2"><span class="num">02</span>全景视图</a></li>
+    <li><a href="#s3"><span class="num">03</span>六块主干</a></li>
+    <li><a href="#s4"><span class="num">04</span>一次回合</a></li>
+    <li><a href="#s5"><span class="num">05</span>进程边界</a></li>
+    <li><a href="#s6"><span class="num">06</span>驱动源与投递</a></li>
+    <li><a href="#s7"><span class="num">07</span>准入与装配</a></li>
+    <li><a href="#s8"><span class="num">08</span>内核契约</a></li>
+    <li><a href="#s9"><span class="num">09</span>安全与确认</a></li>
+    <li><a href="#s10"><span class="num">10</span>存储边界</a></li>
+    <li><a href="#s11"><span class="num">11</span>承诺与可变</a></li>
+    <li><a href="#s12"><span class="num">12</span>偏差与排期</a></li>
+    <li><a href="#s13"><span class="num">13</span>SDK 化覆盖</a></li>
+  </ol>
+  <label class="toggle"><input type="checkbox" id="devtoggle" checked>显示「今天的偏差」</label>
+  <p class="hint">图中节点可点选<br>查看职责与依据</p>
+</aside>
+
+<main>
+
+<header class="head">
+  <p class="eyebrow">SpaceAssistant · 架构理想态 · v0.1.8</p>
+  <h1>一个内核，加若干装配层与驱动源</h1>
+  <p class="lede">Core 只做一件事：给定<strong>这次要什么</strong>（session / messages / profile / limits）、<strong>结果往哪里说</strong>（events），跑完这一次调用。它不认识业务身份、数据库、窗口；桌面界面、飞书 / 微信、定时器、事件源都只是<strong>调用者</strong>，不是宿主。</p>
+  <div class="meta">
+    <span><b>状态</b> 待评审</span>
+    <span><b>基线</b> 工作区 HEAD <code>6fea42c1</code> · v0.1.8</span>
+    <span><b>摸排</b> 2026-09-12</span>
+    <span><b>复核</b> 2026-09-16</span>
+    <span><b>节号</b> 页内 01 – 13，正文引用同此</span>
+    <span><b>自足</b> 单文件 · 不引用其他文档，结论与依据全部写在页内</span>
+  </div>
+</header>
+
+<section id="s1">
+  <h2><span class="sec-num">01</span>产品目标与架构不变量</h2>
+  <p class="lead">要落地的三类能力 —— 自动审批、SubAgent、后台（管家）Agent —— 都需要<strong>可独立发起、可无窗口、可嵌套的 Agent 调用</strong>；而今天的 Core 把「跑一次 Agent」等同于「跑一轮会话回合」。所以这一轮不是加功能，而是<strong>把 Core 的调用方式打开</strong>。</p>
+
+  <h3>要支撑的五种形态</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>#</th><th>形态</th><th>目标</th><th>架构落点</th></tr></thead>
+      <tbody>
+        <tr><td><strong>基线</strong></td><td><strong>桌面 Agent</strong></td><td>界面发起对话、多轮工具调用、确认卡片实时交互；界面既是发起方，也是结果的观察者</td><td><code><a href="#s5">第 5 节</a></code> <code><a href="#s6">第 6 节</a></code> <code><a href="#s8">第 8 节「一次调用」</a></code></td></tr>
+        <tr><td>A</td><td><strong>自动审批 Agent</strong></td><td>需要确认的工具调用由 Agent 依据事实自动裁决，而不是弹卡片等人</td><td><code><a href="#s9">第 9 节「确认通道」</a></code> <code><a href="#s7">第 7 节「定制入口」</a></code></td></tr>
+        <tr><td>B</td><td><strong>SubAgent</strong></td><td>主 Agent 派生一个子 Agent，独立上下文与模型，结果回灌父上下文</td><td><code><a href="#s8">第 8 节「一次调用」</a></code> <code><a href="#s7">第 7 节「模型与思维强度」</a></code></td></tr>
+        <tr><td>C1</td><td><strong>纯后台 Agent</strong></td><td>托盘 / 无窗口状态下 Agent 照常运行，界面只是观察者</td><td><code><a href="#s6">第 6 节</a></code> <code><a href="#s5">第 5 节</a></code></td></tr>
+        <tr><td>C2</td><td><strong>后台管家 Agent</strong></td><td>远程指令托管 + 定时 / 事件任务托管（C1 的业务载体）</td><td><code><a href="#s7">第 7 节</a></code> <code><a href="#s10">第 10 节</a></code> <code><a href="#s6">第 6 节</a></code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>桌面形态是<strong>基线，不是特例</strong>：它是今天唯一在跑的生产形态，A / B / C1 / C2 都相对它定义；但它也是耦合最重的一处 —— 它是唯一「驱动源与观察者重合」的形态，同一处界面既发起回合又承接结果，「谁发起」与「往哪画」混成一件由渲染进程掌管的事。<span class="dev">偏差 1 · 9 · 11 · 12</span></p>
+  <p>本节只有一条用意：<strong>这些形态都不该让 Core 里多出一个 <code>if</code></strong> —— 它们的差异全部落在「带什么配置、谁发起、记在哪、给谁看」。</p>
+
+  <h3>六条架构不变量（全文的「宪法」）</h3>
+  <p>后面每一节都是它的展开。展开条目看职责与边界。</p>
+  <details>
+    <summary><span>一次调用可独立发起</span><span class="tag-id">不变量 1</span></summary>
+    <p>不要求窗口、不要求用户在场、不要求它是某个用户回合的一部分。<strong>但会话仍然要有</strong>，它是归属与落盘的载体；且「会话」不等于「用户会话」—— 归属与可见性是两个维度，内部调用有自己的会话，只是归属 <code>internal</code>、可见性 <code>hidden</code>。真正禁止的只有两件事：会话与窗口 / 回合的存活绑死；「会话只能由用户消息催生」。</p>
+    <p><span class="dev">今天：<code>sender</code> 必填；窗口存活决定回合存亡</span></p>
+  </details>
+  <details>
+    <summary><span>Core 不认识业务身份</span><span class="tag-id">不变量 2</span></summary>
+    <p>审批 Agent、SubAgent、管家 Agent 都是<strong>调用方</strong>，不是 Core 的变体。</p>
+  </details>
+  <details>
+    <summary><span>安全门控不可绕过，标准只有一套</span><span class="tag-id">不变量 3</span></summary>
+    <p>判定顺序、fail-closed 兜底、底线规则不接受配置替换；「谁回答确认」可插拔，且与「从哪个入口进来」正交。<strong>父级的审批不向子调用泄漏</strong>：子调用的放行集合是<strong>替换</strong>而非继承，父批过的那一次不构成子那一次的授权。</p>
+  </details>
+  <details>
+    <summary><span>可见性不由 Agent 自己声明</span><span class="tag-id">不变量 4</span></summary>
+    <p>Agent 只声明归属意图；能不能进用户会话列表、能不能被跨会话搜索到，由宿主与存储决定。</p>
+  </details>
+  <details>
+    <summary><span>内部调用是证据与输入，不是授权</span><span class="tag-id">不变量 5</span></summary>
+    <p>审批 / SubAgent 的记录必须落盘（安全审计加 Agent 自我优化），但「上次批过」不构成「这次批准」。</p>
+  </details>
+  <details>
+    <summary><span>先持久化，再投递（只约束终态与结果）</span><span class="tag-id">不变量 6</span></summary>
+    <p>需要送达、可重试、可补投的东西 —— 消息终态、调用结果、汇报通知 —— 必须先落盘再投递。投递不可达不等于失败：投递是驱动源路由，Agent 只声明意图。<strong>过程性事实流</strong>（工具活动、文本与思考增量、进度心跳）不受此约束：直接投递，不以落盘为前提，投递侧允许丢失。判据是「丢了会不会损害真相」。</p>
+    <p>并且：<strong>「不丢」不等于「一定被看到」</strong>。落盘保证结果永远可查，投递只是尽力而为，所以补投必须<strong>有界</strong>（带 TTL、被更新结果取代、送达后不重复），否则「不丢失」会变成「无限打扰」。</p>
+  </details>
+</section>
+
+<section id="s2">
+  <h2><span class="sec-num">02</span>全景视图：两个进程，三层内容</h2>
+  <p class="lead">从上到下是「意图 → 协议 → 主干」的推导顺序，<strong>不是调用顺序</strong>。主进程有两条并列的线：Agent 模块（六块主干）与业务模块，后者不参与 Agent 回合。</p>
+
+  <figure>
+    <div class="figframe"><span class="ft">图 A · 两个进程、三层内容</span><span class="fk">architecture · 5 nodes</span></div>
+    <div class="figbox">
+      <svg class="dgm" id="dgm-a" viewBox="0 0 1000 620" role="img" aria-labelledby="dgma-t dgma-d" xmlns="http://www.w3.org/2000/svg">
+        <title id="dgma-t">SpaceAssistant 全景：两个进程、三层内容</title>
+        <desc id="dgma-d">全景架构图：外部世界的四类输入经渲染进程的驱动源界面汇入主进程，由 Agent 主干六块执行，事实流与失效通知回流到界面；业务界面与 Agent 主干并列，直接调用主进程的业务模块。</desc>
+        <defs>
+          <marker id="a-ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="a-ar-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+        <rect width="1000" height="620" fill="#f5f5f5"/>
+
+        <!-- zones (painted first) -->
+        <rect class="zone" x="40" y="32" width="920" height="120" rx="8"/>
+        <rect class="mask" x="56" y="36" width="268" height="14" rx="2"/>
+        <text class="ey" x="60" y="47">EXTERNAL WORLD</text>
+        <text class="zl" x="176" y="47">外部世界：四类发起方</text>
+
+        <rect class="zone" x="40" y="200" width="920" height="128" rx="8"/>
+        <rect class="mask" x="56" y="204" width="300" height="14" rx="2"/>
+        <text class="ey" x="60" y="215">RENDERER PROCESS</text>
+        <text class="zl" x="176" y="215">渲染进程 · 界面交互层</text>
+
+        <rect class="zone" x="40" y="376" width="920" height="168" rx="8"/>
+        <rect class="mask" x="56" y="380" width="208" height="14" rx="2"/>
+        <text class="ey" x="60" y="391">MAIN PROCESS</text>
+        <text class="zl" x="176" y="391">主进程</text>
+
+        <!-- arrows -->
+        <path d="M 300,128 V 248" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#a-ar)"/>
+        <path d="M 280,312 V 424" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#a-ar)"/>
+        <path d="M 380,424 V 312" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#a-ar)"/>
+        <path d="M 700,312 V 424" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#a-ar)"/>
+
+        <!-- arrow labels -->
+        <rect class="mask" x="128" y="176" width="160" height="14" rx="2"/>
+        <text class="alc" x="288" y="187" text-anchor="end">意图：发了什么 / 点了什么</text>
+        <rect class="mask" x="188" y="356" width="84" height="14" rx="2"/>
+        <text class="alc" x="268" y="367" text-anchor="end">IPC 驱动协议</text>
+        <rect class="mask" x="388" y="356" width="160" height="14" rx="2"/>
+        <text class="alc" x="392" y="367">事实 · 失效通知 · 确认请求</text>
+        <rect class="mask" x="708" y="356" width="140" height="14" rx="2"/>
+        <text class="alc" x="712" y="367">业务 IPC（不经 Agent）</text>
+
+        <!-- node: external world (4 chips inside) -->
+        <g class="nd" data-head="外部世界：四类发起方" data-note="用户操作（桌面）· 飞书 / 微信（远端）· 定时器 · 事件源。它们是同一层的四类输入，差别只落在「谁发起、结果返回给谁」，不改变主干任何一块的行为。">
+          <rect class="mask" x="200" y="72" width="600" height="56" rx="6"/>
+          <rect class="box ext" x="200" y="72" width="600" height="56" rx="6"/>
+          <rect x="236" y="88" width="120" height="24" rx="4" fill="#f5f5f5" stroke="rgba(45,49,66,0.16)" stroke-width="1"/>
+          <text class="nm" x="296" y="104" text-anchor="middle">用户操作</text>
+          <rect x="372" y="88" width="120" height="24" rx="4" fill="#f5f5f5" stroke="rgba(45,49,66,0.16)" stroke-width="1"/>
+          <text class="nm" x="432" y="104" text-anchor="middle">飞书 · 微信</text>
+          <rect x="508" y="88" width="120" height="24" rx="4" fill="#f5f5f5" stroke="rgba(45,49,66,0.16)" stroke-width="1"/>
+          <text class="nm" x="568" y="104" text-anchor="middle">定时器</text>
+          <rect x="644" y="88" width="120" height="24" rx="4" fill="#f5f5f5" stroke="rgba(45,49,66,0.16)" stroke-width="1"/>
+          <text class="nm" x="704" y="104" text-anchor="middle">事件源</text>
+        </g>
+
+        <!-- node: driver-side UI -->
+        <g class="nd" data-head="驱动源界面（桌面驱动源的一部分）" data-note="对话流、确认卡片、运行态与进度。它与主进程的窗口外壳（BrowserWindow / Tray / Menu）、两者之间的 IPC 协议，三者是同一个驱动源的实现，不该与 IM 网关并列。渲染进程只表达意图并渲染结果，不做决定。">
+          <rect class="mask" x="160" y="248" width="280" height="64" rx="6"/>
+          <rect class="box" x="160" y="248" width="280" height="64" rx="6"/>
+          <rect class="tag" x="168" y="256" width="40" height="12" rx="2" stroke="rgba(45,49,66,0.40)"/>
+          <text class="ey" x="188" y="265" text-anchor="middle">UI</text>
+          <text class="nm" x="300" y="278" text-anchor="middle">驱动源界面</text>
+          <text class="dl" x="300" y="296" text-anchor="middle">对话流 · 确认卡片 · 运行态</text>
+        </g>
+
+        <!-- node: business UI -->
+        <g class="nd" data-head="业务界面（应用域）" data-note="文件树、搜索、设置、Wiki、浏览器、终端。它们与 Agent 正交：不参与 Agent 回合，只有当 Agent 把这些能力当工具使用时才进入链路。">
+          <rect class="mask" x="560" y="248" width="280" height="64" rx="6"/>
+          <rect class="box" x="560" y="248" width="280" height="64" rx="6"/>
+          <rect class="tag" x="568" y="256" width="48" height="12" rx="2" stroke="rgba(45,49,66,0.40)"/>
+          <text class="ey" x="592" y="265" text-anchor="middle">APP</text>
+          <text class="nm" x="700" y="278" text-anchor="middle">业务界面</text>
+          <text class="dl" x="700" y="296" text-anchor="middle">文件 · 搜索 · 设置 · Wiki · 终端</text>
+        </g>
+
+        <!-- node: agent skeleton -->
+        <g class="nd" data-head="Agent 主干（六块）" data-note="Core / Runtime / Driver / Safety / Storage / Utils —— Agent 能力的骨架：谁发起、装配什么、怎么执行、安不安全、记在哪。主干不为任何业务形态加分支，这是可复用性的全部来源。">
+          <rect class="mask" x="120" y="424" width="360" height="80" rx="6"/>
+          <rect class="box focal" x="120" y="424" width="360" height="80" rx="6"/>
+          <rect class="tag" x="128" y="432" width="52" height="12" rx="2" stroke="rgba(235,108,54,0.40)"/>
+          <text class="ey" x="154" y="441" text-anchor="middle">AGENT</text>
+          <text class="nm" x="300" y="458" text-anchor="middle">Agent 主干（六块）</text>
+          <text class="mn" x="300" y="476" text-anchor="middle" letter-spacing="0.02em">Core · Runtime · Driver · Safety · Storage · Utils</text>
+        </g>
+
+        <!-- node: business modules -->
+        <g class="nd" data-head="业务模块（应用域的主进程侧）" data-note="文件、搜索、设置、Wiki、浏览器、终端、会话备份导出。一部分与 Core 共享底层能力（文件读取既是文件树界面的能力，也是 Core 的工具），但共享能力不等于同一层。">
+          <rect class="mask" x="560" y="424" width="320" height="80" rx="6"/>
+          <rect class="box" x="560" y="424" width="320" height="80" rx="6"/>
+          <rect class="tag" x="568" y="432" width="52" height="12" rx="2" stroke="rgba(45,49,66,0.40)"/>
+          <text class="ey" x="594" y="441" text-anchor="middle">APP</text>
+          <text class="nm" x="720" y="458" text-anchor="middle">业务模块（应用域）</text>
+          <text class="dl" x="720" y="476" text-anchor="middle">文件 · 搜索 · 设置 · Wiki · 浏览器 · 终端</text>
+        </g>
+
+        <!-- aside -->
+        <text class="dl2" x="120" y="528">业务模块与 Agent 主干正交：不参与 Agent 回合，仅在「被 Agent 当工具调用」时进入链路。</text>
+
+        <!-- legend -->
+        <line x1="40" y1="560" x2="960" y2="560" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text class="ey" x="40" y="576">LEGEND</text>
+        <rect x="40" y="584" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text class="dl" x="62" y="593">焦点层</text>
+        <rect x="130" y="584" width="14" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text class="dl" x="152" y="593">主干与外框</text>
+        <rect x="260" y="584" width="14" height="12" rx="2" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+        <text class="dl" x="282" y="593">界面与输入</text>
+        <rect x="400" y="584" width="14" height="12" rx="2" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text class="dl" x="422" y="593">外部与业务</text>
+        <line x1="540" y1="590" x2="568" y2="590" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#a-ar)"/>
+        <text class="dl" x="576" y="593">请求与意图</text>
+        <line x1="700" y1="590" x2="728" y2="590" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#a-ar)"/>
+        <text class="dl" x="736" y="593">事实与通知</text>
+      </svg>
+    </div>
+    <div class="note" data-panel="dgm-a">
+      <p class="nt">点选图中任一节点</p>
+      <p class="nh">两个进程，三层内容</p>
+      <p>外部世界只产生意图；渲染进程只表达意图与渲染结果；主进程是唯一做决定的地方。窗口外壳虽被 Electron 强制放在主进程，但与渲染进程的界面同属<strong>一个驱动源</strong>。</p>
+    </div>
+    <p class="figcap">主进程侧唯一桥是 <code>preload → window.api</code>：所有 IPC 通道名都在此定义，渲染进程处在不可信边界（contextIsolation），任何「渲染进程说了算」的地方都是安全缺口。</p>
+  </figure>
+
+  <h3>三层内容的定位</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>层</th><th>定位（一句话）</th><th>承载</th><th>归属</th></tr></thead>
+      <tbody>
+        <tr><td><strong>界面交互</strong></td><td>表达用户意图、渲染结果；<strong>不做决定</strong></td><td>渲染进程（外壳窗口在主进程）</td><td>Driver 的界面部分 + 业务界面</td></tr>
+        <tr><td><strong>业务逻辑</strong><br>（应用域）</td><td>与 Agent 正交的产品功能，各自有界面与主进程侧能力</td><td>渲染进程的业务界面 + 主进程的业务模块</td><td><strong>不属于六块中的任何一块</strong></td></tr>
+        <tr><td><strong>主干</strong>（六块）</td><td>Agent 能力的骨架：谁发起、装配什么、怎么执行、安不安全、记在哪</td><td>主进程</td><td>Core / Safety / Runtime / Driver / Storage / Utils</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><p>一个重要区分：审批 Agent、SubAgent、管家 Agent <strong>不是新增业务逻辑层</strong>，而是主干的使用方式 —— 差异全部落在「配置什么、谁发起、记在哪、给谁看」。主干不为任何业务形态加分支，这是可复用性的全部来源。</p></div>
+</section>
+<section id="s3">
+  <h2><span class="sec-num">03</span>六块主干与依赖方向</h2>
+  <p class="lead">「Core / Runtime / Utils」三分是主轴，展开后是六块 —— 其中两块必须单列（Safety、Storage），一块要再切一刀（Runtime）。依赖方向决定「能不能换」。</p>
+
+  <figure>
+    <div class="figframe"><span class="ft">图 B · 六块主干与依赖方向</span><span class="fk">architecture · 6 nodes · 2 focal</span></div>
+    <div class="figbox">
+      <svg class="dgm" id="dgm-b" viewBox="0 0 1000 560" role="img" aria-labelledby="dgmb-t dgmb-d" xmlns="http://www.w3.org/2000/svg">
+        <title id="dgmb-t">六块主干与依赖方向</title>
+        <desc id="dgmb-d">架构图：Driver 经 Runtime 装配后调用 Core，Safety 在 Core 的判定路径上并与 Core 之间有一条运行期递归边，五块共同使用 Storage，Utils 作为不持有语义的支撑层。</desc>
+        <defs>
+          <marker id="b-ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="b-ar-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+        <rect width="1000" height="560" fill="#f5f5f5"/>
+
+        <!-- arrows first -->
+        <path d="M 220,156 H 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#b-ar)"/>
+        <path d="M 460,156 H 520" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#b-ar)"/>
+        <path d="M 700,172 H 760" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#b-ar)"/>
+        <path d="M 760,140 H 700" fill="none" stroke="#eb6c36" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#b-ar-accent)"/>
+        <path d="M 610,192 V 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#b-ar)"/>
+        <path d="M 370,192 V 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#b-ar)"/>
+        <path d="M 860,192 V 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#b-ar)"/>
+
+        <!-- arrow labels -->
+        <rect class="mask" x="236" y="134" width="28" height="14" rx="2"/>
+        <text class="alc" x="250" y="145" text-anchor="middle">装配</text>
+        <rect class="mask" x="464" y="134" width="52" height="14" rx="2"/>
+        <text class="al" x="490" y="145" text-anchor="middle">Invocation</text>
+        <rect class="mask" x="710" y="150" width="40" height="14" rx="2"/>
+        <text class="alc" x="730" y="161" text-anchor="middle">不可绕</text>
+        <rect class="mask" x="704" y="120" width="52" height="14" rx="2"/>
+        <text class="alc" x="730" y="131" text-anchor="middle">嵌套调用</text>
+        <rect class="mask" x="306" y="228" width="56" height="14" rx="2"/>
+        <text class="alc" x="362" y="239" text-anchor="end">准入状态</text>
+        <rect class="mask" x="622" y="228" width="114" height="14" rx="2"/>
+        <text class="mn" x="626" y="239">loadContext / persist</text>
+        <rect class="mask" x="872" y="228" width="32" height="14" rx="2"/>
+        <text class="alc" x="876" y="239">审计</text>
+
+        <!-- node: driver -->
+        <g class="nd" data-head="Driver · 驱动源" data-note="只回答「谁发起、何时发起、结果给谁」。四类：桌面界面、远端输入方（飞书 / 微信）、定时、事件。Driver 不直接调 Core —— 新驱动源必须走 Runtime 装配。">
+          <rect class="mask" x="40" y="120" width="180" height="72" rx="6"/>
+          <rect class="box" x="40" y="120" width="180" height="72" rx="6"/>
+          <text class="nm" x="130" y="152" text-anchor="middle">驱动源 Driver</text>
+          <text class="dl" x="130" y="172" text-anchor="middle">谁发起 · 结果给谁</text>
+        </g>
+
+        <!-- node: runtime -->
+        <g class="nd" data-head="Runtime · 准入与装配" data-note="唯一的装配点，回答三个问题：这次能不能跑（准入：并发 / 速率 / 配额）、带什么（Profile / Tools / Skill / 模型解析）、过程往哪里说（事件出口实现）。运行期才发起的嵌套调用也在这里被装成「调用器」。">
+          <rect class="mask" x="280" y="120" width="180" height="72" rx="6"/>
+          <rect class="box" x="280" y="120" width="180" height="72" rx="6"/>
+          <text class="nm" x="370" y="152" text-anchor="middle">装配 Runtime</text>
+          <text class="dl" x="370" y="172" text-anchor="middle">能不能跑 · 带什么</text>
+        </g>
+
+        <!-- node: core -->
+        <g class="nd" data-head="Core · 内核" data-note="推理循环、上下文装配、工具执行、事实与事件产出、执行预算与取消。对外只暴露一个 Invocation，不认识表、SQLite、窗口，也不认识业务身份。换了它，执行语义就变了。">
+          <rect class="mask" x="520" y="120" width="180" height="72" rx="6"/>
+          <rect class="box focal" x="520" y="120" width="180" height="72" rx="6"/>
+          <text class="nm" x="610" y="152" text-anchor="middle">内核 Core</text>
+          <text class="dl" x="610" y="172" text-anchor="middle">推理 · 工具 · 事实</text>
+        </g>
+
+        <!-- node: safety -->
+        <g class="nd" data-head="Safety · 安全与审计" data-note="策略引擎与门控、确认通道解析、缓存写入准入、审计落盘。在 Core 的判定路径上不可绕；只依赖端口、不依赖 Runtime —— 回答者是「审批 Agent」时，它会经 invokeApproval 发起一次嵌套 Core 调用，这是全文唯一一条判定路径回到 Core 的边。">
+          <rect class="mask" x="760" y="120" width="200" height="72" rx="6"/>
+          <rect class="box focal" x="760" y="120" width="200" height="72" rx="6"/>
+          <text class="nm" x="860" y="152" text-anchor="middle">安全 Safety</text>
+          <text class="dl" x="860" y="172" text-anchor="middle">门控 · 确认 · 审计</text>
+        </g>
+
+        <!-- node: storage -->
+        <g class="nd" data-head="Storage · 持久化" data-note="会话与消息（含内部会话 / 内部调用记录）、安全审计文件、决策缓存。语义敏感：归属、可见性、只追加、保留期。它被 Core（经两个端口）、Safety、Runtime、Driver 共同使用，但不反向依赖任何人。">
+          <rect class="mask" x="280" y="280" width="680" height="64" rx="6"/>
+          <rect class="box store" x="280" y="280" width="680" height="64" rx="6"/>
+          <text class="nm" x="620" y="308" text-anchor="middle">存储 Storage</text>
+          <text class="dl" x="620" y="328" text-anchor="middle">会话与消息 · 内部会话 · 审计文件 · 决策缓存</text>
+        </g>
+
+        <!-- node: utils -->
+        <g class="nd" data-head="Utils · 支撑" data-note="日志、脱敏、路径安全、加解密机制、i18n 机制、纯逻辑与类型。可以被任何一层使用，但不得持有语义；删掉它不影响正确性，只影响质量或便利。">
+          <rect class="mask" x="40" y="400" width="920" height="56" rx="6"/>
+          <rect class="box util" x="40" y="400" width="920" height="56" rx="6"/>
+          <text class="nm" x="76" y="432">Utils 支撑层</text>
+          <text class="mn" x="204" y="432">agentLogger · logSanitize · pathSecurity · secureApiKey · i18n · shared/</text>
+        </g>
+
+        <text class="dl2" x="40" y="480">Utils 被任何一层使用，但不持有语义；删掉它只损失质量或便利，不改变语义。</text>
+
+        <!-- legend -->
+        <line x1="40" y1="504" x2="960" y2="504" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text class="ey" x="40" y="520">LEGEND</text>
+        <rect x="40" y="528" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text class="dl" x="62" y="537">焦点层（Core / Safety）</text>
+        <rect x="300" y="528" width="14" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text class="dl" x="322" y="537">主干层</text>
+        <rect x="410" y="528" width="14" height="12" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text class="dl" x="432" y="537">存储</text>
+        <line x1="520" y1="534" x2="548" y2="534" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3"/>
+        <text class="dl" x="556" y="537">端口 · 递归 · 支撑</text>
+      </svg>
+    </div>
+    <div class="note" data-panel="dgm-b">
+      <p class="nt">点选图中任一节点</p>
+      <p class="nh">依赖方向决定「能不能换」</p>
+      <p>Core 不 import 任何宿主模块，只用注入的端口；Runtime 是唯一装配点；Safety 在判定路径上不可绕，且只依赖端口；Storage 被各方使用但不反向依赖谁。</p>
+    </div>
+  </figure>
+
+  <h3>六块职责与今天的对应代码</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>层</th><th>职责</th><th>判据</th><th>今天的代码</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Core</strong><br>Agent 内核</td><td>推理循环、上下文装配、工具执行、事实与事件产出、执行预算与取消</td><td>换了它，执行语义就变了；对外只暴露 Invocation</td><td><code>toolChatLoop.ts</code>、<code>tools/</code>、<code>assistantFactAggregator</code>、<code>sessionEvents</code></td></tr>
+        <tr><td><strong>Safety</strong><br>安全与审计</td><td>策略引擎与门控、确认通道解析、缓存写入准入、审计落盘</td><td><strong>不可被 Runtime 的配置绕过</strong>；策略内容在外，底线在此</td><td><code>src/shared/policy/</code>、<code>confirmation/</code></td></tr>
+        <tr><td><strong>Runtime</strong><br>准入与宿主装配</td><td><strong>准入</strong>（并发 / 速率 / 配额），加把宿主的东西装配成一次 Invocation：Profile 解析、Tools 与 Skill 供给、模型与服务解析、事件出口实现、Turn 协调</td><td>只回答「这次能不能跑、带什么、过程往哪里说」</td><td><code>turnExecutionConfig.ts</code>、<code>effectiveTools.ts</code>、<code>skills/</code>、<code>llmServiceResolver.ts</code>、<code>turnRuntime</code></td></tr>
+        <tr><td><strong>Driver</strong><br>驱动源</td><td>四类发起者：桌面界面、远端输入方、定时、事件；各自负责「怎么收指令、结果怎么回去」</td><td>只回答「谁发起、何时发起、结果给谁」</td><td><code>main.ts</code>、<code>tray</code> / <code>menu</code>、<code>appIpc.ts</code> / <code>preload.ts</code>、<code>feishu/</code>、<code>wechat/</code>、<code>remote/</code></td></tr>
+        <tr><td><strong>Storage</strong><br>持久化</td><td>会话与消息（含内部会话 / 内部调用记录）、安全审计文件、决策缓存</td><td>语义敏感：归属、可见性、只追加、保留期</td><td><code>database/</code>、<code>sessionBackupManager</code></td></tr>
+        <tr><td><strong>Utils</strong><br>支撑</td><td>日志、脱敏、路径安全、加解密机制、i18n、纯逻辑与类型</td><td>删掉它不影响语义，只影响质量或便利</td><td><code>agentLogger/</code>、<code>logSanitize</code>、<code>pathSecurity</code>、<code>secureApiKey</code>、<code>src/shared/</code> 纯逻辑</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>四条判据（决定一块东西该放哪层）</h3>
+  <ol class="plain">
+    <li>换了它，执行语义或安全语义会变吗？会 → Core 或 Safety，<strong>不可被配置替换</strong>。</li>
+    <li>它被调用方伪造，会越权吗？会 → 必须在 Core / Safety 侧有不可覆盖的校验。</li>
+    <li>它只是「把宿主的东西装配成一次调用」吗？是 → Runtime；它决定「何时发起、结果给谁」吗？是 → Driver。</li>
+    <li>删掉它，系统还正确吗（只损失质量或便利）？是 → Utils。</li>
+  </ol>
+
+  <h3>依赖方向：五条纪律</h3>
+  <ul class="plain">
+    <li><strong>Core 不 import 任何宿主模块</strong>，只使用注入的端口。</li>
+    <li><strong>Runtime 是唯一的装配点</strong>：Profile、Tools、Skill、模型解析、事件出口实现都在这里装成一次 Invocation；运行期才发起的嵌套调用也不例外。<strong>Driver 不直接调 Core</strong>。</li>
+    <li><strong>Safety 在 Core 的判定路径上，不可绕</strong>；它读的「生效规则」随 Invocation 传入，自己不去读库，也不依赖 Runtime（只依赖端口）。</li>
+    <li><strong>准入在 Runtime、配额状态在 Storage</strong>：跨调用的全局约束不属于任何一次调用，因此不进 Core 的 <code>limits</code>；嵌套调用同样过准入、不豁免。</li>
+    <li><strong>Storage 被 Core（经两个端口）、Safety、Runtime、Driver 共同使用</strong>，不反向依赖任何人；<strong>Utils 可被任何一层使用，但不得持有语义</strong>。</li>
+  </ul>
+
+  <h3>横切关注点：机制 / 内容 / 状态三分</h3>
+  <p>i18n、日志、脱敏同时带着「机制 + 内容 + 状态」三种成分，<strong>不该单列成一层</strong>，否则三种判据不同的东西混在一起。</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>关注点</th><th>机制（Utils）</th><th>内容（数据）</th><th>状态（谁持有）</th></tr></thead>
+      <tbody>
+        <tr><td><strong>i18n</strong></td><td>渲染端 i18next：<code>t()</code>、类型推导、回退、<code>i18n:check</code></td><td>翻译资源，zh-CN 为真源；主进程菜单另有一份手写字典 <span class="dev">偏差 13</span></td><td>界面语言属 <strong>Driver</strong>：<code>config.locale</code> + <code>localStorage[sa_locale]</code> 两份副本</td></tr>
+        <tr><td><strong>日志</strong></td><td>写盘、按日分文件、JSON Lines</td><td><strong>事件名与字段的白名单</strong>：事件名是闭合联合，字段经投影</td><td>日志目录：开发态项目根 <code>logs/</code>、打包态 <code>{workDir}/.agent/logs</code>；<span class="dev">今天没有保留期与轮转 · 偏差 14</span></td></tr>
+        <tr><td><strong>脱敏</strong></td><td>通用净化与长度上限：<code>sanitizeForLog</code>、128KB 截断</td><td><strong>按领域的字段规则</strong>：飞书一套、微信一套，写入前预处理</td><td>无独立状态：在<strong>唯一写入入口</strong>施加</td></tr>
+        <tr><td><strong>遥测 / 审计</strong></td><td>审计写入机制：只追加、独立物理隔离、按天切分、写入前脱敏</td><td>事件名与字段口径：<code>confirm.request</code> / <code>confirm.outcome</code> 与 <code>actor</code> 取值集合</td><td>位置与保留期由 <strong>Storage</strong> 持有（独立文件、保留 180 天）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="plain">
+    <li><strong>主进程不产出「文案」，只产出「键 + 参数」</strong>。错误码已是对的样板：主进程抛 <code>errorCodes.ts</code> 的码，渲染端翻译；需要主进程直接显示的地方走注入的 <code>translate(key, params)</code> 端口。</li>
+    <li><strong>日志的内容是「事件名 + 字段」，不是自由文案</strong>。它让日志同时可审计、可脱敏、可做保留期；退回自由文本，三件事会一起坏掉。</li>
+    <li><strong>脱敏规则随领域走，机制只有一套，且必须在唯一入口施加</strong>。把净化交给每个调用点「记得调用」，等于把安全性寄托在记性上。</li>
+  </ul>
+
+  <h3>三处最容易放错</h3>
+  <div class="cards">
+    <div class="card">
+      <div class="card-head"><span class="dot coral"></span><h3>Safety 不能放进 Runtime</h3></div>
+      <p>Runtime 是「改配置就改行为」的地方，而安全底线恰恰不能随配置改变 —— 放进去等于「配置可以关掉安全」。</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="dot ink"></span><h3>Storage 不能算 Utils</h3></div>
+      <p>会话归属、可见性、审计只追加、保留期都是语义，不是便利设施；把它当 Utils，结果就是「顺手把审计也删了」。</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="dot muted"></span><h3>桌面界面不能从 Driver 摘出去</h3></div>
+      <p>窗口 / 托盘 / IPC 面是同一个驱动源的三个实现部分。</p>
+      <span class="kv">今天一处越界：toolCallGate.ts:185 直接读库 —— Safety 依赖了 Storage 与宿主配置。</span>
+    </div>
+  </div>
+</section>
+<section id="s4">
+  <h2><span class="sec-num">04</span>一次回合：六块依次上场</h2>
+  <p class="lead">以「用户点发送」为例，六块依次上场 —— 括号里是同一位置的其它驱动源。这条链路就是全部：界面在第 2 步之后不再参与。</p>
+
+  <figure>
+    <div class="figframe"><span class="ft">图 C · 一次回合经过哪些块</span><span class="fk">process · 6 stages</span></div>
+    <div class="figbox">
+      <svg class="dgm" id="dgm-c" viewBox="0 0 1000 400" role="img" aria-labelledby="dgmc-t dgmc-d" xmlns="http://www.w3.org/2000/svg">
+        <title id="dgmc-t">一次回合经过哪些块</title>
+        <desc id="dgmc-d">流程图：一次 Agent 回合依次经过意图产生、进入主干、准入与装配、执行（Core 与 Safety）、观察与落盘、回投六个阶段。</desc>
+        <defs>
+          <marker id="c-ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        </defs>
+        <rect width="1000" height="400" fill="#f5f5f5"/>
+
+        <path d="M 160,184 H 200" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#c-ar)"/>
+        <path d="M 320,184 H 360" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#c-ar)"/>
+        <path d="M 480,184 H 520" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#c-ar)"/>
+        <path d="M 640,184 H 680" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#c-ar)"/>
+        <path d="M 800,184 H 840" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#c-ar)"/>
+
+        <rect class="mask" x="171" y="164" width="18" height="14" rx="2"/>
+        <text class="al" x="180" y="175" text-anchor="middle">IPC</text>
+        <rect class="mask" x="326" y="164" width="28" height="14" rx="2"/>
+        <text class="al" x="340" y="175" text-anchor="middle">drive</text>
+        <rect class="mask" x="483" y="164" width="33" height="14" rx="2"/>
+        <text class="al" x="500" y="175" text-anchor="middle">invoke</text>
+        <rect class="mask" x="646" y="164" width="28" height="14" rx="2"/>
+        <text class="al" x="660" y="175" text-anchor="middle">facts</text>
+        <rect class="mask" x="806" y="164" width="28" height="14" rx="2"/>
+        <text class="al" x="820" y="175" text-anchor="middle">route</text>
+
+        <g class="nd" data-step="1" data-head="① 意图产生" data-note="渲染进程，或飞书 / 微信、定时器、事件源。只表达意图（发了什么、点了什么），不决定用哪个模型、哪些工具、要不要确认。">
+          <rect class="mask" x="40" y="140" width="120" height="88" rx="6"/>
+          <rect class="box" x="40" y="140" width="120" height="88" rx="6"/>
+          <rect class="tag" x="48" y="148" width="48" height="12" rx="2" stroke="rgba(45,49,66,0.40)"/>
+          <text class="ey" x="72" y="157" text-anchor="middle">DRIVER</text>
+          <text class="nm" x="100" y="190" text-anchor="middle">① 意图产生</text>
+          <text class="mn" x="100" y="210" text-anchor="middle">ChatView · feishu</text>
+        </g>
+        <g class="nd" data-step="2" data-head="② 进入主干（Driver）" data-note="桌面走 IPC 驱动协议，远端走 IM 网关，定时 / 事件由主进程内的触发源直接进入。Driver 负责入站解析与身份归属：哪个输入方、映射到哪个会话域与 Profile。">
+          <rect class="mask" x="200" y="140" width="120" height="88" rx="6"/>
+          <rect class="box" x="200" y="140" width="120" height="88" rx="6"/>
+          <rect class="tag" x="208" y="148" width="48" height="12" rx="2" stroke="rgba(45,49,66,0.40)"/>
+          <text class="ey" x="232" y="157" text-anchor="middle">DRIVER</text>
+          <text class="nm" x="260" y="190" text-anchor="middle">② 进入主干</text>
+          <text class="mn" x="260" y="210" text-anchor="middle">imInboundGuard</text>
+        </g>
+        <g class="nd" data-step="3" data-head="③ 准入与装配（Runtime）" data-note="先按全局并发、速率与配额准入，再解析 Profile（模型档 / 工具能力集 / Skill / 策略档）、解析模型与服务凭据、装配事件出口实现，产出一个 Invocation。Driver 不直接调 Core。">
+          <rect class="mask" x="360" y="140" width="120" height="88" rx="6"/>
+          <rect class="box" x="360" y="140" width="120" height="88" rx="6"/>
+          <rect class="tag" x="368" y="148" width="56" height="12" rx="2" stroke="rgba(45,49,66,0.40)"/>
+          <text class="ey" x="396" y="157" text-anchor="middle">RUNTIME</text>
+          <text class="nm" x="420" y="190" text-anchor="middle">③ 准入与装配</text>
+          <text class="mn" x="420" y="210" text-anchor="middle">turnExecutionConfig</text>
+        </g>
+        <g class="nd on" data-step="4" data-head="④ 执行（Core + Safety）" data-note="Core 按会话锚点经 loadContext 装载历史并装配上下文，跑推理循环；每次工具调用都经过 Safety 的门控（规则 → 缓存 → 回答者），安全审计独立落盘。">
+          <rect class="mask" x="520" y="140" width="120" height="88" rx="6"/>
+          <rect class="box focal" x="520" y="140" width="120" height="88" rx="6"/>
+          <rect class="tag" x="528" y="148" width="40" height="12" rx="2" stroke="rgba(235,108,54,0.40)"/>
+          <text class="ey" x="548" y="157" text-anchor="middle">CORE</text>
+          <text class="nm" x="580" y="190" text-anchor="middle">④ 执行</text>
+          <text class="mn" x="580" y="210" text-anchor="middle">toolChatLoop</text>
+        </g>
+        <g class="nd" data-step="5" data-head="⑤ 观察与落盘（出口 + Storage）" data-note="执行中的事实经出口流出（无窗口时 no-op，不影响执行），会话台账与内部调用记录由 Storage 落盘。过程性事实流允许丢失，终态与结果必须先落盘。">
+          <rect class="mask" x="680" y="140" width="120" height="88" rx="6"/>
+          <rect class="box store" x="680" y="140" width="120" height="88" rx="6"/>
+          <rect class="tag" x="688" y="148" width="56" height="12" rx="2" stroke="rgba(79,93,117,0.50)"/>
+          <text class="ey" x="716" y="157" text-anchor="middle">STORAGE</text>
+          <text class="nm" x="740" y="190" text-anchor="middle">⑤ 观察与落盘</text>
+          <text class="mn" x="740" y="210" text-anchor="middle">emitFactEvent</text>
+        </g>
+        <g class="nd" data-step="6" data-head="⑥ 回投（Runtime + Driver）" data-note="调用返回 InvocationResult，Driver 按投递路由把结果送回发起方或最近可用入口；视图更新走失效通知（scope + 版本，不携带真相）。">
+          <rect class="mask" x="840" y="140" width="120" height="88" rx="6"/>
+          <rect class="box" x="840" y="140" width="120" height="88" rx="6"/>
+          <rect class="tag" x="848" y="148" width="56" height="12" rx="2" stroke="rgba(45,49,66,0.40)"/>
+          <text class="ey" x="876" y="157" text-anchor="middle">RUNTIME</text>
+          <text class="nm" x="900" y="190" text-anchor="middle">⑥ 回投</text>
+          <text class="mn" x="900" y="210" text-anchor="middle">deliver(route)</text>
+        </g>
+
+        <text class="dl2" x="40" y="272">远端（飞书 · 微信）· 定时 · 事件：第 2 步之后与桌面完全同链路 —— 界面只是观察者，窗口关闭不等于回合失败。</text>
+        <text class="dl2" x="40" y="296">审批 Agent 与 SubAgent 不新增链路：分别落在第 4 步的「回答者」与「嵌套调用」位置。</text>
+
+        <line x1="40" y1="328" x2="960" y2="328" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text class="ey" x="40" y="344">LEGEND</text>
+        <rect x="40" y="352" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text class="dl" x="62" y="361">焦点：执行</text>
+        <rect x="180" y="352" width="14" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text class="dl" x="202" y="361">驱动源与装配</text>
+        <rect x="330" y="352" width="14" height="12" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text class="dl" x="352" y="361">存储与出口</text>
+      </svg>
+    </div>
+    <div class="stager" data-stager="dgm-c">
+      <button class="btn" data-goto="1">① 意图产生</button>
+      <button class="btn" data-goto="2">② 进入主干</button>
+      <button class="btn" data-goto="3">③ 准入与装配</button>
+      <button class="btn on" data-goto="4">④ 执行</button>
+      <button class="btn" data-goto="5">⑤ 观察与落盘</button>
+      <button class="btn" data-goto="6">⑥ 回投</button>
+      <span class="sep"></span>
+      <button class="btn" data-move="-1">← 上一步</button>
+      <button class="btn" data-move="1">下一步 →</button>
+    </div>
+    <div class="note" data-panel="dgm-c">
+      <p class="nt">当前阶段 4 / 6</p>
+      <p class="nh">④ 执行（Core + Safety）</p>
+      <p>Core 按会话锚点经 <code>loadContext</code> 装载历史并装配上下文，跑推理循环；每次工具调用都经过 Safety 的门控（规则 → 缓存 → 回答者），安全审计独立落盘。</p>
+    </div>
+  </figure>
+
+  <h3>三条推论</h3>
+  <div class="cards">
+    <div class="card">
+      <div class="card-head"><span class="dot coral"></span><h3>界面只是观察者</h3></div>
+      <p>第 2 步之后就没有界面参与。无窗口、纯后台、远端触发走的是同一条链路 —— 这也是「窗口关闭不等于回合失败」的由来。</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="dot ink"></span><h3>审批与 SubAgent 不新增链路</h3></div>
+      <p>它们分别落在第 4 步的「回答者」与「嵌套调用」位置，复用同一条链路、同一套策略与审计。审批 Agent 两者兼具：在回答者位置上发起一次嵌套调用。</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="dot muted"></span><h3>业务模块不在链路上</h3></div>
+      <p>文件浏览、搜索、设置等由界面直接调用主进程的业务模块。只有当 Agent 把它们当工具使用时才进入链路 —— 这也是「用户直接操作界面不经过工具门控、Agent 调用必须经过」的由来。</p>
+    </div>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="sec-num">05</span>进程边界：主进程与渲染进程</h2>
+  <p class="lead">先把三件被混在一起的事分开：特权、职责、承载。特权决定「必须在哪里」，职责决定「属于谁」。</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>维度</th><th>回答的问题</th><th>决定什么</th></tr></thead>
+      <tbody>
+        <tr><td><strong>特权</strong></td><td>谁需要 OS 权限、密钥、文件系统访问</td><td><strong>必须</strong>在主进程（Electron 安全边界），这不是架构选择</td></tr>
+        <tr><td><strong>职责</strong></td><td>它属于六块中的哪一块</td><td>它受哪些规则约束</td></tr>
+        <tr><td><strong>承载</strong></td><td>它实际跑在主进程还是渲染进程</td><td>实现位置，可迁移</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>四条边界原则</h3>
+  <ol class="plain">
+    <li><strong>特权决定「必须在哪里」，职责决定「属于谁」</strong>。文件读取既服务「文件树界面」，也是 Core 的工具 —— 同一份底层能力，两个消费者。</li>
+    <li><strong>业务功能不属于六块中的任何一块</strong> —— 它是与 Agent 正交的「应用域」，与 Agent 只有两种关系：共享底层能力，或被 Agent 当工具使用。</li>
+    <li><strong>渲染进程只有两类东西</strong>：驱动源的界面与业务界面。<strong>渲染进程不做决定</strong> —— 不发起 / 排队 / 重试 / 取消，不拼系统提示，不自己跑技能路由。</li>
+    <li><strong>IPC 面按领域切，不按实现方便堆在一起</strong>。今天 <code>appIpc.ts</code> 把 Agent 驱动协议与桌面功能堆在同一个文件里 <span class="dev">偏差 10</span>。</li>
+  </ol>
+
+  <h3>渲染进程面对的域与归属</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>域</th><th>归属</th><th>与 Agent 的关系</th></tr></thead>
+      <tbody>
+        <tr><td>Agent 驱动协议（发起 / 取消 / 确认回执 / 事件投影）</td><td>Driver（桌面驱动源）</td><td>是 Agent 的入口与出口</td></tr>
+        <tr><td>会话与消息</td><td>Storage 的查询面 + Driver 的视图</td><td>真相在 Storage；列表按归属与可见性过滤</td></tr>
+        <tr><td>文件浏览</td><td>业务模块</td><td>与 Core 的 <code>read_file</code> / <code>list_directory</code> <strong>共享底层能力</strong></td></tr>
+        <tr><td>搜索</td><td>业务模块</td><td>同一套索引；跨会话搜索必须受归属与可见性约束（不能搜到内部调用）</td></tr>
+        <tr><td>设置</td><td>业务模块 + Safety 的配置面</td><td>安全档位变更要落审计</td></tr>
+        <tr><td>Wiki / 浏览器 / 终端</td><td>业务模块</td><td>同时可能是 Core 的工具实现</td></tr>
+        <tr><td>托盘 / 菜单 / 标题栏（Electron 外壳）</td><td>Driver（桌面驱动源）</td><td>用户点它是一次<strong>输入</strong>（发起来源）</td></tr>
+        <tr><td>浮动通知</td><td>Runtime 的出口实现</td><td><strong>输出</strong>，不是驱动源</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>一条容易被争论的规则</h3>
+  <div class="callout"><p>同一个能力被两个入口使用时，<strong>用户直接操作界面不经过工具门控，Agent 调用必须经过</strong>。理由不是「界面更可信」，而是安全模型的标的是 <strong>Agent 的自主操作</strong>：用户自己动手不等于 Agent 替他动手。</p></div>
+  <p><strong>渲染进程的信任级别</strong>：它处在不可信边界（contextIsolation，只暴露 <code>window.api</code>），任何「渲染进程说了算」的地方都是安全缺口。<span class="dev">今天只剩驱动权（偏差 9）：回合发起与出站消息分类仍在渲染端；技能路由与系统提示拼装已于 2026-09-16 收回主进程（偏差 12 已解决）</span></p>
+  <h4>交互只有两个方向</h4>
+  <ul class="plain">
+    <li><strong>主进程 → 渲染</strong>：事实流、失效通知、确认请求、投递结果。</li>
+    <li><strong>渲染 → 主进程</strong>：用户意图（发消息、取消、批准或拒绝、切换会话、改设置）。</li>
+    <li><strong>没有第三条</strong>：渲染进程不得「查询之后自己累积成真相」。</li>
+  </ul>
+</section>
+<section id="s6">
+  <h2><span class="sec-num">06</span>驱动源与结果投递</h2>
+  <p class="lead">「窗口 / 托盘 / 菜单被塞进主进程」是 <strong>Electron 的约束，不是架构意愿</strong>。真正的同级切法是<strong>驱动源</strong>：回答「谁发起、何时发起、结果返回给谁」—— 一共四类，桌面只是其中之一。</p>
+
+  <figure>
+    <div class="figframe"><span class="ft">图 D · 四类驱动源与一次投递路由</span><span class="fk">data flow · 8 nodes</span></div>
+    <div class="figbox">
+      <svg class="dgm" id="dgm-d" viewBox="0 0 1000 560" role="img" aria-labelledby="dgmd-t dgmd-d" xmlns="http://www.w3.org/2000/svg">
+        <title id="dgmd-t">四类驱动源与一次投递路由</title>
+        <desc id="dgmd-d">数据流图：桌面界面、远端输入方、定时、事件源四类驱动源把结果交给唯一的投递路由入口，再由它投递到回复型、指定型、路由型三种目标。</desc>
+        <defs>
+          <marker id="d-ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        </defs>
+        <rect width="1000" height="560" fill="#f5f5f5"/>
+
+        <!-- arrows: sources -> route -->
+        <path d="M 140,136 V 192 Q 140,200 148,200 H 360 Q 368,200 368,208 V 216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#d-ar)"/>
+        <path d="M 380,136 V 192 Q 380,200 388,200 H 448 Q 456,200 456,208 V 216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#d-ar)"/>
+        <path d="M 620,136 V 192 Q 620,200 612,200 H 552 Q 544,200 544,208 V 216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#d-ar)"/>
+        <path d="M 860,136 V 192 Q 860,200 852,200 H 640 Q 632,200 632,208 V 216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#d-ar)"/>
+        <!-- arrows: route -> targets -->
+        <path d="M 390,288 V 312 Q 390,320 382,320 H 248 Q 240,320 240,328 V 352" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#d-ar)"/>
+        <path d="M 500,288 V 352" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#d-ar)"/>
+        <path d="M 610,288 V 312 Q 610,320 618,320 H 752 Q 760,320 760,328 V 352" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#d-ar)"/>
+
+        <text class="dl2" x="40" y="52">① 每个驱动源只声明意图：给谁 · 多急 · 什么优先级 —— Agent 不知道 chat_id 与窗口句柄。</text>
+        <text class="dl2" x="40" y="308">② 宿主决定落点：发给哪个驱动源、怎么发</text>
+
+        <g class="nd" data-head="桌面界面（驱动源）" data-note="窗口、托盘、菜单与渲染进程界面，属同一个驱动源。用户点托盘或菜单是一次「输入」，与在对话流里点发送等价。">
+          <rect class="mask" x="40" y="72" width="200" height="64" rx="6"/>
+          <rect class="box input" x="40" y="72" width="200" height="64" rx="6"/>
+          <text class="nm" x="140" y="100" text-anchor="middle">桌面界面</text>
+          <text class="dl" x="140" y="120" text-anchor="middle">窗口 · 托盘 · 对话流</text>
+        </g>
+        <g class="nd" data-head="远端输入方（驱动源）" data-note="飞书 / 微信消息。入站解析与身份归属由 Driver 负责，出站投递走回复通道；回执管道也在这里，但「批准是否有效」由 Safety 判定。">
+          <rect class="mask" x="280" y="72" width="200" height="64" rx="6"/>
+          <rect class="box input" x="280" y="72" width="200" height="64" rx="6"/>
+          <text class="nm" x="380" y="100" text-anchor="middle">远端输入方</text>
+          <text class="dl" x="380" y="120" text-anchor="middle">飞书 · 微信</text>
+        </g>
+        <g class="nd" data-head="定时（驱动源，待建）" data-note="触发时刻编排属于 Driver：定时、事件的节奏与重试由触发源决定，能不能跑由 Runtime 的准入决定。">
+          <rect class="mask" x="520" y="72" width="200" height="64" rx="6"/>
+          <rect class="box input" x="520" y="72" width="200" height="64" rx="6"/>
+          <text class="nm" x="620" y="100" text-anchor="middle">定时</text>
+          <text class="dl" x="620" y="120" text-anchor="middle">定时触发 · 待建</text>
+        </g>
+        <g class="nd" data-head="事件源（驱动源，待建）" data-note="文件变化、外部 webhook 等事件触发。它同样过 Runtime 的准入与装配，不因为「不是用户发起的」而豁免。">
+          <rect class="mask" x="760" y="72" width="200" height="64" rx="6"/>
+          <rect class="box input" x="760" y="72" width="200" height="64" rx="6"/>
+          <text class="nm" x="860" y="100" text-anchor="middle">事件源</text>
+          <text class="dl" x="860" y="120" text-anchor="middle">事件触发 · 待建</text>
+        </g>
+
+        <g class="nd" data-head="投递路由（Driver 唯一入口）" data-note="不要做成「在 Runtime 里到处找 sender」。正确形态是驱动源层暴露唯一投递入口，各驱动源注册自己的可达性与投递实现，并记录送达结果。">
+          <rect class="mask" x="280" y="216" width="440" height="72" rx="6"/>
+          <rect class="box focal" x="280" y="216" width="440" height="72" rx="6"/>
+          <text class="nm" x="500" y="248" text-anchor="middle">投递路由（Driver 唯一入口）</text>
+          <text class="dl" x="500" y="268" text-anchor="middle">可达性 · 降级链 · 送达记录 · 有界补投</text>
+        </g>
+
+        <g class="nd" data-head="回复型（reply-to）" data-note="远端任务托管：向输入方请求确认、回复结果。发起者与回执通道都是确定的，没有路由难度。">
+          <rect class="mask" x="120" y="352" width="240" height="72" rx="6"/>
+          <rect class="box ext" x="120" y="352" width="240" height="72" rx="6"/>
+          <text class="nm" x="240" y="382" text-anchor="middle">回复型 reply-to</text>
+          <text class="dl" x="240" y="402" text-anchor="middle">发起者与回执通道确定</text>
+        </g>
+        <g class="nd" data-head="指定型" data-note="任务配置写明「推到微信」或「只落盘」。按配置走，不可用时按规则降级 —— 降级规则必须显式声明，不允许静默丢弃。">
+          <rect class="mask" x="380" y="352" width="240" height="72" rx="6"/>
+          <rect class="box ext" x="380" y="352" width="240" height="72" rx="6"/>
+          <text class="nm" x="500" y="382" text-anchor="middle">指定型</text>
+          <text class="dl" x="500" y="402" text-anchor="middle">按配置走 · 不可用按规则降级</text>
+        </g>
+        <g class="nd" data-head="路由型（最近可用入口）" data-note="自动化托管：定时 / 事件触发没有发起者，或发起者已不可达。路由难度最高：需要可达性判定、降级链与有界补投。用户下次出现在任一驱动源时补上，这才是「最近可用入口」的完整语义。">
+          <rect class="mask" x="640" y="352" width="240" height="72" rx="6"/>
+          <rect class="box ext" x="640" y="352" width="240" height="72" rx="6"/>
+          <text class="nm" x="760" y="382" text-anchor="middle">路由型 · 最近可用入口</text>
+          <text class="dl" x="760" y="402" text-anchor="middle">可达性 · 降级链 · 有界补投</text>
+        </g>
+
+        <text class="dl2" x="120" y="456">③ 补投必须有界：TTL 过期不再补投 · 同一取代键只送最新 · 送达记录命中即止 ——「不丢」不等于「一定被看到」。</text>
+
+        <line x1="40" y1="488" x2="960" y2="488" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text class="ey" x="40" y="504">LEGEND</text>
+        <rect x="40" y="512" width="14" height="12" rx="2" fill="rgba(79,93,117,0.10)" stroke="#7a8399" stroke-width="1"/>
+        <text class="dl" x="62" y="521">驱动源（输入）</text>
+        <rect x="210" y="512" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text class="dl" x="232" y="521">投递路由（焦点）</text>
+        <rect x="390" y="512" width="14" height="12" rx="2" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text class="dl" x="412" y="521">投递目标</text>
+      </svg>
+    </div>
+    <div class="note" data-panel="dgm-d">
+      <p class="nt">点选图中任一节点</p>
+      <p class="nh">Agent 声明意图，宿主决定落点</p>
+      <p>接口是 <code>deliver(preference, payload)</code>：Skill 给偏好（给谁、多急），宿主解析成具体驱动源并执行。Agent 不该知道 chat_id、窗口句柄这类东西。</p>
+    </div>
+  </figure>
+
+  <h3>三类投递目标与三类前提</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>目标类型</th><th>什么时候出现</th><th>路由难度</th></tr></thead>
+      <tbody>
+        <tr><td><strong>回复型</strong>（reply-to）</td><td>远端任务托管：向输入方请求确认、回复结果</td><td>无 —— 发起者与回执通道都是确定的</td></tr>
+        <tr><td><strong>指定型</strong></td><td>任务配置写明「推到微信」或「只落盘」</td><td>低 —— 按配置走，不可用时按规则降级</td></tr>
+        <tr><td><strong>路由型</strong>（最近可用入口）</td><td>自动化托管：定时 / 事件触发，没有发起者；或发起者已不可达</td><td>高 —— 需要可达性判定、降级链、补投</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>「用户下次出现时补投」需要三个前提，缺一个都会变成打扰：</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>前提</th><th>要什么</th><th>缺了会怎样</th></tr></thead>
+      <tbody>
+        <tr><td><strong>可达性信号</strong></td><td>各驱动源上报自身可达性（在线 / 离线）与「用户出现」事件，投递层订阅</td><td>投递层只能猜「谁在」，或挨个试一遍</td></tr>
+        <tr><td><strong>送达记录</strong></td><td>哪条结果、投给哪个驱动源、何时、结果如何</td><td>同一结果在多个入口重复送达</td></tr>
+        <tr><td><strong>有效期策略</strong></td><td>每条结果带 <strong>TTL</strong> 与<strong>取代键</strong></td><td>三天前的定时任务结果在用户开机时弹出</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><p><strong>「不丢」不等于「一定被看到」</strong>：落盘保证结果永远可查，投递只是尽力而为。这三条必须由<strong>产生结果的一方声明</strong>，投递层不猜 —— 只有 Skill 与任务配置知道结果的有效期与取代关系（「构建失败」几小时内都有价值，「该开会了」过点即失效）。缺失时按显式声明的默认兜底（有限 TTL）。</p></div>
+  <p><strong>与归属联动</strong>：投递到桌面，结果要在一个可见的地方出现（管家会话分区可见）；投递到 IM，走回复通道。投递目标决定结果落在哪，也就决定了会话归属与可见性的选择，两者要一起定。</p>
+
+  <h3>接入：路由、传递与决策往返</h3>
+  <p>这一块天然压在几层的接缝上，分法是<strong>「谁定语义、谁提供管道」</strong>。</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>关注点</th><th>归属</th><th>今天的代码</th></tr></thead>
+      <tbody>
+        <tr><td>入站解析与身份归属（哪个输入方、映射到哪个会话域与 Profile）</td><td><strong>Driver</strong></td><td><code>imInboundGuard.ts</code>、<code>imRateLimit.ts</code>、<code>imProcessedStore.ts</code>、<code>imSessionResolver.ts</code></td></tr>
+        <tr><td>请求 → 一次调用的装配</td><td><strong>Runtime</strong></td><td><code>turnExecutionAdapter.ts</code></td></tr>
+        <tr><td>出站投递（可达性、重试、有界补投、送达记录）</td><td><strong>Driver</strong></td><td><code>imRemoteOutbound.ts</code>、<code>remoteProgressCoordinator.ts</code></td></tr>
+        <tr><td>传输细节（限流、去重、退避）</td><td><strong>Driver 的实现</strong>，通用部分下沉 <strong>Utils</strong></td><td><code>imRateLimit.ts</code>、<code>imProcessedStore.ts</code></td></tr>
+        <tr><td>决策请求的语义（问什么、谁能答、多久过期）</td><td><strong>Safety</strong></td><td><code>remoteConfirmPolicy.ts</code>、<code>confirmId.ts</code></td></tr>
+        <tr><td>回执管道（把回答带回来）</td><td><strong>Driver</strong></td><td><code>pendingRequestRegistry.ts</code>、<code>imConfirmReply.ts</code></td></tr>
+        <tr><td>回执的真实性与有效性校验</td><td><strong>Safety</strong>（不可外置）</td><td>今天散在 <code>remoteConfirmPolicy</code> 与 <code>remoteWriteAuthorization</code></td></tr>
+        <tr><td>审计</td><td><strong>Safety</strong></td><td><code>imAuditLogger.ts</code>、<code>remoteSessionSwitchAudit.ts</code></td></tr>
+        <tr><td>预算与中断</td><td><strong>Safety 定限权</strong>，Runtime 与 Driver 施加</td><td><code>remoteTaskBudget.ts</code>、<code>remoteTaskController.ts</code></td></tr>
+        <tr><td>写授权与租约</td><td><strong>Safety</strong></td><td><code>remoteWriteAuthorization.ts</code>、<code>remoteWriteGrantRegistry.ts</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>一条接缝上的规范：Driver 不直接调 Core。</strong><span class="dev">今天 feishuRemoteAgent.ts:46 与 weChatRemoteAgent.ts:48 直接调 runToolChatSession，跳过 Runtime 装配 —— 代价是每加一个平台就复制一遍装配逻辑</span>新驱动源（定时 / 事件 / 新 IM）必须走 Runtime 装配。</p>
+
+  <h3>视图更新：事实、失效通知与界面语义</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>关注点</th><th>归属</th><th>形态</th></tr></thead>
+      <tbody>
+        <tr><td>发生了什么（工具活动、增量、usage、终态）</td><td><strong>Core 产出，Runtime 投影</strong></td><td>事实流（带序号，可重放）</td></tr>
+        <tr><td>有哪些会话、哪些消息（真相）</td><td><strong>Storage</strong></td><td>按归属与可见性过滤的查询</td></tr>
+        <tr><td>怎么排序、怎么分组、怎么显示</td><td><strong>Driver（界面）</strong></td><td>视图语义，Runtime 不该知道</td></tr>
+        <tr><td>「需要重新查了」</td><td><strong>Runtime 的统一出口</strong></td><td>失效通知（scope + 版本，不携带真相）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="plain">
+    <li><strong>事实流不承担列表真相，只承担变化通知</strong>。渲染端不该从字节流里自己累积出「真相」；序列断裂就取快照补齐。</li>
+    <li><strong>失效通知与内容投递分开</strong>。失效通知是广播，只带 scope 与版本（如 <code>session-list</code>、<code>session:&lt;id&gt;</code>）；Driver 收到后自己去 Storage 取。真相只有一份。</li>
+    <li><strong>不要让 Core 产出 UI 语义事件</strong>（例如 <code>session-list-changed</code>）—— 那等于把宿主的视图模型塞进内核。</li>
+  </ul>
+  <h4>两个号别混</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>号</th><th>属于谁</th><th>权威源</th><th>怎么用</th></tr></thead>
+      <tbody>
+        <tr><td><strong>事实流序号</strong></td><td>一次调用的过程序列</td><td><strong>会话台账</strong>（已落盘的事实流）</td><td>用于重放与对齐：序列断裂说明这次没跟上，取快照补齐</td></tr>
+        <tr><td><strong>scope 版本</strong></td><td>存储里的一个查询域</td><td><strong>Storage</strong>，在事务内递增</td><td>单调即可，只比较、不要求连续</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Driver 侧的动作是<strong>版本比较</strong>，不是「跳号判定」：通知版本更高就重取，否则忽略。丢一条通知不会漏（下一条版本更高），收到多条也只重取一次。<span class="dev">2026-09-16 复核：turn 这一层已经落地（TurnDisplay 带版本、只回差量、确认走独立快照）；还没收敛的是列表与失效通知 —— 会话列表仍拉全表、文件树与工具面仍直连 safeWebContentsSend（偏差 11 剩的那一半）</span></p>
+</section>
+<section id="s7">
+  <h2><span class="sec-num">07</span>Runtime：准入、装配与定制入口</h2>
+  <p class="lead">Runtime 回答<strong>三个</strong>问题，顺序也是它们发生的顺序：这次调用<strong>能不能跑</strong>（准入：并发、速率、配额）→ 这次调用<strong>带什么</strong>（装配：Profile / Tools / Skill / 模型解析）→ 过程<strong>往哪里说</strong>（事件出口实现）。</p>
+
+  <h3>准入：这一轮新增的一层，也是最容易漏掉的一层</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>层</th><th>管什么</th><th>谁施加</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>单次调用内</td><td>轮数、时长、单次 token 上界、<strong>调用内并发</strong>（工具并发与子调用 fan-out）</td><td><code>Invocation.limits</code>，Core 施加</td><td>随调用，不持久</td></tr>
+        <tr><td><strong>跨调用全局</strong></td><td>并发数、速率、lane 配额</td><td><strong>Runtime 的准入</strong>（新增）</td><td><strong>Storage</strong>：跨重启不丢</td></tr>
+        <tr><td>触发时刻编排</td><td>定时、事件、重试节奏</td><td>Driver（触发源）</td><td>配置数据</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>没有它，管家 Agent 加定时与事件源一上线就会爆</strong>：多个定时任务同一分钟触发，单看都「合法」，合起来把配额和机器打满。为什么放在 Runtime：所有调用都经过它，它是唯一的公共前置；Driver 是多个并行驱动源、没有中心，全局判定放进去会变成「各驱动源各判一次」的竞态。</p>
+  <h4>四条硬要求</h4>
+  <ol class="plain">
+    <li><strong>准入不判定安全</strong>：只回答「现在能不能跑」，不回答「这次该不该放行」—— 后者永远是 Safety 的事。</li>
+    <li><strong>交互式优先于后台</strong>：用户在前台点发送的调用，不该被后台 Agent 排队挡住（是优先级，不是先来先服务）。</li>
+    <li><strong>不能静默丢弃</strong>：处置只有四种且必须由调用方声明 —— 排队、延后、降级、拒绝（落审计）。</li>
+    <li><strong>可观测</strong>：排队与拒绝要落审计或事件出口，否则用户无法回答「我的定时任务为什么没跑」。</li>
+  </ol>
+  <h4>嵌套调用也要过准入，但优先级按「谁在等它」定</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>嵌套调用</th><th>例子</th><th>准入语义</th></tr></thead>
+      <tbody>
+        <tr><td><strong>关键路径上的同步依赖</strong></td><td>审批回答者（<code>invokeApproval</code>）</td><td>优先级<strong>继承正在等待它的那条调用</strong>；<strong>有界等待</strong>：超出上界即视为「拿不到裁决」，不能让一条工具调用无限期挂在准入队列里</td></tr>
+        <tr><td><strong>可放弃的派生</strong></td><td>SubAgent、工具内派生调用</td><td><strong>同权排队</strong>；被拒时把「资源不足」作为<strong>工具结果</strong>回灌父调用，让父自己换方案</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><p><strong>准入拒绝永远不构成安全结论</strong>：审批调用拿不到配额时，Safety 得到的事实是「<strong>无法获得裁决</strong>」，不是「裁决为否」。审计上两者必须可区分（<code>cause=unavailable</code> 对 <code>cause=agent-deny</code>），否则「配额不足」会被统计成「审批判定危险」。处置仍是 fail-closed，但不接受静默 fail-closed。</p></div>
+  <p><strong>自锁风险必须提前定</strong>：同步依赖是由一条正占着配额的调用派生的。若全局并发上界是 N，而 N 条调用同时等各自的裁决，谁都拿不到位，全体互锁。准入必须自带回旋机制：给同步依赖留<strong>保留位</strong>，或让调用在等待裁决期间<strong>让出</strong>已占的位。</p>
+
+  <h3>定制入口：能用数据定制的，不开放成 Hook</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>层级</th><th>形态</th><th>判据</th></tr></thead>
+      <tbody>
+        <tr><td><strong>声明式数据</strong>（首选）</td><td>Profile / PolicyRule / Skill / 工具声明</td><td>加数据不加代码；改完可枚举、可审计</td></tr>
+        <tr><td><strong>注入式端口</strong>（受控开放）</td><td><code>events.*</code>、<code>factsProvider</code>、<code>answerer</code>、<code>ToolExecutor</code>、<code>getApiKey</code> / 模型解析、<code>loadContext</code>、<code>persist</code>、<code>translate</code>、<code>limits</code> / <code>signal</code></td><td>必须由外部给实现，且实现只做三类动作：<strong>补事实、给实现、报事实</strong></td></tr>
+        <tr><td><strong>事件回调</strong>（受约束开放）</td><td>工具调用前后、确认请求三类</td><td>声明式 · 事件集固定 · 进程外优先 · schema 校验加能力位（默认最小）· 冲突与顺序显式</td></tr>
+        <tr><td><strong>写死</strong>（不开放）</td><td>安全门控本体、上下文装配顺序、可改写的生命周期 Hook</td><td>一动就等于安全语义或执行语义变了</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>永不开放改写</strong>的理由：参数一旦被改写，「历史记录 / 审计 / 界面 / 实际执行」四者就不再一致，「这次执行是谁改的」无法回答。要改工具行为就换或包一个 <code>ToolExecutor</code>；要改「怎么想」就改 Skill。</p>
+  <p><span class="dev">今天唯一反例是 AutoEvaluator：让外部直接给出结论（同步返回 {approve}、按工具名写死）—— 违反的正是「注入式端口只做补事实、给实现、报事实」</span>目标形态：拆成 <code>factsProvider</code> 补事实、<code>answerer</code> 在末端受控给结论。</p>
+  <h4>「给审批看什么」要拆成两半</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>一半</th><th>谁提供</th><th>时机</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td>工具自述的审批可见输入</td><td><strong>工具声明</strong>（不是端口）</td><td>装配期，随工具注册</td><td>这个工具被确认时该呈现什么：目标路径 / 命令 / 影响面。<strong>声明为空表示「本工具无安全相关性」，必须与「忘了声明」可区分</strong></td></tr>
+        <tr><td>宿主补充的事实</td><td><code>factsProvider</code> 端口</td><td>运行期注入</td><td>宿主才知道的上下文：页面状态、会话位置、最近的相关操作</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>为什么不合并：前者属于<strong>工具契约</strong>（换工具就换），后者属于<strong>宿主环境</strong>（换宿主就换）。审批看到的必须是两半的并集，且<strong>标注每一项来自哪一半</strong> —— 审计要能回答「这个结论是基于谁提供的事实」。</p>
+
+  <h3>模型与思维强度：档位是数据，服务与凭据是端口</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>内容</th><th>层</th><th>形态</th></tr></thead>
+      <tbody>
+        <tr><td>选哪个模型（角色档 / 具体 model id）</td><td><strong>A. Profile 数据</strong></td><td><code>profile.model = { role: 'fast' | 'standard' | 'strong', modelId? }</code></td></tr>
+        <tr><td>思维强度（分档，不是开关）</td><td><strong>A. Profile 数据</strong></td><td><code>profile.reasoning = { effort: 'low' | 'medium' | 'high' }</code></td></tr>
+        <tr><td>其余推理参数（maxTokens / temperature）</td><td><strong>A. Profile 数据</strong></td><td>同上</td></tr>
+        <tr><td>用哪个服务、端点、凭据</td><td><strong>B. 端口（宿主解析）</strong></td><td><code>resolveModel(profile.model) → { serviceId, baseUrl, getApiKey }</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>为什么服务和凭据不能在 A</strong>：API Key 是不能落盘的秘密，服务是用户机器上的运行时状态；写进 Profile 就等于把秘密写进一份可复制、可同步的配置。<strong>为什么模型和强度必须在 A</strong>：「谁付账、谁定档」—— 让被调用的模型自选，它就会自我升级成本。</p>
+  <h4>五条硬规则</h4>
+  <ol class="plain">
+    <li><strong>发起时解析、调用内冻结</strong>：调用中途换模型会破坏上下文一致性与审计口径。</li>
+    <li><strong>Profile 只声明意图，宿主负责可行性</strong>：不满足时按安全与成本侧定死的规则降级或失败。</li>
+    <li><strong>默认必须是「继承」</strong>：子调用不声明模型时，继承父调用<strong>解析后的那个模型</strong>，不得静默解析成另一个具体模型。</li>
+    <li><strong>解析失败必须 fail loud</strong>：静默换一个能用的模型是最坏选项 —— 审计里记的模型与实际执行的不是同一个。</li>
+    <li><strong>子调用的思维强度默认关闭</strong>：思维强度是成本项，不是能力项；父调用的档位不自动下传。</li>
+  </ol>
+  <p><strong>SubAgent 要覆盖模型怎么办</strong>：Profile 声明<strong>可选档位集合</strong>（白名单加成本上界），父 Agent 只能在集合内选 —— 可以降档省钱，不能提档。<strong>审批 Agent 是特例</strong>：它的模型能力<strong>下限</strong>由安全侧强制，因为判断质量本身就是安全属性。</p>
+
+  <h3>事件出口：Core 往外说什么</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>出口</th><th>内容</th><th>谁消费</th><th>无 UI 时</th></tr></thead>
+      <tbody>
+        <tr><td>UI 事实</td><td>工具活动、思考与文本增量、子调用进度</td><td>渲染进程</td><td>no-op，或缓存待重开窗口补播</td></tr>
+        <tr><td>会话台账</td><td>原始增量与步骤事件</td><td>回放 / 恢复</td><td>照常落盘</td></tr>
+        <tr><td>安全审计</td><td>策略判定、确认、缓存、裁决依据与成本</td><td>审计页 / 合规</td><td>照常落盘（独立文件）</td></tr>
+        <tr><td>通知与进度</td><td>文件树刷新、浮动通知、标题建议、IM 心跳</td><td>桌面 / 远端输入方</td><td>no-op，或转投 IM</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>出口默认只持有「观察」能力位，控制能力必须显式授予</strong>：默认任何出口抛错或不可用都不得改变工具的执行结论。今天看得见的缺项至少有五类：会话与调用的起止、压缩前后、配置变更（尤其安全档位）、Skill 与指令加载、子调用起止。</p>
+</section>
+
+<section id="s8">
+  <h2><span class="sec-num">08</span>Core：内核边界与调用契约</h2>
+  <p class="lead">Core 的边界由一个问题定义：<strong>这一次调用要什么、结果往哪里说</strong>；除此之外的一切（谁发起、记在哪、给谁看）都在外面。</p>
+
+  <h3>负责什么，不负责什么</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>属于 Core</th><th>不属于 Core</th></tr></thead>
+      <tbody>
+        <tr><td>一次调用内的推理循环（模型 → 工具 → 结果回灌，直到收敛）</td><td>谁发起、何时发起（触发器、调度、webhook、用户点击）—— 触发归 Driver，准入与配额归 Runtime</td></tr>
+        <tr><td>上下文装配（裁剪 / 注入，与 context-injection-refactor-plan 同源）</td><td>行为逻辑（意图识别 → 方案 → 请求确认 → 执行 → 回复，属 Skill）</td></tr>
+        <tr><td>工具执行（direct / planned、plan / execute 分离、结果形态）</td><td>投递与通知（回复飞书 / 微信、发桌面通知，属调用方的工具）</td></tr>
+        <tr><td>安全门控（策略判定 → 确认 → 授权 → 审计）</td><td>审批标准本身（属安全策略模块）</td></tr>
+        <tr><td>事实与事件产出（UI 事实 / 台账 / 审计，出口可插拔）</td><td>会话列表语义与归属展示（属宿主与存储）</td></tr>
+        <tr><td>预算与取消的执行</td><td>记忆与自我优化的策略（属存储与 Profile 输入）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout"><p>一条硬规则：<strong>Core 不认识业务身份</strong>。它只认识 lane、Profile 提供的配置、事件出口。审批 Agent、SubAgent、管家 Agent 都不该让 Core 里多出一个 <code>if</code>。</p></div>
+
+  <h3>一次调用（Invocation）</h3>
+  <div class="term">
+    <pre>Invocation
+  ├─ session       必填：调用的归属与落盘锚点（既有会话 id，或新建会话的归属与可见性声明）
+  ├─ messages      本次新增输入（可为空）—— 会话历史由 loadContext 装载，不从这里传入
+  ├─ profile       模型档 / 工具能力集 / Skill 加载声明 / system 附加 / 策略档（lane）
+  ├─ events        事件出口：UI 事实 / 台账 / 审计 / 通知（允许全部 no-op）
+  ├─ limits        单次调用内的上界：轮数、时长、token、调用内并发（工具并发与子调用 fan-out）
+  └─ signal        取消
+
+→ InvocationResult
+  ├─ status        completed | cancelled | failed | denied
+  ├─ messages      本次调用产生的消息（供父调用回灌、供落盘）
+  ├─ usage         token 与成本，按调用归属
+  └─ events        或经由出口流式产出</pre>
+  </div>
+  <p><strong>「上下文从哪来」要说死</strong>：<code>messages</code> 只是本次调用的新增输入，<strong>历史不经它传入</strong>。完整上下文由 Core 在循环内装配：① 经 <code>loadContext</code> 按会话锚点装载已有历史与可寻址材料；② 与本次 <code>messages</code> 增量及 <code>additionalContext</code> 合并；③ 应用裁剪与注入规则。历史不能改由调用方装载，否则装配规则随调用方分叉，「同样的历史必须产生同样的上下文」立刻失效。</p>
+  <h4>四个刻意「不出现」的东西</h4>
+  <ul class="plain">
+    <li><strong>不出现 <code>sender</code></strong>：出网点是接口，无 UI 时是 no-op 或转投别的通道。<span class="dev">今天 sender 是必填位置参数</span></li>
+    <li><strong>不出现「必须先有一个活跃的用户回合」</strong>：会话可以随手创建、可以短命、归属由调用方声明。这里禁的是「回合」，不是「会话」。</li>
+    <li><strong>不出现「由谁来回答确认」</strong>：调用方只声明策略档与 lane，回答者由安全模块解析。</li>
+    <li><strong>不出现 <code>isWebContentsAlive</code> 这类存活判断</strong>：调用存亡只由取消、超时、错误决定。<span class="dev">今天每轮检查窗口存活，失败即 'Window closed'</span></li>
+  </ul>
+  <h4>跑道管理的四个字段</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>字段</th><th>语义</th><th>为什么必须有</th></tr></thead>
+      <tbody>
+        <tr><td><code>clientId</code></td><td>调用方给的输入 id，作为幂等键</td><td>定时与事件驱动会出现同一指令被投递两次</td></tr>
+        <tr><td><code>additionalContext</code></td><td>结构化、可寻址的附加上下文（键值对），不是往 system 里拼字符串</td><td>管家 Agent 要挂远程指令原文、审批要挂确认请求锚点；拼进字符串就无法单独裁剪与审计</td></tr>
+        <tr><td><code>trace</code></td><td>随调用传递的追踪上下文</td><td>一次后台调用横跨 Driver、Core、审批、Storage 四段</td></tr>
+        <tr><td>中断语义</td><td>调用停下来之后是「可恢复」还是「已失败」</td><td>「当前没有活跃执行者」与「失败了」是两件事，调用方必须能区分</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>明确预留、本轮不实现：<code>steering</code>（回合进行中再注入输入）。契约里留位置，避免将来加它时改形状。</p>
+
+  <h3>会话锚点与认领</h3>
+  <ol class="plain">
+    <li><strong>会话必须有，<code>session</code> 是必填入参</strong>。没有会话锚点，五件事同时失去着落：审计归属、预算归属、恢复锚点、并发隔离、幂等落点。要拆的是<strong>「会话与用户回合的绑定」</strong>，不是会话本身。审批与 SubAgent 各有一条独立会话，归属 <code>internal</code>、可见性 <code>hidden</code>。唯一不需要会话的是单次模型调用（分类器式）。</li>
+    <li><strong>一个会话一个执行器实例、每个回合一次调用</strong>：确认回复到达就在同一会话上起新 Turn，而不是让某个回合在原地等。</li>
+    <li><strong>认领语义</strong>：多个输入同时到达时，「谁先被处理」必须确定且可审计（先到先服务，或按显式优先级）。</li>
+  </ol>
+
+  <h3>字段的继承语义：一条元规则</h3>
+  <p>以后每新增一个 Invocation 字段，都要先回答「嵌套调用里它怎么取值」。判据只有一条：<strong>看它属于授权维度还是成本质量维度</strong>。</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>维度</th><th>例子</th><th>嵌套调用语义</th><th>错一分的后果</th></tr></thead>
+      <tbody>
+        <tr><td><strong>授权</strong>（谁能做什么）</td><td>策略放行集合、能力位、回答者</td><td><strong>不继承</strong>：替换或取交集</td><td>多继承一分就是<strong>越权</strong></td></tr>
+        <tr><td><strong>成本与质量</strong>（花多少、要多好）</td><td>模型档、思维强度、上下文预算、调用内并发</td><td><strong>默认继承，且可降不可升</strong></td><td>多继承一分只是<strong>多花钱</strong></td></tr>
+        <tr><td><strong>身份与归属</strong></td><td>会话归属、可见性、审计归属</td><td><strong>不继承</strong>：子调用有自己的归属</td><td>混进父的归属就是<strong>串扰</strong></td></tr>
+        <tr><td><strong>附加材料</strong></td><td><code>additionalContext</code></td><td><strong>不继承</strong>：显式传入</td><td>靠血缘传递就<strong>不可寻址、不可审计</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>两条连带硬要求：<strong>凡是「可降不可升」的维度，父侧必须给出上界</strong>；<strong>凡是「替换」的维度，父侧必须给出完整集合</strong>。这条元规则也解释了 <a href="#s7">第 7 节「模型与思维强度」</a> 里看似矛盾的两条：模型默认<strong>继承</strong>（必须有一个值），思维强度默认<strong>关闭</strong>（可以没有，关闭即零成本档）—— 两者都满足「不高于父」。</p>
+
+  <h3>对调用方的四条反向要求</h3>
+  <ol class="plain">
+    <li>声明身份（lane / Profile）：策略、审计、预算都按它归属。</li>
+    <li>提供事件出口（允许全部 no-op）。</li>
+    <li>提供预算与取消信号。</li>
+    <li>不绕过 Core 直接执行工具，否则等于绕过策略与审计。</li>
+  </ol>
+</section>
+<section id="s9">
+  <h2><span class="sec-num">09</span>Safety：策略引擎与确认通道</h2>
+  <p class="lead">Safety 管两件事：<strong>该不该放行</strong>（策略引擎）与<strong>由谁来定夺</strong>（确认通道）。引擎在内、内容在外，底线不可放宽；回答者可插拔，语义不可外置。</p>
+
+  <figure>
+    <div class="figframe"><span class="ft">图 E · 门控判定顺序、回答者与递归边界</span><span class="fk">state / process · 7 nodes · 2 focal</span></div>
+    <div class="figbox">
+      <svg class="dgm" id="dgm-e" viewBox="0 0 1000 640" role="img" aria-labelledby="dgme-t dgme-d" xmlns="http://www.w3.org/2000/svg">
+        <title id="dgme-t">安全门控的判定顺序与递归边界</title>
+        <desc id="dgme-d">状态图：每次工具调用依次经过规则、决策缓存、回答者，未命中时咨询回答者；回答者可以是人、审批 Agent（经 invokeApproval 发起嵌套 Core 调用）或无回答者时的 fail-closed 兜底，全程落独立安全审计。</desc>
+        <defs>
+          <marker id="e-ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="e-ar-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#eb6c36"/></marker>
+        </defs>
+        <rect width="1000" height="640" fill="#f5f5f5"/>
+
+        <path d="M 500,104 V 136" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#e-ar)"/>
+        <path d="M 500,200 V 232" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#e-ar)"/>
+        <path d="M 500,296 V 328" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#e-ar)"/>
+        <path d="M 600,352 H 700" fill="none" stroke="#eb6c36" stroke-width="1.2" marker-end="url(#e-ar-accent)"/>
+        <path d="M 700,384 H 600" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#e-ar)"/>
+        <path d="M 400,352 H 320" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#e-ar)"/>
+        <path d="M 500,400 V 448" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#e-ar)"/>
+
+        <rect class="mask" x="508" y="112" width="112" height="14" rx="2"/>
+        <text class="alc" x="512" y="123">判定顺序 · 不可绕</text>
+        <rect class="mask" x="508" y="208" width="44" height="14" rx="2"/>
+        <text class="alc" x="512" y="219">未命中</text>
+        <rect class="mask" x="508" y="304" width="44" height="14" rx="2"/>
+        <text class="alc" x="512" y="315">未命中</text>
+        <rect class="mask" x="624" y="328" width="52" height="14" rx="2"/>
+        <text class="alc" x="650" y="339" text-anchor="middle">嵌套调用</text>
+        <rect class="mask" x="334" y="328" width="52" height="14" rx="2"/>
+        <text class="alc" x="360" y="339" text-anchor="middle">无回答者</text>
+        <rect class="mask" x="615" y="392" width="72" height="14" rx="2"/>
+        <text class="mn" x="651" y="403" text-anchor="middle">ConfirmOutcome</text>
+        <rect class="mask" x="508" y="416" width="64" height="14" rx="2"/>
+        <text class="alc" x="512" y="427">全程落审计</text>
+
+        <g class="nd" data-head="工具调用" data-note="每一次工具调用都必经门控 —— 它是安全不变量，不是「一个可以跳过的步骤」。用户直接操作界面不经过它，Agent 调用必须经过。">
+          <rect class="mask" x="400" y="40" width="200" height="64" rx="6"/>
+          <rect class="box" x="400" y="40" width="200" height="64" rx="6"/>
+          <text class="nm" x="500" y="74" text-anchor="middle">工具调用</text>
+          <text class="dl" x="500" y="92" text-anchor="middle">每次执行前必经</text>
+        </g>
+        <g class="nd" data-head="规则 PolicyRule" data-note="判定引擎 decide() 是纯函数、在 Core 内，作为内部机制而不是 Hook；规则内容（默认规则、套餐、用户覆盖、locked 底线）在 Core 外。今天接缝错了：gate 自己读库，Core 因此直接依赖宿主的配置存储。">
+          <rect class="mask" x="400" y="136" width="200" height="64" rx="6"/>
+          <rect class="box" x="400" y="136" width="200" height="64" rx="6"/>
+          <text class="nm" x="500" y="170" text-anchor="middle">规则 PolicyRule</text>
+          <text class="dl" x="500" y="188" text-anchor="middle">引擎在 Core 内 · 内容在外</text>
+        </g>
+        <g class="nd" data-head="决策缓存" data-note="缓存命中即结论，但仍要过缓存写入准入。自动审批的裁决不写缓存 —— 永远一事一议。">
+          <rect class="mask" x="400" y="232" width="200" height="64" rx="6"/>
+          <rect class="box" x="400" y="232" width="200" height="64" rx="6"/>
+          <text class="nm" x="500" y="266" text-anchor="middle">决策缓存</text>
+          <text class="dl" x="500" y="284" text-anchor="middle">命中即结论 · 写入有准入</text>
+        </g>
+        <g class="nd" data-head="回答者 answerer（可插拔）" data-note="唯一可以换的一环。实现可以是人（桌面 / IM），也可以是一次嵌套 Core 调用（审批 Agent）。Safety 拿不到也不需要 Invocation —— 换成 Agent 它一行不改，换成 fail-closed 也不改一行。">
+          <rect class="mask" x="400" y="328" width="200" height="72" rx="6"/>
+          <rect class="box focal" x="400" y="328" width="200" height="72" rx="6"/>
+          <text class="nm" x="500" y="364" text-anchor="middle">回答者 answerer</text>
+          <text class="dl" x="500" y="384" text-anchor="middle">人 / 审批 Agent / 无</text>
+        </g>
+        <g class="nd" data-head="审批 Agent：一次嵌套 Core 调用" data-note="由 Runtime 在装配期构造（注入审批 Profile 与 invokeApproval 调用器），运行期由 Safety 按 Profile 与 lane 解析选择。这次调用同样过策略门控、同样过准入、同样落审计。">
+          <rect class="mask" x="700" y="328" width="240" height="72" rx="6"/>
+          <rect class="box focal" x="700" y="328" width="240" height="72" rx="6"/>
+          <text class="nm" x="820" y="364" text-anchor="middle">审批 Agent · 嵌套调用</text>
+          <text class="dl" x="820" y="384" text-anchor="middle">封闭只读 · 有界轮数</text>
+        </g>
+        <g class="nd" data-head="fail-closed 兜底" data-note="无回答者时 fail-closed 是兜底，不是降级目标。「拿不到裁决」永远不等于「批准」。审计必须区分「没送到」与「送到了没人回」：前者说明确认机制失效，后者是正常超时。">
+          <rect class="mask" x="80" y="328" width="240" height="72" rx="6"/>
+          <rect class="box sec" x="80" y="328" width="240" height="72" rx="6"/>
+          <text class="nm" x="200" y="364" text-anchor="middle">fail-closed 兜底</text>
+          <text class="dl" x="200" y="384" text-anchor="middle">拿不到裁决 ≠ 批准</text>
+        </g>
+        <g class="nd" data-head="安全审计" data-note="独立文件、只追加、按天切分、写入前脱敏、保留 180 天。审计一旦变成「Core 往 Storage 写的一条普通记录」，就会跟着 Core 的清理语义走 —— 用户删会话顺手把审计删了。">
+          <rect class="mask" x="80" y="448" width="860" height="56" rx="6"/>
+          <rect class="box store" x="80" y="448" width="860" height="56" rx="6"/>
+          <text class="nm" x="120" y="482">安全审计：独立文件 · 只追加 · 保留 180 天</text>
+          <text class="mn" x="470" y="482">confirm.request / confirm.outcome</text>
+        </g>
+
+        <text class="dl2" x="80" y="528">递归边界：豁免不是授权，而是递归终止条件；被配置破坏或深度上界触发时 → fail-closed + 可区分审计。</text>
+        <text class="dl2" x="80" y="552">它属「不可变集」而非 locked 底线集：底线只拦放宽，拦不住收紧引发的静默停摆。</text>
+
+        <line x1="40" y1="576" x2="960" y2="576" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text class="ey" x="40" y="592">LEGEND</text>
+        <rect x="40" y="600" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text class="dl" x="62" y="609">焦点：回答者与审批调用</text>
+        <rect x="300" y="600" width="14" height="12" rx="2" fill="rgba(235,108,54,0.05)" stroke="rgba(235,108,54,0.50)" stroke-dasharray="4,4"/>
+        <text class="dl" x="322" y="609">安全兜底</text>
+        <rect x="440" y="600" width="14" height="12" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text class="dl" x="462" y="609">审计</text>
+        <line x1="560" y1="606" x2="588" y2="606" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4,3"/>
+        <text class="dl" x="596" y="609">递归 / 返回（虚线）</text>
+      </svg>
+    </div>
+    <div class="note" data-panel="dgm-e">
+      <p class="nt">点选图中任一节点</p>
+      <p class="nh">不可换的顺序，可换的末端</p>
+      <p><strong>不可换</strong>：判定顺序（规则 → 缓存 → 回答者）、fail-closed 兜底、缓存写入准入。<strong>可以换的</strong>只有末端回答者。</p>
+    </div>
+  </figure>
+
+  <h3>策略规则：四问与三条判据</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>问题</th><th>答案</th><th>理由</th></tr></thead>
+      <tbody>
+        <tr><td>判定<strong>时机</strong>（工具执行前必经）</td><td><strong>Core 内，不可绕</strong></td><td>它是安全不变量；外置就等于「一个可以跳过的步骤」</td></tr>
+        <tr><td>判定<strong>引擎</strong>（<code>decide()</code> 纯函数）</td><td><strong>Core 内</strong>，作为内部机制而不是 Hook</td><td>无宿主依赖、可单测；结论必须由 Core 自己算出</td></tr>
+        <tr><td>规则<strong>内容</strong>（默认规则、套餐、用户覆盖、<code>locked</code> 底线）</td><td><strong>Core 外</strong>（安全策略模块 / 配置数据）</td><td>随产品与用户变化，属策略数据，不属于执行框架</td></tr>
+        <tr><td><strong>某次调用用哪套规则</strong></td><td>调用方解析后随 Invocation 传入</td><td>与 tools / model 一样，是输入的一部分</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>但有一半不能外置：底线。</strong>「内容在外」的前提是<strong>放宽方向必须受阻</strong>。<code>locked: true</code> 的规则不能被下调为 allow，也不能被覆盖。目标形态是把这条不变量提到接口上：<strong>Core 只接受「可收紧、不可放宽」的规则集</strong>；相对底线放宽任何一条，Core 拒绝这次调用并落审计。<strong>「不可放宽」在子调用上的具体形状是「不继承」</strong>：子调用的放行集合是<strong>替换</strong>而非继承，父批过的那一次不构成子那一次的授权。</p>
+  <p><strong>规则要有「来源」维度。</strong><span class="dev">今天 PolicyRule 只有内容与 locked，没有「谁设的」，于是「我设的 allow 为什么没生效」无法回答</span>目标形态下每条生效规则都能回答来源（内置默认 / 套餐 / 用户覆盖 / 迁移），并保留<strong>被遮蔽规则的痕迹</strong>。</p>
+  <div class="callout"><p><strong>不得为缺失的托管值静默提供默认值。</strong>托管值缺失时只有两种合法行为：按<strong>显式声明的默认</strong>兜底，或失败并落审计。最坏的做法是「取不到就回退到内置常量」，它把配置错误变成静默的行为差异。</p></div>
+  <p><strong>连续拒绝要有回退阈值。</strong>同一调用内<strong>连续 3 次</strong>被拒时，从「继续尝试」退到更保守的行为。<span class="dev">今天这个计数器与「工具执行失败」共用，安全拒绝会被执行失败带着触发中止</span>两者必须分开计数，且安全拒绝的阈值应更高。</p>
+  <h4>三条判据（决定任何东西该在里还是在外）</h4>
+  <ol class="plain">
+    <li>「它变了，产品的安全语义变了吗？」变了 → 在外（策略模块），且变更要走 <code>settings.policy-change</code> 审计。</li>
+    <li>「它被调用方伪造，会不会造成越权？」会 → Core 侧必须有不可覆盖的校验（底线、fail-closed）。</li>
+    <li>「把它改坏（放宽<strong>或收紧</strong>）之后，安全路径本身是否失效？」会 → 进<strong>不可变集</strong>。</li>
+  </ol>
+
+  <h3>确认通道：五条规则</h3>
+  <ol class="plain">
+    <li><strong>Driver 不做安全判定</strong>：它能把 <code>'y'</code> 这个字符串带回来，但无权判定「这次批准有效」。<span class="dev">今天 PendingDecision = 'y' | 'n' | 'timeout' 把管道事实与语义结论混在一个枚举里</span></li>
+    <li><strong>Safety 不自己发消息</strong>：只产出「决策请求」，由 Driver 投递。这是「确认通道可插拔」的前提。</li>
+    <li><strong>审计必须区分「没送到」与「送到了没人回」</strong>：它们是不同的安全事实。<span class="dev">今天 mapToolOutcome 把两者统一压成 timeout</span></li>
+    <li><strong>lane 不是回答者</strong>：回答者由 Profile 解析、与 lane 正交。<span class="dev">今天 channelFor({ lane }) 按 lane 硬编码返回通道</span></li>
+    <li><strong>端口形状不预设「单次同步问答」</strong>：回答者可以本身是一次 Core 调用，端口必须容纳「多轮 + 有界预算 + 有界输出」。</li>
+  </ol>
+  <h4>多轮回答者的装配与发起</h4>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>环节</th><th>谁负责</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><strong>装配</strong></td><td><strong>Runtime</strong>（装配期）</td><td>构造回答者实现，注入审批 Profile（模型档 / 封闭只读工具集 / 轮数与预算上界 / 有界输出契约）与一个 <code>invokeApproval</code> 调用器</td></tr>
+        <tr><td><strong>解析</strong></td><td><strong>Safety</strong>（运行期）</td><td>按 Profile 与 lane 解析出用哪个回答者；只在规则与缓存都未命中时咨询它</td></tr>
+        <tr><td><strong>发起</strong></td><td><strong>回答者实现</strong>（运行期）</td><td>经 <code>invokeApproval</code> 发起一次<strong>嵌套 Core 调用</strong>；同样过策略门控、过准入、落审计</td></tr>
+        <tr><td><strong>归还</strong></td><td><strong>Safety</strong></td><td>端口只回 <code>ConfirmOutcome</code> —— 装配细节对 Safety 不可见</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>递归边界与两个集合</h3>
+  <p><strong>硬约束</strong>：审批调用自身的工具调用<strong>不再进入确认流程</strong>。不能依赖「它不会调危险工具」的约定，否则就是「审批套审批」的无限递归。</p>
+  <ol class="plain">
+    <li><strong>兜底语义是 fail-closed，且不可静默</strong>。若豁免被配置破坏、或递归深度上界被触发，结论是<strong>拒绝</strong>；必须落审计且能与正常拒绝区分（<code>cause=recursion-blocked</code> 对 <code>cause=agent-deny</code>）。</li>
+    <li><strong>这条豁免不该是可配置规则</strong>，因为它不是授权，是递归终止条件。用户可调的是审批 Profile 的<strong>能力集合</strong>，但「不再对这批工具做确认」不允许被覆盖。</li>
+    <li><strong>因此它不属于 <code>locked</code> 底线集，属于「不可变集」</strong> —— 破坏这条路径的恰恰是收紧。</li>
+  </ol>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>集合</th><th>约束</th><th>目的</th><th>判据</th></tr></thead>
+      <tbody>
+        <tr><td><strong>底线集</strong>（<code>locked</code>）</td><td>不可<strong>放宽</strong>（可收紧）</td><td>防越权：安全标准只有一套</td><td>「用户把它改宽，会不会越权？」</td></tr>
+        <tr><td><strong>不可变集</strong></td><td>放宽与收紧<strong>都不允许</strong></td><td>保<strong>安全路径可运行</strong>：递归终止条件、fail-closed 兜底、审计成对</td><td>「它被改坏，安全路径本身是否失效？」</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>回执校验：两条通道，形状不同、目标相同</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>通道</th><th>合法授权来源</th><th>校验靠什么</th><th>明确不做的</th></tr></thead>
+      <tbody>
+        <tr><td>远端（飞书 / 微信）</td><td>远端用户</td><td><strong>身份</strong>：发送者与授权对象匹配、回执 id 配对、时效</td><td>不把「管道事实」（收到 <code>'y'</code>）当成「语义结论」（批准有效）</td></tr>
+        <tr><td>桌面</td><td><strong>本机用户</strong></td><td><strong>结构</strong>：<code>requestId</code> 配对、一次性消费、来源绑定</td><td><strong>不做用户身份认证</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>桌面通道的信任假设要显式写出：它把「本机用户」当作合法授权来源，但<strong>不把渲染进程当作诚实的执行者</strong>。两句不矛盾：「渲染进程不可信」防的是它<strong>伪造来源</strong>，不是「用户点的那一下不可信」。</p>
+  <p><strong>为什么渲染端发来的「批准」仍能构成放行</strong>：它不是作为「渲染进程的声明」被接受，而是作为<strong>主进程自己提出的待决请求的回答</strong>被接受。于是回执校验只需三件事，且都在主进程：<strong>配对</strong>（回执必须对应真实存在、未过期、未被消费的待决请求）、<strong>来源绑定</strong>（回执必须从该请求被投递到的那个驱动源回来，不跨通道）、<strong>不可自授权</strong>（没有对应待决请求的「批准」一律拒绝并落审计）。</p>
+  <div class="callout"><p><strong>边界要写出来</strong>：桌面回执能证明的是「有人在这台机器上回答了这个请求」，不能作为「用户本人确认」的身份凭据 —— 审计口径按前者写。</p></div>
+  <h4>两个特例</h4>
+  <ul class="plain">
+    <li><strong>自动审批</strong>：审批 Agent 是回答者的一种实现，且<strong>永远一事一议</strong> —— 裁决不写缓存。管家 Agent 不感知审批 Agent 存在，它看到的仍然是「一次工具调用 + 一次安全流程」。</li>
+    <li><strong>无回答者</strong>：fail-closed 是兜底，不是降级目标。</li>
+  </ul>
+</section>
+
+<section id="s10">
+  <h2><span class="sec-num">10</span>Storage：协议在内，实现在外</h2>
+  <p class="lead">耦合确实重 —— Core 的入口直接持有数据库句柄、循环里直接查询 10 处以上。但根因不是「该不该合并」，而是 <strong>Core 的执行单元被定义成了存储里的三行数据</strong>；耦合的根在<strong>执行模型</strong>，不在存储。</p>
+
+  <h3>结论：Storage 不并入 Core，但要切成三份</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>谁持有</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Core</strong></td><td><strong>记录的形状与不变量</strong>：调用记录与事件的字段、只追加、序号单调、终态收敛、归属维度；以及两个端口 <code>loadContext()</code> / <code>persist()</code></td></tr>
+        <tr><td><strong>Storage</strong></td><td><strong>实现</strong>：SQLite 还是 JSONL、迁移、索引、清理、保留期、加密</td></tr>
+        <tr><td><strong>Safety</strong></td><td><strong>审计与决策缓存的语义</strong>：不可改写、独立物理隔离、准入门槛</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>和 <a href="#s9">第 9 节「策略规则」</a> 是同一个道理：<strong>协议的形状在内，存储的实现在外</strong>。为什么不能把 Storage 并进 Core：① 今天有四类使用者要访问存储（Core、Safety、Runtime、Driver），合并后要么都进 Core（Core 变成上帝对象），要么它们绕过 Core 直接访问 —— 那就是今天的状态，只是多了一层假封装；② <strong>审计会失去独立性</strong>，用户删会话顺手把审计删了。</p>
+  <p><strong>真正的解法是反向的</strong>：把 Core 对存储的依赖压到两个端口 —— <code>loadContext(invocation)</code> 与 <code>persist(InvocationResult)</code>，Core 不认识表、事务与 SQLite。<code>loadContext</code> 只按会话锚点取回<strong>原始材料</strong>，<strong>装配（裁剪与注入）留在 Core</strong> 不下沉。这既保证装配规则唯一，也让 Core 能脱 SQLite 单测。</p>
+  <h4>三条验收标准</h4>
+  <ol class="plain">
+    <li>Core 能脱离 SQLite 跑单测。<span class="dev">今天不能，appDb 是入参且被直接使用</span></li>
+    <li>换一种存储实现（例如把某个 Agent 的记录落成 JSONL）不需要改 Core。</li>
+    <li>存储不可用时 Core 的行为有明确约定（fail-closed 还是降级），而不是未定义。</li>
+  </ol>
+
+  <h3>归属与读取</h3>
+  <p>先把两个词对齐：<strong>「内部会话」与「内部调用记录」是同一实体的两个视角</strong> —— 会话是执行期视角（上下文载体、执行独占、预算归属），内部调用记录是存储期视角（落盘形态、可检索、可锚定血缘）。</p>
+  <ol class="plain">
+    <li><strong>先有归属谓词，再谈列表过滤</strong>：归属做成闭合的联合类型（用户 / 远端 / 自动化 / 内部）加一条纯谓词「这条记录该不该进用户列表」；列表只看这个谓词，不散写条件。</li>
+    <li><strong>物理分层优先于逻辑过滤</strong>：内部调用落到子目录或独立表空间，与用户会话天然分家。过滤靠「记得写对」，分层是「不写也进不去」。</li>
+    <li><strong>血缘锚定，不是复制，也不是共用会话</strong>：SubAgent 的会话锚在父 turn、审批的会话锚在确认请求。</li>
+  </ol>
+  <ul class="plain">
+    <li><strong>两级读取</strong>：列表只读轻量元数据（id / 标题 / 时间 / 归属 / 可见性），进入会话才读全量消息。<span class="dev">今天列表是拉全表，量一上来就是瓶颈</span></li>
+    <li><strong>读上限</strong>：全量读取要有硬上限，超过就分片或拒绝。</li>
+  </ul>
+  <div class="callout"><p><strong>一条容易被忽略的硬要求：同样的历史必须产生同样的上下文。</strong>一旦引入「某些工具结果被替换掉」这类压缩决策，就必须<strong>可重放</strong>（记下哪些被替换过），而不是每次装配时重新判断。否则同一份历史能装出两份不同的上下文，任何基于上下文一致性的能力都会变成概率事件。</p></div>
+</section>
+<section id="s11">
+  <h2><span class="sec-num">11</span>对外承诺与内部实现</h2>
+  <p class="lead">判断一个设计改动是否可接受，先看它落在哪一栏：承诺里的东西改了就是架构变更；实现里的东西可以随便换。</p>
+  <div class="cards two">
+    <div class="card">
+      <p class="eyebrow">对外承诺 · 稳定</p>
+      <div class="card-head"><span class="dot coral"></span><h3>不能随便改的部分</h3></div>
+      <ul>
+        <li>六层划分与依赖方向</li>
+        <li>六条架构不变量</li>
+        <li>Invocation 的六项输入、四个跑道字段、会话锚点语义与结果四态</li>
+        <li>扩展点的四层划分与五道约束</li>
+        <li>模型解析的五条硬规则</li>
+        <li>安全门控不可绕过、底线不可放宽、规则来源维度、不得为缺失的托管值静默默认</li>
+        <li>确认通道回答者可插拔</li>
+        <li>事件出口的能力位语义与事件清单判据</li>
+        <li>内部调用记录「只追加、不构成授权」与归属物理分层的语义</li>
+      </ul>
+    </div>
+    <div class="card">
+      <p class="eyebrow">内部实现 · 可变</p>
+      <div class="card-head"><span class="dot muted"></span><h3>可以替换的部分</h3></div>
+      <ul>
+        <li>工具循环内部结构</li>
+        <li>turn / session 的落库形态</li>
+        <li>事件传输机制</li>
+        <li>上下文裁剪算法</li>
+        <li>具体驱动源数量与各平台适配</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout"><p><strong>一句话收束</strong>：Core 的边界是 —— 给定「这次要什么」（session / messages / profile / limits）和「过程与结果往哪里说」（events），跑完这一次调用。至于「为什么跑、什么时候跑、跑完记在哪、给谁看」，全部由调用方与存储层回答。</p></div>
+</section>
+
+<section id="s12">
+  <h2><span class="sec-num">12</span>今天与理想态的偏差</h2>
+  <p class="lead">1 – 12 是 <strong>Agent 主线</strong>的偏差（阻塞自动审批、SubAgent、后台管家三条业务线）；13 – 14 是<strong>横切关注点</strong>的偏差，与主线正交，可并行处理；15 – 16 是<strong>对照研究</strong>新增的两条：机制在代码里是否真的成立（对照对象是 Codex、DeepSeek Harness、Claude Code 三个同类产品的架构；结论已全部并进本页，那些原始对照记录不是阅读前提）。17 – 20 是<strong>复用面</strong>的偏差：只对「拆成可复用的 Agent SDK、给外部复用者用」成立，本产品自己用不到。21 – 23 是<strong>驱动源与准入面</strong>的偏差：从「后台管家的驱动源不是人」推出来，与 SDK 无关。三组都挂在契约（1、2）之后（23 还要等 9），不新增关键路径 —— 但 21 – 23 的证据形式与前二十条正好相反：它们描述的是<strong>还不存在的东西</strong>，复现命令应当返回<strong>空</strong>。表末的<strong>状态</strong>列记 <strong>2026-09-16</strong> 复核结果：绝大多数仍未解决，<strong>12 已解决</strong>，9、11 部分解决 —— 见表后复核记录。</p>
+
+  <figure>
+    <div class="figframe"><span class="ft">图 F · 两条关键路径</span><span class="fk">dependency · 5 nodes</span></div>
+    <div class="figbox">
+      <svg class="dgm" id="dgm-f" viewBox="0 0 1000 600" role="img" aria-labelledby="dgmf-t dgmf-d" xmlns="http://www.w3.org/2000/svg">
+        <title id="dgmf-t">23 条偏差的两条关键路径</title>
+        <desc id="dgmf-d">依赖图：Invocation 契约是公共前置，向上分出 Core 端口与下游能力，向下引出驱动权回收，再由它带出 IPC 面、视图契约与渲染端决定权；横切关注点可整条并行。</desc>
+        <defs>
+          <marker id="f-ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        </defs>
+        <rect width="1000" height="600" fill="#f5f5f5"/>
+
+        <path d="M 280,214 H 432 Q 440,214 440,206 V 168" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#f-ar)"/>
+        <path d="M 540,124 H 620" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#f-ar)"/>
+        <path d="M 280,250 H 432 Q 440,250 440,258 V 300" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#f-ar)"/>
+        <path d="M 540,344 H 620" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#f-ar)"/>
+
+        <rect class="mask" x="380" y="178" width="52" height="14" rx="2"/>
+        <text class="alc" x="428" y="189" text-anchor="end">公共前置</text>
+        <rect class="mask" x="380" y="260" width="52" height="14" rx="2"/>
+        <text class="alc" x="428" y="271" text-anchor="end">本组前置</text>
+
+        <g class="nd" data-head="① Invocation 契约（偏差 1 · 2）" data-note="先做 Invocation 契约与 Core 端口这一对 —— 它是公共前置，做完下游才能并行铺开。它同时是驱动权路径的起点。">
+          <rect class="mask" x="80" y="184" width="200" height="80" rx="6"/>
+          <rect class="box focal" x="80" y="184" width="200" height="80" rx="6"/>
+          <text class="nm" x="180" y="218" text-anchor="middle">Invocation 契约</text>
+          <text class="mn" x="180" y="238" text-anchor="middle">偏差 1 · 2</text>
+        </g>
+        <g class="nd" data-head="② Core 端口收口（偏差 2）" data-note="把 Core 对存储与宿主的依赖收敛成 loadContext / persist 两个端口，Core 不认识表、事务与 SQLite；这是「同样的历史产生同样的上下文」的前提。">
+          <rect class="mask" x="340" y="80" width="200" height="88" rx="6"/>
+          <rect class="box" x="340" y="80" width="200" height="88" rx="6"/>
+          <text class="nm" x="440" y="118" text-anchor="middle">Core 端口收口</text>
+          <text class="mn" x="440" y="138" text-anchor="middle">偏差 2 · 公共前置</text>
+        </g>
+        <g class="nd" data-head="下游能力：按依赖铺开（偏差 3 · 4 · 6 · 8 · 15 – 20）" data-note="策略输入契约（3）→ 策略宽严（15）；扩展点形状（4）→ 子调用裁剪（16）；模型与强度（6）；统一投递入口（8，还需等 9）。这些项之间没有相互依赖，可以并行；17 – 20 是复用面新增的四条，只等 1、2；21、22 也等 3（lane 与规则这一对）。">
+          <rect class="mask" x="620" y="80" width="340" height="88" rx="6"/>
+          <rect class="box" x="620" y="80" width="340" height="88" rx="6"/>
+          <text class="nm" x="790" y="110" text-anchor="middle">下游能力：按依赖铺开</text>
+          <text class="dl" x="790" y="132" text-anchor="middle">策略输入 · 扩展点 · 模型档 · 子调用裁剪</text>
+          <text class="mn" x="790" y="150" text-anchor="middle">偏差 3 · 4 · 6 · 8 · 15 – 20</text>
+        </g>
+        <g class="nd" data-head="⑨ 驱动权回收（偏差 9）" data-note="主进程必须是驱动权威，桌面只是它的一个客户端。它与 10、11、12 是一组：驱动权威不在主进程，另外三条都无从落地。">
+          <rect class="mask" x="340" y="300" width="200" height="88" rx="6"/>
+          <rect class="box focal" x="340" y="300" width="200" height="88" rx="6"/>
+          <text class="nm" x="440" y="338" text-anchor="middle">驱动权回收</text>
+          <text class="mn" x="440" y="358" text-anchor="middle">偏差 9 · 一组改动的前置</text>
+        </g>
+        <g class="nd" data-head="IPC 面 · 视图契约 · 渲染端决定权（偏差 10 · 11 · 12）" data-note="IPC 面按领域拆开；视图更新收敛成「失效通知（scope + 版本）」这一种出口形态；渲染端只表达意图，所有决定回主进程。2026-09-16 复核：12 已解决（技能路由与系统提示拼装收回主进程），11 自 2026-09-15 起部分落地（turn 视图已有版本契约），10 未动；9 部分解决 —— 发起仍在渲染端。">
+          <rect class="mask" x="620" y="300" width="340" height="88" rx="6"/>
+          <rect class="box" x="620" y="300" width="340" height="88" rx="6"/>
+          <text class="nm" x="790" y="330" text-anchor="middle">IPC 面拆分 · 视图契约</text>
+          <text class="dl" x="790" y="352" text-anchor="middle">渲染端只表达意图</text>
+          <text class="mn" x="790" y="370" text-anchor="middle">偏差 10 · 11 · 12</text>
+        </g>
+        <g class="nd" data-head="横切关注点：并行处理（偏差 13 · 14）" data-note="i18n 两套机制收敛成「键 + 参数」加注入的 translate 端口；日志保留期与轮转纳入 Storage 的保留语义。两者不阻塞任何人。">
+          <rect class="mask" x="80" y="440" width="360" height="80" rx="6"/>
+          <rect class="box util" x="80" y="440" width="360" height="80" rx="6"/>
+          <text class="nm" x="104" y="472">横切关注点：并行处理</text>
+          <text class="dl" x="104" y="492">⑬ i18n 两套机制 · ⑭ 日志保留期</text>
+        </g>
+
+        <text class="dl2" x="500" y="472">13 / 14 不阻塞任何人；15 只等 3；16 等 1、2、4、6。</text>
+        <text class="dl2" x="500" y="494">契约是公共前置：先把 1、2 做完，下游才能并行铺开。</text>
+        <text class="dl2" x="500" y="516">21 – 23 也不在关键路径上：21、22 与 15 同批；23 等 1、2、9。</text>
+
+        <line x1="40" y1="536" x2="960" y2="536" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text class="ey" x="40" y="552">LEGEND</text>
+        <rect x="40" y="560" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text class="dl" x="62" y="569">关键路径节点（1 · 2 · 9）</text>
+        <rect x="300" y="560" width="14" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text class="dl" x="322" y="569">路径上的后续项</text>
+        <rect x="480" y="560" width="14" height="12" rx="2" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-dasharray="4,3"/>
+        <text class="dl" x="502" y="569">并行（不阻塞）</text>
+      </svg>
+    </div>
+    <div class="note" data-panel="dgm-f">
+      <p class="nt">点选图中任一节点</p>
+      <p class="nh">两条关键路径</p>
+      <p><strong>调用契约路径</strong>：1、2 → 3、4、5、6、8、16。<strong>驱动权路径</strong>：1 → 9 → 8、10、11、12。契约是公共前置，先做完这一对，下游才能并行铺开。21 – 23 是驱动源与准入面，都不在关键路径上。</p><p class="nh">2026-09-16 复核</p><p>下游已经先动了两处：<strong>12 已解决</strong>（渲染端的技能路由与系统提示拼装收回主进程）、<strong>11 部分落地</strong>（turn 视图已有版本契约），<strong>9 降为部分解决</strong>（事实权属、排队、取消已回主进程，「发起」还没有）。<strong>10 未动</strong>。</p>
+    </div>
+    <p class="figcap">13、14 不阻塞任何人，可整条并行；15 只等 3；16 是主线里最靠后的一条，等 1、2、4、6 齐了再动。17 – 20 只等 1、2，可与 3 – 8 并行；20 是这一组的验收节点，等 17、18、19 齐了再动。21、22 与 15 同批（都等 3，lane 得先可达，规则才有承载对象）；23 等 1、2、9 —— 驱动权不在主进程，准入就无处统一施加。<strong>2026-09-16 复核</strong>：12 已解决、11 与 9 部分解决，但这三条都还没把关键路径本身往前推 —— 1、2、9、10 的状态没变。</p>
+  </figure>
+
+  <h3>偏差清单</h3>
+  <div class="filters" data-filters="devtable">
+    <button class="btn on" data-filter="all">全部 23 条</button>
+    <button class="btn" data-filter="contract">调用契约路径</button>
+    <button class="btn" data-filter="driver">驱动权路径</button>
+    <button class="btn" data-filter="cross">横切与对照</button>
+    <button class="btn" data-filter="sdk">复用面（17 – 20）</button>
+    <button class="btn" data-filter="admission">驱动源与准入（21 – 23）</button>
+    <button class="btn" data-filter="done">已解决 / 部分解决（9 · 11 · 12）</button>
+    <span class="sep"></span>
+    <input class="search" id="devsearch" type="search" placeholder="搜索偏差 / 文件 / 关键词">
+  </div>
+  <div class="tbl-wrap">
+    <table id="devtable">
+      <thead><tr><th>#</th><th>偏差</th><th>证据</th><th>应该往哪走</th><th>前置 → 后置</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr data-path="contract driver"><td><strong>1</strong></td><td>Core 依赖驱动源：<code>sender</code> 是必填参数，窗口存活决定回合存亡</td><td><code>toolChatLoop.ts:389</code>、<code>:623</code></td><td>事件出口取代 <code>sender</code>；调用存亡只由取消 / 超时 / 错误决定</td><td>— → 3、4、5、6、8、9、16</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract"><td><strong>2</strong></td><td>Core 依赖 Storage：入口直接持有数据库句柄，循环内查询 10 处以上</td><td><code>toolChatLoop.ts:411</code>、<code>:543</code>、<code>:594</code>、<code>:596</code>、<code>:636</code>、<code>:923</code>、<code>:1363</code>、<code>:1580</code></td><td>收敛为 <code>loadContext()</code> / <code>persist()</code> 两个端口</td><td>— → 3、4、5、6、7、8、16</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract"><td><strong>3</strong></td><td>Safety 依赖 Storage 与宿主配置：门控自己读库</td><td><code>toolCallGate.ts:185</code></td><td>生效规则由调用方解析后随 Invocation 传入</td><td>1、2 → 15</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract"><td><strong>4</strong></td><td>扩展点形状不对：<code>AutoEvaluator</code> 同步返回结论、按工具名写死</td><td><code>confirmation/types.ts:295</code>、<code>toolCallGate.ts:336</code></td><td>拆成 <code>factsProvider</code>（补事实）+ <code>answerer</code>（末端受控给结论）</td><td>1、2 → 16</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract"><td><strong>5</strong></td><td>描述与实现混在一个结构：<code>baseUrl</code> 出现在可声明的执行快照里</td><td><code>assistantFactAggregator.ts</code>（<code>TurnExecutionConfig</code>）</td><td>端点与凭据留在宿主端口</td><td>1、2 → —</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract"><td><strong>6</strong></td><td>思维强度是全局布尔，不能按调用覆盖；模型元数据没有能力标记</td><td><code>domainTypes.ts:734</code>、<code>:678</code></td><td><code>profile.reasoning.effort</code> 分档 + 宿主机能力校验</td><td>1、2 → 16</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract"><td><strong>7</strong></td><td>Storage 缺归属与可见性：列表全表加载，跨会话搜索只按 profile 过滤</td><td><code>database/operations.ts:118</code>、<code>:1231</code>、<code>SessionListPane.tsx:24</code></td><td>补归属与可见性维度；内部调用不落用户会话</td><td>2 → 11</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract driver"><td><strong>8</strong></td><td>投递点散落，没有统一入口，也没有送达记录</td><td><code>toolChatLoop.ts:419</code>、<code>safeWebContentsSend.ts:3</code></td><td>驱动源层唯一投递入口 + 送达记录</td><td>1、2、9 → 11</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="driver done"><td><strong>9</strong></td><td>驱动权在渲染端</td><td><code>ChatView.tsx:852</code>、<code>chatRunnerService.ts:165</code></td><td>主进程为驱动权威，桌面只是其中一个驱动源</td><td>1 → 8、10、11、12</td><td><span class="st st-part">部分解决 20260916</span></td></tr>
+        <tr data-path="driver"><td><strong>10</strong></td><td>IPC 面混了两类东西：Agent 驱动协议与桌面应用功能同处一个文件</td><td><code>appIpc.ts:207</code>、<code>:2029</code></td><td>拆开：驱动协议属驱动源实现，桌面功能单列</td><td>9 → 12</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="driver done"><td><strong>11</strong></td><td>视图更新没有契约：列表靠拉全表，UI 失效通知直连</td><td><code>database/operations.ts:118</code>、<code>safeWebContentsSend.ts:3</code></td><td>失效通知（scope + 版本）作为一种出口形态；真相只从 Storage 取</td><td>7、8、9 → —</td><td><span class="st st-part">部分解决 20260915</span></td></tr>
+        <tr data-path="driver done"><td><strong>12</strong></td><td>渲染端仍持有决定：为界面提示重复跑技能路由，残留拼系统提示的死代码</td><td><code>ChatView.tsx:742</code>、<code>:778</code></td><td>决定回主进程，渲染端只表达意图</td><td>9、10 → —</td><td><span class="st st-done">已解决 20260916</span></td></tr>
+        <tr data-path="cross"><td><strong>13</strong></td><td>i18n 有两套机制、两份文案：渲染端 i18next，主进程菜单另写一份手写字典</td><td><code>menuLabels.ts</code>、<code>i18n/resources/</code></td><td>主进程只产出「键 + 参数」；直接显示处走注入的 <code>translate</code> 端口</td><td>— → —</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="cross"><td><strong>14</strong></td><td>日志只增不减：按日文件没有保留期与轮转（对照：会话台账有保留期）</td><td><code>agentLogPaths.ts:15</code>、<code>:25</code>、<code>main.ts:391</code></td><td>把保留期与轮转纳入 Storage 的保留语义，不靠人工清理</td><td>— → —</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract cross"><td><strong>15</strong></td><td>安全裁决能不能被配置放宽：档位是在调范围，还是能调宽严</td><td><code>policyPackages.ts:105</code>：<code>resolvePolicyRules</code> 对任意 lane 按 <code>packages[lane]</code> 整体变换</td><td>档位只调<strong>范围</strong>不调<strong>宽严</strong>：底线不可放宽、无远程开关；<code>kind === 'agent'</code> 的 lane 不得用 <code>loose</code></td><td>3 → —</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract"><td><strong>16</strong></td><td>子 Agent 的能力裁剪落在哪里：工具集，还是提示词</td><td>今天没有 SubAgent，工具按会话与配置整体装配（<code>effectiveTools.ts:16</code>），不存在「按子调用裁剪工具集」的机制</td><td>裁剪必须落在<strong>工具集</strong>上，不落在提示词上 —— 无人类应答者的 Agent 就不给它「问人」的工具</td><td>1、2、4、6 → —</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="sdk"><td><strong>17</strong></td><td>契约里允许出现函数与句柄：SDK 的物理边界无法上移</td><td><code>toolChatLoop.ts:409</code> 的 <code>getApiKey</code>、<code>:421</code> / <code>:423</code> 的 <code>emitFactEvent</code> / <code>emitSessionEvent</code> 都是闭包参数；入口同时持有 <code>sender</code> 与数据库句柄</td><td>契约只放可序列化数据与消息；端口表达为「宿主实现的服务接口」，本地绑定时由绑定层适配</td><td>1、2 → 20</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="sdk"><td><strong>18</strong></td><td>一次调用不能多实例并存：四处模块级可变状态</td><td><code>builtinExecutors.ts:1300</code>、<code>confirmation/audit.ts:11</code>、<code>mcpToolExecutor.ts:24</code>、<code>remote/confirmId.ts:6</code>，另有 <code>registerChatCancel</code> / <code>registerToolRevocationRequest</code> 两个注册入口</td><td>状态随 runtime 实例走、不随进程走：<code>createAgentRuntime(deps)</code></td><td>1、2 → 20</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="sdk"><td><strong>19</strong></td><td>没有包边界与依赖护栏：SDK 面靠约定，不靠机制</td><td>从 <code>toolChatLoop.ts</code> 静态可达 368 个本地模块，其中 26 个直接 <code>import 'electron'</code>（15 个为 <code>import type</code>）；<code>package.json</code> 无 workspaces，宿主与 provider 依赖混装</td><td>包边界 + <code>exports</code> + lint 规则 + CI 断言；SDK 包不得依赖 electron 与 Electron 内嵌的 <code>node:sqlite</code></td><td>1、2 → 20</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="sdk"><td><strong>20</strong></td><td>可复用性没有验收：不启动 Electron 跑不完一个回合</td><td>全仓没有「非 Electron 环境跑完一个 Agent 回合」的测试；<code>npm run probe:sqlite</code> 也必须在完整 Electron 主进程里跑</td><td><code>createAgentRuntime(deps)</code> 之后在纯 node 环境跑完「带工具调用的回合 + 一次确认 + 一次拒绝」</td><td>1、2、17、18、19 → —</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="driver admission"><td><strong>21</strong></td><td>驱动源到 lane 的映射不全：<code>automation</code> 在类型里存在，在代码里不可达</td><td><span class="rev">反向</span> <code>rg -n 'automation' electron/confirmation/channels.ts</code> → 0 行<br><code>rg -n 'automation' src/shared/policy/defaultRules.ts</code> → 0 行</td><td>lane 由驱动源层解析后随 Invocation 传入，桌面 / 远端 / 定时 / 事件四类各有可达的 lane；<code>automation</code> 不能只在类型里占个位</td><td>1、3 → 22</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="admission"><td><strong>22</strong></td><td>lane 有档位、没有规则：<code>automation</code> 配了档位却零规则，落进通用兜底，并继承 desktop 的专属豁免</td><td><span class="rev">反向</span> <code>rg -n 'automation' src/shared/policy/</code> → 只有 <code>policyPackages.ts</code> 的两处档位配置，没有一条规则以它为 lane</td><td>无人类应答者的驱动源（定时 / 事件）不得继承桌面豁免；规则集显式写出，兜底 fail-closed</td><td>3 → —</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="admission"><td><strong>23</strong></td><td>Runtime 准入只做了三分之一、维度也不对：只有全局按会话的并发上限，没有速率与配额</td><td><span class="rev">反向</span> <code>rg -n -e admission -e rateLimit -e quota src/shared electron --glob '!*.test.ts'</code> → 命中全在浏览器域与 IM 入口，没有一处拦在调用入口上</td><td>准入按<strong>调用</strong>施加、维度补齐（并发 / 速率 / 配额），对四类驱动源一致；渲染端不能绕过</td><td>1、2、9 → —</td><td><span class="st st-open">未解决</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="figcap">证据约定：上表的行号是当次摸排的快照（基线见文首），会随代码演进失效。每条证据都应能由命令复现：用 <code>rg -n '&lt;符号&gt;' &lt;文件&gt;</code> 定位到同一个事实，行号只作辅助。21 – 23 用<strong>反向证据</strong>（表中标 <span class="rev">反向</span>）：它们描述的是还不存在的东西，所以「证据」列写的是复现命令与期望的空结果 —— 命令<strong>仍返回 0 行</strong>时该条成立；哪天返回了行号，说明东西已经补上，这条就该从清单里划掉。 <strong>2026-09-16 复核</strong>：三条的形态变了，见下表。</p>
+  <div class="callout">
+    <p><strong>复核记录（2026-09-16 ｜ 工作区 HEAD <code>6fea42c1</code> ｜ v0.1.8）</strong>：按最新代码逐条重跑了 23 条的证据命令。<strong>绝大多数偏差仍在</strong> —— 1 – 8、10、13 – 23 的证据都能复现（行号有漂移，结论不变）；只有三条的形态变了。<strong>解决不等于删除</strong>：改的是哪一条、什么时候改的，都留在表里，靠「状态」列和下面这张表追溯。</p>
+    <div class="tbl-wrap">
+      <table id="devreview">
+        <thead><tr><th>#</th><th>状态</th><th>变化</th><th>证据 / 落地提交</th></tr></thead>
+        <tbody>
+          <tr><td><strong>12</strong></td><td><span class="st st-done">已解决 20260916</span></td><td>渲染端不再跑技能路由、不再拼系统提示：两处职责整体收进主进程 —— 技能注入与系统提示装配现在只由 <code>electron/llmSystemPrompt.ts</code>、<code>electron/skills/skillManager.ts</code> 产出（表里这一条的证据位今天已指向别的代码）</td><td><code>9dfc46d1</code>（2026-09-16）<br><code>rg -n -e skillRoute -e systemPrompt src/renderer --glob '!*.test.*'</code> → <strong>0 行</strong><br>注意这是<strong>负向证据</strong>：返回空<strong>代表已经修好</strong>，与 21 – 23 的空结果含义相反</td></tr>
+          <tr><td><strong>9</strong></td><td><span class="st st-part">部分解决 20260916</span></td><td>这一条原举的两处现象（技能路由双跑、拼系统提示死代码）实为偏差 12 的内容，已随 12 一起消除；排队、取消、事实权属与落库也都已回主进程，渲染端只剩本地展示缓存与意图表达。<strong>仍然成立的部分</strong>：回合发起与出站消息分类（<code>src/renderer/services/chatOutboundClassifier.ts</code>）还在渲染端 —— 驱动权本身没有移交</td><td><code>9dfc46d1</code><br><code>appIpc.ts:838</code>（<code>chat:get-next-queued-message</code>）、<code>:996</code>（<code>chat:cancel-turn</code>）</td></tr>
+          <tr><td><strong>11</strong></td><td><span class="st st-part">部分解决 20260915</span></td><td>turn 视图已经有契约：<code>TurnDisplay</code> 带版本号、<code>chat:get-turn-displays</code> 按版本只回差量、确认走独立快照、历史分页从 Storage 取。<strong>仍然成立的部分</strong>：会话列表仍靠拉全表、文件树与工具面的失效通知仍直连 <code>safeWebContentsSend</code> —— 原条目「列表靠拉全表，UI 失效通知直连」这半句仍未兑现</td><td><code>e7d1df01</code>（2026-09-15）<br><code>src/shared/turnDisplayProtocol.ts:28</code>、<code>appIpc.ts:1031</code>、<code>:1055</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>为什么 12 判「已解决」而不是「部分」</strong>：它列的两件事都是<strong>渲染端替主进程做的推理</strong>（技能路由、系统提示拼装），今天在渲染端一条都搜不到，且都有明确的主进程归属；剩下的渲染端行为（本地展示缓存、出站命令分类）属于「表达意图」，不在这一条的定义里。</p>
+    <p><strong>下一次复核怎么跑</strong>：1 – 20 用「证据列的命令能 <code>rg</code> 到同一个事实」判成立，形态变了就改证据位；21 – 23 反过来 —— 命令<strong>返回 0 行</strong>才是成立，返回了行号说明已经补上。条目补上后<strong>不要删行</strong>：把「状态」列改成 <span class="st st-done">已解决 YYYYMMDD</span>，并在这里补一行。</p>
+  </div>
+</section>
+
+<section id="s13">
+  <h2><span class="sec-num">13</span>Agent SDK 化：七类缺口的清单覆盖</h2>
+  <p class="lead">偏差清单的验收主体是<strong>本产品自己的三条业务线</strong>（自动审批、SubAgent、后台管家）。把六大模块拆成可复用的 Agent SDK 会多出一层要求，而这一层只对<strong>外部复用者</strong>成立 —— 凡是只对这一层成立的缺口，清单里一条都没有。下面这七类由同一批架构对照（Codex / DeepSeek Harness / Claude Code）推导而来，判定与结论都写在本页。另有一组<strong>不属于这一层</strong>的缺口（偏差 <span class="dev">21 – 23</span>）：它们由「后台管家的驱动源不是人」推出来，已在 <a href="#s12">第 12 节</a> 清单里，证据用的是反向写法。</p>
+
+  <figure>
+    <div class="figframe"><span class="ft">图 G · 七类缺口的覆盖分区</span><span class="fk">coverage · 7 gaps · 2 zones</span></div>
+    <div class="figbox">
+      <svg class="dgm" id="dgm-g" viewBox="0 0 1000 490" role="img" aria-labelledby="dgmg-t dgmg-d" xmlns="http://www.w3.org/2000/svg">
+        <title id="dgmg-t">Agent SDK 化七类缺口在偏差清单里的覆盖情况</title>
+        <desc id="dgmg-d">分区图：左侧是偏差表里有落点的三类缺口 —— 契约层已列，环境端口与「存储 · 安全 · 工具面」为半覆盖；右侧是文档与偏差表里都没有的另外四类 —— 依赖护栏、单实例假设、发布工程、验证闭环，它们只对外部复用者成立。</desc>
+        <rect width="1000" height="490" fill="#f5f5f5"/>
+
+        <text class="dl2" x="40" y="26">同一批模块的两种消费形态：本产品自用，与拆出去给其他 Agent 复用</text>
+
+        <rect class="zone" x="40" y="48" width="430" height="330" rx="8"/>
+        <rect class="zone warn" x="520" y="48" width="440" height="330" rx="8"/>
+
+        <text class="nm" x="60" y="78">已进偏差清单</text>
+        <text class="dl2" x="60" y="96">偏差表里有对应条目</text>
+        <text class="nm" x="540" y="78">原本不在清单里</text>
+        <text class="dl2" x="540" y="96">只对复用者成立 · 已补为 17 – 20</text>
+
+        <g class="nd" data-head="① 契约层 · 已列（偏差 1 · 2）" data-note="偏差 1、2 就是 Core 两个最脏的耦合面 —— 一个依赖驱动源、一个依赖 Storage；清单把它们标成公共前置（— → 3、4、5、6、8、16），下游都要等这一对。差别只在视角：清单从「Core 依赖了谁」写，没有从「入口签名本身就是对外承诺」写。">
+          <rect class="box" x="60" y="112" width="390" height="54" rx="6"/>
+          <text class="nm" x="76" y="135">① 契约层</text>
+          <text class="mn" x="434" y="135" text-anchor="end">偏差 1 · 2</text>
+          <text class="dl" x="76" y="153">入口签名与 Core 的两个端口</text>
+        </g>
+
+        <g class="nd" data-head="④ 环境端口 · 半覆盖（偏差 1 · 5 · 13）" data-note="凭据走偏差 5（端点与凭据留在宿主端口），事件出口走偏差 1 与 第 7 节「事件出口」，i18n 走偏差 13 —— 三处都已经在清单里。缺一个：clock。日志按日分文件、保留期、数据库时间戳都隐式取系统时间，13 和 14 都碰到了日志，却没有一条提到时间源要端口化。">
+          <rect class="box sec" x="60" y="178" width="390" height="54" rx="6"/>
+          <text class="nm" x="76" y="201">④ 环境端口</text>
+          <text class="mn" x="434" y="201" text-anchor="end">偏差 1 · 5 · 13</text>
+          <text class="dl" x="76" y="219">凭据 · 事件出口 · translate</text>
+          <text class="hlw" x="434" y="219" text-anchor="end">时间源未列</text>
+        </g>
+
+        <g class="nd" data-head="⑤ 存储 · 安全 · 工具面 · 半覆盖（偏差 2 · 15）" data-note="偏差 2 要求把 Core 对存储的依赖收敛成 loadContext / persist 两个端口；偏差 15 是原清单里唯一带强校验语义的条目，和 SDK 化诉求完全重合。缺两条：「实现可替换」只写在 第 10 节 的原则里、没进偏差表 —— 而 node:sqlite 的 DatabaseSync 是 Electron 内嵌，SDK 恰恰不能依赖它；工具自身的宿主耦合（Playwright、shell 执行器）也无人过问。">
+          <rect class="box sec" x="60" y="244" width="390" height="54" rx="6"/>
+          <text class="nm" x="76" y="267">⑤ 存储 · 安全 · 工具面</text>
+          <text class="mn" x="434" y="267" text-anchor="end">偏差 2 · 15</text>
+          <text class="dl" x="76" y="285">Storage 端口 · 策略强校验</text>
+          <text class="hlw" x="434" y="285" text-anchor="end">实现可替换未列</text>
+        </g>
+
+        <text class="dl2" x="60" y="336">橙色虚线：原则写在文档里，条目不在偏差表。</text>
+        <text class="dl2" x="60" y="358">改偏差 1、2 时顺手就能补上，不必单列。</text>
+
+        <g class="nd" data-head="② 依赖护栏 · 已补 17" data-note="原清单的「应该往哪走」全是架构方向，没有一条是「用什么机制把方向锁住」：没有包边界、没有 exports 映射、没有 lint 规则、没有 CI 断言。今天从 Core 入口出发按静态 import 展开，可达的本地模块有 368 个，其中 26 个直接 import 'electron' —— 这类事实清单里一个都没有。没有护栏，前面几类改完还会退化回去。已于 2026-09-15 补为偏差 17。">
+          <rect class="box focal" x="540" y="112" width="400" height="54" rx="6"/>
+          <text class="nm" x="556" y="135">② 依赖护栏</text>
+          <text class="hlw" x="924" y="135" text-anchor="end">已补 17</text>
+          <text class="dl" x="556" y="153">包边界 · exports · lint 规则 · CI 断言</text>
+        </g>
+
+        <g class="nd" data-head="③ 单实例假设 · 已补 18" data-note="builtinExecutors.ts:1300 的 registry、confirmation/audit.ts:11 的 singleton、mcp/mcpToolExecutor.ts:24 的 globalSemaphore、remote/confirmId.ts:6 的 globalConfirmIds —— 今天一个进程只能跑一个 runtime。对单窗口桌面产品没有影响，所以当初摸排没把它算作偏差；对「嵌进别人的进程」是直接否决。已于 2026-09-15 补为偏差 18。">
+          <rect class="box focal" x="540" y="178" width="400" height="54" rx="6"/>
+          <text class="nm" x="556" y="201">③ 单实例假设</text>
+          <text class="hlw" x="924" y="201" text-anchor="end">已补 18</text>
+          <text class="dl" x="556" y="219">模块级可变状态 · 一个进程一个 runtime</text>
+        </g>
+
+        <g class="nd" data-head="⑥ 发布工程 · 已补 19" data-note="没有 workspaces，package.json 把渲染端、宿主与 provider 依赖混装。清单全是代码内偏差，不含构建与发布维度；而「SDK 是库，还是进程 / 服务」这个决定会反过来影响契约形状，越晚定越贵。已于 2026-09-15 补为偏差 19（形态已拍板为同进程库，依据与代价见本节末）。">
+          <rect class="box focal" x="540" y="244" width="400" height="54" rx="6"/>
+          <text class="nm" x="556" y="267">⑥ 发布工程</text>
+          <text class="hlw" x="924" y="267" text-anchor="end">已补 19</text>
+          <text class="dl" x="556" y="285">workspaces · 包拆分 · 分发形态</text>
+        </g>
+
+        <g class="nd" data-head="⑦ 验证闭环 · 已补 20" data-note="偏差 16 是原清单里唯一的验证类条目，而可复用性的验收由后来的 20 承接；16 验收的是「安全机制在代码里是否真的成立」，不是可复用性。SDK 的验收应该是：createAgentRuntime(deps) 之后，不启动 Electron 就能跑完「带工具调用的回合 + 一次确认 + 一次拒绝」。已于 2026-09-15 补为偏差 20，它是这一组的验收节点。">
+          <rect class="box focal" x="540" y="310" width="400" height="54" rx="6"/>
+          <text class="nm" x="556" y="333">⑦ 验证闭环</text>
+          <text class="hlw" x="924" y="333" text-anchor="end">已补 20</text>
+          <text class="dl" x="556" y="351">不启动 Electron 跑完一个回合</text>
+        </g>
+
+        <line x1="40" y1="404" x2="960" y2="404" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text class="ey" x="40" y="424">LEGEND</text>
+        <rect x="40" y="434" width="14" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text class="dl" x="62" y="443">已列（偏差表有条目）</text>
+        <rect x="300" y="434" width="14" height="12" rx="2" fill="rgba(235,108,54,0.05)" stroke="rgba(235,108,54,0.50)" stroke-dasharray="4,4"/>
+        <text class="dl" x="322" y="443">半覆盖（原则在 · 条目缺）</text>
+        <rect x="560" y="434" width="14" height="12" rx="2" fill="rgba(235,108,54,0.08)" stroke="#eb6c36" stroke-width="1"/>
+        <text class="dl" x="582" y="443">未列 → 已补 17 – 20</text>
+        <text class="dl2" x="40" y="470">判定口径：已列 = 偏差表里有对应条目；半覆盖 = 原则在文档、条目不在表；未列 = 两处都没有（现已补为 17 – 20）。</text>
+      </svg>
+    </div>
+    <div class="note" data-panel="dgm-g">
+      <p class="nt">点选图中任一节点</p>
+      <p class="nh">七类缺口的清单覆盖</p>
+      <p>左侧三类在清单里能找到落点（契约层已列，环境端口与「存储 · 安全 · 工具面」各有半覆盖）；右侧四类原本在文档与偏差表里都没有对应项 —— 它们只对「外部复用者」成立 —— 已于 2026-09-15 补为偏差 17 – 20。</p>
+    </div>
+    <p class="figcap">遍历口径：从 <code>electron/toolChatLoop.ts</code> 出发按静态 import 展开依赖闭包（含 <code>@/</code> 别名）得到 368 个本地模块，其中 26 个直接 <code>import 'electron'</code>；全仓非测试文件里直接 import electron 的有 35 个。</p>
+  </figure>
+  <h3>三组判定</h3>
+  <div class="cards">
+    <div class="card">
+      <div class="card-head"><span class="dot ink"></span><h3>已列</h3></div>
+      <ul>
+        <li><strong>契约层</strong>：入口签名与 Core 的两个端口，清单标为公共前置 <span class="dev">偏差 1 · 2</span></li>
+        <li><strong>凭据端口</strong>：端点与凭据留在宿主，不写进可声明的执行快照 <span class="dev">偏差 5</span></li>
+        <li><strong>事件出口</strong>：取代必填的 <code>sender</code>，无窗口时 no-op <span class="dev">偏差 1 · <a href="#s7">第 7 节「事件出口」</a></span></li>
+        <li><strong>i18n</strong>：主进程只产出「键 + 参数」，直接显示处走注入的 <code>translate</code> <span class="dev">偏差 13</span></li>
+        <li><strong>安全</strong>：档位只调范围、不调宽严；原清单里唯一带强校验语义的条目 <span class="dev">偏差 15</span></li>
+      </ul>
+      <span class="kv">视角差异：清单从「Core 依赖了谁」写，没从「入口签名即对外承诺」写</span>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="dot coral"></span><h3>半覆盖</h3></div>
+      <ul>
+        <li><strong>存储实现可替换</strong>：<a href="#s10">第 10 节</a>「协议在内、实现在外」是承诺，偏差 2 只要求收敛成两个端口，没有一条说实现必须能换 —— 而 <code>node:sqlite</code> 的 <code>DatabaseSync</code> 是 Electron 内嵌 <span class="dev">偏差 2</span></li>
+        <li><strong>业务身份进 Core</strong>：<code>toolChatLoop.ts:460</code> 内部按 <code>remoteContext.source</code> 推导 <code>requestLane</code>，可归入偏差 1 的伞下，但没单列 <span class="dev">偏差 1</span></li>
+        <li><strong>时间源</strong>：日志按日分文件、保留期、数据库时间戳都隐式取系统时间；13 与 14 都碰到日志，却没提端口化 <span class="dev">偏差 13 · 14</span></li>
+      </ul>
+      <span class="kv">三条都不必新增行，就地补进偏差 1、2、13 的描述</span>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="dot link"></span><h3>原未进清单 → 17 – 20</h3></div>
+      <ul>
+        <li><strong>依赖护栏</strong>：包边界 · <code>exports</code> · <code>no-restricted-paths</code> · CI 断言 —— 原清单全是架构方向，没有一条是「用什么机制锁住方向」</li>
+        <li><strong>单实例假设</strong>：四处模块级可变状态，今天一个进程只能跑一个 runtime</li>
+        <li><strong>发布工程</strong>：workspaces、包拆分、版本节奏、SDK 是库还是进程 / 服务</li>
+        <li><strong>验证闭环</strong>：不启动 Electron 跑完「带工具调用的回合 + 确认 + 拒绝」</li>
+      </ul>
+      <span class="kv">只对复用者成立，当初摸排没算进来；现已补为偏差 17 – 20</span>
+    </div>
+  </div>
+  <h3>逐条对照</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>SDK 缺口</th><th>清单里的对应</th><th>判定</th><th>还差什么</th></tr></thead>
+      <tbody>
+        <tr><td><strong>① 契约层</strong></td><td><span class="dev">偏差 1 · 2</span>（公共前置）</td><td>已列</td><td>清单从「Core 依赖了谁」写；「入口签名即对外承诺」这层视角缺</td></tr>
+        <tr><td><strong>② 依赖护栏</strong></td><td>无（原清单）</td><td>未列 → 已补 17</td><td>包边界、<code>exports</code> 映射、lint 规则、CI 断言，一条都没有</td></tr>
+        <tr><td><strong>③ 单实例假设</strong></td><td>无（原清单）</td><td>未列 → 已补 18</td><td>四处模块级可变状态 → 需要一个 <code>createAgentRuntime(deps)</code> 形态</td></tr>
+        <tr><td><strong>④ 环境端口</strong></td><td><span class="dev">偏差 1 · 5 · 13</span></td><td>半覆盖</td><td>凭据、事件出口、<code>translate</code> 都在；clock / 时间源没有</td></tr>
+        <tr><td><strong>⑤ 存储 · 安全 · 工具面</strong></td><td><span class="dev">偏差 2 · 15</span></td><td>半覆盖</td><td>「实现可替换」只在 <a href="#s10">第 10 节</a> 的原则里；工具自身的宿主耦合（Playwright · shell 执行器）无人过问</td></tr>
+        <tr><td><strong>⑥ 发布工程</strong></td><td>无（原清单）</td><td>未列 → 已补 19</td><td>无 workspaces，宿主与 provider 依赖混装；SDK 形态已拍板为<strong>同进程库</strong>，但包边界、<code>exports</code> 与护栏一条都还没有</td></tr>
+        <tr><td><strong>⑦ 验证闭环</strong></td><td><span class="dev">偏差 16</span> 同类，验收对象不同</td><td>未列 → 已补 20</td><td>16 验收的是安全机制是否成立；SDK 要验收的是「不启动 Electron 也能跑完一个回合」</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <p><strong>已补进清单</strong>：②③⑥⑦ 现为偏差 <span class="dev">17 – 20</span>，全部挂在契约之后、不新增关键路径（17 / 18 / 19 依赖列写 <code>1、2 → 20</code>，20 是这一组的验收节点）；④⑤ 的两处半覆盖就地补进偏差 1、2、13 的描述。</p>
+    <p><strong>排期含义</strong>：SDK 化约等于<strong>调用契约路径（偏差 1 · 2）的第二张脸</strong>，但第 0 步必须把<strong>契约与包边界护栏</strong>一起做 —— 没有护栏，前面几类改完还会退化回去。</p>
+    <p><strong>另一组不属于 SDK 面</strong>：偏差 <span class="dev">21 – 23</span>（驱动源到 lane 的映射、lane 的规则、Runtime 准入的维度）由「后台管家的驱动源不是人」推出来，与本节七类缺口无关 —— 它们不在 SDK 讨论的射程内，已列进 <a href="#s12">第 12 节</a> 清单，证据用的是反向写法。</p>
+    <p><strong>已拍板</strong>：按<strong>同进程库</strong>推进 —— 契约按「可远程」的形状定义（禁止函数与句柄），物理边界留在本进程。下面三节是这条结论的全部依据：三种形态的账、公共成本与三条硬约束、以及什么时候该回头改选。</p>
+  </div>
+  <h3>SDK 的物理边界：库、服务，还是库 + 托管子进程</h3>
+  <p>这个问题必须先答 —— 它决定契约里能不能出现函数与句柄，<strong>越晚定越贵</strong>。三种形态的账：</p>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>形态</th><th>追加开发代价</th><th>持续成本</th><th>本产品三条业务线</th><th>建议</th></tr></thead>
+      <tbody>
+        <tr><td><strong>A · 同进程库</strong></td><td>≈ 0（P1 – P5 本来就在契约路径的预算里）</td><td>无</td><td>收益已满</td><td><strong>现在做</strong></td></tr>
+        <tr><td>B · 独立服务</td><td>15 – 27 人日</td><td>运维 · 协议兼容 · 跨进程排障</td><td>收益 0</td><td>出现信号再做</td></tr>
+        <tr><td>C · 库 + 托管子进程</td><td>6 – 12 人日</td><td>三平台构建与子进程管理</td><td>收益 0</td><td>需要隔离时先补它</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>理由不是 A 便宜，而是 <strong>A 的收益今天就能全部兑现，B / C 的收益对本产品是 0</strong>：自动审批、SubAgent、后台管家三条业务线本来就跑在同一个进程里，B 买到的进程隔离与多语言宿主对它们没价值。<span class="kv">改造面口径：从 <code>electron/toolChatLoop.ts</code> 按静态 import 展开得 368 个本地模块、2.0 MB / 5.35 万行；切开核心与外壳后，核心内真正耦合宿主的只剩 4 文件 / 3 个能力（<code>app</code> · <code>safeStorage</code> · <code>shell</code>）—— 所以 SDK 化是<strong>一次边界手术，不是重写</strong>。</span></p>
+  <div class="cards two">
+    <div class="card">
+      <div class="card-head"><span class="dot ink"></span><h3>三种形态都要付的公共成本</h3></div>
+      <ul>
+        <li><strong>P1 · 契约层</strong>：Invocation、事件 union、四态结果、端口接口 —— 2 – 4 人日</li>
+        <li><strong>P2 · 宿主能力端口化</strong>：核心内 4 文件 <code>app</code> · <code>safeStorage</code> · <code>shell</code>，加端口与调用方适配 —— 2 – 3 人日</li>
+        <li><strong>P3 · 消掉单实例状态</strong>：4 处模块级状态 + 2 个注册表，成本主要在回归测试 —— 3 – 5 人日</li>
+        <li><strong>P4 · 切走驱动源与桌面外壳</strong>：约 35 – 45 文件 / 280 KB 迁到宿主侧，机械但要修边界处的类型泄漏 —— 3 – 5 人日</li>
+        <li><strong>P5 · 包边界 + 护栏 + 验收闭环</strong>：workspaces、<code>exports</code>、lint 规则、CI 断言、<code>createAgentRuntime</code> —— 3 – 5 人日</li>
+      </ul>
+      <span class="kv">合计 13 – 22 人日。P1 – P4 就是偏差 1 · 2 本身，所以 A 形态的边际成本只有 P5</span>
+      <span class="kv">人日是按改造面量级推的估算，用于比较三种形态的相对成本，不是排期承诺（误差可能 ±50%）</span>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="dot coral"></span><h3>拍板后立刻要落的三条硬约束</h3></div>
+      <ul>
+        <li><strong>契约里禁止函数与句柄</strong>：端口表达为「宿主实现的服务接口」，本地绑定时把对象直接塞进去；唯一例外是绑定层适配器，不进契约</li>
+        <li><strong>端口一律是接口，不是闭包</strong>：<code>toolChatLoop.ts:409</code> 的 <code>getApiKey: () =&gt; Promise&lt;string | null&gt;</code> 这类签名要换成接口方法，同一份契约在进程内与进程外才都成立</li>
+        <li><strong>一次调用能表达多实例并存</strong>（<code>instanceId</code> 或 runtime 句柄），据此消掉四处模块级状态：<code>builtinExecutors.ts:1300</code>、<code>confirmation/audit.ts:11</code>、<code>mcpToolExecutor.ts:24</code>、<code>remote/confirmId.ts:6</code> —— 即偏差 <span class="dev">18</span></li>
+      </ul>
+      <span class="kv">验收：<code>createAgentRuntime(deps)</code> 之后，不启动 Electron 就能跑完「带工具调用的回合 + 一次确认 + 一次拒绝」—— 即偏差 <span class="dev">20</span></span>
+      <span class="kv">三条都不额外增加工作量：P5 的护栏本来就要写，它们只是多加几条断言</span>
+    </div>
+  </div>
+  <h3>升级信号：什么时候回头补 C / B</h3>
+  <div class="tbl-wrap">
+    <table>
+      <thead><tr><th>信号</th><th>动作</th><th>代价</th></tr></thead>
+      <tbody>
+        <tr><td>宿主不可信 —— 要跑别人写的 Agent</td><td>补 C</td><td>6 – 12 人日</td></tr>
+        <tr><td>需要多语言宿主（非 TS / JS）</td><td>补 C，库退化成薄封装</td><td>6 – 12 人日</td></tr>
+        <tr><td>要把安全底线落到进程层（偏差 <span class="dev">15</span>「底线不可放宽」今天只能靠 API 形状挡）</td><td>补 C</td><td>6 – 12 人日</td></tr>
+        <tr><td>一个宿主跑多租户，或远端团队消费</td><td>在 C 之上补 B 的鉴权与部署</td><td>额外 9 – 15 人日</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="kv">这些信号一个都没出现之前，C / B 都是提前付费；而 B 还有一条额外理由不能先做 —— 契约形状未稳时同时动「协议设计 + 核心重构」两个变量，返工概率翻倍，且传输层要求的可序列化契约本来就能在 A 里免费完成。</p>
+</section>
+
+<div class="foot">
+  <span>SpaceAssistant · 产品架构设计（理想态） · 单文件 HTML，图为内联 SVG</span>
+  <span>独立单文件 · 不引用其他文档 · 仅 Web 字体走 CDN，离线自动回退系统字体</span>
+</div>
+
+</main>
+</div>
+
+<script>
+(function () {
+  var body = document.body;
+
+  /* ---- 显示 / 隐藏「今天的偏差」 ---- */
+  var toggle = document.getElementById('devtoggle');
+  if (toggle) {
+    toggle.addEventListener('change', function () {
+      body.classList.toggle('hide-dev', !toggle.checked);
+    });
+  }
+
+  /* ---- 目录高亮 ---- */
+  var links = [].slice.call(document.querySelectorAll('#navlist a'));
+  var targets = links.map(function (a) {
+    return document.querySelector(a.getAttribute('href'));
+  }).filter(Boolean);
+  function spy() {
+    var y = window.scrollY + 120;
+    var current = 0;
+    targets.forEach(function (s, i) {
+      if (s.offsetTop <= y) { current = i; }
+    });
+    links.forEach(function (a, i) {
+      a.classList.toggle('on', i === current);
+    });
+  }
+  window.addEventListener('scroll', spy, { passive: true });
+  window.addEventListener('resize', spy);
+  spy();
+
+  /* ---- 图节点：悬停降噪 + 点选详情 ---- */
+  function setNote(panelId, head, text, eyebrow) {
+    var panel = document.querySelector('.note[data-panel="' + panelId + '"]');
+    if (!panel) { return; }
+    var ps = panel.querySelectorAll('p');
+    if (ps[0] && eyebrow) { ps[0].textContent = eyebrow; }
+    if (ps[1]) { ps[1].textContent = head; }
+    if (ps[2]) { ps[2].innerHTML = text; }
+  }
+
+  [].slice.call(document.querySelectorAll('.dgm')).forEach(function (svg) {
+    var nodes = [].slice.call(svg.querySelectorAll('.nd'));
+    var id = svg.getAttribute('id');
+    nodes.forEach(function (node) {
+      if (!node.getAttribute('data-note')) { return; }
+      node.addEventListener('mouseenter', function () { svg.classList.add('dimmed'); });
+      node.addEventListener('mouseleave', function () { svg.classList.remove('dimmed'); });
+      node.addEventListener('click', function () {
+        nodes.forEach(function (n) { n.classList.remove('on'); });
+        node.classList.add('on');
+        setNote(id, node.getAttribute('data-head'), node.getAttribute('data-note'), '已选节点');
+      });
+      node.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { node.dispatchEvent(new Event('click')); }
+      });
+      node.setAttribute('tabindex', '0');
+      node.setAttribute('role', 'button');
+    });
+  });
+
+  /* ---- 一次回合：步进器 ---- */
+  var stager = document.querySelector('[data-stager]');
+  if (stager) {
+    var svgC = document.getElementById(stager.getAttribute('data-stager'));
+    var steps = [].slice.call(svgC.querySelectorAll('.nd[data-step]')).sort(function (a, b) {
+      return Number(a.getAttribute('data-step')) - Number(b.getAttribute('data-step'));
+    });
+    var total = steps.length;
+    var current = 4;
+    function render(step) {
+      current = Math.min(total, Math.max(1, step));
+      steps.forEach(function (n) {
+        n.classList.toggle('on', Number(n.getAttribute('data-step')) === current);
+      });
+      [].slice.call(stager.querySelectorAll('[data-goto]')).forEach(function (b) {
+        b.classList.toggle('on', Number(b.getAttribute('data-goto')) === current);
+      });
+      var node = steps[current - 1];
+      setNote(svgC.getAttribute('id'), node.getAttribute('data-head'), node.getAttribute('data-note'),
+        '当前阶段 ' + current + ' / ' + total);
+    }
+    stager.addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b) { return; }
+      if (b.hasAttribute('data-goto')) { render(Number(b.getAttribute('data-goto'))); }
+      if (b.hasAttribute('data-move')) { render(current + Number(b.getAttribute('data-move'))); }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.target.tagName === 'INPUT') { return; }
+      if (e.key === 'ArrowRight') { render(current + 1); }
+      if (e.key === 'ArrowLeft') { render(current - 1); }
+    });
+    render(4);
+  }
+
+  /* ---- 偏差清单：筛选 + 搜索 ---- */
+  var filters = document.querySelector('[data-filters]');
+  var table = document.getElementById('devtable');
+  if (filters && table) {
+    var rows = [].slice.call(table.querySelectorAll('tbody tr'));
+    var mode = 'all';
+    var search = document.getElementById('devsearch');
+    function apply() {
+      var q = (search && search.value ? search.value : '').trim().toLowerCase();
+      rows.forEach(function (r) {
+        var paths = (r.getAttribute('data-path') || '').split(/\s+/);
+        var okMode = mode === 'all' || paths.indexOf(mode) !== -1;
+        var okText = !q || r.textContent.toLowerCase().indexOf(q) !== -1;
+        r.classList.toggle('hide', !(okMode && okText));
+      });
+    }
+    filters.addEventListener('click', function (e) {
+      var b = e.target.closest('button[data-filter]');
+      if (!b) { return; }
+      mode = b.getAttribute('data-filter');
+      [].slice.call(filters.querySelectorAll('button[data-filter]')).forEach(function (x) {
+        x.classList.toggle('on', x === b);
+      });
+      apply();
+    });
+    if (search) { search.addEventListener('input', apply); }
+  }
+})();
+</script>
+</body>
+</html>
