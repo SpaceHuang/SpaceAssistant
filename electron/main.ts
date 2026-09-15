@@ -22,7 +22,7 @@ import {
   registerWeChatIpcHandlers,
   shutdownWeChatServices
 } from './wechat/weChatIpc'
-import { getConfigValue, getDefaultDbPath, getMessage, listPersistedTurns, openDatabase, setConfigValue } from './database'
+import { getConfigValue, getDefaultDbPath, getMessage, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
 import { randomUUID } from 'node:crypto'
 import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
 import { TurnRuntime } from './turnRuntime'
@@ -63,6 +63,7 @@ import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceH
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
 import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
+import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
 import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdownCleanup'
 
@@ -354,6 +355,16 @@ app.whenReady().then(async () => {
   runStartupDecisionCacheCleanup(db)
 
   const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))
+  const activeSessionIds = new Set(listSessions(db).map((session) => session.id))
+  // 删除任务可能在切换 profile 前启动；启动恢复必须覆盖所有仍配置的根目录。
+  const cleanupRoots = Array.from(new Set(workDirManager.listProfiles().map((profile) => profile.path)))
+  const isSessionActive = (sessionId: string) => Boolean(getSession(db, sessionId))
+  void Promise.all(cleanupRoots.map((root) => new SessionBackupManager(root).cleanupOrphanedBackups(activeSessionIds, isSessionActive))).catch((error) => {
+    console.warn('[sessionBackup] orphan cleanup failed:', error instanceof Error ? error.message : String(error))
+  })
+  void cleanupOrphanedChatAttachments(app.getPath('userData'), activeSessionIds, isSessionActive).catch((error) => {
+    console.warn('[chatAttachment] orphan cleanup failed:', error instanceof Error ? error.message : String(error))
+  })
   const turnRuntime = new TurnRuntime({
     storage: createTurnCoordinatorStorage(db),
     deps: { now: Date.now, id: randomUUID },

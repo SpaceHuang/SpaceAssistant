@@ -2,7 +2,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
-import { SessionBackupManager, arrayMessagePageReader, type MessagePageReader, type MessagesPage } from './sessionBackupManager'
+import { SessionBackupManager, arrayMessagePageReader, parseSessionBackupDirName, type MessagePageReader, type MessagesPage } from './sessionBackupManager'
 import type { Message, Session } from '../src/shared/domainTypes'
 
 function makeSession(over: Partial<Session> = {}): Session {
@@ -58,6 +58,31 @@ describe('SessionBackupManager', () => {
     const dateStr = new Date(session.createdAt).toISOString().slice(0, 10).replace(/-/g, '')
     return path.join(workDir, 'sessions', `${session.id}-${dateStr}`)
   }
+
+  it('only parses owned UUID/date backup directories', () => {
+    expect(parseSessionBackupDirName('project-folder')).toBeNull()
+    expect(parseSessionBackupDirName('550e8400-e29b-41d4-a716-446655440000-20260101')).toEqual({
+      sessionId: '550e8400-e29b-41d4-a716-446655440000', date: '20260101'
+    })
+  })
+
+  it('does not remove ordinary folders during orphan cleanup', async () => {
+    const mgr = new SessionBackupManager(workDir)
+    const orphan = '550e8400-e29b-41d4-a716-446655440000-20260101'
+    await fs.mkdir(path.join(workDir, 'sessions', orphan), { recursive: true })
+    await fs.mkdir(path.join(workDir, 'sessions', 'project-folder'), { recursive: true })
+    await expect(mgr.cleanupOrphanedBackups(new Set())).resolves.toBe(1)
+    await expect(fs.access(path.join(workDir, 'sessions', 'project-folder'))).resolves.toBeUndefined()
+    await expect(fs.access(path.join(workDir, 'sessions', orphan))).rejects.toThrow()
+  })
+
+  it('rechecks session ownership immediately before deleting', async () => {
+    const mgr = new SessionBackupManager(workDir)
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    await fs.mkdir(path.join(workDir, 'sessions', `${id}-20260101`), { recursive: true })
+    await expect(mgr.cleanupOrphanedBackups(new Set(), (sessionId) => sessionId === id)).resolves.toBe(0)
+    await expect(fs.access(path.join(workDir, 'sessions', `${id}-20260101`))).resolves.toBeUndefined()
+  })
 
   it('writes session.json and messages.json for a normal backup/restore roundtrip', async () => {
     const mgr = new SessionBackupManager(workDir)

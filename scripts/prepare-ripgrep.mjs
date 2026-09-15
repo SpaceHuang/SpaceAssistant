@@ -13,15 +13,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const stagingRoot = path.join(root, 'resources', 'ripgrep')
 const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
 const MAX_ARCHIVE_FILES = 4096
+const DOWNLOAD_TIMEOUT_MS = 30_000
+const DOWNLOAD_ATTEMPTS = 3
 const APPROVED_DOWNLOAD_HOSTS = new Set(['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'])
 
 function sha256(data) { return createHash('sha256').update(data).digest('hex') }
 
-export async function downloadArchive(url, fetchImpl = fetch) {
+async function downloadArchiveOnce(url, fetchImpl) {
   let current = new URL(url)
   if (current.protocol !== 'https:' || current.hostname !== 'github.com') throw new Error('untrusted ripgrep download URL')
   for (let redirects = 0; redirects <= 3; redirects++) {
-    const response = await fetchImpl(current.toString(), { redirect: 'manual' })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
+    let response
+    try {
+      response = await fetchImpl(current.toString(), { redirect: 'manual', signal: controller.signal })
+    } finally {
+      clearTimeout(timeout)
+    }
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location')
       if (!location) throw new Error('ripgrep redirect missing location')
@@ -39,7 +48,18 @@ export async function downloadArchive(url, fetchImpl = fetch) {
     let total = 0
     try {
       while (true) {
-        const { done, value } = await reader.read()
+        const controller = new AbortController()
+        const timeout = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
+        let next
+        try {
+          next = await Promise.race([
+            reader.read(),
+            new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(new Error('ripgrep download timed out')), { once: true }))
+          ])
+        } finally {
+          clearTimeout(timeout)
+        }
+        const { done, value } = next
         if (done) break
         total += value.byteLength
         if (total > MAX_ARCHIVE_BYTES) {
@@ -54,6 +74,19 @@ export async function downloadArchive(url, fetchImpl = fetch) {
     return Buffer.concat(chunks, total)
   }
   throw new Error('ripgrep redirect limit exceeded')
+}
+
+export async function downloadArchive(url, fetchImpl = fetch) {
+  let lastError
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      return await downloadArchiveOnce(url, fetchImpl)
+    } catch (error) {
+      lastError = error
+      if (attempt < DOWNLOAD_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)))
+    }
+  }
+  throw lastError
 }
 export function safeJoin(base, relative) {
   const resolved = path.resolve(base, relative)
@@ -102,6 +135,17 @@ export async function prepareTarget(targetKey, opts = {}) {
   validateManifest(manifest)
   const target = manifest.targets[targetKey]
   if (!target) throw new Error(`unsupported ripgrep target: ${targetKey}`)
+  const sourceName = targetKey.startsWith('win32') ? 'rg.exe' : 'rg'
+  const destination = path.join(stagingRoot, targetKey, sourceName)
+  try {
+    const cached = await fs.readFile(destination)
+    if (sha256(cached) === target.binarySha256) {
+      if (!targetKey.startsWith('win32')) await fs.chmod(destination, 0o755)
+      return destination
+    }
+  } catch {
+    // Cache miss or incomplete cache: download and verify below.
+  }
   const archive = opts.archivePath ? await fs.readFile(opts.archivePath) : await downloadArchive(target.url)
   if (sha256(archive) !== target.archiveSha256) throw new Error(`archive SHA-256 mismatch for ${targetKey}`)
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'spaceassistant-rg-'))
@@ -125,7 +169,7 @@ export async function prepareTarget(targetKey, opts = {}) {
     const content = await fs.readFile(binary)
     if (sha256(content) !== target.binarySha256) throw new Error(`binary SHA-256 mismatch for ${targetKey}`)
     const destinationDir = path.join(stagingRoot, targetKey)
-    const destination = path.join(destinationDir, targetKey.startsWith('win32') ? 'rg.exe' : 'rg')
+    const destination = path.join(destinationDir, sourceName)
     await fs.mkdir(destinationDir, { recursive: true })
     const newFile = `${destination}.new-${process.pid}`
     await fs.writeFile(newFile, content, { flag: 'wx', mode: 0o755 })

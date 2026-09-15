@@ -17,11 +17,13 @@ const WORK_DIR = path.resolve('/fake/workdir')
 
 const mockGetSession = vi.fn()
 const mockUpdateSession = vi.fn()
+const mockCreateSession = vi.fn()
+const mockDeleteSession = vi.fn()
 
 vi.mock('fs/promises', () => ({
-  default: {},
+  default: { mkdir: vi.fn().mockResolvedValue(undefined) },
   writeFile: vi.fn(),
-  mkdir: vi.fn(),
+  mkdir: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn(),
   rename: vi.fn(),
   stat: vi.fn(),
@@ -36,10 +38,10 @@ vi.mock('electron', () => ({
 
 vi.mock('./database', () => ({
   listSessions: vi.fn(() => []),
-  createSession: vi.fn(),
+  createSession: (...args: unknown[]) => mockCreateSession(...args),
   getSession: (...args: unknown[]) => mockGetSession(...args),
   updateSession: (...args: unknown[]) => mockUpdateSession(...args),
-  deleteSession: vi.fn(),
+  deleteSession: (...args: unknown[]) => mockDeleteSession(...args),
   getMessages: vi.fn(() => []),
   appendMessage: vi.fn(),
   updateMessageContent: vi.fn(),
@@ -100,7 +102,9 @@ function makeCtx(): AppIpcContext {
       schedule: vi.fn(),
       flush: vi.fn(),
       backupImmediate: vi.fn(),
-      deleteBackup: vi.fn()
+      backupWithRetry: vi.fn(),
+      deleteBackup: vi.fn(),
+      deleteBackupWithRetry: vi.fn()
     } as unknown as AppIpcContext['backup'],
     workDirManager: makeWorkDirManager(),
     getWorkDir: () => WORK_DIR,
@@ -281,5 +285,35 @@ describe('session:delete IPC busy guard', () => {
     await expect(handler({}, 'session-1')).rejects.toThrow(
       `${ErrorCodes.REMOTE_SESSION_BUSY}: ${REMOTE_SESSION_BUSY_MESSAGE}`
     )
+  })
+
+  it('returns before backup cleanup finishes', async () => {
+    const session = stubSession()
+    mockCreateSession.mockReturnValue(session)
+    let release!: () => void
+    const backupPending = new Promise<void>((resolve) => { release = resolve })
+    ctx.backup.backupWithRetry = vi.fn(() => backupPending)
+    const createHandler = ipc.getHandler('session:create')!
+
+    const result = await createHandler({}, { name: '新会话' })
+
+    expect(result).toEqual(session)
+    expect(ctx.backup.backupWithRetry).toHaveBeenCalled()
+    release()
+  })
+
+  it('returns before backup deletion finishes', async () => {
+    const session = stubSession()
+    mockGetSession.mockReturnValue(session)
+    let release!: () => void
+    const cleanupPending = new Promise<void>((resolve) => { release = resolve })
+    ctx.backup.deleteBackupWithRetry = vi.fn(() => cleanupPending)
+    const handler = ipc.getHandler('session:delete')!
+
+    await handler({}, 'session-1')
+
+    expect(mockDeleteSession).toHaveBeenCalledWith(ctx.db, 'session-1', { flush: false })
+    expect(ctx.backup.deleteBackupWithRetry).toHaveBeenCalledWith(session, 3, expect.any(Function))
+    release()
   })
 })

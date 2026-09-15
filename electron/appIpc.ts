@@ -143,6 +143,7 @@ import { openExternalLink } from './externalLink'
 import { detectLocaleFromSystem, isAppLocale } from '../src/shared/locale'
 import {
   deleteSessionChatAttachments,
+  deleteSessionChatAttachmentsWithRetry,
   discardStagedImage,
   readStagedImage,
   stageChatImage
@@ -653,7 +654,12 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
       })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
-      await ctx.backup.backupImmediate(s, arrayMessagePageReader([]))
+      void ctx.backup.backupWithRetry(s, arrayMessagePageReader([])).catch((error) => {
+        logAgentEvent('warn', 'session.backup.create_failed', {
+          sessionId: s.id,
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
       return s
     }
   )
@@ -742,7 +748,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       throw new Error(`${ErrorCodes.REMOTE_SESSION_BUSY}: ${REMOTE_SESSION_BUSY_MESSAGE}`)
     }
     clearSessionToolResources(sessionId)
-    deleteSession(ctx.db, sessionId)
+    deleteSession(ctx.db, sessionId, { flush: false })
     // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程
     try {
       clearDecisionCacheOnSessionDelete(ctx.db, sessionId)
@@ -752,8 +758,22 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         message: e instanceof Error ? e.message : String(e)
       })
     }
-    await deleteSessionChatAttachments(ctx.getUserDataPath(), sessionId)
-    if (s) await ctx.backup.deleteBackup(s)
+    void Promise.all([
+      deleteSessionChatAttachmentsWithRetry(ctx.getUserDataPath(), sessionId),
+      s
+        ? (ctx.backup.deleteBackupWithRetry(s, 3, (error) => {
+            logAgentEvent('warn', 'session.cleanup.backup_failed', {
+              sessionId,
+              message: error instanceof Error ? error.message : String(error)
+            })
+          }), Promise.resolve())
+        : Promise.resolve()
+    ]).catch((error) => {
+      logAgentEvent('warn', 'session.cleanup_failed', {
+        sessionId,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    })
   })
 
   ipcMain.handle(

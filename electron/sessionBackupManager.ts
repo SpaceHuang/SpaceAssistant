@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import type { Dirent } from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Message, Session } from '../src/shared/domainTypes'
@@ -34,6 +35,13 @@ export function arrayMessagePageReader(messages: Message[]): MessagePageReader {
 function sessionDirName(sessionId: string, createdAt: number): string {
   const dateStr = new Date(createdAt).toISOString().slice(0, 10).replace(/-/g, '')
   return `${sessionId}-${dateStr}`
+}
+
+const SESSION_BACKUP_DIR_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})-(\d{8})$/i
+
+export function parseSessionBackupDirName(name: string): { sessionId: string; date: string } | null {
+  const match = SESSION_BACKUP_DIR_RE.exec(name)
+  return match ? { sessionId: match[1]!, date: match[2]! } : null
 }
 
 export class SessionBackupManager {
@@ -132,6 +140,31 @@ export class SessionBackupManager {
   async deleteBackup(session: Session): Promise<void> {
     const dir = this.dirFor(session)
     await fs.rm(dir, { recursive: true, force: true })
+  }
+
+  async cleanupOrphanedBackups(
+    activeSessionIds: ReadonlySet<string>,
+    isSessionActive?: (sessionId: string) => boolean | Promise<boolean>
+  ): Promise<number> {
+    const root = this.sessionsRoot()
+    let entries: Dirent[]
+    try {
+      entries = await fs.readdir(root, { withFileTypes: true })
+    } catch {
+      return 0
+    }
+    let removed = 0
+    await Promise.all(entries
+      .filter((entry) => entry.isDirectory())
+      .map(async (entry) => {
+        const parsed = parseSessionBackupDirName(entry.name)
+        if (!parsed || activeSessionIds.has(parsed.sessionId)) return
+        // 集合只是快速筛选；删除前重新读取事实源，覆盖扫描期间新建的会话。
+        if (isSessionActive && await isSessionActive(parsed.sessionId)) return
+        await fs.rm(path.join(root, entry.name), { recursive: true, force: true })
+        removed += 1
+      }))
+    return removed
   }
 
   /** 只读审计事件；事件流与消息备份共享目录生命周期，但不参与消息恢复。 */

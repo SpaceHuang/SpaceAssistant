@@ -38,4 +38,31 @@ describe('DebouncedSessionBackupManager', () => {
     await mgr.flush('s1', async () => ({ session, readPage }))
     expect(backupSession).toHaveBeenCalledTimes(1)
   })
+
+  it('retries a failed backup with bounded attempts', async () => {
+    const backupSession = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary'))
+      .mockResolvedValueOnce(undefined)
+    const inner = { backupSession, deleteBackup: vi.fn() } as unknown as SessionBackupManager
+    const mgr = new DebouncedSessionBackupManager(inner)
+
+    const promise = mgr.backupWithRetry({ id: 's1' } as Session, arrayMessagePageReader([]))
+    await vi.advanceTimersByTimeAsync(250)
+    await promise
+
+    expect(backupSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries deletion in the background and reports terminal failure', async () => {
+    const deleteBackup = vi.fn().mockRejectedValue(new Error('permanent'))
+    const inner = { backupSession: vi.fn(), deleteBackup } as unknown as SessionBackupManager
+    const mgr = new DebouncedSessionBackupManager(inner)
+    const onError = vi.fn()
+
+    mgr.deleteBackupWithRetry({ id: 's1' } as Session, 3, onError)
+    await vi.advanceTimersByTimeAsync(1000)
+
+    expect(deleteBackup).toHaveBeenCalledTimes(3)
+    expect(onError).toHaveBeenCalledWith(expect.any(Error))
+  })
 })

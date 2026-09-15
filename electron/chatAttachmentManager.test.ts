@@ -7,7 +7,8 @@ import {
   discardStagedImage,
   readStagedImage,
   resolveChatAttachmentBase64,
-  stageChatImage
+  stageChatImage,
+  cleanupOrphanedChatAttachments
 } from './chatAttachmentManager'
 import { MAX_CHAT_IMAGE_ATTACHMENT_BYTES } from '../src/shared/chatAttachmentLimits'
 
@@ -25,6 +26,21 @@ describe('chatAttachmentManager', () => {
 
   afterEach(async () => {
     await fs.rm(tmpUserData, { recursive: true, force: true })
+  })
+
+  it('does not remove ordinary directories under attachment root', async () => {
+    await fs.mkdir(path.join(tmpUserData, 'chat-attachments', 'project-folder'), { recursive: true })
+    const orphan = '550e8400-e29b-41d4-a716-446655440000'
+    await fs.mkdir(path.join(tmpUserData, 'chat-attachments', orphan), { recursive: true })
+    await expect(cleanupOrphanedChatAttachments(tmpUserData, new Set())).resolves.toBe(1)
+    await expect(fs.access(path.join(tmpUserData, 'chat-attachments', 'project-folder'))).resolves.toBeUndefined()
+  })
+
+  it('rechecks ownership before removing an attachment directory', async () => {
+    const id = '550e8400-e29b-41d4-a716-446655440000'
+    await fs.mkdir(path.join(tmpUserData, 'chat-attachments', id), { recursive: true })
+    await expect(cleanupOrphanedChatAttachments(tmpUserData, new Set(), (sessionId) => sessionId === id)).resolves.toBe(0)
+    await expect(fs.access(path.join(tmpUserData, 'chat-attachments', id))).resolves.toBeUndefined()
   })
 
   it('stages image and reads back', async () => {

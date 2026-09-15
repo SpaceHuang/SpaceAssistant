@@ -10,6 +10,7 @@ import { getFileExtension, getImageMimeType } from '../src/shared/fileTypes'
 import { resolveSafePath } from './pathSecurity'
 
 const CHAT_ATTACHMENTS_ROOT = 'chat-attachments'
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 /** MVP 白名单：png/jpeg/webp/gif */
 const ALLOWED_CHAT_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
@@ -151,4 +152,33 @@ export async function resolveChatAttachmentBase64(
 export async function deleteSessionChatAttachments(userDataDir: string, sessionId: string): Promise<void> {
   const dir = path.join(userDataDir, CHAT_ATTACHMENTS_ROOT, sessionId)
   await fs.rm(dir, { recursive: true, force: true })
+}
+
+export async function deleteSessionChatAttachmentsWithRetry(userDataDir: string, sessionId: string, attempts = 3): Promise<void> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try { await deleteSessionChatAttachments(userDataDir, sessionId); return } catch (error) {
+      lastError = error
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 250 * attempt))
+    }
+  }
+  throw lastError
+}
+
+export async function cleanupOrphanedChatAttachments(
+  userDataDir: string,
+  activeSessionIds: ReadonlySet<string>,
+  isSessionActive?: (sessionId: string) => boolean | Promise<boolean>
+): Promise<number> {
+  const root = path.join(userDataDir, CHAT_ATTACHMENTS_ROOT)
+  let entries: import('fs').Dirent[]
+  try { entries = await fs.readdir(root, { withFileTypes: true }) } catch { return 0 }
+  let removed = 0
+  await Promise.all(entries.filter((entry) => entry.isDirectory() && SESSION_ID_RE.test(entry.name)).map(async (entry) => {
+    if (activeSessionIds.has(entry.name)) return
+    if (isSessionActive && await isSessionActive(entry.name)) return
+    await fs.rm(path.join(root, entry.name), { recursive: true, force: true })
+    removed += 1
+  }))
+  return removed
 }

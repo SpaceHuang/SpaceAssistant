@@ -257,13 +257,13 @@ export function updateSession(
   return next
 }
 
-export function deleteSession(db: AppDatabase, sessionId: string): void {
+export function deleteSession(db: AppDatabase, sessionId: string, options?: { flush?: boolean }): void {
   const conn = getDbConnection(db)
   runInTransaction(conn, () => {
     conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
   })
   deleteSessionUsage(db, sessionId)
-  db.flushSave()
+  if (options?.flush !== false) db.flushSave()
 }
 
 export function getSessionUsage(db: AppDatabase, sessionId: string): SessionUsage | undefined {
