@@ -33,6 +33,31 @@ import {
   setPersistedTurnExecutionConfig
 } from './operations'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
+import { setConfigValue } from './operations'
+
+describe('createSession 默认模型', () => {
+  it('回退到配置里的默认模型，而不是写死的历史模型名', () => {
+    const db = createMemoryAppDb()
+    setConfigValue(db, 'config.defaultModel', 'deepseek-v4-flash')
+
+    const session = createSession(db, { name: 'no-model' })
+
+    // 默认值必须来自配置（并归一到当前内置名），不能是已下线的 claude-sonnet-4-20250514
+    expect(session.model).toBe('deepseek-flash')
+  })
+
+  it('显式传入的模型优先', () => {
+    const db = createMemoryAppDb()
+    setConfigValue(db, 'config.defaultModel', 'deepseek-flash')
+
+    expect(createSession(db, { name: 'explicit', model: 'deepseek-v4-pro' }).model).toBe('deepseek-v4-pro')
+  })
+
+  it('配置缺失时不写入任何历史模型名', () => {
+    const db = createMemoryAppDb()
+    expect(createSession(db, { name: 'empty-config' }).model).toBe('')
+  })
+})
 
 describe('getMessagesPage', () => {
   let db: AppDatabase

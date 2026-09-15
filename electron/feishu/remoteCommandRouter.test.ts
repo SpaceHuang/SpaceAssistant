@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSession, openDatabase, createSession } from '../database'
+import { getSession, openDatabase, createSession, setConfigValue } from '../database'
 import { createWorkDirManager } from '../workDirManager'
 import { RemoteCommandRouter } from './remoteCommandRouter'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
@@ -73,6 +73,51 @@ function makeInbound(overrides: Partial<FeishuInboundMessage> = {}): FeishuInbou
     content: 'hello',
     ...overrides
   }
+}
+
+/** 测试会话模型 / 服务 id；可信 turn 快照会真的解析「会话模型 → 活跃服务 → Key」 */
+const TEST_MODEL_NAME = 'claude-sonnet-4-20250514'
+const TEST_SERVICE_ID = 'svc-test'
+
+/**
+ * 可信 turn 快照会真的解析「会话模型 → 活跃服务 → Key」。不 seed 一份可用配置，
+ * router 会在 prepare 阶段被模型解析 fail-fast 拦下，这些用例就测不到编排本身了。
+ */
+function seedLlmConfig(db: ReturnType<typeof openDatabase>, modelName = TEST_MODEL_NAME): void {
+  setConfigValue(db, 'config.defaultModel', modelName)
+  setConfigValue(
+    db,
+    'config.models',
+    JSON.stringify([
+      {
+        id: modelName,
+        name: modelName,
+        maximumContext: 200000,
+        maxTokens: 64000,
+        isDefault: true,
+        isFast: false,
+        isVision: false,
+        enabled: true
+      }
+    ])
+  )
+  setConfigValue(
+    db,
+    'config.llmServices',
+    JSON.stringify([
+      {
+        id: TEST_SERVICE_ID,
+        name: 'Test Service',
+        baseUrl: 'https://api.example.com',
+        supportedModelIds: [modelName],
+        createdAt: '1',
+        updatedAt: '1'
+      }
+    ])
+  )
+  setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify([TEST_SERVICE_ID]))
+  setConfigValue(db, 'config.preferredLanguageModelId', modelName)
+  setConfigValue(db, 'secrets.llmServiceKeys', JSON.stringify({ [TEST_SERVICE_ID]: 'enc:sk-test' }))
 }
 
 let claimIdSeq = 0
@@ -155,6 +200,7 @@ describe('RemoteCommandRouter workdir binding', () => {
     dirs.push(path.dirname(dbPath))
     const db = openDatabase(dbPath)
     openDbs.push(db)
+    seedLlmConfig(db)
     let workDir = dirA
     const manager = createWorkDirManager({
       db,
@@ -310,6 +356,7 @@ describe('RemoteCommandRouter busy guard', () => {
     dirs.push(path.dirname(dbPath))
     const db = openDatabase(dbPath)
     openDbs.push(db)
+    seedLlmConfig(db)
     const manager = createWorkDirManager({
       db,
       getWorkDir: () => dir,

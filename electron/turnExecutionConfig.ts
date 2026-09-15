@@ -2,9 +2,11 @@ import type { TurnExecutionConfig } from '../src/shared/assistantFactAggregator'
 import { isAppLocale } from '../src/shared/locale'
 import { normalizeTurnExecutionConfig } from '../src/shared/turnCoordinator'
 import type { ModelEntry } from '../src/shared/domainTypes'
+import { getAvailableModels, migrateBuiltinModelName, resolvePreferredModelEntry } from '../src/shared/llmModelConfig'
 import { resolveVisionRouteForImageSend } from '../src/shared/visionModelRouting'
-import { getConfigValue, getSession, type AppDatabase } from './database'
-import { readActiveLlmServiceIds, readLlmServices, resolveLlmCredentialsForModel } from './llmServiceResolver'
+import { logAgentEvent } from './agentLogger/agentLogger'
+import { getConfigValue, getSession, updateSession, type AppDatabase } from './database'
+import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel } from './llmServiceResolver'
 
 export type TurnExecutionLane = NonNullable<TurnExecutionConfig['lane']>
 
@@ -21,17 +23,23 @@ export async function resolveTrustedTurnExecutionConfig(
 ): Promise<TurnExecutionConfig> {
   const session = getSession(db, sessionId)
   if (!session) throw new Error('TURN_SESSION_NOT_FOUND')
-  let model = session.model.trim()
-  if (!model) throw new Error('TURN_MODEL_NOT_CONFIGURED')
+  const storedModel = session.model.trim()
+  if (!storedModel) throw new Error('TURN_MODEL_NOT_CONFIGURED')
+  let model = storedModel
   let llmServiceId = session.llmServiceId
   let effectiveModelForUsage = derived.effectiveModelForUsage
-  let models: ModelEntry[] = []
-  try {
-    const parsed = JSON.parse(getConfigValue(db, 'config.models') ?? '[]') as unknown
-    if (Array.isArray(parsed)) models = parsed as ModelEntry[]
-  } catch {
-    models = []
+
+  const models: ModelEntry[] = readStoredModels(db)
+
+  // ① 旧内置名（kimi-k2.6 / glm-5.1 / deepseek-v4-flash…）先归一到当前名并回写：
+  //    否则请求会带着已不存在的模型名发出，凭据解析也会直接失败。
+  const migratedName = migrateBuiltinModelName(storedModel)
+  if (migratedName !== storedModel) {
+    model = migratedName
+    updateSession(db, sessionId, { model: migratedName })
+    logAgentEvent('info', 'session.model.migrated', { sessionId, lane, from: storedModel, to: migratedName })
   }
+
   if (options.requiresVision) {
     const activeLlmServiceIds = readActiveLlmServiceIds(db)
     const preferredVisionModelId = getConfigValue(db, 'config.preferredVisionModelId')
@@ -47,7 +55,55 @@ export async function resolveTrustedTurnExecutionConfig(
     model = vision.modelName
     llmServiceId = vision.llmServiceId
   }
-  const credentials = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId, models })
+
+  let credentials = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId, models })
+
+  // ② 模型被下架 / 已无可用服务时，重绑到当前优选模型并回写，避免历史会话永久失败。
+  //    渲染层本就把不可用模型显示成回退模型，这里把主进程的真实绑定对齐到同一模型。
+  //    带图 turn 例外：此时的 model 是 per-turn 派生的视觉模型（见上），与用户会话绑定无关。
+  //    从 language 组重绑会把图片发给非视觉模型，还会把「视觉服务缺 Key」的配置事故静默记到
+  //    会话绑定上（effectiveModelForUsage 也仍停在视觉模型名），所以只允许 fail-fast。
+  if (credentials.error && !options.requiresVision) {
+    const available = getAvailableModels(models, readLlmServices(db), readActiveLlmServiceIds(db))
+    const preferred = resolvePreferredModelEntry(
+      'language',
+      models,
+      available,
+      getConfigValue(db, 'config.preferredLanguageModelId') ?? ''
+    )
+    if (preferred && preferred.name !== model) {
+      const rebound = await resolveLlmCredentialsForModel(db, preferred.name, { models })
+      if (!rebound.error) {
+        logAgentEvent('warn', 'session.model.rebound', {
+          sessionId,
+          lane,
+          from: model,
+          to: preferred.name,
+          reason: credentials.error
+        })
+        model = preferred.name
+        llmServiceId = rebound.serviceId || undefined
+        credentials = rebound
+        // 解析成功时必带 serviceId（只有失败才是空串）：显式覆盖旧绑定，
+        // 避免下一轮继续拿过期 serviceId 解析失败再重绑一次。
+        updateSession(db, sessionId, { model, llmServiceId: rebound.serviceId })
+      }
+    }
+  }
+
+  // ③ fail-fast：解析不出端点就不放行。否则 SDK 会退回默认端点，用一个不相干的服务地址
+  //    把「模型不可用」伪装成远端 403，用户只看到「回复未能完成」。
+  if (credentials.error) {
+    if (options.requiresVision) {
+      throw new Error(
+        `视觉模型「${model}」当前不可用（${credentials.error}），请在设置中重新选择视觉模型或补齐 API 服务配置`
+      )
+    }
+    throw new Error(
+      `会话模型「${model}」当前不可用（${credentials.error}），请在设置中重新选择模型或补齐 API 服务配置`
+    )
+  }
+
   const locale = getConfigValue(db, 'config.locale')
   return normalizeTurnExecutionConfig({
     lane,

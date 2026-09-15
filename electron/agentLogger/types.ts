@@ -8,6 +8,8 @@ export type AgentLogEventName =
   | 'llm.error'
   | 'session.event.finalize_failed'
   | 'session.event.chunk_dropped'
+  | 'session.model.migrated'
+  | 'session.model.rebound'
   | 'llm.fetch_models'
   | 'tool.request'
   | 'tool.confirm'

@@ -20,6 +20,7 @@ import {
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { changesToNumber, runInTransaction } from './transaction'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
+import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import {
   estimateThinkingTokensFromMessage,
@@ -127,6 +128,15 @@ export function getSession(db: AppDatabase, sessionId: string): Session | undefi
   return row ? rowToSession(row) : undefined
 }
 
+/**
+ * 新建会话的兜底模型：取配置里的默认模型并归一到当前内置名。
+ * 不能再回退到写死的历史模型名（claude-sonnet-4-20250514 之类）——那样的会话首次发送
+ * 就会因为「未知模型」被解析失败，最终以「回复未能完成」收场。
+ */
+function resolveDefaultSessionModel(db: AppDatabase): string {
+  return migrateBuiltinModelName(getConfigValue(db, 'config.defaultModel') ?? '')
+}
+
 export function createSession(
   db: AppDatabase,
   input: {
@@ -141,7 +151,7 @@ export function createSession(
 ): Session {
   const now = Date.now()
   const id = randomUUID()
-  const model = input.model ?? 'claude-sonnet-4-20250514'
+  const model = input.model ?? resolveDefaultSessionModel(db)
   const temperature = input.temperature ?? DEFAULT_LLM_TEMPERATURE
   const maxTokens = input.maxTokens ?? 4096
   const session: Session = {
