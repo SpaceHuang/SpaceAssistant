@@ -109,6 +109,16 @@ describe('surface replay', () => {
     const replayed = [{ id: 'a', role: 'assistant', content: 'summary' }]
     expect(restoreReplaySurface(original, replayed)).toEqual(original)
   })
+  it('does not restore a shadowed tool pair when only the following user is retained', () => {
+    const original = [
+      { id: 'old-user', role: 'user', content: 'old question' },
+      { id: 'old-assistant', role: 'assistant', content: [{ type: 'tool_use', id: 'old-tool' }] },
+      { id: 'old-result', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'old-tool', content: 'old result' }] },
+      { id: 'current-user', role: 'user', content: 'current question' }
+    ]
+    const replayed = [{ id: 'checkpoint', role: 'user', content: 'summary' }, original[3]!]
+    expect(restoreReplaySurface(original, replayed)).toEqual([replayed[0], original[3]])
+  })
   it('disambiguates repeated normalized messages by occurrence', () => {
     const identities = surfaceItemIdentities([{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }, { role: 'user', content: 'other' }, { role: 'user', content: 'same' }])
     expect(new Set(identities).size).toBe(4)
@@ -127,6 +137,38 @@ describe('surface replay', () => {
     const fingerprint = (values: readonly { content?: string }[]) => values.map((value) => value.content ?? '').join('|')
     expect(applyCommittedSurfaceShadow([{ id: 'db-1', role: 'user', content: 'same' }, { id: 'db-2', role: 'user', content: 'same' }], replay, [], 'w', fingerprint)).toEqual([{ id: 'db-2', role: 'user', content: 'same' }])
     expect(second).not.toBe(first)
+  })
+  it('keeps a later duplicate occurrence when replay removes the earlier reset range', () => {
+    const facts = [
+      { id: 'old-user', role: 'user', content: 'continue' },
+      { id: 'old-answer', role: 'assistant', content: 'old answer' },
+      { id: 'current-user', role: 'user', content: 'continue' },
+      { id: 'current-answer', role: 'assistant', content: 'current answer' },
+      { id: 'next-user', role: 'user', content: 'next' },
+      { id: 'next-answer', role: 'assistant', content: 'next answer' }
+    ]
+    const identities = surfaceItemIdentities(facts)
+    const fingerprint = (items: readonly { content?: string }[]) => items.map((item) => item.content ?? '').join('|')
+    const firstOutput = facts.slice(2)
+    const first = { kind: 'reset' as const, shadowedRanges: [{ start: identities[0]!, end: identities[1]! }] }
+    const second = { kind: 'summary' as const, shadowedRanges: [{ start: identities[2]!, end: identities[5]! }] }
+    const events = [
+      { seq: 1, type: 'compaction_start' as const, payload: { compactionId: 'reset', windowId: 'w', inputSurfaceFingerprint: fingerprint(facts), surfaceBoundaryId: 'next-answer' } },
+      { seq: 2, type: 'compaction_summary' as const, payload: { compactionId: 'reset', windowId: 'w', candidate: first, summaryHash: computeCompactionSummaryHash(first), outputSurfaceFingerprint: fingerprint(firstOutput), shadowedRanges: first.shadowedRanges } },
+      { seq: 3, type: 'compaction_end' as const, payload: { compactionId: 'reset', windowId: 'w', status: 'committed' as const, startSeq: 1, summarySeq: 2, inputSurfaceFingerprint: fingerprint(facts), outputSurfaceFingerprint: fingerprint(firstOutput), summaryHash: computeCompactionSummaryHash(first) } },
+      { seq: 4, type: 'compaction_start' as const, payload: { compactionId: 'summary', windowId: 'w', inputSurfaceFingerprint: fingerprint(firstOutput), surfaceBoundaryId: 'next-answer' } },
+      { seq: 5, type: 'compaction_summary' as const, payload: { compactionId: 'summary', windowId: 'w', candidate: second, summaryHash: computeCompactionSummaryHash(second), outputSurfaceFingerprint: '', shadowedRanges: second.shadowedRanges } },
+      { seq: 6, type: 'compaction_end' as const, payload: { compactionId: 'summary', windowId: 'w', status: 'committed' as const, startSeq: 4, summarySeq: 5, inputSurfaceFingerprint: fingerprint(firstOutput), outputSurfaceFingerprint: '', summaryHash: computeCompactionSummaryHash(second) } }
+    ]
+    expect(applyCommittedSurfaceShadow(facts, foldCompactionEvents(events), [], 'w', fingerprint)).toEqual([])
+  })
+  it('reuses the source occurrence for a cloned mixed user after tool-result removal', () => {
+    const current = { id: 'current-user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'old-tool', content: 'old result' }, { type: 'text', text: 'continue' }] }
+    const sourceMessages = [{ id: 'old-user', role: 'user', content: 'continue' }, { id: 'old-answer', role: 'assistant', content: 'old answer' }, current]
+    const source = projectReplaySurfaceWithSources(sourceMessages)
+    const retained = projectReplaySurfaceWithSources([{ ...current, content: 'continue' }])
+    const sourceIdentities = surfaceItemIdentities(source.messages)
+    expect(surfaceItemIdentitiesForProjectionSubset(source, retained)).toEqual([sourceIdentities[2]])
   })
   it('uses the persisted identity for a checkpoint that duplicates an existing message', () => {
     const checkpoint = { id: 'checkpoint', role: 'user', content: 'same' }

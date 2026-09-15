@@ -141,19 +141,43 @@ export function restoreReplaySurface<T extends { id?: string }>(original: readon
     byKey.set(item.id ?? identities[index]!, item)
     byKey.set(identities[index]!, item)
   })
+  // 原始 API surface 可能仍是多条 tool-use 消息，而 replay surface 已将
+  // 整个工具轮合并成一个 assistant。把 projected identity 也映射回其首个
+  // source，才能恢复保留的完整工具轮；普通 user 不会因此获得邻近旧工具对。
+  const originalProjection = projectReplaySurfaceWithSources(original)
+  const projectedIdentities = surfaceItemIdentities(originalProjection.messages)
+  originalProjection.messages.forEach((message, index) => {
+    const source = originalProjection.sources[index]
+    const identity = projectedIdentities[index]!
+    byKey.set(identity, source)
+    const messageId = message && typeof message === 'object' ? (message as { id?: unknown }).id : undefined
+    if (typeof messageId === 'string') byKey.set(messageId, source)
+  })
   const restored: T[] = []
   for (const item of replayed) {
     const source = byKey.get(item.id ?? '')
     if (!source) { restored.push(item); continue }
-    const index = original.indexOf(source)
-    let start = index
-    while (start >= 2 && isToolResultMessage(original[start - 1]!) && isToolUseMessage(original[start - 2]!)) start -= 2
-    let end = index
-    while (end + 2 < original.length && isToolResultMessage(original[end + 1]!) && isToolUseMessage(original[end + 2]!)) end += 2
-    if (end + 1 < original.length && isToolResultMessage(original[end + 1]!)) end += 1
+    // 只有保留的 tool-use assistant 才能恢复其所属协议块。普通 user
+    // 不能向前跨越一个已被 shadow 的 assistant/tool_result turn；混合 user
+    // 使用 replay 后的 content，避免历史 tool_result 被带回 wire 面。
+    if (!isToolUseMessage(source)) {
+      const sourceContent = (source as { role?: unknown; content?: unknown }).content
+      const content = hasToolResultBlock(sourceContent) ? (item as { content?: unknown }).content : sourceContent
+      restored.push(content === sourceContent ? source : { ...source, content } as T)
+      continue
+    }
+    const group = originalProjection.sourceGroups.find((sources) => sources.includes(source)) ?? [source]
+    const sourceIndices = group.map((entry) => original.indexOf(entry)).filter((index) => index >= 0)
+    const start = sourceIndices.length > 0 ? Math.min(...sourceIndices) : original.indexOf(source)
+    let end = sourceIndices.length > 0 ? Math.max(...sourceIndices) : start
+    while (end + 1 < original.length && isToolResultMessage(original[end + 1]!)) end++
     for (let cursor = start; cursor <= end; cursor++) restored.push(original[cursor]!)
   }
   return restored
+}
+
+function hasToolResultBlock(content: unknown): boolean {
+  return Array.isArray(content) && content.some((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')
 }
 
 function isToolUseMessage(value: unknown): boolean {
@@ -236,8 +260,19 @@ export function surfaceItemIdentitiesForSubset(sourceValues: readonly unknown[],
 export function surfaceItemIdentitiesForProjectionSubset<T>(source: ReplaySurfaceProjection<T>, retained: ReplaySurfaceProjection<T>): string[] {
   const sourceIdentities = surfaceItemIdentities(source.messages)
   const bySource = new Map<unknown, string>()
+  const byExplicitId = new Map<string, string>()
   source.sources.forEach((value, index) => bySource.set(value, sourceIdentities[index]!))
-  return retained.sources.map((value, index) => bySource.get(value) ?? surfaceItemIdentity(retained.messages[index], index))
+  source.messages.forEach((value, index) => {
+    const messageId = value && typeof value === 'object' ? (value as { id?: unknown }).id : undefined
+    if (typeof messageId === 'string') byExplicitId.set(messageId, sourceIdentities[index]!)
+  })
+  return retained.sources.map((value, index) => {
+    const byReferenceIdentity = bySource.get(value)
+    if (byReferenceIdentity) return byReferenceIdentity
+    const messageId = value && typeof value === 'object' ? (value as { id?: unknown }).id : undefined
+    if (typeof messageId === 'string' && byExplicitId.has(messageId)) return byExplicitId.get(messageId)!
+    return surfaceItemIdentity(retained.messages[index], index)
+  })
 }
 
 /** 从 replay 域剔除无法由下一轮事实重建的请求级 Skill 消息。 */
@@ -307,6 +342,7 @@ export function applyCommittedSurfaceShadow<T extends SurfaceReplayItem>(items: 
     } })
     const identities = surfaceItemIdentities(projection.messages)
     projection.sourceGroups.forEach((group, index) => {
+      if (group.length < 2) return
       for (const source of group) {
         const sourceId = source && typeof source === 'object' ? (source as { id?: unknown }).id : undefined
         if (typeof sourceId === 'string') stableIdentities.set(sourceId, identities[index]!)

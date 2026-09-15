@@ -65,7 +65,7 @@ vi.mock('./database', async (importOriginal) => {
 
 import { runToolChatSession } from './toolChatLoop'
 import { createMemoryAppDb } from './database/testHelpers'
-import { projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
@@ -268,6 +268,42 @@ describe('runToolChatSession message_start usage', () => {
     expect(sentMessages?.[0]).toMatchObject({ role: 'user', content: 'current question' })
     expect(sentMessages?.[1]?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'tool_use', id: 'current-tool' })]))
     expect(sentMessages?.[2]?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'tool_result', tool_use_id: 'current-tool', content: 'current result' })]))
+  })
+
+  it('工具中途超窗只为稳定当前 user 提交 replay 指纹，但 retry 仍保留完整工具轮', async () => {
+    const appendCompactionTransaction = vi.fn(async () => undefined)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => {
+      streamRound += 1
+      if (streamRound === 2) throw new Error('maximum context length exceeded')
+      return {
+        async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
+        finalMessage: vi.fn(async () => streamRound === 1
+          ? { content: [{ type: 'tool_use', id: 'current-tool', name: 'read_file', input: { path: 'a.txt' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } }
+          : { content: [{ type: 'text', text: 'answer after reset' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } })
+      }
+    }) } })
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'read_file'
+      ? { name, execute: async () => ({ success: true, data: 'tool result' }) }
+      : undefined)
+    const old = { id: 'old-user', role: 'user' as const, content: 'x'.repeat(2_000) }
+    const current = { id: 'current-user', role: 'user' as const, content: 'current question' }
+    const res = await runToolChatSession({
+      sender: makeSender(), requestId: 'req-mid-reset', sessionId: 'sess-mid-reset',
+      model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages: [old, current], currentUserMessageId: current.id,
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+    })
+    expect(res.ok).toBe(true)
+    expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
+    const start = appendCompactionTransaction.mock.calls[0]?.[0] as { inputSurfaceFingerprint?: string } | undefined
+    const summary = appendCompactionTransaction.mock.calls[0]?.[1] as { outputSurfaceFingerprint?: string; shadowedRanges?: unknown[] } | undefined
+    expect(start?.inputSurfaceFingerprint).toBe(computeReplaySurfaceFingerprint('', [old, current]))
+    expect(summary?.outputSurfaceFingerprint).toBe(computeReplaySurfaceFingerprint('', [current]))
+    expect(summary?.shadowedRanges).toHaveLength(1)
+    const retryMessages = mockCreateAnthropicClient.mock.results[0]?.value?.messages?.stream?.mock?.calls?.[2]?.[0]?.messages as Array<{ content?: unknown }> | undefined
+    expect(JSON.stringify(retryMessages)).toContain('current-tool')
+    expect(JSON.stringify(retryMessages)).toContain('tool result')
+    expect(JSON.stringify(retryMessages)).not.toContain('x'.repeat(1_000))
   })
 
   it('turn-boundary snapshot includes the newly generated assistant content', async () => {

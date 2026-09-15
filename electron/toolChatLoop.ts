@@ -658,7 +658,24 @@ async function runToolChatSessionInner(
     retry: number,
     totalInputBudget: number
   ): Promise<boolean> => {
-    const replayInputMessages = excludeReplayOnlyMessages(inputMessages, args.skillFragments)
+    const stableReplayPrefix = (messages: readonly Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
+      const replayable = excludeReplayOnlyMessages(messages, args.skillFragments)
+      let currentIndex = args.currentUserMessageId
+        ? replayable.findIndex((message) => (message as Anthropic.MessageParam & { id?: string }).id === args.currentUserMessageId)
+        : -1
+      if (currentIndex < 0) {
+        for (let index = replayable.length - 1; index >= 0; index--) {
+          const message = replayable[index]!
+          if (message.role !== 'user' || !Array.isArray(message.content) || !message.content.every((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'tool_result')) {
+            if (message.role === 'user') { currentIndex = index; break }
+          }
+        }
+      }
+      return currentIndex >= 0 ? replayable.slice(0, currentIndex + 1) : replayable
+    }
+    // 中途工具轮的 assistant 仍会继续增长，不能进入跨轮 replay 指纹；
+    // provider retry 仍使用完整 recoveredMessages，只有持久化匹配面截到当前 user。
+    const replayInputMessages = stableReplayPrefix(inputMessages)
     const inputProjection = projectReplaySurfaceWithSources(replayInputMessages)
     const inputSurface = inputProjection.messages
     const selectedMessages = selectRecoveryMessages(inputMessages as unknown as ClaudeContentBlockMessage[], args.currentUserMessageId) as unknown as Anthropic.MessageParam[]
@@ -672,7 +689,7 @@ async function runToolChatSessionInner(
     // 是否发生缩减必须比较真实 provider surface；replay projection 会隐藏工具消息，
     // 不能据此把“已删除旧工具对”误判成 no-op。
     if (JSON.stringify(recoveredMessages) === JSON.stringify(inputMessages)) return false
-    const replayOutputMessages = excludeReplayOnlyMessages(recoveredMessages, args.skillFragments)
+    const replayOutputMessages = stableReplayPrefix(recoveredMessages)
     const outputProjection = projectReplaySurfaceWithSources(replayOutputMessages)
     const outputSurface = outputProjection.messages
     if (outputSurface.length === 0) return false
