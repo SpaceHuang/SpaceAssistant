@@ -32,7 +32,7 @@ type AssistantFactEventPayload =
   | { type: 'content-delta'; text: string }
   | { type: 'thinking-delta'; text: string }
   | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel']; mcp?: ToolCallRecord['mcp'] }
-  | { type: 'tool-progress'; id: string; seq: number; text: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
+  | { type: 'tool-progress'; id: string; seq: number; text: string; rawDelta?: string; rawEncoding?: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
   | {
       type: 'confirm-requested'
       id: string
