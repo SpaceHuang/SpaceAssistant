@@ -76,6 +76,11 @@ async function downloadArchiveOnce(url, fetchImpl) {
   throw new Error('ripgrep redirect limit exceeded')
 }
 
+// 仅瞬时故障值得重试；重定向超限、不可信主机、超限等永久错误重试只会放大请求次数。
+function isTransientDownloadError(error) {
+  return error instanceof TypeError || /timed out|abort/i.test(String(error?.message))
+}
+
 export async function downloadArchive(url, fetchImpl = fetch) {
   let lastError
   for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
@@ -83,6 +88,7 @@ export async function downloadArchive(url, fetchImpl = fetch) {
       return await downloadArchiveOnce(url, fetchImpl)
     } catch (error) {
       lastError = error
+      if (!isTransientDownloadError(error)) throw error
       if (attempt < DOWNLOAD_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)))
     }
   }
