@@ -582,13 +582,13 @@ app.whenReady().then(async () => {
   }
   registerButlerIpcHandlers(ipcMain, butlerInvokerDeps)
 
-  // P6 定时调度器：托盘前提（P0 决策 a）+ 启动恢复 + interval tick；before-quit 停机标 interrupted
+  // P6 定时调度器：托盘前提（P0 决策 a）+ 启动恢复 + interval tick；before-quit 停机标 interrupted。
+  // 实际 start() 延后到 initTray() 之后（见下方 whenReady 尾部）。
   butlerScheduler = new ButlerTaskScheduler({
     db,
     runTask: (taskId, request) => runButlerTask(butlerInvokerDeps, taskId, request),
     isTrayEnabled
   })
-  butlerScheduler.start()
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
   createFeishuBundle({
@@ -690,6 +690,9 @@ app.whenReady().then(async () => {
     getMainWindow,
     mainDirname: __dirname
   })
+  // 托盘初始化完成后才能启动定时调度器：start() 内的托盘前提校验读 isTrayEnabled()，
+  // 早于 initTray 会在托盘实际启用的情况下被误判为未启用（disabled-no-tray）而永不启动。
+  butlerScheduler?.start()
 
   void autoStartWeChatPollIfNeeded(db)
 
