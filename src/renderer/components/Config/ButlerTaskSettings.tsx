@@ -3,6 +3,7 @@ import { Alert, App, Button, DatePicker, Empty, Form, Input, InputNumber, List, 
 import type { AutomationTask, AutomationDeliveryPref } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import dayjs from 'dayjs'
+import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
 
 /**
  * 设置弹窗「定时任务」Tab（P6）：任务列表、新建/编辑、启停、删除、立即运行。
@@ -228,10 +229,17 @@ export function ButlerTaskSettings() {
             <Form.Item
               name="onceAt"
               label={t('butler.form.onceAt')}
-              rules={[{ required: true, message: t('butler.form.onceAtRequired') }]}
+              rules={[
+                { required: true, message: t('butler.form.onceAtRequired') },
+                // 提交兜底：面板禁用挡不住手动键入的过去时间（约束详见 onceAtConstraints.ts）
+                {
+                  validator: (_rule, value: dayjs.Dayjs | undefined) =>
+                    onceAtInFuture(value) ? Promise.resolve() : Promise.reject(new Error(t('butler.form.onceAtPast')))
+                }
+              ]}
               extra={t('butler.form.onceHint')}
             >
-              <DatePicker showTime format="YYYY-MM-DD HH:mm" />
+              <DatePicker showTime format="YYYY-MM-DD HH:mm" {...buildOnceDisabledConstraints()} />
             </Form.Item>
           ) : (
             <Form.Item name="intervalMinutes" label={t('butler.form.intervalMinutes')} rules={[{ required: true }]}>
