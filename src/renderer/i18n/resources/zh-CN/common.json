@@ -115,7 +115,8 @@
     "title": "设置",
     "tools": "工具",
     "wiki": "项目 Wiki",
-    "remoteIm": "IM 远程通用"
+    "remoteIm": "IM 远程通用",
+    "butler": "定时任务"
   },
   "titleBar": {
     "close": "关闭",

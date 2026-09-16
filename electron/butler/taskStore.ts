@@ -6,64 +6,8 @@ import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
  * 表结构见 schema.ts MIGRATION_V15_BUTLER_TABLES_SQL。
  */
 
-export type AutomationTaskSchedule =
-  | { kind: 'interval'; intervalMinutes: number }
-  | { kind: 'daily'; time: string }
-
-export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
-
-export type AutomationTask = {
-  id: string
-  name: string
-  schedule: AutomationTaskSchedule
-  prompt: string
-  deliveryPref: AutomationDeliveryPref
-  deliveryTarget?: string
-  modelOverride?: string
-  enabled: boolean
-  createdAt: number
-  updatedAt: number
-  lastRunAt?: number
-  nextRunAt?: number
-}
-
-export type AutomationTaskInput = {
-  name: string
-  schedule: AutomationTaskSchedule
-  prompt: string
-  deliveryPref: AutomationDeliveryPref
-  deliveryTarget?: string
-  modelOverride?: string
-  enabled?: boolean
-  nextRunAt?: number
-}
-
-export type AutomationTaskRunStatus =
-  | 'queued'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'skipped'
-  | 'interrupted'
-
-export type AutomationTaskRunTrigger = 'schedule' | 'manual'
-
-export type AutomationTaskRun = {
-  id: string
-  taskId: string
-  clientId: string
-  trigger: AutomationTaskRunTrigger
-  scheduledFor: number
-  status: AutomationTaskRunStatus
-  error?: string
-  sessionId?: string
-  resultSummary?: string
-  usageJson?: string
-  deliveryStatus: 'pending' | 'delivered' | 'failed-degraded' | 'none'
-  deliveredAt?: number
-  createdAt: number
-  updatedAt: number
-}
+export type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, AutomationDeliveryPref, AutomationTaskRun, AutomationTaskRunStatus, AutomationTaskRunTrigger } from '../../src/shared/automationTaskTypes'
+import type { AutomationTask, AutomationTaskInput, AutomationTaskSchedule, AutomationDeliveryPref, AutomationTaskRun, AutomationTaskRunStatus, AutomationTaskRunTrigger } from '../../src/shared/automationTaskTypes'
 
 type TaskRow = {
   id: string
@@ -313,4 +257,24 @@ export function getRunById(db: AppDatabase, runId: string): AutomationTaskRun | 
   const conn = getDbConnection(db)
   const row = conn.prepare('SELECT * FROM automation_task_runs WHERE id = ?').get(runId) as RunRow | undefined
   return row ? rowToRun(row) : undefined
+}
+
+export function listAutomationTaskRuns(db: AppDatabase, taskId: string): AutomationTaskRun[] {
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare('SELECT * FROM automation_task_runs WHERE task_id = ? ORDER BY scheduled_for ASC')
+    .all(taskId) as RunRow[]
+  return rows.map(rowToRun)
+}
+
+/** 启动恢复 / 退出停机：活跃（queued/running）run 标记 interrupted（崩溃或显式退出导致）。 */
+export function markActiveRunsInterrupted(db: AppDatabase, error = 'interrupted'): number {
+  const conn = getDbConnection(db)
+  const result = conn
+    .prepare(
+      "UPDATE automation_task_runs SET status = 'interrupted', error = ?, updated_at = ? WHERE status IN ('queued', 'running')"
+    )
+    .run(error, Date.now())
+  db.save()
+  return Number(result.changes)
 }

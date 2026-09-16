@@ -10,6 +10,8 @@ import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { registerButlerIpcHandlers } from './butler/butlerIpc'
 import { ButlerAdmission } from './butler/butlerAdmission'
+import { ButlerTaskScheduler } from './butler/taskScheduler'
+import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
 import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
@@ -71,6 +73,7 @@ import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdo
 import { cleanupMcpArtifactsOnStartup } from './mcp/mcpArtifactCleanup'
 
 let floatingManager: FloatingNotificationManager | null = null
+let butlerScheduler: ButlerTaskScheduler | null = null
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -532,9 +535,9 @@ app.whenReady().then(async () => {
     executeTurn
   })
 
-  // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ 手动触发 IPC
+  // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
   const butlerAdmission = new ButlerAdmission()
-  registerButlerIpcHandlers(ipcMain, {
+  const butlerInvokerDeps: ButlerInvokerDeps = {
     db,
     turnRuntime,
     getWorkDir: () => workDirState,
@@ -576,7 +579,16 @@ app.whenReady().then(async () => {
         notification.show()
       }
     }
+  }
+  registerButlerIpcHandlers(ipcMain, butlerInvokerDeps)
+
+  // P6 定时调度器：托盘前提（P0 决策 a）+ 启动恢复 + interval tick；before-quit 停机标 interrupted
+  butlerScheduler = new ButlerTaskScheduler({
+    db,
+    runTask: (taskId, request) => runButlerTask(butlerInvokerDeps, taskId, request),
+    isTrayEnabled
   })
+  butlerScheduler.start()
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
   createFeishuBundle({
@@ -695,6 +707,7 @@ app.on('before-quit', (event) => {
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()
+  butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()
   stopMemoryWatcher()

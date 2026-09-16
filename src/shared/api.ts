@@ -161,6 +161,12 @@ export type SpaceAssistantApi = {
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   appGetTrayEnabled: () => Promise<boolean>
 
+  butlerListTasks: () => Promise<import('./automationTaskTypes').AutomationTask[]>
+  butlerCreateTask: (payload: Partial<import('./automationTaskTypes').AutomationTaskInput>) => Promise<import('./automationTaskTypes').ButlerTaskWriteResult>
+  butlerUpdateTask: (payload: { id: string; patch: Partial<import('./automationTaskTypes').AutomationTask> }) => Promise<{ ok: boolean; error?: string }>
+  butlerDeleteTask: (payload: { id: string }) => Promise<{ ok: boolean; error?: string }>
+  butlerRunTask: (payload: { taskId: string; requestId?: string }) => Promise<import('./automationTaskTypes').ButlerRunTaskResult>
+
   sessionList: () => Promise<Session[]>
   sessionCreate: (payload: {
     name: string

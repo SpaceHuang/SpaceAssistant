@@ -115,7 +115,8 @@
     "title": "Settings",
     "tools": "Tools",
     "wiki": "Project Wiki",
-    "remoteIm": "IM remote common"
+    "remoteIm": "IM remote common",
+    "butler": "Scheduled tasks"
   },
   "titleBar": {
     "close": "Close",
