@@ -5,7 +5,7 @@ export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | '
 
 /** prepare 时冻结的非敏感执行快照；API key、授权凭据和工具 permit 禁止进入该结构。 */
 export type TurnExecutionConfig = {
-  lane?: 'desktop' | 'feishu' | 'wechat'
+  lane?: 'desktop' | 'feishu' | 'wechat' | 'automation'
   model?: string
   maximumContext?: number
   llmServiceId?: string

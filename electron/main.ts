@@ -8,6 +8,8 @@ import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } f
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
+import { registerButlerIpcHandlers } from './butler/butlerIpc'
+import { ButlerAdmission } from './butler/butlerAdmission'
 import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
@@ -528,6 +530,39 @@ app.whenReady().then(async () => {
     isTrayEnabled,
     turnRuntime,
     executeTurn
+  })
+
+  // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ 手动触发 IPC
+  const butlerAdmission = new ButlerAdmission()
+  registerButlerIpcHandlers(ipcMain, {
+    db,
+    turnRuntime,
+    getWorkDir: () => workDirState,
+    getUserDataPath: () => app.getPath('userData'),
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    },
+    getBrowserConfig: () => readBrowserConfigFromDb(db),
+    getShellConfig: () => readShellConfigFromDb(db),
+    workDirManager: workDirManager!,
+    resolveWorkDirForSession: (sessionId) => {
+      const resolved = resolveWorkDirForSession(
+        db,
+        sessionId,
+        () => workDirManager!.listProfiles(),
+        () => workDirManager!.getActiveProfileId(),
+        () => workDirManager!.getActiveWorkDir()
+      )
+      return resolved?.workDir ?? workDirState
+    },
+    getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
+    admission: butlerAdmission
   })
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'

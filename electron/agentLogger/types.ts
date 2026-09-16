@@ -103,5 +103,12 @@ export type AgentLogEventName =
   | 'confirmation.exemption_migration.failed'
   | 'confirmation.mcp_confirm_policy_migration.done'
   | 'confirmation.mcp_confirm_policy_migration.failed'
+  | 'automation.admission.denied'
+  | 'automation.admission.queued'
+  | 'automation.task.triggered'
+  | 'automation.task.completed'
+  | 'automation.task.failed'
+  | 'automation.task.skipped'
+  | 'automation.scheduler.disabled-no-tray'
 
 export type AgentLogFields = Record<string, unknown>
