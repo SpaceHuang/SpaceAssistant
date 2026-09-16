@@ -205,7 +205,7 @@ describe('runShellExecutor', () => {
     const result = await runShellExecutor.execute({ command: cmd }, baseCtx(workDir, userDataDir))
     expect(result).toMatchObject({ success: false, error: 'SHELL_PROCESS_EXIT', data: { exitCode: 1, status: 'failed' } })
     expect(String(result.data?.stderr)).toContain('ValueError: bad')
-    expect(String(result.data?.stderr)).toContain('<path:redacted>')
+    expect(String(result.data?.stderr)).toContain('Traceback: /tmp/x.py:3')
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('外部 signal 终止不降级为普通 exit code 失败', async () => {

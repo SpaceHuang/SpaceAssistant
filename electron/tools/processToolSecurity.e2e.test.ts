@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { projectAgentLogFields } from '../agentLogger/agentLogProjection'
 import { projectAgentToolResult, serializeAgentToolResult } from '../../src/shared/agentToolResult'
 import { assertNoSensitiveValues } from '../../src/shared/testSupport/leakAssertions'
 import { createAgentLogCapture } from '../testSupport/agentLogCapture'
+import { setKnownHomeDir } from '../../src/shared/agentSafeText'
 
 const SECRET = 'token=raw-secret'
 const HOST_PATH = '/Users/Alice/private project'
+
+beforeEach(() => setKnownHomeDir('/Users/Alice'))
+afterEach(() => setKnownHomeDir(undefined))
 
 function checkAllBoundaries(result: Parameters<typeof projectAgentToolResult>[0]): void {
   const external = projectAgentToolResult(result, { processTool: true })

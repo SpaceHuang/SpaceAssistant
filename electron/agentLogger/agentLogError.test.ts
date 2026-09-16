@@ -7,10 +7,12 @@ import {
   extractDevErrorDetail
 } from './agentLogError'
 import { isAgentLogProductionMode } from './agentLogPaths'
+import { setKnownHomeDir } from '../../src/shared/agentSafeText'
 
 describe('agent log error fields', () => {
   afterEach(() => {
     bindAgentLogErrorDeps(() => null)
+    setKnownHomeDir(undefined)
   })
 
   it('isAgentLogProductionMode follows packaged flag', () => {
@@ -28,14 +30,14 @@ describe('agent log error fields', () => {
 
   it('进程工具错误在开发态也不携带宿主 Error 详情', () => {
     bindAgentLogErrorDeps(() => ({ isPackaged: false }))
+    setKnownHomeDir('/Users/Alice')
     const cause = new Error('/Users/Alice/private/token=raw-secret')
     const err = new Error('spawn failed', { cause })
     err.stack = `Error: spawn failed\n    at /usr/local/bin/python:1:2\n token=raw-secret`
     const fields = buildProcessToolLogErrorFields(err, 'cwd:/Users/Alice/private project 失败')
     expect(fields.error).toBe('TOOL_EXECUTION_FAILED')
-    expect(fields.userError).toContain('cwd:<path:redacted>')
-    expect(fields.userError).toContain('ambiguous_path')
-    expect(fields.userError).not.toContain('失败')
+    expect(fields.userError).toContain('cwd:~/private project')
+    expect(fields.userError).not.toContain('/Users/Alice')
     expect(JSON.stringify(fields)).not.toContain('/Users/Alice')
     expect(JSON.stringify(fields)).not.toContain('raw-secret')
     expect(JSON.stringify(fields)).not.toContain('stack')

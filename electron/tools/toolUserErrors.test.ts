@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { containsInternalDetails, sanitizeToolErrorString, sanitizeToolOutput, toToolUserError } from './toolUserErrors'
+import { setKnownHomeDir } from '../../src/shared/agentSafeText'
+
+afterEach(() => setKnownHomeDir(undefined))
 
 describe('toToolUserError', () => {
   it('does not classify ordinary dependency directory names as internal details', () => {
@@ -7,17 +10,19 @@ describe('toToolUserError', () => {
     expect(sanitizeToolOutput('node_modules dist-electron').text).toBe('node_modules dist-electron')
   })
 
-  it('redacts path fragments while preserving traceback context', () => {
+  it('主目录前缀折叠并保留 traceback 上下文', () => {
+    setKnownHomeDir('/tmp/project')
     const result = sanitizeToolOutput('Traceback: /tmp/project/app.py:3\nValueError: bad')
-    expect(result.text).toContain('Traceback: <path:redacted>')
+    expect(result.text).toContain('Traceback: ~/app.py:3')
     expect(result.text).toContain('ValueError: bad')
     expect(result.redacted).toBe(true)
   })
 
-  it('传播 ambiguous_path，并移除无法归类的路径后缀', () => {
-    const result = sanitizeToolOutput('/tmp/private file')
-    expect(result.text).not.toContain('file')
-    expect(result.redactionReason).toBe('ambiguous_path')
+  it('路径后缀不再被吞（旧版会把模糊后缀整体移除）', () => {
+    setKnownHomeDir('/tmp/home')
+    const result = sanitizeToolOutput('/tmp/home/private file')
+    expect(result.text).toBe('~/private file')
+    expect(result.text).not.toContain('<path:redacted>')
   })
 
   it('遮盖常见 secret 与 Bearer token，但保留错误上下文', () => {

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { setKnownHomeDir } from './agentSafeText'
 import {
   projectAgentToolResultForSink,
   projectLocalHistoryToolResult,
@@ -9,6 +10,9 @@ import {
 const options: ProcessProjectionOptions = {
   workspaceRoot: '/Users/alice/project'
 }
+
+beforeEach(() => setKnownHomeDir('/Users/alice'))
+afterEach(() => setKnownHomeDir(undefined))
 
 describe('process result projections', () => {
   it('给 Agent 保留可解释的系统路径，并将 workspace 路径转换为相对路径', () => {
@@ -31,7 +35,7 @@ describe('process result projections', () => {
       executable: '/usr/bin/python3'
     })
     expect(projected.data).not.toHaveProperty('command')
-    expect((projected.data as Record<string, unknown>).stderr).toContain('<path:redacted>:37:4')
+    expect((projected.data as Record<string, unknown>).stderr).toContain('~/project/src/app.py:37:4')
     expect(projectLocalHistoryToolResult(result, { ...options, processTool: true })).toEqual(projected)
   })
 
@@ -50,7 +54,7 @@ describe('process result projections', () => {
     expect(data.cwd).toBeUndefined()
     expect(data.executable).toBe('private-tool')
     expect(String(data.stderr)).not.toContain('/Users/alice/customer-data')
-    expect(String(data.stderr)).toContain('<path:redacted>')
+    expect(String(data.stderr)).toContain('~/customer-data/secret.csv')
   })
 
   it('telemetry 只输出稳定结构化字段和不可逆指纹', () => {

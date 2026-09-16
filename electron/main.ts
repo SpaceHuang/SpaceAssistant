@@ -67,6 +67,11 @@ import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
 import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdownCleanup'
 import { cleanupMcpArtifactsOnStartup } from './mcp/mcpArtifactCleanup'
+import { setKnownHomeDir } from '../src/shared/agentSafeText'
+import { homedir } from 'node:os'
+
+// 主目录折叠（agentSafeText）依赖已知主目录；必须在任何工具结果投影前注入。
+setKnownHomeDir(homedir())
 
 let floatingManager: FloatingNotificationManager | null = null
 
