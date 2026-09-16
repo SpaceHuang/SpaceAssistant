@@ -2,7 +2,7 @@ import path from 'path'
 import { mkdirSync } from 'fs'
 import http from 'http'
 import https from 'https'
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
@@ -562,7 +562,20 @@ app.whenReady().then(async () => {
       return resolved?.workDir ?? workDirState
     },
     getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
-    admission: butlerAdmission
+    admission: butlerAdmission,
+    deliveryPorts: {
+      // v1 桌面端口用系统通知（窗口状态语义由 OS 托管）；IM 端口未接线时走 butlerDelivery
+      // 的显式降级路径。浮动窗结果展示随偏差 8 整项关闭时统一。
+      notifyDesktop: (summary) => {
+        if (!Notification.isSupported()) return
+        const notification = new Notification({
+          title: 'SpaceAssistant 管家',
+          body: summary.slice(0, 280)
+        })
+        notification.on('click', () => void showMainWindow())
+        notification.show()
+      }
+    }
   })
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'

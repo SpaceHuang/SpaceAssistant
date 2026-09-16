@@ -16,6 +16,7 @@ import type { TurnRuntime } from '../turnRuntime'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { createButlerSessionEvents } from './butlerSessionEvents'
 import { ButlerAdmission } from './butlerAdmission'
+import { deliverTaskResult, type ButlerDeliveryPorts } from './butlerDelivery'
 import { getAutomationTask, insertAutomationTaskRun, updateAutomationTaskRun } from './taskStore'
 
 /**
@@ -47,6 +48,8 @@ export type ButlerInvokerDeps = {
   /** 活动工作目录 profile id（会话创建时绑定）。 */
   getActiveWorkDirProfileId?: () => string | undefined
   admission?: ButlerAdmission
+  /** 投递端口（主进程装配注入；缺省 = IM 未接线走显式降级路径）。 */
+  deliveryPorts?: ButlerDeliveryPorts
 }
 
 export type ButlerRunRequest = {
@@ -142,12 +145,27 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       updateAutomationTaskRun(db, runId, { status: 'failed', error: turn.error })
       return { ok: false, runId, error: turn.error }
     }
+    // P5 投递薄分发：run 终态按任务配置送达；只有 completed 才投递（skipped 由调度侧守卫）。
+    const delivery =
+      task.deliveryPref === 'none'
+        ? ({ status: 'none' as const } as const)
+        : await deliverTaskResult({
+            task: {
+              id: task.id,
+              name: task.name,
+              deliveryPref: task.deliveryPref,
+              ...(task.deliveryTarget ? { deliveryTarget: task.deliveryTarget } : {})
+            },
+            run: { runId, status: 'completed', sessionId: turn.sessionId, resultSummary: turn.summary },
+            ports: deps.deliveryPorts ?? {}
+          })
     updateAutomationTaskRun(db, runId, {
       status: 'completed',
       sessionId: turn.sessionId,
       resultSummary: turn.summary,
       usageJson: turn.usageJson,
-      deliveryStatus: 'none'
+      deliveryStatus: delivery.status,
+      ...(delivery.status !== 'none' ? { deliveredAt: Date.now() } : {})
     })
     return { ok: true, runId, sessionId: turn.sessionId, summary: turn.summary }
   } catch (error) {
