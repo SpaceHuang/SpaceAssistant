@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
+import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
+import { normalizeOwnership, normalizeVisibility } from '../../src/shared/sessionOwnership'
 import type { TurnExecutionConfig } from '../../src/shared/assistantFactAggregator'
 import {
   CURRENT_SCHEMA_VERSION,
@@ -42,6 +44,8 @@ type SessionRow = {
   metadata: string
   schema_version: number
   work_dir_profile_id: string | null
+  ownership: string | null
+  visibility: string | null
 }
 
 type MessageRow = {
@@ -85,7 +89,10 @@ function rowToSession(row: SessionRow): Session {
     skillsState: parseJsonObject(row.skills_state, { ...DEFAULT_SESSION_SKILLS_STATE }),
     metadata: parseJsonObject(row.metadata, {}),
     schemaVersion: row.schema_version,
-    ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {})
+    ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {}),
+    // 偏差 7：归属/可见性缺失或损坏时按谓词模块归一（历史行等价 user/primary）
+    ...(row.ownership ? { ownership: normalizeOwnership(row.ownership) } : {}),
+    ...(row.visibility ? { visibility: normalizeVisibility(row.visibility) } : {})
   })
 }
 
@@ -116,9 +123,24 @@ function normalizeSession(session: Session): Session {
   }
 }
 
-export function listSessions(db: AppDatabase): Session[] {
+/** 列表视图（偏差 7）：all 全量（内部调用方）；user-visible 用户可见（排除 internal/hidden，含 section 分区行）。 */
+export type SessionListView = 'all' | 'user-visible'
+
+export function listSessions(db: AppDatabase, options?: { view?: SessionListView }): Session[] {
   const conn = getDbConnection(db)
-  const rows = conn.prepare('SELECT * FROM sessions ORDER BY updated_at DESC').all() as SessionRow[]
+  const view = options?.view ?? 'all'
+  const rows = (
+    view === 'user-visible'
+      ? conn
+          .prepare(
+            `SELECT * FROM sessions
+             WHERE ownership IS NOT NULL AND ownership != 'internal'
+               AND visibility IS NOT NULL AND visibility != 'hidden'
+             ORDER BY updated_at DESC`
+          )
+          .all()
+      : conn.prepare('SELECT * FROM sessions ORDER BY updated_at DESC').all()
+  ) as SessionRow[]
   return rows.map(rowToSession)
 }
 
@@ -147,6 +169,10 @@ export function createSession(
     maxTokens?: number
     metadata?: Record<string, unknown>
     workDirProfileId?: string
+    /** 偏差 7：创建强制声明归属；缺省 user（历史调用方行为不变）。 */
+    ownership?: SessionOwnership
+    /** 偏差 7：创建强制声明可见性；缺省 primary。 */
+    visibility?: SessionVisibility
   }
 ): Session {
   const now = Date.now()
@@ -154,6 +180,8 @@ export function createSession(
   const model = input.model ?? resolveDefaultSessionModel(db)
   const temperature = input.temperature ?? DEFAULT_LLM_TEMPERATURE
   const maxTokens = input.maxTokens ?? 4096
+  const ownership = normalizeOwnership(input.ownership)
+  const visibility = normalizeVisibility(input.visibility)
   const session: Session = {
     id,
     name: input.name,
@@ -168,7 +196,9 @@ export function createSession(
     skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
     metadata: input.metadata ? { ...input.metadata } : {},
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    workDirProfileId: input.workDirProfileId
+    workDirProfileId: input.workDirProfileId,
+    ownership,
+    visibility
   }
 
   const conn = getDbConnection(db)
@@ -176,10 +206,12 @@ export function createSession(
     .prepare(
       `INSERT INTO sessions (
         id, name, preview, model, llm_service_id, temperature, max_tokens,
-        created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id
+        created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
+        ownership, visibility
       ) VALUES (
         @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
-        @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId
+        @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
+        @ownership, @visibility
       )`
     )
     .run({
@@ -196,7 +228,9 @@ export function createSession(
       skillsState: JSON.stringify(session.skillsState),
       metadata: JSON.stringify(session.metadata),
       schemaVersion: session.schemaVersion,
-      workDirProfileId: session.workDirProfileId ?? null
+      workDirProfileId: session.workDirProfileId ?? null,
+      ownership,
+      visibility
     })
   db.save()
   return session
@@ -218,6 +252,8 @@ export function updateSession(
       | 'messageCount'
       | 'skillsState'
       | 'workDirProfileId'
+      | 'ownership'
+      | 'visibility'
     >
   >
 ): Session | undefined {
@@ -246,7 +282,9 @@ export function updateSession(
         message_count = @messageCount,
         skills_state = @skillsState,
         metadata = @metadata,
-        work_dir_profile_id = @workDirProfileId
+        work_dir_profile_id = @workDirProfileId,
+        ownership = @ownership,
+        visibility = @visibility
       WHERE id = @id`
     )
     .run({
@@ -261,7 +299,9 @@ export function updateSession(
       messageCount: next.messageCount,
       skillsState: JSON.stringify(next.skillsState),
       metadata: JSON.stringify(next.metadata),
-      workDirProfileId: next.workDirProfileId ?? null
+      workDirProfileId: next.workDirProfileId ?? null,
+      ownership: normalizeOwnership(next.ownership),
+      visibility: normalizeVisibility(next.visibility)
     })
   db.save()
   return next
@@ -1275,6 +1315,7 @@ export function searchMessages(
        INNER JOIN sessions s ON s.id = m.session_id
        WHERE m.content LIKE ? ESCAPE '\\'
          AND (s.work_dir_profile_id IS NULL OR s.work_dir_profile_id = ?)
+         AND (s.ownership IS NULL OR s.ownership != 'internal')
        ORDER BY m.timestamp DESC
        LIMIT ?`
     )

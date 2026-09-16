@@ -98,7 +98,8 @@
       "menuItem": "Copy session ID"
     },
     "stopAria": "Stop execution for \"{{name}}\"",
-    "unnamed": "Untitled session"
+    "unnamed": "Untitled session",
+    "butlerSection": "Butler"
   },
   "time": {
     "hoursAgo": "{{count}}h ago",

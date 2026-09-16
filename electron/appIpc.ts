@@ -211,8 +211,8 @@ function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Sess
   return updateSession(db, session.id, { metadata }) ?? session
 }
 
-function stripAllSessionsAndPersist(db: AppDatabase): Session[] {
-  const sessions = listSessions(db)
+function stripAllSessionsAndPersist(db: AppDatabase, options?: { view?: 'all' | 'user-visible' }): Session[] {
+  const sessions = listSessions(db, options)
   let changed = false
   const result = sessions.map((s) => {
     if (!hasPlanMetadataKeys(s.metadata)) return s
@@ -662,7 +662,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('session:list', (): Session[] => {
     const profileId = ctx.workDirManager.getActiveProfileId()
-    return stripAllSessionsAndPersist(ctx.db).filter((s) => {
+    // 偏差 7：用户可见视图（排除 internal/hidden；section 分区行透传给渲染端分组）
+    return stripAllSessionsAndPersist(ctx.db, { view: 'user-visible' }).filter((s) => {
       if (!s.workDirProfileId) return false
       return s.workDirProfileId === profileId
     })

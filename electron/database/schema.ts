@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 13
+export const DB_SCHEMA_VERSION = 14
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -158,6 +158,21 @@ ALTER TABLE turns ADD COLUMN execution_config_json TEXT;
 export const MIGRATION_V13_TURN_ROUTING_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_turns_session_assistant_state
   ON turns(session_id, assistant_message_id, state);
+`
+
+/**
+ * 偏差 7：会话归属与可见性成为 sessions 的独立维度。
+ * 存量行默认 user/primary（行为不变）；IM 来源会话（metadata.source ∈ feishu/wechat）按创建特征回填 remote。
+ */
+export const MIGRATION_V14_SESSION_OWNERSHIP_SQL = `
+ALTER TABLE sessions ADD COLUMN ownership TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'primary';
+`
+
+/** 归属回填：IM 创建的存量会话按 metadata.source 特征标记为 remote。 */
+export const MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL = `
+UPDATE sessions SET ownership = 'remote'
+  WHERE json_extract(metadata, '$.source') IN ('feishu', 'wechat');
 `
 
 export const SCHEMA_META_KEYS = {
