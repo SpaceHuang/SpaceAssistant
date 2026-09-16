@@ -65,7 +65,9 @@ export function ButlerTaskSettings() {
   }
 
   const submit = async () => {
-    const values = await form.validateFields()
+    // 校验失败：antd 已在表单项上展示错误，reject 就地吸收，不产生 unhandled rejection
+    const values = await form.validateFields().catch(() => null)
+    if (!values) return
     setSubmitting(true)
     try {
       const schedule =
@@ -97,14 +99,22 @@ export function ButlerTaskSettings() {
   }
 
   const toggleEnabled = async (task: AutomationTask, enabled: boolean) => {
-    await window.api.butlerUpdateTask({ id: task.id, patch: { enabled } })
-    await refresh()
+    try {
+      await window.api.butlerUpdateTask({ id: task.id, patch: { enabled } })
+      await refresh()
+    } catch {
+      message.error(t('butler.saveFailed'))
+    }
   }
 
   const remove = async (task: AutomationTask) => {
-    await window.api.butlerDeleteTask({ id: task.id })
-    message.success(t('butler.deleted'))
-    await refresh()
+    try {
+      await window.api.butlerDeleteTask({ id: task.id })
+      message.success(t('butler.deleted'))
+      await refresh()
+    } catch {
+      message.error(t('butler.loadFailed'))
+    }
   }
 
   const runNow = async (task: AutomationTask) => {

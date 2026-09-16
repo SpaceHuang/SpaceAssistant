@@ -169,10 +169,12 @@ ALTER TABLE sessions ADD COLUMN ownership TEXT NOT NULL DEFAULT 'user';
 ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'primary';
 `
 
-/** 归属回填：IM 创建的存量会话按 metadata.source 特征标记为 remote。 */
+/** 归属回填：IM 创建的存量会话按 metadata.source 特征标记为 remote。
+ *  json_valid 防护：损坏/篡改的 metadata 不得阻断迁移（该行保持默认 user，评审观察项）。 */
 export const MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL = `
 UPDATE sessions SET ownership = 'remote'
-  WHERE json_extract(metadata, '$.source') IN ('feishu', 'wechat');
+  WHERE json_valid(metadata)
+    AND json_extract(metadata, '$.source') IN ('feishu', 'wechat');
 `
 
 /**

@@ -133,3 +133,26 @@ describe('偏差 7：sessions 归属与可见性', () => {
     db.close()
   })
 })
+
+describe('评审观察项：v14 回填对非法 JSON metadata 的防护', () => {
+  it('metadata 非法 JSON 的存量会话不阻断迁移，归属保持默认 user', () => {
+    const dbPath = tempDbPath()
+    createLegacyV13Database(dbPath)
+    // 直接注入一条 metadata 非法的存量行（模拟外部篡改/损坏）
+    const probe = new DatabaseSync(dbPath)
+    probe.prepare(
+      `INSERT INTO sessions (id, name, preview, model, llm_service_id, temperature, max_tokens,
+        created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id)
+       VALUES ('s-broken', '坏数据', '', 'm', NULL, 0.7, 4096, 1, 2, 0, '{}', 'not-json{', 1, NULL)`
+    ).run()
+    probe.close()
+
+    expect(() => {
+      const db = openDatabase(dbPath)
+      const conn = getDbConnection(db)
+      const row = conn.prepare('SELECT ownership FROM sessions WHERE id = ?').get('s-broken') as { ownership: string }
+      expect(row.ownership).toBe('user')
+      db.close()
+    }).not.toThrow()
+  })
+})
