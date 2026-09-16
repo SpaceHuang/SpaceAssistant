@@ -5,6 +5,7 @@ export type AgentLogEventName =
   | 'llm.request'
   | 'llm.max_tokens_floor'
   | 'llm.response'
+  | 'llm.output_recovery'
   | 'llm.error'
   | 'session.event.finalize_failed'
   | 'session.event.chunk_dropped'

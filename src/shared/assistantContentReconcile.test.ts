@@ -1,67 +1,35 @@
 import { describe, expect, it } from 'vitest'
-import { appendContentDelta as appendContent, closeOpenContentSegment, createContentState as createContent } from './contentSegments'
-import {
-  appendThinkingDelta,
-  closeOpenThinkingSegment,
-  createThinkingState
-} from './thinkingSegments'
-import {
-  promoteLastThinkingSegmentToContent,
-  reconcileAssistantStreamOnComplete,
-  shouldPromoteFinalThinkingToContent
-} from './assistantContentReconcile'
+import { appendContentDelta as appendContent, createContentState as createContent } from './contentSegments'
+import { appendThinkingDelta, createThinkingState } from './thinkingSegments'
+import { reconcileAssistantStreamOnComplete } from './assistantContentReconcile'
 
 describe('assistantContentReconcile', () => {
-  it('promotes only the last thinking segment on end_turn with thinking-only api blocks', () => {
-    let thinkingState = createThinkingState(1)
-    thinkingState = appendThinkingDelta(thinkingState, 'round1 plan', 2)
-    thinkingState = closeOpenThinkingSegment(thinkingState, 3)
-
-    let contentState = createContent(4)
-    contentState = appendContent(contentState, 'short ack', 5)
-    contentState = closeOpenContentSegment(contentState, 6)
-
-    thinkingState = appendThinkingDelta(thinkingState, 'formal reply body', 7)
-
-    const apiContent = [{ type: 'thinking', thinking: 'formal reply body' }]
-    expect(shouldPromoteFinalThinkingToContent('end_turn', apiContent, contentState, thinkingState)).toBe(true)
-
-    const reconciled = reconcileAssistantStreamOnComplete({
-      stopReason: 'end_turn',
-      apiContent,
-      contentState,
-      thinkingState
-    })
-
-    expect(reconciled.thinkingState.content).toBe('round1 plan')
-    expect(reconciled.textOut).toBe('short ackformal reply body')
-    expect(reconciled.contentState.segments).toHaveLength(2)
-  })
-
-  it('does not promote when final api response includes text', () => {
-    const thinkingState = createThinkingState(1)
+  it('promotes thinking-only normal end_turn content for gateway compatibility', () => {
+    const thinkingState = appendThinkingDelta(createThinkingState(1), 'internal reply', 2)
     const contentState = createContent(1)
-    const apiContent = [
-      { type: 'thinking', thinking: 'internal' },
-      { type: 'text', text: 'visible reply' }
-    ]
-    expect(shouldPromoteFinalThinkingToContent('end_turn', apiContent, contentState, thinkingState)).toBe(false)
+    const reconciled = reconcileAssistantStreamOnComplete({ stopReason: 'end_turn', apiContent: [{ type: 'thinking', thinking: 'internal reply' }], contentState, thinkingState })
+    expect(reconciled.textOut).toBe('internal reply')
+    expect(reconciled.contentState.content).toBe('internal reply')
+    expect(reconciled.thinkingState.content).toBe('')
   })
 
-  it('does not promote on tool_use stop reason', () => {
-    let thinkingState = createThinkingState(1)
-    let contentState = createContent(1)
-    thinkingState = appendThinkingDelta(thinkingState, 'plan', 2)
-    contentState = appendContent(contentState, 'ack', 3)
-    const apiContent = [{ type: 'thinking', thinking: 'plan' }, { type: 'tool_use', id: 't1', name: 'read_file', input: {} }]
-    expect(shouldPromoteFinalThinkingToContent('tool_use', apiContent, contentState, thinkingState)).toBe(false)
+  it('does not promote incomplete thinking on max_tokens', () => {
+    const thinkingState = appendThinkingDelta(createThinkingState(1), 'incomplete', 2)
+    const reconciled = reconcileAssistantStreamOnComplete({ stopReason: 'max_tokens', apiContent: [{ type: 'thinking', thinking: 'incomplete' }], contentState: createContent(1), thinkingState })
+    expect(reconciled.textOut).toBe('')
+    expect(reconciled.thinkingState.content).toBe('incomplete')
   })
 
-  it('promotes entire thinking when no segments exist (legacy stream state)', () => {
-    const thinkingState = { content: 'only thinking reply', segments: [], startTime: 1 }
-    const contentState = createContent(1)
-    const promoted = promoteLastThinkingSegmentToContent(thinkingState, contentState, 2)
-    expect(promoted.thinkingState.content).toBe('')
-    expect(promoted.contentState.content).toBe('only thinking reply')
+  it('promotes thinking-only content when stop reason is missing', () => {
+    const thinkingState = { content: 'only thinking', segments: [], startTime: 1 }
+    const reconciled = reconcileAssistantStreamOnComplete({ apiContent: [], contentState: createContent(1), thinkingState })
+    expect(reconciled.textOut).toBe('only thinking')
+    expect(reconciled.contentState.content).toBe('only thinking')
+    expect(reconciled.thinkingState.content).toBe('')
+  })
+
+  it('uses explicit text blocks as the only API answer text', () => {
+    const reconciled = reconcileAssistantStreamOnComplete({ stopReason: 'end_turn', apiContent: [{ type: 'thinking', thinking: 'internal' }, { type: 'text', text: 'visible reply' }], contentState: createContent(1), thinkingState: createThinkingState(1) })
+    expect(reconciled.textOut).toBe('visible reply')
   })
 })
