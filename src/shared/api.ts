@@ -158,6 +158,9 @@ export type SpaceAssistantApi = {
 
   appOpenExternal: (url: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
+  /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
+  appGetTrayEnabled: () => Promise<boolean>
+
   sessionList: () => Promise<Session[]>
   sessionCreate: (payload: {
     name: string

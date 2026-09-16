@@ -492,6 +492,7 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
+    notifyMainWindow: (channel, payload) => getMainWindow()?.webContents.send(channel, payload),
     turnRuntime
   })
 
@@ -524,6 +525,7 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
+    isTrayEnabled,
     turnRuntime,
     executeTurn
   })

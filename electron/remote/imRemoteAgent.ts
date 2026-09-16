@@ -1,4 +1,3 @@
-import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import { getMessages, getConfigValue } from '../database'
 import { runToolChatSession, type RunToolChatSessionArgs } from '../toolChatLoop'
@@ -47,7 +46,6 @@ export async function runImRemoteAgent(args: {
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
-  getMainWebContents: () => WebContents | null
   getApiKey: () => Promise<string | null>
   getBaseUrl: () => string
   getModel: () => string
@@ -70,9 +68,6 @@ export async function runImRemoteAgent(args: {
   emitFactEvent?: (event: AssistantFactEvent) => void
 }): Promise<ImRemoteAgentResult> {
   const requestId = args.requestId
-  const sender = args.getMainWebContents()
-  const noopSender = { send: () => undefined } as unknown as WebContents
-  const effectiveSender = sender ?? noopSender
 
   const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
   const adapter = args.createProgressAdapter(getOutboundSessionId)
@@ -127,7 +122,6 @@ export async function runImRemoteAgent(args: {
     const getApiKey = creds.error ? args.getApiKey : creds.getApiKey
 
     const res = await runToolChatSession({
-      sender: effectiveSender,
       requestId,
       sessionId: args.sessionId,
       model: routeModelName,
@@ -155,7 +149,8 @@ export async function runImRemoteAgent(args: {
       remoteContext: args.remoteContext,
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
-      ,emitFactEvent: args.emitFactEvent
+      ,emitFactEvent: args.emitFactEvent ?? (() => undefined)
+      ,emitSessionEvent: async () => undefined
     })
 
     if (!res.ok) {

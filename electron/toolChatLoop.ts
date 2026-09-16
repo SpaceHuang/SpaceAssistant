@@ -1,5 +1,3 @@
-import type { WebContents } from 'electron'
-import { isWebContentsAlive, safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
@@ -164,7 +162,6 @@ import {
   releaseWritePath,
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
@@ -402,7 +399,6 @@ async function maybeBuildConfirmDiff(
 }
 
 export type RunToolChatSessionArgs = {
-  sender: WebContents
   requestId: string
   sessionId: string
   windowId?: string
@@ -438,10 +434,14 @@ export type RunToolChatSessionArgs = {
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
-  /** 统一消息事实迁移端口；Core-owned 请求可配合关闭 legacy IPC 事实发送。 */
-  emitFactEvent?: (event: AssistantFactEvent) => void
-  /** Core 事件台账写入口；与 UI fact 通道分离，保存原始 NormalizedDelta。 */
-  emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
+  /** 统一消息事实迁移端口（必填）：调用方显式声明过程事实往哪里说；无观察者时传 no-op。 */
+  emitFactEvent: (event: AssistantFactEvent) => void
+  /** Core 事件台账写入口（必填）：与 UI fact 通道分离，保存原始 NormalizedDelta。 */
+  emitSessionEvent: (event: SessionEventInput) => void | Promise<void>
+  /** 文件树失效通知出口；由装配方决定投给谁，未传即 no-op。 */
+  onFileTreeChanged?: (event: import('../src/shared/fileTreeSync').FileTreeChangeEvent) => void
+  /** 会话标题落库完成后的界面通知出口；未传即 no-op（落库照常）。 */
+  onTitleGenerated?: (session: import('../src/shared/domainTypes').Session) => void
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
   /** Core 以 session event ledger 提供的唯一上下文测量适配器。 */
   contextMeter?: ContextMeter
@@ -464,7 +464,6 @@ export type RunToolChatSessionResult =
   | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
 function failToolLoopWithLastUsage(
-  sender: WebContents,
   requestId: string,
   sessionId: string,
   error: string,
@@ -520,7 +519,6 @@ async function runToolChatSessionInner(
   args: RunToolChatSessionArgs & { chatSignal: AbortSignal; getMcpConnectionManager: () => McpConnectionManager }
 ): Promise<RunToolChatSessionResult> {
   const {
-    sender,
     requestId,
     sessionId,
     model,
@@ -749,10 +747,6 @@ async function runToolChatSessionInner(
   while (true) {
     loopRound++
     throwIfChatCancelled(chatSignal)
-    if (!isWebContentsAlive(sender)) {
-      logAgentEvent('warn', 'llm.error', { requestId, sessionId, error: 'Window closed' })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage, args.emitFactEvent)
-    }
     const memoryContent = getCachedMemoryContent()
     const baseSystemWithRecovery = typeof system === 'string' && system.trim().length > 0 ? system : undefined
     const capabilityHint = buildToolCapabilityConventionHint(toolNames)
@@ -952,7 +946,6 @@ async function runToolChatSessionInner(
           }
         }
       }
-      safeWebContentsSend(sender,'claude-chat-tools-activity', { requestId, at: Date.now() })
     }
 
       const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
@@ -1006,7 +999,7 @@ async function runToolChatSessionInner(
           ? await recoverBeforeSend(lastRequestHeader, messagesForApi, overflowRetries, lastRequestContext.budget.totalInputBudget)
           : false
         if (!recovered) {
-          return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
+          return failToolLoopWithLastUsage( requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
         }
         await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
@@ -1019,7 +1012,7 @@ async function runToolChatSessionInner(
         error,
         stack: e instanceof Error ? e.stack : undefined
       })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
+      return failToolLoopWithLastUsage( requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
     } finally {
       endLlm(sessionId, requestId)
     }
@@ -1076,7 +1069,7 @@ async function runToolChatSessionInner(
         }
       }
       if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
-        return failToolLoopWithLastUsage(sender, requestId, sessionId, 'model_output_token_limit_exhausted', lastValidUsage, args.emitFactEvent)
+        return failToolLoopWithLastUsage( requestId, sessionId, 'model_output_token_limit_exhausted', lastValidUsage, args.emitFactEvent)
       }
       outputRecoveryRetries += 1
       const recoveryMessage = buildOutputRecoveryMessage({ attempt: outputRecoveryRetries, causeRequestId: attemptRequestId, hadVisibleText: truncatedToolText.length > 0, hadToolUse: true })
@@ -1095,7 +1088,6 @@ async function runToolChatSessionInner(
       if (text.length > 0) needsFinalAnswerReconciliation = true
       if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
         return failToolLoopWithLastUsage(
-          sender,
           requestId,
           sessionId,
           'model_output_token_limit_exhausted',
@@ -1142,7 +1134,7 @@ async function runToolChatSessionInner(
       titleSuggestScheduledThisInvoke = true
       scheduleSessionTitleSuggestion({
         db: appDb,
-        sender,
+        onTitleGenerated: (session) => args.onTitleGenerated?.(session),
         sessionId,
         model,
         baseUrl,
@@ -1173,7 +1165,6 @@ async function runToolChatSessionInner(
 
     if (toolNames.length === 0) {
       return failToolLoopWithLastUsage(
-        sender,
         requestId,
         sessionId,
         'unexpected_tool_call_with_no_tools',
@@ -2295,9 +2286,9 @@ async function runToolChatSessionInner(
       if (execResult.success) {
         if (toolName === 'write_file' || toolName === 'edit_file') {
           const rel = typeof inputObj.path === 'string' ? inputObj.path.trim() : ''
-          if (rel) notifyFileTreeChanged(sender, { kind: 'paths', relPaths: [rel] })
+          if (rel) args.onFileTreeChanged?.({ kind: 'paths', relPaths: [rel] })
         } else if (toolName === 'run_shell' || toolName === 'run_script') {
-          notifyFileTreeChanged(sender, { kind: 'refreshExpanded' })
+          args.onFileTreeChanged?.({ kind: 'refreshExpanded' })
         }
       }
       floatingNotificationManager?.onToolResult(requestId, toolUseId)
@@ -2332,7 +2323,7 @@ async function runToolChatSessionInner(
       }
     }
     if (abortRepeatedToolError) {
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
+      return failToolLoopWithLastUsage( requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
     }
   }
 }

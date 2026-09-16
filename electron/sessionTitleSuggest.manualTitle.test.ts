@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import type { WebContents } from 'electron'
 import {
   SESSION_META_TITLE_GENERATED,
   SESSION_META_TITLE_USER_CUSTOM,
@@ -53,8 +52,8 @@ function makeDb(session: Session): AppDatabase {
   } as unknown as AppDatabase
 }
 
-function makeSender(): WebContents {
-  return { send: vi.fn() } as unknown as WebContents
+function makeOnTitleGenerated() {
+  return vi.fn()
 }
 
 describe('scheduleSessionTitleSuggestion manual title mutex', () => {
@@ -76,11 +75,11 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
     })
     vi.mocked(getSession).mockReturnValue(session)
     const db = makeDb(session)
-    const sender = makeSender()
+    const onTitleGenerated = makeOnTitleGenerated()
 
     scheduleSessionTitleSuggestion({
       db,
-      sender,
+      onTitleGenerated,
       sessionId: session.id,
       model: session.model,
       messagesForApi: [
@@ -97,14 +96,14 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
     await new Promise((r) => setTimeout(r, 10))
     expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
     expect(mockUpdateSession).not.toHaveBeenCalled()
-    expect(sender.send).not.toHaveBeenCalled()
+    expect(onTitleGenerated).not.toHaveBeenCalled()
   })
 
   it('writes generated title when no user custom flag', async () => {
     const session = stubSession({ name: '', metadata: {} })
     vi.mocked(getSession).mockReturnValue(session)
     const db = makeDb(session)
-    const sender = makeSender()
+    const onTitleGenerated = makeOnTitleGenerated()
     const updated = stubSession({
       name: '自动标题',
       metadata: { [SESSION_META_TITLE_GENERATED]: true }
@@ -113,7 +112,7 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
 
     scheduleSessionTitleSuggestion({
       db,
-      sender,
+      onTitleGenerated,
       sessionId: session.id,
       model: session.model,
       messagesForApi: [
@@ -138,6 +137,6 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
         })
       })
     )
-    expect(sender.send).toHaveBeenCalledWith('session:title-generated', { session: updated })
+    expect(onTitleGenerated).toHaveBeenCalledWith(updated)
   })
 })

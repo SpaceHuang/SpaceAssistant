@@ -1,5 +1,4 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
-import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
@@ -24,7 +23,6 @@ export async function runWeChatRemoteAgent(ctx: {
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
-  getMainWebContents: () => WebContents | null
   getApiKey: () => Promise<string | null>
   getBaseUrl: () => string
   getModel: () => string
@@ -52,7 +50,6 @@ export async function runWeChatRemoteAgent(ctx: {
     workDir: ctx.workDir,
     workDirManager: ctx.workDirManager,
     userDataDir: ctx.userDataDir,
-    getMainWebContents: ctx.getMainWebContents,
     getApiKey: ctx.getApiKey,
     getBaseUrl: ctx.getBaseUrl,
     getModel: ctx.getModel,

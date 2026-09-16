@@ -201,6 +201,8 @@ export type AppIpcContext = {
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   turnRuntime?: TurnRuntime
   executeTurn?: ClaudeTurnExecution
+  /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
+  isTrayEnabled?: () => boolean
 }
 
 function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Session {
@@ -302,6 +304,8 @@ async function backupAfterMessagePatch(
 }
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
+  ipcMain.handle('app:get-tray-enabled', () => ctx.isTrayEnabled?.() ?? false)
+
 
   const turnRuntime = ctx.turnRuntime ?? new TurnRuntimeImpl({ storage: createTurnCoordinatorStorage(ctx.db), deps: { now: Date.now, id: randomUUID } })
   const turnCoordinator = turnRuntime.coordinator
@@ -700,7 +704,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
       const next = scheduleSessionTitleOpenBackfillIfNeeded({
         db: ctx.db,
-        sender: event.sender,
+        onTitleGenerated: (session) => event.sender.send('session:title-generated', { session }),
         sessionId,
         baseUrl,
         getApiKey: ctx.getApiKey

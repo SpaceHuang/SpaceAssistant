@@ -5,6 +5,7 @@ import type { SpaceAssistantApi, TurnExecutePayload } from '../src/shared/api'
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
   appOpenExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  appGetTrayEnabled: () => ipcRenderer.invoke('app:get-tray-enabled') as Promise<boolean>,
 
   sessionList: () => ipcRenderer.invoke('session:list'),
   sessionCreate: (payload) => ipcRenderer.invoke('session:create', payload),
