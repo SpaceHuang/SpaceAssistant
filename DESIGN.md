@@ -60,7 +60,7 @@ typography:
     lineHeight: 1.4
     letterSpacing: "normal"
   mono:
-    fontFamily: "'Cascadia Code', 'IBM Plex Mono', Consolas, 'Courier New', monospace"
+    fontFamily: "'SFMono-Regular', 'Cascadia Code', Menlo, monospace"
     fontSize: "12px"
     fontWeight: 400
     lineHeight: 1.6
@@ -182,7 +182,7 @@ SpaceAssistant 的视觉系统服务于长时间桌面协作：用户与 Agent �
 ## 3. Typography
 
 **Body Font:** Segoe UI, PingFang SC, Microsoft YaHei, system-ui（系统栈，中文优先）
-**Mono Font:** Cascadia Code, IBM Plex Mono, Consolas（路径、diff、代码块）
+**Mono Font:** SFMono-Regular, Cascadia Code, Menlo（路径、diff、代码块、终端）
 
 **Character:** 单一 sans 家族承担全部 UI；通过字重与 11–15px 固定阶梯建立层级。`:root` 启用 Segoe UI OpenType 特性 `cv01–cv03`。中文长文用 `text-wrap: pretty`；panel 标题 letter-spacing 轻微收紧（-0.01em）。
 

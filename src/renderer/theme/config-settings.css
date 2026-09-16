@@ -1601,7 +1601,7 @@
 }
 
 .mcp-diagnostics-drawer .mcp-diagnostics-entry code {
-  font-family: var(--sa-font-mono, 'Cascadia Code', Consolas, monospace);
+  font-family: var(--sa-font-mono, 'SFMono-Regular', 'Cascadia Code', Menlo, monospace);
   font-size: var(--sa-config-font-sm);
   color: var(--sa-text-secondary);
 }

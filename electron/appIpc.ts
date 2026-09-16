@@ -2068,7 +2068,7 @@ function readExposureInputsFromDb(
         const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
           body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; line-height: 1.6; }
           pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }
-          code { font-family: Consolas, monospace; font-size: 13px; }
+          code { font-family: 'SFMono-Regular', 'Cascadia Code', Menlo, monospace; font-size: 13px; }
           img { max-width: 100%; }
         </style></head><body>${payload.htmlContent}</body></html>`
         const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`

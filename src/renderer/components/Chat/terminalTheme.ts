@@ -7,7 +7,7 @@ export const SHELL_TERMINAL_COLS = 80
 export const SHELL_TERMINAL_MIN_COLS = 40
 
 const SHELL_TERMINAL_FONT_FAMILY =
-  'Consolas, "Cascadia Mono", "Courier New", monospace'
+  '"SFMono-Regular", "Cascadia Code", Menlo, monospace'
 
 /** 将应用 CSS 变量映射为 xterm ITheme */
 export function buildXtermThemeFromCss(): ITheme {

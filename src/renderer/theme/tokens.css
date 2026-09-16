@@ -1,6 +1,7 @@
 :root {
   --sa-font-sans: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  --sa-font-mono: 'Cascadia Code', 'IBM Plex Mono', Consolas, 'Courier New', monospace;
+  /* 更适合长时间阅读代码的系统等宽无衬线字体；按平台优先使用较饱满的 Regular 字重 */
+  --sa-font-mono: 'SFMono-Regular', 'Cascadia Code', Menlo, monospace;
 
   /* 品牌橙（Committed 策略） */
   --sa-primary: #f06529;

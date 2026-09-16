@@ -183,8 +183,13 @@
 .detail-code-view {
   display: flex;
   min-height: 100%;
+  font-family: var(--sa-font-mono);
   font-size: 12px;
-  line-height: 1.5;
+  font-weight: 450;
+  line-height: 1.6;
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
   background: var(--sa-split-pane-bg);
 }
 
@@ -1203,4 +1208,3 @@
   border-radius: var(--sa-radius-sm);
   background: rgba(255, 255, 255, 0.95);
 }
-
