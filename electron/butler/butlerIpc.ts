@@ -19,12 +19,15 @@ export type ButlerIpcDeps = ButlerInvokerDeps
 
 function parseSchedule(raw: unknown): AutomationTaskSchedule | undefined {
   if (!raw || typeof raw !== 'object') return undefined
-  const r = raw as { kind?: string; intervalMinutes?: number; time?: string }
+  const r = raw as { kind?: string; intervalMinutes?: number; time?: string; at?: number }
   if (r.kind === 'interval' && typeof r.intervalMinutes === 'number' && r.intervalMinutes > 0) {
     return { kind: 'interval', intervalMinutes: r.intervalMinutes }
   }
   if (r.kind === 'daily' && typeof r.time === 'string' && /^\d{2}:\d{2}$/.test(r.time)) {
     return { kind: 'daily', time: r.time }
+  }
+  if (r.kind === 'once' && typeof r.at === 'number' && Number.isFinite(r.at) && r.at > 0) {
+    return { kind: 'once', at: r.at }
   }
   return undefined
 }

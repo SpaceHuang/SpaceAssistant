@@ -894,7 +894,8 @@
     "saveFailed": "Failed to save task",
     "schedule": {
       "interval": "Every {{minutes}} minutes",
-      "daily": "Daily at {{time}}"
+      "daily": "Daily at {{time}}",
+      "once": "Once at {{time}}"
     },
     "delivery": {
       "desktop": "Desktop notification",
@@ -916,7 +917,11 @@
       "time": "Time",
       "deliveryPref": "Delivery",
       "save": "Save",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "once": "Once",
+      "onceAt": "Run at",
+      "onceAtRequired": "Please pick a time",
+      "onceHint": "Runs once at the given time, then disables itself"
     }
   }
 }

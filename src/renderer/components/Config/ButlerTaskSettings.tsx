@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Switch, Tag, TimePicker, Alert } from 'antd'
+import { Alert, App, Button, DatePicker, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Switch, Tag, TimePicker } from 'antd'
 import type { AutomationTask, AutomationDeliveryPref } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import dayjs from 'dayjs'
@@ -46,6 +46,7 @@ export function ButlerTaskSettings() {
       scheduleKind: 'interval',
       intervalMinutes: 30,
       dailyTime: dayjs('09:00', 'HH:mm'),
+      onceAt: dayjs().add(1, 'hour'),
       deliveryPref: 'desktop'
     })
     setEditorOpen(true)
@@ -59,6 +60,7 @@ export function ButlerTaskSettings() {
       scheduleKind: task.schedule.kind,
       intervalMinutes: task.schedule.kind === 'interval' ? task.schedule.intervalMinutes : 30,
       dailyTime: dayjs(task.schedule.kind === 'daily' ? task.schedule.time : '09:00', 'HH:mm'),
+      onceAt: dayjs(task.schedule.kind === 'once' ? task.schedule.at : Date.now() + 3_600_000),
       deliveryPref: task.deliveryPref
     })
     setEditorOpen(true)
@@ -73,7 +75,9 @@ export function ButlerTaskSettings() {
       const schedule =
         values.scheduleKind === 'daily'
           ? { kind: 'daily' as const, time: (values.dailyTime as dayjs.Dayjs).format('HH:mm') }
-          : { kind: 'interval' as const, intervalMinutes: Number(values.intervalMinutes) }
+          : values.scheduleKind === 'once'
+            ? { kind: 'once' as const, at: (values.onceAt as dayjs.Dayjs).valueOf() }
+            : { kind: 'interval' as const, intervalMinutes: Number(values.intervalMinutes) }
       if (editing) {
         await window.api.butlerUpdateTask({
           id: editing.id,
@@ -137,7 +141,9 @@ export function ButlerTaskSettings() {
   const scheduleText = (task: AutomationTask): string =>
     task.schedule.kind === 'interval'
       ? t('butler.schedule.interval', { minutes: task.schedule.intervalMinutes })
-      : t('butler.schedule.daily', { time: task.schedule.time })
+      : task.schedule.kind === 'daily'
+        ? t('butler.schedule.daily', { time: task.schedule.time })
+        : t('butler.schedule.once', { time: dayjs(task.schedule.at).format('YYYY-MM-DD HH:mm') })
 
   const deliveryText = (pref: AutomationDeliveryPref): string =>
     t(`butler.delivery.${pref}` as 'butler.delivery.desktop')
@@ -209,13 +215,23 @@ export function ButlerTaskSettings() {
             <Select
               options={[
                 { value: 'interval', label: t('butler.form.interval') },
-                { value: 'daily', label: t('butler.form.daily') }
+                { value: 'daily', label: t('butler.form.daily') },
+                { value: 'once', label: t('butler.form.once') }
               ]}
             />
           </Form.Item>
           {scheduleKind === 'daily' ? (
             <Form.Item name="dailyTime" label={t('butler.form.time')} rules={[{ required: true }]}>
               <TimePicker format="HH:mm" />
+            </Form.Item>
+          ) : scheduleKind === 'once' ? (
+            <Form.Item
+              name="onceAt"
+              label={t('butler.form.onceAt')}
+              rules={[{ required: true, message: t('butler.form.onceAtRequired') }]}
+              extra={t('butler.form.onceHint')}
+            >
+              <DatePicker showTime format="YYYY-MM-DD HH:mm" />
             </Form.Item>
           ) : (
             <Form.Item name="intervalMinutes" label={t('butler.form.intervalMinutes')} rules={[{ required: true }]}>

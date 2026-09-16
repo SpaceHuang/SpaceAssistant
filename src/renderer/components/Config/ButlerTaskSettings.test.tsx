@@ -120,4 +120,23 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(butlerRunTask.mock.calls[0]![0]).toEqual({ taskId: 'task-1' })
     await waitFor(() => expect(screen.getByText(/完成/)).toBeTruthy())
   })
+
+  it('列表渲染一次性任务的触发时刻标签', async () => {
+      butlerListTasks.mockResolvedValue([
+        task({ id: 'task-once', name: '周报汇总', schedule: { kind: 'once', at: new Date('2026-10-20T09:30:00').getTime() } })
+      ])
+      renderTab()
+      await waitFor(() => expect(screen.getByText('周报汇总')).toBeTruthy())
+      expect(screen.getByText(/一次性 2026-10-20 09:30/)).toBeTruthy()
+    })
+  
+    it('编辑一次性任务回填执行时间并展示提示', async () => {
+      butlerListTasks.mockResolvedValue([
+        task({ id: 'task-once', name: '周报汇总', schedule: { kind: 'once', at: new Date('2026-10-20T09:30:00').getTime() } })
+      ])
+      renderTab()
+      await waitFor(() => expect(screen.getByText('周报汇总')).toBeTruthy())
+      fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
+      await waitFor(() => expect(screen.getByText('到点执行一次，之后自动停用，不再重复执行')).toBeTruthy())
+    })
 })

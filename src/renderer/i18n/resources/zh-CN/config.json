@@ -894,7 +894,8 @@
     "saveFailed": "任务保存失败",
     "schedule": {
       "interval": "每 {{minutes}} 分钟",
-      "daily": "每天 {{time}}"
+      "daily": "每天 {{time}}",
+      "once": "一次性 {{time}}"
     },
     "delivery": {
       "desktop": "桌面通知",
@@ -916,7 +917,11 @@
       "time": "时间",
       "deliveryPref": "投递偏好",
       "save": "保存",
-      "cancel": "取消"
+      "cancel": "取消",
+      "once": "一次性",
+      "onceAt": "执行时间",
+      "onceAtRequired": "请选择执行时间",
+      "onceHint": "到点执行一次，之后自动停用，不再重复执行"
     }
   }
 }

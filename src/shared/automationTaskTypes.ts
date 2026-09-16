@@ -5,6 +5,8 @@
 export type AutomationTaskSchedule =
   | { kind: 'interval'; intervalMinutes: number }
   | { kind: 'daily'; time: string }
+  /** 一次性：给定具体时刻（epoch ms）到点执行一次，之后不再执行（执行后任务停用）。 */
+  | { kind: 'once'; at: number }
 
 export type AutomationDeliveryPref = 'desktop' | 'feishu' | 'wechat' | 'none'
 

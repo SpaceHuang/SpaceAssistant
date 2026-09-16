@@ -194,6 +194,11 @@ export class ButlerTaskScheduler {
   }
 
   private rearm(task: AutomationTask, now: number): void {
+    // 一次性任务：执行后不再排程——停用任务（next_run_at 随停用置空），满足「之后不再执行」。
+    if (task.schedule.kind === 'once') {
+      updateAutomationTask(this.db, task.id, { lastRunAt: now, enabled: false })
+      return
+    }
     updateAutomationTask(this.db, task.id, {
       lastRunAt: now,
       nextRunAt: computeNextRunAt(task.schedule, now)

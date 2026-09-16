@@ -46,6 +46,7 @@ function parseSchedule(raw: string): AutomationTaskSchedule {
     const parsed = JSON.parse(raw) as AutomationTaskSchedule
     if (parsed?.kind === 'interval' && typeof parsed.intervalMinutes === 'number') return parsed
     if (parsed?.kind === 'daily' && typeof parsed.time === 'string') return parsed
+    if (parsed?.kind === 'once' && typeof parsed.at === 'number' && parsed.at > 0) return parsed
   } catch { /* fallthrough */ }
   return { kind: 'interval', intervalMinutes: 60 }
 }
@@ -144,6 +145,11 @@ export function listAutomationTasks(db: AppDatabase): AutomationTask[] {
 export function computeNextRunAt(schedule: AutomationTaskSchedule, from: number): number {
   if (schedule.kind === 'interval') {
     return from + Math.max(1, schedule.intervalMinutes) * 60_000
+  }
+  if (schedule.kind === 'once') {
+    // 一次性：触发时刻恒为给定 at（与 from 无关）。at 已过时视为立即到期；
+    // 执行后的「不再排程」由调度器 rearm 停用任务实现，不走本函数。
+    return schedule.at
   }
   const [h, m] = schedule.time.split(':').map((v) => Number.parseInt(v, 10))
   const next = new Date(from)
