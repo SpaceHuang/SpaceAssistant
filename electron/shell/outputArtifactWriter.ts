@@ -2,6 +2,19 @@ import fs from 'fs/promises'
 import { createHash, Hash } from 'crypto'
 import path from 'path'
 
+function completeUtf8PrefixLength(buf: Buffer, maxLength: number): number {
+  if (maxLength >= buf.length) return buf.length
+
+  let end = maxLength
+  let leadIndex = end - 1
+  while (leadIndex >= 0 && (buf[leadIndex]! & 0xc0) === 0x80) leadIndex -= 1
+  if (leadIndex < 0) return 0
+
+  const lead = buf[leadIndex]!
+  const characterLength = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4
+  return characterLength > end - leadIndex ? leadIndex : maxLength
+}
+
 export class OutputArtifactWriter {
   private handle: fs.FileHandle | undefined
   private writeChain: Promise<void> = Promise.resolve()
@@ -47,7 +60,9 @@ export class OutputArtifactWriter {
   /** 文本路径（非原始字节）：仅供仍持有解码后文本的调用方使用。 */
   append(text: string): void {
     if (!text) return
-    this.appendBytes(Buffer.from(text, 'utf8'))
+    const encoded = Buffer.from(text, 'utf8')
+    const remaining = this.maxBytes - this.bytes
+    this.appendBytes(encoded.subarray(0, completeUtf8PrefixLength(encoded, remaining)))
   }
 
   async close(): Promise<{ path: string; bytes: number; sha256: string }> {
