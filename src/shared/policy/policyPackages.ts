@@ -107,6 +107,8 @@ export function resolvePolicyRules(args: {
   rules: PolicyRule[]
 }): PolicyRule[] {
   const pkg = args.packages?.[args.lane] ?? 'standard'
+  // P2 guard（偏差 15 最小防护）：automation 无人类应答者，无豁免来源——不得套用 loose 档。
+  if (pkg === 'loose' && args.lane === 'automation') return args.rules
   switch (pkg) {
     case 'strict':
       return applyStrict(args.rules)

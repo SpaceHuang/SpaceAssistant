@@ -415,6 +415,8 @@ export type RunToolChatSessionArgs = {
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
+  /** 显式 lane（偏差 21）：由驱动源层解析后随调用传入；缺省回退 remoteContext 推导，最终 desktop。 */
+  lane?: import('../src/shared/confirmation/types').ExecutionLane
   remoteContext?: RemoteContext
   workDir: string
   workDirManager?: WorkDirManager
@@ -482,11 +484,12 @@ function failToolLoopWithLastUsage(
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
   const chatSignal = registerChatCancel(args.requestId)
-  const requestLane = args.remoteContext
-    ? args.remoteContext.source === 'feishu'
-      ? 'feishu'
-      : 'wechat'
-    : 'desktop'
+  const requestLane = args.lane
+    ?? (args.remoteContext
+      ? args.remoteContext.source === 'feishu'
+        ? 'feishu'
+        : 'wechat'
+      : 'desktop')
   registerToolRevocationRequest(args.requestId, requestLane)
   let mcpConnectionManager: McpConnectionManager | undefined
   const getMcpConnectionManager = (): McpConnectionManager => {
@@ -620,12 +623,19 @@ async function runToolChatSessionInner(
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
+  // 偏差 21：lane 一次解析、全点消费——exposure / MCP 注入 / 确认通道 / 审计归属全部使用显式值
+  const effectiveLane = args.lane
+    ?? (remoteContext
+      ? remoteContext.source === 'feishu'
+        ? ('feishu' as const)
+        : ('wechat' as const)
+      : ('desktop' as const))
   // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）；默认 standard 时为零行为变化快路径
-  const exposureLane = remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop'
+  const exposureLane = effectiveLane
   const exposureRules = appDb ? loadEffectivePolicyRules(appDb, exposureLane) : undefined
-  /** 请求级 MCP 工具快照：仅桌面会话注入（remoteContext 存在时为空）。 */
+  /** 请求级 MCP 工具快照：仅桌面 lane 注入（远程与 automation 不注入）。 */
   const mcpSnapshot: McpToolSnapshot = appDb
-    ? buildSnapshotFromDb(appDb, { remoteContext: Boolean(remoteContext) })
+    ? buildSnapshotFromDb(appDb, { remoteContext: effectiveLane !== 'desktop' })
     : { entries: new Map(), budgetDropped: [] }
   const effectiveTools = computeEffectiveTools({
     builtinConfig: toolsConfig,
@@ -1286,7 +1296,7 @@ async function runToolChatSessionInner(
           getSecurityAuditLog().record({
             ts: Date.now(),
             event: 'budget.exhausted',
-            lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+            lane: effectiveLane,
             origin: { kind: 'direct-owner' },
             sessionId,
             toolName,
@@ -1390,6 +1400,7 @@ async function runToolChatSessionInner(
         sessionId,
         workDir,
         userDataDir,
+        lane: effectiveLane,
         remoteContext,
         toolsConfig,
         shellConfig,
@@ -1500,7 +1511,7 @@ async function runToolChatSessionInner(
         getSecurityAuditLog().record({
           ts: Date.now(),
           event: 'budget.exhausted',
-          lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+          lane: effectiveLane,
           origin: { kind: 'direct-owner' },
           sessionId,
           toolName,
@@ -1602,11 +1613,7 @@ async function runToolChatSessionInner(
       const mcpEntryForConfirm = gate.mcpEntry
 
       if (needsConfirm) {
-        const confirmLane = remoteContext
-          ? remoteContext.source === 'feishu'
-            ? ('feishu' as const)
-            : ('wechat' as const)
-          : ('desktop' as const)
+        const confirmLane = effectiveLane
         const askViaIm = remoteContext
           ? shouldRequestImConfirm(resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig))
           : true
@@ -1906,7 +1913,7 @@ async function runToolChatSessionInner(
             recordUserAnswerFromDecision({
               db: appDb,
               audit: getSecurityAuditLog(),
-              lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+              lane: effectiveLane,
               sessionId,
               key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
               decision: gate.decision,
@@ -1934,7 +1941,7 @@ async function runToolChatSessionInner(
               recordUserAnswerFromDecision({
                 db: appDb,
                 audit: getSecurityAuditLog(),
-                lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+                lane: effectiveLane,
                 sessionId,
                 key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
                 decision: gate.decision,

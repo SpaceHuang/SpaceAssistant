@@ -110,6 +110,6 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
     expect(audit.events.at(-1)!.outcome).toBe('rejected')
 
     const noIm = channelFor({ lane: 'wechat', requestId: 'r', sessionId: 's', toolName: 'run_shell' })
-    await expect(noIm.request(req())).resolves.toEqual({ kind: 'rejected' })
+    await expect(noIm.request(req())).resolves.toEqual({ kind: 'rejected', reason: 'no-answerer' })
   })
 })

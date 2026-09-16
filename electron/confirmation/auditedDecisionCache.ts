@@ -9,7 +9,7 @@ import type { AuditSink } from './channels'
 
 export interface AuditedDecisionCacheDeps {
   cache: {
-    lookup: (key: CacheKey) => DecisionCacheEntry | null
+    lookup: (key: CacheKey, lane?: ExecutionLane | '*') => DecisionCacheEntry | null
     record: (entry: DecisionCacheEntry) => void
     clear: (key: CacheKey) => number
     clearAllSession: () => number
@@ -28,8 +28,8 @@ export interface AuditedDecisionCacheDeps {
 export class AuditedDecisionCache {
   constructor(private readonly deps: AuditedDecisionCacheDeps) {}
 
-  lookup(key: CacheKey): DecisionCacheEntry | null {
-    const entry = this.deps.cache.lookup(key)
+  lookup(key: CacheKey, lane?: ExecutionLane | '*'): DecisionCacheEntry | null {
+    const entry = this.deps.cache.lookup(key, lane ?? this.deps.lane)
     if (entry) {
       this.deps.audit.record({
         ts: Date.now(),

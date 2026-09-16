@@ -3,6 +3,7 @@ import type {
   ConfirmOutcome,
   ConfirmRequest,
   ConfirmationChannel,
+  ExecutionLane,
   OriginInfo,
   RiskLevel,
   SecurityAuditEvent
@@ -27,7 +28,7 @@ function eventBase(deps: {
   requestId: string
   sessionId: string
   toolName: string
-  lane: 'desktop' | 'wechat' | 'feishu'
+  lane: ExecutionLane
   origin?: OriginInfo
   actionClass?: ActionClass
   riskLevel?: RiskLevel
@@ -104,7 +105,7 @@ export class DesktopChannel implements ConfirmationChannel {
  * 桌面链路需 `toolUseId`。
  */
 export function channelFor(args: {
-  lane: 'desktop' | 'wechat' | 'feishu'
+  lane: ExecutionLane
   requestId: string
   sessionId: string
   toolName: string
@@ -120,6 +121,16 @@ export function channelFor(args: {
       sessionId: args.sessionId,
       toolName: args.toolName,
       lane: 'desktop',
+      ...(args.audit ? { audit: args.audit } : {})
+    })
+  }
+  if (args.lane === 'automation') {
+    // 偏差 21/22：automation 无人类应答者，fail-closed 拒绝并在审计可区分（cause=no-answerer）。
+    return new RejectingChannel({
+      lane: 'automation',
+      requestId: args.requestId,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
       ...(args.audit ? { audit: args.audit } : {})
     })
   }
@@ -152,10 +163,33 @@ export class ImRequestChannel implements ConfirmationChannel {
   }
 }
 
-/** 远程链路无 IM 通道实例时的兜底通道：一律拒绝，不发送任何 IM 消息。 */
+/** 无回答者时的兜底通道：一律拒绝，不发送任何确认请求；可落 no-answerer 审计供与用户拒绝区分。 */
 class RejectingChannel implements ConfirmationChannel {
+  constructor(
+    private readonly deps?: {
+      lane: ExecutionLane
+      requestId?: string
+      sessionId?: string
+      toolName?: string
+      audit?: AuditSink
+    }
+  ) {}
+
   request(_req: ConfirmRequest): Promise<ConfirmOutcome> {
-    return Promise.resolve({ kind: 'rejected' })
+    if (this.deps?.audit) {
+      this.deps.audit.record({
+        ts: Date.now(),
+        event: 'confirm.outcome',
+        lane: this.deps.lane,
+        sessionId: this.deps.sessionId ?? '',
+        requestId: this.deps.requestId,
+        toolName: this.deps.toolName,
+        outcome: 'rejected',
+        reason: 'no-answerer',
+        actor: 'system'
+      })
+    }
+    return Promise.resolve({ kind: 'rejected', reason: 'no-answerer' })
   }
 
   cancel(_requestId: string): void {

@@ -98,10 +98,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   // run_shell 预检放行（等价现 canSkipShellConfirm：结构化信任 argv 前缀匹配 / permissionDecision=allow）。
   // 评估器由执行链路注入（预检结果闭包）；不裁决则交还规则链。信任命令的 exact 档同时经缓存命中
   // （迁移/记N 写入的 decision_cache 条目），两路语义一致（缓存键仅在无风险提示时派生）。
+  // 评审 B2：auto-evaluator 必须带 lane 限定——automation 的 run_shell 即使命中预检信任命令也落 confirm。
   {
     id: 'shell-precheck-auto-allow',
     when: 'invocation',
-    match: { toolName: 'run_shell' },
+    match: { lane: ['desktop'], toolName: 'run_shell' },
     action: 'auto-evaluator',
     reason: 'shell 预检判定可跳过确认（信任命令或安全命令）'
   },
@@ -154,10 +155,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   // act 确认总开关关闭 → 免确认（等价现 browserActionNeedsConfirmation: !actRequiresConfirm → false，
   // 桌面/远程同一开关；configRequires 门控不满足即不命中，可先于 ask 条目）。
+  // 评审 B2：allow 动作必须带 lane 限定——automation 无人类应答者，不消费该放行。
   {
     id: 'browser-act-allow-unconfigured',
     when: 'invocation',
-    match: { toolName: 'browser', signals: ['browser-act'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'] },
     action: 'allow',
     configRequires: { config: 'actRequiresConfirm', equals: false },
     reason: '浏览器 act 确认开关已关闭'
@@ -262,6 +264,37 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['wechat', 'feishu'], actionClass: 'write' },
     action: 'ask',
     reason: '远程链路写本地文件默认需要确认'
+  },
+
+  // ===== automation lane（偏差 21/22：无人值守链路的显式规则集，§P2-4）=====
+  // 无人类应答者：规则显式写出，兜底 fail-closed；automation 不继承任何 desktop 专属豁免。
+  {
+    id: 'automation-readonly-allow',
+    when: 'invocation',
+    match: {
+      lane: ['automation'],
+      toolName: [
+        'read_file',
+        'list_directory',
+        'grep',
+        'list_work_dirs',
+        'history.read',
+        'skills.read',
+        'read_feishu_attachment'
+      ]
+    },
+    action: 'allow',
+    reason: 'automation 只读工具无外部副作用，免确认'
+  },
+  // 默认兜底（catch-all）：新工具天然 fail-safe——落 confirm；automation lane 无回答者，
+  // RejectingChannel 使其实际效果为拒绝（cause=no-answerer，与用户拒绝在审计可区分）。locked：无豁免来源。
+  {
+    id: 'automation-default-confirm',
+    when: 'invocation',
+    match: { lane: ['automation'] },
+    action: 'ask',
+    locked: true,
+    reason: 'automation 无人类应答者，未显式放行的调用一律确认（实际拒绝）'
   },
 
   // ===== exposure 时机示例 =====

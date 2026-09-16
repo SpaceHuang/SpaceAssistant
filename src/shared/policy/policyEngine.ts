@@ -235,7 +235,7 @@ function lookupCache(
 ): Decision | null {
   if (deriveMemoryEligibility(facts, lane ?? 'desktop').eligibility === 'none') return null
   for (const key of deriveCacheKeys(facts, sessionId, lane, constraints)) {
-    const entry = cache.lookup(key)
+    const entry = cache.lookup(key, lane)
     if (entry && entry.decision === 'allow') return autoAllow('cache-hit', facts, key)
     if (entry && entry.decision === 'deny') return deny('cache-hit', '缓存记忆为拒绝')
   }

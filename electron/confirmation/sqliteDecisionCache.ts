@@ -60,12 +60,21 @@ interface CacheRow {
 export class SqliteDecisionCache implements DecisionCacheView {
   constructor(private readonly db: DatabaseSync) {}
 
-  lookup(key: CacheKey): DecisionCacheEntry | null {
+  lookup(key: CacheKey, lane?: string): DecisionCacheEntry | null {
     const now = Date.now()
     const keyJson = canonicalKeyJson(key)
-    const row = this.db
-      .prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1')
-      .get(keyJson) as CacheRow | undefined
+    // lane 键控（评审 B1）：同签名条目按 lane 隔离；'*' 条目（存量豁免迁移）对所有 lane 生效。
+    const row = (
+      lane
+        ? this.db
+            .prepare(
+              'SELECT * FROM decision_cache WHERE key_json = ? AND (lane = ? OR lane = ?) ORDER BY created_at DESC LIMIT 1'
+            )
+            .get(keyJson, lane, '*')
+        : this.db
+            .prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1')
+            .get(keyJson)
+    ) as CacheRow | undefined
     if (!row) return null
     if (row.expires_at !== null && row.expires_at <= now) return null
     if (now - row.last_hit_at > DORMANT_MS) return null
