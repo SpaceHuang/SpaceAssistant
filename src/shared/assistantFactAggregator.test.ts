@@ -14,6 +14,15 @@ function apply(events: AssistantFactEvent[]) {
 }
 
 describe('AssistantFactAggregator', () => {
+  it('用权威最终正文替换流式草稿，避免完成时重复追加', () => {
+    const result = apply([
+      { type: 'content-delta', text: 'partial' },
+      { type: 'content-reconciled', text: 'A + B' },
+      { type: 'source-completed' }
+    ])
+    expect(result.content).toBe('A + B')
+    expect(result.contentSegments?.map((segment) => segment.content).join('')).toBe('A + B')
+  })
   it('压缩提交标记不会阻断后续 assistant 正文写入', () => {
     const result = apply([
       { type: 'content-delta', text: 'before' },

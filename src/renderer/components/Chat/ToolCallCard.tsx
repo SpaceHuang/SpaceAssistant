@@ -138,7 +138,6 @@ export const ToolCallCard = memo(function ToolCallCard({
   onOpenFile,
   activeSearchTarget = null
 }: Props) {
-  const mcp = isMcpRecord(record)
   const { t } = useTypedTranslation('chat')
   const [loadedDetail, setLoadedDetail] = useState<ToolCallRecord | undefined>()
   // 详情是补充数据；只有它对应当前 source 快照时才允许参与展示。
@@ -146,6 +145,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const record = loadedDetail && loadedForSource === sourceRecord
     ? { ...loadedDetail, ...sourceRecord, input: Object.keys(sourceRecord.input).length ? sourceRecord.input : loadedDetail.input, result: sourceRecord.result ?? loadedDetail.result }
     : sourceRecord
+  const mcp = isMcpRecord(record)
   const currentLoadedDetail = loadedDetail && loadedForSource === sourceRecord ? loadedDetail : undefined
   const cardRef = useRef<HTMLDivElement>(null)
   const [executingHint, setExecutingHint] = useState(false)

@@ -179,6 +179,12 @@ import { computeReplaySurfaceFingerprint, computeShadowedRanges, excludeReplayOn
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
+import {
+  MAX_OUTPUT_RECOVERIES,
+  buildOutputRecoveryMessage,
+  buildTruncatedToolResults,
+  classifyOutputRecovery
+} from './outputRecovery'
 
 const fileCaches = new Map<string, FileStateCache>()
 
@@ -642,6 +648,9 @@ async function runToolChatSessionInner(
   let lastRequestContext: ReturnType<typeof buildRequestContextPayload> | undefined
   let lastRequestHeader: ReturnType<typeof buildRequestHeaderPayload> | undefined
   let overflowRetries = 0
+  let outputRecoveryRetries = 0
+  let answerRecoveryText = ''
+  let needsFinalAnswerReconciliation = false
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -1019,7 +1028,111 @@ async function runToolChatSessionInner(
       Boolean(b && typeof b === 'object' && (b as { type?: string }).type === 'tool_use')
     ) as Array<{ type: 'tool_use'; id: string; name: string; input: unknown }>
 
-    messagesForApi = [...messagesForApi, { role: 'assistant', content: content as Anthropic.ContentBlock[] }]
+    // 必须先使用与下一轮相同的 replay 清理，再判断是否追加 assistant。
+    // 否则无签名 thinking-only 截断会在下一轮变成空 assistant 消息。
+    const replayableAssistantContent = stripThinking([
+      { role: 'assistant', content: content as Anthropic.ContentBlock[] }
+    ])[0]?.content
+    const safeAssistantContent = Array.isArray(replayableAssistantContent)
+      ? replayableAssistantContent.filter((block) => {
+        if (!block || typeof block !== 'object' || (block as { type?: unknown }).type !== 'tool_use') return true
+        const id = (block as { id?: unknown }).id
+        return typeof id === 'string' && id.trim().length > 0
+      })
+      : replayableAssistantContent
+    if (Array.isArray(safeAssistantContent) && safeAssistantContent.length > 0) {
+      messagesForApi = [...messagesForApi, { role: 'assistant', content: safeAssistantContent as Anthropic.ContentBlock[] }]
+    }
+
+    const outputRecoveryKind = classifyOutputRecovery({ stopReason, content })
+    if (toolUses.length > 0 && needsFinalAnswerReconciliation && outputRecoveryKind !== 'output_truncated_with_tools') {
+      answerRecoveryText += content
+        .filter((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+        .map((block) => ((block as { text?: unknown }).text ?? ''))
+        .filter((value): value is string => typeof value === 'string')
+        .join('')
+      needsFinalAnswerReconciliation = true
+    }
+    if (outputRecoveryKind === 'output_truncated_with_tools') {
+      // 工具轮也可能已经向用户展示正文，必须保留在最终恢复正文链中。
+      const truncatedToolText = content
+        .filter((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+        .map((block) => ((block as { text?: unknown }).text ?? ''))
+        .filter((value): value is string => typeof value === 'string')
+        .join('')
+      answerRecoveryText += truncatedToolText
+      needsFinalAnswerReconciliation = true
+      const failedResults = buildTruncatedToolResults(toolUses.filter((tool) => typeof tool.id === 'string' && tool.id.trim().length > 0))
+      if (failedResults.length > 0) {
+        messagesForApi = [...messagesForApi, { role: 'user', content: failedResults }]
+        for (const failedResult of failedResults) {
+          const result: ToolCallResultPersisted = {
+            success: false,
+            error: 'model_output_token_limit',
+            userMessage: failedResult.content
+          }
+          await args.emitSessionEvent?.({ type: 'tool_result', payload: { turnId: sessionId, stepId: requestId, toolUseId: failedResult.tool_use_id, result } })
+          args.emitFactEvent?.({ type: 'tool-result', id: failedResult.tool_use_id, result })
+        }
+      }
+      if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
+        return failToolLoopWithLastUsage(sender, requestId, sessionId, 'model_output_token_limit_exhausted', lastValidUsage, args.emitFactEvent)
+      }
+      outputRecoveryRetries += 1
+      const recoveryMessage = buildOutputRecoveryMessage({ attempt: outputRecoveryRetries, causeRequestId: attemptRequestId, hadVisibleText: truncatedToolText.length > 0, hadToolUse: true })
+      messagesForApi = [...messagesForApi, { role: 'user', content: recoveryMessage.content }]
+      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId: attemptRequestId, attempt: outputRecoveryRetries, backoffMs: 0, code: 'model_output_token_limit' } })
+      logAgentEvent('warn', 'llm.output_recovery', { requestId, sessionId, causeRequestId: attemptRequestId, attempt: outputRecoveryRetries, toolCount: toolUses.length, failedToolResultCount: failedResults.length, usage })
+      continue
+    }
+    if (outputRecoveryKind === 'output_truncated_without_tools') {
+      const text = content
+        .filter((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+        .map((block) => ((block as { text?: unknown }).text ?? ''))
+        .filter((value): value is string => typeof value === 'string')
+        .join('')
+      answerRecoveryText += text
+      if (text.length > 0) needsFinalAnswerReconciliation = true
+      if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
+        return failToolLoopWithLastUsage(
+          sender,
+          requestId,
+          sessionId,
+          'model_output_token_limit_exhausted',
+          lastValidUsage,
+          args.emitFactEvent
+        )
+      }
+      outputRecoveryRetries += 1
+      const recoveryMessage = buildOutputRecoveryMessage({
+        attempt: outputRecoveryRetries,
+        causeRequestId: attemptRequestId,
+        hadVisibleText: text.length > 0
+      })
+      messagesForApi = [...messagesForApi, { role: 'user', content: recoveryMessage.content }]
+      await args.emitSessionEvent?.({
+        type: 'request_retry',
+        payload: {
+          turnId: sessionId,
+          stepId: requestId,
+          requestId: attemptRequestId,
+          attempt: outputRecoveryRetries,
+          backoffMs: 0,
+          code: 'model_output_token_limit'
+        }
+      })
+      logAgentEvent('warn', 'llm.output_recovery', {
+        requestId,
+        sessionId,
+        causeRequestId: attemptRequestId,
+        attempt: outputRecoveryRetries,
+        maxRecoveries: MAX_OUTPUT_RECOVERIES,
+        stopReason,
+        hadVisibleText: text.length > 0,
+        usage
+      })
+      continue
+    }
 
     if (
       appDb &&
@@ -1040,11 +1153,22 @@ async function runToolChatSessionInner(
 
     if (toolUses.length === 0) {
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
+      const explicitText = content.filter((block) => block.type === 'text').map((block) => block.type === 'text' ? block.text : '').join('')
+      const compatibleThinkingText = !explicitText && (stopReason === undefined || stopReason === 'end_turn')
+        ? content.filter((block) => block.type === 'thinking').map((block) => block.type === 'thinking' ? block.thinking : '').join('')
+        : ''
+      const finalRoundText = explicitText || compatibleThinkingText
+      const finalText = answerRecoveryText ? answerRecoveryText + finalRoundText : finalRoundText
+      const hasOutputRecovery = outputRecoveryRetries > 0
+      if (needsFinalAnswerReconciliation || hasOutputRecovery) args.emitFactEvent?.({ type: 'content-reconciled', text: finalText })
       args.emitFactEvent?.({ type: 'source-completed' })
       if (args.onTurnBoundary && lastRequestHeader && lastRequestContext) {
         await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system, tools: lastRequestHeader.tools, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: lastRequestHeader.toolExecutionCheckpoint, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
       }
-      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
+      const finalContent = answerRecoveryText || hasOutputRecovery
+        ? ([{ type: 'text', text: finalText }] as Anthropic.ContentBlock[])
+        : content
+      return { ok: true, content: finalContent, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
     }
 
     if (toolNames.length === 0) {

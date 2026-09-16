@@ -30,6 +30,7 @@ export type TurnTerminal = {
 
 type AssistantFactEventPayload =
   | { type: 'content-delta'; text: string }
+  | { type: 'content-reconciled'; text: string }
   | { type: 'thinking-delta'; text: string }
   | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel']; mcp?: ToolCallRecord['mcp'] }
   | { type: 'tool-progress'; id: string; seq: number; text: string; rawDelta?: string; rawEncoding?: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
@@ -75,6 +76,9 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     if (last && !last.endTime) segments[segments.length - 1] = { ...last, content: last.content + event.text }
     else segments.push({ content: event.text, startTime: deps.now })
     next.contentSegments = segments
+  } else if (event.type === 'content-reconciled') {
+    next.content = event.text
+    next.contentSegments = event.text.length > 0 ? [{ content: event.text, startTime: deps.now, endTime: deps.now }] : []
   } else if (event.type === 'thinking-delta') {
     if (next.contentSegments) next.contentSegments = next.contentSegments.map((segment) => ({ ...segment, endTime: segment.endTime ?? deps.now }))
     const thinking = next.thinking ?? { content: '', isVisible: true, startTime: deps.now, segments: [] }

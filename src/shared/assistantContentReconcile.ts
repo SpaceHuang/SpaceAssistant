@@ -28,7 +28,7 @@ export function extractThinkingFromApiContent(content: unknown[]): string {
   return s
 }
 
-/** 末轮仅有 thinking、无 text 时（部分网关会把正式回复写进 thinking 块） */
+/** 兼容部分网关在正常完成时把正式回复放进 thinking 块的行为。 */
 export function shouldPromoteFinalThinkingToContent(
   stopReason: string | undefined,
   apiContent: unknown[],
@@ -36,18 +36,15 @@ export function shouldPromoteFinalThinkingToContent(
   thinkingState: ThinkingState
 ): boolean {
   if (stopReason && stopReason !== 'end_turn') return false
-
   if (apiContent.length > 0) {
-    const apiText = extractAssistantTextFromApiContent(apiContent).trim()
-    if (apiText) return false
+    if (extractAssistantTextFromApiContent(apiContent).trim()) return false
     return extractThinkingFromApiContent(apiContent).trim().length > 0
   }
-
   if (contentState.content.trim()) return false
   return Boolean(thinkingState.content.trim())
 }
 
-/** 将最后一轮 thinking 段落提升为助手正文，保留更早的 thinking 段落在思考块内 */
+/** 将最后一轮 thinking 提升为正文，并保留更早的 thinking 段落。 */
 export function promoteLastThinkingSegmentToContent(
   thinkingState: ThinkingState,
   contentState: ContentState,
@@ -57,34 +54,17 @@ export function promoteLastThinkingSegmentToContent(
   if (segments.length === 0) {
     if (!thinkingState.content.trim()) return { thinkingState, contentState }
     let nextContent = contentState
-    if (hasOpenContentSegment(nextContent)) {
-      nextContent = closeOpenContentSegment(nextContent, now)
-    }
+    if (hasOpenContentSegment(nextContent)) nextContent = closeOpenContentSegment(nextContent, now)
     nextContent = appendContentDelta(nextContent, thinkingState.content, now)
-    return {
-      thinkingState: { ...thinkingState, content: '', segments: [] },
-      contentState: nextContent
-    }
+    return { thinkingState: { ...thinkingState, content: '', segments: [] }, contentState: nextContent }
   }
-
   const last = segments[segments.length - 1]!
   if (!last.content.trim()) return { thinkingState, contentState }
-
-  const remainingSegments = segments.slice(0, -1)
-  const remainingContent = remainingSegments.map((s) => s.content).join('')
-
   let nextContent = contentState
-  if (hasOpenContentSegment(nextContent)) {
-    nextContent = closeOpenContentSegment(nextContent, now)
-  }
+  if (hasOpenContentSegment(nextContent)) nextContent = closeOpenContentSegment(nextContent, now)
   nextContent = appendContentDelta(nextContent, last.content, now)
-
   return {
-    thinkingState: {
-      ...thinkingState,
-      content: remainingContent,
-      segments: remainingSegments
-    },
+    thinkingState: { ...thinkingState, content: segments.slice(0, -1).map((s) => s.content).join(''), segments: segments.slice(0, -1) },
     contentState: nextContent
   }
 }
@@ -98,15 +78,10 @@ export function reconcileAssistantStreamOnComplete(args: {
 }): { contentState: ContentState; thinkingState: ThinkingState; textOut: string } {
   let { contentState, thinkingState } = args
   const apiContent = args.apiContent ?? []
-  const now = args.now ?? Date.now()
-
   if (shouldPromoteFinalThinkingToContent(args.stopReason, apiContent, contentState, thinkingState)) {
-    const promoted = promoteLastThinkingSegmentToContent(thinkingState, contentState, now)
-    thinkingState = promoted.thinkingState
-    contentState = promoted.contentState
-    return { contentState, thinkingState, textOut: contentState.content }
+    const promoted = promoteLastThinkingSegmentToContent(thinkingState, contentState, args.now)
+    return { contentState: promoted.contentState, thinkingState: promoted.thinkingState, textOut: promoted.contentState.content }
   }
-
   const apiText = extractAssistantTextFromApiContent(apiContent)
   const textOut = apiText || contentState.content
   if (apiText && apiText !== contentState.content) {
