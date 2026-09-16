@@ -554,6 +554,8 @@ export interface ToolCallResultPersisted {
   userMessage?: string
   dependencyRecovery?: BrowserDependencyToolError
   autoApprovedWrite?: AutoApprovedWriteMeta
+  /** 已由主进程解析的 MCP 展示投影；不参与模型上下文。 */
+  displayData?: import('./mcpToolResultDisplay').McpResultDisplay
 }
 
 /** 工具调用记录（持久化到消息中） */

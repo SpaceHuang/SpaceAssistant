@@ -86,6 +86,20 @@ describe('resolveStreamingActivityStatus', () => {
     expect(status?.detail).toBe('added 47 packages')
   })
 
+  it('passes MCP metadata to the shared label formatter', () => {
+    let seen: unknown
+    const status = resolveStreamingActivityStatus({
+      message: assistantMessage({ toolCalls: [{
+        id: 'mcp-1', toolName: 'mcp_s_demo_tool_hash', input: {}, status: 'executing', riskLevel: 'low',
+        mcp: { serverId: 's1', serverName: '演示服务', originalToolName: 'demo_tool' }
+      }] }),
+      formatToolLabel: (_name, _input, mcp) => { seen = mcp; return '演示服务 · demo_tool' },
+      t
+    })
+    expect(status?.label).toBe('演示服务 · demo_tool')
+    expect(seen).toEqual({ serverId: 's1', serverName: '演示服务', originalToolName: 'demo_tool' })
+  })
+
   it('falls back to thinking label', () => {
     const status = resolveStreamingActivityStatus({
       message: assistantMessage({

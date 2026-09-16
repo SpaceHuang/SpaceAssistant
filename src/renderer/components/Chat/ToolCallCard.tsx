@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { FileConfirmMode, ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
+import { projectPersistedMcpResult, type McpResultDisplay } from '../../../shared/mcpToolResultDisplay'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import {
   hasShellOutput,
@@ -37,9 +38,23 @@ import { ShellOutputView } from './ShellOutputView'
 import { ShellTerminalView } from './ShellTerminalView'
 import { ShellScrollbackView } from './ShellScrollbackView'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
+import { McpToolResultView } from './McpToolResultView'
+
+function isMcpRecord(record: ToolCallRecord): boolean {
+  return Boolean(record.mcp) || record.toolName.startsWith('mcp_')
+}
+
+function getMcpDisplay(record: ToolCallRecord): McpResultDisplay | undefined {
+  if (record.result?.displayData) return record.result.displayData
+  if (!isMcpRecord(record) || !record.result?.success) return undefined
+  return projectPersistedMcpResult(record.result.data)
+}
+import { McpElapsed } from './McpElapsed'
 import { scrollIntoViewWithMotionPreference } from '../../utils/motionPreference'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildFragmentId } from '../../../shared/chatSearchFragments'
+import { formatToolDuration } from '../../../shared/toolDurationFormat'
+import { getToolDurationPhases } from '../../../shared/toolDurationPhases'
 import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
 import type { ToolCallDisplaySummary } from '../../../shared/turnDisplayProtocol'
 
@@ -60,6 +75,20 @@ type Props = {
   onCancel?: () => void
   onOpenFile?: (relPath: string) => void
   activeSearchTarget?: ChatSearchActiveTarget | null
+}
+
+export function getMcpStatusTranslationKey(status: ToolCallRecord['status'], interrupted = false):
+  | 'mcp.statusRunning'
+  | 'mcp.statusSuccess'
+  | 'mcp.statusRejected'
+  | 'mcp.statusInterrupted'
+  | 'mcp.statusAwaitingConfirm'
+  | 'mcp.statusFailed' {
+  if (status === 'calling' || status === 'executing') return 'mcp.statusRunning'
+  if (status === 'confirming') return 'mcp.statusAwaitingConfirm'
+  if (status === 'completed') return 'mcp.statusSuccess'
+  if (status === 'rejected') return 'mcp.statusRejected'
+  return interrupted ? 'mcp.statusInterrupted' : 'mcp.statusFailed'
 }
 
 function truncate(s: string, max: number): string {
@@ -109,6 +138,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   onOpenFile,
   activeSearchTarget = null
 }: Props) {
+  const mcp = isMcpRecord(record)
   const { t } = useTypedTranslation('chat')
   const [loadedDetail, setLoadedDetail] = useState<ToolCallRecord | undefined>()
   // 详情是补充数据；只有它对应当前 source 快照时才允许参与展示。
@@ -294,16 +324,24 @@ export const ToolCallCard = memo(function ToolCallCard({
       larkCliConfirming) &&
     hasDetail
 
+  const mcpDisplay = useMemo(
+    () => record.result?.displayData ?? ((showDetail || activeSearchTarget) ? getMcpDisplay(record) : undefined),
+    [record.result, showDetail, activeSearchTarget]
+  )
+
   const label = useMemo(() => {
     const silent = shellToolCompletedLabel(record, t)
     if (silent) return silent
     if (record.toolName === 'browser') return formatBrowserToolLabel(record.input)
-    return formatToolLabel(record.toolName, record.input, t)
+    return formatToolLabel(record.toolName, record.input, t, record.mcp)
   }, [record, t])
   const labelTitle = useMemo(() => {
     if (record.toolName === 'browser') return formatBrowserToolLabelTitle(record.input)
-    return formatToolLabelTitle(record.toolName, record.input)
-  }, [record.toolName, record.input])
+    return formatToolLabelTitle(record.toolName, record.input, t, record.mcp)
+  }, [record.toolName, record.input, record.mcp, t])
+  const durationPhases = mcp && showDetail
+    ? getToolDurationPhases({ startedAt: record.startedAt, confirmedAt: record.confirmedAt, completedAt: record.completedAt })
+    : {}
 
   const paramPreview = useMemo(() => {
     if (!showDetail) return ''
@@ -317,6 +355,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const resultStr = useMemo(() => {
     const result = currentLoadedDetail?.result ?? record.result
     if (!showDetail || !result) return ''
+    if (mcp && mcpDisplay) return ''
     if (record.toolName === 'run_shell' && (shellHasFormattedOutput || isShellSilentResult(result.data))) {
       return ''
     }
@@ -387,7 +426,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       : undefined
   const earlySearchText = earlySearchFragmentId ? activeSearchTarget?.searchableText : undefined
 
-  const mcpConfirming = Boolean(record.mcp && record.status === 'confirming')
+  const mcpConfirming = Boolean(mcp && record.status === 'confirming')
 
   if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
@@ -499,6 +538,17 @@ export const ToolCallCard = memo(function ToolCallCard({
         >
           {label}
         </span>
+        {mcp ? (
+          <span className={`tool-row__status tool-row__status--${record.status}`} data-testid="mcp-status">
+            {t(getMcpStatusTranslationKey(record.status, record.interrupted))}
+          </span>
+        ) : null}
+        {mcp && record.duration !== undefined && record.status !== 'rejected' ? (
+          <span className="tool-row__duration" data-testid="tool-duration">{formatToolDuration(record.duration)}</span>
+        ) : null}
+        {mcp && (record.status === 'calling' || record.status === 'executing') && record.startedAt !== undefined ? (
+          <McpElapsed startedAt={record.startedAt} />
+        ) : null}
         {hasDetail ? (
           <ChevronRight size={12} strokeWidth={2} className="tool-row__chevron" aria-hidden />
         ) : null}
@@ -513,6 +563,12 @@ export const ToolCallCard = memo(function ToolCallCard({
           aria-hidden={!showDetail}
         >
           <div className="tool-row-detail__inner">
+          {mcp && showDetail && durationPhases.totalMs !== undefined ? (
+            <div className="tool-row-detail__message tool-row__duration-phases">
+              {durationPhases.waitingMs !== undefined ? `${t('mcp.waitingConfirm', { value: formatToolDuration(durationPhases.waitingMs) })} · ` : ''}
+              {t('mcp.execution', { value: formatToolDuration(durationPhases.executionMs ?? 0) })} · {t('mcp.total', { value: formatToolDuration(durationPhases.totalMs) })}
+            </div>
+          ) : null}
           {showShellLiveTerminal ? (
             <ShellTerminalView
               progressOutputRaw={record.progressOutputRaw}
@@ -551,6 +607,11 @@ export const ToolCallCard = memo(function ToolCallCard({
             <span className="tool-row-detail__message">
               {record.result?.userMessage ?? record.result?.error ?? (record.status === 'rejected' ? t('tool.rejected') : t('tool.failed'))}
             </span>
+          ) : null}
+          {mcp && record.status === 'failed' ? (
+            <Button size="small" type="link" className="tool-row-detail__action" onClick={() => window.dispatchEvent(new CustomEvent('sa-open-settings', { detail: { tab: 'tools', toolsSubTab: 'mcp' } }))}>
+              {t('mcp.openSettings')}
+            </Button>
           ) : null}
 
           {showShellCompletedTerminal && shellResultData ? (
@@ -609,6 +670,10 @@ export const ToolCallCard = memo(function ToolCallCard({
             >
               {renderFullSearchResult ? displayedResultText : truncate(displayedResultText, 4000)}
             </pre>
+          ) : null}
+
+          {mcp && showDetail && record.status === 'completed' && mcpDisplay ? (
+            <McpToolResultView display={mcpDisplay} fragmentId={resultFragmentId} messageId={messageId} toolUseId={record.id} activeSearchTarget={searchResultOwnsFragment ? activeSearchTarget : null} />
           ) : null}
 
           {showSearchResult && !(record.status === 'completed' && resultStr) ? (

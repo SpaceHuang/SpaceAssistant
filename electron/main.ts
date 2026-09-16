@@ -66,6 +66,7 @@ import { getSecurityAuditLog } from './confirmation/audit'
 import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
 import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdownCleanup'
+import { cleanupMcpArtifactsOnStartup } from './mcp/mcpArtifactCleanup'
 
 let floatingManager: FloatingNotificationManager | null = null
 
@@ -231,6 +232,10 @@ app.whenReady().then(async () => {
 
   app.on('second-instance', () => {
     void showMainWindow()
+  })
+
+  await cleanupMcpArtifactsOnStartup(app.getPath('userData')).catch((error) => {
+    console.warn('[mcp] startup artifact cleanup failed:', error instanceof Error ? error.message : String(error))
   })
 
   const dbPath = getDefaultDbPath(app.getPath('userData'))

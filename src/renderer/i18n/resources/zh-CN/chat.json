@@ -45,6 +45,7 @@
     "pending": "仍在运行…",
     "rejected": "已拒绝",
     "failed": "失败",
+    "completed": "成功",
     "empty": "(空)",
     "fileFallback": "文件",
     "completedNoOutput": "已完成（无输出）",
@@ -60,7 +61,9 @@
       "runScript": "运行脚本",
       "runShellEmpty": "运行命令",
       "browserDetect": "检测浏览器依赖",
-      "invokeTool": "调用工具：{{toolName}}"
+      "invokeTool": "调用工具：{{toolName}}",
+      "mcpUnknownServer": "未知 MCP 服务",
+      "mcpUnresolved": "外部 MCP 工具（来源未知）"
     },
     "descriptions": {
       "grep": "在工作目录下搜索匹配的文件内容",
@@ -75,6 +78,7 @@
       "invokeTool": "调用工具：{{toolName}}"
     }
   },
+  "mcp": { "copyResult": "复制结果", "openArtifact": "打开完整内容", "openFailed": "无法打开完整内容", "openSettings": "打开 MCP 服务设置", "noDescription": "该服务未提供工具描述", "waitingConfirm": "等待确认 {{value}}", "execution": "执行 {{value}}", "total": "总计 {{value}}", "expandAll": "展开全部（共 {{count}} 行）", "resultEmpty": "工具返回空结果", "resultTooLarge": "结果过大，仅显示摘要", "imageResult": "图片结果 · {{mimeType}} · {{size}} bytes", "resourceResult": "资源：{{name}}（{{uri}}）", "statusRunning": "运行中", "statusSuccess": "成功", "statusFailed": "失败", "statusRejected": "已拒绝", "statusInterrupted": "已中断", "statusAwaitingConfirm": "待确认" },
   "input": {
     "placeholder": "输入消息…",
     "send": "发送消息",

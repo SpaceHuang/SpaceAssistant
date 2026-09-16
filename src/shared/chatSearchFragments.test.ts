@@ -134,6 +134,23 @@ describe('buildSearchFragmentsFromMessage', () => {
     expect(result?.searchableText).toBe('stdout needle\n退出码 1\nstderr warning')
   })
 
+  it('indexes MCP markdown text and code with isolated result fragment kinds', () => {
+    const markdown = '## MCP 标题\n\n```json\n{"needle":true}\n```'
+    const message = assistantMsg({ toolCalls: [{
+      id: 'mcp-1', toolName: 'mcp_s_demo_tool_abcd1234', input: {}, status: 'completed', riskLevel: 'low',
+      mcp: { serverId: 'server-1', serverName: '演示服务', originalToolName: 'demo_tool' },
+      result: { success: true, data: [{ type: 'text', text: markdown }], displayData: {
+        text: markdown,
+        blocks: [{ kind: 'text', text: markdown }],
+        isEmpty: false,
+        displayMode: 'short'
+      } }
+    }] })
+    const fragments = buildSearchFragmentsFromMessage(message, { kind: 'persisted', sequence: 9 }, { projectMarkdown: projectMarkdownForSearch })
+    expect(fragments.some((f) => f.source.kind === 'tool-result' && f.searchableText.includes('MCP 标题') && f.searchableText.includes('needle'))).toBe(true)
+    expect(fragments.filter((f) => f.source.kind.startsWith('tool-result-')).every((f) => f.fragmentId.includes('mcp-1'))).toBe(true)
+  })
+
   it('prefers visible shell stderr over hidden failure error and normalizes terminal output', () => {
     const message = assistantMsg({ toolCalls: [{
       id: 'shell-2', toolName: 'run_shell', input: { command: 'test' }, status: 'failed', riskLevel: 'low',

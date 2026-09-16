@@ -31,8 +31,8 @@ export type TurnTerminal = {
 type AssistantFactEventPayload =
   | { type: 'content-delta'; text: string }
   | { type: 'thinking-delta'; text: string }
-  | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel'] }
-  | { type: 'tool-progress'; id: string; seq: number; text: string; rawDelta?: string; rawEncoding?: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
+  | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel']; mcp?: ToolCallRecord['mcp'] }
+  | { type: 'tool-progress'; id: string; seq: number; text: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
   | {
       type: 'confirm-requested'
       id: string
@@ -88,7 +88,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
       // 首次工具调用是活动时间线的边界：关闭调用前开放的正文/Thinking segment，
       // 否则工具执行期间再次到达的 thinking 会沿用旧 startTime，被渲染到工具之前。
       closeSegments(next, deps.now)
-      next.toolCalls = [...(next.toolCalls ?? []), { id: event.id, toolName: event.toolName, input: event.input, status: 'calling', riskLevel: event.riskLevel ?? 'low', startedAt: deps.now }]
+      next.toolCalls = [...(next.toolCalls ?? []), { id: event.id, toolName: event.toolName, input: event.input, status: 'calling', riskLevel: event.riskLevel ?? 'low', startedAt: deps.now, ...(event.mcp ? { mcp: event.mcp } : {}) }]
     }
   } else if (event.type === 'tool-progress') {
     const processPid = event.processPid

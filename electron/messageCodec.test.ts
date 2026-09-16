@@ -8,6 +8,13 @@ vi.mock('./agentLogger/agentLogger', () => ({
 import { logAgentEvent } from './agentLogger/agentLogger'
 
 describe('deserializeToolCallsFromDb', () => {
+  it('round-trips MCP displayData for historical cards', () => {
+    const raw = serializeToolCallsForDb([{
+      id: 'mcp-1', toolName: 'mcp_x_y_abc', input: {}, status: 'completed', riskLevel: 'low',
+      result: { success: true, data: '[model]', displayData: { text: '可读结果', blocks: [{ kind: 'text', text: '可读结果' }], isEmpty: false } }
+    }])
+    expect(deserializeToolCallsFromDb(raw)?.[0]?.result?.displayData?.text).toBe('可读结果')
+  })
   it('13: returns corrupted placeholder and logs on parse failure', () => {
     const result = deserializeToolCallsFromDb('not-valid-json{{{')
     expect(result).toHaveLength(1)

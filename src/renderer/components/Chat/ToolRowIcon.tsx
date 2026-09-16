@@ -8,6 +8,7 @@ import {
   Globe,
   MessagesSquare,
   Pencil,
+  Plug,
   Search,
   Wrench
 } from 'lucide-react'
@@ -41,6 +42,8 @@ export function ToolKindIcon({ kind, className, size = 14, strokeWidth = 1.75 }:
       return <Globe {...props} />
     case 'lark':
       return <MessagesSquare {...props} />
+    case 'mcp':
+      return <Plug {...props} />
     default:
       return <Wrench {...props} />
   }

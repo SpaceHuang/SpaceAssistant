@@ -100,7 +100,7 @@ function buildBatchSummary(
   if (highlight.kind === 'tool') {
     const tc = ctx.toolById.get(highlight.toolId)
     if (tc) {
-      const base = formatToolLabel(tc.toolName, tc.input, ctx.t)
+      const base = formatToolLabel(tc.toolName, tc.input, ctx.t, tc.mcp)
       const label = count > 1 ? `${base} ${ctx.t('batch.count', { count })}` : base
       return {
         icon: <ToolRowIcon toolName={tc.toolName} pending={tc.status === 'calling' || tc.status === 'executing'} />,

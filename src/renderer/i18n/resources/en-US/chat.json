@@ -45,6 +45,7 @@
     "pending": "Still running…",
     "rejected": "Rejected",
     "failed": "Failed",
+    "completed": "Succeeded",
     "empty": "(empty)",
     "fileFallback": "File",
     "completedNoOutput": "Completed (no output)",
@@ -60,7 +61,9 @@
       "runScript": "Run script",
       "runShellEmpty": "Run command",
       "browserDetect": "Check browser dependencies",
-      "invokeTool": "Invoke tool: {{toolName}}"
+      "invokeTool": "Invoke tool: {{toolName}}",
+      "mcpUnknownServer": "Unknown MCP service",
+      "mcpUnresolved": "External MCP tool (unknown source)"
     },
     "descriptions": {
       "grep": "Search file contents under the working directory",
@@ -75,6 +78,7 @@
       "invokeTool": "Invoke tool: {{toolName}}"
     }
   },
+  "mcp": { "copyResult": "Copy result", "openArtifact": "Open full result", "openFailed": "Failed to open full content", "openSettings": "Open MCP server settings", "noDescription": "No description provided by this server", "waitingConfirm": "Waiting for confirmation {{value}}", "execution": "Execution {{value}}", "total": "Total {{value}}", "expandAll": "Expand all ({{count}} lines)", "resultEmpty": "Tool returned an empty result", "resultTooLarge": "Result too large; showing summary only", "imageResult": "Image result · {{mimeType}} · {{size}} bytes", "resourceResult": "Resource: {{name}} ({{uri}})", "statusRunning": "Running", "statusSuccess": "Success", "statusFailed": "Failed", "statusRejected": "Rejected", "statusInterrupted": "Interrupted", "statusAwaitingConfirm": "Awaiting confirmation" },
   "input": {
     "placeholder": "Type a message…",
     "send": "Send message",

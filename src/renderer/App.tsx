@@ -3,7 +3,7 @@ import { App as AntdApp, Button } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
-import { setConfig, setSettingsOpen, setAboutOpen } from './store/configSlice'
+import { setConfig, setSettingsOpen, setAboutOpen, openSettings } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
 import { ConfigSettingsPage } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
@@ -37,6 +37,7 @@ import searchLineRaw from './assets/search_line.svg?raw'
 import searchFillRaw from './assets/search_fill.svg?raw'
 import settingsRaw from './assets/settings_1_line.svg?raw'
 import { TitleBar } from './components/TitleBar/TitleBar'
+import { refreshMcpToolCatalog } from './services/mcpToolCatalog'
 
 const chatLineSvg = patchSvg(chatLineRaw)
 const chatFillSvg = patchSvg(chatFillRaw)
@@ -87,6 +88,17 @@ function AppShellInner() {
   const wikiPaneRef = useRef<WikiPaneHandle>(null)
   const { openFile } = useDetailPanel()
   const wikiEnabled = Boolean(config?.wiki?.enabled)
+
+  useEffect(() => { void refreshMcpToolCatalog() }, [])
+
+  useEffect(() => {
+    const onOpenSettings = (event: Event) => {
+      const detail = (event as CustomEvent<{ tab?: string; toolsSubTab?: 'switches' | 'mcp' | 'file' | 'script' | 'shell' | 'browser' | 'security' }>).detail
+      dispatch(openSettings(detail))
+    }
+    window.addEventListener('sa-open-settings', onOpenSettings)
+    return () => window.removeEventListener('sa-open-settings', onOpenSettings)
+  }, [dispatch])
 
   const createSession = async () => {
     try {

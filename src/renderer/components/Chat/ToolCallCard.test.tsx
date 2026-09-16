@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
-import { ToolCallCard } from './ToolCallCard'
+import { getMcpStatusTranslationKey, ToolCallCard } from './ToolCallCard'
 
 vi.mock('./ShikiHighlightedCode', () => ({
   ShikiHighlightedCode: ({ code, className }: { code: string; className?: string }) => (
@@ -25,6 +25,14 @@ function writeRecord(status: ToolCallRecord['status'], extra: Partial<ToolCallRe
     ...extra
   }
 }
+
+describe('MCP status mapping', () => {
+  it('keeps confirming distinct from failed', () => {
+    expect(getMcpStatusTranslationKey('confirming')).toBe('mcp.statusAwaitingConfirm')
+    expect(getMcpStatusTranslationKey('failed')).toBe('mcp.statusFailed')
+    expect(getMcpStatusTranslationKey('failed', true)).toBe('mcp.statusInterrupted')
+  })
+})
 
 describe('ToolCallCard file write expand behavior', () => {
   it('失败结果优先显示 userMessage 而非机器错误码', () => {

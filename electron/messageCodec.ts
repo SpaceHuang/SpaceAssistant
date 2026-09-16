@@ -1,6 +1,7 @@
 import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { createCorruptedToolCallPlaceholder } from './database/streamingCleanup'
+import type { McpResultDisplay } from '../src/shared/mcpToolResultDisplay'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -109,7 +110,7 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
   if (!raw) return undefined
   try {
     const arr = JSON.parse(raw) as Array<
-      ToolCallRecord & { input: string; result?: { success: boolean; data?: string; error?: string } }
+      ToolCallRecord & { input: string; result?: { success: boolean; data?: string; error?: string; displayData?: McpResultDisplay } }
     >
     if (!Array.isArray(arr)) return undefined
     return arr.map((c) => ({
@@ -121,7 +122,8 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
         ? {
             success: c.result.success,
             error: c.result.error,
-            data: c.result.data !== undefined ? JSON.parse(c.result.data) : undefined
+            data: c.result.data !== undefined ? JSON.parse(c.result.data) : undefined,
+            ...(c.result.displayData ? { displayData: c.result.displayData } : {})
           }
         : undefined,
       status: c.status,

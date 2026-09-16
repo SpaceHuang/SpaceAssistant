@@ -2,8 +2,9 @@
 
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import { isShellReadOnlyCommand, isShellSilentResult } from '../../../shared/shellToolDisplay'
-import { formatToolLabel as formatToolLabelCore, pathBasename as pathBasenameCore } from '../../../shared/toolCallLabel'
+import { formatToolLabel as formatToolLabelCore, pathBasename as pathBasenameCore, type McpToolLabelMetadata } from '../../../shared/toolCallLabel'
 import i18n from '../../i18n'
+import { resolveMcpToolFromCatalog } from '../../services/mcpToolCatalog'
 
 const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_directory'])
 const FILE_WRITE_TOOLS = new Set(['write_file', 'edit_file'])
@@ -52,7 +53,16 @@ export function getToolDescription(toolName: string, t: ToolCallDisplayT = defau
   }
 }
 
-export function formatToolLabelTitle(toolName: string, input: Record<string, unknown>): string | undefined {
+export function formatToolLabelTitle(toolName: string, input: Record<string, unknown>, t: ToolCallDisplayT = defaultT, mcp?: McpToolLabelMetadata): string | undefined {
+  if (toolName.startsWith('mcp_')) {
+    mcp = mcp ?? resolveMcpToolFromCatalog(toolName)
+    const server = mcp?.serverName || t('tool.labels.mcpUnknownServer')
+    const formatted = formatToolLabelCore(toolName, input, t, mcp)
+    const original = mcp?.originalToolName || formatted.split(' · ')[1]
+    if (!original) return t('tool.labels.mcpUnresolved')
+    const description = mcp?.description?.trim() || t('mcp.noDescription')
+    return `${server}${mcp?.serverId ? ` (${mcp.serverId})` : ''}\n${original} · ${toolName}\n${description.slice(0, 200)}`
+  }
   if (
     (toolName === 'read_file' ||
       toolName === 'list_directory' ||
@@ -72,9 +82,11 @@ export function formatToolLabelTitle(toolName: string, input: Record<string, unk
 export function formatToolLabel(
   toolName: string,
   input: Record<string, unknown>,
-  t: ToolCallDisplayT = defaultT
+  t: ToolCallDisplayT = defaultT,
+  mcp?: McpToolLabelMetadata
 ): string {
-  return formatToolLabelCore(toolName, input, t)
+  if (toolName.startsWith('mcp_')) mcp = mcp ?? resolveMcpToolFromCatalog(toolName)
+  return formatToolLabelCore(toolName, input, t, mcp)
 }
 
 export type ToolIconKind =
@@ -86,9 +98,11 @@ export type ToolIconKind =
   | 'shell'
   | 'browser'
   | 'lark'
+  | 'mcp'
   | 'generic'
 
 export function getToolIconKind(toolName: string): ToolIconKind {
+  if (toolName.startsWith('mcp_')) return 'mcp'
   switch (toolName) {
     case 'grep':
       return 'grep'

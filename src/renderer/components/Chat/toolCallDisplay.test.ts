@@ -8,6 +8,7 @@ import {
   shellToolCompletedLabel,
   shouldAutoExpandShellToolRow
 } from './toolCallDisplay'
+import { buildMcpToolCatalog } from '../../services/mcpToolCatalog'
 
 describe('pathBasename', () => {
   it('returns filename from posix path', () => {
@@ -20,6 +21,14 @@ describe('pathBasename', () => {
 })
 
 describe('formatToolLabel', () => {
+  it('uses the MCP catalog fallback when record metadata is absent', () => {
+    buildMcpToolCatalog({
+      servers: [{ id: 'server-1', name: '知乎热榜' }],
+      toolCaches: { 'server-1': { tools: [{ mappedName: 'mcp_s_hot_abcdef12', originalName: 'hot_list', description: '榜单' }] } }
+    } as never)
+    expect(formatToolLabel('mcp_s_hot_abcdef12', {})).toBe('知乎热榜 · hot_list')
+  })
+
   it('shows basename for read_file', () => {
     expect(formatToolLabel('read_file', { path: 'docs/requirement/file-pane-tree-requirement.md' })).toBe(
       'file-pane-tree-requirement.md'
@@ -28,6 +37,14 @@ describe('formatToolLabel', () => {
 
   it('shows basename for list_directory', () => {
     expect(formatToolLabel('list_directory', { path: 'src/renderer/components' })).toBe('components')
+  })
+
+  it('formats MCP labels from persisted metadata', () => {
+    const record: ToolCallRecord = {
+      id: 'mcp-1', toolName: 'mcp_s_hot_abc', input: {}, status: 'completed', riskLevel: 'low',
+      mcp: { serverId: 'zhihu', serverName: '知乎热榜', originalToolName: 'hot_list' }
+    }
+    expect(formatToolLabel(record.toolName, record.input, undefined, record.mcp)).toBe('知乎热榜 · hot_list')
   })
 })
 
