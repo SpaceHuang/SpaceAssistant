@@ -5,10 +5,14 @@ import {
   markActiveRunsInterrupted,
   updateAutomationTask,
   insertAutomationTaskRun,
+  computeNextRunAt,
   type AutomationTask,
   type AutomationTaskRun,
   type AutomationTaskSchedule
 } from './taskStore'
+
+// schedule 计算已移至 taskStore（创建/编辑层也要武装 next_run_at，评审 P0-1）；此处 re-export 保持既有导入路径。
+export { computeNextRunAt }
 
 /**
  * 管家定时驱动源（P6，Driver 层）：主进程 setInterval tick + 有界启动恢复。
@@ -37,18 +41,6 @@ export type ButlerSchedulerDeps = {
 
 /** 单次错过扫描上限：interval 任务最多回看 48 个槽位（防风暴）。 */
 const MAX_MISSED_SLOTS = 48
-
-/** 下一次触发时刻（interval：from + N 分钟；daily：下一个 HH:mm 本地时刻）。 */
-export function computeNextRunAt(schedule: AutomationTaskSchedule, from: number): number {
-  if (schedule.kind === 'interval') {
-    return from + Math.max(1, schedule.intervalMinutes) * 60_000
-  }
-  const [h, m] = schedule.time.split(':').map((v) => Number.parseInt(v, 10))
-  const next = new Date(from)
-  next.setHours(Number.isFinite(h) ? h : 0, Number.isFinite(m) ? m : 0, 0, 0)
-  if (next.getTime() <= from) next.setDate(next.getDate() + 1)
-  return next.getTime()
-}
 
 /** 枚举 (from, now] 内错过的全部调度槽位（升序，有界）。from 本身视作第一个错过的槽位。 */
 export function enumerateMissedSlots(schedule: AutomationTaskSchedule, from: number, now: number): number[] {
@@ -95,7 +87,15 @@ export class ButlerTaskScheduler {
     }
     this.recoverOnStartup()
     this.stopped = false
-    this.timer = this.setIntervalFn(() => void this.tick(), this.tickIntervalMs)
+    // 评审 P1-1：interval 回调触发的 tick 必须兜底 catch——tick 体内任何逃逸异常
+    // （如退出竞态下 db 已关闭）否则成为 unhandled rejection，Electron 默认崩溃主进程。
+    this.timer = this.setIntervalFn(() => {
+      void this.tick().catch((error) => {
+        this.logWarn('automation.scheduler.tick-failed', {
+          message: error instanceof Error ? error.message : String(error)
+        })
+      })
+    }, this.tickIntervalMs)
   }
 
   /** before-quit：停 tick；进行中 run 走现有取消语义后标 interrupted（退出显式且干净）。 */
@@ -132,13 +132,11 @@ export class ButlerTaskScheduler {
       // 最近一次错过：有界补跑（走 P4 执行链，准入取票）
       const lastSlot = slots[slots.length - 1]!
       if (lastSlot <= now) {
-        void this.runTask(task.id, {
+        void this.runTaskProtected(task, {
           trigger: 'schedule',
           requestId: `recover-${task.id}-${lastSlot}`,
           scheduledFor: lastSlot
         })
-          .then(() => undefined)
-          .catch(() => undefined)
         catchUpCount += 1
         this.rearm(task, now)
       }
@@ -154,7 +152,7 @@ export class ButlerTaskScheduler {
       const now = this.nowFn()
       for (const task of this.dueTasks(now)) {
         const scheduledFor = task.nextRunAt!
-        await this.runTask(task.id, {
+        await this.runTaskProtected(task, {
           trigger: 'schedule',
           requestId: `sched-${task.id}-${scheduledFor}`,
           scheduledFor
@@ -163,6 +161,21 @@ export class ButlerTaskScheduler {
       }
     } finally {
       this.ticking = false
+    }
+  }
+
+  /**
+   * 受保护的任务执行入口（评审 P1-1）：单任务异常（执行链抛错 / 退出竞态下落库失败）
+   * 吞噬并落 tick-failed 日志，不影响同批后续任务，也不向调用方传播为 unhandled rejection。
+   */
+  private async runTaskProtected(task: AutomationTask, request: { trigger: 'schedule'; requestId: string; scheduledFor: number }): Promise<void> {
+    try {
+      await this.runTask(task.id, request)
+    } catch (error) {
+      this.logWarn('automation.scheduler.tick-failed', {
+        taskId: task.id,
+        message: error instanceof Error ? error.message : String(error)
+      })
     }
   }
 

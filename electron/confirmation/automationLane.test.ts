@@ -177,3 +177,55 @@ describe('channelFor automation 通道（偏差 21：channels.ts 可达 automati
     expect(outcomeEv?.reason).toBe('no-answerer')
   })
 })
+
+describe('评审 P1-2：lane=* 存量豁免缓存条目不得作用于 automation', () => {
+  it('lane=* 的 shell-command allow 条目（存量豁免迁移写入形态）：desktop/feishu 命中，automation 不命中', () => {
+    const db = openDb()
+    const cache = new SqliteDecisionCache(getDbConnection(db))
+    const key = { kind: 'shell-command' as const, verb: 'npm install', level: 'exact' as const }
+    cache.record({
+      id: 'seed-legacy',
+      key,
+      decision: 'allow',
+      lane: '*',
+      scope: 'persistent',
+      createdAt: Date.now(),
+      lastHitAt: Date.now(),
+      hitCount: 0,
+      source: 'migration'
+    })
+
+    expect(cache.lookup(key, 'desktop')?.decision).toBe('allow')
+    expect(cache.lookup(key, 'feishu')?.decision).toBe('allow')
+    // 无人值守链路不得继承桌面用户的历史信任：'*' 条目对 automation 不可见
+    expect(cache.lookup(key, 'automation')).toBeNull()
+  })
+
+  it('lane=* 的 domain allow 条目：automation 的 browser 调用不命中（落确认）', async () => {
+    const db = openDb()
+    const cache = new SqliteDecisionCache(getDbConnection(db))
+    const key = { kind: 'domain' as const, domain: 'trusted.example.com', level: 'domain-any-action' as const }
+    cache.record({
+      id: 'seed-legacy-domain',
+      key,
+      decision: 'allow',
+      lane: '*',
+      scope: 'persistent',
+      createdAt: Date.now(),
+      lastHitAt: Date.now(),
+      hitCount: 0,
+      source: 'migration'
+    })
+
+    const r = await evaluateToolCallGate(
+      base({
+        lane: 'automation',
+        toolName: 'browser',
+        toolInput: { action: 'navigate', url: 'https://trusted.example.com/page' },
+        appDb: db
+      })
+    )
+    expect(r.decision.type).toBe('require-confirm')
+    expect(r.decision.ruleId).toBe('automation-default-confirm')
+  })
+})

@@ -98,6 +98,10 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
   const now = Date.now()
   const id = randomUUID()
   const conn = getDbConnection(db)
+  // 评审 P0-1：缺省按 schedule 自动武装首次触发时刻——渲染端 / IPC 链路不传 nextRunAt，
+  // 落 NULL 会使任务被 due 扫描（next_run_at IS NOT NULL）永久排除。
+  const enabled = input.enabled !== false
+  const nextRunAt = input.nextRunAt ?? (enabled ? computeNextRunAt(input.schedule, now) : null)
   conn
     .prepare(
       `INSERT INTO automation_tasks (
@@ -113,10 +117,10 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       input.deliveryPref,
       input.deliveryTarget ?? null,
       input.modelOverride ?? null,
-      input.enabled === false ? 0 : 1,
+      enabled ? 1 : 0,
       now,
       now,
-      input.nextRunAt ?? null
+      nextRunAt
     )
   db.save()
   return getAutomationTask(db, id)!
@@ -134,9 +138,22 @@ export function listAutomationTasks(db: AppDatabase): AutomationTask[] {
   return rows.map(rowToTask)
 }
 
+/** 下一次触发时刻（interval：from + N 分钟；daily：下一个 HH:mm 本地时刻）。
+ *  定义在 taskStore 而非 taskScheduler：创建/编辑任务时就要按 schedule 武装 next_run_at
+ *  （评审 P0-1——若只有调度器 rearm 一个写值点，任务永不首次触发）。 */
+export function computeNextRunAt(schedule: AutomationTaskSchedule, from: number): number {
+  if (schedule.kind === 'interval') {
+    return from + Math.max(1, schedule.intervalMinutes) * 60_000
+  }
+  const [h, m] = schedule.time.split(':').map((v) => Number.parseInt(v, 10))
+  const next = new Date(from)
+  next.setHours(Number.isFinite(h) ? h : 0, Number.isFinite(m) ? m : 0, 0, 0)
+  if (next.getTime() <= from) next.setDate(next.getDate() + 1)
+  return next.getTime()
+}
+
 /** 调度器扫描：enabled=1 且 next_run_at <= now（next_run_at 为空视为未排程，不触发）。 */
-export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): AutomationTask[] {
-  const conn = getDbConnection(db)
+export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): AutomationTask[] {  const conn = getDbConnection(db)
   const rows = conn
     .prepare(
       'SELECT * FROM automation_tasks WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at ASC'
@@ -156,6 +173,17 @@ export function updateAutomationTask(
     ...cur,
     ...patch,
     updatedAt: Date.now()
+  }
+  // 评审 P0-1：排程语义随状态推导——停用置空（未排程）；schedule 变更 / 重新启用 /
+  // 启用但从未武装（历史 NULL 行）时按 schedule 重算；仅改名/提示词等不动既有排程。
+  if (!next.enabled) {
+    next.nextRunAt = undefined
+  } else if (
+    patch.schedule !== undefined ||
+    patch.enabled === true ||
+    next.nextRunAt === undefined
+  ) {
+    next.nextRunAt = computeNextRunAt(next.schedule, Date.now())
   }
   const conn = getDbConnection(db)
   conn

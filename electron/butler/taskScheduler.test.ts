@@ -163,3 +163,45 @@ describe('ButlerTaskScheduler（fake clock）', () => {
     expect(logEvents).toContain('automation.scheduler.disabled-no-tray')
   })
 })
+
+describe('评审 P1-1：tick 异常不得成为 unhandled rejection', () => {
+  it('runTask 抛错时 tick 正常 resolve，后续任务仍被处理，落 tick-failed 日志', async () => {
+    const d = db()
+    createAutomationTask(d, taskInput({ nextRunAt: 0, name: 'task-a' }))
+    createAutomationTask(d, taskInput({ nextRunAt: 0, name: 'task-b' }))
+    const logEvents: string[] = []
+    let call = 0
+    const runTask = vi.fn(async () => {
+      call += 1
+      if (call === 1) throw new Error('db gone')
+      return { ok: true }
+    }) as unknown as SchedulerRunFn
+    const scheduler = new ButlerTaskScheduler({
+      db: d,
+      runTask,
+      isTrayEnabled: () => true,
+      now: () => 1_000_000,
+      logWarn: (event: string) => logEvents.push(event)
+    })
+    // tick 本身不 reject（否则外层 void 即 unhandled rejection）
+    await expect(scheduler.tick()).resolves.toBeUndefined()
+    expect(runTask).toHaveBeenCalledTimes(2)
+    expect(logEvents).toContain('automation.scheduler.tick-failed')
+  })
+
+  it('runTaskProtected 吞噬执行链异常（补跑 / interval 共用入口）', async () => {
+    const d = db()
+    const logEvents: string[] = []
+    const scheduler = new ButlerTaskScheduler({
+      db: d,
+      runTask: vi.fn(async () => { throw new Error('invoker catch 落库再抛') }) as unknown as SchedulerRunFn,
+      isTrayEnabled: () => true,
+      now: () => 1_000_000,
+      logWarn: (event: string) => logEvents.push(event)
+    })
+    await expect(
+      (scheduler as unknown as { runTaskProtected: (t: unknown, r: unknown) => Promise<void> }).runTaskProtected('task-x', {})
+    ).resolves.toBeUndefined()
+    expect(logEvents).toContain('automation.scheduler.tick-failed')
+  })
+})

@@ -170,7 +170,13 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     return { ok: true, runId, sessionId: turn.sessionId, summary: turn.summary }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    updateAutomationTaskRun(db, runId, { status: 'failed', error: message })
+    // 评审 P1-1：catch 块内的失败落库本身可能再抛（退出竞态下 db 已关闭），
+    // 再抛会逃逸成 unhandled rejection——吞噬并记日志，保证向上返回结构化失败。
+    try {
+      updateAutomationTaskRun(db, runId, { status: 'failed', error: message })
+    } catch {
+      // 落库失败时 run 行保持 running；下一次启动恢复会标 interrupted
+    }
     return { ok: false, runId, error: message }
   } finally {
     ticket.release()

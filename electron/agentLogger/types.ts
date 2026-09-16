@@ -110,5 +110,6 @@ export type AgentLogEventName =
   | 'automation.task.failed'
   | 'automation.task.skipped'
   | 'automation.scheduler.disabled-no-tray'
+  | 'automation.scheduler.tick-failed'
 
 export type AgentLogFields = Record<string, unknown>

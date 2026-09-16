@@ -63,14 +63,23 @@ export class SqliteDecisionCache implements DecisionCacheView {
   lookup(key: CacheKey, lane?: string): DecisionCacheEntry | null {
     const now = Date.now()
     const keyJson = canonicalKeyJson(key)
-    // lane 键控（评审 B1）：同签名条目按 lane 隔离；'*' 条目（存量豁免迁移）对所有 lane 生效。
+    // lane 键控（评审 B1）：同签名条目按 lane 隔离；'*' 条目（存量豁免迁移：桌面用户历史
+    // 信任的 shell 命令 / 浏览器域名）对所有有人应答的 lane 生效。
+    // 评审 P1-2：automation 无人类应答者，不继承任何存量豁免——只命中显式 lane='automation'
+    // 的条目（当前无任何写入方，即事实上的零缓存放行，全部落规则链兜底）。
     const row = (
       lane
-        ? this.db
-            .prepare(
-              'SELECT * FROM decision_cache WHERE key_json = ? AND (lane = ? OR lane = ?) ORDER BY created_at DESC LIMIT 1'
-            )
-            .get(keyJson, lane, '*')
+        ? lane === 'automation'
+          ? this.db
+              .prepare(
+                'SELECT * FROM decision_cache WHERE key_json = ? AND lane = ? ORDER BY created_at DESC LIMIT 1'
+              )
+              .get(keyJson, lane)
+          : this.db
+              .prepare(
+                'SELECT * FROM decision_cache WHERE key_json = ? AND (lane = ? OR lane = ?) ORDER BY created_at DESC LIMIT 1'
+              )
+              .get(keyJson, lane, '*')
         : this.db
             .prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1')
             .get(keyJson)
