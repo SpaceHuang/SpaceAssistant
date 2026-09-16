@@ -62,6 +62,7 @@ export interface ToolExecutionContext {
   requestId: string
   toolUseId: string
   sessionId: string
+  assistantMessageId?: string
   sendProgress: (status: string, payload?: string | ToolProgressPayload) => void
   /** 仅记录不含 pattern、cwd、命中文本或文件名的工具诊断。 */
   recordDiagnostic?: (entry: { code: string; message: string }) => void | Promise<void>
@@ -101,6 +102,7 @@ export interface ToolExecutorResult {
   }
   duration?: number
   dependencyError?: BrowserDependencyToolError
+  displayData?: import('../../src/shared/mcpToolResultDisplay').McpResultDisplay
 }
 
 export function validateToolExecutorResult(result: unknown): ToolExecutorResult {

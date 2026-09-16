@@ -148,6 +148,7 @@ const api: SpaceAssistantApi = {
   shellTestExecutable: (payload: { executable?: string; argsPrefix?: string[] }) =>
     ipcRenderer.invoke('shell:test-executable', payload),
   shellOpenOutputPath: (absPath: string) => ipcRenderer.invoke('shell:open-output-path', absPath),
+  mcpOpenResultArtifact: (payload: { artifactId: string; owner: { sessionId: string; assistantMessageId: string; toolUseId: string } }) => ipcRenderer.invoke('mcp:open-result-artifact', payload),
   shellOpenTerminal: (payload: { cwd: string }) => ipcRenderer.invoke('shell:open-terminal', payload),
   shellManageTrustedCommands: (payload) => ipcRenderer.invoke('shell:manage-trusted-commands', payload),
 

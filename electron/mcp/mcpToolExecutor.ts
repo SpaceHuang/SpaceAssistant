@@ -7,10 +7,17 @@ import {
   type McpServerProfile
 } from '../../src/shared/mcpTypes'
 import { sanitizeForLog } from '../logSanitize'
+import { adaptMcpToolResult } from './mcpToolResultAdapter'
+import { randomBytes } from 'crypto'
+import path from 'path'
+import fs from 'fs/promises'
+import { OutputArtifactWriter } from '../shell/outputArtifactWriter'
+import { cleanupMcpArtifacts } from './mcpArtifactCleanup'
 import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from '../tools/types'
 import type { McpSession } from './mcpConnectionManager'
 import { Semaphore, withSemaphore } from './semaphore'
 import type { McpToolSnapshotEntry } from './mcpToolRegistry'
+import { resolveMcpArtifactOwnerPath } from './mcpArtifactPath'
 
 /**
  * MCP 工具执行器：把模型映射调用路由到 Server 的 tools/call。
@@ -23,6 +30,10 @@ import type { McpToolSnapshotEntry } from './mcpToolRegistry'
 
 const globalSemaphore = new Semaphore(MCP_GLOBAL_CONCURRENCY)
 const perServerSemaphores = new Map<string, Semaphore>()
+
+export function shouldPersistMcpArtifact(displayText: string): boolean {
+  return displayText.length > 512 * 1024
+}
 
 function getPerServerSemaphore(serverId: string): Semaphore {
   let semaphore = perServerSemaphores.get(serverId)
@@ -135,8 +146,48 @@ export function createMcpToolExecutor(
             if (result.isError) {
               return { success: false, error: safeServerSummary(extractContentText(result)) }
             }
+            const envelope = { __spaceAssistantMcpResult: 1 as const, content: result.content, structuredContent: result.structuredContent }
+            // Keep artifact construction independent from the bounded UI projection.
+            // Otherwise a single large text block is clipped before the threshold check.
+            const artifactData = adaptMcpToolResult(envelope, { maxTextBytes: 64 * 1024 * 1024, maxUnknownBytes: 16 * 1024, maxBlocks: Number.MAX_SAFE_INTEGER })
+            const displayData = adaptMcpToolResult(envelope)
+            const blockSummary = artifactData.blocks.filter((block) => block.kind !== 'text').map((block) => {
+              if (block.kind === 'image') return `[图片] ${block.mimeType}，${block.byteLength} bytes${block.previewable ? '' : '（不可预览）'}`
+              if (block.kind === 'resource') return `[资源] ${block.name ?? block.uri}${block.mimeType ? ` (${block.mimeType})` : ''}`
+              return `[其他结果] ${block.raw}`
+            }).join('\n')
+            const displayText = [artifactData.text, artifactData.structuredText, blockSummary].filter(Boolean).join('\n\n')
+            if (shouldPersistMcpArtifact(displayText)) {
+              try {
+                void cleanupMcpArtifacts(path.join(ctx.userDataDir, 'shell-output', 'mcp'))
+                const artifactId = `artifact-mcp-${randomBytes(32).toString('hex')}` as `artifact-mcp-${string}`
+                const writer = new OutputArtifactWriter(path.join(ctx.userDataDir, 'shell-output', 'mcp', `${artifactId}.log`), 16 * 1024 * 1024)
+                await writer.open()
+                const sourceBytes = new TextEncoder().encode(displayText).byteLength
+                const artifactLimit = 16 * 1024 * 1024
+                const marker = '\n\n[内容已截断：artifact 超过 16 MiB]\n'
+                const markerBytes = new TextEncoder().encode(marker).byteLength
+                let artifactText = displayText
+                if (sourceBytes > artifactLimit) {
+                  const bytes = new TextEncoder().encode(displayText)
+                  const prefix = bytes.slice(0, Math.max(0, artifactLimit - markerBytes))
+                  artifactText = `${new TextDecoder().decode(prefix)}${marker}`
+                }
+                writer.append(artifactText)
+                const artifact = await writer.close()
+                const artifactOwner = { sessionId: ctx.sessionId, assistantMessageId: ctx.assistantMessageId ?? ctx.requestId, toolUseId: ctx.toolUseId }
+                const ownerPath = resolveMcpArtifactOwnerPath(ctx.userDataDir, artifactId)
+                if (!ownerPath) throw new Error('invalid artifact owner path')
+                await fs.writeFile(ownerPath, JSON.stringify(artifactOwner), 'utf8')
+                displayData.artifactId = artifactId
+                displayData.artifactTruncated = sourceBytes > artifactLimit
+                displayData.artifactOwner = artifactOwner
+              } catch (artifactError) {
+                console.warn('[mcp] failed to persist oversized result artifact', artifactError instanceof Error ? artifactError.message : String(artifactError))
+              }
+            }
             const data = (result.structuredContent ?? result.content) as unknown
-            return { success: true, data: compactResultIfNeeded(data) }
+            return { success: true, data: compactResultIfNeeded(data), displayData }
           } catch (error) {
             if (ctx.signal.aborted) {
               return { success: false, error: 'MCP 工具调用超时或已取消。' }

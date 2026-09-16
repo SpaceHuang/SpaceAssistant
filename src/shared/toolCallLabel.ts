@@ -1,4 +1,5 @@
 export type ToolCallLabelT = (key: string, options?: Record<string, unknown>) => string
+export type McpToolLabelMetadata = { serverId?: string; serverName?: string; originalToolName?: string; description?: string }
 
 export function pathBasename(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -9,8 +10,17 @@ export function pathBasename(filePath: string): string {
 export function formatToolLabel(
   toolName: string,
   input: Record<string, unknown>,
-  t: ToolCallLabelT
+  t: ToolCallLabelT,
+  mcp?: McpToolLabelMetadata
 ): string {
+  if (toolName.startsWith('mcp_')) {
+    const mappedParts = toolName.slice(4).split('_')
+    const fallbackTool = mappedParts.slice(1, -1).join('_') || undefined
+    const server = mcp?.serverName || t('tool.labels.mcpUnknownServer')
+    const original = mcp?.originalToolName || fallbackTool
+    if (!original) return t('tool.labels.mcpUnresolved')
+    return `${server} · ${original}`
+  }
   switch (toolName) {
     case 'grep': {
       const pattern = typeof input.pattern === 'string' ? input.pattern : ''

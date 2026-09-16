@@ -2,6 +2,7 @@ import type { ContentSegment, Message, ToolCallRecord } from './domainTypes'
 import { contentSegmentsForRender } from './contentSegments'
 import { thinkingSegmentsForRender } from './thinkingSegments'
 import type { RemoteProgressSnapshot } from './remoteProgressTypes'
+import type { McpToolLabelMetadata } from './toolCallLabel'
 
 export type RemoteProgressT = (key: string, options?: Record<string, unknown>) => string
 
@@ -59,7 +60,7 @@ function textSnapshotFromSegment(
 
 export function resolveRemoteProgressSnapshot(args: {
   message: Message
-  formatToolLabel: (toolName: string, input: Record<string, unknown>) => string
+  formatToolLabel: (toolName: string, input: Record<string, unknown>, mcp?: McpToolLabelMetadata) => string
   t: RemoteProgressT
 }): RemoteProgressSnapshot {
   const { message, formatToolLabel, t } = args
@@ -70,7 +71,7 @@ export function resolveRemoteProgressSnapshot(args: {
   const activeTool = findActiveTool(message.toolCalls ?? [])
 
   if (activeTool?.status === 'confirming') {
-    const action = formatToolLabel(activeTool.toolName, activeTool.input)
+    const action = formatToolLabel(activeTool.toolName, activeTool.input, activeTool.mcp)
     return {
       kind: 'confirm',
       label: t('streaming.awaitingConfirm', { action }),
@@ -79,7 +80,7 @@ export function resolveRemoteProgressSnapshot(args: {
   }
 
   if (activeTool && ACTIVE_TOOL_STATUSES.has(activeTool.status)) {
-    const label = formatToolLabel(activeTool.toolName, activeTool.input)
+    const label = formatToolLabel(activeTool.toolName, activeTool.input, activeTool.mcp)
     const detail =
       firstProgressLine(activeTool.progressOutput) ??
       (activeTool.status === 'calling' ? t('streaming.preparing') : undefined)

@@ -2,19 +2,20 @@ import type { ToolCallRecord } from '../../src/shared/domainTypes'
 import type { RemoteProgressSnapshot } from '../../src/shared/remoteProgressTypes'
 import { firstProgressLine } from '../../src/shared/resolveRemoteProgressSnapshot'
 import { updateRemoteProgressSnapshot } from './remoteProgressStore'
+import type { McpToolLabelMetadata } from '../../src/shared/toolCallLabel'
 
 export type RemoteProgressHookContext = {
   sessionId: string
-  formatToolLabel: (toolName: string, input: Record<string, unknown>) => string
+  formatToolLabel: (toolName: string, input: Record<string, unknown>, mcp?: McpToolLabelMetadata) => string
   t: (key: string, options?: Record<string, unknown>) => string
 }
 
 export function onRemoteToolStateChange(
   ctx: RemoteProgressHookContext,
-  tool: Pick<ToolCallRecord, 'toolName' | 'input' | 'status' | 'progressOutput'>
+  tool: Pick<ToolCallRecord, 'toolName' | 'input' | 'status' | 'progressOutput' | 'mcp'>
 ): void {
   if (tool.status === 'confirming') {
-    const action = ctx.formatToolLabel(tool.toolName, tool.input)
+    const action = ctx.formatToolLabel(tool.toolName, tool.input, tool.mcp)
     updateRemoteProgressSnapshot(ctx.sessionId, {
       kind: 'confirm',
       label: ctx.t('streaming.awaitingConfirm', { action }),
@@ -24,7 +25,7 @@ export function onRemoteToolStateChange(
   }
 
   if (tool.status === 'calling' || tool.status === 'executing') {
-    const label = ctx.formatToolLabel(tool.toolName, tool.input)
+    const label = ctx.formatToolLabel(tool.toolName, tool.input, tool.mcp)
     const detail =
       firstProgressLine(tool.progressOutput) ??
       (tool.status === 'calling' ? ctx.t('streaming.preparing') : undefined)
@@ -46,11 +47,11 @@ export function onRemoteToolStateChange(
 
 export function onRemoteToolProgress(
   ctx: RemoteProgressHookContext,
-  tool: Pick<ToolCallRecord, 'toolName' | 'input' | 'status' | 'progressOutput'>,
+  tool: Pick<ToolCallRecord, 'toolName' | 'input' | 'status' | 'progressOutput' | 'mcp'>,
   message?: string
 ): void {
   if (tool.status !== 'calling' && tool.status !== 'executing') return
-  const label = ctx.formatToolLabel(tool.toolName, tool.input)
+  const label = ctx.formatToolLabel(tool.toolName, tool.input, tool.mcp)
   const detail = firstProgressLine(message ?? tool.progressOutput) ?? undefined
   updateRemoteProgressSnapshot(ctx.sessionId, {
     kind: 'tool',
@@ -87,9 +88,10 @@ export function onRemoteThinkingActive(ctx: RemoteProgressHookContext): void {
 export function formatConfirmHeartbeatLabel(
   ctx: RemoteProgressHookContext,
   toolName: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  mcp?: McpToolLabelMetadata
 ): string {
-  const action = ctx.formatToolLabel(toolName, input)
+  const action = ctx.formatToolLabel(toolName, input, mcp)
   return ctx.t('streaming.awaitingConfirm', { action })
 }
 

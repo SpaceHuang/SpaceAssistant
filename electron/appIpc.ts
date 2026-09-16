@@ -607,6 +607,25 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
   )
 
+  ipcMain.handle('mcp:open-result-artifact', async (_e, payload: unknown): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const { resolveMcpArtifactPath, resolveMcpArtifactOwnerPath } = await import('./mcp/mcpArtifactPath')
+    const artifactId = payload && typeof payload === 'object' ? (payload as { artifactId?: unknown }).artifactId : undefined
+    const owner = payload && typeof payload === 'object' ? (payload as { owner?: unknown }).owner : undefined
+    const target = resolveMcpArtifactPath(ctx.getUserDataPath(), artifactId)
+    if (!target) return { ok: false, error: ErrorCodes.INVALID_PATH }
+    const ownerPath = resolveMcpArtifactOwnerPath(ctx.getUserDataPath(), artifactId)
+    if (!ownerPath) return { ok: false, error: ErrorCodes.INVALID_PATH }
+    try {
+      const storedOwner = JSON.parse(await fs.readFile(ownerPath, 'utf8'))
+      const { isMcpArtifactOwner } = await import('../src/shared/mcpArtifactSecurity')
+      if (!isMcpArtifactOwner(owner as never, storedOwner)) return { ok: false, error: ErrorCodes.INVALID_PATH }
+    } catch {
+      return { ok: false, error: ErrorCodes.INVALID_PATH }
+    }
+    const err = await shell.openPath(target)
+    return err ? { ok: false, error: err } : { ok: true }
+  })
+
   ipcMain.handle(
     'shell:open-terminal',
     async (_e, payload: { cwd?: string }): Promise<{ ok: true } | { ok: false; error: string }> => {

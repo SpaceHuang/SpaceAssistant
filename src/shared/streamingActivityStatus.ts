@@ -1,5 +1,6 @@
 import type { Message, ToolCallRecord } from './domainTypes'
 import { thinkingSegmentsForRender } from './thinkingSegments'
+import type { McpToolLabelMetadata } from './toolCallLabel'
 
 const IN_PROGRESS_TOOL_STATUSES = new Set<ToolCallRecord['status']>(['calling', 'confirming', 'executing'])
 
@@ -46,7 +47,7 @@ function hasActiveThinking(message: Message): boolean {
 
 export function resolveStreamingActivityStatus(args: {
   message: Message
-  formatToolLabel: (toolName: string, input: Record<string, unknown>) => string
+  formatToolLabel: (toolName: string, input: Record<string, unknown>, mcp?: McpToolLabelMetadata) => string
   t: StreamingActivityT
   now?: number
 }): StreamingActivityStatus | null {
@@ -58,13 +59,13 @@ export function resolveStreamingActivityStatus(args: {
 
   if (activeTool?.status === 'confirming') {
     return {
-      label: t('streaming.awaitingConfirm', { action: formatToolLabel(activeTool.toolName, activeTool.input) }),
+      label: t('streaming.awaitingConfirm', { action: formatToolLabel(activeTool.toolName, activeTool.input, activeTool.mcp) }),
       showElapsed: true
     }
   }
 
   if (activeTool?.status === 'executing' || activeTool?.status === 'calling') {
-    const label = formatToolLabel(activeTool.toolName, activeTool.input)
+    const label = formatToolLabel(activeTool.toolName, activeTool.input, activeTool.mcp)
     const detail =
       firstProgressLine(activeTool.progressOutput) ??
       (activeTool.status === 'calling' ? t('streaming.preparing') : undefined)

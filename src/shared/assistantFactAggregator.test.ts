@@ -133,4 +133,9 @@ describe('AssistantFactAggregator', () => {
     })
     expect(result.toolCalls?.[0]).not.toHaveProperty('permit')
   })
+
+  it('tool-use 即使未进入确认也保留 MCP 来源元数据', () => {
+    const result = apply([{ type: 'tool-use', id: 'mcp-auto', toolName: 'mcp_s_t_hash', input: {}, mcp: { serverId: 's', serverName: '服务', originalToolName: 'tool' } }])
+    expect(result.toolCalls?.[0]?.mcp).toEqual({ serverId: 's', serverName: '服务', originalToolName: 'tool' })
+  })
 })

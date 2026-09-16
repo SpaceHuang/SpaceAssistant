@@ -4,12 +4,16 @@ import { contentSegmentsForRender } from './contentSegments'
 import { thinkingSegmentsForRender } from './thinkingSegments'
 import { formatToolLabel, type ToolCallLabelT } from './toolCallLabel'
 import { projectShellOutput } from './terminalOutputSanitize'
+import { projectPersistedMcpResult } from './mcpToolResultDisplay'
 
 export type SearchSource =
   | { kind: 'user-content' }
   | { kind: 'assistant-markdown-text'; segmentIndex: number; fragmentIndex: number }
   | { kind: 'assistant-code'; segmentIndex: number; codeIndex: number; inline: boolean }
   | { kind: 'assistant-math'; segmentIndex: number; mathIndex: number; display: boolean }
+  | { kind: 'tool-result-markdown-text'; toolUseId: string; segmentIndex: number; fragmentIndex: number }
+  | { kind: 'tool-result-code'; toolUseId: string; segmentIndex: number; codeIndex: number; inline: boolean }
+  | { kind: 'tool-result-math'; toolUseId: string; segmentIndex: number; mathIndex: number; display: boolean }
   | { kind: 'thinking'; segmentIndex: number }
   | { kind: 'skill'; hintId: string }
   | { kind: 'tool-label'; toolUseId: string }
@@ -99,6 +103,12 @@ function sourceIdentityKey(source: SearchSource): string {
       return `assistant-code:${source.segmentIndex}:${source.codeIndex}:${source.inline ? 'inline' : 'block'}`
     case 'assistant-math':
       return `assistant-math:${source.segmentIndex}:${source.mathIndex}:${source.display ? 'display' : 'inline'}`
+    case 'tool-result-markdown-text':
+      return `tool-result-markdown-text:${source.toolUseId}:${source.segmentIndex}:${source.fragmentIndex}`
+    case 'tool-result-code':
+      return `tool-result-code:${source.toolUseId}:${source.segmentIndex}:${source.codeIndex}:${source.inline ? 'inline' : 'block'}`
+    case 'tool-result-math':
+      return `tool-result-math:${source.toolUseId}:${source.segmentIndex}:${source.mathIndex}:${source.display ? 'display' : 'inline'}`
     case 'thinking':
       return `thinking:${source.segmentIndex}`
     case 'skill':
@@ -289,10 +299,11 @@ function appendToolFragments(
   out: SearchFragment[],
   message: Message,
   order: DisplayOrder,
-  t: ToolCallLabelT
+  t: ToolCallLabelT,
+  projectMarkdown?: (markdown: string, segmentIndex: number) => MarkdownSearchProjectionInput
 ): void {
   for (const tool of message.toolCalls ?? []) {
-    appendToolRecordFragments(out, message.id, order, tool, t)
+    appendToolRecordFragments(out, message.id, order, tool, t, projectMarkdown)
   }
 }
 
@@ -301,7 +312,8 @@ function appendToolRecordFragments(
   messageId: string,
   order: DisplayOrder,
   tool: ToolCallRecord,
-  t: ToolCallLabelT
+  t: ToolCallLabelT,
+  projectMarkdown?: (markdown: string, segmentIndex: number) => MarkdownSearchProjectionInput
 ): void {
   const revealBase: SearchRevealPath = { toolUseId: tool.id }
 
@@ -310,7 +322,7 @@ function appendToolRecordFragments(
     messageId,
     order,
     { kind: 'tool-label', toolUseId: tool.id },
-    formatToolLabel(tool.toolName, tool.input, t),
+    formatToolLabel(tool.toolName, tool.input, t, tool.mcp),
     revealBase
   )
 
@@ -326,8 +338,12 @@ function appendToolRecordFragments(
     )
   }
 
-  const resultText = simplifyToolResult(tool.result, tool.toolName)
-  if (resultText.trim()) {
+  const isMcp = Boolean(tool.mcp) || tool.toolName.startsWith('mcp_')
+  const mcpDisplay = isMcp && tool.result ? (tool.result.displayData ?? projectPersistedMcpResult(tool.result.data)) : undefined
+  const resultText = isMcp ? [mcpDisplay?.text, mcpDisplay?.structuredText].filter((value): value is string => Boolean(value)).join('\n\n') : simplifyToolResult(tool.result, tool.toolName)
+  if (resultText.trim() && isMcp) {
+    pushAnchoredTextFragment(out, messageId, order, { kind: 'tool-result', toolUseId: tool.id }, resultText, { ...revealBase, toolSection: 'result' })
+  } else if (resultText.trim()) {
     pushAnchoredTextFragment(
       out,
       messageId,
@@ -338,6 +354,27 @@ function appendToolRecordFragments(
       [],
       tool.toolName === 'run_shell' || tool.toolName === 'run_script'
     )
+  }
+
+  const mcpText = [mcpDisplay?.text, mcpDisplay?.structuredText].filter((value): value is string => Boolean(value)).join('\n\n').trim()
+  if (!isMcp && mcpText && projectMarkdown && mcpDisplay?.displayMode !== 'huge' && mcpDisplay?.displayMode !== 'long') {
+    const projection = projectMarkdown(mcpText, 0)
+    for (const plain of projection.plainTextFragments) {
+      pushAnchoredTextFragment(
+        out,
+        messageId,
+        order,
+        { kind: 'tool-result-markdown-text', toolUseId: tool.id, segmentIndex: plain.segmentIndex, fragmentIndex: plain.fragmentIndex },
+        plain.searchableText,
+        { ...revealBase, toolSection: 'result' },
+        plain.anchors
+      )
+    }
+    for (const code of projection.codeFragments) {
+      if (!code.searchableText.trim()) continue
+      const source: SearchSource = { kind: 'tool-result-code', toolUseId: tool.id, segmentIndex: code.segmentIndex, codeIndex: code.codeIndex, inline: code.inline }
+      out.push({ fragmentId: buildFragmentId(messageId, source), messageId, order, source, renderStrategy: 'code-source', searchableText: code.searchableText.trim(), revealPath: { ...revealBase, toolSection: 'result' } })
+    }
   }
 }
 
@@ -359,7 +396,7 @@ export function buildSearchFragmentsFromMessage(
     appendThinkingFragments(out, message, order)
     appendSkillFragments(out, message, order)
     appendAssistantContentFragments(out, message, order, options)
-    appendToolFragments(out, message, order, t)
+    appendToolFragments(out, message, order, t, options.projectMarkdown)
   }
 
   return out

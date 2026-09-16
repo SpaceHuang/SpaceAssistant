@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import type { ToolExecutionContext } from '../tools/types'
 import { McpConnectionManager } from './mcpConnectionManager'
-import { createMcpToolExecutor } from './mcpToolExecutor'
+import { createMcpToolExecutor, shouldPersistMcpArtifact } from './mcpToolExecutor'
 
 const tempDirs: string[] = []
 function makeTempDir(): string {
@@ -111,6 +111,11 @@ function makeContext(overrides: Partial<ToolExecutionContext> = {}): ToolExecuti
 }
 
 describe('mcpToolExecutor', () => {
+  it('uses a byte-safe 512 KiB artifact threshold', () => {
+    expect(shouldPersistMcpArtifact('a'.repeat(512 * 1024))).toBe(false)
+    expect(shouldPersistMcpArtifact('a'.repeat(512 * 1024 + 1))).toBe(true)
+    expect(shouldPersistMcpArtifact('中'.repeat(256 * 1024 + 1))).toBe(false)
+  })
   it('calls the server tool and returns structured content', async () => {
     const dir = makeTempDir()
     const script = writeEchoServer(dir, ECHO_OK)

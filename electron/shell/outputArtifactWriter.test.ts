@@ -5,6 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OutputArtifactWriter } from './outputArtifactWriter'
 
 describe('OutputArtifactWriter', () => {
+  it('does not split a UTF-8 character at the byte boundary', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'utf8-artifact-'))
+    const file = path.join(dir, 'output.log')
+    const writer = new OutputArtifactWriter(file, 4)
+    await writer.open()
+    writer.append('你好')
+    await writer.close()
+    expect(await fs.readFile(file, 'utf8')).toBe('你')
+  })
   afterEach(() => vi.restoreAllMocks())
 
   it('按顺序增量写入并限制 artifact 字节数', async () => {

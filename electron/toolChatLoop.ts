@@ -770,7 +770,12 @@ async function runToolChatSessionInner(
               type: 'tool_call',
               payload: { turnId: sessionId, stepId: requestId, toolUseId: pending.id, name: compatName, args: normalizeToolUseInputRecord(toolUseBlock.input) }
             })
-            args.emitFactEvent?.({ type: 'tool-use', id: pending.id, toolName: compatName, input: normalizeToolUseInputRecord(toolUseBlock.input) })
+            const mcpEntry = mcpSnapshot.entries.get(compatName)
+            args.emitFactEvent?.({
+              type: 'tool-use', id: pending.id, toolName: compatName,
+              input: normalizeToolUseInputRecord(toolUseBlock.input),
+              ...(mcpEntry ? { mcp: { serverId: mcpEntry.serverId, serverName: mcpEntry.serverName, originalToolName: mcpEntry.originalName, description: mcpEntry.description } } : {})
+            })
             contentBlocks.push(toolUseBlock)
             logAgentEvent('info', 'tool.request', {
               requestId,
@@ -949,6 +954,7 @@ async function runToolChatSessionInner(
           {
             requestId,
             sessionId,
+            assistantMessageId: args.assistantMessageId,
             loopRound,
             toolUseId,
             toolName,
@@ -1958,6 +1964,7 @@ async function runToolChatSessionInner(
         ...factResult,
         ...(execResult.dependencyError ? { dependencyRecovery: execResult.dependencyError } : {}),
         ...(execResult.success && fileAutoApproveMeta ? { autoApprovedWrite: fileAutoApproveMeta } : {})
+        ,...(execResult.displayData ? { displayData: execResult.displayData } : {})
       })
       if (execResult.success) {
         if (toolName === 'write_file' || toolName === 'edit_file') {

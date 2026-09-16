@@ -1,5 +1,6 @@
 import type { AppConfig } from '../src/shared/domainTypes'
 import { formatToolLabel, type ToolCallLabelT } from '../src/shared/toolCallLabel'
+import type { McpToolLabelMetadata } from '../src/shared/toolCallLabel'
 
 const ZH_LABELS: Record<string, string> = {
   'tool.labels.grep.withPattern': '搜索 {{pattern}}',
@@ -40,7 +41,7 @@ function makeT(locale: AppConfig['locale']): ToolCallLabelT {
 
 export function createToolCallLabelFormatter(locale: AppConfig['locale'] = 'zh-CN') {
   const t = makeT(locale)
-  return (toolName: string, input: Record<string, unknown>) => formatToolLabel(toolName, input, t)
+  return (toolName: string, input: Record<string, unknown>, mcp?: McpToolLabelMetadata) => formatToolLabel(toolName, input, t, mcp)
 }
 
 export function createRemoteProgressT(locale: AppConfig['locale'] = 'zh-CN'): (

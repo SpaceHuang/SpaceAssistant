@@ -1771,6 +1771,44 @@
   line-height: var(--sa-chat-line-body);
 }
 
+.tool-row__status,
+.tool-row__duration {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tool-row__status {
+  padding: 1px 6px;
+  border-radius: var(--sa-radius-sm);
+  color: var(--sa-text-secondary);
+  background: color-mix(in srgb, var(--sa-text-tertiary) 12%, transparent);
+}
+
+.tool-row__status--calling,
+.tool-row__status--executing {
+  color: var(--sa-text-secondary);
+  animation: sa-mcp-status-pulse 1.8s ease-in-out infinite;
+}
+
+.tool-row__status--completed { color: var(--sa-success); background: color-mix(in srgb, var(--sa-success) 12%, transparent); }
+.tool-row__status--failed { color: var(--sa-danger); background: color-mix(in srgb, var(--sa-danger) 12%, transparent); }
+.tool-row__status--rejected { color: var(--sa-text-tertiary); }
+.tool-row__status--confirming { color: var(--sa-warning); background: color-mix(in srgb, var(--sa-warning) 12%, transparent); }
+.tool-row__duration { color: var(--sa-text-tertiary); }
+
+@keyframes sa-mcp-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.58; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-row__status--calling,
+  .tool-row__status--executing { animation: none; }
+}
+
 .tool-row__chevron {
   flex-shrink: 0;
   color: var(--sa-text-tertiary);

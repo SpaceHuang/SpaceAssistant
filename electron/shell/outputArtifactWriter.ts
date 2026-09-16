@@ -33,7 +33,12 @@ export class OutputArtifactWriter {
   append(text: string): void {
     if (!text || this.bytes >= this.maxBytes) return
     const remaining = this.maxBytes - this.bytes
-    const data = Buffer.from(text, 'utf8').subarray(0, remaining)
+    const full = Buffer.from(text, 'utf8')
+    let end = Math.min(full.length, remaining)
+    while (end > 0) {
+      try { new TextDecoder('utf-8', { fatal: true }).decode(full.subarray(0, end)); break } catch { end -= 1 }
+    }
+    const data = full.subarray(0, end)
     this.bytes += data.length
     this.hash.update(data)
     if (this.handle) {

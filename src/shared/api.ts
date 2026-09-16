@@ -406,6 +406,7 @@ export type SpaceAssistantApi = {
     argsPrefix?: string[]
   }) => Promise<{ ok: boolean; error?: string }>
   shellOpenOutputPath: (absPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  mcpOpenResultArtifact: (payload: { artifactId: string; owner: { sessionId: string; assistantMessageId: string; toolUseId: string } }) => Promise<{ ok: true } | { ok: false; error: string }>
 
   skillList: () => Promise<SkillDefinition[]>
   skillProbeFromUrl: (payload: { sourceUrl: string }) => Promise<{ ok: true; repo: { owner: string; repo: string; branch: string; subPath: string }; candidates: Array<{ name: string; description: string; subPath: string; totalBytes: number }> } | { ok: false; error: string }>
