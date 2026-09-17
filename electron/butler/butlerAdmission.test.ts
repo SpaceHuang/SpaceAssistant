@@ -96,3 +96,62 @@ describe('butlerAdmission 单入口准入（偏差 23 单例外）', () => {
     next.ok && next.release()
   })
 })
+
+describe('评审 P1：排队唤醒后并发计数不漂移', () => {
+  it('两次排队接力后，并发上限仍生效（第三个触发必须排队而非立即运行）', async () => {
+    const admission = new ButlerAdmission({ now: () => 1_000_000 })
+    const first = await admission.acquire('req-1')
+    expect(first.ok).toBe(true)
+
+    const second = admission.acquire('req-2')
+    await Promise.resolve()
+    first.ok && first.release()
+    const secondResult = await second
+    expect(secondResult.ok).toBe(true)
+
+    // running 应为 1：第三个触发必须进入排队，不得立即运行
+    let thirdResolved = false
+    const third = admission.acquire('req-3')
+    void third.then((r) => {
+      thirdResolved = true
+      return r
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(thirdResolved).toBe(false)
+
+    secondResult.ok && secondResult.release()
+    const thirdResult = await third
+    expect(thirdResult.ok).toBe(true)
+    thirdResult.ok && thirdResult.release()
+  })
+
+  it('多次排队接力后并发恰为 1（计数既不漂负也不漂正）', async () => {
+    const admission = new ButlerAdmission({ now: () => 1_000_000 })
+    let current = await admission.acquire('req-0')
+    for (let i = 1; i <= 5; i += 1) {
+      const queued = admission.acquire('req-' + i)
+      await Promise.resolve()
+      current.ok && current.release()
+      current = await queued
+      expect(current.ok).toBe(true)
+      // 每一轮接力后并发必须恰为 1：下一个 acquire 必须排队（不立即解决）
+      let probeResolved = false
+      const probe = admission.acquire('probe-' + i)
+      void probe.then((r) => {
+        probeResolved = true
+        return r
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(probeResolved).toBe(false)
+      // 清理 probe：释放当前后让它接管
+      current.ok && current.release()
+      const probeResult = await probe
+      probeResult.ok && probeResult.release()
+      // 重新取一张作为下一轮的 current
+      current = await admission.acquire('next-' + i)
+      expect(current.ok).toBe(true)
+    }
+  })
+})

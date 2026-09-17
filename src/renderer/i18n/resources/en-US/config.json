@@ -922,7 +922,8 @@
       "onceAt": "Run at",
       "onceAtRequired": "Please pick a time",
       "onceHint": "Runs once at the given time, then disables itself",
-      "onceAtPast": "The run time cannot be in the past"
+      "onceAtPast": "The run time cannot be in the past",
+      "saveFailedWithError": "Failed to save task: {{error}}"
     },
     "tabTitle": "Scheduled tasks",
     "tabIntro": "Butler tasks run automatically on schedule; results are delivered per task preference",

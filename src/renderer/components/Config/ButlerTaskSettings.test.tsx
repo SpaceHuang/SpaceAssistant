@@ -158,8 +158,32 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     renderTab()
     await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
     expect(document.querySelector('.butler-task-card--disabled')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /编s*辑/ }))
+    fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
     await waitFor(() => expect(screen.getByText('编辑定时任务')).toBeTruthy())
   })
 
+  it('daily 默认时间解析有效（customParseFormat 注册后非 Invalid Date）', async () => {
+    // 回归评审 P1-2：未注册插件时 dayjs(值, 格式) 返回 Invalid Date，提交产出 'Invalid Date' 被主进程拒绝
+    const dayjs = (await import('dayjs')).default
+    await import('./ButlerTaskSettings')
+    const parsed = dayjs('09:00', 'HH:mm')
+    expect(parsed.isValid()).toBe(true)
+    expect(parsed.format('HH:mm')).toBe('09:00')
+  })
+
+  it('主进程返回 ok:false 时不提示成功、弹窗不关闭、不刷新列表（假成功防护）', async () => {
+    butlerCreateTask.mockResolvedValue({ ok: false, error: '任务参数不完整（名称 / 提示词 / 触发方式 / 投递偏好）' })
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    await waitFor(() => expect(screen.getByLabelText('任务名称')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: '会失败的任务' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: 'x' } })
+    fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
+    // 失败分支：不关弹窗、不刷新（成功分支会刷新 → 第 2 次 list 调用）
+    expect(screen.getByText('新建定时任务')).toBeTruthy()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(butlerListTasks).toHaveBeenCalledTimes(1)
+  })
 })

@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, TimePicker } from 'antd'
 import { Pencil, Plus, SquarePlay, Trash2 } from 'lucide-react'
+import dayjs from 'dayjs'
+import customParseFormat from 'dayjs/plugin/customParseFormat'
 import type { AutomationTask, AutomationDeliveryPref } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import dayjs from 'dayjs'
 import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
+
+// 评审 P1-2：项目默认不注册 customParseFormat——dayjs(值, 格式) 会得到 Invalid Date，
+// daily 默认时间提交后变成 'Invalid Date' 被主进程拒绝。显式注册（幂等，全局生效一次）。
+dayjs.extend(customParseFormat)
 
 /**
  * 设置弹窗「定时任务」Tab（P6）：任务列表、新建/编辑、启停、删除、立即运行。
@@ -153,21 +158,24 @@ export function ButlerTaskSettings() {
           : values.scheduleKind === 'once'
             ? { kind: 'once' as const, at: (values.onceAt as dayjs.Dayjs).valueOf() }
             : { kind: 'interval' as const, intervalMinutes: Number(values.intervalMinutes) }
-      if (editing) {
-        await window.api.butlerUpdateTask({
-          id: editing.id,
-          patch: { name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref }
-        })
-        message.success(t('butler.updated'))
-      } else {
-        await window.api.butlerCreateTask({
-          name: values.name,
-          prompt: values.prompt,
-          schedule,
-          deliveryPref: values.deliveryPref
-        })
-        message.success(t('butler.created'))
+      // 评审 P1-2：主进程校验失败返回 {ok:false}（resolve 而非 reject）——不检查会假成功。
+      // 失败时保留弹窗与已填内容，展示主进程给出的原因。
+      const res = editing
+        ? await window.api.butlerUpdateTask({
+            id: editing.id,
+            patch: { name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref }
+          })
+        : await window.api.butlerCreateTask({
+            name: values.name,
+            prompt: values.prompt,
+            schedule,
+            deliveryPref: values.deliveryPref
+          })
+      if (!res.ok) {
+        message.error(t('butler.form.saveFailedWithError', { error: res.error ?? '' }))
+        return
       }
+      message.success(editing ? t('butler.updated') : t('butler.created'))
       setEditorOpen(false)
       await refresh()
     } catch {

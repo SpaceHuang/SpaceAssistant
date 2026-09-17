@@ -82,6 +82,9 @@ export class ButlerAdmission {
         return { ok: false, reason: 'queue-full' }
       }
       await new Promise<void>((resolve) => this.waiters.push(resolve))
+      // 评审 P1：finish() 唤醒等待者时已把 running -1（它释放了自己的票），
+      // 被唤醒者此处必须把 running +1 补回——否则每发生一次排队计数永久漂移，并发上限失效。
+      this.running += 1
       return { ok: true, release: () => this.finish() }
     }
     this.running += 1
