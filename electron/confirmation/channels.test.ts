@@ -38,7 +38,7 @@ describe('DesktopChannel', () => {
       waitForToolConfirm: async () => 'approved'
     })
     const outcome = await ch.request(req())
-    expect(outcome).toEqual({ kind: 'approved' })
+    expect(outcome).toEqual({ kind: 'approved', cause: 'user-approved' })
     const events = audit.events
     expect(events.map((e) => e.event)).toEqual(['confirm.request', 'confirm.outcome'])
     expect(events[0]!.requestId).toBe('req-1')
@@ -58,7 +58,7 @@ describe('DesktopChannel', () => {
       audit,
       waitForToolConfirm: async () => 'timeout'
     })
-    expect(await ch.request(req())).toEqual({ kind: 'timeout' })
+    expect(await ch.request(req())).toEqual({ kind: 'timeout', cause: 'timeout' })
   })
 })
 
@@ -85,7 +85,7 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
     const p = ch.request(req())
     const cid = im.listPending()[0]!.confirmId!
     im.tryResolveFromInbound({ kind: 'approve', confirmId: cid }, { matchKey: 'u1', messageId: 'm2' })
-    await expect(p).resolves.toEqual({ kind: 'approved' })
+    await expect(p).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
     expect(audit.events.map((e) => e.event)).toEqual(['confirm.request', 'confirm.outcome'])
     expect(audit.events[0]!.requestId).toBe('req-2')
     expect(audit.events[1]!.requestId).toBe('req-2')
@@ -106,10 +106,83 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
     const p = ch.request(req())
     const cid = im.listPending()[0]!.confirmId!
     im.tryResolveFromInbound({ kind: 'reject', confirmId: cid }, { matchKey: 'u1', messageId: 'm2' })
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
     expect(audit.events.at(-1)!.outcome).toBe('rejected')
 
     const noIm = channelFor({ lane: 'wechat', requestId: 'r', sessionId: 's', toolName: 'run_shell' })
-    await expect(noIm.request(req())).resolves.toEqual({ kind: 'rejected', reason: 'no-answerer' })
+    await expect(noIm.request(req())).resolves.toEqual({ kind: 'rejected', cause: 'no-answerer' })
+  })
+})
+
+describe('P0 审计如实归因（B1 收窄范围）：confirm.* 事件 actor 如实', () => {
+  it('DesktopChannel confirm.request/outcome actor=user，outcome 携带非空 cause', async () => {
+    const audit = auditSink()
+    const ch = new DesktopChannel({
+      requestId: 'req-actor-1',
+      toolUseId: 'tool-actor-1',
+      sessionId: 's1',
+      toolName: 'run_shell',
+      lane: 'desktop',
+      audit,
+      waitForToolConfirm: async () => 'approved'
+    })
+    await ch.request(req())
+    const events = audit.events
+    expect(events.map((e) => e.event)).toEqual(['confirm.request', 'confirm.outcome'])
+    // request 无裁决：actor 如实但不落 cause；outcome 携带非空 cause
+    expect(events[0]!.actor).toBe('user')
+    expect(events[0]!.cause).toBeUndefined()
+    expect(events[1]!.actor).toBe('user')
+    expect(events[1]!.cause).toBe('user-approved')
+  })
+
+  it('DesktopChannel 用户拒绝 cause=user-denied、超时 cause=timeout', async () => {
+    const audit = auditSink()
+    const ch = new DesktopChannel({
+      requestId: 'r',
+      toolUseId: 't',
+      sessionId: 's',
+      toolName: 'run_shell',
+      lane: 'desktop',
+      audit,
+      waitForToolConfirm: async () => 'rejected'
+    })
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'user-denied' })
+    expect(audit.events.at(-1)!.cause).toBe('user-denied')
+
+    const audit2 = auditSink()
+    const ch2 = new DesktopChannel({
+      requestId: 'r2',
+      toolUseId: 't2',
+      sessionId: 's',
+      toolName: 'run_shell',
+      lane: 'desktop',
+      audit: audit2,
+      waitForToolConfirm: async () => 'timeout'
+    })
+    const outcome2 = await ch2.request(req())
+    expect(outcome2).toEqual({ kind: 'timeout', cause: 'timeout' })
+    expect(audit2.events.at(-1)!.cause).toBe('timeout')
+    // 超时无回答动作，actor 如实为 system
+    expect(audit2.events.at(-1)!.actor).toBe('system')
+  })
+
+  it('channelFor automation 分支：拒绝 actor 保持 system（无回答者）、cause=no-answerer', async () => {
+    const audit = auditSink()
+    const ch = channelFor({
+      lane: 'automation',
+      requestId: 'req-auto-1',
+      sessionId: 's-auto',
+      toolName: 'write_file',
+      audit
+    })
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'no-answerer' })
+    const events = audit.events
+    expect(events.map((e) => e.event)).toEqual(['confirm.outcome'])
+    expect(events[0]!.actor).toBe('system')
+    expect(events[0]!.cause).toBe('no-answerer')
+    expect(events[0]!.reason).toBe('no-answerer')
   })
 })

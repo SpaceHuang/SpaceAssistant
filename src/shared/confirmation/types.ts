@@ -160,11 +160,71 @@ export interface ConfirmRequest {
   timeoutMs: number | null
 }
 
+// ===== 回答者（I1：回答者与 lane 正交；I3：记忆只源于人类）=====
+export type ConfirmAnswererKind = 'user' | 'agent' | 'deny'
+
+export interface ConfirmAnswererPolicy {
+  kind: ConfirmAnswererKind
+  /** kind='agent' 时使用；缺省用全局唯一的审批 Profile。 */
+  approvalProfileId?: string
+  /** 覆盖默认超时；不得为 null——无人场景必须有上界。 */
+  timeoutMs?: number
+}
+
+/** lane → 回答者配置；缺省 lane 用默认值表（desktop/wechat/feishu=user，automation 由主进程装配决定）。 */
+export type ConfirmAnswererMap = Partial<Record<ExecutionLane, ConfirmAnswererPolicy>>
+
+/** 审批裁决理由（方案 §4.5）：summary 给模型可读，evidence 仅审计侧。 */
+export interface ApprovalReason {
+  summary: string
+  evidence?: string[]
+  confidence?: 'low' | 'medium' | 'high'
+}
+
+/** 审批 Agent 裁决输出：只有两态，无中间态（输出不可解析/超时/不可用一律 deny）。 */
+export type ApprovalVerdict =
+  | { kind: 'approve'; reason: ApprovalReason }
+  | { kind: 'deny'; reason: ApprovalReason }
+
+/**
+ * 确认结束原因（审计五问之「到底拿没拿到裁决」）：fail-closed 各路径必须与 agent-deny 可区分。
+ * agent-approved 为 agent 放行的显式表达（与 user-approved 在「谁批的」口径可区分）。
+ */
+export type ConfirmOutcomeCause =
+  | 'user-approved'
+  | 'user-denied'
+  | 'agent-approved'
+  | 'agent-deny'
+  | 'unavailable'
+  | 'timeout'
+  | 'unparsable'
+  | 'config-error'
+  | 'recursion-blocked'
+  | 'no-answerer'
+
 export type ConfirmOutcome =
-  | { kind: 'approved'; memory?: CacheKey }
-  | { kind: 'rejected'; memory?: CacheKey; /** 无回答者兜底拒绝（automation fail-closed），与用户拒绝在审计可区分。 */ reason?: 'no-answerer' }
-  | { kind: 'timeout' }
-  | { kind: 'approved-with-action'; action: 'continue' | 'back-to-desktop' | 'stop' }
+  | {
+      kind: 'approved'
+      memory?: CacheKey
+      reason?: ApprovalReason
+      /** 本次批准的回答者；缺省视为 user（既有桌面 / IM 路径）。非 user 不得产生任何记忆写入（I3）。 */
+      answererKind?: ConfirmAnswererKind
+      cause: ConfirmOutcomeCause
+    }
+  | {
+      kind: 'rejected'
+      memory?: CacheKey
+      reason?: ApprovalReason
+      answererKind?: ConfirmAnswererKind
+      cause: ConfirmOutcomeCause
+    }
+  | { kind: 'timeout'; reason?: ApprovalReason; answererKind?: ConfirmAnswererKind; cause: ConfirmOutcomeCause }
+  | {
+      kind: 'approved-with-action'
+      action: 'continue' | 'back-to-desktop' | 'stop'
+      /** 用户通过三选一动作回答，归因 user-approved。 */
+      cause: ConfirmOutcomeCause
+    }
 
 export interface ConfirmationChannel {
   request(req: ConfirmRequest): Promise<ConfirmOutcome>
@@ -230,7 +290,14 @@ export interface SecurityAuditEvent {
   /** settings.* 事件的新旧值（JSON 序列化文本，写入前脱敏）。 */
   before?: string
   after?: string
-  actor: 'user' | 'system' | 'migration'
+  actor: 'user' | 'system' | 'migration' | 'agent'
+  /**
+   * 确认结束原因（仅 confirm.outcome 等有裁决的事件携带；与 outcome 联动，
+   * fail-closed 各路径与 agent-deny 可区分）。
+   */
+  cause?: ConfirmOutcomeCause
+  /** actor='agent' 时的归因细节（哪个 Profile / 模型 / 哪次审批调用）。 */
+  actorRef?: { profileId: string; model?: string; invocationId?: string }
 }
 
 export type SecurityAuditEventKind =

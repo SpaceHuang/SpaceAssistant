@@ -41,3 +41,27 @@ describe('MemoryEligibility', () => {
       .toEqual({ eligibility: 'none', reasons: ['non-persistable-command'] })
   })
 })
+
+describe('MemoryEligibility 回答者维度（I3：记忆只源于人类）', () => {
+  const persistable = [{ kind: 'command-sequence' as const, commands: [], persistable: true as const }]
+
+  it('answererKind 为 agent / deny 时一律 none（理由 non-human-answerer）', () => {
+    for (const answererKind of ['agent', 'deny'] as const) {
+      expect(deriveMemoryEligibility(facts(persistable), 'desktop', answererKind)).toEqual({
+        eligibility: 'none',
+        reasons: ['non-human-answerer']
+      })
+    }
+  })
+
+  it('answererKind=user（含缺省）时输出与既有向量逐项一致', () => {
+    expect(deriveMemoryEligibility(facts(persistable), 'desktop', 'user')).toEqual(
+      deriveMemoryEligibility(facts(persistable), 'desktop')
+    )
+    expect(deriveMemoryEligibility(facts([{ kind: 'extraction-failed', reason: 'partial' }]), 'desktop', 'user')).toEqual({
+      eligibility: 'none', reasons: ['analysis-incomplete']
+    })
+    expect(deriveMemoryEligibility(facts(persistable), 'feishu', 'user').eligibility).toBe('session')
+    expect(deriveMemoryEligibility(facts(persistable), 'desktop', 'user').eligibility).toBe('persistent')
+  })
+})

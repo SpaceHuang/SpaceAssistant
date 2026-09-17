@@ -90,7 +90,7 @@ import { channelFor } from './confirmation/channels'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
 import { mapLegacyConfirmation } from './tools/coordinatorConfirmationAdapter'
-import type { ConfirmRequest } from '../src/shared/confirmation/types'
+import type { ConfirmAnswererKind, ConfirmOutcomeCause, ConfirmRequest } from '../src/shared/confirmation/types'
 import {
   formatScriptDenyUserMessage,
   getRemoteTaskController
@@ -1572,6 +1572,10 @@ async function runToolChatSessionInner(
 
       let outcome: ToolConfirmOutcome = 'approved'
       let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
+      /** 本次确认的回答者（I3：非 user 不得产生任何记忆写入）；缺省 user 保持既有路径等价。 */
+      let confirmAnswererKind: ConfirmAnswererKind = 'user'
+      /** 本次确认的结束原因（审计五问之「到底拿没拿到裁决」）。 */
+      let confirmOutcomeCause: ConfirmOutcomeCause = 'user-approved'
       const autoApproveFallback: AutoApproveFallback | undefined = gate.autoApproveFallback
       if (autoApproveFallback) {
         logAgentEvent('info', 'file.auto_approve.fallback', {
@@ -1751,6 +1755,11 @@ async function runToolChatSessionInner(
               : channelOutcome.kind === 'timeout'
                 ? 'timeout'
                 : 'rejected'
+          // 回答者与结束原因随 outcome 记录（缺省视为 user，保持既有桌面/IM 路径行为等价）
+          if (channelOutcome.kind !== 'approved-with-action') {
+            confirmAnswererKind = channelOutcome.answererKind ?? 'user'
+            confirmOutcomeCause = channelOutcome.cause
+          }
         }
         if (!remoteContext) {
           // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
@@ -1904,23 +1913,37 @@ async function runToolChatSessionInner(
         typeof inputObj.url === 'string' &&
         inputObj.url.trim()
       ) {
-        rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
-        // 会话级信任双写 decision_cache（navigate 档 domain-any-action，键带 sessionId）
-        if (appDb) {
-          const navHost = extractHostname(inputObj.url.trim())
-          if (navHost) {
-            if (gate.decision.type !== 'require-confirm') {
-              throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+        // I3：记忆只源于人类——非 user 回答者（如审批 Agent）的批准不产生任何记忆写入
+        if (confirmAnswererKind !== 'user') {
+          logAgentEvent('info', 'tool.confirm.non_human_answerer_skip_memory', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            answererKind: confirmAnswererKind,
+            cause: confirmOutcomeCause
+          })
+        } else {
+          rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
+          // 会话级信任双写 decision_cache（navigate 档 domain-any-action，键带 sessionId）
+          if (appDb) {
+            const navHost = extractHostname(inputObj.url.trim())
+            if (navHost) {
+              if (gate.decision.type !== 'require-confirm') {
+                throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+              }
+              recordUserAnswerFromDecision({
+                db: appDb,
+                audit: getSecurityAuditLog(),
+                lane: effectiveLane,
+                sessionId,
+                key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
+                decision: gate.decision,
+                answererKind: confirmAnswererKind,
+                source: 'user-confirm'
+              })
             }
-            recordUserAnswerFromDecision({
-              db: appDb,
-              audit: getSecurityAuditLog(),
-              lane: effectiveLane,
-              sessionId,
-              key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
-              decision: gate.decision,
-              source: 'user-confirm'
-            })
           }
         }
       }
@@ -1932,30 +1955,44 @@ async function runToolChatSessionInner(
       ) {
         const actUrl = stagehandService.peekCurrentUrl(sessionId)
         if (actUrl) {
-          rememberBrowserSessionActTrust(sessionId, actUrl)
-          // 会话级信任双写 decision_cache（act 档 domain+action，键带 sessionId）
-          if (appDb) {
-            const actHost = extractHostname(actUrl)
-            if (actHost) {
-              if (gate.decision.type !== 'require-confirm') {
-                throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+          // I3：记忆只源于人类——非 user 回答者（如审批 Agent）的批准不产生任何记忆写入
+          if (confirmAnswererKind !== 'user') {
+            logAgentEvent('info', 'tool.confirm.non_human_answerer_skip_memory', {
+              requestId,
+              sessionId,
+              loopRound,
+              toolUseId,
+              toolName,
+              answererKind: confirmAnswererKind,
+              cause: confirmOutcomeCause
+            })
+          } else {
+            rememberBrowserSessionActTrust(sessionId, actUrl)
+            // 会话级信任双写 decision_cache（act 档 domain+action，键带 sessionId）
+            if (appDb) {
+              const actHost = extractHostname(actUrl)
+              if (actHost) {
+                if (gate.decision.type !== 'require-confirm') {
+                  throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+                }
+                recordUserAnswerFromDecision({
+                  db: appDb,
+                  audit: getSecurityAuditLog(),
+                  lane: effectiveLane,
+                  sessionId,
+                  key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
+                  decision: gate.decision,
+                  answererKind: confirmAnswererKind,
+                  source: 'user-confirm'
+                })
               }
-              recordUserAnswerFromDecision({
-                db: appDb,
-                audit: getSecurityAuditLog(),
-                lane: effectiveLane,
-                sessionId,
-                key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
-                decision: gate.decision,
-                source: 'user-confirm'
-              })
             }
+            logAgentEvent('info', 'browser.act.sessionTrust.remember', {
+              sessionId,
+              host: extractHostname(actUrl),
+              timestamp: Date.now()
+            })
           }
-          logAgentEvent('info', 'browser.act.sessionTrust.remember', {
-            sessionId,
-            host: extractHostname(actUrl),
-            timestamp: Date.now()
-          })
         }
       }
       if (

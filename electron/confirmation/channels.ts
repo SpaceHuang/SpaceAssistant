@@ -19,9 +19,9 @@ export interface AuditSink {
 }
 
 function mapToolOutcome(outcome: ToolConfirmOutcome): ConfirmOutcome {
-  if (outcome === 'approved') return { kind: 'approved' }
-  if (outcome === 'timeout') return { kind: 'timeout' }
-  return { kind: 'rejected' }
+  if (outcome === 'approved') return { kind: 'approved', cause: 'user-approved' }
+  if (outcome === 'timeout') return { kind: 'timeout', cause: 'timeout' }
+  return { kind: 'rejected', cause: 'user-denied' }
 }
 
 function eventBase(deps: {
@@ -41,7 +41,8 @@ function eventBase(deps: {
     origin: deps.origin,
     actionClass: deps.actionClass,
     riskLevel: deps.riskLevel,
-    actor: 'system'
+    // B1 归因口径：confirm.request / confirm.outcome 归因于回答动作——桌面卡片回答者恒为用户
+    actor: 'user'
   }
 }
 
@@ -85,13 +86,17 @@ export class DesktopChannel implements ConfirmationChannel {
       toolName: this.deps.toolName,
       lane: this.deps.lane
     })
+    const mapped = mapToolOutcome(outcome)
     this.deps.audit?.record({
       ...base,
       event: 'confirm.outcome',
       ts: Date.now(),
-      outcome: outcome
+      outcome: outcome,
+      cause: mapped.cause,
+      // 超时无回答动作，actor 如实为 system；批准/拒绝归因桌面用户（B1）
+      actor: outcome === 'timeout' ? 'system' : 'user'
     })
-    return mapToolOutcome(outcome)
+    return mapped
   }
 
   cancel(_requestId: string): void {
@@ -186,10 +191,12 @@ class RejectingChannel implements ConfirmationChannel {
         toolName: this.deps.toolName,
         outcome: 'rejected',
         reason: 'no-answerer',
+        cause: 'no-answerer',
+        // 无回答者：本次没有回答动作，actor 如实为 system（B1：不占「谁批的」用户口径）
         actor: 'system'
       })
     }
-    return Promise.resolve({ kind: 'rejected', reason: 'no-answerer' })
+    return Promise.resolve({ kind: 'rejected', cause: 'no-answerer' })
   }
 
   cancel(_requestId: string): void {

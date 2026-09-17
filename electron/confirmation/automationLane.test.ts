@@ -171,10 +171,14 @@ describe('channelFor automation 通道（偏差 21：channels.ts 可达 automati
       facts: { summary: { text: 'write a.txt' }, signals: [] }
     } as never)
     expect(outcome.kind).toBe('rejected')
-    expect((outcome as { reason?: string }).reason).toBe('no-answerer')
+    expect((outcome as { reason?: string }).reason).toBeUndefined()
+    expect((outcome as { cause?: string }).cause).toBe('no-answerer')
     const outcomeEv = audit.events.find((e) => e.event === 'confirm.outcome')
     expect(outcomeEv?.lane).toBe('automation')
     expect(outcomeEv?.reason).toBe('no-answerer')
+    expect(outcomeEv?.cause).toBe('no-answerer')
+    // 无回答者：本次没有回答动作，actor 如实为 system（B1 归因口径）
+    expect(outcomeEv?.actor).toBe('system')
   })
 })
 

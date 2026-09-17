@@ -66,4 +66,27 @@ describe('AuditedDecisionCache（cache.* 审计）', () => {
     expect(cache.expireDormant()).toBe(2)
     expect(a.events.map((e) => e.event)).toEqual(['cache.clear', 'cache.generation-reset', 'cache.expire-dormant'])
   })
+
+  it('P0-4 归因收窄：cache.hit / generation-reset / expire-dormant 的 actor 保持 system（不误伤）', () => {
+    const a = audit()
+    const store = new Map<string, DecisionCacheEntry>([[JSON.stringify(shellKey()), entry(shellKey())]])
+    const cache = new AuditedDecisionCache({
+      cache: {
+        lookup: (k) => store.get(JSON.stringify(k)) ?? null,
+        record: (e) => store.set(JSON.stringify(e.key), e),
+        clear: (k) => (store.delete(JSON.stringify(k)) ? 1 : 0),
+        clearAllSession: () => 1,
+        expireDormant: () => 2
+      },
+      audit: a,
+      sessionId: 's1',
+      lane: 'desktop'
+    })
+    // 命中（缓存系统代答）与生命周期事件（纯系统行为）不进入「谁批的」口径
+    cache.lookup(shellKey())
+    cache.clearAllSession()
+    cache.expireDormant()
+    const guarded = a.events.filter((e) => e.event === 'cache.hit' || e.event === 'cache.generation-reset' || e.event === 'cache.expire-dormant')
+    expect(guarded.map((e) => e.actor)).toEqual(['system', 'system', 'system'])
+  })
 })

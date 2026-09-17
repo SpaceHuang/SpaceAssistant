@@ -492,6 +492,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             sessionId: payload.sessionId ?? 'desktop',
             key: payload.memoryTier,
             memoryTiers: getPendingMemoryTiers(payload.requestId, payload.toolUseId),
+            answererKind: 'user',
             source: 'user-confirm'
           })
         } else {

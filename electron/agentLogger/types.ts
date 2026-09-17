@@ -14,6 +14,7 @@ export type AgentLogEventName =
   | 'llm.fetch_models'
   | 'tool.request'
   | 'tool.confirm'
+  | 'tool.confirm.non_human_answerer_skip_memory'
   | 'tool.confirm.remote_read_only_reject'
   | 'tool.error'
   | 'tool.result'
