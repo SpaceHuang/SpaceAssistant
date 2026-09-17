@@ -164,6 +164,12 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('session:title-generated', fn)
   },
 
+  sessionOnCreated: (cb) => {
+    const fn = (_e: unknown, data: { session: Session }) => cb(data)
+    ipcRenderer.on('session:created', fn)
+    return () => ipcRenderer.removeListener('session:created', fn)
+  },
+
   toolConfirmResponse: (payload: import('../src/shared/api').ToolConfirmResponsePayload) =>
     ipcRenderer.invoke('tool:confirm-response', payload),
   toolCancel: (payload) => ipcRenderer.invoke('tool:cancel', payload),

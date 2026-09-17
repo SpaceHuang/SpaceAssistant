@@ -50,6 +50,9 @@ export type ButlerInvokerDeps = {
   admission?: ButlerAdmission
   /** 投递端口（主进程装配注入；缺省 = IM 未接线走显式降级路径）。 */
   deliveryPorts?: ButlerDeliveryPorts
+  /** 会话创建出口（主进程装配注入）：调度 / 手动触发的管家会话创建即回调，
+   *  装配方经此把新会话推给渲染端会话列表（否则列表要重启才能看到，拉模式失效）。 */
+  onSessionCreated?: (session: { id: string; name: string; ownership: string; visibility: string; workDirProfileId?: string }) => void
 }
 
 export type ButlerRunRequest = {
@@ -114,10 +117,18 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       name: `管家 · ${task.prompt.slice(0, 24)}`,
       ...(deps.getActiveWorkDirProfileId ? { workDirProfileId: deps.getActiveWorkDirProfileId() } : {}),
       ...(task.modelOverride ? { model: task.modelOverride } : {}),
-      ownership: 'automation',
-      visibility: 'section'
-    })
-    const sessionId = session.id
+    ownership: 'automation',
+    visibility: 'section'
+  })
+  const sessionId = session.id
+  // 会话创建即通知装配方（渲染端列表即时可见；依赖 P1 出口契约，Core 不接触窗口）
+  deps.onSessionCreated?.({
+    id: session.id,
+    name: session.name,
+    ownership: 'automation',
+    visibility: 'section',
+    ...(session.workDirProfileId ? { workDirProfileId: session.workDirProfileId } : {})
+  })
     const executionConfig = await resolveTrustedTurnExecutionConfig(db, sessionId, 'automation')
     const prepared = deps.turnRuntime.prepare({
       mode: 'create-user',

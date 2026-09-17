@@ -141,3 +141,55 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(run?.sessionId).toBeTruthy()
   })
 })
+
+describe('管家会话创建推送（渲染端列表即时可见）', () => {
+  it('onSessionCreated 在会话创建即回调（调度与手动触发共用），字段含归属与可见性', async () => {
+    let db: AppDatabase
+    const { openDatabase: openDb2, setConfigValue: setCfg } = await import('../database')
+    db = openDb2(':memory:')
+    setCfg(db, 'config.defaultModel', 'claude-sonnet-4-20250514')
+    mockResolveLlmCredentials.mockResolvedValue({
+      error: undefined,
+      serviceId: 'svc-1',
+      baseUrl: 'https://mock.local',
+      getApiKey: async () => 'test-key'
+    })
+    mockCreateAnthropicClient.mockReturnValue({
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({
+            content: [{ type: 'text', text: '完成' }],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 1, output_tokens: 1 }
+          }))
+        }))
+      }
+    })
+    const task = createAutomationTask(db, {
+      name: '推送任务',
+      schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: '检查',
+      deliveryPref: 'none'
+    })
+    const onSessionCreated = vi.fn()
+    await runButlerTask(
+      {
+        db,
+        turnRuntime: makeRuntime(db),
+        getWorkDir: () => '/tmp/wd',
+        getUserDataPath: () => '/tmp/ud',
+        getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, confirmMode: 'auto' as const }),
+        resolveWorkDirForSession: () => '/tmp/wd',
+        onSessionCreated
+      },
+      task.id,
+      { trigger: 'manual', requestId: 'req-push-1' }
+    )
+    expect(onSessionCreated).toHaveBeenCalledTimes(1)
+    const pushed = onSessionCreated.mock.calls[0]![0] as { id: string; ownership: string; visibility: string }
+    expect(pushed.ownership).toBe('automation')
+    expect(pushed.visibility).toBe('section')
+    db.close()
+  })
+})

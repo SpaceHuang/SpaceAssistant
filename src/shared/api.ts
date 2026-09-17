@@ -415,6 +415,8 @@ export type SpaceAssistantApi = {
   appToggleDevTools: () => Promise<void>
 
   sessionOnTitleGenerated: (cb: (data: { session: Session }) => void) => () => void
+  /** 管家定时 / 手动触发的会话创建推送：渲染端即时 upsert 进会话列表，无需重启。 */
+  sessionOnCreated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>

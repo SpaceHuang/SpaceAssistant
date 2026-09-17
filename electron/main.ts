@@ -566,6 +566,7 @@ app.whenReady().then(async () => {
     },
     getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
     admission: butlerAdmission,
+    onSessionCreated: (session) => getMainWindow()?.webContents.send('session:created', { session }),
     deliveryPorts: {
       // v1 桌面端口用系统通知（窗口状态语义由 OS 托管）；IM 端口未接线时走 butlerDelivery
       // 的显式降级路径。浮动窗结果展示随偏差 8 整项关闭时统一。
