@@ -61,18 +61,25 @@ export interface ApprovalAgentDeps {
   getApiKey: () => Promise<string | null>
 }
 
+/** 围栏逃逸防护（评审追踪）：证据值中插入零宽间隔，使任何反引号序列都无法构成围栏定界符。 */
+function neutralizeFence(value: string): string {
+  return value.replace(/`/g, '\u200b`')
+}
+
 /**
  * 线索包渲染（P1-2 反注入）：固定结构 + 数据字段全部收进「不可信证据数据」围栏块。
  * summary/command/url 等字段值可能携带主 Agent 从网页/文件/消息读到的敌意文本，
  * 绝不作为自由文本拼进指令位；裁决模型依 Skill 的防注入条款将其视为纯证据。
  */
 function renderCluePack(clue: ApprovalCluePack): string {
-  const evidence: string[] = [`[摘要] ${clue.summary}`]
-  evidence.push(`[信号] ${clue.signals.length ? clue.signals.join(', ') : '（无）'}`)
-  if (clue.targetPath) evidence.push(`[目标路径] ${clue.targetPath}`)
-  if (clue.command) evidence.push(`[命令] ${clue.command}`)
-  if (clue.url) evidence.push(`[URL] ${clue.url}`)
-  if (clue.involvedFiles?.length) evidence.push(`[涉及文件] ${clue.involvedFiles.join(', ')}`)
+  const evidence: string[] = [`[摘要] ${neutralizeFence(clue.summary)}`]
+  evidence.push(`[信号] ${neutralizeFence(clue.signals.length ? clue.signals.join(', ') : '（无）')}`)
+  if (clue.targetPath) evidence.push(`[目标路径] ${neutralizeFence(clue.targetPath)}`)
+  if (clue.command) evidence.push(`[命令] ${neutralizeFence(clue.command)}`)
+  if (clue.url) evidence.push(`[URL] ${neutralizeFence(clue.url)}`)
+  if (clue.involvedFiles?.length) {
+    evidence.push(`[涉及文件] ${neutralizeFence(clue.involvedFiles.join(', '))}`)
+  }
   const lines = [
     '## 待裁决调用',
     `- 工具：${clue.toolName}`,
@@ -168,6 +175,12 @@ export function parseApprovalVerdict(text: string): ApprovalVerdict | null {
 export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInvocation): Promise<ApprovalInvocationResult> {
   const db = deps.db
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  // P1-4 守卫标记的生命周期状态（finally 兜底可见）：
+  // - guardSessionId：已标记的审批会话（null = 尚未标记）
+  // - runCreated / runSettled：内层 run 是否已创建 / 已收敛（孤儿 run 存续期窗口保持开启）
+  let guardSessionId: string | null = null
+  let runCreated = false
+  let runSettled = false
   try {
     const skill = getBundledSecurityApprovalSkill()
     const session = createSession(db, {
@@ -176,7 +189,9 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       visibility: 'hidden'
     })
     const sessionId = session.id
-    // P1-4：标记审批会话进行中——递归兜底以会话为作用域（agentChannel），收敛后解除
+    // P1-4：标记审批会话进行中——递归兜底以会话为作用域（agentChannel），收敛后解除；
+    // 解除由外层 try/finally 兜底（runPromise 创建前抛错也不得泄漏标记）
+    guardSessionId = sessionId
     markApprovalSessionActive(sessionId)
 
     // 封闭只读工具集：在调用方配置基础上显式收窄（allowedTools 白名单），不给任何写 / 执行工具
@@ -221,8 +236,16 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       emitFactEvent: () => undefined,
       emitSessionEvent: () => undefined
     })
-    // P1-4：守卫解除挂在 runPromise 最终收敛上（含超时孤儿 run 存续期，窗口保持开启）
-    void runPromise.catch(() => undefined).finally(() => unmarkApprovalSessionActive(sessionId))
+    runCreated = true
+    // P1-4：run 收敛时置位（孤儿 run 存续期窗口由 finally 判断保持开启）；拒绝已被 race 派生分支处理
+    void runPromise.then(
+      () => {
+        runSettled = true
+      },
+      () => {
+        runSettled = true
+      }
+    )
 
     // 超时上界（Profile 有界性）：inv.timeoutMs 到期按 timeout 处理，不依赖内层自觉；
     // 超时同时取消内层调用，避免孤儿 run 继续消耗
@@ -261,8 +284,10 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     return { ok: false, cause: 'unavailable' }
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle)
+    // P1-4 兜底：runPromise 创建前抛错、或 run 已收敛时，立即解除守卫标记（杜绝泄漏）；
+    // run 已创建但未收敛（超时孤儿 run 存续期）时不解除，由上面的收敛回调解除，窗口保持开启
+    if (guardSessionId && (!runCreated || runSettled)) {
+      unmarkApprovalSessionActive(guardSessionId)
+    }
   }
 }
-
-// 注意：审批会话守卫标记的解除挂在 runPromise 的最终收敛上（见函数体内的清理链），
-// 超时孤儿 run 存续期间守卫窗口保持开启，确保豁免失效场景仍被拦截。
