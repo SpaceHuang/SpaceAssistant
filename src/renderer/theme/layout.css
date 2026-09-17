@@ -572,7 +572,9 @@
   overflow-y: auto;
   /* Virtuoso 的绝对定位 viewport 从滚动层 top:0 开始渲染，滚动层上的
    * padding 会被 viewport 覆盖；间距统一由内层 item-list 容器提供。 */
-  scroll-behavior: smooth;
+  /* 禁止设置 scroll-behavior: smooth：Virtuoso 依赖瞬时 scrollTop 补偿，
+   * CSS 平滑会把位置修正动画化，流式跟随时引发整列表抖动；
+   * 平滑滚动由各调用点显式 behavior 参数控制。 */
 }
 
 /* Virtuoso 的 viewport 使用内联 width: 100%，需要明确继承滚动容器的可用宽度。
@@ -640,10 +642,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-scroll {
-    scroll-behavior: auto;
-  }
-
   .chat-scroll-to-latest {
     transition: none;
   }
