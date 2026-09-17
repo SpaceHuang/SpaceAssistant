@@ -33,6 +33,7 @@
     "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
     "typecheck:shared": "node scripts/check-shared-config-types.mjs",
     "check:message-fact-ownership": "node scripts/check-message-fact-ownership.mjs",
+    "check:no-nul": "node scripts/check-no-nul.mjs",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
     "probe:chat-ipc-transport": "electron scripts/probe-chat-ipc-transport.cjs",
     "probe:chat-business-ipc": "electron scripts/probe-chat-business-ipc.cjs",

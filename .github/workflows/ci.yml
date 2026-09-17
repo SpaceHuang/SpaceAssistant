@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # 源文件 NUL 字节检查：只需 git 与 node，放在 npm ci 之前失败即秒级退出
+      # （背景：Node 22 node:sqlite 按 NUL 截断读出字符串，字面 NUL 曾致 CI 与本地结果不一致）
+      - name: Check source files for NUL bytes
+        run: npm run check:no-nul
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
