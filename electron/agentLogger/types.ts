@@ -111,5 +111,8 @@ export type AgentLogEventName =
   | 'automation.task.skipped'
   | 'automation.scheduler.disabled-no-tray'
   | 'automation.scheduler.tick-failed'
+  | 'usageStats.write.failed'
+  | 'usageStats.retention.cleaned'
+  | 'usageStats.backfill.completed'
 
 export type AgentLogFields = Record<string, unknown>

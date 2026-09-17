@@ -391,6 +391,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const res = await runToolChatSession({
           requestId,
           sessionId,
+          turnId,
+          llmServiceId,
           windowId: contextWindowId,
           model,
           contextWindow: frozen.maximumContext,

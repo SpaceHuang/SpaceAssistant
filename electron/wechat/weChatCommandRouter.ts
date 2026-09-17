@@ -405,6 +405,8 @@ export class WeChatCommandRouter {
             userMessage: content,
             replyMessageId: msg.messageId,
             requestId,
+            turnId: prepared?.turnId,
+            llmServiceId: executionConfig?.llmServiceId,
             wechatConfig: config,
             workDir,
             workDirManager: this.deps.workDirManager,

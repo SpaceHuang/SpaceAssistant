@@ -50,6 +50,7 @@ import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
 import { getCachedSkills } from './skills/skillCache'
 import { getSession, updateSession } from './database'
+import { recordStepUsage, recordTurnSummary, type UsageTurnOutcome } from './usageStats/usageStatsRecorder'
 import { listProfiles } from './mcp/mcpConfigStore'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
 import { type ActDangerAssessment } from './browser/browserActionPolicy'
@@ -401,6 +402,10 @@ async function maybeBuildConfirmDiff(
 export type RunToolChatSessionArgs = {
   requestId: string
   sessionId: string
+  /** 本回合真实 Turn ID（C17）：桌面 / 远程 / butler 三个调用方各传现成值；缺省回退 sessionId 占位（桌面包装层仍会覆写台账 payload）。 */
+  turnId?: string
+  /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
+  llmServiceId?: string
   windowId?: string
   model: string
   contextWindow?: number
@@ -465,6 +470,27 @@ export type RunToolChatSessionResult =
   | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage; finalSurfaceSnapshot?: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; finalSurfaceMessages?: ClaudeContentBlockMessage[] }
   | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
+/** 本回合的用量统计计数（runToolChatSession 作用域内创建、随回合结束丢弃，不引入跨模块累加器 —— 需求 §7.3.1）。 */
+export type TurnUsageStats = {
+  stepCount: number
+  toolCallCount: number
+  toolErrorCount: number
+  toolSkippedCount: number
+}
+
+/**
+ * 以 tool_result 终态为基准的三分类计数（需求 §2.4.0 恒等式）：
+ * `tool_call_count = 执行成功 + 执行失败 + 未执行`；孤儿 tool_call（无 tool_result）不计入。
+ */
+function noteToolResultForStats(stats: TurnUsageStats, result: ToolCallResultPersisted): void {
+  stats.toolCallCount += 1
+  if (result.notExecuted) {
+    stats.toolSkippedCount += 1
+  } else if (!result.success) {
+    stats.toolErrorCount += 1
+  }
+}
+
 function failToolLoopWithLastUsage(
   requestId: string,
   sessionId: string,
@@ -502,12 +528,30 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     }
     return mcpConnectionManager
   }
+  // 用量统计收口（C16）：计数对象随本回合创建，inner 内就近累计，这里在返回前一次落库。
+  // 三条链路（桌面 / 远程 / butler）共用本函数，Turn 数与工具计数对全部渠道生效。
+  const turnUsageStats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 }
+  let turnOutcome: UsageTurnOutcome = 'failed'
   try {
-    return await runToolChatSessionInner({ ...args, chatSignal, getMcpConnectionManager })
+    const result = await runToolChatSessionInner({ ...args, chatSignal, getMcpConnectionManager, turnUsageStats })
+    turnOutcome = result.ok ? 'completed' : result.cancelled ? 'cancelled' : 'failed'
+    return result
   } catch (e) {
-    if (e instanceof ChatCancelledError) return { ok: false, error: e.message, cancelled: true }
+    if (e instanceof ChatCancelledError) {
+      turnOutcome = 'cancelled'
+      return { ok: false, error: e.message, cancelled: true }
+    }
+    turnOutcome = 'failed'
     throw e
   } finally {
+    recordTurnSummary(args.appDb, {
+      turnId: args.turnId ?? args.sessionId,
+      sessionId: args.sessionId,
+      outcome: turnOutcome,
+      counts: turnUsageStats,
+      model: args.model,
+      llmServiceId: args.llmServiceId
+    })
     if (chatSignal.aborted) {
       args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
     }
@@ -519,7 +563,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
 }
 
 async function runToolChatSessionInner(
-  args: RunToolChatSessionArgs & { chatSignal: AbortSignal; getMcpConnectionManager: () => McpConnectionManager }
+  args: RunToolChatSessionArgs & { chatSignal: AbortSignal; getMcpConnectionManager: () => McpConnectionManager; turnUsageStats: TurnUsageStats }
 ): Promise<RunToolChatSessionResult> {
   const {
     requestId,
@@ -549,8 +593,11 @@ async function runToolChatSessionInner(
     getBrowserDetectContext,
     getMcpConnectionManager,
     floatingNotificationManager,
-    hasImageAttachments
+    hasImageAttachments,
+    turnUsageStats
   } = args
+  // 台账事件与统计写入共用的 Turn ID：真实 turnId 优先，缺省回退 sessionId（现状占位）。
+  const eventTurnId = args.turnId ?? sessionId
   let contextWindowId = args.windowId ?? requestId
   const apiKey = await getApiKey()
   if (!apiKey) {
@@ -565,7 +612,7 @@ async function runToolChatSessionInner(
 
   const client = createAnthropicClient(apiKey, baseUrl, {
     onRetry: async ({ attempt, backoffMs, code }) => {
-      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt, backoffMs, code } })
+      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt, backoffMs, code } })
     }
   })
   const sessionMeta = appDb ? getSession(appDb, sessionId)?.metadata : undefined
@@ -813,7 +860,7 @@ async function runToolChatSessionInner(
         overflowRetries += 1
         const recovered = await recoverBeforeSend(requestHeader, messagesStripped, overflowRetries, requestContext.budget.totalInputBudget)
         if (recovered) {
-          await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'preflight_context_overflow' } })
+          await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'preflight_context_overflow' } })
           continue
         }
       }
@@ -857,7 +904,7 @@ async function runToolChatSessionInner(
       if (normalizedDelta) {
         await args.emitSessionEvent?.({
           type: 'assistant_chunk',
-          payload: { turnId: sessionId, stepId: requestId, messageId: args.assistantMessageId, delta: normalizedDelta }
+          payload: { turnId: eventTurnId, stepId: requestId, messageId: args.assistantMessageId, delta: normalizedDelta }
         })
       }
       if (normalizedDelta?.type === 'tool_call_delta') {
@@ -935,7 +982,7 @@ async function runToolChatSessionInner(
             }
             await args.emitSessionEvent?.({
               type: 'tool_call',
-              payload: { turnId: sessionId, stepId: requestId, toolUseId: pending.id, name: compatName, args: normalizeToolUseInputRecord(toolUseBlock.input) }
+              payload: { turnId: eventTurnId, stepId: requestId, toolUseId: pending.id, name: compatName, args: normalizeToolUseInputRecord(toolUseBlock.input) }
             })
             const mcpEntry = mcpSnapshot.entries.get(compatName)
             args.emitFactEvent?.({
@@ -970,6 +1017,17 @@ async function runToolChatSessionInner(
           type: 'request_usage',
           payload: { schemaVersion: 1, requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
+        // Token 用量统计：每次 LLM 调用即时落一行 usage_step_facts（异步容错，不阻断对话）。
+        recordStepUsage(appDb, {
+          sessionId,
+          turnId: eventTurnId,
+          stepId: attemptRequestId,
+          usage: finalUsage,
+          baseUrl,
+          model,
+          llmServiceId: args.llmServiceId
+        })
+        turnUsageStats.stepCount += 1
         const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: content as Anthropic.ContentBlock[] }]
         const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system, tools: requestHeader.tools, messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
         const finalProjection = computeContextPressure({
@@ -1011,7 +1069,7 @@ async function runToolChatSessionInner(
         if (!recovered) {
           return failToolLoopWithLastUsage( requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
         }
-        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
+        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
       }
       logAgentEvent('error', 'llm.error', {
@@ -1074,7 +1132,9 @@ async function runToolChatSessionInner(
             error: 'model_output_token_limit',
             userMessage: failedResult.content
           }
-          await args.emitSessionEvent?.({ type: 'tool_result', payload: { turnId: sessionId, stepId: requestId, toolUseId: failedResult.tool_use_id, result } })
+          await args.emitSessionEvent?.({ type: 'tool_result', payload: { turnId: eventTurnId, stepId: requestId, toolUseId: failedResult.tool_use_id, result } })
+          // 第 15 处 tool_result 发出点（绕过 recordToolResult）：同样计入三分类统计（需求 §2.4.0）。
+          noteToolResultForStats(turnUsageStats, result)
           args.emitFactEvent?.({ type: 'tool-result', id: failedResult.tool_use_id, result })
         }
       }
@@ -1084,7 +1144,7 @@ async function runToolChatSessionInner(
       outputRecoveryRetries += 1
       const recoveryMessage = buildOutputRecoveryMessage({ attempt: outputRecoveryRetries, causeRequestId: attemptRequestId, hadVisibleText: truncatedToolText.length > 0, hadToolUse: true })
       messagesForApi = [...messagesForApi, { role: 'user', content: recoveryMessage.content }]
-      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId: attemptRequestId, attempt: outputRecoveryRetries, backoffMs: 0, code: 'model_output_token_limit' } })
+      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId: attemptRequestId, attempt: outputRecoveryRetries, backoffMs: 0, code: 'model_output_token_limit' } })
       logAgentEvent('warn', 'llm.output_recovery', { requestId, sessionId, causeRequestId: attemptRequestId, attempt: outputRecoveryRetries, toolCount: toolUses.length, failedToolResultCount: failedResults.length, usage })
       continue
     }
@@ -1115,7 +1175,7 @@ async function runToolChatSessionInner(
       await args.emitSessionEvent?.({
         type: 'request_retry',
         payload: {
-          turnId: sessionId,
+          turnId: eventTurnId,
           stepId: requestId,
           requestId: attemptRequestId,
           attempt: outputRecoveryRetries,
@@ -1194,8 +1254,9 @@ async function runToolChatSessionInner(
       toolResults.push(block)
       await args.emitSessionEvent?.({
         type: 'tool_result',
-        payload: { turnId: sessionId, stepId: requestId, toolUseId: block.tool_use_id, result }
+        payload: { turnId: eventTurnId, stepId: requestId, toolUseId: block.tool_use_id, result }
       })
+      noteToolResultForStats(turnUsageStats, result)
       emitToolResultFact(block.tool_use_id, result)
     }
     const fileCache = getFileStateCacheForSession(sessionId)

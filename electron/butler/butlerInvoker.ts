@@ -147,6 +147,8 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
         runButlerModelTurn(deps, {
           sessionId,
           requestId,
+          turnId: prepared.turnId,
+          llmServiceId: executionConfig?.llmServiceId,
           taskPrompt: task.prompt,
           assistantMessageId: prepared.assistantMessage.id
         })
@@ -196,7 +198,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionId: string; requestId: string; taskPrompt: string; assistantMessageId?: string }
+  args: { sessionId: string; requestId: string; turnId?: string; llmServiceId?: string; taskPrompt: string; assistantMessageId?: string }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
   const session = getSession(db, args.sessionId)
@@ -245,6 +247,8 @@ async function runButlerModelTurn(
   const res = await runToolChatSession({
     requestId: args.requestId,
     sessionId: args.sessionId,
+    turnId: args.turnId,
+    llmServiceId: args.llmServiceId,
     lane: 'automation',
     model: session.model,
     contextWindow,

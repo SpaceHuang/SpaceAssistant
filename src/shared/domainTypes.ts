@@ -556,6 +556,14 @@ export interface ToolCallResultPersisted {
   autoApprovedWrite?: AutoApprovedWriteMeta
   /** 已由主进程解析的 MCP 展示投影；不参与模型上下文。 */
   displayData?: import('./mcpToolResultDisplay').McpResultDisplay
+  /** 工具未进入执行流程（被授权 / 确认 / 策略 / 预算拦下，或调用整体被放弃），区别于「执行了但失败」（需求 §7.6）。 */
+  notExecuted?: true
+  /** 未执行的原因码，便于聚合与今后回填区分「未执行」与「执行失败」。 */
+  notExecutedReason?:
+    | 'user_rejected' | 'confirm_timeout' | 'remote_read_only'
+    | 'authorization_revoked' | 'policy_denied' | 'budget_paused'
+    | 'remote_budget_exhausted' | 'not_authorized' | 'unknown_tool'
+    | 'model_output_truncated'
 }
 
 /** 工具调用记录（持久化到消息中） */
