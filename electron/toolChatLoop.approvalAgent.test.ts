@@ -151,6 +151,15 @@ describe('P2 端到端：automation 写操作由审批 Agent 裁决', () => {
     expect(res.ok).toBe(true)
     // 裁决确实走了审批链
     expect(mockRunApprovalAgent).toHaveBeenCalled()
+    // P1-1 凭证对装配：装配方把外层会话的 model/baseUrl/getApiKey 配对传给审批链
+    const assembleDeps = mockRunApprovalAgent.mock.calls[0]![0] as {
+      model: string
+      baseUrl?: string
+      getApiKey: () => Promise<string | null>
+    }
+    expect(assembleDeps.model).toBe('claude-sonnet-4-20250514')
+    expect(assembleDeps.baseUrl).toBe('http://localhost:9999')
+    expect(typeof assembleDeps.getApiKey).toBe('function')
     const inv = mockRunApprovalAgent.mock.calls[0]![1] as { clue: { toolName: string; summary: string; targetPath?: string } }
     expect(inv.clue.toolName).toBe('write_file')
     expect(inv.clue.targetPath).toBe('out.txt')

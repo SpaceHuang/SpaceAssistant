@@ -14,8 +14,21 @@ import type { AuditSink } from './channels'
 /** 审批调用默认超时上界（方案 §12-2 取值 30s）；req.timeoutMs / policy.timeoutMs 可覆盖，必须有上界。 */
 export const DEFAULT_AGENT_APPROVAL_TIMEOUT_MS = 30_000
 
-/** I5 深度计数：审批进行中的嵌套确认请求一律 fail-closed（豁免失效兜底）。 */
-let approvalDepth = 0
+/**
+ * P1-4 修复：递归兜底以「审批会话」为作用域（同调用树语义），不再是全局计数——
+ * 审批执行链（approvalAgent）创建内部会话后标记，收敛后解除；只有确认请求本身
+ * 来自**进行中的审批内部会话**（即豁免失效、gate 守卫被绕过的场景）才算递归。
+ * 不同会话/不同 lane 的并发审批互不影响，审计归因不再失真。
+ */
+const activeApprovalSessions = new Set<string>()
+
+export function markApprovalSessionActive(sessionId: string): void {
+  activeApprovalSessions.add(sessionId)
+}
+
+export function unmarkApprovalSessionActive(sessionId: string): void {
+  activeApprovalSessions.delete(sessionId)
+}
 
 let invocationSeq = 0
 
@@ -79,8 +92,8 @@ export class AgentChannel implements ConfirmationChannel {
     const invocationId = `approval-${Date.now()}-${invocationSeq}`
     const innerRequestId = `${this.deps.requestId}:approval`
 
-    // ===== I5 深度计数兜底：审批进行中不允许再进入确认流程 =====
-    if (approvalDepth > 0) {
+    // ===== I5 兜底：确认请求来自进行中的审批内部会话（豁免失效）→ 立即 fail-closed =====
+    if (activeApprovalSessions.has(this.deps.sessionId)) {
       const cause = 'recursion-blocked' as const
       this.deps.audit?.record({
         ts: Date.now(),
@@ -135,7 +148,6 @@ export class AgentChannel implements ConfirmationChannel {
     })
 
     const startedAt = Date.now()
-    approvalDepth += 1
     this.inflightCancelId = innerRequestId
     let result: ApprovalInvocationResult
     try {
@@ -160,7 +172,6 @@ export class AgentChannel implements ConfirmationChannel {
         this.inflightSettle = (r) => finish(r)
       })
     } finally {
-      approvalDepth -= 1
       this.inflightCancelId = null
       this.inflightSettle = null
     }

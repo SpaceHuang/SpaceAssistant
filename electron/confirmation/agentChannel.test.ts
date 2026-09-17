@@ -142,21 +142,64 @@ describe('AgentChannel（P2-3）', () => {
     expect(a.events[1]!.cause).toBe('agent-approved')
   })
 
-  it('I5 深度计数兜底：审批进行中再进入 AgentChannel → 立即 rejected + cause=recursion-blocked', async () => {
-    let release: (() => void) | undefined
-    const { ch } = channel({
-      invokeApproval: () =>
-        new Promise<ApprovalInvocationResult>((resolve) => {
-          release = () => resolve({ ok: true, verdict: APPROVE })
-        })
+  it('I5 兜底（P1-4 修复：会话作用域）：确认请求来自进行中的审批内部会话 → 立即 rejected + cause=recursion-blocked', async () => {
+    const { markApprovalSessionActive, unmarkApprovalSessionActive } = await import('./agentChannel')
+    markApprovalSessionActive('sess-approval-inner')
+    try {
+      const ch2 = new AgentChannel({
+        lane: 'automation',
+        requestId: 'r-inner',
+        sessionId: 'sess-approval-inner',
+        toolName: 'write_file',
+        policy: { kind: 'agent' },
+        invokeApproval: async () => ({ ok: true, verdict: APPROVE })
+      })
+      const outcome = await ch2.request(req())
+      expect(outcome).toMatchObject({ kind: 'rejected', cause: 'recursion-blocked' })
+    } finally {
+      unmarkApprovalSessionActive('sess-approval-inner')
+    }
+    // 守卫解除后同会话恢复正常裁决
+    const ch3 = new AgentChannel({
+      lane: 'automation',
+      requestId: 'r-inner-2',
+      sessionId: 'sess-approval-inner',
+      toolName: 'write_file',
+      policy: { kind: 'agent' },
+      invokeApproval: async () => ({ ok: true, verdict: APPROVE })
     })
-    const outer = ch.request(req())
-    // 外层审批尚未返回时，嵌套的确认请求必须被立即拒绝（豁免失效兜底）
-    const nested = channel()
-    const nestedOutcome = await nested.ch.request(req())
-    expect(nestedOutcome).toMatchObject({ kind: 'rejected', cause: 'recursion-blocked' })
-    release?.()
-    await expect(outer).resolves.toMatchObject({ kind: 'approved' })
+    await expect(ch3.request(req())).resolves.toMatchObject({ kind: 'approved' })
+  })
+
+  it('P1-4 并发不误伤：两个不同会话的审批同时进行，均正常裁决、无 recursion-blocked', async () => {
+    let release1: (() => void) | undefined
+    let release2: (() => void) | undefined
+    const makeHanging = (setter: (fn: () => void) => void) =>
+      new Promise<ApprovalInvocationResult>((resolve) => {
+        setter(() => resolve({ ok: true, verdict: APPROVE }))
+      })
+    const chA = new AgentChannel({
+      lane: 'automation',
+      requestId: 'req-a',
+      sessionId: 'sess-a',
+      toolName: 'write_file',
+      policy: { kind: 'agent' },
+      invokeApproval: () => makeHanging((fn) => (release1 = fn))
+    })
+    const chB = new AgentChannel({
+      lane: 'automation',
+      requestId: 'req-b',
+      sessionId: 'sess-b',
+      toolName: 'write_file',
+      policy: { kind: 'agent' },
+      invokeApproval: () => makeHanging((fn) => (release2 = fn))
+    })
+    const pa = chA.request(req())
+    const pb = chB.request(req())
+    release2?.()
+    await expect(pb).resolves.toMatchObject({ kind: 'approved' })
+    release1?.()
+    await expect(pa).resolves.toMatchObject({ kind: 'approved' })
   })
 
   it('cancel 中断内层调用（signalChatCancel）', async () => {

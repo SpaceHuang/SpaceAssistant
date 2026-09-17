@@ -1772,7 +1772,11 @@ async function runToolChatSessionInner(
                         ...(shellConfig !== undefined ? { getShellConfig: () => shellConfig } : {}),
                         ...(browserConfig ? { getBrowserConfig: () => browserConfig } : {}),
                         getWorkDir: () => (resolveWorkDir ? resolveWorkDir() : workDir),
-                        getApiKey: getApiKey
+                        // P1-1：凭证对配对传入——复用外层会话已解析的 model/baseUrl/getApiKey，
+                        // 审批请求打用户实际服务端点（中转/自定义端点下不失效）；Profile 机制落地后按 approvalProfileId 解析独立快模型
+                        model,
+                        ...(baseUrl ? { baseUrl } : {}),
+                        getApiKey
                       },
                       inv
                     )
