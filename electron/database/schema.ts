@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 13
+export const DB_SCHEMA_VERSION = 15
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -158,6 +158,64 @@ ALTER TABLE turns ADD COLUMN execution_config_json TEXT;
 export const MIGRATION_V13_TURN_ROUTING_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_turns_session_assistant_state
   ON turns(session_id, assistant_message_id, state);
+`
+
+/**
+ * 偏差 7：会话归属与可见性成为 sessions 的独立维度。
+ * 存量行默认 user/primary（行为不变）；IM 来源会话（metadata.source ∈ feishu/wechat）按创建特征回填 remote。
+ */
+export const MIGRATION_V14_SESSION_OWNERSHIP_SQL = `
+ALTER TABLE sessions ADD COLUMN ownership TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'primary';
+`
+
+/** 归属回填：IM 创建的存量会话按 metadata.source 特征标记为 remote。
+ *  json_valid 防护：损坏/篡改的 metadata 不得阻断迁移（该行保持默认 user，评审观察项）。 */
+export const MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL = `
+UPDATE sessions SET ownership = 'remote'
+  WHERE json_valid(metadata)
+    AND json_extract(metadata, '$.source') IN ('feishu', 'wechat');
+`
+
+/**
+ * P4 管家任务表：任务定义 + 运行记录。
+ * client_id 唯一幂等键（`${taskId}:${scheduledFor}`）防 tick 重入 / 双投递；
+ * 手动触发用 `${taskId}:manual:${requestId}`。
+ */
+export const MIGRATION_V15_BUTLER_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS automation_tasks (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  schedule_json TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  delivery_pref TEXT NOT NULL DEFAULT 'desktop',
+  delivery_target TEXT,
+  model_override TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_run_at INTEGER,
+  next_run_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS automation_task_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  task_id TEXT NOT NULL REFERENCES automation_tasks(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL UNIQUE,
+  trigger TEXT NOT NULL DEFAULT 'schedule',
+  scheduled_for INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  error TEXT,
+  session_id TEXT,
+  result_summary TEXT,
+  usage_json TEXT,
+  delivery_status TEXT NOT NULL DEFAULT 'pending',
+  delivered_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_runs_task ON automation_task_runs(task_id, scheduled_for);
 `
 
 export const SCHEMA_META_KEYS = {

@@ -5,6 +5,13 @@ import type { SpaceAssistantApi, TurnExecutePayload } from '../src/shared/api'
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
   appOpenExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  appGetTrayEnabled: () => ipcRenderer.invoke('app:get-tray-enabled') as Promise<boolean>,
+
+  butlerListTasks: () => ipcRenderer.invoke('butler:list') as Promise<import('../src/shared/automationTaskTypes').AutomationTask[]>,
+  butlerCreateTask: (payload) => ipcRenderer.invoke('butler:create', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
+  butlerUpdateTask: (payload) => ipcRenderer.invoke('butler:update', payload) as Promise<{ ok: boolean; error?: string }>,
+  butlerDeleteTask: (payload) => ipcRenderer.invoke('butler:delete', payload) as Promise<{ ok: boolean; error?: string }>,
+  butlerRunTask: (payload) => ipcRenderer.invoke('butler:run-task', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerRunTaskResult>,
 
   sessionList: () => ipcRenderer.invoke('session:list'),
   sessionCreate: (payload) => ipcRenderer.invoke('session:create', payload),
@@ -155,6 +162,12 @@ const api: SpaceAssistantApi = {
     const fn = (_e: unknown, data: { session: Session }) => cb(data)
     ipcRenderer.on('session:title-generated', fn)
     return () => ipcRenderer.removeListener('session:title-generated', fn)
+  },
+
+  sessionOnCreated: (cb) => {
+    const fn = (_e: unknown, data: { session: Session }) => cb(data)
+    ipcRenderer.on('session:created', fn)
+    return () => ipcRenderer.removeListener('session:created', fn)
   },
 
   toolConfirmResponse: (payload: import('../src/shared/api').ToolConfirmResponsePayload) =>

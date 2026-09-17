@@ -678,6 +678,10 @@ export interface Session {
   schemaVersion: number
   /** 所属工作目录 profile；缺省时视为当前激活目录（向后兼容） */
   workDirProfileId?: string
+  /** 会话归属（偏差 7）；缺省等价 user（历史会话向后兼容） */
+  ownership?: import('./sessionOwnership').SessionOwnership
+  /** 可见性（偏差 7）；缺省等价 primary */
+  visibility?: import('./sessionOwnership').SessionVisibility
 }
 
 /** 用户消息附带的图片（DB 只存引用，不存 base64） */

@@ -181,6 +181,10 @@ function AppShellInner() {
     const offTitle = window.api.sessionOnTitleGenerated(({ session }) => {
       dispatch(upsertSession(session))
     })
+    // 管家定时 / 手动触发的会话创建推送：不订阅的话新会话要重启才出现在列表里
+    const offSessionCreated = window.api.sessionOnCreated(({ session }) => {
+      dispatch(upsertSession(session))
+    })
     const offTurnProjection = initTurnProjectionBridge()
     const offTurnDisplay = initTurnDisplayBridge()
     void turnDisplayReconciliation.reconcile().catch(() => {})
@@ -192,6 +196,7 @@ function AppShellInner() {
       off1()
       off2()
       offTitle()
+      offSessionCreated()
       offTurnProjection()
       offTurnDisplay()
       turnDisplayReconciliation.clear()

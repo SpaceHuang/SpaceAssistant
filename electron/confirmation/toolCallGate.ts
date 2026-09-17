@@ -62,6 +62,8 @@ export interface ToolCallGateArgs {
   sessionId: string
   workDir: string
   userDataDir: string
+  /** 显式 lane（偏差 21：由驱动源层解析后随调用传入）；缺省回退 remoteContext 推导，最终 desktop。 */
+  lane?: ExecutionLane
   remoteContext?: RemoteContext
   toolsConfig: ToolsConfig
   shellConfig?: ShellConfig | null
@@ -104,7 +106,8 @@ export interface ToolCallGateResult {
   rawScriptAnalysis?: ScriptAnalysisResult
 }
 
-function laneOf(remoteContext?: RemoteContext): ExecutionLane {
+function laneOf(remoteContext: RemoteContext | undefined, explicitLane?: ExecutionLane): ExecutionLane {
+  if (explicitLane) return explicitLane
   if (!remoteContext) return 'desktop'
   return remoteContext.source === 'feishu' ? 'feishu' : 'wechat'
 }
@@ -114,7 +117,7 @@ function laneOf(remoteContext?: RemoteContext): ExecutionLane {
  * 通道确认、记账（recordOutboundWrite / grant reserve）与拒绝消息映射仍由主循环承担。
  */
 export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<ToolCallGateResult> {
-  const lane = laneOf(args.remoteContext)
+  const lane = laneOf(args.remoteContext, args.lane)
   const origin: OriginInfo = { kind: 'direct-owner' }
   const channelConfig = args.remoteContext
     ? args.remoteContext.source === 'feishu'
@@ -193,7 +196,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     (autoApproveRule.configRequires ? args.toolsConfig.confirmMode === 'auto' : true)
   let fileAutoApprove: boolean | undefined
   if (
-    !args.remoteContext &&
+    lane === 'desktop' &&
     (args.toolName === 'write_file' || args.toolName === 'edit_file') &&
     autoApproveActive
   ) {

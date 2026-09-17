@@ -2,12 +2,16 @@ import path from 'path'
 import { mkdirSync } from 'fs'
 import http from 'http'
 import https from 'https'
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
+import { registerButlerIpcHandlers } from './butler/butlerIpc'
+import { ButlerAdmission } from './butler/butlerAdmission'
+import { ButlerTaskScheduler } from './butler/taskScheduler'
+import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
 import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
@@ -74,6 +78,7 @@ import { homedir } from 'node:os'
 setKnownHomeDir(homedir())
 
 let floatingManager: FloatingNotificationManager | null = null
+let butlerScheduler: ButlerTaskScheduler | null = null
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -497,6 +502,7 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
+    notifyMainWindow: (channel, payload) => getMainWindow()?.webContents.send(channel, payload),
     turnRuntime
   })
 
@@ -529,8 +535,65 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
+    isTrayEnabled,
     turnRuntime,
     executeTurn
+  })
+
+  // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
+  const butlerAdmission = new ButlerAdmission()
+  const butlerInvokerDeps: ButlerInvokerDeps = {
+    db,
+    turnRuntime,
+    getWorkDir: () => workDirState,
+    getUserDataPath: () => app.getPath('userData'),
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    },
+    getBrowserConfig: () => readBrowserConfigFromDb(db),
+    getShellConfig: () => readShellConfigFromDb(db),
+    workDirManager: workDirManager!,
+    resolveWorkDirForSession: (sessionId) => {
+      const resolved = resolveWorkDirForSession(
+        db,
+        sessionId,
+        () => workDirManager!.listProfiles(),
+        () => workDirManager!.getActiveProfileId(),
+        () => workDirManager!.getActiveWorkDir()
+      )
+      return resolved?.workDir ?? workDirState
+    },
+    getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
+    admission: butlerAdmission,
+    onSessionCreated: (session) => getMainWindow()?.webContents.send('session:created', { session }),
+    deliveryPorts: {
+      // v1 桌面端口用系统通知（窗口状态语义由 OS 托管）；IM 端口未接线时走 butlerDelivery
+      // 的显式降级路径。浮动窗结果展示随偏差 8 整项关闭时统一。
+      notifyDesktop: (summary) => {
+        if (!Notification.isSupported()) return
+        const notification = new Notification({
+          title: 'SpaceAssistant 管家',
+          body: summary.slice(0, 280)
+        })
+        notification.on('click', () => void showMainWindow())
+        notification.show()
+      }
+    }
+  }
+  registerButlerIpcHandlers(ipcMain, butlerInvokerDeps)
+
+  // P6 定时调度器：托盘前提（P0 决策 a）+ 启动恢复 + interval tick；before-quit 停机标 interrupted。
+  // 实际 start() 延后到 initTray() 之后（见下方 whenReady 尾部）。
+  butlerScheduler = new ButlerTaskScheduler({
+    db,
+    runTask: (taskId, request) => runButlerTask(butlerInvokerDeps, taskId, request),
+    isTrayEnabled
   })
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
@@ -633,6 +696,9 @@ app.whenReady().then(async () => {
     getMainWindow,
     mainDirname: __dirname
   })
+  // 托盘初始化完成后才能启动定时调度器：start() 内的托盘前提校验读 isTrayEnabled()，
+  // 早于 initTray 会在托盘实际启用的情况下被误判为未启用（disabled-no-tray）而永不启动。
+  butlerScheduler?.start()
 
   void autoStartWeChatPollIfNeeded(db)
 
@@ -650,6 +716,7 @@ app.on('before-quit', (event) => {
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()
+  butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()
   stopMemoryWatcher()

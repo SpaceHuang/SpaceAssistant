@@ -98,7 +98,8 @@
       "menuItem": "Copy session ID"
     },
     "stopAria": "Stop execution for \"{{name}}\"",
-    "unnamed": "Untitled session"
+    "unnamed": "Untitled session",
+    "butlerSection": "Butler"
   },
   "time": {
     "hoursAgo": "{{count}}h ago",
@@ -114,7 +115,8 @@
     "title": "Settings",
     "tools": "Tools",
     "wiki": "Project Wiki",
-    "remoteIm": "IM remote common"
+    "remoteIm": "IM remote common",
+    "butler": "Scheduled tasks"
   },
   "titleBar": {
     "close": "Close",

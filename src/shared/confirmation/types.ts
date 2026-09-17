@@ -162,7 +162,7 @@ export interface ConfirmRequest {
 
 export type ConfirmOutcome =
   | { kind: 'approved'; memory?: CacheKey }
-  | { kind: 'rejected'; memory?: CacheKey }
+  | { kind: 'rejected'; memory?: CacheKey; /** 无回答者兜底拒绝（automation fail-closed），与用户拒绝在审计可区分。 */ reason?: 'no-answerer' }
   | { kind: 'timeout' }
   | { kind: 'approved-with-action'; action: 'continue' | 'back-to-desktop' | 'stop' }
 
@@ -288,7 +288,8 @@ export interface PolicyConfigRequirement {
 
 /** 策略层只读缓存视图：写缓存是执行链路的事。 */
 export interface DecisionCacheView {
-  lookup(key: CacheKey): DecisionCacheEntry | null
+  /** lane 透传：缓存读写按真实 lane 键控（评审 B1——automation 不得命中 desktop 用户的历史信任条目）。 */
+  lookup(key: CacheKey, lane?: ExecutionLane | '*'): DecisionCacheEntry | null
 }
 
 /** 第 4 步自动审批器：批准返回 Decision，不裁决（approve:false）交还规则链。 */

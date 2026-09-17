@@ -1,7 +1,8 @@
 import type {
   CacheKey,
   DecisionCacheEntry,
-  DecisionCacheView
+  DecisionCacheView,
+  ExecutionLane
 } from '../../src/shared/confirmation/types'
 import { normalizeShellSignature } from './extractors/commandSequenceExtractor'
 
@@ -34,7 +35,9 @@ export interface LegacyExemptionAdapterDeps {
 export class LegacyExemptionAdapter implements DecisionCacheView {
   constructor(private readonly deps: LegacyExemptionAdapterDeps) {}
 
-  lookup(key: CacheKey): DecisionCacheEntry | null {
+  lookup(key: CacheKey, lane?: ExecutionLane | '*'): DecisionCacheEntry | null {
+    // 存量豁免是桌面用户配置的信任（shell 信任命令 / 浏览器域名信任）：不作用于无人值守的 automation。
+    if (lane === 'automation') return null
     switch (key.kind) {
       case 'shell-command': {
         if (key.level !== 'exact') return null

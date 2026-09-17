@@ -158,6 +158,15 @@ export type SpaceAssistantApi = {
 
   appOpenExternal: (url: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
+  /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
+  appGetTrayEnabled: () => Promise<boolean>
+
+  butlerListTasks: () => Promise<import('./automationTaskTypes').AutomationTask[]>
+  butlerCreateTask: (payload: Partial<import('./automationTaskTypes').AutomationTaskInput>) => Promise<import('./automationTaskTypes').ButlerTaskWriteResult>
+  butlerUpdateTask: (payload: { id: string; patch: Partial<import('./automationTaskTypes').AutomationTask> }) => Promise<{ ok: boolean; error?: string }>
+  butlerDeleteTask: (payload: { id: string }) => Promise<{ ok: boolean; error?: string }>
+  butlerRunTask: (payload: { taskId: string; requestId?: string }) => Promise<import('./automationTaskTypes').ButlerRunTaskResult>
+
   sessionList: () => Promise<Session[]>
   sessionCreate: (payload: {
     name: string
@@ -406,6 +415,8 @@ export type SpaceAssistantApi = {
   appToggleDevTools: () => Promise<void>
 
   sessionOnTitleGenerated: (cb: (data: { session: Session }) => void) => () => void
+  /** 管家定时 / 手动触发的会话创建推送：渲染端即时 upsert 进会话列表，无需重启。 */
+  sessionOnCreated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>

@@ -201,6 +201,8 @@ export type AppIpcContext = {
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   turnRuntime?: TurnRuntime
   executeTurn?: ClaudeTurnExecution
+  /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
+  isTrayEnabled?: () => boolean
 }
 
 function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Session {
@@ -209,8 +211,8 @@ function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Sess
   return updateSession(db, session.id, { metadata }) ?? session
 }
 
-function stripAllSessionsAndPersist(db: AppDatabase): Session[] {
-  const sessions = listSessions(db)
+function stripAllSessionsAndPersist(db: AppDatabase, options?: { view?: 'all' | 'user-visible' }): Session[] {
+  const sessions = listSessions(db, options)
   let changed = false
   const result = sessions.map((s) => {
     if (!hasPlanMetadataKeys(s.metadata)) return s
@@ -302,6 +304,8 @@ async function backupAfterMessagePatch(
 }
 
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
+  ipcMain.handle('app:get-tray-enabled', () => ctx.isTrayEnabled?.() ?? false)
+
 
   const turnRuntime = ctx.turnRuntime ?? new TurnRuntimeImpl({ storage: createTurnCoordinatorStorage(ctx.db), deps: { now: Date.now, id: randomUUID } })
   const turnCoordinator = turnRuntime.coordinator
@@ -658,7 +662,8 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('session:list', (): Session[] => {
     const profileId = ctx.workDirManager.getActiveProfileId()
-    return stripAllSessionsAndPersist(ctx.db).filter((s) => {
+    // 偏差 7：用户可见视图（排除 internal/hidden；section 分区行透传给渲染端分组）
+    return stripAllSessionsAndPersist(ctx.db, { view: 'user-visible' }).filter((s) => {
       if (!s.workDirProfileId) return false
       return s.workDirProfileId === profileId
     })
@@ -700,7 +705,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
       const next = scheduleSessionTitleOpenBackfillIfNeeded({
         db: ctx.db,
-        sender: event.sender,
+        onTitleGenerated: (session) => event.sender.send('session:title-generated', { session }),
         sessionId,
         baseUrl,
         getApiKey: ctx.getApiKey

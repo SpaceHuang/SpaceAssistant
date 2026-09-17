@@ -874,5 +874,59 @@
       "retentionHint": "Audit files older than the retention period are cleaned up automatically (default 180 days).",
       "retentionSaved": "Saved"
     }
+  },
+  "butler": {
+    "create": "New task",
+    "edit": "Edit",
+    "delete": "Delete",
+    "deleteAria": "Delete task \"{{name}}\"",
+    "deleteConfirm": "Delete task \"{{name}}\"?",
+    "deleted": "Task deleted",
+    "toggleAria": "Toggle task \"{{name}}\"",
+    "run": "Run now",
+    "runSuccess": "Task completed: {{summary}}",
+    "runFailed": "Run failed: {{error}}",
+    "trayHint": "Tray residency is required. Without it, closing the window quits the app and background tasks will be interrupted.",
+    "empty": "No scheduled tasks yet. Click \"New task\" to start",
+    "loadFailed": "Failed to load tasks",
+    "created": "Task created",
+    "updated": "Task updated",
+    "saveFailed": "Failed to save task",
+    "schedule": {
+      "interval": "Every {{minutes}} minutes",
+      "daily": "Daily at {{time}}",
+      "once": "Once at {{time}}"
+    },
+    "delivery": {
+      "desktop": "Desktop notification",
+      "feishu": "Feishu push",
+      "wechat": "WeChat push",
+      "none": "Save only"
+    },
+    "form": {
+      "createTitle": "New scheduled task",
+      "editTitle": "Edit scheduled task",
+      "name": "Task name",
+      "nameRequired": "Task name is required",
+      "prompt": "Task prompt",
+      "promptRequired": "Task prompt is required",
+      "scheduleKind": "Trigger",
+      "interval": "Fixed interval",
+      "daily": "Daily",
+      "intervalMinutes": "Interval (minutes)",
+      "time": "Time",
+      "deliveryPref": "Delivery",
+      "save": "Save",
+      "cancel": "Cancel",
+      "once": "Once",
+      "onceAt": "Run at",
+      "onceAtRequired": "Please pick a time",
+      "onceHint": "Runs once at the given time, then disables itself",
+      "onceAtPast": "The run time cannot be in the past",
+      "saveFailedWithError": "Failed to save task: {{error}}"
+    },
+    "tabTitle": "Scheduled tasks",
+    "tabIntro": "Butler tasks run automatically on schedule; results are delivered per task preference",
+    "lastRun": "Last run {{time}}"
   }
 }

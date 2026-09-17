@@ -408,7 +408,6 @@ export class WeChatCommandRouter {
             wechatConfig: config,
             workDir,
             workDirManager: this.deps.workDirManager,
-            getMainWebContents: this.deps.getMainWebContents,
             getApiKey: this.deps.getApiKey,
             getBaseUrl: this.deps.getBaseUrl,
             getModel: this.deps.getModel,

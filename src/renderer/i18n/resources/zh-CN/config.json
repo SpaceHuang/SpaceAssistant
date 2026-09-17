@@ -874,5 +874,59 @@
       "retentionHint": "超过保留天数的审计文件会自动清理（默认 180 天）。",
       "retentionSaved": "已保存"
     }
+  },
+  "butler": {
+    "create": "新建任务",
+    "edit": "编辑",
+    "delete": "删除",
+    "deleteAria": "删除任务「{{name}}」",
+    "deleteConfirm": "删除任务「{{name}}」？",
+    "deleted": "任务已删除",
+    "toggleAria": "启停任务「{{name}}」",
+    "run": "立即运行",
+    "runSuccess": "任务完成：{{summary}}",
+    "runFailed": "运行失败：{{error}}",
+    "trayHint": "需要启用托盘常驻，否则关窗即退出、后台任务会中断",
+    "empty": "暂无定时任务，点击「新建任务」开始",
+    "loadFailed": "任务列表加载失败",
+    "created": "任务已创建",
+    "updated": "任务已更新",
+    "saveFailed": "任务保存失败",
+    "schedule": {
+      "interval": "每 {{minutes}} 分钟",
+      "daily": "每天 {{time}}",
+      "once": "一次性 {{time}}"
+    },
+    "delivery": {
+      "desktop": "桌面通知",
+      "feishu": "飞书推送",
+      "wechat": "微信推送",
+      "none": "仅落盘"
+    },
+    "form": {
+      "createTitle": "新建定时任务",
+      "editTitle": "编辑定时任务",
+      "name": "任务名称",
+      "nameRequired": "请输入任务名称",
+      "prompt": "任务提示词",
+      "promptRequired": "请输入任务提示词",
+      "scheduleKind": "触发方式",
+      "interval": "固定间隔",
+      "daily": "每天",
+      "intervalMinutes": "间隔（分钟）",
+      "time": "时间",
+      "deliveryPref": "投递偏好",
+      "save": "保存",
+      "cancel": "取消",
+      "once": "一次性",
+      "onceAt": "执行时间",
+      "onceAtRequired": "请选择执行时间",
+      "onceHint": "到点执行一次，之后自动停用，不再重复执行",
+      "onceAtPast": "执行时间不能早于当前时间",
+      "saveFailedWithError": "任务保存失败：{{error}}"
+    },
+    "tabTitle": "定时任务",
+    "tabIntro": "到点自动运行管家任务；任务在后台执行，结果按投递偏好送达",
+    "lastRun": "上次运行 {{time}}"
   }
 }

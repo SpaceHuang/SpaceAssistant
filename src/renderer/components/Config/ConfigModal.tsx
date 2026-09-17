@@ -43,6 +43,7 @@ import { WikiTab } from './WikiTab'
 import { FeishuSettingsTab } from './FeishuSettingsTab'
 
 import { WeChatSettingsTab } from './WeChatSettingsTab'
+import { ButlerTaskSettings } from './ButlerTaskSettings'
 
 import { RemoteImCommonSettings } from './RemoteImCommonSettings'
 
@@ -90,7 +91,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
 
-const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat'] as const
+const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat', 'butler'] as const
 
 type SettingsSectionKey = (typeof SETTINGS_SECTION_KEYS)[number]
 
@@ -235,7 +236,8 @@ export function ConfigSettingsPage() {
       wiki: tCommon('settings.wiki'),
       remoteIm: tCommon('settings.remoteIm'),
       feishu: tCommon('settings.feishu'),
-      wechat: tCommon('settings.wechat')
+      wechat: tCommon('settings.wechat'),
+      butler: tCommon('settings.butler')
     }
     return SETTINGS_SECTION_KEYS.map((key) => ({ key, label: labels[key] }))
   }, [tCommon])
@@ -1009,6 +1011,10 @@ export function ConfigSettingsPage() {
       case 'wechat':
 
         return <WeChatSettingsTab wechat={wechatUi} onChange={setWechatUi} />
+
+      case 'butler':
+
+        return <ButlerTaskSettings />
 
       default:
 

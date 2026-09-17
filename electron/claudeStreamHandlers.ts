@@ -47,6 +47,8 @@ export type ClaudeStreamDeps = {
   getBrowserDetectContext: () => import('../src/shared/browserTypes').BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   emitFactEvent?: (requestId: string, event: AssistantFactEvent) => void
+  /** 绑定主窗口的出站通道：Core 出口事件（标题生成、文件树失效）经此投递渲染层。 */
+  notifyMainWindow?: (channel: string, payload: unknown) => void
   turnRuntime?: TurnRuntime
 }
 
@@ -387,7 +389,6 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
 
         const res = await runToolChatSession({
-          sender,
           requestId,
           sessionId,
           windowId: contextWindowId,
@@ -414,7 +415,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           hasImageAttachments,
           contextMeter,
           getBrowserDetectContext: deps.getBrowserDetectContext,
-          floatingNotificationManager: deps.floatingNotificationManager
+          floatingNotificationManager: deps.floatingNotificationManager,
+          onTitleGenerated: (session) => deps.notifyMainWindow?.('session:title-generated', { session }),
+          onFileTreeChanged: (event) => deps.notifyMainWindow?.('file:tree-changed', event)
           ,emitSessionEvent: async (event: SessionEventInput) => {
             if (!eventWriter) return
             const normalized = { ...event, payload: { ...event.payload, turnId } }

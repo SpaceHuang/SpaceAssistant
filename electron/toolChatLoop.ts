@@ -1,5 +1,3 @@
-import type { WebContents } from 'electron'
-import { isWebContentsAlive, safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
@@ -164,7 +162,6 @@ import {
   releaseWritePath,
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
@@ -402,7 +399,6 @@ async function maybeBuildConfirmDiff(
 }
 
 export type RunToolChatSessionArgs = {
-  sender: WebContents
   requestId: string
   sessionId: string
   windowId?: string
@@ -419,6 +415,8 @@ export type RunToolChatSessionArgs = {
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
+  /** 显式 lane（偏差 21）：由驱动源层解析后随调用传入；缺省回退 remoteContext 推导，最终 desktop。 */
+  lane?: import('../src/shared/confirmation/types').ExecutionLane
   remoteContext?: RemoteContext
   workDir: string
   workDirManager?: WorkDirManager
@@ -438,10 +436,14 @@ export type RunToolChatSessionArgs = {
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
-  /** 统一消息事实迁移端口；Core-owned 请求可配合关闭 legacy IPC 事实发送。 */
-  emitFactEvent?: (event: AssistantFactEvent) => void
-  /** Core 事件台账写入口；与 UI fact 通道分离，保存原始 NormalizedDelta。 */
-  emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
+  /** 统一消息事实迁移端口（必填）：调用方显式声明过程事实往哪里说；无观察者时传 no-op。 */
+  emitFactEvent: (event: AssistantFactEvent) => void
+  /** Core 事件台账写入口（必填）：与 UI fact 通道分离，保存原始 NormalizedDelta。 */
+  emitSessionEvent: (event: SessionEventInput) => void | Promise<void>
+  /** 文件树失效通知出口；由装配方决定投给谁，未传即 no-op。 */
+  onFileTreeChanged?: (event: import('../src/shared/fileTreeSync').FileTreeChangeEvent) => void
+  /** 会话标题落库完成后的界面通知出口；未传即 no-op（落库照常）。 */
+  onTitleGenerated?: (session: import('../src/shared/domainTypes').Session) => void
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
   /** Core 以 session event ledger 提供的唯一上下文测量适配器。 */
   contextMeter?: ContextMeter
@@ -464,7 +466,6 @@ export type RunToolChatSessionResult =
   | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
 function failToolLoopWithLastUsage(
-  sender: WebContents,
   requestId: string,
   sessionId: string,
   error: string,
@@ -483,11 +484,12 @@ function failToolLoopWithLastUsage(
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
   const chatSignal = registerChatCancel(args.requestId)
-  const requestLane = args.remoteContext
-    ? args.remoteContext.source === 'feishu'
-      ? 'feishu'
-      : 'wechat'
-    : 'desktop'
+  const requestLane = args.lane
+    ?? (args.remoteContext
+      ? args.remoteContext.source === 'feishu'
+        ? 'feishu'
+        : 'wechat'
+      : 'desktop')
   registerToolRevocationRequest(args.requestId, requestLane)
   let mcpConnectionManager: McpConnectionManager | undefined
   const getMcpConnectionManager = (): McpConnectionManager => {
@@ -520,7 +522,6 @@ async function runToolChatSessionInner(
   args: RunToolChatSessionArgs & { chatSignal: AbortSignal; getMcpConnectionManager: () => McpConnectionManager }
 ): Promise<RunToolChatSessionResult> {
   const {
-    sender,
     requestId,
     sessionId,
     model,
@@ -622,12 +623,19 @@ async function runToolChatSessionInner(
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
+  // 偏差 21：lane 一次解析、全点消费——exposure / MCP 注入 / 确认通道 / 审计归属全部使用显式值
+  const effectiveLane = args.lane
+    ?? (remoteContext
+      ? remoteContext.source === 'feishu'
+        ? ('feishu' as const)
+        : ('wechat' as const)
+      : ('desktop' as const))
   // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）；默认 standard 时为零行为变化快路径
-  const exposureLane = remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop'
+  const exposureLane = effectiveLane
   const exposureRules = appDb ? loadEffectivePolicyRules(appDb, exposureLane) : undefined
-  /** 请求级 MCP 工具快照：仅桌面会话注入（remoteContext 存在时为空）。 */
+  /** 请求级 MCP 工具快照：仅桌面 lane 注入（远程与 automation 不注入）。 */
   const mcpSnapshot: McpToolSnapshot = appDb
-    ? buildSnapshotFromDb(appDb, { remoteContext: Boolean(remoteContext) })
+    ? buildSnapshotFromDb(appDb, { remoteContext: effectiveLane !== 'desktop' })
     : { entries: new Map(), budgetDropped: [] }
   const effectiveTools = computeEffectiveTools({
     builtinConfig: toolsConfig,
@@ -749,10 +757,6 @@ async function runToolChatSessionInner(
   while (true) {
     loopRound++
     throwIfChatCancelled(chatSignal)
-    if (!isWebContentsAlive(sender)) {
-      logAgentEvent('warn', 'llm.error', { requestId, sessionId, error: 'Window closed' })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage, args.emitFactEvent)
-    }
     const memoryContent = getCachedMemoryContent()
     const baseSystemWithRecovery = typeof system === 'string' && system.trim().length > 0 ? system : undefined
     const capabilityHint = buildToolCapabilityConventionHint(toolNames)
@@ -952,7 +956,6 @@ async function runToolChatSessionInner(
           }
         }
       }
-      safeWebContentsSend(sender,'claude-chat-tools-activity', { requestId, at: Date.now() })
     }
 
       const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
@@ -1006,7 +1009,7 @@ async function runToolChatSessionInner(
           ? await recoverBeforeSend(lastRequestHeader, messagesForApi, overflowRetries, lastRequestContext.budget.totalInputBudget)
           : false
         if (!recovered) {
-          return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
+          return failToolLoopWithLastUsage( requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
         }
         await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
@@ -1019,7 +1022,7 @@ async function runToolChatSessionInner(
         error,
         stack: e instanceof Error ? e.stack : undefined
       })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
+      return failToolLoopWithLastUsage( requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
     } finally {
       endLlm(sessionId, requestId)
     }
@@ -1076,7 +1079,7 @@ async function runToolChatSessionInner(
         }
       }
       if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
-        return failToolLoopWithLastUsage(sender, requestId, sessionId, 'model_output_token_limit_exhausted', lastValidUsage, args.emitFactEvent)
+        return failToolLoopWithLastUsage( requestId, sessionId, 'model_output_token_limit_exhausted', lastValidUsage, args.emitFactEvent)
       }
       outputRecoveryRetries += 1
       const recoveryMessage = buildOutputRecoveryMessage({ attempt: outputRecoveryRetries, causeRequestId: attemptRequestId, hadVisibleText: truncatedToolText.length > 0, hadToolUse: true })
@@ -1095,7 +1098,6 @@ async function runToolChatSessionInner(
       if (text.length > 0) needsFinalAnswerReconciliation = true
       if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
         return failToolLoopWithLastUsage(
-          sender,
           requestId,
           sessionId,
           'model_output_token_limit_exhausted',
@@ -1142,7 +1144,7 @@ async function runToolChatSessionInner(
       titleSuggestScheduledThisInvoke = true
       scheduleSessionTitleSuggestion({
         db: appDb,
-        sender,
+        onTitleGenerated: (session) => args.onTitleGenerated?.(session),
         sessionId,
         model,
         baseUrl,
@@ -1173,7 +1175,6 @@ async function runToolChatSessionInner(
 
     if (toolNames.length === 0) {
       return failToolLoopWithLastUsage(
-        sender,
         requestId,
         sessionId,
         'unexpected_tool_call_with_no_tools',
@@ -1295,7 +1296,7 @@ async function runToolChatSessionInner(
           getSecurityAuditLog().record({
             ts: Date.now(),
             event: 'budget.exhausted',
-            lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+            lane: effectiveLane,
             origin: { kind: 'direct-owner' },
             sessionId,
             toolName,
@@ -1399,6 +1400,7 @@ async function runToolChatSessionInner(
         sessionId,
         workDir,
         userDataDir,
+        lane: effectiveLane,
         remoteContext,
         toolsConfig,
         shellConfig,
@@ -1509,7 +1511,7 @@ async function runToolChatSessionInner(
         getSecurityAuditLog().record({
           ts: Date.now(),
           event: 'budget.exhausted',
-          lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+          lane: effectiveLane,
           origin: { kind: 'direct-owner' },
           sessionId,
           toolName,
@@ -1611,11 +1613,7 @@ async function runToolChatSessionInner(
       const mcpEntryForConfirm = gate.mcpEntry
 
       if (needsConfirm) {
-        const confirmLane = remoteContext
-          ? remoteContext.source === 'feishu'
-            ? ('feishu' as const)
-            : ('wechat' as const)
-          : ('desktop' as const)
+        const confirmLane = effectiveLane
         const askViaIm = remoteContext
           ? shouldRequestImConfirm(resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig))
           : true
@@ -1915,7 +1913,7 @@ async function runToolChatSessionInner(
             recordUserAnswerFromDecision({
               db: appDb,
               audit: getSecurityAuditLog(),
-              lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+              lane: effectiveLane,
               sessionId,
               key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
               decision: gate.decision,
@@ -1943,7 +1941,7 @@ async function runToolChatSessionInner(
               recordUserAnswerFromDecision({
                 db: appDb,
                 audit: getSecurityAuditLog(),
-                lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+                lane: effectiveLane,
                 sessionId,
                 key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
                 decision: gate.decision,
@@ -2295,9 +2293,9 @@ async function runToolChatSessionInner(
       if (execResult.success) {
         if (toolName === 'write_file' || toolName === 'edit_file') {
           const rel = typeof inputObj.path === 'string' ? inputObj.path.trim() : ''
-          if (rel) notifyFileTreeChanged(sender, { kind: 'paths', relPaths: [rel] })
+          if (rel) args.onFileTreeChanged?.({ kind: 'paths', relPaths: [rel] })
         } else if (toolName === 'run_shell' || toolName === 'run_script') {
-          notifyFileTreeChanged(sender, { kind: 'refreshExpanded' })
+          args.onFileTreeChanged?.({ kind: 'refreshExpanded' })
         }
       }
       floatingNotificationManager?.onToolResult(requestId, toolUseId)
@@ -2332,7 +2330,7 @@ async function runToolChatSessionInner(
       }
     }
     if (abortRepeatedToolError) {
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
+      return failToolLoopWithLastUsage( requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
     }
   }
 }
