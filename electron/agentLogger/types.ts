@@ -16,6 +16,7 @@ export type AgentLogEventName =
   | 'tool.confirm'
   | 'tool.confirm.non_human_answerer_skip_memory'
   | 'tool.confirm.remote_read_only_reject'
+  | 'confirm.answerer.config_fallback'
   | 'tool.error'
   | 'tool.result'
   | 'tool.progress'

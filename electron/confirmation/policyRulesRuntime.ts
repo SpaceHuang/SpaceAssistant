@@ -10,6 +10,7 @@ import {
 import { getConfigValue, setConfigValue, type AppDatabase } from '../database'
 import { getDbConnection } from '../database'
 import { PolicyRuleStore } from './policyRuleStore'
+import { resolveLaneAnswererKind } from './answererConfig'
 
 /** 套餐映射持久化 key（configs 表 key-value，JSON）。 */
 export const POLICY_PACKAGES_CONFIG_KEY = 'config.policyPackages'
@@ -72,9 +73,11 @@ export function isPolicyRuleDisabled(db: AppDatabase, ruleId: string): boolean {
 /**
  * 按链路加载生效规则集：默认（standard 且无覆盖）返回 DEFAULT_POLICY_RULES 引用，
  * 保证未配置套餐/覆盖时与 P1–P3 行为逐项等价；strict/loose/custom 经 resolvePolicyRules 变换。
+ * P2-5：agent 回答者的 lane 不得 loose、custom 只保留收紧覆盖（解析期兜底，写入期另有强校验）。
  */
 export function loadEffectivePolicyRules(db: AppDatabase, lane: ExecutionLane): PolicyRule[] {
   const packages = readPolicyPackages(db)
+  const answererKind = resolveLaneAnswererKind(db, lane)
   const disabledRuleIds = readDisabledPolicyRuleIds(db)
   const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
   const safeDisabledRuleIds = disabledRuleIds.filter((id) => !lockedIds.has(id))
@@ -87,7 +90,7 @@ export function loadEffectivePolicyRules(db: AppDatabase, lane: ExecutionLane): 
   // 默认（standard 且无禁用规则）返回 DEFAULT_POLICY_RULES 引用，保持零行为变化快路径。
   if (pkg === 'standard' && safeDisabledRuleIds.length === 0) return DEFAULT_POLICY_RULES
   const overrides = pkg === 'custom' ? new PolicyRuleStore(getDbConnection(db)).listOverrides() : []
-  return resolvePolicyRules({ lane, packages, overrides, rules: baseRules })
+  return resolvePolicyRules({ lane, packages, overrides, rules: baseRules, answererKind })
 }
 
 /** 设置页展示用：默认规则 + 当前覆盖合并视图（overridden 标记）。 */

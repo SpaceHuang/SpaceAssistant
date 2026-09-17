@@ -12,6 +12,7 @@ import type {
 } from '../../src/shared/confirmation/types'
 import { waitForToolConfirm } from '../toolConfirmRegistry'
 import { ImChannel, type ImPendingInput } from './imChannel'
+import { DEFAULT_CONFIRM_ANSWERER } from './answererConfig'
 
 export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout'
 
@@ -119,26 +120,12 @@ export class DesktopChannel implements ConfirmationChannel {
  * 远程链路注入合并后的 `ImChannel` 单例与 `buildImPending`（lane 差异由调用方注入）；
  * 桌面链路需 `toolUseId`。
  */
-export function channelFor(args: {
-  lane: ExecutionLane
-  requestId: string
-  sessionId: string
-  toolName: string
-  toolUseId?: string
-  audit?: AuditSink
-  imChannel?: ImChannel
-  buildImPending?: (req: ConfirmRequest) => ImPendingInput
-}): ConfirmationChannel {
+export function channelFor(args: ResolveConfirmChannelArgs): ConfirmationChannel {
   return resolveConfirmChannel(args)
 }
 
-/** lane → 默认回答者（I1 默认值表）。automation 在 P2-6 切换为 agent（单行可回退）。 */
-export const DEFAULT_CONFIRM_ANSWERER: Record<ExecutionLane, ConfirmAnswererPolicy> = {
-  desktop: { kind: 'user' },
-  wechat: { kind: 'user' },
-  feishu: { kind: 'user' },
-  automation: { kind: 'deny' }
-}
+/** lane → 默认回答者（I1 默认值表）已移至 answererConfig.ts（叶子模块，便于测试 mock 与避免循环引用）。 */
+export { DEFAULT_CONFIRM_ANSWERER } from './answererConfig'
 
 export interface ResolveConfirmChannelArgs {
   lane: ExecutionLane

@@ -82,6 +82,12 @@ export interface ToolCallGateArgs {
   /** 测试注入：替代 shell 预检 / 文件自动审批（生产默认真实实现）。 */
   runShellPrecheck?: typeof precheckRunShellTool
   fileAutoApproval?: typeof evaluateFileToolAutoApproval
+  /**
+   * P2-4 递归守卫（I5，硬约束）：审批执行链调用时传入的内部标记（代码写死，不进配置与规则集）。
+   * gate 看到 require-confirm 决策 + 该标记 → 改写为 deny(cause=recursion-blocked)。
+   * 守卫只认标记不认业务身份；豁免失效兜底由 AgentChannel 深度计数承担。
+   */
+  internalConfirmExemption?: 'approval-agent'
 }
 
 export interface ToolCallGateResult {
@@ -351,7 +357,15 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     }
   }
   // 生效规则集已在上方加载（自动审批预计算依赖），此处直接判定
-  const decision = decide(facts, context, rules, deps)
+  let decision = decide(facts, context, rules, deps)
+
+  // ===== P2-4 递归守卫（I5）：审批会话内的 require-confirm 一律 fail-closed =====
+  // 守卫在回答者解析之前生效，否则内层 require-confirm 会被再次解析到 AgentChannel 造成递归。
+  // 不可进规则集：进规则集就会被 custom/loose 改坏，收紧致自动审批静默停摆（不可变集，非 locked 底线集）。
+  if (decision.type === 'require-confirm' && args.internalConfirmExemption === 'approval-agent') {
+    const reason = '安全策略无法完成裁决：审批会话内不允许再进入确认流程（递归守卫）'
+    decision = { type: 'deny', ruleId: 'recursion-guard', reason }
+  }
 
   // 判定即记录（§5.6）：policy.decision 事件
   audit.record({
@@ -368,6 +382,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision: decision.type,
     ruleId: decision.ruleId,
     reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
+    ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'
+      ? { cause: 'recursion-blocked' as const }
+      : {}),
     actor: 'system'
   })
 

@@ -57,3 +57,12 @@ describe('automation lane 显式规则集（偏差 21/22：反向证据翻转）
     expect(automationAsk?.action).toBe('ask')
   })
 })
+
+describe('P2-8 desktop-only lint 收紧（评审 N6）', () => {
+  it('auto-evaluator 动作规则的 lane 限定必须为 desktop-only（防无 lane 限定规则绕过 lane 矩阵）', () => {
+    const violations = DEFAULT_POLICY_RULES.filter(
+      (rule) => rule.when === 'invocation' && rule.action === 'auto-evaluator' && JSON.stringify(rule.match?.lane) !== JSON.stringify(['desktop'])
+    )
+    expect(violations.map((r) => `${r.id}:${JSON.stringify(r.match?.lane)}`)).toEqual([])
+  })
+})

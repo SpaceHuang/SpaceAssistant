@@ -87,6 +87,8 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
+import { resolveLaneAnswererPolicy } from './confirmation/answererConfig'
+import { AgentChannel } from './confirmation/agentChannel'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
 import { mapLegacyConfirmation, type LegacyConfirmationRejectReason, type LegacyPolicyCode } from './tools/coordinatorConfirmationAdapter'
@@ -423,6 +425,13 @@ export type RunToolChatSessionArgs = {
   larkCliRunner?: LarkCliRunner
   /** 显式 lane（偏差 21）：由驱动源层解析后随调用传入；缺省回退 remoteContext 推导，最终 desktop。 */
   lane?: import('../src/shared/confirmation/types').ExecutionLane
+  /**
+   * P2-4 递归守卫标记（I5）：仅审批执行链传入 'approval-agent'（代码写死，不进配置）。
+   * gate 看到 require-confirm + 该标记 → 改写为 deny(cause=recursion-blocked)。
+   */
+  internalConfirmExemption?: 'approval-agent'
+  /** 工具执行轮数上界（有界调用方使用，如审批 Agent ≤3）；缺省不限。 */
+  maxToolLoopRounds?: number
   remoteContext?: RemoteContext
   workDir: string
   workDirManager?: WorkDirManager
@@ -1189,6 +1198,18 @@ async function runToolChatSessionInner(
       )
     }
 
+    // 轮数上界（审批 Agent 等有界调用方传入）：达到上界后不再执行工具，终止循环——
+    // 未获最终裁决的 fail-closed 由调用方（approvalAgent）兜底处理
+    if (args.maxToolLoopRounds != null && loopRound > args.maxToolLoopRounds) {
+      return failToolLoopWithLastUsage(
+        requestId,
+        sessionId,
+        `TOOL_LOOP_MAX_ROUNDS_EXCEEDED(${args.maxToolLoopRounds})`,
+        lastValidUsage,
+        args.emitFactEvent,
+      )
+    }
+
     const toolResults: Anthropic.ToolResultBlockParam[] = []
     const emitToolResultFact = (toolUseId: string, result: ToolCallResultPersisted) => {
       args.emitFactEvent?.({ type: 'tool-result', id: toolUseId, result })
@@ -1419,7 +1440,8 @@ async function runToolChatSessionInner(
         remoteBudgetState,
         dangerAssessment,
         currentPageUrl,
-        mcpEntry: mcpSnapshot.entries.get(resolvedToolName)
+        mcpEntry: mcpSnapshot.entries.get(resolvedToolName),
+        internalConfirmExemption: args.internalConfirmExemption
       })
 
       // run_shell 预检拒绝（validator 性质，gate 前置短路）
@@ -1725,6 +1747,9 @@ async function runToolChatSessionInner(
             memoryTiers: confirmMemoryTiers,
             timeoutMs: gate.decision.type === 'require-confirm' ? gate.decision.timeoutMs : null
           }
+          // P2 回答者接线（I1）：回答者按配置解析（缺省值表）；kind='agent' 经工厂挂 AgentChannel，
+          // invokeApproval 延迟加载审批执行链（避免 toolChatLoop ↔ approvalAgent 循环依赖）。
+          const answererPolicy = resolveLaneAnswererPolicy(appDb, confirmLane)
           const channelOutcome = await channelFor({
             lane: confirmLane,
             requestId,
@@ -1732,6 +1757,27 @@ async function runToolChatSessionInner(
             sessionId,
             toolName,
             audit: getSecurityAuditLog(),
+            answererPolicy,
+            agentChannelFactory: (agentDeps) =>
+              new AgentChannel({
+                ...agentDeps,
+                invokeApproval: (inv) =>
+                  import('./confirmation/approvalAgent').then((m) =>
+                    m.runApprovalAgent(
+                      {
+                        db: appDb as AppDatabase,
+                        workDir,
+                        userDataDir,
+                        getToolsConfig: () => toolsConfig,
+                        ...(shellConfig !== undefined ? { getShellConfig: () => shellConfig } : {}),
+                        ...(browserConfig ? { getBrowserConfig: () => browserConfig } : {}),
+                        getWorkDir: () => (resolveWorkDir ? resolveWorkDir() : workDir),
+                        getApiKey: getApiKey
+                      },
+                      inv
+                    )
+                  )
+              }),
             ...(remoteContext?.imChannel
               ? {
                   imChannel: remoteContext.imChannel,

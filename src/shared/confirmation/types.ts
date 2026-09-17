@@ -187,6 +187,40 @@ export type ApprovalVerdict =
   | { kind: 'deny'; reason: ApprovalReason }
 
 /**
+ * 审批调用输入（方案 §12-1 采纳：facts + 结构化线索包），不给全量会话。
+ * 由执行链路从 ContentFacts 与工具输入构造。
+ */
+export interface ApprovalCluePack {
+  toolName: string
+  actionClass: ActionClass
+  riskLevel: RiskLevel
+  /** ConfirmSummary 纯文本摘要。 */
+  summary: string
+  /** 事实信号种类清单（不落原始输入全文）。 */
+  signals: string[]
+  targetPath?: string
+  command?: string
+  url?: string
+  involvedFiles?: string[]
+}
+
+/** 一次审批 Agent 调用（I2：标准唯一；I5：由 AgentChannel 深度计数兜底递归）。 */
+export interface ApprovalInvocation {
+  clue: ApprovalCluePack
+  lane: ExecutionLane
+  sessionId: string
+  requestId: string
+  invocationId: string
+  profileId: string
+  timeoutMs: number
+}
+
+/** 审批执行链结果：ok=false 时 cause 必须可区分（I4 / 审计五问）。 */
+export type ApprovalInvocationResult =
+  | { ok: true; verdict: ApprovalVerdict; model?: string; usage?: Record<string, unknown> }
+  | { ok: false; cause: 'timeout' | 'unavailable' | 'unparsable' | 'config-error'; summary?: string }
+
+/**
  * 确认结束原因（审计五问之「到底拿没拿到裁决」）：fail-closed 各路径必须与 agent-deny 可区分。
  * agent-approved 为 agent 放行的显式表达（与 user-approved 在「谁批的」口径可区分）。
  */
@@ -298,6 +332,8 @@ export interface SecurityAuditEvent {
   cause?: ConfirmOutcomeCause
   /** actor='agent' 时的归因细节（哪个 Profile / 模型 / 哪次审批调用）。 */
   actorRef?: { profileId: string; model?: string; invocationId?: string }
+  /** 该事件的耗时（审批调用等有明确时长的动作，成本观测用）。 */
+  latencyMs?: number
 }
 
 export type SecurityAuditEventKind =
