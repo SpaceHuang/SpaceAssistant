@@ -188,13 +188,14 @@ describe('P0 审计如实归因（B1 收窄范围）：confirm.* 事件 actor �
     expect(audit2.events.at(-1)!.actor).toBe('system')
   })
 
-  it('channelFor automation 分支：拒绝 actor 保持 system（无回答者）、cause=no-answerer', async () => {
+  it('deny × automation（显式配置）：拒绝 actor 保持 system（无回答者）、cause=no-answerer', async () => {
     const audit = auditSink()
     const ch = channelFor({
       lane: 'automation',
       requestId: 'req-auto-1',
       sessionId: 's-auto',
       toolName: 'write_file',
+      answererPolicy: { kind: 'deny' },
       audit
     })
     const outcome = await ch.request(req())
@@ -236,14 +237,23 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     ).toBeInstanceOf(ImRequestChannel)
   })
 
-  it('automation 缺省回答者 deny → DenyChannel，出口与 RejectingChannel 等价（rejected + no-answerer + system 审计）', async () => {
+  it('deny × automation（显式配置，RejectingChannel 语义保留）→ DenyChannel，出口等价（rejected + no-answerer + system 审计）', async () => {
     const audit = auditSink()
-    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation', audit })
+    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation', answererPolicy: { kind: 'deny' }, audit })
     expect(ch).toBeInstanceOf(DenyChannel)
     const outcome = await ch.request(req())
     expect(outcome).toEqual({ kind: 'rejected', cause: 'no-answerer' })
     expect(audit.events.at(-1)!.actor).toBe('system')
     expect(audit.events.at(-1)!.cause).toBe('no-answerer')
+  })
+
+  it('P2-6 翻转后：automation 缺省回答者 = agent（无 factory → fail-closed config-error deny，一行可回退）', async () => {
+    const audit = auditSink()
+    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation', audit })
+    expect(ch).toBeInstanceOf(DenyChannel)
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'config-error' })
+    expect(audit.events.find((e) => e.event === 'confirm.answerer-fallback')).toBeTruthy()
   })
 
   it('deny × IM（显式 notifyDenied）→ 回执被调用（不静默吞掉远端用户的等待）', async () => {

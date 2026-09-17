@@ -151,7 +151,7 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
 })
 
 describe('channelFor automation 通道（偏差 21：channels.ts 可达 automation）', () => {
-  it('automation lane 返回 RejectingChannel，confirm.outcome 审计带 cause=no-answerer', async () => {
+  it('automation lane 显式 deny 回答者（RejectingChannel 语义保留）→ confirm.outcome 审计带 cause=no-answerer', async () => {
     const audit = auditSink()
     const channel = channelFor({
       lane: 'automation',
@@ -159,6 +159,7 @@ describe('channelFor automation 通道（偏差 21：channels.ts 可达 automati
       sessionId: 's-auto-1',
       toolName: 'write_file',
       toolUseId: 'tu-1',
+      answererPolicy: { kind: 'deny' },
       audit
     })
     const outcome = await channel.request({

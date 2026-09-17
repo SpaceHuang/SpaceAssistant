@@ -1,4 +1,5 @@
 import type {
+  ApprovalCluePack,
   ApprovalInvocation,
   ApprovalInvocationResult,
   ConfirmAnswererPolicy,
@@ -29,6 +30,22 @@ function summaryFor(cause: 'timeout' | 'unavailable' | 'unparsable' | 'config-er
     default:
       return '安全审批服务暂不可用，已按拒绝处理。请改用只读方式或稍后重试。'
   }
+}
+
+/** 从事实信号提取结构化线索（方案 §12-1：目标路径 / 命令 / URL），不给全量会话。 */
+function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<ApprovalCluePack> {
+  const extras: Partial<ApprovalCluePack> = {}
+  for (const s of facts.signals) {
+    if (s.kind === 'path-target' && !extras.targetPath) extras.targetPath = s.path
+    if (s.kind === 'command-sequence' && !extras.command && s.commands.length > 0) {
+      const c = s.commands[0]!
+      extras.command = [c.verb, ...c.args].join(' ')
+      const files = s.commands.flatMap((cmd) => (cmd.redirectTarget ? [cmd.redirectTarget] : []))
+      if (files.length > 0) extras.involvedFiles = files
+    }
+    if (s.kind === 'network-egress' && !extras.url && s.domains.length > 0) extras.url = s.domains[0]
+  }
+  return extras
 }
 
 /**
@@ -90,7 +107,8 @@ export class AgentChannel implements ConfirmationChannel {
       actionClass: req.facts.actionClass,
       riskLevel: req.riskLevel,
       summary: req.facts.summary.text,
-      signals: req.facts.signals.map((s) => s.kind)
+      signals: req.facts.signals.map((s) => s.kind),
+      ...deriveClueExtras(req.facts)
     }
     const invocation: ApprovalInvocation = {
       clue,

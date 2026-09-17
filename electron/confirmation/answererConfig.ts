@@ -10,12 +10,14 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 /** 回答者映射持久化 key（configs 表 key-value，JSON 形态的 ConfirmAnswererMap）。 */
 export const CONFIRM_ANSWERERS_CONFIG_KEY = 'config.confirmAnswerers'
 
-/** lane → 默认回答者（I1 默认值表）。automation 在 P2-6 切换为 agent（单行可回退）。 */
+/** lane → 默认回答者（I1 默认值表）。automation 默认 agent（P2-6 业务语义变化点：
+ * 写操作从「全拒」变「审批 Agent 裁决」；回退 = 本行改回 { kind: 'deny' }（RejectingChannel 语义保留为
+ * 配置缺失/Profile 不可用时的兜底）。 */
 export const DEFAULT_CONFIRM_ANSWERER: Record<ExecutionLane, ConfirmAnswererPolicy> = {
   desktop: { kind: 'user' },
   wechat: { kind: 'user' },
   feishu: { kind: 'user' },
-  automation: { kind: 'deny' }
+  automation: { kind: 'agent' }
 }
 
 const LANES: readonly ExecutionLane[] = ['desktop', 'wechat', 'feishu', 'automation']
