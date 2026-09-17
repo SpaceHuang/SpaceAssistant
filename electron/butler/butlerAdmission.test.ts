@@ -155,3 +155,70 @@ describe('评审 P1：排队唤醒后并发计数不漂移', () => {
     }
   })
 })
+
+describe('不变量：任意 acquire/release 序列后，探针排队 ⇔ 持票数已满（AGENTS.md 测试纪律示范）', () => {
+  // mulberry32 确定性伪随机：序列可复现，失败时可固定种子收缩
+  function mulberry32(seed: number): () => number {
+    let a = seed
+    return () => {
+      a |= 0; a = (a + 0x6d2b79f5) | 0
+      let t = Math.imul(a ^ (a >>> 15), 1 | a)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  type Ticket = Extract<ButlerAdmissionResult, { ok: true }>
+
+  // 立即性探测（与既有用例同一模式）：2 个微任务内 resolve = 立即获票；否则已进入排队
+  async function acquireTracked(admission: ButlerAdmission, id: string): Promise<{ immediate: boolean; result?: Ticket; pending: Promise<ButlerAdmissionResult> }> {
+    let settled: Ticket | undefined
+    const promise = admission.acquire(id)
+    void promise.then((r) => {
+      if (r.ok) settled = r
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    if (settled) return { immediate: true, result: settled, pending: promise }
+    return { immediate: false, pending: promise }
+  }
+
+  it('3 个随机种子 × 300 步：oracle 持票数与排队行为全程一致', async () => {
+    for (const seed of [1, 42, 2026]) {
+      const rand = mulberry32(seed)
+      const admission = new ButlerAdmission({ hourlyLimit: 1e9, queueLimit: 1e9, now: () => 1_000_000 })
+      const held: Ticket[] = []                       // oracle：在外未释放的票
+      const pending: Array<Promise<ButlerAdmissionResult>> = [] // 已进入排队的 acquire
+
+      for (let step = 0; step < 300; step += 1) {
+        const roll = rand()
+        if (roll < 0.5) {
+          const r = await acquireTracked(admission, 'a' + seed + '-' + step)
+          if (r.immediate) {
+            expect(held.length).toBe(0)               // 立即获票 ⇔ 此前未满
+            held.push(r.result!)
+          } else {
+            pending.push(r.pending)                   // 排队 ⇔ 此前已满
+            expect(held.length).toBe(1)
+          }
+        } else if (roll < 0.75 && held.length > 0) {
+          const idx = Math.floor(rand() * held.length)
+          held[idx]!.release()
+          held.splice(idx, 1)
+          // 释放唤醒队首排队者（同步 resolve），收编为持票
+          if (pending.length > 0) {
+            const woken = await pending.shift()!
+            expect(woken.ok).toBe(true)
+            if (woken.ok) held.push(woken)
+          }
+        }
+
+        // 不变量断言（每步后）：
+        expect(held.length).toBeLessThanOrEqual(1)    // 并发上界
+        if (pending.length > 0) {
+          expect(held.length).toBe(1)                 // 有排队者 ⇔ 并发已满
+        }
+      }
+    }
+  })
+})
