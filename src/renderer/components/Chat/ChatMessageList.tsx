@@ -8,6 +8,9 @@ import type { PendingConfirmItem } from '../../services/pendingConfirmStore'
 import { restorePendingConfirmToolCalls } from '../../services/resolveMessageToolsInteractive'
 import { useTurnDisplay } from '../../hooks/useTurnDisplay'
 
+/** 空确认映射常量：保证无确认项时行内 props 引用稳定（ChatBubble.memo 浅比较依赖）。 */
+const EMPTY_CONFIRM_READY: Record<string, boolean | undefined> = {}
+
 export type ChatMessageListProps = {
   messages: Message[]
   enterMessageId?: string | null
@@ -16,6 +19,8 @@ export type ChatMessageListProps = {
   showArchiveToWiki: (message: Message) => boolean
   canRetry: (message: Message) => boolean
   canCancelQueued: (message: Message) => boolean
+  /** 由 ChatView 按 sessionId 预分组的确认就绪映射；值三态透传（undefined 不归一为 false） */
+  confirmationReadyBySession: Record<string, Record<string, boolean | undefined>>
   /** 解析该消息对应的真实失败原因（无则返回 undefined） */
   resolveFailureReason?: (message: Message) => string | undefined
   focusToolUseId?: string | null
@@ -37,6 +42,7 @@ export function ChatMessageList({
   messages,
   enterMessageId,
   actions,
+  confirmationReadyBySession,
   resolveToolsInteractive,
   showArchiveToWiki,
   canRetry,
@@ -87,7 +93,7 @@ export function ChatMessageList({
             turnId={rowTurnId}
             displayActivity={display && (m.status === 'streaming' || display.message.id === m.id) ? display.message.activity : undefined}
             displayToolSummaries={display && (m.status === 'streaming' || display.message.id === m.id) ? Object.fromEntries(display.message.toolCalls.map((tool) => [tool.id, tool.display])) : undefined}
-            confirmationReadyByToolId={Object.fromEntries(pendingConfirmItems.filter((item) => item.sessionId === m.sessionId).map((item) => [item.toolUseId, item.confirmationReady]))}
+            confirmationReadyByToolId={confirmationReadyBySession[m.sessionId] ?? EMPTY_CONFIRM_READY}
             enter={m.id === enterMessageId}
             actions={actions}
             toolsInteractive={toolsInteractive}

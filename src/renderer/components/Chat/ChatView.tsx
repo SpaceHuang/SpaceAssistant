@@ -973,6 +973,19 @@ export function ChatView() {
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
 
+  // 按 sessionId 预分组的确认就绪映射：同一份 pendingConfirmItems 下引用稳定，
+  // 使各行 ChatBubble 的 memo 浅比较生效（J-03）。值原样透传三态：
+  // undefined（未知/旧路径）/ false（未就绪）/ true（就绪），
+  // 下游 ToolCallCard 门禁为 confirmationReady !== false，禁止把 undefined 归一为 false。
+  const confirmationReadyBySession = useMemo(() => {
+    const map: Record<string, Record<string, boolean | undefined>> = {}
+    for (const item of pendingConfirmItems) {
+      const byTool = (map[item.sessionId] ??= {})
+      byTool[item.toolUseId] = item.confirmationReady
+    }
+    return map
+  }, [pendingConfirmItems])
+
   const testPreviewToolsInteractive = useMemo(
     () =>
       cfg
@@ -1087,6 +1100,7 @@ export function ChatView() {
         turnId={sessionId && streamingAssistant?.id === m.id ? runningSessions[sessionId]?.turnId : undefined}
         enterMessageId={enterMessageId}
         actions={messageActions}
+        confirmationReadyBySession={confirmationReadyBySession}
         resolveToolsInteractive={resolveToolsInteractive}
         showArchiveToWiki={showArchiveToWikiFor}
         canRetry={canRetryMessage}
@@ -1104,6 +1118,7 @@ export function ChatView() {
     [
       enterMessageId,
       messageActions,
+      confirmationReadyBySession,
       resolveToolsInteractive,
       showArchiveToWikiFor,
       canRetryMessage,

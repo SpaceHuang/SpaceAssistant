@@ -35,6 +35,7 @@ function renderList(messages: Message[], resolveFailureReason?: (m: Message) => 
     <ChatMessageList
       messages={messages}
       actions={actions}
+      confirmationReadyBySession={{}}
       resolveToolsInteractive={() => undefined}
       showArchiveToWiki={() => false}
       canRetry={() => false}
