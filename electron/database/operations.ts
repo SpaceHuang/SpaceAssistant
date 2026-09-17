@@ -1341,3 +1341,325 @@ export function listSessionsMissingWorkDirProfile(db: AppDatabase): Session[] {
     .all('') as SessionRow[]
   return rows.map(rowToSession)
 }
+
+// ---------- Agent Token 用量统计（v16）：事实表读写 ----------
+
+export type UsageStepFactInput = {
+  sessionId: string
+  turnId: string
+  stepId: string
+  createdAt: number
+  day: string
+  model?: string | null
+  llmServiceId?: string | null
+  appVersion?: string | null
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  cacheSemantics?: string | null
+  source: string
+}
+
+export type UsageStepFactRow = {
+  id: number
+  sessionId: string
+  turnId: string
+  stepId: string
+  createdAt: number
+  day: string
+  model: string | null
+  llmServiceId: string | null
+  appVersion: string | null
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  cacheSemantics: string | null
+  source: string
+}
+
+type UsageStepFactSqlRow = {
+  id: number
+  session_id: string
+  turn_id: string
+  step_id: string
+  created_at: number
+  day: string
+  model: string | null
+  llm_service_id: string | null
+  app_version: string | null
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  cache_semantics: string | null
+  source: string
+}
+
+function rowToUsageStepFact(row: UsageStepFactSqlRow): UsageStepFactRow {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    stepId: row.step_id,
+    createdAt: row.created_at,
+    day: row.day,
+    model: row.model,
+    llmServiceId: row.llm_service_id,
+    appVersion: row.app_version,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheCreationTokens: row.cache_creation_tokens,
+    cacheSemantics: row.cache_semantics,
+    source: row.source
+  }
+}
+
+/** 幂等写入逐步用量事实（重复写按 UNIQUE(session_id, turn_id, step_id) 覆盖，不累加）。 */
+export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): void {
+  const conn = getDbConnection(db)
+  conn
+    .prepare(
+      `INSERT INTO usage_step_facts (
+        session_id, turn_id, step_id, created_at, day, model, llm_service_id, app_version,
+        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_semantics, source
+      ) VALUES (
+        @sessionId, @turnId, @stepId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @inputTokens, @outputTokens, @cacheReadTokens, @cacheCreationTokens, @cacheSemantics, @source
+      )
+      ON CONFLICT(session_id, turn_id, step_id) DO UPDATE SET
+        created_at = excluded.created_at,
+        day = excluded.day,
+        model = excluded.model,
+        llm_service_id = excluded.llm_service_id,
+        app_version = excluded.app_version,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cache_read_tokens = excluded.cache_read_tokens,
+        cache_creation_tokens = excluded.cache_creation_tokens,
+        cache_semantics = excluded.cache_semantics,
+        source = excluded.source`
+    )
+    .run({
+      sessionId: fact.sessionId,
+      turnId: fact.turnId,
+      stepId: fact.stepId,
+      createdAt: fact.createdAt,
+      day: fact.day,
+      model: fact.model ?? null,
+      llmServiceId: fact.llmServiceId ?? null,
+      appVersion: fact.appVersion ?? null,
+      inputTokens: fact.inputTokens,
+      outputTokens: fact.outputTokens,
+      cacheReadTokens: fact.cacheReadTokens,
+      cacheCreationTokens: fact.cacheCreationTokens,
+      cacheSemantics: fact.cacheSemantics ?? null,
+      source: fact.source
+    })
+  db.save()
+}
+
+export function getUsageStepFactsForTurn(db: AppDatabase, sessionId: string, turnId: string): UsageStepFactRow[] {
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare('SELECT * FROM usage_step_facts WHERE session_id = ? AND turn_id = ? ORDER BY created_at, id')
+    .all(sessionId, turnId) as UsageStepFactSqlRow[]
+  return rows.map(rowToUsageStepFact)
+}
+
+export type UsageTurnFactInput = {
+  turnId: string
+  sessionId: string
+  createdAt: number
+  day: string
+  model?: string | null
+  llmServiceId?: string | null
+  appVersion?: string | null
+  stepCount: number
+  toolCallCount: number
+  toolErrorCount: number
+  toolSkippedCount: number
+  outcome: string
+}
+
+export type UsageTurnFactRow = {
+  turnId: string
+  sessionId: string
+  createdAt: number
+  day: string
+  model: string | null
+  llmServiceId: string | null
+  appVersion: string | null
+  stepCount: number
+  toolCallCount: number
+  toolErrorCount: number
+  toolSkippedCount: number
+  outcome: string | null
+}
+
+type UsageTurnFactSqlRow = {
+  turn_id: string
+  session_id: string
+  created_at: number
+  day: string
+  model: string | null
+  llm_service_id: string | null
+  app_version: string | null
+  step_count: number
+  tool_call_count: number
+  tool_error_count: number
+  tool_skipped_count: number
+  outcome: string | null
+}
+
+function rowToUsageTurnFact(row: UsageTurnFactSqlRow): UsageTurnFactRow {
+  return {
+    turnId: row.turn_id,
+    sessionId: row.session_id,
+    createdAt: row.created_at,
+    day: row.day,
+    model: row.model,
+    llmServiceId: row.llm_service_id,
+    appVersion: row.app_version,
+    stepCount: row.step_count,
+    toolCallCount: row.tool_call_count,
+    toolErrorCount: row.tool_error_count,
+    toolSkippedCount: row.tool_skipped_count,
+    outcome: row.outcome
+  }
+}
+
+/** 幂等写入按 Turn 汇总事实（重复写按主键 turn_id 覆盖）。 */
+export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): void {
+  const conn = getDbConnection(db)
+  conn
+    .prepare(
+      `INSERT INTO usage_turn_facts (
+        turn_id, session_id, created_at, day, model, llm_service_id, app_version,
+        step_count, tool_call_count, tool_error_count, tool_skipped_count, outcome
+      ) VALUES (
+        @turnId, @sessionId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @stepCount, @toolCallCount, @toolErrorCount, @toolSkippedCount, @outcome
+      )
+      ON CONFLICT(turn_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        created_at = excluded.created_at,
+        day = excluded.day,
+        model = excluded.model,
+        llm_service_id = excluded.llm_service_id,
+        app_version = excluded.app_version,
+        step_count = excluded.step_count,
+        tool_call_count = excluded.tool_call_count,
+        tool_error_count = excluded.tool_error_count,
+        tool_skipped_count = excluded.tool_skipped_count,
+        outcome = excluded.outcome`
+    )
+    .run({
+      turnId: fact.turnId,
+      sessionId: fact.sessionId,
+      createdAt: fact.createdAt,
+      day: fact.day,
+      model: fact.model ?? null,
+      llmServiceId: fact.llmServiceId ?? null,
+      appVersion: fact.appVersion ?? null,
+      stepCount: fact.stepCount,
+      toolCallCount: fact.toolCallCount,
+      toolErrorCount: fact.toolErrorCount,
+      toolSkippedCount: fact.toolSkippedCount,
+      outcome: fact.outcome
+    })
+  db.save()
+}
+
+export function getUsageTurnFact(db: AppDatabase, turnId: string): UsageTurnFactRow | undefined {
+  const conn = getDbConnection(db)
+  const row = conn.prepare('SELECT * FROM usage_turn_facts WHERE turn_id = ?').get(turnId) as
+    | UsageTurnFactSqlRow
+    | undefined
+  return row ? rowToUsageTurnFact(row) : undefined
+}
+
+export type OrphanUsageTurn = {
+  sessionId: string
+  turnId: string
+  stepCount: number
+  firstCreatedAt: number
+  day: string
+  model: string | null
+  llmServiceId: string | null
+  appVersion: string | null
+}
+
+/**
+ * 崩溃补齐：有 usage_step_facts 行、但缺 usage_turn_facts 行的 Turn。
+ * step_count 由其 step 行数得出；工具计数崩溃时不可知，补齐时按 0 写入（需求 §7.3.1）。
+ */
+export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare(
+      `SELECT s.session_id, s.turn_id, COUNT(*) AS step_count, MIN(s.created_at) AS first_created_at,
+              MIN(s.day) AS day,
+              (SELECT m.model FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.model IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS model,
+              (SELECT m.llm_service_id FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.llm_service_id IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS llm_service_id,
+              (SELECT m.app_version FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.app_version IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS app_version
+       FROM usage_step_facts s
+       LEFT JOIN usage_turn_facts t ON t.turn_id = s.turn_id
+       WHERE t.turn_id IS NULL
+       GROUP BY s.session_id, s.turn_id
+       ORDER BY first_created_at`
+    )
+    .all() as Array<{
+    session_id: string
+    turn_id: string
+    step_count: number
+    first_created_at: number
+    day: string
+    model: string | null
+    llm_service_id: string | null
+    app_version: string | null
+  }>
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    stepCount: row.step_count,
+    firstCreatedAt: row.first_created_at,
+    day: row.day,
+    model: row.model,
+    llmServiceId: row.llm_service_id,
+    appVersion: row.app_version
+  }))
+}
+
+export type UsageFactsCleanupResult = {
+  deletedStepRows: number
+  deletedTurnRows: number
+  earliestDeletedDay: string | null
+  latestDeletedDay: string | null
+}
+
+/** 保留期清理：删除 day 早于 cutoffDayExclusive 的两表行（事务内，返回留痕信息）。 */
+export function deleteUsageFactsBeforeDay(db: AppDatabase, cutoffDayExclusive: string): UsageFactsCleanupResult {
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const stepRange = conn
+      .prepare('SELECT MIN(day) AS min_day, MAX(day) AS max_day, COUNT(*) AS c FROM usage_step_facts WHERE day < ?')
+      .get(cutoffDayExclusive) as { min_day: string | null; max_day: string | null; c: number }
+    const turnRange = conn
+      .prepare('SELECT MIN(day) AS min_day, MAX(day) AS max_day, COUNT(*) AS c FROM usage_turn_facts WHERE day < ?')
+      .get(cutoffDayExclusive) as { min_day: string | null; max_day: string | null; c: number }
+    conn.prepare('DELETE FROM usage_step_facts WHERE day < ?').run(cutoffDayExclusive)
+    conn.prepare('DELETE FROM usage_turn_facts WHERE day < ?').run(cutoffDayExclusive)
+    db.save()
+    const earliest = [stepRange.min_day, turnRange.min_day].filter((d): d is string => d !== null).sort()
+    const latest = [stepRange.max_day, turnRange.max_day].filter((d): d is string => d !== null).sort()
+    return {
+      deletedStepRows: stepRange.c,
+      deletedTurnRows: turnRange.c,
+      earliestDeletedDay: earliest.length > 0 ? earliest[0] : null,
+      latestDeletedDay: latest.length > 0 ? latest[latest.length - 1] : null
+    }
+  })
+}
