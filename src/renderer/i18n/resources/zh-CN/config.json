@@ -311,11 +311,6 @@
         "summary": "在隔离浏览器中打开网页、读取页面并执行点击等操作。",
         "disabledHint": "关闭后 Agent 无法访问网页或自动化浏览器。"
       },
-      "browserDetect": {
-        "displayName": "浏览器依赖检测",
-        "summary": "检测网络访问（browser）所需的 Stagehand、Playwright、Chromium 依赖是否就绪。",
-        "disabledHint": "关闭后 Agent 无法在对话中自动检测浏览器依赖状态。"
-      },
       "listWorkDirs": {
         "displayName": "列出工作目录",
         "summary": "列出已配置的工作目录及当前远程会话绑定状态（仅飞书/微信远程可用）。",
@@ -331,7 +326,17 @@
         "summary": "将桌面端当前视图切换到指定远程会话，并同步工作目录（仅飞书/微信远程可用）。",
         "disabledHint": "关闭后远程 Agent 无法切换桌面会话视图。"
       },
-      "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。"
+      "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。",
+      "toolkitFind": {
+        "displayName": "能力集合查询",
+        "summary": "按用途查询产品能力集合（环境知觉/产品功能）的调用方式",
+        "disabledHint": "该工具提供能力集合的按需发现，关闭后将无法查询能力用法"
+      },
+      "toolkitCall": {
+        "displayName": "能力集合调用",
+        "summary": "调用产品能力集合中的具体能力（act 类需确认）",
+        "disabledHint": "该工具是产品功能的执行入口，关闭后 Agent 将无法执行产品功能"
+      }
     },
     "nav": {
       "switches": {

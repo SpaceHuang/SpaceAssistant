@@ -116,12 +116,16 @@ export type FactSignal =
   | { kind: 'lark-subcommand'; impact: 'read' | 'write' | 'low_write' | 'high_impact' | 'unknown' }
   /** MCP 工具调用事实：携带 serverId 与原始工具名（会话信任缓存键来源）。 */
   | { kind: 'mcp-tool'; serverId: string; toolName: string }
-  /**
-   * MCP 只读注解信号：server 单方面声明 `readOnlyHint === true && destructiveHint !== true` 时
+  /** MCP 只读注解信号：server 单方面声明 `readOnlyHint === true && destructiveHint !== true` 时
    * 额外产出（payload 同 mcp-tool）。命中 `mcp-readonly-allow` 默认放行；strict 套餐自动上调为
    * ask，自定义套餐可覆盖。该信号永不进确认，不派生会话信任缓存键。
    */
   | { kind: 'mcp-readonly'; serverId: string; toolName: string }
+  /**
+   * toolkit.call 能力调用事实：携带能力 id 与描述符风险级（toolkitCapabilityExtractor 派生）。
+   * 信号 token：`toolkit-capability`、`toolkit-capability:${id}`、`toolkit-read|toolkit-act`。
+   */
+  | { kind: 'toolkit-capability'; capabilityId: string; risk: 'read' | 'act' }
   | { kind: 'extraction-failed'; reason: string }
   // reserved: 沙箱迭代启用
   | { kind: 'sandbox-escape'; blockedReason: string }

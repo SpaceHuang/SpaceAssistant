@@ -28,6 +28,7 @@ import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
 import { McpConfirmCard } from './McpConfirmCard'
+import { ToolkitConfirmCard } from './ToolkitConfirmCard'
 import { ShellConfirmCard } from './ShellConfirmCard'
 import { ScriptConfirmCard } from './ScriptConfirmCard'
 import { ScriptCodePreview, ScriptTimeoutMeta } from './ScriptCodePreview'
@@ -427,11 +428,23 @@ export const ToolCallCard = memo(function ToolCallCard({
   const earlySearchText = earlySearchFragmentId ? activeSearchTarget?.searchableText : undefined
 
   const mcpConfirming = Boolean(mcp && record.status === 'confirming')
+  // toolkit 网关确认卡：事件名为 compat 名（toolkit_call），双口径匹配
+  const toolkitConfirming =
+    (record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call') && record.status === 'confirming'
 
   if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <McpConfirmCard record={record} onConfirm={onConfirm} sessionId={sessionId} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
+  if (toolkitConfirming && onConfirm && confirmationReady !== false) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <ToolkitConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )

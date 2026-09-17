@@ -19,3 +19,22 @@ describe('file-tool descriptions hint the path field name', () => {
     expect(def.description).not.toMatch(/跨平台|内置实现|系统 grep|findstr|打包路径/)
   })
 })
+
+describe('toolkit 网关工具（docs/requirement/agent-toolkit-capability-gateway-requirement.md §8）', () => {
+  const findDef = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'toolkit.find')
+  const callDef = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'toolkit.call')
+
+  it('两条网关工具已定义', () => {
+    expect(findDef).toBeDefined()
+    expect(callDef).toBeDefined()
+  })
+
+  it('browser_detect 已收编为 env.browserDetect 能力，不再占据模型面', () => {
+    expect(BUILTIN_TOOL_DEFINITIONS.some((d) => d.name === 'browser_detect')).toBe(false)
+  })
+
+  it('上下文预算回归：两网关工具 schema 序列化体积 < 2 KiB（防未来无意膨胀）', () => {
+    const serialized = JSON.stringify([findDef, callDef]) ?? ''
+    expect(Buffer.byteLength(serialized, 'utf8')).toBeLessThan(2048)
+  })
+})

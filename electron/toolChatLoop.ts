@@ -647,7 +647,7 @@ async function runToolChatSessionInner(
     exposureRules,
     mcpSnapshot
   })
-  const { tools, toolNames, authorizedToolNames } = effectiveTools
+  const { tools, toolNames, authorizedToolNames, compatToInternal } = effectiveTools
   if (toolNames.includes('browser')) {
     stagehandService.resetInferenceCount(sessionId)
   }
@@ -1207,10 +1207,12 @@ async function runToolChatSessionInner(
       const workDir = resolveWorkDir ? resolveWorkDir() : initialWorkDir
       const toolUseId = tu.id
       const toolName = tu.name
+      // B1：API 返回的是 sanitize 后的 compat 名，回向解析为内部注册名（可能含点号）再授权与查找
+      const resolvedToolName = compatToInternal.get(toolName) ?? toolName
       const processTool = isProcessToolName(toolName)
       const inputObj = normalizeToolUseInputRecord(tu.input)
 
-      const authorization = authorizeToolCall(toolName, authorizedToolNames)
+      const authorization = authorizeToolCall(resolvedToolName, authorizedToolNames)
       if (!authorization.ok) {
         const error = toolName.startsWith('mcp_')
           ? `${authorization.error}: MCP 工具已变更或服务不可用`
@@ -1225,17 +1227,17 @@ async function runToolChatSessionInner(
         await recordToolResult(buildToolErrorResult(toolUseId, error, { requestId, sessionId }), { success: false, error })
         continue
       }
-      if (isToolRevoked(requestId, toolName)) {
+      if (isToolRevoked(requestId, resolvedToolName)) {
         await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
         continue
       }
 
-      const registeredTool = getRegisteredTool(toolName)
-      const builtinExec = getToolExecutor(toolName)
+      const registeredTool = getRegisteredTool(resolvedToolName)
+      const builtinExec = getToolExecutor(resolvedToolName)
       const exec =
         builtinExec ??
-        (mcpSnapshot.entries.has(toolName)
-          ? resolveMcpExecutor(toolName, mcpSnapshot, getMcpConnectionManager(), appDb)
+        (mcpSnapshot.entries.has(resolvedToolName)
+          ? resolveMcpExecutor(resolvedToolName, mcpSnapshot, getMcpConnectionManager(), appDb)
           : undefined)
       if (!registeredTool && !exec) {
         const unknownToolError = toolName.startsWith('mcp_')
@@ -1395,7 +1397,7 @@ async function runToolChatSessionInner(
 
       // ===== §5.5 直线流程：门控判定（组装上下文 → 事实提取 → decide → policy.decision 审计）=====
       const gate = await evaluateToolCallGate({
-        toolName,
+        toolName: resolvedToolName,
         toolInput: inputObj,
         sessionId,
         workDir,
@@ -1411,7 +1413,7 @@ async function runToolChatSessionInner(
         remoteBudgetState,
         dangerAssessment,
         currentPageUrl,
-        mcpEntry: mcpSnapshot.entries.get(toolName)
+        mcpEntry: mcpSnapshot.entries.get(resolvedToolName)
       })
 
       // run_shell 预检拒绝（validator 性质，gate 前置短路）
@@ -1668,7 +1670,8 @@ async function runToolChatSessionInner(
           args.emitFactEvent?.({
             type: 'confirm-requested',
             id: toolUseId,
-            riskLevel: toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+            // 风险级采用裁决结果（toolkit.call 等网关工具按能力动态定级，不再按工具名硬编码）
+            riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : 'medium',
             ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
             ...(diff ? { confirmDiff: diff } : {}),
             ...(shellSecurityHints ? { shellSecurityHints } : {}),
@@ -2041,7 +2044,7 @@ async function runToolChatSessionInner(
       let execThrew = false
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
-      if (isToolRevoked(requestId, toolName)) {
+      if (isToolRevoked(requestId, resolvedToolName)) {
         await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
         continue
       }

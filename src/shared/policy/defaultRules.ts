@@ -236,6 +236,25 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'allow',
     reason: 'lark-cli 读类子命令免确认'
   },
+  // toolkit 能力集合（docs/requirement/agent-toolkit-capability-gateway-requirement.md §6 确认矩阵）：
+  // 描述符 risk=read 的能力（env.*、action.session.status/list/read）免确认；
+  // risk=act 的能力（action.mcp.add 等）需确认。按能力定制的策略用 `toolkit-capability:${id}` token。
+  // toolkit 初期 desktop-only（lane 隔离），远程 lane 无此工具面。
+  {
+    id: 'toolkit-read-allow',
+    when: 'invocation',
+    match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-read'] },
+    action: 'allow',
+    reason: '能力集合只读能力免确认'
+  },
+  {
+    id: 'toolkit-act-ask',
+    when: 'invocation',
+    match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-act'] },
+    action: 'ask',
+    locked: true,
+    reason: '能力集合变更类能力需确认'
+  },
   // MCP 只读注解放行：工具带安全注解（readOnlyHint:true 且 destructiveHint≠true）时额外产
   // mcp-readonly 信号，命中本条目默认放行（替代原 per-server readonly-auto 豁免，改由策略可见、
   // 可审计、可覆盖）。必须排在 mcp-tool-ask 之前：注解安全调用同时带 mcp-tool 信号，先命中放行，

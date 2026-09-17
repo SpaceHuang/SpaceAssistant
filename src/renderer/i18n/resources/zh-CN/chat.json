@@ -63,7 +63,9 @@
       "browserDetect": "检测浏览器依赖",
       "invokeTool": "调用工具：{{toolName}}",
       "mcpUnknownServer": "未知 MCP 服务",
-      "mcpUnresolved": "外部 MCP 工具（来源未知）"
+      "mcpUnresolved": "外部 MCP 工具（来源未知）",
+      "toolkitFind": "查询能力集合",
+      "toolkitCall": "能力调用 · {{id}}"
     },
     "descriptions": {
       "grep": "在工作目录下搜索匹配的文件内容",
@@ -78,7 +80,27 @@
       "invokeTool": "调用工具：{{toolName}}"
     }
   },
-  "mcp": { "copyResult": "复制结果", "openArtifact": "打开完整内容", "openFailed": "无法打开完整内容", "openSettings": "打开 MCP 服务设置", "noDescription": "该服务未提供工具描述", "waitingConfirm": "等待确认 {{value}}", "execution": "执行 {{value}}", "total": "总计 {{value}}", "expandAll": "展开全部（共 {{count}} 行）", "resultEmpty": "工具返回空结果", "resultTooLarge": "结果过大，仅显示摘要", "imageResult": "图片结果 · {{mimeType}} · {{size}} bytes", "resourceResult": "资源：{{name}}（{{uri}}）", "statusRunning": "运行中", "statusSuccess": "成功", "statusFailed": "失败", "statusRejected": "已拒绝", "statusInterrupted": "已中断", "statusAwaitingConfirm": "待确认" },
+  "mcp": {
+    "copyResult": "复制结果",
+    "openArtifact": "打开完整内容",
+    "openFailed": "无法打开完整内容",
+    "openSettings": "打开 MCP 服务设置",
+    "noDescription": "该服务未提供工具描述",
+    "waitingConfirm": "等待确认 {{value}}",
+    "execution": "执行 {{value}}",
+    "total": "总计 {{value}}",
+    "expandAll": "展开全部（共 {{count}} 行）",
+    "resultEmpty": "工具返回空结果",
+    "resultTooLarge": "结果过大，仅显示摘要",
+    "imageResult": "图片结果 · {{mimeType}} · {{size}} bytes",
+    "resourceResult": "资源：{{name}}（{{uri}}）",
+    "statusRunning": "运行中",
+    "statusSuccess": "成功",
+    "statusFailed": "失败",
+    "statusRejected": "已拒绝",
+    "statusInterrupted": "已中断",
+    "statusAwaitingConfirm": "待确认"
+  },
   "input": {
     "placeholder": "输入消息…",
     "send": "发送消息",
@@ -189,7 +211,16 @@
       "expand": "展开全部（共 {{count}} 行）"
     },
     "previewTruncatedLine": "…（仅显示前 500 行）",
-    "previewCap": "变更超过 500 行，预览已截断；请结合文件树查看完整内容。"
+    "previewCap": "变更超过 500 行，预览已截断；请结合文件树查看完整内容。",
+    "toolkit": {
+      "title": "产品能力调用",
+      "capability": "能力：{{id}}",
+      "argsLabel": "参数摘要",
+      "emptyArgs": "（无参数）",
+      "riskHint": "该能力为产品内置功能；变更类能力（如添加 MCP 连接）执行前需确认。",
+      "allow": "允许",
+      "deny": "拒绝"
+    }
   },
   "chatView": {
     "warnings": {

@@ -35,12 +35,16 @@ export function buildToolConventionHint(locale: AppLocale): string {
   if (locale === 'en-US') {
     return [
       '## Tool call conventions',
-      'For file tools (read_file / edit_file / write_file / list_directory / grep), the path argument is named `path`. Do not use `filePath` or `file_path`.'
+      'For file tools (read_file / edit_file / write_file / list_directory / grep), the path argument is named `path`. Do not use `filePath` or `file_path`.',
+      '## Capability toolkit',
+      'The product exposes a capability toolkit: when you need runtime facts (product/OS/dev environment/work dir/current time/browser dependencies) or product actions (MCP management, session status/list/messages), first call `toolkit.find` with a purpose description to learn the usage, then call `toolkit.call` with the returned capability id. If no capability fits, say so honestly instead of inventing one.'
     ].join('\n')
   }
   return [
     '## 工具调用约定',
-    '文件类工具（read_file / edit_file / write_file / list_directory / grep）的路径参数字段名为 `path`，请勿使用 `filePath` 或 `file_path`。'
+    '文件类工具（read_file / edit_file / write_file / list_directory / grep）的路径参数字段名为 `path`，请勿使用 `filePath` 或 `file_path`。',
+    '## 能力集合（toolkit）',
+    '产品提供能力集合：需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话状态/列表/消息）时，先用 toolkit.find 按用途描述查询用法，再用 toolkit.call 以返回的能力 id 调用。能力不足时如实报告，不要编造。'
   ].join('\n')
 }
 
