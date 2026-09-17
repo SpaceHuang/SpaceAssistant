@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   isPendingMemoryTier,
   submitToolConfirmResponse,
@@ -74,5 +74,31 @@ describe('toolConfirmRegistry', () => {
     cancelAllPendingToolConfirms()
     await expect(remoteWrite).resolves.toBe('rejected')
     await expect(desktopRead).resolves.toBe('rejected')
+  })
+
+  it('P1-4 超时可配：timeoutMs 参数真实消费（自定义短超时到期 resolve timeout）', async () => {
+    vi.useFakeTimers()
+    const pending = waitForToolConfirm('req-timeout-custom', 'tool-t', undefined, undefined, 50)
+    let settled: string | undefined
+    void pending.then((v) => {
+      settled = v
+    })
+    await vi.advanceTimersByTimeAsync(60)
+    expect(settled).toBe('timeout')
+    vi.useRealTimers()
+  })
+
+  it('P1-4 缺省超时仍为 CONFIRM_MS=5min（user 回答者默认不回归）', async () => {
+    vi.useFakeTimers()
+    const pending = waitForToolConfirm('req-timeout-default', 'tool-d')
+    let settled: string | undefined
+    void pending.then((v) => {
+      settled = v
+    })
+    await vi.advanceTimersByTimeAsync(4 * 60 * 1000)
+    expect(settled).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(60 * 1000 + 10)
+    expect(settled).toBe('timeout')
+    vi.useRealTimers()
   })
 })

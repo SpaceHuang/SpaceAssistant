@@ -89,7 +89,7 @@ import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
-import { mapLegacyConfirmation } from './tools/coordinatorConfirmationAdapter'
+import { mapLegacyConfirmation, type LegacyConfirmationRejectReason, type LegacyPolicyCode } from './tools/coordinatorConfirmationAdapter'
 import type { ConfirmAnswererKind, ConfirmOutcomeCause, ConfirmRequest } from '../src/shared/confirmation/types'
 import {
   formatScriptDenyUserMessage,
@@ -294,7 +294,12 @@ function formatToolResultPayload(
   return serializeAgentToolResult(r, options)
 }
 
+/** 执行失败桶阈值（既有行为不变）。 */
 const MAX_CONSECUTIVE_SAME_TOOL_ERROR = 3
+/** P1-3 安全拒绝桶阈值（计划 §12-3 定值 5）：安全拒绝与执行失败分开计数，管家「换方案」能力不被压制。 */
+const MAX_CONSECUTIVE_SAFETY_REJECT = 5
+
+type ToolErrorBucket = 'exec' | 'safety'
 
 function compactToolResultContentForApi(
   content: string,
@@ -342,17 +347,18 @@ function makeToolErrorRepeatTracker() {
   let lastKey: string | null = null
   let count = 0
   return {
-    noteFailure(toolName: string, error: string, identity?: string): boolean {
-      const key = `${toolName}\0${error}\0${identity ?? ''}`
+    noteFailure(toolName: string, error: string, identity?: string, bucket: ToolErrorBucket = 'exec'): boolean {
+      // P1-3：键内并入来源分桶——安全拒绝（策略 deny / 确认拒绝）与执行失败互不累计
+      const key = `${bucket}\0${toolName}\0${error}\0${identity ?? ''}`
       if (key === lastKey) count++
       else {
         lastKey = key
         count = 1
       }
-      return count >= MAX_CONSECUTIVE_SAME_TOOL_ERROR
+      return count >= (bucket === 'safety' ? MAX_CONSECUTIVE_SAFETY_REJECT : MAX_CONSECUTIVE_SAME_TOOL_ERROR)
     },
     noteSuccess(toolName: string): void {
-      if (lastKey?.startsWith(`${toolName}\0`)) {
+      if (lastKey?.includes(`\0${toolName}\0`)) {
         lastKey = null
         count = 0
       }
@@ -1549,8 +1555,9 @@ async function runToolChatSessionInner(
             : denyMsg
         )
         await recordToolResult(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }), { success: false, error: denyMsg })
-        if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
+        // P1-3：策略 deny 属安全拒绝桶（阈值 5），不与执行失败共用计数
+        if (toolErrorRepeat.noteFailure(toolName, denyMsg, undefined, 'safety')) {
+          abortRepeatedToolError = `安全拒绝已连续出现 ${MAX_CONSECUTIVE_SAFETY_REJECT} 次，已停止：${denyMsg}`
           break
         }
         continue
@@ -1571,11 +1578,15 @@ async function runToolChatSessionInner(
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
-      let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
+      let rejectReason: LegacyConfirmationRejectReason = 'user'
+      /** rejectReason='policy' 时的细分来源（迁移期保持既有文案与 errorCode 可对照）。 */
+      let rejectPolicyCode: LegacyPolicyCode | undefined
       /** 本次确认的回答者（I3：非 user 不得产生任何记忆写入）；缺省 user 保持既有路径等价。 */
       let confirmAnswererKind: ConfirmAnswererKind = 'user'
       /** 本次确认的结束原因（审计五问之「到底拿没拿到裁决」）。 */
       let confirmOutcomeCause: ConfirmOutcomeCause = 'user-approved'
+      /** 通道裁决附带的模型可读理由（ConfirmOutcome.reason.summary，P1-2 回传）。 */
+      let channelRejectSummary: string | undefined
       const autoApproveFallback: AutoApproveFallback | undefined = gate.autoApproveFallback
       if (autoApproveFallback) {
         logAgentEvent('info', 'file.auto_approve.fallback', {
@@ -1626,7 +1637,8 @@ async function runToolChatSessionInner(
         if (remoteContext && !askViaIm) {
           // 远程只读策略：不发 IM 确认，直接拒绝
           outcome = 'rejected'
-          rejectReason = 'remote_read_only'
+          rejectReason = 'policy'
+          rejectPolicyCode = 'remote_read_only'
           logAgentEvent('info', 'tool.confirm.remote_read_only_reject', {
             requestId,
             sessionId,
@@ -1706,11 +1718,12 @@ async function runToolChatSessionInner(
           }
           }
           // §5.5 统一通道分发：channelFor(lane)；confirm.* 审计由通道内部以同一 requestId 落
+          // P1-4：timeoutMs 真实消费决策层给的值（现状恒 null → 通道回退 5min 默认）；P2 起回答者配置可覆盖
           const confirmReq: ConfirmRequest = {
             facts: gate.facts,
             riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : gate.facts.baseRiskLevel,
             memoryTiers: confirmMemoryTiers,
-            timeoutMs: null
+            timeoutMs: gate.decision.type === 'require-confirm' ? gate.decision.timeoutMs : null
           }
           const channelOutcome = await channelFor({
             lane: confirmLane,
@@ -1759,6 +1772,7 @@ async function runToolChatSessionInner(
           if (channelOutcome.kind !== 'approved-with-action') {
             confirmAnswererKind = channelOutcome.answererKind ?? 'user'
             confirmOutcomeCause = channelOutcome.cause
+            channelRejectSummary = channelOutcome.reason?.summary
           }
         }
         if (!remoteContext) {
@@ -1819,7 +1833,8 @@ async function runToolChatSessionInner(
           const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
           if (!recheck.ok) {
             outcome = 'rejected'
-            rejectReason = 'authorization_revoked'
+            rejectReason = 'policy'
+            rejectPolicyCode = 'authorization_revoked'
             logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
               requestId,
               sessionId,
@@ -1846,7 +1861,8 @@ async function runToolChatSessionInner(
         const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
         if (!recheck.ok) {
           outcome = 'rejected'
-          rejectReason = 'authorization_revoked'
+          rejectReason = 'policy'
+          rejectPolicyCode = 'authorization_revoked'
           logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
             requestId,
             sessionId,
@@ -1876,7 +1892,7 @@ async function runToolChatSessionInner(
       }
 
       // 收窄 legacy confirm 状态为 coordinator 合同；下方仍保留既有文案和审计分支。
-      const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason })
+      const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason, policyCode: rejectPolicyCode })
       if (needsConfirm) {
         args.emitFactEvent?.({
           type: 'tool-confirmed',
@@ -2011,12 +2027,14 @@ async function runToolChatSessionInner(
       }
 
       if (!confirmationDecision.approved) {
+        // P1-2 拒绝理由回传：优先通道裁决的 reason.summary（模型可读、可据此改方案）；
+        // 无理由时按来源回退既有文案，迁移期文案逐一对照不回归。
         const rejectedError =
           confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
             ? '远程只读策略禁止执行需确认的工具。请在设置中将「远程写确认策略」改为「微信/飞书确认」，或开启「大模型生成的脚本自动允许执行」。'
             : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
               ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
-              : '用户拒绝执行此工具'
+              : (channelRejectSummary ?? '用户拒绝执行此工具')
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
@@ -2024,8 +2042,9 @@ async function runToolChatSessionInner(
         )
         await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
-        if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
+        // P1-3：确认拒绝属安全拒绝桶（阈值 5）——管家 Agent 被拒后可改方案推进，Turn 不因 3 次拒绝而中止
+        if (toolErrorRepeat.noteFailure(toolName, rejectedError, undefined, 'safety')) {
+          abortRepeatedToolError = `安全拒绝已连续出现 ${MAX_CONSECUTIVE_SAFETY_REJECT} 次，已停止：${rejectedError}`
           break
         }
         continue

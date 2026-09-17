@@ -1,6 +1,8 @@
 import type {
   ActionClass,
+  ConfirmAnswererPolicy,
   ConfirmOutcome,
+  ConfirmOutcomeCause,
   ConfirmRequest,
   ConfirmationChannel,
   ExecutionLane,
@@ -66,7 +68,8 @@ export class DesktopChannel implements ConfirmationChannel {
         requestId: string,
         toolUseId: string,
         memoryTiers?: ConfirmRequest['memoryTiers'],
-        scope?: { toolName: string; lane: string }
+        scope?: { toolName: string; lane: string },
+        timeoutMs?: number
       ) => Promise<ToolConfirmOutcome>
     }
   ) {}
@@ -82,10 +85,17 @@ export class DesktopChannel implements ConfirmationChannel {
     })
     const wait = this.deps.waitForToolConfirm ?? waitForToolConfirm
     // 把决策层给出的记忆档位登记到 registry，供 tool:confirm-response 校验渲染端回传档位（B1）
-    const outcome = await wait(this.deps.requestId, this.deps.toolUseId, req.memoryTiers, {
-      toolName: this.deps.toolName,
-      lane: this.deps.lane
-    })
+    // P1-4：ConfirmRequest.timeoutMs 真实消费；null/缺省回退 registry 的 CONFIRM_MS（5min，user 默认不变）
+    const outcome = await wait(
+      this.deps.requestId,
+      this.deps.toolUseId,
+      req.memoryTiers,
+      {
+        toolName: this.deps.toolName,
+        lane: this.deps.lane
+      },
+      req.timeoutMs ?? undefined
+    )
     const mapped = mapToolOutcome(outcome)
     this.deps.audit?.record({
       ...base,
@@ -105,7 +115,7 @@ export class DesktopChannel implements ConfirmationChannel {
 }
 
 /**
- * §5.5 统一分发：按 lane 产出确认通道（桌面卡片 / IM 通道），主循环不再按链路分双叉。
+ * §5.5 统一分发（既有入口，P1 起转调 resolveConfirmChannel 二维模型，保持签名兼容）：
  * 远程链路注入合并后的 `ImChannel` 单例与 `buildImPending`（lane 差异由调用方注入）；
  * 桌面链路需 `toolUseId`。
  */
@@ -119,6 +129,84 @@ export function channelFor(args: {
   imChannel?: ImChannel
   buildImPending?: (req: ConfirmRequest) => ImPendingInput
 }): ConfirmationChannel {
+  return resolveConfirmChannel(args)
+}
+
+/** lane → 默认回答者（I1 默认值表）。automation 在 P2-6 切换为 agent（单行可回退）。 */
+export const DEFAULT_CONFIRM_ANSWERER: Record<ExecutionLane, ConfirmAnswererPolicy> = {
+  desktop: { kind: 'user' },
+  wechat: { kind: 'user' },
+  feishu: { kind: 'user' },
+  automation: { kind: 'deny' }
+}
+
+export interface ResolveConfirmChannelArgs {
+  lane: ExecutionLane
+  requestId: string
+  sessionId: string
+  toolName: string
+  toolUseId?: string
+  audit?: AuditSink
+  imChannel?: ImChannel
+  buildImPending?: (req: ConfirmRequest) => ImPendingInput
+  /** 维度一：回答者配置（主进程装配方按 lane 解析后传入；缺省用默认值表）。 */
+  answererPolicy?: ConfirmAnswererPolicy
+  /** kind='agent' 的通道工厂（P2 注入 AgentChannel 构造；未注入而配置了 agent → fail-closed）。 */
+  agentChannelFactory?: (deps: {
+    lane: ExecutionLane
+    requestId: string
+    sessionId: string
+    toolName: string
+    policy: ConfirmAnswererPolicy
+    audit?: AuditSink
+  }) => ConfirmationChannel
+  /** deny 回答者在 IM 传输下的用户可见回执出口（桌面静默拒绝不传）。 */
+  notifyDenied?: (req: ConfirmRequest) => void
+}
+
+/**
+ * P1-1 二维解析模型（评审 B2）：
+ *  - 维度一「回答者种类」（user / agent / deny）由回答者配置解析，替代按 lane 硬编码；
+ *  - 维度二「传输通道」（desktop 窗口卡 / IM 出站）由 lane 与注入的 imChannel 派生。
+ * fail-closed（I4）：配置损坏、kind='agent' 无工厂 → DenyChannel + 告警审计，绝不回退为 user。
+ */
+export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): ConfirmationChannel {
+  const answerer = args.answererPolicy ?? DEFAULT_CONFIRM_ANSWERER[args.lane]
+  const isLaneWithImTransport = args.lane === 'wechat' || args.lane === 'feishu'
+
+  // 配置损坏：kind 非法 → deny + 告警（绝不回退 user）
+  if (answerer.kind !== 'user' && answerer.kind !== 'agent' && answerer.kind !== 'deny') {
+    return denyFallback(args, 'config-error', `未知回答者配置 kind=${String((answerer as { kind?: unknown }).kind)}`)
+  }
+
+  if (answerer.kind === 'agent') {
+    if (!args.agentChannelFactory) {
+      return denyFallback(args, 'config-error', '回答者配置为 agent 但审批通道工厂未接线')
+    }
+    return args.agentChannelFactory({
+      lane: args.lane,
+      requestId: args.requestId,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      policy: answerer,
+      ...(args.audit ? { audit: args.audit } : {})
+    })
+  }
+
+  if (answerer.kind === 'deny') {
+    return new DenyChannel({
+      lane: args.lane,
+      requestId: args.requestId,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      cause: 'no-answerer',
+      // deny 的用户可见形态按传输区分：IM 回拒绝说明，桌面静默拒绝（工具结果带理由）
+      ...(isLaneWithImTransport && args.notifyDenied ? { notifyDenied: args.notifyDenied } : {}),
+      ...(args.audit ? { audit: args.audit } : {})
+    })
+  }
+
+  // user 按传输维度落实现（现状等价）
   if (args.lane === 'desktop') {
     return new DesktopChannel({
       requestId: args.requestId,
@@ -129,21 +217,34 @@ export function channelFor(args: {
       ...(args.audit ? { audit: args.audit } : {})
     })
   }
-  if (args.lane === 'automation') {
-    // 偏差 21/22：automation 无人类应答者，fail-closed 拒绝并在审计可区分（cause=no-answerer）。
-    return new RejectingChannel({
-      lane: 'automation',
-      requestId: args.requestId,
-      sessionId: args.sessionId,
-      toolName: args.toolName,
-      ...(args.audit ? { audit: args.audit } : {})
-    })
-  }
   if (!args.imChannel || !args.buildImPending) {
     // 远程链路缺少 IM 通道实例时安全兜底为拒绝（等价原 requestToolConfirm 缺失返回 n）
-    return new RejectingChannel()
+    return new DenyChannel({ lane: args.lane, cause: 'no-answerer' })
   }
   return new ImRequestChannel({ imChannel: args.imChannel, buildPending: args.buildImPending })
+}
+
+/** fail-closed 兜底：产出 DenyChannel 并落告警审计（仅异常配置路径）。 */
+function denyFallback(args: ResolveConfirmChannelArgs, cause: ConfirmOutcomeCause, detail: string): DenyChannel {
+  args.audit?.record({
+    ts: Date.now(),
+    event: 'confirm.answerer-fallback',
+    lane: args.lane,
+    sessionId: args.sessionId,
+    requestId: args.requestId,
+    toolName: args.toolName,
+    reason: detail,
+    cause,
+    actor: 'system'
+  })
+  return new DenyChannel({
+    lane: args.lane,
+    requestId: args.requestId,
+    sessionId: args.sessionId,
+    toolName: args.toolName,
+    cause,
+    ...(args.audit ? { audit: args.audit } : {})
+  })
 }
 
 /**
@@ -168,20 +269,27 @@ export class ImRequestChannel implements ConfirmationChannel {
   }
 }
 
-/** 无回答者时的兜底通道：一律拒绝，不发送任何确认请求；可落 no-answerer 审计供与用户拒绝区分。 */
-class RejectingChannel implements ConfirmationChannel {
+/**
+ * P1-1 DenyChannel：deny 回答者 / 无回答者兜底通道——一律拒绝，不发送任何确认请求。
+ * cause 可区分 no-answerer（无回答者）与 config-error（配置损坏 / agent 未接线）；
+ * IM 传输下可注入 notifyDenied 回执（不静默吞掉远端用户的等待）。
+ */
+export class DenyChannel implements ConfirmationChannel {
   constructor(
-    private readonly deps?: {
+    private readonly deps: {
       lane: ExecutionLane
       requestId?: string
       sessionId?: string
       toolName?: string
+      cause?: ConfirmOutcomeCause
       audit?: AuditSink
+      notifyDenied?: (req: ConfirmRequest) => void
     }
   ) {}
 
-  request(_req: ConfirmRequest): Promise<ConfirmOutcome> {
-    if (this.deps?.audit) {
+  request(req: ConfirmRequest): Promise<ConfirmOutcome> {
+    const cause = this.deps.cause ?? 'no-answerer'
+    if (this.deps.audit) {
       this.deps.audit.record({
         ts: Date.now(),
         event: 'confirm.outcome',
@@ -190,13 +298,14 @@ class RejectingChannel implements ConfirmationChannel {
         requestId: this.deps.requestId,
         toolName: this.deps.toolName,
         outcome: 'rejected',
-        reason: 'no-answerer',
-        cause: 'no-answerer',
-        // 无回答者：本次没有回答动作，actor 如实为 system（B1：不占「谁批的」用户口径）
+        ...(cause === 'no-answerer' ? { reason: 'no-answerer' } : {}),
+        cause,
+        // deny / 无回答者：本次没有回答动作，actor 如实为 system（B1：不占「谁批的」用户口径）
         actor: 'system'
       })
     }
-    return Promise.resolve({ kind: 'rejected', cause: 'no-answerer' })
+    this.deps.notifyDenied?.(req)
+    return Promise.resolve({ kind: 'rejected', cause })
   }
 
   cancel(_requestId: string): void {

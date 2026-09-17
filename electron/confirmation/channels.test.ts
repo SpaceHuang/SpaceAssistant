@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { channelFor, DesktopChannel } from './channels'
+import { describe, expect, it, vi } from 'vitest'
+import { channelFor, DesktopChannel, ImRequestChannel, DenyChannel, resolveConfirmChannel } from './channels'
 import type { AuditSink } from './channels'
 import { ImChannel } from './imChannel'
-import type { ConfirmRequest, SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import type { ConfirmAnswererMap, ConfirmRequest, SecurityAuditEvent } from '../../src/shared/confirmation/types'
 
 function req(overrides: Partial<ConfirmRequest> = {}): ConfirmRequest {
   return {
@@ -59,6 +59,26 @@ describe('DesktopChannel', () => {
       waitForToolConfirm: async () => 'timeout'
     })
     expect(await ch.request(req())).toEqual({ kind: 'timeout', cause: 'timeout' })
+  })
+
+  it('P1-4 超时可配：req.timeoutMs 传递给 waitForToolConfirm', async () => {
+    const wait = vi.fn(async () => 'approved' as const)
+    const ch = new DesktopChannel({
+      requestId: 'req-to',
+      toolUseId: 'tool-to',
+      sessionId: 's',
+      toolName: 'run_shell',
+      lane: 'desktop',
+      waitForToolConfirm: wait
+    })
+    await ch.request(req({ timeoutMs: 30000 }))
+    expect(wait).toHaveBeenCalledWith(
+      'req-to',
+      'tool-to',
+      [],
+      { toolName: 'run_shell', lane: 'desktop' },
+      30000
+    )
   })
 })
 
@@ -184,5 +204,103 @@ describe('P0 审计如实归因（B1 收窄范围）：confirm.* 事件 actor �
     expect(events[0]!.actor).toBe('system')
     expect(events[0]!.cause).toBe('no-answerer')
     expect(events[0]!.reason).toBe('no-answerer')
+  })
+})
+
+describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通道）', () => {
+  const baseArgs = {
+    requestId: 'req-rcc',
+    sessionId: 's-rcc',
+    toolName: 'write_file'
+  }
+  const buildPending = () => ({
+    sessionId: 's-rcc',
+    toolName: 'write_file',
+    messageId: 'm1',
+    matchKey: 'u1'
+  })
+
+  it('user × desktop → DesktopChannel（现状等价）', () => {
+    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'desktop' })
+    expect(ch).toBeInstanceOf(DesktopChannel)
+  })
+
+  it('user × wechat / feishu（有 imChannel）→ ImRequestChannel（现状等价）', () => {
+    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
+    expect(
+      resolveConfirmChannel({ ...baseArgs, lane: 'wechat', imChannel: im, buildImPending: buildPending })
+    ).toBeInstanceOf(ImRequestChannel)
+    const imF = new ImChannel({ lane: 'feishu', timeoutMs: 1000, sendPrompt: () => undefined })
+    expect(
+      resolveConfirmChannel({ ...baseArgs, lane: 'feishu', imChannel: imF, buildImPending: buildPending })
+    ).toBeInstanceOf(ImRequestChannel)
+  })
+
+  it('automation 缺省回答者 deny → DenyChannel，出口与 RejectingChannel 等价（rejected + no-answerer + system 审计）', async () => {
+    const audit = auditSink()
+    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation', audit })
+    expect(ch).toBeInstanceOf(DenyChannel)
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'no-answerer' })
+    expect(audit.events.at(-1)!.actor).toBe('system')
+    expect(audit.events.at(-1)!.cause).toBe('no-answerer')
+  })
+
+  it('deny × IM（显式 notifyDenied）→ 回执被调用（不静默吞掉远端用户的等待）', async () => {
+    const notifyDenied = vi.fn()
+    const ch = resolveConfirmChannel({
+      ...baseArgs,
+      lane: 'wechat',
+      answererPolicy: { kind: 'deny' },
+      notifyDenied
+    })
+    expect(ch).toBeInstanceOf(DenyChannel)
+    const r = req()
+    await ch.request(r)
+    expect(notifyDenied).toHaveBeenCalledWith(r)
+  })
+
+  it('deny × desktop → 静默拒绝（无 notifyDenied 出口）', async () => {
+    const notifyDenied = vi.fn()
+    const ch = resolveConfirmChannel({
+      ...baseArgs,
+      lane: 'desktop',
+      answererPolicy: { kind: 'deny' },
+      notifyDenied
+    })
+    await ch.request(req())
+    expect(notifyDenied).not.toHaveBeenCalled()
+  })
+
+  it('配置损坏（非法 kind）→ fail-closed deny + cause=config-error + 告警审计，绝不回退 user', async () => {
+    const audit = auditSink()
+    const broken = { kind: 'robot' } as unknown as ConfirmAnswererMap['desktop']
+    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'desktop', answererPolicy: broken, audit })
+    expect(ch).toBeInstanceOf(DenyChannel)
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'config-error' })
+    const warn = audit.events.find((e) => e.event === 'confirm.answerer-fallback')
+    expect(warn).toBeTruthy()
+    expect(warn!.actor).toBe('system')
+  })
+
+  it("kind='agent' 无 factory（P1 未接线）→ fail-closed deny + cause=config-error + 告警，绝不回退 user", async () => {
+    const audit = auditSink()
+    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation', answererPolicy: { kind: 'agent' }, audit })
+    expect(ch).toBeInstanceOf(DenyChannel)
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'config-error' })
+    expect(audit.events.find((e) => e.event === 'confirm.answerer-fallback')).toBeTruthy()
+  })
+
+  it("kind='agent' + factory → factory 产出通道（P2 AgentChannel 挂点）", () => {
+    const stub = { request: async () => ({ kind: 'rejected', cause: 'agent-deny' } as const), cancel: () => undefined }
+    const ch = resolveConfirmChannel({
+      ...baseArgs,
+      lane: 'automation',
+      answererPolicy: { kind: 'agent', approvalProfileId: 'p1' },
+      agentChannelFactory: () => stub
+    })
+    expect(ch).toBe(stub)
   })
 })

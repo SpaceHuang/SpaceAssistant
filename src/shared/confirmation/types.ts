@@ -306,6 +306,7 @@ export type SecurityAuditEventKind =
   | 'policy.deny-exposure'
   | 'confirm.request'
   | 'confirm.outcome'
+  | 'confirm.answerer-fallback'
   | 'cache.hit'
   | 'cache.write'
   | 'cache.clear'
