@@ -2513,3 +2513,148 @@
   color: color-mix(in srgb, var(--sa-warning) 82%, var(--sa-text));
   font-weight: 500;
 }
+
+/* ===== 定时任务 Tab（butler）：卡片行语言对齐 mcp-server-card / llm-service-card ===== */
+/* header（标题 + 触发/投递标签 + 启停）→ summary（提示词 + 最近运行 meta）→ footer 动作 */
+
+.butler-settings-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-stack);
+  width: 100%;
+  min-width: 0;
+}
+
+.butler-settings-tab__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-substack);
+  flex-wrap: wrap;
+}
+
+.butler-settings-tab__heading {
+  min-width: 0;
+}
+
+.butler-settings-tab__title {
+  margin: 0;
+  font-size: var(--sa-config-font-title);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+}
+
+.butler-settings-tab__intro {
+  margin: var(--sa-config-gap-tight) 0 0;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.butler-settings-empty {
+  display: flex;
+  justify-content: flex-start;
+  padding: var(--sa-config-gap-block) 0 0;
+}
+
+.butler-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-stack);
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line);
+}
+
+.butler-task-card {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-elevated);
+  color: var(--sa-text);
+  transition:
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    opacity var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.butler-task-card--disabled {
+  opacity: 0.62;
+}
+
+.butler-task-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-field);
+  padding: var(--sa-config-gap-substack) var(--sa-config-gap-substack) 0;
+  min-height: var(--sa-config-control-min-height);
+}
+
+.butler-task-card__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.butler-task-card__tag {
+  margin-inline-end: 0;
+  flex-shrink: 0;
+}
+
+.butler-task-card__tag--delivery {
+  color: var(--sa-text-secondary);
+  background: transparent;
+  border-color: var(--sa-border);
+}
+
+.butler-task-card__header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-tight);
+  flex-shrink: 0;
+}
+
+.butler-task-card__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-field);
+  padding: 0 var(--sa-config-gap-substack);
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+  min-width: 0;
+}
+
+.butler-task-card__summary-icon {
+  flex-shrink: 0;
+  color: var(--sa-icon);
+}
+
+.butler-task-card__summary-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.butler-task-card__summary-meta {
+  flex-shrink: 0;
+  font-size: var(--sa-config-font-meta);
+  color: var(--sa-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.butler-task-card__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-field);
+  padding: var(--sa-config-gap-field) var(--sa-config-gap-substack) var(--sa-config-gap-substack);
+}
+
+.butler-task-card__footer .ant-btn-dangerous {
+  margin-left: auto;
+}

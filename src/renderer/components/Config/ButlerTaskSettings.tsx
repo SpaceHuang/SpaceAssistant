@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, App, Button, DatePicker, Empty, Form, Input, InputNumber, List, Modal, Popconfirm, Select, Switch, Tag, TimePicker } from 'antd'
+import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, TimePicker } from 'antd'
+import { Pencil, Plus, SquarePlay, Trash2 } from 'lucide-react'
 import type { AutomationTask, AutomationDeliveryPref } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import dayjs from 'dayjs'
@@ -7,8 +8,80 @@ import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraint
 
 /**
  * 设置弹窗「定时任务」Tab（P6）：任务列表、新建/编辑、启停、删除、立即运行。
+ * 列表语言与设置页既有卡片行（mcp-server-card / llm-service-card）对齐：
+ * header（标题 + 标签 + 启停 Switch）→ summary（提示词 + meta）→ footer 动作（运行/编辑/删除）。
  * 渲染进程只表达意图——准入、调度、会话创建、门控、投递全在主进程。
  */
+
+type TaskActions = {
+  t: ReturnType<typeof useTypedTranslation<'config'>>['t']
+  onRun: (task: AutomationTask) => void
+  onEdit: (task: AutomationTask) => void
+  onDelete: (task: AutomationTask) => void
+  onToggle: (task: AutomationTask, enabled: boolean) => void
+  running: boolean
+}
+
+function scheduleTagText(task: AutomationTask, t: TaskActions['t']): string {
+  if (task.schedule.kind === 'interval') return t('butler.schedule.interval', { minutes: task.schedule.intervalMinutes })
+  if (task.schedule.kind === 'daily') return t('butler.schedule.daily', { time: task.schedule.time })
+  return t('butler.schedule.once', { time: dayjs(task.schedule.at).format('YYYY-MM-DD HH:mm') })
+}
+
+function deliveryText(pref: AutomationDeliveryPref, t: TaskActions['t']): string {
+  return t(`butler.delivery.${pref}` as 'butler.delivery.desktop')
+}
+
+function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: TaskActions }) {
+  const { t, onRun, onEdit, onDelete, onToggle, running } = actions
+  return (
+    <div className={`butler-task-card${task.enabled ? '' : ' butler-task-card--disabled'}`}>
+      <div className="butler-task-card__header">
+        <span className="butler-task-card__title" title={task.name}>
+          {task.name}
+        </span>
+        <Tag className="butler-task-card__tag">{scheduleTagText(task, t)}</Tag>
+        <Tag className="butler-task-card__tag butler-task-card__tag--delivery">{deliveryText(task.deliveryPref, t)}</Tag>
+        <div className="butler-task-card__header-actions">
+          <Switch
+            size="small"
+            aria-label={t('butler.toggleAria', { name: task.name })}
+            checked={task.enabled}
+            onChange={(checked) => onToggle(task, checked)}
+          />
+        </div>
+      </div>
+      <div className="butler-task-card__summary">
+        <SquarePlay size={13} aria-hidden className="butler-task-card__summary-icon" />
+        <span className="butler-task-card__summary-text" title={task.prompt}>
+          {task.prompt}
+        </span>
+        {task.lastRunAt ? (
+          <span className="butler-task-card__summary-meta">
+            {t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}
+          </span>
+        ) : null}
+      </div>
+      <div className="butler-task-card__footer">
+        <Button size="small" type="primary" loading={running} disabled={!task.enabled} onClick={() => onRun(task)}>
+          {t('butler.run')}
+        </Button>
+        <Button size="small" icon={<Pencil size={13} aria-hidden />} onClick={() => onEdit(task)}>
+          {t('butler.edit')}
+        </Button>
+        <Popconfirm title={t('butler.deleteConfirm', { name: task.name })} onConfirm={() => onDelete(task)}>
+          <Button
+            size="small"
+            danger
+            icon={<Trash2 size={13} aria-hidden />}
+            aria-label={t('butler.deleteAria', { name: task.name })}
+          />
+        </Popconfirm>
+      </div>
+    </div>
+  )
+}
+
 export function ButlerTaskSettings() {
   const { t } = useTypedTranslation('config')
   const { message } = App.useApp()
@@ -20,6 +93,7 @@ export function ButlerTaskSettings() {
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set())
   const [form] = Form.useForm()
   const scheduleKind = Form.useWatch('scheduleKind', form)
+  const onceConstraints = buildOnceDisabledConstraints()
 
   const refresh = useCallback(async () => {
     try {
@@ -139,59 +213,40 @@ export function ButlerTaskSettings() {
     }
   }
 
-  const scheduleText = (task: AutomationTask): string =>
-    task.schedule.kind === 'interval'
-      ? t('butler.schedule.interval', { minutes: task.schedule.intervalMinutes })
-      : task.schedule.kind === 'daily'
-        ? t('butler.schedule.daily', { time: task.schedule.time })
-        : t('butler.schedule.once', { time: dayjs(task.schedule.at).format('YYYY-MM-DD HH:mm') })
-
-  const deliveryText = (pref: AutomationDeliveryPref): string =>
-    t(`butler.delivery.${pref}` as 'butler.delivery.desktop')
+  const actions: TaskActions = {
+    t,
+    onRun: (task) => void runNow(task),
+    onEdit: openEdit,
+    onDelete: (task) => void remove(task),
+    onToggle: (task, enabled) => void toggleEnabled(task, enabled),
+    running: false
+  }
 
   return (
-    <div>
+    <div className="butler-settings-tab">
       {!trayEnabled ? <Alert type="warning" role="alert" showIcon message={t('butler.trayHint')} className="config-alert-block--loose" /> : null}
-      <div className="config-butler-toolbar">
-        <Button type="primary" onClick={() => void openCreate()}>
+      <div className="butler-settings-tab__header">
+        <div className="butler-settings-tab__heading">
+          <h2 className="butler-settings-tab__title">{t('butler.tabTitle')}</h2>
+          <p className="butler-settings-tab__intro">{t('butler.tabIntro')}</p>
+        </div>
+        <Button type="dashed" icon={<Plus size={14} aria-hidden />} onClick={() => void openCreate()}>
           {t('butler.create')}
         </Button>
       </div>
-      <List
-        dataSource={tasks}
-        locale={{ emptyText: <Empty description={t('butler.empty')} image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-        renderItem={(task) => (
-          <List.Item
-            actions={[
-              <Button key="run" size="small" loading={runningIds.has(task.id)} onClick={() => void runNow(task)}>
-                {t('butler.run')}
-              </Button>,
-              <Button key="edit" size="small" onClick={() => openEdit(task)}>
-                {t('butler.edit')}
-              </Button>,
-              <Popconfirm key="del" title={t('butler.deleteConfirm', { name: task.name })} onConfirm={() => void remove(task)}>
-                <Button size="small" danger aria-label={t('butler.deleteAria', { name: task.name })}>
-                  {t('butler.delete')}
-                </Button>
-              </Popconfirm>
-            ]}
-          >
-            <List.Item.Meta
-              title={
-                <span>
-                  {task.name} <Tag>{scheduleText(task)}</Tag> <Tag>{deliveryText(task.deliveryPref)}</Tag>
-                </span>
-              }
-              description={task.prompt}
-            />
-            <Switch
-              aria-label={t('butler.toggleAria', { name: task.name })}
-              checked={task.enabled}
-              onChange={(checked) => void toggleEnabled(task, checked)}
-            />
-          </List.Item>
-        )}
-      />
+      {tasks.length === 0 ? (
+        <div className="butler-settings-empty">
+          <Button type="primary" size="large" icon={<Plus size={16} aria-hidden />} onClick={() => void openCreate()}>
+            {t('butler.create')}
+          </Button>
+        </div>
+      ) : (
+        <div className="butler-task-list" role="list">
+          {tasks.map((task) => (
+            <ButlerTaskCard key={task.id} task={task} actions={{ ...actions, running: runningIds.has(task.id) }} />
+          ))}
+        </div>
+      )}
       <Modal
         title={editing ? t('butler.form.editTitle') : t('butler.form.createTitle')}
         open={editorOpen}
@@ -239,7 +294,7 @@ export function ButlerTaskSettings() {
               ]}
               extra={t('butler.form.onceHint')}
             >
-              <DatePicker showTime format="YYYY-MM-DD HH:mm" {...buildOnceDisabledConstraints()} />
+              <DatePicker showTime format="YYYY-MM-DD HH:mm" {...onceConstraints} />
             </Form.Item>
           ) : (
             <Form.Item name="intervalMinutes" label={t('butler.form.intervalMinutes')} rules={[{ required: true }]}>

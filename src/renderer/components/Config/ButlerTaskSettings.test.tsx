@@ -78,7 +78,7 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
   it('新建任务：提交后调用 butlerCreateTask 并刷新列表', async () => {
     renderTab()
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: '新建任务' }))
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
     await waitFor(() => expect(screen.getByLabelText('任务名称')).toBeTruthy())
     fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: '周报汇总' } })
     fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '汇总本周会话' } })
@@ -139,4 +139,27 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
       await waitFor(() => expect(screen.getByText('到点执行一次，之后自动停用，不再重复执行')).toBeTruthy())
     })
+
+  it('列表用卡片行结构渲染（butler-task-card，对齐设置页卡片语言）', async () => {
+    butlerListTasks.mockResolvedValue([task()])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+    const card = document.querySelector('.butler-task-card')
+    expect(card).toBeTruthy()
+    expect(card!.querySelector('.butler-task-card__title')?.textContent).toBe('每日巡检')
+    expect(card!.querySelector('.butler-task-card__summary')?.textContent).toContain('检查磁盘')
+    expect(card!.querySelectorAll('.butler-task-card__tag')).toHaveLength(2)
+    expect(card!.querySelector('.butler-task-card__header .ant-switch')).toBeTruthy()
+    expect(card!.querySelector('.butler-task-card__footer')).toBeTruthy()
+  })
+
+  it('停用任务带 disabled 视觉类；编辑图标按钮可打开编辑器', async () => {
+    butlerListTasks.mockResolvedValue([task({ enabled: false })])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+    expect(document.querySelector('.butler-task-card--disabled')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /编s*辑/ }))
+    await waitFor(() => expect(screen.getByText('编辑定时任务')).toBeTruthy())
+  })
+
 })

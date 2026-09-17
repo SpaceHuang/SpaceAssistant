@@ -923,6 +923,9 @@
       "onceAtRequired": "Please pick a time",
       "onceHint": "Runs once at the given time, then disables itself",
       "onceAtPast": "The run time cannot be in the past"
-    }
+    },
+    "tabTitle": "Scheduled tasks",
+    "tabIntro": "Butler tasks run automatically on schedule; results are delivered per task preference",
+    "lastRun": "Last run {{time}}"
   }
 }
