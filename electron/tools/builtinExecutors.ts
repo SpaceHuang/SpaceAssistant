@@ -1138,7 +1138,7 @@ export const grepExecutor: ToolExecutor = {
     }
     const text = await grepWithRg(resolved.path, ctx.workDir, absSearch, pattern, gargs, timeoutMs, ctx.signal, (m) =>
       ctx.sendProgress('grep', m)
-    )
+    , ctx.grepSpawnProcess)
     if (text.kind === 'success' || text.kind === 'no_match') {
       return { success: true, data: { output: text.output }, duration: Date.now() - started }
     }
