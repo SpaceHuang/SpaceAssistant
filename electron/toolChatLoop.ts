@@ -136,6 +136,7 @@ import {
   registerChatCancel,
   throwIfChatCancelled
 } from './chatCancelRegistry'
+import { clearSessionActiveStream, registerSessionActiveStream } from './chatActiveStreams'
 import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import type { AppLocale } from '../src/shared/locale'
@@ -484,6 +485,9 @@ function failToolLoopWithLastUsage(
 
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
   const chatSignal = registerChatCancel(args.requestId)
+  // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
+  // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
+  registerSessionActiveStream(args.sessionId, args.requestId)
   const requestLane = args.lane
     ?? (args.remoteContext
       ? args.remoteContext.source === 'feishu'
@@ -512,6 +516,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
       args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
     }
     clearChatCancel(args.requestId)
+    clearSessionActiveStream(args.sessionId, args.requestId)
     clearToolRevocationRequest(args.requestId)
     clearRequest(args.requestId)
     await mcpConnectionManager?.shutdown().catch(() => undefined)
