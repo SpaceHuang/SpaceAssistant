@@ -71,6 +71,8 @@ export interface AgentInvocationProfile {
     wechatConfig?: WeChatConfig
     /** electron 侧为 LarkCliRunner。 */
     larkCliRunner?: unknown
+    /** P7（偏差 16）：按调用裁剪——allow 封闭集（列表外无效）/ deny 收窄；只落工具集，不落提示词。 */
+    trim?: { allow?: readonly string[]; deny?: readonly string[] }
   }
   /** 显式 lane（偏差 21）：缺省回退 driverContext 推导，最终 desktop。 */
   lane?: ExecutionLane

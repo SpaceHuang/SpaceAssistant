@@ -6,6 +6,7 @@ export type AgentLogEventName =
   | 'agent.persist.failed'
   | 'agent.profile.reasoning_degraded'
   | 'driver.delivery.record'
+  | 'agent.tools.trim_widen_denied'
   | 'llm.request'
   | 'llm.max_tokens_floor'
   | 'llm.response'

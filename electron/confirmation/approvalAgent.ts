@@ -39,14 +39,8 @@ export const APPROVAL_MAX_ROUNDS = 3
 export const DEFAULT_APPROVAL_MODEL = 'claude-haiku-4-5-20251001'
 
 /** 封闭只读工具集（Profile 工具集只能收窄，不能加宽——「免再审批」的安全前提）。 */
-export const APPROVAL_READONLY_TOOLS: readonly string[] = [
-  'read_file',
-  'list_directory',
-  'grep',
-  'list_work_dirs',
-  'history.read',
-  'skills.read'
-]
+import { APPROVAL_READONLY_TOOLS } from './approvalToolset'
+export { APPROVAL_READONLY_TOOLS }
 
 export interface ApprovalAgentDeps {
   /** P3：父调用规则集上界（嵌套交集；缺省 = 无上界约束）。 */
@@ -291,6 +285,8 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       requestId: inv.requestId,
       // 子调用零成本档：审批推理不产生 thinking（基线 §5.4 规则 5）
       effort: 'off',
+      // P7（偏差 16）：封闭只读工具集平移为按调用裁剪声明（数据化实例，白名单内容不变）
+      toolsTrim: { allow: APPROVAL_READONLY_TOOLS },
       ...(deps.policyRuleFloor ? { policyRuleFloor: deps.policyRuleFloor } : {}),
       sessionId,
       lane: 'automation',

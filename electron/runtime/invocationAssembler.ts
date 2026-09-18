@@ -81,6 +81,10 @@ export interface AgentInvocationMaterials {
   getBrowserDetectContext?: () => import('../../src/shared/browserTypes').BrowserDetectContext
   /** P3：父调用的规则集上界（嵌套调用取交集；放行集合只收窄，授权不继承）。 */
   policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
+  /** P7（偏差 16）：本次调用的工具裁剪声明（allow 封闭集 / deny）。 */
+  toolsTrim?: { allow?: readonly string[]; deny?: readonly string[] }
+  /** P7：父调用的工具裁剪上界（嵌套取交集；违规 = 装配期拒绝）。 */
+  parentToolsTrim?: { allow?: readonly string[]; deny?: readonly string[] }
   /** §5.5 收口：宿主实例在此包装为 events.notify，不再进入调用契约。 */
   floatingNotificationManager?: FloatingNotificationManager
   emitFactEvent: (event: import('../../src/shared/assistantFactAggregator').AssistantFactEvent) => void
@@ -144,6 +148,35 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // locale 定值（请求优先、库回退在装配期完成；循环内不再查库）
   const resolvedLocale = resolveRequestLocale(materials.locale, db as never)
 
+  // P7（偏差 16）：工具裁剪——嵌套调用相对父调用取交集（只能收窄不能加宽），违规装配期拒绝并落日志
+  const parentTrim = materials.parentToolsTrim
+  const childTrim = materials.toolsTrim
+  let toolsTrim: { allow?: readonly string[]; deny?: readonly string[] } | undefined
+  if (childTrim || parentTrim) {
+    if (childTrim?.allow && parentTrim?.allow) {
+      const childAllow = childTrim.allow
+      const parentAllow = new Set(parentTrim.allow)
+      const widened = childAllow.filter((name) => !parentAllow.has(name))
+      if (widened.length > 0) {
+        logAgentEvent('info', 'agent.tools.trim_widen_denied', {
+          requestId: materials.requestId,
+          sessionId: materials.sessionId,
+          widened
+        })
+        throw new Error(`TOOLS_TRIM_WIDEN_DENIED(${widened.join(',')})`)
+      }
+      const denyUnion = [...new Set([...(childTrim.deny ?? []), ...(parentTrim.deny ?? [])])]
+      toolsTrim = { allow: [...childAllow], ...(denyUnion.length > 0 ? { deny: denyUnion } : {}) }
+    } else {
+      const allowPick = childTrim?.allow ?? parentTrim?.allow
+      const denyUnion2 = [...new Set([...(childTrim?.deny ?? []), ...(parentTrim?.deny ?? [])])]
+      toolsTrim = {
+        ...(allowPick ? { allow: [...allowPick] } : {}),
+        ...(denyUnion2.length > 0 ? { deny: denyUnion2 } : {})
+      }
+    }
+  }
+
   // P4（偏差 6）：effort 解析——显式档位 > enableThinking 兼容映射（true→medium）> off（子调用零成本档）；
   // 宿主按 ModelEntry 能力校验，不支持时按定死规则降级为 off 并留痕（不静默换档）
   const requestedEffort = materials.effort
@@ -191,7 +224,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.wikiConfig !== undefined ? { wikiConfig: materials.wikiConfig } : {}),
         ...(materials.feishuConfig !== undefined ? { feishuConfig: materials.feishuConfig } : {}),
         ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
-        ...(materials.larkCliRunner !== undefined ? { larkCliRunner: materials.larkCliRunner } : {})
+        ...(materials.larkCliRunner !== undefined ? { larkCliRunner: materials.larkCliRunner } : {}),
+        ...(toolsTrim ? { trim: toolsTrim } : {})
       },
       ...(materials.lane !== undefined ? { lane: materials.lane } : {}),
       reasoning

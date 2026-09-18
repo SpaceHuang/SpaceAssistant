@@ -513,6 +513,8 @@ export type RunToolChatSessionArgs = {
     policy: ReturnType<typeof import('./confirmation/answererConfig').resolveLaneAnswererPolicy>
     approvalDatabase?: unknown
   }
+  /** P7（偏差 16）：按调用裁剪（装配层从 profile.tools.trim 平移）。 */
+  toolsTrim?: { allow?: readonly string[]; deny?: readonly string[] }
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -631,7 +633,8 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     },
     hostExposureRules: ports.exposure?.rules,
     hostMcp: ports.mcp as RunToolChatSessionArgs['hostMcp'],
-    hostAnswerer: ports.answerer as RunToolChatSessionArgs['hostAnswerer']
+    hostAnswerer: ports.answerer as RunToolChatSessionArgs['hostAnswerer'],
+    toolsTrim: invocation.profile.tools.trim
   }
 }
 
@@ -718,6 +721,7 @@ async function runToolChatSessionInner(
     hostExposureRules,
     hostMcp,
     hostAnswerer,
+    toolsTrim,
     reasoningEffort,
     locale: payloadLocale,
     projectMemoryEnabled,
@@ -822,7 +826,8 @@ async function runToolChatSessionInner(
     wechatConfig,
     remoteContext,
     exposureRules,
-    mcpSnapshot
+    mcpSnapshot,
+    trim: toolsTrim
   })
   const { tools, toolNames, authorizedToolNames, compatToInternal } = effectiveTools
   if (toolNames.includes('browser')) {
