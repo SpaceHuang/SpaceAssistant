@@ -10,7 +10,7 @@ import {
   type McpTestConnectionResult
 } from '../../src/shared/mcpTypes'
 import { validateMcpEndpoint } from './endpointPolicy'
-import { listProfiles, saveProfiles } from './mcpConfigStore'
+import { appendServer } from './mcpConfigStore'
 import { getSecret } from './mcpSecretStore'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
 import { discoverOAuthServerInfo } from '@modelcontextprotocol/sdk/client/auth.js'
@@ -111,6 +111,8 @@ function buildWriteInput(params: McpAddServerParams, endpoint: string | undefine
 
 /** discovery 每跳超时与重定向跟随上限（评审 S4/S5） */
 const DISCOVERY_TIMEOUT_MS = 5_000
+/** discovery 整体 deadline（评审 v2 建议 3）：每跳 5s × 多跳串行可能突破 capability 10s 上限 */
+const DISCOVERY_TOTAL_TIMEOUT_MS = 8_000
 const DISCOVERY_MAX_REDIRECTS = 3
 
 /**
@@ -162,17 +164,26 @@ async function discoverConclusion(
     return { kind: 'none', message: 'stdio 传输不涉及 OAuth 发现' }
   }
   let blocked = false
-  let timedOut = false
   const blockedConclusion: McpAddServerConclusion = {
     kind: 'bearer-only',
     message: 'OAuth 发现被安全策略拦截（存在指向私网/保留地址的重定向）：该端点暂按不支持 OAuth 处理'
   }
   try {
-    const info = await discoverOAuthServerInfo(new URL(endpoint), {
-      fetchFn: createSafeDiscoveryFetch(DISCOVERY_TIMEOUT_MS, () => {
-        blocked = true
+    // 整体 deadline（v2 建议 3）：保证 discovery 在 capability 层 10s 上限内收敛
+    const info = await Promise.race([
+      discoverOAuthServerInfo(new URL(endpoint), {
+        fetchFn: createSafeDiscoveryFetch(DISCOVERY_TIMEOUT_MS, () => {
+          blocked = true
+        })
+      }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          const error = new Error('OAuth 发现整体超时')
+          error.name = 'TimeoutError'
+          reject(error)
+        }, DISCOVERY_TOTAL_TIMEOUT_MS).unref()
       })
-    })
+    ])
     if (blocked) return blockedConclusion
     const metadata = info.authorizationServerMetadata
     if (!metadata) {
@@ -199,7 +210,7 @@ async function discoverConclusion(
     }
   } catch (error) {
     if (blocked) return blockedConclusion
-    timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
     return {
       kind: 'bearer-only',
       message: timedOut
@@ -207,43 +218,6 @@ async function discoverConclusion(
         : 'OAuth 发现不可达：该服务可能不支持 OAuth（或发现端点暂不可用），请改用 Bearer token 或稍后重试'
     }
   }
-}
-
-/**
- * 既有 profile → write input（评审 B2）：saveProfiles 是全量保存语义，
- * addMcpServer 必须把既有服务合并进列表再保存，否则既有服务及其加密凭据会被清空。
- * secret 不回填（保留在 secret map 中，saveProfiles 对未出现的 kind 不做 clear）。
- */
-function existingProfilesAsWriteInputs(profiles: McpServerProfile[]): McpServerWriteInput[] {
-  return profiles.map((p) => ({
-    id: p.id,
-    name: p.name,
-    enabled: p.enabled,
-    transport: p.transport,
-    timeoutSec: p.timeoutSec,
-    auth: {
-      mode: p.auth.mode,
-      ...(p.auth.headerName ? { headerName: p.auth.headerName } : {}),
-      ...(p.auth.valuePrefix ? { valuePrefix: p.auth.valuePrefix } : {}),
-      ...(p.auth.oauthClientId ? { oauthClientId: p.auth.oauthClientId } : {}),
-      ...(p.auth.oauthScopes?.length ? { oauthScopes: p.auth.oauthScopes } : {}),
-      ...(p.auth.accessTokenExpiresAt ? { accessTokenExpiresAt: p.auth.accessTokenExpiresAt } : {})
-    },
-    ...(p.stdio
-      ? {
-          stdio: {
-            command: p.stdio.command,
-            args: p.stdio.args,
-            ...(p.stdio.cwd ? { cwd: p.stdio.cwd } : {}),
-            env: p.stdio.env.map((e) => ({ key: e.key, valuePresent: e.valuePresent }))
-          }
-        }
-      : {}),
-    ...(p.http ? { http: { endpoint: p.http.endpoint } } : {}),
-    enabledToolNames: p.enabledToolNames,
-    createdAt: p.createdAt,
-    updatedAt: p.updatedAt
-  }))
 }
 
 /**
@@ -285,8 +259,8 @@ export async function addMcpServer(
     : { kind: 'none' as const, message: '该认证模式不涉及 OAuth 发现' }
 
   try {
-    const existing = existingProfilesAsWriteInputs(listProfiles(db))
-    await saveProfiles(db, [...existing, input])
+    // appendServer：读-合并-写整体在写锁临界区内（v2 评审 S2'，并发交错不丢服务）
+    await appendServer(db, input)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return { ok: false, code: 'save-failed', message }

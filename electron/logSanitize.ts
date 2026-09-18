@@ -1,5 +1,22 @@
-const SENSITIVE_KEY_PATTERN =
+import { CREDENTIAL_KEY_PATTERN } from '../src/shared/capabilityParamSanitize'
+
+/**
+ * 键级脱敏：精确匹配历史清单 + 凭据词包含匹配（v2 评审 S1'）。
+ * 精确锚定不匹配 accessToken/headerValue/env 内 API_TOKEN 等复合键，toolkit.call 的
+ * tool.request 日志经此落盘，故补「键名含凭据词」的宽匹配——误伤（普通值被 [REDACTED]）
+ * 代价小于漏报（token 明文落 180 天日志）。
+ */
+const SENSITIVE_KEY_EXACT_PATTERN =
   /^(api[_-]?key|password|passwd|secret|token|authorization|x-api-key|credentials?|private[_-]?key)$/i
+
+function isSensitiveKey(key: string): boolean {
+  if (SENSITIVE_KEY_EXACT_PATTERN.test(key)) return true
+  if (CREDENTIAL_KEY_PATTERN.test(key)) return true
+  // env 键值表的载体键（toolkit.call 入参 env: { KEY: value }）与其 secret-map 变体
+  if (key === 'env' || key.startsWith('env:')) return true
+  // 复合键名含凭据词（accessToken / API_TOKEN / refreshToken…）：宽匹配兜底
+  return /(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|authorization|credential)/i.test(key)
+}
 
 const ANTHROPIC_KEY_PATTERN = /sk-ant-[a-zA-Z0-9_-]+/g
 const BEARER_PATTERN = /Bearer\s+\S+/gi
@@ -17,10 +34,6 @@ function sanitizeString(value: string): string {
   s = s.replace(BEARER_PATTERN, 'Bearer [REDACTED]')
   s = s.replace(LONG_B64_PATTERN, '[REDACTED_B64]')
   return s
-}
-
-function isSensitiveKey(key: string): boolean {
-  return SENSITIVE_KEY_PATTERN.test(key)
 }
 
 export function sanitizeForLog(value: unknown, options?: SanitizeOptions): unknown {

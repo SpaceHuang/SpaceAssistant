@@ -17,9 +17,15 @@ const SENSITIVE_PATTERN = /(sk-[A-Za-z0-9_-]+|Bearer\s+[^\s,;"'}{]+|secret\s*=\s
 const JSON_CREDENTIAL_PATTERN =
   /("(?:[^"]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|authorization|credential)[^"]*)"\s*:\s*")[^"]*(")/gi
 
+/** 高熵凭据值的常见前缀形态（v2 评审建议 6 兜底：键名无关键词的 JSON 值，如 "DEBUG":"ghp_…"）。 */
+const CREDENTIAL_VALUE_PREFIX_PATTERN = /"(?:ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|eyJ[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{16,})"/g
+
 export function sanitizeAuditField(value: unknown): unknown {
   if (typeof value === 'string') {
-    return value.replace(SENSITIVE_PATTERN, '[REDACTED]').replace(JSON_CREDENTIAL_PATTERN, '$1[REDACTED]$2')
+    return value
+      .replace(SENSITIVE_PATTERN, '[REDACTED]')
+      .replace(JSON_CREDENTIAL_PATTERN, '$1[REDACTED]$2')
+      .replace(CREDENTIAL_VALUE_PREFIX_PATTERN, '"[REDACTED]"')
   }
   return value
 }

@@ -1,17 +1,25 @@
 /**
- * 能力入参的展示侧净化（评审 B1）：
+ * 能力入参的展示侧净化（评审 B1/R1）：
  * toolkit.call 的 act 能力（如 action.mcp.add）以 accessToken/headerValue/env 为入参，
- * 这些值会出现在确认摘要、confirm-requested 载荷与确认卡片中——展示前必须把凭据值
- * 归并为布尔存在性，与结果路径的 sanitizeCapabilityResult（electron/capabilities/sanitize.ts）
- * 形成输入/输出两侧对称防线。
+ * 这些值会出现在确认摘要、confirm-requested 载荷、确认卡片与确认后的详情展开中——
+ * 展示前必须把凭据值归并为布尔存在性，与结果路径的 sanitizeCapabilityResult
+ * （electron/capabilities/sanitize.ts）形成输入/输出两侧对称防线。
  */
 
-const CREDENTIAL_KEY_PATTERN =
-  /^(api[_-]?key|password|passwd|secret|token|access[_-]?token|refresh[_-]?token|authorization|x-api-key|credentials?|private[_-]?key|client[_-]?secret|header[_-]?value|headerName)$/i
+/**
+ * 凭据键清单（展示/结果两侧共享）。
+ * 不含 headerName：它是「用哪个 header 鉴权」的可辨识信息，非凭据值（v2 评审建议 5）。
+ * electron/logSanitize 也引用此清单做键级宽匹配兜底。
+ */
+export const CREDENTIAL_KEY_PATTERN =
+  /^(api[_-]?key|password|passwd|secret|token|access[_-]?token|refresh[_-]?token|authorization|x-api-key|credentials?|private[_-]?key|client[_-]?secret|header[_-]?value)$/i
+
+/** env 键值表的载体键（大小写不敏感，v2 评审建议 5） */
+const ENV_KEY_PATTERN = /^env$/i
 
 /** env 键值表的值整体布尔化（键名保留，供用户辨认是哪个变量） */
 function isEnvValueTable(key: string | undefined, value: unknown): value is Record<string, unknown> {
-  return key === 'env' && Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  return Boolean(key) && ENV_KEY_PATTERN.test(key!) && Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 export function sanitizeCapabilityParamsForDisplay(value: unknown, key?: string): unknown {

@@ -3,6 +3,7 @@ import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { FileConfirmMode, ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
 import { projectPersistedMcpResult, type McpResultDisplay } from '../../../shared/mcpToolResultDisplay'
+import { sanitizeCapabilityParamsForDisplay } from '../../../shared/capabilityParamSanitize'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import {
   hasShellOutput,
@@ -347,7 +348,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   const paramPreview = useMemo(() => {
     if (!showDetail) return ''
     try {
-      return JSON.stringify(record.input, null, 2)
+      // toolkit.call 详情展开与确认卡同口径：凭据类入参只出存在性布尔（v2 评审 R1）
+      const isToolkit = record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call'
+      const input = isToolkit ? sanitizeCapabilityParamsForDisplay(record.input) : record.input
+      return JSON.stringify(input, null, 2)
     } catch {
       return String(record.input)
     }

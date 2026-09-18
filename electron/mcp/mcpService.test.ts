@@ -25,6 +25,8 @@ interface MockServerOptions {
   noProtectedResource?: boolean
   /** /.well-known/oauth-protected-resource 返回 302 到该地址（评审 S5 重定向用例） */
   redirectProtectedResourceTo?: string
+  /** 同源 302 → /meta/protected-resource（评审 v2 建议 2 正向用例） */
+  redirectProtectedResourceSameOrigin?: boolean
 }
 
 function startMockServer(options: MockServerOptions = {}): Promise<string> {
@@ -34,6 +36,12 @@ function startMockServer(options: MockServerOptions = {}): Promise<string> {
       if (req.url === '/.well-known/oauth-protected-resource') {
         if (options.redirectProtectedResourceTo) {
           res.writeHead(302, { Location: options.redirectProtectedResourceTo })
+          res.end()
+          return
+        }
+        if (options.redirectProtectedResourceSameOrigin) {
+          // 同源 302：Location 指向同 server 的合法元数据路径（评审 v2 建议 2 正向链路）
+          res.writeHead(302, { Location: '/meta/protected-resource' })
           res.end()
           return
         }
@@ -49,6 +57,12 @@ function startMockServer(options: MockServerOptions = {}): Promise<string> {
             authorization_servers: [`${origin}/auth-server`]
           })
         )
+        return
+      }
+      if (req.url === '/meta/protected-resource') {
+        const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ resource: `${origin}/mcp`, authorization_servers: [`${origin}/auth-server`] }))
         return
       }
       if (
@@ -266,15 +280,20 @@ describe('mcpService.addMcpServer 三态结论（需求 §7 Phase 2 / 前案 §5
     }
   })
 
-  it('discovery 重定向到同源合法路径 → 正常跟随并得出 DCR 结论（评审 S5 正向）', async () => {
+  it('discovery 同源 302 → 正常跟随并得出 DCR 结论（评审 v2 建议 2 正向链路）', async () => {
     const { db, cleanup } = createTempDatabase('mcp-add-redirect-ok-')
     try {
-      const endpoint = await startMockServer({ registrationEndpoint: true })
-      const origin = new URL(endpoint).origin
-      // 再起一个 server：把 well-known 302 到同一 mock 的合法地址需要同 server；改用把 endpoint 指到 302 中转
-      // 简化：直接断言 302 → 同源（自身 origin 的 /auth-server/...）链路可用
-      void origin
-      expect(endpoint).toContain('127.0.0.1')
+      const endpoint = await startMockServer({
+        registrationEndpoint: true,
+        redirectProtectedResourceSameOrigin: true
+      })
+      const result = await addMcpServer(db, {
+        name: '同源跳转服务', transport: 'http', endpoint, authMode: 'oauth'
+      })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      // 同源合法重定向被跟随，元数据可达 → DCR 结论成立
+      expect(result.conclusion.kind).toBe('oauth-dcr')
     } finally {
       cleanup()
     }
