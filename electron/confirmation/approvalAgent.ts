@@ -168,11 +168,8 @@ function extractBalancedJsonObjects(text: string): string[] {
  */
 export const APPROVAL_MAX_AUTHORIZATION: ApprovalAuthorizationDimension = 'low'
 
-/** E 安全默认 summary（Guardian 对齐）：rationale 缺失按 kind 给固定文案，不因格式漂移整体拒判。 */
-const DEFAULT_VERDICT_SUMMARY: Record<ApprovalVerdict['kind'], string> = {
-  approve: '审批 Agent 未给出理由，默认放行。',
-  deny: '审批 Agent 未给出理由，默认拒绝。'
-}
+/** E 安全默认 summary（仅 deny 侧宽容用）：rationale 缺失给固定文案，结果方向仍是拒绝。 */
+const DEFAULT_DENY_SUMMARY = '审批 Agent 未给出理由，默认拒绝。'
 
 function isRiskDimension(value: unknown): value is ApprovalRiskDimension {
   return typeof value === 'string' && (APPROVAL_RISK_LEVELS as readonly string[]).includes(value)
@@ -190,12 +187,14 @@ function isAuthorizationDimension(value: unknown): value is ApprovalAuthorizatio
  *
  * Skill v2（对比分析 §4-A/§4-E，输出合同与 security-approval Skill「输出格式」节互为锚定，
  * 修改任一侧必须同步另一侧）：
- * - 双维裁决：接受 riskLevel / authorization；缺省或非法枚举按 kind 安全默认
- *   （approve→low+unknown、deny→high+unknown），不因格式漂移整体拒判；
+ * - 双维裁决：接受 riskLevel / authorization；两维终值记入 reason.evidence（仅审计侧）；
+ * - 非对称容错（评审跟进，替换 Guardian 式双侧宽容）：deny 侧宽容——缺 summary / 维度脏值
+ *   按默认（high + unknown + 固定文案）收敛，结果方向仍是拒绝；approve 侧严格——summary
+ *   与 riskLevel 必填且枚举合法，缺一即视为无效候选（无有效候选 → 上层 unparsable → deny，
+ *   I4 兜底不变），杜绝「最小 approve」借缺省通道通过解析；
  * - 阈值矩阵只对 approve 做降级校验（fail-closed 单向）：critical 无条件 deny、
  *   high 需授权 ≥ medium；deny 结论永不被升级；
- * - opts.maxAuthorization 截断授权维度（automation 传 APPROVAL_MAX_AUTHORIZATION='low'）；
- * - 两维终值记入 reason.evidence（仅审计侧）。
+ * - opts.maxAuthorization 截断授权维度（automation 传 APPROVAL_MAX_AUTHORIZATION='low'）。
  */
 export function parseApprovalVerdict(
   text: string,
@@ -212,11 +211,11 @@ export function parseApprovalVerdict(
       }
       if (parsed.kind !== 'approve' && parsed.kind !== 'deny') continue
       const declaredKind = parsed.kind
-      const summary =
-        typeof parsed.reason?.summary === 'string' && parsed.reason.summary
-          ? parsed.reason.summary
-          : DEFAULT_VERDICT_SUMMARY[declaredKind]
-      const risk = isRiskDimension(parsed.riskLevel) ? parsed.riskLevel : declaredKind === 'approve' ? 'low' : 'high'
+      const explicitSummary =
+        typeof parsed.reason?.summary === 'string' && parsed.reason.summary ? parsed.reason.summary : undefined
+      const explicitRisk = isRiskDimension(parsed.riskLevel) ? parsed.riskLevel : undefined
+      if (declaredKind === 'approve' && (!explicitSummary || !explicitRisk)) continue
+      const risk = explicitRisk ?? 'high'
       const auth = capAuthorization(
         isAuthorizationDimension(parsed.authorization) ? parsed.authorization : 'unknown',
         opts?.maxAuthorization ?? 'high'
@@ -230,7 +229,7 @@ export function parseApprovalVerdict(
         reason: {
           summary: matrixSaysDeny
             ? `模型结论 approve 与阈值矩阵矛盾（risk=${risk}，authorization=${auth}），已降级为拒绝。`
-            : summary,
+            : (explicitSummary ?? DEFAULT_DENY_SUMMARY),
           evidence: [`risk=${risk}`, `authorization=${auth}`]
         }
       }

@@ -69,7 +69,12 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
   it('approve 裁决：两态 JSON 解析为 verdict', async () => {
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
-      content: [{ type: 'text', text: '前置说明\n{"kind":"approve","reason":{"summary":"常规写入，风险可控"}}' }]
+      content: [
+        {
+          type: 'text',
+          text: '前置说明\n{"kind":"approve","riskLevel":"low","reason":{"summary":"常规写入，风险可控"}}'
+        }
+      ]
     })
     const res = await runApprovalAgent(deps, invocation())
     expect(res).toMatchObject({ ok: true, verdict: { kind: 'approve' } })
@@ -231,7 +236,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
   it('P1-1 凭证对装配：deps.baseUrl 透传到内层 runToolChatSession', async () => {
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
-      content: [{ type: 'text', text: '{"kind":"approve","reason":{"summary":"ok"}}' }]
+      content: [{ type: 'text', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"ok"}}' }]
     })
     await runApprovalAgent({ ...deps, baseUrl: 'https://relay.example.com' }, invocation())
     const args = mockRunToolChatSession.mock.calls.at(-1)![0] as { baseUrl?: string }
@@ -274,7 +279,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     if (!outer.ok) throw new Error('外层取票应成功')
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
-      content: [{ type: 'text', text: '{"kind":"approve","reason":{"summary":"ok"}}' }]
+      content: [{ type: 'text', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"ok"}}' }]
     })
     const res = await Promise.race([
       runApprovalAgent(deps, invocation()),
@@ -285,20 +290,28 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
   })
 })
 
-describe('parseApprovalVerdict（Skill v2：双维裁决 + 安全默认，对比分析 §4-A/§4-E）', () => {
-  it('A 缺省维度按 kind 安全默认：approve→low+unknown，deny→high+unknown；两维记入 reason.evidence（仅审计侧）', () => {
-    expect(parseApprovalVerdict('{"kind":"approve","reason":{"summary":"常规写入"}}')).toEqual({
+describe('parseApprovalVerdict（Skill v2：双维裁决 + 非对称容错，对比分析 §4-A/§4-E + 评审跟进）', () => {
+  it('A 非对称容错：deny 侧宽容（缺字段按默认收敛为拒绝）；approve 侧全字段合法结论原样保留', () => {
+    // deny 宽容：缺维度默认 high+unknown，缺 summary 给默认文案——结果仍是 deny，方向安全
+    expect(parseApprovalVerdict('{"kind":"deny"}')).toEqual({
+      kind: 'deny',
+      riskLevel: 'high',
+      authorization: 'unknown',
+      reason: { summary: '审批 Agent 未给出理由，默认拒绝。', evidence: ['risk=high', 'authorization=unknown'] }
+    })
+    // approve 严格：v2 合同字段齐全时保留，两维记入 reason.evidence（仅审计侧）
+    expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"low","reason":{"summary":"常规写入"}}')).toEqual({
       kind: 'approve',
       riskLevel: 'low',
       authorization: 'unknown',
       reason: { summary: '常规写入', evidence: ['risk=low', 'authorization=unknown'] }
     })
-    expect(parseApprovalVerdict('{"kind":"deny","reason":{"summary":"敏感路径"}}')).toEqual({
-      kind: 'deny',
-      riskLevel: 'high',
-      authorization: 'unknown',
-      reason: { summary: '敏感路径', evidence: ['risk=high', 'authorization=unknown'] }
-    })
+  })
+
+  it('A approve 严格：最小 {"kind":"approve"} 或缺 summary/riskLevel 均不构成有效结论（null → 上层 unparsable → deny，I4 兜底不变）', () => {
+    expect(parseApprovalVerdict('{"kind":"approve"}')).toBeNull()
+    expect(parseApprovalVerdict('{"kind":"approve","reason":{"summary":"常规写入"}}')).toBeNull()
+    expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"low"}')).toBeNull()
   })
 
   it('A 显式维度保留：approve + medium 风险 + low 授权 → 原样保留', () => {
@@ -352,15 +365,11 @@ describe('parseApprovalVerdict（Skill v2：双维裁决 + 安全默认，对比
     expect(v?.riskLevel).toBe('low')
   })
 
-  it('E 安全默认 summary：缺 reason 按 kind 给固定文案，整体不再拒判（降低格式漂移噪音）', () => {
-    expect(parseApprovalVerdict('{"kind":"deny"}')?.reason.summary).toBeTruthy()
-    expect(parseApprovalVerdict('{"kind":"approve"}')?.reason.summary).toBeTruthy()
-  })
-
-  it('E 非法枚举按缺失处理：riskLevel:"extreme" 视为缺省（approve→low，不因脏值放行更高风险）', () => {
-    const v = parseApprovalVerdict('{"kind":"approve","riskLevel":"extreme","reason":{"summary":"ok"}}')
-    expect(v?.riskLevel).toBe('low')
-    expect(v?.kind).toBe('approve')
+  it('E 非法枚举：approve 侧脏 riskLevel 即无效候选（不得「修复」为 low 放行）；deny 侧脏 riskLevel 按默认 high 收敛', () => {
+    expect(parseApprovalVerdict('{"kind":"approve","riskLevel":"extreme","reason":{"summary":"ok"}}')).toBeNull()
+    const deny = parseApprovalVerdict('{"kind":"deny","riskLevel":"extreme","reason":{"summary":"x"}}')
+    expect(deny?.kind).toBe('deny')
+    expect(deny?.riskLevel).toBe('high')
   })
 
   it('既有两态不回归：非 JSON 输入返回 null', () => {
