@@ -40,10 +40,10 @@ export function UsageTrendChart({ points }: Props) {
           tick={{ fontSize: 11 }}
         />
         <RechartsTooltip
-          formatter={(value, name, item) => {
+          formatter={(value: unknown, name: unknown, item: { dataKey?: unknown }) => {
             const key = String(item?.dataKey ?? '')
-            if (key === 'hitRate') return [formatPercent(Number(value) || null), name]
-            return [formatInteger(Number(value)), name]
+            if (key === 'hitRate') return [formatPercent(Number(value) || null), String(name)]
+            return [formatInteger(Number(value)), String(name)]
           }}
         />
         <Legend />
