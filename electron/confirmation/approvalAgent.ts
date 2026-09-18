@@ -1,9 +1,17 @@
 import type {
+  ApprovalAuthorizationDimension,
   ApprovalCluePack,
   ApprovalInvocation,
   ApprovalInvocationResult,
+  ApprovalRiskDimension,
   ApprovalVerdict
 } from '../../src/shared/confirmation/types'
+import {
+  APPROVAL_AUTHORIZATION_LEVELS,
+  APPROVAL_RISK_LEVELS,
+  capAuthorization,
+  deriveApprovalOutcome
+} from '../../src/shared/confirmation/approvalVerdict'
 import type { BrowserConfig, ShellConfig, ToolsConfig } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
 import { createSession } from '../database'
@@ -70,6 +78,8 @@ function neutralizeFence(value: string): string {
  * 线索包渲染（P1-2 反注入）：固定结构 + 数据字段全部收进「不可信证据数据」围栏块。
  * summary/command/url 等字段值可能携带主 Agent 从网页/文件/消息读到的敌意文本，
  * 绝不作为自由文本拼进指令位；裁决模型依 Skill 的防注入条款将其视为纯证据。
+ * D 任务声明（taskDigest，可信证据）单独小节渲染在围栏之外——来自用户创建任务时的输入，
+ * 用于任务相关性判断；它不构成对高危动作的授权（Skill v2 授权条款约束）。
  */
 function renderCluePack(clue: ApprovalCluePack): string {
   const evidence: string[] = [`[摘要] ${neutralizeFence(clue.summary)}`]
@@ -91,6 +101,15 @@ function renderCluePack(clue: ApprovalCluePack): string {
     '```',
     ...evidence,
     '```',
+    ...(clue.taskDigest
+      ? [
+          '',
+          '## 已声明的任务（可信证据）',
+          '以下任务声明来自真实用户创建任务时的输入，仅用于判断本次动作与任务的相关性；',
+          '它不构成对 high / critical 风险动作的授权。',
+          clue.taskDigest
+        ]
+      : []),
     '',
     '请依据裁决标准独立给出两态 JSON 结论。'
   ]
@@ -144,22 +163,76 @@ function extractBalancedJsonObjects(text: string): string[] {
 }
 
 /**
+ * automation 无人场景的授权维度上限（对比分析 §4-A/§6）：真实人类授权信号仅 P3 桌面档位
+ * 启用；此处代码侧强制截断，与 Skill v2「authorization 只能输出 unknown 或 low」条款互为防线。
+ */
+export const APPROVAL_MAX_AUTHORIZATION: ApprovalAuthorizationDimension = 'low'
+
+/** E 安全默认 summary（Guardian 对齐）：rationale 缺失按 kind 给固定文案，不因格式漂移整体拒判。 */
+const DEFAULT_VERDICT_SUMMARY: Record<ApprovalVerdict['kind'], string> = {
+  approve: '审批 Agent 未给出理由，默认放行。',
+  deny: '审批 Agent 未给出理由，默认拒绝。'
+}
+
+function isRiskDimension(value: unknown): value is ApprovalRiskDimension {
+  return typeof value === 'string' && (APPROVAL_RISK_LEVELS as readonly string[]).includes(value)
+}
+
+function isAuthorizationDimension(value: unknown): value is ApprovalAuthorizationDimension {
+  return typeof value === 'string' && (APPROVAL_AUTHORIZATION_LEVELS as readonly string[]).includes(value)
+}
+
+/**
  * 从模型输出中解析两态裁决 JSON（无中间态：解析不出即为 unparsable → deny 由调用方兜底）。
  * P1-2：取**最后一个**合法裁决——输出协议允许少量前置说明，若模型被证据内容诱导先吐出
  * 一个 approve 示例 JSON，取首会命中诱导；取尾使诱导示例只有出现在最终结论位才生效，
  * 与「裁决 JSON 是回复的收束产物」协议一致。
+ *
+ * Skill v2（对比分析 §4-A/§4-E，输出合同与 security-approval Skill「输出格式」节互为锚定，
+ * 修改任一侧必须同步另一侧）：
+ * - 双维裁决：接受 riskLevel / authorization；缺省或非法枚举按 kind 安全默认
+ *   （approve→low+unknown、deny→high+unknown），不因格式漂移整体拒判；
+ * - 阈值矩阵只对 approve 做降级校验（fail-closed 单向）：critical 无条件 deny、
+ *   high 需授权 ≥ medium；deny 结论永不被升级；
+ * - opts.maxAuthorization 截断授权维度（automation 传 APPROVAL_MAX_AUTHORIZATION='low'）；
+ * - 两维终值记入 reason.evidence（仅审计侧）。
  */
-export function parseApprovalVerdict(text: string): ApprovalVerdict | null {
+export function parseApprovalVerdict(
+  text: string,
+  opts?: { maxAuthorization?: ApprovalAuthorizationDimension }
+): ApprovalVerdict | null {
   let last: ApprovalVerdict | null = null
   for (const raw of extractBalancedJsonObjects(text)) {
     try {
-      const parsed = JSON.parse(raw) as { kind?: unknown; reason?: { summary?: unknown } }
-      if (
-        (parsed.kind === 'approve' || parsed.kind === 'deny') &&
-        typeof parsed.reason?.summary === 'string' &&
-        parsed.reason.summary
-      ) {
-        last = { kind: parsed.kind, reason: { summary: parsed.reason.summary } }
+      const parsed = JSON.parse(raw) as {
+        kind?: unknown
+        riskLevel?: unknown
+        authorization?: unknown
+        reason?: { summary?: unknown }
+      }
+      if (parsed.kind !== 'approve' && parsed.kind !== 'deny') continue
+      const declaredKind = parsed.kind
+      const summary =
+        typeof parsed.reason?.summary === 'string' && parsed.reason.summary
+          ? parsed.reason.summary
+          : DEFAULT_VERDICT_SUMMARY[declaredKind]
+      const risk = isRiskDimension(parsed.riskLevel) ? parsed.riskLevel : declaredKind === 'approve' ? 'low' : 'high'
+      const auth = capAuthorization(
+        isAuthorizationDimension(parsed.authorization) ? parsed.authorization : 'unknown',
+        opts?.maxAuthorization ?? 'high'
+      )
+      const matrixSaysDeny = declaredKind === 'approve' && deriveApprovalOutcome(risk, auth) === 'deny'
+      const kind = matrixSaysDeny ? 'deny' : declaredKind
+      last = {
+        kind,
+        riskLevel: risk,
+        authorization: auth,
+        reason: {
+          summary: matrixSaysDeny
+            ? `模型结论 approve 与阈值矩阵矛盾（risk=${risk}，authorization=${auth}），已降级为拒绝。`
+            : summary,
+          evidence: [`risk=${risk}`, `authorization=${auth}`]
+        }
       }
     } catch {
       // 尝试下一个候选
@@ -270,7 +343,8 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     if (!raced.r.ok) {
       return { ok: false, cause: 'unavailable' }
     }
-    const verdict = parseApprovalVerdict(extractText(raced.r))
+    // 授权维度上限随链强制（automation 无人场景 'low'，P3 桌面档位启用真人授权信号时调整）
+    const verdict = parseApprovalVerdict(extractText(raced.r), { maxAuthorization: APPROVAL_MAX_AUTHORIZATION })
     if (!verdict) {
       return { ok: false, cause: 'unparsable' }
     }

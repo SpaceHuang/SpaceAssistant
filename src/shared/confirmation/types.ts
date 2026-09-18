@@ -181,10 +181,32 @@ export interface ApprovalReason {
   confidence?: 'low' | 'medium' | 'high'
 }
 
+/**
+ * 风险维度（Skill v2 双维裁决，对比分析 §4-A）：裁决模型先独立评估动作的内在风险，
+ * 与是否被授权无关（风险分类学见 security-approval Skill）。
+ */
+export type ApprovalRiskDimension = 'low' | 'medium' | 'high' | 'critical'
+
+/**
+ * 授权维度：unknown=无证据。automation 无人场景运行时上限为 low（真实人类授权信号
+ * 仅 P3 桌面档位启用）；上限由 parseApprovalVerdict 的 maxAuthorization 在代码侧强制。
+ */
+export type ApprovalAuthorizationDimension = 'unknown' | 'low' | 'medium' | 'high'
+
 /** 审批 Agent 裁决输出：只有两态，无中间态（输出不可解析/超时/不可用一律 deny）。 */
 export type ApprovalVerdict =
-  | { kind: 'approve'; reason: ApprovalReason }
-  | { kind: 'deny'; reason: ApprovalReason }
+  | {
+      kind: 'approve'
+      reason: ApprovalReason
+      riskLevel?: ApprovalRiskDimension
+      authorization?: ApprovalAuthorizationDimension
+    }
+  | {
+      kind: 'deny'
+      reason: ApprovalReason
+      riskLevel?: ApprovalRiskDimension
+      authorization?: ApprovalAuthorizationDimension
+    }
 
 /**
  * 审批调用输入（方案 §12-1 采纳：facts + 结构化线索包），不给全量会话。
@@ -202,6 +224,12 @@ export interface ApprovalCluePack {
   command?: string
   url?: string
   involvedFiles?: string[]
+  /**
+   * 已声明的任务（对比分析 §4-D，可信证据）：真实用户创建任务时的输入摘要，
+   * 用于「动作是否服务于任务」的相关性判断；缺省 = 调用方无任务上下文（安全缺省）。
+   * 与不可信证据分区呈现（渲染在围栏之外，见 approvalAgent.renderCluePack）。
+   */
+  taskDigest?: string
 }
 
 /** 一次审批 Agent 调用（I2：标准唯一；I5：由 AgentChannel 深度计数兜底递归）。 */

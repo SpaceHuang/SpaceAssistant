@@ -20,7 +20,7 @@ vi.mock('../database', async (importOriginal) => {
   }
 })
 
-import { runApprovalAgent } from './approvalAgent'
+import { APPROVAL_MAX_AUTHORIZATION, parseApprovalVerdict, runApprovalAgent } from './approvalAgent'
 import type { ApprovalCluePack, ApprovalInvocation } from '../../src/shared/confirmation/types'
 
 function clue(overrides: Partial<ApprovalCluePack> = {}): ApprovalCluePack {
@@ -282,5 +282,136 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     ])
     expect(res).toMatchObject({ ok: true })
     outer.release()
+  })
+})
+
+describe('parseApprovalVerdict（Skill v2：双维裁决 + 安全默认，对比分析 §4-A/§4-E）', () => {
+  it('A 缺省维度按 kind 安全默认：approve→low+unknown，deny→high+unknown；两维记入 reason.evidence（仅审计侧）', () => {
+    expect(parseApprovalVerdict('{"kind":"approve","reason":{"summary":"常规写入"}}')).toEqual({
+      kind: 'approve',
+      riskLevel: 'low',
+      authorization: 'unknown',
+      reason: { summary: '常规写入', evidence: ['risk=low', 'authorization=unknown'] }
+    })
+    expect(parseApprovalVerdict('{"kind":"deny","reason":{"summary":"敏感路径"}}')).toEqual({
+      kind: 'deny',
+      riskLevel: 'high',
+      authorization: 'unknown',
+      reason: { summary: '敏感路径', evidence: ['risk=high', 'authorization=unknown'] }
+    })
+  })
+
+  it('A 显式维度保留：approve + medium 风险 + low 授权 → 原样保留', () => {
+    expect(
+      parseApprovalVerdict('{"kind":"approve","riskLevel":"medium","authorization":"low","reason":{"summary":"ok"}}')
+    ).toEqual({
+      kind: 'approve',
+      riskLevel: 'medium',
+      authorization: 'low',
+      reason: { summary: 'ok', evidence: ['risk=medium', 'authorization=low'] }
+    })
+  })
+
+  it('A 矩阵降级：approve + critical → deny（无条件拒绝格，结论与自报风险矛盾时取严）', () => {
+    const v = parseApprovalVerdict(
+      '{"kind":"approve","riskLevel":"critical","reason":{"summary":"任务需要"}}'
+    )
+    expect(v?.kind).toBe('deny')
+    expect(v?.reason.summary).toContain('矩阵')
+  })
+
+  it('A 矩阵降级：approve + high + unknown → deny（授权不足格）', () => {
+    const v = parseApprovalVerdict(
+      '{"kind":"approve","riskLevel":"high","authorization":"unknown","reason":{"summary":"任务需要"}}'
+    )
+    expect(v?.kind).toBe('deny')
+  })
+
+  it('A 无上限时矩阵放行：approve + high + medium → approve（P3 桌面档位形态，真人授权信号启用）', () => {
+    const v = parseApprovalVerdict(
+      '{"kind":"approve","riskLevel":"high","authorization":"medium","reason":{"summary":"用户明确要求"}}'
+    )
+    expect(v?.kind).toBe('approve')
+  })
+
+  it('A 授权上限：APPROVAL_MAX_AUTHORIZATION=low——approve + high + authorization=high 按 low 截断 → deny（automation 无人场景授权不得高于 low）', () => {
+    expect(APPROVAL_MAX_AUTHORIZATION).toBe('low')
+    const v = parseApprovalVerdict(
+      '{"kind":"approve","riskLevel":"high","authorization":"high","reason":{"summary":"已获任务授权"}}',
+      { maxAuthorization: APPROVAL_MAX_AUTHORIZATION }
+    )
+    expect(v?.kind).toBe('deny')
+    expect(v?.authorization).toBe('low')
+  })
+
+  it('A fail-closed 单向：deny + low 风险不因矩阵升级为 approve', () => {
+    const v = parseApprovalVerdict(
+      '{"kind":"deny","riskLevel":"low","reason":{"summary":"证据可疑"}}'
+    )
+    expect(v?.kind).toBe('deny')
+    expect(v?.riskLevel).toBe('low')
+  })
+
+  it('E 安全默认 summary：缺 reason 按 kind 给固定文案，整体不再拒判（降低格式漂移噪音）', () => {
+    expect(parseApprovalVerdict('{"kind":"deny"}')?.reason.summary).toBeTruthy()
+    expect(parseApprovalVerdict('{"kind":"approve"}')?.reason.summary).toBeTruthy()
+  })
+
+  it('E 非法枚举按缺失处理：riskLevel:"extreme" 视为缺省（approve→low，不因脏值放行更高风险）', () => {
+    const v = parseApprovalVerdict('{"kind":"approve","riskLevel":"extreme","reason":{"summary":"ok"}}')
+    expect(v?.riskLevel).toBe('low')
+    expect(v?.kind).toBe('approve')
+  })
+
+  it('既有两态不回归：非 JSON 输入返回 null', () => {
+    expect(parseApprovalVerdict('我觉得风险不大，可以执行。')).toBeNull()
+  })
+})
+
+describe('runApprovalAgent（Skill v2 链内矩阵生效）', () => {
+  it('模型 approve 但自报 critical → 链内按阈值矩阵降级为 deny（授权上限 low 随链生效）', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [
+        { type: 'text', text: '{"kind":"approve","riskLevel":"critical","reason":{"summary":"已获任务授权"}}' }
+      ]
+    })
+    const res = await runApprovalAgent(deps, invocation())
+    expect(res.ok === true && res.verdict.kind).toBe('deny')
+  })
+
+  it('模型 approve + medium 风险（无维度矛盾）→ 链内保持 approve（两态行为不回归）', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: '{"kind":"approve","riskLevel":"medium","reason":{"summary":"常规写入"}}' }]
+    })
+    const res = await runApprovalAgent(deps, invocation())
+    expect(res).toMatchObject({ ok: true, verdict: { kind: 'approve', riskLevel: 'medium' } })
+  })
+})
+
+describe('线索包任务声明（D：可信证据分区）', () => {
+  it('clue.taskDigest 存在 → 渲染「已声明的任务（可信证据）」小节，位于不可信围栏之外', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: '{"kind":"deny","reason":{"summary":"x"}}' }]
+    })
+    await runApprovalAgent(deps, invocation({ clue: clue({ taskDigest: '整理报告目录并汇总周报' }) }))
+    const args = mockRunToolChatSession.mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> }
+    const content = args.messages[0]!.content
+    expect(content).toContain('已声明的任务')
+    expect(content).toContain('整理报告目录并汇总周报')
+    // 可信区在不可信围栏闭合定界符之后（分区呈现，不进围栏）
+    expect(content.indexOf('整理报告目录并汇总周报')).toBeGreaterThan(content.lastIndexOf('```'))
+  })
+
+  it('无 taskDigest（P3 桌面等无任务上下文调用方）→ 不渲染任务小节', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: '{"kind":"deny","reason":{"summary":"x"}}' }]
+    })
+    await runApprovalAgent(deps, invocation())
+    const args = mockRunToolChatSession.mock.calls[0]![0] as { messages: Array<{ role: string; content: string }> }
+    expect(args.messages[0]!.content).not.toContain('已声明的任务')
   })
 })
