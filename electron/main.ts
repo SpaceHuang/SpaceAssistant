@@ -449,7 +449,6 @@ app.whenReady().then(async () => {
   // 因此这里只定义，推迟到主窗口创建完成后执行；统计非关键路径，晚几秒完成无碍。
   const runUsageStatsStartupMaintenance = (): void => {
     try {
-      setUsageStatsAppVersion(app.getVersion())
       if (!getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt)) {
         const backfillWorkDirs = [workDirState, ...workDirManager!.listProfiles().map((profile) => profile.path)]
         const backfill = backfillUsageStats(db, Array.from(new Set(backfillWorkDirs.filter((dir) => dir))))
@@ -473,6 +472,10 @@ app.whenReady().then(async () => {
       console.warn('[usageStats] startup maintenance failed:', error instanceof Error ? error.message : String(error))
     }
   }
+  // 版本快照必须同步注入（仅缓存字符串、无 IO）：飞书/微信 autoStart 与 butler 调度器
+  // 都在窗口创建之前启动，启动窗口期内触发的回合若拿到 undefined 会把 app_version 落成
+  // null，且版本枚举查询（WHERE app_version IS NOT NULL）会漏掉这些行（评审跟进项）。
+  setUsageStatsAppVersion(app.getVersion())
   // 注册维护任务；实际执行时机在下方 createMainWindow 完成之后（评审 P1-3）。
   usageStatsStartupMaintenance = runUsageStatsStartupMaintenance
 
