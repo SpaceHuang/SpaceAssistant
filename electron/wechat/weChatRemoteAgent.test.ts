@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import type { AppDatabase } from '../database'
+import { AppDatabase, openDatabase, setConfigValue } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 import { makeIncomingMessage } from './__mocks__/wechatBotMock'
@@ -13,9 +13,13 @@ vi.mock('../toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
 }))
 
-vi.mock('../database', () => ({
-  getMessages: (...args: unknown[]) => mockGetMessages(...args)
-}))
+vi.mock('../database', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../database')>()
+  return {
+    ...actual,
+    getMessages: (...args: unknown[]) => mockGetMessages(...args)
+  }
+})
 
 vi.mock('../appIpc', () => ({
   readAppLocale: () => 'zh-CN'
@@ -49,10 +53,9 @@ vi.mock('../workDirManager', async (importOriginal) => {
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
 
 function makeDb(): AppDatabase {
-  return {
-    data: { configs: {}, sessions: [], messages: [] },
-    save: vi.fn()
-  } as unknown as AppDatabase
+  const db = openDatabase(':memory:')
+  setConfigValue(db, 'config.locale', 'en-US')
+  return db
 }
 
 function makeWorkDirManager() {

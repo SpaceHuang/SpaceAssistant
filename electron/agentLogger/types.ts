@@ -2,6 +2,8 @@ export type AgentLogLevel = 'info' | 'warn' | 'error'
 
 export type AgentLogEventName =
   | 'agent.startup'
+  | 'agent.policy.default_materials'
+  | 'agent.persist.failed'
   | 'llm.request'
   | 'llm.max_tokens_floor'
   | 'llm.response'

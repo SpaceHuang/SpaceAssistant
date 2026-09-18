@@ -1,3 +1,4 @@
+import { DEFAULT_POLICY_RULES } from '../src/shared/policy/defaultRules'
 import { describe, expect, it } from 'vitest'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './confirmation/toolCallGate'
 import { DEFAULT_FEISHU_CONFIG, type FeishuConfig } from '../src/shared/feishuTypes'
@@ -31,6 +32,7 @@ async function needsConfirm(
     userDataDir: '/tmp/ud',
     toolsConfig,
     audit: { record: () => undefined },
+    ...gateDefaultMaterials(),
     ...overrides
   })
   return r.decision.type === 'require-confirm'
@@ -38,6 +40,22 @@ async function needsConfirm(
 
 const lark = (args: unknown[], feishuConfig: FeishuConfig) =>
   needsConfirm('run_lark_cli', { args }, { feishuConfig })
+
+
+/** P2（B1）：显式默认门控材料（原 appDb 缺失静默回退的显式化）。 */
+function gateDefaultMaterials() {
+  return {
+    effectiveRules: DEFAULT_POLICY_RULES,
+    decisionCache: {
+      lookup: () => null,
+      record: () => undefined,
+      clear: () => 0,
+      clearAllSession: () => 0,
+      expireDormant: () => 0
+    },
+    shellPrecheck: { touchTrustedCommand: () => undefined }
+  }
+}
 
 describe('phase2 remote confirm defaults（经 toolCallGate + 规则表）', () => {
   it('larkCliWriteRequiresConfirm defaults true; high-impact always asks', async () => {

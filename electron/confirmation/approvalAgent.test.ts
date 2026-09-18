@@ -5,6 +5,10 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
+vi.mock('electron', () => ({
+  app: { getLocale: vi.fn(() => 'zh-CN') }
+}))
+
 const mockRunToolChatSession = vi.fn()
 const mockCreateSession = vi.fn()
 
@@ -20,6 +24,7 @@ vi.mock('../database', async (importOriginal) => {
   }
 })
 
+import { openDatabase } from '../database'
 import { APPROVAL_MAX_AUTHORIZATION, parseApprovalVerdict, runApprovalAgent } from './approvalAgent'
 import type { ApprovalCluePack, ApprovalInvocation } from '../../src/shared/confirmation/types'
 
@@ -49,7 +54,7 @@ function invocation(overrides: Partial<ApprovalInvocation> = {}): ApprovalInvoca
 }
 
 const deps = {
-  db: {} as never,
+  db: openDatabase(':memory:') as never,
   workDir: '/tmp/wd',
   userDataDir: '/tmp/ud',
   getToolsConfig: () => ({}) as never,

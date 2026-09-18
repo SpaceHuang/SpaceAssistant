@@ -1,3 +1,4 @@
+import { DEFAULT_POLICY_RULES } from '../src/shared/policy/defaultRules'
 import { describe, expect, it } from 'vitest'
 import { evaluateToolCallGate, isOutboundWriteTool, type ToolCallGateArgs } from './confirmation/toolCallGate'
 import {
@@ -38,6 +39,7 @@ function gateArgs(
     userDataDir: '/tmp/ud',
     toolsConfig,
     audit: { record: () => undefined },
+    ...gateDefaultMaterials(),
     ...overrides
   }
 }
@@ -60,6 +62,22 @@ function budgetState(maxConsecutiveOutboundWrites: number): RemoteTaskBudgetStat
     maxConcurrentExecutions: 1,
     maxConsecutiveOutboundWrites
   })
+}
+
+
+/** P2（B1）：显式默认门控材料（原 appDb 缺失静默回退的显式化）。 */
+function gateDefaultMaterials() {
+  return {
+    effectiveRules: DEFAULT_POLICY_RULES,
+    decisionCache: {
+      lookup: () => null,
+      record: () => undefined,
+      clear: () => 0,
+      clearAllSession: () => 0,
+      expireDormant: () => 0
+    },
+    shellPrecheck: { touchTrustedCommand: () => undefined }
+  }
 }
 
 describe('outbound write budget gate (经 toolCallGate + 规则 remote-outbound-budget-pause-*)', () => {

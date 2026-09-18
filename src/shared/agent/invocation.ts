@@ -10,7 +10,7 @@ import type {
   WeChatConfig,
   WikiConfig
 } from '../domainTypes'
-import type { ExecutionLane } from '../confirmation/types'
+import type { DecisionCacheView, ExecutionLane, PolicyRule } from '../confirmation/types'
 
 /**
  * Agent 调用契约（基线 §6.2；本计划 P1 落形）。
@@ -161,13 +161,93 @@ export interface AgentCredentialsPorts {
   resolveApiKey(): Promise<string | null>
 }
 
-/** 宿主端口：上下文台账写（压缩事务；真相类，P2 正式归入 ports.storage）。 */
+/** loadContext 装载的会话原始材料（只装载不装配；裁剪与注入留在 Core）。 */
+export interface AgentLoadedSessionContext {
+  /** electron 侧为 Session['metadata']。 */
+  metadata?: unknown
+}
+
+/** 真相类持久化端口：失败 = 调用显式失败 + 可区分错误码 + 审计，不允许静默 no-op。 */
+export interface AgentPersistPorts {
+  /** 会话元数据写（recovery skill 激活等）。 */
+  updateSessionMetadata?(sessionId: string, patch: Record<string, unknown>): void
+  /** 标题建议生成与落库。 */
+  scheduleTitleSuggestion?(input: Record<string, unknown>): void
+  /** 人类确认后的会话级信任双写 decision_cache（browser navigate / act）。 */
+  recordUserAnswerFromDecision?(input: Record<string, unknown>): void
+}
+
+/** 宿主存储端口（P2）：loadContext 材料 + 真相类写 + 压缩事务。 */
 export interface AgentStoragePorts {
+  /** 装配期 loadContext 装载的会话材料。 */
+  loaded?: AgentLoadedSessionContext
+  /** 现读通道（循环内消费点需要最新值，如浮动通知的会话名）。 */
+  readSession?(sessionId: string): unknown
+  persist?: AgentPersistPorts
   appendCompactionTransaction?(start: Record<string, unknown>, summary: Record<string, unknown>): Promise<unknown>
+}
+
+/** 暴露面规则（装配期解析；与门控 effectiveRules 同机制）。 */
+export interface AgentExposurePorts {
+  rules?: readonly PolicyRule[]
+}
+
+/** MCP 装配材料（P2）：快照装配期构建；执行器与连接管理走端口。 */
+export interface AgentMcpPorts {
+  /** electron 侧为 McpToolSnapshot；无库宿主为空快照。 */
+  snapshot: unknown
+  /** electron 侧为 (toolName, manager) => ToolExecutor | undefined。 */
+  resolveExecutor?(toolName: string, manager: unknown): unknown
+  /** 工具执行上下文的宿主库（工具实现的装配材料，非 Core 依赖）。 */
+  executorDatabase?: unknown
+}
+
+/** 用量观察类端口：失败降级重试、不改执行结论，但不得静默。 */
+export interface AgentUsagePorts {
+  recordStepUsage?(input: Record<string, unknown>): void
+  recordTurnSummary?(input: Record<string, unknown>): void
+}
+
+/** 诊断观察类端口（MCP 连接诊断）。 */
+export interface AgentDiagnosticsPorts {
+  append(serverId: string, entry: unknown): void
+}
+
+/** 回答者装配材料（P2 装配期解析；P5 接线 factsProvider 时收口）。 */
+export interface AgentAnswererPorts {
+  /** electron 侧为 LaneAnswererPolicy。 */
+  policy?: unknown
+  /** 审批子链的宿主库装配材料（子调用域，随块 4 收敛）。 */
+  approvalDatabase?: unknown
+}
+
+/**
+ * 门控端口材料（B1）：装配期解析注入；门控缺料 = 调用失败 + 审计（fail-loud）。
+ * 无库宿主（内存端口）必须显式提供默认材料并留痕，不得依赖门控侧回退。
+ */
+export interface AgentPolicyPorts {
+  effectiveRules: readonly PolicyRule[]
+  /** electron 侧为 GateDecisionCache（lookup + 写/清理族的完整形状）。 */
+  decisionCache: unknown
+  shellPrecheck: { touchTrustedCommand: (command: string) => void }
 }
 
 /** 宿主端口集合（P1 立骨架，P2 起承接 storage / usage / tools 等实现）。 */
 export interface AgentHostPorts {
+  /** P2（B1）：门控与暴露面规则的装配期材料。 */
+  policy?: AgentPolicyPorts
+  /** P2：loadContext / persist（真相类）。 */
+  storage?: AgentStoragePorts
+  /** P2：暴露面规则（装配期解析）。 */
+  exposure?: AgentExposurePorts
+  /** P2：MCP 快照与执行器（装配期构建）。 */
+  mcp?: AgentMcpPorts
+  /** P2：用量落库（观察类）。 */
+  usage?: AgentUsagePorts
+  /** P2：MCP 连接诊断（观察类）。 */
+  diagnostics?: AgentDiagnosticsPorts
+  /** P2：回答者策略与审批装配材料。 */
+  answerer?: AgentAnswererPorts
   workspace: AgentWorkspacePorts
   credentials: AgentCredentialsPorts
   /**
@@ -180,7 +260,6 @@ export interface AgentHostPorts {
   hostFacts?: {
     getBrowserDetectContext?(): BrowserDetectContext
   }
-  storage?: AgentStoragePorts
   /** electron 侧为 ContextMeter（Core 以 session event ledger 提供的测量适配器）。 */
   contextMeter?: unknown
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */

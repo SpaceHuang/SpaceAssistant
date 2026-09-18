@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import type { AppDatabase } from '../database'
+import { AppDatabase, openDatabase, setConfigValue } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 
@@ -17,9 +17,13 @@ vi.mock('../appIpc', () => ({
   readAppLocale: (...args: unknown[]) => mockReadAppLocale(...args)
 }))
 
-vi.mock('../database', () => ({
-  getMessages: (...args: unknown[]) => mockGetMessages(...args)
-}))
+vi.mock('../database', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../database')>()
+  return {
+    ...actual,
+    getMessages: (...args: unknown[]) => mockGetMessages(...args)
+  }
+})
 
 vi.mock('../llmServiceResolver', () => ({
   resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args)
@@ -53,14 +57,9 @@ vi.mock('../workDirManager', async (importOriginal) => {
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 
 function makeDb(): AppDatabase {
-  return {
-    data: {
-      configs: { 'config.locale': { value: 'en-US', createdAt: 0, updatedAt: 0 } },
-      sessions: [{ id: 'sess-1', name: '', model: 'claude-sonnet-4-20250514' }],
-      messages: []
-    },
-    save: vi.fn()
-  } as unknown as AppDatabase
+  const db = openDatabase(':memory:')
+  setConfigValue(db, 'config.locale', 'en-US')
+  return db
 }
 
 function makeWorkDirManager() {

@@ -1,3 +1,4 @@
+import { DEFAULT_POLICY_RULES } from '../src/shared/policy/defaultRules'
 import { describe, expect, it } from 'vitest'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './confirmation/toolCallGate'
 import { DEFAULT_WECHAT_CONFIG, type WeChatConfig } from '../src/shared/wechatTypes'
@@ -31,8 +32,25 @@ function gate(
     userDataDir: '/tmp/ud',
     toolsConfig,
     audit: { record: () => undefined },
+    ...gateDefaultMaterials(),
     ...overrides
   })
+}
+
+
+/** P2（B1）：显式默认门控材料（原 appDb 缺失静默回退的显式化）。 */
+function gateDefaultMaterials() {
+  return {
+    effectiveRules: DEFAULT_POLICY_RULES,
+    decisionCache: {
+      lookup: () => null,
+      record: () => undefined,
+      clear: () => 0,
+      clearAllSession: () => 0,
+      expireDormant: () => 0
+    },
+    shellPrecheck: { touchTrustedCommand: () => undefined }
+  }
 }
 
 describe('wechat outbound confirm removal（经 toolCallGate + 规则表）', () => {

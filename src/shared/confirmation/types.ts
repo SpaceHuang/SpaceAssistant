@@ -263,6 +263,7 @@ export type ConfirmOutcomeCause =
   | 'config-error'
   | 'recursion-blocked'
   | 'no-answerer'
+  | 'gate-materials-missing'
 
 export type ConfirmOutcome =
   | {

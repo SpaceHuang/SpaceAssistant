@@ -6,6 +6,27 @@ import type {
 } from '../../src/shared/agent/invocation'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../../src/shared/agent/invocation'
 import type { FloatingNotificationManager } from '../floatingNotificationManager'
+import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
+import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
+import { touchTrustedCommand } from '../shell/shellCommandTrust'
+import { getDbConnection, getSession, updateSession } from '../database'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
+import type { AppDatabase } from '../database'
+import { logAgentEvent } from '../agentLogger/agentLogger'
+import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
+import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
+import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
+import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
+import { resolveLaneAnswererPolicy } from '../confirmation/answererConfig'
+import { buildSnapshotFromDb, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
+import { resolveRequestLocale } from '../llmSystemPrompt'
+import { listProfiles } from '../mcp/mcpConfigStore'
+import { getSecret } from '../mcp/mcpSecretStore'
+import { getDiagnostics } from '../mcp/mcpDiagnostics'
+import { createMcpOAuthClientProvider } from '../mcp/mcpOauthService'
+import { createMcpToolExecutor } from '../mcp/mcpToolExecutor'
+import { getSecurityAuditLog } from '../confirmation/audit'
+import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
 
 /**
  * Runtime 唯一装配点（roadmap「Runtime 是唯一装配点」在主进程的落位）。
@@ -105,6 +126,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   invocation: AgentInvocation
   ports: AgentHostPorts
 } {
+  const db = materials.appDb as AppDatabase | undefined
   const additionalContext: Record<string, unknown> = {}
   if (materials.approvalTaskDigest !== undefined) {
     additionalContext[AGENT_ADDITIONAL_CONTEXT_KEYS.approvalTaskDigest] = materials.approvalTaskDigest
@@ -112,6 +134,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   if (materials.historyFacts !== undefined) {
     additionalContext[AGENT_ADDITIONAL_CONTEXT_KEYS.historyFacts] = materials.historyFacts
   }
+
+  // locale 定值（请求优先、库回退在装配期完成；循环内不再查库）
+  const resolvedLocale = resolveRequestLocale(materials.locale, db as never)
 
   const invocation: AgentInvocation = {
     session: { sessionId: materials.sessionId },
@@ -128,7 +153,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.baseUrl !== undefined ? { baseUrl: materials.baseUrl } : {}),
       ...(materials.system !== undefined ? { system: materials.system } : {}),
       ...(materials.options !== undefined ? { options: materials.options } : {}),
-      ...(materials.locale !== undefined ? { locale: materials.locale } : {}),
+      ...(resolvedLocale !== undefined ? { locale: resolvedLocale } : {}),
       ...(materials.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: materials.projectMemoryEnabled } : {}),
       ...(materials.skillFragments !== undefined ? { skillFragments: materials.skillFragments } : {}),
       tools: {
@@ -158,7 +183,116 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     ...(materials.remoteContext !== undefined ? { driverContext: materials.remoteContext } : {})
   }
 
+  // ===== P2（B1）：门控端口材料装配期解析 =====
+  // lane 推导与 Core 外壳同一规则（显式 lane → remoteContext 推导 → desktop）
+  const materialsLane = materials.lane
+    ?? (materials.remoteContext
+      ? materials.remoteContext.source === 'feishu'
+        ? 'feishu'
+        : 'wechat'
+      : 'desktop')
+  const policy = db
+    ? {
+        effectiveRules: loadEffectivePolicyRules(db, materialsLane),
+        decisionCache: new SqliteDecisionCache(getDbConnection(db)),
+        shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) }
+      }
+    : {
+        // 无库宿主（内存端口 / 测试）：显式默认材料 + 留痕——不是门控侧静默回退
+        effectiveRules: DEFAULT_POLICY_RULES,
+        decisionCache: { lookup: () => null },
+        shellPrecheck: { touchTrustedCommand: () => undefined }
+      }
+  if (!db) {
+    logAgentEvent('info', 'agent.policy.default_materials', {
+      requestId: materials.requestId,
+      lane: materialsLane,
+      reason: 'no-database-host'
+    })
+  }
+
+  // ===== P2 批次 B：Core 脱库的装配期材料 =====
+  // 真相类端口失败可观测（§2.4 标准 3）：落审计诊断 + 原样 rethrow——
+  // 执行结论仍为调用显式失败（fail-cancelled 语义随异常传播保持），但不再静默。
+  const persistObservable = <T>(op: string, fn: () => T): T => {
+    try {
+      return fn()
+    } catch (e) {
+      logAgentEvent('error', 'agent.persist.failed', {
+        requestId: materials.requestId,
+        sessionId: materials.sessionId,
+        op,
+        error: e instanceof Error ? e.message : String(e)
+      })
+      throw e
+    }
+  }
+  const storage = {
+    ...(db
+      ? {
+          loaded: { metadata: getSession(db, materials.sessionId)?.metadata },
+          readSession: (sessionId: string) => getSession(db, sessionId),
+          persist: {
+            updateSessionMetadata: (sessionId: string, patch: Record<string, unknown>) =>
+              persistObservable('updateSessionMetadata', () => updateSession(db, sessionId, patch as never)),
+            scheduleTitleSuggestion: (input: Record<string, unknown>) =>
+              persistObservable('scheduleTitleSuggestion', () => scheduleSessionTitleSuggestion({ ...input, db } as never)),
+            recordUserAnswerFromDecision: (input: Record<string, unknown>) =>
+              persistObservable('recordUserAnswerFromDecision', () => recordUserAnswerFromDecision({ ...input, db, audit: getSecurityAuditLog() } as never))
+          }
+        }
+      : {}),
+    ...(materials.appendCompactionTransaction !== undefined
+      ? { appendCompactionTransaction: (start: Record<string, unknown>, summary: Record<string, unknown>) => materials.appendCompactionTransaction!(start, summary) }
+      : {})
+  }
+  const exposure = db ? { rules: loadEffectivePolicyRules(db, materialsLane) } : undefined
+  const mcpSnapshot: McpToolSnapshot = db
+    ? buildSnapshotFromDb(db, { remoteContext: materialsLane !== 'desktop' })
+    : { entries: new Map(), budgetDropped: [] }
+  const mcp = db
+    ? {
+        snapshot: mcpSnapshot,
+        resolveExecutor: (toolName: string, manager: McpConnectionManager) => {
+          const entry = mcpSnapshot.entries.get(toolName)
+          if (!entry) return undefined
+          const profile = listProfiles(db).find((p) => p.id === entry.serverId)
+          if (!profile) return undefined
+          const oauthProvider =
+            profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
+          return createMcpToolExecutor(entry, {
+            getSession: (serverId: string) =>
+              manager.connect(profile, async (kind) => getSecret(db, serverId, kind), { oauthProvider }),
+            getProfile: () => profile,
+            invalidateSession: (serverId: string) => manager.disconnect(serverId),
+            getRecentDiagnostics: (serverId: string) => getDiagnostics(db, serverId)
+          })
+        },
+        executorDatabase: db
+      }
+    : { snapshot: mcpSnapshot }
+  const usage = db
+    ? {
+        recordStepUsage: (input: Record<string, unknown>) => recordStepUsage(db, input as never),
+        recordTurnSummary: (input: Record<string, unknown>) => recordTurnSummary(db, input as never)
+      }
+    : undefined
+  const diagnostics = db
+    ? { append: (serverId: string, entry: unknown) => safeAppendDiagnostic(db, serverId, entry as never) }
+    : undefined
+  const answerer = {
+    policy: resolveLaneAnswererPolicy(db, materialsLane),
+    ...(db ? { approvalDatabase: db } : {})
+  }
+
   const ports: AgentHostPorts = {
+    policy,
+    storage,
+    exposure,
+    mcp,
+    usage,
+    diagnostics,
+    answerer,
     workspace: {
       workDir: materials.workDir,
       ...(materials.workDirManager !== undefined ? { workDirManager: materials.workDirManager } : {}),
@@ -171,9 +305,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     ...(materials.appDb !== undefined ? { legacy: { appDb: materials.appDb } } : {}),
     ...(materials.getBrowserDetectContext !== undefined
       ? { hostFacts: { getBrowserDetectContext: () => materials.getBrowserDetectContext!() } }
-      : {}),
-    ...(materials.appendCompactionTransaction !== undefined
-      ? { storage: { appendCompactionTransaction: (start, summary) => materials.appendCompactionTransaction!(start, summary) } }
       : {}),
     ...(materials.contextMeter !== undefined ? { contextMeter: materials.contextMeter } : {}),
     ...(materials.onTurnBoundary !== undefined ? { turnBoundary: (input) => materials.onTurnBoundary!(input as never) } : {})

@@ -1,5 +1,5 @@
 import { decide } from '../../src/shared/policy/policyEngine'
-import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
+import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -33,21 +33,16 @@ import type { ActDangerAssessment } from '../browser/browserActionPolicy'
 import { classifyLarkCliImpact } from '../feishu/larkCliImpactPolicy'
 import type { McpToolSnapshotEntry } from '../mcp/mcpToolRegistry'
 import type { RemoteContext } from '../tools/types'
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database'
 import { checkRemoteTaskBudget, type RemoteTaskBudgetState } from '../remote/remoteTaskBudget'
 import {
   isRemoteSecurityMigrationComplete,
   shouldSkipRemoteBrowserActConfirm
 } from '../remote/remoteToolPolicy'
 import { AuditedDecisionCache } from './auditedDecisionCache'
-import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getSecurityAuditLog } from './audit'
-import { loadEffectivePolicyRules } from './policyRulesRuntime'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 
-const EMPTY_CACHE: DecisionCacheView = { lookup: () => null }
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
 export function isOutboundWriteTool(toolName: string, toolInput: Record<string, unknown>): boolean {
@@ -55,6 +50,9 @@ export function isOutboundWriteTool(toolName: string, toolInput: Record<string, 
   if (toolName !== 'run_lark_cli') return false
   return classifyLarkCliImpact(toolInput.args).impact !== 'read'
 }
+
+/** 门控消费的决策缓存完整形状（lookup + 写/清理族；由装配期注入 SqliteDecisionCache 或等价内存实现）。 */
+export type GateDecisionCache = import('./auditedDecisionCache').AuditedDecisionCacheDeps['cache']
 
 export interface ToolCallGateArgs {
   toolName: string
@@ -70,7 +68,12 @@ export interface ToolCallGateArgs {
   browserConfig?: BrowserConfig | null
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
-  appDb?: AppDatabase
+  /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退 DEFAULT_POLICY_RULES）。 */
+  effectiveRules: PolicyRule[]
+  /** 装配期构造的决策缓存视图（B1：必填，缺料 fail-loud，不回退 EMPTY_CACHE）。 */
+  decisionCache: GateDecisionCache
+  /** 装配期注入的 shell 预检材料（B1：必填；trusted-command 记账写不允许静默停写）。 */
+  shellPrecheck: { touchTrustedCommand: (command: string) => void }
   remoteBudgetState?: RemoteTaskBudgetState | null
   /** 浏览器 act 的危险评估结论（由执行链路先行评估注入）。 */
   dangerAssessment?: ActDangerAssessment | null
@@ -136,6 +139,31 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     facts: undefined as unknown as ContentFacts
   }
 
+  // ===== B1 缺料 fail-loud：端口材料缺失 = 调用失败 + 审计（不回退任何静默默认）=====
+  const materialsMissing: string[] = []
+  if (!Array.isArray(args.effectiveRules)) materialsMissing.push('effectiveRules')
+  if (!args.decisionCache || typeof args.decisionCache.lookup !== 'function') materialsMissing.push('decisionCache')
+  if (!args.shellPrecheck || typeof args.shellPrecheck.touchTrustedCommand !== 'function') materialsMissing.push('shellPrecheck')
+  if (materialsMissing.length > 0) {
+    audit.record({
+      ts: Date.now(),
+      event: 'policy.decision',
+      lane,
+      origin,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      riskLevel: 'high',
+      factsSummary: args.toolName,
+      signals: [],
+      decision: 'deny',
+      ruleId: 'gate-materials-missing',
+      reason: `TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`,
+      cause: 'gate-materials-missing',
+      actor: 'system'
+    })
+    throw new Error(`TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`)
+  }
+
   // ===== 前置 validator：run_shell 预检（deny 短路，不进引擎）=====
   let shellLegacyAutoAllowEligible = false
   if (args.toolName === 'run_shell') {
@@ -144,7 +172,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       workDir: args.workDir,
       userDataDir: args.userDataDir,
       shellConfig: args.shellConfig,
-      appDb: args.appDb
+      shellPrecheck: args.shellPrecheck
     })
     if (!precheck.ok) {
       result.shellPrecheckDeny = {
@@ -189,9 +217,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible
   }
 
-  // ===== 生效规则集（套餐/覆盖，§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用 =====
-  // 提前加载：桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作
-  const rules = args.appDb ? loadEffectivePolicyRules(args.appDb, lane) : DEFAULT_POLICY_RULES
+  // ===== 生效规则集（§4 第 1 区）：装配期解析注入（B1）——门控不再持库，缺料在入口已 fail-loud =====
+  // （桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作）
+  const rules = args.effectiveRules
 
   // ===== 桌面写/编辑自动审批（预计算，评估器闭包消费）=====
   // 生效条件：desktop-auto-approve 动作为 auto-evaluator；默认规则带 confirmMode=auto 门控，
@@ -329,15 +357,14 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   // ===== 决策（缓存走 AuditedDecisionCache，落 cache.hit 审计）=====
-  const cache: DecisionCacheView = args.appDb
-    ? new AuditedDecisionCache({
-        cache: new SqliteDecisionCache(getDbConnection(args.appDb)),
-        audit,
-        sessionId: args.sessionId,
-        lane,
-        origin
-      })
-    : EMPTY_CACHE
+  // 底层视图由装配期注入（B1）；审计装饰仍在此完成，保证 args.audit 注入语义不变
+  const cache: DecisionCacheView = new AuditedDecisionCache({
+    cache: args.decisionCache,
+    audit,
+    sessionId: args.sessionId,
+    lane,
+    origin
+  })
   const deps: PolicyEngineDeps = {
     cache,
     config,

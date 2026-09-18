@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WebContents } from 'electron'
-import type { AppDatabase } from '../database'
+import { openDatabase, type AppDatabase } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
@@ -25,9 +25,13 @@ vi.mock('../llmServiceResolver', () => ({
   resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args)
 }))
 
-vi.mock('../database', () => ({
-  getMessages: (...args: unknown[]) => mockGetMessages(...args)
-}))
+vi.mock('../database', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../database')>()
+  return {
+    ...actual,
+    getMessages: (...args: unknown[]) => mockGetMessages(...args)
+  }
+})
 
 vi.mock('../appIpc', () => ({
   readAppLocale: () => 'zh-CN'
@@ -53,7 +57,7 @@ vi.mock('../workDirManager', async (importOriginal) => {
 import { runImRemoteAgent } from './imRemoteAgent'
 
 function makeDb(): AppDatabase {
-  return { data: { configs: {}, sessions: [], messages: [] }, save: vi.fn() } as unknown as AppDatabase
+  return openDatabase(':memory:')
 }
 
 function makeWorkDirManager() {
