@@ -10,11 +10,14 @@ const SENSITIVE_KEY_EXACT_PATTERN =
   /^(api[_-]?key|password|passwd|secret|token|authorization|x-api-key|credentials?|private[_-]?key)$/i
 
 /**
- * 宽匹配否定白名单（v3 评审建议 2）：`max_tokens` 等量化字段名含 token 词但非凭据，
- * 误伤会把 LLM 400 排障关键字段打成 [REDACTED]。
+ * 宽匹配否定白名单（v3 评审建议 2 / v4 建议 1）：`max_tokens`、`maxTokens`、`tokenLimit`
+ * 等量化字段名含 token 词但非凭据，误伤会把 LLM 400 排障关键字段打成 [REDACTED]。
+ * 覆盖 snake_case 前后缀与 camelCase（量化词后跟大写字母开头段落）。
+ * 已知理论假阴性（记录在案，无现实触发路径）：`limit_api_key` 等量化词与凭据词组合的键
+ * 会被豁免——现网无此类键名；新增凭据键时须检查是否撞白名单。
  */
 const NON_CREDENTIAL_KEY_PATTERN =
-  /^(?:max|min|total|remaining|used|limit|budget)[_-]|[_-](?:max|min|total|remaining|used|limit|budget|count)$/i
+  /^(?:max|min|total|remaining|used|limit|budget)(?:[_-]|[A-Z])|[_-](?:max|min|total|remaining|used|limit|budget|count)$|[a-z](?:Max|Min|Total|Remaining|Used|Limit|Budget)$|[A-Z_-](?:max|min|total|remaining|used|limit|budget|count)$/i
 
 function isSensitiveKey(key: string): boolean {
   if (SENSITIVE_KEY_EXACT_PATTERN.test(key)) return true

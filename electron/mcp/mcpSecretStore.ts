@@ -55,8 +55,11 @@ let lockHeld = false
 
 /**
  * 主进程内单一互斥队列：串行化所有 Secret「读→改→写」临界区。
- * 临界区内再调用本函数会静默死锁（内层排在 writeChain 尾部等外层释放），
- * 重入立即抛错暴露调用点（v3 评审建议 4）。
+ * 重入语义（v3 建议 4 + v4 评审修正）：仅检测「fn 同步执行期间的重入调用」——那是
+ * 唯一会静默死锁的形态（内层排在 writeChain 尾部等外层释放）。lockHeld 必须在 fn()
+ * 同步返回的 try/finally 内联清除：放到外层 promise 的 finally 会在 async fn 挂起
+ * 期间留下窗口，把独立并发调用方误报为重入（v4 评审实证 B 被误拒）。fn 返回的
+ * promise 继续在锁链上排队，互斥性不受清除时机影响。
  */
 export function withMcpSecretWriteLock<T>(fn: () => T | Promise<T>): Promise<T> {
   if (lockHeld) {
@@ -64,15 +67,17 @@ export function withMcpSecretWriteLock<T>(fn: () => T | Promise<T>): Promise<T> 
   }
   const result = writeChain.then(() => {
     lockHeld = true
-    return fn()
+    try {
+      return fn()
+    } finally {
+      lockHeld = false
+    }
   })
   writeChain = result.then(
     () => undefined,
     () => undefined
   )
-  return result.finally(() => {
-    lockHeld = false
-  })
+  return result
 }
 
 export async function setSecret(db: AppDatabase, serverId: string, kind: string, plain: string): Promise<void> {

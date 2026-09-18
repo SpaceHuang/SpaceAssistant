@@ -373,5 +373,27 @@ describe('withMcpSecretWriteLock 重入检测（v3 评审建议 4）', () => {
       )
     ).rejects.toThrow('MCP_SECRET_LOCK_REENTRY')
   })
+
+  it('async 临界区挂起期间，独立并发调用正常排队而非误拒（v4 评审）', async () => {
+    const { withMcpSecretWriteLock } = await import('./mcpSecretStore')
+    const order: string[] = []
+    const first = withMcpSecretWriteLock(async () => {
+      order.push('A-start')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      order.push('A-end')
+      return 'A-done'
+    })
+    // 等 A 的回调开始执行（lockHeld=true 的窗口）后 B 才进入入口——
+    // 这是 v4 评审实证的误拒形态：B 是独立调用方，必须排队而非被误报 REENTRY
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(order).toEqual(['A-start'])
+    const second = withMcpSecretWriteLock(() => {
+      order.push('B')
+      return 'B-done'
+    })
+    expect(await first).toBe('A-done')
+    expect(await second).toBe('B-done')
+    expect(order).toEqual(['A-start', 'A-end', 'B'])
+  })
 })
 })

@@ -60,15 +60,19 @@ describe('sanitizeForLog', () => {
     expect(result.env).toBe('[REDACTED]')
   })
 
-  it('量化字段名含 token 词但非凭据 → 保留（v3 评审建议 2 否定白名单）', () => {
+  it('量化字段名含 token 词但非凭据 → 保留（v3 建议 2 / v4 建议 1 否定白名单，含驼峰）', () => {
     const result = sanitizeForLog({
       max_tokens: 8192,
       total_tokens: 1024,
-      token_limit: 4096
+      token_limit: 4096,
+      maxTokens: 8192,
+      tokenLimit: 4096
     }) as Record<string, unknown>
     expect(result.max_tokens).toBe(8192)
     expect(result.total_tokens).toBe(1024)
     expect(result.token_limit).toBe(4096)
+    expect(result.maxTokens).toBe(8192)
+    expect(result.tokenLimit).toBe(4096)
   })
 
   it('redacts llmServiceKeys map values', () => {
