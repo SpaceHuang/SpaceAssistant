@@ -719,4 +719,74 @@ describe('ToolCallCard deferred stringify', () => {
     expect(callsOnInput.length).toBe(0)
     stringifySpy.mockRestore()
   })
+describe('ToolCallCard toolkit 凭据净化（v2 评审 R1 / v3 建议 5 回归）', () => {
+  it('确认窗口内搜索兜底渲染的 toolkit 入参文本不落明文（v3 评审 S + R1 联合回归）', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    const { container } = render(
+      <ToolCallCard
+        record={{
+          id: 'toolkit-r1',
+          toolName: 'toolkit_call',
+          status: 'confirming',
+          riskLevel: 'high',
+          input: {
+            id: 'action.mcp.add',
+            params: { name: 'scys', accessToken: 'ghp_leakcheck123', env: { API_TOKEN: 'tok-leak' } }
+          }
+        }}
+        confirmMode="direct"
+        onConfirm={vi.fn()}
+        messageId="msg-1"
+        activeSearchTarget={{
+          messageId: 'msg-1',
+          fragmentId: 'msg-1|tool-input:toolkit-r1',
+          start: 0,
+          end: 5,
+          order: { kind: 'live', createdAt: 1 },
+          source: { kind: 'tool-input', toolUseId: 'toolkit-r1' },
+          renderStrategy: 'anchored-text',
+          revealPath: { toolUseId: 'toolkit-r1', toolSection: 'input' },
+          // 生产中该文本来自 chatSearchFragments 的净化片段（v3 评审 S 修复后的 corpus）
+          searchableText:
+            '{\n  "id": "action.mcp.add",\n  "params": { "name": "scys", "accessToken": true }\n}'
+        }}
+      />
+    )
+    // 搜索兜底 pre 渲染的是净化后的片段文本（锚点断言：确有内容渲染，防假绿）
+    await waitFor(() => {
+      const pre = container.querySelector('.sa-search-reveal-source')
+      expect(pre?.textContent ?? '').toContain('action.mcp.add')
+    })
+    expect(container.textContent).not.toContain('ghp_leakcheck123')
+    expect(container.textContent).not.toContain('tok-leak')
+    expect(container.textContent).toContain('scys')
+  })
+})
+it('completed 展开态的 paramPreview 凭据不落 DOM（v2 评审 R1 主路径回归）', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    const { container } = render(
+      <ToolCallCard
+        record={{
+          id: 'toolkit-r1-completed',
+          toolName: 'toolkit_call',
+          status: 'completed',
+          riskLevel: 'high',
+          input: {
+            id: 'action.mcp.add',
+            params: { name: 'scys', accessToken: 'ghp_leakcheck123' }
+          },
+          completedAt: Date.now()
+        }}
+        confirmMode="direct"
+        focus
+      />
+    )
+    await waitFor(() => {
+      const pre = container.querySelector('.sa-command-inset')
+      expect(pre?.textContent ?? '').toContain('action.mcp.add')
+    })
+    expect(container.textContent).not.toContain('ghp_leakcheck123')
+  })
 })

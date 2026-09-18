@@ -14,12 +14,19 @@
 export const CREDENTIAL_KEY_PATTERN =
   /^(api[_-]?key|password|passwd|secret|token|access[_-]?token|refresh[_-]?token|authorization|x-api-key|credentials?|private[_-]?key|client[_-]?secret|header[_-]?value)$/i
 
-/** env 键值表的载体键（大小写不敏感，v2 评审建议 5） */
-const ENV_KEY_PATTERN = /^env$/i
+/** env 键值表的载体键（大小写不敏感；v3 评审建议 3：三处口径统一引用此判定） */
+export function isEnvCarrierKey(key: string): boolean {
+  return /^env$/i.test(key)
+}
+
+/** env secret-map 键形态（env:KEY，结果/日志侧） */
+export function isEnvSecretMapKey(key: string): boolean {
+  return /^env:/i.test(key)
+}
 
 /** env 键值表的值整体布尔化（键名保留，供用户辨认是哪个变量） */
 function isEnvValueTable(key: string | undefined, value: unknown): value is Record<string, unknown> {
-  return Boolean(key) && ENV_KEY_PATTERN.test(key!) && Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  return Boolean(key) && isEnvCarrierKey(key!) && Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 export function sanitizeCapabilityParamsForDisplay(value: unknown, key?: string): unknown {

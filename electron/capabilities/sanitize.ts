@@ -1,4 +1,4 @@
-import { CREDENTIAL_KEY_PATTERN } from '../../src/shared/capabilityParamSanitize'
+import { CREDENTIAL_KEY_PATTERN, isEnvSecretMapKey } from '../../src/shared/capabilityParamSanitize'
 
 const ANTHROPIC_KEY_PATTERN = /sk-ant-[a-zA-Z0-9_-]+/g
 const BEARER_PATTERN = /Bearer\s+\S+/gi
@@ -19,7 +19,7 @@ export function scrubString(s: string): string {
 export function sanitizeCapabilityResult(value: unknown): unknown {
   const seen = new WeakSet<object>()
   const walk = (v: unknown, key?: string): unknown => {
-    if (key && (CREDENTIAL_KEY_PATTERN.test(key) || /^env:/i.test(key))) {
+    if (key && (CREDENTIAL_KEY_PATTERN.test(key) || isEnvSecretMapKey(key))) {
       return Boolean(v)
     }
     if (v == null || typeof v === 'number' || typeof v === 'boolean') return v

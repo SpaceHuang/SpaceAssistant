@@ -299,6 +299,30 @@ describe('mcpService.addMcpServer 三态结论（需求 §7 Phase 2 / 前案 §5
     }
   })
 
+  it('并发 appendServer：Promise.all 两个 add 全部落库，既有 secret 保留（v3 评审建议 1）', async () => {
+    const { db, cleanup } = createTempDatabase('mcp-append-concurrent-')
+    try {
+      await addMcpServer(db, {
+        name: '并发既有服务', transport: 'http', endpoint: await startMockServer({ registrationEndpoint: true }),
+        authMode: 'bearer-token', accessToken: 'existing-kept-token'
+      })
+      const endpointB = await startMockServer({ registrationEndpoint: true })
+      // 同一 endpoint 无害：名称不同即可
+      const [r1, r2] = await Promise.all([
+        addMcpServer(db, { name: '并发A', transport: 'stdio', command: 'a' }),
+        addMcpServer(db, { name: '并发B', transport: 'stdio', command: 'b' })
+      ])
+      expect(r1.ok).toBe(true)
+      expect(r2.ok).toBe(true)
+      const profiles = listProfiles(db)
+      const names = profiles.map((p) => p.name).sort()
+      expect(names).toEqual(['并发A', '并发B', '并发既有服务'].sort())
+      expect(profiles.find((p) => p.name === '并发既有服务')?.auth.secretPresent).toBe(true)
+    } finally {
+      cleanup()
+    }
+  })
+
   it('safeStorage 不可用且带 secret → save-failed，不落库（评审建议 14）', async () => {
     const secureApiKey = await import('../secureApiKey')
     const spy = vi.spyOn(secureApiKey, 'isSecretStorageAvailable').mockReturnValue(false)
@@ -340,4 +364,14 @@ describe('mcpService.addMcpServer 三态结论（需求 §7 Phase 2 / 前案 §5
       cleanup()
     }
   })
+describe('withMcpSecretWriteLock 重入检测（v3 评审建议 4）', () => {
+  it('临界区内重入调用立即拒绝', async () => {
+    const { withMcpSecretWriteLock } = await import('./mcpSecretStore')
+    await expect(
+      withMcpSecretWriteLock(() =>
+        withMcpSecretWriteLock(() => 'inner')
+      )
+    ).rejects.toThrow('MCP_SECRET_LOCK_REENTRY')
+  })
+})
 })

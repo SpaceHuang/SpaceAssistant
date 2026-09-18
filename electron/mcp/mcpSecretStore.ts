@@ -51,15 +51,28 @@ export function writeSecretMapRaw(db: AppDatabase, map: McpSecretMap): void {
 }
 
 let writeChain: Promise<void> = Promise.resolve()
+let lockHeld = false
 
-/** 主进程内单一互斥队列：串行化所有 Secret「读→改→写」临界区。 */
+/**
+ * 主进程内单一互斥队列：串行化所有 Secret「读→改→写」临界区。
+ * 临界区内再调用本函数会静默死锁（内层排在 writeChain 尾部等外层释放），
+ * 重入立即抛错暴露调用点（v3 评审建议 4）。
+ */
 export function withMcpSecretWriteLock<T>(fn: () => T | Promise<T>): Promise<T> {
-  const result = writeChain.then(fn)
+  if (lockHeld) {
+    return Promise.reject(new Error('MCP_SECRET_LOCK_REENTRY: withMcpSecretWriteLock 临界区内不可重入'))
+  }
+  const result = writeChain.then(() => {
+    lockHeld = true
+    return fn()
+  })
   writeChain = result.then(
     () => undefined,
     () => undefined
   )
-  return result
+  return result.finally(() => {
+    lockHeld = false
+  })
 }
 
 export async function setSecret(db: AppDatabase, serverId: string, kind: string, plain: string): Promise<void> {

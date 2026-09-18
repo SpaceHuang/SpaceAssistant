@@ -1,4 +1,4 @@
-import { CREDENTIAL_KEY_PATTERN } from '../src/shared/capabilityParamSanitize'
+import { CREDENTIAL_KEY_PATTERN, isEnvCarrierKey, isEnvSecretMapKey } from '../src/shared/capabilityParamSanitize'
 
 /**
  * 键级脱敏：精确匹配历史清单 + 凭据词包含匹配（v2 评审 S1'）。
@@ -9,11 +9,19 @@ import { CREDENTIAL_KEY_PATTERN } from '../src/shared/capabilityParamSanitize'
 const SENSITIVE_KEY_EXACT_PATTERN =
   /^(api[_-]?key|password|passwd|secret|token|authorization|x-api-key|credentials?|private[_-]?key)$/i
 
+/**
+ * 宽匹配否定白名单（v3 评审建议 2）：`max_tokens` 等量化字段名含 token 词但非凭据，
+ * 误伤会把 LLM 400 排障关键字段打成 [REDACTED]。
+ */
+const NON_CREDENTIAL_KEY_PATTERN =
+  /^(?:max|min|total|remaining|used|limit|budget)[_-]|[_-](?:max|min|total|remaining|used|limit|budget|count)$/i
+
 function isSensitiveKey(key: string): boolean {
   if (SENSITIVE_KEY_EXACT_PATTERN.test(key)) return true
-  if (CREDENTIAL_KEY_PATTERN.test(key)) return true
   // env 键值表的载体键（toolkit.call 入参 env: { KEY: value }）与其 secret-map 变体
-  if (key === 'env' || key.startsWith('env:')) return true
+  if (isEnvCarrierKey(key) || isEnvSecretMapKey(key)) return true
+  if (NON_CREDENTIAL_KEY_PATTERN.test(key)) return false
+  if (CREDENTIAL_KEY_PATTERN.test(key)) return true
   // 复合键名含凭据词（accessToken / API_TOKEN / refreshToken…）：宽匹配兜底
   return /(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|authorization|credential)/i.test(key)
 }
