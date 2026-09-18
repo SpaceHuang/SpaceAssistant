@@ -1,0 +1,185 @@
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
+import { Provider } from 'react-redux'
+import { configureStore } from '@reduxjs/toolkit'
+import { ConfigProvider } from 'antd'
+import { UsageStatsKpiCards } from './UsageStatsKpiCards'
+import { UsageTrendChart } from './UsageTrendChart'
+import { UsageStatsDrawer } from './UsageStatsDrawer'
+import { setUsageStatsOpen } from '../../store/configSlice'
+import configReducer from '../../store/configSlice'
+import type { UsageDailyPoint, UsageSummary } from '../../../shared/usageStatsTypes'
+
+function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
+  return {
+    totalTokens: 1_280_000,
+    inputTokens: 1_100_000,
+    outputTokens: 180_000,
+    cacheReadTokens: 860_000,
+    cacheCreationTokens: 0,
+    hitRate: 0.782,
+    toolCallCount: 342,
+    toolErrorCount: 12,
+    toolSkippedCount: 5,
+    toolErrorRate: 12 / 342,
+    turnCount: 128,
+    stepCount: 438,
+    avgStepsPerTurn: 438 / 128,
+    ...overrides
+  }
+}
+
+function mockChartSize(): void {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    width: 800,
+    height: 400,
+    top: 0,
+    left: 0,
+    right: 800,
+    bottom: 400,
+    x: 0,
+    y: 0,
+    toJSON: () => ({})
+  } as DOMRect)
+  // setup.ts 的 RO polyfill 不触发回调；recharts ResponsiveContainer 依赖首次回调确定尺寸
+  class ImmediateResizeObserver {
+    private readonly callback: ResizeObserverCallback
+    constructor(callback: ResizeObserverCallback) {
+      this.callback = callback
+    }
+    observe(target: Element): void {
+      this.callback(
+        [{ target, contentRect: { width: 800, height: 400, top: 0, left: 0 } } as unknown as ResizeObserverEntry],
+        this as unknown as ResizeObserver
+      )
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  vi.stubGlobal('ResizeObserver', ImmediateResizeObserver)
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
+describe('UsageStatsKpiCards', () => {
+  it('展示全部核心指标：缩写、命中率、工具三分类与步数佐证', () => {
+    render(
+      <ConfigProvider>
+        <UsageStatsKpiCards summary={summary()} />
+      </ConfigProvider>
+    )
+    expect(screen.getAllByTestId('usage-kpi-value').map((el) => el.textContent)).toEqual(['1.28M', '1.1M', '180,000', '860,000'])
+    expect(screen.getByTestId('usage-kpi-hit-rate').textContent).toBe('78.2%')
+    expect(screen.getByTestId('usage-kpi-tool-calls').textContent).toContain('342 / 12')
+    expect(screen.getByTestId('usage-kpi-tool-skipped').textContent).toContain('5')
+    expect(screen.getByTestId('usage-steps-proof').textContent).toContain('3.42')
+  })
+
+  it('缓存写入仅在 > 0 时条件展示（C1）', () => {
+    const { rerender, container } = render(
+      <ConfigProvider>
+        <UsageStatsKpiCards summary={summary({ cacheCreationTokens: 0 })} />
+      </ConfigProvider>
+    )
+    expect(container.textContent).not.toContain('缓存写入')
+
+    rerender(
+      <ConfigProvider>
+        <UsageStatsKpiCards summary={summary({ cacheCreationTokens: 42_000 })} />
+      </ConfigProvider>
+    )
+    expect(container.textContent).toContain('缓存写入')
+  })
+
+  it('分母为 0 时命中率显示 —（M4）', () => {
+    render(
+      <ConfigProvider>
+        <UsageStatsKpiCards summary={summary({ hitRate: null })} />
+      </ConfigProvider>
+    )
+    expect(screen.getByTestId('usage-kpi-hit-rate').textContent).toBe('—')
+  })
+})
+
+describe('UsageTrendChart', () => {
+  it('T3：渲染输入/输出/命中率三条折线，右轴 0–100%（C15）', async () => {
+    mockChartSize()
+    const points: UsageDailyPoint[] = [
+      { day: '2026-09-15', inputTokens: 100, outputTokens: 10, cacheReadTokens: 80, cacheCreationTokens: 0, hitRate: 0.8, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0, turnCount: 1, stepCount: 1, avgStepsPerTurn: 1 },
+      { day: '2026-09-16', inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, hitRate: null, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0, turnCount: 0, stepCount: 0, avgStepsPerTurn: null }
+    ]
+    render(
+      <ConfigProvider>
+        <UsageTrendChart points={points} />
+      </ConfigProvider>
+    )
+    // recharts 3.x 的曲线 class 不含 -line 前缀；以图例项数量断言三条系列被渲染
+    await waitFor(() => {
+      expect(document.querySelectorAll('.recharts-legend-item')).toHaveLength(3)
+    })
+    expect(document.querySelector('.recharts-wrapper')).toBeTruthy()
+  })
+})
+
+describe('UsageStatsDrawer', () => {
+  function mockApi(overrides: Partial<Record<string, unknown>> = {}) {
+    const api = {
+      usageStatsSummary: vi.fn(async () => summary()),
+      usageStatsDaily: vi.fn(async () => [] as UsageDailyPoint[]),
+      usageStatsDimensions: vi.fn(async () => ({
+        models: [{ model: 'deepseek-v4-pro', llmServiceId: 'svc-a' }],
+        sessions: [{ sessionId: 'sess-1', name: null }],
+        appVersions: ['0.1.5']
+      })),
+      ...overrides
+    }
+    ;(window as unknown as { api: unknown }).api = api
+    return api
+  }
+
+  function renderDrawer(open = true) {
+    const store = configureStore({ reducer: { config: configReducer } })
+    if (open) store.dispatch(setUsageStatsOpen(true))
+    return render(
+      <Provider store={store}>
+        <ConfigProvider>
+          <UsageStatsDrawer open={open} onClose={() => undefined} />
+        </ConfigProvider>
+      </Provider>
+    )
+  }
+
+  it('T1/T2：打开面板默认查询近 30 天（含今天）并渲染 KPI 与图表', async () => {
+    mockChartSize()
+    const api = mockApi()
+    renderDrawer(true)
+    await waitFor(() => {
+      expect(api.usageStatsSummary).toHaveBeenCalled()
+    })
+    const [args] = api.usageStatsSummary.mock.calls[0] as Array<{ from: string; to: string }>
+    // [today-29, today]
+    const [ty, tm, td] = args.to.split('-').map(Number)
+    const expectedFrom = new Date(ty!, tm! - 1, td! - 29)
+    const month = String(expectedFrom.getMonth() + 1).padStart(2, '0')
+    const day = String(expectedFrom.getDate()).padStart(2, '0')
+    expect(args.from).toBe(`${expectedFrom.getFullYear()}-${month}-${day}`)
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-kpi-cards')).toBeTruthy()
+    })
+    expect(screen.getByTestId('usage-tz-hint').textContent).toContain('UTC')
+  })
+
+  it('T15：无任何用量数据时展示空态', async () => {
+    mockChartSize()
+    mockApi({
+      usageStatsSummary: async () => summary({ totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 }),
+      usageStatsDaily: async () => []
+    })
+    renderDrawer(true)
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-empty')).toBeTruthy()
+    })
+  })
+})

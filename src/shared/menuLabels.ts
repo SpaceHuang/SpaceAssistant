@@ -8,6 +8,7 @@ export interface MenuLabels {
   closeWindow: string
   quit: string
   devTools: string
+  usageStats: string
   settings: string
   about: string
   docs: string
@@ -22,6 +23,7 @@ export const MENU_LABELS: Record<MenuLocale, MenuLabels> = {
     closeWindow: '关闭窗口',
     quit: '退出',
     devTools: '开发者工具',
+    usageStats: 'Token 用量统计',
     settings: '设置',
     about: '关于',
     docs: '文档'
@@ -34,6 +36,7 @@ export const MENU_LABELS: Record<MenuLocale, MenuLabels> = {
     closeWindow: 'Close Window',
     quit: 'Quit',
     devTools: 'Developer Tools',
+    usageStats: 'Token Usage',
     settings: 'Settings',
     about: 'About',
     docs: 'Documentation'

@@ -3,10 +3,11 @@ import { App as AntdApp, Button } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
-import { setConfig, setSettingsOpen, setAboutOpen, openSettings } from './store/configSlice'
+import { setConfig, setSettingsOpen, setAboutOpen, setUsageStatsOpen, openSettings } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
 import { ConfigSettingsPage } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
+import { UsageStatsDrawer } from './components/UsageStats/UsageStatsDrawer'
 import { WikiPane, type WikiPaneHandle } from './components/WikiPane'
 import { WikiPaneToolbar } from './components/WikiPane/WikiPaneToolbar'
 import { collectToWiki } from './services/wikiImportService'
@@ -81,6 +82,7 @@ function AppShellInner() {
   const { message } = AntdApp.useApp()
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
+  const usageStatsOpen = useTypedSelector((s) => s.config.usageStatsOpen)
   const sessions = useTypedSelector((s) => s.session.list)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const [siderKey, setSiderKey] = useState<'sessions' | 'wiki' | 'search'>('sessions')
@@ -178,6 +180,7 @@ function AppShellInner() {
     })
     const off1 = window.api.onOpenSettings(() => dispatch(setSettingsOpen(true)))
     const off2 = window.api.onOpenAbout(() => dispatch(setAboutOpen(true)))
+    const offUsageStats = window.api.onOpenUsageStats(() => dispatch(setUsageStatsOpen(true)))
     const offTitle = window.api.sessionOnTitleGenerated(({ session }) => {
       dispatch(upsertSession(session))
     })
@@ -195,6 +198,7 @@ function AppShellInner() {
     return () => {
       off1()
       off2()
+      offUsageStats()
       offTitle()
       offSessionCreated()
       offTurnProjection()
@@ -300,6 +304,7 @@ function AppShellInner() {
 
       <ConfigSettingsPage />
       <AboutModal />
+      <UsageStatsDrawer open={usageStatsOpen} onClose={() => dispatch(setUsageStatsOpen(false))} />
       </div>
     </div>
   )

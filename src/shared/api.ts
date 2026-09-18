@@ -407,6 +407,7 @@ export type SpaceAssistantApi = {
   usageStatsDimensions: () => Promise<import('./usageStatsTypes').UsageDimensions>
 
   onOpenSettings: (cb: () => void) => () => void
+  onOpenUsageStats: (cb: () => void) => () => void
   onOpenAbout: (cb: () => void) => () => void
 
   windowGetPlatform: () => Promise<NodeJS.Platform>

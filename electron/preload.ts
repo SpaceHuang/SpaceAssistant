@@ -143,6 +143,11 @@ const api: SpaceAssistantApi = {
     ipcRenderer.on('app:open-settings', fn)
     return () => ipcRenderer.removeListener('app:open-settings', fn)
   },
+  onOpenUsageStats: (cb) => {
+    const fn = () => cb()
+    ipcRenderer.on('app:open-usage-stats', fn)
+    return () => ipcRenderer.removeListener('app:open-usage-stats', fn)
+  },
   onOpenAbout: (cb) => {
     const fn = () => cb()
     ipcRenderer.on('app:open-about', fn)
