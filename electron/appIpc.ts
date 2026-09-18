@@ -5,6 +5,8 @@ import type { IpcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { app, BrowserWindow, dialog, shell } from 'electron'
 import type { AppDatabase } from './database'
+import { queryUsageDaily, queryUsageDimensions, queryUsageSummary } from './usageStats/usageStatsQueries'
+import type { UsageDailyPoint, UsageDimensions, UsageStatsRangeArgs, UsageSummary } from '../src/shared/usageStatsTypes'
 import { toConfirmationSnapshot, turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import {
   appendMessage,
@@ -2156,6 +2158,12 @@ function readExposureInputsFromDb(
   })
 
   ipcMain.handle('search:get-history', (): string[] => listSearchHistory(ctx.db))
+
+  ipcMain.handle('usage-stats:daily', (_e, args: UsageStatsRangeArgs): UsageDailyPoint[] =>
+    queryUsageDaily(ctx.db, args))
+  ipcMain.handle('usage-stats:summary', (_e, args: UsageStatsRangeArgs): UsageSummary =>
+    queryUsageSummary(ctx.db, args))
+  ipcMain.handle('usage-stats:dimensions', (): UsageDimensions => queryUsageDimensions(ctx.db))
 
   ipcMain.handle('dialog:select-directory', async (): Promise<{ path: string } | { canceled: true } | { error: string }> => {
     const win = getMainWindow()
