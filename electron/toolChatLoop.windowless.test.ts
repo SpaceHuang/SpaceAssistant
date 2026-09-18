@@ -69,6 +69,7 @@ vi.mock('./database', async (importOriginal) => {
 
 import { runToolChatSession } from './toolChatLoop'
 import { createMemoryAppDb } from './database/testHelpers'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
 
 function makeDb(): AppDatabase {
   return createMemoryAppDb('zh-CN')
@@ -148,7 +149,7 @@ describe('runToolChatSession 无窗口运行（偏差 1：事件出口取代 sen
     expect(capturedSessionEvents.some((event) => event.type === 'tool_result')).toBe(true)
   })
 
-  it('确认超时 fail-closed：无回答者时工具被拒，回合继续收敛', async () => {
+  it('确认超时 fail-closed：无回答者时工具被拒，回合继续收敛（strict 档 user 确认）', async () => {
     mockConfirmOutcome.mockResolvedValue('timeout')
     mockCreateAnthropicClient.mockReturnValue(
       makeStreamRounds([
@@ -156,7 +157,10 @@ describe('runToolChatSession 无窗口运行（偏差 1：事件出口取代 sen
         { content: [{ type: 'text', text: 'give up' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
       ])
     )
-    const res = await runToolChatSession(baseArgs() as never)
+    // P1：desktop standard 的 write_file 走「自动」快通道；确认超时语义取 strict 档（user 确认）
+    const strictDb = makeDb()
+    writePolicyPackages(strictDb, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const res = await runToolChatSession({ ...baseArgs(), appDb: strictDb } as never)
     expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'give up' }] })
     const failedResult = capturedFacts.find((fact) => fact.type === 'tool-result' && (fact as { id?: string }).id === 'tu-3') as { result?: { success?: boolean } } | undefined
     expect(failedResult?.result?.success).toBe(false)

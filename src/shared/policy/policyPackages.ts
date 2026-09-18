@@ -26,13 +26,14 @@ export function isPolicyPackage(value: unknown): value is PolicyPackage {
   return typeof value === 'string' && (VALID_PACKAGES as string[]).includes(value)
 }
 
-/** 从持久化 JSON（可能残缺/损坏）解析套餐映射，缺省链路回退 standard。 */
+/** 从持久化 JSON（可能残缺/损坏）解析套餐映射，缺省链路回退 standard；
+ * 档位不在本链路 availablePackages 内（如 automation 伪造 loose/custom）一律收敛 standard（M2 运行时防护）。 */
 export function normalizePolicyPackages(raw: unknown): PolicyPackageMap {
   const out: PolicyPackageMap = { ...DEFAULT_POLICY_PACKAGES }
   if (!raw || typeof raw !== 'object') return out
   for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
     const v = (raw as Record<string, unknown>)[lane]
-    if (isPolicyPackage(v)) out[lane] = v
+    if (isPolicyPackage(v) && LANE_PROFILES[lane].availablePackages.includes(v)) out[lane] = v
   }
   return out
 }
@@ -158,46 +159,35 @@ export function validateRuleOverride(
   return { ok: true, rule }
 }
 
-function applyStrict(rules: PolicyRule[]): PolicyRule[] {
-  return rules.map((r) =>
-    !r.locked && (r.action === 'allow' || r.action === 'auto-evaluator') ? { ...r, action: 'ask' as const } : r
-  )
+/** 档位生效动作作用于单条规则：动作不变时保持原引用（恒等快路径）。 */
+function withEffectiveAction(lane: ExecutionLane, pkg: PolicyPackage, rule: PolicyRule): PolicyRule {
+  const action = effectiveActionFor(lane, pkg, rule)
+  return action === rule.action ? rule : { ...rule, action }
 }
 
-function applyLoose(rules: PolicyRule[]): PolicyRule[] {
-  return rules.map((r) => (!r.locked && r.action === 'ask' ? { ...r, action: 'allow' as const } : r))
-}
-
-function applyCustom(rules: PolicyRule[], overrides: PolicyRuleOverrideInput[]): PolicyRule[] {
+/**
+ * custom 覆盖应用（M2 纵深防御）：过滤掉不在本链路 availableActions 的覆盖
+ * （B2：auto-evaluator 仅 desktop；wechat/feishu 拒绝——入口校验之外的引擎层防线）。
+ * 覆盖 = 用户显式定死动作：剥离条件门控（configRequires/askUnless/requiresContext），
+ * 否则被门控拦截时覆盖静默失效。
+ */
+function applyCustom(lane: ExecutionLane, rules: PolicyRule[], overrides: PolicyRuleOverrideInput[]): PolicyRule[] {
   if (overrides.length === 0) return rules
-  const byId = new Map(overrides.map((o) => [o.ruleId, o]))
+  const allowed = new Set<PolicyAction>(LANE_PROFILES[lane].availableActions)
+  const byId = new Map(overrides.filter((o) => allowed.has(o.action)).map((o) => [o.ruleId, o]))
+  if (byId.size === 0) return rules
   return rules.map((r) => {
     if (r.locked) return r
     const o = byId.get(r.id)
     if (!o) return r
-    const editable = r.action === 'auto-evaluator' ? AUTO_EVALUATOR_EDITABLE_ACTIONS : CUSTOM_EDITABLE_ACTIONS
-    if (!editable.includes(o.action)) return r
-    // 覆盖 = 用户显式定死动作：剥离条件门控（configRequires/askUnless/requiresContext），
-    // 否则被门控拦截时覆盖静默失效（如 desktop-auto-approve 覆盖为"询问"但 confirmMode≠auto 不命中）
     const { configRequires: _c, askUnless: _a, requiresContext: _r, ...rest } = r
     return { ...rest, action: o.action }
   })
 }
 
 /**
- * P2-5：非 user 回答者（agent / deny）的 custom 覆盖只保留收紧项。
- * 覆盖到 allow 的条目一律丢弃：对 allow 基准是无操作，对 ask/deny 基准是向下覆盖。
- * deny 回答者（无任何应答者）同样受此约束——否则「全拒」会被 custom 静默翻转为「放行」。
- */
-function applyCustomForNonUserAnswerer(rules: PolicyRule[], overrides: PolicyRuleOverrideInput[]): PolicyRule[] {
-  if (overrides.length === 0) return rules
-  return applyCustom(rules, overrides.filter((o) => o.action !== 'allow'))
-}
-
-/**
- * P2-5 写入强校验（对齐 validateRuleOverride 的强制度）：
- * 非 user 回答者（agent = 审批裁决 / deny = 无应答者）的 lane 不得套用 loose
- * ——「无人监督 + 自动放宽」组合会把 confirm 面静默翻转为全自动放行（缺口 9）。
+ * P2-5 写入强校验（存量，P3 随 answererConfig 收缩一并退役——决策 1 废除「非 user 不许 loose」，
+ * 运行时已不消费此约束；仅 IPC 入口仍在用，删除时同步迁移到 isPackageAvailableForLane）。
  */
 export function validatePolicyPackageForLane(
   lane: ExecutionLane,
@@ -211,33 +201,30 @@ export function validatePolicyPackageForLane(
 }
 
 /**
- * 按链路解析生效规则集：基础规则 + 套餐变换/自定义覆盖。
- * 默认（standard 且无覆盖）返回原数组引用，保证零行为变化的快路径。
- * P2-5：answererKind='agent' 的 lane 不得 loose（按 standard 处理）、custom 只保留收紧覆盖。
+ * 按链路解析生效规则集（§2.1 LANE_PROFILES）：基础规则 + 档位变换/自定义覆盖。
+ * - 恒等情形（standard 的恒等 lane、无覆盖的 custom）返回原数组引用，保证零行为变化快路径；
+ * - 档位不在本链路可用集合 → 视为 standard（M2：automation 伪造 loose/custom 等）；
+ * - 决策 1：不再按回答者收紧套餐（「非 user 不许 loose」论证不成立，以用户显式选择为准）。
  */
 export function resolvePolicyRules(args: {
   lane: ExecutionLane
   packages?: Partial<PolicyPackageMap>
   overrides?: PolicyRuleOverrideInput[]
   rules: PolicyRule[]
-  /** 回答者种类（P2-5 套餐约束的维度）；缺省 'user' 保持既有行为。 */
-  answererKind?: ConfirmAnswererKind
 }): PolicyRule[] {
-  const pkg = args.packages?.[args.lane] ?? 'standard'
-  // P2 guard（偏差 15 最小防护）：automation 无人类应答者，无豁免来源——不得套用 loose 档。
-  // P2-5 评审修复：约束扩到一切非 user 回答者（agent / deny）——deny 的「全拒」面不得被 loose 静默翻转为放行。
-  const nonUserAnswerer = args.answererKind === 'agent' || args.answererKind === 'deny'
-  if (pkg === 'loose' && (args.lane === 'automation' || nonUserAnswerer)) return args.rules
+  const profile = LANE_PROFILES[args.lane]
+  let pkg = args.packages?.[args.lane] ?? 'standard'
+  if (!profile.availablePackages.includes(pkg)) pkg = 'standard'
   switch (pkg) {
     case 'strict':
-      return applyStrict(args.rules)
     case 'loose':
-      return applyLoose(args.rules)
+      return args.rules.map((r) => withEffectiveAction(args.lane, pkg, r))
     case 'custom':
-      return nonUserAnswerer
-        ? applyCustomForNonUserAnswerer(args.rules, args.overrides ?? [])
-        : applyCustom(args.rules, args.overrides ?? [])
+      return applyCustom(args.lane, args.rules, args.overrides ?? [])
     default:
+      // standard 恒等：desktop 的「自动」（ask→auto-evaluator）不在规则集层面变换——
+      // 规则集变换会把 ask 条目提升到引擎第 4 步，破坏 mcp-readonly-allow 等条目的顺序语义；
+      // 该映射由引擎产出时经 deps.transform（effectiveActionFor 同源）解释，规则顺序保持。
       return args.rules
   }
 }

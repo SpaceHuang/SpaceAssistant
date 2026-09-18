@@ -76,7 +76,8 @@ import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { RemoteContext } from './tools/types'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
-import type { ExecutionLane } from '../src/shared/confirmation/types'
+import type {
+  ConfirmAnswererPolicy, ExecutionLane } from '../src/shared/confirmation/types'
 import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
@@ -88,7 +89,6 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
-import { resolveLaneAnswererPolicy } from './confirmation/answererConfig'
 import { AgentChannel } from './confirmation/agentChannel'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
@@ -1761,9 +1761,10 @@ async function runToolChatSessionInner(
               progressOutput: undefined
             })
           } else {
+          // M1：diff 预览由「本次确认的回答者是否为人类」驱动（confirmMode 退役）；
+          // agent 路径没有卡片 diff；autoApproveFallback（快通道未过）时保留展示原因
           const useDiff =
-            toolsConfig.confirmMode === 'diff' ||
-            toolsConfig.confirmMode === 'auto' ||
+            (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user') ||
             Boolean(autoApproveFallback)
           const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
           const actDanger =
@@ -1830,9 +1831,12 @@ async function runToolChatSessionInner(
             memoryTiers: confirmMemoryTiers,
             timeoutMs: gate.decision.type === 'require-confirm' ? gate.decision.timeoutMs : null
           }
-          // P2 回答者接线（I1）：回答者按配置解析（缺省值表）；kind='agent' 经工厂挂 AgentChannel，
-          // invokeApproval 延迟加载审批执行链（避免 toolChatLoop ↔ approvalAgent 循环依赖）。
-          const answererPolicy = resolveLaneAnswererPolicy(appDb, confirmLane)
+          // P1 回答者接线（§2.2 动作派生）：回答者由 gate 决策给出（不再按 lane 查配置表）；
+          // kind='agent' 经工厂挂 AgentChannel，invokeApproval 延迟加载审批执行链（避免循环依赖）。
+          // §6：桌面链路授权上限放宽到 high（有 taskDigest 真人证据）；automation 维持 low。
+          const answererPolicy: ConfirmAnswererPolicy = {
+            kind: gate.decision.type === 'require-confirm' ? gate.decision.answerer : 'user'
+          }
           const channelOutcome = await channelFor({
             lane: confirmLane,
             requestId,
@@ -1844,7 +1848,8 @@ async function runToolChatSessionInner(
             agentChannelFactory: (agentDeps) =>
               new AgentChannel({
                 ...agentDeps,
-                // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面/IM 链路缺省无
+                // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面链路经 claudeStreamHandlers
+                // 传当前 turn 用户消息摘要；缺省 = 无任务上下文
                 ...(args.approvalTaskDigest ? { taskDigest: args.approvalTaskDigest } : {}),
                 invokeApproval: (inv) =>
                   import('./confirmation/approvalAgent').then((m) =>
@@ -1857,6 +1862,8 @@ async function runToolChatSessionInner(
                         ...(shellConfig !== undefined ? { getShellConfig: () => shellConfig } : {}),
                         ...(browserConfig ? { getBrowserConfig: () => browserConfig } : {}),
                         getWorkDir: () => (resolveWorkDir ? resolveWorkDir() : workDir),
+                        // §6 授权上限：desktop 允许到 high；automation（及审批内层）维持 low
+                        maxAuthorization: confirmLane === 'automation' ? 'low' : 'high',
                         // P1-1：凭证对配对传入——复用外层会话已解析的 model/baseUrl/getApiKey，
                         // 审批请求打用户实际服务端点（中转/自定义端点下不失效）；Profile 机制落地后按 approvalProfileId 解析独立快模型
                         model,
@@ -1903,9 +1910,12 @@ async function runToolChatSessionInner(
               : channelOutcome.kind === 'timeout'
                 ? 'timeout'
                 : 'rejected'
-          // 回答者与结束原因随 outcome 记录（缺省视为 user，保持既有桌面/IM 路径行为等价）
+          // 回答者与结束原因随 outcome 记录（I3：由 decision 派生——agent 裁决不写任何记忆）
           if (channelOutcome.kind !== 'approved-with-action') {
-            confirmAnswererKind = channelOutcome.answererKind ?? 'user'
+            confirmAnswererKind =
+              gate.decision.type === 'require-confirm'
+                ? gate.decision.answerer
+                : (channelOutcome.answererKind ?? 'user')
             confirmOutcomeCause = channelOutcome.cause
             channelRejectSummary = channelOutcome.reason?.summary
           }

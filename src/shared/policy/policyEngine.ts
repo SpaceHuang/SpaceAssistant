@@ -374,30 +374,52 @@ export function decide(
     return autoAllow('declared-capability', facts)
   }
 
-  // 第 4 步：自动审批器（auto-evaluator）。命中不产生 Decision；评估器批准才返回，否则交还规则链。
+  // 第 4 步：自动审批器（auto-evaluator =「自动」动作）。确定性快通道批准即放行；
+  // 未裁决 → 交审批 Agent（require-confirm answerer='agent'，§5.2：不再交还默认表问人）。
   const autoRules = invocationRules.filter((r) => r.action === 'auto-evaluator')
+  let lastAutoRule: PolicyRule | undefined
   for (const rule of autoRules) {
     if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
+    lastAutoRule = rule
     if (deps.autoEvaluator) {
       const res = deps.autoEvaluator(facts, context)
       if (res.approve) return autoAllow(rule.id, facts)
     }
-    // 约定 2：评估器不裁决 → 继续评估后续条目（M3，不再 break 截断后续 auto 条目），最终通常落到默认表 ask
+    // 约定 2（M3）：评估器不裁决 → 继续评估后续 auto 条目（多快通道级联）；
+    // 全部未裁决则由末次命中条目落 Agent 裁决
     continue
+  }
+  if (lastAutoRule) {
+    return requireConfirm(lastAutoRule, facts, context.sessionId, context.lane, undefined, 'agent')
   }
 
   // 第 5 步：链路软约束（只影响体验，纯决策层无操作）
 
-  // 第 6 步：默认表（ask / allow，首条命中即返回）
+  // 第 6 步：默认表（ask / allow，首条命中即返回）。生效动作按档位产出时变换
+  // （deps.transform = effectiveActionFor 同源）：standard 桌面的 ask → auto-evaluator
+  // 走快通道/审批 Agent，且不改变规则间优先级（mcp-readonly-allow 等先命中条目不受影响）。
   const defaultRules = invocationRules.filter((r) => r.action === 'ask' || r.action === 'allow')
   for (const rule of defaultRules) {
     if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
-    if (rule.action === 'ask') {
-      return askUnlessHolds(rule, deps)
-        ? autoAllow(rule.id, facts)
-        : requireConfirm(rule, facts, context.sessionId, context.lane)
+    const effective = deps.transform ? deps.transform(rule) : rule.action
+    // askUnless 门控放行先于动作解释：开关已声明「不问」（如 larkCliWriteRequiresConfirm=false）
+    // 时无论生效动作是 ask 还是「自动」都直接放行，档位不接管已放行的调用
+    if ((effective === 'ask' || effective === 'auto-evaluator') && askUnlessHolds(rule, deps)) {
+      return autoAllow(rule.id, facts)
     }
-    if (rule.action === 'allow') return autoAllow(rule.id, facts)
+    if (effective === 'ask') {
+      return requireConfirm(rule, facts, context.sessionId, context.lane)
+    }
+    if (effective === 'auto-evaluator') {
+      if (deps.autoEvaluator) {
+        const res = deps.autoEvaluator(facts, context)
+        if (res.approve) return autoAllow(rule.id, facts)
+      }
+      // 「自动」：确定性快通道未裁决 → 审批 Agent（answerer=agent）
+      return requireConfirm(rule, facts, context.sessionId, context.lane, undefined, 'agent')
+    }
+    if (effective === 'allow') return autoAllow(rule.id, facts)
+    if (effective === 'deny') return deny(rule.id, rule.reason)
   }
 
   return applyDefault(facts, deps, context)

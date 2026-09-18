@@ -78,7 +78,9 @@ export function runMcpConfirmPolicyMigrationOnce(
           params: {}
         })
         const packages = readPolicyPackages(db)
-        for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
+        // P1（§2.1）：automation 仅提供 standard 档（回答者=agent 由 lane 派生），
+        // 不提供 custom——写入也会被 normalizePolicyPackages 收敛，直接跳过。
+        for (const lane of ['desktop', 'wechat', 'feishu'] as const) {
           if (packages[lane] === 'standard') packages[lane] = 'custom'
         }
         writePolicyPackages(db, packages)

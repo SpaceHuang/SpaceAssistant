@@ -43,7 +43,8 @@ import {
 import { AuditedDecisionCache } from './auditedDecisionCache'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getSecurityAuditLog } from './audit'
-import { loadEffectivePolicyRules } from './policyRulesRuntime'
+import { loadLanePolicyContext } from './policyRulesRuntime'
+import { effectiveActionFor } from '../../src/shared/policy/policyPackages'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 
@@ -189,23 +190,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible
   }
 
-  // ===== 生效规则集（套餐/覆盖，§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用 =====
-  // 提前加载：桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作
-  const rules = args.appDb ? loadEffectivePolicyRules(args.appDb, lane) : DEFAULT_POLICY_RULES
+  // ===== 生效规则集（套餐/覆盖经 LANE_PROFILES 变换，§2.1）=====
+  // desktop standard 非 locked ask→auto-evaluator（「自动」）；提前加载：桌面写/编辑
+  // 自动审批的预计算在判定前完成（评估器闭包消费）。
+  const lanePolicy = args.appDb ? loadLanePolicyContext(args.appDb, lane) : { rules: DEFAULT_POLICY_RULES, pkg: 'standard' as const }
+  const rules = lanePolicy.rules
 
   // ===== 桌面写/编辑自动审批（预计算，评估器闭包消费）=====
-  // 生效条件：desktop-auto-approve 动作为 auto-evaluator；默认规则带 confirmMode=auto 门控，
-  // 覆盖后（门控剥离，见 applyCustom）由规则动作直接决定——确认模式已并入规则列表统一受套餐管理
-  const autoApproveRule = rules.find((r) => r.id === 'desktop-auto-approve')
-  const autoApproveActive =
-    autoApproveRule?.action === 'auto-evaluator' &&
-    (autoApproveRule.configRequires ? args.toolsConfig.confirmMode === 'auto' : true)
+  // P1 起「自动」是 standard 桌面的默认路径：write_file/edit_file 恒预计算确定性快通道
+  // （基于 autoApproveMaxBytes / autoApproveMaxEditChars）；未通过时记录 fallback 原因，
+  // 由审批 Agent 裁决（custom 覆盖为 ask 时该原因随确认卡展示）。
   let fileAutoApprove: boolean | undefined
-  if (
-    lane === 'desktop' &&
-    (args.toolName === 'write_file' || args.toolName === 'edit_file') &&
-    autoApproveActive
-  ) {
+  if (lane === 'desktop' && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
     const autoEval = await (args.fileAutoApproval ?? evaluateFileToolAutoApproval)({
       workDir: args.workDir,
       userDataDir: args.userDataDir,
@@ -342,6 +338,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     cache,
     config,
     migrationComplete: isRemoteSecurityMigrationComplete(channelConfig),
+    // 档位动作变换（§2.1）：引擎合成规则（default-write-execute-ask）经同源变换参与「自动」
+    transform: (r) => effectiveActionFor(lane, lanePolicy.pkg, r),
     autoEvaluator: (f) => {
       if (f.toolName === 'run_shell') {
         return shellLegacyAutoAllowEligible

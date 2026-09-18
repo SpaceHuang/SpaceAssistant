@@ -7,6 +7,8 @@ import type {
 } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
 import { buildMemoryTiers, decide, decideIngress, deriveInvocationPolicyConstraints, signalTokenSet } from './policyEngine'
+import { effectiveActionFor, resolvePolicyRules } from './policyPackages'
+import type { PolicyAction } from '../confirmation/types'
 
 function mkFacts(
   toolName: string,
@@ -153,42 +155,89 @@ describe('decide：脚本规则作用域不外溢', () => {
   })
 })
 
-describe('decide：自动审批器（desktop-auto-approve）不与截胡', () => {
-  it('confirmMode=auto 且评估器批准 write_file → 自动放行', () => {
+describe('decide：desktop「自动」路径（P1：standard 变换 + 快通道 + Agent 兜底）', () => {
+  // P1 生效语义：desktop standard 规则集经 LANE_PROFILES 变换后喂给引擎（等价 runtime 装配）
+  const desktopStandard = () => resolvePolicyRules({ lane: 'desktop', rules: DEFAULT_POLICY_RULES })
+  const standardTransform = (r: { action: PolicyAction; locked?: boolean }) => effectiveActionFor('desktop', 'standard', r)
+
+  it('write_file 快通道批准 → 自动放行（default-write-execute-ask 经 transform 变 auto）', () => {
     const d = decide(
       mkFacts('write_file', 'write', [{ kind: 'path-target', path: 'a.txt', zone: 'workdir-normal' }], 'medium'),
       mkContext('desktop'),
-      DEFAULT_POLICY_RULES,
+      desktopStandard(),
+      deps({ transform: standardTransform, autoEvaluator: () => ({ approve: true, reason: '低风险' }) })
+    )
+    expect(d.type).toBe('auto-allow')
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('default-write-execute-ask')
+  })
+
+  it('write_file 快通道未裁决 → require-confirm(answerer=agent)，不再交还默认表问人', () => {
+    const d = decide(
+      mkFacts('write_file', 'write', [{ kind: 'path-target', path: 'a.txt', zone: 'workdir-normal' }], 'medium'),
+      mkContext('desktop'),
+      desktopStandard(),
       deps({
-        config: { confirmMode: 'auto' },
-        autoEvaluator: () => ({ approve: true, reason: '低风险' })
+        transform: standardTransform,
+        autoEvaluator: () => ({ approve: false, reason: '文件过大' })
+      })
+    )
+    expect(d.type).toBe('require-confirm')
+    if (d.type === 'require-confirm') {
+      expect(d.ruleId).toBe('default-write-execute-ask')
+      expect(d.answerer).toBe('agent')
+    }
+  })
+
+  it('mcp-tool 经 standard 变换为 auto-evaluator：评估器批准 → 自动放行（ruleId=mcp-tool-ask）', () => {
+    const d = decide(
+      mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
+      mkContext('desktop'),
+      desktopStandard(),
+      deps({
+        transform: standardTransform,
+        autoEvaluator: (f) =>
+          f.toolName === 'mcp_query' ? { approve: true as const, reason: '信任' } : { approve: false as const, reason: 'x' }
       })
     )
     expect(d.type).toBe('auto-allow')
-    expect(d.type === 'auto-allow' && d.ruleId).toBe('desktop-auto-approve')
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('mcp-tool-ask')
   })
 
-  it('confirmMode=auto 下桌面 read_file 不被评估器截胡（默认放行）', () => {
+  it('mcp-tool 未裁决 → require-confirm(answerer=agent, ruleId=mcp-tool-ask)', () => {
+    const d = decide(
+      mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
+      mkContext('desktop'),
+      desktopStandard(),
+      deps({ transform: standardTransform })
+    )
+    expect(d.type).toBe('require-confirm')
+    if (d.type === 'require-confirm') {
+      expect(d.ruleId).toBe('mcp-tool-ask')
+      expect(d.answerer).toBe('agent')
+    }
+  })
+
+  it('read_file 不被评估器截胡（默认放行）', () => {
     const d = decide(
       mkFacts('read_file', 'read', [], 'low'),
       mkContext('desktop'),
-      DEFAULT_POLICY_RULES,
+      desktopStandard(),
       deps({
-        config: { confirmMode: 'auto' },
+        transform: standardTransform,
         autoEvaluator: () => ({ approve: true, reason: '不该被调用' })
       })
     )
     expect(d.type).toBe('auto-allow')
-    expect(d.type === 'auto-allow' && d.ruleId).not.toBe('desktop-auto-approve')
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('default-read-outbound-allow')
   })
 
-  it('confirmMode=auto 下桌面 clean 脚本仍免确认（评估器不拦截 run_script）', () => {
+  it('桌面 clean 脚本仍免确认（评估器不拦截 run_script）', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
       mkContext('desktop'),
-      DEFAULT_POLICY_RULES,
+      desktopStandard(),
       deps({
-        config: { confirmMode: 'auto' },
+        transform: standardTransform,
         autoEvaluator: () => ({ approve: true, reason: '不该被调用' })
       })
     )
@@ -196,20 +245,7 @@ describe('decide：自动审批器（desktop-auto-approve）不与截胡', () =>
     expect(d.type === 'auto-allow' && d.ruleId).toBe('script-clean-allow-desktop')
   })
 
-  it('confirmMode={diff} 时评估器不命中，按默认 write 走确认', () => {
-    const d = decide(
-      mkFacts('write_file', 'write', [], 'medium'),
-      mkContext('desktop'),
-      DEFAULT_POLICY_RULES,
-      deps({
-        config: { confirmMode: 'diff' },
-        autoEvaluator: () => ({ approve: true, reason: '不该被调用' })
-      })
-    )
-    expect(d.type).toBe('require-confirm')
-  })
-
-  it('首条匹配的 auto 规则评估器不批准时继续评估后续 auto 规则（M3）', () => {
+  it('首条 auto 条目未裁决时继续评估后续条目（M3 级联），批准落在后续条目', () => {
     const rules = [
       {
         id: 'auto-1',
@@ -232,7 +268,6 @@ describe('decide：自动审批器（desktop-auto-approve）不与截胡', () =>
       mkContext('desktop'),
       rules,
       deps({
-        config: { confirmMode: 'auto' },
         autoEvaluator: () => {
           calls++
           return calls === 1 ? { approve: false, reason: '信息不足' } : { approve: true, reason: '低风险' }
@@ -241,6 +276,36 @@ describe('decide：自动审批器（desktop-auto-approve）不与截胡', () =>
     )
     expect(calls).toBe(2)
     expect(d.type === 'auto-allow' && d.ruleId).toBe('auto-2')
+  })
+
+  it('全部 auto 条目均未裁决 → require-confirm(answerer=agent, 末次命中条目 id)', () => {
+    const rules = [
+      {
+        id: 'auto-1',
+        when: 'invocation',
+        match: { lane: ['desktop'], toolName: ['write_file'] },
+        action: 'auto-evaluator',
+        reason: 'r1'
+      },
+      {
+        id: 'auto-2',
+        when: 'invocation',
+        match: { lane: ['desktop'], toolName: ['write_file'] },
+        action: 'auto-evaluator',
+        reason: 'r2'
+      }
+    ]
+    const d = decide(
+      mkFacts('write_file', 'write', [], 'medium'),
+      mkContext('desktop'),
+      rules,
+      deps({ autoEvaluator: () => ({ approve: false, reason: '未裁决' }) })
+    )
+    expect(d.type).toBe('require-confirm')
+    if (d.type === 'require-confirm') {
+      expect(d.ruleId).toBe('auto-2')
+      expect(d.answerer).toBe('agent')
+    }
   })
 })
 

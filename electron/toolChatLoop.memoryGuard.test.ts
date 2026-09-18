@@ -9,6 +9,7 @@ import type { ConfirmOutcome, ContentFacts, Decision, SecurityAuditEvent } from 
 import type { ToolCallGateResult } from './confirmation/toolCallGate'
 
 const mockChannelOutcome = vi.fn((): ConfirmOutcome => ({ kind: 'approved', cause: 'user-approved' }))
+const gateState = vi.hoisted(() => ({ answerer: 'user' as 'user' | 'agent' }))
 const capturedAuditEvents: SecurityAuditEvent[] = []
 
 vi.mock('./agentLogger/agentLogger', () => ({
@@ -83,6 +84,7 @@ const I3_FACTS: ContentFacts = {
 const I3_DECISION: Decision = {
   type: 'require-confirm',
   ruleId: 'navigate-requires-confirm',
+  answerer: 'user',
   riskLevel: 'medium',
   facts: I3_FACTS,
   memoryTiers: [{ key: I3_KEY, label: '记住 example.com（本会话）' }],
@@ -94,7 +96,7 @@ vi.mock('./confirmation/toolCallGate', async (importOriginal) => {
   return {
     ...actual,
     evaluateToolCallGate: vi.fn(async (): Promise<ToolCallGateResult> => ({
-      decision: I3_DECISION,
+      decision: { ...I3_DECISION, answerer: gateState.answerer },
       facts: I3_FACTS
     }))
   }
@@ -110,6 +112,7 @@ import { runToolChatSession } from './toolChatLoop'
 import { createMemoryAppDb } from './database/testHelpers'
 import { SqliteDecisionCache } from './confirmation/sqliteDecisionCache'
 import { getDbConnection } from './database'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
 
 function makeDb(): AppDatabase {
   return createMemoryAppDb('zh-CN')
@@ -170,10 +173,12 @@ describe('I3 回归锚点：记忆只源于人类（P0 验收）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     capturedAuditEvents.length = 0
+    gateState.answerer = 'user'
     mockChannelOutcome.mockImplementation(() => ({ kind: 'approved', cause: 'user-approved' }))
   })
 
-  it('回答者为 agent：navigate 批准也不写 decision_cache、无 cache.write 审计', async () => {
+  it('回答者为 agent（decision.answerer）：navigate 批准也不写 decision_cache、无 cache.write 审计', async () => {
+    gateState.answerer = 'agent'
     mockChannelOutcome.mockImplementation(() => ({
       kind: 'approved',
       answererKind: 'agent',
@@ -187,9 +192,11 @@ describe('I3 回归锚点：记忆只源于人类（P0 验收）', () => {
     expect(capturedAuditEvents.filter((e) => e.event === 'cache.write')).toHaveLength(0)
   })
 
-  it('回答者为 user（缺省）：navigate 批准照常双写 decision_cache（行为等价对照）', async () => {
+  it('回答者为 user（strict 档，desktop standard 的 navigate 走「自动」agent）：批准照常双写 decision_cache', async () => {
     installStreamClient()
     const db = makeDb()
+    // P1：desktop standard 的询问条目变换为「自动」（agent 裁决）；user 回答者路径取 strict 档
+    writePolicyPackages(db, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
     await runToolChatSession(baseArgs(db))
 
     expect(new SqliteDecisionCache(getDbConnection(db)).lookup(I3_KEY)).not.toBeNull()

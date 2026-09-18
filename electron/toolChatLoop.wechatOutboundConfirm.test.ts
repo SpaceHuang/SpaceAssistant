@@ -86,8 +86,10 @@ describe('wechat outbound confirm removal（经 toolCallGate + 规则表）', ()
     }
   })
 
-  it('write_file still needs confirmation under builtin policy without remote context', async () => {
-    const r = await gate('write_file', { path: 'a.txt', content: 'x' })
+  it('wechat write_file still needs confirmation under builtin policy without remote context', async () => {
+    // P1：desktop 的 write_file 走「自动」（快通道/Agent）；远程写确认（零行为变化）取 wechat lane
+    const r = await gate('write_file', { path: 'a.txt', content: 'x' }, { lane: 'wechat' })
     expect(r.decision.type).toBe('require-confirm')
+    if (r.decision.type === 'require-confirm') expect(r.decision.answerer).toBe('user')
   })
 })

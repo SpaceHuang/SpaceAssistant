@@ -60,7 +60,7 @@ describe('runMcpConfirmPolicyMigrationOnce（R5 MCP 确认策略收敛迁移）'
     const store = new PolicyRuleStore(getDbConnection(db))
     expect(store.getOverride('mcp-readonly-allow')?.action).toBe('ask')
     const packages = readPolicyPackages(db)
-    expect(packages).toEqual({ desktop: 'custom', wechat: 'custom', feishu: 'custom', automation: 'custom' })
+    expect(packages).toEqual({ desktop: 'custom', wechat: 'custom', feishu: 'custom', automation: 'standard' })
 
     // 生效规则：覆盖已应用（custom 套餐），行为等价原 always（只读注解工具转询问）
     const rules = loadEffectivePolicyRules(db, 'desktop')
@@ -78,7 +78,7 @@ describe('runMcpConfirmPolicyMigrationOnce（R5 MCP 确认策略收敛迁移）'
     const db = openSqliteDatabase(':memory:')
     dbs.push(db)
     seedProfiles(db, [{ id: 'a', toolConfirmPolicy: 'always' }])
-    writePolicyPackages(db, { desktop: 'strict', wechat: 'loose', feishu: 'standard', automation: 'custom' })
+    writePolicyPackages(db, { desktop: 'strict', wechat: 'loose', feishu: 'standard', automation: 'standard' })
 
     const r = runMcpConfirmPolicyMigrationOnce(db)
     expect(r.migrated).toBe(true)
@@ -86,7 +86,7 @@ describe('runMcpConfirmPolicyMigrationOnce（R5 MCP 确认策略收敛迁移）'
       desktop: 'strict',
       wechat: 'loose',
       feishu: 'custom',
-      automation: 'custom'
+      automation: 'standard'
     })
     // strict 链路：mcp-readonly-allow 经套餐上调已为 ask（不依赖覆盖），迁移意图天然达成
     const rules = loadEffectivePolicyRules(db, 'desktop')
@@ -200,7 +200,7 @@ describe('runMcpConfirmPolicyMigrationOnce（R5 MCP 确认策略收敛迁移）'
       desktop: 'custom',
       wechat: 'custom',
       feishu: 'custom',
-      automation: 'custom'
+      automation: 'standard'
     })
     expect(Number(getConfigValue(db, MCP_CONFIRM_POLICY_MIGRATION_VERSION_KEY))).toBe(
       MCP_CONFIRM_POLICY_MIGRATION_VERSION

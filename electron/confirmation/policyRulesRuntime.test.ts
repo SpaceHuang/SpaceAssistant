@@ -26,10 +26,12 @@ function db(): AppDatabase {
 }
 
 describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
-  it('未配置时各链路返回 DEFAULT_POLICY_RULES 引用（零行为变化）', () => {
+  it('未配置时各 lane 规则集恒等返回 DEFAULT_POLICY_RULES 引用（「自动」在引擎产出层变换）', () => {
     const d = db()
     expect(loadEffectivePolicyRules(d, 'desktop')).toBe(DEFAULT_POLICY_RULES)
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
+    expect(loadEffectivePolicyRules(d, 'feishu')).toBe(DEFAULT_POLICY_RULES)
+    expect(loadEffectivePolicyRules(d, 'automation')).toBe(DEFAULT_POLICY_RULES)
     expect(readPolicyPackages(d).desktop).toBe('standard')
   })
 
@@ -101,5 +103,45 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     writeSecurityAuditRetentionDays(d, 30)
     expect(readSecurityAuditRetentionDays(d)).toBe(30)
     expect(getConfigValue(d, 'config.securityAuditRetentionDays')).toBe('30')
+  })
+})
+
+describe('policyRulesRuntime：P1 desktop「自动」生效与 lane 收敛', () => {
+  it('loadLanePolicyContext 返回当前档位与规则集（供 gate 注入 deps.transform）', async () => {
+    const { loadLanePolicyContext } = await import('./policyRulesRuntime')
+    const d = db()
+    const ctx = loadLanePolicyContext(d, 'desktop')
+    expect(ctx.pkg).toBe('standard')
+    expect(ctx.rules).toBe(DEFAULT_POLICY_RULES)
+  })
+
+  it('DB 中伪造 automation: loose → 读回收敛为 standard 且规则恒等（M2）', () => {
+    const d = db()
+    setConfigValue(d, 'config.policyPackages', JSON.stringify({ automation: 'loose' }))
+    expect(readPolicyPackages(d).automation).toBe('standard')
+    expect(loadEffectivePolicyRules(d, 'automation')).toBe(DEFAULT_POLICY_RULES)
+  })
+
+  it('wechat custom 下 auto-evaluator 覆盖被引擎丢弃（B2 引擎层防线）', () => {
+    const d = db()
+    const packages = readPolicyPackages(d)
+    packages.wechat = 'custom'
+    writePolicyPackages(d, packages)
+    const store = new PolicyRuleStore(getDbConnection(d))
+    store.setOverride({ ruleId: 'im-write-ask', action: 'auto-evaluator', params: {} })
+    const rules = loadEffectivePolicyRules(d, 'wechat')
+    // 动作域过滤：auto-evaluator 不在 wechat availableActions → 覆盖不生效
+    expect(rules.find((r) => r.id === 'im-write-ask')?.action).toBe('ask')
+  })
+
+  it('desktop custom 下 auto-evaluator 覆盖生效（B2，desktop 4 态动作域）', () => {
+    const d = db()
+    const packages = readPolicyPackages(d)
+    packages.desktop = 'custom'
+    writePolicyPackages(d, packages)
+    const store = new PolicyRuleStore(getDbConnection(d))
+    store.setOverride({ ruleId: 'mcp-tool-ask', action: 'auto-evaluator', params: {} })
+    const rules = loadEffectivePolicyRules(d, 'desktop')
+    expect(rules.find((r) => r.id === 'mcp-tool-ask')?.action).toBe('auto-evaluator')
   })
 })

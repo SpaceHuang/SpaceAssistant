@@ -99,6 +99,7 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeSender(): WebContents {
@@ -139,9 +140,13 @@ describe('runToolChatSession locale injection', () => {
         cancel: vi.fn()
       })
     })
+    // P1：desktop standard 的 write_file 走「自动」快通道；人工确认路径取 strict 档（ask 不变换 → user）
+    const strictDb = makeDb('zh-CN')
+    writePolicyPackages(strictDb, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
     const run = runSession({
       requestId: 'remote-race',
-      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'always' }
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'always' },
+      appDb: strictDb
     })
     await confirmStarted
     const { revokeToolForAllLanes } = await import('./toolRevocationRegistry')
