@@ -1481,7 +1481,8 @@ export type UsageTurnFactInput = {
   toolCallCount: number
   toolErrorCount: number
   toolSkippedCount: number
-  outcome: string
+  /** 回填的台账缺 turn_end 时为 null（不臆断结果） */
+  outcome: string | null
 }
 
 export type UsageTurnFactRow = {

@@ -273,5 +273,7 @@ export const SCHEMA_META_KEYS = {
   schemaVersion: 'schema_version',
   migratedFromJsonAt: 'migrated_from_json_at',
   migratedFromJsonPath: 'migrated_from_json_path',
-  legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at'
+  legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at',
+  /** 用量统计一次性历史回填完成时间（C7）；缺失时启动重试，成功即写。 */
+  usageStatsBackfillAt: 'usage_stats_backfill_at'
 } as const

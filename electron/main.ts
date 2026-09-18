@@ -37,6 +37,10 @@ import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, enforceSessionEventRetentionDetailed, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
+import { backfillUsageStats } from './usageStats/usageStatsBackfill'
+import { getDbConnection } from './database/sqliteStore'
+import { SCHEMA_META_KEYS } from './database/schema'
+import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
 import { cleanupPersistedOrphansOnStartup } from './shell/startupOrphanCleanup'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
@@ -437,10 +441,22 @@ app.whenReady().then(async () => {
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
   }
 
-  // 用量统计启动维护（需求 §7.3.1 / §7.5）：崩溃 Turn 补齐 → 保留期清理（删除留痕）。
-  // 二者都不得阻断启动；失败仅记日志，下一次启动继续重试。
+  // 用量统计启动维护（需求 §7.3.1 / §7.4 / §7.5）：
+  // 一次性历史回填（机会不可逆，每次启动检查标记）→ 崩溃 Turn 补齐 → 保留期清理（删除留痕）。
+  // 全部不得阻断启动；失败仅记日志，下一次启动继续重试。
   try {
     setUsageStatsAppVersion(app.getVersion())
+    if (!getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt)) {
+      const backfillWorkDirs = [workDirState, ...workDirManager!.listProfiles().map((profile) => profile.path)]
+      const backfill = backfillUsageStats(db, Array.from(new Set(backfillWorkDirs.filter((dir) => dir))))
+      setSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt, String(Date.now()))
+      logAgentEvent('info', 'usageStats.backfill.completed', {
+        scannedSessionDirs: backfill.scannedSessionDirs,
+        stepRowsWritten: backfill.stepRowsWritten,
+        turnRowsWritten: backfill.turnRowsWritten,
+        skippedMalformedFiles: backfill.skippedMalformedFiles
+      })
+    }
     const patched = reconcileUsageTurnFacts(db)
     if (patched > 0) {
       console.log(`[usageStats] reconciled ${patched} interrupted turn(s) after crash`)
