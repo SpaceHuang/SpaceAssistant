@@ -42,7 +42,8 @@
     "dirty": "Unsaved changes",
     "commandSummary": "Command: {{command}}",
     "endpointSummary": "Endpoint: {{endpoint}}",
-    "untestedHint": "Unnamed server"
+    "untestedHint": "Unnamed server",
+    "noToolsEnabledWarning": "{{total}} tools discovered but none enabled; they will not be available in chats. Select tools in the list and save"
   },
   "form": {
     "basicTitle": "Basic info",
@@ -99,6 +100,7 @@
     "discardTitle": "Discard unsaved MCP drafts?",
     "discardContent": "MCP settings are saved per card; changes without \"Save & Apply\" will be discarded.",
     "discardOk": "Discard changes",
-    "discardCancel": "Keep editing"
+    "discardCancel": "Keep editing",
+    "autoEnabledTools": "Auto-enabled {{count}} newly discovered tools"
   }
 }

@@ -100,6 +100,12 @@ export function McpServerCard({
         </span>
       </div>
 
+      {draft.enabled && tools.length > 0 && enabledCount === 0 ? (
+        <div className="mcp-server-card__warning" role="alert">
+          {t('card.noToolsEnabledWarning', { total: tools.length })}
+        </div>
+      ) : null}
+
       <div className="mcp-server-card__footer">
         <div className="mcp-server-card__footer-actions">
           <Button type="text" size="small" onClick={onClearSecret}>

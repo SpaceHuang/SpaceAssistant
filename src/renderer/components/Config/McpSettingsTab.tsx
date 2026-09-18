@@ -162,6 +162,13 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
               discoveredAt: new Date().toISOString()
             }
           }))
+          // 与主进程 mcp:refresh-tools 同口径：已启用且从未勾选工具的草稿，
+          // 测试成功即自动勾选本次发现的全部工具；已有选择不覆盖。
+          if (draft.enabled && draft.enabledToolNames.length === 0 && result.tools.length > 0) {
+            patchDraft(id, { enabledToolNames: result.tools.map((tool) => tool.originalName) })
+            message.success(t('messages.autoEnabledTools', { count: result.tools.length }))
+            return
+          }
           message.success(t('messages.testOk', { count: result.tools.length }))
           return
         }
@@ -199,7 +206,7 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
         setTestingId(null)
       }
     },
-    [drafts, message, t]
+    [drafts, message, t, patchDraft]
   )
 
   const refreshServer = useCallback(
@@ -216,7 +223,11 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
               discoveredAt: new Date().toISOString()
             }
           }))
-          message.success(t('messages.testOk', { count: result.tools.length }))
+          message.success(
+            result.autoEnabledToolCount
+              ? t('messages.autoEnabledTools', { count: result.autoEnabledToolCount })
+              : t('messages.testOk', { count: result.tools.length })
+          )
         } else {
           message.error(t('messages.testFailed', { message: result.message }))
         }

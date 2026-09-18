@@ -1312,6 +1312,15 @@
   color: var(--sa-text-secondary);
 }
 
+.mcp-server-card__warning {
+  margin: 4px 12px 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: var(--sa-config-font-sm);
+  color: var(--sa-warning, #d46b08);
+  background: var(--sa-warning-bg, rgba(250, 173, 20, 0.12));
+}
+
 .mcp-server-form {
   display: flex;
   flex-direction: column;

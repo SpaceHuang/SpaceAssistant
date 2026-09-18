@@ -42,7 +42,8 @@
     "dirty": "有未保存更改",
     "commandSummary": "命令：{{command}}",
     "endpointSummary": "端点：{{endpoint}}",
-    "untestedHint": "未命名服务"
+    "untestedHint": "未命名服务",
+    "noToolsEnabledWarning": "已发现 {{total}} 个工具，尚未启用任何一个，会话中将不可用。请在工具列表中勾选后保存"
   },
   "form": {
     "basicTitle": "基础信息",
@@ -99,6 +100,7 @@
     "discardTitle": "放弃未保存的 MCP 草稿？",
     "discardContent": "MCP 设置采用分区内保存，未点击「保存并应用」的修改将被丢弃。",
     "discardOk": "放弃更改",
-    "discardCancel": "继续编辑"
+    "discardCancel": "继续编辑",
+    "autoEnabledTools": "已自动启用 {{count}} 个新发现的工具"
   }
 }
