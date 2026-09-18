@@ -46,7 +46,7 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     expect(sent).toBe(1)
     expect(ch.countPending()).toBe(1)
     ch.tryResolveFromInbound({ kind: 'approve', confirmId: ch.listPending()[0]!.confirmId }, { matchKey: 'u1', messageId: 'm2' })
-    await expect(p).resolves.toEqual({ kind: 'approved' })
+    await expect(p).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
     expect(a.events.map((e) => e.event)).toEqual(['confirm.request', 'confirm.outcome'])
     expect(a.events[1]!.outcome).toBe('approved')
   })
@@ -65,7 +65,7 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     })
     ch.tryResolveFromInbound({ kind: 'remember', confirmId: ch.listPending()[0]!.confirmId, tier: 1 }, { matchKey: 'c1', messageId: 'm2' })
     const outcome = await p
-    expect(outcome).toEqual({ kind: 'approved', memory: tiers[0]!.key })
+    expect(outcome).toEqual({ kind: 'approved', memory: tiers[0]!.key, cause: 'user-approved' })
   })
 
   it('记N 选中后触发 onMemory 回调（链路侧写 decision_cache）', async () => {
@@ -133,7 +133,7 @@ describe('ImChannel（飞书/微信合并通道）', () => {
       messageId: 'm1',
       matchKey: 'u1'
     })
-    await expect(p).resolves.toEqual({ kind: 'approved' })
+    await expect(p).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
   })
 
   it('sendPrompt 同步抛异常：请求不抛出、确认码释放、条目仍可待超时', async () => {
@@ -151,7 +151,7 @@ describe('ImChannel（飞书/微信合并通道）', () => {
       matchKey: 'u1'
     })
     expect(ch.countPending()).toBe(1)
-    await expect(p).resolves.toEqual({ kind: 'timeout' })
+    await expect(p).resolves.toEqual({ kind: 'timeout', cause: 'timeout' })
   })
 
   it('入站 rejects；resolveFromDesktop 可代答；cancelByChannel 只作用于本链路', async () => {
@@ -164,7 +164,7 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     })
     const id = ch.listPending()[0]!.id
     expect(ch.resolveFromDesktop(id, false)).toBe(true)
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
     expect(ch.cancelByChannel('wechat')).toBe(0)
     // 会话级 pending 已清空
     expect(ch.hasPendingForSession('s1')).toBe(false)
@@ -235,5 +235,38 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     expect((sent as { raw: string }).raw).toBe('orig')
     ch.cancel(ch.listPending()[0]!.id)
     await p.catch(() => undefined)
+  })
+})
+
+describe('P0 审计如实归因（R1 补充：IM 侧 confirm.* 落点）', () => {
+  it('confirm.outcome 的 actor=user 且 cause 非空（批准路径；request 无裁决不落 cause）', async () => {
+    const a = audit()
+    const ch = new ImChannel({
+      lane: 'wechat',
+      timeoutMs: 1000,
+      audit: a,
+      sendPrompt: (entry) => {
+        chRef!.tryResolveFromInbound(
+          { kind: 'approve', confirmId: entry.confirmId },
+          { matchKey: 'u1', messageId: 'm2' }
+        )
+      }
+    })
+    const chRef = ch
+    const p = ch.request(req(), { sessionId: 's1', toolName: 'run_shell', messageId: 'm1', matchKey: 'u1' })
+    await p
+    expect(a.events.map((e) => e.event)).toEqual(['confirm.request', 'confirm.outcome'])
+    expect(a.events[0]!.actor).toBe('user')
+    expect(a.events[0]!.cause).toBeUndefined()
+    expect(a.events[1]!.actor).toBe('user')
+    expect(a.events[1]!.cause).toBe('user-approved')
+  })
+
+  it('超时路径 cause=timeout 且 actor 如实为 system（无回答动作）', async () => {
+    const a = audit()
+    const ch = new ImChannel({ lane: 'feishu', timeoutMs: 30, audit: a, sendPrompt: () => undefined })
+    await ch.request(req(), { sessionId: 's2', toolName: 'run_shell', messageId: 'm1', matchKey: 'u1' })
+    expect(a.events.at(-1)!.cause).toBe('timeout')
+    expect(a.events.at(-1)!.actor).toBe('system')
   })
 })

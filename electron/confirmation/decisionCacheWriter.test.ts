@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openSqliteDatabase, type AppDatabase } from '../database'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection } from '../database'
-import { recordSystemManagedCacheEntry } from './decisionCacheWriter'
+import { recordSystemManagedCacheEntry, recordUserAnswerFromMemoryTiers } from './decisionCacheWriter'
 import type { CacheKey } from '../../src/shared/confirmation/types'
 import type { AuditSink } from './channels'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
@@ -121,5 +121,43 @@ describe('recordSystemManagedCacheEntry', () => {
     const hit = new SqliteDecisionCache(getDbConnection(db)).lookup(key)
     expect(hit!.decision).toBe('deny')
     expect(hit!.lane).toBe('feishu')
+  })
+})
+
+describe('recordUserAnswerFromMemoryTiers 回答者闸（I3 第三道闸：写入断言）', () => {
+  it('answererKind 非 user 直接抛错，不产生缓存行与 cache.write 审计', () => {
+    const db = open()
+    const { sink, events } = fakeAudit()
+    const key: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action', sessionId: 's1' }
+    for (const answererKind of ['agent', 'deny'] as const) {
+      expect(() =>
+        recordUserAnswerFromMemoryTiers({
+          db,
+          audit: sink,
+          lane: 'desktop',
+          sessionId: 's1',
+          key,
+          memoryTiers: [{ key, label: '记住该网站' }],
+          answererKind
+        })
+      ).toThrowError(/MEMORY_WRITE_NOT_HUMAN/)
+    }
+    expect(new SqliteDecisionCache(getDbConnection(db)).lookup(key)).toBeNull()
+    expect(events).toHaveLength(0)
+  })
+
+  it('answererKind=user 时行为不变（档位内 key 正常写入）', () => {
+    const db = open()
+    const key: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action', sessionId: 's1' }
+    recordUserAnswerFromMemoryTiers({
+      db,
+      lane: 'desktop',
+      sessionId: 's1',
+      key,
+      memoryTiers: [{ key, label: '记住该网站' }],
+      answererKind: 'user',
+      source: 'user-confirm'
+    })
+    expect(new SqliteDecisionCache(getDbConnection(db)).lookup(key)).not.toBeNull()
   })
 })

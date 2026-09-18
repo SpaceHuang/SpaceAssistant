@@ -1,4 +1,4 @@
-import type { ExecutionLane, PolicyAction, PolicyRule } from '../confirmation/types'
+import type { ConfirmAnswererKind, ExecutionLane, PolicyAction, PolicyRule } from '../confirmation/types'
 
 /**
  * 策略套餐（顶层设计 §4 第 1 区 / §5）：每条链路选择 严格/标准/宽松/自定义 之一。
@@ -97,25 +97,58 @@ function applyCustom(rules: PolicyRule[], overrides: PolicyRuleOverrideInput[]):
 }
 
 /**
+ * P2-5：非 user 回答者（agent / deny）的 custom 覆盖只保留收紧项。
+ * 覆盖到 allow 的条目一律丢弃：对 allow 基准是无操作，对 ask/deny 基准是向下覆盖。
+ * deny 回答者（无任何应答者）同样受此约束——否则「全拒」会被 custom 静默翻转为「放行」。
+ */
+function applyCustomForNonUserAnswerer(rules: PolicyRule[], overrides: PolicyRuleOverrideInput[]): PolicyRule[] {
+  if (overrides.length === 0) return rules
+  return applyCustom(rules, overrides.filter((o) => o.action !== 'allow'))
+}
+
+/**
+ * P2-5 写入强校验（对齐 validateRuleOverride 的强制度）：
+ * 非 user 回答者（agent = 审批裁决 / deny = 无应答者）的 lane 不得套用 loose
+ * ——「无人监督 + 自动放宽」组合会把 confirm 面静默翻转为全自动放行（缺口 9）。
+ */
+export function validatePolicyPackageForLane(
+  lane: ExecutionLane,
+  pkg: PolicyPackage,
+  answererKind: ConfirmAnswererKind
+): { ok: true } | { ok: false; error: string } {
+  if (answererKind !== 'user' && pkg === 'loose') {
+    return { ok: false, error: `lane ${lane} 的回答者非人类（${answererKind}），不得使用 loose 套餐` }
+  }
+  return { ok: true }
+}
+
+/**
  * 按链路解析生效规则集：基础规则 + 套餐变换/自定义覆盖。
  * 默认（standard 且无覆盖）返回原数组引用，保证零行为变化的快路径。
+ * P2-5：answererKind='agent' 的 lane 不得 loose（按 standard 处理）、custom 只保留收紧覆盖。
  */
 export function resolvePolicyRules(args: {
   lane: ExecutionLane
   packages?: Partial<PolicyPackageMap>
   overrides?: PolicyRuleOverrideInput[]
   rules: PolicyRule[]
+  /** 回答者种类（P2-5 套餐约束的维度）；缺省 'user' 保持既有行为。 */
+  answererKind?: ConfirmAnswererKind
 }): PolicyRule[] {
   const pkg = args.packages?.[args.lane] ?? 'standard'
   // P2 guard（偏差 15 最小防护）：automation 无人类应答者，无豁免来源——不得套用 loose 档。
-  if (pkg === 'loose' && args.lane === 'automation') return args.rules
+  // P2-5 评审修复：约束扩到一切非 user 回答者（agent / deny）——deny 的「全拒」面不得被 loose 静默翻转为放行。
+  const nonUserAnswerer = args.answererKind === 'agent' || args.answererKind === 'deny'
+  if (pkg === 'loose' && (args.lane === 'automation' || nonUserAnswerer)) return args.rules
   switch (pkg) {
     case 'strict':
       return applyStrict(args.rules)
     case 'loose':
       return applyLoose(args.rules)
     case 'custom':
-      return applyCustom(args.rules, args.overrides ?? [])
+      return nonUserAnswerer
+        ? applyCustomForNonUserAnswerer(args.rules, args.overrides ?? [])
+        : applyCustom(args.rules, args.overrides ?? [])
     default:
       return args.rules
   }

@@ -1,5 +1,6 @@
 import type {
   CacheKey,
+  ConfirmAnswererKind,
   DecisionCacheEntry,
   Decision,
   ExecutionLane,
@@ -45,11 +46,15 @@ export interface RecordUserAnswerArgs {
 export interface RecordDecisionMemoryArgs extends Omit<RecordUserAnswerArgs, 'key' | 'scope' | 'decision'> {
   decision: Extract<Decision, { type: 'require-confirm' }>
   key: CacheKey
+  /** 本次确认的回答者（I3 第三道闸：非 'user' 拒绝写入）。 */
+  answererKind: ConfirmAnswererKind
 }
 
 export interface RecordMemoryTierArgs extends Omit<RecordUserAnswerArgs, 'key' | 'scope' | 'decision'> {
   memoryTiers: readonly MemoryTier[]
   key: CacheKey
+  /** 本次确认的回答者（I3 第三道闸：非 'user' 拒绝写入）。 */
+  answererKind: ConfirmAnswererKind
 }
 
 function sameCacheKey(left: CacheKey, right: CacheKey): boolean {
@@ -64,8 +69,14 @@ export function recordUserAnswerFromDecision(args: RecordDecisionMemoryArgs): vo
   recordUserAnswerFromMemoryTiers({ ...args, memoryTiers: args.decision.memoryTiers })
 }
 
-/** IM/确认通道适配入口：只允许写入该通道实际展示给用户的 memoryTiers。 */
+/**
+ * IM/确认通道适配入口：只允许写入该通道实际展示给用户的 memoryTiers。
+ * 回答者闸（I3 第三道闸）：非 'user' 回答者（agent/deny）一律抛错——裁决永不落缓存。
+ */
 export function recordUserAnswerFromMemoryTiers(args: RecordMemoryTierArgs): void {
+  if (args.answererKind !== 'user') {
+    throw new Error('MEMORY_WRITE_NOT_HUMAN_ANSWERER')
+  }
   if (args.memoryTiers.length === 0) {
     throw new Error('MEMORY_WRITE_NOT_ALLOWED')
   }

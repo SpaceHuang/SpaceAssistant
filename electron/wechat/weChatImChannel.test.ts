@@ -48,7 +48,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     expect(im.tryResolveFromInboundMessage(ynMsg, {
       allowedUserIds: ['wx-user@test']
     })).toBe(true)
-    await expect(promise).resolves.toEqual({ kind: 'approved' })
+    await expect(promise).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
     expect(reply).toHaveBeenCalledWith(
       expect.anything(),
       expect.stringContaining('回复 Y')
@@ -96,6 +96,6 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     ).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(promise).resolves.toEqual({ kind: 'rejected' })
+    await expect(promise).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 })

@@ -59,9 +59,11 @@ export interface ImChannelDeps {
 }
 
 function toOutcome(decision: PendingDecision, memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
-  if (decision === 'y') return { kind: 'approved', ...(memory ? { memory: memory.key } : {}) }
-  if (decision === 'timeout') return { kind: 'timeout' }
-  return { kind: 'rejected' }
+  if (decision === 'y') {
+    return { kind: 'approved', ...(memory ? { memory: memory.key } : {}), cause: 'user-approved' }
+  }
+  if (decision === 'timeout') return { kind: 'timeout', cause: 'timeout' }
+  return { kind: 'rejected', cause: 'user-denied' }
 }
 
 /**
@@ -109,7 +111,10 @@ export class ImChannel {
   }
 
   request(req: ConfirmRequest, pending: ImPendingInput): Promise<ConfirmOutcome> {
-    if (this.registry.hasPendingForSession(pending.sessionId)) return Promise.resolve({ kind: 'rejected' })
+    // 并发保护：同会话已有待确认时拒绝新请求（无人回答本次请求，非用户意志）
+    if (this.registry.hasPendingForSession(pending.sessionId)) {
+      return Promise.resolve({ kind: 'rejected', cause: 'no-answerer' })
+    }
     const id = randomUUID()
     const confirmId = allocateConfirmId()
     const now = Date.now()
@@ -133,7 +138,8 @@ export class ImChannel {
       toolName: entry.toolName,
       riskLevel: req.riskLevel as RiskLevel,
       factsSummary: req.facts.summary.text,
-      actor: 'system'
+      // B1 归因口径：confirm.request / confirm.outcome 归因于回答动作——IM 出站回答者恒为远端用户
+      actor: 'user'
     })
     // 先注册再发送提示：sendPrompt 同步触发入站解析时能命中待确认项；
     // 注入实现同步抛异常时释放 confirmId，避免短确认码泄漏
@@ -220,8 +226,10 @@ export class ImChannel {
       requestId: entry.requestId ?? entry.id,
       toolName: entry.toolName,
       outcome: decision === 'y' ? 'approved' : decision === 'n' ? 'rejected' : 'timeout',
+      cause: decision === 'y' ? 'user-approved' : decision === 'n' ? 'user-denied' : 'timeout',
       ...(memory ? { memoryTier: memory.label } : {}),
-      actor: 'system'
+      // 超时无回答动作，actor 如实为 system；批准/拒绝归因远端用户（B1）
+      actor: decision === 'timeout' ? 'system' : 'user'
     })
   }
 

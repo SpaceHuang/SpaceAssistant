@@ -62,6 +62,8 @@ describe('evaluateToolCallGate', () => {
     expect(ev).toBeTruthy()
     expect(ev!.lane).toBe('desktop')
     expect(ev!.decision).toBe('auto-allow')
+    // P0-4 归因收窄：policy.decision 发生在询问之前，此刻不存在回答者，actor 保持 system
+    expect(ev!.actor).toBe('system')
   })
 
   it('桌面 write_file confirmMode=auto：评估器批准 → auto-allow(desktop-auto-approve)', async () => {

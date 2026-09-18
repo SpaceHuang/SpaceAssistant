@@ -492,6 +492,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
             sessionId: payload.sessionId ?? 'desktop',
             key: payload.memoryTier,
             memoryTiers: getPendingMemoryTiers(payload.requestId, payload.toolUseId),
+            answererKind: 'user',
             source: 'user-confirm'
           })
         } else {
@@ -1343,6 +1344,11 @@ function readExposureInputsFromDb(
         return { ok: false as const, error: 'invalid lane' }
       }
       if (!isPolicyPackage(pkg)) return { ok: false as const, error: 'invalid package' }
+      // P2-5 写入强校验（对齐 validateRuleOverride 强制度）：agent 回答者的 lane 不得套用 loose
+      const { resolveLaneAnswererKind } = await import('./confirmation/answererConfig')
+      const { validatePolicyPackageForLane } = await import('../src/shared/policy/policyPackages')
+      const packageCheck = validatePolicyPackageForLane(lane, pkg, resolveLaneAnswererKind(ctx.db, lane))
+      if (!packageCheck.ok) return { ok: false as const, error: packageCheck.error }
       const packages = runtime.readPolicyPackages(ctx.db)
       const before = packages[lane]
       if (before === pkg) return { ok: true as const }

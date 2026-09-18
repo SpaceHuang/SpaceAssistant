@@ -87,10 +87,12 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
+import { resolveLaneAnswererPolicy } from './confirmation/answererConfig'
+import { AgentChannel } from './confirmation/agentChannel'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
-import { mapLegacyConfirmation } from './tools/coordinatorConfirmationAdapter'
-import type { ConfirmRequest } from '../src/shared/confirmation/types'
+import { mapLegacyConfirmation, type LegacyConfirmationRejectReason, type LegacyPolicyCode } from './tools/coordinatorConfirmationAdapter'
+import type { ConfirmAnswererKind, ConfirmOutcomeCause, ConfirmRequest } from '../src/shared/confirmation/types'
 import {
   formatScriptDenyUserMessage,
   getRemoteTaskController
@@ -294,7 +296,12 @@ function formatToolResultPayload(
   return serializeAgentToolResult(r, options)
 }
 
+/** 执行失败桶阈值（既有行为不变）。 */
 const MAX_CONSECUTIVE_SAME_TOOL_ERROR = 3
+/** P1-3 安全拒绝桶阈值（计划 §12-3 定值 5）：安全拒绝与执行失败分开计数，管家「换方案」能力不被压制。 */
+const MAX_CONSECUTIVE_SAFETY_REJECT = 5
+
+type ToolErrorBucket = 'exec' | 'safety'
 
 function compactToolResultContentForApi(
   content: string,
@@ -342,17 +349,18 @@ function makeToolErrorRepeatTracker() {
   let lastKey: string | null = null
   let count = 0
   return {
-    noteFailure(toolName: string, error: string, identity?: string): boolean {
-      const key = `${toolName}\0${error}\0${identity ?? ''}`
+    noteFailure(toolName: string, error: string, identity?: string, bucket: ToolErrorBucket = 'exec'): boolean {
+      // P1-3：键内并入来源分桶——安全拒绝（策略 deny / 确认拒绝）与执行失败互不累计
+      const key = `${bucket}\0${toolName}\0${error}\0${identity ?? ''}`
       if (key === lastKey) count++
       else {
         lastKey = key
         count = 1
       }
-      return count >= MAX_CONSECUTIVE_SAME_TOOL_ERROR
+      return count >= (bucket === 'safety' ? MAX_CONSECUTIVE_SAFETY_REJECT : MAX_CONSECUTIVE_SAME_TOOL_ERROR)
     },
     noteSuccess(toolName: string): void {
-      if (lastKey?.startsWith(`${toolName}\0`)) {
+      if (lastKey?.includes(`\0${toolName}\0`)) {
         lastKey = null
         count = 0
       }
@@ -417,6 +425,18 @@ export type RunToolChatSessionArgs = {
   larkCliRunner?: LarkCliRunner
   /** 显式 lane（偏差 21）：由驱动源层解析后随调用传入；缺省回退 remoteContext 推导，最终 desktop。 */
   lane?: import('../src/shared/confirmation/types').ExecutionLane
+  /**
+   * P2-4 递归守卫标记（I5）：仅审批执行链传入 'approval-agent'（代码写死，不进配置）。
+   * gate 看到 require-confirm + 该标记 → 改写为 deny(cause=recursion-blocked)。
+   */
+  internalConfirmExemption?: 'approval-agent'
+  /** 工具执行轮数上界（有界调用方使用，如审批 Agent ≤3）；缺省不限。 */
+  maxToolLoopRounds?: number
+  /**
+   * 已声明的任务（对比分析 §4-D，可信证据）：管家装配传任务 prompt 摘要，
+   * 仅用于 agent 回答者线索包的任务相关性判断；缺省 = 无任务上下文。
+   */
+  approvalTaskDigest?: string
   remoteContext?: RemoteContext
   workDir: string
   workDirManager?: WorkDirManager
@@ -1183,6 +1203,18 @@ async function runToolChatSessionInner(
       )
     }
 
+    // 轮数上界（审批 Agent 等有界调用方传入）：达到上界后不再执行工具，终止循环——
+    // 未获最终裁决的 fail-closed 由调用方（approvalAgent）兜底处理
+    if (args.maxToolLoopRounds != null && loopRound > args.maxToolLoopRounds) {
+      return failToolLoopWithLastUsage(
+        requestId,
+        sessionId,
+        `TOOL_LOOP_MAX_ROUNDS_EXCEEDED(${args.maxToolLoopRounds})`,
+        lastValidUsage,
+        args.emitFactEvent,
+      )
+    }
+
     const toolResults: Anthropic.ToolResultBlockParam[] = []
     const emitToolResultFact = (toolUseId: string, result: ToolCallResultPersisted) => {
       args.emitFactEvent?.({ type: 'tool-result', id: toolUseId, result })
@@ -1413,7 +1445,8 @@ async function runToolChatSessionInner(
         remoteBudgetState,
         dangerAssessment,
         currentPageUrl,
-        mcpEntry: mcpSnapshot.entries.get(resolvedToolName)
+        mcpEntry: mcpSnapshot.entries.get(resolvedToolName),
+        internalConfirmExemption: args.internalConfirmExemption
       })
 
       // run_shell 预检拒绝（validator 性质，gate 前置短路）
@@ -1549,8 +1582,9 @@ async function runToolChatSessionInner(
             : denyMsg
         )
         await recordToolResult(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }), { success: false, error: denyMsg })
-        if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
+        // P1-3：策略 deny 属安全拒绝桶（阈值 5），不与执行失败共用计数
+        if (toolErrorRepeat.noteFailure(toolName, denyMsg, undefined, 'safety')) {
+          abortRepeatedToolError = `安全拒绝已连续出现 ${MAX_CONSECUTIVE_SAFETY_REJECT} 次，已停止：${denyMsg}`
           break
         }
         continue
@@ -1571,7 +1605,15 @@ async function runToolChatSessionInner(
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
-      let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
+      let rejectReason: LegacyConfirmationRejectReason = 'user'
+      /** rejectReason='policy' 时的细分来源（迁移期保持既有文案与 errorCode 可对照）。 */
+      let rejectPolicyCode: LegacyPolicyCode | undefined
+      /** 本次确认的回答者（I3：非 user 不得产生任何记忆写入）；缺省 user 保持既有路径等价。 */
+      let confirmAnswererKind: ConfirmAnswererKind = 'user'
+      /** 本次确认的结束原因（审计五问之「到底拿没拿到裁决」）。 */
+      let confirmOutcomeCause: ConfirmOutcomeCause = 'user-approved'
+      /** 通道裁决附带的模型可读理由（ConfirmOutcome.reason.summary，P1-2 回传）。 */
+      let channelRejectSummary: string | undefined
       const autoApproveFallback: AutoApproveFallback | undefined = gate.autoApproveFallback
       if (autoApproveFallback) {
         logAgentEvent('info', 'file.auto_approve.fallback', {
@@ -1622,7 +1664,8 @@ async function runToolChatSessionInner(
         if (remoteContext && !askViaIm) {
           // 远程只读策略：不发 IM 确认，直接拒绝
           outcome = 'rejected'
-          rejectReason = 'remote_read_only'
+          rejectReason = 'policy'
+          rejectPolicyCode = 'remote_read_only'
           logAgentEvent('info', 'tool.confirm.remote_read_only_reject', {
             requestId,
             sessionId,
@@ -1702,12 +1745,16 @@ async function runToolChatSessionInner(
           }
           }
           // §5.5 统一通道分发：channelFor(lane)；confirm.* 审计由通道内部以同一 requestId 落
+          // P1-4：timeoutMs 真实消费决策层给的值（现状恒 null → 通道回退 5min 默认）；P2 起回答者配置可覆盖
           const confirmReq: ConfirmRequest = {
             facts: gate.facts,
             riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : gate.facts.baseRiskLevel,
             memoryTiers: confirmMemoryTiers,
-            timeoutMs: null
+            timeoutMs: gate.decision.type === 'require-confirm' ? gate.decision.timeoutMs : null
           }
+          // P2 回答者接线（I1）：回答者按配置解析（缺省值表）；kind='agent' 经工厂挂 AgentChannel，
+          // invokeApproval 延迟加载审批执行链（避免 toolChatLoop ↔ approvalAgent 循环依赖）。
+          const answererPolicy = resolveLaneAnswererPolicy(appDb, confirmLane)
           const channelOutcome = await channelFor({
             lane: confirmLane,
             requestId,
@@ -1715,6 +1762,33 @@ async function runToolChatSessionInner(
             sessionId,
             toolName,
             audit: getSecurityAuditLog(),
+            answererPolicy,
+            agentChannelFactory: (agentDeps) =>
+              new AgentChannel({
+                ...agentDeps,
+                // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面/IM 链路缺省无
+                ...(args.approvalTaskDigest ? { taskDigest: args.approvalTaskDigest } : {}),
+                invokeApproval: (inv) =>
+                  import('./confirmation/approvalAgent').then((m) =>
+                    m.runApprovalAgent(
+                      {
+                        db: appDb as AppDatabase,
+                        workDir,
+                        userDataDir,
+                        getToolsConfig: () => toolsConfig,
+                        ...(shellConfig !== undefined ? { getShellConfig: () => shellConfig } : {}),
+                        ...(browserConfig ? { getBrowserConfig: () => browserConfig } : {}),
+                        getWorkDir: () => (resolveWorkDir ? resolveWorkDir() : workDir),
+                        // P1-1：凭证对配对传入——复用外层会话已解析的 model/baseUrl/getApiKey，
+                        // 审批请求打用户实际服务端点（中转/自定义端点下不失效）；Profile 机制落地后按 approvalProfileId 解析独立快模型
+                        model,
+                        ...(baseUrl ? { baseUrl } : {}),
+                        getApiKey
+                      },
+                      inv
+                    )
+                  )
+              }),
             ...(remoteContext?.imChannel
               ? {
                   imChannel: remoteContext.imChannel,
@@ -1751,6 +1825,12 @@ async function runToolChatSessionInner(
               : channelOutcome.kind === 'timeout'
                 ? 'timeout'
                 : 'rejected'
+          // 回答者与结束原因随 outcome 记录（缺省视为 user，保持既有桌面/IM 路径行为等价）
+          if (channelOutcome.kind !== 'approved-with-action') {
+            confirmAnswererKind = channelOutcome.answererKind ?? 'user'
+            confirmOutcomeCause = channelOutcome.cause
+            channelRejectSummary = channelOutcome.reason?.summary
+          }
         }
         if (!remoteContext) {
           // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
@@ -1810,7 +1890,8 @@ async function runToolChatSessionInner(
           const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
           if (!recheck.ok) {
             outcome = 'rejected'
-            rejectReason = 'authorization_revoked'
+            rejectReason = 'policy'
+            rejectPolicyCode = 'authorization_revoked'
             logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
               requestId,
               sessionId,
@@ -1837,7 +1918,8 @@ async function runToolChatSessionInner(
         const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
         if (!recheck.ok) {
           outcome = 'rejected'
-          rejectReason = 'authorization_revoked'
+          rejectReason = 'policy'
+          rejectPolicyCode = 'authorization_revoked'
           logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
             requestId,
             sessionId,
@@ -1867,7 +1949,7 @@ async function runToolChatSessionInner(
       }
 
       // 收窄 legacy confirm 状态为 coordinator 合同；下方仍保留既有文案和审计分支。
-      const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason })
+      const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason, policyCode: rejectPolicyCode })
       if (needsConfirm) {
         args.emitFactEvent?.({
           type: 'tool-confirmed',
@@ -1904,23 +1986,37 @@ async function runToolChatSessionInner(
         typeof inputObj.url === 'string' &&
         inputObj.url.trim()
       ) {
-        rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
-        // 会话级信任双写 decision_cache（navigate 档 domain-any-action，键带 sessionId）
-        if (appDb) {
-          const navHost = extractHostname(inputObj.url.trim())
-          if (navHost) {
-            if (gate.decision.type !== 'require-confirm') {
-              throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+        // I3：记忆只源于人类——非 user 回答者（如审批 Agent）的批准不产生任何记忆写入
+        if (confirmAnswererKind !== 'user') {
+          logAgentEvent('info', 'tool.confirm.non_human_answerer_skip_memory', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            answererKind: confirmAnswererKind,
+            cause: confirmOutcomeCause
+          })
+        } else {
+          rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
+          // 会话级信任双写 decision_cache（navigate 档 domain-any-action，键带 sessionId）
+          if (appDb) {
+            const navHost = extractHostname(inputObj.url.trim())
+            if (navHost) {
+              if (gate.decision.type !== 'require-confirm') {
+                throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+              }
+              recordUserAnswerFromDecision({
+                db: appDb,
+                audit: getSecurityAuditLog(),
+                lane: effectiveLane,
+                sessionId,
+                key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
+                decision: gate.decision,
+                answererKind: confirmAnswererKind,
+                source: 'user-confirm'
+              })
             }
-            recordUserAnswerFromDecision({
-              db: appDb,
-              audit: getSecurityAuditLog(),
-              lane: effectiveLane,
-              sessionId,
-              key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
-              decision: gate.decision,
-              source: 'user-confirm'
-            })
           }
         }
       }
@@ -1932,30 +2028,44 @@ async function runToolChatSessionInner(
       ) {
         const actUrl = stagehandService.peekCurrentUrl(sessionId)
         if (actUrl) {
-          rememberBrowserSessionActTrust(sessionId, actUrl)
-          // 会话级信任双写 decision_cache（act 档 domain+action，键带 sessionId）
-          if (appDb) {
-            const actHost = extractHostname(actUrl)
-            if (actHost) {
-              if (gate.decision.type !== 'require-confirm') {
-                throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+          // I3：记忆只源于人类——非 user 回答者（如审批 Agent）的批准不产生任何记忆写入
+          if (confirmAnswererKind !== 'user') {
+            logAgentEvent('info', 'tool.confirm.non_human_answerer_skip_memory', {
+              requestId,
+              sessionId,
+              loopRound,
+              toolUseId,
+              toolName,
+              answererKind: confirmAnswererKind,
+              cause: confirmOutcomeCause
+            })
+          } else {
+            rememberBrowserSessionActTrust(sessionId, actUrl)
+            // 会话级信任双写 decision_cache（act 档 domain+action，键带 sessionId）
+            if (appDb) {
+              const actHost = extractHostname(actUrl)
+              if (actHost) {
+                if (gate.decision.type !== 'require-confirm') {
+                  throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+                }
+                recordUserAnswerFromDecision({
+                  db: appDb,
+                  audit: getSecurityAuditLog(),
+                  lane: effectiveLane,
+                  sessionId,
+                  key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
+                  decision: gate.decision,
+                  answererKind: confirmAnswererKind,
+                  source: 'user-confirm'
+                })
               }
-              recordUserAnswerFromDecision({
-                db: appDb,
-                audit: getSecurityAuditLog(),
-                lane: effectiveLane,
-                sessionId,
-                key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
-                decision: gate.decision,
-                source: 'user-confirm'
-              })
             }
+            logAgentEvent('info', 'browser.act.sessionTrust.remember', {
+              sessionId,
+              host: extractHostname(actUrl),
+              timestamp: Date.now()
+            })
           }
-          logAgentEvent('info', 'browser.act.sessionTrust.remember', {
-            sessionId,
-            host: extractHostname(actUrl),
-            timestamp: Date.now()
-          })
         }
       }
       if (
@@ -1974,12 +2084,14 @@ async function runToolChatSessionInner(
       }
 
       if (!confirmationDecision.approved) {
+        // P1-2 拒绝理由回传：优先通道裁决的 reason.summary（模型可读、可据此改方案）；
+        // 无理由时按来源回退既有文案，迁移期文案逐一对照不回归。
         const rejectedError =
           confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
             ? '远程只读策略禁止执行需确认的工具。请在设置中将「远程写确认策略」改为「微信/飞书确认」，或开启「大模型生成的脚本自动允许执行」。'
             : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
               ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
-              : '用户拒绝执行此工具'
+              : (channelRejectSummary ?? '用户拒绝执行此工具')
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
@@ -1987,8 +2099,9 @@ async function runToolChatSessionInner(
         )
         await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
-        if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
+        // P1-3：确认拒绝属安全拒绝桶（阈值 5）——管家 Agent 被拒后可改方案推进，Turn 不因 3 次拒绝而中止
+        if (toolErrorRepeat.noteFailure(toolName, rejectedError, undefined, 'safety')) {
+          abortRepeatedToolError = `安全拒绝已连续出现 ${MAX_CONSECUTIVE_SAFETY_REJECT} 次，已停止：${rejectedError}`
           break
         }
         continue

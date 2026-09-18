@@ -57,7 +57,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 
   it('does not resolve confirm from non-owner', async () => {
@@ -74,7 +74,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 
   it('does not resolve confirm when owner unbound', async () => {
@@ -89,7 +89,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     expect(im.tryResolveFromInboundMessage(p2p({ content: 'Y' }), {})).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 
   it('builds browser navigate confirm text', () => {
@@ -148,7 +148,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(true)
     expect(im.countPending()).toBe(1)
     im.tryResolveFromInboundMessage(p2p({ messageId: 'm3', content: `Y ${cid}` }), confirmOpts)
-    await expect(p).resolves.toEqual({ kind: 'approved' })
+    await expect(p).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
   })
 
   it('approve_and_trust without eligibility does not resolve', async () => {
@@ -168,6 +168,6 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(true)
     expect(im.countPending()).toBe(1)
     im.tryResolveFromInboundMessage(p2p({ messageId: 'm3', content: `N ${cid}` }), confirmOpts)
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 })

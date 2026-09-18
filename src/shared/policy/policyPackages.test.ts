@@ -6,6 +6,7 @@ import {
   isPolicyPackage,
   normalizePolicyPackages,
   resolvePolicyRules,
+  validatePolicyPackageForLane,
   validateRuleOverride
 } from './policyPackages'
 
@@ -161,5 +162,75 @@ describe('fail-closed 兜底规则必须 locked（评审中等项）', () => {
     for (const id of FAIL_CLOSED_IDS) {
       expect(validateRuleOverride(DEFAULT_POLICY_RULES, id, 'allow').ok).toBe(false)
     }
+  })
+})
+
+describe('P2-5 套餐约束：agent 回答者的 lane 不得 loose / custom 向下覆盖', () => {
+  it('answererKind=agent 的 lane 不得套用 loose（按 standard 处理）', () => {
+    const out = resolvePolicyRules({
+      lane: 'wechat',
+      packages: { wechat: 'loose' },
+      rules: DEFAULT_POLICY_RULES,
+      answererKind: 'agent'
+    })
+    const ask = out.find((r) => r.id === 'im-write-ask')
+    expect(ask?.action).toBe('ask')
+  })
+
+  it('answererKind=agent 的 custom 覆盖只保留收紧项，向下覆盖（→allow）被丢弃', () => {
+    const out = resolvePolicyRules({
+      lane: 'automation',
+      packages: { automation: 'custom' },
+      overrides: [
+        { ruleId: 'im-write-ask', action: 'allow' },        // 向下：丢弃
+        { ruleId: 'desktop-auto-approve', action: 'deny' }  // 收紧：保留
+      ],
+      rules: DEFAULT_POLICY_RULES,
+      answererKind: 'agent'
+    })
+    expect(out.find((r) => r.id === 'im-write-ask')?.action).toBe('ask')
+    expect(out.find((r) => r.id === 'desktop-auto-approve')?.action).toBe('deny')
+  })
+
+  it('user 回答者行为不变：loose/custom 照旧生效', () => {
+    const loosened = resolvePolicyRules({
+      lane: 'desktop',
+      packages: { desktop: 'loose' },
+      rules: DEFAULT_POLICY_RULES,
+      answererKind: 'user'
+    })
+    expect(loosened.find((r) => r.id === 'im-write-ask')?.action).toBe('allow')
+
+    const customed = resolvePolicyRules({
+      lane: 'desktop',
+      packages: { desktop: 'custom' },
+      overrides: [{ ruleId: 'im-write-ask', action: 'allow' }],
+      rules: DEFAULT_POLICY_RULES,
+      answererKind: 'user'
+    })
+    expect(customed.find((r) => r.id === 'im-write-ask')?.action).toBe('allow')
+  })
+
+  it('validatePolicyPackageForLane：agent lane 拒绝 loose，user lane 不受限', () => {
+    expect(validatePolicyPackageForLane('automation', 'loose', 'agent').ok).toBe(false)
+    expect(validatePolicyPackageForLane('desktop', 'loose', 'user').ok).toBe(true)
+    expect(validatePolicyPackageForLane('automation', 'strict', 'agent').ok).toBe(true)
+  })
+})
+
+describe('P2-5 评审修复：deny 回答者同样受套餐禁令约束（防「全拒」被静默翻转）', () => {
+  it('validatePolicyPackageForLane：deny lane 拒绝 loose', () => {
+    expect(validatePolicyPackageForLane('desktop', 'loose', 'deny').ok).toBe(false)
+  })
+
+  it('answererKind=deny 的 custom 覆盖只保留收紧项', () => {
+    const out = resolvePolicyRules({
+      lane: 'wechat',
+      packages: { wechat: 'custom' },
+      overrides: [{ ruleId: 'im-write-ask', action: 'allow' }],
+      rules: DEFAULT_POLICY_RULES,
+      answererKind: 'deny'
+    })
+    expect(out.find((r) => r.id === 'im-write-ask')?.action).toBe('ask')
   })
 })
