@@ -199,3 +199,45 @@ describe('runImRemoteAgent', () => {
     expect(result).toMatchObject({ ok: false, pendingConfirm: false, outcome: 'cancelled' })
   })
 })
+
+describe('调用方契约特征化（P0：入参 → Core args 平移）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockResolveWorkDirForSession.mockReturnValue({
+      profileId: 'p1',
+      workDir: '/tmp',
+      isSensitive: false
+    })
+    mockResolveLlmCredentialsForModel.mockResolvedValue({
+      serviceId: 'svc-1',
+      baseUrl: 'https://creds.example.com',
+      getApiKey: async () => 'creds-key'
+    })
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: 'done' }],
+      stopReason: 'end_turn'
+    })
+  })
+
+  it('remoteContext 与事件出口接线平移给 Core；emitFactEvent 透传、emitSessionEvent 为 no-op 出口', async () => {
+    const emitFactEvent = vi.fn()
+    let captured: Record<string, unknown> = {}
+    mockRunToolChatSession.mockImplementation(async (args: Record<string, unknown>) => {
+      captured = args
+      return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
+    })
+
+    await runImRemoteAgent(baseArgs({ emitFactEvent }))
+
+    // lane 推导基础：remoteContext 原样平移（Core 内据此推导 im lane）
+    expect(captured.remoteContext).toMatchObject({ source: 'feishu', messageId: 'm1', confirmPolicy: 'always' })
+    // 事件出口：fact 出口透传调用方实现；session 台账出口为显式 no-op（远程无窗口）
+    expect(captured.emitFactEvent).toBe(emitFactEvent)
+    expect(captured.emitSessionEvent).toBeTypeOf('function')
+    await (captured.emitSessionEvent as (e: unknown) => Promise<void>)({ type: 'request_header' })
+    // Core 输入：会话锚点与消息装载
+    expect(captured.sessionId).toBe('sess-1')
+    expect(captured.appDb).toBeTypeOf('object')
+  })
+})
