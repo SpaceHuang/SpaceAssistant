@@ -299,3 +299,8 @@ toolkit.call(id, params)
   严重：S1 `runProbe` 超时/信号杀死归 `code:null`（WSL 不再误报）；S2 `requestLocale`/`lane` 接入 ToolExecutionContext 并透传 CapabilityContext；S3 新增 `getMessagesPageWithSequence`，能力返回真实 sequence（删除空洞不错标）；S4 discovery 前置于落库并带 5s 超时（超时归入结论）；S5 discovery 专用 fetch 手动跟随重定向并逐跳过 endpointPolicy（SSRF 拦截，合成 403 + 拦截态结论文案）；S6 toolkit 系统提示并入 `buildToolCapabilityConventionHint` 按工具面条件注入、使用 compat 名 `toolkit_find`/`toolkit_call`；S7 `confirm-requested` riskLevel 取 max(裁决, medium)。
   建议项：call id 大小写归一、取消语义独立文案、handler 错误消息过 scrubString、结果脱敏键清单补 headerValue/env:、超时经 AbortController 通知 handler、env overrides 不污染单例、session.read notes 口径修正、testMcpConnection 标注共享类型、删除死代码、`ok:false` 以 `success:false` 回报（data 保留）、`confirmedByUser` 纵深防御、metadata 测试断言 browser_detect 已注销、save-failed/stdio-env e2e 用例、env.system 缓存共享入 notes。
   显式取舍（建议项 8）：toolkit.call 的工具入参（如 accessToken）会随 assistant 消息 tool_calls 持久化到 SQLite 与 sessions/ 明文备份——与 run_shell 命令行带 secret 同类既有行为；确认卡/审计链已布尔化，落库链暂沿用现状，后续如需落库前打码另立需求。
+- **v2.4（2026-09-18）**：按 `docs/review/agent-toolkit-capability-gateway-code-review-v2.md`（修复复核轮）完成第二轮修复（45d407e5）。
+  阻断：R1 确认完成后详情展开明文——`ToolCallCard` 的 paramPreview 对 toolkit.call/toolkit_call 入参走 `sanitizeCapabilityParamsForDisplay`，展示路径彻底关闭。
+  严重：S1' `logSanitize` 键级脱敏扩展（精确清单 + 共享 CREDENTIAL_KEY_PATTERN + 复合键宽匹配 + env 表整体脱敏）；S2' `mcpConfigStore.appendServer`——saveProfiles 主体下沉 saveProfilesLocked，「读-合并-写」整体进写锁临界区，addMcpServer 改走 appendServer，并发交错不丢服务。
+  建议项：commandTrustedAt 补齐、S5 正向真用例（同源 302→DCR）、discovery 整体 deadline 8s、paramSanitize 专属单测 + 键清单共享常量 + headerName 放行 + env 大小写、审计兜底补高熵凭据前缀值、confirmRequestedRiskLevel 回归测试、act-ask locked 前提固化测试。
+  仍开放（跟进级）：建议 4（mcpConnectionManager challenge 元数据 fetch 的 endpointPolicy 接入，预存在）与建议 9（skillPrompt 整体 i18n 化）随后续批次处理。
