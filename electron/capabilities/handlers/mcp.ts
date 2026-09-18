@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import type { CapabilityDescriptor } from '../types'
 import { addMcpServer, type McpAddServerParams } from '../../mcp/mcpService'
+import { listProfiles } from '../../mcp/mcpConfigStore'
+import { getCachedTools } from '../../mcp/mcpToolRegistry'
 
 /**
  * action.mcp.add（需求 §4.2，risk=act 需确认——确认矩阵 §6）：
@@ -54,6 +56,57 @@ const mcpAddCapability: CapabilityDescriptor = {
   }
 }
 
+/**
+ * action.mcp.list（risk=read 免确认）：服务配置概览自诊断——模型在会话内可查
+ * 「服务已连接但白名单为空（0 工具注入）」等状态，避免凭 toolkit_find 搜不到就误报未加载。
+ * 只出存在性旗标与计数；lastError 仅出结构化 code（message 可能含 endpoint/主机名或
+ * 服务端可控文本，属提示注入面，只留给面向人的设置页诊断通道）。
+ */
+const mcpListCapability: CapabilityDescriptor = {
+  id: 'action.mcp.list',
+  family: 'action',
+  summary: '列出已配置的 MCP 服务：启用状态、连接状态、发现/启用工具数；用于自查服务是否可用',
+  keywords: ['mcp', '服务列表', 'mcp状态', '连接状态', '已配置服务', 'servers', 'list'],
+  paramsSchema: z.object({}).strict(),
+  paramsDoc: '{ }；无参数',
+  returnsDoc:
+    '{ servers: [{ id, name, enabled, transport, status, authMode, secretPresent, discoveredToolCount, enabledToolCount, enabledToolNames, lastError?: { code }, hint? }]}；hint 非空表示服务已发现工具但未启用任何一个（会话中不可用）',
+  risk: 'read',
+  notes: ['只读，不出 endpoint、不出凭据、lastError 仅含 code', 'hint 非空时需引导用户到设置页勾选工具'],
+  handler: async (_rawParams, ctx) => {
+    const db = ctx.appDatabase as import('../../database').AppDatabase | undefined
+    if (!db) {
+      throw new Error('MCP 配置不可用：缺少数据库上下文')
+    }
+    const servers = listProfiles(db).map((profile) => {
+      const cache = getCachedTools(db, profile.id)
+      const discoveredToolCount = cache?.tools.length ?? 0
+      const enabledToolCount = profile.enabledToolNames.length
+      const base = {
+        id: profile.id,
+        name: profile.name,
+        enabled: profile.enabled,
+        transport: profile.transport,
+        status: profile.status,
+        authMode: profile.auth.mode,
+        secretPresent: profile.auth.secretPresent,
+        discoveredToolCount,
+        enabledToolCount,
+        enabledToolNames: [...profile.enabledToolNames],
+        ...(profile.lastError ? { lastError: { code: profile.lastError.code } } : {})
+      }
+      if (profile.enabled && discoveredToolCount > 0 && enabledToolCount === 0) {
+        return {
+          ...base,
+          hint: `该服务已连接并发现 ${discoveredToolCount} 个工具，但尚未启用任何一个——会话中不可用；请引导用户到设置页 → MCP 服务中勾选工具`
+        }
+      }
+      return base
+    })
+    return { servers }
+  }
+}
+
 export function createMcpCapabilities(): CapabilityDescriptor[] {
-  return [mcpAddCapability]
+  return [mcpAddCapability, mcpListCapability]
 }

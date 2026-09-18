@@ -188,6 +188,7 @@ toolkit.call(id, params)
 | `action.session.status` | 某会话是否正在运行 | sessionId | 主进程需补「sessionId → 活跃流」登记（现状 `chatCancelRegistry.ts` 以 requestId 为键，需对齐 claudeStreamHandlers 的会话-请求绑定补一层映射） | read |
 | `action.session.list` | 分页枚举用户会话 | offset/游标、limit（默认 20，≤50） | 复用 `listSessions`（`operations.ts:129`，注意其返回**全量 `Session[]`**，非轻量 DTO），能力层裁剪为紧凑字段（id/标题/更新时间/运行中标志），兼顾 §6 尺寸上限 | read |
 | `action.session.read` | 读取某会话消息 | sessionId、cursor、limit | 按 sequence 游标分页，复用 `getMessagesPage`（`operations.ts:736`，比 offset 分页更适合增量读取）；单条大消息截断为摘要 + 提示 | read |
+| `action.mcp.list`（v2.4 追加） | 列出已配置 MCP 服务：启用/连接状态、发现/启用工具数；模型自查「服务已连接但白名单为空」 | 无参数（strict） | 复用 `listProfiles` + 工具缓存计数；只出结构化旗标与计数——**不出 endpoint、不出凭据、`lastError` 仅含 `code`**（原始 message 可能含主机名/URL 或服务端可控文本，属提示注入面，只保留在设置页诊断通道）；「已启用但 0 工具白名单」返回 hint 引导设置页勾选 | read |
 
 > 与既有工具的关系：`switch_session`（切换当前会话）、`list_work_dirs`（列工作目录）已存在且语义不同，能力实现必须复用其数据源而非另起口径；`history.read` 读的是压缩历史事实，`action.session.read` 读的是原始会话消息，两者不重叠但在系统提示中无需刻意区分（`find` 负责路由）。
 
@@ -231,6 +232,7 @@ toolkit.call(id, params)
 | `action.session.status/list` | 免确认 | 元数据级；与既有跨会话搜索（`search:execute`）同级 |
 | `action.session.read` | 免确认 + 审计 | 跨会话读取用户消息属敏感读取：有跨会话搜索先例，但须留审计痕迹；是否加配置开关见 §9 |
 | `action.mcp.add` | **需确认** | 写配置 + 发起网络发现；确认卡必须展示完整 endpoint（防诱导配置恶意端点；私网/保留地址拒绝在 `endpointPolicy`，重定向拒绝在传输/连接层——`mcpConnectionManager` 的 302 用例，两层独立兜底） |
+| `action.mcp.list`（v2.4 追加） | 免确认 | 只读配置概览：仅服务名/开关状态/计数/存在性旗标与结构化 `lastError.code`；endpoint、凭据、错误 message 均不出能力边界 |
 
 **通用约束**：结果尺寸上限 256 KiB（截断 + 提示）；handler 超时 10s；探测类缓存 10min；spawn 一律参数数组、禁 shell 字符串拼接；结果与日志经 `logSanitize`；凭据零出现——profile 侧沿用 `mcpConfigStore` 的存在性布尔旗标模式（`secretPresent`），与 `logSanitize`（日志脱敏）是两个独立机制的组合。
 
@@ -286,6 +288,12 @@ toolkit.call(id, params)
 ---
 
 ## 修订记录
+
+- **v2.4（2026-09-19）**：新增 `action.mcp.list`（read 免确认，§4.2/§6 已登记）并配套 MCP 空白名单修复（TDD）：
+  ① 能力输出安全边界写死——只出服务名/开关状态/计数/存在性旗标与结构化 `lastError.code`；不出 endpoint、不出凭据、不出错误 message（防 endpoint 泄漏与服务端可控文本进入模型上下文/提示注入面），paramsSchema 用 `.strict()` 暴露模型错误调用；
+  ② `mcp:refresh-tools` 白名单自动回填——服务启用且 `enabledToolNames` 为空（`action.mcp.add` 创建 + 设置页授权路径的必然产物）时，刷新成功即全选本次发现工具并返回 `autoEnabledToolCount` 供 UI 提示；已有选择不覆盖、禁用不回填；`updateServerStatus` 扩展 `enabledToolNames` 补丁；
+  ③ 渲染端同口径：设置页「测试连接」退化分支（存在未命名草稿无法整体落盘）在草稿上自动勾选并提示；`McpServerCard` 增加「已发现 N 个工具，尚未启用」警示横幅；
+  ④ OAuth 后台路径防惊吓——`mcp:refresh-tools`/`testConnection` 的 provider 以 `interactive: false` 构造：token 失效时不再静默弹浏览器授权（旧链路无人 `finishAuth`，授权成功后仍以 Unauthorized 失败），转译为 `auth-required` 结构化状态引导用户走「连接账户」。
 
 - **v2（2026-09-17）**：按 `docs/review/agent-toolkit-capability-gateway-requirement-review.md` 修订——① 新增 §3.6「工具名双向转换与分发」（阻断项 B1：逆映射 + 构建期撞名校验 + `history.read`/`skills.read` 存量缺陷前置立项）；② `action.mcp.add` 补齐 `env`/`oauthScopes` 入参（P1-1）；③ 新增 §1.4 端到端目标分期交代，前案 P2③④ 归属 Phase 3（P1-2）；④ 与前案的取代/保留关系精确化为 §5.2.2/§5.2.3（P1-4）；⑤ 确认体系机制归属修正（提取器信号 + `toolkit-capability:${id}` 信号 token，静态元数据表仅兜底；新增确认卡片与 `riskLevel` 硬编码实施项）；⑥ 引用偏差修正（§1.2 字节数、§4.2 `listSessions` 返回形态、§5 `toolCallLabel` 口径、§6 secretPresent 与重定向归属、§8 mock server 测试缝、§9 `Set<requestId>` 重入语义）。
 - **v2.1（2026-09-17）**：§3.6 前置任务完成——B1 存量缺陷已按逆映射方案修复（授权白名单切换为内部名口径，分发循环统一回向解析），回归测试 `electron/effectiveTools.compatName.test.ts` 红→绿；定向与依赖关联测试通过，增量构建通过。
