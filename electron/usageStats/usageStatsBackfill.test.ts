@@ -121,19 +121,32 @@ describe('backfillUsageStats 历史台账回填', () => {
     cleanup()
   })
 
-  it('台账有 turn_end 时 outcome=completed；无 turn_end 时 outcome 为 null', () => {
+  it('台账有 turn_end(reason=completed) 时 outcome=completed；error/interrupted/无 turn_end 均留空', () => {
     const { db, workDir, cleanup } = setup()
     const withEnd = seedSessionLedger(workDir, [
       jsonlLine({ seq: 1, time: T_FIRST, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'r:round:1', turnId: 'turn-end', usage: { input_tokens: 5, output_tokens: 1 }, source: 'api' } }),
-      jsonlLine({ seq: 2, time: T_FIRST, type: 'turn_end', payload: { turnId: 'turn-end' } })
+      jsonlLine({ seq: 2, time: T_FIRST, type: 'turn_end', payload: { turnId: 'turn-end', reason: 'completed' } })
     ], '20260914')
     seedTurnRow(db, { sessionId: withEnd, turnId: 'turn-end' })
+    const withError = seedSessionLedger(workDir, [
+      jsonlLine({ seq: 1, time: T_FIRST, type: 'request_usage', payload: { schemaVersion: 1, requestId: 're:round:1', turnId: 'turn-err', usage: { input_tokens: 5, output_tokens: 1 }, source: 'api' } }),
+      // reason='error'：含用户中止的失败 Turn，不得误标 completed（评审 P1-1）
+      jsonlLine({ seq: 2, time: T_FIRST, type: 'turn_end', payload: { turnId: 'turn-err', reason: 'error', error: 'boom' } })
+    ], '20260914')
+    seedTurnRow(db, { sessionId: withError, turnId: 'turn-err' })
+    const withInterrupted = seedSessionLedger(workDir, [
+      jsonlLine({ seq: 1, time: T_FIRST, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'ri:round:1', turnId: 'turn-int', usage: { input_tokens: 5, output_tokens: 1 }, source: 'api' } }),
+      jsonlLine({ seq: 2, time: T_FIRST, type: 'turn_end', payload: { turnId: 'turn-int', reason: 'interrupted' } })
+    ], '20260915')
+    seedTurnRow(db, { sessionId: withInterrupted, turnId: 'turn-int' })
     const withoutEnd = seedSessionLedger(workDir, [
       jsonlLine({ seq: 1, time: T_FIRST, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'r2:round:1', turnId: 'turn-noend', usage: { input_tokens: 5, output_tokens: 1 }, source: 'api' } })
     ], '20260915')
     seedTurnRow(db, { sessionId: withoutEnd, turnId: 'turn-noend' })
     backfillUsageStats(db, [workDir])
     expect(getUsageTurnFact(db, 'turn-end')!.outcome).toBe('completed')
+    expect(getUsageTurnFact(db, 'turn-err')!.outcome).toBeNull()
+    expect(getUsageTurnFact(db, 'turn-int')!.outcome).toBeNull()
     expect(getUsageTurnFact(db, 'turn-noend')!.outcome).toBeNull()
     cleanup()
   })

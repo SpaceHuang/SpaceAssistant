@@ -129,7 +129,9 @@ export async function runImRemoteAgent(args: {
       requestId,
       sessionId: args.sessionId,
       turnId: args.turnId,
-      llmServiceId: args.llmServiceId,
+      // DIM3：统计维度以实际解析出的服务为准——resolver 未指定 serviceId 时可能回落默认服务，
+      // 会话冻结配置（args.llmServiceId）仅作 resolver 失败时的兜底（评审 P1-2）。
+      llmServiceId: creds.serviceId || args.llmServiceId,
       model: routeModelName,
       contextWindow,
       baseUrl,

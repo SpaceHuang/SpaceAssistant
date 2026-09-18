@@ -248,7 +248,8 @@ async function runButlerModelTurn(
     requestId: args.requestId,
     sessionId: args.sessionId,
     turnId: args.turnId,
-    llmServiceId: args.llmServiceId,
+    // DIM3：统计维度以实际解析出的服务为准（评审 P1-2）；配置值仅作兜底
+    llmServiceId: creds.serviceId || args.llmServiceId,
     lane: 'automation',
     model: session.model,
     contextWindow,

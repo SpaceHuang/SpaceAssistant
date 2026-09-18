@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import dayjs, { type Dayjs } from 'dayjs'
 import { Alert, DatePicker, Drawer, Radio, Select, Space, Spin, Typography } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { UsageDailyPoint, UsageDimensions, UsageStatsFilters, UsageStatsRangeArgs, UsageSummary } from '../../../shared/usageStatsTypes'
@@ -27,7 +28,9 @@ function shiftDay(day: string, n: number): string {
 export function UsageStatsDrawer({ open, onClose }: Props) {
   const { t } = useTypedTranslation('usageStats')
   const [preset, setPreset] = useState<RangePreset>('30')
-  const [customRange, setCustomRange] = useState<[string, string] | null>(null)
+  // rc-picker 的 value/onChange 均为 dayjs 对象；存字符串再强转会在渲染期抛
+  // TypeError（date.isValid is not a function）导致整应用白屏（评审 P0）。
+  const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null)
   const [filters, setFilters] = useState<UsageStatsFilters>({})
   const [dimensions, setDimensions] = useState<UsageDimensions | null>(null)
   const [summary, setSummary] = useState<UsageSummary | null>(null)
@@ -36,10 +39,12 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
   const [loadError, setLoadError] = useState(false)
 
   const today = useMemo(() => formatLocalDay(new Date()), [])
-  // 默认近 30 天（含今天）：[today-29, today]；自定义跨度超过 365 天时截断（§5.3.1）
+  // 默认近 30 天（含今天）：[today-29, today]；自定义跨度超过 365 天时截断（§5.3.1）。
+  // 自定义模式下尚未选定完整日期时，回落近 30 天（Number('custom') 为 NaN，不能直接参与计算）。
   const [from, to] = useMemo<[string, string]>(() => {
     if (preset === 'custom' && customRange) {
-      const [rawFrom, rawTo] = customRange
+      const rawFrom = customRange[0].format('YYYY-MM-DD')
+      const rawTo = customRange[1].format('YYYY-MM-DD')
       let nextFrom = rawFrom
       const nextTo = rawTo
       if (daysBetween(nextFrom, nextTo) > 365) {
@@ -47,11 +52,12 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
       }
       return [nextFrom, nextTo]
     }
-    const days = Number(preset)
+    const days = preset === 'custom' ? 30 : Number(preset)
     return [shiftDay(today, -(days - 1)), today]
   }, [preset, customRange, today])
 
-  const rangeTooLong = preset === 'custom' && customRange !== null && daysBetween(customRange[0], customRange[1]) > 365
+  const rangeTooLong =
+    preset === 'custom' && customRange !== null && daysBetween(customRange[0].format('YYYY-MM-DD'), customRange[1].format('YYYY-MM-DD')) > 365
 
   const fetchData = useCallback(async (args: UsageStatsRangeArgs) => {
     setLoading(true)
@@ -107,10 +113,12 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
           />
           {preset === 'custom' && (
             <RangePicker
-              value={customRange ? ([customRange[0], customRange[1]] as unknown as never) : null}
-              onChange={(_, dateString) => {
-                const [rawFrom, rawTo] = dateString as [string, string]
-                if (rawFrom && rawTo) setCustomRange([rawFrom, rawTo])
+              value={customRange}
+              onChange={(dates) => {
+                // 输入中途可能拿到 Invalid dayjs（format 输出 NaN-NaN-NaN），必须校验后再入 state
+                if (dates && dates[0] && dates[1] && dates[0].isValid() && dates[1].isValid()) {
+                  setCustomRange([dates[0], dates[1]])
+                }
               }}
               allowClear={false}
             />

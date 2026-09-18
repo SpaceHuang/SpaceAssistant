@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import dayjs from 'dayjs'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
 import { ConfigProvider } from 'antd'
@@ -181,5 +182,46 @@ describe('UsageStatsDrawer', () => {
     await waitFor(() => {
       expect(screen.getByTestId('usage-empty')).toBeTruthy()
     })
+  })
+
+  it('P0 回归：自定义模式选定日期后 RangePicker 以 dayjs 渲染，不白屏且按新范围查询', async () => {
+    mockChartSize()
+    const api = mockApi()
+    renderDrawer(true)
+    await waitFor(() => {
+      expect(api.usageStatsSummary).toHaveBeenCalled()
+    })
+    const callsAfterDefault = api.usageStatsSummary.mock.calls.length
+
+    // 切到「自定义」（Drawer 内容渲染在 body portal，需从 document 查询）
+    const customRadio = document.querySelector('input.ant-radio-button-input[value="custom"]') as HTMLInputElement | null
+    expect(customRadio).toBeTruthy()
+    fireEvent.click(customRadio!)
+
+    // 打开 RangePicker：输入起点并 Enter 确认 → 面板进入终点选择态 → 导航上月点选终点
+    // （jsdom 下 focus + change + Enter 驱动 rc-picker 比 panel 首击可靠）
+    const pickerInput = () => document.querySelector('.ant-picker-input > input') as HTMLInputElement
+    fireEvent.mouseEnter(document.querySelector('.ant-picker')!)
+    fireEvent.focus(pickerInput())
+    fireEvent.change(pickerInput(), { target: { value: '2026-08-01' } })
+    fireEvent.keyDown(pickerInput(), { key: 'Enter', keyCode: 13, which: 13 })
+    await waitFor(() => {
+      expect(document.querySelector('.ant-picker-panel')).toBeTruthy()
+    })
+    const prev = document.querySelector('.ant-picker-header-prev-btn')
+    if (prev) fireEvent.click(prev)
+    await waitFor(() => {
+      expect(document.querySelector('.ant-picker-cell[title="2026-08-15"]')).toBeTruthy()
+    })
+    fireEvent.click(document.querySelector('.ant-picker-cell[title="2026-08-15"]')!)
+
+    // 修复前：字符串 value 进入 rc-picker 渲染抛 "date.isValid is not a function" → 整应用白屏。
+    // 修复后：value 为 dayjs 元组，选完日期以新范围重新查询。
+    await waitFor(() => {
+      expect(api.usageStatsSummary.mock.calls.length).toBeGreaterThan(callsAfterDefault)
+    })
+    const latest = api.usageStatsSummary.mock.calls.at(-1)?.[0] as { from: string; to: string }
+    expect(latest.from).toBe('2026-08-01')
+    expect(latest.to).toBe('2026-08-15')
   })
 })

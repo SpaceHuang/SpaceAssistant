@@ -126,6 +126,20 @@ describe('runImRemoteAgent', () => {
     expect(await captured.getApiKey?.()).toBe('creds-key')
   })
 
+  it('用量统计的 llmServiceId 取实际解析出的 creds.serviceId，而非会话冻结配置（DIM3，评审 P1-2）', async () => {
+    let captured: { llmServiceId?: string; turnId?: string } = {}
+    mockRunToolChatSession.mockImplementation(async (args: typeof captured) => {
+      captured = args
+      return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
+    })
+
+    // 会话配置指向 svc-stale，但 resolver 实际解析到 svc-1（远程 resolver 未带 serviceId，可能回落默认服务）
+    await runImRemoteAgent({ ...baseArgs(), llmServiceId: 'svc-stale', turnId: 'turn-remote-1' })
+
+    expect(captured.llmServiceId).toBe('svc-1')
+    expect(captured.turnId).toBe('turn-remote-1')
+  })
+
   it('falls back to getApiKey when credentials resolve with error', async () => {
     mockResolveLlmCredentialsForModel.mockResolvedValue({
       serviceId: '',

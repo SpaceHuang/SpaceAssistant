@@ -238,11 +238,8 @@ export function backfillUsageStats(db: AppDatabase, workDirs: string[]): UsageBa
             toolSkippedCount: 0,
             hasCleanTurnEnd: false
           }
-          if (payload.reason === 'interrupted') {
-            turnAcc.hasCleanTurnEnd = false
-          } else {
-            turnAcc.hasCleanTurnEnd = true
-          }
+          // 仅 reason='completed' 视为正常完成；'error'（含用户中止）/ 'interrupted' 不臆断结果
+          turnAcc.hasCleanTurnEnd = payload.reason === 'completed'
           turns.set(turnId, turnAcc)
         }
       }

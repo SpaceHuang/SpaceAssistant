@@ -144,6 +144,8 @@ function getRendererIndexPath(): string {
 let workDirState = ''
 let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
+/** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
+let usageStatsStartupMaintenance: (() => void) | null = null
 let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
@@ -442,32 +444,37 @@ app.whenReady().then(async () => {
   }
 
   // 用量统计启动维护（需求 §7.3.1 / §7.4 / §7.5）：
-  // 一次性历史回填（机会不可逆，每次启动检查标记）→ 崩溃 Turn 补齐 → 保留期清理（删除留痕）。
-  // 全部不得阻断启动；失败仅记日志，下一次启动继续重试。
-  try {
-    setUsageStatsAppVersion(app.getVersion())
-    if (!getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt)) {
-      const backfillWorkDirs = [workDirState, ...workDirManager!.listProfiles().map((profile) => profile.path)]
-      const backfill = backfillUsageStats(db, Array.from(new Set(backfillWorkDirs.filter((dir) => dir))))
-      setSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt, String(Date.now()))
-      logAgentEvent('info', 'usageStats.backfill.completed', {
-        scannedSessionDirs: backfill.scannedSessionDirs,
-        stepRowsWritten: backfill.stepRowsWritten,
-        turnRowsWritten: backfill.turnRowsWritten,
-        skippedMalformedFiles: backfill.skippedMalformedFiles
-      })
+  // 一次性历史台账回填（机会不可逆，schema_meta 标记保证只跑一次）→ 崩溃 Turn 补齐 → 保留期清理（删除留痕）。
+  // 回填要同步扫描各 workDir 的全部台账（上限 100 个会话），大台账下会拖延启动数秒（评审 P1-3），
+  // 因此这里只定义，推迟到主窗口创建完成后执行；统计非关键路径，晚几秒完成无碍。
+  const runUsageStatsStartupMaintenance = (): void => {
+    try {
+      setUsageStatsAppVersion(app.getVersion())
+      if (!getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt)) {
+        const backfillWorkDirs = [workDirState, ...workDirManager!.listProfiles().map((profile) => profile.path)]
+        const backfill = backfillUsageStats(db, Array.from(new Set(backfillWorkDirs.filter((dir) => dir))))
+        setSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt, String(Date.now()))
+        logAgentEvent('info', 'usageStats.backfill.completed', {
+          scannedSessionDirs: backfill.scannedSessionDirs,
+          stepRowsWritten: backfill.stepRowsWritten,
+          turnRowsWritten: backfill.turnRowsWritten,
+          skippedMalformedFiles: backfill.skippedMalformedFiles
+        })
+      }
+      const patched = reconcileUsageTurnFacts(db)
+      if (patched > 0) {
+        console.log(`[usageStats] reconciled ${patched} interrupted turn(s) after crash`)
+      }
+      const usageRetention = cleanupUsageFactsByRetention(db)
+      if (usageRetention && (usageRetention.deletedStepRows > 0 || usageRetention.deletedTurnRows > 0)) {
+        console.log('[usageStats] retention cleanup:', JSON.stringify(usageRetention))
+      }
+    } catch (error) {
+      console.warn('[usageStats] startup maintenance failed:', error instanceof Error ? error.message : String(error))
     }
-    const patched = reconcileUsageTurnFacts(db)
-    if (patched > 0) {
-      console.log(`[usageStats] reconciled ${patched} interrupted turn(s) after crash`)
-    }
-    const usageRetention = cleanupUsageFactsByRetention(db)
-    if (usageRetention && (usageRetention.deletedStepRows > 0 || usageRetention.deletedTurnRows > 0)) {
-      console.log('[usageStats] retention cleanup:', JSON.stringify(usageRetention))
-    }
-  } catch (error) {
-    console.warn('[usageStats] startup maintenance failed:', error instanceof Error ? error.message : String(error))
   }
+  // 注册维护任务；实际执行时机在下方 createMainWindow 完成之后（评审 P1-3）。
+  usageStatsStartupMaintenance = runUsageStatsStartupMaintenance
 
   const getApiKey = async (): Promise<string | null> => {
     return getActiveLlmService(db).getApiKey()
@@ -738,6 +745,16 @@ app.whenReady().then(async () => {
 
   setupWindowIconThemeListener(__dirname)
   void createMainWindow()
+    .then(() => {
+      usageStatsStartupMaintenance?.()
+      usageStatsStartupMaintenance = null
+    })
+    .catch((error) => {
+      // 窗口创建失败也要跑维护：统计链路不依赖窗口；失败仅记日志，下次启动重试。
+      console.warn('[usageStats] main window creation failed, running maintenance anyway:', error instanceof Error ? error.message : String(error))
+      usageStatsStartupMaintenance?.()
+      usageStatsStartupMaintenance = null
+    })
   setupAppMenu(readAppLocale(db))
 }).catch((err) => {
   console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
