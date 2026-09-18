@@ -65,6 +65,8 @@ export type ButlerInvokerDeps = {
   admission?: ButlerAdmission
   /** 投递端口（主进程装配注入；缺省 = IM 未接线走显式降级路径）。 */
   deliveryPorts?: ButlerDeliveryPorts
+  /** P6：共享投递入口（装配器持有）；缺省为调用级实例。 */
+  deliveryHub?: import('../driver/deliveryHub').DeliveryHub
   /** 会话创建出口（主进程装配注入）：调度 / 手动触发的管家会话创建即回调，
    *  装配方经此把新会话推给渲染端会话列表（否则列表要重启才能看到，拉模式失效）。 */
   onSessionCreated?: (session: { id: string; name: string; ownership: string; visibility: string; workDirProfileId?: string }) => void
@@ -185,7 +187,8 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
               ...(task.deliveryTarget ? { deliveryTarget: task.deliveryTarget } : {})
             },
             run: { runId, status: 'completed', sessionId: turn.sessionId, resultSummary: turn.summary },
-            ports: deps.deliveryPorts ?? {}
+            ports: deps.deliveryPorts ?? {},
+            ...(deps.deliveryHub ? { hub: deps.deliveryHub } : {})
           })
     updateAutomationTaskRun(db, runId, {
       status: 'completed',

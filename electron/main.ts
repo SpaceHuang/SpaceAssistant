@@ -9,6 +9,7 @@ import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { registerButlerIpcHandlers } from './butler/butlerIpc'
+import { createDeliveryHub } from './driver/deliveryHub'
 import { ButlerAdmission } from './butler/butlerAdmission'
 import { ButlerTaskScheduler } from './butler/taskScheduler'
 import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
@@ -586,6 +587,20 @@ app.whenReady().then(async () => {
 
   // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
   const butlerAdmission = new ButlerAdmission()
+  // P6：共享投递入口（装配器持有，状态随实例走）；桌面 sink 注册（系统通知实现）。
+  const sharedDeliveryHub = createDeliveryHub()
+  sharedDeliveryHub.registerDriver({
+    id: 'desktop',
+    isReachable: () => Notification.isSupported(),
+    deliver: async (payload) => {
+      const notification = new Notification({
+        title: 'SpaceAssistant 管家',
+        body: (payload.text ?? '').slice(0, 280)
+      })
+      notification.on('click', () => void showMainWindow())
+      notification.show()
+    }
+  })
   const butlerInvokerDeps: ButlerInvokerDeps = {
     db,
     turnRuntime,
@@ -616,6 +631,10 @@ app.whenReady().then(async () => {
     getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
     admission: butlerAdmission,
     onSessionCreated: (session) => getMainWindow()?.webContents.send('session:created', { session }),
+    // P6（偏差 8 机制面）：驱动源层唯一投递入口——桌面 sink（系统通知）注册进共享 hub；
+    // butler 投递经 hub 路由并落送达记录。桌面终态发送通道（notifyMainWindow 路径）与
+    // 文件树/文件内容直连点不迁（驱动权路径 9/10/11 认领存量收敛）。
+    deliveryHub: sharedDeliveryHub,
     deliveryPorts: {
       // v1 桌面端口用系统通知（窗口状态语义由 OS 托管）；IM 端口未接线时走 butlerDelivery
       // 的显式降级路径。浮动窗结果展示随偏差 8 整项关闭时统一。
