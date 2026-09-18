@@ -35,6 +35,8 @@ import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, enforceSessionEventRetentionDetailed, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
+import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
 import { cleanupPersistedOrphansOnStartup } from './shell/startupOrphanCleanup'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
@@ -433,6 +435,22 @@ app.whenReady().then(async () => {
   } catch (error) {
     // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
+  }
+
+  // 用量统计启动维护（需求 §7.3.1 / §7.5）：崩溃 Turn 补齐 → 保留期清理（删除留痕）。
+  // 二者都不得阻断启动；失败仅记日志，下一次启动继续重试。
+  try {
+    setUsageStatsAppVersion(app.getVersion())
+    const patched = reconcileUsageTurnFacts(db)
+    if (patched > 0) {
+      console.log(`[usageStats] reconciled ${patched} interrupted turn(s) after crash`)
+    }
+    const usageRetention = cleanupUsageFactsByRetention(db)
+    if (usageRetention && (usageRetention.deletedStepRows > 0 || usageRetention.deletedTurnRows > 0)) {
+      console.log('[usageStats] retention cleanup:', JSON.stringify(usageRetention))
+    }
+  } catch (error) {
+    console.warn('[usageStats] startup maintenance failed:', error instanceof Error ? error.message : String(error))
   }
 
   const getApiKey = async (): Promise<string | null> => {
