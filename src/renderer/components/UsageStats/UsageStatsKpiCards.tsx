@@ -1,25 +1,27 @@
 import { Card, Col, Row, Tooltip } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { UsageSummary } from '../../../shared/usageStatsTypes'
-import { formatCount, formatInteger, formatPercent, formatRatio } from './format'
+import { formatCount, formatInteger, formatPercent, formatRatio, type AbbreviationLocale } from './format'
 
 type Props = {
   summary: UsageSummary | null
   loading?: boolean
 }
 
-function NumericValue({ label, value }: { label: string; value: number }) {
+function NumericValue({ label, value, locale }: { label: string; value: number; locale: AbbreviationLocale }) {
   return (
     <Tooltip title={`${label}: ${formatInteger(value)}`}>
-      <span data-testid="usage-kpi-value">{formatCount(value)}</span>
+      <span data-testid="usage-kpi-value">{formatCount(value, locale)}</span>
     </Tooltip>
   )
 }
 
 /** KPI 卡片行（§5.3）：M1–M7 全指标；缓存写入仅在 > 0 时条件展示（M3b / C1）。 */
 export function UsageStatsKpiCards({ summary, loading }: Props) {
-  const { t } = useTypedTranslation('usageStats')
+  const { t, i18n } = useTypedTranslation('usageStats')
   if (!summary) return null
+  // 缩写进位按界面语言：英文 K / M，中文万 / 亿
+  const abbrevLocale: AbbreviationLocale = String(i18n.language).startsWith('zh') ? 'zh-CN' : 'en-US'
   const cacheWriteVisible = summary.cacheCreationTokens > 0
 
   return (
@@ -29,7 +31,7 @@ export function UsageStatsKpiCards({ summary, loading }: Props) {
           <Card size="small" loading={loading}>
             <div className="ant-statistic-title">{t('kpi.totalTokens')}</div>
             <div className="ant-statistic-content">
-              <NumericValue label={t('kpi.totalTokens')} value={summary.totalTokens} />
+              <NumericValue label={t('kpi.totalTokens')} value={summary.totalTokens} locale={abbrevLocale} />
             </div>
           </Card>
         </Col>
@@ -37,7 +39,7 @@ export function UsageStatsKpiCards({ summary, loading }: Props) {
           <Card size="small" loading={loading}>
             <div className="ant-statistic-title">{t('kpi.inputTokens')}</div>
             <div className="ant-statistic-content">
-              <NumericValue label={t('kpi.inputTokens')} value={summary.inputTokens} />
+              <NumericValue label={t('kpi.inputTokens')} value={summary.inputTokens} locale={abbrevLocale} />
             </div>
           </Card>
         </Col>
@@ -45,7 +47,7 @@ export function UsageStatsKpiCards({ summary, loading }: Props) {
           <Card size="small" loading={loading}>
             <div className="ant-statistic-title">{t('kpi.outputTokens')}</div>
             <div className="ant-statistic-content">
-              <NumericValue label={t('kpi.outputTokens')} value={summary.outputTokens} />
+              <NumericValue label={t('kpi.outputTokens')} value={summary.outputTokens} locale={abbrevLocale} />
             </div>
           </Card>
         </Col>
@@ -53,7 +55,7 @@ export function UsageStatsKpiCards({ summary, loading }: Props) {
           <Card size="small" loading={loading}>
             <div className="ant-statistic-title">{t('kpi.cacheRead')}</div>
             <div className="ant-statistic-content">
-              <NumericValue label={t('kpi.cacheRead')} value={summary.cacheReadTokens} />
+              <NumericValue label={t('kpi.cacheRead')} value={summary.cacheReadTokens} locale={abbrevLocale} />
             </div>
           </Card>
         </Col>
@@ -89,7 +91,7 @@ export function UsageStatsKpiCards({ summary, loading }: Props) {
             <Card size="small">
               <div className="ant-statistic-title">{t('kpi.cacheWrite')}</div>
               <div className="ant-statistic-content">
-                <NumericValue label={t('kpi.cacheWrite')} value={summary.cacheCreationTokens} />
+                <NumericValue label={t('kpi.cacheWrite')} value={summary.cacheCreationTokens} locale={abbrevLocale} />
               </div>
             </Card>
           </Col>

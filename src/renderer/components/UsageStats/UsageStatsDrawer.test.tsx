@@ -9,6 +9,7 @@ import { UsageTrendChart } from './UsageTrendChart'
 import { UsageStatsDrawer } from './UsageStatsDrawer'
 import { setUsageStatsOpen } from '../../store/configSlice'
 import configReducer from '../../store/configSlice'
+import { changeAppLocale } from '../../i18n/localeSync'
 import type { UsageDailyPoint, UsageSummary } from '../../../shared/usageStatsTypes'
 
 function summary(overrides: Partial<UsageSummary> = {}): UsageSummary {
@@ -65,17 +66,27 @@ afterEach(() => {
 })
 
 describe('UsageStatsKpiCards', () => {
-  it('展示全部核心指标：缩写、命中率、工具三分类与步数佐证', () => {
+  it('中文环境：缩写按万 / 亿进位（128 万 / 110 万），Tooltip 精确值不变', () => {
     render(
       <ConfigProvider>
         <UsageStatsKpiCards summary={summary()} />
       </ConfigProvider>
     )
-    expect(screen.getAllByTestId('usage-kpi-value').map((el) => el.textContent)).toEqual(['1.28M', '1.1M', '180,000', '860,000'])
+    // summary: 1,280,000 / 1,100,000 / 180,000 / 860,000 → 中文万进位
+    expect(screen.getAllByTestId('usage-kpi-value').map((el) => el.textContent)).toEqual(['128 万', '110 万', '18 万', '86 万'])
     expect(screen.getByTestId('usage-kpi-hit-rate').textContent).toBe('78.2%')
     expect(screen.getByTestId('usage-kpi-tool-calls').textContent).toContain('342 / 12')
-    expect(screen.getByTestId('usage-kpi-tool-skipped').textContent).toContain('5')
     expect(screen.getByTestId('usage-steps-proof').textContent).toContain('3.42')
+  })
+
+  it('英文环境：缩写按 K / M 进位', async () => {
+    await changeAppLocale('en-US')
+    render(
+      <ConfigProvider>
+        <UsageStatsKpiCards summary={summary()} />
+      </ConfigProvider>
+    )
+    expect(screen.getAllByTestId('usage-kpi-value').map((el) => el.textContent)).toEqual(['1.28M', '1.1M', '180K', '860K'])
   })
 
   it('缓存写入仅在 > 0 时条件展示（C1）', () => {

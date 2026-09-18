@@ -10,7 +10,7 @@ import {
 } from 'recharts'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { UsageDailyPoint } from '../../../shared/usageStatsTypes'
-import { formatInteger, formatPercent } from './format'
+import { formatCount, formatInteger, formatPercent, type AbbreviationLocale } from './format'
 
 type Props = {
   points: UsageDailyPoint[]
@@ -21,7 +21,9 @@ type Props = {
  * 右轴输入缓存命中率固定 0–100%（虚线）；命中率无数据的日期断线（null 不连线）。
  */
 export function UsageTrendChart({ points }: Props) {
-  const { t } = useTypedTranslation('usageStats')
+  const { t, i18n } = useTypedTranslation('usageStats')
+  // 轴刻度缩写按界面语言进位：英文 K / M，中文万 / 亿
+  const abbrevLocale: AbbreviationLocale = String(i18n.language).startsWith('zh') ? 'zh-CN' : 'en-US'
   return (
     <ResponsiveContainer width="100%" height={320}>
       <LineChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
@@ -30,7 +32,7 @@ export function UsageTrendChart({ points }: Props) {
         <YAxis
           yAxisId="tokens"
           label={{ value: t('chart.tokensAxis'), angle: -90, position: 'insideLeft' }}
-          tickFormatter={(value: number) => formatInteger(value)}
+          tickFormatter={(value: number) => formatCount(value, abbrevLocale)}
         />
         <YAxis
           yAxisId="rate"
