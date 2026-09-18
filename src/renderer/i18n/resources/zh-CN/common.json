@@ -4,6 +4,7 @@
     "search": "搜索",
     "sessions": "会话",
     "settings": "设置",
+    "usageStats": "Token 用量统计",
     "wiki": "Wiki"
   },
   "app": {
@@ -43,6 +44,7 @@
     "help": "帮助",
     "quit": "退出",
     "settings": "设置",
+    "usageStats": "Token 用量统计",
     "view": "查看"
   },
   "save": "保存",

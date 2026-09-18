@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { useAppDispatch } from '../../hooks'
-import { setAboutOpen, setSettingsOpen } from '../../store/configSlice'
+import { setAboutOpen, setSettingsOpen, setUsageStatsOpen } from '../../store/configSlice'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Platform = NodeJS.Platform
@@ -55,6 +55,7 @@ export function TitleBar() {
 
   const openSettings = useCallback(() => dispatch(setSettingsOpen(true)), [dispatch])
   const openAbout = useCallback(() => dispatch(setAboutOpen(true)), [dispatch])
+  const openUsageStats = useCallback(() => dispatch(setUsageStatsOpen(true)), [dispatch])
 
   const fileItems = useMemo<MenuProps['items']>(
     () => [
@@ -82,12 +83,18 @@ export function TitleBar() {
       },
       { type: 'divider' },
       {
+        key: 'usage-stats',
+        label: t('menu.usageStats'),
+        onClick: openUsageStats
+      },
+      { type: 'divider' },
+      {
         key: 'settings',
         label: t('menu.settings'),
         onClick: openSettings
       }
     ],
-    [openSettings, t]
+    [openSettings, openUsageStats, t]
   )
 
   const helpItems = useMemo<MenuProps['items']>(

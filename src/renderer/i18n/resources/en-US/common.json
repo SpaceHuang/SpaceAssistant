@@ -4,6 +4,7 @@
     "search": "Search",
     "sessions": "Sessions",
     "settings": "Settings",
+    "usageStats": "Token Usage",
     "wiki": "Wiki"
   },
   "app": {
@@ -43,6 +44,7 @@
     "help": "Help",
     "quit": "Quit",
     "settings": "Settings",
+    "usageStats": "Token Usage",
     "view": "View"
   },
   "save": "Save",
