@@ -208,16 +208,23 @@ function askUnlessHolds(rule: PolicyRule, deps: PolicyEngineDeps): boolean {
   return true
 }
 
+/** 回答者派生（§2.2）：ask 类动作按 lane 落回答者——automation 无人可问恒为 agent，其余人工。 */
+export function askAnswererFor(lane?: ExecutionLane): 'user' | 'agent' {
+  return lane === 'automation' ? 'agent' : 'user'
+}
+
 function requireConfirm(
   rule: PolicyRule,
   facts: ContentFacts,
   sessionId?: string,
   lane?: ExecutionLane,
-  constraints?: InvocationPolicyConstraints
+  constraints?: InvocationPolicyConstraints,
+  answerer: 'user' | 'agent' = askAnswererFor(lane)
 ): Decision {
   return {
     type: 'require-confirm',
     ruleId: rule.id,
+    answerer,
     riskLevel: facts.baseRiskLevel,
     facts,
     memoryTiers: buildMemoryTiers(facts, sessionId, lane, constraints),
@@ -249,20 +256,48 @@ function lookupCache(
   return null
 }
 
-function applyDefault(facts: ContentFacts, sessionId?: string, lane?: ExecutionLane): Decision {
+function applyDefault(
+  facts: ContentFacts,
+  deps: PolicyEngineDeps,
+  context: ExecutionContext
+): Decision {
+  const { sessionId, lane } = context
   const tokens = signalTokenSet(facts)
   if (tokens.has('extraction-failed')) {
+    // M3 不变换例外：提取失败 = 输入畸形/对抗性，「信息不足 → 问人」，任何档位恒落人工
+    // （automation 经 lane 规则落 agent，不会到达此兜底——automation-default-confirm 全量拦截）。
     return requireConfirm(
       { id: 'default-extraction-failed', when: 'invocation', action: 'ask', reason: '提取失败，信息不足' },
       facts,
       sessionId,
-      lane
+      lane,
+      undefined,
+      'user'
     )
   }
   // 缺元数据 / 无信号一律按"信息不足宁可多问"处理
   if (facts.actionClass === 'read' || facts.actionClass === 'outbound') {
     return autoAllow('default-read-outbound-allow', facts)
   }
+  // default-write-execute-ask 照常参与档位变换（desktop standard → auto-evaluator，§5.2）：
+  // 变换后先走快通道（确定性预判），未裁决交审批 Agent（answerer=agent）。
+  const effective = deps.transform ? deps.transform({ action: 'ask' }) : 'ask'
+  if (effective === 'auto-evaluator') {
+    if (deps.autoEvaluator) {
+      const res = deps.autoEvaluator(facts, context)
+      if (res.approve) return autoAllow('default-write-execute-ask', facts)
+    }
+    return requireConfirm(
+      { id: 'default-write-execute-ask', when: 'invocation', action: 'ask', reason: '默认按动作类别询问' },
+      facts,
+      sessionId,
+      lane,
+      undefined,
+      'agent'
+    )
+  }
+  if (effective === 'allow') return autoAllow('default-write-execute-ask', facts)
+  if (effective === 'deny') return deny('default-write-execute-ask', '默认兜底按档位变换为拒绝')
   return requireConfirm(
     { id: 'default-write-execute-ask', when: 'invocation', action: 'ask', reason: '默认按动作类别询问' },
     facts,
@@ -324,7 +359,10 @@ export function decide(
   const confirmEveryTime = invocationRules.find(
     (r) => r.locked && r.action === 'confirm-every-time' && ruleMatchesInvocation(r, facts, context, deps)
   )
-  if (confirmEveryTime) return requireConfirm(confirmEveryTime, facts, context.sessionId, context.lane, constraints)
+  if (confirmEveryTime) {
+    // 决策 3：confirm-every-time 始终人工逐次确认（不因 lane 落 agent）
+    return requireConfirm(confirmEveryTime, facts, context.sessionId, context.lane, constraints, 'user')
+  }
 
   // 第 2 步：缓存命中（会话级键按 context.sessionId 绑定）
   const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
@@ -362,7 +400,7 @@ export function decide(
     if (rule.action === 'allow') return autoAllow(rule.id, facts)
   }
 
-  return applyDefault(facts, context.sessionId, context.lane)
+  return applyDefault(facts, deps, context)
 }
 
 /**

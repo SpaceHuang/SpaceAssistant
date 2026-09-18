@@ -44,6 +44,94 @@ export interface PolicyRuleOverrideInput {
   params?: Record<string, unknown>
 }
 
+/**
+ * 链路档位档案（§2.1）：档位不是跨链路共享的全局枚举——每条链路自带「提供哪几档 +
+ * 可编辑动作域 + 每档动作变换」，跨链路不对齐；同名档位在不同链路是不同的东西。
+ * 变换表放 src/shared 两端同源（显示=实际，§9 风险表）。
+ */
+export interface LaneProfile {
+  /** 本链路提供的档位（不在集合内的档位按 standard 收敛，见 M2 运行时防护）。 */
+  availablePackages: readonly PolicyPackage[]
+  /** 用户是否可在设置页选择档位（automation 不展示）。 */
+  userSelectable: boolean
+  /** custom 档可编辑动作域（B2）：auto-evaluator 仅 desktop 可用。 */
+  availableActions: readonly PolicyAction[]
+  /**
+   * 档位 → 基线动作 → 生效动作映射（仅声明清单，未列出即恒等）。
+   * custom 档是用户显式覆盖，不经变换表改写。
+   */
+  transforms: Partial<Record<'strict' | 'standard' | 'loose', Partial<Record<PolicyAction, PolicyAction>>>>
+}
+
+/**
+ * 桌面（决策 7/8）：standard 非 locked `ask → auto-evaluator`（=「自动」：快通道 + 审批 Agent）；
+ * strict 收紧（allow/auto-evaluator → ask）；loose 放宽（ask → allow，auto-evaluator 保持）。
+ */
+const DESKTOP_TRANSFORMS: LaneProfile['transforms'] = {
+  strict: { allow: 'ask', 'auto-evaluator': 'ask' },
+  standard: { ask: 'auto-evaluator' },
+  loose: { ask: 'allow' }
+}
+
+/** wechat/feishu：standard 恒等（本轮零行为变化硬回归）；无 auto-evaluator 条目，strict 只上调 allow。 */
+const IM_TRANSFORMS: LaneProfile['transforms'] = {
+  strict: { allow: 'ask' },
+  loose: { ask: 'allow' }
+}
+
+export const LANE_PROFILES: Record<ExecutionLane, LaneProfile> = {
+  desktop: {
+    availablePackages: ['strict', 'standard', 'loose', 'custom'],
+    userSelectable: true,
+    availableActions: ['deny', 'allow', 'ask', 'auto-evaluator'],
+    transforms: DESKTOP_TRANSFORMS
+  },
+  wechat: {
+    availablePackages: ['strict', 'standard', 'loose', 'custom'],
+    userSelectable: true,
+    availableActions: ['deny', 'allow', 'ask'],
+    transforms: IM_TRANSFORMS
+  },
+  feishu: {
+    availablePackages: ['strict', 'standard', 'loose', 'custom'],
+    userSelectable: true,
+    availableActions: ['deny', 'allow', 'ask'],
+    transforms: IM_TRANSFORMS
+  },
+  // automation：仅 standard、不可用户选、无可编辑档（其唯一 ask 为 locked；回答者=agent 由 lane 派生）
+  automation: {
+    availablePackages: ['standard'],
+    userSelectable: false,
+    availableActions: [],
+    transforms: {}
+  }
+}
+
+/**
+ * 不可变换集（§2.1 普遍例外）：`deny`、`confirm-every-time`、`locked` 条目——
+ * 任何档位都不变换（放宽与收紧都不）。「必须真人 / 系统底线」语义的条目不因档位而换路径。
+ * `extraction-failed` 兜底在引擎合成规则侧豁免（policyEngine.applyDefault）。
+ */
+function isTransformExempt(rule: Pick<PolicyRule, 'action' | 'locked'>): boolean {
+  return Boolean(rule.locked) || rule.action === 'deny' || rule.action === 'confirm-every-time'
+}
+
+/**
+ * 基线动作 → 生效动作（显示=实际：渲染端与引擎共用）。
+ * custom 档恒等（用户覆盖即最终动作，动作域合法性由 validateRuleOverride 按 lane 校验）；
+ * 档位不在本链路 transforms 中（如 automation × strict）按恒等返回，收敛责任在调用方（M2）。
+ */
+export function effectiveActionFor(
+  lane: ExecutionLane,
+  pkg: PolicyPackage,
+  rule: Pick<PolicyRule, 'action' | 'locked'>
+): PolicyAction {
+  if (isTransformExempt(rule)) return rule.action
+  if (pkg === 'custom') return rule.action
+  const mapping = LANE_PROFILES[lane].transforms[pkg]
+  return mapping?.[rule.action] ?? rule.action
+}
+
 /** 自定义套餐可编辑的动作集合（普通规则限定 deny/allow/ask）。 */
 const CUSTOM_EDITABLE_ACTIONS: readonly PolicyAction[] = ['deny', 'allow', 'ask']
 /** 默认动作即 auto-evaluator 的规则（自动审批器入口）允许的动作域：询问/允许/自动。 */

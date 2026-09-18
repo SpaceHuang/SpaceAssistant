@@ -531,3 +531,103 @@ describe('shell signal tokens', () => {
     expect(tokens).toContain('shell-connector:&&')
   })
 })
+
+describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () => {
+  it('desktop 第 6 步 ask → answerer=user（mcp-tool 默认确认）', () => {
+    const d = decide(
+      mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
+      mkContext('desktop'),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('mcp-tool-ask')
+    expect(d.type === 'require-confirm' && d.answerer).toBe('user')
+  })
+
+  it('wechat 第 6 步 ask → answerer=user（零行为变化硬回归）', () => {
+    const d = decide(
+      mkFacts('mcp_query', 'write', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]),
+      mkContext('wechat'),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type === 'require-confirm' && d.answerer).toBe('user')
+  })
+
+  it('automation locked ask（automation-default-confirm）→ answerer=agent（等价 P2-6 现状）', () => {
+    const d = decide(
+      mkFacts('some_new_tool', 'write', []),
+      mkContext('automation'),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('automation-default-confirm')
+    expect(d.type === 'require-confirm' && d.answerer).toBe('agent')
+  })
+
+  it('extraction-failed 兜底 → 恒落人工 answerer=user（M3 不变换例外）', () => {
+    const d = decide(
+      mkFacts('write_file', 'write', [{ kind: 'extraction-failed', reason: '无法解析' }]),
+      mkContext('desktop'),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('default-extraction-failed')
+    expect(d.type === 'require-confirm' && d.answerer).toBe('user')
+  })
+
+  it('locked confirm-every-time → answerer=user（决策 3：始终人工逐次确认）', () => {
+    const rule = { id: 'always-confirm', when: 'invocation' as const, match: { toolName: 'run_shell' }, action: 'confirm-every-time' as const, locked: true, reason: '逐次确认' }
+    const d = decide(
+      mkFacts('run_shell', 'execute', []),
+      mkContext('desktop'),
+      [rule],
+      deps()
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.answerer).toBe('user')
+  })
+
+  it('deps.transform 缺省恒等：default-write-execute-ask 仍落人工（desktop 生效前零行为变化）', () => {
+    const d = decide(
+      mkFacts('brand_new_tool', 'write', []),
+      mkContext('desktop'),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('default-write-execute-ask')
+    expect(d.type === 'require-confirm' && d.answerer).toBe('user')
+  })
+
+  it('deps.transform 提供（desktop standard 语义）：合成兜底 ask→auto-evaluator，快通道放行', () => {
+    const d = decide(
+      mkFacts('brand_new_tool', 'write', []),
+      mkContext('desktop'),
+      DEFAULT_POLICY_RULES,
+      deps({
+        transform: () => 'auto-evaluator',
+        autoEvaluator: () => ({ approve: true, reason: '文件大小快通道' })
+      })
+    )
+    expect(d.type).toBe('auto-allow')
+    expect(d.type === 'auto-allow' && d.ruleId).toBe('default-write-execute-ask')
+  })
+
+  it('deps.transform 提供：快通道未裁决 → require-confirm(answerer=agent)', () => {
+    const d = decide(
+      mkFacts('brand_new_tool', 'write', []),
+      mkContext('desktop'),
+      DEFAULT_POLICY_RULES,
+      deps({
+        transform: () => 'auto-evaluator'
+      })
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('default-write-execute-ask')
+    expect(d.type === 'require-confirm' && d.answerer).toBe('agent')
+  })
+})

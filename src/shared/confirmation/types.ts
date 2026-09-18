@@ -144,6 +144,8 @@ export type Decision =
   | {
       type: 'require-confirm'
       ruleId: string
+      /** 本次确认的回答者（§2.2 由动作派生，不再按 lane 查配置表）：user=人工确认卡；agent=审批 Agent。 */
+      answerer: 'user' | 'agent'
       riskLevel: RiskLevel
       facts: ContentFacts
       memoryTiers: MemoryTier[]
@@ -443,4 +445,10 @@ export interface PolicyEngineDeps {
   migrationComplete: boolean
   /** 第 4 步自动审批器（可注入，缺省不裁决）。 */
   autoEvaluator?: AutoEvaluator
+  /**
+   * 档位动作变换（§2.1 LANE_PROFILES 按当前 lane+档位绑定；缺省恒等）。
+   * 规则集变换由 resolvePolicyRules 完成，此项仅用于引擎合成规则（default-write-execute-ask）
+   * ——extraction-failed 兜底不参与变换（不变换例外）。
+   */
+  transform?: (rule: Pick<PolicyRule, 'action' | 'locked'>) => PolicyAction
 }
