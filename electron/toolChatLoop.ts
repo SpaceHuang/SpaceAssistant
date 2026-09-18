@@ -482,7 +482,7 @@ export type TurnUsageStats = {
  * 以 tool_result 终态为基准的三分类计数（需求 §2.4.0 恒等式）：
  * `tool_call_count = 执行成功 + 执行失败 + 未执行`；孤儿 tool_call（无 tool_result）不计入。
  */
-function noteToolResultForStats(stats: TurnUsageStats, result: ToolCallResultPersisted): void {
+export function noteToolResultForStats(stats: TurnUsageStats, result: ToolCallResultPersisted): void {
   stats.toolCallCount += 1
   if (result.notExecuted) {
     stats.toolSkippedCount += 1
@@ -1130,7 +1130,10 @@ async function runToolChatSessionInner(
           const result: ToolCallResultPersisted = {
             success: false,
             error: 'model_output_token_limit',
-            userMessage: failedResult.content
+            userMessage: failedResult.content,
+            // §7.6 #15：输出截断整体放弃，未进入执行流程 → 未执行
+            notExecuted: true,
+            notExecutedReason: 'model_output_truncated'
           }
           await args.emitSessionEvent?.({ type: 'tool_result', payload: { turnId: eventTurnId, stepId: requestId, toolUseId: failedResult.tool_use_id, result } })
           // 第 15 处 tool_result 发出点（绕过 recordToolResult）：同样计入三分类统计（需求 §2.4.0）。
@@ -1285,11 +1288,11 @@ async function runToolChatSessionInner(
           toolUseId,
           toolName
         })
-        await recordToolResult(buildToolErrorResult(toolUseId, error, { requestId, sessionId }), { success: false, error })
+        await recordToolResult(buildToolErrorResult(toolUseId, error, { requestId, sessionId }), { success: false, error, notExecuted: true, notExecutedReason: 'not_authorized' })
         continue
       }
       if (isToolRevoked(requestId, resolvedToolName)) {
-        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
+        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked', notExecuted: true, notExecutedReason: 'authorization_revoked' })
         continue
       }
 
@@ -1309,7 +1312,7 @@ async function runToolChatSessionInner(
           unknownToolError,
           unknownToolError
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }), { success: false, error: unknownToolError })
+        await recordToolResult(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }), { success: false, error: unknownToolError, notExecuted: true, notExecutedReason: 'unknown_tool' })
         if (toolErrorRepeat.noteFailure(toolName, unknownToolError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${unknownToolError}`
           break
@@ -1366,7 +1369,7 @@ async function runToolChatSessionInner(
             reason: budgetCheck.reason,
             actor: 'system'
           })
-          await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg })
+          await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg, notExecuted: true, notExecutedReason: 'remote_budget_exhausted' })
           abortRepeatedToolError = pauseMsg
           break
         }
@@ -1493,7 +1496,7 @@ async function runToolChatSessionInner(
           gate.shellPrecheckDeny.error,
           gate.shellPrecheckDeny.error
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }), { success: false, error: gate.shellPrecheckDeny.error })
+        await recordToolResult(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }), { success: false, error: gate.shellPrecheckDeny.error, notExecuted: true, notExecutedReason: 'policy_denied' })
         if (toolErrorRepeat.noteFailure(toolName, gate.shellPrecheckDeny.error)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${gate.shellPrecheckDeny.error}`
           break
@@ -1581,7 +1584,7 @@ async function runToolChatSessionInner(
           reason: gate.budgetPause.reason,
           actor: 'system'
         })
-        await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg })
+        await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg, notExecuted: true, notExecutedReason: 'budget_paused' })
         abortRepeatedToolError = pauseMsg
         break
       }
@@ -1609,7 +1612,7 @@ async function runToolChatSessionInner(
             ? `script deny patterns=${gate.rawScriptAnalysis.patterns.join(',')}`
             : denyMsg
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }), { success: false, error: denyMsg })
+        await recordToolResult(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }), { success: false, error: denyMsg, notExecuted: true, notExecutedReason: 'policy_denied' })
         if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
           break
@@ -1949,7 +1952,7 @@ async function runToolChatSessionInner(
           timeoutError,
           timeoutError
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }), { success: false, error: timeoutError })
+        await recordToolResult(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }), { success: false, error: timeoutError, notExecuted: true, notExecutedReason: 'confirm_timeout' })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, timeoutError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${timeoutError}`
@@ -2041,12 +2044,19 @@ async function runToolChatSessionInner(
             : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
               ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
               : '用户拒绝执行此工具'
+        // §7.6 #11：确认未批准覆盖三类来源（用户拒绝 / 远程只读 / 授权撤销），均未进入执行流程
+        const notExecutedReason: ToolCallResultPersisted['notExecutedReason'] =
+          confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
+            ? 'remote_read_only'
+            : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
+              ? 'authorization_revoked'
+              : 'user_rejected'
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
           rejectedError
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError })
+        await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError, notExecuted: true, notExecutedReason })
         floatingNotificationManager?.onToolResult(requestId, toolUseId)
         if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
@@ -2105,7 +2115,7 @@ async function runToolChatSessionInner(
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
       if (isToolRevoked(requestId, resolvedToolName)) {
-        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
+        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked', notExecuted: true, notExecutedReason: 'authorization_revoked' })
         continue
       }
       if (remoteContext) {

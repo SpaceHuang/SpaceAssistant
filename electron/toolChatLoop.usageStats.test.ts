@@ -42,12 +42,35 @@ vi.mock('./browser/stagehandService', () => ({
   stagehandService: { resetInferenceCount: vi.fn() }
 }))
 
-let confirmOutcome: { approved: boolean } | { approved: false; outcome: 'rejected' | 'timeout'; rejectReason?: string } = { approved: true }
+let confirmOutcome: 'approved' | 'rejected' | 'timeout' = 'approved'
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(),
   clearToolCancel: vi.fn(),
   waitForToolConfirm: vi.fn(async () => confirmOutcome)
 }))
+
+/** 置非空时强制 gate 返回该决策（用于驱动确认链路出口），否则走真实 gate。 */
+let gateOverride: Record<string, unknown> | null = null
+vi.mock('./confirmation/toolCallGate', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./confirmation/toolCallGate')>()
+  return {
+    ...actual,
+    evaluateToolCallGate: vi.fn(async (args: unknown) =>
+      gateOverride
+        ? {
+            decision: gateOverride,
+            facts: { baseRiskLevel: 'medium', summary: { text: 'test tool call' }, signals: [] },
+            shellPrecheckDeny: undefined,
+            shellPrecheck: undefined,
+            budgetPause: undefined,
+            rawScriptAnalysis: undefined,
+            autoApproveFallback: undefined,
+            mcpEntry: undefined
+          }
+        : actual.evaluateToolCallGate(args as Parameters<typeof actual.evaluateToolCallGate>[0])
+    )
+  }
+})
 
 vi.mock('./database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./database')>()
@@ -87,7 +110,8 @@ describe('runToolChatSession 用量统计收口（usage_step_facts / usage_turn_
   beforeEach(() => {
     vi.clearAllMocks()
     streamRound = 0
-    confirmOutcome = { approved: true }
+    confirmOutcome = 'approved'
+    gateOverride = null
     db = createMemoryAppDb('zh-CN')
   })
 
@@ -165,7 +189,7 @@ describe('runToolChatSession 用量统计收口（usage_step_facts / usage_turn_
     db.close()
   })
 
-  it('用户拒绝工具确认：终态已落（计数在出口标记 notExecuted 后归入 skipped —— Phase 3 验证）', async () => {
+  it('用户拒绝工具确认计入 tool_skipped_count（不计入 error，恒等式成立）', async () => {
     streamWithRounds([
       { content: [{ type: 'tool_use', id: 'tu-rej', name: 'read_file', input: { path: 'a' } }], stop_reason: 'tool_use', usage: { input_tokens: 100, output_tokens: 10 } },
       { content: [{ type: 'text', text: 'ok, skipped' }], stop_reason: 'end_turn', usage: { input_tokens: 200, output_tokens: 20 } }
@@ -174,13 +198,74 @@ describe('runToolChatSession 用量统计收口（usage_step_facts / usage_turn_
     vi.mocked(getToolExecutor).mockImplementation((name: string) =>
       name === 'read_file' ? { name, execute: async () => ({ success: true, data: 'ok' }) } : undefined
     )
-    confirmOutcome = { approved: false, outcome: 'rejected' }
+    gateOverride = { type: 'require-confirm', riskLevel: 'medium', memoryTiers: [], ruleId: 'test-require-confirm' }
+    confirmOutcome = 'rejected'
 
     await runSession({ turnId: 'turn-rej-1' })
-    // Phase 2 仅验证终态计入 tool_call_count（计数基准 = tool_result 终态）；
-    // 拒绝归入 skipped 而非 error 的分类标记由 Phase 3（15 处出口穷举）落地后在此断言。
     expect(getUsageTurnFact(db, 'turn-rej-1')).toMatchObject({
       toolCallCount: 1,
+      toolErrorCount: 0,
+      toolSkippedCount: 1,
+      outcome: 'completed'
+    })
+    db.close()
+  })
+
+  it('确认超时计入 tool_skipped_count（不计入 error）', async () => {
+    streamWithRounds([
+      { content: [{ type: 'tool_use', id: 'tu-timeout', name: 'read_file', input: { path: 'a' } }], stop_reason: 'tool_use', usage: { input_tokens: 100, output_tokens: 10 } },
+      { content: [{ type: 'text', text: 'gave up' }], stop_reason: 'end_turn', usage: { input_tokens: 200, output_tokens: 20 } }
+    ])
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) =>
+      name === 'read_file' ? { name, execute: async () => ({ success: true, data: 'ok' }) } : undefined
+    )
+    gateOverride = { type: 'require-confirm', riskLevel: 'medium', memoryTiers: [], ruleId: 'test-require-confirm' }
+    confirmOutcome = 'timeout'
+
+    await runSession({ turnId: 'turn-timeout-1' })
+    expect(getUsageTurnFact(db, 'turn-timeout-1')).toMatchObject({
+      toolCallCount: 1,
+      toolErrorCount: 0,
+      toolSkippedCount: 1,
+      outcome: 'completed'
+    })
+    db.close()
+  })
+
+  it('未知工具名（授权内但无执行器）计入 tool_skipped_count（不计入 error）', async () => {
+    streamWithRounds([
+      { content: [{ type: 'tool_use', id: 'tu-unknown', name: 'read_file', input: { path: 'a' } }], stop_reason: 'tool_use', usage: { input_tokens: 100, output_tokens: 10 } },
+      { content: [{ type: 'text', text: 'not a tool' }], stop_reason: 'end_turn', usage: { input_tokens: 200, output_tokens: 20 } }
+    ])
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation(() => undefined)
+
+    await runSession({ turnId: 'turn-unknown-1' })
+    expect(getUsageTurnFact(db, 'turn-unknown-1')).toMatchObject({
+      toolCallCount: 1,
+      toolErrorCount: 0,
+      toolSkippedCount: 1,
+      outcome: 'completed'
+    })
+    db.close()
+  })
+
+  it('模型输出截断放弃的工具调用计入 tool_skipped_count（第 15 处发出点）', async () => {
+    streamWithRounds([
+      { content: [{ type: 'tool_use', id: 'tu-cut', name: 'read_file', input: { path: 'a' } }], stop_reason: 'max_tokens', usage: { input_tokens: 100, output_tokens: 10 } },
+      { content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn', usage: { input_tokens: 200, output_tokens: 20 } }
+    ])
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) =>
+      name === 'read_file' ? { name, execute: async () => ({ success: true, data: 'ok' }) } : undefined
+    )
+
+    await runSession({ turnId: 'turn-cut-1' })
+    expect(getUsageTurnFact(db, 'turn-cut-1')).toMatchObject({
+      toolCallCount: 1,
+      toolErrorCount: 0,
+      toolSkippedCount: 1,
       outcome: 'completed'
     })
     db.close()
