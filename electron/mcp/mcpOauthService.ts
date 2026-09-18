@@ -11,6 +11,7 @@ import type { OAuthClientInformationMixed, OAuthTokens } from '@modelcontextprot
 import type { AppDatabase } from '../database'
 import { deleteConfigValue, getConfigValue, setConfigValue } from '../database'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
+import { APP_VERSION } from '../../src/shared/appMeta'
 import {
   getSecret,
   setSecret
@@ -291,7 +292,7 @@ export async function startOAuthFlow(
       })
     let transport = await buildTransport()
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
-    let client = new Client({ name: 'spaceassistant', version: '0.1.5' })
+    let client = new Client({ name: 'spaceassistant', version: APP_VERSION })
     try {
       await client.connect(transport)
     } catch (error) {
@@ -300,7 +301,7 @@ export async function startOAuthFlow(
         await client.close().catch(() => undefined)
         // SDK 传输不可重复 start：携带已保存 token 重建传输后连接
         transport = await buildTransport()
-        client = new Client({ name: 'spaceassistant', version: '0.1.5' })
+        client = new Client({ name: 'spaceassistant', version: APP_VERSION })
         await client.connect(transport)
       } else {
         throw error
