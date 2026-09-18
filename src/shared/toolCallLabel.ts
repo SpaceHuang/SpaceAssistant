@@ -45,6 +45,15 @@ export function formatToolLabel(
       return 'browser'
     case 'browser_detect':
       return t('tool.labels.browserDetect')
+    // toolkit 网关：UI 收到的事件名是 compat 名（toolkit_find/toolkit_call），双口径覆盖（需求 §3.6）
+    case 'toolkit.find':
+    case 'toolkit_find':
+      return t('tool.labels.toolkitFind')
+    case 'toolkit.call':
+    case 'toolkit_call': {
+      const id = typeof input.id === 'string' && input.id ? input.id : ''
+      return id ? t('tool.labels.toolkitCall', { id }) : t('tool.labels.toolkitCall', { id: '…' })
+    }
     default:
       return toolName
   }

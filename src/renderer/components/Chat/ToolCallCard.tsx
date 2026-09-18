@@ -3,6 +3,7 @@ import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
 import type { FileConfirmMode, ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
 import { projectPersistedMcpResult, type McpResultDisplay } from '../../../shared/mcpToolResultDisplay'
+import { sanitizeCapabilityParamsForDisplay } from '../../../shared/capabilityParamSanitize'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import {
   hasShellOutput,
@@ -28,6 +29,7 @@ import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
 import { McpConfirmCard } from './McpConfirmCard'
+import { ToolkitConfirmCard } from './ToolkitConfirmCard'
 import { ShellConfirmCard } from './ShellConfirmCard'
 import { ScriptConfirmCard } from './ScriptConfirmCard'
 import { ScriptCodePreview, ScriptTimeoutMeta } from './ScriptCodePreview'
@@ -346,7 +348,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   const paramPreview = useMemo(() => {
     if (!showDetail) return ''
     try {
-      return JSON.stringify(record.input, null, 2)
+      // toolkit.call 详情展开与确认卡同口径：凭据类入参只出存在性布尔（v2 评审 R1）
+      const isToolkit = record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call'
+      const input = isToolkit ? sanitizeCapabilityParamsForDisplay(record.input) : record.input
+      return JSON.stringify(input, null, 2)
     } catch {
       return String(record.input)
     }
@@ -427,11 +432,23 @@ export const ToolCallCard = memo(function ToolCallCard({
   const earlySearchText = earlySearchFragmentId ? activeSearchTarget?.searchableText : undefined
 
   const mcpConfirming = Boolean(mcp && record.status === 'confirming')
+  // toolkit 网关确认卡：事件名为 compat 名（toolkit_call），双口径匹配
+  const toolkitConfirming =
+    (record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call') && record.status === 'confirming'
 
   if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <McpConfirmCard record={record} onConfirm={onConfirm} sessionId={sessionId} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
+  if (toolkitConfirming && onConfirm && confirmationReady !== false) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <ToolkitConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )

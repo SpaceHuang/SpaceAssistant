@@ -66,6 +66,10 @@ export function filterBuiltinToolsForApi(
       (t) => t.name !== 'list_work_dirs' && t.name !== 'switch_work_dir' && t.name !== 'switch_session'
     )
   }
+  // toolkit 网关初期仅桌面 lane（docs/requirement/agent-toolkit-capability-gateway-requirement.md §2 lane 隔离）
+  if (remoteContext) {
+    list = list.filter((t) => t.name !== 'toolkit.find' && t.name !== 'toolkit.call')
+  }
   // exposure 规则（主进程唯一评估者）：remote 链路按 lane 评估（如 im-no-wechat-send）；
   // desktop 链路不受该 exposure 规则影响。
   const lane = remoteContext

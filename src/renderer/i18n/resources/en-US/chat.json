@@ -63,7 +63,9 @@
       "browserDetect": "Check browser dependencies",
       "invokeTool": "Invoke tool: {{toolName}}",
       "mcpUnknownServer": "Unknown MCP service",
-      "mcpUnresolved": "External MCP tool (unknown source)"
+      "mcpUnresolved": "External MCP tool (unknown source)",
+      "toolkitFind": "Query capability toolkit",
+      "toolkitCall": "Capability call · {{id}}"
     },
     "descriptions": {
       "grep": "Search file contents under the working directory",
@@ -78,7 +80,27 @@
       "invokeTool": "Invoke tool: {{toolName}}"
     }
   },
-  "mcp": { "copyResult": "Copy result", "openArtifact": "Open full result", "openFailed": "Failed to open full content", "openSettings": "Open MCP server settings", "noDescription": "No description provided by this server", "waitingConfirm": "Waiting for confirmation {{value}}", "execution": "Execution {{value}}", "total": "Total {{value}}", "expandAll": "Expand all ({{count}} lines)", "resultEmpty": "Tool returned an empty result", "resultTooLarge": "Result too large; showing summary only", "imageResult": "Image result · {{mimeType}} · {{size}} bytes", "resourceResult": "Resource: {{name}} ({{uri}})", "statusRunning": "Running", "statusSuccess": "Success", "statusFailed": "Failed", "statusRejected": "Rejected", "statusInterrupted": "Interrupted", "statusAwaitingConfirm": "Awaiting confirmation" },
+  "mcp": {
+    "copyResult": "Copy result",
+    "openArtifact": "Open full result",
+    "openFailed": "Failed to open full content",
+    "openSettings": "Open MCP server settings",
+    "noDescription": "No description provided by this server",
+    "waitingConfirm": "Waiting for confirmation {{value}}",
+    "execution": "Execution {{value}}",
+    "total": "Total {{value}}",
+    "expandAll": "Expand all ({{count}} lines)",
+    "resultEmpty": "Tool returned an empty result",
+    "resultTooLarge": "Result too large; showing summary only",
+    "imageResult": "Image result · {{mimeType}} · {{size}} bytes",
+    "resourceResult": "Resource: {{name}} ({{uri}})",
+    "statusRunning": "Running",
+    "statusSuccess": "Success",
+    "statusFailed": "Failed",
+    "statusRejected": "Rejected",
+    "statusInterrupted": "Interrupted",
+    "statusAwaitingConfirm": "Awaiting confirmation"
+  },
   "input": {
     "placeholder": "Type a message…",
     "send": "Send message",
@@ -189,7 +211,16 @@
       "expand": "Expand all ({{count}} lines)"
     },
     "previewTruncatedLine": "… (showing first 500 lines only)",
-    "previewCap": "Changes exceed 500 lines; preview truncated. Use the file tree for the full diff."
+    "previewCap": "Changes exceed 500 lines; preview truncated. Use the file tree for the full diff.",
+    "toolkit": {
+      "title": "Product capability call",
+      "capability": "Capability: {{id}}",
+      "argsLabel": "Arguments",
+      "emptyArgs": "(no arguments)",
+      "riskHint": "This capability is built into the product; mutating capabilities (e.g. adding an MCP connection) require confirmation.",
+      "allow": "Allow",
+      "deny": "Deny"
+    }
   },
   "chatView": {
     "warnings": {

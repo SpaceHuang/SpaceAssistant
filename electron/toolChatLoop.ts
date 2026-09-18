@@ -139,6 +139,7 @@ import {
   registerChatCancel,
   throwIfChatCancelled
 } from './chatCancelRegistry'
+import { clearSessionActiveStream, registerSessionActiveStream } from './chatActiveStreams'
 import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import type { AppLocale } from '../src/shared/locale'
@@ -528,8 +529,18 @@ function failToolLoopWithLastUsage(
   }
 }
 
+/** confirm-requested 事件的风险级：取裁决结果与 medium 的较大值（评审 S7）。 */
+export function confirmRequestedRiskLevel(gate: { decision: { type: string; riskLevel?: 'low' | 'medium' | 'high' } }): 'low' | 'medium' | 'high' {
+  const order = { low: 0, medium: 1, high: 2 } as const
+  const decided = gate.decision.type === 'require-confirm' ? gate.decision.riskLevel ?? 'medium' : 'medium'
+  return order[decided] >= order.medium ? decided : 'medium'
+}
+
 export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
   const chatSignal = registerChatCancel(args.requestId)
+  // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
+  // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
+  registerSessionActiveStream(args.sessionId, args.requestId)
   const requestLane = args.lane
     ?? (args.remoteContext
       ? args.remoteContext.source === 'feishu'
@@ -576,6 +587,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
       args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
     }
     clearChatCancel(args.requestId)
+    clearSessionActiveStream(args.sessionId, args.requestId)
     clearToolRevocationRequest(args.requestId)
     clearRequest(args.requestId)
     await mcpConnectionManager?.shutdown().catch(() => undefined)
@@ -1777,7 +1789,9 @@ async function runToolChatSessionInner(
           args.emitFactEvent?.({
             type: 'confirm-requested',
             id: toolUseId,
-            riskLevel: toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+            // 风险级取 max(裁决结果, medium)：修 toolkit.call 恒 medium 的同时，避免静态兜底为
+            // low 的工具（如 browser）确认卡较旧硬编码行为降档（评审 S7）
+            riskLevel: confirmRequestedRiskLevel(gate),
             ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
             ...(diff ? { confirmDiff: diff } : {}),
             ...(shellSecurityHints ? { shellSecurityHints } : {}),
@@ -2280,6 +2294,8 @@ async function runToolChatSessionInner(
             remoteContext,
             toolUserConfirmed,
             getBrowserDetectContext,
+            requestLocale: locale,
+            lane: effectiveLane,
             historyFacts: args.historyFacts
           }
           execResult = preparedShellExecution

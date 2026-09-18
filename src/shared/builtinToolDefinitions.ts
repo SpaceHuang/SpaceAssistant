@@ -184,20 +184,6 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
     }
   },
   {
-    name: 'browser_detect',
-    description:
-      '检测 browser 工具依赖（Stagehand、Playwright、Chromium、Node）是否就绪。返回 canInitialize、primaryFailure 与各组件状态。修复网络访问依赖时优先调用；用户表示安装完成后传 force=true 重新检测。',
-    input_schema: {
-      type: 'object',
-      properties: {
-        force: {
-          type: 'boolean',
-          description: '跳过缓存强制重新检测，默认 false'
-        }
-      }
-    }
-  },
-  {
     name: 'wechat_reply',
     description:
       '向当前微信对话回复消息。仅在 source=wechat 的会话中使用。自动处理 context_token 与长文本分片。',
@@ -283,7 +269,10 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
 // 恢复工具由主进程 executor 注册；schema 必须同时进入 provider exposure/authorization。
 BUILTIN_TOOL_DEFINITIONS.push(
   { name: 'history.read', description: '读取被压缩的历史事实，支持按窗口、条目或关键词查询。', input_schema: { type: 'object', properties: { window_id: { type: 'string' }, entry_id: { type: 'string' }, query: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'integer' }, max_tokens: { type: 'integer' } } } },
-  { name: 'skills.read', description: '读取技能目录中指定技能的完整说明。', input_schema: { type: 'object', properties: { name: { type: 'string' }, max_chars: { type: 'integer' } }, required: ['name'] } }
+  { name: 'skills.read', description: '读取技能目录中指定技能的完整说明。', input_schema: { type: 'object', properties: { name: { type: 'string' }, max_chars: { type: 'integer' } }, required: ['name'] } },
+  // 能力集合（toolkit）网关：模型面恒定两条，能力增删不改变 schema（docs/requirement/agent-toolkit-capability-gateway-requirement.md §3.1）
+  { name: 'toolkit.find', description: '查询产品能力集合。需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话查询）时，先用本工具按用途描述或能力 id 查询，获取调用方式后再用 toolkit.call 执行。', input_schema: { type: 'object', properties: { query: { type: 'string', description: '自然语言用途描述，或精确能力 id' }, family: { type: 'string', enum: ['env', 'action'], description: '可选：env=环境知觉（只读），action=功能执行' } }, required: ['query'] } },
+  { name: 'toolkit.call', description: '调用能力集合中的具体能力。先用 toolkit.find 查询能力 id 与参数说明，再调用本工具；act 类能力需用户确认。', input_schema: { type: 'object', properties: { id: { type: 'string', description: '能力 id（来自 toolkit.find）' }, params: { type: 'object', description: '能力参数，格式见 toolkit.find 返回的 usage' } }, required: ['id'] } }
 )
 
 export const ALL_BUILTIN_TOOL_NAMES = BUILTIN_TOOL_DEFINITIONS.map((t) => t.name)

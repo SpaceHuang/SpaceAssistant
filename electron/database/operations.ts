@@ -728,17 +728,30 @@ export interface MessagesPage {
   nextSequence: number
 }
 
+export interface MessagesPageRow {
+  message: Message
+  /** 行的真实 sequence（Message 本体不携带；删除产生空洞后 cursor+index 会错标，评审 S3） */
+  sequence: number
+}
+
+export interface MessagesPageWithSequence {
+  rows: MessagesPageRow[]
+  /** 下一页应从此 sequence（含）开始读取；页为空时回填传入的 fromSequence，供调用方判定翻页结束 */
+  nextSequence: number
+}
+
 /**
  * 按 sequence 游标分页读取消息，不受固定条数上限约束。较 `getMessages()` 的 offset 分页更适合
  * 大会话完整导出：游标基于稳定的 sequence 而非行位置，翻页期间新增消息不会导致重复或跳过。
  * `fromSequence` 为闭区间下界，初始调用传 0（消息 sequence 从 0 开始递增）。
+ * 每行附带真实 sequence——消息删除会产生 sequence 空洞，调用方不得以 cursor+index 合成。
  */
-export function getMessagesPage(
+export function getMessagesPageWithSequence(
   db: AppDatabase,
   sessionId: string,
   fromSequence: number,
   pageSize: number
-): MessagesPage {
+): MessagesPageWithSequence {
   const conn = getDbConnection(db)
   const rows = conn
     .prepare(
@@ -749,8 +762,21 @@ export function getMessagesPage(
     )
     .all(sessionId, fromSequence, pageSize) as MessageRow[]
   return {
-    messages: rows.map(rowToStoredMessage),
+    rows: rows.map((row) => ({ message: rowToStoredMessage(row), sequence: row.sequence })),
     nextSequence: rows.length > 0 ? rows[rows.length - 1]!.sequence + 1 : fromSequence
+  }
+}
+
+export function getMessagesPage(
+  db: AppDatabase,
+  sessionId: string,
+  fromSequence: number,
+  pageSize: number
+): MessagesPage {
+  const page = getMessagesPageWithSequence(db, sessionId, fromSequence, pageSize)
+  return {
+    messages: page.rows.map((r) => r.message),
+    nextSequence: page.nextSequence
   }
 }
 

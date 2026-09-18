@@ -92,11 +92,71 @@ function modeSecretKinds(mode: McpServerWriteInput['auth']['mode']): string[] {
 /**
  * 保存整个 Profile 列表（唯一的 MCP Profile/Secret 持久化通道）。
  * 一次性 Secret 仅在请求体出现一次：加密后立即写入 Secret map，不进入 Profile JSON。
+ * 「读 previous + 合并 + 写」整体在写锁临界区内（v2 评审 S2'）。
  */
 export async function saveProfiles(
   db: AppDatabase,
   inputs: McpServerWriteInput[]
 ): Promise<McpServerProfile[]> {
+  return withMcpSecretWriteLock(() => saveProfilesLocked(db, inputs))
+}
+
+/**
+ * 追加单个服务（v2 评审 S2'）：addMcpServer 等增量写入方必须走本函数——
+ * 「读既有 + 合并 + 写」整体在写锁临界区内，两次并发 append 不会互相覆盖丢服务。
+ * 与既有服务重名时抛错（事务回滚，无副作用）。
+ */
+/**
+ * 既有 profile → write input：appendServer 的合并输入。
+ * secret 不回填（保留在 secret map 中，saveProfiles 对未出现的 kind 不做 clear）。
+ */
+function existingProfilesAsWriteInputs(profiles: McpServerProfile[]): McpServerWriteInput[] {
+  return profiles.map((p) => ({
+    id: p.id,
+    name: p.name,
+    enabled: p.enabled,
+    transport: p.transport,
+    timeoutSec: p.timeoutSec,
+    auth: {
+      mode: p.auth.mode,
+      ...(p.auth.headerName ? { headerName: p.auth.headerName } : {}),
+      ...(p.auth.valuePrefix ? { valuePrefix: p.auth.valuePrefix } : {}),
+      ...(p.auth.oauthClientId ? { oauthClientId: p.auth.oauthClientId } : {}),
+      ...(p.auth.oauthScopes?.length ? { oauthScopes: p.auth.oauthScopes } : {}),
+      ...(p.auth.accessTokenExpiresAt ? { accessTokenExpiresAt: p.auth.accessTokenExpiresAt } : {})
+    },
+    ...(p.stdio
+      ? {
+          stdio: {
+            command: p.stdio.command,
+            args: p.stdio.args,
+            ...(p.stdio.cwd ? { cwd: p.stdio.cwd } : {}),
+            env: p.stdio.env.map((e) => ({ key: e.key, valuePresent: e.valuePresent })),
+            ...(p.stdio.commandTrustedAt ? { commandTrustedAt: p.stdio.commandTrustedAt } : {})
+          }
+        }
+      : {}),
+    ...(p.http ? { http: { endpoint: p.http.endpoint } } : {}),
+    enabledToolNames: p.enabledToolNames,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt
+  }))
+}
+
+export async function appendServer(
+  db: AppDatabase,
+  input: McpServerWriteInput
+): Promise<McpServerProfile[]> {
+  return withMcpSecretWriteLock(() => {
+    const existing = listProfiles(db)
+    return saveProfilesLocked(db, [...existingProfilesAsWriteInputs(existing), input])
+  })
+}
+
+function saveProfilesLocked(
+  db: AppDatabase,
+  inputs: McpServerWriteInput[]
+): McpServerProfile[] {
   const parsedInputs = inputs.map((i) => McpServerWriteInputSchema.parse(i))
 
   if (parsedInputs.length > MCP_MAX_SERVERS) {
@@ -162,47 +222,45 @@ export async function saveProfiles(
     }
   })
 
-  return withMcpSecretWriteLock(() => {
-    return runInTransaction(getDbConnection(db), () => {
-      const map = readSecretMapRaw(db)
-      for (const change of secretChanges) {
-        const key = secretMapKey(change.serverId, change.kind)
-        if ('clear' in change) {
-          delete map[key]
-        } else {
-          map[key] = change.enc
+  return runInTransaction(getDbConnection(db), () => {
+    const map = readSecretMapRaw(db)
+    for (const change of secretChanges) {
+      const key = secretMapKey(change.serverId, change.kind)
+      if ('clear' in change) {
+        delete map[key]
+      } else {
+        map[key] = change.enc
+      }
+    }
+    for (const id of previous.map((p) => p.id)) {
+      if (!nextIds.has(id)) {
+        const prefix = `${id}:`
+        for (const key of Object.keys(map)) {
+          if (key.startsWith(prefix)) delete map[key]
         }
       }
-      for (const id of previous.map((p) => p.id)) {
-        if (!nextIds.has(id)) {
-          const prefix = `${id}:`
-          for (const key of Object.keys(map)) {
-            if (key.startsWith(prefix)) delete map[key]
-          }
-        }
-      }
-      writeSecretMapRaw(db, map)
+    }
+    writeSecretMapRaw(db, map)
 
-      for (const profile of nextProfiles) {
-        const kinds = modeSecretKinds(profile.auth.mode)
-        profile.auth.secretPresent = kinds.some((k) => Boolean(map[secretMapKey(profile.id, k)]))
-        if (profile.stdio) {
-          profile.stdio.env = profile.stdio.env.map((e) => ({
-            key: e.key,
-            valuePresent: Boolean(map[secretMapKey(profile.id, `env:${e.key}`)])
-          }))
-        }
+    for (const profile of nextProfiles) {
+      const kinds = modeSecretKinds(profile.auth.mode)
+      profile.auth.secretPresent = kinds.some((k) => Boolean(map[secretMapKey(profile.id, k)]))
+      if (profile.stdio) {
+        profile.stdio.env = profile.stdio.env.map((e) => ({
+          key: e.key,
+          valuePresent: Boolean(map[secretMapKey(profile.id, `env:${e.key}`)])
+        }))
       }
+    }
 
-      setConfigValue(db, MCP_CONFIG_KEYS.profiles, JSON.stringify(nextProfiles))
-      for (const id of previous.map((p) => p.id)) {
-        if (!nextIds.has(id)) {
-          deleteConfigValue(db, MCP_CONFIG_KEYS.toolCache(id))
-          deleteConfigValue(db, MCP_CONFIG_KEYS.diagnostics(id))
-        }
+    setConfigValue(db, MCP_CONFIG_KEYS.profiles, JSON.stringify(nextProfiles))
+    for (const id of previous.map((p) => p.id)) {
+      if (!nextIds.has(id)) {
+        deleteConfigValue(db, MCP_CONFIG_KEYS.toolCache(id))
+        deleteConfigValue(db, MCP_CONFIG_KEYS.diagnostics(id))
       }
-      return nextProfiles
-    })
+    }
+    return nextProfiles
   })
 }
 

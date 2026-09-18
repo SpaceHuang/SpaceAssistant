@@ -3,7 +3,6 @@ import type { AppIpcContext } from '../appIpc'
 import {
   McpSaveProfilesPayloadSchema,
   McpTestConnectionPayloadSchema,
-  MCP_CONNECT_TIMEOUT_MS,
   type McpServerProfile,
   type McpServerWriteInput
 } from '../../src/shared/mcpTypes'
@@ -18,13 +17,14 @@ import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
 import { revokeToolForAllLanes } from '../toolRevocationRegistry'
 import { clearSecret, getSecret } from './mcpSecretStore'
 import { clearDiagnostics, getDiagnostics, safeAppendDiagnostic } from './mcpDiagnostics'
-import { McpConnectionManager, testConnection } from './mcpConnectionManager'
-import { buildMappedToolDescriptors, discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
+import { McpConnectionManager } from './mcpConnectionManager'
+import { discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
 import {
   createMcpOAuthClientProvider,
   isOAuthFlowActive,
   startOAuthFlow
 } from './mcpOauthService'
+import { testMcpConnection } from './mcpService'
 
 /**
  * mcp:* IPC 处理器注册（被 appIpc.ts 调用）。
@@ -110,47 +110,8 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('mcp:test-connection', async (_e, payload: unknown) => {
     const parsed = McpTestConnectionPayloadSchema.parse(payload)
-    const input = parsed.server
-    const profile = writeInputToProfile(input)
-
-    const draftSecrets: Record<string, string> = {}
-    if (input.auth.accessToken?.trim()) draftSecrets['access-token'] = input.auth.accessToken.trim()
-    if (input.auth.headerValue?.trim()) draftSecrets['auth-header'] = input.auth.headerValue.trim()
-    for (const env of input.stdio?.env ?? []) {
-      if (env.value !== undefined && env.value !== '') draftSecrets[`env:${env.key}`] = env.value
-    }
-    // 草稿未填写的新值优先；已保存服务编辑草稿留空时回退到已保存 Secret，
-    // 避免「已配好 token 只是没重填」被误判为未认证。
-    const secretProvider = async (kind: string): Promise<string | null> =>
-      draftSecrets[kind] ?? (await getSecret(ctx.db, profile.id, kind))
-
-    // OAuth 服务：已保存 token 直接携带；未授权则先跑一次授权流程（草稿 profile），
-    // 授权成功后 token 落在草稿 id 下，再按已授权状态连接。
-    let oauthProvider: ReturnType<typeof createMcpOAuthClientProvider> | undefined
-    if (profile.auth.mode === 'oauth') {
-      oauthProvider = createMcpOAuthClientProvider(ctx.db, profile)
-      const hasToken = await getSecret(ctx.db, profile.id, 'access-token')
-      if (!hasToken) {
-        const oauthResult = await startOAuthFlow(ctx.db, profile.id, { profile })
-        if (!oauthResult.ok) return oauthResult
-      }
-    }
-
-    const result = await testConnection(profile, {
-      connectTimeoutMs: MCP_CONNECT_TIMEOUT_MS,
-      secretProvider,
-      oauthProvider
-    })
-    if (!result.ok) return result
-    const { descriptors, skipped } = buildMappedToolDescriptors(input.id, input.name, result.tools)
-    return {
-      ok: true,
-      serverName: result.serverInfo.name,
-      protocolVersion: result.protocolVersion,
-      capabilities: result.capabilities,
-      tools: descriptors,
-      skipped
-    }
+    // 编排逻辑已抽取到 mcpService（前案 §5.2.1）；IPC 仅做载荷解析与委托
+    return testMcpConnection(ctx.db, parsed.server)
   })
 
   ipcMain.handle('mcp:delete-server', async (_e, payload: { serverId?: unknown }) => {

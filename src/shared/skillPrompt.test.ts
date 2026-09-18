@@ -10,6 +10,14 @@ describe('skillPrompt', () => {
     expect(hint).not.toContain('当前可用工具')
     expect(hint).not.toContain('仅可调用以下工具名称')
   })
+  it('toolkit 提示按工具面条件注入（评审 S6）：暴露 toolkit_find 时含 compat 名；否则不诱导', () => {
+    const withToolkit = buildToolCapabilityConventionHint(['run_shell', 'toolkit_find', 'toolkit_call'])
+    expect(withToolkit).toContain('toolkit_find')
+    expect(withToolkit).toContain('toolkit_call')
+    expect(withToolkit).not.toContain('toolkit.find')
+    const withoutToolkit = buildToolCapabilityConventionHint(['run_shell'])
+    expect(withoutToolkit).not.toContain('toolkit')
+  })
   it('reads a registered skill by name with a bounded response', () => {
     const skill = { meta: { name: 'demo', description: '', triggers: [], version: '1', author: '' }, content: 'content', scope: 'user' as const, directoryPath: '/a', filePath: '/a/SKILL.md', lastModified: 0 }
     expect(readSkillForTool([skill], 'demo', 100)).toBe('content')

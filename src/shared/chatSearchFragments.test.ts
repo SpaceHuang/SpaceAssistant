@@ -198,4 +198,26 @@ describe('buildSearchFragmentsFromMessage', () => {
     expect(a).not.toBe(c)
     expect(a).toContain('msg-1')
   })
+it('toolkit.call 的 tool-input 片段凭据布尔化，非 toolkit 工具不受影响', () => {
+      const toolkitTool = {
+        id: 'toolkit-1',
+        toolName: 'toolkit_call',
+        status: 'confirming',
+        input: {
+          id: 'action.mcp.add',
+          params: { name: 'scys', accessToken: 'ghp_supersecret123', env: { API_TOKEN: 'tok-1', DEBUG: '1' } }
+        },
+        riskLevel: 'high'
+      } as unknown as ToolCallRecord
+      const message = assistantMsg({ content: '', toolCalls: [toolkitTool] })
+      const fragments = buildSearchFragmentsFromMessage(message, { kind: 'persisted', sequence: 9 }, { t: mockT })
+      const inputFragment = fragments.find((f) => f.source.kind === 'tool-input')
+      expect(inputFragment).toBeDefined()
+      const text = inputFragment && inputFragment.renderStrategy === 'anchored-text' ? inputFragment.searchableText : ''
+      expect(text).toContain('action.mcp.add')
+      expect(text).toContain('scys')
+      expect(text).not.toContain('ghp_supersecret123')
+      expect(text).not.toContain('tok-1')
+      expect(text).toContain('DEBUG')
+    })
 })

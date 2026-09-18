@@ -34,12 +34,13 @@ import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
 import { browserExecutor } from './browserExecutor'
-import { browserDetectExecutor } from './browserDetectExecutor'
 import { runShellExecutor } from './runShellExecutor'
 import { TypedToolRegistry } from './plannedToolRegistry'
 import { runShellRegisteredTool } from './runShellRegisteredTool'
 import { skillsReadTool } from './skillsReadTool'
 import { historyReadTool } from './historyTool'
+import { toolkitFindTool, toolkitCallTool } from '../capabilities/toolkitTool'
+import '../capabilities/registerBuiltinCapabilities'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
@@ -1303,6 +1304,9 @@ const registry = new TypedToolRegistry()
 registry.register(runShellRegisteredTool)
 registry.register(skillsReadTool)
 registry.register(historyReadTool)
+// toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
+registry.register(toolkitFindTool)
+registry.register(toolkitCallTool)
 for (const executor of [
   readFileExecutor,
   listDirectoryExecutor,
@@ -1315,7 +1319,6 @@ for (const executor of [
   wechatReplyExecutor,
   wechatSendExecutor,
   browserExecutor,
-  browserDetectExecutor,
   runShellExecutor,
   listWorkDirsExecutor,
   switchWorkDirExecutor,

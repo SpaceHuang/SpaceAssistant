@@ -311,11 +311,6 @@
         "summary": "Open web pages in an isolated browser, read pages, and perform actions like clicking.",
         "disabledHint": "When disabled, the agent cannot access web pages or automate the browser."
       },
-      "browserDetect": {
-        "displayName": "Browser dependency check",
-        "summary": "Check whether the Stagehand, Playwright, and Chromium dependencies required by Web access (browser) are ready.",
-        "disabledHint": "When disabled, the agent cannot auto-detect browser dependency status in chat."
-      },
       "listWorkDirs": {
         "displayName": "List work directories",
         "summary": "List configured work directories and the current remote session binding (Feishu/WeChat remote only).",
@@ -331,7 +326,17 @@
         "summary": "Switch the desktop view to a specified remote session and sync its work directory (Feishu/WeChat remote only).",
         "disabledHint": "When disabled, the remote agent cannot switch the desktop session view."
       },
-      "fallbackDisabledHint": "When disabled, the agent cannot call this tool in chat."
+      "fallbackDisabledHint": "When disabled, the agent cannot call this tool in chat.",
+      "toolkitFind": {
+        "displayName": "Capability toolkit query",
+        "summary": "Query the product capability toolkit (env awareness / product actions) on demand",
+        "disabledHint": "Disabling removes on-demand capability discovery for the agent"
+      },
+      "toolkitCall": {
+        "displayName": "Capability toolkit call",
+        "summary": "Invoke a specific capability from the product capability toolkit (act-class requires confirmation)",
+        "disabledHint": "Disabling removes the agent’s entry point to product capabilities"
+      }
     },
     "nav": {
       "switches": {

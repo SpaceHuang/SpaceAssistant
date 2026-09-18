@@ -5,6 +5,7 @@ import { thinkingSegmentsForRender } from './thinkingSegments'
 import { formatToolLabel, type ToolCallLabelT } from './toolCallLabel'
 import { projectShellOutput } from './terminalOutputSanitize'
 import { projectPersistedMcpResult } from './mcpToolResultDisplay'
+import { sanitizeCapabilityParamsForDisplay } from './capabilityParamSanitize'
 
 export type SearchSource =
   | { kind: 'user-content' }
@@ -126,6 +127,9 @@ function sourceIdentityKey(source: SearchSource): string {
 export function buildFragmentId(messageId: string, source: SearchSource): string {
   return `${messageId}|${sourceIdentityKey(source)}`
 }
+
+/** toolkit 网关工具名（内部点号名 + API compat 名双口径） */
+const TOOLKIT_TOOL_NAMES = new Set(['toolkit.find', 'toolkit_find', 'toolkit.call', 'toolkit_call'])
 
 function simplifyToolInput(input: Record<string, unknown>): string {
   try {
@@ -326,7 +330,12 @@ function appendToolRecordFragments(
     revealBase
   )
 
-  const inputText = simplifyToolInput(tool.input)
+  // toolkit 网关入参含凭据（如 action.mcp.add 的 accessToken/env）：搜索片段与
+  // 确认卡同口径净化——确认窗口期搜索兜底渲染的是本片段文本（v3 评审：确认窗口内搜索兜底仍明文）
+  const isToolkitTool = TOOLKIT_TOOL_NAMES.has(tool.toolName)
+  const inputText = simplifyToolInput(
+    isToolkitTool ? (sanitizeCapabilityParamsForDisplay(tool.input) as Record<string, unknown>) : tool.input
+  )
   if (inputText.trim()) {
     pushAnchoredTextFragment(
       out,

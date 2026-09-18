@@ -95,6 +95,10 @@ export interface ToolExecutionContext {
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
+  /** 本次请求的产品语言（resolveRequestLocale 结果）；toolkit 能力的 env.agent/env.time 用（评审 S2） */
+  requestLocale?: string
+  /** 本次请求的执行 lane；toolkit 能力的 lane 校验用（评审 S2） */
+  lane?: string
 }
 
 import type { BrowserDependencyToolError } from '../../src/shared/browserTypes'

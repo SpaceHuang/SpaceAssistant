@@ -39,6 +39,13 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         // high_impact / unknown 归并到 write 域（fail-closed，与 isOutboundWriteTool 一致）
         if (signal.impact !== 'read') tokens.add('lark-write')
         break
+      case 'toolkit-capability':
+        // toolkit.call 能力级信号：网关 + 子实体（需求 §5）。
+        // `toolkit-capability:${id}` 支持按能力定制策略；read/act 二值由描述符风险级决定。
+        tokens.add(signal.kind)
+        tokens.add(`toolkit-capability:${signal.capabilityId}`)
+        tokens.add(signal.risk === 'act' ? 'toolkit-act' : 'toolkit-read')
+        break
       case 'browser-action':
         tokens.add(signal.kind)
         tokens.add(`browser-${signal.action}`)
