@@ -48,6 +48,23 @@ describe('安全审计日志：脱敏', () => {
   it('sanitizeAuditField 保留普通文本', () => {
     expect(sanitizeAuditField('ping baidu.com')).toBe('ping baidu.com')
   })
+
+  it('JSON 形态凭据字段打码（评审 B1）：序列化 params 流经摘要时不落明文', () => {
+    const summary =
+      'toolkit.call · action.mcp.add：添加 MCP 连接；参数 {"name":"scys","endpoint":"https://mcp.scys.com/mcp","accessToken":"ghp_secret123456","headerValue":"Bearer xyz","env":{"API_TOKEN":"tok_789"}}'
+    const out = sanitizeAuditField(summary) as string
+    expect(out).not.toContain('ghp_secret123456')
+    expect(out).not.toContain('Bearer xyz')
+    expect(out).not.toContain('tok_789')
+    expect(out).toContain('https://mcp.scys.com/mcp')
+    expect(out).toContain('"accessToken":"[REDACTED]"')
+    expect(out).toContain('"API_TOKEN"')
+  })
+
+  it('JSON 形态打码不影响普通 JSON 数值与布尔', () => {
+    const out = sanitizeAuditField('{"limit":20,"force":true,"name":"x"}') as string
+    expect(out).toBe('{"limit":20,"force":true,"name":"x"}')
+  })
 })
 
 describe('安全审计日志：独立文件 + JSON Lines 落盘', () => {

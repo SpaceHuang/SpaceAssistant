@@ -30,6 +30,8 @@ export interface CapabilityContext {
   lane?: string
   /** 产品语言（用户选择的 i18n locale，如 zh-CN） */
   locale?: string
+  /** 确认裁决信号：true=本次调用经用户批准；false=明确未批准（act 能力拒执行）；undefined=直调/测试 */
+  confirmedByUser?: boolean
   /** 产品名称/版本（env.agent 用；执行器适配层从 electron app 填充） */
   productName?: string
   productVersion?: string

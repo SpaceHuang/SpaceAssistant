@@ -26,6 +26,9 @@ export function buildCapabilityContext(ctx: ToolExecutionContext): CapabilityCon
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
     signal: ctx.signal,
+    locale: ctx.requestLocale,
+    lane: ctx.lane,
+    confirmedByUser: ctx.toolUserConfirmed === true,
     productName: APP_PRODUCT_NAME,
     // 懒取 electron app（单测环境无 electron 模块；主进程运行时恒可用）
     get productVersion() {
@@ -103,7 +106,11 @@ export function createToolkitCallExecutor(registry: CapabilityRegistry = capabil
       return { success: false, error: 'toolkit.call 缺少运行时上下文' }
     }
     const result = await callCapability(registry, id, input.params, buildCapabilityContext(runtimeContext))
-    return { success: true, data: result }
+    // 业务失败也以 success:false 回报（UI 行显示失败）；data 保留结构化结论供模型自纠
+    // （serializeAgentToolResult 对失败结果仍序列化 data，评审建议 11）
+    return result.ok
+      ? { success: true, data: result }
+      : { success: false, error: result.error.message, data: result }
   }
 }
 

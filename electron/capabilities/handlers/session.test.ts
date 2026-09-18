@@ -154,6 +154,20 @@ describe('action.session.read', () => {
     expect(page.messages[0]!.originalChars).toBe(20_000)
   })
 
+  it('消息删除产生 sequence 空洞后，返回真实 sequence 与 nextSequence 口径一致（评审 S3）', async () => {
+    const { getDbConnection } = await import('../../database')
+    const id = await seedSession('空洞会话', ['消息 0', '消息 1', '消息 2'])
+    // 直接删除中间一行制造 sequence 空洞（sequence=1）
+    getDbConnection(db).prepare('DELETE FROM messages WHERE session_id = ? AND sequence = 1').run(id)
+    const read = findCap('action.session.read')
+    const page = (await read.handler({ sessionId: id }, ctx())) as {
+      messages: Array<{ sequence: number; content: string }>
+      nextSequence: number
+    }
+    expect(page.messages.map((m) => m.sequence)).toEqual([0, 2]) // 真实 sequence，非 0/1
+    expect(page.nextSequence).toBe(3)
+  })
+
   it('空会话返回空页', async () => {
     const id = await seedSession('空会话')
     const read = findCap('action.session.read')

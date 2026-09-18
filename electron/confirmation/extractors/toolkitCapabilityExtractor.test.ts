@@ -47,6 +47,26 @@ describe('toolkit-capability 提取器', () => {
     const { signals } = extractToolkitCapability({})
     expect(signals[0]).toMatchObject({ risk: 'act' })
   })
+
+  it('act 能力摘要零凭据泄漏（评审 B1 对称用例）：accessToken/headerValue/env 值只出布尔', () => {
+    const registry = new CapabilityRegistry()
+    registry.register(desc({ id: 'action.mcp.add', summary: '添加 MCP 连接', risk: 'act', family: 'action' }))
+    const { summary } = createToolkitCapabilityExtractor(registry)({
+      id: 'action.mcp.add',
+      params: {
+        name: '生财有术',
+        endpoint: 'https://mcp.scys.com/mcp',
+        accessToken: 'ghp_supersecretvalue123',
+        headerValue: 'Bearer opaque-token-value',
+        env: { API_TOKEN: 'tok-plain-456', DEBUG: '1' }
+      }
+    })
+    expect(summary).not.toContain('ghp_supersecretvalue123')
+    expect(summary).not.toContain('opaque-token-value')
+    expect(summary).not.toContain('tok-plain-456')
+    expect(summary).toContain('生财有术')
+    expect(summary).toContain('DEBUG')
+  })
 })
 
 describe('signalTokenSet 对 toolkit-capability 的映射', () => {

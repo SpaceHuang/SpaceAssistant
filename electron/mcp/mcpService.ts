@@ -5,7 +5,9 @@ import {
   MCP_TIMEOUT_SEC_MAX,
   MCP_TIMEOUT_SEC_MIN,
   McpServerWriteInputSchema,
-  type McpServerWriteInput
+  type McpServerProfile,
+  type McpServerWriteInput,
+  type McpTestConnectionResult
 } from '../../src/shared/mcpTypes'
 import { validateMcpEndpoint } from './endpointPolicy'
 import { listProfiles, saveProfiles } from './mcpConfigStore'
@@ -107,6 +109,50 @@ function buildWriteInput(params: McpAddServerParams, endpoint: string | undefine
   return McpServerWriteInputSchema.parse(input)
 }
 
+/** discovery 每跳超时与重定向跟随上限（评审 S4/S5） */
+const DISCOVERY_TIMEOUT_MS = 5_000
+const DISCOVERY_MAX_REDIRECTS = 3
+
+/**
+ * discovery 专用 fetch（评审 S5）：SDK 默认 fetch 自动跟随重定向，会绕过 endpoint
+ * 安全策略（公网 302 → 内网探测）。这里手动跟随每一跳并对目标重新过 endpointPolicy；
+ * 被拦截的跳转返回合成 403（SDK 会吞掉 fetchFn 抛错，用状态码表达失败）并记录拦截态，
+ * 供结论文案区分「不支持 OAuth」与「发现被安全策略拦截」。超时经 AbortSignal 强制收敛（评审 S4）。
+ */
+function createSafeDiscoveryFetch(
+  timeoutMs = DISCOVERY_TIMEOUT_MS,
+  onBlocked?: (target: URL) => void
+): (url: string | URL, init?: RequestInit) => Promise<Response> {
+  const assertTargetAllowed = (target: URL): boolean => {
+    const validation = validateMcpEndpoint(target.toString())
+    if (!validation.ok) {
+      onBlocked?.(target)
+      return false
+    }
+    return true
+  }
+  return async (url, init) => {
+    let current = new URL(url.toString())
+    if (!assertTargetAllowed(current)) {
+      return new Response(null, { status: 403, statusText: 'endpoint policy blocked' })
+    }
+    for (let hop = 0; ; hop++) {
+      const response = await fetch(current, { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
+      if (response.status < 300 || response.status >= 400) return response
+      const location = response.headers.get('location')
+      if (!location) return response
+      if (hop >= DISCOVERY_MAX_REDIRECTS) {
+        onBlocked?.(current)
+        return new Response(null, { status: 508, statusText: 'redirect loop limit' })
+      }
+      current = new URL(location, current)
+      if (!assertTargetAllowed(current)) {
+        return new Response(null, { status: 403, statusText: 'endpoint policy blocked' })
+      }
+    }
+  }
+}
+
 async function discoverConclusion(
   params: McpAddServerParams,
   endpoint: string,
@@ -115,8 +161,19 @@ async function discoverConclusion(
   if (params.transport !== 'http') {
     return { kind: 'none', message: 'stdio 传输不涉及 OAuth 发现' }
   }
+  let blocked = false
+  let timedOut = false
+  const blockedConclusion: McpAddServerConclusion = {
+    kind: 'bearer-only',
+    message: 'OAuth 发现被安全策略拦截（存在指向私网/保留地址的重定向）：该端点暂按不支持 OAuth 处理'
+  }
   try {
-    const info = await discoverOAuthServerInfo(new URL(endpoint))
+    const info = await discoverOAuthServerInfo(new URL(endpoint), {
+      fetchFn: createSafeDiscoveryFetch(DISCOVERY_TIMEOUT_MS, () => {
+        blocked = true
+      })
+    })
+    if (blocked) return blockedConclusion
     const metadata = info.authorizationServerMetadata
     if (!metadata) {
       return {
@@ -140,17 +197,60 @@ async function discoverConclusion(
         ? `该服务不支持 DCR，但已匹配内置预设「${preset.displayName}」，可直接在设置页发起授权`
         : '该服务不支持 DCR：需要提供 OAuth Client ID（在设置页该服务的认证方式中填写）后授权，或改用 Bearer token'
     }
-  } catch {
+  } catch (error) {
+    if (blocked) return blockedConclusion
+    timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
     return {
       kind: 'bearer-only',
-      message: 'OAuth 发现不可达：该服务可能不支持 OAuth（或发现端点暂不可用），请改用 Bearer token 或稍后重试'
+      message: timedOut
+        ? 'OAuth 发现超时：无法确认该服务是否支持 OAuth，请稍后在设置页重试，或改用 Bearer token 认证'
+        : 'OAuth 发现不可达：该服务可能不支持 OAuth（或发现端点暂不可用），请改用 Bearer token 或稍后重试'
     }
   }
 }
 
 /**
+ * 既有 profile → write input（评审 B2）：saveProfiles 是全量保存语义，
+ * addMcpServer 必须把既有服务合并进列表再保存，否则既有服务及其加密凭据会被清空。
+ * secret 不回填（保留在 secret map 中，saveProfiles 对未出现的 kind 不做 clear）。
+ */
+function existingProfilesAsWriteInputs(profiles: McpServerProfile[]): McpServerWriteInput[] {
+  return profiles.map((p) => ({
+    id: p.id,
+    name: p.name,
+    enabled: p.enabled,
+    transport: p.transport,
+    timeoutSec: p.timeoutSec,
+    auth: {
+      mode: p.auth.mode,
+      ...(p.auth.headerName ? { headerName: p.auth.headerName } : {}),
+      ...(p.auth.valuePrefix ? { valuePrefix: p.auth.valuePrefix } : {}),
+      ...(p.auth.oauthClientId ? { oauthClientId: p.auth.oauthClientId } : {}),
+      ...(p.auth.oauthScopes?.length ? { oauthScopes: p.auth.oauthScopes } : {}),
+      ...(p.auth.accessTokenExpiresAt ? { accessTokenExpiresAt: p.auth.accessTokenExpiresAt } : {})
+    },
+    ...(p.stdio
+      ? {
+          stdio: {
+            command: p.stdio.command,
+            args: p.stdio.args,
+            ...(p.stdio.cwd ? { cwd: p.stdio.cwd } : {}),
+            env: p.stdio.env.map((e) => ({ key: e.key, valuePresent: e.valuePresent }))
+          }
+        }
+      : {}),
+    ...(p.http ? { http: { endpoint: p.http.endpoint } } : {}),
+    enabledToolNames: p.enabledToolNames,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt
+  }))
+}
+
+/**
  * 添加 MCP 连接（action.mcp.add 的执行入口）。
- * endpoint 校验走 endpointPolicy（私网/保留地址拒绝）；重定向拒绝在传输/连接层独立兜底。
+ * - endpoint 校验走 endpointPolicy（私网/保留地址拒绝）；
+ * - OAuth discovery 在保存前执行且带超时（评审 S4），重定向经安全策略拦截（评审 S5）；
+ * - 保存为追加语义：既有服务与凭据保留（评审 B2），与既有服务重名会因查重失败而保存失败。
  */
 export async function addMcpServer(
   db: AppDatabase,
@@ -179,16 +279,18 @@ export async function addMcpServer(
     return { ok: false, code: 'invalid-params', message: `参数校验失败：${message}` }
   }
 
+  // discovery 先于落库（评审 S4）：发现超时/被拦截不影响已保存状态与返回语义的一致性
+  const conclusion = endpoint
+    ? await discoverConclusion(params, endpoint, options)
+    : { kind: 'none' as const, message: '该认证模式不涉及 OAuth 发现' }
+
   try {
-    await saveProfiles(db, [input])
+    const existing = existingProfilesAsWriteInputs(listProfiles(db))
+    await saveProfiles(db, [...existing, input])
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     return { ok: false, code: 'save-failed', message }
   }
-
-  const conclusion = endpoint
-    ? await discoverConclusion(params, endpoint, options)
-    : { kind: 'none' as const, message: '该认证模式不涉及 OAuth 发现' }
 
   return {
     ok: true,
@@ -198,14 +300,7 @@ export async function addMcpServer(
   }
 }
 
-/** 已保存 profile 的紧凑摘要（不含任何 secret；供 find/审计与结果展示）。 */
-export function describeSavedServer(db: AppDatabase, serverId: string): { id: string; name: string; transport: string; authMode: string } | undefined {
-  const profile = listProfiles(db).find((p) => p.id === serverId)
-  if (!profile) return undefined
-  return { id: profile.id, name: profile.name, transport: profile.transport, authMode: profile.auth.mode }
-}
 
-export type McpTestConnectionResult = Record<string, unknown>
 
 /**
  * 连接测试编排（自 mcpIpc 抽取，前案 §5.2.1）：草稿 secret 合并、OAuth 授权触发、
@@ -290,4 +385,3 @@ function writeProfileFromInput(input: McpServerWriteInput) {
   }
 }
 
-export { isOAuthFlowActive }

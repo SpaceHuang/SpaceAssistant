@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { listSessions, getMessagesPage } from '../../database/operations'
+import { listSessions, getMessagesPageWithSequence } from '../../database/operations'
 import type { AppDatabase } from '../../database'
 import type { CapabilityDescriptor, CapabilityContext } from '../types'
 import { isSessionActiveStream } from '../../chatActiveStreams'
@@ -91,18 +91,16 @@ const readCapability: CapabilityDescriptor = {
   paramsDoc: '{ "sessionId": "会话 ID", "cursor": number, "limit": number }（cursor 为起始 sequence，默认 0；limit 默认 20，上限 50）',
   returnsDoc: '{ messages: [{ sequence, role, timestamp, content, truncated?, originalChars? }], nextSequence, hasMore }',
   risk: 'read',
-  notes: ['读取跨会话消息会留审计痕迹'],
+  notes: ['调用记录经策略决策审计（policy.decision）留存'],
   handler: async (rawParams, ctx) => {
     const params = rawParams as SessionReadParams
     const db = getDb(ctx)
     if (!db) throw new Error('会话数据不可用：缺少数据库上下文')
     const limit = Math.min(params.limit ?? 20, 50)
     const cursor = params.cursor ?? 0
-    const page = getMessagesPage(db, params.sessionId, cursor, limit)
-    // messages 表 sequence 连续递增（MAX+1 分配），页内第 i 条即 cursor+i
+    const page = getMessagesPageWithSequence(db, params.sessionId, cursor, limit)
     return {
-      messages: page.messages.map((m, i) => {
-        const sequence = cursor + i
+      messages: page.rows.map(({ message: m, sequence }) => {
         if (m.content.length > MESSAGE_MAX_CHARS) {
           return {
             sequence,
@@ -122,7 +120,7 @@ const readCapability: CapabilityDescriptor = {
       }),
       nextSequence: page.nextSequence,
       // 满页才可能有余量；非满页即最后一片（空页回填 cursor 时同样为 false）
-      hasMore: page.messages.length >= limit
+      hasMore: page.rows.length >= limit
     }
   }
 }

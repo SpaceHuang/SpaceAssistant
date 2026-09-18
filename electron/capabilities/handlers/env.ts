@@ -21,8 +21,6 @@ const defaultDeps: EnvHandlerDeps = {
   fileExists: (path) => existsSync(path)
 }
 
-/** 当前探测依赖（默认实现；createEnvCapabilities({osType,fileExists}) 可覆盖，供测试注入） */
-let deps: EnvHandlerDeps = defaultDeps
 
 interface CacheEntry {
   expiresAt: number
@@ -44,7 +42,7 @@ async function cachedProbe(key: string, compute: () => Promise<unknown>): Promis
   return value
 }
 
-/** 参数数组 spawn（禁 shell 字符串拼接）；命令不存在返回 null。 */
+/** 参数数组 spawn（禁 shell 字符串拼接）；命令不存在返回 null。超时/被信号杀死时 code 为 null（评审 S1：不得误判为 0）。 */
 export async function runProbe(command: string[], timeoutMs: number): Promise<ProbeOutcome | null> {
   return new Promise((resolve) => {
     execFile(
@@ -57,11 +55,16 @@ export async function runProbe(command: string[], timeoutMs: number): Promise<Pr
           resolve(null)
           return
         }
-        resolve({
-          code: typeof errno === 'number' ? errno : 0,
-          stdout: String(stdout ?? ''),
-          stderr: String(stderr ?? '')
-        })
+        if (error) {
+          // 超时（killed，code=null）/非零退出：code 只在数字时透传，其余归 null（探测失败）
+          resolve({
+            code: typeof errno === 'number' ? errno : null,
+            stdout: String(stdout ?? ''),
+            stderr: String(stderr ?? '')
+          })
+          return
+        }
+        resolve({ code: 0, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
       }
     ).on('error', () => resolve(null))
   })
@@ -103,21 +106,11 @@ const systemCapability: CapabilityDescriptor = {
   paramsDoc: '{ }；无参数',
   returnsDoc: '{ os, osVersion, arch, systemLanguage, wsl: { installed, version? } }',
   risk: 'read',
-  notes: ['WSL 探测结果缓存 10 分钟'],
-  handler: async (_params, ctx) =>
-    cachedProbe('env.system', async () => {
-      const os = deps.osType()
-      return {
-        os,
-        osVersion: release(),
-        arch: arch(),
-        systemLanguage: await detectSystemLanguage(os, ctx),
-        wsl: await detectWsl(os, ctx)
-      }
-    })
+  notes: ['探测结果缓存 10 分钟（进程级共享，跨会话；无 force 参数）'],
+  handler: makeSystemHandler(defaultDeps)
 }
 
-async function detectSystemLanguage(os: string, ctx: CapabilityContext): Promise<string> {
+async function detectSystemLanguage(os: string, handlerDeps: EnvHandlerDeps, ctx: CapabilityContext): Promise<string> {
   if (os === 'Windows_NT') {
     const probe = ctx.runProbe ?? runProbe
     const out = await probe(['powershell', '-NoProfile', '-Command', '(Get-Culture).Name'], WSL_PROBE_TIMEOUT_MS)
@@ -126,15 +119,34 @@ async function detectSystemLanguage(os: string, ctx: CapabilityContext): Promise
   return process.env.LANG ?? process.env.LC_ALL ?? ''
 }
 
-async function detectWsl(os: string, ctx: CapabilityContext): Promise<{ installed: boolean; version?: string }> {
+async function detectWsl(
+  os: string,
+  handlerDeps: EnvHandlerDeps,
+  ctx: CapabilityContext
+): Promise<{ installed: boolean; version?: string }> {
   if (os !== 'Windows_NT') return { installed: false }
-  if (!deps.fileExists(WSL_EXE_PATH)) return { installed: false }
+  if (!handlerDeps.fileExists(WSL_EXE_PATH)) return { installed: false }
   const probe = ctx.runProbe ?? runProbe
   const out = await probe(['wsl', '--status'], WSL_PROBE_TIMEOUT_MS)
   if (!out || out.code !== 0) return { installed: false }
   return { installed: true, version: firstLine(out.stdout) || firstLine(out.stderr) || undefined }
 }
 
+
+/** system handler 工厂：deps 经闭包注入，测试 overrides 不污染模块级单例（评审建议 6）。 */
+function makeSystemHandler(handlerDeps: EnvHandlerDeps) {
+  return async (_params: unknown, ctx: CapabilityContext) =>
+    cachedProbe('env.system', async () => {
+      const os = handlerDeps.osType()
+      return {
+        os,
+        osVersion: release(),
+        arch: arch(),
+        systemLanguage: await detectSystemLanguage(os, handlerDeps, ctx),
+        wsl: await detectWsl(os, handlerDeps, ctx)
+      }
+    })
+}
 // ----------------------------------------------------------------- env.dev
 
 const DEV_TOOLS: Array<{ key: string; candidates: string[][] }> = [
@@ -152,7 +164,7 @@ const devCapability: CapabilityDescriptor = {
   paramsDoc: '{ }；无参数',
   returnsDoc: '{ node: { available, version? }, python: { available, version?, resolvedAs? }, git: { available, version? } }',
   risk: 'read',
-  notes: ['探测结果缓存 10 分钟'],
+  notes: ['探测结果缓存 10 分钟（进程级共享，跨会话；无 force 参数）'],
   handler: async (_params, ctx) =>
     cachedProbe('env.dev', async () => {
       const probe = ctx.runProbe ?? runProbe
@@ -271,6 +283,8 @@ const browserDetectCapability: CapabilityDescriptor = {
  * 生产使用默认实现（os 模块 + fs 存在性）。
  */
 export function createEnvCapabilities(overrides?: Partial<EnvHandlerDeps>): CapabilityDescriptor[] {
-  if (overrides) deps = { ...defaultDeps, ...overrides }
-  return [agentCapability, systemCapability, devCapability, workspaceCapability, timeCapability, browserDetectCapability]
+  const system = overrides
+    ? { ...systemCapability, handler: makeSystemHandler({ ...defaultDeps, ...overrides }) }
+    : systemCapability
+  return [agentCapability, system, devCapability, workspaceCapability, timeCapability, browserDetectCapability]
 }

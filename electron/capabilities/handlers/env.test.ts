@@ -179,6 +179,31 @@ describe('env.time', () => {
   })
 })
 
+describe('runProbe（评审 S1）', () => {
+  it('探测超时（killed）code 为 null 而非 0', async () => {
+    const { runProbe } = await import('./env')
+    // node 挂起 5s，探测超时 100ms → 被杀，code 必须为 null
+    const out = await runProbe([process.execPath, '-e', 'setTimeout(()=>{},5000)'], 100)
+    expect(out).not.toBeNull()
+    expect(out!.code).toBeNull()
+  })
+
+  it('wsl --status 挂起超时 → installed=false（不误报）', async () => {
+    clearEnvCapabilityCacheForTest()
+    const cap = findCap(
+      createEnvCapabilities({ osType: () => 'Windows_NT', fileExists: () => true }),
+      'env.system'
+    )
+    const data = (await cap.handler(
+      {},
+      makeCtx({
+        probe: fakeProbe(() => ({ code: null, stdout: '', stderr: '' })) // 模拟超时被杀
+      })
+    )) as { wsl: { installed: boolean } }
+    expect(data.wsl.installed).toBe(false)
+  })
+})
+
 describe('env.browserDetect', () => {
   it('透传 force 参数到检测缝', async () => {
     const cap = findCap(createEnvCapabilities(), 'env.browserDetect')

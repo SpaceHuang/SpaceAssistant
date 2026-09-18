@@ -108,7 +108,13 @@ export function buildToolCapabilityConventionHint(toolNames: readonly string[]):
   const shell = toolNames.includes('run_shell')
     ? 'run_shell 可执行 shell 命令；run_script 用于 Python 脚本，两者不可互相替代。'
     : 'run_shell 当前未启用；需要执行 shell 时请遵循 Skill 的 fallback，不要编造或调用该工具。'
-  return `工具能力以当前请求的 tools 定义为准，不要调用未定义的工具。${shell}`
+  // 能力集合提示按工具面条件注入、使用 compat 名（评审 S6）：工具被禁用/远程 lane 时不诱导模型调用
+  const toolkit = toolNames.includes('toolkit_find')
+    ? '产品提供能力集合（toolkit_find / toolkit_call）：需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话状态/列表/消息）时，先用 toolkit_find 按用途描述查询用法，再用 toolkit_call 以返回的能力 id 调用；能力不足时如实报告，不要编造。'
+    : ''
+  return ['工具能力以当前请求的 tools 定义为准，不要调用未定义的工具。' + shell, toolkit]
+    .filter(Boolean)
+    .join('\n')
 }
 
 export function appendAvailableToolsHint(system: string | undefined, toolNames: string[]): string | undefined {

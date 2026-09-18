@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import type { CapabilityDescriptor } from './types'
 import { CapabilityRegistry } from './registry'
-import { createToolkitFindExecutor, createToolkitCallExecutor } from './toolkitTool'
+import { createToolkitFindExecutor, createToolkitCallExecutor, buildCapabilityContext } from './toolkitTool'
 import type { ToolExecutorResult } from '../tools/types'
 
 function desc(overrides: Partial<CapabilityDescriptor> & { id: string; summary: string }): CapabilityDescriptor {
@@ -91,7 +91,9 @@ describe('toolkit.call 执行器', () => {
 
   it('未知能力返回结构化错误（含索引兜底）', async () => {
     const result = await callExecutor({ id: 'env.nope', params: {} }, runtimeContext)
-    expect(result.success).toBe(true) // 工具执行成功，业务结果为 ok:false
+    // 评审建议 11：业务失败以 success:false 回报（UI 显示失败），data 保留结构化结论供模型自纠
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('未知能力')
     const data = result.data as { ok: boolean; error: { code: string; index: unknown[] } }
     expect(data.ok).toBe(false)
     expect(data.error.code).toBe('unknown-capability')
@@ -101,5 +103,21 @@ describe('toolkit.call 执行器', () => {
   it('缺少运行时上下文返回失败', async () => {
     const result = await callExecutor({ id: 'env.system', params: {} })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('buildCapabilityContext 适配（评审 S2）', () => {
+  it('透传 requestLocale 与 lane 到能力上下文', () => {
+    const ctx = buildCapabilityContext({
+      workDir: '/w',
+      userDataDir: '/u',
+      sessionId: 's1',
+      requestId: 'r1',
+      signal: new AbortController().signal,
+      requestLocale: 'zh-CN',
+      lane: 'desktop'
+    } as unknown as import('../tools/types').ToolExecutionContext)
+    expect(ctx.locale).toBe('zh-CN')
+    expect(ctx.lane).toBe('desktop')
   })
 })

@@ -3,11 +3,24 @@ import path from 'path'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { logAgentError } from '../agentLogger/agentLogger'
 
-/** 脱敏：命中敏感形态的字段值统一替换，不落用户正文/token/secret/API Key。 */
-const SENSITIVE_PATTERN = /(sk-[A-Za-z0-9_-]+|Bearer\s+\S+|secret\s*=\s*[^\s,;]+|api[_-]?key\s*=\s*[^\s,;]+)/gi
+/**
+ * 脱敏：命中敏感形态的字段值统一替换，不落用户正文/token/secret/API Key。
+ * Bearer 值不含引号/逗号/分号/花括号（避免在 JSON 上下文吞掉后续字段——评审 B1 发现）。
+ */
+const SENSITIVE_PATTERN = /(sk-[A-Za-z0-9_-]+|Bearer\s+[^\s,;"'}{]+|secret\s*=\s*[^\s,;]+|api[_-]?key\s*=\s*[^\s,;]+)/gi
+
+/**
+ * JSON 形态的凭据字段（评审 B1）：确认摘要里序列化的 params 以该形态流经 factsSummary。
+ * 键名含凭据词即打码（宽匹配，兼容 camelCase 与任意 env 变量键名）——审计层是
+ * 字符串级最后防线，误伤（如普通值恰好含 key 字样）代价小于漏报。
+ */
+const JSON_CREDENTIAL_PATTERN =
+  /("(?:[^"]*(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|authorization|credential)[^"]*)"\s*:\s*")[^"]*(")/gi
 
 export function sanitizeAuditField(value: unknown): unknown {
-  if (typeof value === 'string') return value.replace(SENSITIVE_PATTERN, '[REDACTED]')
+  if (typeof value === 'string') {
+    return value.replace(SENSITIVE_PATTERN, '[REDACTED]').replace(JSON_CREDENTIAL_PATTERN, '$1[REDACTED]$2')
+  }
   return value
 }
 

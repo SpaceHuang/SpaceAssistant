@@ -143,6 +143,30 @@ describe('action.mcp.add 能力', () => {
     }
   })
 
+  it('stdio + env 端到端：经 callCapability 落库为存在性旗标，结果零凭据（评审建议 14）', async () => {
+    const { db, cleanup } = createTempDatabase('cap-mcp-stdio-')
+    try {
+      const registry = makeRegistry()
+      const result = await callCapability(
+        registry,
+        'action.mcp.add',
+        { name: 'stdio能力服务', transport: 'stdio', command: 'npx', args: ['-y', 'srv'], env: { SECRET_KEY: 'plain-secret-xyz', DEBUG: '1' } },
+        makeCtx(db),
+        { allowed: true }
+      )
+      expect(result.ok).toBe(true)
+      const serialized = JSON.stringify(result)
+      expect(serialized).not.toContain('plain-secret-xyz')
+      const profile = listProfiles(db).find((p) => p.name === 'stdio能力服务')
+      expect(profile?.stdio?.env).toEqual([
+        { key: 'SECRET_KEY', valuePresent: true },
+        { key: 'DEBUG', valuePresent: true }
+      ])
+    } finally {
+      cleanup()
+    }
+  })
+
   it('paramsSchema superRefine：http 缺 endpoint 报 endpoint 字段错误', () => {
     const schema = createMcpCapabilities()[0]!.paramsSchema
     const parsed = schema.safeParse({ name: 'x', transport: 'http' })

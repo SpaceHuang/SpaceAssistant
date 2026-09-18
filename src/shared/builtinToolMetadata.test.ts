@@ -54,12 +54,15 @@ describe('builtinToolNeedsConfirmation 读元数据且对外行为不变', () =>
   })
   it('read / outbound 工具不需要确认', () => {
     for (const name of [
-      'read_file', 'grep', 'list_directory', 'browser_detect', 'read_feishu_attachment',
+      'read_file', 'grep', 'list_directory', 'read_feishu_attachment',
       'list_work_dirs', 'switch_work_dir', 'switch_session', 'browser',
       'wechat_reply', 'wechat_send'
     ]) {
       expect(builtinToolNeedsConfirmation(name)).toBe(false)
     }
+  })
+  it('browser_detect 已收编为 env.browserDetect 能力，元数据不再注册（评审建议 13）', () => {
+    expect(getBuiltinToolMetadata('browser_detect')).toBeUndefined()
   })
   it('未知工具默认不确认（保持现状）', () => {
     expect(builtinToolNeedsConfirmation('non_existent_tool')).toBe(false)

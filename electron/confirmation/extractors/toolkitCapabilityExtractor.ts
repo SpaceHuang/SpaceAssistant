@@ -1,4 +1,5 @@
 import type { FactSignal } from '../../../src/shared/confirmation/types'
+import { sanitizeCapabilityParamsForDisplay } from '../../../src/shared/capabilityParamSanitize'
 import { capabilityRegistry } from '../../capabilities/registry'
 import type { CapabilityRegistry } from '../../capabilities/registry'
 // 确保单例注册表已装载内置能力（独立使用提取器的场景，如 runExtractors 编排）
@@ -23,7 +24,8 @@ export function createToolkitCapabilityExtractor(registry: CapabilityRegistry = 
         summary: `toolkit.call · ${id || '(缺少能力 id)'}（未知能力，需确认）`
       }
     }
-    const params = JSON.stringify(toolInput.params ?? {})
+    // 摘要会流向安全审计日志（180 天）与确认载荷：凭据类入参先归并为存在性布尔（评审 B1）
+    const params = JSON.stringify(sanitizeCapabilityParamsForDisplay(toolInput.params ?? {}))
     const paramsPreview = params.length > 200 ? `${params.slice(0, 200)}…` : params
     return {
       signals: [{ kind: 'toolkit-capability', capabilityId: descriptor.id, risk: descriptor.risk }],
