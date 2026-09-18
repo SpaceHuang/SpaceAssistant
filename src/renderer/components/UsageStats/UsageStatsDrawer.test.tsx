@@ -140,17 +140,49 @@ describe('UsageStatsDrawer', () => {
     return api
   }
 
-  function renderDrawer(open = true) {
+  function renderDrawer(open = true, onClose?: () => void) {
     const store = configureStore({ reducer: { config: configReducer } })
     if (open) store.dispatch(setUsageStatsOpen(true))
-    return render(
+    render(
       <Provider store={store}>
         <ConfigProvider>
-          <UsageStatsDrawer open={open} onClose={() => undefined} />
+          <UsageStatsDrawer open={open} onClose={onClose ?? (() => undefined)} />
         </ConfigProvider>
       </Provider>
     )
+    return store
   }
+
+  it('点击关闭按钮触发 onClose（真实链路 = dispatch 置 false）', async () => {
+    mockChartSize()
+    mockApi()
+    const store = renderDrawer(true, () => store.dispatch(setUsageStatsOpen(false)))
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-kpi-cards')).toBeTruthy()
+    })
+    const closeButton = document.querySelector('.ant-drawer-close') as HTMLButtonElement
+    expect(closeButton).toBeTruthy()
+    fireEvent.click(closeButton)
+    await waitFor(() => {
+      expect(store.getState().config.usageStatsOpen).toBe(false)
+    })
+  })
+
+  it('footer「关闭」按钮同样触发 onClose（× 被遮挡时的确定性关闭出口）', async () => {
+    mockChartSize()
+    mockApi()
+    const store = renderDrawer(true, () => store.dispatch(setUsageStatsOpen(false)))
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-kpi-cards')).toBeTruthy()
+    })
+    // Drawer footer 内的关闭按钮
+    const footerButton = document.querySelector('.ant-drawer-footer button') as HTMLButtonElement
+    expect(footerButton).toBeTruthy()
+    fireEvent.click(footerButton)
+    await waitFor(() => {
+      expect(store.getState().config.usageStatsOpen).toBe(false)
+    })
+  })
 
   it('T1/T2：打开面板默认查询近 30 天（含今天）并渲染 KPI 与图表', async () => {
     mockChartSize()

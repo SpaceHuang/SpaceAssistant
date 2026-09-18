@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs, { type Dayjs } from 'dayjs'
-import { Alert, DatePicker, Drawer, Radio, Select, Space, Spin, Typography } from 'antd'
+import { Alert, Button, DatePicker, Drawer, Radio, Select, Space, Spin, Typography } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { UsageDailyPoint, UsageDimensions, UsageStatsFilters, UsageStatsRangeArgs, UsageSummary } from '../../../shared/usageStatsTypes'
 import { UsageStatsKpiCards } from './UsageStatsKpiCards'
@@ -27,6 +27,7 @@ function shiftDay(day: string, n: number): string {
 /** Token 用量统计面板（C6：Drawer 宽 86%，destroyOnClose；筛选状态在面板会话内保持，关闭即重置）。 */
 export function UsageStatsDrawer({ open, onClose }: Props) {
   const { t } = useTypedTranslation('usageStats')
+  const { t: tCommon } = useTypedTranslation('common')
   const [preset, setPreset] = useState<RangePreset>('30')
   // rc-picker 的 value/onChange 均为 dayjs 对象；存字符串再强转会在渲染期抛
   // TypeError（date.isValid is not a function）导致整应用白屏（评审 P0）。
@@ -91,7 +92,17 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
       width="86%"
       open={open}
       onClose={onClose}
-      destroyOnClose
+      // antd 5.25+ 将 destroyOnClose 改名为 destroyOnHidden；沿用废弃旧名在部分 5.2x
+      // 版本存在 Drawer 关闭交互回归，这里使用新属性名（当前依赖 5.29.3）。
+      destroyOnHidden
+      maskClosable
+      keyboard
+      footer={
+        <div style={{ textAlign: 'right' }}>
+          {/* × 之外的确定性关闭出口：遮罩 / Esc 失效或被遮挡时仍可关闭 */}
+          <Button onClick={onClose}>{tCommon('titleBar.close')}</Button>
+        </div>
+      }
     >
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Space wrap align="center">
