@@ -3,7 +3,7 @@
 > 定位：本文是**实施计划**，把 `docs/develop/architect/product-architecture-design.md` §10 偏差清单中**调用契约路径**上的七条偏差（1、2 → 3、4、5、6、8、16）落成可分阶段交付、可独立验收的工程排期。
 > 上游（方向共识）：`architect/product-architecture-design.md`（下称「基线」，`§N` 指其小节）；`architect/agent-core-roadmap.md`（下称「roadmap」，块 1 = 本计划 P1 + P2 的完整版）。
 > 左右邻：`butler-agent-shortest-path-plan.md` §11 债务移交清单（第 1、2、7 条由本计划认领）；`approval-agent-shortest-path-plan.md` §8（「块 1 收敛后 AgentChannel 装配点平移」由本计划落实）。
-> 状态：**v2 已修订、待复核** ｜ 基线：工作区 HEAD `24f9b546` · v0.1.8（修订时工作区已前进至 `784d86b3`，本计划涉及的证据符号均未变化）｜ 摸排：2026-09-18 ｜ 预估总量：15 – 21 人日
+> 状态：**已实施（2026-09-19，偏差表回写见 §11）** ｜ 基线：工作区 HEAD `24f9b546` · v0.1.8（修订时工作区已前进至 `784d86b3`，本计划涉及的证据符号均未变化）｜ 摸排：2026-09-18 ｜ 预估总量：15 – 21 人日
 > 修订记录：**v2（2026-09-18）**——按评审报告 `docs/review/agent-core-contract-path-refactor-plan-review.md` 修订：**B1** 采纳方案 a（门控入参端口化前移并入 P2，P3 缩为语义收口）；**B2** 补登 shell 预检 `touchTrustedCommand` 销号项；**N1** 声明 appDb 的 P1 过渡存放例外；**N2** 修正偏差 8 证据（死引用 / `notifyMainWindow`）并重定投递面盘点口径；**N3** 分立真相类 / 观察类端口失败语义；**N4** 销号基数改为开工实测、不钉死数字。
 > 证据约定：与基线 §10 相同 —— 行号是摸排快照，会随代码演进失效；每条证据以 `rg -n '<符号>' <文件>` 复现，行号只作辅助。**摸排期间 HEAD 已自 `c725896e` 经 `24f9b546` 前进到 `784d86b3`**，每阶段开工必须重跑证据命令。
 
@@ -410,3 +410,32 @@ P0 特征化测试基线（本阶段新增文件）：
 - `electron/claudeStreamHandlers.callerContract.test.ts` —— 桌面调用方出口接线 / 会话锚点 / appDb 注入 / lane 缺省。
 - `electron/remote/imRemoteAgent.test.ts`（追加 describe）—— 远端 remoteContext / 出口接线透传。
 - 既有覆盖确认：审批调用方四维度（lane / exemption / rounds / 封闭工具集）已在 `approvalAgent.test.ts:246-272`；事件出口 Core 级行为已在 `toolChatLoop.windowless.test.ts`；递归守卫 gate 级已在 `recursionGuard.test.ts`；管家 lane 行为（automation 写拒绝）已在 `butlerInvoker.test.ts`。
+
+---
+
+## 11. 偏差表回写（P8 实际产出，2026-09-19）
+
+> 实施基线：worktree 分支 `agent-core-contract-path`（自 `784d86b3` 起），阶段提交 P0 `8ad19d6f` → P1 `033beb8e` → P2 `fefd5646` → P3 `b36c95cf` → P4 `ce08d1ff` → P5 `22a8a2f7` → P6 `591c110b` → P7 `22a9fa9b`。
+> 每条附可复现证据命令（行号会漂移，以符号为准）。
+
+| 偏差 | 回写状态 | 依据（证据命令 + 落地提交） |
+| --- | --- | --- |
+| 1 | 已解决（20260917 主体；P1 收尾） | `rg -n 'floatingNotificationManager' electron/toolChatLoop.ts` → 仅注释（参数已删除，经 `events.notify` 出口，宿主实例由装配器包装）；P1 `033beb8e` |
+| 2 | **已解决** | `rg -n 'appDb' electron/toolChatLoop.ts electron/confirmation/toolCallGate.ts` → 0 行；`rg -n "import .*database" electron/toolChatLoop.ts` → 0 行；内存端口完整回合测试入仓（`electron/toolChatLoop.inMemoryPorts.test.ts`：带工具调用 + 一次批准 + 一次拒绝，不启动 Electron、不碰 SQLite）；§2.4 标准 3（persist 失败可观测 + rethrow）与标准 4（端口接口化，内存/SQLite 双实现不改 Core）同步达成；P2 `fefd5646` |
+| 3 | **已解决**（P2 管道 + P3 语义） | `rg -n 'appDb\|DEFAULT_POLICY_RULES\|EMPTY_CACHE' electron/confirmation/toolCallGate.ts` → 0 行（门控不再持库、无静默回退）；底线校验（`validatePolicyRulesFloor`，违规 → deny(rules-violated) + cause 审计）、嵌套交集（`intersectPolicyRulesWithFloor`，子 allow ⊆ 父 allow + deny 继承）、来源标注（`resolveEffectivePolicyRulesWithOrigin` + 审计 ruleOrigin）测试入仓（`electron/confirmation/policyFloor.test.ts`）；缺料 fail-loud（`TOOL_GATE_MATERIALS_MISSING` + cause 可区分审计）；P2 `fefd5646` + P3 `b36c95cf` |
+| 4 | **已解决**（AutoEvaluator 保留为确定性预过滤属有意决策） | factsProvider 端口（`ToolCallGateArgs.factsProvider`）+ 事实来源半区标注（`ContentFacts.factSources`：tool-contract / host-environment）+「声明为空 vs 忘了声明」可区分（`factsProviderDeclared`）+ 审计 factSources；AutoEvaluator 数据化（预过滤器路由由 auto-evaluator 规则的 match.toolName + lane 驱动，非代码分支）；`approvalTaskDigest` 接线（additionalContext → 展开层 → AgentChannel 线索包，两端测试钉住）；测试 `electron/confirmation/factsProvider.test.ts`；P5 `22a8a2f7` |
+| 5 | **已解决** | `rg -n 'baseUrl' src/shared/assistantFactAggregator.ts` → 0 行（TurnExecutionConfig 无 baseUrl）；网络目标归 `ports.credentials.networkTarget`（宿主绑定，不进可序列化契约）；桌面 frozen.baseUrl 伪造路径同步移除；P4 `ce08d1ff` |
+| 6 | **已解决**（设置面 UI 例外注明，独立排期） | `profile.reasoning.effort`（off/low/medium/high）+ `ModelEntry.supportsThinking` 能力标记 + 宿主校验降级（不支持 → off + `degraded` 留痕 + `agent.profile.reasoning_degraded` 日志，fail-loud）；`enableThinking` 布尔保留一个发布周期兼容映射（true→medium）；子调用默认 off（审批显式 effort:'off'）；冻结语义不变；测试 `electron/runtime/profileReasoning.test.ts`；设置页 effort 档位选择器不在本计划（i18n/Config 组件独立排期）；P4 `ce08d1ff` |
+| 8 | **部分解决**（机制面收口 + butler 首批迁移；存量直连点收敛随 9/10/11） | `electron/driver/deliveryHub.ts` 入库：deliver(preference, payload) 唯一入口 + 驱动源注册/可达性 + 送达记录（成对性，agentLogger 台账 + 内存窗口）+ 有界补投三件套（TTL 缺省 10min 显式 / 取代键 superseded / 送达即止 already-delivered）+ 延后不丢弃（deferred + flush）；butler `deliverTaskResult` 迁入（`deliveryRecords` 随结果返回，降级语义保持）；main.ts 装配共享 hub 并注册桌面 sink（系统通知）；`claudeStreamHandlers.ts` 死引用 import 清除（P6 盘点确认，本分支上该 import 已不存在）；桌面 `notifyMainWindow` 路径与 fileTreeSyncNotify / fileContentWatcher 直连点**未迁**（驱动权路径认领）；测试 `electron/driver/deliveryHub.test.ts`（不变量风格 7 条）；P6 `591c110b` |
+| 16 | **已解决**（通用裁剪机制；SubAgent 派生工具业务属块 3） | `profile.tools.trim`（allow 封闭集 / deny 收窄）→ `computeEffectiveTools` 在 builtin+MCP 合成层统一过滤（MCP 同受裁剪，authorizedToolNames 同步）；嵌套交集装配期断言（子 allow ⊄ 父 allow → `TOOLS_TRIM_WIDEN_DENIED` + `agent.tools.trim_widen_denied` 日志）；审批白名单数据化平移（`electron/confirmation/approvalToolset.ts`，首个实例，白名单内容不变，re-export 兼容）；测试 `electron/effectiveTools.trim.test.ts`；P7 `22a9fa9b` |
+
+### 实施备注（复核记录）
+
+1. **B1 落地确认**：门控入参端口化随 P2 完成（P2/P3 之间无「循环已脱库、门控仍持库」窗口）；P0 的 dbFallback 特征化测试在 P2 改写为 fail-loud 断言（`toolCallGate.ports.test.ts`）后删除。
+2. **N1 关闭确认**：`ports.legacy.appDb` 过渡豁免已随 P2 删除（`rg -n 'legacy' electron/toolChatLoop.ts` → 仅注释）。
+3. **N3 落地**：真相类（persist / shellPrecheck 记账）/ 观察类（usage / diagnostics / events）失败语义分立——真相类失败落 `agent.persist.failed` + rethrow；观察类降级不改执行结论。
+4. **裁决顺序澄清**（P0 特征化发现）：custom deny 覆盖 auto-evaluator 条目时，readonly 放行失效落 ask 兜底；ask 分支查询决策缓存，既有会话信任仍可放行（cache-hit）。该行为已在 `toolCallGate.ports.test.ts` 钉住。
+5. **P6 送达记录实现取舍**：按「沿用会话台账的保留语义风格」落 agentLogger JSON Lines + 内存窗口（不动 SQLite schema 主干，规避 v14+ 迁移线变更）；跨进程持久化送达台账留待驱动权路径或后续阶段评估。
+6. **已知存量问题（非本计划引入）**：`electron/tools/runShellRegisteredTool.test.ts` 的 plan 用例在本机 Windows 环境超时（stash 全部改动后基线同样复现，已验证与本计划无关）。
+7. **待真机/外部系统人工验收**（§6 清单，不阻塞提交）：桌面 dev 真实会话带工具回合、关窗收敛、确认卡片真人批/拒；飞书/微信远程托管收发+审计落盘；浮动通知弹出（P1 改造点）；设置页 test-connection（P4 凭据路径改动后必测）。
+8. **worktree 依赖变化**：实施中段主仓库 `node_modules` 被外部清空，worktree 已改为独立 `npm ci`（junction 解除），后续在该 worktree 工作无需依赖主仓库。
