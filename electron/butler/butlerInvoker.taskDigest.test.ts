@@ -90,8 +90,8 @@ describe('butlerInvoker 任务声明装配（D）', () => {
     const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-digest-1' })
     expect(result.ok).toBe(true)
     expect(mockRunToolChatSession).toHaveBeenCalled()
-    const args = mockRunToolChatSession.mock.calls[0]![0] as { approvalTaskDigest?: string }
-    expect(args.approvalTaskDigest).toBe('检查磁盘空间')
+    const inv = mockRunToolChatSession.mock.calls[0]![0] as { additionalContext: Record<string, unknown> }
+    expect(inv.additionalContext['approval.taskDigest']).toBe('检查磁盘空间')
   })
 })
 

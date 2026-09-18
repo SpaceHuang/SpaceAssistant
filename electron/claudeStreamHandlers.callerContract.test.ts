@@ -161,27 +161,29 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     })
 
     expect(mockRunToolChatSession).toHaveBeenCalledTimes(1)
-    const args = mockRunToolChatSession.mock.calls[0]![0] as Record<string, unknown>
+    const invocation = mockRunToolChatSession.mock.calls[0]![0] as Record<string, any>
+    const ports = mockRunToolChatSession.mock.calls[0]![1] as Record<string, any>
 
     // 会话锚点与请求追踪
-    expect(args.sessionId).toBe(session.id)
-    expect(args.requestId).toBe('cc-request')
-    expect(args.turnId).toBe('cc-turn')
+    expect(invocation.session.sessionId).toBe(session.id)
+    expect(invocation.trace.requestId).toBe('cc-request')
+    expect(invocation.trace.turnId).toBe('cc-turn')
     // 宿主数据库注入（P1 平移为 ports.legacy.appDb，P2 收口为端口）
-    expect(args.appDb).toBe(db)
+    expect(ports.legacy?.appDb).toBe(db)
     // 桌面调用方不显式声明 lane（Core 缺省 desktop）
-    expect(args.lane).toBeUndefined()
+    expect(invocation.profile.lane).toBeUndefined()
     // 事件出口接线：fact / session 双出口 + 标题 / 文件树出口接 notifyMainWindow
-    expect(args.emitFactEvent).toBeTypeOf('function')
-    expect(args.emitSessionEvent).toBeTypeOf('function')
-    expect(args.onTitleGenerated).toBeTypeOf('function')
-    expect(args.onFileTreeChanged).toBeTypeOf('function')
-    // 浮动通知宿主对象直传（§5.5 待出口化——P1 收口的偏差 1 尾巴）
-    expect(args.floatingNotificationManager).toBe(floatingNotificationManager)
+    expect(invocation.events.onFact).toBeTypeOf('function')
+    expect(invocation.events.onSessionEvent).toBeTypeOf('function')
+    expect(invocation.events.onTitleGenerated).toBeTypeOf('function')
+    expect(invocation.events.onFileTreeChanged).toBeTypeOf('function')
+    // 浮动通知经 events.notify 出口（宿主实例由装配器包装，§5.5 收口）
+    expect(invocation.events.notify).toBeTypeOf('function')
+    expect((invocation as Record<string, unknown>).floatingNotificationManager).toBeUndefined()
     // 冻结快照值语义
-    expect(args.locale).toBe('zh-CN')
-    expect(args.currentUserMessageId).toBe('cc-user')
-    ;(args.onFileTreeChanged as (e: unknown) => void)({ kind: 'paths', relPaths: ['a.txt'] })
+    expect(invocation.profile.locale).toBe('zh-CN')
+    expect(invocation.messages.currentUserMessageId).toBe('cc-user')
+    invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })
     expect(notifyMainWindow).toHaveBeenCalledWith('file:tree-changed', { kind: 'paths', relPaths: ['a.txt'] })
     db.close()
   })

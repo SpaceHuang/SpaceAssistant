@@ -1,6 +1,7 @@
 import type { AppDatabase } from '../database'
 import { getMessages, getConfigValue, getSession, createSession } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
+import { assembleInvocation } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback } from '../workDirManager'
 import type { BrowserConfig, ShellConfig, ToolsConfig, ModelEntry } from '../../src/shared/domainTypes'
 import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
@@ -258,7 +259,7 @@ async function runButlerModelTurn(
   })
   const workDir = deps.resolveWorkDirForSession ? deps.resolveWorkDirForSession(args.sessionId) : deps.getWorkDir()
 
-  const res = await runToolChatSession({
+  const { invocation, ports } = assembleInvocation({
     requestId: args.requestId,
     sessionId: args.sessionId,
     turnId: args.turnId,
@@ -290,6 +291,7 @@ async function runButlerModelTurn(
     emitSessionEvent: butlerEvents.emitSessionEvent,
     onFileTreeChanged: butlerEvents.onFileTreeChanged
   })
+  const res = await runToolChatSession(invocation, ports)
 
   if (!res.ok) return { ok: false, error: res.error }
   const summary = extractTextFromContent(res.content) || '任务已完成。'

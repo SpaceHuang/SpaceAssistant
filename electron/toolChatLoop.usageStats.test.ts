@@ -78,6 +78,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from './database/operations'
 import type { AppDatabase } from './database'
@@ -116,7 +123,7 @@ describe('runToolChatSession 用量统计收口（usage_step_facts / usage_turn_
   })
 
   function runSession(overrides: Record<string, unknown> = {}) {
-    return runToolChatSession({
+    return runAssembledSession({
       sender: makeSender(),
       requestId: 'req-stats-1',
       sessionId: 'sess-stats-1',

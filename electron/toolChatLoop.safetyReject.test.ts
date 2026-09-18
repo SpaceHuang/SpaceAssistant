@@ -100,6 +100,13 @@ vi.mock('./anthropicClientFactory', () => ({
 }))
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeDb(): AppDatabase {
@@ -175,7 +182,7 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
   it('连续 3 次同类安全拒绝不中止 Turn：模型在第 4 轮收敛并看到拒绝理由', async () => {
     installStreamClient()
     const db = makeDb()
-    const res = await runToolChatSession(baseArgs(db))
+    const res = await runAssembledSession(baseArgs(db))
     expect(res.ok).toBe(true)
     // 第 4 轮请求发生 = 第 3 次拒绝后未 break（旧代码 safety 拒绝同键满 3 次即中止 → 红）
     expect(capturedStreamParams.length).toBeGreaterThanOrEqual(4)
@@ -197,7 +204,7 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
     )
     installStreamClient()
     const db = makeDb()
-    await runToolChatSession(baseArgs(db))
+    await runAssembledSession(baseArgs(db))
     // 3 次执行失败后 break：第 4 轮请求不发生
     expect(capturedStreamParams.length).toBe(3)
   })

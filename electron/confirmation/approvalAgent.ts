@@ -16,6 +16,7 @@ import type { BrowserConfig, ShellConfig, ToolsConfig } from '../../src/shared/d
 import type { AppDatabase } from '../database'
 import { createSession } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
+import { assembleInvocation } from '../runtime/invocationAssembler'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import { buildFinalSystemPrompt } from '../llmSystemPrompt'
 import type { AppLocale } from '../../src/shared/locale'
@@ -284,7 +285,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       locale: deps.locale ?? 'zh-CN'
     })
 
-    const runPromise = runToolChatSession({
+    const { invocation, ports } = assembleInvocation({
       requestId: inv.requestId,
       sessionId,
       lane: 'automation',
@@ -308,6 +309,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       emitFactEvent: () => undefined,
       emitSessionEvent: () => undefined
     })
+    const runPromise = runToolChatSession(invocation, ports)
     runCreated = true
     // P1-4：run 收敛时置位（孤儿 run 存续期窗口由 finally 判断保持开启）；拒绝已被 race 派生分支处理
     void runPromise.then(

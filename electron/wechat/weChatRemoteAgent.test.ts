@@ -111,8 +111,8 @@ describe('runWeChatRemoteAgent', () => {
 
   it('invokes runToolChatSession with wechat appendix', async () => {
     let capturedSystem: string | undefined
-    mockRunToolChatSession.mockImplementation(async (args: { system?: string }) => {
-      capturedSystem = args.system
+    mockRunToolChatSession.mockImplementation(async (invocation: { profile: { system?: string } }) => {
+      capturedSystem = invocation.profile.system
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
     })
 
@@ -130,24 +130,33 @@ describe('runWeChatRemoteAgent', () => {
     await runWeChatRemoteAgent(baseCtx(() => sender))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        shellConfig: expect.objectContaining({ maxInlineOutputBytes: 1024 })
-      })
+        profile: expect.objectContaining({
+          tools: expect.objectContaining({
+            shellConfig: expect.objectContaining({ maxInlineOutputBytes: 1024 })
+          })
+        })
+      }),
+      expect.anything()
     )
   })
 
   it('works when main webContents is null', async () => {
     await runWeChatRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
-      expect.objectContaining({ appDb: expect.anything() })
+      expect.anything(),
+      expect.objectContaining({ legacy: expect.objectContaining({ appDb: expect.anything() }) })
     )
   })
 
   it('passes workDirManager and resolveWorkDir to runToolChatSession', async () => {
     await runWeChatRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        workDirManager: expect.anything(),
-        resolveWorkDir: expect.any(Function)
+        workspace: expect.objectContaining({
+          workDirManager: expect.anything(),
+          resolveWorkDir: expect.any(Function)
+        })
       })
     )
   })

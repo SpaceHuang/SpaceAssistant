@@ -69,6 +69,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeDb(): AppDatabase {
@@ -121,7 +128,7 @@ describe('runToolChatSession maxToolLoopRounds 轮数上界（特征化）', () 
 
   it('达到上界后终止循环并 fail-fast，错误可区分、不执行更多工具轮', async () => {
     mockCreateAnthropicClient.mockReturnValue(makeInfiniteToolUseStream())
-    const res = await runToolChatSession(baseArgs({ maxToolLoopRounds: 2 }) as never)
+    const res = await runAssembledSession(baseArgs({ maxToolLoopRounds: 2 }) as never)
     expect(res).toMatchObject({ ok: false, error: 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED(2)' })
     // 第 3 轮起不再调用模型（上界 2 = 至多 2 轮工具执行，第 3 次流被拒绝）
     expect(streamRound).toBe(3)
@@ -142,7 +149,7 @@ describe('runToolChatSession maxToolLoopRounds 轮数上界（特征化）', () 
         })
       }
     })
-    const res = await runToolChatSession(baseArgs({ maxToolLoopRounds: 2 }) as never)
+    const res = await runAssembledSession(baseArgs({ maxToolLoopRounds: 2 }) as never)
     expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'done' }] })
   })
 
@@ -164,7 +171,7 @@ describe('runToolChatSession maxToolLoopRounds 轮数上界（特征化）', () 
       }
     }
     mockCreateAnthropicClient.mockReturnValue(finite)
-    const res = await runToolChatSession(baseArgs() as never)
+    const res = await runAssembledSession(baseArgs() as never)
     expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'done' }] })
     expect(streamRound).toBe(4)
   })

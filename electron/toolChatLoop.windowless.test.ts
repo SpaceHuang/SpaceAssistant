@@ -68,6 +68,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeDb(): AppDatabase {
@@ -129,7 +136,7 @@ describe('runToolChatSession 无窗口运行（偏差 1：事件出口取代 sen
         { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
       ])
     )
-    const res = await runToolChatSession(baseArgs() as never)
+    const res = await runAssembledSession(baseArgs() as never)
     expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'done' }] })
     expect(capturedFacts.some((fact) => fact.type === 'tool-result')).toBe(true)
     expect(capturedFacts.some((fact) => fact.type === 'source-completed')).toBe(true)
@@ -142,7 +149,7 @@ describe('runToolChatSession 无窗口运行（偏差 1：事件出口取代 sen
         { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
       ])
     )
-    const res = await runToolChatSession(baseArgs() as never)
+    const res = await runAssembledSession(baseArgs() as never)
     expect(res.ok).toBe(true)
     expect(capturedSessionEvents.some((event) => event.type === 'request_header')).toBe(true)
     expect(capturedSessionEvents.some((event) => event.type === 'tool_result')).toBe(true)
@@ -156,7 +163,7 @@ describe('runToolChatSession 无窗口运行（偏差 1：事件出口取代 sen
         { content: [{ type: 'text', text: 'give up' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
       ])
     )
-    const res = await runToolChatSession(baseArgs() as never)
+    const res = await runAssembledSession(baseArgs() as never)
     expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'give up' }] })
     const failedResult = capturedFacts.find((fact) => fact.type === 'tool-result' && (fact as { id?: string }).id === 'tu-3') as { result?: { success?: boolean } } | undefined
     expect(failedResult?.result?.success).toBe(false)
@@ -171,7 +178,7 @@ describe('runToolChatSession 无窗口运行（偏差 1：事件出口取代 sen
         { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
       ])
     )
-    await runToolChatSession(baseArgs() as never)
+    await runAssembledSession(baseArgs() as never)
     expect(sessionTitleSuggest.scheduleSessionTitleSuggestion).toHaveBeenCalledTimes(1)
     const callArgs = vi.mocked(sessionTitleSuggest.scheduleSessionTitleSuggestion).mock.calls[0]?.[0] as Record<string, unknown>
     expect(callArgs).not.toHaveProperty('sender')
@@ -185,7 +192,7 @@ describe('runToolChatSession 无窗口运行（偏差 1：事件出口取代 sen
         { content: [{ type: 'text', text: 'written' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
       ])
     )
-    const res = await runToolChatSession(baseArgs() as never)
+    const res = await runAssembledSession(baseArgs() as never)
     expect(res.ok).toBe(true)
     expect(capturedFileTreeEvents).toContainEqual({ kind: 'paths', relPaths: ['b.txt'] })
   })

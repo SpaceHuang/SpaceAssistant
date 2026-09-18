@@ -75,6 +75,13 @@ import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitle
 import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { RemoteContext } from './tools/types'
+import type {
+  AgentEventSink,
+  AgentHostPorts,
+  AgentInvocation,
+  AgentInvocationResult
+} from '../src/shared/agent/invocation'
+import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../src/shared/agent/invocation'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
 import type { ExecutionLane } from '../src/shared/confirmation/types'
 import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
@@ -460,7 +467,6 @@ export type RunToolChatSessionArgs = {
   assistantMessageId?: string
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
-  floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   /** 统一消息事实迁移端口（必填）：调用方显式声明过程事实往哪里说；无观察者时传 no-op。 */
   emitFactEvent: (event: AssistantFactEvent) => void
   /** Core 事件台账写入口（必填）：与 UI fact 通道分离，保存原始 NormalizedDelta。 */
@@ -474,6 +480,8 @@ export type RunToolChatSessionArgs = {
   contextMeter?: ContextMeter
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
   onTurnBoundary?: (input: { requestId: string; windowId: string; system: string; tools: unknown[]; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage']; toolExecutionCheckpoint: ReturnType<typeof buildRequestHeaderPayload>['toolExecutionCheckpoint']; requiredSurfaceSet: string[] }) => Promise<void>
+  /** P1：events 出口对象随展开层注入（floatingNotificationManager 已收回为 events.notify，§5.5）。 */
+  events?: AgentEventSink
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -528,7 +536,65 @@ function failToolLoopWithLastUsage(
   }
 }
 
-export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
+/**
+ * P1 适配层展开（基线 §6.2 → 既有内部字段名）：把 Invocation 契约 + 宿主端口展开为
+ * 循环体既有的取用形状（旧变量名逐个对应），循环体不动（计划 §4 P1）。
+ * electron 专属类型（消息块 / RemoteContext / WorkDirManager / AppDatabase / ContextMeter）
+ * 的收窄集中在此，不进循环体。
+ */
+function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): RunToolChatSessionArgs {
+  const additional = invocation.additionalContext
+  return {
+    requestId: invocation.trace.requestId,
+    sessionId: invocation.session.sessionId,
+    turnId: invocation.trace.turnId,
+    windowId: invocation.trace.windowId,
+    llmServiceId: invocation.profile.llmServiceId,
+    model: invocation.profile.model,
+    contextWindow: invocation.profile.contextWindow,
+    baseUrl: invocation.profile.baseUrl,
+    messages: invocation.messages.list as unknown as ClaudeContentBlockMessage[],
+    system: invocation.profile.system,
+    options: invocation.profile.options,
+    toolsConfig: invocation.profile.tools.toolsConfig,
+    browserConfig: invocation.profile.tools.browserConfig,
+    shellConfig: invocation.profile.tools.shellConfig,
+    wikiConfig: invocation.profile.tools.wikiConfig,
+    feishuConfig: invocation.profile.tools.feishuConfig,
+    wechatConfig: invocation.profile.tools.wechatConfig,
+    larkCliRunner: invocation.profile.tools.larkCliRunner as LarkCliRunner | undefined,
+    lane: invocation.profile.lane,
+    internalConfirmExemption: invocation.safety.recursionGuard,
+    maxToolLoopRounds: invocation.limits.maxToolRounds,
+    approvalTaskDigest: additional[AGENT_ADDITIONAL_CONTEXT_KEYS.approvalTaskDigest] as string | undefined,
+    remoteContext: invocation.driverContext as RemoteContext | undefined,
+    workDir: ports.workspace.workDir,
+    workDirManager: ports.workspace.workDirManager as WorkDirManager | undefined,
+    resolveWorkDir: ports.workspace.resolveWorkDir,
+    userDataDir: ports.workspace.userDataDir,
+    getApiKey: () => ports.credentials.resolveApiKey(),
+    appDb: ports.legacy?.appDb as AppDatabase | undefined,
+    locale: invocation.profile.locale as AppLocale | undefined,
+    projectMemoryEnabled: invocation.profile.projectMemoryEnabled,
+    skillFragments: invocation.profile.skillFragments,
+    currentUserMessageId: invocation.messages.currentUserMessageId,
+    historyFacts: additional[AGENT_ADDITIONAL_CONTEXT_KEYS.historyFacts] as readonly HistoryFact[] | undefined,
+    assistantMessageId: invocation.messages.assistantMessageId,
+    hasImageAttachments: invocation.messages.hasImageAttachments,
+    getBrowserDetectContext: ports.hostFacts?.getBrowserDetectContext,
+    emitFactEvent: (event) => invocation.events.onFact(event),
+    emitSessionEvent: (event) => invocation.events.onSessionEvent(event),
+    onFileTreeChanged: invocation.events.onFileTreeChanged,
+    onTitleGenerated: invocation.events.onTitleGenerated,
+    appendCompactionTransaction: ports.storage?.appendCompactionTransaction,
+    contextMeter: ports.contextMeter as ContextMeter | undefined,
+    onTurnBoundary: ports.turnBoundary as RunToolChatSessionArgs['onTurnBoundary'],
+    events: invocation.events
+  }
+}
+
+export async function runToolChatSession(invocation: AgentInvocation, ports: AgentHostPorts): Promise<AgentInvocationResult> {
+  const args = expandInvocation(invocation, ports)
   const chatSignal = registerChatCancel(args.requestId)
   const requestLane = args.lane
     ?? (args.remoteContext
@@ -573,7 +639,7 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
       llmServiceId: args.llmServiceId
     })
     if (chatSignal.aborted) {
-      args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
+      invocation.events.notify?.({ kind: 'request-all-cancelled', requestId: args.requestId })
     }
     clearChatCancel(args.requestId)
     clearToolRevocationRequest(args.requestId)
@@ -612,7 +678,7 @@ async function runToolChatSessionInner(
     chatSignal,
     getBrowserDetectContext,
     getMcpConnectionManager,
-    floatingNotificationManager,
+    events: invocationEvents,
     hasImageAttachments,
     turnUsageStats
   } = args
@@ -1794,17 +1860,17 @@ async function runToolChatSessionInner(
               }
             } : {})
           })
-          // 通知浮动通知管理器
-          if (floatingNotificationManager) {
+          // 通知浮动通知管理器（P1：经 events.notify 出口，宿主实例由装配器包装）
+          if (invocationEvents?.notify) {
             const session = appDb ? getSession(appDb, sessionId) : undefined
-            floatingNotificationManager.onConfirmRequest({
+            invocationEvents?.notify({
+              kind: 'confirm-request',
+              requestId,
               sessionId,
               sessionName: sessionDisplayNameRaw(session?.name, sessionId),
               toolUseId,
               toolName,
-              input: inputObj,
-              requestId,
-              createdAt: Date.now()
+              input: inputObj
             })
           }
           }
@@ -1898,7 +1964,7 @@ async function runToolChatSessionInner(
         }
         if (!remoteContext) {
           // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
-          floatingNotificationManager?.onToolResult(requestId, toolUseId)
+          invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
           if (toolName === 'run_shell' && shellSecurityHints) {
             const command = typeof inputObj.command === 'string' ? inputObj.command : ''
             if (outcome === 'approved' && shellSecurityHints.requiresRiskAck) {
@@ -2035,7 +2101,7 @@ async function runToolChatSessionInner(
           timeoutError
         )
         await recordToolResult(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }), { success: false, error: timeoutError, notExecuted: true, notExecutedReason: 'confirm_timeout' })
-        floatingNotificationManager?.onToolResult(requestId, toolUseId)
+        invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
         if (toolErrorRepeat.noteFailure(toolName, timeoutError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${timeoutError}`
           break
@@ -2169,7 +2235,7 @@ async function runToolChatSessionInner(
           rejectedError
         )
         await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError, notExecuted: true, notExecutedReason })
-        floatingNotificationManager?.onToolResult(requestId, toolUseId)
+        invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
         // P1-3：确认拒绝属安全拒绝桶（阈值 5）——管家 Agent 被拒后可改方案推进，Turn 不因 3 次拒绝而中止
         if (toolErrorRepeat.noteFailure(toolName, rejectedError, undefined, 'safety')) {
           abortRepeatedToolError = `安全拒绝已连续出现 ${MAX_CONSECUTIVE_SAFETY_REJECT} 次，已停止：${rejectedError}`
@@ -2484,7 +2550,7 @@ async function runToolChatSessionInner(
           args.onFileTreeChanged?.({ kind: 'refreshExpanded' })
         }
       }
-      floatingNotificationManager?.onToolResult(requestId, toolUseId)
+      invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
       if (abortRepeatedToolError) break
     }
 

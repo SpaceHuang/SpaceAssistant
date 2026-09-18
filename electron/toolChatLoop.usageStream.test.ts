@@ -64,6 +64,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 import { computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
 
@@ -103,7 +110,7 @@ describe('runToolChatSession message_start usage', () => {
   })
 
   async function runSession(sender = makeSender(), options: { enableThinking?: boolean } = {}) {
-    return runToolChatSession({
+    return runAssembledSession({
       sender,
       requestId: 'req-usage-1',
       sessionId: 'sess-usage-1',
@@ -114,6 +121,7 @@ describe('runToolChatSession message_start usage', () => {
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
       emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
+      emitSessionEvent: async () => undefined,
       appDb: makeDb(),
       options
     })
@@ -288,7 +296,7 @@ describe('runToolChatSession message_start usage', () => {
 
   it('Core-owned/non-compatible invocation never emits legacy usage IPC', async () => {
     const sender = makeSender()
-    await runToolChatSession({
+    await runAssembledSession({
       sender,
       requestId: 'req-no-legacy-usage',
       sessionId: 'sess-no-legacy-usage',
@@ -298,6 +306,7 @@ describe('runToolChatSession message_start usage', () => {
       workDir: '/tmp',
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
+      emitFactEvent: () => undefined, emitSessionEvent: async () => undefined,
       appDb: makeDb()
     })
     expect(usagePayloads(sender)).toEqual([])
@@ -309,11 +318,11 @@ describe('runToolChatSession message_start usage', () => {
       async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
       finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
     })) } })
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-boundary-hook', sessionId: 'sess-boundary-hook',
       model: 'claude-sonnet-4-20250514', messages: [{ role: 'user', content: 'hello' }],
       toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
-      getApiKey: async () => 'test-key', appDb: makeDb(), onTurnBoundary: boundary
+      getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), onTurnBoundary: boundary
     })
     expect(res.ok).toBe(true)
     expect(boundary).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'req-boundary-hook', messages: expect.any(Array), surfaceSnapshot: expect.any(Object) }))
@@ -325,10 +334,10 @@ describe('runToolChatSession message_start usage', () => {
       finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
     }))
     mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-stable-id', sessionId: 'sess-stable-id', model: 'claude-sonnet-4-20250514',
       messages: [{ id: 'current-user-id', role: 'user', content: 'hello' }], currentUserMessageId: 'current-user-id',
-      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb()
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb()
     })
     expect(res.ok).toBe(true)
     expect(stream).toHaveBeenCalled()
@@ -341,11 +350,11 @@ describe('runToolChatSession message_start usage', () => {
       finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
     }))
     mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-skill-fragment', sessionId: 'sess-skill-fragment',
       model: 'claude-sonnet-4-20250514', messages: [{ id: 'current-user', role: 'user', content: 'current question' }], currentUserMessageId: 'current-user',
       skillFragments: ['## Skill: review\n\nreview instructions'],
-      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb()
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb()
     })
     expect(res.ok).toBe(true)
     const messages = stream.mock.calls[0]?.[0]?.messages as Array<{ content?: unknown }> | undefined
@@ -360,7 +369,7 @@ describe('runToolChatSession message_start usage', () => {
     }))
     const appendCompactionTransaction = vi.fn(async () => undefined)
     mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-preflight-recovery', sessionId: 'sess-preflight-recovery',
       model: 'claude-sonnet-4-20250514', contextWindow: 40_000,
       messages: [
@@ -368,7 +377,7 @@ describe('runToolChatSession message_start usage', () => {
         { id: 'current-user', role: 'user', content: '当前问题' }
       ], currentUserMessageId: 'current-user',
       toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
-      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+      getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), appendCompactionTransaction
     })
     expect(res.ok).toBe(true)
     expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
@@ -390,11 +399,11 @@ describe('runToolChatSession message_start usage', () => {
       messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `tool-${i}`, content: 'x'.repeat(20_000) }] } as never)
     }
     messages.push({ id: 'current-user', role: 'user', content: 'current question' })
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-tool-history-recovery', sessionId: 'sess-tool-history-recovery',
       model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages, currentUserMessageId: 'current-user',
       toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
-      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+      getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), appendCompactionTransaction
     })
     expect(res.ok).toBe(true)
     expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
@@ -419,11 +428,11 @@ describe('runToolChatSession message_start usage', () => {
       { role: 'assistant' as const, content: [{ type: 'tool_use', id: 'current-tool', name: 'read', input: {} }] },
       { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'current-tool', content: 'current result' }] }
     ]
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-empty-tool-identity', sessionId: 'sess-empty-tool-identity',
       model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages, currentUserMessageId: 'current-user',
       toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
-      getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+      getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), appendCompactionTransaction
     })
     expect(res.ok).toBe(true)
     const projected = projectReplaySurface(messages)
@@ -456,10 +465,10 @@ describe('runToolChatSession message_start usage', () => {
       : undefined)
     const old = { id: 'old-user', role: 'user' as const, content: 'x'.repeat(2_000) }
     const current = { id: 'current-user', role: 'user' as const, content: 'current question' }
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-mid-reset', sessionId: 'sess-mid-reset',
       model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages: [old, current], currentUserMessageId: current.id,
-      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: makeDb(), appendCompactionTransaction
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), appendCompactionTransaction
     })
     expect(res.ok).toBe(true)
     expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
@@ -481,12 +490,12 @@ describe('runToolChatSession message_start usage', () => {
       async *[Symbol.asyncIterator]() { yield { type: 'message_start', message: { usage: { input_tokens: 1 } } } },
       finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: longReply }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
     })) } })
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-final-surface', sessionId: 'sess-final-surface',
       model: 'claude-sonnet-4-20250514', contextWindow: 100_000,
       messages: [{ id: 'current-user', role: 'user', content: 'hello' }], currentUserMessageId: 'current-user',
       toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
-      getApiKey: async () => 'test-key', appDb: makeDb(), onTurnBoundary: boundary
+      getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), onTurnBoundary: boundary
     })
     expect(res.ok).toBe(true)
     expect(boundary).toHaveBeenCalledWith(expect.objectContaining({
@@ -554,7 +563,7 @@ describe('runToolChatSession message_start usage', () => {
       }
     }))
 
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       sender,
       requestId: 'req-usage-core',
       sessionId: 'sess-usage-core',
@@ -564,6 +573,7 @@ describe('runToolChatSession message_start usage', () => {
       workDir: '/tmp',
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
+      emitFactEvent: () => undefined, emitSessionEvent: async () => undefined,
       appDb: makeDb(),
       emitFactEvent: (event) => facts.push(event)
     })

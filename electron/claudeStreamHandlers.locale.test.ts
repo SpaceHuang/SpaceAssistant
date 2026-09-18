@@ -186,12 +186,16 @@ describe('claudeStreamHandlers locale', () => {
     })
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
-      options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
-      windowId: session.id,
-      skillFragments: ['## Skill: review\n\nreview instructions'],
-      historyFacts: expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
-    }))
+      profile: expect.objectContaining({
+        model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
+        options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
+        skillFragments: ['## Skill: review\n\nreview instructions']
+      }),
+      trace: expect.objectContaining({ windowId: session.id }),
+      additionalContext: expect.objectContaining({
+        'facts.history': expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
+      })
+    }), expect.anything())
     expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String))
     db.close()
   })

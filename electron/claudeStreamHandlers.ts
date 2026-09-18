@@ -7,6 +7,7 @@ import type { AgentLogFields } from './agentLogger/types'
 import { getTurnContext, getPersistedTurn, getSession, type AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
 import { isAppLocale } from '../src/shared/locale'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
@@ -388,7 +389,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
         const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
 
-        const res = await runToolChatSession({
+        const { invocation: turnInvocation, ports: turnPorts } = assembleInvocation({
           requestId,
           sessionId,
           turnId,
@@ -521,6 +522,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             deps.emitFactEvent?.(requestId, fact)
           }
         })
+        const res = await runToolChatSession(turnInvocation, turnPorts)
 
         if (!res.ok) {
           const finalized = await finalizeTurn(turnId, 'error', res.error)

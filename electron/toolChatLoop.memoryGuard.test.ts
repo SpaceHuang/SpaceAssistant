@@ -107,6 +107,13 @@ vi.mock('./anthropicClientFactory', () => ({
 }))
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 import { SqliteDecisionCache } from './confirmation/sqliteDecisionCache'
 import { getDbConnection } from './database'
@@ -181,7 +188,7 @@ describe('I3 回归锚点：记忆只源于人类（P0 验收）', () => {
     }) satisfies ConfirmOutcome)
     installStreamClient()
     const db = makeDb()
-    await runToolChatSession(baseArgs(db))
+    await runAssembledSession(baseArgs(db))
 
     expect(new SqliteDecisionCache(getDbConnection(db)).lookup(I3_KEY)).toBeNull()
     expect(capturedAuditEvents.filter((e) => e.event === 'cache.write')).toHaveLength(0)
@@ -190,7 +197,7 @@ describe('I3 回归锚点：记忆只源于人类（P0 验收）', () => {
   it('回答者为 user（缺省）：navigate 批准照常双写 decision_cache（行为等价对照）', async () => {
     installStreamClient()
     const db = makeDb()
-    await runToolChatSession(baseArgs(db))
+    await runAssembledSession(baseArgs(db))
 
     expect(new SqliteDecisionCache(getDbConnection(db)).lookup(I3_KEY)).not.toBeNull()
     expect(capturedAuditEvents.filter((e) => e.event === 'cache.write')).toHaveLength(1)
