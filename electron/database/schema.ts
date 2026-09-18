@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 15
+export const DB_SCHEMA_VERSION = 16
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -218,9 +218,62 @@ CREATE TABLE IF NOT EXISTS automation_task_runs (
 CREATE INDEX IF NOT EXISTS idx_automation_runs_task ON automation_task_runs(task_id, scheduled_for);
 `
 
+/**
+ * Agent Token 用量统计（v16）：逐步明细 + 按 Turn 汇总两张事实表。
+ * 不对 sessions 建外键 —— 会话删除后统计行必须保留（需求 §9.1）。
+ * UNIQUE(session_id, turn_id, step_id) 保证重试 / 恢复场景幂等（重复写为覆盖）。
+ */
+export const MIGRATION_V16_USAGE_STATS_SQL = `
+CREATE TABLE IF NOT EXISTS usage_step_facts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  model TEXT,
+  llm_service_id TEXT,
+  app_version TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_semantics TEXT,
+  source TEXT NOT NULL DEFAULT 'api',
+  UNIQUE(session_id, turn_id, step_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_step_day ON usage_step_facts(day);
+CREATE INDEX IF NOT EXISTS idx_usage_step_session_day ON usage_step_facts(session_id, day);
+CREATE INDEX IF NOT EXISTS idx_usage_step_model_day ON usage_step_facts(model, day);
+CREATE INDEX IF NOT EXISTS idx_usage_step_app_version_day ON usage_step_facts(app_version, day);
+
+CREATE TABLE IF NOT EXISTS usage_turn_facts (
+  turn_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  model TEXT,
+  llm_service_id TEXT,
+  app_version TEXT,
+  step_count INTEGER NOT NULL DEFAULT 0,
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  tool_error_count INTEGER NOT NULL DEFAULT 0,
+  tool_skipped_count INTEGER NOT NULL DEFAULT 0,
+  outcome TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_turn_day ON usage_turn_facts(day);
+CREATE INDEX IF NOT EXISTS idx_usage_turn_session_day ON usage_turn_facts(session_id, day);
+CREATE INDEX IF NOT EXISTS idx_usage_turn_model_day ON usage_turn_facts(model, day);
+CREATE INDEX IF NOT EXISTS idx_usage_turn_app_version_day ON usage_turn_facts(app_version, day);
+`
+
 export const SCHEMA_META_KEYS = {
   schemaVersion: 'schema_version',
   migratedFromJsonAt: 'migrated_from_json_at',
   migratedFromJsonPath: 'migrated_from_json_path',
-  legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at'
+  legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at',
+  /** 用量统计一次性历史回填完成时间（C7）；缺失时启动重试，成功即写。 */
+  usageStatsBackfillAt: 'usage_stats_backfill_at'
 } as const

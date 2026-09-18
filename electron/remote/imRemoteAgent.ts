@@ -43,6 +43,10 @@ export async function runImRemoteAgent(args: {
   db: AppDatabase
   sessionId: string
   requestId: string
+  /** 本回合真实 Turn ID（C17）：由 router 的 prepared.turnId 下传，供用量统计落库。 */
+  turnId?: string
+  /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
+  llmServiceId?: string
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
@@ -124,6 +128,10 @@ export async function runImRemoteAgent(args: {
     const res = await runToolChatSession({
       requestId,
       sessionId: args.sessionId,
+      turnId: args.turnId,
+      // DIM3：统计维度以实际解析出的服务为准——resolver 未指定 serviceId 时可能回落默认服务，
+      // 会话冻结配置（args.llmServiceId）仅作 resolver 失败时的兜底（评审 P1-2）。
+      llmServiceId: creds.serviceId || args.llmServiceId,
       model: routeModelName,
       contextWindow,
       baseUrl,

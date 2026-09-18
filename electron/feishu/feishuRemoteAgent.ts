@@ -18,6 +18,10 @@ export async function runFeishuRemoteAgent(ctx: {
   userMessage: string
   replyMessageId: string
   requestId: string
+  /** 本回合真实 Turn ID（C17）：供用量统计落库。 */
+  turnId?: string
+  /** 冻结执行配置里的 LLM 服务 ID（DIM3）。 */
+  llmServiceId?: string
   feishuConfig: FeishuConfig
   workDir: string
   workDirManager: WorkDirManager
@@ -45,6 +49,8 @@ export async function runFeishuRemoteAgent(ctx: {
     db: ctx.db,
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
+    turnId: ctx.turnId,
+    llmServiceId: ctx.llmServiceId,
     workDir: ctx.workDir,
     workDirManager: ctx.workDirManager,
     userDataDir: ctx.userDataDir,

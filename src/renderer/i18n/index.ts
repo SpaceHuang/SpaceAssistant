@@ -17,6 +17,7 @@ import zhCNDetailPanel from './resources/zh-CN/detailPanel.json'
 import zhCNContextUsage from './resources/zh-CN/contextUsage.json'
 import zhCNNotification from './resources/zh-CN/notification.json'
 import zhCNMcp from './resources/zh-CN/mcp.json'
+import zhCNUsageStats from './resources/zh-CN/usageStats.json'
 import enUSCommon from './resources/en-US/common.json'
 import enUSConfig from './resources/en-US/config.json'
 import enUSChat from './resources/en-US/chat.json'
@@ -30,6 +31,7 @@ import enUSDetailPanel from './resources/en-US/detailPanel.json'
 import enUSContextUsage from './resources/en-US/contextUsage.json'
 import enUSNotification from './resources/en-US/notification.json'
 import enUSMcp from './resources/en-US/mcp.json'
+import enUSUsageStats from './resources/en-US/usageStats.json'
 
 const initialLocale = detectLocale(
   readStoredLocale(),
@@ -54,7 +56,8 @@ void i18n
         detailPanel: zhCNDetailPanel,
         contextUsage: zhCNContextUsage,
         notification: zhCNNotification,
-        mcp: zhCNMcp
+        mcp: zhCNMcp,
+        usageStats: zhCNUsageStats
       },
       'en-US': {
         common: enUSCommon,
@@ -69,13 +72,14 @@ void i18n
         detailPanel: enUSDetailPanel,
         contextUsage: enUSContextUsage,
         notification: enUSNotification,
-        mcp: enUSMcp
+        mcp: enUSMcp,
+        usageStats: enUSUsageStats
       }
     },
     lng: initialLocale,
     fallbackLng: 'zh-CN',
     defaultNS: 'common',
-    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification', 'mcp'],
+    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification', 'mcp', 'usageStats'],
     interpolation: { escapeValue: false },
     debug: import.meta.env.DEV && !import.meta.env.VITEST,
     detection: {

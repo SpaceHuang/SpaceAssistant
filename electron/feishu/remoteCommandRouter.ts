@@ -703,6 +703,8 @@ export class RemoteCommandRouter {
             userMessage: content,
             replyMessageId: msg.messageId,
             requestId,
+            turnId: prepared?.turnId,
+            llmServiceId: executionConfig?.llmServiceId,
             feishuConfig: config,
             workDir,
             workDirManager: this.deps.workDirManager,

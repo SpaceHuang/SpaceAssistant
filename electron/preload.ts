@@ -134,10 +134,19 @@ const api: SpaceAssistantApi = {
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),
 
+  usageStatsDaily: (args) => ipcRenderer.invoke('usage-stats:daily', args),
+  usageStatsSummary: (args) => ipcRenderer.invoke('usage-stats:summary', args),
+  usageStatsDimensions: () => ipcRenderer.invoke('usage-stats:dimensions'),
+
   onOpenSettings: (cb) => {
     const fn = () => cb()
     ipcRenderer.on('app:open-settings', fn)
     return () => ipcRenderer.removeListener('app:open-settings', fn)
+  },
+  onOpenUsageStats: (cb) => {
+    const fn = () => cb()
+    ipcRenderer.on('app:open-usage-stats', fn)
+    return () => ipcRenderer.removeListener('app:open-usage-stats', fn)
   },
   onOpenAbout: (cb) => {
     const fn = () => cb()

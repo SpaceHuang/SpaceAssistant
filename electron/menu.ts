@@ -64,6 +64,11 @@ export function setupAppMenu(locale: string = 'zh-CN'): void {
       },
       { type: 'separator' },
       {
+        label: labels.usageStats,
+        click: () => sendToRenderer('app:open-usage-stats')
+      },
+      { type: 'separator' },
+      {
         label: labels.settings,
         accelerator: isMac ? 'Cmd+,' : 'Ctrl+,',
         click: () => sendToRenderer('app:open-settings')

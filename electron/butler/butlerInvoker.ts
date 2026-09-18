@@ -161,6 +161,8 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
         runButlerModelTurn(deps, {
           sessionId,
           requestId,
+          turnId: prepared.turnId,
+          llmServiceId: executionConfig?.llmServiceId,
           taskPrompt: task.prompt,
           assistantMessageId: prepared.assistantMessage.id
         })
@@ -210,7 +212,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionId: string; requestId: string; taskPrompt: string; assistantMessageId?: string }
+  args: { sessionId: string; requestId: string; turnId?: string; llmServiceId?: string; taskPrompt: string; assistantMessageId?: string }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
   const session = getSession(db, args.sessionId)
@@ -259,6 +261,9 @@ async function runButlerModelTurn(
   const res = await runToolChatSession({
     requestId: args.requestId,
     sessionId: args.sessionId,
+    turnId: args.turnId,
+    // DIM3：统计维度以实际解析出的服务为准（评审 P1-2）；配置值仅作兜底
+    llmServiceId: creds.serviceId || args.llmServiceId,
     lane: 'automation',
     // D 任务声明（可信证据）：随执行链进入审批线索包，供任务相关性判断
     approvalTaskDigest: buildApprovalTaskDigest(args.taskPrompt),

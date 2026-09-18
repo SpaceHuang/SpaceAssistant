@@ -402,7 +402,12 @@ export type SpaceAssistantApi = {
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>
 
+  usageStatsDaily: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageDailyPoint[]>
+  usageStatsSummary: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageSummary>
+  usageStatsDimensions: () => Promise<import('./usageStatsTypes').UsageDimensions>
+
   onOpenSettings: (cb: () => void) => () => void
+  onOpenUsageStats: (cb: () => void) => () => void
   onOpenAbout: (cb: () => void) => () => void
 
   windowGetPlatform: () => Promise<NodeJS.Platform>
