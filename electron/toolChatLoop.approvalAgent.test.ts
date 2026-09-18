@@ -206,3 +206,35 @@ describe('P2 端到端：automation 写操作由审批 Agent 裁决', () => {
     expect(serialized).toContain('安全审批服务暂不可用')
   })
 })
+
+describe('P2 端到端：任务声明透传（D）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockRunApprovalAgent.mockImplementation(async () => ({
+      ok: true,
+      verdict: { kind: 'approve', reason: { summary: '常规写入，风险可控' } }
+    }))
+  })
+
+  it('args.approvalTaskDigest → AgentChannel → 线索包 clue.taskDigest 全链透传', async () => {
+    installStreamClient()
+    const db = makeDb()
+    const res = await runToolChatSession({
+      ...baseArgs(db),
+      approvalTaskDigest: '整理报告目录并汇总周报'
+    })
+    expect(res.ok).toBe(true)
+    expect(mockRunApprovalAgent).toHaveBeenCalled()
+    const inv = mockRunApprovalAgent.mock.calls[0]![1] as { clue: { taskDigest?: string } }
+    expect(inv.clue.taskDigest).toBe('整理报告目录并汇总周报')
+  })
+
+  it('未传 approvalTaskDigest → clue.taskDigest 缺省 undefined（无任务上下文调用方安全）', async () => {
+    installStreamClient()
+    const db = makeDb()
+    const res = await runToolChatSession(baseArgs(db))
+    expect(res.ok).toBe(true)
+    const inv = mockRunApprovalAgent.mock.calls[0]![1] as { clue: { taskDigest?: string } }
+    expect(inv.clue.taskDigest).toBeUndefined()
+  })
+})

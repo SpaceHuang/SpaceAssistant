@@ -34,6 +34,20 @@ export const BUTLER_SYSTEM_APPENDIX = [
   '最终回复即任务结果汇报，请直接给出结论与关键数据，不要反问。'
 ].join('\n')
 
+/** 审批线索包任务声明摘要上限（有界）：超长任务 prompt 只取前 N 字符。 */
+export const APPROVAL_TASK_DIGEST_MAX_CHARS = 500
+
+/**
+ * 任务声明摘要（对比分析 §4-D，可信证据）：来自用户创建任务时的输入，
+ * 供审批 Agent 判断「动作是否服务于任务」；折叠空白并截断，保持线索包有界。
+ */
+export function buildApprovalTaskDigest(prompt: string): string {
+  const collapsed = prompt.replace(/\s+/g, ' ').trim()
+  return collapsed.length > APPROVAL_TASK_DIGEST_MAX_CHARS
+    ? collapsed.slice(0, APPROVAL_TASK_DIGEST_MAX_CHARS)
+    : collapsed
+}
+
 export type ButlerInvokerDeps = {
   db: AppDatabase
   turnRuntime?: TurnRuntime
@@ -246,6 +260,8 @@ async function runButlerModelTurn(
     requestId: args.requestId,
     sessionId: args.sessionId,
     lane: 'automation',
+    // D 任务声明（可信证据）：随执行链进入审批线索包，供任务相关性判断
+    approvalTaskDigest: buildApprovalTaskDigest(args.taskPrompt),
     model: session.model,
     contextWindow,
     baseUrl: creds.baseUrl,

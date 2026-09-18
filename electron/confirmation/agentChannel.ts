@@ -81,6 +81,8 @@ export class AgentChannel implements ConfirmationChannel {
       sessionId: string
       toolName: string
       policy: ConfirmAnswererPolicy
+      /** 已声明的任务（D，可信证据）：装配方从外层任务上下文透传；缺省 = 无任务上下文。 */
+      taskDigest?: string
       audit?: AuditSink
       invokeApproval: (inv: ApprovalInvocation) => Promise<ApprovalInvocationResult>
     }
@@ -121,7 +123,8 @@ export class AgentChannel implements ConfirmationChannel {
       riskLevel: req.riskLevel,
       summary: req.facts.summary.text,
       signals: req.facts.signals.map((s) => s.kind),
-      ...deriveClueExtras(req.facts)
+      ...deriveClueExtras(req.facts),
+      ...(this.deps.taskDigest ? { taskDigest: this.deps.taskDigest } : {})
     }
     const invocation: ApprovalInvocation = {
       clue,

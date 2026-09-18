@@ -432,6 +432,11 @@ export type RunToolChatSessionArgs = {
   internalConfirmExemption?: 'approval-agent'
   /** 工具执行轮数上界（有界调用方使用，如审批 Agent ≤3）；缺省不限。 */
   maxToolLoopRounds?: number
+  /**
+   * 已声明的任务（对比分析 §4-D，可信证据）：管家装配传任务 prompt 摘要，
+   * 仅用于 agent 回答者线索包的任务相关性判断；缺省 = 无任务上下文。
+   */
+  approvalTaskDigest?: string
   remoteContext?: RemoteContext
   workDir: string
   workDirManager?: WorkDirManager
@@ -1761,6 +1766,8 @@ async function runToolChatSessionInner(
             agentChannelFactory: (agentDeps) =>
               new AgentChannel({
                 ...agentDeps,
+                // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面/IM 链路缺省无
+                ...(args.approvalTaskDigest ? { taskDigest: args.approvalTaskDigest } : {}),
                 invokeApproval: (inv) =>
                   import('./confirmation/approvalAgent').then((m) =>
                     m.runApprovalAgent(

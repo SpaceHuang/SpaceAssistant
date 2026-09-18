@@ -220,3 +220,19 @@ describe('AgentChannel（P2-3）', () => {
     void inv
   })
 })
+
+describe('AgentChannel 任务声明透传（D：可信证据）', () => {
+  it('deps.taskDigest → invocation.clue.taskDigest 原样透传', async () => {
+    const { ch, invokeApproval } = channel({ taskDigest: '整理报告目录并汇总周报' })
+    await ch.request(req())
+    const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
+    expect(inv.clue.taskDigest).toBe('整理报告目录并汇总周报')
+  })
+
+  it('缺省（无任务上下文调用方）→ clue.taskDigest undefined', async () => {
+    const { ch, invokeApproval } = channel()
+    await ch.request(req())
+    const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
+    expect(inv.clue.taskDigest).toBeUndefined()
+  })
+})
