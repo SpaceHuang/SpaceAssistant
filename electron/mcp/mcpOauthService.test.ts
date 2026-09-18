@@ -6,7 +6,12 @@ import { createTempDatabase } from '../database/testHelpers'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import { listProfiles, saveProfiles } from './mcpConfigStore'
 import { getSecret } from './mcpSecretStore'
-import { isOAuthFlowActive, startOAuthFlow } from './mcpOauthService'
+import {
+  createMcpOAuthClientProvider,
+  isOAuthFlowActive,
+  McpInteractiveAuthRequiredError,
+  startOAuthFlow
+} from './mcpOauthService'
 
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
@@ -457,5 +462,24 @@ describe('mcpOauthService', () => {
     expect(result.ok).toBe(true)
     expect(await getSecret(db, serverId, 'access-token')).toBe('cross-origin-token')
     expect(receivedAuthHeaders).toContain('Bearer cross-origin-token')
+  })
+
+  it('blocks interactive re-auth when interactive:false and fires onInteractiveAuthRequired', async () => {
+    // 后台刷新场景（mcp:refresh-tools / testConnection）：token 失效时不允许静默弹浏览器授权
+    const { endpoint } = await startMockAuthServer()
+    const serverId = await saveOauthProfile(endpoint)
+    const profile = listProfiles(db)[0]!
+    let interactiveAuthRequired = false
+    const provider = createMcpOAuthClientProvider(db, profile, {
+      interactive: false,
+      onInteractiveAuthRequired: () => {
+        interactiveAuthRequired = true
+      }
+    })
+
+    await expect(
+      provider.redirectToAuthorization(new URL('https://auth.example.com/authorize'))
+    ).rejects.toBeInstanceOf(McpInteractiveAuthRequiredError)
+    expect(interactiveAuthRequired).toBe(true)
   })
 })

@@ -15,7 +15,7 @@ import { getSecret } from './mcpSecretStore'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
 import { discoverOAuthServerInfo } from '@modelcontextprotocol/sdk/client/auth.js'
 import { matchOauthClientPreset, MCP_OAUTH_CLIENT_PRESETS, type McpOAuthClientPreset } from './oauthClientPresets'
-import { createMcpOAuthClientProvider, isOAuthFlowActive, startOAuthFlow } from './mcpOauthService'
+import { createMcpOAuthClientProvider, isOAuthFlowActive, MCP_AUTH_REQUIRED_MESSAGE, startOAuthFlow } from './mcpOauthService'
 import { buildMappedToolDescriptors } from './mcpToolRegistry'
 
 /**
@@ -296,9 +296,16 @@ export async function testMcpConnection(db: AppDatabase, input: McpServerWriteIn
 
   // OAuth 服务：已保存 token 直接携带；未授权则先跑一次授权流程（草稿 profile），
   // 授权成功后 token 落在草稿 id 下，再按已授权状态连接。
+  // 已有 token 但失效（连接中 401）：后台测试禁止静默弹浏览器授权，转译为 auth-required。
   let oauthProvider: ReturnType<typeof createMcpOAuthClientProvider> | undefined
+  let interactiveAuthRequired = false
   if (profile.auth.mode === 'oauth') {
-    oauthProvider = createMcpOAuthClientProvider(db, profile)
+    oauthProvider = createMcpOAuthClientProvider(db, profile, {
+      interactive: false,
+      onInteractiveAuthRequired: () => {
+        interactiveAuthRequired = true
+      }
+    })
     const hasToken = await getSecret(db, profile.id, 'access-token')
     if (!hasToken) {
       const oauthResult = await startOAuthFlow(db, profile.id, { profile })
@@ -311,7 +318,12 @@ export async function testMcpConnection(db: AppDatabase, input: McpServerWriteIn
     secretProvider,
     oauthProvider
   })
-  if (!result.ok) return result as McpTestConnectionResult
+  if (!result.ok) {
+    if (interactiveAuthRequired) {
+      return { ok: false, code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE }
+    }
+    return result as McpTestConnectionResult
+  }
   const { descriptors, skipped } = buildMappedToolDescriptors(input.id, input.name, result.tools)
   return {
     ok: true,

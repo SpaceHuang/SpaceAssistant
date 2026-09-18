@@ -188,7 +188,13 @@ export interface McpRefreshToolsPayload {
 }
 
 export type McpRefreshToolsResult =
-  | { ok: true; serverName: string; tools: McpToolDescriptor[] }
+  | {
+      ok: true
+      serverName: string
+      tools: McpToolDescriptor[]
+      /** 本次刷新自动回填了空白名单时返回：已自动启用的工具数（供 UI 提示，非静默改库）。 */
+      autoEnabledToolCount?: number
+    }
   | { ok: false; code: string; message: string }
 
 export interface McpGetDiagnosticsPayload {

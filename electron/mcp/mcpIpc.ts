@@ -22,6 +22,7 @@ import { discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
 import {
   createMcpOAuthClientProvider,
   isOAuthFlowActive,
+  MCP_AUTH_REQUIRED_MESSAGE,
   startOAuthFlow
 } from './mcpOauthService'
 import { testMcpConnection } from './mcpService'
@@ -169,29 +170,66 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const manager = new McpConnectionManager({
       appendDiagnostic: (id, entry) => safeAppendDiagnostic(ctx.db, id, entry)
     })
+    // 后台刷新禁止静默发起交互式授权：token 失效时返回 auth-required，引导用户点「连接账户」。
+    let interactiveAuthRequired = false
     try {
       const secretProvider = async (kind: string): Promise<string | null> => getSecret(ctx.db, serverId, kind)
       const oauthProvider =
-        profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(ctx.db, profile) : undefined
+        profile.auth.mode === 'oauth'
+          ? createMcpOAuthClientProvider(ctx.db, profile, {
+              interactive: false,
+              onInteractiveAuthRequired: () => {
+                interactiveAuthRequired = true
+              }
+            })
+          : undefined
       const session = await manager.connect(profile, secretProvider, { oauthProvider })
       const discovery = await discoverToolsFromSession(ctx.db, profile, session)
       if (!discovery.ok) {
+        if (interactiveAuthRequired) {
+          updateServerStatus(ctx.db, serverId, {
+            status: 'auth-required',
+            lastError: { code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE, occurredAt: new Date().toISOString() }
+          })
+          return { ok: false, code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE }
+        }
         updateServerStatus(ctx.db, serverId, {
           status: 'failed',
           lastError: { code: discovery.code, message: discovery.message, occurredAt: new Date().toISOString() }
         })
         return discovery
       }
+      // 白名单自动回填：服务启用且从未勾选过工具（如会话内 action.mcp.add 创建后仅在设置页完成授权）
+      // 时，刷新发现成功即全选本次工具，消除「已连接但 0 工具注入」的静默不可用态；已有选择不覆盖。
+      const current = listProfiles(ctx.db).find((p) => p.id === serverId)
+      const shouldAutoFillEnabledTools =
+        current?.enabled === true && current.enabledToolNames.length === 0 && discovery.tools.length > 0
       updateServerStatus(ctx.db, serverId, {
         status: discovery.tools.length > 0 ? 'connected' : 'no-tools',
         discoveredAt: new Date().toISOString(),
         discoveredProtocolVersion: discovery.protocolVersion,
-        clearLastError: true
+        clearLastError: true,
+        ...(shouldAutoFillEnabledTools
+          ? { enabledToolNames: discovery.tools.map((tool) => tool.originalName) }
+          : {})
       })
-      return { ok: true, serverName: discovery.serverName, tools: discovery.tools }
+      return {
+        ok: true,
+        serverName: discovery.serverName,
+        tools: discovery.tools,
+        // 回填告知标记：UI 据此提示「已自动启用 N 个工具」，避免静默改库
+        ...(shouldAutoFillEnabledTools ? { autoEnabledToolCount: discovery.tools.length } : {})
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       safeAppendDiagnostic(ctx.db, serverId, { code: 'refresh-failed', message })
+      if (interactiveAuthRequired) {
+        updateServerStatus(ctx.db, serverId, {
+          status: 'auth-required',
+          lastError: { code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE, occurredAt: new Date().toISOString() }
+        })
+        return { ok: false, code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE }
+      }
       updateServerStatus(ctx.db, serverId, {
         status: 'failed',
         lastError: { code: 'refresh-failed', message, occurredAt: new Date().toISOString() }

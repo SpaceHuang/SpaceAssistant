@@ -300,6 +300,7 @@ export function updateServerStatus(
     lastError?: McpServerProfile['lastError']
     clearLastError?: boolean
     enabled?: boolean
+    enabledToolNames?: string[]
     auth?: Partial<McpServerProfile['auth']>
   }
 ): void {
@@ -317,6 +318,7 @@ export function updateServerStatus(
     ...(patch.lastError !== undefined ? { lastError: patch.lastError } : {}),
     ...(patch.clearLastError ? { lastError: undefined } : {}),
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+    ...(patch.enabledToolNames !== undefined ? { enabledToolNames: [...patch.enabledToolNames] } : {}),
     ...(patch.auth ? { auth: { ...profile.auth, ...patch.auth } } : {}),
     updatedAt: new Date().toISOString()
   }
