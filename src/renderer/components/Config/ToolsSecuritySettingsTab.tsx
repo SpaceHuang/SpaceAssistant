@@ -13,6 +13,7 @@ import type {
   SecuritySettingsRuleView
 } from '../../../shared/confirmation/settingsCenter'
 import type { PolicyPackage } from '../../../shared/policy/policyPackages'
+import { LANE_PROFILES, effectiveActionFor } from '../../../shared/policy/policyPackages'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 import { groupMemoryEntries, memoryEntrySummary } from './toolsSecurityFormat'
@@ -29,7 +30,6 @@ type Props = {
   onFeishuChange: (next: FeishuConfig) => void
 }
 
-const PACKAGE_VALUES: PolicyPackage[] = ['strict', 'standard', 'loose', 'custom']
 const LANES: Array<'desktop' | 'wechat' | 'feishu'> = ['desktop', 'wechat', 'feishu']
 
 const AUDIT_EVENT_KINDS = [
@@ -52,7 +52,7 @@ function formatTs(ts: number): string {
   return ts > 0 ? new Date(ts).toLocaleString() : '—'
 }
 
-/** 区 1：策略套餐 + 规则覆盖（确认模式并入 desktop-auto-approve 规则行；系统保护规则以「启用/不启用」开关控制）。 */
+/** 区 1：策略套餐 + 规则覆盖（规则行展示当前档位生效动作；custom 档动作域按 lane；系统保护规则以「启用/不启用」开关控制）。 */
 function PolicyPackageSection({
   model,
   onModelChange,
@@ -154,6 +154,7 @@ function PolicyPackageSection({
 
   const packageHint = (pkg: PolicyPackage): string | null => {
     if (pkg === 'strict') return t('toolsSecurity.policy.strictHint')
+    if (pkg === 'standard') return t('toolsSecurity.policy.standardHint')
     if (pkg === 'loose') return t('toolsSecurity.policy.looseHint')
     if (pkg === 'custom') return t('toolsSecurity.policy.customHint')
     return null
@@ -203,24 +204,27 @@ function PolicyPackageSection({
                     : v === 'auto-evaluator'
                       ? t('toolsSecurity.policy.actionAutoShort')
                       : t('toolsSecurity.policy.actionAsk')
+            // 生效动作（显示=实际）：按当前链路 + 档位经 LANE_PROFILES 计算（standard 桌面「询问」→「自动」）；
+            // locked 条目不参与档位变换，原样展示
+            const pkg = model?.packages[lane] ?? 'standard'
             if (r.locked) {
               return (
                 <span className={r.enabled ? undefined : 'config-field__hint'}>
-                  {actionLabel(r.action)}
+                  {actionLabel(effectiveActionFor(lane, pkg, { action: r.action, locked: r.locked }))}
                 </span>
               )
             }
-            // 默认动作即 auto-evaluator 的规则（自动审批器入口，如 desktop-auto-approve）：
-            // 动作域为 询问/允许/自动，与其他规则同口径受套餐管理（custom 可编辑）
-            const options =
-              r.defaultAction === 'auto-evaluator'
-                ? (['ask', 'allow', 'auto-evaluator'] as const)
-                : (['deny', 'allow', 'ask'] as const)
+            if (pkg !== 'custom') {
+              // 非 custom 档只读：展示当前档位下的生效动作
+              return <span>{actionLabel(effectiveActionFor(lane, pkg, { action: r.action, locked: r.locked }))}</span>
+            }
+            // custom 档：动作域按 lane（B2）——desktop 4 态（deny/allow/ask/auto-evaluator）、
+            // wechat/feishu 3 态；覆盖动作即最终动作
+            const options = LANE_PROFILES[lane].availableActions.filter((v) => v !== 'confirm-every-time')
             return (
               <Select
                 size="small"
                 value={r.action}
-                disabled={(model?.packages[lane] ?? 'standard') !== 'custom'}
                 style={{ width: '100%' }}
                 classNames={configModalSelectPopupClassNames}
                 options={options.map((v) => ({ value: v, label: actionLabel(v) }))}
@@ -288,7 +292,7 @@ function PolicyPackageSection({
                     value={pkg}
                     className="config-policy-selector__select"
                     classNames={configModalSelectPopupClassNames}
-                    options={PACKAGE_VALUES.map((v) => ({
+                    options={LANE_PROFILES[lane].availablePackages.map((v) => ({
                       value: v,
                       label:
                         v === 'strict'
@@ -629,8 +633,8 @@ function AuditSection({
 }
 
 /**
- * 「安全策略」设置页（§7，P4）：1. 策略套餐（含规则列表；确认模式并入 desktop-auto-approve
- * 规则行，动作域 询问/允许/自动，统一受套餐管理）2. 确认记忆管理 3. 安全审计记录。
+ * 「安全策略」设置页（§7，P4）：1. 策略套餐（含规则列表；规则行展示当前链路+档位的生效动作，
+ * custom 档动作域按 lane）2. 确认记忆管理 3. 安全审计记录。
  * 工具开关（Agent 可用能力面）在「工具 → 工具开关」独立子 Tab，与安全策略管控并列。
  */
 export function ToolsSecuritySettingsTab({ active, browser, onBrowserChange, feishu, onFeishuChange }: Props) {

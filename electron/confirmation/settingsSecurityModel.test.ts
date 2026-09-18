@@ -5,7 +5,6 @@ describe('buildSettingsSecurityModel（P4 设置中心五区数据）', () => {
   it('装配五区（套餐/确认模式/工具开关/确认记忆/审计摘要）', () => {
     const model = buildSettingsSecurityModel({
       packages: { desktop: 'loose', wechat: 'strict', feishu: 'standard', automation: 'custom' },
-      confirmMode: 'diff',
       deniedTools: ['run_shell'],
       cache: [
         {
@@ -25,7 +24,6 @@ describe('buildSettingsSecurityModel（P4 设置中心五区数据）', () => {
       haveAuditLog: true
     })
     expect(model.packages.desktop).toBe('loose')
-    expect(model.confirmMode).toBe('diff')
     expect(model.deniedTools).toEqual(['run_shell'])
     expect(model.memoryEntries).toHaveLength(1)
     expect(model.memoryEntries[0]!.hitCount).toBe(3)
@@ -58,7 +56,7 @@ describe('toRuleViews（规则合并视图）', () => {
       { id: 'script-network-deny-remote', when: 'invocation' as const, action: 'deny' as const, locked: true, reason: 'r1' },
       { id: 'im-write-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
     ]
-    const views = toRuleViews(rules, [], undefined, ['script-network-deny-remote'])
+    const views = toRuleViews(rules, [], ['script-network-deny-remote'])
     expect(views[0]).toMatchObject({ id: 'script-network-deny-remote', enabled: true, locked: true })
     expect(views[1]).toMatchObject({ id: 'im-write-ask', enabled: true, locked: false })
   })
@@ -82,21 +80,12 @@ describe('toRuleViews（规则合并视图）', () => {
   })
 })
 
-  it('desktop-auto-approve 无覆盖时动作由 confirmMode 派生（auto→自动，其余→询问）', async () => {
+  it('desktop-auto-approve 规则已退役（P1）：confirmMode 派生删除，动作保留基线/覆盖值', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [
-      {
-        id: 'desktop-auto-approve',
-        when: 'invocation' as const,
-        match: { lane: ['desktop' as const] },
-        action: 'auto-evaluator' as const,
-        configRequires: { config: 'confirmMode', equals: 'auto' },
-        reason: 'r'
-      }
+      { id: 'mcp-tool-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r' }
     ]
-    expect(toRuleViews(rules, [], 'auto')[0]!.action).toBe('auto-evaluator')
-    expect(toRuleViews(rules, [], 'diff')[0]!.action).toBe('ask')
-    expect(toRuleViews(rules, [], 'direct')[0]!.action).toBe('ask')
-    // 有覆盖时覆盖优先
-    expect(toRuleViews(rules, [{ ruleId: 'desktop-auto-approve', action: 'allow' }], 'diff')[0]!.action).toBe('allow')
+    // 无 confirmMode 入参：action = 基线动作；生效动作（desktop standard → 自动）由渲染端 effectiveActionFor 计算
+    expect(toRuleViews(rules, [])[0]!.action).toBe('ask')
+    expect(toRuleViews(rules, [{ ruleId: 'mcp-tool-ask', action: 'allow' }])[0]!.action).toBe('allow')
   })

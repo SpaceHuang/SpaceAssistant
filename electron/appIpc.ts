@@ -1321,13 +1321,11 @@ function readExposureInputsFromDb(
     const tools = readToolsConfig(ctx.db)
     return model.buildSettingsSecurityModel({
       packages: runtime.readPolicyPackages(ctx.db),
-      confirmMode: tools.confirmMode,
       deniedTools: tools.deniedTools,
       cache: new SqliteDecisionCache(conn).list(),
       rules: model.toRuleViews(
         DEFAULT_POLICY_RULES,
         new PolicyRuleStore(conn).listOverrides(),
-        tools.confirmMode,
         runtime.readDisabledPolicyRuleIds(ctx.db)
       ),
       retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),

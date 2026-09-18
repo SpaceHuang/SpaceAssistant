@@ -3,7 +3,6 @@ import type {
   ExecutionLane,
   PolicyRule
 } from '../../src/shared/confirmation/types'
-import type { FileConfirmMode } from '../../src/shared/domainTypes'
 import type {
   SecuritySettingsModelPayload,
   SecuritySettingsRuleView
@@ -25,7 +24,6 @@ export type SettingsSecurityModel = SecuritySettingsModelPayload
  */
 export function buildSettingsSecurityModel(args: {
   packages: Partial<Record<ExecutionLane, PolicyPackage>>
-  confirmMode: FileConfirmMode
   deniedTools: string[]
   cache: DecisionCacheEntry[]
   rules: SecuritySettingsRuleView[]
@@ -39,7 +37,6 @@ export function buildSettingsSecurityModel(args: {
       feishu: args.packages.feishu ?? DEFAULT_POLICY_PACKAGES.feishu,
       automation: args.packages.automation ?? DEFAULT_POLICY_PACKAGES.automation
     },
-    confirmMode: args.confirmMode,
     deniedTools: args.deniedTools,
     memoryEntries: args.cache,
     audit: { retentionDays: args.retentionDays, haveAuditLog: args.haveAuditLog },
@@ -47,27 +44,23 @@ export function buildSettingsSecurityModel(args: {
   }
 }
 
-/** 默认规则 → 展示视图（无覆盖）。confirmMode 用于派生 desktop-auto-approve 的展示动作（确认模式已并入规则行）。 */
+/**
+ * 默认规则 → 展示视图（无覆盖）。action 保留基线/覆盖动作；各链路档位下的**生效动作**
+ * （standard 桌面「询问」→「自动」）由渲染端按 LANE_PROFILES.effectiveActionFor 计算（显示=实际，两端口径同源）。
+ */
 export function toRuleViews(
   rules: PolicyRule[],
   overrides: Array<{ ruleId: string; action: PolicyRule['action'] }>,
-  confirmMode?: FileConfirmMode,
   disabledRuleIds?: string[]
 ): SecuritySettingsRuleView[] {
   const byId = new Map(overrides.map((o) => [o.ruleId, o]))
   const disabled = new Set(disabledRuleIds ?? [])
   return rules.map((rule) => {
     const o = byId.get(rule.id)
-    // desktop-auto-approve 的默认语义是"confirmMode=auto 才命中评估器"：
-    // 无覆盖时把展示动作派生为 自动（confirmMode=auto）/ 询问（其余），与规则行控件同口径
-    const derived =
-      rule.id === 'desktop-auto-approve' && !o
-        ? ((confirmMode === 'auto' ? 'auto-evaluator' : 'ask') as PolicyRule['action'])
-        : (o?.action ?? rule.action)
     return {
       id: rule.id,
       when: rule.when,
-      action: derived,
+      action: o?.action ?? rule.action,
       defaultAction: rule.action,
       enabled: rule.locked || !disabled.has(rule.id),
       locked: rule.locked === true,
