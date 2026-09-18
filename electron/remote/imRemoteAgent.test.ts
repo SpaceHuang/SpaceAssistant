@@ -126,7 +126,7 @@ describe('runImRemoteAgent', () => {
       'claude-sonnet-4-20250514',
       {}
     )
-    expect(captured.invocation.profile.baseUrl).toBe('https://creds.example.com')
+    expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://creds.example.com')
     expect(await captured.ports.credentials.resolveApiKey()).toBe('creds-key')
   })
 
@@ -160,7 +160,7 @@ describe('runImRemoteAgent', () => {
     await runImRemoteAgent(baseArgs())
 
     expect(await captured.ports.credentials.resolveApiKey()).toBe('fallback-key')
-    expect(captured.invocation.profile.baseUrl).toBe('https://fallback.example.com')
+    expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://fallback.example.com')
   })
 
   it('blocks sensitive workdir and still stops progress session', async () => {

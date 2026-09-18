@@ -456,6 +456,8 @@ export type RunToolChatSessionArgs = {
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
   locale?: AppLocale
   projectMemoryEnabled?: boolean
+  /** P4：思维强度档位（装配期解析；发起时冻结，调用内不变）。 */
+  reasoningEffort?: import('../src/shared/agent/invocation').AgentReasoningEffort
   skillFragments?: string[]
   /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
@@ -581,7 +583,8 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     llmServiceId: invocation.profile.llmServiceId,
     model: invocation.profile.model,
     contextWindow: invocation.profile.contextWindow,
-    baseUrl: invocation.profile.baseUrl,
+    baseUrl: ports.credentials.networkTarget?.baseUrl as string | undefined,
+    reasoningEffort: invocation.profile.reasoning?.effort ?? 'off',
     messages: invocation.messages.list as unknown as ClaudeContentBlockMessage[],
     system: invocation.profile.system,
     options: invocation.profile.options,
@@ -715,6 +718,7 @@ async function runToolChatSessionInner(
     hostExposureRules,
     hostMcp,
     hostAnswerer,
+    reasoningEffort,
     locale: payloadLocale,
     projectMemoryEnabled,
     chatSignal,
@@ -765,7 +769,8 @@ async function runToolChatSessionInner(
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
   const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
-  const thinking = toolLoopOptions.enableThinking ? ({ type: 'adaptive' as const }) : ({ type: 'disabled' as const })
+  // P4：thinking 由 effort 档位推导（off = 关闭；其余档位本期统一 adaptive，budget 细分随后续阶段）
+  const thinking = reasoningEffort !== 'off' ? ({ type: 'adaptive' as const }) : ({ type: 'disabled' as const })
 
   if (maxTokensEffective !== toolLoopOptions.maxTokens) {
     logAgentEvent('info', 'llm.max_tokens_floor', {
@@ -794,7 +799,7 @@ async function runToolChatSessionInner(
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
     // thinking 开启时须保留 assistant 消息中的 thinking/redacted_thinking（含 signature），
     // 否则多轮 tool loop 会触发 Anthropic 400（final assistant 须以 thinking 块开头）。
-    if (toolLoopOptions.enableThinking) return sanitizeThinkingForReplay(msgs)
+    if (reasoningEffort !== 'off') return sanitizeThinkingForReplay(msgs)
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
@@ -1006,7 +1011,7 @@ async function runToolChatSessionInner(
       messages: messagesStripped,
       toolNames,
       maxTokens: maxTokensEffective,
-      enableThinking: toolLoopOptions.enableThinking
+      enableThinking: reasoningEffort !== 'off'
     })
     beginLlm(sessionId, requestId)
 

@@ -244,8 +244,8 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       content: [{ type: 'text', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"ok"}}' }]
     })
     await runApprovalAgent({ ...deps, baseUrl: 'https://relay.example.com' }, invocation())
-    const inv = mockRunToolChatSession.mock.calls.at(-1)![0] as { profile: { baseUrl?: string } }
-    expect(inv.profile.baseUrl).toBe('https://relay.example.com')
+    const [, prt] = mockRunToolChatSession.mock.calls.at(-1)! as [{ profile: Record<string, unknown> }, { credentials: { networkTarget?: { baseUrl?: string } } }]
+    expect(prt.credentials.networkTarget?.baseUrl).toBe('https://relay.example.com')
   })
 
   it('执行链形态：internal/hidden 会话 + automation lane + 递归豁免标记 + 轮数≤3 + 封闭只读工具集', async () => {

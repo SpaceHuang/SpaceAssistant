@@ -946,7 +946,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           sessionMetadata: session.metadata,
           recentMessages,
           model: baseConfig.model!,
-          baseUrl: baseConfig.baseUrl,
+          baseUrl: credentials.baseUrl,
           getApiKey: credentials.getApiKey,
           sessionId: intent.sessionId,
           signal: controller.signal

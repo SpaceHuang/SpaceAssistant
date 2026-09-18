@@ -110,7 +110,6 @@ export async function resolveTrustedTurnExecutionConfig(
     model,
     ...(modelEntry?.maximumContext ? { maximumContext: modelEntry.maximumContext } : {}),
     llmServiceId: credentials.serviceId || llmServiceId,
-    baseUrl: credentials.baseUrl,
     maxTokens: session.maxTokens,
     enableThinking: getConfigValue(db, 'config.thinkingEnabled') !== 'false',
     ...(locale && isAppLocale(locale) ? { locale } : {}),

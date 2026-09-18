@@ -289,6 +289,8 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
 
     const { invocation, ports } = assembleInvocation({
       requestId: inv.requestId,
+      // 子调用零成本档：审批推理不产生 thinking（基线 §5.4 规则 5）
+      effort: 'off',
       ...(deps.policyRuleFloor ? { policyRuleFloor: deps.policyRuleFloor } : {}),
       sessionId,
       lane: 'automation',

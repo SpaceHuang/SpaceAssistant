@@ -56,8 +56,6 @@ export interface AgentInvocationProfile {
   /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
   llmServiceId?: string
   contextWindow?: number
-  /** P4 移出契约：网络目标与凭据留在宿主解析结果（ports.credentials）。 */
-  baseUrl?: string
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   locale?: string
@@ -76,6 +74,17 @@ export interface AgentInvocationProfile {
   }
   /** 显式 lane（偏差 21）：缺省回退 driverContext 推导，最终 desktop。 */
   lane?: ExecutionLane
+  /** P4（偏差 6）：思维强度分档；发起时解析、调用内冻结（兼容映射 true → 'medium'）。 */
+  reasoning?: AgentReasoningProfile
+}
+
+/** 思维强度档位：off 为零成本档（子调用默认）。 */
+export type AgentReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+
+export interface AgentReasoningProfile {
+  effort: AgentReasoningEffort
+  /** 宿主按定死规则降级的留痕（fail-loud 不静默换档）。 */
+  degraded?: { from: AgentReasoningEffort; to: AgentReasoningEffort }
 }
 
 /**
@@ -159,6 +168,8 @@ export interface AgentWorkspacePorts {
 /** 宿主端口：凭据（接口方法，不是闭包——SDK 决策 §6 硬约束 2）。 */
 export interface AgentCredentialsPorts {
   resolveApiKey(): Promise<string | null>
+  /** P4（偏差 5）：网络目标留在宿主绑定，不进可序列化契约；可声明层只有模型意图。 */
+  networkTarget?: { baseUrl?: string }
 }
 
 /** loadContext 装载的会话原始材料（只装载不装配；裁剪与注入留在 Core）。 */

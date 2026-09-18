@@ -11,6 +11,7 @@ import { intersectPolicyRulesWithFloor } from '../../src/shared/policy/policyFlo
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { getDbConnection, getSession, updateSession } from '../database'
+import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -50,6 +51,8 @@ export interface AgentInvocationMaterials {
   messages: readonly unknown[]
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
+  /** P4（偏差 6）：显式思维强度档位；优先于 enableThinking 兼容映射；缺省 'off'（零成本档）。 */
+  effort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
   toolsConfig: import('../../src/shared/domainTypes').ToolsConfig
   browserConfig?: import('../../src/shared/domainTypes').BrowserConfig
   shellConfig?: import('../../src/shared/domainTypes').ShellConfig | null
@@ -141,6 +144,29 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // locale 定值（请求优先、库回退在装配期完成；循环内不再查库）
   const resolvedLocale = resolveRequestLocale(materials.locale, db as never)
 
+  // P4（偏差 6）：effort 解析——显式档位 > enableThinking 兼容映射（true→medium）> off（子调用零成本档）；
+  // 宿主按 ModelEntry 能力校验，不支持时按定死规则降级为 off 并留痕（不静默换档）
+  const requestedEffort = materials.effort
+    ?? (materials.options?.enableThinking === true ? 'medium' : 'off')
+  let reasoningEffort = requestedEffort
+  let reasoningDegraded: import('../../src/shared/agent/invocation').AgentReasoningProfile['degraded']
+  if (db && reasoningEffort !== 'off') {
+    const entry = readStoredModels(db).find((m) => m.name === materials.model)
+    if (entry?.supportsThinking === false) {
+      reasoningDegraded = { from: requestedEffort, to: 'off' }
+      reasoningEffort = 'off'
+      logAgentEvent('info', 'agent.profile.reasoning_degraded', {
+        requestId: materials.requestId,
+        sessionId: materials.sessionId,
+        model: materials.model,
+        from: requestedEffort,
+        to: 'off',
+        reason: 'model-not-support-thinking'
+      })
+    }
+  }
+  const reasoning = { effort: reasoningEffort, ...(reasoningDegraded ? { degraded: reasoningDegraded } : {}) }
+
   const invocation: AgentInvocation = {
     session: { sessionId: materials.sessionId },
     messages: {
@@ -153,7 +179,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       model: materials.model,
       ...(materials.llmServiceId !== undefined ? { llmServiceId: materials.llmServiceId } : {}),
       ...(materials.contextWindow !== undefined ? { contextWindow: materials.contextWindow } : {}),
-      ...(materials.baseUrl !== undefined ? { baseUrl: materials.baseUrl } : {}),
       ...(materials.system !== undefined ? { system: materials.system } : {}),
       ...(materials.options !== undefined ? { options: materials.options } : {}),
       ...(resolvedLocale !== undefined ? { locale: resolvedLocale } : {}),
@@ -168,7 +193,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
         ...(materials.larkCliRunner !== undefined ? { larkCliRunner: materials.larkCliRunner } : {})
       },
-      ...(materials.lane !== undefined ? { lane: materials.lane } : {})
+      ...(materials.lane !== undefined ? { lane: materials.lane } : {}),
+      reasoning
     },
     events: buildEventSink(materials),
     limits: {
@@ -312,7 +338,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       userDataDir: materials.userDataDir
     },
     credentials: {
-      resolveApiKey: () => materials.getApiKey()
+      resolveApiKey: () => materials.getApiKey(),
+      ...(materials.baseUrl !== undefined ? { networkTarget: { baseUrl: materials.baseUrl } } : {})
     },
     ...(materials.appDb !== undefined ? { legacy: { appDb: materials.appDb } } : {}),
     ...(materials.getBrowserDetectContext !== undefined

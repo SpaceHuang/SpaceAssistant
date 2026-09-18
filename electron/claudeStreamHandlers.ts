@@ -308,7 +308,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
         const model = assertValidModel(frozen.model ?? '')
         await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
-        const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(frozen.baseUrl)
+
         const llmServiceId = frozen.llmServiceId
         const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
         if (creds.error) {
@@ -318,7 +318,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             `会话模型「${model}」当前不可用（${creds.error}），请重新选择模型或补齐 API 服务配置`
           )
         }
-        const baseUrl = baseUrlFromPayload ?? creds.baseUrl
+        const baseUrl = creds.baseUrl
         const getApiKey = creds.getApiKey
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]

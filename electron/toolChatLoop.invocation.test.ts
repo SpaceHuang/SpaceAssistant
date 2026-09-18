@@ -151,7 +151,8 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
     expect(invocation.session).toEqual({ sessionId: 'sess-invocation-1' })
     expect(invocation.profile.model).toBe('claude-sonnet-4-20250514')
     expect(invocation.profile.llmServiceId).toBe('svc-1')
-    expect(invocation.profile.baseUrl).toBe('https://relay.example.com')
+    // P4：网络目标出契约，归 ports.credentials.networkTarget
+    expect(ports.credentials.networkTarget?.baseUrl).toBe('https://relay.example.com')
     expect(invocation.profile.system).toBe('sys')
     expect(invocation.profile.locale).toBe('zh-CN')
     expect(invocation.profile.lane).toBe('automation')

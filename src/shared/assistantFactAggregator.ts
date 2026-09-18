@@ -9,7 +9,6 @@ export type TurnExecutionConfig = {
   model?: string
   maximumContext?: number
   llmServiceId?: string
-  baseUrl?: string
   system?: string
   skillFragments?: string[]
   maxTokens?: number

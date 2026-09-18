@@ -168,7 +168,7 @@ describe('claudeStreamHandlers locale', () => {
       turnId: 'frozen-turn', requestId: 'frozen-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'frozen-token',
-      executionConfig: { lane: 'desktop', model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system', skillFragments: ['## Skill: review\n\nreview instructions'], maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
+      executionConfig: { lane: 'desktop', model: 'trusted-model', system: 'trusted system', skillFragments: ['## Skill: review\n\nreview instructions'], maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
@@ -187,7 +187,7 @@ describe('claudeStreamHandlers locale', () => {
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({
       profile: expect.objectContaining({
-        model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
+        model: 'trusted-model', system: 'trusted system',
         options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
         skillFragments: ['## Skill: review\n\nreview instructions']
       }),
@@ -195,7 +195,11 @@ describe('claudeStreamHandlers locale', () => {
       additionalContext: expect.objectContaining({
         'facts.history': expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
       })
-    }), expect.anything())
+    }), expect.objectContaining({
+      credentials: expect.objectContaining({
+        networkTarget: expect.objectContaining({ baseUrl: 'https://trusted.example.com' })
+      })
+    }))
     expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String))
     db.close()
   })
