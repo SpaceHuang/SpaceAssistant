@@ -1,5 +1,6 @@
 import { decide } from '../../src/shared/policy/policyEngine'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
+import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -51,6 +52,8 @@ export function isOutboundWriteTool(toolName: string, toolInput: Record<string, 
   return classifyLarkCliImpact(toolInput.args).impact !== 'read'
 }
 
+export { validatePolicyRulesFloor }
+
 /** 门控消费的决策缓存完整形状（lookup + 写/清理族；由装配期注入 SqliteDecisionCache 或等价内存实现）。 */
 export type GateDecisionCache = import('./auditedDecisionCache').AuditedDecisionCacheDeps['cache']
 
@@ -68,9 +71,11 @@ export interface ToolCallGateArgs {
   browserConfig?: BrowserConfig | null
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
-  /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退 DEFAULT_POLICY_RULES）。 */
+  /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
   effectiveRules: PolicyRule[]
-  /** 装配期构造的决策缓存视图（B1：必填，缺料 fail-loud，不回退 EMPTY_CACHE）。 */
+  /** 装配期随规则集携带的来源标注（P3）；审计据此回答规则为何未生效。 */
+  policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
+  /** 装配期构造的决策缓存视图（B1：必填，缺料 fail-loud，不回退空缓存）。 */
   decisionCache: GateDecisionCache
   /** 装配期注入的 shell 预检材料（B1：必填；trusted-command 记账写不允许静默停写）。 */
   shellPrecheck: { touchTrustedCommand: (command: string) => void }
@@ -162,6 +167,41 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       actor: 'system'
     })
     throw new Error(`TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`)
+  }
+
+  // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
+  // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
+  if (!floorCheck.ok) {
+    result.decision = {
+      type: 'deny',
+      ruleId: 'rules-violated',
+      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`
+    }
+    result.facts = {
+      toolName: args.toolName,
+      actionClass: 'execute',
+      baseRiskLevel: 'high',
+      signals: [],
+      summary: { text: args.toolName }
+    }
+    audit.record({
+      ts: Date.now(),
+      event: 'policy.decision',
+      lane,
+      origin,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      riskLevel: 'high',
+      factsSummary: args.toolName,
+      signals: [],
+      decision: 'deny',
+      ruleId: 'rules-violated',
+      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`,
+      cause: 'rules-violated',
+      actor: 'system'
+    })
+    return result
   }
 
   // ===== 前置 validator：run_shell 预检（deny 短路，不进引擎）=====
@@ -411,6 +451,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
     ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'
       ? { cause: 'recursion-blocked' as const }
+      : {}),
+    ...(args.policyOrigins?.[decision.ruleId]
+      ? { ruleOrigin: args.policyOrigins[decision.ruleId]!.source }
       : {}),
     actor: 'system'
   })

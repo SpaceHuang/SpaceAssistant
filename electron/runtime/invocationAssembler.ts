@@ -6,7 +6,8 @@ import type {
 } from '../../src/shared/agent/invocation'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../../src/shared/agent/invocation'
 import type { FloatingNotificationManager } from '../floatingNotificationManager'
-import { loadEffectivePolicyRules } from '../confirmation/policyRulesRuntime'
+import { resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
+import { intersectPolicyRulesWithFloor } from '../../src/shared/policy/policyFloor'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { getDbConnection, getSession, updateSession } from '../database'
@@ -75,6 +76,8 @@ export interface AgentInvocationMaterials {
   assistantMessageId?: string
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => import('../../src/shared/browserTypes').BrowserDetectContext
+  /** P3：父调用的规则集上界（嵌套调用取交集；放行集合只收窄，授权不继承）。 */
+  policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
   /** §5.5 收口：宿主实例在此包装为 events.notify，不再进入调用契约。 */
   floatingNotificationManager?: FloatingNotificationManager
   emitFactEvent: (event: import('../../src/shared/assistantFactAggregator').AssistantFactEvent) => void
@@ -191,11 +194,19 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ? 'feishu'
         : 'wechat'
       : 'desktop')
+  // P3：带来源解析 + 嵌套交集（floor 上界由调用方声明；放行集合只收窄）
+  const withOrigin = db
+    ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
+    : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} }
+  const effectiveRules = materials.policyRuleFloor
+    ? intersectPolicyRulesWithFloor(withOrigin.rules, materials.policyRuleFloor)
+    : withOrigin.rules
   const policy = db
     ? {
-        effectiveRules: loadEffectivePolicyRules(db, materialsLane),
+        effectiveRules,
         decisionCache: new SqliteDecisionCache(getDbConnection(db)),
-        shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) }
+        shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) },
+        origins: withOrigin.origins
       }
     : {
         // 无库宿主（内存端口 / 测试）：显式默认材料 + 留痕——不是门控侧静默回退
@@ -246,7 +257,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ? { appendCompactionTransaction: (start: Record<string, unknown>, summary: Record<string, unknown>) => materials.appendCompactionTransaction!(start, summary) }
       : {})
   }
-  const exposure = db ? { rules: loadEffectivePolicyRules(db, materialsLane) } : undefined
+  // 暴露面规则与门控同源同判（P3：带来源解析；嵌套交集同样适用）
+  const exposure = db ? { rules: effectiveRules } : undefined
   const mcpSnapshot: McpToolSnapshot = db
     ? buildSnapshotFromDb(db, { remoteContext: materialsLane !== 'desktop' })
     : { entries: new Map(), budgetDropped: [] }

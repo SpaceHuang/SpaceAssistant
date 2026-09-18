@@ -49,6 +49,8 @@ export const APPROVAL_READONLY_TOOLS: readonly string[] = [
 ]
 
 export interface ApprovalAgentDeps {
+  /** P3：父调用规则集上界（嵌套交集；缺省 = 无上界约束）。 */
+  policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
   db: AppDatabase
   workDir: string
   userDataDir: string
@@ -287,6 +289,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
 
     const { invocation, ports } = assembleInvocation({
       requestId: inv.requestId,
+      ...(deps.policyRuleFloor ? { policyRuleFloor: deps.policyRuleFloor } : {}),
       sessionId,
       lane: 'automation',
       internalConfirmExemption: 'approval-agent',

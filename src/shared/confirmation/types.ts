@@ -264,6 +264,7 @@ export type ConfirmOutcomeCause =
   | 'recursion-blocked'
   | 'no-answerer'
   | 'gate-materials-missing'
+  | 'rules-violated'
 
 export type ConfirmOutcome =
   | {
@@ -331,6 +332,8 @@ export interface DecisionCacheEntry {
 export interface SecurityAuditEvent {
   ts: number
   event: SecurityAuditEventKind
+  /** P3：命中规则的来源维度（builtin / package / user-override / migration），审计可回答「我设的 allow 为什么没生效」。 */
+  ruleOrigin?: 'builtin' | 'package' | 'user-override' | 'migration'
   lane: ExecutionLane
   origin?: OriginInfo
   sessionId: string

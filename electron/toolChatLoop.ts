@@ -484,6 +484,7 @@ export type RunToolChatSessionArgs = {
     effectiveRules: import('../src/shared/confirmation/types').PolicyRule[]
     decisionCache: import('./confirmation/toolCallGate').GateDecisionCache
     shellPrecheck: { touchTrustedCommand: (command: string) => void }
+    policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
   }
   /** P2 批次 B：宿主端口材料（展开层注入，循环体经端口消费，Core 不持库）。 */
   hostDiagnostics?: { append(serverId: string, entry: never): void }
@@ -1613,6 +1614,7 @@ async function runToolChatSessionInner(
         effectiveRules: args.gatePolicy?.effectiveRules as import('../src/shared/confirmation/types').PolicyRule[],
         decisionCache: args.gatePolicy?.decisionCache as import('./confirmation/toolCallGate').GateDecisionCache,
         shellPrecheck: args.gatePolicy?.shellPrecheck as { touchTrustedCommand: (command: string) => void },
+        ...(args.gatePolicy?.policyOrigins ? { policyOrigins: args.gatePolicy.policyOrigins } : {}),
         remoteBudgetState,
         dangerAssessment,
         currentPageUrl,
@@ -1944,6 +1946,8 @@ async function runToolChatSessionInner(
                     m.runApprovalAgent(
                       {
                         db: hostAnswerer?.approvalDatabase as never,
+                        // P3：嵌套规则上界——内层放行集合相对父调用取交集（授权不继承）
+                        policyRuleFloor: args.gatePolicy?.effectiveRules,
                         workDir,
                         userDataDir,
                         getToolsConfig: () => toolsConfig,
