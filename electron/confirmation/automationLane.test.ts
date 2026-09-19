@@ -94,19 +94,18 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     expect(ev?.lane).toBe('automation')
   })
 
-  it('desktop-auto-approve 开启（confirmMode=auto）时 automation 的 write_file 仍被确认', async () => {
+  it('automation 的 write_file 不消费桌面快通道（lane 隔离），恒落 locked 确认', async () => {
     const r = await evaluateToolCallGate(
       base({
         lane: 'automation',
         toolName: 'write_file',
         toolInput: { path: 'a.txt', content: 'x' },
-        toolsConfig: toolsConfig({ confirmMode: 'auto' }),
         fileAutoApproval: async () => ({ approve: true }),
         appDb: openDb()
       })
     )
     expect(r.decision.type).toBe('require-confirm')
-    expect(r.decision.ruleId).not.toBe('desktop-auto-approve')
+    expect(r.decision.ruleId).toBe('automation-default-confirm')
   })
 
   it('只读工具命中 automation-readonly-allow 放行', async () => {

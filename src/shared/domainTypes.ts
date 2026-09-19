@@ -14,11 +14,9 @@ export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export type ToolCallStatus = 'calling' | 'confirming' | 'executing' | 'completed' | 'failed' | 'rejected'
 
-export type FileConfirmMode = 'diff' | 'direct' | 'auto'
 
 export interface ToolsConfig {
   enabled: boolean
-  confirmMode: FileConfirmMode
   allowedTools: string[]
   deniedTools: string[]
   pythonPath: string
@@ -32,7 +30,6 @@ export interface ToolsConfig {
 
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   enabled: true,
-  confirmMode: 'diff',
   allowedTools: [],
   deniedTools: [],
   pythonPath: 'python',
@@ -582,6 +579,8 @@ export interface ToolCallRecord {
   shellSecurityHints?: ShellSecurityHints
   /** 文件 auto 模式回落 diff 时的原因 */
   autoApproveFallback?: AutoApproveFallback
+  /** H1：本次确认由审批 Agent 裁决（无 waiter）——渲染端出只读「自动审批中」卡，不渲染交互按钮 */
+  autoAnswerer?: true
   confirmedAt?: number
   startedAt?: number
   completedAt?: number

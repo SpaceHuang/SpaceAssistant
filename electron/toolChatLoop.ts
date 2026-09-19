@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
+import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
 import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
@@ -81,7 +82,8 @@ import type {
 } from '../src/shared/agent/invocation'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../src/shared/agent/invocation'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
-import type { ExecutionLane } from '../src/shared/confirmation/types'
+import type {
+  ConfirmAnswererPolicy, ExecutionLane } from '../src/shared/confirmation/types'
 import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
@@ -93,7 +95,6 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
-import { resolveLaneAnswererPolicy } from './confirmation/answererConfig'
 import { AgentChannel } from './confirmation/agentChannel'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
@@ -485,6 +486,8 @@ export type RunToolChatSessionArgs = {
   /** P2（B1）：门控端口材料（装配期解析注入；此处空对象仅类型占位，缺失会触发门控 fail-loud）。 */
   gatePolicy?: {
     effectiveRules: import('../src/shared/confirmation/types').PolicyRule[]
+    /** 「自动」变换的档位来源（§2.1，与 effectiveRules 同源装配注入；缺省 standard） */
+    lanePackage?: import('../src/shared/policy/policyPackages').PolicyPackage
     decisionCache: import('./confirmation/toolCallGate').GateDecisionCache
     shellPrecheck: { touchTrustedCommand: (command: string) => void }
     policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
@@ -511,7 +514,7 @@ export type RunToolChatSessionArgs = {
     executorDatabase?: unknown
   }
   hostAnswerer?: {
-    policy: ReturnType<typeof import('./confirmation/answererConfig').resolveLaneAnswererPolicy>
+    /** P3 契约路径重构遗留端口：审批内层独立数据库上下文（回答者已由 gate 决策派生，不再按 lane 查配置）。 */
     approvalDatabase?: unknown
   }
   /** P7（偏差 16）：按调用裁剪（装配层从 profile.tools.trim 平移）。 */
@@ -684,6 +687,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Age
     turnOutcome = 'failed'
     throw e
   } finally {
+    // 中2（评审复验）：internal/hidden 会话（审批 Agent / automation）的用量不进统计
     args.hostUsage?.recordTurnSummary?.({
       turnId: args.turnId ?? args.sessionId,
       sessionId: args.sessionId,
@@ -1128,9 +1132,20 @@ async function runToolChatSessionInner(
               name: compatName,
               input: parseToolInput(pending.input, pending.partialJson)
             }
+            // H3：toolkit 网关入参含凭据——JSONL 事件台账落盘前与展示/落库同口径净化
+            const rawToolCallInput = normalizeToolUseInputRecord(toolUseBlock.input)
+            const isToolkitCall = compatName === 'toolkit_call' || compatName === 'toolkit.call'
             await args.emitSessionEvent?.({
               type: 'tool_call',
-              payload: { turnId: eventTurnId, stepId: requestId, toolUseId: pending.id, name: compatName, args: normalizeToolUseInputRecord(toolUseBlock.input) }
+              payload: {
+                turnId: eventTurnId,
+                stepId: requestId,
+                toolUseId: pending.id,
+                name: compatName,
+                args: isToolkitCall
+                  ? (sanitizeCapabilityParamsForDisplay(rawToolCallInput) as Record<string, unknown>)
+                  : rawToolCallInput
+              }
             })
             const mcpEntry = mcpSnapshot.entries.get(compatName)
             args.emitFactEvent?.({
@@ -1634,6 +1649,7 @@ async function runToolChatSessionInner(
         wechatConfig,
         // 缺料时保持 undefined 传递：由门控入口 fail-loud（B1 禁止静默回退）
         effectiveRules: args.gatePolicy?.effectiveRules as import('../src/shared/confirmation/types').PolicyRule[],
+        lanePackage: args.gatePolicy?.lanePackage as import('../src/shared/policy/policyPackages').PolicyPackage | undefined,
         decisionCache: args.gatePolicy?.decisionCache as import('./confirmation/toolCallGate').GateDecisionCache,
         shellPrecheck: args.gatePolicy?.shellPrecheck as { touchTrustedCommand: (command: string) => void },
         ...(args.gatePolicy?.policyOrigins ? { policyOrigins: args.gatePolicy.policyOrigins } : {}),
@@ -1821,11 +1837,11 @@ async function runToolChatSessionInner(
           reasonCode: autoApproveFallback.reasonCode
         })
       }
-      // 桌面写/编辑自动批准：构建 diff/字节 meta（纯展示，判定已在 gate 完成）
-      let fileAutoApproved = false
+      // 桌面写/编辑自动批准：构建 diff/字节 meta（纯展示，判定已在 gate 完成）。
+      // H2：判定消费 gate 显式结果字段（desktop-auto-approve 规则已删，ruleId 匹配是死分支）
+      let fileAutoApproved = gate.fileAutoApproved === true
       let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
-      if (gate.decision.type === 'auto-allow' && gate.decision.ruleId === 'desktop-auto-approve') {
-        fileAutoApproved = true
+      if (fileAutoApproved) {
         const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
         const diff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
         let bytesWritten = 0
@@ -1880,9 +1896,10 @@ async function runToolChatSessionInner(
               progressOutput: undefined
             })
           } else {
+          // M1：diff 预览由「本次确认的回答者是否为人类」驱动（confirmMode 退役）；
+          // agent 路径没有卡片 diff；autoApproveFallback（快通道未过）时保留展示原因
           const useDiff =
-            toolsConfig.confirmMode === 'diff' ||
-            toolsConfig.confirmMode === 'auto' ||
+            (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user') ||
             Boolean(autoApproveFallback)
           const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
           const actDanger =
@@ -1915,6 +1932,9 @@ async function runToolChatSessionInner(
             ...(diff ? { confirmDiff: diff } : {}),
             ...(shellSecurityHints ? { shellSecurityHints } : {}),
             ...(autoApproveFallback ? { autoApproveFallback } : {}),
+            ...(gate.decision.type === 'require-confirm' && gate.decision.answerer === 'agent'
+              ? { autoAnswerer: true as const }
+              : {}),
             ...(currentPageUrl ? { currentPageUrl } : {}),
             ...(dangerInfo ? { dangerInfo } : {}),
             ...(sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
@@ -1927,8 +1947,12 @@ async function runToolChatSessionInner(
               }
             } : {})
           })
-          // 通知浮动通知管理器（P1：经 events.notify 出口，宿主实例由装配器包装）
-          if (invocationEvents?.notify) {
+          // 通知浮动通知管理器（P1：经 events.notify 出口，宿主实例由装配器包装；
+          // H1：agent 裁决路径无 waiter，不发「待确认」浮动通知）
+          if (
+            invocationEvents?.notify &&
+            (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user')
+          ) {
             const session = hostStorage?.readSession?.(sessionId) as { name?: string } | undefined
             invocationEvents?.notify({
               kind: 'confirm-request',
@@ -1949,9 +1973,13 @@ async function runToolChatSessionInner(
             memoryTiers: confirmMemoryTiers,
             timeoutMs: gate.decision.type === 'require-confirm' ? gate.decision.timeoutMs : null
           }
-          // P2 回答者接线（I1）：回答者按配置解析（缺省值表）；kind='agent' 经工厂挂 AgentChannel，
-          // invokeApproval 延迟加载审批执行链（避免 toolChatLoop ↔ approvalAgent 循环依赖）。
-          const answererPolicy = hostAnswerer?.policy ?? resolveLaneAnswererPolicy(undefined, confirmLane)
+          // P1 回答者接线（§2.2 动作派生，融合契约路径端口架构）：回答者由 gate 决策给出
+          //（不再按 lane 查配置表）；kind='agent' 经工厂挂 AgentChannel，invokeApproval
+          // 延迟加载审批执行链（避免循环依赖）。
+          // §6：桌面链路授权上限放宽到 high（有 taskDigest 真人证据）；automation 维持 low。
+          const answererPolicy: ConfirmAnswererPolicy = {
+            kind: gate.decision.type === 'require-confirm' ? gate.decision.answerer : 'user'
+          }
           const channelOutcome = await channelFor({
             lane: confirmLane,
             requestId,
@@ -1963,7 +1991,8 @@ async function runToolChatSessionInner(
             agentChannelFactory: (agentDeps) =>
               new AgentChannel({
                 ...agentDeps,
-                // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面/IM 链路缺省无
+                // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面链路经 claudeStreamHandlers
+                // 传当前 turn 用户消息摘要；缺省 = 无任务上下文
                 ...(args.approvalTaskDigest ? { taskDigest: args.approvalTaskDigest } : {}),
                 invokeApproval: (inv) =>
                   import('./confirmation/approvalAgent').then((m) =>
@@ -1978,6 +2007,8 @@ async function runToolChatSessionInner(
                         ...(shellConfig !== undefined ? { getShellConfig: () => shellConfig } : {}),
                         ...(browserConfig ? { getBrowserConfig: () => browserConfig } : {}),
                         getWorkDir: () => (resolveWorkDir ? resolveWorkDir() : workDir),
+                        // §6 授权上限：desktop 允许到 high；automation（及审批内层）维持 low
+                        maxAuthorization: confirmLane === 'automation' ? 'low' : 'high',
                         // P1-1：凭证对配对传入——复用外层会话已解析的 model/baseUrl/getApiKey，
                         // 审批请求打用户实际服务端点（中转/自定义端点下不失效）；Profile 机制落地后按 approvalProfileId 解析独立快模型
                         model,
@@ -2024,9 +2055,12 @@ async function runToolChatSessionInner(
               : channelOutcome.kind === 'timeout'
                 ? 'timeout'
                 : 'rejected'
-          // 回答者与结束原因随 outcome 记录（缺省视为 user，保持既有桌面/IM 路径行为等价）
+          // 回答者与结束原因随 outcome 记录（I3：由 decision 派生——agent 裁决不写任何记忆）
           if (channelOutcome.kind !== 'approved-with-action') {
-            confirmAnswererKind = channelOutcome.answererKind ?? 'user'
+            confirmAnswererKind =
+              gate.decision.type === 'require-confirm'
+                ? gate.decision.answerer
+                : (channelOutcome.answererKind ?? 'user')
             confirmOutcomeCause = channelOutcome.cause
             channelRejectSummary = channelOutcome.reason?.summary
           }

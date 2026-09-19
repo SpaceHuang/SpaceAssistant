@@ -411,7 +411,6 @@ export const ChatBubble = memo(function ChatBubble({
         shellConfig={shellConfig}
         sessionMetadata={sessionMetadata}
         focus={focusToolUseId === tc.id}
-        confirmMode={toolsInteractive?.confirmMode ?? 'diff'}
         onConfirm={
           toolsLive && confirmTool && tc.status === 'confirming'
             ? (approved, options) => confirmTool(tc.id, approved, options)
@@ -550,7 +549,6 @@ export const ChatBubble = memo(function ChatBubble({
   prev.enter === next.enter &&
   prev.focusToolUseId === next.focusToolUseId &&
   prev.toolsInteractive?.requestId === next.toolsInteractive?.requestId &&
-  prev.toolsInteractive?.confirmMode === next.toolsInteractive?.confirmMode &&
   prev.toolsInteractive?.onToolConfirm === next.toolsInteractive?.onToolConfirm &&
   prev.toolsInteractive?.onToolCancel === next.toolsInteractive?.onToolCancel &&
   prev.workDir === next.workDir &&

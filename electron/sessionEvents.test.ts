@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  stripPartialJsonForPersist,
   getSessionEventSink,
   beginSessionEventShutdown,
   SessionEventWriter,
@@ -469,5 +470,23 @@ describe('session events', () => {
     expect(() => sink.appendCritical({ type: 'turn_end', payload: {} })).toThrow('session event sink is closing')
     await expect(flushAllSessionEventSinks()).resolves.toBeUndefined()
     expect((await readSessionEvents(sink.eventsPath)).map((event) => event.payload.text)).toEqual(['accepted-before-shutdown'])
+  })
+})
+
+describe('stripPartialJsonForPersist（R1：流式入参分片不落台账）', () => {
+  it('assistant_chunk 的 tool_call_delta.partialJson 剥离为空串', () => {
+    const out = stripPartialJsonForPersist({
+      type: 'assistant_chunk',
+      payload: { turnId: 't1', delta: { type: 'tool_call_delta', index: 2, partialJson: '{"accessTok' } }
+    })
+    expect(out.type).toBe('assistant_chunk')
+    expect((out.payload.delta as { partialJson: string }).partialJson).toBe('')
+  })
+
+  it('其他 delta 类型与其他事件原样透传', () => {
+    const textChunk = { type: 'assistant_chunk', payload: { delta: { type: 'text_delta', text: 'hi' } } }
+    expect(stripPartialJsonForPersist(textChunk)).toBe(textChunk)
+    const toolCall = { type: 'tool_call', payload: { args: { a: 1 } } }
+    expect(stripPartialJsonForPersist(toolCall)).toBe(toolCall)
   })
 })

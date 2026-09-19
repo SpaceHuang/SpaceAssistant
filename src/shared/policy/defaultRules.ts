@@ -85,18 +85,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
 
   // ===== 第 4 步段：auto-evaluator（自动审批器入口）=====
-  // 命中不产生 Decision，评估器裁决通过才返回；不裁决交还规则链后续条目（约定 2 例外）。
-  // match 收窄到现状等价域：仅桌面 + 仅 write_file/edit_file + confirmMode=auto 配置前置。
-  {
-    id: 'desktop-auto-approve',
-    when: 'invocation',
-    match: { lane: ['desktop'], toolName: ['write_file', 'edit_file'] },
-    action: 'auto-evaluator',
-    configRequires: { config: 'confirmMode', equals: 'auto' },
-    reason: '桌面 confirmMode=auto 时写/编辑文件的自动审批'
-  },
+  // 命中即「自动」动作：确定性快通道批准才返回；未裁决交审批 Agent（引擎第 4 步，answerer=agent）。
+  // P1 起 desktop 通用「自动」由档位变换承载（standard 非 locked ask→auto-evaluator，§2.1 LANE_PROFILES），
+  // 原 desktop-auto-approve 规则（confirmMode 门控）随之删除。
   // run_shell 预检放行（等价现 canSkipShellConfirm：结构化信任 argv 前缀匹配 / permissionDecision=allow）。
-  // 评估器由执行链路注入（预检结果闭包）；不裁决则交还规则链。信任命令的 exact 档同时经缓存命中
+  // 评估器由执行链路注入（预检结果闭包）。信任命令的 exact 档同时经缓存命中
   // （迁移/记N 写入的 decision_cache 条目），两路语义一致（缓存键仅在无风险提示时派生）。
   // 评审 B2：auto-evaluator 必须带 lane 限定——automation 的 run_shell 即使命中预检信任命令也落 confirm。
   {

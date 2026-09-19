@@ -187,13 +187,13 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const discovery = await discoverToolsFromSession(ctx.db, profile, session)
       if (!discovery.ok) {
         if (interactiveAuthRequired) {
-          updateServerStatus(ctx.db, serverId, {
+          await updateServerStatus(ctx.db, serverId, {
             status: 'auth-required',
             lastError: { code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE, occurredAt: new Date().toISOString() }
           })
           return { ok: false, code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE }
         }
-        updateServerStatus(ctx.db, serverId, {
+        await updateServerStatus(ctx.db, serverId, {
           status: 'failed',
           lastError: { code: discovery.code, message: discovery.message, occurredAt: new Date().toISOString() }
         })
@@ -204,7 +204,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const current = listProfiles(ctx.db).find((p) => p.id === serverId)
       const shouldAutoFillEnabledTools =
         current?.enabled === true && current.enabledToolNames.length === 0 && discovery.tools.length > 0
-      updateServerStatus(ctx.db, serverId, {
+      await updateServerStatus(ctx.db, serverId, {
         status: discovery.tools.length > 0 ? 'connected' : 'no-tools',
         discoveredAt: new Date().toISOString(),
         discoveredProtocolVersion: discovery.protocolVersion,
@@ -224,13 +224,13 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const message = error instanceof Error ? error.message : String(error)
       safeAppendDiagnostic(ctx.db, serverId, { code: 'refresh-failed', message })
       if (interactiveAuthRequired) {
-        updateServerStatus(ctx.db, serverId, {
+        await updateServerStatus(ctx.db, serverId, {
           status: 'auth-required',
           lastError: { code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE, occurredAt: new Date().toISOString() }
         })
         return { ok: false, code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE }
       }
-      updateServerStatus(ctx.db, serverId, {
+      await updateServerStatus(ctx.db, serverId, {
         status: 'failed',
         lastError: { code: 'refresh-failed', message, occurredAt: new Date().toISOString() }
       })

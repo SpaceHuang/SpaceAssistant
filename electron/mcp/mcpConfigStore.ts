@@ -290,7 +290,7 @@ export function clearToolCache(db: AppDatabase, serverId: string): void {
 }
 
 /** 状态类字段补丁（连接测试/刷新工具后更新），不触碰 Secret。 */
-export function updateServerStatus(
+export async function updateServerStatus(
   db: AppDatabase,
   serverId: string,
   patch: {
@@ -303,7 +303,10 @@ export function updateServerStatus(
     enabledToolNames?: string[]
     auth?: Partial<McpServerProfile['auth']>
   }
-): void {
+): Promise<void> {
+  // 中6（评审）：整表读改写必须在 secret 写锁内，避免与 appendServer 交错造成
+  // 「锁外读到旧表 → 整表回写」丢失并发新增的服务（secret 成孤儿）。
+  return withMcpSecretWriteLock(() => {
   const profiles = listProfiles(db)
   const index = profiles.findIndex((p) => p.id === serverId)
   if (index < 0) return
@@ -324,6 +327,7 @@ export function updateServerStatus(
   }
   profiles[index] = next
   setConfigValue(db, MCP_CONFIG_KEYS.profiles, JSON.stringify(profiles))
+  })
 }
 
 /** 依据当前 Secret map 重算所有 Profile 的 secretPresent / env valuePresent。 */

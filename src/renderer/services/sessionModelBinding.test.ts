@@ -32,12 +32,12 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     workDirProfiles: [],
     activeWorkDirProfileId: 'default',
     maxParallelChatSessions: 3,
-    tools: { enabled: true, confirmMode: 'diff', deniedTools: [], allowedTools: [], pythonPath: 'python', scriptTimeout: 300, fileCheckpointingEnabled: true, maxFileSnapshots: 100, grepTimeoutSec: 60 },
+    tools: { enabled: true, deniedTools: [], allowedTools: [], pythonPath: 'python', scriptTimeout: 300, fileCheckpointingEnabled: true, maxFileSnapshots: 100, grepTimeoutSec: 60 },
     skills: { routing: { mode: 'llm', enabled: true, model: '', timeoutMs: 15000, includeTriggersInCatalog: false }, alwaysLoad: [] },
     wiki: { enabled: false, rootPath: 'llm-wiki' },
     feishu: { enabled: false },
     browser: { enabled: true, trustedDomains: [], allowedDomains: [] },
-    shell: { enabled: true, trustedCommands: [], confirmMode: 'always' },
+    shell: { enabled: true, trustedCommands: [] },
     ...overrides
   } as AppConfig
 }

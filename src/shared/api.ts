@@ -312,6 +312,8 @@ export type SpaceAssistantApi = {
   securitySetRuleOverride: (payload: {
     ruleId: string
     action: PolicyAction
+    /** 覆盖提交所在链路（B2 动作域校验；缺省按最严格 3 态域） */
+    lane?: ExecutionLane
     params?: Record<string, unknown>
   }) => Promise<{ ok: true } | { ok: false; error: string }>
   /** 系统保护（禁止类）规则「启用/不启用」：启用=在策略链中生效，不启用=不再作为硬拒绝。 */

@@ -155,12 +155,11 @@ describe('resolveMessageToolsInteractive', () => {
     const interactive = resolveMessageToolsInteractive({
       message: confirmingMessage,
       sessionId: 'sess-1',
-      confirmMode: 'diff',
       pendingItems: [pendingItem],
       streamingAssistantId: 'msg-2',
       streamingRequestId: null
     })
-    expect(interactive).toEqual({ requestId: 'req-pending', confirmMode: 'diff' })
+    expect(interactive).toEqual({ requestId: 'req-pending' })
   })
 
   it('restores interaction when a reloaded message status is stale but the pending store still has the tool', () => {
@@ -172,11 +171,10 @@ describe('resolveMessageToolsInteractive', () => {
       resolveMessageToolsInteractive({
         message: reloadedMessage,
         sessionId: 'sess-1',
-        confirmMode: 'diff',
         pendingItems: [pendingItem],
         streamingRequestId: null
       })
-    ).toEqual({ requestId: 'req-pending', confirmMode: 'diff' })
+    ).toEqual({ requestId: 'req-pending' })
   })
 
   it('returns scalars for executing tool on streaming assistant', () => {
@@ -197,11 +195,10 @@ describe('resolveMessageToolsInteractive', () => {
       resolveMessageToolsInteractive({
         message: executing,
         sessionId: 'sess-1',
-        confirmMode: 'diff',
         pendingItems: [],
         streamingAssistantId: 'msg-exec',
         streamingRequestId: 'req-live'
       })
-    ).toEqual({ requestId: 'req-live', confirmMode: 'diff' })
+    ).toEqual({ requestId: 'req-live' })
   })
 })

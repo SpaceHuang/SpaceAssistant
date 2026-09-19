@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadEffectivePolicyRules } from './policyRulesRuntime'
+import { loadEffectivePolicyRules, readPolicyPackages } from './policyRulesRuntime'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
@@ -45,12 +45,14 @@ function gateMaterialsFor(db: AppDatabase | undefined, lane: import('../../src/s
   if (db) {
     return {
       effectiveRules: loadEffectivePolicyRules(db, lane),
+      lanePackage: readPolicyPackages(db)[lane] ?? 'standard',
       decisionCache: new SqliteDecisionCache(getDbConnection(db)),
       shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) }
     }
   }
   return {
     effectiveRules: DEFAULT_POLICY_RULES,
+    lanePackage: 'standard',
     decisionCache: {
       lookup: () => null,
       record: () => undefined,
@@ -102,25 +104,23 @@ describe('evaluateToolCallGate', () => {
     expect(ev!.actor).toBe('system')
   })
 
-  it('桌面 write_file confirmMode=auto：评估器批准 → auto-allow(desktop-auto-approve)', async () => {
+  it('桌面 write_file（standard「自动」）：快通道批准 → auto-allow(default-write-execute-ask 经 transform)', async () => {
     const r = await evaluateToolCallGate(
       base({
         toolName: 'write_file',
         toolInput: { path: 'a.txt', content: 'x' },
-        toolsConfig: toolsConfig({ confirmMode: 'auto' }),
         fileAutoApproval: async () => ({ approve: true })
       })
     )
     expect(r.decision.type).toBe('auto-allow')
-    expect(r.decision.ruleId).toBe('desktop-auto-approve')
+    expect(r.decision.ruleId).toBe('default-write-execute-ask')
   })
 
-  it('桌面 write_file confirmMode=auto 评估器拒绝 → require-confirm + fallback', async () => {
+  it('桌面 write_file 快通道拒绝 → require-confirm(agent) + fallback', async () => {
     const r = await evaluateToolCallGate(
       base({
         toolName: 'write_file',
         toolInput: { path: 'a.txt', content: 'x' },
-        toolsConfig: toolsConfig({ confirmMode: 'auto' }),
         fileAutoApproval: async () => ({ approve: false, reason: '过大', reasonCode: 'oversize' })
       })
     )
@@ -128,12 +128,17 @@ describe('evaluateToolCallGate', () => {
     expect(r.autoApproveFallback?.reasonCode).toBe('oversize')
   })
 
-  it('桌面 write_file confirmMode=diff → require-confirm，带 path 记忆档位', async () => {
+  it('桌面 write_file 未过快通道 → require-confirm(answerer=agent)，带 path 记忆档位', async () => {
     const r = await evaluateToolCallGate(
-      base({ toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' } })
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        fileAutoApproval: async () => ({ approve: false, reason: '过大', reasonCode: 'oversize' })
+      })
     )
     expect(r.decision.type).toBe('require-confirm')
     if (r.decision.type === 'require-confirm') {
+      expect(r.decision.answerer).toBe('agent')
       expect(r.decision.memoryTiers.length).toBeGreaterThan(0)
     }
   })
@@ -445,23 +450,30 @@ describe('evaluateToolCallGate', () => {
   })
 })
 
-describe('desktop-auto-approve 规则覆盖（确认模式并入规则列表，§7）', () => {
+describe('custom 套餐规则覆盖（动作域按 lane，B2）', () => {
   function dbWithDesktopOverride(action: 'ask' | 'allow' | 'auto-evaluator'): AppDatabase {
     const db = openDb()
     writePolicyPackages(db, { desktop: 'custom', wechat: 'standard', feishu: 'standard', automation: 'standard' })
-    new PolicyRuleStore(getDbConnection(db)).setOverride({ ruleId: 'desktop-auto-approve', action })
+    new PolicyRuleStore(getDbConnection(db)).setOverride({ ruleId: 'mcp-tool-ask', action })
     return db
   }
 
-  it('覆盖为"询问"：confirmMode=auto 也一律确认（覆盖剥离 confirmMode 门控）', async () => {
+  it('覆盖为"询问"：user 确认（不经过快通道/评估器）', async () => {
     const db = dbWithDesktopOverride('ask')
     let evaluatorCalled = false
     const r = await evaluateToolCallGate(
       base({
-        toolName: 'write_file',
-        toolInput: { path: 'a.txt', content: 'x' },
-        toolsConfig: toolsConfig({ confirmMode: 'auto' }),
+        toolName: 'mcp__srv__query',
+        toolInput: {},
         appDb: db,
+        mcpEntry: {
+          serverId: 'srv',
+          serverName: 'Srv',
+          originalName: 'query',
+          mappedName: 'mcp__srv__query',
+          description: '',
+          inputSchema: {}
+        },
         fileAutoApproval: async () => {
           evaluatorCalled = true
           return { approve: true }
@@ -469,19 +481,29 @@ describe('desktop-auto-approve 规则覆盖（确认模式并入规则列表，�
       })
     )
     expect(r.decision.type).toBe('require-confirm')
-    if (r.decision.type === 'require-confirm') expect(r.decision.ruleId).toBe('desktop-auto-approve')
+    if (r.decision.type === 'require-confirm') {
+      expect(r.decision.ruleId).toBe('mcp-tool-ask')
+      expect(r.decision.answerer).toBe('user')
+    }
     expect(evaluatorCalled).toBe(false)
   })
 
-  it('覆盖为"允许"：confirmMode=diff 也直接放行（不经过评估器）', async () => {
+  it('覆盖为"允许"：直接放行（不经过评估器）', async () => {
     const db = dbWithDesktopOverride('allow')
     let evaluatorCalled = false
     const r = await evaluateToolCallGate(
       base({
-        toolName: 'write_file',
-        toolInput: { path: 'a.txt', content: 'x' },
-        toolsConfig: toolsConfig({ confirmMode: 'diff' }),
+        toolName: 'mcp__srv__query',
+        toolInput: {},
         appDb: db,
+        mcpEntry: {
+          serverId: 'srv',
+          serverName: 'Srv',
+          originalName: 'query',
+          mappedName: 'mcp__srv__query',
+          description: '',
+          inputSchema: {}
+        },
         fileAutoApproval: async () => {
           evaluatorCalled = true
           return { approve: false }
@@ -489,27 +511,59 @@ describe('desktop-auto-approve 规则覆盖（确认模式并入规则列表，�
       })
     )
     expect(r.decision.type).toBe('auto-allow')
-    expect(r.decision.ruleId).toBe('desktop-auto-approve')
+    expect(r.decision.ruleId).toBe('mcp-tool-ask')
     expect(evaluatorCalled).toBe(false)
   })
 
-  it('覆盖为"自动"：confirmMode=diff 也走评估器裁决', async () => {
+  it('覆盖为"自动"：无确定性快通道（MCP 工具）→ 审批 Agent 裁决', async () => {
     const db = dbWithDesktopOverride('auto-evaluator')
-    let evaluatorCalled = false
-    const r = await evaluateToolCallGate(
+    const declined = await evaluateToolCallGate(
       base({
-        toolName: 'write_file',
-        toolInput: { path: 'a.txt', content: 'x' },
-        toolsConfig: toolsConfig({ confirmMode: 'diff' }),
+        toolName: 'mcp__srv__query',
+        toolInput: {},
         appDb: db,
-        fileAutoApproval: async () => {
-          evaluatorCalled = true
-          return { approve: true }
+        mcpEntry: {
+          serverId: 'srv',
+          serverName: 'Srv',
+          originalName: 'query',
+          mappedName: 'mcp__srv__query',
+          description: '',
+          inputSchema: {}
         }
       })
     )
-    expect(evaluatorCalled).toBe(true)
-    expect(r.decision.type).toBe('auto-allow')
-    expect(r.decision.ruleId).toBe('desktop-auto-approve')
+    expect(declined.decision.type).toBe('require-confirm')
+    if (declined.decision.type === 'require-confirm') {
+      expect(declined.decision.ruleId).toBe('mcp-tool-ask')
+      expect(declined.decision.answerer).toBe('agent')
+    }
+  })
+})
+
+describe('fileAutoApproved 显式结果字段（H2：自动批准审计不再依赖 ruleId）', () => {
+  it('desktop write_file 快通道批准 → fileAutoApproved=true；未批准 → false', async () => {
+    const approved = await evaluateToolCallGate(
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        fileAutoApproval: async () => ({ approve: true })
+      })
+    )
+    expect(approved.decision.type).toBe('auto-allow')
+    expect(approved.fileAutoApproved).toBe(true)
+
+    const declined = await evaluateToolCallGate(
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        fileAutoApproval: async () => ({ approve: false, reason: '过大', reasonCode: 'oversize' })
+      })
+    )
+    expect(declined.fileAutoApproved).toBe(false)
+  })
+
+  it('非写文件工具恒 false（预计算未跑）', async () => {
+    const r = await evaluateToolCallGate(base())
+    expect(r.fileAutoApproved).toBe(false)
   })
 })

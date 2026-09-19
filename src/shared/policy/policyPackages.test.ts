@@ -3,15 +3,17 @@ import type { PolicyRule } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
 import {
   DEFAULT_POLICY_PACKAGES,
+  effectiveActionFor,
+  isPackageAvailableForLane,
   isPolicyPackage,
   normalizePolicyPackages,
   resolvePolicyRules,
-  validatePolicyPackageForLane,
   validateRuleOverride
 } from './policyPackages'
 
 const RULES: PolicyRule[] = [
   { id: 'locked-deny', when: 'invocation', action: 'deny', locked: true, reason: '底线' },
+  { id: 'locked-ask', when: 'invocation', action: 'ask', locked: true, reason: '必须真人' },
   { id: 'auto-1', when: 'invocation', action: 'auto-evaluator', reason: '自动审批' },
   { id: 'ask-1', when: 'invocation', action: 'ask', reason: '询问' },
   { id: 'allow-1', when: 'invocation', action: 'allow', reason: '放行' }
@@ -27,6 +29,12 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     })
   })
 
+  it('normalizePolicyPackages：automation 非法档位收敛为 standard（M2，仅提供 standard）', () => {
+    expect(normalizePolicyPackages({ automation: 'loose' }).automation).toBe('standard')
+    expect(normalizePolicyPackages({ automation: 'custom' }).automation).toBe('standard')
+    expect(normalizePolicyPackages({ automation: 'strict' }).automation).toBe('standard')
+  })
+
   it('isPolicyPackage 校验合法值', () => {
     expect(isPolicyPackage('strict')).toBe(true)
     expect(isPolicyPackage('custom')).toBe(true)
@@ -34,39 +42,65 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     expect(isPolicyPackage(1)).toBe(false)
   })
 
-  it('standard 套餐返回原规则引用（零行为变化快路径）', () => {
-    const out = resolvePolicyRules({ lane: 'desktop', rules: RULES })
+  it('恒等 lane 的 standard 返回原规则引用（零行为变化快路径）', () => {
+    const out = resolvePolicyRules({ lane: 'wechat', rules: RULES })
     expect(out).toBe(RULES)
   })
 
-  it('strict 套餐：非 locked 的 allow/auto-evaluator 上调为 ask，locked 不动', () => {
+  it('standard 恒等返回原引用（desktop 的「自动」映射在引擎产出层经 deps.transform 生效）', () => {
+    // 规则集层不做 standard 变换：ask 条目提升到引擎第 4 步会破坏 mcp-readonly-allow 等顺序语义
+    const out = resolvePolicyRules({ lane: 'desktop', rules: RULES })
+    expect(out).toBe(RULES)
+    expect(effectiveActionFor('desktop', 'standard', { action: 'ask' })).toBe('auto-evaluator')
+  })
+
+  it('desktop strict：非 locked 的 allow/auto-evaluator 上调为 ask，locked 不动', () => {
     const out = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'strict' }, rules: RULES })
     expect(out.map((r) => [r.id, r.action])).toEqual([
       ['locked-deny', 'deny'],
+      ['locked-ask', 'ask'],
       ['auto-1', 'ask'],
       ['ask-1', 'ask'],
       ['allow-1', 'ask']
     ])
-    // 不改原数组
-    expect(RULES[3]!.action).toBe('allow')
   })
 
-  it('loose 套餐：非 locked 的 ask 下调为 allow，locked 与 deny 不动', () => {
-    const out = resolvePolicyRules({ lane: 'wechat', packages: { wechat: 'loose' }, rules: RULES })
+  it('desktop loose：非 locked 的 ask 下调为 allow，auto-evaluator 保持，locked 不动', () => {
+    const out = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'loose' }, rules: RULES })
     expect(out.map((r) => [r.id, r.action])).toEqual([
       ['locked-deny', 'deny'],
+      ['locked-ask', 'ask'],
       ['auto-1', 'auto-evaluator'],
       ['ask-1', 'allow'],
       ['allow-1', 'allow']
     ])
   })
 
-  it('custom 套餐：应用动作覆盖；locked 与未知 id 被忽略', () => {
+  it('wechat loose：非 locked 的 ask 下调为 allow（现状等价）', () => {
+    const out = resolvePolicyRules({ lane: 'wechat', packages: { wechat: 'loose' }, rules: RULES })
+    expect(out.map((r) => [r.id, r.action])).toEqual([
+      ['locked-deny', 'deny'],
+      ['locked-ask', 'ask'],
+      ['auto-1', 'auto-evaluator'],
+      ['ask-1', 'allow'],
+      ['allow-1', 'allow']
+    ])
+  })
+
+  it('automation 伪造档位（loose/strict/custom）一律按 standard 恒等（M2 运行时防护）', () => {
+    for (const pkg of ['loose', 'strict', 'custom'] as const) {
+      const out = resolvePolicyRules({ lane: 'automation', packages: { automation: pkg }, rules: RULES })
+      expect(out.map((r) => r.action)).toEqual(RULES.map((r) => r.action))
+    }
+  })
+
+  it('custom 套餐：应用动作覆盖；locked 与未知 id 被忽略；wechat 拒绝 auto-evaluator 覆盖（B2 引擎层）', () => {
     const out = resolvePolicyRules({
       lane: 'feishu',
       packages: { feishu: 'custom' },
       overrides: [
         { ruleId: 'ask-1', action: 'allow' },
+        { ruleId: 'allow-1', action: 'auto-evaluator' },
         { ruleId: 'locked-deny', action: 'allow' },
         { ruleId: 'nope', action: 'deny' }
       ],
@@ -74,63 +108,76 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     })
     expect(out.map((r) => [r.id, r.action])).toEqual([
       ['locked-deny', 'deny'],
+      ['locked-ask', 'ask'],
       ['auto-1', 'auto-evaluator'],
       ['ask-1', 'allow'],
+      // allow-1 的 auto-evaluator 覆盖不在 feishu 动作域内 → 丢弃（fail-closed）
       ['allow-1', 'allow']
     ])
   })
 
-  it('validateRuleOverride：locked 不可改、未知规则拒绝、动作限定 deny/allow/ask', () => {
+  it('desktop custom：auto-evaluator 在动作域内，覆盖生效（B2）', () => {
+    const out = resolvePolicyRules({
+      lane: 'desktop',
+      packages: { desktop: 'custom' },
+      overrides: [{ ruleId: 'allow-1', action: 'auto-evaluator' }],
+      rules: RULES
+    })
+    expect(out.find((r) => r.id === 'allow-1')?.action).toBe('auto-evaluator')
+  })
+
+  it('validateRuleOverride：locked 不可改、未知规则拒绝；动作域按 lane（B2）', () => {
     expect(validateRuleOverride(RULES, 'locked-deny', 'allow').ok).toBe(false)
     expect(validateRuleOverride(RULES, 'missing', 'ask').ok).toBe(false)
+    // wechat/feishu 拒绝 auto-evaluator（3 态）；desktop 接受（4 态）
+    expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator', 'wechat').ok).toBe(false)
+    expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator', 'feishu').ok).toBe(false)
+    expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator', 'desktop').ok).toBe(true)
+    // 未带 lane：按最严格 3 态（fail-closed）
     expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator').ok).toBe(false)
-    const ok = validateRuleOverride(RULES, 'ask-1', 'allow')
+    const ok = validateRuleOverride(RULES, 'ask-1', 'allow', 'wechat')
     expect(ok.ok).toBe(true)
+  })
+
+  it('isPackageAvailableForLane：automation 仅 standard；其余 lane 四档全开（§2.1）', () => {
+    expect(isPackageAvailableForLane('automation', 'standard')).toBe(true)
+    expect(isPackageAvailableForLane('automation', 'loose')).toBe(false)
+    expect(isPackageAvailableForLane('automation', 'custom')).toBe(false)
+    expect(isPackageAvailableForLane('desktop', 'loose')).toBe(true)
+    expect(isPackageAvailableForLane('wechat', 'custom')).toBe(true)
   })
 })
 
-describe('auto-evaluator 规则的覆盖（确认模式并入规则列表）', () => {
-  const AUTO_RULES = [
+describe('auto-evaluator 基线规则的覆盖（shell-precheck-auto-allow）', () => {
+  const AUTO_RULES: PolicyRule[] = [
     {
-      id: 'desktop-auto-approve',
-      when: 'invocation' as const,
-      match: { lane: ['desktop' as const], toolName: ['write_file', 'edit_file'] },
-      action: 'auto-evaluator' as const,
-      configRequires: { config: 'confirmMode', equals: 'auto' },
-      reason: 'r'
+      id: 'shell-precheck-auto-allow',
+      when: 'invocation',
+      match: { lane: ['desktop'], toolName: 'run_shell' },
+      action: 'auto-evaluator',
+      reason: 'shell 预检'
     },
-    { id: 'plain-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
+    { id: 'plain-ask', when: 'invocation', action: 'ask', reason: 'r2' }
   ]
 
-  it('默认动作为 auto-evaluator 的规则允许覆盖为 询问/允许/自动', () => {
-    expect(validateRuleOverride(AUTO_RULES, 'desktop-auto-approve', 'ask').ok).toBe(true)
-    expect(validateRuleOverride(AUTO_RULES, 'desktop-auto-approve', 'allow').ok).toBe(true)
-    expect(validateRuleOverride(AUTO_RULES, 'desktop-auto-approve', 'auto-evaluator').ok).toBe(true)
-    // 普通规则仍不允许覆盖成 auto-evaluator
-    expect(validateRuleOverride(AUTO_RULES, 'plain-ask', 'auto-evaluator').ok).toBe(false)
+  it('auto-evaluator 基线规则的覆盖按 lane 动作域校验（desktop 4 态）', () => {
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'ask', 'desktop').ok).toBe(true)
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'allow', 'desktop').ok).toBe(true)
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'auto-evaluator', 'desktop').ok).toBe(true)
+    // wechat 即使对该规则也拒绝 auto-evaluator（3 态动作域，B2）
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'auto-evaluator', 'wechat').ok).toBe(false)
   })
 
   it('覆盖后剥离条件门控（configRequires/askUnless/requiresContext），用户显式定死动作', () => {
+    const gated: PolicyRule[] = [{ ...AUTO_RULES[0]!, configRequires: { config: 'someFlag', equals: true } }]
     const out = resolvePolicyRules({
       lane: 'desktop',
       packages: { desktop: 'custom' },
-      overrides: [{ ruleId: 'desktop-auto-approve', action: 'ask' }],
-      rules: AUTO_RULES
+      overrides: [{ ruleId: 'shell-precheck-auto-allow', action: 'ask' }],
+      rules: gated
     })
-    const r = out.find((x) => x.id === 'desktop-auto-approve')!
+    const r = out.find((x) => x.id === 'shell-precheck-auto-allow')!
     expect(r.action).toBe('ask')
-    expect(r.configRequires).toBeUndefined()
-  })
-
-  it('覆盖为 auto-evaluator：保留评估器语义且不再受 confirmMode 门控', () => {
-    const out = resolvePolicyRules({
-      lane: 'desktop',
-      packages: { desktop: 'custom' },
-      overrides: [{ ruleId: 'desktop-auto-approve', action: 'auto-evaluator' }],
-      rules: AUTO_RULES
-    })
-    const r = out.find((x) => x.id === 'desktop-auto-approve')!
-    expect(r.action).toBe('auto-evaluator')
     expect(r.configRequires).toBeUndefined()
   })
 })
@@ -165,72 +212,38 @@ describe('fail-closed 兜底规则必须 locked（评审中等项）', () => {
   })
 })
 
-describe('P2-5 套餐约束：agent 回答者的 lane 不得 loose / custom 向下覆盖', () => {
-  it('answererKind=agent 的 lane 不得套用 loose（按 standard 处理）', () => {
-    const out = resolvePolicyRules({
-      lane: 'wechat',
-      packages: { wechat: 'loose' },
-      rules: DEFAULT_POLICY_RULES,
-      answererKind: 'agent'
-    })
-    const ask = out.find((r) => r.id === 'im-write-ask')
-    expect(ask?.action).toBe('ask')
+describe('B1：desktop standard 下 locked ask 保持人工（不交 Agent 裁决）', () => {
+  const LOCKED_DESKTOP_ASKS = ['toolkit-act-ask', 'lark-high-impact-ask', 'lark-unknown-ask']
+
+  it('三条 locked ask 在 desktop standard 下动作仍为 ask', () => {
+    const out = resolvePolicyRules({ lane: 'desktop', rules: DEFAULT_POLICY_RULES })
+    for (const id of LOCKED_DESKTOP_ASKS) {
+      expect(out.find((r) => r.id === id)?.action, id).toBe('ask')
+    }
   })
 
-  it('answererKind=agent 的 custom 覆盖只保留收紧项，向下覆盖（→allow）被丢弃', () => {
-    const out = resolvePolicyRules({
-      lane: 'automation',
-      packages: { automation: 'custom' },
-      overrides: [
-        { ruleId: 'im-write-ask', action: 'allow' },        // 向下：丢弃
-        { ruleId: 'desktop-auto-approve', action: 'deny' }  // 收紧：保留
-      ],
-      rules: DEFAULT_POLICY_RULES,
-      answererKind: 'agent'
-    })
-    expect(out.find((r) => r.id === 'im-write-ask')?.action).toBe('ask')
-    expect(out.find((r) => r.id === 'desktop-auto-approve')?.action).toBe('deny')
-  })
-
-  it('user 回答者行为不变：loose/custom 照旧生效', () => {
-    const loosened = resolvePolicyRules({
-      lane: 'desktop',
-      packages: { desktop: 'loose' },
-      rules: DEFAULT_POLICY_RULES,
-      answererKind: 'user'
-    })
-    expect(loosened.find((r) => r.id === 'im-write-ask')?.action).toBe('allow')
-
-    const customed = resolvePolicyRules({
-      lane: 'desktop',
-      packages: { desktop: 'custom' },
-      overrides: [{ ruleId: 'im-write-ask', action: 'allow' }],
-      rules: DEFAULT_POLICY_RULES,
-      answererKind: 'user'
-    })
-    expect(customed.find((r) => r.id === 'im-write-ask')?.action).toBe('allow')
-  })
-
-  it('validatePolicyPackageForLane：agent lane 拒绝 loose，user lane 不受限', () => {
-    expect(validatePolicyPackageForLane('automation', 'loose', 'agent').ok).toBe(false)
-    expect(validatePolicyPackageForLane('desktop', 'loose', 'user').ok).toBe(true)
-    expect(validatePolicyPackageForLane('automation', 'strict', 'agent').ok).toBe(true)
+  it('desktop strict/loose 下 locked ask 同样不变换', () => {
+    for (const pkg of ['strict', 'loose'] as const) {
+      const out = resolvePolicyRules({ lane: 'desktop', packages: { desktop: pkg }, rules: DEFAULT_POLICY_RULES })
+      for (const id of LOCKED_DESKTOP_ASKS) {
+        expect(out.find((r) => r.id === id)?.action, `${pkg}:${id}`).toBe('ask')
+      }
+    }
   })
 })
 
-describe('P2-5 评审修复：deny 回答者同样受套餐禁令约束（防「全拒」被静默翻转）', () => {
-  it('validatePolicyPackageForLane：deny lane 拒绝 loose', () => {
-    expect(validatePolicyPackageForLane('desktop', 'loose', 'deny').ok).toBe(false)
+describe('standard 规则集恒等（两端共用变换表经 effectiveActionFor 供显示/引擎产出层）', () => {
+  it('desktop standard 规则集原样返回；wechat 同为原引用（零行为变化）', () => {
+    expect(resolvePolicyRules({ lane: 'desktop', rules: DEFAULT_POLICY_RULES })).toBe(DEFAULT_POLICY_RULES)
+    expect(resolvePolicyRules({ lane: 'wechat', rules: DEFAULT_POLICY_RULES })).toBe(DEFAULT_POLICY_RULES)
+    // 生效动作（显示=实际）经 effectiveActionFor：desktop 询问行显示「自动」
+    expect(effectiveActionFor('desktop', 'standard', { action: 'ask' })).toBe('auto-evaluator')
+    expect(effectiveActionFor('wechat', 'standard', { action: 'ask' })).toBe('ask')
   })
 
-  it('answererKind=deny 的 custom 覆盖只保留收紧项', () => {
-    const out = resolvePolicyRules({
-      lane: 'wechat',
-      packages: { wechat: 'custom' },
-      overrides: [{ ruleId: 'im-write-ask', action: 'allow' }],
-      rules: DEFAULT_POLICY_RULES,
-      answererKind: 'deny'
-    })
-    expect(out.find((r) => r.id === 'im-write-ask')?.action).toBe('ask')
+  it('shell-precheck-auto-allow 保持 auto-evaluator（desktop standard「自动」内建快通道路径）', () => {
+    const out = resolvePolicyRules({ lane: 'desktop', rules: DEFAULT_POLICY_RULES })
+    expect(out.find((r) => r.id === 'shell-precheck-auto-allow')?.action).toBe('auto-evaluator')
   })
 })
+

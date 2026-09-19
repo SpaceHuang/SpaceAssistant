@@ -128,7 +128,7 @@ import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
-import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers } from './toolConfirmRegistry'
+import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers, isPendingConfirm } from './toolConfirmRegistry'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
@@ -412,7 +412,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         memoryTierOptionId?: number
       }
     ): Promise<void> => {
-      if (payload.approved && payload.trustCommand?.trim()) {
+      // H1：信任写入必须与 pending 确认挂钩——agent 裁决路径（AgentChannel）不登记 waiter，
+      // 其残留确认卡片上的「信任并允许」点击在此被拒绝，不得形成与裁决结果相悖的持久授权。
+      const pendingConfirm = isPendingConfirm(payload.requestId, payload.toolUseId)
+      if (payload.approved && !pendingConfirm && (payload.trustCommand || payload.trustDomain || payload.trustActDomain || payload.trustMcpServerId)) {
+        logAgentEvent('warn', 'tool.confirm.trust_rejected_no_pending', {
+          requestId: payload.requestId,
+          toolUseId: payload.toolUseId,
+          sessionId: payload.sessionId,
+          timestamp: Date.now()
+        })
+      }
+      if (payload.approved && pendingConfirm && payload.trustCommand?.trim()) {
         const { addTrustedCommand } = await import('./shell/shellCommandTrust')
         const added = addTrustedCommand(ctx.db, payload.trustCommand.trim(), { source: 'desktop' })
         if (added) {
@@ -434,7 +445,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           }
         }
       }
-      if (payload.approved && payload.trustDomain?.trim()) {
+      if (payload.approved && pendingConfirm && payload.trustDomain?.trim()) {
         const { addTrustedDomain } = await import('./browser/browserDomainTrust')
         const browser = readBrowserConfigFromDb(ctx.db)
         const next = addTrustedDomain(browser, payload.trustDomain.trim())
@@ -446,7 +457,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         // 双写 navigate 档（domain-any-action）缓存键，供执行链路缓存命中
         recordTrustToCache({ kind: 'domain', domain: payload.trustDomain.trim(), level: 'domain-any-action' }, payload.sessionId)
       }
-      if (payload.approved && payload.trustActDomain?.trim()) {
+      if (payload.approved && pendingConfirm && payload.trustActDomain?.trim()) {
         const { addTrustedActDomain } = await import('./browser/browserDomainTrust')
         const browser = readBrowserConfigFromDb(ctx.db)
         const next = addTrustedActDomain(browser, payload.trustActDomain.trim())
@@ -458,7 +469,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         // 双写 act 档（domain+action）缓存键，与 navigate 档隔离
         recordTrustToCache({ kind: 'domain', domain: payload.trustActDomain.trim(), level: 'domain+action' }, payload.sessionId)
       }
-      if (payload.approved && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
+      if (payload.approved && pendingConfirm && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
         const { rememberMcpSessionTrust } = await import('./mcp/mcpSessionTrust')
         rememberMcpSessionTrust(payload.sessionId, payload.trustMcpServerId, payload.trustMcpToolName)
         logAgentEvent('info', 'mcp.trust.session', {
@@ -1322,13 +1333,11 @@ function readExposureInputsFromDb(
     const tools = readToolsConfig(ctx.db)
     return model.buildSettingsSecurityModel({
       packages: runtime.readPolicyPackages(ctx.db),
-      confirmMode: tools.confirmMode,
       deniedTools: tools.deniedTools,
       cache: new SqliteDecisionCache(conn).list(),
       rules: model.toRuleViews(
         DEFAULT_POLICY_RULES,
         new PolicyRuleStore(conn).listOverrides(),
-        tools.confirmMode,
         runtime.readDisabledPolicyRuleIds(ctx.db)
       ),
       retentionDays: runtime.readSecurityAuditRetentionDays(ctx.db),
@@ -1347,11 +1356,11 @@ function readExposureInputsFromDb(
         return { ok: false as const, error: 'invalid lane' }
       }
       if (!isPolicyPackage(pkg)) return { ok: false as const, error: 'invalid package' }
-      // P2-5 写入强校验（对齐 validateRuleOverride 强制度）：agent 回答者的 lane 不得套用 loose
-      const { resolveLaneAnswererKind } = await import('./confirmation/answererConfig')
-      const { validatePolicyPackageForLane } = await import('../src/shared/policy/policyPackages')
-      const packageCheck = validatePolicyPackageForLane(lane, pkg, resolveLaneAnswererKind(ctx.db, lane))
-      if (!packageCheck.ok) return { ok: false as const, error: packageCheck.error }
+      // §2.1 档位可用性（B2）：本链路不提供的档位拒绝（automation 仅 standard）
+      const { isPackageAvailableForLane } = await import('../src/shared/policy/policyPackages')
+      if (!isPackageAvailableForLane(lane, pkg)) {
+        return { ok: false as const, error: `package ${String(pkg)} not available for lane ${lane}` }
+      }
       const packages = runtime.readPolicyPackages(ctx.db)
       const before = packages[lane]
       if (before === pkg) return { ok: true as const }
@@ -1373,13 +1382,17 @@ function readExposureInputsFromDb(
 
   ipcMain.handle(
     'security:set-rule-override',
-    async (_e, payload: { ruleId?: unknown; action?: unknown; params?: unknown }) => {
+    async (_e, payload: { ruleId?: unknown; action?: unknown; lane?: unknown; params?: unknown }) => {
       const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
       const { validateRuleOverride } = await import('../src/shared/policy/policyPackages')
       const { getDbConnection } = await import('./database')
       const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
-      // 主进程侧强制校验：规则必须存在、非 locked、动作域按规则类型限定（§4 第 1 区）
-      const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action)
+      const lane =
+        payload?.lane === 'desktop' || payload?.lane === 'wechat' || payload?.lane === 'feishu' || payload?.lane === 'automation'
+          ? payload.lane
+          : undefined
+      // 主进程侧强制校验：规则必须存在、非 locked、动作域按链路（B2：desktop 4 态 / 远程 3 态）
+      const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action, lane)
       if (!check.ok) return { ok: false as const, error: check.error }
       const params =
         payload?.params && typeof payload.params === 'object' && !Array.isArray(payload.params)
@@ -1676,24 +1689,6 @@ function readExposureInputsFromDb(
           } catch {
             /* ignore */
           }
-        }
-        if (
-          payload.tools.confirmMode !== undefined &&
-          payload.tools.confirmMode !== cur.confirmMode
-        ) {
-          logAgentEvent('info', 'file.confirm_mode.change', {
-            from: cur.confirmMode,
-            to: payload.tools.confirmMode,
-            timestamp: Date.now()
-          })
-          // §5.6-6：确认模式变更落 settings.policy-change（含新旧值）
-          recordSettings({
-            kind: 'policy-change',
-            lane: 'desktop',
-            key: 'tools.confirmMode',
-            before: cur.confirmMode,
-            after: payload.tools.confirmMode
-          })
         }
         const next = mergeToolsConfig({ ...cur, ...payload.tools })
         // 这里比较的是全局内置工具配置，而不是桌面暴露清单。

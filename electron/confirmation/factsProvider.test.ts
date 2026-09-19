@@ -98,30 +98,28 @@ describe('factsProvider 端口（P5）', () => {
 })
 
 describe('AutoEvaluator 数据化（P5：预过滤器路由由规则数据驱动）', () => {
-  it('等价性：desktop-auto-approve 规则在 → confirmMode=auto 批准 write_file（auto-allow）', async () => {
+  it('desktop write_file 快通道批准 → auto-allow（内建 file-fast-track 路由，desktop-auto-approve 已退役）', async () => {
     const db = openDb()
     const r = await evaluateToolCallGate(base(db, {
       toolName: 'write_file',
       toolInput: { path: 'x.txt', content: 'v' },
-      toolsConfig: { ...toolsConfig(), confirmMode: 'auto' },
       fileAutoApproval: async () => ({ approve: true, reason: 'ok', reasonCode: 'ok' })
     }))
     expect(r.decision.type).toBe('auto-allow')
-    if (r.decision.type === 'auto-allow') expect(r.decision.ruleId).toBe('desktop-auto-approve')
+    if (r.decision.type === 'auto-allow') expect(r.decision.ruleId).toBe('default-write-execute-ask')
   })
 
-  it('数据驱动：规则集移除 desktop-auto-approve 条目 → write_file 不再走自动审批（落 ask）', async () => {
+  it('lane 隔离：非 desktop lane 不注册 write_file 快通道路由（路由数据仍按 lane 收敛）', async () => {
     const db = openDb()
-    const rules = loadEffectivePolicyRules(db, 'desktop').filter((rule) => rule.id !== 'desktop-auto-approve')
     const r = await evaluateToolCallGate(base(db, {
       toolName: 'write_file',
       toolInput: { path: 'x.txt', content: 'v' },
-      toolsConfig: { ...toolsConfig(), confirmMode: 'auto' },
-      fileAutoApproval: async () => ({ approve: true, reason: 'ok', reasonCode: 'ok' }),
-      effectiveRules: rules
+      lane: 'wechat',
+      fileAutoApproval: async () => ({ approve: true, reason: 'ok', reasonCode: 'ok' })
     }))
-    // 规则数据不在 → 预过滤器不路由 → 评估器不批准 → 落默认表 require-confirm
+    // 路由仅 desktop 注册 → 评估器不批准 → 落 im-write-ask 确认（user）
     expect(r.decision.type).toBe('require-confirm')
+    if (r.decision.type === 'require-confirm') expect(r.decision.answerer).toBe('user')
   })
 
   it('数据驱动：shell-precheck-auto-allow 规则移除 → 预检放行不再 auto-allow', async () => {

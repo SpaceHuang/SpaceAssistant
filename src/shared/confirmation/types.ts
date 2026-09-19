@@ -148,6 +148,8 @@ export type Decision =
   | {
       type: 'require-confirm'
       ruleId: string
+      /** 本次确认的回答者（§2.2 由动作派生，不再按 lane 查配置表）：user=人工确认卡；agent=审批 Agent。 */
+      answerer: 'user' | 'agent'
       riskLevel: RiskLevel
       facts: ContentFacts
       memoryTiers: MemoryTier[]
@@ -359,6 +361,12 @@ export interface SecurityAuditEvent {
   ruleId?: string
   reason?: string
   outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled'
+  /** require-confirm 决策的回答者（policy.decision；user=人工卡 / agent=审批 Agent）。 */
+  answerer?: 'user' | 'agent'
+  /** 裁决理由摘要（审批 Agent；脱敏由调用方保证，仅 summary 不落 evidence 原文）。 */
+  reasonSummary?: string
+  /** 裁决证据条数（审计侧量化依据规模，不落 evidence 原文）。 */
+  evidenceCount?: number
   /** 用户所选档位的规范化签名文本。 */
   memoryTier?: string
   /** 规范化签名文本（与缓存键同源，可对账），不落原始输入。 */
@@ -447,10 +455,16 @@ export type AutoEvaluator = (
 /** decide 的求值环境：策略层保持纯函数，所有运行时输入经由依赖对象传入。 */
 export interface PolicyEngineDeps {
   cache: DecisionCacheView
-  /** 配置值（confirmMode / remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
+  /** 配置值（remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean
   /** 第 4 步自动审批器（可注入，缺省不裁决）。 */
   autoEvaluator?: AutoEvaluator
+  /**
+   * 档位动作变换（§2.1 LANE_PROFILES 按当前 lane+档位绑定；缺省恒等）。
+   * 规则集变换由 resolvePolicyRules 完成，此项仅用于引擎合成规则（default-write-execute-ask）
+   * ——extraction-failed 兜底不参与变换（不变换例外）。
+   */
+  transform?: (rule: Pick<PolicyRule, 'action' | 'locked'>) => PolicyAction
 }

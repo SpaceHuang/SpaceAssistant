@@ -100,6 +100,7 @@ vi.mock('./database', async (importOriginal) => {
 
 import { runToolChatSession } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
 
 /** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
 function runAssembledSession(materials: unknown) {
@@ -146,9 +147,13 @@ describe('runToolChatSession locale injection', () => {
         cancel: vi.fn()
       })
     })
+    // P1：desktop standard 的 write_file 走「自动」快通道；人工确认路径取 strict 档（ask 不变换 → user）
+    const strictDb = makeDb('zh-CN')
+    writePolicyPackages(strictDb, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
     const run = runSession({
       requestId: 'remote-race',
-      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'always' }
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
+      appDb: strictDb
     })
     await confirmStarted
     const { revokeToolForAllLanes } = await import('./toolRevocationRegistry')

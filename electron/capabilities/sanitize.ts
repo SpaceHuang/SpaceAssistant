@@ -4,7 +4,8 @@ const ANTHROPIC_KEY_PATTERN = /sk-ant-[a-zA-Z0-9_-]+/g
 const BEARER_PATTERN = /Bearer\s+\S+/gi
 const LONG_B64_PATTERN = /[A-Za-z0-9+/]{80,}={0,2}/g
 
-/** 字符串级凭据形态打码（导出供 callCapability 的 handler 错误消息复用，评审建议 3）。 */
+/** 字符串级凭据形态打码（导出供 callCapability 的 handler 错误消息复用，评审建议 3）。
+ *  URL 内嵌凭据打码统一走 shared 的 sanitizeUrlCredentials（R1：单份实现，extractor/落库/展示同源）。 */
 export function scrubString(s: string): string {
   return s.replace(ANTHROPIC_KEY_PATTERN, '[REDACTED]').replace(BEARER_PATTERN, 'Bearer [REDACTED]').replace(LONG_B64_PATTERN, '[REDACTED_B64]')
 }

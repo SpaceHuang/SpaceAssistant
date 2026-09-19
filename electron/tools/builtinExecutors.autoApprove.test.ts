@@ -21,7 +21,7 @@ describe('file auto approval integration', () => {
     const result = await evaluateFileToolAutoApproval({
       workDir,
       userDataDir: path.join(os.tmpdir(), 'sa-userdata-not-workdir'),
-      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'auto' },
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
       toolName: 'write_file',
       input: { path: 'new.txt', content: 'small' }
     })
@@ -32,7 +32,7 @@ describe('file auto approval integration', () => {
     const result = await evaluateFileToolAutoApproval({
       workDir,
       userDataDir: path.join(os.tmpdir(), 'sa-userdata-not-workdir'),
-      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'auto' },
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
       toolName: 'write_file',
       input: { path: '.env', content: 'KEY=1' }
     })

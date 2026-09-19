@@ -95,7 +95,6 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     preferredFastLanguageModelId: input.preferredFastLanguageModelId,
     preferredVisionModelId: input.preferredVisionModelId,
     toolUi: {
-      confirmMode: input.toolUi.confirmMode,
       deniedTools: [...input.toolUi.deniedTools].sort(),
       pythonPath: input.toolUi.pythonPath,
       scriptTimeout: input.toolUi.scriptTimeout,
@@ -133,7 +132,6 @@ export function buildConfigModalSnapshotFromConfig(
     preferredVisionModelId: cfg.preferredVisionModelId ?? '',
     llmState,
     toolUi: {
-      confirmMode: cfg.tools.confirmMode,
       deniedTools,
       pythonPath: cfg.tools.pythonPath,
       scriptTimeout: cfg.tools.scriptTimeout,

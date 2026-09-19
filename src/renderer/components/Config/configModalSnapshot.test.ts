@@ -43,7 +43,6 @@ describe('buildConfigModalSnapshot', () => {
       models: [{ id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, isVision: false, enabled: true }],
       llmState,
       toolUi: {
-        confirmMode: 'diff' as const,
         deniedTools: ['browser'],
         pythonPath: 'python',
         scriptTimeout: 300,
@@ -75,7 +74,6 @@ describe('buildConfigModalSnapshot', () => {
         models: [],
         llmState,
         toolUi: {
-          confirmMode: 'diff',
           deniedTools: [],
           pythonPath: 'python',
           scriptTimeout: 300,
@@ -105,7 +103,6 @@ describe('buildConfigModalSnapshot', () => {
         models: [],
         llmState,
         toolUi: {
-          confirmMode: 'diff',
           deniedTools: [],
           pythonPath: 'python',
           scriptTimeout: 300,
@@ -134,7 +131,6 @@ describe('buildConfigModalSnapshot', () => {
       models: [],
       llmState,
       toolUi: {
-        confirmMode: 'diff' as const,
         deniedTools: [],
         pythonPath: 'python',
         scriptTimeout: 300,
@@ -167,7 +163,6 @@ describe('buildConfigModalSnapshot', () => {
         models: [],
         llmState,
         toolUi: {
-          confirmMode: 'diff',
           deniedTools: [],
           pythonPath: 'python',
           scriptTimeout: 300,
@@ -196,7 +191,6 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
     models: [],
     llmState: initLlmServiceTabState([], [], []),
     toolUi: {
-      confirmMode: 'diff' as const,
       deniedTools: [],
       pythonPath: 'python',
       scriptTimeout: 300,
@@ -245,7 +239,6 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
           thinkingEnabled: false,
           models: [],
           tools: {
-            confirmMode: 'diff',
             deniedTools: [],
             pythonPath: 'python',
             scriptTimeout: 300,

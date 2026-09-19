@@ -59,6 +59,29 @@ vi.mock('./windowRef', () => ({
   getMainWindow: vi.fn(() => ({ webContents: { send: mockSend } }))
 }))
 
+const mockSetOverride = vi.fn()
+
+vi.mock('./confirmation/policyRuleStore', () => ({
+  PolicyRuleStore: class {
+    listOverrides() {
+      return []
+    }
+    getOverride() {
+      return null
+    }
+    setOverride = mockSetOverride
+  }
+}))
+
+vi.mock('./confirmation/settingsAudit', () => ({
+  recordSettingsChange: vi.fn()
+}))
+
+vi.mock('./confirmation/audit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./confirmation/audit')>()),
+  getSecurityAuditLog: vi.fn(() => ({ record: vi.fn() }))
+}))
+
 vi.mock('./toolsConfigRuntime', () => ({
   exposedToolNamesForLane: vi.fn(() => ['read_file'])
   ,isToolEnabledByConfig: (name: string, cfg: typeof DEFAULT_TOOLS_CONFIG) =>
@@ -179,5 +202,41 @@ describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail
       clearToolRevocationRequest('feishu-request')
       clearToolRevocationRequest('wechat-request')
     }
+  })
+})
+
+describe('security:set-rule-override / set-policy-package：B2 动作域与档位可用性按 lane（IPC 层）', () => {
+  let ipc: ReturnType<typeof mockIpcMain>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockReadDisabledIds.mockReturnValue([])
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
+  })
+
+  it('wechat lane 提交 auto-evaluator 覆盖被拒（3 态动作域，IPC 层 B2）', async () => {
+    const handler = ipc.getHandler('security:set-rule-override')!
+    const res = (await handler(null, { ruleId: 'mcp-tool-ask', action: 'auto-evaluator', lane: 'wechat' })) as {
+      ok: boolean
+      error?: string
+    }
+    expect(res.ok).toBe(false)
+    expect(mockSetOverride).not.toHaveBeenCalled()
+  })
+
+  it('desktop lane 提交 auto-evaluator 覆盖被接受（4 态动作域）', async () => {
+    const handler = ipc.getHandler('security:set-rule-override')!
+    const res = (await handler(null, { ruleId: 'mcp-tool-ask', action: 'auto-evaluator', lane: 'desktop' })) as {
+      ok: boolean
+    }
+    expect(res.ok).toBe(true)
+    expect(mockSetOverride).toHaveBeenCalled()
+  })
+
+  it('automation lane 提交 loose 套餐被拒（仅提供 standard，§2.1）', async () => {
+    const handler = ipc.getHandler('security:set-policy-package')!
+    const res = (await handler(null, { lane: 'automation', package: 'loose' })) as { ok: boolean; error?: string }
+    expect(res.ok).toBe(false)
   })
 })

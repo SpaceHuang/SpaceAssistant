@@ -73,6 +73,7 @@ import { FloatingNotificationManager } from './floatingNotificationManager'
 import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceHooks'
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
 import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
+import { runConfirmModeRetirementMigrationOnce } from './confirmation/confirmModeRetirementMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
@@ -376,6 +377,8 @@ app.whenReady().then(async () => {
   // （清空会话级条目 = "进程消亡即失效"语义等价物 + 过期/休眠清理）。
   runExemptionMigrationOnce(db, { audit: getSecurityAuditLog() })
   runMcpConfirmPolicyMigrationOnce(db, { audit: getSecurityAuditLog() })
+  // confirmMode 退役（§5.7）：一次性删除存量 config.tools JSON 的 confirmMode 键（幂等、失败不阻塞）
+  runConfirmModeRetirementMigrationOnce(db)
   runStartupDecisionCacheCleanup(db)
 
   const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))

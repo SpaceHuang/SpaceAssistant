@@ -63,6 +63,11 @@ export interface ApprovalAgentDeps {
   baseUrl?: string
   /** 界面语言（系统提示渲染用）；缺省由装配方决定，测试可省。 */
   locale?: AppLocale
+  /**
+   * 授权维度上限（§6）：automation 无人场景维持 'low'（缺省）；desktop 档位启用真人授权
+   * 证据（taskDigest）后允许到 'high'，缓解高风险动作误拒。代码侧截断仍由 parseApprovalVerdict 强制。
+   */
+  maxAuthorization?: ApprovalAuthorizationDimension
   getApiKey: () => Promise<string | null>
 }
 
@@ -345,8 +350,10 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     if (!raced.r.ok) {
       return { ok: false, cause: 'unavailable' }
     }
-    // 授权维度上限随链强制（automation 无人场景 'low'，P3 桌面档位启用真人授权信号时调整）
-    const verdict = parseApprovalVerdict(extractText(raced.r), { maxAuthorization: APPROVAL_MAX_AUTHORIZATION })
+    // 授权维度上限随链强制：automation 无人场景 'low'（缺省）；desktop 档位传 'high'（§6）
+    const verdict = parseApprovalVerdict(extractText(raced.r), {
+      maxAuthorization: deps.maxAuthorization ?? APPROVAL_MAX_AUTHORIZATION
+    })
     if (!verdict) {
       return { ok: false, cause: 'unparsable' }
     }

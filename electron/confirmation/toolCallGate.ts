@@ -41,6 +41,7 @@ import {
 } from '../remote/remoteToolPolicy'
 import { AuditedDecisionCache } from './auditedDecisionCache'
 import { getSecurityAuditLog } from './audit'
+import { effectiveActionFor, type PolicyPackage } from '../../src/shared/policy/policyPackages'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 
@@ -73,6 +74,11 @@ export interface ToolCallGateArgs {
   wechatConfig?: WeChatConfig
   /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
   effectiveRules: PolicyRule[]
+  /**
+   * 「自动」变换的档位来源（§2.1 LANE_PROFILES，与 effectiveRules 同源装配注入）；
+   * 缺省 standard——装配方未显式声明时按恒等处理（fail-safe：少自动化不多自动化）。
+   */
+  lanePackage?: PolicyPackage
   /** 装配期随规则集携带的来源标注（P3）；审计据此回答规则为何未生效。 */
   policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
   /**
@@ -120,6 +126,8 @@ export interface ToolCallGateResult {
   budgetPause?: { message: string; reason: string }
   /** 桌面写/编辑自动审批回退原因（确认卡片展示）。 */
   autoApproveFallback?: AutoApproveFallback
+  /** H2：写文件自动批准（快通道批准 && 决策放行）——审计与持久 meta 的判定来源 */
+  fileAutoApproved?: boolean
   /** MCP 条目回传（确认卡片载荷）。 */
   mcpEntry?: McpToolSnapshotEntry
   /** run_script 原始分析（拒绝消息桥接 / 日志 patterns）。 */
@@ -263,23 +271,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible
   }
 
-  // ===== 生效规则集（§4 第 1 区）：装配期解析注入（B1）——门控不再持库，缺料在入口已 fail-loud =====
-  // （桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作）
+  // ===== 生效规则集（§4 第 1 区 + §2.1「自动」语义）：装配期解析注入（B1，门控不持库）=====
+  // 规则集由装配期按 lane+档位解析（resolveEffectivePolicyRulesWithOrigin），引擎合成规则的
+  // 档位变换经 lanePackage 同源注入（desktop standard 非 locked ask→auto-evaluator）。
   const rules = args.effectiveRules
+  const lanePackage = args.lanePackage ?? 'standard'
 
   // ===== 桌面写/编辑自动审批（预计算，评估器闭包消费）=====
-  // 生效条件：desktop-auto-approve 动作为 auto-evaluator；默认规则带 confirmMode=auto 门控，
-  // 覆盖后（门控剥离，见 applyCustom）由规则动作直接决定——确认模式已并入规则列表统一受套餐管理
-  const autoApproveRule = rules.find((r) => r.id === 'desktop-auto-approve')
-  const autoApproveActive =
-    autoApproveRule?.action === 'auto-evaluator' &&
-    (autoApproveRule.configRequires ? args.toolsConfig.confirmMode === 'auto' : true)
+  // P1 起「自动」是 standard 桌面的默认路径：write_file/edit_file 恒预计算确定性快通道
+  // （基于 autoApproveMaxBytes / autoApproveMaxEditChars）；未通过时记录 fallback 原因，
+  // 由审批 Agent 裁决（custom 覆盖为 ask 时该原因随确认卡展示）。
   let fileAutoApprove: boolean | undefined
-  if (
-    lane === 'desktop' &&
-    (args.toolName === 'write_file' || args.toolName === 'edit_file') &&
-    autoApproveActive
-  ) {
+  if (lane === 'desktop' && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
     const autoEval = await (args.fileAutoApproval ?? evaluateFileToolAutoApproval)({
       workDir: args.workDir,
       userDataDir: args.userDataDir,
@@ -386,7 +389,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
   // ===== 配置袋（规则 configRequires/askUnless 消费）=====
   const config: Record<string, unknown> = {
-    confirmMode: args.toolsConfig.confirmMode,
     deniedTools: args.toolsConfig.deniedTools,
     remoteDenyOutbound: channelConfig?.remoteDenyOutbound ?? false,
     // 现状仅在 browserConfig 存在且未开放远程会话时阻断；无配置等价放行
@@ -415,6 +417,12 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // 条目的 match.toolName + match.lane 声明评估域与 lane 标注），不再是按工具名写死的代码分支。
   // 确定性预过滤地位保留在回答者之前（审批计划已拍板，复核记录留痕）。
   const autoEvaluatorRoutes = new Map<string, string>()
+  if (lane === 'desktop') {
+    // §2.3：「自动」动作的内建快通道——desktop 下 write_file/edit_file 恒注册（不依赖基线规则，
+    // desktop-auto-approve 规则已删；custom 覆盖为 ask 时规则动作不再消费评估器，路由天然旁路）
+    autoEvaluatorRoutes.set('write_file', 'file-fast-track')
+    autoEvaluatorRoutes.set('edit_file', 'file-fast-track')
+  }
   for (const rule of rules) {
     if (rule.action !== 'auto-evaluator') continue
     const laneMatch = rule.match?.lane
@@ -430,6 +438,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     cache,
     config,
     migrationComplete: isRemoteSecurityMigrationComplete(channelConfig),
+    // 档位动作变换（§2.1）：引擎合成规则（default-write-execute-ask）经同源变换参与「自动」
+    transform: (r) => effectiveActionFor(lane, lanePackage, r),
     autoEvaluator: (f) => {
       const route = autoEvaluatorRoutes.get(f.toolName)
       if (!route) return { approve: false as const, reason: '无评估器' }
@@ -438,9 +448,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           ? { approve: true as const, reason: 'shell-precheck' }
           : { approve: false as const, reason: 'shell-precheck 未放行' }
       }
-      if (route === 'desktop-auto-approve') {
+      if (route === 'file-fast-track') {
         return fileAutoApprove === true
-          ? { approve: true as const, reason: 'desktop-auto-approve' }
+          ? { approve: true as const, reason: 'file-fast-track' }
           : { approve: false as const, reason: '文件自动审批未通过' }
       }
       return { approve: false as const, reason: '无评估器' }
@@ -486,6 +496,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision: decision.type,
     ruleId: decision.ruleId,
     reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
+    ...(decision.type === 'require-confirm' ? { answerer: decision.answerer } : {}),
     ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'
       ? { cause: 'recursion-blocked' as const }
       : {}),
@@ -499,6 +510,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   if (decision.type === 'deny' && decision.ruleId.startsWith('remote-outbound-budget-pause-')) {
     result.budgetPause = outboundBudgetMessage ?? { message: decision.reason, reason: 'remote_task_budget' }
   }
+  // H2：写文件自动批准的显式结果（快通道批准 && 决策为放行）——审计与 meta 的判定来源，
+  // 不再用已删除的 desktop-auto-approve ruleId 匹配
+  result.fileAutoApproved = fileAutoApprove === true && decision.type === 'auto-allow'
   result.decision = decision
   result.facts = facts
   return result

@@ -1,7 +1,7 @@
 # 桌面自动审批（回答者并入规则动作）开发计划
 
-> 状态：v2（评审修订；评审报告 `docs/review/desktop-auto-approval-plan-review.md`，B1/B2 已处理，M1–M4 已处理，7 处事实性错误已修订）
-> 基线：main（`approval-agent-shortest-path` 代码已合并；上游**文档尚未入库**，见 §12 前置）
+> 状态：**已实施完成**（分支 `codex/desktop-auto-approval`，TDD 推进；实施记录见 §13）
+> 基线：main（`approval-agent-shortest-path` 代码已合并；上游文档已入库，见 §12 前置）
 > 上游：`docs/develop/approval-agent-shortest-path-plan.md`、`docs/develop/architect/confirmation-answerer-and-auto-approval-design.md`（I1–I5）
 > 范围：**仅桌面链路**。wechat / feishu 回答者改造不在本轮。
 
@@ -295,3 +295,42 @@
 `docs/develop/approval-agent-shortest-path-plan.md`、`docs/develop/architect/confirmation-answerer-and-auto-approval-design.md` 与本计划原先均为 git **未跟踪**状态（`git ls-files` 为空），基线引用会断链。已于提交 `20d31edf` 一并入库，M4 关闭。
 
 > 注：评审报告 `docs/review/desktop-auto-approval-plan-review.md` **不入版本控制**——`docs/review/` 目录被 `.gitignore` 忽略（项目约定：评审报告为本地过程产物）。因此 M4 的范围仅限 `docs/develop/` 下的设计/计划文档。
+
+---
+
+## 13. 实施记录（2026-09-19，分支 `codex/desktop-auto-approval`）
+
+按 §10 提交切分完成，全部阶段 TDD（先写/改写测试到目标态再实现）：
+
+| 阶段 | 提交 | 内容 |
+| --- | --- | --- |
+| P0 | `e40af8e0` | `LANE_PROFILES` + `effectiveActionFor` + `Decision.require-confirm.answerer` + 引擎产出 answerer + 不变换例外（locked/deny/confirm-every-time/extraction-failed）。desktop 变换未接线，零行为变化 |
+| P1 | `f64567d2` | desktop standard `ask→auto` 生效 + toolCallGate/toolChatLoop 装配接线 + `taskDigest` 桌面透传 + `maxAuthorization`（desktop high / automation low）+ 删 `desktop-auto-approve` / confirmMode 门控 |
+| P2 | `7cb45bef` | 设置面生效动作显示（`effectiveActionFor` 两端同源）+ custom 动作域按 lane + standard/loose 档位文案（i18n zh/en） |
+| P3 | `99ab0c42` | confirmMode 全量清理（生产 ~15 文件 + 测试夹具 19 文件 + `confirmModeRetirementMigration` DB 迁移）；`answererConfig` 整文件退役；`validatePolicyPackageForLane` 删除 + `isPackageAvailableForLane`；B2 IPC 层 lane 校验（`validateRuleOverride` 带 lane、`set-policy-package` 档位可用性） |
+
+### 实施中的关键设计决策（相对计划的偏差与发现）
+
+1. **standard 档在规则集层恒等**：desktop 的 `ask→auto-evaluator` 不在 `resolvePolicyRules` 预变换规则集，而由引擎**产出时**经 `deps.transform`（= `effectiveActionFor` 同源）解释。原因（测试先行发现）：规则集预变换会把 ask 条目提升到引擎第 4 步（auto-evaluator 段），破坏 `mcp-readonly-allow` 必须先于 `mcp-tool-ask` 命中的顺序语义（defaultRules 注释明示）。产出时变换保持规则顺序与「首条命中即返回」不变。
+2. **askUnless 门控放行先于动作解释**：`larkCliWriteRequiresConfirm=false` 等开关满足时，无论生效动作是 ask 还是「自动」都直接放行——档位不接管已放行的调用（phase2 回归测试锚定）。
+3. **引擎第 4 步级联保留 + 末次命中落 Agent**：多个基线 auto-evaluator 条目依次尝试快通道（M3 级联），全部未裁决由末次命中条目产 `require-confirm(answerer='agent')`（不再交还默认表问人）。
+4. **confirmMode 迁移**：`runConfirmModeRetirementMigrationOnce`（版本门控 + 事务 + 损坏 JSON fail-safe），`'direct'` 用户行为变化 = 写确认卡始终展示 diff。
+5. **mcpConfirmPolicyMigration 适配**：automation 仅提供 standard 档，迁移不再将其置 custom（写入也会被 `normalizePolicyPackages` 收敛）。
+
+### 评审修复（代码评审 v1，`docs/review/desktop-auto-approval-code-review-v1.md`）
+
+修复提交 `2894c166`：
+
+- **H1**（合并前必须）：信任写入与 pending 确认挂钩——`tool:confirm-response` 四个信任分支要求 registry 存在 pending（agent 裁决路径无 waiter，残留卡片信任点击被拒并落告警）；`confirm-requested` 载荷携带 `autoAnswerer`，agent 路径渲染只读「自动审批中」卡且不发浮动确认通知。
+- **H2**（合并前必须）：`toolCallGate` 增 `fileAutoApproved` 显式结果字段，`toolChatLoop` 不再匹配已删除的 `desktop-auto-approve` ruleId；e2e 锚定 `file.auto_approve` 审计与 `autoApprovedWrite` meta。
+- **H3**（合并前必须）：`serializeToolCallsForDb` 与 `tool_call` JSONL 事件对 `toolkit.call` 入参按展示侧同口径净化，凭据明文不落 `messages.tool_calls` / 事件台账 / 会话备份。
+- **中 1/2/4/5/6**：审批裁决 `reasonSummary`/`evidenceCount` 落审计；用量统计过滤 internal/hidden 会话；URL 内嵌凭据打码；`action.session.read` 拒绝 internal/hidden 会话；`updateServerStatus` 纳入 secret 写锁。
+- **低项**：normalize 收敛告警、`policy.decision` 记 `answerer`、`readLanePackage` 死导出、taskDigest 代理对切割、UsageTrendChart 真实 0%、desktop loose run_shell 锚定测试、孤儿 `config.confirmAnswerers` 键清理。
+- **H4 产品签署**：存量未配置套餐桌面用户升级后「询问」默认变为「审批 Agent 自动裁决」（含 `browser-act-danger-ask` 危险表单/支付类浏览器操作）——**产品确认维持默认自动，不做默认关闭、不额外锁定高危条目**（2026-09-19 签署）。升级告知（release notes / 首次启动提示）由产品发布流程负责，不在本分支代码范围。
+- **R1/N1 复验修复（v2 报告）**：`assistant_chunk` 的 `tool_call_delta.partialJson`（入参原文流式分片，chunk 拼接可还原凭据）在两个 JSONL sink（桌面 `claudeStreamHandlers` / automation `butlerSessionEvents`）落盘前剥离（`sessionEvents.stripPartialJsonForPersist`，partialJson 无任何重放消费者）；`sanitizeUrlCredentials` 收敛到 shared 单份正确实现（userinfo `***:***` + 凭据 query 打码）并接入 `capabilityParamSanitize` 的 endpoint/url 分支（electron 侧死代码删除）；`updateServerStatus` 的 6 个调用点（mcpIpc ×3、mcpOauthService ×3）补 await；用量写入侧同步跳过 internal/hidden 会话（中 2 完整闭环——审批 Agent 内部回合开销不进事实表）。
+- 未修复转跟进批次：中 3（用量回填主线程分片）、中 7（保留期设置出口）、其余低项（死 i18n key 精确核对、`config.confirmAnswerers` 之外的清理等）。
+
+### 验收边界（§7.3）
+
+- 已验收：档位变换逐格（4 lane × 4 档 + 例外）、回答者派生、快通道、I3/I4/I5、B1（locked ask 保持人工）、B2（IPC + 引擎双层）、端到端 gate 决策链路、迁移幂等——全部自动化测试（electron + renderer 双项目）。
+- 需真机/真实 LLM 抽样评审：审批 Agent 裁决质量（误拒率）——后续按 §7.3 人工抽样。

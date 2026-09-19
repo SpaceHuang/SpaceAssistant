@@ -170,8 +170,6 @@ export function ConfigSettingsPage() {
 
   const [toolUi, setToolUi] = useState({
 
-    confirmMode: 'diff' as 'diff' | 'direct' | 'auto',
-
     deniedTools: [] as string[],
 
     pythonPath: 'python',
@@ -313,8 +311,6 @@ export function ConfigSettingsPage() {
       ]
 
       setToolUi({
-
-        confirmMode: cfg.tools.confirmMode,
 
         deniedTools,
 
@@ -629,8 +625,6 @@ export function ConfigSettingsPage() {
         tools: {
 
           enabled: true,
-
-          confirmMode: toolUi.confirmMode,
 
           deniedTools: toolUi.deniedTools,
 

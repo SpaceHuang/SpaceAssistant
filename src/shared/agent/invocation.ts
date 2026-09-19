@@ -228,8 +228,7 @@ export interface AgentDiagnosticsPorts {
 
 /** 回答者装配材料（P2 装配期解析；P5 接线 factsProvider 时收口）。 */
 export interface AgentAnswererPorts {
-  /** electron 侧为 LaneAnswererPolicy。 */
-  policy?: unknown
+  /** 回答者已由 gate 决策派生（§2.2 动作派生，desktop-auto-approval 合并）；端口保留审批子链库材料。 */
   /** 审批子链的宿主库装配材料（子调用域，随块 4 收敛）。 */
   approvalDatabase?: unknown
 }

@@ -9,6 +9,7 @@ import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { runToolChatSession } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { isAppLocale } from '../src/shared/locale'
+import { buildApprovalTaskDigest } from '../src/shared/approvalTaskDigest'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
@@ -24,7 +25,7 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, stripPartialJsonForPersist, type SessionEventInput, type SessionEventSink } from './sessionEvents'
 import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
@@ -408,6 +409,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
+          // §6 桌面授权证据：当前 turn 用户消息摘要进审批线索包「已声明的任务」段
+          approvalTaskDigest: buildApprovalTaskDigest(
+            authoritative.messages.find((m) => m.id === authoritative.currentUserMessageId)?.content ?? ''
+          ),
           workDir: sessionWorkDir,
           userDataDir,
           getApiKey,
@@ -423,7 +428,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           onFileTreeChanged: (event) => deps.notifyMainWindow?.('file:tree-changed', event)
           ,emitSessionEvent: async (event: SessionEventInput) => {
             if (!eventWriter) return
-            const normalized = { ...event, payload: { ...event.payload, turnId } }
+            // R1：tool_call_delta.partialJson 原文不落台账（chunk 拼接可还原凭据）
+            const stripped = stripPartialJsonForPersist(event)
+            const normalized = { ...stripped, payload: { ...stripped.payload, turnId } }
             if (event.type === 'assistant_chunk') {
               try {
                 await eventWriter.waitForCapacity()

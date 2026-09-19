@@ -334,24 +334,29 @@ describe('判定矩阵：MCP 工具', () => {
 
 describe('判定矩阵：write_file / edit_file', () => {
   const input = { path: 'src/a.ts', content: 'x' }
-  it('桌面默认 → 确认', () => {
-    const d = decideToolCall('write_file', input, 'desktop', deps({ confirmMode: 'diff' }))
+  it('桌面未注入变换/评估器（装配缺省=恒等）→ 人工确认（answerer=user）', () => {
+    const d = decideToolCall('write_file', input, 'desktop', deps())
     expect(d.type).toBe('require-confirm')
+    if (d.type === 'require-confirm') expect(d.answerer).toBe('user')
   })
-  it('桌面 confirmMode=auto + 评估器批准 → 放行；不裁决 → 确认', () => {
-    const approved = decideToolCall('write_file', input, 'desktop', deps({ confirmMode: 'auto' }, mapCache([]), {
+  it('桌面 standard（transform 变换）+ 评估器批准 → 放行；不裁决 → Agent 确认', () => {
+    const transform = (r: { action: string }) => (r.action === 'ask' ? ('auto-evaluator' as const) : r.action)
+    const approved = decideToolCall('write_file', input, 'desktop', deps({}, mapCache([]), {
+      transform,
       autoEvaluator: () => ({ approve: true, reason: 'ok' })
     }))
     expect(approved.type).toBe('auto-allow')
-    expect(approved.ruleId).toBe('desktop-auto-approve')
-    const declined = decideToolCall('write_file', input, 'desktop', deps({ confirmMode: 'auto' }, mapCache([]), {
+    expect(approved.ruleId).toBe('default-write-execute-ask')
+    const declined = decideToolCall('write_file', input, 'desktop', deps({}, mapCache([]), {
+      transform,
       autoEvaluator: () => ({ approve: false, reason: 'no' })
     }))
     expect(declined.type).toBe('require-confirm')
+    if (declined.type === 'require-confirm') expect(declined.answerer).toBe('agent')
   })
   it('桌面命中路径缓存 → 放行', () => {
     const cache = mapCache([allowEntry({ kind: 'path', path: 'src/a.ts', level: 'file' })])
-    const d = decideToolCall('write_file', input, 'desktop', deps({ confirmMode: 'diff' }, cache))
+    const d = decideToolCall('write_file', input, 'desktop', deps({}, cache))
     expect(d.type).toBe('auto-allow')
     expect(d.ruleId).toBe('cache-hit')
   })
@@ -369,7 +374,7 @@ describe('判定矩阵：write_file / edit_file', () => {
     if (trusted.type === 'auto-allow') expect(trusted.ruleId).toBe('cache-hit')
   })
   it('远程写不命中桌面 auto 审批（lane 隔离）', () => {
-    const d = decideToolCall('write_file', input, 'feishu', deps({ confirmMode: 'auto' }, mapCache([]), {
+    const d = decideToolCall('write_file', input, 'feishu', deps({}, mapCache([]), {
       autoEvaluator: () => ({ approve: true, reason: 'ok' })
     }))
     expect(d.type).toBe('require-confirm')

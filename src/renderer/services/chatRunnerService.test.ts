@@ -45,7 +45,6 @@ describe('getMaxParallelChatSessions', () => {
         maxParallelChatSessions: 5,
         tools: {
           enabled: true,
-          confirmMode: 'diff',
           allowedTools: [],
           deniedTools: [],
           pythonPath: 'python',

@@ -129,7 +129,7 @@ describe('嵌套调用规则交集（放行集合取交集，授权不继承）'
   it('装配器 policyRuleFloor：内层 allow 条目被父 ask 收严；floor 特有保护条目保留', () => {
     const db = openDb()
     const parentFloor = DEFAULT_POLICY_RULES.map((r) =>
-      r.id === 'desktop-auto-approve' ? { ...r, action: 'ask' as const } : r
+      r.id === 'lark-read-allow' ? { ...r, action: 'ask' as const } : r
     )
     const { ports } = assembleInvocation({
       requestId: 'r-nest', sessionId: 's-nest', model: 'm',
@@ -140,8 +140,8 @@ describe('嵌套调用规则交集（放行集合取交集，授权不继承）'
       emitFactEvent: () => undefined, emitSessionEvent: async () => undefined
     } as never)
     const rules = ports.policy?.effectiveRules as import('../../src/shared/confirmation/types').PolicyRule[]
-    const autoApprove = rules.find((r) => r.id === 'desktop-auto-approve')
-    expect(autoApprove?.action).toBe('ask')
+    const floorTightened = rules.find((r) => r.id === 'lark-read-allow')
+    expect(floorTightened?.action).toBe('ask')
     // floor 的 locked 保护条目在内层不缺失
     expect(rules.some((r) => r.id === 'remote-shell-disabled' && r.locked)).toBe(true)
   })

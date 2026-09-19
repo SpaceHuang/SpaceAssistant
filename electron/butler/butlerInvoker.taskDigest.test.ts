@@ -75,7 +75,7 @@ describe('butlerInvoker 任务声明装配（D）', () => {
       turnRuntime: makeRuntime(db),
       getWorkDir: () => '/tmp/wd',
       getUserDataPath: () => '/tmp/ud',
-      getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, confirmMode: 'auto' as const }),
+      getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
       resolveWorkDirForSession: () => '/tmp/wd'
     }
   }

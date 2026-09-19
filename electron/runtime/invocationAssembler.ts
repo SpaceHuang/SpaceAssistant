@@ -6,7 +6,7 @@ import type {
 } from '../../src/shared/agent/invocation'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../../src/shared/agent/invocation'
 import type { FloatingNotificationManager } from '../floatingNotificationManager'
-import { resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
+import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 import { intersectPolicyRulesWithFloor } from '../../src/shared/policy/policyFloor'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
@@ -19,7 +19,6 @@ import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsReco
 import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
-import { resolveLaneAnswererPolicy } from '../confirmation/answererConfig'
 import { buildSnapshotFromDb, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
 import { listProfiles } from '../mcp/mcpConfigStore'
@@ -261,9 +260,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const effectiveRules = materials.policyRuleFloor
     ? intersectPolicyRulesWithFloor(withOrigin.rules, materials.policyRuleFloor)
     : withOrigin.rules
+  const lanePackage = db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard'
   const policy = db
     ? {
         effectiveRules,
+        lanePackage,
         decisionCache: new SqliteDecisionCache(getDbConnection(db)),
         shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) },
         policyOrigins: withOrigin.origins
@@ -271,6 +272,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     : {
         // 无库宿主（内存端口 / 测试）：显式默认材料 + 留痕——不是门控侧静默回退
         effectiveRules: DEFAULT_POLICY_RULES,
+        lanePackage,
         decisionCache: { lookup: () => null },
         shellPrecheck: { touchTrustedCommand: () => undefined }
       }
@@ -343,17 +345,28 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         executorDatabase: db
       }
     : { snapshot: mcpSnapshot }
+  // 中2（评审复验）：审批 Agent / automation 内部会话（internal/hidden）的 LLM 开销在写入端口
+  // 直接短路（toolChatLoop 只见端口，豁免判定留在有 db 的装配侧）
+  const usageExempt = db
+    ? (() => {
+        const s = getSession(db, materials.sessionId)
+        return s?.ownership === 'internal' || s?.visibility === 'hidden'
+      })()
+    : false
   const usage = db
     ? {
-        recordStepUsage: (input: Record<string, unknown>) => recordStepUsage(db, input as never),
-        recordTurnSummary: (input: Record<string, unknown>) => recordTurnSummary(db, input as never)
+        recordStepUsage: usageExempt
+          ? () => undefined
+          : (input: Record<string, unknown>) => recordStepUsage(db, input as never),
+        recordTurnSummary: usageExempt
+          ? () => undefined
+          : (input: Record<string, unknown>) => recordTurnSummary(db, input as never)
       }
     : undefined
   const diagnostics = db
     ? { append: (serverId: string, entry: unknown) => safeAppendDiagnostic(db, serverId, entry as never) }
     : undefined
   const answerer = {
-    policy: resolveLaneAnswererPolicy(db, materialsLane),
     ...(db ? { approvalDatabase: db } : {})
   }
 

@@ -131,6 +131,7 @@ function runAssembledSession(materials: unknown) {
   return runToolChatSession(invocation, ports)
 }
 import { createMemoryAppDb } from './database/testHelpers'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
 
 function makeStream() {
   return {
@@ -160,7 +161,10 @@ function makeSender(): WebContents {
 }
 
 function makeDb(): AppDatabase {
-  return createMemoryAppDb('zh-CN')
+  // P1：desktop standard 的 mcp-tool 走「自动」（Agent 裁决）；确认-执行集成语义取 strict 档（user 确认）
+  const db = createMemoryAppDb('zh-CN')
+  writePolicyPackages(db, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+  return db
 }
 
 async function runSession(overrides: Record<string, unknown> = {}) {

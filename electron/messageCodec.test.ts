@@ -77,3 +77,41 @@ describe('deserializeToolCallsFromDb', () => {
     expect(restored?.[0]).toMatchObject({ processPid: 4321, processGroupId: 4321, processOwnerToken: 'request:t-shell' })
   })
 })
+
+describe('serializeToolCallsForDb：toolkit.call 凭据持久化净化（H3）', () => {
+  it('toolkit.call 的 accessToken/headerValue/env 落库前布尔化（明文不进 messages.tool_calls）', () => {
+    const raw = serializeToolCallsForDb([
+      {
+        id: 'tu-1',
+        toolName: 'toolkit.call',
+        input: {
+          id: 'action.mcp.add',
+          params: {
+            name: 'srv',
+            endpoint: 'https://example.com/mcp',
+            accessToken: 'sk-secret-value',
+            headerValue: 'Bearer xyz',
+            env: { TOKEN: 'plain-secret' }
+          }
+        },
+        status: 'completed'
+      }
+    ])
+    const parsed = JSON.parse(raw!) as Array<{ input: string }>
+    const input = JSON.parse(parsed[0]!.input) as { params: Record<string, unknown> }
+    expect(input.params.accessToken).toBe(true)
+    expect(input.params.headerValue).toBe(true)
+    expect(JSON.stringify(input.params)).not.toContain('sk-secret-value')
+    expect(JSON.stringify(input.params)).not.toContain('plain-secret')
+    // 非凭据字段原样保留
+    expect(input.params.endpoint).toBe('https://example.com/mcp')
+    expect(input.params.name).toBe('srv')
+  })
+
+  it('非 toolkit 工具的 input 不净化（行为不变）', () => {
+    const raw = serializeToolCallsForDb([
+      { id: 'tu-2', toolName: 'write_file', input: { path: 'a.txt', content: 'x' }, status: 'completed' }
+    ])
+    expect(raw).toContain('a.txt')
+  })
+})
