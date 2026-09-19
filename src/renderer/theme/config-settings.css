@@ -1112,6 +1112,25 @@
   padding-top: 2px;
 }
 
+/* Thinking 强度四档选择器（§5.1） */
+.config-settings-page .config-models-effort-select {
+  width: 128px;
+}
+
+/* 「无思考」弱化标记（§5.3）：仅 supportsThinking === false 的模型名后显示 */
+.config-settings-page .config-models-catalog-row__no-thinking {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--sa-radius-sm);
+  border: 1px solid var(--sa-border-strong);
+  color: var(--sa-text-tertiary);
+  font-size: var(--sa-config-font-sm);
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .config-settings-page .config-models-section__content {
   display: flex;
   flex-direction: column;

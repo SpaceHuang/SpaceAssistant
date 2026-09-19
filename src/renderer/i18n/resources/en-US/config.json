@@ -102,7 +102,16 @@
       "hint": "Helps the agent manage the context window. Leave empty if unsure.",
       "fastLabel": "Mark as fast model (for low-cost simple tasks)",
       "visionLabel": "Mark as vision model (supports image input and understanding)",
+      "supportsThinking": "Supports extended thinking",
       "submit": "Add model"
+    },
+    "effort": {
+      "off": "Off",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "notSupported": "This model does not support thinking",
+      "unsupportedBadge": "No thinking"
     },
     "list": {
       "title": "Model catalog",
@@ -120,7 +129,7 @@
     },
     "defaults": {
       "title": "Model settings",
-      "intro": "Configure three preferred default models. When Thinking is enabled, supported models show their reasoning process.",
+      "intro": "Configure three preferred default models. Thinking effort controls how much supported models reason (lower is faster and cheaper, higher reasons more thoroughly).",
       "defaultModel": "Default model",
       "preferredLanguage": "Preferred language model",
       "preferredFast": "Preferred fast language model",
@@ -136,7 +145,10 @@
       "addModel": "Add model",
       "thinkingLabel": "Enable Thinking by default",
       "thinkingAria": "Enable Thinking by default",
-      "thinkingHint": "Only applies to models that support extended thinking"
+      "thinkingHint": "Only applies to models that support extended thinking",
+      "effortLabel": "Thinking effort",
+      "effortAria": "Choose the global thinking effort",
+      "effortHint": "For models that overthink, lower the default effort here; you can also adjust it per session in the chat."
     }
   },
   "llmService": {

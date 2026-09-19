@@ -105,7 +105,6 @@
     "placeholder": "Type a message…",
     "send": "Send message",
     "abort": "Stop generation",
-    "hintIdle": "Enter to send, Shift+Enter for newline",
     "hintRunning": "Click Stop to abort",
     "hintRunningQueue": "Enter to send and queue",
     "queueSend": "Send and queue",
@@ -248,5 +247,18 @@
     "workDirNotConfigured": "Working directory is not configured. Set it in Settings first.",
     "outputTrustSuspect": "Output encoding is suspect and the raw bytes were saved: the text may not be the real output — check the raw-bytes artifact to verify."
   },
-  "writeSuccess": {}
+  "writeSuccess": {},
+  "composer": {
+    "thinking": {
+      "label": "Thinking effort",
+      "aria": "Choose thinking effort",
+      "inherit": "Default",
+      "inheritWithGlobal": "Default ({{effort}})",
+      "off": "Off",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "notSupported": "This model does not support thinking"
+    }
+  }
 }
