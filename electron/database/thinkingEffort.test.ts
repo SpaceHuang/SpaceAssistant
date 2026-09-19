@@ -23,7 +23,8 @@ import {
 } from './schema'
 import { runMigrations } from './migrations'
 import { openSqliteDatabase, getDbConnection, type AppDatabase } from './sqliteStore'
-import { createSession, getSession, updateSession, setConfigValue } from './operations'
+import { createSession, getSession, updateSession, getConfigValue, setConfigValue } from './operations'
+import { migrateThinkingEffortConfig } from './thinkingEffortMigration'
 
 const dirs: string[] = []
 const dbPaths: string[] = []
@@ -186,5 +187,63 @@ describe('session thinkingEffort persistence', () => {
 describe('MIGRATION_V17_SESSION_THINKING_EFFORT_SQL shape', () => {
   it('is exported for the migration chain', () => {
     expect(MIGRATION_V17_SESSION_THINKING_EFFORT_SQL).toContain('thinking_effort')
+  })
+})
+
+describe('migrateThinkingEffortConfig（§8.1 启动时一次性等价迁移）', () => {
+  function readRaw(db: AppDatabase): string | undefined {
+    return getConfigValue(db, 'config.thinkingEffort')
+  }
+
+  it('legacy true → medium；与装配层兼容映射完全一致', () => {
+    const db = openSqliteDatabase(':memory:')
+    setConfigValue(db, 'config.thinkingEnabled', 'true')
+    migrateThinkingEffortConfig(db)
+    expect(readRaw(db)).toBe('medium')
+    // 旧键保留为只读镜像，不被删除
+    expect(getConfigValue(db, 'config.thinkingEnabled')).toBe('true')
+    db.close()
+  })
+
+  it('legacy false → off', () => {
+    const db = openSqliteDatabase(':memory:')
+    setConfigValue(db, 'config.thinkingEnabled', 'false')
+    migrateThinkingEffortConfig(db)
+    expect(readRaw(db)).toBe('off')
+    db.close()
+  })
+
+  it('两键均缺失 → medium（现网默认开启语义）', () => {
+    const db = openSqliteDatabase(':memory:')
+    migrateThinkingEffortConfig(db)
+    expect(readRaw(db)).toBe('medium')
+    db.close()
+  })
+
+  it('新键已合法 → 不覆盖（只写一次，thinkingEffort 为准）', () => {
+    const db = openSqliteDatabase(':memory:')
+    setConfigValue(db, 'config.thinkingEffort', 'high')
+    setConfigValue(db, 'config.thinkingEnabled', 'false')
+    migrateThinkingEffortConfig(db)
+    expect(readRaw(db)).toBe('high')
+    db.close()
+  })
+
+  it('新键损坏（非法档位）→ 按旧键重新推导', () => {
+    const db = openSqliteDatabase(':memory:')
+    setConfigValue(db, 'config.thinkingEffort', 'bogus')
+    setConfigValue(db, 'config.thinkingEnabled', 'false')
+    migrateThinkingEffortConfig(db)
+    expect(readRaw(db)).toBe('off')
+    db.close()
+  })
+
+  it('幂等：重复执行结果不变', () => {
+    const db = openSqliteDatabase(':memory:')
+    setConfigValue(db, 'config.thinkingEnabled', 'false')
+    migrateThinkingEffortConfig(db)
+    migrateThinkingEffortConfig(db)
+    expect(readRaw(db)).toBe('off')
+    db.close()
   })
 })

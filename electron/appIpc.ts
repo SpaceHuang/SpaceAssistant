@@ -86,6 +86,7 @@ import { normalizeTurnExecutionConfig } from '../src/shared/turnCoordinator'
 import { canonicalQueueInput } from '../src/shared/queueInputFingerprint'
 import type { TurnExecutePayload } from '../src/shared/api'
 import { ErrorCodes } from '../src/shared/errorCodes'
+import { isThinkingEffort, resolveGlobalThinkingEffort } from '../src/shared/thinkingEffort'
 import { isRemoteAgentRunning } from './remote/remoteAgentRegistry'
 import {
   REMOTE_SESSION_BUSY_MESSAGE,
@@ -163,6 +164,7 @@ const CONFIG_KEYS = {
   defaultModel: 'config.defaultModel',
   models: 'config.models',
   thinkingEnabled: 'config.thinkingEnabled',
+  thinkingEffort: 'config.thinkingEffort',
   workDir: 'config.workDir',
   apiKeyEnc: LLM_SERVICE_CONFIG_KEYS.apiKeyEnc,
   llmServices: LLM_SERVICE_CONFIG_KEYS.llmServices,
@@ -688,7 +690,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     'session:create',
     async (
       _e,
-      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown> }
+      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown>; thinkingEffort?: import('../src/shared/agent/invocation').AgentReasoningEffort }
     ): Promise<Session> => {
       const s = createSession(ctx.db, {
         ...payload,
@@ -744,8 +746,13 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         skillsState?: SessionSkillsState
         metadata?: Record<string, unknown>
         workDirProfileId?: string
+        thinkingEffort?: import('../src/shared/agent/invocation').AgentReasoningEffort | null
       }
     ): Promise<Session | undefined> => {
+      if (payload.thinkingEffort !== undefined && payload.thinkingEffort !== null
+        && !isThinkingEffort(payload.thinkingEffort)) {
+        throw new Error(`无效的 Thinking 强度档位：${String(payload.thinkingEffort)}（允许 off / low / medium / high 或 null 清除覆盖）`)
+      }
       const cur = getSession(ctx.db, payload.sessionId)
       if (!cur) return undefined
       if (
@@ -776,6 +783,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
         ...(payload.workDirProfileId !== undefined ? { workDirProfileId: payload.workDirProfileId } : {}),
+        ...(payload.thinkingEffort !== undefined ? { thinkingEffort: payload.thinkingEffort } : {}),
         ...(hasMetaChange ? { metadata: mergedMetadata } : {})
       })
       if (next) scheduleBackup(ctx, next.id)
@@ -1251,6 +1259,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       preferredVisionModelId: migrated.preferredVisionModelId,
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
+      thinkingEffort: resolveGlobalThinkingEffort(
+        getConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort),
+        getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled)
+      ),
       workDir: wd,
       maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
       tools,
@@ -1561,6 +1573,7 @@ function readExposureInputsFromDb(
         defaultModel: string
         models: AppConfig['models']
         thinkingEnabled: boolean
+        thinkingEffort?: import('../src/shared/agent/invocation').AgentReasoningEffort
         workDir: string
         apiKey: string
         llmServices: LlmServiceProfile[]
@@ -1672,6 +1685,13 @@ function readExposureInputsFromDb(
         setConfigValue(ctx.db, CONFIG_KEYS.preferredVisionModelId, payload.preferredVisionModelId)
       }
       if (payload.thinkingEnabled !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled, String(payload.thinkingEnabled))
+      if (payload.thinkingEffort !== undefined) {
+        // §8.4：档位枚举校验（净新增）——非法值拒绝保存并提示，不做静默强转
+        if (!isThinkingEffort(payload.thinkingEffort)) {
+          throw new Error(`无效的 Thinking 强度档位：${String(payload.thinkingEffort)}（允许 off / low / medium / high）`)
+        }
+        setConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort, payload.thinkingEffort)
+      }
       if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
         ctx.setWorkDir(payload.workDir)
