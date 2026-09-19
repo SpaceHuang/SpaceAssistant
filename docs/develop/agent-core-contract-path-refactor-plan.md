@@ -240,7 +240,7 @@ P0 ──▶ P1 ──▶ P2 ──┬──▶ P3 ──▶ P5 ──┐
 4. 子调用继承规则落地（基线 §5.4 规则 3/5 + §6.2 元规则）：模型默认继承父解析结果、effort 默认 `off`；审批 Profile 的 effort **下限**校验（安全属性）加进装配期断言。
 5. 冻结语义不变：发起时解析、调用内冻结（既有测试不动）。
 
-**范围说明**：设置页 UI 的 effort 档位选择器**不在本计划**（涉及 i18n、Config 组件，独立排期）；本阶段交付契约与主进程侧全部语义，全局配置的 `thinkingEnabled` 布尔继续作为默认值来源。
+**范围说明**：设置页 UI 的 effort 档位选择器**不在本计划**（涉及 i18n、Config 组件，独立排期）；本阶段交付契约与主进程侧全部语义，全局配置的 `thinkingEnabled` 布尔继续作为默认值来源。<!-- 已实施（2026-09-19）：见 [thinking-effort-settings-requirement.md](../requirement/thinking-effort-settings-requirement.md) -->
 
 **测试**：能力校验 / 降级审计 / 继承与默认值 / 兼容映射的定向用例。
 

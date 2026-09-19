@@ -102,7 +102,16 @@
       "hint": "用于帮助 Agent 管理上下文窗口。不确定时可留空。",
       "fastLabel": "标注为快速模型（用于低成本简单任务）",
       "visionLabel": "标注为视觉模型（支持输入并理解图片）",
+      "supportsThinking": "支持 Extended Thinking",
       "submit": "添加模型"
+    },
+    "effort": {
+      "off": "关闭",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "notSupported": "该模型不支持 Thinking",
+      "unsupportedBadge": "无思考"
     },
     "list": {
       "title": "大模型列表",
@@ -120,7 +129,7 @@
     },
     "defaults": {
       "title": "大模型设置",
-      "intro": "配置三类优选默认模型；Thinking 开启后，支持该能力的模型会展示推理过程。",
+      "intro": "配置三类优选默认模型；Thinking 强度决定支持该能力的模型思考多少（调低更快更省，调高推理更完整）。",
       "defaultModel": "默认大模型",
       "preferredLanguage": "优选默认语言大模型",
       "preferredFast": "优选快速语言大模型",
@@ -136,7 +145,10 @@
       "addModel": "添加模型",
       "thinkingLabel": "默认开启 Thinking",
       "thinkingAria": "默认开启 Thinking",
-      "thinkingHint": "仅对支持 extended thinking 的模型生效"
+      "thinkingHint": "仅对支持 extended thinking 的模型生效",
+      "effortLabel": "Thinking 强度",
+      "effortAria": "选择全局 Thinking 强度",
+      "effortHint": "对会长时间思考的模型，可在此调低默认强度；也可在对话中单独调整当前会话。"
     }
   },
   "llmService": {

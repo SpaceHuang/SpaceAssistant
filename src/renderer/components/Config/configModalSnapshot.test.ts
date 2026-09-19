@@ -39,7 +39,7 @@ describe('buildConfigModalSnapshot', () => {
       ...preferredIds,
       workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp/work', isDefault: true }],
       locale: 'zh-CN' as const,
-      thinkingEnabled: true,
+      thinkingEffort: 'medium' as const,
       models: [{ id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, isVision: false, enabled: true }],
       llmState,
       toolUi: {
@@ -70,7 +70,7 @@ describe('buildConfigModalSnapshot', () => {
         ...preferredIds,
         workDirProfiles: [{ id: 'd1', name: 'Work', path: pathValue, isDefault: true }],
         locale: 'zh-CN',
-        thinkingEnabled: false,
+        thinkingEffort: 'off' as const,
         models: [],
         llmState,
         toolUi: {
@@ -99,7 +99,7 @@ describe('buildConfigModalSnapshot', () => {
         ...preferredIds,
         workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp', isDefault: true }],
         locale,
-        thinkingEnabled: false,
+        thinkingEffort: 'off' as const,
         models: [],
         llmState,
         toolUi: {
@@ -127,7 +127,7 @@ describe('buildConfigModalSnapshot', () => {
       ...preferredIds,
       workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp', isDefault: true }],
       locale: 'en-US' as const,
-      thinkingEnabled: false,
+      thinkingEffort: 'off' as const,
       models: [],
       llmState,
       toolUi: {
@@ -159,7 +159,7 @@ describe('buildConfigModalSnapshot', () => {
         ...preferredIds,
         workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp', isDefault: true }],
         locale: 'zh-CN',
-        thinkingEnabled: false,
+        thinkingEffort: 'off' as const,
         models: [],
         llmState,
         toolUi: {
@@ -187,7 +187,7 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
     ...preferredIds,
     workDirProfiles: [],
     locale: 'zh-CN' as const,
-    thinkingEnabled: false,
+    thinkingEffort: 'off' as const,
     models: [],
     llmState: initLlmServiceTabState([], [], []),
     toolUi: {
@@ -236,7 +236,7 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
           preferredLanguageModelId,
           workDirProfiles: [],
           locale: 'zh-CN',
-          thinkingEnabled: false,
+          thinkingEffort: 'off' as const,
           models: [],
           tools: {
             deniedTools: [],
@@ -258,5 +258,61 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
         true
       )
     expect(configModalSnapshotsEqual(mk('a'), mk('b'))).toBe(false)
+  })
+})
+
+
+describe('buildConfigModalSnapshot Thinking 强度与能力标记（§5.5 / §2.6）', () => {
+  const base = {
+    ...preferredIds,
+    workDirProfiles: [],
+    locale: 'zh-CN' as const,
+    thinkingEffort: 'medium' as const,
+    models: [
+      { id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, isVision: false, enabled: true }
+    ],
+    llmState: initLlmServiceTabState([], [], []),
+    toolUi: {
+      deniedTools: [],
+      pythonPath: 'python',
+      scriptTimeout: 300,
+      fileCheckpointingEnabled: true,
+      maxFileSnapshots: 100,
+      grepTimeoutSec: 60
+    },
+    maxParallelChatSessions: 3,
+    wiki: { ...DEFAULT_WIKI_CONFIG },
+    feishu: { ...DEFAULT_FEISHU_CONFIG },
+    wechat: { ...DEFAULT_WECHAT_CONFIG },
+    browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
+    shell: { ...DEFAULT_SHELL_CONFIG },
+    shellEnabled: true
+  }
+
+  it('全局强度档位变化时快照必须变化（脏检测覆盖新字段，§10.4）', () => {
+    expect(
+      configModalSnapshotsEqual(
+        buildConfigModalSnapshot(base),
+        buildConfigModalSnapshot({ ...base, thinkingEffort: 'low' as const })
+      )
+    ).toBe(false)
+    // off 与 medium 也不相等（档位不被折叠）
+    expect(
+      configModalSnapshotsEqual(
+        buildConfigModalSnapshot({ ...base, thinkingEffort: 'low' as const }),
+        buildConfigModalSnapshot({ ...base, thinkingEffort: 'off' as const })
+      )
+    ).toBe(false)
+  })
+
+  it('supportsThinking 能力标记变化时快照必须变化（§2.6：normalizeModels 曾遗漏同类字段）', () => {
+    const supports = { ...base.models[0]!, supportsThinking: true }
+    const notSupports = { ...base.models[0]!, supportsThinking: false }
+    expect(
+      configModalSnapshotsEqual(
+        buildConfigModalSnapshot({ ...base, models: [supports] }),
+        buildConfigModalSnapshot({ ...base, models: [notSupports] })
+      )
+    ).toBe(false)
   })
 })

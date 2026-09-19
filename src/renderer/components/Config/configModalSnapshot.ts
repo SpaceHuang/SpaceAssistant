@@ -16,7 +16,8 @@ import type { ToolsSettingsUi } from './ToolsSettingsTab'
 export type ConfigModalSnapshotInput = {
   workDirProfiles: WorkDirProfile[]
   locale: AppLocale
-  thinkingEnabled: boolean
+  /** 全局 Thinking 强度（§5.5：替代原 thinkingEnabled 布尔入快照） */
+  thinkingEffort: import('../../../shared/agent/invocation').AgentReasoningEffort
   models: ModelEntry[]
   llmState: LlmServiceTabState
   toolUi: ToolsSettingsUi
@@ -47,7 +48,9 @@ function normalizeModels(models: ModelEntry[]): ModelEntry[] {
       isDefault: m.isDefault,
       isFast: m.isFast,
       isVision: m.isVision,
-      enabled: m.enabled
+      enabled: m.enabled,
+      // §2.6：能力标记必须进快照，否则「添加模型时取消勾选支持 Thinking」会被判为无更改、保存按钮禁用
+      supportsThinking: m.supportsThinking
     }))
     .sort((a, b) => a.id.localeCompare(b.id))
 }
@@ -88,7 +91,7 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
   const payload = {
     workDirProfiles: normalizeProfiles(input.workDirProfiles),
     locale: input.locale,
-    thinkingEnabled: input.thinkingEnabled,
+    thinkingEffort: input.thinkingEffort,
     models: normalizeModels(input.models),
     llm: normalizeLlmState(input.llmState),
     preferredLanguageModelId: input.preferredLanguageModelId,
@@ -125,7 +128,7 @@ export function buildConfigModalSnapshotFromConfig(
   return buildConfigModalSnapshot({
     workDirProfiles: cfg.workDirProfiles ?? [],
     locale: cfg.locale,
-    thinkingEnabled: cfg.thinkingEnabled,
+    thinkingEffort: cfg.thinkingEffort,
     models: cfg.models,
     preferredLanguageModelId: cfg.preferredLanguageModelId ?? '',
     preferredFastLanguageModelId: cfg.preferredFastLanguageModelId ?? '',

@@ -1,0 +1,113 @@
+import { useState } from 'react'
+import { Popover, Tooltip } from 'antd'
+import { ChevronDown } from 'lucide-react'
+import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
+import { THINKING_EFFORT_LEVELS } from '../../../shared/thinkingEffort'
+import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+
+type Props = {
+  /** 当前生效档位（会话覆盖或全局默认） */
+  value: AgentReasoningEffort
+  /** 是否存在会话级覆盖（决定展示「默认（中）」还是显式档位） */
+  overridden: boolean
+  /** 全局默认档位（「默认（中）」括注） */
+  globalEffort: AgentReasoningEffort
+  disabled?: boolean
+  /** 禁用原因（当前会话模型不支持 Thinking） */
+  disabledReason?: string
+  /** null = 清除覆盖（回到继承全局） */
+  onSelect: (effort: AgentReasoningEffort | null) => void
+}
+
+/** 会话级 Thinking 强度入口（需求 §5.2）：composer footer 左段、模型 chip 之后的 5 项选择器。 */
+export function ComposerThinkingPicker({ value, overridden, globalEffort, disabled, disabledReason, onSelect }: Props) {
+  const { t } = useTypedTranslation('chat')
+  const [open, setOpen] = useState(false)
+
+  const effortLabel = (effort: AgentReasoningEffort): string => t(`composer.thinking.${effort}`)
+  const label = overridden
+    ? effortLabel(value)
+    : t('composer.thinking.inheritWithGlobal', { effort: effortLabel(globalEffort) })
+
+  // 交互定稿（用户指示）：「是否默认」是档位的属性而非独立选项——
+  // 等于当前全局档位的项带「· 默认」标记，点它 = 清除覆盖回到继承（写 null）
+  const items = THINKING_EFFORT_LEVELS.map((level) => ({
+    key: level,
+    isDefaultSlot: level === globalEffort,
+    label:
+      level === globalEffort
+        ? t('composer.thinking.defaultSuffix', { effort: effortLabel(level) })
+        : effortLabel(level),
+    select: () => onSelect(level === globalEffort ? null : level)
+  }))
+
+  const content = (
+    <ul className="composer-thinking-picker__list" role="menu">
+      {items.map((item) => (
+        <li key={item.key}>
+          <button
+            type="button"
+            role="menuitem"
+            className={[
+              'composer-thinking-picker__item',
+              (item.isDefaultSlot ? !overridden : item.key === value) ? 'composer-thinking-picker__item--active' : ''
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={() => {
+              item.select()
+              setOpen(false)
+            }}
+          >
+            {item.label}
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
+
+  // 评审 B2：disabled 控件不派发鼠标事件——原生 title 与 Popover 都不可达，
+  // 禁用原因必须用 Tooltip 挂在外层 span 上才对用户可见
+  const chip = (
+    <button
+      type="button"
+      className={[
+        'composer-model-chip',
+        'composer-model-chip--button',
+        'composer-thinking-chip',
+        open ? 'composer-model-chip--open' : ''
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      disabled={disabled}
+      title={disabled ? undefined : t('composer.thinking.label')}
+    >
+      <span className="composer-model-chip__label">{label}</span>
+      <ChevronDown size={12} strokeWidth={2} className="composer-model-chip__chevron" aria-hidden />
+    </button>
+  )
+
+  if (disabled && disabledReason) {
+    return (
+      <Tooltip title={disabledReason}>
+        {/* disabled 元素不触发 Tooltip，必须包一层可接收鼠标事件的 span */}
+        <span className="composer-thinking-chip--disabled-wrapper">{chip}</span>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={setOpen}
+      trigger="click"
+      placement="topLeft"
+      classNames={{ root: 'composer-thinking-picker-popover' }}
+      content={content}
+    >
+      {chip}
+    </Popover>
+  )
+}

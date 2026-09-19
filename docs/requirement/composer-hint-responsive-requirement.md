@@ -1,3 +1,5 @@
+> **⚠️ 已过时（2026-09-19）**：本档描述的 `.composer-hint` 提示文案实现已演进为「折叠式状态区」（见 [thinking-effort-settings-requirement.md](./thinking-effort-settings-requirement.md) §2.7）；且其中 idle 态「Enter 发送，Shift+Enter 换行」提示已按 OQ-9 决策移除。本档不再维护，仅作历史参考。
+
 # 聊天输入区 — 自适应隐藏提示文案需求规格
 
 **版本：** 1.0
