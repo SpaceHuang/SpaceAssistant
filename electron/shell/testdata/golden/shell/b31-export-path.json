@@ -1,0 +1,80 @@
+{
+  "id": "b31-export-path",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "export PATH=$PATH:/usr/local/bin"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "export",
+          "args": [
+            "PATH=$PATH:/usr/local/bin"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [
+        "PATH=$PATH:/usr/local/bin"
+      ],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "export PATH=$PATH:/usr/local/bin",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "export",
+        "args": [
+          "PATH=$PATH:/usr/local/bin"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [
+      "PATH=$PATH:/usr/local/bin"
+    ],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

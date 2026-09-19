@@ -1,0 +1,81 @@
+{
+  "id": "p05-encoded-command",
+  "dialect": "windows-powershell",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "powershell -EncodedCommand ZQBjAGgAbwA="
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "powershell",
+          "args": [
+            "-EncodedCommand",
+            "ZQBjAGgAbwA="
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "powershell -EncodedCommand ZQBjAGgAbwA=",
+    "trust": {
+      "executable": "powershell",
+      "argv": [
+        "-EncodedCommand",
+        "ZQBjAGgAbwA="
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "powershell",
+        "args": [
+          "-EncodedCommand",
+          "ZQBjAGgAbwA="
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": true,
+    "hasMetasyntax": false
+  }
+}

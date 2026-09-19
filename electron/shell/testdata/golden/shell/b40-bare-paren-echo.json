@@ -1,0 +1,87 @@
+{
+  "id": "b40-bare-paren-echo",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "echo \"a(b)\""
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "echo",
+          "args": [
+            "a(b)"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "segment:0:shell-control-flow"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "echo a(b)",
+    "trust": {
+      "executable": "echo",
+      "argv": [
+        "a(b)"
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "echo",
+        "args": [
+          "a(b)"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "segment:0:shell-control-flow"
+    ]
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": true,
+    "hasMetasyntax": false
+  },
+  "precheckTrusted": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial"
+  }
+}

@@ -51,9 +51,21 @@
 - **IrCoverageError 引起的 A-fail：0 条**（91 样本无 ④ 未建模构造；该通道由 `scriptParseCount.test.ts` 的 match 语句反向用例单独覆盖）
 - **现状可解析集 A-fail（含 IrCoverageError）：0 / 51**（✓ 硬门禁满足，禁净退化成立）
 
-## Bash 段（P2-T0 建立）
+## Bash 段
 
-（待 P2-T0 填写）
+### 基线信息（P2-T0）
+
+- **基线 commit**：`e3517a6207092165328ddfc82a8d528ca40e81f5`（P1 收尾 commit；相对 P1-T0 基线，本阶段仅改动 Python 解析前端，bash/PS 分析路径、共享原语层与确认域组件零改动）
+- `git show -s --format='%H %ci' e3517a62…`：`e3517a6207092165328ddfc82a8d528ca40e81f5 2026-09-20 03:34:30 +0800`
+- 采集时间：2026-09-20 03:35（`SHELL_GOLDEN_RECORD=1 npm exec vitest run electron/shell/shellGolden.test.ts`）
+- 样本集：`electron/shell/testdata/golden/shell/`（60 条 = posix-bash 48 + windows-powershell 12；含裸括号形态 3 条 b40/b41/b42——发现 H；生成器 `scripts/generate-shell-golden-samples.mjs`）
+- 四类基线：① 判定（analyzeShellCommand 完整结果，路径归一化）② 签名（normalizeShellSignature + parseShellCommandForTrust）③ facts（六字段级）④ 免确认资格派生（precheckRunShellTool：legacyAutoAllowEligible + analysisCompleteness + persistable/hasMetasyntax；bash 全量，裸括号样本含 trusted/untrusted 双配置）。
+- 关键基线锚点（发现 H 翻转可见性）：`b40 echo "a(b)"` — untrusted eligible=false / trusted eligible=false / analysisCompleteness=partial（旧实现 `[()]` 启发式判 partial）。
+
+### P2-T5 比对结果（切换后填写）
+
+- 判定/facts/免确认资格/签名比对与逐条处置：（待 P2-T5 填写）
+
 
 ## PowerShell 段（P3-T0 建立）
 

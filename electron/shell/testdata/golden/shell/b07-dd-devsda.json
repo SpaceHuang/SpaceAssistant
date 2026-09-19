@@ -1,0 +1,92 @@
+{
+  "id": "b07-dd-devsda",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "deny",
+    "denyReason": "检测到磁盘擦除风险\n\ndd if=/dev/zero of=/dev/… 会用零覆盖整个磁盘，导致所有数据永久丢失。\n\n建议：请确认命令参数是否正确，如需备份磁盘镜像，请使用专用备份工具。",
+    "validatorId": "disk_wipe",
+    "denyType": "strong",
+    "segments": [
+      "dd if=/dev/zero of=/dev/sda"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": [],
+      "violationCodes": [
+        "disk_wipe"
+      ],
+      "validatorId": "disk_wipe",
+      "denyType": "strong"
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "dd",
+          "args": [
+            "if=/dev/zero",
+            "of=/dev/sda"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [
+        "if=/dev/zero",
+        "of=/dev/sda"
+      ],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "dd if=/dev/zero of=/dev/sda",
+    "trust": {
+      "executable": "dd",
+      "argv": [
+        "if=/dev/zero",
+        "of=/dev/sda"
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "dd",
+        "args": [
+          "if=/dev/zero",
+          "of=/dev/sda"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [
+      "if=/dev/zero",
+      "of=/dev/sda"
+    ],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": false,
+    "auditReason": "检测到磁盘擦除风险\n\ndd if=/dev/zero of=/dev/… 会用零覆盖整个磁盘，导致所有数据永久丢失。\n\n建议：请确认命令参数是否正确，如需备份磁盘镜像，请使用专用备份工具。"
+  }
+}

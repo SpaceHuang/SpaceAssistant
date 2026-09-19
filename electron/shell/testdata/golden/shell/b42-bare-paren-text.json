@@ -1,0 +1,87 @@
+{
+  "id": "b42-bare-paren-text",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "echo \"text (with parens) here\""
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "echo",
+          "args": [
+            "text (with parens) here"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "segment:0:shell-control-flow"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "echo text (with parens) here",
+    "trust": {
+      "executable": "echo",
+      "argv": [
+        "text (with parens) here"
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "echo",
+        "args": [
+          "text (with parens) here"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "segment:0:shell-control-flow"
+    ]
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": true,
+    "hasMetasyntax": false
+  },
+  "precheckTrusted": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial"
+  }
+}

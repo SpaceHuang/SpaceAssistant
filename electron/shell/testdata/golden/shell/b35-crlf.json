@@ -1,0 +1,94 @@
+{
+  "id": "b35-crlf",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "echo crlf\r\nnext line"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "echo",
+          "args": [
+            "crlf"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "next",
+          "args": [
+            "line"
+          ],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        ";"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "echo crlf next line",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "echo",
+        "args": [
+          "crlf"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "next",
+        "args": [
+          "line"
+        ],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      ";"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

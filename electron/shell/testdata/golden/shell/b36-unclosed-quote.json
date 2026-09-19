@@ -1,0 +1,64 @@
+{
+  "id": "b36-unclosed-quote",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "echo \"unclosed"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [],
+      "connectors": [],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "segment:0:unparseable"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": false,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [],
+    "connectors": [],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "segment:0:unparseable"
+    ]
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": false,
+    "hasMetasyntax": false
+  }
+}

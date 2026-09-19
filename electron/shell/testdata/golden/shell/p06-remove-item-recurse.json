@@ -1,0 +1,104 @@
+{
+  "id": "p06-remove-item-recurse",
+  "dialect": "windows-powershell",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "Remove-Item -Recurse -Force C:\\temp"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：C:\\temp",
+          "path": "C:\\temp",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：C:\\temp"
+      ],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": true
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": false,
+      "warnings": [
+        "命令包含工作目录外的路径：C:\\temp"
+      ],
+      "scannedPaths": [
+        "C:\\temp"
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>"
+      ]
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "Remove-Item",
+          "args": [
+            "-Recurse",
+            "-Force",
+            "C:\\temp"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [
+        "C:\\temp"
+      ],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "Remove-Item -Recurse -Force C:\\temp",
+    "trust": {
+      "executable": "Remove-Item",
+      "argv": [
+        "-Recurse",
+        "-Force",
+        "C:\\temp"
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "Remove-Item",
+        "args": [
+          "-Recurse",
+          "-Force",
+          "C:\\temp"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [
+      "C:\\temp"
+    ],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": true,
+    "hasMetasyntax": false
+  }
+}

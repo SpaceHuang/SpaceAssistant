@@ -1,0 +1,107 @@
+{
+  "id": "b02-rmrf-tmp",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "validatorId": "dangerous_rm",
+    "denyType": "weak",
+    "segments": [
+      "rm -rf /tmp/data"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/tmp/data",
+          "path": "/tmp/data",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：/tmp/data"
+      ],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": true
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": false,
+      "warnings": [
+        "命令包含工作目录外的路径：/tmp/data"
+      ],
+      "scannedPaths": [
+        "/tmp/data"
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "dangerous_rm"
+      ],
+      "validatorId": "dangerous_rm",
+      "denyType": "weak",
+      "securityWarning": "警告：此操作将递归删除目录\n\nrm -rf 会永久删除目标目录及其所有内容，且无法恢复。\n\n确认执行？"
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "rm",
+          "args": [
+            "-rf",
+            "/tmp/data"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [
+        "/tmp/data"
+      ],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "rm -rf /tmp/data",
+    "trust": {
+      "executable": "rm",
+      "argv": [
+        "-rf",
+        "/tmp/data"
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "rm",
+        "args": [
+          "-rf",
+          "/tmp/data"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [
+      "/tmp/data"
+    ],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": true,
+    "hasMetasyntax": false
+  }
+}

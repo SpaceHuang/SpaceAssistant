@@ -1,0 +1,115 @@
+{
+  "id": "b21-cd-dotdot",
+  "dialect": "posix-bash",
+  "platform": "win32",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "cd ..",
+      "git status"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "CD_OUTSIDE_<WORKDIR>",
+          "message": "cd 目标不在工作目录内：..",
+          "path": "..",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "cd 目标不在工作目录内：.."
+      ],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": true
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": false,
+      "warnings": [
+        "cd 目标不在工作目录内：.."
+      ],
+      "scannedPaths": [
+        ".."
+      ],
+      "violationCodes": [
+        "CD_OUTSIDE_<WORKDIR>"
+      ]
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "cd",
+          "args": [
+            ".."
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "git",
+          "args": [
+            "status"
+          ],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "&&"
+      ],
+      "paths": [],
+      "cwdChanges": [
+        ".."
+      ],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "cd .. && git status",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "cd",
+        "args": [
+          ".."
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "git",
+        "args": [
+          "status"
+        ],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "&&"
+    ],
+    "paths": [],
+    "cwdChanges": [
+      ".."
+    ],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}
