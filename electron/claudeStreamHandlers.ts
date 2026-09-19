@@ -1,8 +1,8 @@
 import type { IpcMain, WebContents } from 'electron'
-import { safeWebContentsSend } from './safeWebContentsSend'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
 import { getTurnContext, getPersistedTurn, getSession, type AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
@@ -426,7 +426,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           getBrowserDetectContext: deps.getBrowserDetectContext,
           floatingNotificationManager: deps.floatingNotificationManager,
           onTitleGenerated: (session) => deps.notifyMainWindow?.('session:title-generated', { session }),
-          onFileTreeChanged: (event) => deps.notifyMainWindow?.('file:tree-changed', event)
+          onFileTreeChanged: (event) => notifyFileTreeChanged(null, event)
           ,emitSessionEvent: async (event: SessionEventInput) => {
             if (!eventWriter) return
             // R1：tool_call_delta.partialJson 原文不落台账（chunk 拼接可还原凭据）

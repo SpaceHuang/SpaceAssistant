@@ -1,17 +1,15 @@
 import { FSWatcher, watch } from 'fs'
-import type { WebContents } from 'electron'
 import { resolveSafePath } from './pathSecurity'
-import { safeWebContentsSend } from './safeWebContentsSend'
 import { logAgentEvent } from './agentLogger/agentLogger'
-import type { FileContentChangedEvent } from '../src/shared/fileContentSync'
+import { nextFileScopeVersion } from './fileScopeVersion'
+import { broadcastScopeInvalidation } from './ipc/invalidationOutlet'
 
 let watcher: FSWatcher | null = null
 let watchedRelPath: string | null = null
 
 export function startContentWatch(
   workDir: string,
-  relPath: string,
-  sender: WebContents
+  relPath: string
 ): void {
   stopContentWatch()
 
@@ -21,8 +19,8 @@ export function startContentWatch(
 
     watcher = watch(absPath, (eventType) => {
       if (eventType !== 'change') return
-      const payload: FileContentChangedEvent = { relPath }
-      safeWebContentsSend(sender, 'file:content-changed', payload)
+      // 偏差 11/3c:文件内容失效广播 { scope: 'file:<path>', version },渲染端收到后自行 file:read-file 重取
+      broadcastScopeInvalidation(`file:${relPath}`, nextFileScopeVersion())
     })
 
     watcher.on('error', (err) => {

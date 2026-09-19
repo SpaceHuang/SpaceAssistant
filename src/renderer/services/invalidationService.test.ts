@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetInvalidationServiceForTest, startInvalidationService, registerMessagesReloadHandler } from './invalidationService'
+
+vi.mock('./fileTreeSyncBus', () => ({ applyFileTreeInvalidation: vi.fn() }))
+vi.mock('./fileContentSyncBus', () => ({ applyFileContentInvalidation: vi.fn() }))
 import { store } from '../store'
 import { setSessions } from '../store/sessionSlice'
 import type { Session } from '../../shared/domainTypes'
@@ -82,6 +85,21 @@ describe('invalidationService(通知驱动重取,偏差 11)', () => {
     emit({ scope: 'session:s9:messages', version: 2 })
     await flushAsync()
     expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('文件域失效转发到对应 bus(树:hint;内容:path)', async () => {
+    const { applyFileTreeInvalidation } = await import('./fileTreeSyncBus')
+    const { applyFileContentInvalidation } = await import('./fileContentSyncBus')
+    const treeFn = vi.mocked(applyFileTreeInvalidation)
+    const contentFn = vi.mocked(applyFileContentInvalidation)
+    emit({ scope: 'file-tree', version: 1, hint: { paths: ['docs/note.md'] } })
+    emit({ scope: 'file:docs/other.md', version: 1 })
+    await flushAsync()
+    expect(treeFn).toHaveBeenCalledWith({ kind: 'paths', relPaths: ['docs/note.md'] })
+    expect(contentFn).toHaveBeenCalledWith('docs/other.md')
+    emit({ scope: 'file-tree', version: 2, hint: { refreshExpanded: true } })
+    await flushAsync()
+    expect(treeFn).toHaveBeenLastCalledWith({ kind: 'refreshExpanded' })
   })
 
   it('不相关 scope 不触发重取', async () => {

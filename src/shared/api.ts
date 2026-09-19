@@ -254,7 +254,7 @@ export type SpaceAssistantApi = {
     >
   }) => Promise<{ message: Message; sequence: number } | null>
   chatSubmitOutbound: (intent: import('./outboundProtocol').OutboundSubmitIntent) => Promise<import('./outboundProtocol').OutboundSubmitResult>
-  onScopeInvalidated: (cb: (payload: { scope: string; version: number }) => void) => () => void
+  onScopeInvalidated: (cb: (payload: { scope: string; version: number; hint?: unknown }) => void) => () => void
   chatCancelTurn: (turnId: string) => Promise<boolean>
   chatGetTurnTerminal: (turnId: string) => Promise<(import('./assistantFactAggregator').TurnTerminal & { committedVersion?: number; commitStatus?: 'pending' | 'committed' | 'failed' }) | undefined>
   chatRetryTurnCheckpoint: (turnId: string) => Promise<boolean>
@@ -394,9 +394,7 @@ export type SpaceAssistantApi = {
   fileRename: (relPath: string, newName: string) => Promise<void>
   fileMove: (srcRelPath: string, destDirRelPath: string) => Promise<void>
   fileCopy: (payload: { srcRelPath: string; destRelPath: string }) => Promise<void>
-  fileOnTreeChanged: (cb: (event: import('./fileTreeSync').FileTreeChangeEvent) => void) => () => void
   fileWatchContent: (relPath: string | null) => Promise<void>
-  fileOnContentChanged: (cb: (event: import('./fileContentSync').FileContentChangedEvent) => void) => () => void
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>

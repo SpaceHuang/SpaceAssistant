@@ -63,7 +63,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       stopContentWatch()
       return
     }
-    startContentWatch(ctx.getWorkDir(), payload.relPath.trim(), event.sender)
+    startContentWatch(ctx.getWorkDir(), payload.relPath.trim())
   })
 
   ipcMain.handle('file:to-viewer-url', async (_e, rel: unknown) => {

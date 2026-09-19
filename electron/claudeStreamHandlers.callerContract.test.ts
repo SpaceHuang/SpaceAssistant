@@ -183,8 +183,9 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     // 冻结快照值语义
     expect(invocation.profile.locale).toBe('zh-CN')
     expect(invocation.messages.currentUserMessageId).toBe('cc-user')
-    invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })
-    expect(notifyMainWindow).toHaveBeenCalledWith('file:tree-changed', { kind: 'paths', relPaths: ['a.txt'] })
+    // 偏差 11/3c:文件树失效归一为统一出口(scope:invalidated),不再直发 file:tree-changed
+    expect(() => invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })).not.toThrow()
+    expect(notifyMainWindow).not.toHaveBeenCalledWith('file:tree-changed', expect.anything())
     db.close()
   })
 })

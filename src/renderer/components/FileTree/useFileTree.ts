@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileInfo } from '../../../shared/domainTypes'
 import { dirsToRefreshForPath, mergeRefreshedChildren } from '../../../shared/fileTreeSync'
-import { ensureFileTreeSyncIpc, subscribeFileTreeSync } from '../../services/fileTreeSyncBus'
+import { subscribeFileTreeSync } from '../../services/fileTreeSyncBus'
 
 export interface FileTreeNode {
   key: string
@@ -295,7 +295,6 @@ export function useFileTree(workDir: string, options: UseFileTreeOptions = {}) {
   refreshDirectoryRef.current = refreshDirectory
 
   useEffect(() => {
-    ensureFileTreeSyncIpc()
     return subscribeFileTreeSync((event) => {
       void (async () => {
         const expanded = new Set(expandedKeysRef.current)

@@ -122,17 +122,9 @@ const api: SpaceAssistantApi = {
   fileRename: (relPath, newName) => ipcRenderer.invoke('file:rename', relPath, newName),
   fileMove: (srcRelPath, destDirRelPath) => ipcRenderer.invoke('file:move', srcRelPath, destDirRelPath),
   fileCopy: (payload) => ipcRenderer.invoke('file:copy', payload),
-  fileOnTreeChanged: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/fileTreeSync').FileTreeChangeEvent) => cb(data)
-    ipcRenderer.on('file:tree-changed', fn)
-    return () => ipcRenderer.removeListener('file:tree-changed', fn)
-  },
+
   fileWatchContent: (relPath) => ipcRenderer.invoke('file:watch-content', { relPath }),
-  fileOnContentChanged: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/fileContentSync').FileContentChangedEvent) => cb(data)
-    ipcRenderer.on('file:content-changed', fn)
-    return () => ipcRenderer.removeListener('file:content-changed', fn)
-  },
+
 
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),
