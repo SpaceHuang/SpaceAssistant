@@ -187,3 +187,21 @@ describe('AssistantFactAggregator', () => {
     expect(result.toolCalls?.[0]?.mcp).toEqual({ serverId: 's', serverName: '服务', originalToolName: 'tool' })
   })
 })
+
+describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
+  it('confirm-requested 带 autoAnswerer 时写入 tool record（渲染端据此出只读「自动审批中」卡）', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-auto', toolName: 'run_shell', input: { command: 'ls' } },
+      { type: 'confirm-requested', id: 't-auto', riskLevel: 'high', autoAnswerer: true }
+    ])
+    expect(result.toolCalls?.[0]).toMatchObject({ status: 'confirming', autoAnswerer: true })
+  })
+
+  it('user 确认路径不带 autoAnswerer（交互卡不受影响）', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-user', toolName: 'run_shell', input: { command: 'ls' } },
+      { type: 'confirm-requested', id: 't-user', riskLevel: 'high' }
+    ])
+    expect(result.toolCalls?.[0]?.autoAnswerer).toBeUndefined()
+  })
+})

@@ -696,3 +696,20 @@ describe('decide：回答者派生（P0 §2.2，动作决定回答者）', () =>
     expect(d.type === 'require-confirm' && d.answerer).toBe('agent')
   })
 })
+
+describe('desktop loose 语义锚定（评审低项明示）', () => {
+  it('desktop loose：未过预检的 run_shell → 快通道(auto-evaluator 保持)→ 审批 Agent 裁决（非人工）', () => {
+    const rules = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'loose' }, rules: DEFAULT_POLICY_RULES })
+    // loose 下 ask→allow、auto-evaluator 保持：shell-precheck-auto-allow 仍为快通道
+    expect(rules.find((r) => r.id === 'shell-precheck-auto-allow')?.action).toBe('auto-evaluator')
+    const d = decide(
+      mkFacts('run_shell', 'execute', [{ kind: 'command-sequence', commands: [{ verb: 'curl', args: ['x'] }] }]),
+      mkContext('desktop'),
+      rules,
+      deps({ autoEvaluator: () => ({ approve: false, reason: '预检未放行' }) })
+    )
+    // 预检未过 → 交审批 Agent（决策 1：loose 由用户显式选择，回答者口径随之）
+    expect(d.type).toBe('require-confirm')
+    if (d.type === 'require-confirm') expect(d.answerer).toBe('agent')
+  })
+})

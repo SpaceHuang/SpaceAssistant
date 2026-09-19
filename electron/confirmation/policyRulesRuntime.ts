@@ -24,7 +24,20 @@ export function readPolicyPackages(db: AppDatabase): PolicyPackageMap {
   const raw = getConfigValue(db, POLICY_PACKAGES_CONFIG_KEY)
   if (!raw) return { ...DEFAULT_POLICY_PACKAGES }
   try {
-    return normalizePolicyPackages(JSON.parse(raw))
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const normalized = normalizePolicyPackages(parsed)
+    // M2 告警（评审低项）：伪造/不可用档位被收敛 standard 时留痕（shared 模块无日志依赖，告警在装配侧落）
+    for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
+      if (parsed[lane] !== undefined && parsed[lane] !== normalized[lane]) {
+        void import('../agentLogger/agentLogger').then((m) =>
+          m.logAgentEvent('warn', 'policy.package.normalized', {
+            detail: `policy package for lane ${lane} normalized: ${String(parsed[lane])} -> ${normalized[lane]}`,
+            timestamp: Date.now()
+          })
+        )
+      }
+    }
+    return normalized
   } catch {
     return { ...DEFAULT_POLICY_PACKAGES }
   }
@@ -67,11 +80,6 @@ export function writeDisabledPolicyRuleIds(db: AppDatabase, ids: string[]): void
 /** 某条系统保护规则是否处于「不启用」状态。 */
 export function isPolicyRuleDisabled(db: AppDatabase, ruleId: string): boolean {
   return readDisabledPolicyRuleIds(db).includes(ruleId)
-}
-
-/** 当前 lane 的档位（经 normalize 收敛；automation 伪造档位回落 standard）。 */
-export function readLanePackage(db: AppDatabase, lane: ExecutionLane): PolicyPackage {
-  return readPolicyPackages(db)[lane] ?? 'standard'
 }
 
 /**

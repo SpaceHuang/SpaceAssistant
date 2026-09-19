@@ -254,6 +254,9 @@ export function queryUsageDimensions(db: AppDatabase): UsageDimensions {
          SELECT DISTINCT t.session_id, NULL AS alias_name FROM usage_turn_facts t
        )
        LEFT JOIN sessions ON sessions.id = session_id
+       -- 中2（评审）：内部/隐藏会话（审批 Agent、automation 内部会话）不进筛选下拉
+       WHERE (sessions.ownership IS NULL OR sessions.ownership != 'internal')
+         AND (sessions.visibility IS NULL OR sessions.visibility != 'hidden')
        GROUP BY session_id
        ORDER BY session_id`
     )

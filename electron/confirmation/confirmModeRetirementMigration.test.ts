@@ -52,6 +52,14 @@ describe('runConfirmModeRetirementMigrationOnce（confirmMode 退役迁移，§5
     expect(after.enabled).toBe(true)
   })
 
+  it('孤儿 config.confirmAnswerers 键（answererConfig 退役遗留）：迁移时一并清理', () => {
+    const d = db()
+    setConfigValue(d, 'config.confirmAnswerers', JSON.stringify({ desktop: { kind: 'user' } }))
+    const res = runConfirmModeRetirementMigrationOnce(d)
+    expect(res.migrated).toBe(true)
+    expect(getConfigValue(d, 'config.confirmAnswerers')).toBeUndefined()
+  })
+
   it('版本标记已存在：跳过不再解析（幂等）', () => {
     const d = db()
     setConfigValue(d, CONFIRM_MODE_RETIREMENT_MIGRATION_VERSION_KEY, '1')

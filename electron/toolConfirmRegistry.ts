@@ -66,6 +66,11 @@ export function rejectPendingConfirmsForToolAcrossLanes(toolName: string): numbe
   )
 }
 
+/** 该 (requestId, toolUseId) 是否存在已登记的 pending 确认（H1：信任写入的前置校验）。 */
+export function isPendingConfirm(requestId: string, toolUseId: string): boolean {
+  return pending.has(confirmKey(requestId, toolUseId))
+}
+
 /**
  * 校验渲染端回传的 memoryTier 是否属于该待确认请求决策层给出的档位（B1）。
  * 无 pending 请求、请求未登记档位、或键不在档位内时一律 false（fail-closed）。

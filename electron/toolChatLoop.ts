@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
+import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
 import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
@@ -1012,9 +1013,20 @@ async function runToolChatSessionInner(
               name: compatName,
               input: parseToolInput(pending.input, pending.partialJson)
             }
+            // H3：toolkit 网关入参含凭据——JSONL 事件台账落盘前与展示/落库同口径净化
+            const rawToolCallInput = normalizeToolUseInputRecord(toolUseBlock.input)
+            const isToolkitCall = compatName === 'toolkit_call' || compatName === 'toolkit.call'
             await args.emitSessionEvent?.({
               type: 'tool_call',
-              payload: { turnId: eventTurnId, stepId: requestId, toolUseId: pending.id, name: compatName, args: normalizeToolUseInputRecord(toolUseBlock.input) }
+              payload: {
+                turnId: eventTurnId,
+                stepId: requestId,
+                toolUseId: pending.id,
+                name: compatName,
+                args: isToolkitCall
+                  ? (sanitizeCapabilityParamsForDisplay(rawToolCallInput) as Record<string, unknown>)
+                  : rawToolCallInput
+              }
             })
             const mcpEntry = mcpSnapshot.entries.get(compatName)
             args.emitFactEvent?.({
@@ -1702,11 +1714,11 @@ async function runToolChatSessionInner(
           reasonCode: autoApproveFallback.reasonCode
         })
       }
-      // 桌面写/编辑自动批准：构建 diff/字节 meta（纯展示，判定已在 gate 完成）
-      let fileAutoApproved = false
+      // 桌面写/编辑自动批准：构建 diff/字节 meta（纯展示，判定已在 gate 完成）。
+      // H2：判定消费 gate 显式结果字段（desktop-auto-approve 规则已删，ruleId 匹配是死分支）
+      let fileAutoApproved = gate.fileAutoApproved === true
       let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
-      if (gate.decision.type === 'auto-allow' && gate.decision.ruleId === 'desktop-auto-approve') {
-        fileAutoApproved = true
+      if (fileAutoApproved) {
         const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
         const diff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
         let bytesWritten = 0
@@ -1797,6 +1809,9 @@ async function runToolChatSessionInner(
             ...(diff ? { confirmDiff: diff } : {}),
             ...(shellSecurityHints ? { shellSecurityHints } : {}),
             ...(autoApproveFallback ? { autoApproveFallback } : {}),
+            ...(gate.decision.type === 'require-confirm' && gate.decision.answerer === 'agent'
+              ? { autoAnswerer: true as const }
+              : {}),
             ...(currentPageUrl ? { currentPageUrl } : {}),
             ...(dangerInfo ? { dangerInfo } : {}),
             ...(sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
@@ -1809,8 +1824,8 @@ async function runToolChatSessionInner(
               }
             } : {})
           })
-          // 通知浮动通知管理器
-          if (floatingNotificationManager) {
+          // 通知浮动通知管理器（H1：agent 裁决路径无 waiter，不发「待确认」浮动通知）
+          if (floatingNotificationManager && (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user')) {
             const session = appDb ? getSession(appDb, sessionId) : undefined
             floatingNotificationManager.onConfirmRequest({
               sessionId,

@@ -9,7 +9,9 @@ export const APPROVAL_TASK_DIGEST_MAX_CHARS = 500
 
 export function buildApprovalTaskDigest(prompt: string): string {
   const collapsed = prompt.replace(/\s+/g, ' ').trim()
-  return collapsed.length > APPROVAL_TASK_DIGEST_MAX_CHARS
-    ? collapsed.slice(0, APPROVAL_TASK_DIGEST_MAX_CHARS)
-    : collapsed
+  if (collapsed.length <= APPROVAL_TASK_DIGEST_MAX_CHARS) return collapsed
+  // 按 code point 切割（评审低项：避免劈裂 Unicode 代理对/组合字符）
+  return Array.from(collapsed)
+    .slice(0, APPROVAL_TASK_DIGEST_MAX_CHARS)
+    .join('')
 }

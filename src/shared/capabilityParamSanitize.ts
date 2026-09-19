@@ -33,6 +33,12 @@ export function sanitizeCapabilityParamsForDisplay(value: unknown, key?: string)
   if (key && CREDENTIAL_KEY_PATTERN.test(key)) {
     return Boolean(value)
   }
+  // URL 类值：内嵌凭据（userinfo / 凭据 query 参数）打码，与结果侧 sanitizeUrlCredentials 同口径。
+  // electron 侧注入实现（评审中 4）；shared 侧默认原样（无 electron 依赖），由 electron/confirm
+  // 提取器在组装摘要时二次处理——此处仅按 URL 形态保守处理 query 凭据。
+  if (key && /^(endpoint|url|href)$/i.test(key) && typeof value === 'string') {
+    return value.replace(/([?&](?:token|key|secret|signature|sig|password|passwd|access_token|refresh_token|api[_-]?key)=)[^&#]*/gi, '$1***')
+  }
   if (isEnvValueTable(key, value)) {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value)) {

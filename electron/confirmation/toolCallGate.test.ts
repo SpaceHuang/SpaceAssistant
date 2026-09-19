@@ -501,3 +501,31 @@ describe('custom 套餐规则覆盖（动作域按 lane，B2）', () => {
     }
   })
 })
+
+describe('fileAutoApproved 显式结果字段（H2：自动批准审计不再依赖 ruleId）', () => {
+  it('desktop write_file 快通道批准 → fileAutoApproved=true；未批准 → false', async () => {
+    const approved = await evaluateToolCallGate(
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        fileAutoApproval: async () => ({ approve: true })
+      })
+    )
+    expect(approved.decision.type).toBe('auto-allow')
+    expect(approved.fileAutoApproved).toBe(true)
+
+    const declined = await evaluateToolCallGate(
+      base({
+        toolName: 'write_file',
+        toolInput: { path: 'a.txt', content: 'x' },
+        fileAutoApproval: async () => ({ approve: false, reason: '过大', reasonCode: 'oversize' })
+      })
+    )
+    expect(declined.fileAutoApproved).toBe(false)
+  })
+
+  it('非写文件工具恒 false（预计算未跑）', async () => {
+    const r = await evaluateToolCallGate(base())
+    expect(r.fileAutoApproved).toBe(false)
+  })
+})

@@ -1,3 +1,4 @@
+import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
 import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { createCorruptedToolCallPlaceholder } from './database/streamingCleanup'
@@ -90,12 +91,20 @@ export function deserializeContentSegmentsFromDb(raw: string | null | undefined)
   }
 }
 
+/** toolkit 网关工具名（内部点号名 + API compat 名双口径，与 chatSearchFragments 同口径） */
+const TOOLKIT_PERSIST_TOOL_NAMES = new Set(['toolkit.find', 'toolkit_find', 'toolkit.call', 'toolkit_call'])
+
 export function serializeToolCallsForDb(calls: ToolCallRecord[] | undefined): string | null {
   if (!calls || calls.length === 0) return null
+  // H3：toolkit 网关入参含凭据（action.mcp.add 的 accessToken/headerValue/env 等）——
+  // 落库前与展示/搜索片段同口径净化（凭据值布尔化），明文不进 messages.tool_calls / 会话备份。
+  const toolkitNames = TOOLKIT_PERSIST_TOOL_NAMES
   return JSON.stringify(
     calls.map((c) => ({
       ...c,
-      input: JSON.stringify(c.input),
+      input: JSON.stringify(
+        toolkitNames.has(c.toolName) ? (sanitizeCapabilityParamsForDisplay(c.input) as Record<string, unknown>) : c.input
+      ),
       result: c.result
         ? {
             ...c.result,

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { listSessions, getMessagesPageWithSequence } from '../../database/operations'
+import { listSessions, getMessagesPageWithSequence, getSession } from '../../database/operations'
 import type { AppDatabase } from '../../database'
 import type { CapabilityDescriptor, CapabilityContext } from '../types'
 import { isSessionActiveStream } from '../../chatActiveStreams'
@@ -96,6 +96,12 @@ const readCapability: CapabilityDescriptor = {
     const params = rawParams as SessionReadParams
     const db = getDb(ctx)
     if (!db) throw new Error('会话数据不可用：缺少数据库上下文')
+    // 中5（评审）：与同族 list（view: 'user-visible'）口径对齐——内部会话（审批 Agent /
+    // automation internal）与 hidden 会话正文不可被 read 直读，防内部会话内容外泄到模型上下文
+    const target = getSession(db, params.sessionId)
+    if (!target || target.ownership === 'internal' || target.visibility === 'hidden') {
+      return { error: 'session not found or not user-visible' }
+    }
     const limit = Math.min(params.limit ?? 20, 50)
     const cursor = params.cursor ?? 0
     const page = getMessagesPageWithSequence(db, params.sessionId, cursor, limit)

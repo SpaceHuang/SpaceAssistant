@@ -128,7 +128,7 @@ import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { arrayMessagePageReader, type MessagePageReader, SessionBackupManager } from './sessionBackupManager'
 import { getMainWindow } from './windowRef'
 import { completeRendererSessionSwitch } from './remote/requestRendererSessionSwitch'
-import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers } from './toolConfirmRegistry'
+import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers, isPendingConfirm } from './toolConfirmRegistry'
 import { clearSessionToolResources } from './toolChatLoop'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from './sessionTitleSuggest'
 import { spawn } from 'child_process'
@@ -411,7 +411,18 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         memoryTierOptionId?: number
       }
     ): Promise<void> => {
-      if (payload.approved && payload.trustCommand?.trim()) {
+      // H1：信任写入必须与 pending 确认挂钩——agent 裁决路径（AgentChannel）不登记 waiter，
+      // 其残留确认卡片上的「信任并允许」点击在此被拒绝，不得形成与裁决结果相悖的持久授权。
+      const pendingConfirm = isPendingConfirm(payload.requestId, payload.toolUseId)
+      if (payload.approved && !pendingConfirm && (payload.trustCommand || payload.trustDomain || payload.trustActDomain || payload.trustMcpServerId)) {
+        logAgentEvent('warn', 'tool.confirm.trust_rejected_no_pending', {
+          requestId: payload.requestId,
+          toolUseId: payload.toolUseId,
+          sessionId: payload.sessionId,
+          timestamp: Date.now()
+        })
+      }
+      if (payload.approved && pendingConfirm && payload.trustCommand?.trim()) {
         const { addTrustedCommand } = await import('./shell/shellCommandTrust')
         const added = addTrustedCommand(ctx.db, payload.trustCommand.trim(), { source: 'desktop' })
         if (added) {
@@ -433,7 +444,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           }
         }
       }
-      if (payload.approved && payload.trustDomain?.trim()) {
+      if (payload.approved && pendingConfirm && payload.trustDomain?.trim()) {
         const { addTrustedDomain } = await import('./browser/browserDomainTrust')
         const browser = readBrowserConfigFromDb(ctx.db)
         const next = addTrustedDomain(browser, payload.trustDomain.trim())
@@ -445,7 +456,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         // 双写 navigate 档（domain-any-action）缓存键，供执行链路缓存命中
         recordTrustToCache({ kind: 'domain', domain: payload.trustDomain.trim(), level: 'domain-any-action' }, payload.sessionId)
       }
-      if (payload.approved && payload.trustActDomain?.trim()) {
+      if (payload.approved && pendingConfirm && payload.trustActDomain?.trim()) {
         const { addTrustedActDomain } = await import('./browser/browserDomainTrust')
         const browser = readBrowserConfigFromDb(ctx.db)
         const next = addTrustedActDomain(browser, payload.trustActDomain.trim())
@@ -457,7 +468,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         // 双写 act 档（domain+action）缓存键，与 navigate 档隔离
         recordTrustToCache({ kind: 'domain', domain: payload.trustActDomain.trim(), level: 'domain+action' }, payload.sessionId)
       }
-      if (payload.approved && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
+      if (payload.approved && pendingConfirm && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
         const { rememberMcpSessionTrust } = await import('./mcp/mcpSessionTrust')
         rememberMcpSessionTrust(payload.sessionId, payload.trustMcpServerId, payload.trustMcpToolName)
         logAgentEvent('info', 'mcp.trust.session', {

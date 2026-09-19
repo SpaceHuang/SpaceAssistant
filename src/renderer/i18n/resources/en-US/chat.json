@@ -144,6 +144,7 @@
     "fallbackBanner": "Auto-approve failed: {{reason}}. Please confirm this write manually."
   },
   "confirm": {
+    "autoAnswering": "Being auto-adjudicated by the approval agent — no manual confirmation needed",
     "decisionAriaLabel": "Confirm: {{action}}",
     "mcp": {
       "title": "External MCP tool call",

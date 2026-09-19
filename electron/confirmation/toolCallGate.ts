@@ -107,6 +107,8 @@ export interface ToolCallGateResult {
   budgetPause?: { message: string; reason: string }
   /** 桌面写/编辑自动审批回退原因（确认卡片展示）。 */
   autoApproveFallback?: AutoApproveFallback
+  /** H2：写文件自动批准（快通道批准 && 决策放行）——审计与持久 meta 的判定来源 */
+  fileAutoApproved?: boolean
   /** MCP 条目回传（确认卡片载荷）。 */
   mcpEntry?: McpToolSnapshotEntry
   /** run_script 原始分析（拒绝消息桥接 / 日志 patterns）。 */
@@ -379,6 +381,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision: decision.type,
     ruleId: decision.ruleId,
     reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
+    ...(decision.type === 'require-confirm' ? { answerer: decision.answerer } : {}),
     ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'
       ? { cause: 'recursion-blocked' as const }
       : {}),
@@ -388,6 +391,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   if (decision.type === 'deny' && decision.ruleId.startsWith('remote-outbound-budget-pause-')) {
     result.budgetPause = outboundBudgetMessage ?? { message: decision.reason, reason: 'remote_task_budget' }
   }
+  // H2：写文件自动批准的显式结果（快通道批准 && 决策为放行）——审计与 meta 的判定来源，
+  // 不再用已删除的 desktop-auto-approve ruleId 匹配
+  result.fileAutoApproved = fileAutoApprove === true && decision.type === 'auto-allow'
   result.decision = decision
   result.facts = facts
   return result

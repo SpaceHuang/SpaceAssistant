@@ -351,6 +351,12 @@ export interface SecurityAuditEvent {
   ruleId?: string
   reason?: string
   outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled'
+  /** require-confirm 决策的回答者（policy.decision；user=人工卡 / agent=审批 Agent）。 */
+  answerer?: 'user' | 'agent'
+  /** 裁决理由摘要（审批 Agent；脱敏由调用方保证，仅 summary 不落 evidence 原文）。 */
+  reasonSummary?: string
+  /** 裁决证据条数（审计侧量化依据规模，不落 evidence 原文）。 */
+  evidenceCount?: number
   /** 用户所选档位的规范化签名文本。 */
   memoryTier?: string
   /** 规范化签名文本（与缓存键同源，可对账），不落原始输入。 */

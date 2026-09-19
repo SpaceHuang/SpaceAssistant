@@ -434,6 +434,19 @@ export const ToolCallCard = memo(function ToolCallCard({
   const toolkitConfirming =
     (record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call') && record.status === 'confirming'
 
+  // H1：审批 Agent 裁决路径（AgentChannel 无 waiter）——渲染只读「自动审批中」卡，
+  // 不出交互按钮与信任选项；无 pending 的信任写入已在 IPC 层拒绝（纵深防御第二层）
+  if (record.status === 'confirming' && record.autoAnswerer) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <div className="sa-chat-inset-code" role="status">
+          {t('confirm.autoAnswering')}
+        </div>
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
   if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>

@@ -210,6 +210,8 @@ export class AgentChannel implements ConfirmationChannel {
       toolName: this.deps.toolName,
       outcome: outcome.kind === 'approved' ? 'approved' : 'rejected',
       cause: outcome.cause,
+      // 中1（评审）：裁决依据落审计——summary 与证据规模（evidence 原文不落，仅计数）
+      ...(outcome.reason ? { reasonSummary: outcome.reason.summary, evidenceCount: outcome.reason.evidence?.length ?? 0 } : {}),
       actor: 'agent',
       actorRef: { profileId, invocationId },
       latencyMs

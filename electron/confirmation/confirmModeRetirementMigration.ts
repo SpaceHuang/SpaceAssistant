@@ -1,4 +1,4 @@
-import { getConfigValue, setConfigValue, type AppDatabase } from '../database'
+import { getConfigValue, setConfigValue, deleteConfigValue, type AppDatabase } from '../database'
 import { getDbConnection } from '../database'
 import { runInTransaction } from '../database/transaction'
 
@@ -12,6 +12,11 @@ export const CONFIRM_MODE_RETIREMENT_MIGRATION_VERSION = 1
 export const CONFIRM_MODE_RETIREMENT_MIGRATION_VERSION_KEY = 'config.confirmModeRetirement.migrationVersion'
 
 export type ConfirmModeRetirementMigrationResult = { status: 'done' | 'skipped'; migrated: boolean }
+
+/** config.confirmAnswerers（旧回答者配置表）已随 answererConfig 退役，检测孤儿键。 */
+function hasOrphanAnswerersConfig(db: AppDatabase): boolean {
+  return getConfigValue(db, 'config.confirmAnswerers') != null
+}
 
 /** 宽松解析存量 tools 原始 JSON：含 confirmMode 键即需迁移。损坏/缺省视为无需迁移。 */
 export function rawToolsContainConfirmMode(raw: string | null | undefined): boolean {
@@ -31,12 +36,18 @@ export function runConfirmModeRetirementMigrationOnce(db: AppDatabase): ConfirmM
   }
   try {
     const raw = getConfigValue(db, 'config.tools')
-    if (rawToolsContainConfirmMode(raw)) {
+    if (rawToolsContainConfirmMode(raw) || hasOrphanAnswerersConfig(db)) {
       const conn = getDbConnection(db)
       runInTransaction(conn, () => {
-        const parsed = JSON.parse(raw!) as Record<string, unknown>
-        delete parsed.confirmMode
-        setConfigValue(db, 'config.tools', JSON.stringify(parsed))
+        if (rawToolsContainConfirmMode(raw)) {
+          const parsed = JSON.parse(raw!) as Record<string, unknown>
+          delete parsed.confirmMode
+          setConfigValue(db, 'config.tools', JSON.stringify(parsed))
+        }
+        // answererConfig 已退役（§5.3）：孤儿 config.confirmAnswerers 键一并清理（无任何消费者）
+        if (hasOrphanAnswerersConfig(db)) {
+          deleteConfigValue(db, 'config.confirmAnswerers')
+        }
         setConfigValue(db, CONFIRM_MODE_RETIREMENT_MIGRATION_VERSION_KEY, String(CONFIRM_MODE_RETIREMENT_MIGRATION_VERSION))
       })
       return { status: 'done', migrated: true }

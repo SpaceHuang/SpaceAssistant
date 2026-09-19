@@ -64,6 +64,8 @@ export type AgentLogEventName =
   | 'tool.confirm.remote_write_grant_required'
   | 'tool.confirm.authorization_revoked'
   | 'tool.confirm.memory_tier_rejected'
+  | 'tool.confirm.trust_rejected_no_pending'
+  | 'policy.package.normalized'
   | 'remote.budget.pause'
   | 'shell.path.confirm'
   | 'shell.path.reject'

@@ -47,6 +47,8 @@ type AssistantFactEventPayload =
       dangerInfo?: ToolCallRecord['dangerInfo']
       sessionTrustedHint?: true
       mcp?: ToolCallRecord['mcp']
+      /** H1：agent 裁决路径（AgentChannel）——渲染端据此出只读「自动审批中」卡，无交互按钮 */
+      autoAnswerer?: true
     }
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
@@ -126,7 +128,8 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...(event.currentPageUrl ? { currentPageUrl: event.currentPageUrl } : {}),
           ...(event.dangerInfo ? { dangerInfo: event.dangerInfo } : {}),
           ...(event.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
-          ...(event.mcp ? { mcp: event.mcp } : {})
+          ...(event.mcp ? { mcp: event.mcp } : {}),
+          ...(event.autoAnswerer ? { autoAnswerer: true as const } : {})
         }
       : tool)
   } else if (event.type === 'tool-confirmed') {
