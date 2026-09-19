@@ -83,6 +83,7 @@ import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
 import { resolveTrustedTurnExecutionConfig } from './turnExecutionConfig'
 import type { TurnIntent } from '../src/shared/assistantFactAggregator'
 import { normalizeTurnExecutionConfig } from '../src/shared/turnCoordinator'
+import type { TurnStarted } from '../src/shared/turnCoordinator'
 import { canonicalQueueInput } from '../src/shared/queueInputFingerprint'
 import type { TurnExecutePayload } from '../src/shared/api'
 import { ErrorCodes } from '../src/shared/errorCodes'
@@ -156,6 +157,10 @@ import {
 } from './chatAttachmentManager'
 import type { ChatImageAttachment } from '../src/shared/domainTypes'
 import { withTransientLockRetry } from './safeAtomicWrite'
+import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from './outbound/outboundAcceptor'
+import type { OutboundSubmitIntent } from '../src/shared/outboundProtocol'
+import { createSkillHintSystemMessage } from '../src/shared/skillHintRecords'
+import type { AgentLogEventName, AgentLogFields } from './agentLogger/types'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
@@ -903,7 +908,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
   )
 
-  ipcMain.handle('chat:prepare-turn', async (_e, intent: TurnIntent) => {
+  // Phase 1b：prepare 编排抽为内部函数——chat:prepare-turn 与出站受理端口（chat:submit-outbound）
+  // 共用同一套 configuring/skill-route/execution-config 装配，避免两处分叉。
+  type PreparedTurn = Omit<TurnStarted, 'executionConfig'>
+  const prepareTurnInternal = async (intent: TurnIntent): Promise<PreparedTurn> => {
     const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
     const existing = getTurnByRequestId(ctx.db, intent.sessionId, intent.requestId)
     if (existing) {
@@ -911,7 +919,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
         // 即使同进程单飞，也要先复用 Coordinator 的消息意图校验，拒绝同 requestId 的变形重试。
         turnCoordinator.prepare({ ...intent, config: {} })
         const configuring = configuringTurns.get(configuringKey)
-        if (configuring) return configuring
+        if (configuring) return (await configuring) as PreparedTurn
         throw new Error('TURN_CONFIGURATION_INCOMPLETE')
       }
       const { executionConfig: _executionConfig, ...prepared } = turnCoordinator.prepare({ ...intent, config: existing.executionConfig ?? {} })
@@ -1011,8 +1019,11 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     )
     const { executionConfig: _executionConfig, ...prepared } = started
     return prepared
-  })
-  ipcMain.handle('chat:execute-turn', async (event, payload: TurnExecutePayload) => {
+  }
+  ipcMain.handle('chat:prepare-turn', (_e, intent: TurnIntent) => prepareTurnInternal(intent))
+  // Phase 1b：execute 编排抽为内部函数——chat:execute-turn 与出站受理端口共用。
+  // sender 为 null 表示主进程内部驱动源（排水器/受理端口）发起，事件出口不依赖 sender。
+  const executeTurnInternal = async (sender: Electron.WebContents | null, payload: TurnExecutePayload) => {
     if (!ctx.executeTurn) throw new Error('TURN_EXECUTOR_NOT_CONFIGURED')
     if (!payload || typeof payload !== 'object' || typeof payload.turnId !== 'string' || typeof payload.turnStartToken !== 'string') {
       throw new Error('INVALID_TURN_EXECUTION_PAYLOAD')
@@ -1025,13 +1036,84 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     void (async () => {
       try {
         if (configuring) await configuring
-        await ctx.executeTurn!(event.sender, executionPayload)
+        await ctx.executeTurn!(sender, executionPayload)
       } catch {
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
       }
     })()
     return { ok: true as const, accepted: true as const, turnId: payload.turnId }
+  }
+  ipcMain.handle('chat:execute-turn', (event, payload: TurnExecutePayload) => executeTurnInternal(event.sender, payload))
+
+  // Phase 1b：出站受理端口——渲染端只提交意图，发起/排队/本地命令/守卫全部由主进程决定（偏差 9 回收）。
+  const outboundAcceptor = createOutboundAcceptor({
+    db: ctx.db,
+    turnRuntime,
+    isDev: () => !app.isPackaged,
+    apiKeyPresent: () => {
+      const services = readLlmServices(ctx.db)
+      const activeId = readActiveLlmServiceId(ctx.db)
+      const active = services.find((s) => s.id === activeId) ?? services[0]
+      return active?.apiKeyPresent ?? Boolean(getConfigValue(ctx.db, CONFIG_KEYS.apiKeyEnc))
+    },
+    getMaxParallel: () => {
+      const raw = getConfigValue(ctx.db, CONFIG_KEYS.maxParallelChatSessions)
+      return clampMaxParallelChatSessions(raw ? Number(raw) : undefined)
+    },
+    readWikiConfig: () => readWikiConfig(ctx.db),
+    listSkills: async () => skillManager.list(true),
+    getSkill: async (payload) => skillManager.get(payload.name),
+    wikiInit: async (payload) =>
+      initWikiStructure(ctx.getWorkDir(), readWikiConfig(ctx.db), {
+        overwrite: payload?.overwrite === true,
+        installSkill: payload?.installSkill !== false
+      }),
+    wikiStatus: async () => getWikiStatus(ctx.getWorkDir(), readWikiConfig(ctx.db)),
+    wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath),
+    appendHintMessage: async (sessionId, hint) => {
+      const msg = createSkillHintSystemMessage(sessionId, hint)
+      appendMessage(ctx.db, msg)
+      scheduleBackup(ctx, sessionId)
+    },
+    updateSessionState: async (sessionId, patch) => {
+      if (!getSession(ctx.db, sessionId)) return
+      updateSession(ctx.db, sessionId, {
+        ...(patch.skillsState ? { skillsState: patch.skillsState } : {}),
+        ...(patch.metadataPatch ? { metadata: patch.metadataPatch } : {})
+      })
+    },
+    createSession: async () => {
+      const s = createSession(ctx.db, { name: '', workDirProfileId: ctx.workDirManager.getActiveProfileId() })
+      await fs.mkdir(ctx.getWorkDir(), { recursive: true })
+      return s
+    },
+    startTurn: async ({ turnIntent }) => {
+      const started = await prepareTurnInternal(turnIntent)
+      // 主进程驱动 execute：渲染端不再持有 execute 调用时机（1c 落实渲染端退役）
+      void executeTurnInternal(null, {
+        requestId: started.requestId,
+        turnId: started.turnId,
+        turnStartToken: started.startToken,
+        sessionId: started.sessionId
+      })
+      return { turnId: started.turnId, assistantMessage: started.assistantMessage }
+    },
+    contextUsageWarn: async ({ sessionId, attachments }) => computeContextPressureWarnings(ctx.db, sessionId, attachments),
+    newRequestId: () => randomUUID(),
+    audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
   })
+  ipcMain.handle('chat:submit-outbound', (_e, intent: OutboundSubmitIntent) => outboundAcceptor.submitOutbound(intent))
+
+  // 主进程排水器：turn 终态后取队首 queued 驱动下一回合（偏差 9 核心条目——「何时发起下一回合」回主进程）。
+  // 渲染端 drainQueueForSession 触发器在 1c 删除，此前两者并存（先建后删，避免双驱空窗）。
+  const outboundDrainer = createOutboundDrainer({
+    submitOutbound: outboundAcceptor.submitOutbound,
+    listActiveCount: (sessionId) => turnRuntime.listActive(sessionId).length,
+    getNextQueued: (sessionId) => getNextQueuedMessage(ctx.db, sessionId),
+    audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
+  })
+  turnRuntime.subscribe((turn, event) => outboundDrainer.onTurnProjection(turn, event))
+
   ipcMain.handle('chat:cancel-turn', (_e, turnId: string) => {
     const controller = configuringAbortControllers.get(turnId)
     const cancelled = turnRuntime.cancel(turnId)

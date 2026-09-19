@@ -38,6 +38,7 @@ const api: SpaceAssistantApi = {
   chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
   messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
   messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),
+  chatSubmitOutbound: (intent) => ipcRenderer.invoke('chat:submit-outbound', intent),
   chatPrepareTurn: (intent) => ipcRenderer.invoke('chat:prepare-turn', intent),
   chatExecuteTurn: (payload: TurnExecutePayload) => ipcRenderer.invoke('chat:execute-turn', payload),
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),

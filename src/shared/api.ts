@@ -256,6 +256,7 @@ export type SpaceAssistantApi = {
       >
     >
   }) => Promise<{ message: Message; sequence: number } | null>
+  chatSubmitOutbound: (intent: import('./outboundProtocol').OutboundSubmitIntent) => Promise<import('./outboundProtocol').OutboundSubmitResult>
   chatPrepareTurn: (intent: import('./assistantFactAggregator').TurnIntent) => Promise<import('./turnCoordinator').TurnStarted>
   chatExecuteTurn: (payload: TurnExecutePayload) => Promise<{ ok: true; accepted: true; turnId: string }>
   chatCancelTurn: (turnId: string) => Promise<boolean>

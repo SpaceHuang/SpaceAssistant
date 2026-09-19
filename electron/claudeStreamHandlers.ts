@@ -213,7 +213,8 @@ export function normalizeAndValidateClaudeMessagesWithContentBlocks(
 }
 
 export type ClaudeTurnExecution = (
-  sender: WebContents,
+  /** 排水器等主进程内部驱动源没有 IPC sender；事实事件全走 emitFactEvent/emitSessionEvent 出口 */
+  sender: WebContents | null,
   payload: ClaudeChatCreateWithToolsPayload
 ) => Promise<unknown>
 

@@ -554,7 +554,7 @@ app.whenReady().then(async () => {
     turnRuntime
   })
 
-  const executeTurn = async (sender: Electron.WebContents, payload: ClaudeChatCreateWithToolsPayload) => {
+  const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
     return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {
