@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parseSkillCommand } from './skillCommandService'
-import type { SkillDefinition } from '../../shared/domainTypes'
+import type { SkillDefinition } from '../domainTypes'
 
 function makeSkill(name: string, scope: SkillDefinition['scope']): SkillDefinition {
   return {

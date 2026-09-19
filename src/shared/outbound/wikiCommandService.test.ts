@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { parseWikiCommand, isWikiPathLink } from './wikiCommandService'
-import { DEFAULT_WIKI_CONFIG } from '../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG } from '../domainTypes'
 
 function makeDeps() {
   return {

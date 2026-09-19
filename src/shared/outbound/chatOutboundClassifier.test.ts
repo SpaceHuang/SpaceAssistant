@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { classifyOutboundMessageWithDeps } from './chatOutboundClassifier'
-import { DEFAULT_WIKI_CONFIG } from '../../shared/domainTypes'
-import type { SkillDefinition } from '../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG } from '../domainTypes'
+import type { SkillDefinition } from '../domainTypes'
 
 function makeSkill(name: string, scope: SkillDefinition['scope']): SkillDefinition {
   return {
