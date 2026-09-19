@@ -266,7 +266,7 @@ export interface AppConfig {
 
 1. **三类优选默认模型**（§7）
 2. **大模型列表**（§6）
-3. **默认开启 Thinking**（保持现网 Switch）
+3. **默认开启 Thinking**（保持现网 Switch）<!-- 已变更（2026-09-19）：Switch 已由 [thinking-effort-settings-requirement.md](./thinking-effort-settings-requirement.md) 的「Thinking 强度」四档选择器取代 -->
 
 #### 5.2.1 与现网差异
 
