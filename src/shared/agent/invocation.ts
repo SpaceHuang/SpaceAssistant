@@ -243,6 +243,8 @@ export interface AgentPolicyPorts {
   /** electron 侧为 GateDecisionCache（lookup + 写/清理族的完整形状）。 */
   decisionCache: unknown
   shellPrecheck: { touchTrustedCommand: (command: string) => void }
+  /** P3：规则来源标注（键 = 规则 id），随门控入参透传、落审计 ruleOrigin。 */
+  policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
 }
 
 /** 宿主端口集合（P1 立骨架，P2 起承接 storage / usage / tools 等实现）。 */

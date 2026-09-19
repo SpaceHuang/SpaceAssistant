@@ -20,7 +20,16 @@ export function isActionWider(action: PolicyAction, than: PolicyAction): boolean
   return ACTION_WIDTH[action] > ACTION_WIDTH[than]
 }
 
-/** 校验规则集相对 locked 底线「可收紧不可放宽」（基线 §7.1：Core 侧不可覆盖的校验）。 */
+/** 触发条件规范化比较：locked 条目的 when + match 必须原样保留（防「条件掏空」绕过底线）。 */
+function conditionSignature(rule: PolicyRule): string {
+  return JSON.stringify({ when: rule.when, match: rule.match ?? null })
+}
+
+/**
+ * 校验规则集相对 locked 底线「可收紧不可放宽」（基线 §7.1：Core 侧不可覆盖的校验）。
+ * locked 条目三重约束：不可缺失、action 只能收紧、when + match 原样保留——
+ * 只比对 action 宽度会被「条件掏空」绕过（保持动作但改 match 使规则永不命中）。
+ */
 export function validatePolicyRulesFloor(
   rules: readonly PolicyRule[],
   floor: readonly PolicyRule[] = DEFAULT_FLOOR
@@ -35,6 +44,7 @@ export function validatePolicyRulesFloor(
       continue
     }
     if (isActionWider(incoming.action, base.action)) violations.push(base.id)
+    if (conditionSignature(incoming) !== conditionSignature(base)) violations.push(base.id)
   }
   return violations.length > 0 ? { ok: false, violations } : { ok: true }
 }

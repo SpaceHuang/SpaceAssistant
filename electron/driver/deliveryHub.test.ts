@@ -116,6 +116,36 @@ describe('deliveryHub 投递与送达记录（P6）', () => {
     expect(hub.getRecords().filter((r) => r.outcome === 'delivered')).toHaveLength(1)
   })
 
+  it('覆盖注册：旧 deferred 绑定失效目标——落 superseded 且绝不发给新目标（评审 P0-2 错投回归）', async () => {
+    let reachable = false
+    const oldDriver = makeDriver({ id: 'im', isReachable: () => reachable, deliver: vi.fn(async () => undefined) })
+    hub.registerDriver(oldDriver)
+    // 任务 A 的结果因不可达积压（闭包捕获 A 的目标）
+    const r1 = await hub.deliver(pref({ target: 'im', ttlMs: 60_000 }), { kind: 'butler-run-result', text: 'task-A' })
+    expect(r1.outcome).toBe('deferred')
+    // 任务 B 覆盖注册同 id 驱动源（闭包换成 B 的目标）
+    const newDriver = makeDriver({ id: 'im', isReachable: () => true, deliver: vi.fn(async () => undefined) })
+    hub.registerDriver(newDriver)
+    // flush：A 的积压不得发给 B 的驱动源实例
+    const flushed = await hub.flushDeferred()
+    expect(flushed).toBe(0)
+    expect(oldDriver.deliver).not.toHaveBeenCalled()
+    expect(newDriver.deliver).not.toHaveBeenCalled()
+    // 旧积压落 superseded（DEFERRED_TARGET_REPLACED 留痕）
+    const superseded = hub.getRecords().find((r) => r.outcome === 'superseded')
+    expect(superseded).toMatchObject({ driverId: 'im', error: 'DEFERRED_TARGET_REPLACED' })
+  })
+
+  it('deferred 队列有界：溢出丢最旧并落 failed 记录（DEFERRED_OVERFLOW）', async () => {
+    let reachable = false
+    const driver = makeDriver({ id: 'im', isReachable: () => reachable })
+    hub.registerDriver(driver)
+    for (let i = 0; i < 205; i++) {
+      await hub.deliver(pref({ target: 'im', ttlMs: 60_000 }), { kind: 'k', text: `m-${i}` })
+    }
+    expect(hub.getRecords().filter((r) => r.outcome === 'failed' && r.error === 'DEFERRED_OVERFLOW').length).toBeGreaterThanOrEqual(1)
+  })
+
   it('未知目标：显式失败（fail-loud），不静默丢弃', async () => {
     const record = await hub.deliver(pref({ target: 'no-such-driver' }), payload)
     expect(record.outcome).toBe('failed')

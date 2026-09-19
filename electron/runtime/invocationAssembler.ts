@@ -257,7 +257,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // P3：带来源解析 + 嵌套交集（floor 上界由调用方声明；放行集合只收窄）
   const withOrigin = db
     ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
-    : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} }
+    : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }> }
   const effectiveRules = materials.policyRuleFloor
     ? intersectPolicyRulesWithFloor(withOrigin.rules, materials.policyRuleFloor)
     : withOrigin.rules
@@ -266,7 +266,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         effectiveRules,
         decisionCache: new SqliteDecisionCache(getDbConnection(db)),
         shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) },
-        origins: withOrigin.origins
+        policyOrigins: withOrigin.origins
       }
     : {
         // 无库宿主（内存端口 / 测试）：显式默认材料 + 留痕——不是门控侧静默回退

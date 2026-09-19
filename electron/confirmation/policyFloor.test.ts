@@ -167,6 +167,75 @@ describe('规则来源标注（resolveEffectivePolicyRulesWithOrigin）', () => 
   })
 })
 
+describe('P0-1 评审回归：来源标注装配 → 门控审计全链路（键名端到端）', () => {
+  it('ports.policy.policyOrigins 键名正确且随门控入参落 ruleOrigin 审计', async () => {
+    const db = openDb()
+    // 用 ask 覆盖：裁决会命中本条规则（deny 覆盖的既有语义是 readonly 放行失效落 mcp-tool-ask 兜底，见 P0 特征化）
+    new PolicyRuleStore(getDbConnection(db)).setOverride({ ruleId: 'mcp-readonly-allow', action: 'ask', params: {} })
+    writePolicyPackages(db, { desktop: 'custom', wechat: 'custom', feishu: 'custom', automation: 'custom' })
+
+    const { ports } = assembleInvocation({
+      requestId: 'r-origin-e2e', sessionId: 's-origin-e2e', model: 'm',
+      messages: [{ role: 'user', content: 'x' }] as never,
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'k', appDb: db,
+      emitFactEvent: () => undefined, emitSessionEvent: async () => undefined
+    } as never)
+    // 键名断言（评审 P0-1：曾写成 origins 导致链路断裂）
+    const policy = ports.policy as { policyOrigins?: Record<string, { source: string }> }
+    expect(policy.policyOrigins?.['mcp-readonly-allow']?.source).toBe('user-override')
+
+    // 用装配产物原样过门控（等价 toolChatLoop 调用点的组装方式），审计必须带 ruleOrigin
+    const audit = auditSink()
+    const readonlyEntry = {
+      serverId: 'srv1', serverName: 'Srv', originalName: 'list_issues',
+      mappedName: 'mcp__srv1__list_issues', description: '', inputSchema: {},
+      annotations: { readOnlyHint: true }
+    }
+    const r = await evaluateToolCallGate(base(db, {
+      toolName: readonlyEntry.mappedName,
+      toolInput: {},
+      mcpEntry: readonlyEntry,
+      audit,
+      effectiveRules: (ports.policy as { effectiveRules: import('../../src/shared/confirmation/types').PolicyRule[] }).effectiveRules,
+      policyOrigins: policy.policyOrigins,
+      decisionCache: (ports.policy as { decisionCache: { lookup: (k: unknown) => null } }).decisionCache
+    }))
+    expect(r.decision.type).toBe('require-confirm')
+    const evt = audit.events.find((e) => e.event === 'policy.decision')
+    expect(evt).toMatchObject({ ruleOrigin: 'user-override', ruleId: 'mcp-readonly-allow' })
+  })
+})
+
+describe('P1-1 评审回归：locked 条目条件不可掏空（when + match 必须原样保留）', () => {
+  it('locked 条目保持 action 但 match 被改宽（条件掏空）→ violation', () => {
+    const hollowed = DEFAULT_POLICY_RULES.map((rule) =>
+      rule.id === 'remote-shell-disabled' && rule.match
+        ? { ...rule, match: { ...rule.match, toolName: ['never_matches'] } }
+        : rule
+    )
+    const res = validatePolicyRulesFloor(hollowed)
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.violations).toContain('remote-shell-disabled')
+  })
+
+  it('locked 条目 when 被改（invocation → exposure）→ violation', () => {
+    const moved = DEFAULT_POLICY_RULES.map((rule) =>
+      rule.id === 'remote-shell-disabled' ? { ...rule, when: 'exposure' as const } : rule
+    )
+    const res = validatePolicyRulesFloor(moved)
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.violations).toContain('remote-shell-disabled')
+  })
+
+  it('locked 条目 match 原样（仅 action 收紧）→ 通过', () => {
+    const tightened = DEFAULT_POLICY_RULES.map((rule) =>
+      rule.id === 'remote-shell-disabled' ? { ...rule, action: 'deny' as const } : rule
+    )
+    expect(validatePolicyRulesFloor(tightened)).toEqual({ ok: true })
+  })
+})
+
 describe('装配期默认解析留痕（P3 收尾：内置默认只作显式数据源）', () => {
   it('无 db 宿主装配默认门控材料时落 agent.policy.default_materials 日志', async () => {
     const logAgentEvent = await import('../agentLogger/agentLogger')

@@ -587,20 +587,10 @@ app.whenReady().then(async () => {
 
   // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
   const butlerAdmission = new ButlerAdmission()
-  // P6：共享投递入口（装配器持有，状态随实例走）；桌面 sink 注册（系统通知实现）。
+  // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
+  // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
+  // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。
   const sharedDeliveryHub = createDeliveryHub()
-  sharedDeliveryHub.registerDriver({
-    id: 'desktop',
-    isReachable: () => Notification.isSupported(),
-    deliver: async (payload) => {
-      const notification = new Notification({
-        title: 'SpaceAssistant 管家',
-        body: (payload.text ?? '').slice(0, 280)
-      })
-      notification.on('click', () => void showMainWindow())
-      notification.show()
-    }
-  })
   const butlerInvokerDeps: ButlerInvokerDeps = {
     db,
     turnRuntime,

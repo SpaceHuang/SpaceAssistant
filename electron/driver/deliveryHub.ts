@@ -72,7 +72,9 @@ export function createDeliveryHub(options: { now?: () => number; recordLimit?: n
   const recordLimit = options.recordLimit ?? 200
   const drivers = new Map<DeliveryDriverId, DeliveryDriver>()
   const records: DeliveryRecord[] = []
-  const deferred: Array<{ preference: DeliveryPreference; payload: DeliveryPayload; ts: number }> = []
+  // 快照入队时刻的 driver 引用：覆盖注册后旧积压不得发给新目标（错投）
+  const deferred: Array<{ preference: DeliveryPreference; payload: DeliveryPayload; ts: number; driver: DeliveryDriver }> = []
+  const DEFERRED_LIMIT = 200
   const supersedeState = new Map<string, { delivered: boolean; lastSeq: number }>()
   let seqCounter = 0
 
@@ -96,7 +98,7 @@ export function createDeliveryHub(options: { now?: () => number; recordLimit?: n
     ts: number
   ): Promise<DeliveryRecord> {
     if (!driver.isReachable()) {
-      deferred.push({ preference, payload, ts })
+      enqueueDeferred({ preference, payload, ts, driver })
       return emitRecord({ kind: payload.kind, driverId: driver.id, supersedeKey: preference.supersedeKey, outcome: 'deferred' })
     }
     try {
@@ -120,6 +122,21 @@ export function createDeliveryHub(options: { now?: () => number; recordLimit?: n
     return record
   }
 
+  function enqueueDeferred(item: { preference: DeliveryPreference; payload: DeliveryPayload; ts: number; driver: DeliveryDriver }): void {
+    deferred.push(item)
+    if (deferred.length > DEFERRED_LIMIT) {
+      // 有界积压：溢出丢最旧并落 failed 记录（不静默丢弃）
+      const dropped = deferred.shift()!
+      emitRecord({
+        kind: dropped.payload.kind,
+        driverId: dropped.driver.id,
+        supersedeKey: dropped.preference.supersedeKey,
+        outcome: 'failed',
+        error: 'DEFERRED_OVERFLOW'
+      })
+    }
+  }
+
   function hasDrivenExpired(preference: DeliveryPreference, ts: number): boolean {
     const ttl = preference.ttlMs ?? DEFAULT_DELIVERY_TTL_MS
     return now() - ts > ttl
@@ -140,8 +157,7 @@ export function createDeliveryHub(options: { now?: () => number; recordLimit?: n
           continue
         }
       }
-      const driver = item.preference.target ? drivers.get(item.preference.target) : undefined
-      if (!driver) continue
+      const driver = item.driver
       if (!driver.isReachable()) {
         deferred.push(item)
         continue
@@ -162,6 +178,24 @@ export function createDeliveryHub(options: { now?: () => number; recordLimit?: n
 
   return {
     registerDriver(driver) {
+      // 覆盖注册 = 同 id 驱动源的目标/实现已更换：旧积压绑定的是失效目标，继续补投即错投——
+      // 全部落 superseded（DEFERRED_TARGET_REPLACED 留痕）并从积压移除，不静默丢弃也不错投
+      const stale = deferred.filter((item) => item.driver.id === driver.id)
+      for (const item of stale) {
+        emitRecord({
+          kind: item.payload.kind,
+          driverId: driver.id,
+          supersedeKey: item.preference.supersedeKey,
+          outcome: 'superseded',
+          error: 'DEFERRED_TARGET_REPLACED'
+        })
+      }
+      for (let i = deferred.length - 1; i >= 0; i--) {
+        if (deferred[i]!.driver.id === driver.id) deferred.splice(i, 1)
+      }
+      if (stale.length > 0) {
+        logAgentEvent('info', 'driver.deferred.invalidated', { driverId: driver.id, count: stale.length })
+      }
       drivers.set(driver.id, driver)
     },
     async reportReachability(driverId) {
