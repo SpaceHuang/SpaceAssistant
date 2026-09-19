@@ -405,6 +405,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           projectMemoryEnabled: frozen.projectMemoryEnabled,
           skillFragments: frozen.skillFragments,
           options: { maxTokens: frozen.maxTokens, enableThinking: frozen.enableThinking },
+          // §7.2：主链路显式传档位（优先于 options.enableThinking 兼容映射；旧 turn 记录无该字段时回退）
+          effort: frozen.thinkingEffort,
           toolsConfig: deps.getToolsConfig(),
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),

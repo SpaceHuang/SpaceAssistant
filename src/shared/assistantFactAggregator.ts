@@ -12,6 +12,9 @@ export type TurnExecutionConfig = {
   system?: string
   skillFragments?: string[]
   maxTokens?: number
+  /** Thinking 强度最终档位（发起时解析、调用内冻结）；远程 / Butler lane 恒 off（OQ-10） */
+  thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
+  /** @deprecated 由 thinkingEffort 派生（≠off 即 true），保留一个发布周期做兼容映射 */
   enableThinking?: boolean
   locale?: string
   projectMemoryEnabled?: boolean

@@ -2,6 +2,8 @@ import type { TurnExecutionConfig } from '../src/shared/assistantFactAggregator'
 import { isAppLocale } from '../src/shared/locale'
 import { normalizeTurnExecutionConfig } from '../src/shared/turnCoordinator'
 import type { ModelEntry } from '../src/shared/domainTypes'
+import type { AgentReasoningEffort } from '../src/shared/agent/invocation'
+import { resolveGlobalThinkingEffort } from '../src/shared/thinkingEffort'
 import { getAvailableModels, migrateBuiltinModelName, resolvePreferredModelEntry } from '../src/shared/llmModelConfig'
 import { resolveVisionRouteForImageSend } from '../src/shared/visionModelRouting'
 import { logAgentEvent } from './agentLogger/agentLogger'
@@ -9,6 +11,19 @@ import { getConfigValue, getSession, updateSession, type AppDatabase } from './d
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel } from './llmServiceResolver'
 
 export type TurnExecutionLane = NonNullable<TurnExecutionConfig['lane']>
+
+/**
+ * Thinking 强度最终解析（需求 §7.1）：
+ * 能力校验（显式 false → off）优先于优先级；其余按「会话覆盖 > 全局默认」。
+ */
+export function resolveThinkingEffort(
+  globalEffort: AgentReasoningEffort,
+  sessionEffort: AgentReasoningEffort | null | undefined,
+  modelEntry: ModelEntry | undefined
+): AgentReasoningEffort {
+  if (modelEntry?.supportsThinking === false) return 'off'
+  return sessionEffort ?? globalEffort
+}
 
 /**
  * 从主进程持有的 session / LLM service 配置生成不含凭据的执行快照。
@@ -105,13 +120,24 @@ export async function resolveTrustedTurnExecutionConfig(
 
   const modelEntry = models.find((entry) => entry.name === model)
   const locale = getConfigValue(db, 'config.locale')
+  // Thinking 强度（§7.1）：迁移期双读（新键缺失由旧布尔推导，读兜底不落库）+ 会话覆盖 + 能力降级；
+  // enableThinking 由最终档位派生（过渡期兼容字段，保留一个发布周期）
+  const thinkingEffort = resolveThinkingEffort(
+    resolveGlobalThinkingEffort(
+      getConfigValue(db, 'config.thinkingEffort'),
+      getConfigValue(db, 'config.thinkingEnabled')
+    ),
+    session.thinkingEffort,
+    modelEntry
+  )
   return normalizeTurnExecutionConfig({
     lane,
     model,
     ...(modelEntry?.maximumContext ? { maximumContext: modelEntry.maximumContext } : {}),
     llmServiceId: credentials.serviceId || llmServiceId,
     maxTokens: session.maxTokens,
-    enableThinking: getConfigValue(db, 'config.thinkingEnabled') !== 'false',
+    thinkingEffort,
+    enableThinking: thinkingEffort !== 'off',
     ...(locale && isAppLocale(locale) ? { locale } : {}),
     ...derived,
     ...(effectiveModelForUsage ? { effectiveModelForUsage } : {})

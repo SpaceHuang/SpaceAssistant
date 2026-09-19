@@ -271,12 +271,15 @@ export function updateSession(
   const cur = getSession(db, sessionId)
   if (!cur) return undefined
   const metadata = patch.metadata ?? cur.metadata
+  // thinkingEffort 单独处理：patch 允许 null（清除覆盖），Session 语义为「缺省 = 继承」
+  const { thinkingEffort: patchedEffort, ...restPatch } = patch
   const next: Session = {
     ...cur,
-    ...patch,
+    ...restPatch,
     metadata,
     skillsState: patch.skillsState ? normalizeSessionSkillsState(patch.skillsState) : cur.skillsState,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    ...(patchedEffort !== undefined ? { thinkingEffort: patchedEffort ?? undefined } : {})
   }
 
   const conn = getDbConnection(db)

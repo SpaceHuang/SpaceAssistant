@@ -77,6 +77,8 @@ vi.mock('./database', async (importOriginal) => {
 import { runToolChatSession } from './toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from './runtime/invocationAssembler'
 import { createMemoryAppDb } from './database/testHelpers'
+import { resetEffortMemoForTests } from './effortFallback'
+import { logAgentEvent } from './agentLogger/agentLogger'
 
 function makeDb(): AppDatabase {
   return createMemoryAppDb('zh-CN')
@@ -251,5 +253,121 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     expect(confirmReq).toMatchObject({ sessionId: 'sess-invocation-1', toolUseId: 'tu-inv2', toolName: 'write_file', requestId: 'req-invocation-1' })
     // 工具终态同样经 notify 出口（tool-result）
     expect(notifications.some((n) => n.kind === 'tool-result' && n.toolUseId === 'tu-inv2')).toBe(true)
+  })
+})
+
+/** 模拟「首轮 output_config 被上游 400 拒绝、去强度后重试成功」的客户端 */
+function makeEffortRejectionClient(rounds: Array<{ content: unknown[]; stop_reason: string }>) {
+  const calls: Array<Record<string, unknown>> = []
+  let call = 0
+  return {
+    calls,
+    messages: {
+      stream: vi.fn((params: Record<string, unknown>) => {
+        call += 1
+        calls.push(params)
+        if (call === 1) {
+          const rejection = Object.assign(new Error('output_config: Extra inputs are not permitted'), { status: 400 })
+          return {
+            // AsyncIterator 在首轮迭代时抛 400（for await 捕获路径）
+            async *[Symbol.asyncIterator]() {
+              throw rejection
+            },
+            finalMessage: vi.fn(async () => {
+              throw rejection
+            })
+          }
+        }
+        const round = rounds[Math.min(call - 2, rounds.length - 1)]
+        return {
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => round)
+        }
+      })
+    }
+  }
+}
+
+describe('thinking effort 档位与上游降级（§7.3 / §7.4）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    streamRound = 0
+    capturedFacts.length = 0
+    capturedSessionEvents.length = 0
+    resetEffortMemoForTests()
+  })
+
+  it('effort=low 的请求 wire 产物为 adaptive + output_config.effort=low（未被折叠成布尔）', async () => {
+    const client = {
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+        }))
+      }
+    }
+    mockCreateAnthropicClient.mockReturnValue(client)
+    const res = await run(baseMaterials({ effort: 'low' }))
+    expect(res).toMatchObject({ ok: true })
+    const params = client.messages.stream.mock.calls[0][0] as Record<string, unknown>
+    expect(params.thinking).toEqual({ type: 'adaptive' })
+    expect(params.output_config).toEqual({ effort: 'low' })
+    // llm.request 日志记录实际档位（§10.3，不再是布尔）
+    const requestLog = vi.mocked(logAgentEvent).mock.calls.find((c) => c[1] === 'llm.request')
+    expect(requestLog?.[2]).toMatchObject({ effort: 'low' })
+  })
+
+  it('上游 400 拒绝 output_config → 自动去强度重试一次成功 + 落 llm.effort.unsupported 审计', async () => {
+    const client = makeEffortRejectionClient([
+      { content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn' }
+    ])
+    mockCreateAnthropicClient.mockReturnValue(client)
+    const res = await run(baseMaterials({ effort: 'low' }))
+    expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'recovered' }] })
+    // 恰好两次请求：首轮带强度、重试去强度（保留 adaptive）
+    expect(client.messages.stream).toHaveBeenCalledTimes(2)
+    expect(client.calls[0].output_config).toEqual({ effort: 'low' })
+    expect(client.calls[1].output_config).toBeUndefined()
+    expect(client.calls[1].thinking).toEqual({ type: 'adaptive' })
+    expect(vi.mocked(logAgentEvent).mock.calls.some((c) => c[1] === 'llm.effort.unsupported')).toBe(true)
+    expect(capturedSessionEvents.some((event) => (event as { type?: string; payload?: { code?: string } }).type === 'request_retry')).toBe(true)
+  })
+
+  it('降级记忆生效：同服务同模型第二次运行首轮即不带 output_config（粒度 llmServiceId+model）', async () => {
+    const first = makeEffortRejectionClient([{ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }])
+    mockCreateAnthropicClient.mockReturnValue(first)
+    await run(baseMaterials({ effort: 'low', llmServiceId: 'svc-effort' }))
+    expect(first.messages.stream).toHaveBeenCalledTimes(2)
+
+    const second = {
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok2' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+        }))
+      }
+    }
+    mockCreateAnthropicClient.mockReturnValue(second)
+    const res = await run(baseMaterials({ effort: 'low', llmServiceId: 'svc-effort' }))
+    expect(res).toMatchObject({ ok: true })
+    expect(second.messages.stream).toHaveBeenCalledTimes(1)
+    const params = second.messages.stream.mock.calls[0][0] as Record<string, unknown>
+    expect(params.output_config).toBeUndefined()
+    // 首次跳过落一次 memoized 审计
+    expect(vi.mocked(logAgentEvent).mock.calls.filter((c) => c[1] === 'llm.effort.unsupported_memoized')).toHaveLength(1)
+
+    // 同服务其他模型不受记忆连坐（C1：粒度 = service + model）
+    const third = {
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok3' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+        }))
+      }
+    }
+    mockCreateAnthropicClient.mockReturnValue(third)
+    await run(baseMaterials({ effort: 'low', llmServiceId: 'svc-effort', model: 'another-model' }))
+    const thirdParams = third.messages.stream.mock.calls[0][0] as Record<string, unknown>
+    expect(thirdParams.output_config).toEqual({ effort: 'low' })
   })
 })
