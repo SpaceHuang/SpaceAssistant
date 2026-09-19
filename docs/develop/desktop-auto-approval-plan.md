@@ -317,6 +317,18 @@
 4. **confirmMode 迁移**：`runConfirmModeRetirementMigrationOnce`（版本门控 + 事务 + 损坏 JSON fail-safe），`'direct'` 用户行为变化 = 写确认卡始终展示 diff。
 5. **mcpConfirmPolicyMigration 适配**：automation 仅提供 standard 档，迁移不再将其置 custom（写入也会被 `normalizePolicyPackages` 收敛）。
 
+### 评审修复（代码评审 v1，`docs/review/desktop-auto-approval-code-review-v1.md`）
+
+修复提交 `2894c166`：
+
+- **H1**（合并前必须）：信任写入与 pending 确认挂钩——`tool:confirm-response` 四个信任分支要求 registry 存在 pending（agent 裁决路径无 waiter，残留卡片信任点击被拒并落告警）；`confirm-requested` 载荷携带 `autoAnswerer`，agent 路径渲染只读「自动审批中」卡且不发浮动确认通知。
+- **H2**（合并前必须）：`toolCallGate` 增 `fileAutoApproved` 显式结果字段，`toolChatLoop` 不再匹配已删除的 `desktop-auto-approve` ruleId；e2e 锚定 `file.auto_approve` 审计与 `autoApprovedWrite` meta。
+- **H3**（合并前必须）：`serializeToolCallsForDb` 与 `tool_call` JSONL 事件对 `toolkit.call` 入参按展示侧同口径净化，凭据明文不落 `messages.tool_calls` / 事件台账 / 会话备份。
+- **中 1/2/4/5/6**：审批裁决 `reasonSummary`/`evidenceCount` 落审计；用量统计过滤 internal/hidden 会话；URL 内嵌凭据打码；`action.session.read` 拒绝 internal/hidden 会话；`updateServerStatus` 纳入 secret 写锁。
+- **低项**：normalize 收敛告警、`policy.decision` 记 `answerer`、`readLanePackage` 死导出、taskDigest 代理对切割、UsageTrendChart 真实 0%、desktop loose run_shell 锚定测试、孤儿 `config.confirmAnswerers` 键清理。
+- **H4 产品签署**：存量未配置套餐桌面用户升级后「询问」默认变为「审批 Agent 自动裁决」（含 `browser-act-danger-ask` 危险表单/支付类浏览器操作）——**产品确认维持默认自动，不做默认关闭、不额外锁定高危条目**（2026-09-19 签署）。升级告知（release notes / 首次启动提示）由产品发布流程负责，不在本分支代码范围。
+- 未修复转跟进批次：中 3（用量回填主线程分片）、中 7（保留期设置出口）、其余低项（死 i18n key 精确核对、`config.confirmAnswerers` 之外的清理等）。
+
 ### 验收边界（§7.3）
 
 - 已验收：档位变换逐格（4 lane × 4 档 + 例外）、回答者派生、快通道、I3/I4/I5、B1（locked ask 保持人工）、B2（IPC + 引擎双层）、端到端 gate 决策链路、迁移幂等——全部自动化测试（electron + renderer 双项目）。
