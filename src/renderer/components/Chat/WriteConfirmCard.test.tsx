@@ -15,7 +15,7 @@ function record(partial: Partial<ToolCallRecord> = {}): ToolCallRecord {
 
 describe('WriteConfirmCard', () => {
   it('renders diff preview for write content', () => {
-    render(<WriteConfirmCard record={record()} confirmMode="diff" onConfirm={vi.fn()} />)
+    render(<WriteConfirmCard record={record()} onConfirm={vi.fn()} />)
     expect(screen.getByText(/写入「notes.txt」/)).toBeDefined()
     expect(screen.getByText('hello')).toBeDefined()
   })
@@ -26,7 +26,6 @@ describe('WriteConfirmCard', () => {
         record={record({
           autoApproveFallback: { reason: '目标路径命中敏感目录', reasonCode: 'sensitive_path' }
         })}
-        confirmMode="auto"
         onConfirm={vi.fn()}
       />
     )
@@ -39,7 +38,6 @@ describe('WriteConfirmCard', () => {
     render(
       <WriteConfirmCard
         record={record({ input: { path: 'big.txt', content: lines } })}
-        confirmMode="diff"
         onConfirm={vi.fn()}
       />
     )

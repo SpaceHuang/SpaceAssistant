@@ -247,13 +247,11 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(audit.events.at(-1)!.cause).toBe('no-answerer')
   })
 
-  it('P2-6 翻转后：automation 缺省回答者 = agent（无 factory → fail-closed config-error deny，一行可回退）', async () => {
-    const audit = auditSink()
-    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation', audit })
+  it('P3 收缩：回答者缺省 = user（由 gate 决策派生，不再按 lane 查默认表）；automation 无 IM 传输 → no-answerer deny 兜底', async () => {
+    const ch = resolveConfirmChannel({ ...baseArgs, lane: 'automation' })
     expect(ch).toBeInstanceOf(DenyChannel)
     const outcome = await ch.request(req())
-    expect(outcome).toEqual({ kind: 'rejected', cause: 'config-error' })
-    expect(audit.events.find((e) => e.event === 'confirm.answerer-fallback')).toBeTruthy()
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'no-answerer' })
   })
 
   it('deny × IM（显式 notifyDenied）→ 回执被调用（不静默吞掉远端用户的等待）', async () => {

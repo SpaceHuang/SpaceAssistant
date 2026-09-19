@@ -439,7 +439,7 @@ export type AutoEvaluator = (
 /** decide 的求值环境：策略层保持纯函数，所有运行时输入经由依赖对象传入。 */
 export interface PolicyEngineDeps {
   cache: DecisionCacheView
-  /** 配置值（confirmMode / remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
+  /** 配置值（remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean

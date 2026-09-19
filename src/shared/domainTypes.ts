@@ -14,11 +14,9 @@ export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export type ToolCallStatus = 'calling' | 'confirming' | 'executing' | 'completed' | 'failed' | 'rejected'
 
-export type FileConfirmMode = 'diff' | 'direct' | 'auto'
 
 export interface ToolsConfig {
   enabled: boolean
-  confirmMode: FileConfirmMode
   allowedTools: string[]
   deniedTools: string[]
   pythonPath: string
@@ -32,7 +30,6 @@ export interface ToolsConfig {
 
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   enabled: true,
-  confirmMode: 'diff',
   allowedTools: [],
   deniedTools: [],
   pythonPath: 'python',

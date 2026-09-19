@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, App, Button, Collapse, Form, Input, InputNumber, Radio, Select, Space, Switch, Table, Tabs, Tag } from 'antd'
-import type { BrowserConfig, FileConfirmMode } from '../../../shared/domainTypes'
+import type { BrowserConfig } from '../../../shared/domainTypes'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
 import type { FeishuConfig } from '../../../shared/feishuTypes'
 import type {
@@ -95,13 +95,14 @@ function PolicyPackageSection({
     void apply()
   }
 
-  /** 规则动作改覆盖：写 policy_rules（settings.policy-change 审计在主进程落）。 */
+  /** 规则动作改覆盖：写 policy_rules（settings.policy-change 审计在主进程落）。B2：提交携带链路。 */
   const changeRuleAction = (
+    lane: (typeof LANES)[number],
     rule: SecuritySettingsRuleView,
     action: 'deny' | 'allow' | 'ask' | 'auto-evaluator'
   ) => {
     void (async () => {
-      const res = await window.api.securitySetRuleOverride({ ruleId: rule.id, action })
+      const res = await window.api.securitySetRuleOverride({ ruleId: rule.id, action, lane })
       if (!res.ok) {
         message.error(t('toolsSecurity.policy.saveFailed'))
         return
@@ -112,6 +113,7 @@ function PolicyPackageSection({
 
   /** 选择"自动"（启用自动审批器）保留二次确认警示。 */
   const changeRuleActionGuarded = (
+    lane: (typeof LANES)[number],
     rule: SecuritySettingsRuleView,
     action: 'deny' | 'allow' | 'ask' | 'auto-evaluator'
   ) => {
@@ -126,11 +128,11 @@ function PolicyPackageSection({
         ),
         okText: t('tools.file.autoApprove.confirmOk'),
         cancelText: t('tools.file.autoApprove.confirmCancel'),
-        onOk: () => changeRuleAction(rule, action)
+        onOk: () => changeRuleAction(lane, rule, action)
       })
       return
     }
-    changeRuleAction(rule, action)
+    changeRuleAction(lane, rule, action)
   }
 
   const resetRule = (rule: SecuritySettingsRuleView) => {
@@ -228,7 +230,7 @@ function PolicyPackageSection({
                 style={{ width: '100%' }}
                 classNames={configModalSelectPopupClassNames}
                 options={options.map((v) => ({ value: v, label: actionLabel(v) }))}
-                onChange={(v) => changeRuleActionGuarded(r, v as 'deny' | 'allow' | 'ask' | 'auto-evaluator')}
+                onChange={(v) => changeRuleActionGuarded(lane, r, v as 'deny' | 'allow' | 'ask' | 'auto-evaluator')}
               />
             )
           }

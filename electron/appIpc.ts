@@ -1344,11 +1344,11 @@ function readExposureInputsFromDb(
         return { ok: false as const, error: 'invalid lane' }
       }
       if (!isPolicyPackage(pkg)) return { ok: false as const, error: 'invalid package' }
-      // P2-5 写入强校验（对齐 validateRuleOverride 强制度）：agent 回答者的 lane 不得套用 loose
-      const { resolveLaneAnswererKind } = await import('./confirmation/answererConfig')
-      const { validatePolicyPackageForLane } = await import('../src/shared/policy/policyPackages')
-      const packageCheck = validatePolicyPackageForLane(lane, pkg, resolveLaneAnswererKind(ctx.db, lane))
-      if (!packageCheck.ok) return { ok: false as const, error: packageCheck.error }
+      // §2.1 档位可用性（B2）：本链路不提供的档位拒绝（automation 仅 standard）
+      const { isPackageAvailableForLane } = await import('../src/shared/policy/policyPackages')
+      if (!isPackageAvailableForLane(lane, pkg)) {
+        return { ok: false as const, error: `package ${String(pkg)} not available for lane ${lane}` }
+      }
       const packages = runtime.readPolicyPackages(ctx.db)
       const before = packages[lane]
       if (before === pkg) return { ok: true as const }
@@ -1370,13 +1370,17 @@ function readExposureInputsFromDb(
 
   ipcMain.handle(
     'security:set-rule-override',
-    async (_e, payload: { ruleId?: unknown; action?: unknown; params?: unknown }) => {
+    async (_e, payload: { ruleId?: unknown; action?: unknown; lane?: unknown; params?: unknown }) => {
       const { PolicyRuleStore, DEFAULT_POLICY_RULES, recordSettingsChange } = await securityDeps()
       const { validateRuleOverride } = await import('../src/shared/policy/policyPackages')
       const { getDbConnection } = await import('./database')
       const ruleId = typeof payload?.ruleId === 'string' ? payload.ruleId : ''
-      // 主进程侧强制校验：规则必须存在、非 locked、动作域按规则类型限定（§4 第 1 区）
-      const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action)
+      const lane =
+        payload?.lane === 'desktop' || payload?.lane === 'wechat' || payload?.lane === 'feishu' || payload?.lane === 'automation'
+          ? payload.lane
+          : undefined
+      // 主进程侧强制校验：规则必须存在、非 locked、动作域按链路（B2：desktop 4 态 / 远程 3 态）
+      const check = validateRuleOverride(DEFAULT_POLICY_RULES, ruleId, payload?.action, lane)
       if (!check.ok) return { ok: false as const, error: check.error }
       const params =
         payload?.params && typeof payload.params === 'object' && !Array.isArray(payload.params)
@@ -1673,24 +1677,6 @@ function readExposureInputsFromDb(
           } catch {
             /* ignore */
           }
-        }
-        if (
-          payload.tools.confirmMode !== undefined &&
-          payload.tools.confirmMode !== cur.confirmMode
-        ) {
-          logAgentEvent('info', 'file.confirm_mode.change', {
-            from: cur.confirmMode,
-            to: payload.tools.confirmMode,
-            timestamp: Date.now()
-          })
-          // §5.6-6：确认模式变更落 settings.policy-change（含新旧值）
-          recordSettings({
-            kind: 'policy-change',
-            lane: 'desktop',
-            key: 'tools.confirmMode',
-            before: cur.confirmMode,
-            after: payload.tools.confirmMode
-          })
         }
         const next = mergeToolsConfig({ ...cur, ...payload.tools })
         // 这里比较的是全局内置工具配置，而不是桌面暴露清单。

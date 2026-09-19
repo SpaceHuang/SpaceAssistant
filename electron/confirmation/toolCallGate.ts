@@ -308,7 +308,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
   // ===== 配置袋（规则 configRequires/askUnless 消费）=====
   const config: Record<string, unknown> = {
-    confirmMode: args.toolsConfig.confirmMode,
     deniedTools: args.toolsConfig.deniedTools,
     remoteDenyOutbound: channelConfig?.remoteDenyOutbound ?? false,
     // 现状仅在 browserConfig 存在且未开放远程会话时阻断；无配置等价放行

@@ -374,7 +374,7 @@ describe('判定矩阵：write_file / edit_file', () => {
     if (trusted.type === 'auto-allow') expect(trusted.ruleId).toBe('cache-hit')
   })
   it('远程写不命中桌面 auto 审批（lane 隔离）', () => {
-    const d = decideToolCall('write_file', input, 'feishu', deps({ confirmMode: 'auto' }, mapCache([]), {
+    const d = decideToolCall('write_file', input, 'feishu', deps({}, mapCache([]), {
       autoEvaluator: () => ({ approve: true, reason: 'ok' })
     }))
     expect(d.type).toBe('require-confirm')

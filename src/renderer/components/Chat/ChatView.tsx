@@ -991,7 +991,6 @@ export function ChatView() {
       cfg
         ? {
             requestId: 'test-cards-preview',
-            confirmMode: cfg.tools.confirmMode,
             onToolConfirm: (_toolUseId: string, approved: boolean) => {
               message.info(approved ? '测试预览：已确认（无实际操作）' : '测试预览：已拒绝（无实际操作）')
             },
@@ -1027,7 +1026,6 @@ export function ChatView() {
       return resolveMessageToolsInteractive({
         message: m,
         sessionId,
-        confirmMode: cfg.tools.confirmMode,
         pendingItems: pendingConfirmItems,
         streamingAssistantId,
         streamingRequestId
@@ -1036,7 +1034,6 @@ export function ChatView() {
     [
       sessionId,
       cfg?.tools.enabled,
-      cfg?.tools.confirmMode,
       pendingConfirmItems,
       streamingAssistantId,
       streamingRequestId,

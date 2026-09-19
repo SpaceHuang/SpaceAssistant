@@ -59,7 +59,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       turnRuntime: makeRuntime(db),
       getWorkDir: () => '/tmp/wd',
       getUserDataPath: () => '/tmp/ud',
-      getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, confirmMode: 'auto' as const }),
+      getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
       resolveWorkDirForSession: () => '/tmp/wd',
       ...overrides
     }
@@ -179,7 +179,7 @@ describe('管家会话创建推送（渲染端列表即时可见）', () => {
         turnRuntime: makeRuntime(db),
         getWorkDir: () => '/tmp/wd',
         getUserDataPath: () => '/tmp/ud',
-        getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, confirmMode: 'auto' as const }),
+        getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
         resolveWorkDirForSession: () => '/tmp/wd',
         onSessionCreated
       },

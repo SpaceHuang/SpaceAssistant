@@ -78,12 +78,11 @@ describe('evaluateToolCallGate', () => {
     expect(r.decision.ruleId).toBe('default-write-execute-ask')
   })
 
-  it('桌面 write_file confirmMode=auto 评估器拒绝 → require-confirm + fallback', async () => {
+  it('桌面 write_file 快通道拒绝 → require-confirm(agent) + fallback', async () => {
     const r = await evaluateToolCallGate(
       base({
         toolName: 'write_file',
         toolInput: { path: 'a.txt', content: 'x' },
-        toolsConfig: toolsConfig({ confirmMode: 'auto' }),
         fileAutoApproval: async () => ({ approve: false, reason: '过大', reasonCode: 'oversize' })
       })
     )

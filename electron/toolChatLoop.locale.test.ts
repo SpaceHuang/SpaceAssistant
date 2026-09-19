@@ -145,7 +145,7 @@ describe('runToolChatSession locale injection', () => {
     writePolicyPackages(strictDb, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
     const run = runSession({
       requestId: 'remote-race',
-      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'always' },
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
       appDb: strictDb
     })
     await confirmStarted

@@ -1,5 +1,4 @@
 import { Button, Form, Input, InputNumber, Space, Switch } from 'antd'
-import type { FileConfirmMode } from '../../../shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../../shared/builtinToolDefinitions'
 import { getBuiltinToolI18nKeys } from '../../../shared/builtinToolSettingsCopy'
 import type { BrowserConfig, ModelEntry, ShellConfig } from '../../../shared/domainTypes'
@@ -14,7 +13,6 @@ import { getToolsSettingsSectionHint } from './toolsSettingsNav'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 export type ToolsSettingsUi = {
-  confirmMode: FileConfirmMode
   deniedTools: string[]
   pythonPath: string
   scriptTimeout: number

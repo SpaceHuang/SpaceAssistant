@@ -1,9 +1,8 @@
-import type { FileConfirmMode, Message, ToolCallRecord } from '../../shared/domainTypes'
+import type { Message, ToolCallRecord } from '../../shared/domainTypes'
 import type { PendingConfirmItem } from './pendingConfirmStore'
 
 export type ToolsInteractiveScalars = {
   requestId: string
-  confirmMode: FileConfirmMode
 }
 
 /** 切回会话时，DB 分页可能早于工具调用持久化；用 pending store 补回确认卡片节点。 */
@@ -107,7 +106,6 @@ export function resolveRequestIdForConfirmingMessage(args: {
 export function resolveMessageToolsInteractive(args: {
   message: Message
   sessionId: string | null
-  confirmMode: FileConfirmMode
   pendingItems: PendingConfirmItem[]
   streamingAssistantId?: string
   streamingRequestId?: string | null
@@ -115,7 +113,6 @@ export function resolveMessageToolsInteractive(args: {
   const {
     message,
     sessionId,
-    confirmMode,
     pendingItems,
     streamingAssistantId,
     streamingRequestId
@@ -137,7 +134,7 @@ export function resolveMessageToolsInteractive(args: {
       streamingRequestId
     })
     if (!requestId) return undefined
-    return { requestId, confirmMode }
+    return { requestId }
   }
 
   if (
@@ -145,7 +142,7 @@ export function resolveMessageToolsInteractive(args: {
     streamingRequestId &&
     message.id === streamingAssistantId
   ) {
-    return { requestId: streamingRequestId, confirmMode }
+    return { requestId: streamingRequestId }
   }
 
   return undefined

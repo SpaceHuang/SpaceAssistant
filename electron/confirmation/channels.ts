@@ -12,7 +12,6 @@ import type {
 } from '../../src/shared/confirmation/types'
 import { waitForToolConfirm } from '../toolConfirmRegistry'
 import { ImChannel, type ImPendingInput } from './imChannel'
-import { DEFAULT_CONFIRM_ANSWERER } from './answererConfig'
 
 export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout'
 
@@ -124,9 +123,6 @@ export function channelFor(args: ResolveConfirmChannelArgs): ConfirmationChannel
   return resolveConfirmChannel(args)
 }
 
-/** lane → 默认回答者（I1 默认值表）已移至 answererConfig.ts（叶子模块，便于测试 mock 与避免循环引用）。 */
-export { DEFAULT_CONFIRM_ANSWERER } from './answererConfig'
-
 export interface ResolveConfirmChannelArgs {
   lane: ExecutionLane
   requestId: string
@@ -158,7 +154,9 @@ export interface ResolveConfirmChannelArgs {
  * fail-closed（I4）：配置损坏、kind='agent' 无工厂 → DenyChannel + 告警审计，绝不回退为 user。
  */
 export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): ConfirmationChannel {
-  const answerer = args.answererPolicy ?? DEFAULT_CONFIRM_ANSWERER[args.lane]
+  // P3 收缩（§5.3）：回答者由 gate 决策派生（decision.answerer），缺省 user 仅防御未接线的旧调用方；
+  // automation 的 agent 回答者同样由引擎派生（automation-default-confirm locked ask）
+  const answerer = args.answererPolicy ?? { kind: 'user' as const }
   const isLaneWithImTransport = args.lane === 'wechat' || args.lane === 'feishu'
 
   // 配置损坏：kind 非法 → deny + 告警（绝不回退 user）

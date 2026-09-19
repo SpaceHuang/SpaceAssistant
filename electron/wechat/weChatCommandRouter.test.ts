@@ -154,7 +154,7 @@ describe('WeChatCommandRouter', () => {
       getBaseUrl: () => 'https://api.example.com',
       getMainWebContents: () => ({ send: vi.fn() }) as never,
       getModel: () => 'm1',
-      getToolsConfig: () => ({ confirmMode: 'diff', deniedTools: [] }) as never
+      getToolsConfig: () => ({ deniedTools: [] }) as never
     })
   })
 
@@ -248,7 +248,7 @@ describe('WeChatCommandRouter', () => {
       getBaseUrl: () => 'https://api.example.com',
       getMainWebContents: () => null,
       getModel: () => 'm1',
-      getToolsConfig: () => ({ confirmMode: 'diff', deniedTools: [] }) as never
+      getToolsConfig: () => ({ deniedTools: [] }) as never
     })
     await r2.handleSdkInbound(raw)
     expect(mockRunAgent).not.toHaveBeenCalled()
@@ -287,7 +287,7 @@ describe('WeChatCommandRouter', () => {
       getBaseUrl: () => 'https://api.example.com',
       getMainWebContents: () => null,
       getModel: () => 'm1',
-      getToolsConfig: () => ({ confirmMode: 'diff', deniedTools: [] }) as never
+      getToolsConfig: () => ({ deniedTools: [] }) as never
     })
     await r2.handleSdkInbound(raw)
     expect(mockRunAgent).not.toHaveBeenCalled()
@@ -357,7 +357,7 @@ describe('WeChatCommandRouter', () => {
       getBaseUrl: () => 'https://api.example.com',
       getMainWebContents: () => ({ send: wcSend }) as never,
       getModel: () => 'm1',
-      getToolsConfig: () => ({ confirmMode: 'diff', deniedTools: [] }) as never
+      getToolsConfig: () => ({ deniedTools: [] }) as never
     })
 
     const raw = makeIncomingMessage({ text: 'switch then reply' })

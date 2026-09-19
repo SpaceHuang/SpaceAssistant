@@ -1,4 +1,4 @@
-import type { ConfirmAnswererKind, ExecutionLane, PolicyAction, PolicyRule } from '../confirmation/types'
+import type { ExecutionLane, PolicyAction, PolicyRule } from '../confirmation/types'
 
 /**
  * 策略套餐（顶层设计 §4 第 1 区 / §5）：每条链路选择 严格/标准/宽松/自定义 之一。
@@ -133,27 +133,26 @@ export function effectiveActionFor(
   return mapping?.[rule.action] ?? rule.action
 }
 
-/** 自定义套餐可编辑的动作集合（普通规则限定 deny/allow/ask）。 */
-const CUSTOM_EDITABLE_ACTIONS: readonly PolicyAction[] = ['deny', 'allow', 'ask']
-/** 默认动作即 auto-evaluator 的规则（自动审批器入口）允许的动作域：询问/允许/自动。 */
-const AUTO_EVALUATOR_EDITABLE_ACTIONS: readonly PolicyAction[] = ['deny', 'allow', 'ask', 'auto-evaluator']
-
 /**
- * 自定义套餐覆盖校验（主进程强制，UI 仅作前置提示）：
- * 规则必须存在、非 locked；普通规则动作 ∈ {deny, allow, ask}；
- * 默认动作即 auto-evaluator 的规则（如 desktop-auto-approve）额外允许覆盖回 auto-evaluator。
+ * 自定义套餐覆盖校验（主进程强制，UI 仅作前置提示；B2 动作域按 lane）：
+ * 规则必须存在、非 locked；动作 ∈ 本链路 availableActions
+ * （desktop 4 态含 auto-evaluator；wechat/feishu 3 态拒绝 auto-evaluator）。
+ * 调用方未带 lane 时按最严格 3 态域（fail-closed：auto-evaluator 仅在显式 desktop 下接受）。
  * 不可增删规则、顺序不可改由"仅按 id 覆盖动作"天然保证。
  */
 export function validateRuleOverride(
   baseRules: PolicyRule[],
   ruleId: string,
-  action: unknown
+  action: unknown,
+  lane?: ExecutionLane
 ): { ok: true; rule: PolicyRule } | { ok: false; error: string } {
   const rule = baseRules.find((r) => r.id === ruleId)
   if (!rule) return { ok: false, error: `unknown rule: ${ruleId}` }
   if (rule.locked) return { ok: false, error: `rule is locked: ${ruleId}` }
-  const editable = rule.action === 'auto-evaluator' ? AUTO_EVALUATOR_EDITABLE_ACTIONS : CUSTOM_EDITABLE_ACTIONS
-  if (!editable.includes(action as PolicyAction)) {
+  const domain: readonly PolicyAction[] = lane
+    ? LANE_PROFILES[lane].availableActions
+    : (['deny', 'allow', 'ask'] as const)
+  if (!domain.includes(action as PolicyAction)) {
     return { ok: false, error: `invalid action: ${String(action)}` }
   }
   return { ok: true, rule }
@@ -186,18 +185,11 @@ function applyCustom(lane: ExecutionLane, rules: PolicyRule[], overrides: Policy
 }
 
 /**
- * P2-5 写入强校验（存量，P3 随 answererConfig 收缩一并退役——决策 1 废除「非 user 不许 loose」，
- * 运行时已不消费此约束；仅 IPC 入口仍在用，删除时同步迁移到 isPackageAvailableForLane）。
+ * 档位是否在本链路可用（§2.1 availablePackages；automation 仅 standard）。
+ * IPC 写入入口（security:set-policy-package）与运行时防护（normalizePolicyPackages 收敛）共用此口径。
  */
-export function validatePolicyPackageForLane(
-  lane: ExecutionLane,
-  pkg: PolicyPackage,
-  answererKind: ConfirmAnswererKind
-): { ok: true } | { ok: false; error: string } {
-  if (answererKind !== 'user' && pkg === 'loose') {
-    return { ok: false, error: `lane ${lane} 的回答者非人类（${answererKind}），不得使用 loose 套餐` }
-  }
-  return { ok: true }
+export function isPackageAvailableForLane(lane: ExecutionLane, pkg: PolicyPackage): boolean {
+  return LANE_PROFILES[lane].availablePackages.includes(pkg)
 }
 
 /**

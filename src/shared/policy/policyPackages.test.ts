@@ -4,10 +4,10 @@ import { DEFAULT_POLICY_RULES } from './defaultRules'
 import {
   DEFAULT_POLICY_PACKAGES,
   effectiveActionFor,
+  isPackageAvailableForLane,
   isPolicyPackage,
   normalizePolicyPackages,
   resolvePolicyRules,
-  validatePolicyPackageForLane,
   validateRuleOverride
 } from './policyPackages'
 
@@ -126,12 +126,25 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     expect(out.find((r) => r.id === 'allow-1')?.action).toBe('auto-evaluator')
   })
 
-  it('validateRuleOverride：locked 不可改、未知规则拒绝、动作限定 deny/allow/ask', () => {
+  it('validateRuleOverride：locked 不可改、未知规则拒绝；动作域按 lane（B2）', () => {
     expect(validateRuleOverride(RULES, 'locked-deny', 'allow').ok).toBe(false)
     expect(validateRuleOverride(RULES, 'missing', 'ask').ok).toBe(false)
+    // wechat/feishu 拒绝 auto-evaluator（3 态）；desktop 接受（4 态）
+    expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator', 'wechat').ok).toBe(false)
+    expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator', 'feishu').ok).toBe(false)
+    expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator', 'desktop').ok).toBe(true)
+    // 未带 lane：按最严格 3 态（fail-closed）
     expect(validateRuleOverride(RULES, 'ask-1', 'auto-evaluator').ok).toBe(false)
-    const ok = validateRuleOverride(RULES, 'ask-1', 'allow')
+    const ok = validateRuleOverride(RULES, 'ask-1', 'allow', 'wechat')
     expect(ok.ok).toBe(true)
+  })
+
+  it('isPackageAvailableForLane：automation 仅 standard；其余 lane 四档全开（§2.1）', () => {
+    expect(isPackageAvailableForLane('automation', 'standard')).toBe(true)
+    expect(isPackageAvailableForLane('automation', 'loose')).toBe(false)
+    expect(isPackageAvailableForLane('automation', 'custom')).toBe(false)
+    expect(isPackageAvailableForLane('desktop', 'loose')).toBe(true)
+    expect(isPackageAvailableForLane('wechat', 'custom')).toBe(true)
   })
 })
 
@@ -147,12 +160,12 @@ describe('auto-evaluator 基线规则的覆盖（shell-precheck-auto-allow）', 
     { id: 'plain-ask', when: 'invocation', action: 'ask', reason: 'r2' }
   ]
 
-  it('默认动作为 auto-evaluator 的规则允许覆盖为 询问/允许/自动', () => {
-    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'ask').ok).toBe(true)
-    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'allow').ok).toBe(true)
-    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'auto-evaluator').ok).toBe(true)
-    // 普通规则仍不允许覆盖成 auto-evaluator
-    expect(validateRuleOverride(AUTO_RULES, 'plain-ask', 'auto-evaluator').ok).toBe(false)
+  it('auto-evaluator 基线规则的覆盖按 lane 动作域校验（desktop 4 态）', () => {
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'ask', 'desktop').ok).toBe(true)
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'allow', 'desktop').ok).toBe(true)
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'auto-evaluator', 'desktop').ok).toBe(true)
+    // wechat 即使对该规则也拒绝 auto-evaluator（3 态动作域，B2）
+    expect(validateRuleOverride(AUTO_RULES, 'shell-precheck-auto-allow', 'auto-evaluator', 'wechat').ok).toBe(false)
   })
 
   it('覆盖后剥离条件门控（configRequires/askUnless/requiresContext），用户显式定死动作', () => {
@@ -234,10 +247,3 @@ describe('standard 规则集恒等（两端共用变换表经 effectiveActionFor
   })
 })
 
-describe('validatePolicyPackageForLane（P3 退役前的存量校验）', () => {
-  it('agent lane 拒绝 loose，user lane 不受限', () => {
-    expect(validatePolicyPackageForLane('automation', 'loose', 'agent').ok).toBe(false)
-    expect(validatePolicyPackageForLane('desktop', 'loose', 'user').ok).toBe(true)
-    expect(validatePolicyPackageForLane('automation', 'strict', 'agent').ok).toBe(true)
-  })
-})

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
-import type { FileConfirmMode, ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
+import type { ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
 import { projectPersistedMcpResult, type McpResultDisplay } from '../../../shared/mcpToolResultDisplay'
 import { sanitizeCapabilityParamsForDisplay } from '../../../shared/capabilityParamSanitize'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
@@ -62,7 +62,6 @@ import type { ToolCallDisplaySummary } from '../../../shared/turnDisplayProtocol
 
 type Props = {
   record: ToolCallRecord
-  confirmMode: FileConfirmMode
   focus?: boolean
   workDir?: string
   messageId?: string
@@ -124,7 +123,6 @@ function defaultExpanded(record: ToolCallRecord): boolean {
 
 export const ToolCallCard = memo(function ToolCallCard({
   record: sourceRecord,
-  confirmMode,
   focus,
   workDir,
   messageId,
@@ -457,7 +455,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (writeConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
-        <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+        <WriteConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
