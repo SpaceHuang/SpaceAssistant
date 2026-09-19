@@ -5,6 +5,7 @@ import { DEFAULT_WIKI_CONFIG, type Message } from '../../src/shared/domainTypes'
 import {
   claimQueuedTurnAtomically,
   createSession,
+  deleteQueuedUserMessage,
   enqueueQueuedUserMessage,
   getMessages,
   getNextQueuedMessage,
@@ -34,6 +35,7 @@ function makeDeps(
   const session = createSession(db, { name: 'acceptor-test' })
   const active = new Map<string, string>()
   const audit = vi.fn()
+  const createSessionFn = vi.fn(async (_prefs?: unknown) => createSession(db, { name: 'created' }))
   const startTurn = vi.fn(async (input: { turnIntent: { requestId: string; sessionId: string } }) => {
     const turnId = `turn-${input.turnIntent.requestId}`
     active.set(turnId, input.turnIntent.sessionId)
@@ -69,9 +71,9 @@ function makeDeps(
     wikiInit: async () => ({ ok: true as const, rootPath: 'llm-wiki', skillInstalled: true }),
     wikiStatus: async () => ({ enabled: true, rootPath: 'llm-wiki', initialized: true, pageCount: 1, rawCount: 0 }),
     wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }),
-    appendHintMessage: vi.fn(async () => undefined),
+    appendHintMessage: vi.fn(async () => ({ messageId: 'hint-1', sequence: 1 })),
     updateSessionState: vi.fn(async () => undefined),
-    createSession: vi.fn(async () => createSession(db, { name: 'created' })),
+    createSession: createSessionFn,
     startTurn,
     newRequestId: (() => {
       let n = 0
@@ -141,6 +143,45 @@ describe('createOutboundAcceptor（集成，真实 DB 排队路径）', () => {
       'outbound.submit.rejected',
       expect.objectContaining({ reason: 'OUTBOUND_API_KEY_MISSING' })
     )
+  })
+
+  it('B1:运行中带附件提交(contextIntent.create-user.attachments)→ 排队消息落库含附件', async () => {
+    const deps = makeDeps(db)
+    const acceptor = createOutboundAcceptor(deps)
+    const session = createSession(db, { name: 'b1' })
+    deps.activeOps.add('t-live', session.id)
+    const attachments = [
+      { id: 'img-1', stagingKey: 'chat-attachments/x/1.png', fileName: '1.png', mimeType: 'image/png' } as never
+    ]
+    const res = await acceptor.submitOutbound({
+      sessionId: session.id,
+      text: '看这张图',
+      contextIntent: { kind: 'create-user', text: '看这张图', attachments }
+    })
+    expect(res).toMatchObject({ accepted: 'queued' })
+    const stored = getMessages(db, session.id).find((m) => m.content === '看这张图')
+    expect(stored?.attachments).toHaveLength(1)
+    expect((stored?.attachments as unknown[])[0]).toMatchObject({ id: 'img-1' })
+  })
+
+  it('B2:无会话提交携带 sessionPrefs → 代建会话收到 model/llmServiceId/thinkingEffort', async () => {
+    const deps = makeDeps(db)
+    const acceptor = createOutboundAcceptor(deps)
+    const res = await acceptor.submitOutbound({
+      text: '新会话首条',
+      sessionPrefs: { model: 'glm-5', llmServiceId: 'svc-2', thinkingEffort: 'high' }
+    })
+    expect(res).toMatchObject({ accepted: 'turn-started' })
+    expect(deps.createSession).toHaveBeenCalledWith({ model: 'glm-5', llmServiceId: 'svc-2', thinkingEffort: 'high' })
+  })
+
+  it('B3:wiki run 发起时提示消息落库(hint 不再丢弃)', async () => {
+    const deps = makeDeps(db)
+    const acceptor = createOutboundAcceptor(deps)
+    const session = createSession(db, { name: 'b3' })
+    const res = await acceptor.submitOutbound({ sessionId: session.id, text: '/wiki query 如何重构' })
+    expect(res).toMatchObject({ accepted: 'turn-started' })
+    expect(deps.appendHintMessage).toHaveBeenCalledWith(session.id, expect.stringContaining('已进入 Wiki Query'))
   })
 
   it('hint-only：落提示消息 + skillsState 落库，返回 local-command', async () => {
@@ -230,9 +271,16 @@ describe('createOutboundDrainer（排水不变量）', () => {
     const audit = vi.fn()
     const submits: OutboundSubmitIntent[] = []
     let listActiveCountValue = 0
+    const customSubmit = (overrides as { onSubmit?: (intent: OutboundSubmitIntent) => OutboundSubmitResult | undefined }).onSubmit
     const drainer = createOutboundDrainer({
       submitOutbound: vi.fn(async (intent: OutboundSubmitIntent) => {
         submits.push(intent)
+        if (customSubmit) {
+          const custom = customSubmit(intent)
+          if (custom) return custom
+        }
+        // 成功发起后 active=1(模拟真实 turnRuntime 状态),防兜底误判
+        listActiveCountValue = 1
         return {
           accepted: 'turn-started',
           sessionId: intent.sessionId!,
@@ -242,6 +290,9 @@ describe('createOutboundDrainer（排水不变量）', () => {
       }),
       listActiveCount: () => listActiveCountValue,
       getNextQueued: (sessionId: string) => getNextQueuedMessage(db, sessionId),
+      consumeQueued: (_sessionId: string, messageId: string) => {
+        deleteQueuedUserMessage(db, messageId)
+      },
       audit,
       ...overrides
     })
@@ -350,5 +401,96 @@ describe('createOutboundDrainer（排水不变量）', () => {
     h.drainer.onTurnProjection(turn, { type: 'source-timeout' })
     await new Promise((r) => setTimeout(r, 0))
     expect(h.submits).toHaveLength(1)
+  })
+
+  it('B5:排队的本地命令被排水器消费(审计 + 删除)并继续驱动下一条', async () => {
+    const h = makeDrainerHarness({
+      onSubmit: (intent: OutboundSubmitIntent) => {
+        // 主进程无法执行渲染端本地命令 → 受理端口分类为 local-command
+        if (intent.text === '/test-cards') return { accepted: 'local-command', command: { kind: 'test-cards-run' } }
+        return undefined
+      }
+    } as never)
+    const cmdEnq = enqueueQueuedUserMessage(db, { sessionId: h.session.id, requestId: 'cmd-1', content: '/test-cards' })
+    enqueueQueuedUserMessage(db, { sessionId: h.session.id, requestId: 'msg-1', content: '普通消息' })
+    h.setActive(0)
+    await h.drainer.drain(h.session.id)
+    await new Promise((r) => setTimeout(r, 0))
+    // 本地命令被消费删除 + 审计,不是静默丢弃
+    expect(queuedCount(db, h.session.id)).toBe(1)
+    expect(getMessages(db, h.session.id).some((m) => m.id === cmdEnq.persisted.message.id)).toBe(false)
+    expect(h.audit).toHaveBeenCalledWith(
+      'outbound.drain.local_command_consumed',
+      expect.objectContaining({ requestId: 'cmd-1' })
+    )
+    // 继续驱动了后面的普通消息
+    expect(h.submits.some((s) => s.contextIntent?.kind === 'reuse-user' && s.text === '普通消息')).toBe(true)
+  })
+
+  it('B6:submit 期间终态投影被挡(configuring 立即失败)→ drain 结束后补扫,队列不停摆', async () => {
+    const session = createSession(db, { name: 'b6' })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'q-a', content: 'first' })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'q-b', content: 'second' })
+    const audit = vi.fn()
+    const submits: OutboundSubmitIntent[] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const drainer = createOutboundDrainer({
+      submitOutbound: vi.fn(async (intent: OutboundSubmitIntent) => {
+        submits.push(intent)
+        if (submits.length === 1) {
+          // 第一次 submit 挂起,模拟 configuring 阶段
+          await gate
+        }
+        // 模拟 prepare 链的 claim:队首 queued 转 sent
+        if (intent.contextIntent?.kind === 'reuse-user') {
+          deleteQueuedUserMessage(db, intent.contextIntent.currentUser.message.id)
+        }
+        return {
+          accepted: 'turn-started',
+          sessionId: intent.sessionId!,
+          turnId: 't-' + submits.length,
+          assistantMessage: { id: 'a-' + submits.length } as unknown as Message
+        }
+      }),
+      listActiveCount: () => 0,
+      getNextQueued: (sessionId: string) => getNextQueuedMessage(db, sessionId),
+      consumeQueued: (_sessionId: string, messageId: string) => {
+        deleteQueuedUserMessage(db, messageId)
+      },
+      audit
+    })
+    const p = drainer.drain(session.id)
+    await Promise.resolve()
+    await Promise.resolve()
+    // drain 挂起期间,新 turn 的 configuring 立即失败 → 终态投影同步到达(被 draining 挡)
+    drainer.onTurnProjection({ sessionId: session.id }, { type: 'source-failed' })
+    release()
+    await p
+    await new Promise((r) => setTimeout(r, 0))
+    // 被挡的触发被补扫:第二条排队消息得到驱动,队列不停摆
+    expect(submits).toHaveLength(2)
+    expect(submits[1]!.text).toBe('second')
+    expect(audit).not.toHaveBeenCalledWith('outbound.drain.stalled', expect.anything())
+  })
+
+  it('B6:连续 rejected 至多重试 3 轮后停摆并落审计(不自旋)', async () => {
+    const session = createSession(db, { name: 'b6b' })
+    enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'q-b', content: 'x' })
+    const audit = vi.fn()
+    const drainer = createOutboundDrainer({
+      submitOutbound: vi.fn(async () => ({ rejected: { reason: 'OUTBOUND_API_KEY_MISSING' } })),
+      listActiveCount: () => 0,
+      getNextQueued: (sessionId: string) => getNextQueuedMessage(db, sessionId),
+      consumeQueued: () => undefined,
+      audit
+    })
+    await drainer.drain(session.id)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(audit).toHaveBeenCalledWith('outbound.drain.stalled', expect.objectContaining({ sessionId: session.id }))
+    // 队列保留(非命令类不被消费),等下一条终态/用户动作再试
+    expect(queuedCount(db, session.id)).toBe(1)
   })
 })

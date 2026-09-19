@@ -1,3 +1,4 @@
+import { isThinkingEffort, resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import fs from 'fs/promises'
 import path from 'path'
@@ -116,6 +117,10 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       preferredVisionModelId: migrated.preferredVisionModelId,
       models,
       thinkingEnabled: getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled) !== 'false',
+      thinkingEffort: resolveGlobalThinkingEffort(
+        getConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort),
+        getConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled)
+      ),
       workDir: wd,
       maxParallelChatSessions: clampMaxParallelChatSessions(maxParallelRaw ? Number(maxParallelRaw) : undefined),
       tools,
@@ -141,6 +146,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         defaultModel: string
         models: AppConfig['models']
         thinkingEnabled: boolean
+        thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
         workDir: string
         apiKey: string
         llmServices: LlmServiceProfile[]
@@ -163,6 +169,10 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         locale: AppConfig['locale']
       }>
     ): Promise<void> => {
+      // §8.4 / 评审 C2:档位校验前置到任何写入之前,非法值整体拒绝、不产生部分写入
+      if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
+        throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 off / low / medium / high)`)
+      }
       try {
         if (payload.llmServices !== undefined) {
           const activeIds =
@@ -252,6 +262,8 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         setConfigValue(ctx.db, CONFIG_KEYS.preferredVisionModelId, payload.preferredVisionModelId)
       }
       if (payload.thinkingEnabled !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled, String(payload.thinkingEnabled))
+      // 评审 C1:旧键仅为旧客户端兼容保留一个发布周期;新键 thinkingEffort 优先,迁移后此处可删
+      if (payload.thinkingEffort !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort, payload.thinkingEffort)
       if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
         ctx.setWorkDir(payload.workDir)

@@ -1,3 +1,4 @@
+import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import fs from 'fs/promises'
 import type { AppIpcContext } from '../appIpc'
@@ -33,8 +34,12 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     'session:create',
     async (
       _e,
-      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown> }
+      payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown>; thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort }
     ): Promise<Session> => {
+      // 评审 N4:非法档位拒绝(与 session:update / config:set 同口径),不做静默丢弃
+      if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
+        throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 off / low / medium / high)`)
+      }
       const s = createSession(ctx.db, {
         ...payload,
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
@@ -89,8 +94,13 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         skillsState?: SessionSkillsState
         metadata?: Record<string, unknown>
         workDirProfileId?: string
+        thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort | null
       }
     ): Promise<Session | undefined> => {
+      if (payload.thinkingEffort !== undefined && payload.thinkingEffort !== null
+        && !isThinkingEffort(payload.thinkingEffort)) {
+        throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 off / low / medium / high 或 null 清除覆盖)`)
+      }
       const cur = getSession(ctx.db, payload.sessionId)
       if (!cur) return undefined
       if (
@@ -121,6 +131,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
         ...(payload.workDirProfileId !== undefined ? { workDirProfileId: payload.workDirProfileId } : {}),
+        ...(payload.thinkingEffort !== undefined ? { thinkingEffort: payload.thinkingEffort } : {}),
         ...(hasMetaChange ? { metadata: mergedMetadata } : {})
       })
       if (next) scheduleBackup(ctx, next.id)

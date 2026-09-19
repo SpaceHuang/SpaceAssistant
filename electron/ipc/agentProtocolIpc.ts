@@ -488,8 +488,15 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         ...(patch.metadataPatch ? { metadata: patch.metadataPatch } : {})
       })
     },
-    createSession: async () => {
-      const s = createSession(ctx.db, { name: '', workDirProfileId: ctx.workDirManager.getActiveProfileId() })
+    createSession: async (prefs) => {
+      // B2:无会话首条消息的 composer 草稿偏好随代建落库（thinkingEffort 校验在 operations 层）
+      const s = createSession(ctx.db, {
+        name: '',
+        workDirProfileId: ctx.workDirManager.getActiveProfileId(),
+        ...(prefs?.model ? { model: prefs.model } : {}),
+        ...(prefs?.llmServiceId ? { llmServiceId: prefs.llmServiceId } : {}),
+        ...(prefs?.thinkingEffort ? { thinkingEffort: prefs.thinkingEffort } : {})
+      })
       await fs.mkdir(ctx.getWorkDir(), { recursive: true })
       return s
     },
@@ -518,6 +525,10 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     submitOutbound: outboundAcceptor.submitOutbound,
     listActiveCount: (sessionId) => turnRuntime.listActive(sessionId).length,
     getNextQueued: (sessionId) => getNextQueuedMessage(ctx.db, sessionId),
+    consumeQueued: (_sessionId, messageId) => {
+      // B5:排队的渲染端本地命令(如 /test-cards)主进程无法执行,消费落库避免卡队
+      deleteQueuedUserMessage(ctx.db, messageId)
+    },
     audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
   })
   turnRuntime.subscribe((turn, event) => outboundDrainer.onTurnProjection(turn, event))

@@ -91,6 +91,8 @@ type SendInternalOptions = {
   targetSessionId?: string
   /** 显式发送上下文意图；缺省为 create-user。决定（排队/发起/拒绝）由主进程受理端口做出 */
   contextIntent?: OutboundContextIntent
+  /** 无会话时的代建偏好（B2）：model / llmServiceId / thinkingEffort 草稿 */
+  sessionPrefs?: import('../../../shared/outboundProtocol').OutboundSessionPrefs
 }
 
 function buildClaudePayload(history: Message[]) {
@@ -165,8 +167,12 @@ export function ChatView() {
   const composerRef = useRef<MessageInputHandle>(null)
   const abortRequestedRef = useRef(false)
   const sendInternalRef = useRef<
-    (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => Promise<void>
-  >(async () => {})
+    (
+      text: string,
+      skillsStateOverride?: SessionSkillsState,
+      options?: SendInternalOptions
+    ) => Promise<unknown | undefined>
+  >(async () => undefined)
   const [testPreviewMessageIds, setTestPreviewMessageIds] = useState<Set<string>>(() => new Set())
   const [showScrollToLatest, setShowScrollToLatest] = useState(false)
 
@@ -488,7 +494,11 @@ export function ChatView() {
   // 协议注释：turn 投影（chatOnTurnProjection）是唯一事实源；submitOutbound 返回载荷仅供即时展示，
   // 渲染端按 turnId/messageId 幂等归并，不得据此双写状态（投影事件可能先于 invoke 返回到达）。
   const submitOutbound = useCallback(
-    async (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => {
+    async (
+      text: string,
+      skillsStateOverride?: SessionSkillsState,
+      options?: SendInternalOptions
+    ): Promise<Awaited<ReturnType<typeof window.api.chatSubmitOutbound>> | undefined> => {
       void skillsStateOverride
       const runSessionId = options?.targetSessionId ?? sessionId
       let result: Awaited<ReturnType<typeof window.api.chatSubmitOutbound>>
@@ -496,17 +506,22 @@ export function ChatView() {
         result = await window.api.chatSubmitOutbound({
           ...(runSessionId ? { sessionId: runSessionId } : {}),
           text,
-          ...(options?.contextIntent ? { contextIntent: options.contextIntent } : {})
+          ...(options?.contextIntent ? { contextIntent: options.contextIntent } : {}),
+          ...(options?.sessionPrefs ? { sessionPrefs: options.sessionPrefs } : {})
         })
       } catch (err) {
         message.error(formatUserFacingError(err instanceof Error ? err.message : String(err)))
-        return
+        return undefined
       }
 
       if ('rejected' in result) {
         for (const w of result.rejected.warnings ?? []) message.warning(formatUserFacingError(w))
         message.error(formatUserFacingError(result.rejected.reason))
-        return
+        // main 基线语义:缺 API Key 时引导用户打开设置页
+        if (result.rejected.reason === 'OUTBOUND_API_KEY_MISSING') {
+          dispatch(openSettings({ tab: 'models' }))
+        }
+        return result
       }
 
       if (result.accepted === 'local-command') {
@@ -514,7 +529,7 @@ export function ChatView() {
         if (cmd.kind === 'test-pop-run') {
           await window.api.testPopShow()
           message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
-          return
+          return result
         }
         if (cmd.kind === 'test-cards-run') {
           if (!runSessionId) return
@@ -528,21 +543,21 @@ export function ChatView() {
             },
             persistSystemHint: (hint) => persistSkillHintSystemMessage(runSessionId, hint)
           })
-          return
+          return result
         }
         showSkillHint(
           runSessionId!,
           cmd.hint,
           cmd.messageId ? { messageId: cmd.messageId, sequence: cmd.sequence ?? 0 } : undefined
         )
-        return
+        return result
       }
 
       if (result.accepted === 'queued') {
         stickToBottomRef.current = true
         dispatch(ackDisplayMessagePersisted({ messageId: result.queued.messageId, sequence: result.queued.sequence }))
         scrollBottom(true)
-        return
+        return result
       }
 
       // turn-started：建立即时展示状态；后续事实流由投影驱动
@@ -561,6 +576,7 @@ export function ChatView() {
         dispatch(ackDisplayMessagePersisted({ messageId: assistantMessage.id, sequence }))
       }
       scrollBottom(true)
+      return result
     },
     [sessionId, dispatch, message, showSkillHint, persistSkillHintSystemMessage, bumpContextSummary]
   )
@@ -585,7 +601,7 @@ export function ChatView() {
             })
       })
       // §5.2 草稿保持:档位随主进程代建的首个会话落库后即清理
-      if (result && result.accepted === 'turn-started' && result.sessionId !== sessionId) {
+      if (result && 'accepted' in result && result.accepted === 'turn-started' && result.sessionId !== sessionId) {
         setDraftThinkingEffort(undefined)
       }
     },

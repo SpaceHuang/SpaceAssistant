@@ -1,7 +1,7 @@
 import type { Message, SessionSkillsState, SkillDefinition, WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
 import { MAX_CHAT_MESSAGE_QUEUE_SIZE, countQueuedUserMessages } from '../../src/shared/chatMessageQueue'
-import type { OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
+import type { OutboundSessionPrefs, OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
 import type { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import { parseTestPopCommand } from '../../src/shared/outbound/testPopCommandService'
 import { parseTestCardsCommand } from '../../src/shared/outbound/testCardsCommandService'
@@ -37,7 +37,14 @@ export type OutboundDecision =
   | { action: 'hint-only'; hint: string; skillsState?: SessionSkillsState }
   | { action: 'reject'; reason: string }
   | { action: 'enqueue'; text: string }
-  | { action: 'start-turn'; text: string; skillsState?: SessionSkillsState; wikiModeActive?: boolean }
+  | {
+      action: 'start-turn'
+      text: string
+      skillsState?: SessionSkillsState
+      wikiModeActive?: boolean
+      /** B3:wiki run 等「先提示后发起」的用户反馈,随发起落库(main 语义保持) */
+      hint?: string
+    }
 
 /** 出站分类所需的 IO 端口（主进程直连实现由接线层注入；测试注入 fake） */
 export type OutboundClassifierIo = {
@@ -114,10 +121,12 @@ export async function decideOutbound(
   if (wikiCmd.type === 'command') {
     return { action: 'hint-only', hint: wikiCmd.hint, ...(wikiCmd.skillsState ? { skillsState: wikiCmd.skillsState } : {}) }
   }
+  let pendingHint: string | undefined
   if (wikiCmd.type === 'run') {
     chatText = wikiCmd.text
     skillsState = wikiCmd.skillsState
     wikiModeActive = true
+    pendingHint = wikiCmd.hint
   }
 
   // ⑦ skill：command → 提示
@@ -141,7 +150,8 @@ export async function decideOutbound(
     action: 'start-turn',
     text: chatText,
     ...(skillsState !== snapshot.sessionSkillsState ? { skillsState } : {}),
-    ...(wikiModeActive ? { wikiModeActive: true } : {})
+    ...(wikiModeActive ? { wikiModeActive: true } : {}),
+    ...(pendingHint ? { hint: pendingHint } : {})
   }
 }
 
@@ -172,7 +182,9 @@ export type OutboundAcceptorDeps = {
     sessionId: string,
     patch: { skillsState?: SessionSkillsState; metadataPatch?: Record<string, unknown> }
   ) => Promise<void> | void
-  createSession: () => Promise<Pick<Session_Requested, 'id'>> | Pick<Session_Requested, 'id'>
+  createSession: (
+    prefs?: OutboundSessionPrefs
+  ) => Promise<Pick<Session_Requested, 'id'>> | Pick<Session_Requested, 'id'>
   startTurn: OutboundTurnStarter
   /** 占用 ≥80% 通过型警告（P2-2）：返回错误码数组，随 turn-started.warnings 透出 */
   contextUsageWarn?: (input: { sessionId: string; model: string; attachments?: Message['attachments'] }) => Promise<string[]>
@@ -211,7 +223,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     // 会话解析/创建：无会话 = 请主进程创建（决定回主进程）
     let sessionId = intent.sessionId
     if (!sessionId) {
-      const created = await deps.createSession()
+      const created = await deps.createSession(intent.sessionPrefs)
       sessionId = created.id
       deps.audit('outbound.session.created', { sessionId })
     } else if (!getSession(deps.db, sessionId)) {
@@ -267,7 +279,8 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           sessionId,
           requestId,
           content: decision.text,
-          attachments: intent.attachments
+          // B1:渲染端把附件放在 contextIntent.create-user.attachments,排队路径同样要带上
+          attachments: intent.attachments ?? (intent.contextIntent?.kind === 'create-user' ? intent.contextIntent.attachments : undefined)
         })
         return {
           accepted: 'queued',
@@ -276,6 +289,10 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
         }
       }
       case 'start-turn': {
+        // B3:wiki run 的「已开始」类提示随发起落库(main 语义保持)
+        if (decision.hint) {
+          await deps.appendHintMessage(sessionId, decision.hint)
+        }
         if (decision.skillsState || decision.wikiModeActive) {
           await deps.updateSessionState(sessionId, {
             ...(decision.skillsState ? { skillsState: decision.skillsState } : {}),
@@ -364,44 +381,136 @@ export type OutboundDrainerDeps = {
   submitOutbound: (intent: OutboundSubmitIntent) => Promise<OutboundSubmitResult>
   listActiveCount: (sessionId: string) => number
   getNextQueued: (sessionId: string) => { message: Message; sequence: number; requestId?: string } | null
+  /** 消费一条不可由主进程执行的排队条目(本地命令类),由实现层删除落库 */
+  consumeQueued: (sessionId: string, messageId: string) => void
   audit: (event: string, data: Record<string, unknown>) => void
 }
+
+/** 同一会话连续 rejected 的自动重试上限(防自旋);超过后停摆并落审计,等下一条终态/用户动作 */
+const MAX_DRAIN_RETRIES = 3
 
 /**
  * 主进程排水器：turn 终态后取队首 queued 驱动下一回合。
  * 不变量：同一会话同一时刻至多一个 drain；会话仍有 active turn 时不驱动；
  * 队空 / 非 queued / 无 requestId 不驱动；拒绝与异常落审计不静默。
+ * B5:排队的本地命令(渲染端本地执行类)由排水器消费(审计 + 删除),不再静默丢弃;
+ * B6:rejected/被挡触发的丢触发兜底——drain 结束后若仍「无 active 且队列有可驱动条目」,
+ *    微任务自动重排(上限 MAX_DRAIN_RETRIES,成功发起即重置),configuring 失败不再导致队列停摆。
  */
 export function createOutboundDrainer(deps: OutboundDrainerDeps) {
   const draining = new Set<string>()
+  const retryAttempts = new Map<string, number>()
+  /** drain 进行中到达(被挡)的终态触发:B6——结束后必须补扫,否则丢触发导致队列停摆 */
+  const suppressedTriggers = new Set<string>()
+
+  function scheduleRetry(sessionId: string): void {
+    const n = (retryAttempts.get(sessionId) ?? 0) + 1
+    retryAttempts.set(sessionId, n)
+    if (n > MAX_DRAIN_RETRIES) {
+      deps.audit('outbound.drain.stalled', {
+        sessionId,
+        attempts: n,
+        requestId: deps.getNextQueued(sessionId)?.requestId
+      })
+      return
+    }
+    queueMicrotask(() => {
+      void drain(sessionId)
+    })
+  }
 
   async function drain(sessionId: string): Promise<void> {
-    if (draining.has(sessionId)) return
-    if (deps.listActiveCount(sessionId) > 0) return
-    const next = deps.getNextQueued(sessionId)
-    if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return
-    draining.add(sessionId)
+    if (draining.has(sessionId)) {
+      suppressedTriggers.add(sessionId)
+      return
+    }
+    let started = false
     try {
-      const result = await deps.submitOutbound({
-        sessionId,
-        text: next.message.content,
-        contextIntent: {
-          kind: 'reuse-user',
-          currentUser: { message: next.message, order: { kind: 'persisted', sequence: next.sequence } },
-          requestId: next.requestId
-        }
-      })
-      if ('rejected' in result) {
-        deps.audit('outbound.drain.rejected', { sessionId, requestId: next.requestId, reason: result.rejected.reason })
-      }
-    } catch (error) {
-      deps.audit('outbound.drain.failed', {
-        sessionId,
-        requestId: next.requestId,
-        error: error instanceof Error ? error.message : String(error)
-      })
+      started = await drainOnce(sessionId)
     } finally {
-      draining.delete(sessionId)
+      if (draining.has(sessionId)) draining.delete(sessionId)
+    }
+    if (started) {
+      // 已成功发起:后续丢触发由新 turn 的终态投影接管(turn-started 必有 active)
+      retryAttempts.delete(sessionId)
+      // 但 submitOutbound await 期间可能有终态被挡(如 configuring 立即失败)——仍需补扫一次
+      if (suppressedTriggers.has(sessionId)) {
+        suppressedTriggers.delete(sessionId)
+        if (deps.listActiveCount(sessionId) === 0 && deps.getNextQueued(sessionId)?.message.status === 'queued') {
+          scheduleRetry(sessionId)
+        }
+      }
+      return
+    }
+    if (suppressedTriggers.has(sessionId)) {
+      // B6:被挡的终态触发必须补扫(有限次,防自旋)
+      suppressedTriggers.delete(sessionId)
+      scheduleRetry(sessionId)
+      return
+    }
+    if (deps.listActiveCount(sessionId) > 0) {
+      retryAttempts.delete(sessionId)
+      return
+    }
+    if (deps.getNextQueued(sessionId)?.message.status === 'queued') {
+      scheduleRetry(sessionId)
+    }
+  }
+
+  /** 单轮排水:返回 true 表示成功发起了新 turn */
+  async function drainOnce(sessionId: string): Promise<boolean> {
+    if (draining.has(sessionId)) return false
+    try {
+      // 单轮循环:驱动一条 turn 后停(等它的终态再触发);本地命令类消费后继续(队列收敛)
+      for (;;) {
+        if (deps.listActiveCount(sessionId) > 0) return false
+        const next = deps.getNextQueued(sessionId)
+        if (!next || next.message.role !== 'user' || next.message.status !== 'queued' || !next.requestId) return false
+        draining.add(sessionId)
+        let result: OutboundSubmitResult
+        try {
+          result = await deps.submitOutbound({
+            sessionId,
+            text: next.message.content,
+            contextIntent: {
+              kind: 'reuse-user',
+              currentUser: { message: next.message, order: { kind: 'persisted', sequence: next.sequence } },
+              requestId: next.requestId
+            }
+          })
+        } catch (error) {
+          deps.audit('outbound.drain.failed', {
+            sessionId,
+            requestId: next.requestId,
+            error: error instanceof Error ? error.message : String(error)
+          })
+          return false
+        } finally {
+          draining.delete(sessionId)
+        }
+        if ('rejected' in result) {
+          deps.audit('outbound.drain.rejected', { sessionId, requestId: next.requestId, reason: result.rejected.reason })
+          return false
+        }
+        if (result.accepted === 'turn-started') {
+          return true
+        }
+        if (result.accepted === 'local-command') {
+          // B5:主进程无法执行渲染端本地命令(如排队的 /test-cards)——审计 + 消费该条目,继续驱动后续
+          deps.audit('outbound.drain.local_command_consumed', {
+            sessionId,
+            requestId: next.requestId,
+            command: result.command.kind
+          })
+          deps.consumeQueued(sessionId, next.message.id)
+          continue
+        }
+        // queued(理论不可达:reuse-user 排队语义)——审计防静默,跳出等下一次触发
+        deps.audit('outbound.drain.unexpected_queued', { sessionId, requestId: next.requestId })
+        return false
+      }
+    } finally {
+      if (draining.has(sessionId)) draining.delete(sessionId)
     }
   }
 

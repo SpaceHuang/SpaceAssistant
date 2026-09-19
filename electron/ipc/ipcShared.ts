@@ -1,4 +1,6 @@
 // Phase 2 拆分:模块级共享 helper 与跨域工厂(自 appIpc.ts 纯移动)。
+// B9:AppIpcContext 类型以 appIpc.ts 为唯一真实来源,此处仅 type import。
+import type { AppIpcContext } from '../appIpc'
 import fs from 'fs/promises'
 import path from 'path'
 import { AppConfig, Message, SearchResult, Session, SkillsConfig, ToolsConfig } from '../../src/shared/domainTypes'
@@ -107,6 +109,7 @@ export const CONFIG_KEYS = {
   defaultModel: 'config.defaultModel',
   models: 'config.models',
   thinkingEnabled: 'config.thinkingEnabled',
+  thinkingEffort: 'config.thinkingEffort',
   workDir: 'config.workDir',
   apiKeyEnc: LLM_SERVICE_CONFIG_KEYS.apiKeyEnc,
   llmServices: LLM_SERVICE_CONFIG_KEYS.llmServices,
@@ -135,22 +138,6 @@ export function readAppLocale(db: AppDatabase): AppConfig['locale'] {
   return detected
 }
 
-export type AppIpcContext = {
-  db: AppDatabase
-  backup: DebouncedSessionBackupManager
-  workDirManager: WorkDirManager
-  getWorkDir: () => string
-  setWorkDir: (dir: string) => void
-  getUserDataPath: () => string
-  getApiKey: () => Promise<string | null>
-  setApiKey: (value: string) => Promise<void>
-  getBrowserDetectContext: () => BrowserDetectContext
-  floatingNotificationManager?: import('../floatingNotificationManager').FloatingNotificationManager
-  turnRuntime?: TurnRuntime
-  executeTurn?: ClaudeTurnExecution
-  /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
-  isTrayEnabled?: () => boolean
-}
 
 export function stripSessionMetadataAndPersist(db: AppDatabase, session: Session): Session {
   if (!hasPlanMetadataKeys(session.metadata)) return session

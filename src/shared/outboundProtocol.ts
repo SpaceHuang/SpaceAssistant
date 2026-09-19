@@ -11,12 +11,21 @@ export type OutboundContextIntent =
       excludeMessageIds?: string[]
     }
 
+/** 无会话首条消息的代建偏好（B2）：composer 草稿(model/llmServiceId/thinkingEffort)随创建落库 */
+export type OutboundSessionPrefs = {
+  model?: string
+  llmServiceId?: string
+  thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
+}
+
 export type OutboundSubmitIntent = {
   /** 无会话 = 请主进程创建（决定回主进程） */
   sessionId?: string
   text: string
   attachments?: Message['attachments']
   contextIntent?: OutboundContextIntent
+  /** 仅在未携带 sessionId 时生效：主进程代建会话的初始偏好 */
+  sessionPrefs?: OutboundSessionPrefs
 }
 
 export type LocalCommandPayload =

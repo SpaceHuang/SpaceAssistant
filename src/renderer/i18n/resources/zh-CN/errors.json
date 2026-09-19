@@ -40,5 +40,11 @@
   "SKILL_MD_MISSING": "目录中未找到 SKILL.md",
   "SKILL_MD_UNREADABLE": "SKILL.md 无法读取",
   "SKILL_NO_INSTALLABLE_CANDIDATE": "没有可安装的 Skill：{{code}}",
-  "SKILL_INSTALL_CANCELLED": "安装已取消"
+  "SKILL_INSTALL_CANCELLED": "安装已取消",
+  "OUTBOUND_SESSION_NOT_FOUND": "会话不存在或已被删除，请刷新会话列表后重试",
+  "OUTBOUND_SESSION_RUNNING": "当前会话正在回复中，请等待完成后再重试",
+  "OUTBOUND_MAX_PARALLEL_REACHED": "同时进行的会话数已达上限（{max}），请先等待某个会话完成",
+  "OUTBOUND_QUEUE_FULL": "排队消息已达上限（{max}），请稍后再发送",
+  "OUTBOUND_API_KEY_MISSING": "API Key 未配置，请先在「设置 → 模型」中补齐",
+  "OUTBOUND_CONTEXT_PRESSURE_80": "上下文占用已超过 80%，建议开启新会话或压缩历史"
 }
