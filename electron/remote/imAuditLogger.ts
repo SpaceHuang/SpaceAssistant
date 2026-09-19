@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { withTransientLockRetry } from '../safeAtomicWrite'
 
 export interface ImAuditLoggerOpts {
   channel: 'feishu' | 'wechat'
@@ -110,13 +111,13 @@ export class ImAuditLogger<T extends { type: string; ts?: number }> {
       const from = `${this.logPath}.${i}`
       const to = `${this.logPath}.${i + 1}`
       try {
-        await fs.rename(from, to)
+        await withTransientLockRetry(() => fs.rename(from, to))
       } catch {
         /* skip */
       }
     }
     try {
-      await fs.rename(this.logPath, `${this.logPath}.1`)
+      await withTransientLockRetry(() => fs.rename(this.logPath, `${this.logPath}.1`))
     } catch {
       /* skip */
     }

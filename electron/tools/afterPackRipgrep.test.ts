@@ -24,7 +24,13 @@ describe('afterPack bundled ripgrep', () => {
     await fs.mkdir(app, { recursive: true })
     afterPack.copyBundledRipgrep(await fixtureContext(out, 1))
     const stat = await fs.stat(path.join(app, 'Contents/Resources/bin/rg'))
-    expect(stat.mode & 0o111).not.toBe(0)
+    // Windows 宿主（NTFS）不维护 POSIX 权限位：writeFileSync 的 mode 与 chmodSync 均无效果，
+    // 可执行位语义只在 darwin/linux 宿主可验证
+    if (process.platform !== 'win32') {
+      expect(stat.mode & 0o111).not.toBe(0)
+    } else {
+      expect(stat.isFile()).toBe(true)
+    }
     await fs.rm(out, { recursive: true, force: true })
   })
 

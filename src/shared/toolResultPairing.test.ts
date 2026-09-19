@@ -157,6 +157,7 @@ describe('ensureToolResultPairing', () => {
     const elapsed = performance.now() - start
     expect(report.repaired).toBe(false)
     expect(report.messageStructure).toHaveLength(0)
-    expect(elapsed).toBeLessThan(50)
+    // 慢机/首跑 JIT 预热下 50ms 偶发不达标；防悬崖意图不变（退化实现为秒级）
+    expect(elapsed).toBeLessThan(200)
   })
 })

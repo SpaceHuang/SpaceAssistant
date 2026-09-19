@@ -7,7 +7,8 @@ import { assertArchiveLimits, assertNoLinks, safeJoin, validateArchiveEntries } 
 describe('ripgrep archive extraction security', () => {
   it('拒绝解压树中的符号链接', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-links-'))
-    await fs.symlink('/tmp', path.join(root, 'escape'))
+    // Windows 无特权时 'dir' 符号链接会 EPERM；junction 同样是 reparse point（readdir withFileTypes 报 symbolic link），不需要特权
+    await fs.symlink(os.tmpdir(), path.join(root, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
     await expect(assertNoLinks(root)).rejects.toThrow(/symbolic link/)
     await fs.rm(root, { recursive: true, force: true })
   })
@@ -30,7 +31,7 @@ describe('ripgrep archive extraction security', () => {
   it('拒绝归档绝对路径和路径穿越', () => {
     expect(() => safeJoin('/tmp/extract', '../escape')).toThrow(/unsafe archive path/)
     expect(() => safeJoin('/tmp/extract', '/etc/passwd')).toThrow(/unsafe archive path/)
-    expect(safeJoin('/tmp/extract', 'dir/rg')).toBe('/tmp/extract/dir/rg')
+    expect(safeJoin('/tmp/extract', 'dir/rg')).toBe(path.resolve('/tmp/extract', 'dir/rg'))
   })
 
   it('拒绝归档重复条目和过多条目', () => {

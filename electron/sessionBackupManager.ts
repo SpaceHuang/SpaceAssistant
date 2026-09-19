@@ -6,6 +6,7 @@ import type { Message, Session } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION } from '../src/shared/domainTypes'
 import { writeAllBytes } from './safeAtomicWrite'
 import { readSessionEventsDetailed, type SessionEvent } from './sessionEvents'
+import { withTransientLockRetry } from './safeAtomicWrite'
 
 export interface MessagesPage {
   messages: Message[]
@@ -112,7 +113,7 @@ export class SessionBackupManager {
       await handle.sync()
       await handle.close()
       handle = undefined
-      await fs.rename(tempPath, finalPath)
+      await withTransientLockRetry(() => fs.rename(tempPath, finalPath))
     } catch (err) {
       if (handle) {
         await handle.close().catch(() => {})
