@@ -141,16 +141,20 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
           window.setTimeout(() => { if (!disposed) applyDisplay({ display, retry: true }) }, Math.min(30_000, 100 * 2 ** Math.min(attempt, 8)))
           return undefined
         }
-        return window.api.chatGetMessagePage({ sessionId: display.sessionId, limit: 60 })
-      }).then((page) => {
+        // display 协议本身不带失败详情，终态失败原因只能随这里已回查到的 terminal 带下去，
+        // 否则失败气泡当场只剩通用提示，要等重开页面回查才能看到真实原因。
+        const failureReason = display.outcome === 'failed' || display.outcome === 'timed-out' ? terminal?.error?.message?.trim() || undefined : undefined
+        return window.api.chatGetMessagePage({ sessionId: display.sessionId, limit: 60 }).then((page) => ({ page, failureReason }))
+      }).then((result) => {
         if (versions.get(display.turnId) !== display.version) return
-        if (!page) return
-        const message = page.entries.find((entry) => entry.message.id === display.message.id)?.message
+        if (!result?.page) return
+        const message = result.page.entries.find((entry) => entry.message.id === display.message.id)?.message
         if (!message) {
           import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
           return
         }
         routePatchMessage(display.sessionId, message.id, message)
+        if (result.failureReason) store.dispatch(setTurnFailure({ messageId: message.id, reason: result.failureReason }))
         terminalRetries.delete(display.turnId)
         store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
         import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
