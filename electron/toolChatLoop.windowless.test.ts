@@ -104,8 +104,11 @@ function baseArgs(overrides: Record<string, unknown> = {}) {
     model: 'claude-sonnet-4-20250514',
     messages: [{ role: 'user', content: 'hello' }],
     toolsConfig: DEFAULT_TOOLS_CONFIG,
-    workDir: '/tmp',
-    userDataDir: '/tmp',
+    // userDataDir 属内置敏感前缀：Linux 上裸 /tmp 真实存在，会命中 write 目标的
+    // sensitive_path 判定并触发 fallback 确认（无应答者时 fail-closed 拒绝），
+    // 故用与 workDir 互不重叠的子目录
+    workDir: '/tmp/sa-windowless-work',
+    userDataDir: '/tmp/sa-windowless-user',
     getApiKey: async () => 'test-key',
     appDb: makeDb(),
     emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
