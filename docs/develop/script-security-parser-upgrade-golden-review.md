@@ -62,9 +62,16 @@
 - 四类基线：① 判定（analyzeShellCommand 完整结果，路径归一化）② 签名（normalizeShellSignature + parseShellCommandForTrust）③ facts（六字段级）④ 免确认资格派生（precheckRunShellTool：legacyAutoAllowEligible + analysisCompleteness + persistable/hasMetasyntax；bash 全量，裸括号样本含 trusted/untrusted 双配置）。
 - 关键基线锚点（发现 H 翻转可见性）：`b40 echo "a(b)"` — untrusted eligible=false / trusted eligible=false / analysisCompleteness=partial（旧实现 `[()]` 启发式判 partial）。
 
-### P2-T5 比对结果（切换后填写）
+### P2-T5 比对结果
 
-- 判定/facts/免确认资格/签名比对与逐条处置：（待 P2-T5 填写）
+- 比对基线 commit：`e8879b94`（P2-T0 重录后的基线）✓；机器可读明细：`docs/develop/golden-data/shell-drift-after-switch.json`
+- **四类比对结论（P2-T2/T3/T5）**：
+  - **签名（P2-T3）：60/60 逐字节一致，零 drift**（PS 组零容忍 ✓；bash 组零不一致 ✓）——确认域签名组件与共享原语层冻结直证：`git diff e8879b94 -- shellCommandParser.ts shellPathAnalysis.ts commandSequenceExtractor.ts` 为空。
+  - **PS 组判定 + facts：零漂移**（windows-powershell 分叉结构性不变）。
+  - **判定（bash）：4 条变严**（b36–b39 畸形/截断命令：旧实现分段解析不报错落 ask，切换后 tree parse_error → deny 兜底，fail-closed 变严方向）——**接受**。
+  - **facts：27 条 partial→complete 翻转**（重定向/命令替换/变量展开/裸括号形态：旧 `[()<>`]` 启发式把引号内元字符与重定向判 partial，语法树完整解析后 complete 化；路径安全面由树事实增强 `verifyPathsInWorkDir` 只增不减覆盖）——**接受**。
+  - **免确认资格（发现 H）：untrusted 场景 eligible 无一翻转（0/27）**——complete 化不改变无信任命令的 eligible（仍受 requiresRiskAck / 无 allow 权限约束）。**trusted 场景 1 处翻转**：`b40 echo "a(b)"`（trusted 命中）eligible false → true，bashPathFork.test.ts 成对断言，处置结论「接受」：echo 无副作用；trusted 条目为用户显式信任的结构化条目（persistable、无元语法，括号仅是引号内字面文本）；既有 `echo $(pwd)` 用例因 hasMetasyntax=true 短路，不构成本防线（已在测试注释注明）。
+- 既有测试登记修改（facts 语义固化的同类漂移，均为 posix-bash 分叉面）：`shellBehaviorMatrix.test.ts`（redirection / command substitution → complete，PS 期望经 `expectedCompletenessPs` 保持 partial 不变）、`shellAnalyzer.test.ts`（complete 化、connectors 原文顺序、`\;` 为字面参数的树事实语义）。
 
 
 ## PowerShell 段（P3-T0 建立）

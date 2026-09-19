@@ -30,13 +30,15 @@ export interface BashCommandFacts {
   commands: BashCommandFact[]
   pipelines: BashPipelineFact[]
   lists: string[]
+  /** 按原文出现顺序的连接词流（'|'、'&&'、'||'、';'） */
+  connectorFlow: string[]
   substitutions: BashSubstitutionFact[]
   comments: string[]
   unresolved: string[]
 }
 
 function emptyFacts(ok: boolean, unresolved: string[] = []): BashCommandFacts {
-  return { ok, commands: [], pipelines: [], lists: [], substitutions: [], comments: [], unresolved }
+  return { ok, commands: [], pipelines: [], lists: [], connectorFlow: [], substitutions: [], comments: [], unresolved }
 }
 
 function namedChildren(node: TsNode): TsNode[] {
@@ -68,6 +70,7 @@ export function extractBashCommandFacts(source: string): BashCommandFacts {
       commands: body.commands,
       pipelines: body.pipelines,
       lists: body.lists,
+      connectorFlow: body.connectorFlow,
       substitutions: ctx.substitutions,
       comments: ctx.comments,
       unresolved: ctx.unresolved
@@ -89,8 +92,12 @@ interface Body {
   lists: string[]
 }
 
+function isStatementLike(node: TsNode): boolean {
+  return ['pipeline', 'list', 'command', 'redirected_statement', 'variable_assignment', 'subshell', 'function_definition', 'for_clause', 'while_clause', 'until_clause', 'case_clause'].includes(node.type)
+}
+
 function adaptProgram(root: TsNode, ctx: Ctx): Body {
-  const body: Body = { commands: [], pipelines: [], lists: [] }
+  const body: Body = { commands: [], pipelines: [], lists: [], connectorFlow: [] }
   collectComments(root, ctx)
   walkStatements(root, ctx, body)
   return body
@@ -105,42 +112,34 @@ function collectComments(node: TsNode, ctx: Ctx): void {
 
 /** 语句序列遍历：pipeline / list / 单命令 / 重定向语句；未识别类型进 unresolved。 */
 function walkStatements(node: TsNode, ctx: Ctx, body: Body): void {
+  // program/subshell 的多个子语句 = 换行或 ';' 分隔：语句间产出 ';'（对齐旧实现换行归一化）
+  const isStatementSequence = node.type === 'program' || node.type === 'subshell'
+  let seenStatement = false
   for (const child of namedChildren(node)) {
+    if (isStatementSequence && isStatementLike(child)) {
+      if (seenStatement) body.connectorFlow.push(';')
+      seenStatement = true
+    }
     switch (child.type) {
-      case 'pipeline': {
-        const segments: BashCommandFact[] = []
-        const wasNegated = anonTexts(child).includes('!')
-        for (const seg of namedChildren(child)) {
-          if (seg.type === 'command' || seg.type === 'redirected_statement') {
-            const before = body.commands.length
-            adaptStatement(seg, ctx, body)
-            segments.push(...body.commands.slice(before))
-          } else {
-            ctx.unresolved.push(`${seg.type}:${seg.text.slice(0, 60)}`)
-          }
-        }
-        if (wasNegated) ctx.unresolved.push('pipeline-negation:!')
-        if (segments.length > 1) body.pipelines.push({ segments })
+      case 'pipeline':
+        adaptPipelineStatement(child, ctx, body)
         break
-      }
-      case 'list': {
-        // && / || 序列（left-assoc 可嵌套 list）：named 子节点为 statement / 内层 list
-        for (const seg of namedChildren(child)) {
-          if (seg.type === 'command' || seg.type === 'redirected_statement' || seg.type === 'pipeline' || seg.type === 'list') {
-            adaptStatement(seg, ctx, body)
-          }
-        }
-        for (const op of anonTexts(child)) {
-          if (op === '&&' || op === '||') body.lists.push(op)
-        }
+      case 'list':
+        adaptListStatement(child, ctx, body)
         break
-      }
       case 'command':
       case 'redirected_statement':
         adaptStatement(child, ctx, body)
         break
       case 'variable_assignment':
         adaptStatement(child, ctx, body)
+        break
+      case 'comment':
+        break
+      case 'subshell':
+        // 子壳分组：内部语句递归提取；子壳本身记入 unresolved（保守 partial，维持分组边界可见）
+        ctx.unresolved.push(`subshell:${child.text.slice(0, 40)}`)
+        walkStatements(child, ctx, body)
         break
       default:
         ctx.unresolved.push(`${child.type}:${child.text.slice(0, 60)}`)
@@ -191,7 +190,7 @@ function adaptStatement(node: TsNode, ctx: Ctx, body: Body): void {
       break
     }
     case 'pipeline':
-      walkStatements(node, ctx, body)
+      adaptPipelineStatement(node, ctx, body)
       break
     case 'list': {
       // list 自身的连接词在 anon 子节点上：adaptStatement 直达时也需收集
@@ -208,6 +207,43 @@ function adaptStatement(node: TsNode, ctx: Ctx, body: Body): void {
 
     default:
       ctx.unresolved.push(`${node.type}:${node.text.slice(0, 60)}`)
+  }
+}
+
+/** list：子节点为 [statement, anon 连接词, statement...] 交错（left-assoc 可嵌套），按树位置顺序产出连接词。 */
+function adaptListStatement(node: TsNode, ctx: Ctx, body: Body): void {
+  for (let i = 0; i < node.childCount; i += 1) {
+    const child = node.child(i)
+    if (!child) continue
+    if (!child.isNamed) {
+      if (child.type === '&&' || child.type === '||' || child.type === ';') {
+        body.lists.push(child.type)
+        body.connectorFlow.push(child.type)
+      }
+      continue
+    }
+    if (child.type === 'command' || child.type === 'redirected_statement' || child.type === 'pipeline' || child.type === 'list') {
+      adaptStatement(child, ctx, body)
+    }
+  }
+}
+
+function adaptPipelineStatement(node: TsNode, ctx: Ctx, body: Body): void {
+  const segments: BashCommandFact[] = []
+  const wasNegated = anonTexts(node).includes('!')
+  for (const seg of namedChildren(node)) {
+    if (seg.type === 'command' || seg.type === 'redirected_statement') {
+      const before = body.commands.length
+      adaptStatement(seg, ctx, body)
+      segments.push(...body.commands.slice(before))
+    } else {
+      ctx.unresolved.push(`${seg.type}:${seg.text.slice(0, 60)}`)
+    }
+  }
+  if (wasNegated) ctx.unresolved.push('pipeline-negation:!')
+  if (segments.length > 1) {
+    body.pipelines.push({ segments })
+    for (let i = 0; i < segments.length - 1; i += 1) body.connectorFlow.push('|')
   }
 }
 

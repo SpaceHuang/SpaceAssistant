@@ -1,0 +1,4229 @@
+[
+  {
+    "id": "b06-base64-decode-exec",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "deny",
+          "denyReason": "检测到危险的远程脚本执行\n\n这个命令会从网络下载脚本并直接运行。如果网址被劫持或下载内容被篡改，可能造成损失。\n\n建议：先用 curl … -o script.sh 下载到本地，查看内容后再执行。",
+          "validatorId": "pipe_to_shell",
+          "denyType": "strong",
+          "segments": [
+            "echo aGVsbG8=",
+            "base64 -d",
+            "sh"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": [],
+            "violationCodes": [
+              "pipe_to_shell"
+            ],
+            "validatorId": "pipe_to_shell",
+            "denyType": "strong"
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "aGVsbG8="
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "base64",
+                "args": [
+                  "-d"
+                ],
+                "segmentIndex": 1
+              },
+              {
+                "verb": "sh",
+                "args": [],
+                "segmentIndex": 2
+              }
+            ],
+            "connectors": [
+              "|",
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "deny",
+          "denyReason": "检测到危险的远程脚本执行\n\n这个命令会从网络下载脚本并直接运行。如果网址被劫持或下载内容被篡改，可能造成损失。\n\n建议：先用 curl … -o script.sh 下载到本地，查看内容后再执行。",
+          "validatorId": "pipe_to_shell",
+          "denyType": "strong",
+          "segments": [
+            "echo aGVsbG8=",
+            "base64 -d",
+            "sh"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": [],
+            "violationCodes": [
+              "pipe_to_shell"
+            ],
+            "validatorId": "pipe_to_shell",
+            "denyType": "strong"
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "aGVsbG8="
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "base64",
+                "args": [
+                  "-d"
+                ],
+                "segmentIndex": 1
+              },
+              {
+                "verb": "sh",
+                "args": [],
+                "segmentIndex": 2
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "aGVsbG8="
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "base64",
+              "args": [
+                "-d"
+              ],
+              "segmentIndex": 1
+            },
+            {
+              "verb": "sh",
+              "args": [],
+              "segmentIndex": 2
+            }
+          ],
+          "connectors": [
+            "|",
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "aGVsbG8="
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "base64",
+              "args": [
+                "-d"
+              ],
+              "segmentIndex": 1
+            },
+            {
+              "verb": "sh",
+              "args": [],
+              "segmentIndex": 2
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b12-semi-list",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo a",
+            "echo b"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "a"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "echo",
+                "args": [
+                  "b"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              ";"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo a",
+            "echo b"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "a"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "echo",
+                "args": [
+                  "b"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "a"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "echo",
+              "args": [
+                "b"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            ";"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "a"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "echo",
+              "args": [
+                "b"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b13-dquote",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"hello world\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "hello world"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"hello world\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "\"hello world\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "hello world"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "\"hello world\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b14-squote",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo 'single quoted'"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "single quoted"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo 'single quoted'"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "'single quoted'"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "single quoted"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "'single quoted'"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b15-mixed-quote",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"mixed 'quote' inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "mixed 'quote' inside"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"mixed 'quote' inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "\"mixed 'quote' inside\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "mixed 'quote' inside"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "\"mixed 'quote' inside\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b16-escaped-quote",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"with \\\"escape\\\" inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "with \"escape\" inside"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"with \\\"escape\\\" inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "\"with \\\"escape\\\" inside\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "with \"escape\" inside"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "\"with \\\"escape\\\" inside\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b18-assign-prefix",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "FOO=1 cmd --flag"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "FOO=1",
+                "args": [
+                  "cmd",
+                  "--flag"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "FOO=1 cmd --flag"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "cmd",
+                "args": [
+                  "--flag"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "FOO=1",
+              "args": [
+                "cmd",
+                "--flag"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "cmd",
+              "args": [
+                "--flag"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b19-assign-echo-var",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "VAR=value echo $VAR"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "VAR=value",
+                "args": [
+                  "echo",
+                  "$VAR"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "VAR=value echo $VAR"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "$VAR"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "VAR=value",
+              "args": [
+                "echo",
+                "$VAR"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "$VAR"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b21-cd-dotdot",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "cd ..",
+            "git status"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "CD_OUTSIDE_<WORKDIR>",
+                "message": "cd 目标不在工作目录内：..",
+                "path": "..",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "cd 目标不在工作目录内：.."
+            ],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": true
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": false,
+            "warnings": [
+              "cd 目标不在工作目录内：.."
+            ],
+            "scannedPaths": [
+              ".."
+            ],
+            "violationCodes": [
+              "CD_OUTSIDE_<WORKDIR>"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "cd",
+                "args": [
+                  ".."
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "git",
+                "args": [
+                  "status"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              "&&"
+            ],
+            "paths": [],
+            "cwdChanges": [
+              ".."
+            ],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "cd ..",
+            "git status"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "CD_OUTSIDE_<WORKDIR>",
+                "message": "cd 目标不在工作目录内：..",
+                "path": "..",
+                "severity": "warning"
+              },
+              {
+                "code": "PATH_OUTSIDE_<WORKDIR>",
+                "message": "命令包含工作目录外的路径：..",
+                "path": "..",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "cd 目标不在工作目录内：..",
+              "命令包含工作目录外的路径：.."
+            ],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": true
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": false,
+            "warnings": [
+              "cd 目标不在工作目录内：..",
+              "命令包含工作目录外的路径：.."
+            ],
+            "scannedPaths": [
+              "..",
+              ".."
+            ],
+            "violationCodes": [
+              "CD_OUTSIDE_<WORKDIR>",
+              "PATH_OUTSIDE_<WORKDIR>"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "cd",
+                "args": [
+                  ".."
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "git",
+                "args": [
+                  "status"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              "&&"
+            ],
+            "paths": [],
+            "cwdChanges": [
+              ".."
+            ],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "b22-redirect-abs",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo x > /tmp/out.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "PATH_OUTSIDE_<WORKDIR>",
+                "message": "命令包含工作目录外的路径：/tmp/out.txt",
+                "path": "/tmp/out.txt",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "命令包含工作目录外的路径：/tmp/out.txt"
+            ],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": true
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": false,
+            "warnings": [
+              "命令包含工作目录外的路径：/tmp/out.txt"
+            ],
+            "scannedPaths": [
+              "/tmp/out.txt"
+            ],
+            "violationCodes": [
+              "PATH_OUTSIDE_<WORKDIR>"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "x",
+                  ">",
+                  "/tmp/out.txt"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "/tmp/out.txt"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo x > /tmp/out.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "PATH_OUTSIDE_<WORKDIR>",
+                "message": "命令包含工作目录外的路径：/tmp/out.txt",
+                "path": "/tmp/out.txt",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "命令包含工作目录外的路径：/tmp/out.txt"
+            ],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": true
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": false,
+            "warnings": [
+              "命令包含工作目录外的路径：/tmp/out.txt"
+            ],
+            "scannedPaths": [
+              "/tmp/out.txt"
+            ],
+            "violationCodes": [
+              "PATH_OUTSIDE_<WORKDIR>"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "x"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "/tmp/out.txt"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "x",
+                ">",
+                "/tmp/out.txt"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "/tmp/out.txt"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "x"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "/tmp/out.txt"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b23-redirect-append-rel",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo x >> out.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "x",
+                  ">>",
+                  "out.txt"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo x >> out.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "x"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "x",
+                ">>",
+                "out.txt"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "x"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b24-redirect-input",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "cat < input.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "cat",
+                "args": [
+                  "<",
+                  "input.txt"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "cat < input.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "cat",
+                "args": [],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "cat",
+              "args": [
+                "<",
+                "input.txt"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "cat",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b25-redirect-stderr",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "make build 2>/dev/null"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "make",
+                "args": [
+                  "build",
+                  "2>/dev/null"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "2>/dev/null"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "make build 2>/dev/null"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "PATH_OUTSIDE_<WORKDIR>",
+                "message": "命令包含工作目录外的路径：/dev/null",
+                "path": "/dev/null",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "命令包含工作目录外的路径：/dev/null"
+            ],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": true
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": false,
+            "warnings": [
+              "命令包含工作目录外的路径：/dev/null"
+            ],
+            "scannedPaths": [
+              "/dev/null"
+            ],
+            "violationCodes": [
+              "PATH_OUTSIDE_<WORKDIR>"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "make",
+                "args": [
+                  "build"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "/dev/null"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "make",
+              "args": [
+                "build",
+                "2>/dev/null"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "2>/dev/null"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "make",
+              "args": [
+                "build"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "/dev/null"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b26-cmd-subst",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo $(pwd)"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "$(pwd)"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo $(pwd)"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "$(pwd)"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "pwd",
+                "args": [],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "$(pwd)"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "$(pwd)"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "pwd",
+              "args": [],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b27-backtick-subst",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo `pwd`"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "`pwd`"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo `pwd`"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "`pwd`"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "pwd",
+                "args": [],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "`pwd`"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "`pwd`"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "pwd",
+              "args": [],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b28-process-subst",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "diff <(sort a.txt) <(sort b.txt)"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "diff",
+                "args": [
+                  "<(sort",
+                  "a.txt)",
+                  "<(sort",
+                  "b.txt)"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "diff <(sort a.txt) <(sort b.txt)"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "diff",
+                "args": [
+                  "<(sort a.txt)",
+                  "<(sort b.txt)"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "diff",
+              "args": [
+                "<(sort",
+                "a.txt)",
+                "<(sort",
+                "b.txt)"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "diff",
+              "args": [
+                "<(sort a.txt)",
+                "<(sort b.txt)"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b30-var-brace",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo ${USER}-suffix"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "${USER}-suffix"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo ${USER}-suffix"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "${USER}-suffix"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "${USER}-suffix"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "${USER}-suffix"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b31-export-path",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "export PATH=$PATH:/usr/local/bin"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "export",
+                "args": [
+                  "PATH=$PATH:/usr/local/bin"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "PATH=$PATH:/usr/local/bin"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "export PATH=$PATH:/usr/local/bin"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "declaration_command:export PATH=$PATH:/usr/local/bin"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "export",
+              "args": [
+                "PATH=$PATH:/usr/local/bin"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "PATH=$PATH:/usr/local/bin"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "declaration_command:export PATH=$PATH:/usr/local/bin"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b32-escape-space",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo a\\ b"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "a\\",
+                  "b"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "a\\"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo a\\ b"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "a\\ b"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "a\\",
+                "b"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "a\\"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "a\\ b"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b33-printf-escapes",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "printf \"tab\\tnewline\\n\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "printf",
+                "args": [
+                  "tabtnewlinen"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "printf \"tab\\tnewline\\n\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "printf",
+                "args": [
+                  "\"tab\\tnewline\\n\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "printf",
+              "args": [
+                "tabtnewlinen"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "printf",
+              "args": [
+                "\"tab\\tnewline\\n\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b34-unicode-quote",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"unicode “quoted” inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "unicode “quoted” inside"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"unicode “quoted” inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "\"unicode “quoted” inside\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "unicode “quoted” inside"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "\"unicode “quoted” inside\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b35-crlf",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo crlf\r\nnext line"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "crlf"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "next",
+                "args": [
+                  "line"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              ";"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo crlf\r\nnext line"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "crlf"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "next",
+                "args": [
+                  "line"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "crlf"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "next",
+              "args": [
+                "line"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            ";"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "crlf"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "next",
+              "args": [
+                "line"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "b36-unclosed-quote",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"unclosed"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:unparseable"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "deny",
+          "denyReason": "命令语法解析失败，无法进行安全分析",
+          "segments": [],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "PARSE_ERROR",
+                "message": "命令语法解析失败，无法进行安全分析",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ],
+            "outsideWorkDirRisk": true,
+            "requiresRiskAck": true
+          },
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": true,
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "parse:tree-error"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:unparseable"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "parse:tree-error"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": false
+        },
+        "current": {
+          "ok": false,
+          "auditReason": "命令语法解析失败，无法进行安全分析"
+        }
+      }
+    }
+  },
+  {
+    "id": "b37-trailing-pipe",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "ls"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "ls",
+                "args": [],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "deny",
+          "denyReason": "命令语法解析失败，无法进行安全分析",
+          "segments": [],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "PARSE_ERROR",
+                "message": "命令语法解析失败，无法进行安全分析",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ],
+            "outsideWorkDirRisk": true,
+            "requiresRiskAck": true
+          },
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": true,
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "parse:tree-error"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "ls",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "parse:tree-error"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": false,
+          "auditReason": "命令语法解析失败，无法进行安全分析"
+        }
+      }
+    }
+  },
+  {
+    "id": "b38-leading-and",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "",
+            "echo start"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "start"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              "&&"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:unparseable"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "deny",
+          "denyReason": "命令语法解析失败，无法进行安全分析",
+          "segments": [],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "PARSE_ERROR",
+                "message": "命令语法解析失败，无法进行安全分析",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ],
+            "outsideWorkDirRisk": true,
+            "requiresRiskAck": true
+          },
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": true,
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "parse:tree-error"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "start"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            "&&"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:unparseable"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "parse:tree-error"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": false,
+          "auditReason": "命令语法解析失败，无法进行安全分析"
+        }
+      }
+    }
+  },
+  {
+    "id": "b39-truncated-subst",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo $("
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "$("
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "deny",
+          "denyReason": "命令语法解析失败，无法进行安全分析",
+          "segments": [],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [
+              {
+                "code": "PARSE_ERROR",
+                "message": "命令语法解析失败，无法进行安全分析",
+                "severity": "warning"
+              }
+            ],
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ],
+            "outsideWorkDirRisk": true,
+            "requiresRiskAck": true
+          },
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": true,
+            "warnings": [
+              "命令语法解析失败，无法进行安全分析"
+            ]
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "parse:tree-error"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "$("
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "parse:tree-error"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": false,
+          "auditReason": "命令语法解析失败，无法进行安全分析"
+        }
+      }
+    }
+  },
+  {
+    "id": "b40-bare-paren-echo",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"a(b)\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "a(b)"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"a(b)\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "\"a(b)\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "a(b)"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "\"a(b)\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": true,
+          "hasMetasyntax": false
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": true,
+          "hasMetasyntax": false
+        }
+      }
+    }
+  },
+  {
+    "id": "b41-bare-paren-grep",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "grep \"foo(bar)\" x.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "grep",
+                "args": [
+                  "foo(bar)",
+                  "x.txt"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "grep \"foo(bar)\" x.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "grep",
+                "args": [
+                  "\"foo(bar)\"",
+                  "x.txt"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "grep",
+              "args": [
+                "foo(bar)",
+                "x.txt"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "grep",
+              "args": [
+                "\"foo(bar)\"",
+                "x.txt"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": true,
+          "hasMetasyntax": false
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": true,
+          "hasMetasyntax": false
+        }
+      }
+    }
+  },
+  {
+    "id": "b42-bare-paren-text",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"text (with parens) here\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "text (with parens) here"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "echo \"text (with parens) here\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "\"text (with parens) here\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "text (with parens) here"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "\"text (with parens) here\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": true,
+          "hasMetasyntax": false
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": true,
+          "hasMetasyntax": false
+        }
+      }
+    }
+  },
+  {
+    "id": "b43-redirect-sensitive",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "echo secret > ~/.ssh/authorized_keys"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "secret",
+                  ">",
+                  "~/.ssh/authorized_keys"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "~/.ssh/authorized_keys"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "validatorId": "redirect-sensitive-target",
+          "denyType": "weak",
+          "segments": [
+            "echo secret > ~/.ssh/authorized_keys"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": true,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": [],
+            "violationCodes": [
+              "redirect-sensitive-target"
+            ],
+            "validatorId": "redirect-sensitive-target",
+            "denyType": "weak",
+            "securityWarning": "重定向目标为敏感路径（~/.ssh/authorized_keys），需人工确认"
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "echo",
+                "args": [
+                  "secret"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "~/.ssh/authorized_keys"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "secret",
+                ">",
+                "~/.ssh/authorized_keys"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "~/.ssh/authorized_keys"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "echo",
+              "args": [
+                "secret"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "~/.ssh/authorized_keys"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "b46-eval-var",
+    "dialect": "posix-bash",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "eval \"$CMD\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "eval",
+                "args": [
+                  "$CMD"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "eval \"$CMD\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "posix-bash",
+            "operations": [
+              {
+                "verb": "eval",
+                "args": [
+                  "\"$CMD\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "eval",
+              "args": [
+                "$CMD"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "posix-bash",
+          "operations": [
+            {
+              "verb": "eval",
+              "args": [
+                "\"$CMD\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  }
+]
