@@ -162,6 +162,15 @@ export function ChatView() {
     () => (cfg ? resolveSessionThinkingBinding(cfg, currentSession, draftThinkingEffort) : null),
     [cfg, currentSession, draftThinkingEffort]
   )
+  // 评审 N6：草稿只服务「composer 先于首个会话」的窗口；一旦存在会话（含侧边栏新建）即清除，
+  // 防止草稿在回到无会话状态时「复活」并被带入无关会话（draftModelOption 同款沿袭缺陷一并修复）
+  const currentSessionId = currentSession?.id
+  useEffect(() => {
+    if (currentSessionId) {
+      setDraftThinkingEffort(undefined)
+      setDraftModelOption(undefined)
+    }
+  }, [currentSessionId])
   const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
   const chatLlmServiceId = sessionBinding?.llmServiceId
   const currentModelEntry = useMemo(

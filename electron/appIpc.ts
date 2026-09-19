@@ -692,6 +692,10 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       _e,
       payload: { name: string; model?: string; llmServiceId?: string; temperature?: number; maxTokens?: number; metadata?: Record<string, unknown>; thinkingEffort?: import('../src/shared/agent/invocation').AgentReasoningEffort }
     ): Promise<Session> => {
+      // 评审 N4：非法档位拒绝（与 session:update / config:set 同口径），不做静默丢弃
+      if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
+        throw new Error(`无效的 Thinking 强度档位：${String(payload.thinkingEffort)}（允许 off / low / medium / high）`)
+      }
       const s = createSession(ctx.db, {
         ...payload,
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
@@ -1596,6 +1600,10 @@ function readExposureInputsFromDb(
         locale: AppConfig['locale']
       }>
     ): Promise<void> => {
+      // §8.4 / 评审 C2：档位校验前置到任何写入之前，非法值整体拒绝、不产生部分写入
+      if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
+        throw new Error(`无效的 Thinking 强度档位：${String(payload.thinkingEffort)}（允许 off / low / medium / high）`)
+      }
       try {
         if (payload.llmServices !== undefined) {
           const activeIds =
@@ -1684,14 +1692,9 @@ function readExposureInputsFromDb(
       if (payload.preferredVisionModelId !== undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.preferredVisionModelId, payload.preferredVisionModelId)
       }
+      // 评审 C1：旧键仅为旧客户端兼容保留一个发布周期；新键 thinkingEffort 优先，迁移后此处可删
       if (payload.thinkingEnabled !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEnabled, String(payload.thinkingEnabled))
-      if (payload.thinkingEffort !== undefined) {
-        // §8.4：档位枚举校验（净新增）——非法值拒绝保存并提示，不做静默强转
-        if (!isThinkingEffort(payload.thinkingEffort)) {
-          throw new Error(`无效的 Thinking 强度档位：${String(payload.thinkingEffort)}（允许 off / low / medium / high）`)
-        }
-        setConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort, payload.thinkingEffort)
-      }
+      if (payload.thinkingEffort !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort, payload.thinkingEffort)
       if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
         ctx.setWorkDir(payload.workDir)

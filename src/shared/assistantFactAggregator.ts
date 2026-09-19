@@ -14,6 +14,11 @@ export type TurnExecutionConfig = {
   maxTokens?: number
   /** Thinking 强度最终档位（发起时解析、调用内冻结）；远程 / Butler lane 恒 off（OQ-10） */
   thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
+  /**
+   * 能力降级前的请求档位（评审 B1）：仅当模型 supportsThinking === false 导致降级时产出（≠ thinkingEffort）。
+   * 主链路把它作为装配器 effort 入参，装配层照旧落 agent.profile.reasoning_degraded 并写 degraded 字段。
+   */
+  requestedThinkingEffort?: import('./agent/invocation').AgentReasoningEffort
   /** @deprecated 由 thinkingEffort 派生（≠off 即 true），保留一个发布周期做兼容映射 */
   enableThinking?: boolean
   locale?: string

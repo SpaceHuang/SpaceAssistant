@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Popover } from 'antd'
+import { Popover, Tooltip } from 'antd'
 import { ChevronDown } from 'lucide-react'
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { THINKING_EFFORT_LEVELS } from '../../../shared/thinkingEffort'
@@ -63,33 +63,48 @@ export function ComposerThinkingPicker({ value, overridden, globalEffort, disabl
     </ul>
   )
 
+  // 评审 B2：disabled 控件不派发鼠标事件——原生 title 与 Popover 都不可达，
+  // 禁用原因必须用 Tooltip 挂在外层 span 上才对用户可见
+  const chip = (
+    <button
+      type="button"
+      className={[
+        'composer-model-chip',
+        'composer-model-chip--button',
+        'composer-thinking-chip',
+        open ? 'composer-model-chip--open' : ''
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      disabled={disabled}
+      title={disabled ? undefined : t('composer.thinking.label')}
+    >
+      <span className="composer-model-chip__label">{label}</span>
+      <ChevronDown size={12} strokeWidth={2} className="composer-model-chip__chevron" aria-hidden />
+    </button>
+  )
+
+  if (disabled && disabledReason) {
+    return (
+      <Tooltip title={disabledReason}>
+        {/* disabled 元素不触发 Tooltip，必须包一层可接收鼠标事件的 span */}
+        <span className="composer-thinking-chip--disabled-wrapper">{chip}</span>
+      </Tooltip>
+    )
+  }
+
   return (
     <Popover
-      open={disabled ? false : open}
+      open={open}
       onOpenChange={setOpen}
       trigger="click"
       placement="topLeft"
       classNames={{ root: 'composer-thinking-picker-popover' }}
       content={content}
     >
-      <button
-        type="button"
-        className={[
-          'composer-model-chip',
-          'composer-model-chip--button',
-          'composer-thinking-chip',
-          open ? 'composer-model-chip--open' : ''
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={disabled}
-        title={disabled && disabledReason ? disabledReason : t('composer.thinking.label')}
-      >
-        <span className="composer-model-chip__label">{label}</span>
-        <ChevronDown size={12} strokeWidth={2} className="composer-model-chip__chevron" aria-hidden />
-      </button>
+      {chip}
     </Popover>
   )
 }

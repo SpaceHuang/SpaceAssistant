@@ -90,6 +90,10 @@ export function buildClaudeChatSendStreamParams(args: {
   }
 }
 
+/**
+ * 叙述补全参数构建（评审 C4：当前生产代码无调用方，属预备代码——与 buildClaudeToolLoopStreamParams
+ * 保持 outputConfig 映射同构，供后续非工具循环链路复用）。
+ */
 export function buildClaudeNarrativeCompletionParams(args: {
   model: string
   max_tokens: number

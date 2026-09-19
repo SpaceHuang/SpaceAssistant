@@ -120,6 +120,55 @@ describe('resolveTrustedTurnExecutionConfig 产出档位', () => {
     })
   })
 
+  // B1 断链回归（评审 v1）：turnExecutionConfig 先行降级会把装配器的留痕块跳过，
+  // 因此 frozen 必须携带「降级前档位」，主链路把它传给装配器，由装配层照旧落
+  // agent.profile.reasoning_degraded 审计并写 profile.reasoning.degraded。
+  it('能力降级时携带降级前档位 requestedThinkingEffort，全链路审计不丢失', async () => {
+    const db = createMemoryAppDb()
+    seedLlmConfig(db, [makeModel({ id: 'm', name: 'deepseek-chat', supportsThinking: false })])
+    const session = createSession(db, { name: 's', model: 'deepseek-chat', thinkingEffort: 'high' })
+    setConfigValue(db, 'config.thinkingEffort', 'high')
+
+    const frozen = await resolveTrustedTurnExecutionConfig(db, session.id, 'desktop')
+    expect(frozen.thinkingEffort).toBe('off')
+    expect(frozen.requestedThinkingEffort).toBe('high')
+
+    // 用 frozen 组装配材料（与 claudeStreamHandlers.ts:407 同一传参口径），断言留痕完整
+    const { assembleInvocation } = await import('./runtime/invocationAssembler')
+    const { logAgentEvent } = await import('./agentLogger/agentLogger')
+    const { invocation } = assembleInvocation({
+      requestId: 'req-degraded-1',
+      sessionId: session.id,
+      model: frozen.model ?? 'deepseek-chat',
+      messages: [],
+      effort: frozen.requestedThinkingEffort ?? frozen.thinkingEffort,
+      toolsConfig: {} as never,
+      workDir: '/tmp',
+      userDataDir: '/tmp',
+      getApiKey: async () => 'k',
+      appDb: db,
+      emitFactEvent: () => undefined,
+      emitSessionEvent: () => undefined
+    } as never)
+    expect(invocation.profile.reasoning).toEqual({
+      effort: 'off',
+      degraded: { from: 'high', to: 'off' }
+    })
+    const degradedLogs = vi.mocked(logAgentEvent).mock.calls.filter((c) => c[1] === 'agent.profile.reasoning_degraded')
+    expect(degradedLogs).toHaveLength(1)
+    expect(degradedLogs[0]?.[2]).toMatchObject({ from: 'high', to: 'off', model: 'deepseek-chat' })
+  })
+
+  it('无能力降级时不产出 requestedThinkingEffort（装配器入参 = 冻结档位）', async () => {
+    const db = createMemoryAppDb()
+    seedLlmConfig(db, [makeModel({ id: 'm', name: 'deepseek-chat' })])
+    const session = createSession(db, { name: 's', model: 'deepseek-chat', thinkingEffort: 'low' })
+
+    const frozen = await resolveTrustedTurnExecutionConfig(db, session.id, 'desktop')
+    expect(frozen.thinkingEffort).toBe('low')
+    expect(frozen.requestedThinkingEffort).toBeUndefined()
+  })
+
   it('视觉路由换模型后按目标模型能力降级（§9：按切换后的目标模型重新解析）', async () => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [

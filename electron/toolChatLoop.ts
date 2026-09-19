@@ -1056,7 +1056,9 @@ async function runToolChatSessionInner(
       messages: messagesStripped,
       toolNames,
       maxTokens: maxTokensEffective,
-      effort: reasoningEffort
+      effort: reasoningEffort,
+      // 评审 N2：降级 / 记忆跳过后 wire 已无 output_config，标注实际生效状态便于排障
+      ...(requestedOutputConfig !== undefined && effortOutputConfig === undefined ? { effortSuppressed: true } : {})
     })
     beginLlm(sessionId, requestId)
 

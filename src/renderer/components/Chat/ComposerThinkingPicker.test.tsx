@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ComposerThinkingPicker } from './ComposerThinkingPicker'
 
 function renderPicker(props: Partial<React.ComponentProps<typeof ComposerThinkingPicker>> = {}) {
@@ -49,10 +49,14 @@ describe('ComposerThinkingPicker（§5.2 会话级强度覆盖）', () => {
     expect(onSelect).toHaveBeenCalledWith('high')
   })
 
-  it('模型不支持 Thinking 时控件禁用并提示（§5.2 能力联动）', () => {
+  it('模型不支持 Thinking 时控件禁用并提示（§5.2 能力联动；评审 B2：disabled 控件原生 title 不可达，须用 Tooltip）', async () => {
     renderPicker({ disabled: true, disabledReason: '该模型不支持 Thinking' })
     const button = screen.getByRole('button', { name: /默认（中）/ })
     expect((button as HTMLButtonElement).disabled).toBe(true)
-    expect(button.getAttribute('title')).toContain('该模型不支持 Thinking')
+    // Tooltip 挂在外层 span（disabled 元素不派发鼠标事件）；fireEvent.mouseEnter 不冒泡，须直接对 span 派发
+    fireEvent.mouseEnter(button.closest('span')!)
+    // antd Tooltip 默认 mouseEnterDelay=0.1s，异步弹出
+    await waitFor(() => expect(document.querySelector('.ant-tooltip')).not.toBeNull())
+    expect(document.querySelector('.ant-tooltip')?.textContent).toContain('该模型不支持 Thinking')
   })
 })

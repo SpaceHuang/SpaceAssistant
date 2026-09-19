@@ -359,7 +359,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   useEffect(() => {
     checkOverflow()
-  }, [modelSlot, running, canQueueSend, queueCount, footerStatusLabel, pendingAttachments.length, checkOverflow])
+  }, [modelSlot, thinkingSlot, running, canQueueSend, queueCount, footerStatusLabel, pendingAttachments.length, checkOverflow])
 
   useEffect(() => {
     if (!tooManyHint) return

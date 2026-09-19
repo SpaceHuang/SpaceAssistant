@@ -23,6 +23,7 @@ import {
 } from './schema'
 import { runMigrations } from './migrations'
 import { openSqliteDatabase, getDbConnection, type AppDatabase } from './sqliteStore'
+import { openDatabase } from './index'
 import { createSession, getSession, updateSession, getConfigValue, setConfigValue } from './operations'
 import { migrateThinkingEffortConfig } from './thinkingEffortMigration'
 
@@ -245,5 +246,18 @@ describe('migrateThinkingEffortConfig（§8.1 启动时一次性等价迁移）'
     migrateThinkingEffortConfig(db)
     expect(readRaw(db)).toBe('off')
     db.close()
+  })
+
+  // 评审 N3：守护 openDatabase 的迁移接线——若接线行被删，本用例转红（防止功能静默丢失）
+  it('openDatabase 打开预置旧布尔的文件库后全局档位已迁移（接线级守护）', () => {
+    const dbPath = tempDbPath()
+    {
+      const raw = openSqliteDatabase(dbPath)
+      setConfigValue(raw, 'config.thinkingEnabled', 'false')
+      raw.close()
+    }
+    const reopened = openDatabase(dbPath)
+    expect(getConfigValue(reopened, 'config.thinkingEffort')).toBe('off')
+    reopened.close()
   })
 })

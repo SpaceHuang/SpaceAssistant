@@ -121,7 +121,17 @@ export async function resolveTrustedTurnExecutionConfig(
   const modelEntry = models.find((entry) => entry.name === model)
   const locale = getConfigValue(db, 'config.locale')
   // Thinking 强度（§7.1）：迁移期双读（新键缺失由旧布尔推导，读兜底不落库）+ 会话覆盖 + 能力降级；
-  // enableThinking 由最终档位派生（过渡期兼容字段，保留一个发布周期）
+  // enableThinking 由最终档位派生（过渡期兼容字段，保留一个发布周期）。
+  // 评审 B1：能力降级时额外携带降级前档位（requestedThinkingEffort），主链路把它传给装配器，
+  // 由装配层照旧落 agent.profile.reasoning_degraded 审计——降级不能在装配前「静默」发生。
+  const requestedThinkingEffort = resolveThinkingEffort(
+    resolveGlobalThinkingEffort(
+      getConfigValue(db, 'config.thinkingEffort'),
+      getConfigValue(db, 'config.thinkingEnabled')
+    ),
+    session.thinkingEffort,
+    undefined
+  )
   const thinkingEffort = resolveThinkingEffort(
     resolveGlobalThinkingEffort(
       getConfigValue(db, 'config.thinkingEffort'),
@@ -137,6 +147,7 @@ export async function resolveTrustedTurnExecutionConfig(
     llmServiceId: credentials.serviceId || llmServiceId,
     maxTokens: session.maxTokens,
     thinkingEffort,
+    ...(thinkingEffort !== requestedThinkingEffort ? { requestedThinkingEffort } : {}),
     enableThinking: thinkingEffort !== 'off',
     ...(locale && isAppLocale(locale) ? { locale } : {}),
     ...derived,
