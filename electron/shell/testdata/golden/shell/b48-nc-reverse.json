@@ -1,7 +1,7 @@
 {
   "id": "b48-nc-reverse",
   "dialect": "posix-bash",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "segments": [
@@ -38,7 +38,7 @@
       ]
     },
     "facts": {
-      "dialect": "windows-powershell",
+      "dialect": "posix-bash",
       "operations": [
         {
           "verb": "nc",

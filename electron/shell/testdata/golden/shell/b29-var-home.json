@@ -1,7 +1,7 @@
 {
   "id": "b29-var-home",
   "dialect": "posix-bash",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "segments": [
@@ -22,7 +22,7 @@
       "scannedPaths": []
     },
     "facts": {
-      "dialect": "windows-powershell",
+      "dialect": "posix-bash",
       "operations": [
         {
           "verb": "echo",

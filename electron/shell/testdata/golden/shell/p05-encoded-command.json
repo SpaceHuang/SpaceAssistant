@@ -1,7 +1,7 @@
 {
   "id": "p05-encoded-command",
   "dialect": "windows-powershell",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "segments": [

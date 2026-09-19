@@ -1,7 +1,7 @@
 {
   "id": "p11-sort-pipeline",
   "dialect": "windows-powershell",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "segments": [

@@ -1,7 +1,7 @@
 {
   "id": "b01-rmrf-root",
   "dialect": "posix-bash",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "deny",
     "denyReason": "检测到致命的删除操作\n\n尝试删除根目录 /、用户主目录 ~ 或其他系统级目录，这会导致数据完全丢失。\n\n建议：请确认目标路径是否正确，如需删除项目内目录（如 node_modules），系统会在确认后执行。",
@@ -44,7 +44,7 @@
       "denyType": "strong"
     },
     "facts": {
-      "dialect": "windows-powershell",
+      "dialect": "posix-bash",
       "operations": [
         {
           "verb": "rm",

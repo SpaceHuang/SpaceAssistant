@@ -21,7 +21,9 @@ const RECORD_MODE = process.env.SHELL_GOLDEN_RECORD === '1'
 
 const WORK_DIR = 'WORKDIR'
 const USER_DATA_DIR = 'USERDATADIR'
-const PLATFORM: NodeJS.Platform = process.platform
+// 平台按样本 dialect 固定（发现 H 场景 = posix-bash 下的 bash 分析路径）：
+// bash 样本 → linux；PS 样本 → win32。与运行时 process.platform 解耦，保证基线跨机器稳定。
+const PLATFORM: NodeJS.Platform = 'linux'
 
 // 发现 H：裸括号样本的 trusted 配置（命中 trustedCommands，验证 eligible 随 facts 翻转可见）
 const TRUSTED_CONFIG_FOR_BARE_PAREN: ShellConfig = {
@@ -57,16 +59,16 @@ function loadSamples(): Array<{ id: string; dialect: string; code: string }> {
   }))
 }
 
+function platformFor(dialect: string): NodeJS.Platform {
+  return dialect === 'posix-bash' ? 'linux' : 'win32'
+}
+
 async function snapshot(id: string, dialect: string, code: string): Promise<ShellGoldenBaseline> {
-  const analysis = await analyzeShellCommand(WORK_DIR, code, PLATFORM, null, USER_DATA_DIR)
+  const analysis = await analyzeShellCommand(WORK_DIR, code, platformFor(dialect), null, USER_DATA_DIR)
   const trust = parseShellCommandForTrust(code, commandHasShellMetasyntax)
   const facts = analyzeShellFacts(code, dialect as never)
-  const precheck = await precheckRunShellTool({
-    command: code,
-    workDir: WORK_DIR,
-    userDataDir: USER_DATA_DIR,
-    shellConfig: null
-  })
+  const precheck = await precheckRunShellToolOn(dialect, code, null)
+  void PLATFORM
   const snap: ShellGoldenBaseline = {
     id,
     dialect,
@@ -91,12 +93,7 @@ async function snapshot(id: string, dialect: string, code: string): Promise<Shel
     }
   }
   if (isBareParenSample(id)) {
-    const precheckTrusted = await precheckRunShellTool({
-      command: code,
-      workDir: WORK_DIR,
-      userDataDir: USER_DATA_DIR,
-      shellConfig: TRUSTED_CONFIG_FOR_BARE_PAREN
-    })
+    const precheckTrusted = await precheckRunShellToolOn(dialect, code, TRUSTED_CONFIG_FOR_BARE_PAREN)
     snap.precheckTrusted = {
       ok: precheckTrusted.ok,
       ...(precheckTrusted.ok
@@ -108,6 +105,23 @@ async function snapshot(id: string, dialect: string, code: string): Promise<Shel
     }
   }
   return snap
+}
+
+/** precheckRunShellTool 内部读取 process.platform：录制/比对统一 stub 为样本 dialect 对应平台。 */
+async function precheckRunShellToolOn(dialect: string, code: string, shellConfig: ShellConfig | null) {
+  const target = platformFor(dialect)
+  const desc = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value: target })
+  try {
+    return await precheckRunShellTool({
+      command: code,
+      workDir: WORK_DIR,
+      userDataDir: USER_DATA_DIR,
+      shellConfig
+    })
+  } finally {
+    if (desc) Object.defineProperty(process, 'platform', desc)
+  }
 }
 
 function isBareParenSample(id: string): boolean {

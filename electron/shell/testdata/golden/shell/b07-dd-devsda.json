@@ -1,7 +1,7 @@
 {
   "id": "b07-dd-devsda",
   "dialect": "posix-bash",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "deny",
     "denyReason": "检测到磁盘擦除风险\n\ndd if=/dev/zero of=/dev/… 会用零覆盖整个磁盘，导致所有数据永久丢失。\n\n建议：请确认命令参数是否正确，如需备份磁盘镜像，请使用专用备份工具。",
@@ -30,7 +30,7 @@
       "denyType": "strong"
     },
     "facts": {
-      "dialect": "windows-powershell",
+      "dialect": "posix-bash",
       "operations": [
         {
           "verb": "dd",

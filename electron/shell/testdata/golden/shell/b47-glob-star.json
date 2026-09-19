@@ -1,7 +1,7 @@
 {
   "id": "b47-glob-star",
   "dialect": "posix-bash",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "validatorId": "dangerous_rm",
@@ -30,7 +30,7 @@
       "securityWarning": "警告：此操作将递归删除目录\n\nrm -rf 会永久删除目标目录及其所有内容，且无法恢复。\n\n确认执行？"
     },
     "facts": {
-      "dialect": "windows-powershell",
+      "dialect": "posix-bash",
       "operations": [
         {
           "verb": "rm",

@@ -1,7 +1,7 @@
 {
   "id": "p01-get-childitem",
   "dialect": "windows-powershell",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "segments": [

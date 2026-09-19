@@ -1,7 +1,7 @@
 {
   "id": "b04-curl-pipe-bash",
   "dialect": "posix-bash",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "deny",
     "denyReason": "检测到危险的远程脚本执行\n\n这个命令会从网络下载脚本并直接运行。如果网址被劫持或下载内容被篡改，可能造成损失。\n\n建议：先用 curl … -o script.sh 下载到本地，查看内容后再执行。",
@@ -31,7 +31,7 @@
       "denyType": "strong"
     },
     "facts": {
-      "dialect": "windows-powershell",
+      "dialect": "posix-bash",
       "operations": [
         {
           "verb": "curl",

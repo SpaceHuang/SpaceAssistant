@@ -1,7 +1,7 @@
 {
   "id": "p09-backtick-continuation",
   "dialect": "windows-powershell",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "segments": [

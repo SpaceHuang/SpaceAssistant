@@ -1,7 +1,7 @@
 {
   "id": "p08-subexpression",
   "dialect": "windows-powershell",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "ask",
     "segments": [

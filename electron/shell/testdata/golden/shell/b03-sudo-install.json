@@ -1,7 +1,7 @@
 {
   "id": "b03-sudo-install",
   "dialect": "posix-bash",
-  "platform": "win32",
+  "platform": "linux",
   "analysis": {
     "verdict": "deny",
     "denyReason": "提权",
@@ -23,7 +23,7 @@
       "scannedPaths": []
     },
     "facts": {
-      "dialect": "windows-powershell",
+      "dialect": "posix-bash",
       "operations": [
         {
           "verb": "sudo",
