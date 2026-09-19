@@ -29,7 +29,6 @@ import { readWeChatConfigFromDb, persistWeChatConfig } from '../wechat/weChatIpc
 import { rebuildAppMenu } from '../menu'
 import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
 import { revokeToolForAllLanes } from '../toolRevocationRegistry'
-import { shell } from 'electron'
 
 export function registerConfigIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 const recordSettings = makeRecordSettings(ctx)

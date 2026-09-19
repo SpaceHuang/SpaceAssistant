@@ -102,6 +102,23 @@ describe('invalidationService(通知驱动重取,偏差 11)', () => {
     expect(treeFn).toHaveBeenLastCalledWith({ kind: 'refreshExpanded' })
   })
 
+  it('v2-B5:同窗多条 file-tree 通知 hint 合并(paths 并集),不再整体覆盖', async () => {
+    const { applyFileTreeInvalidation } = await import('./fileTreeSyncBus')
+    const treeFn = vi.mocked(applyFileTreeInvalidation)
+    treeFn.mockClear()
+    emit({ scope: 'file-tree', version: 10, hint: { paths: ['a.md'] } })
+    emit({ scope: 'file-tree', version: 11, hint: { paths: ['b.md'] } })
+    await flushAsync()
+    // 一次 flush,paths 并集(旧实现只保留最后一份 → a.md 目录永不刷新)
+    expect(treeFn).toHaveBeenCalledTimes(1)
+    expect(treeFn).toHaveBeenCalledWith({ kind: 'paths', relPaths: ['a.md', 'b.md'] })
+    // refreshExpanded 粘性:混合场景升级为全量刷新
+    emit({ scope: 'file-tree', version: 12, hint: { paths: ['c.md'] } })
+    emit({ scope: 'file-tree', version: 13, hint: { refreshExpanded: true } })
+    await flushAsync()
+    expect(treeFn).toHaveBeenLastCalledWith({ kind: 'refreshExpanded' })
+  })
+
   it('不相关 scope 不触发重取', async () => {
     emit({ scope: 'unknown-scope', version: 5 })
     await flushAsync()

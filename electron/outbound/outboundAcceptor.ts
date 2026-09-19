@@ -185,6 +185,10 @@ export type OutboundAcceptorDeps = {
   createSession: (
     prefs?: OutboundSessionPrefs
   ) => Promise<Pick<Session_Requested, 'id'>> | Pick<Session_Requested, 'id'>
+  /** B2(v2 评审):发起/排队前按会话绑定 profile 对齐主进程 active workDir(main 语义回收) */
+  ensureSessionWorkDir: (sessionId: string) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** B3(v2 评审):enqueue 落库后通知(受理端口不持有排水器,由接线层把 drain 接进来),闭环 snapshot→enqueue 窗口竞态 */
+  notifyEnqueued?: (sessionId: string) => void
   startTurn: OutboundTurnStarter
   /** 占用 ≥80% 通过型警告（P2-2）：返回错误码数组，随 turn-started.warnings 透出 */
   contextUsageWarn?: (input: { sessionId: string; model: string; attachments?: Message['attachments'] }) => Promise<string[]>
@@ -205,6 +209,32 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
   }
 
   const countQueued = (sessionId: string): number => countQueuedUserMessages(getMessages(deps.db, sessionId), sessionId)
+
+  /** 排队落库（v2-B4 降级与 enqueue 决定共用）：幂等凭证、附件兜底、落库后补触发（v2-B3） */
+  async function enqueueDecision(
+    sessionId: string,
+    text: string,
+    intent: OutboundSubmitIntent
+  ): Promise<Extract<OutboundSubmitResult, { accepted: 'queued' }>> {
+    // 幂等凭证：reuse-user（排水）透传原 requestId，否则新生成
+    const requestId =
+      intent.contextIntent?.kind === 'reuse-user' && intent.contextIntent.requestId
+        ? intent.contextIntent.requestId
+        : deps.newRequestId()
+    const enqueued = await enqueueQueuedUserMessage(deps.db, {
+      sessionId,
+      requestId,
+      content: text,
+      // 附件兜底：渲染端把附件放在 contextIntent.create-user.attachments，排队路径同样带上
+      attachments: intent.attachments ?? (intent.contextIntent?.kind === 'create-user' ? intent.contextIntent.attachments : undefined)
+    })
+    deps.notifyEnqueued?.(sessionId)
+    return {
+      accepted: 'queued',
+      sessionId,
+      queued: { requestId, messageId: enqueued.persisted.message.id, sequence: enqueued.persisted.sequence }
+    }
+  }
 
   async function submitOutbound(intent: OutboundSubmitIntent): Promise<OutboundSubmitResult> {
     // 前置快路径：test-pop 不依赖会话 / apiKey（渲染端 sendInternal 同序）
@@ -250,7 +280,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
 
     switch (decision.action) {
       case 'local-command':
-        return { accepted: 'local-command', command: decision.command }
+        return { accepted: 'local-command', command: decision.command, sessionId }
       case 'hint-only': {
         const persisted = await deps.appendHintMessage(sessionId, decision.hint)
         if (decision.skillsState) {
@@ -262,7 +292,8 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
             kind: 'hint-only',
             hint: decision.hint,
             ...(persisted ? { messageId: persisted.messageId, sequence: persisted.sequence } : {})
-          }
+          },
+          sessionId
         }
       }
       case 'reject': {
@@ -270,26 +301,16 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
         return { rejected: { reason: decision.reason } }
       }
       case 'enqueue': {
-        // 幂等凭证：reuse-user（排水）透传原 requestId，否则新生成
-        const requestId =
-          intent.contextIntent?.kind === 'reuse-user' && intent.contextIntent.requestId
-            ? intent.contextIntent.requestId
-            : deps.newRequestId()
-        const enqueued = await enqueueQueuedUserMessage(deps.db, {
-          sessionId,
-          requestId,
-          content: decision.text,
-          // B1:渲染端把附件放在 contextIntent.create-user.attachments,排队路径同样要带上
-          attachments: intent.attachments ?? (intent.contextIntent?.kind === 'create-user' ? intent.contextIntent.attachments : undefined)
-        })
-        return {
-          accepted: 'queued',
-          sessionId,
-          queued: { requestId, messageId: enqueued.persisted.message.id, sequence: enqueued.persisted.sequence }
-        }
+        return enqueueDecision(sessionId, decision.text, intent)
       }
       case 'start-turn': {
-        // B3:wiki run 的「已开始」类提示随发起落库(main 语义保持)
+        // B2(v2 评审):发起前按会话绑定 profile 对齐 workDir(main ensureWorkDirForSession 语义回收)
+        const wd = await deps.ensureSessionWorkDir(sessionId)
+        if (!wd.ok) {
+          deps.audit('outbound.submit.rejected', { sessionId, reason: 'OUTBOUND_WORKDIR_SWITCH_FAILED', detail: wd.error })
+          return { rejected: { reason: 'OUTBOUND_WORKDIR_SWITCH_FAILED' } }
+        }
+        // wiki run 的「已开始」类提示随发起落库(main 语义保持)
         if (decision.hint) {
           await deps.appendHintMessage(sessionId, decision.hint)
         }
@@ -325,7 +346,13 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
         try {
           const started = await deps.startTurn({ turnIntent })
           const warnings = session
-            ? (await deps.contextUsageWarn?.({ sessionId, model: session.model, attachments: intent.attachments })) ?? []
+            ? (await deps.contextUsageWarn?.({
+                sessionId,
+                model: session.model,
+                // v2-N2:附件兜底(渲染端放在 contextIntent.create-user.attachments)
+                attachments:
+                  intent.attachments ?? (intent.contextIntent?.kind === 'create-user' ? intent.contextIntent.attachments : undefined)
+              })) ?? []
             : []
           return {
             accepted: 'turn-started',
@@ -335,10 +362,15 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
             ...(warnings.length ? { warnings } : {})
           }
         } catch (error) {
-          // 准入/配置拒绝（如 TURN_VISION_MODEL_NOT_CONFIGURED）→ 错误码拒绝，渲染端仅翻译展示
-          const reason = error instanceof Error ? error.message : String(error)
-          deps.audit('outbound.submit.rejected', { sessionId, reason, requestId: turnIntent.requestId })
-          return { rejected: { reason } }
+          const msg = error instanceof Error ? error.message : String(error)
+          // B4(v2 评审):快照过期竞态（snapshot 未运行 → prepare 时已被占）——降级排队，消息不丢
+          if (msg.includes('SESSION_TURN_BUSY')) {
+            deps.audit('outbound.submit.degraded_to_queue', { sessionId, requestId: turnIntent.requestId })
+            return enqueueDecision(sessionId, decision.text, intent)
+          }
+          // 准入/配置拒绝（如 TURN_VISION_MODEL_NOT_CONFIGURED 的中文消息）→ 渲染端仅翻译展示
+          deps.audit('outbound.submit.rejected', { sessionId, reason: msg, requestId: turnIntent.requestId })
+          return { rejected: { reason: msg } }
         }
       }
     }

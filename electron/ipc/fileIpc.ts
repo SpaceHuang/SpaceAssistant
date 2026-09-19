@@ -53,7 +53,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     return getFileMetadata(target)
   })
 
-  ipcMain.handle('file:watch-content', async (event, payload: { relPath: string | null }) => {
+  ipcMain.handle('file:watch-content', async (_event, payload: { relPath: string | null }) => {
     const { startContentWatch, stopContentWatch } = await import('../fileContentWatcher')
     if (payload.relPath === null) {
       stopContentWatch()

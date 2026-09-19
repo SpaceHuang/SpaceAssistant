@@ -50,7 +50,12 @@ export type OutboundSubmitResult =
       /** 落库凭据：渲染端据此把本地乐观排队条目转正（幂等归并），不重发查询 */
       queued: { requestId: string; messageId: string; sequence: number }
     }
-  | { accepted: 'local-command'; command: LocalCommandPayload }
+  | {
+      accepted: 'local-command'
+      command: LocalCommandPayload
+      /** v2-B1:主进程已为该命令代建会话时必填——渲染端据此切换视图再路由提示/预览 */
+      sessionId?: string
+    }
   | {
       rejected: {
         /** 错误码（errors i18n 命名空间），渲染端只翻译展示 */

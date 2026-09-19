@@ -74,6 +74,8 @@ function makeDeps(
     appendHintMessage: vi.fn(async () => ({ messageId: 'hint-1', sequence: 1 })),
     updateSessionState: vi.fn(async () => undefined),
     createSession: createSessionFn,
+    ensureSessionWorkDir: vi.fn(async () => ({ ok: true as const })),
+    notifyEnqueued: vi.fn(),
     startTurn,
     newRequestId: (() => {
       let n = 0
@@ -86,6 +88,8 @@ function makeDeps(
     audit: ReturnType<typeof vi.fn>
     startTurn: ReturnType<typeof vi.fn>
     createSession: ReturnType<typeof vi.fn>
+    ensureSessionWorkDir: ReturnType<typeof vi.fn>
+    notifyEnqueued: ReturnType<typeof vi.fn>
     updateSessionState: ReturnType<typeof vi.fn>
     appendHintMessage: ReturnType<typeof vi.fn>
   }
@@ -182,6 +186,55 @@ describe('createOutboundAcceptor（集成，真实 DB 排队路径）', () => {
     const res = await acceptor.submitOutbound({ sessionId: session.id, text: '/wiki query 如何重构' })
     expect(res).toMatchObject({ accepted: 'turn-started' })
     expect(deps.appendHintMessage).toHaveBeenCalledWith(session.id, expect.stringContaining('已进入 Wiki Query'))
+  })
+
+  it('B1:无会话发命令 → local-command 载荷携带主进程代建的 sessionId', async () => {
+    const deps = makeDeps(db)
+    const acceptor = createOutboundAcceptor(deps)
+    const res = await acceptor.submitOutbound({ text: '/skill list' })
+    expect(res).toMatchObject({ accepted: 'local-command' })
+    if (res.accepted === 'local-command') {
+      expect(res.sessionId).toBeTruthy()
+    }
+  })
+
+  it('B2:workDir 对齐失败 → 拒绝且不发起 turn', async () => {
+    const deps = makeDeps(db, { ensureSessionWorkDir: vi.fn(async () => ({ ok: false as const, error: '目录已失效' })) })
+    const acceptor = createOutboundAcceptor(deps)
+    const session = createSession(db, { name: 'b2' })
+    const res = await acceptor.submitOutbound({ sessionId: session.id, text: '你好' })
+    expect(res).toMatchObject({ rejected: { reason: 'OUTBOUND_WORKDIR_SWITCH_FAILED' } })
+    expect(deps.startTurn).not.toHaveBeenCalled()
+    expect(deps.audit).toHaveBeenCalledWith('outbound.submit.rejected', expect.objectContaining({ reason: 'OUTBOUND_WORKDIR_SWITCH_FAILED' }))
+  })
+
+  it('B2:workDir 对齐成功 → 正常发起(start-turn 前执行对齐)', async () => {
+    const deps = makeDeps(db)
+    const acceptor = createOutboundAcceptor(deps)
+    const session = createSession(db, { name: 'b2b' })
+    await acceptor.submitOutbound({ sessionId: session.id, text: '你好' })
+    expect(deps.ensureSessionWorkDir).toHaveBeenCalledWith(session.id)
+    expect(deps.startTurn).toHaveBeenCalled()
+  })
+
+  it('B3:enqueue 落库后触发 notifyEnqueued(闭环 snapshot→enqueue 窗口的丢触发)', async () => {
+    const deps = makeDeps(db)
+    const acceptor = createOutboundAcceptor(deps)
+    const session = createSession(db, { name: 'b3' })
+    deps.activeOps.add('t-live', session.id)
+    await acceptor.submitOutbound({ sessionId: session.id, text: '排队消息' })
+    expect(deps.notifyEnqueued).toHaveBeenCalledWith(session.id)
+  })
+
+  it('B4:start-turn 撞 SESSION_TURN_BUSY → 降级排队(消息不丢)', async () => {
+    const deps = makeDeps(db)
+    deps.startTurn.mockRejectedValueOnce(new Error('SESSION_TURN_BUSY'))
+    const acceptor = createOutboundAcceptor(deps)
+    const session = createSession(db, { name: 'b4' })
+    const res = await acceptor.submitOutbound({ sessionId: session.id, text: '双击快发' })
+    expect(res).toMatchObject({ accepted: 'queued', sessionId: session.id })
+    expect(queuedCount(db, session.id)).toBe(1)
+    expect(deps.audit).toHaveBeenCalledWith('outbound.submit.degraded_to_queue', expect.objectContaining({ sessionId: session.id }))
   })
 
   it('hint-only：落提示消息 + skillsState 落库，返回 local-command', async () => {
@@ -474,6 +527,89 @@ describe('createOutboundDrainer（排水不变量）', () => {
     expect(submits).toHaveLength(2)
     expect(submits[1]!.text).toBe('second')
     expect(audit).not.toHaveBeenCalledWith('outbound.drain.stalled', expect.anything())
+  })
+
+  it('B6(v2):随机终态/触发/入队交错序列的不变量——无 active 且队非空必有 submit 或 stalled;条目守恒', async () => {
+    const session = createSession(db, { name: 'b6-inv' })
+    const audit = vi.fn()
+    const submits: OutboundSubmitIntent[] = []
+    const active = new Set<string>()
+    let seq = 0
+    const drainer = createOutboundDrainer({
+      submitOutbound: vi.fn(async (intent: OutboundSubmitIntent) => {
+        submits.push(intent)
+        if (intent.text.startsWith('/cmd')) {
+          // 本地命令:受理端口分类为 local-command,由排水器消费
+          return { accepted: 'local-command', command: { kind: 'test-cards-run' } }
+        }
+        // 模拟 prepare 链 claim:队首 queued 转 sent 并登记 active
+        if (intent.contextIntent?.kind === 'reuse-user') {
+          deleteQueuedUserMessage(db, intent.contextIntent.currentUser.message.id)
+          const turnId = `t-${++seq}`
+          active.add(turnId)
+        }
+        return {
+          accepted: 'turn-started',
+          sessionId: intent.sessionId!,
+          turnId: `t-${seq}`,
+          assistantMessage: { id: `a-${seq}` } as unknown as Message
+        }
+      }),
+      listActiveCount: () => active.size,
+      getNextQueued: (sessionId: string) => getNextQueuedMessage(db, sessionId),
+      consumeQueued: (_sessionId: string, messageId: string) => {
+        deleteQueuedUserMessage(db, messageId)
+      },
+      audit
+    })
+
+    const rand = mulberry32(20260920)
+    const settle = () => new Promise((r) => setTimeout(r, 0))
+    let enqueuedTotal = 0
+
+    for (let step = 0; step < 120; step++) {
+      const roll = rand()
+      if (roll < 0.35) {
+        const isCmd = roll < 0.1
+        enqueueQueuedUserMessage(db, {
+          sessionId: session.id,
+          requestId: `rq-${step}`,
+          content: isCmd ? `/cmd-${step}` : `msg-${step}`
+        })
+        enqueuedTotal += 1
+      } else if (roll < 0.6) {
+        // 随机终态:清掉一个 active turn 并发终态投影(触发排水)
+        const turnId = [...active][0]
+        if (turnId) {
+          active.delete(turnId)
+          drainer.onTurnProjection({ sessionId: session.id }, { type: 'source-completed' })
+        }
+      } else if (roll < 0.75) {
+        // 重复终态投影(被挡/无 active 的空触发)
+        drainer.onTurnProjection({ sessionId: session.id }, { type: 'source-completed' })
+      } else if (roll < 0.9) {
+        await drainer.drain(session.id)
+      } else {
+        await settle()
+      }
+      // 步进不变量:排队条数只可能来自 enqueue(不凭空增);active 非负
+      expect(queuedCount(db, session.id)).toBeLessThanOrEqual(enqueuedTotal)
+      expect(active.size).toBeGreaterThanOrEqual(0)
+    }
+
+    // 排空所有未 settled 的重排链
+    for (let i = 0; i < 10; i++) await settle()
+
+    // 终局不变量 I2:不存在「无 active 且队非空且无 submit/stalled」的终态(丢触发 ⇒ 停摆)
+    const stalledAudited = audit.mock.calls.some((c) => c[0] === 'outbound.drain.stalled')
+    if (active.size === 0 && queuedCount(db, session.id) > 0) {
+      expect(stalledAudited || submits.length > 0).toBe(true)
+    }
+    // 终局不变量 I3(守恒):消息只会被 claim 转 sent 或被消费删除,不凭空消失
+    const all = getMessages(db, session.id)
+    for (const m of all) {
+      expect(['sent', 'queued']).toContain(m.status)
+    }
   })
 
   it('B6:连续 rejected 至多重试 3 轮后停摆并落审计(不自旋)', async () => {

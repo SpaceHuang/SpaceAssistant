@@ -511,6 +511,19 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       })
       return { turnId: started.turnId, assistantMessage: started.assistantMessage }
     },
+    ensureSessionWorkDir: async (sessionId) => {
+      // B2(v2 评审):main ensureWorkDirForSession 语义回收——turn 执行用 active profile 目录,
+      // 会话绑定 profile 与 active 不一致时切过去,失败即拒绝(不写错目录)
+      const session = getSession(ctx.db, sessionId)
+      const target = session?.workDirProfileId
+      if (!target || target === ctx.workDirManager.getActiveProfileId()) return { ok: true as const }
+      const result = await ctx.workDirManager.switchProfile(target)
+      return result.success ? { ok: true as const } : { ok: false as const, error: result.error ?? '切换失败' }
+    },
+    notifyEnqueued: (sessionId) => {
+      // B3(v2 评审):enqueue 落库后若无 active turn,补一次排水(闭环 snapshot→enqueue 窗口竞态)
+      if (turnRuntime.listActive(sessionId).length === 0) void outboundDrainer.drain(sessionId)
+    },
     contextUsageWarn: async ({ sessionId, attachments }) => computeContextPressureWarnings(ctx.db, sessionId, attachments),
     newRequestId: () => randomUUID(),
     audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)

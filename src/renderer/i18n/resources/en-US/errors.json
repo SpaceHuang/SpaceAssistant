@@ -43,8 +43,9 @@
   "SKILL_INSTALL_CANCELLED": "Installation cancelled",
   "OUTBOUND_SESSION_NOT_FOUND": "Session not found or deleted. Refresh the session list and try again.",
   "OUTBOUND_SESSION_RUNNING": "This session is still responding. Please wait for it to finish.",
-  "OUTBOUND_MAX_PARALLEL_REACHED": "Reached the limit of {max} concurrent sessions. Wait for one to finish.",
-  "OUTBOUND_QUEUE_FULL": "Message queue is full ({max}). Please try again later.",
+  "OUTBOUND_MAX_PARALLEL_REACHED": "Reached the limit of concurrent sessions. Wait for one to finish.",
+  "OUTBOUND_QUEUE_FULL": "Message queue is full. Please try again later.",
   "OUTBOUND_API_KEY_MISSING": "API Key is not configured. Add it in Settings → Models first.",
-  "OUTBOUND_CONTEXT_PRESSURE_80": "Context usage is above 80%. Consider starting a new session or compacting history."
+  "OUTBOUND_CONTEXT_PRESSURE_80": "Context usage is above 80%. Consider starting a new session or compacting history.",
+  "OUTBOUND_WORKDIR_SWITCH_FAILED": "Failed to switch the working directory. Check the directory bound to this session."
 }

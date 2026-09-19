@@ -57,9 +57,8 @@ import { resolveFailureReasonForMessage } from '../../services/turnFailureDispla
 import { loadTurnFailureReasons } from '../../services/turnFailureHydration'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
-import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
+import { appendArchivedQuery } from '../../../shared/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
-import { ensureWorkDirForSession } from '../../services/workDirSessionSync'
 import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserRecoverySkillService'
 import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
@@ -67,7 +66,7 @@ import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter
 import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG, type SessionSkillsState } from '../../../shared/domainTypes'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
 import { CompactionMarker } from './CompactionMarker'
@@ -165,7 +164,6 @@ export function ChatView() {
   const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
   const composerRef = useRef<MessageInputHandle>(null)
-  const abortRequestedRef = useRef(false)
   const sendInternalRef = useRef<
     (
       text: string,
@@ -443,7 +441,6 @@ export function ChatView() {
   )
 
   const abort = useCallback(() => {
-    abortRequestedRef.current = true
     const turnId = sessionId ? runningSessions[sessionId]?.turnId : undefined
     if (turnId) void window.api.chatCancelTurn(turnId)
   }, [runningSessions, sessionId])
@@ -526,27 +523,30 @@ export function ChatView() {
 
       if (result.accepted === 'local-command') {
         const cmd = result.command
+        // v2-B1:主进程为命令代建会话时,先切视图再路由提示/预览(否则提示塞进 undefined 键、预览静默)
+        const effectiveSessionId = result.sessionId ?? runSessionId
+        if (effectiveSessionId && effectiveSessionId !== sessionId) dispatch(setSession(effectiveSessionId))
         if (cmd.kind === 'test-pop-run') {
           await window.api.testPopShow()
           message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
           return result
         }
         if (cmd.kind === 'test-cards-run') {
-          if (!runSessionId) return
+          if (!effectiveSessionId) return
           await runTestCardsPreview({
-            sessionId: runSessionId,
+            sessionId: effectiveSessionId,
             text,
             dispatch,
             scrollBottom,
             onPreviewMessageId: (messageId) => {
               setTestPreviewMessageIds((prev) => new Set([...prev, messageId]))
             },
-            persistSystemHint: (hint) => persistSkillHintSystemMessage(runSessionId, hint)
+            persistSystemHint: (hint) => persistSkillHintSystemMessage(effectiveSessionId, hint)
           })
           return result
         }
         showSkillHint(
-          runSessionId!,
+          effectiveSessionId!,
           cmd.hint,
           cmd.messageId ? { messageId: cmd.messageId, sequence: cmd.sequence ?? 0 } : undefined
         )

@@ -43,8 +43,9 @@
   "SKILL_INSTALL_CANCELLED": "安装已取消",
   "OUTBOUND_SESSION_NOT_FOUND": "会话不存在或已被删除，请刷新会话列表后重试",
   "OUTBOUND_SESSION_RUNNING": "当前会话正在回复中，请等待完成后再重试",
-  "OUTBOUND_MAX_PARALLEL_REACHED": "同时进行的会话数已达上限（{max}），请先等待某个会话完成",
-  "OUTBOUND_QUEUE_FULL": "排队消息已达上限（{max}），请稍后再发送",
+  "OUTBOUND_MAX_PARALLEL_REACHED": "同时进行的会话数已达上限，请先等待某个会话完成",
+  "OUTBOUND_QUEUE_FULL": "排队消息已达上限，请稍后再发送",
   "OUTBOUND_API_KEY_MISSING": "API Key 未配置，请先在「设置 → 模型」中补齐",
-  "OUTBOUND_CONTEXT_PRESSURE_80": "上下文占用已超过 80%，建议开启新会话或压缩历史"
+  "OUTBOUND_CONTEXT_PRESSURE_80": "上下文占用已超过 80%，建议开启新会话或压缩历史",
+  "OUTBOUND_WORKDIR_SWITCH_FAILED": "工作目录切换失败,请检查该会话绑定的工作目录配置"
 }
