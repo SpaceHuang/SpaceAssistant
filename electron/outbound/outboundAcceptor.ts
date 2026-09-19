@@ -167,7 +167,7 @@ export type OutboundAcceptorDeps = {
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
-  appendHintMessage: (sessionId: string, hint: string) => Promise<void> | void
+  appendHintMessage: (sessionId: string, hint: string) => Promise<{ messageId: string; sequence: number } | void> | { messageId: string; sequence: number } | void
   updateSessionState: (
     sessionId: string,
     patch: { skillsState?: SessionSkillsState; metadataPatch?: Record<string, unknown> }
@@ -240,11 +240,18 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       case 'local-command':
         return { accepted: 'local-command', command: decision.command }
       case 'hint-only': {
-        await deps.appendHintMessage(sessionId, decision.hint)
+        const persisted = await deps.appendHintMessage(sessionId, decision.hint)
         if (decision.skillsState) {
           await deps.updateSessionState(sessionId, { skillsState: decision.skillsState })
         }
-        return { accepted: 'local-command', command: { kind: 'hint-only', hint: decision.hint } }
+        return {
+          accepted: 'local-command',
+          command: {
+            kind: 'hint-only',
+            hint: decision.hint,
+            ...(persisted ? { messageId: persisted.messageId, sequence: persisted.sequence } : {})
+          }
+        }
       }
       case 'reject': {
         deps.audit('outbound.submit.rejected', { sessionId, reason: decision.reason })
@@ -256,13 +263,17 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           intent.contextIntent?.kind === 'reuse-user' && intent.contextIntent.requestId
             ? intent.contextIntent.requestId
             : deps.newRequestId()
-        await enqueueQueuedUserMessage(deps.db, {
+        const enqueued = await enqueueQueuedUserMessage(deps.db, {
           sessionId,
           requestId,
           content: decision.text,
           attachments: intent.attachments
         })
-        return { accepted: 'queued', sessionId }
+        return {
+          accepted: 'queued',
+          sessionId,
+          queued: { requestId, messageId: enqueued.persisted.message.id, sequence: enqueued.persisted.sequence }
+        }
       }
       case 'start-turn': {
         if (decision.skillsState || decision.wikiModeActive) {

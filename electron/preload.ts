@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppConfig, FileInfo, Message, SearchResult, Session } from '../src/shared/domainTypes'
-import type { SpaceAssistantApi, TurnExecutePayload } from '../src/shared/api'
+import type { SpaceAssistantApi } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
@@ -32,15 +32,12 @@ const api: SpaceAssistantApi = {
   chatGetContextHistorySummaryBaseline: (payload) =>
     ipcRenderer.invoke('chat:get-context-history-summary-baseline', payload),
   chatGetSearchCorpusPage: (payload) => ipcRenderer.invoke('chat:get-search-corpus-page', payload),
-  chatGetNextQueuedMessage: (payload) => ipcRenderer.invoke('chat:get-next-queued-message', payload),
   chatEnqueueQueuedMessage: (payload) => ipcRenderer.invoke('chat:enqueue-queued-message', payload),
   chatResolveRetryContext: (payload) => ipcRenderer.invoke('chat:resolve-retry-context', payload),
   chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
   messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
   messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),
   chatSubmitOutbound: (intent) => ipcRenderer.invoke('chat:submit-outbound', intent),
-  chatPrepareTurn: (intent) => ipcRenderer.invoke('chat:prepare-turn', intent),
-  chatExecuteTurn: (payload: TurnExecutePayload) => ipcRenderer.invoke('chat:execute-turn', payload),
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
   chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
   chatRetryTurnCheckpoint: (turnId) => ipcRenderer.invoke('chat:retry-turn-checkpoint', turnId),

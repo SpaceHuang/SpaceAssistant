@@ -225,9 +225,6 @@ export type SpaceAssistantApi = {
     nextSequence: number
     hasMore: boolean
   }>
-  chatGetNextQueuedMessage: (payload: {
-    sessionId: string
-  }) => Promise<import('./displayOrder').QueuedMessageEntry | null>
   chatEnqueueQueuedMessage: (payload: { sessionId: string; requestId: string; content: string; attachments?: ChatImageAttachment[] }) => Promise<{ receipt: unknown; persisted: import('./displayOrder').PersistedMessageAck; duplicate: boolean }>
   chatResolveRetryContext: (payload: {
     sessionId: string
@@ -257,8 +254,6 @@ export type SpaceAssistantApi = {
     >
   }) => Promise<{ message: Message; sequence: number } | null>
   chatSubmitOutbound: (intent: import('./outboundProtocol').OutboundSubmitIntent) => Promise<import('./outboundProtocol').OutboundSubmitResult>
-  chatPrepareTurn: (intent: import('./assistantFactAggregator').TurnIntent) => Promise<import('./turnCoordinator').TurnStarted>
-  chatExecuteTurn: (payload: TurnExecutePayload) => Promise<{ ok: true; accepted: true; turnId: string }>
   chatCancelTurn: (turnId: string) => Promise<boolean>
   chatGetTurnTerminal: (turnId: string) => Promise<(import('./assistantFactAggregator').TurnTerminal & { committedVersion?: number; commitStatus?: 'pending' | 'committed' | 'failed' }) | undefined>
   chatRetryTurnCheckpoint: (turnId: string) => Promise<boolean>

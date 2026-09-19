@@ -1072,8 +1072,9 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath),
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
-      appendMessage(ctx.db, msg)
+      const { sequence } = appendMessage(ctx.db, msg)
       scheduleBackup(ctx, sessionId)
+      return { messageId: msg.id, sequence }
     },
     updateSessionState: async (sessionId, patch) => {
       if (!getSession(ctx.db, sessionId)) return

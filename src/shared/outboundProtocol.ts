@@ -22,7 +22,7 @@ export type OutboundSubmitIntent = {
 export type LocalCommandPayload =
   | { kind: 'test-pop-run' }
   | { kind: 'test-cards-run' }
-  | { kind: 'hint-only'; hint: string }
+  | { kind: 'hint-only'; hint: string; /** 主进程已落库时携带，渲染端据此路由真实消息；无会话快路径（仅展示）缺省 */ messageId?: string; sequence?: number }
 
 export type OutboundSubmitResult =
   | {
@@ -35,7 +35,12 @@ export type OutboundSubmitResult =
     }
     // 协议注释：turn 投影（chatOnTurnProjection）是唯一事实源；本返回载荷仅供即时展示，
     // 渲染端按 turnId/messageId 幂等归并，不得据此双写状态（投影事件可能先于 invoke 返回到达）
-  | { accepted: 'queued'; sessionId: string }
+  | {
+      accepted: 'queued'
+      sessionId: string
+      /** 落库凭据：渲染端据此把本地乐观排队条目转正（幂等归并），不重发查询 */
+      queued: { requestId: string; messageId: string; sequence: number }
+    }
   | { accepted: 'local-command'; command: LocalCommandPayload }
   | {
       rejected: {
