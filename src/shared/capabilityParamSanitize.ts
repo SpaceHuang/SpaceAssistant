@@ -29,15 +29,30 @@ function isEnvValueTable(key: string | undefined, value: unknown): value is Reco
   return Boolean(key) && isEnvCarrierKey(key!) && Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+const URL_QUERY_SECRET_PATTERN =
+  /([?&](?:token|key|secret|signature|sig|password|passwd|access_token|refresh_token|api[_-]?key)=)[^&#]*/gi
+
+/**
+ * URL 内嵌凭据打码（R1，评审复验）：userinfo 段与凭据类 query 参数值打码。
+ * 保留原串形态（正则切片替换，不做 URL 规范化重写）；非法 URL 仅做 query 保守打码。
+ */
+export function sanitizeUrlCredentials(value: string): string {
+  let out = value
+  const userinfo = /^([a-z][a-z0-9+.-]*:\/\/)([^@/\s]+)@/i.exec(out)
+  if (userinfo) {
+    // 统一 ***:***（不区分 user-only / user:pass，避免凭据存在性侧信道）
+    out = userinfo[1] + '***:***@' + out.slice(userinfo[0].length)
+  }
+  return out.replace(URL_QUERY_SECRET_PATTERN, '$1***')
+}
+
 export function sanitizeCapabilityParamsForDisplay(value: unknown, key?: string): unknown {
   if (key && CREDENTIAL_KEY_PATTERN.test(key)) {
     return Boolean(value)
   }
-  // URL 类值：内嵌凭据（userinfo / 凭据 query 参数）打码，与结果侧 sanitizeUrlCredentials 同口径。
-  // electron 侧注入实现（评审中 4）；shared 侧默认原样（无 electron 依赖），由 electron/confirm
-  // 提取器在组装摘要时二次处理——此处仅按 URL 形态保守处理 query 凭据。
+  // URL 类值（R1/中4）：userinfo 与凭据 query 参数打码——展示、审计摘要、持久化三面同口径
   if (key && /^(endpoint|url|href)$/i.test(key) && typeof value === 'string') {
-    return value.replace(/([?&](?:token|key|secret|signature|sig|password|passwd|access_token|refresh_token|api[_-]?key)=)[^&#]*/gi, '$1***')
+    return sanitizeUrlCredentials(value)
   }
   if (isEnvValueTable(key, value)) {
     const out: Record<string, unknown> = {}

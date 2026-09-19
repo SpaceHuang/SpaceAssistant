@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeCapabilityParamsForDisplay, CREDENTIAL_KEY_PATTERN } from './capabilityParamSanitize'
+import {
+  sanitizeCapabilityParamsForDisplay,
+  sanitizeUrlCredentials,
+  CREDENTIAL_KEY_PATTERN
+} from './capabilityParamSanitize'
 
 describe('capabilityParamSanitize（v2 评审建议 5 专属单测）', () => {
   it('凭据键布尔化：accessToken/headerValue/oauthClientId 等', () => {
@@ -41,5 +45,40 @@ describe('capabilityParamSanitize（v2 评审建议 5 专属单测）', () => {
     expect(out.endpoint).toBe('https://mcp.scys.com/mcp')
     expect((out.nested as Record<string, unknown>).token).toBe(true)
     expect((out.list as Array<Record<string, unknown>>)[0]!.secret).toBe(true)
+  })
+})
+
+describe('sanitizeUrlCredentials（R1：URL 内嵌凭据打码，userinfo + 凭据 query）', () => {
+  it('userinfo 段打码且保留 URL 形态', () => {
+    expect(sanitizeUrlCredentials('https://user:pass@mcp.example.com/mcp')).toBe(
+      'https://***:***@mcp.example.com/mcp'
+    )
+    expect(sanitizeUrlCredentials('https://user@mcp.example.com/mcp')).toBe(
+      'https://***:***@mcp.example.com/mcp'
+    )
+    expect(sanitizeUrlCredentials('https://mcp.example.com/mcp')).toBe('https://mcp.example.com/mcp')
+  })
+
+  it('凭据类 query 参数值打码（大小写不敏感）', () => {
+    expect(sanitizeUrlCredentials('https://mcp.example.com/mcp?api_key=sk-secret&page=1')).toBe(
+      'https://mcp.example.com/mcp?api_key=***&page=1'
+    )
+    expect(sanitizeUrlCredentials('https://mcp.example.com/mcp?Token=abc&sig=xyz')).toBe(
+      'https://mcp.example.com/mcp?Token=***&sig=***'
+    )
+  })
+
+  it('非法 URL 保守处理（query 凭据仍打码）', () => {
+    expect(sanitizeUrlCredentials('not a url?token=abc')).toBe('not a url?token=***')
+  })
+
+  it('sanitizeCapabilityParamsForDisplay 对 endpoint/url 键应用 URL 打码（含 userinfo）', () => {
+    const out = sanitizeCapabilityParamsForDisplay({
+      endpoint: 'https://user:pass@mcp.example.com/mcp?api_key=sk-1'
+    }, 'endpoint')
+    const v = out as Record<string, string>
+    expect(JSON.stringify(v)).not.toContain('user:pass')
+    expect(JSON.stringify(v)).not.toContain('sk-1')
+    expect(v.endpoint).toContain('***:***@mcp.example.com/mcp?api_key=***')
   })
 })

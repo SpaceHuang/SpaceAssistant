@@ -4,28 +4,8 @@ const ANTHROPIC_KEY_PATTERN = /sk-ant-[a-zA-Z0-9_-]+/g
 const BEARER_PATTERN = /Bearer\s+\S+/gi
 const LONG_B64_PATTERN = /[A-Za-z0-9+/]{80,}={0,2}/g
 
-/**
- * URL 内嵌凭据打码（评审中 4）：userinfo 段与凭据类 query 参数值打码，
- * 供 endpoint/url 类值进摘要、审计、错误消息前统一处理。
- */
-export function sanitizeUrlCredentials(raw: string): string {
-  const QUERY_SECRET_PATTERN = /(token|key|secret|signature|sig|password|passwd|access_token|refresh_token|api[_-]?key)(=[^&#]*)/gi
-  try {
-    const u = new URL(raw)
-    let out = raw
-    if (u.username || u.password) {
-      const redactedAuth = `${u.username ? '***' : ''}:${u.password ? '***' : ''}@`
-      out = out.replace(`${u.username}${u.password ? ':' + u.password : ''}@`, redactedAuth)
-    }
-    out = out.replace(QUERY_SECRET_PATTERN, '$1=***')
-    return out
-  } catch {
-    // 非合法 URL：仅对凭据类 query 形态做保守打码
-    return raw.replace(QUERY_SECRET_PATTERN, '$1=***')
-  }
-}
-
-/** 字符串级凭据形态打码（导出供 callCapability 的 handler 错误消息复用，评审建议 3）。 */
+/** 字符串级凭据形态打码（导出供 callCapability 的 handler 错误消息复用，评审建议 3）。
+ *  URL 内嵌凭据打码统一走 shared 的 sanitizeUrlCredentials（R1：单份实现，extractor/落库/展示同源）。 */
 export function scrubString(s: string): string {
   return s.replace(ANTHROPIC_KEY_PATTERN, '[REDACTED]').replace(BEARER_PATTERN, 'Bearer [REDACTED]').replace(LONG_B64_PATTERN, '[REDACTED_B64]')
 }

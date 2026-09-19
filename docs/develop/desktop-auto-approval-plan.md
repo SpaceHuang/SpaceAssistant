@@ -327,6 +327,7 @@
 - **中 1/2/4/5/6**：审批裁决 `reasonSummary`/`evidenceCount` 落审计；用量统计过滤 internal/hidden 会话；URL 内嵌凭据打码；`action.session.read` 拒绝 internal/hidden 会话；`updateServerStatus` 纳入 secret 写锁。
 - **低项**：normalize 收敛告警、`policy.decision` 记 `answerer`、`readLanePackage` 死导出、taskDigest 代理对切割、UsageTrendChart 真实 0%、desktop loose run_shell 锚定测试、孤儿 `config.confirmAnswerers` 键清理。
 - **H4 产品签署**：存量未配置套餐桌面用户升级后「询问」默认变为「审批 Agent 自动裁决」（含 `browser-act-danger-ask` 危险表单/支付类浏览器操作）——**产品确认维持默认自动，不做默认关闭、不额外锁定高危条目**（2026-09-19 签署）。升级告知（release notes / 首次启动提示）由产品发布流程负责，不在本分支代码范围。
+- **R1/N1 复验修复（v2 报告）**：`assistant_chunk` 的 `tool_call_delta.partialJson`（入参原文流式分片，chunk 拼接可还原凭据）在两个 JSONL sink（桌面 `claudeStreamHandlers` / automation `butlerSessionEvents`）落盘前剥离（`sessionEvents.stripPartialJsonForPersist`，partialJson 无任何重放消费者）；`sanitizeUrlCredentials` 收敛到 shared 单份正确实现（userinfo `***:***` + 凭据 query 打码）并接入 `capabilityParamSanitize` 的 endpoint/url 分支（electron 侧死代码删除）；`updateServerStatus` 的 6 个调用点（mcpIpc ×3、mcpOauthService ×3）补 await；用量写入侧同步跳过 internal/hidden 会话（中 2 完整闭环——审批 Agent 内部回合开销不进事实表）。
 - 未修复转跟进批次：中 3（用量回填主线程分片）、中 7（保留期设置出口）、其余低项（死 i18n key 精确核对、`config.confirmAnswerers` 之外的清理等）。
 
 ### 验收边界（§7.3）

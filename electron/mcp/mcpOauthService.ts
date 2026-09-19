@@ -168,7 +168,7 @@ export function createMcpOAuthClientProvider(
       if (tokens.refresh_token) {
         await setSecret(db, profile.id, 'refresh-token', tokens.refresh_token)
       }
-      updateServerStatus(db, profile.id, {
+      await updateServerStatus(db, profile.id, {
         ...(tokens.expires_in
           ? {
               auth: {
@@ -187,7 +187,7 @@ export function createMcpOAuthClientProvider(
       if (kind === 'all') {
         deleteConfigValue(db, oauthClientInfoKey(profile.id))
       }
-      updateServerStatus(db, profile.id, {
+      await updateServerStatus(db, profile.id, {
         status: 'auth-expired',
         auth: { accessTokenExpiresAt: undefined }
       })
@@ -310,7 +310,7 @@ export async function startOAuthFlow(
       await client.close().catch(() => undefined)
     }
 
-    updateServerStatus(db, serverId, {
+    await updateServerStatus(db, serverId, {
       status: 'connected',
       clearLastError: true
     })

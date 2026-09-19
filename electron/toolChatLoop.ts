@@ -576,14 +576,16 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
     turnOutcome = 'failed'
     throw e
   } finally {
-    recordTurnSummary(args.appDb, {
-      turnId: args.turnId ?? args.sessionId,
-      sessionId: args.sessionId,
-      outcome: turnOutcome,
-      counts: turnUsageStats,
-      model: args.model,
-      llmServiceId: args.llmServiceId
-    })
+    if (!isUsageExemptSession(args.appDb, args.sessionId)) {
+      recordTurnSummary(args.appDb, {
+        turnId: args.turnId ?? args.sessionId,
+        sessionId: args.sessionId,
+        outcome: turnOutcome,
+        counts: turnUsageStats,
+        model: args.model,
+        llmServiceId: args.llmServiceId
+      })
+    }
     if (chatSignal.aborted) {
       args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
     }
@@ -1062,15 +1064,17 @@ async function runToolChatSessionInner(
           payload: { schemaVersion: 1, requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
         // Token 用量统计：每次 LLM 调用即时落一行 usage_step_facts（异步容错，不阻断对话）。
-        recordStepUsage(appDb, {
-          sessionId,
-          turnId: eventTurnId,
-          stepId: attemptRequestId,
-          usage: finalUsage,
-          baseUrl,
-          model,
-          llmServiceId: args.llmServiceId
-        })
+        if (!isUsageExemptSession(appDb, sessionId)) {
+          recordStepUsage(appDb, {
+            sessionId,
+            turnId: eventTurnId,
+            stepId: attemptRequestId,
+            usage: finalUsage,
+            baseUrl,
+            model,
+            llmServiceId: args.llmServiceId
+          })
+        }
         turnUsageStats.stepCount += 1
         const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: content as Anthropic.ContentBlock[] }]
         const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system, tools: requestHeader.tools, messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
@@ -2582,4 +2586,11 @@ function resolveMcpExecutor(
     invalidateSession: (serverId) => manager.disconnect(serverId),
     getRecentDiagnostics: (serverId) => getDiagnostics(appDb, serverId)
   })
+}
+
+/** 中2（评审复验）：审批 Agent / automation 内部会话（internal/hidden）的 LLM 开销不进用户用量统计。 */
+function isUsageExemptSession(appDb: AppDatabase | undefined, sessionId: string): boolean {
+  if (!appDb) return false
+  const s = getSession(appDb, sessionId)
+  return s?.ownership === 'internal' || s?.visibility === 'hidden'
 }

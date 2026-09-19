@@ -176,13 +176,13 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const session = await manager.connect(profile, secretProvider, { oauthProvider })
       const discovery = await discoverToolsFromSession(ctx.db, profile, session)
       if (!discovery.ok) {
-        updateServerStatus(ctx.db, serverId, {
+        await updateServerStatus(ctx.db, serverId, {
           status: 'failed',
           lastError: { code: discovery.code, message: discovery.message, occurredAt: new Date().toISOString() }
         })
         return discovery
       }
-      updateServerStatus(ctx.db, serverId, {
+      await updateServerStatus(ctx.db, serverId, {
         status: discovery.tools.length > 0 ? 'connected' : 'no-tools',
         discoveredAt: new Date().toISOString(),
         discoveredProtocolVersion: discovery.protocolVersion,
@@ -192,7 +192,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       safeAppendDiagnostic(ctx.db, serverId, { code: 'refresh-failed', message })
-      updateServerStatus(ctx.db, serverId, {
+      await updateServerStatus(ctx.db, serverId, {
         status: 'failed',
         lastError: { code: 'refresh-failed', message, occurredAt: new Date().toISOString() }
       })

@@ -70,6 +70,18 @@ const DEFAULT_OPTIONS: SessionEventSinkOptions = {
 }
 const EVENT_TYPES = new Set<SessionEventType>(['turn_start', 'turn_end', 'step_start', 'step_end', 'assistant_chunk', 'tool_call', 'tool_result', 'request_header', 'request_context', 'request_usage', 'request_retry', 'compaction_start', 'compaction_summary', 'compaction_end', 'session_end_seed'])
 
+/**
+ * R1（评审复验）：assistant_chunk 的 tool_call_delta.partialJson 是工具入参原文的流式分片
+ * ——chunk 顺序拼接即可还原 toolkit 凭据明文，且台账无任何重放消费者（tool_call 事件的
+ * 净化 args 承担入参审计职责）。JSONL sink 落盘前必须剥离（置空串保留事件结构）。
+ */
+export function stripPartialJsonForPersist<T extends { type: string; payload: Record<string, unknown> }>(event: T): T {
+  if (event.type !== 'assistant_chunk') return event
+  const delta = event.payload.delta as { type?: string; partialJson?: string } | undefined
+  if (delta?.type !== 'tool_call_delta' || typeof delta.partialJson !== 'string') return event
+  return { ...event, payload: { ...event.payload, delta: { ...delta, partialJson: '' } } }
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object')
 }
