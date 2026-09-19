@@ -10,6 +10,8 @@ export default defineConfig({
           name: 'electron',
           include: ['electron/**/*.test.ts'],
           environment: 'node',
+          // Windows 慢机满载下 5s 默认值会误杀重 IO 用例（如 1000 并发台账写盘）；断言本身不受影响
+          testTimeout: 15_000,
           globals: true,
           pool: 'forks',
           maxWorkers: 1,
@@ -22,6 +24,8 @@ export default defineConfig({
         test: {
           name: 'renderer',
           include: ['src/**/*.test.{ts,tsx}'],
+          // 同上：jsdom 组件交互用例在满载下 5s 不够（性能界限类用例自行断言更紧的界）
+          testTimeout: 15_000,
           exclude: ['src/**/*.perf.*.test.tsx', '**/node_modules/**'],
           environment: 'jsdom',
           globals: true,

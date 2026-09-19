@@ -656,8 +656,12 @@ describe('runShellExecutor', () => {
   it('高频输出时 progress IPC 事件数量受每秒预算限制', async () => {
     const cmd = shellCommand('yes x | head -n 5000', 'Write-Output (1..5000)')
     const ctx = baseCtx(workDir, userDataDir)
+    const startedAt = Date.now()
     await runShellExecutor.execute({ command: cmd }, ctx)
-    expect(vi.mocked(ctx.sendProgress).mock.calls.length).toBeLessThanOrEqual(22)
+    const elapsedSec = Math.max(1, Math.ceil((Date.now() - startedAt) / 1000))
+    // 节流预算按秒计（约 20 条/秒）：满载慢机上命令跑得久、窗口数变多，上界随执行时长扩展；
+    // 无节流的实现会发出 ~5000 条，该断言仍能拦住
+    expect(vi.mocked(ctx.sendProgress).mock.calls.length).toBeLessThanOrEqual(22 * elapsedSec + 2)
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('超过执行输出上限时终止进程并返回 OUTPUT_LIMIT_REACHED', async () => {

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { loadEffectivePolicyRules } from './policyRulesRuntime'
+import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
+import { touchTrustedCommand } from '../shell/shellCommandTrust'
+import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { channelFor } from './channels'
-import { openSqliteDatabase, getDbConnection, type AppDatabase } from '../database'
 import { SqliteDecisionCache, canonicalKeyJson } from './sqliteDecisionCache'
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../../src/shared/domainTypes'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
@@ -23,7 +26,38 @@ const toolsConfig = (overrides: Partial<ToolsConfig> = {}): ToolsConfig => ({
   ...overrides
 })
 
+
+/** P2（B1）：把旧的 appDb 覆盖项装配为门控端口材料；无 db 时提供显式默认材料（原静默回退的显式化）。 */
+function gateMaterialsFor(db: AppDatabase | undefined, lane: import('../../src/shared/confirmation/types').ExecutionLane) {
+  if (db) {
+    return {
+      effectiveRules: loadEffectivePolicyRules(db, lane),
+      decisionCache: new SqliteDecisionCache(getDbConnection(db)),
+      shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) }
+    }
+  }
+  return {
+    effectiveRules: DEFAULT_POLICY_RULES,
+    decisionCache: {
+      lookup: () => null,
+      record: () => undefined,
+      clear: () => 0,
+      clearAllSession: () => 0,
+      expireDormant: () => 0
+    },
+    shellPrecheck: { touchTrustedCommand: () => undefined }
+  }
+}
+
 function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
+  const legacyDb = (overrides as { appDb?: AppDatabase }).appDb
+  const { appDb: _legacyAppDb, ...rest } = overrides as Partial<ToolCallGateArgs> & { appDb?: AppDatabase }
+  const lane = (overrides as { lane?: import('../../src/shared/confirmation/types').ExecutionLane }).lane
+    ?? (overrides.remoteContext
+      ? overrides.remoteContext.source === 'feishu'
+        ? 'feishu'
+        : 'wechat'
+      : 'desktop')
   return {
     toolName: 'read_file',
     toolInput: { path: 'a.txt' },
@@ -32,7 +66,8 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     userDataDir: '/tmp/ud',
     toolsConfig: toolsConfig(),
     audit: { record: () => undefined },
-    ...overrides
+    ...gateMaterialsFor(legacyDb, lane),
+    ...rest
   }
 }
 

@@ -34,7 +34,10 @@ body`)
     expect(frontMatter.metadata).toEqual({ name: 'should-not-win' })
   })
 
-  it('counts regular files but not symbolic links and stops at a limit', () => {
+  // Windows 无特权创建文件符号链接会 EPERM（junction 会被 readdir 计入目录，语义不等价）；
+  // symlink 跳过逻辑由 POSIX 宿主（CI / macOS / Linux）覆盖
+  const itWithSymlink = process.platform === 'win32' ? it.skip : it
+  itWithSymlink('counts regular files but not symbolic links and stops at a limit', () => {
     const dir = mkTmpDir()
     fs.writeFileSync(path.join(dir, 'a.bin'), '12345')
     fs.symlinkSync(path.join(dir, 'a.bin'), path.join(dir, 'link.bin'))

@@ -43,7 +43,6 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.model?.trim() ? { model: config.model.trim() } : {}),
     ...(Number.isFinite(config.maximumContext) && config.maximumContext! > 0 ? { maximumContext: config.maximumContext } : {}),
     ...(config.llmServiceId?.trim() ? { llmServiceId: config.llmServiceId.trim() } : {}),
-    ...(config.baseUrl?.trim() ? { baseUrl: config.baseUrl.trim().replace(/\/+$/, '') } : {}),
     ...(config.system?.trim() ? { system: config.system.trim() } : {}),
     ...(config.skillFragments?.length ? { skillFragments: config.skillFragments.filter((fragment) => typeof fragment === 'string' && fragment.trim()).map((fragment) => fragment.trim()) } : {}),
     ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens } : {}),

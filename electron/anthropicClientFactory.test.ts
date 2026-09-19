@@ -11,7 +11,12 @@ describe('createRetryAuditedFetch', () => {
     await fetch('https://example.test', { body: 'request-1' })
     vi.setSystemTime(Date.now() + 2_000)
     await fetch('https://example.test', { body: 'request-1' })
-    expect(retries).toEqual([{ attempt: 2, backoffMs: 2_000, code: 'http_429' }])
+    // backoffMs 来自 Date.now() 实测等待时长：跨毫秒进位会 +1（满载下更明显），用容差断言
+    expect(retries).toEqual([
+      { attempt: 2, backoffMs: expect.any(Number), code: 'http_429' }
+    ])
+    expect((retries[0] as { backoffMs: number }).backoffMs).toBeGreaterThanOrEqual(2_000)
+    expect((retries[0] as { backoffMs: number }).backoffMs).toBeLessThan(2_100)
   })
 
   it('does not classify a later identical request as a retry after a non-retryable response', async () => {

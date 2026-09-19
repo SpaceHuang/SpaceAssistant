@@ -2,6 +2,12 @@ export type AgentLogLevel = 'info' | 'warn' | 'error'
 
 export type AgentLogEventName =
   | 'agent.startup'
+  | 'agent.policy.default_materials'
+  | 'agent.persist.failed'
+  | 'agent.profile.reasoning_degraded'
+  | 'driver.delivery.record'
+  | 'agent.tools.trim_widen_denied'
+  | 'driver.deferred.invalidated'
   | 'llm.request'
   | 'llm.max_tokens_floor'
   | 'llm.response'

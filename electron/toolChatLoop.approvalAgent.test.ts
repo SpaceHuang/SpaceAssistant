@@ -73,6 +73,13 @@ vi.mock('./anthropicClientFactory', () => ({
 }))
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeDb(): AppDatabase {
@@ -147,7 +154,7 @@ describe('P2 端到端：automation 写操作由审批 Agent 裁决', () => {
   it('approve 路径：写操作放行执行、confirm.outcome actor=agent、无 cache.write（I3）', async () => {
     installStreamClient()
     const db = makeDb()
-    const res = await runToolChatSession(baseArgs(db))
+    const res = await runAssembledSession(baseArgs(db))
     expect(res.ok).toBe(true)
     // 裁决确实走了审批链
     expect(mockRunApprovalAgent).toHaveBeenCalled()
@@ -181,7 +188,7 @@ describe('P2 端到端：automation 写操作由审批 Agent 裁决', () => {
     }))
     installStreamClient()
     const db = makeDb()
-    const res = await runToolChatSession(baseArgs(db))
+    const res = await runAssembledSession(baseArgs(db))
     expect(res.ok).toBe(true)
     // 每轮拒绝后模型仍被允许继续改方案（CONVERGE_ROUND=3 次拒绝 < 安全桶阈值 5）
     expect(capturedStreamParams.length).toBe(CONVERGE_ROUND + 1)
@@ -197,7 +204,7 @@ describe('P2 端到端：automation 写操作由审批 Agent 裁决', () => {
     mockRunApprovalAgent.mockImplementation(async () => ({ ok: false, cause: 'unavailable' }))
     installStreamClient()
     const db = makeDb()
-    const res = await runToolChatSession(baseArgs(db))
+    const res = await runAssembledSession(baseArgs(db))
     expect(res.ok).toBe(true)
     const outcomeEv = capturedAuditEvents.find((e) => e.event === 'confirm.outcome')
     expect(outcomeEv!.cause).toBe('unavailable')
@@ -219,7 +226,7 @@ describe('P2 端到端：任务声明透传（D）', () => {
   it('args.approvalTaskDigest → AgentChannel → 线索包 clue.taskDigest 全链透传', async () => {
     installStreamClient()
     const db = makeDb()
-    const res = await runToolChatSession({
+    const res = await runAssembledSession({
       ...baseArgs(db),
       approvalTaskDigest: '整理报告目录并汇总周报'
     })
@@ -232,7 +239,7 @@ describe('P2 端到端：任务声明透传（D）', () => {
   it('未传 approvalTaskDigest → clue.taskDigest 缺省 undefined（无任务上下文调用方安全）', async () => {
     installStreamClient()
     const db = makeDb()
-    const res = await runToolChatSession(baseArgs(db))
+    const res = await runAssembledSession(baseArgs(db))
     expect(res.ok).toBe(true)
     const inv = mockRunApprovalAgent.mock.calls[0]![1] as { clue: { taskDigest?: string } }
     expect(inv.clue.taskDigest).toBeUndefined()

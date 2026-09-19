@@ -155,6 +155,7 @@ import {
   stageChatImage
 } from './chatAttachmentManager'
 import type { ChatImageAttachment } from '../src/shared/domainTypes'
+import { withTransientLockRetry } from './safeAtomicWrite'
 
 const CONFIG_KEYS = {
   baseUrl: LLM_SERVICE_CONFIG_KEYS.baseUrl,
@@ -946,7 +947,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           sessionMetadata: session.metadata,
           recentMessages,
           model: baseConfig.model!,
-          baseUrl: baseConfig.baseUrl,
+          baseUrl: credentials.baseUrl,
           getApiKey: credentials.getApiKey,
           sessionId: intent.sessionId,
           signal: controller.signal
@@ -2123,7 +2124,7 @@ function readExposureInputsFromDb(
     const root = ctx.getWorkDir()
     const oldPath = resolveSafePath(root, rel)
     const newPath = path.join(path.dirname(oldPath), newName)
-    await fs.rename(oldPath, newPath)
+    await withTransientLockRetry(() => fs.rename(oldPath, newPath))
   })
 
   ipcMain.handle('file:move', async (_e, srcRel: string, destDirRel: string): Promise<void> => {
@@ -2135,7 +2136,7 @@ function readExposureInputsFromDb(
       throw new Error(ErrorCodes.TARGET_NOT_DIRECTORY)
     }
     const srcName = path.basename(srcPath)
-    await fs.rename(srcPath, path.join(destDirPath, srcName))
+    await withTransientLockRetry(() => fs.rename(srcPath, path.join(destDirPath, srcName)))
   })
 
   ipcMain.handle('file:copy', async (_e, payload: { srcRelPath: string; destRelPath: string }): Promise<void> => {

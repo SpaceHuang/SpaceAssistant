@@ -1,6 +1,7 @@
 import type { AppDatabase } from '../database'
 import { getMessages, getConfigValue, getSession, createSession } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
+import { assembleInvocation } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback } from '../workDirManager'
 import type { BrowserConfig, ShellConfig, ToolsConfig, ModelEntry } from '../../src/shared/domainTypes'
 import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
@@ -64,6 +65,8 @@ export type ButlerInvokerDeps = {
   admission?: ButlerAdmission
   /** 投递端口（主进程装配注入；缺省 = IM 未接线走显式降级路径）。 */
   deliveryPorts?: ButlerDeliveryPorts
+  /** P6：共享投递入口（装配器持有）；缺省为调用级实例。 */
+  deliveryHub?: import('../driver/deliveryHub').DeliveryHub
   /** 会话创建出口（主进程装配注入）：调度 / 手动触发的管家会话创建即回调，
    *  装配方经此把新会话推给渲染端会话列表（否则列表要重启才能看到，拉模式失效）。 */
   onSessionCreated?: (session: { id: string; name: string; ownership: string; visibility: string; workDirProfileId?: string }) => void
@@ -184,7 +187,8 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
               ...(task.deliveryTarget ? { deliveryTarget: task.deliveryTarget } : {})
             },
             run: { runId, status: 'completed', sessionId: turn.sessionId, resultSummary: turn.summary },
-            ports: deps.deliveryPorts ?? {}
+            ports: deps.deliveryPorts ?? {},
+            ...(deps.deliveryHub ? { hub: deps.deliveryHub } : {})
           })
     updateAutomationTaskRun(db, runId, {
       status: 'completed',
@@ -258,7 +262,7 @@ async function runButlerModelTurn(
   })
   const workDir = deps.resolveWorkDirForSession ? deps.resolveWorkDirForSession(args.sessionId) : deps.getWorkDir()
 
-  const res = await runToolChatSession({
+  const { invocation, ports } = assembleInvocation({
     requestId: args.requestId,
     sessionId: args.sessionId,
     turnId: args.turnId,
@@ -290,6 +294,7 @@ async function runButlerModelTurn(
     emitSessionEvent: butlerEvents.emitSessionEvent,
     onFileTreeChanged: butlerEvents.onFileTreeChanged
   })
+  const res = await runToolChatSession(invocation, ports)
 
   if (!res.ok) return { ok: false, error: res.error }
   const summary = extractTextFromContent(res.content) || '任务已完成。'

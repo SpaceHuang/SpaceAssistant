@@ -88,6 +88,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeMcpSnapshotEntry() {
@@ -125,7 +132,7 @@ describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注�
         })
       }
     })
-    await runToolChatSession({
+    await runAssembledSession({
       requestId: 'req-lane-1',
       sessionId: 'sess-lane-1',
       model: 'claude-sonnet-4-20250514',

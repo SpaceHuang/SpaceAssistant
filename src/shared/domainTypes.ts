@@ -730,6 +730,8 @@ export interface Message {
 }
 
 export interface ModelEntry {
+  /** P4（偏差 6）：模型能力标记——显式 false 表示不支持 thinking（effort 将被降级为 off 并落审计）。缺省视为支持。 */
+  supportsThinking?: boolean
   id: string
   name: string
   maximumContext: number

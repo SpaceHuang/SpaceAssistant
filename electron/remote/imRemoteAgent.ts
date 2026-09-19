@@ -1,6 +1,7 @@
 import type { AppDatabase } from '../database'
 import { getMessages, getConfigValue } from '../database'
-import { runToolChatSession, type RunToolChatSessionArgs } from '../toolChatLoop'
+import { runToolChatSession } from '../toolChatLoop'
+import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
@@ -62,7 +63,7 @@ export async function runImRemoteAgent(args: {
   buildSystemAppendix: (args: { browserRemoteHint?: FeishuBrowserRemoteHint }) => string
   progressDefaults: Required<RemoteProgressConfig>
   progressConfig: RemoteProgressConfig
-  toolChatExtras?: Pick<RunToolChatSessionArgs, 'feishuConfig' | 'wechatConfig' | 'larkCliRunner'>
+  toolChatExtras?: Pick<AgentInvocationMaterials, 'feishuConfig' | 'wechatConfig' | 'larkCliRunner'>
   onFinally?: () => void
   /** WeChat historically rethrows as `new Error(message)`. */
   rethrowAsError?: boolean
@@ -125,7 +126,7 @@ export async function runImRemoteAgent(args: {
     const baseUrl = creds.baseUrl ?? args.getBaseUrl()
     const getApiKey = creds.error ? args.getApiKey : creds.getApiKey
 
-    const res = await runToolChatSession({
+    const { invocation, ports } = assembleInvocation({
       requestId,
       sessionId: args.sessionId,
       turnId: args.turnId,
@@ -160,6 +161,7 @@ export async function runImRemoteAgent(args: {
       ,emitFactEvent: args.emitFactEvent ?? (() => undefined)
       ,emitSessionEvent: async () => undefined
     })
+    const res = await runToolChatSession(invocation, ports)
 
     if (!res.ok) {
       const pending = res.error.includes('确认')

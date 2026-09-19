@@ -1,4 +1,5 @@
 import { buildSimpleOutboundText } from '../remote/imRemoteOutbound'
+import { createDeliveryHub, type DeliveryHub } from '../driver/deliveryHub'
 import type { AutomationDeliveryPref } from './taskStore'
 
 /**
@@ -33,12 +34,16 @@ export type ButlerDeliveryInput = {
     resultSummary?: string
   }
   ports: ButlerDeliveryPorts
+  /** P6：共享投递入口（装配器持有）；缺省为本次调用级 hub 实例（状态随调用走，不进模块级）。 */
+  hub?: DeliveryHub
 }
 
 export type ButlerDeliveryResult = {
   status: 'delivered' | 'failed-degraded' | 'none'
   /** 降级发生时记录原因，写回 run 的 error 字段留痕。 */
   degradedReason?: string
+  /** P6：统一入口的送达记录（偏差 8：哪条结果、投给哪个驱动源、何时、结果如何）。 */
+  deliveryRecords?: Array<{ driverId: string; outcome: string }>
 }
 
 /** 只有 completed 的 run 才投递：skipped / failed / interrupted 不产生通知（有界性由调度侧保证）。 */
@@ -49,31 +54,7 @@ export function shouldDeliverRun(run: { status: string }): boolean {
 const IM_MAX_LEN = 2000
 const IM_TRUNCATION_SUFFIX = '…（内容过长已截断）'
 
-async function deliverToIm(
-  send: ((text: string, target?: string) => Promise<void>) | undefined,
-  platform: string,
-  input: ButlerDeliveryInput
-): Promise<{ status: 'delivered' | 'failed-degraded'; degradedReason?: string }> {
-  if (!send) {
-    return { status: 'failed-degraded', degradedReason: `${platform} 投递端口未接线` }
-  }
-  try {
-    const text = buildSimpleOutboundText({
-      body: `[管家] ${input.task.name}\n${input.run.resultSummary ?? '任务已完成'}`,
-      sessionId: input.run.sessionId,
-      maxLen: IM_MAX_LEN,
-      truncationSuffix: IM_TRUNCATION_SUFFIX
-    })
-    await send(text, input.task.deliveryTarget)
-    return { status: 'delivered' }
-  } catch (error) {
-    return {
-      status: 'failed-degraded',
-      degradedReason: `${platform} 投递失败：${error instanceof Error ? error.message : String(error)}`
-    }
-  }
-}
-
+/** P6（偏差 8 首批迁移）：butler 投递经统一入口——端口包装为驱动源注册进 hub，送达记录成对落台账。 */
 export async function deliverTaskResult(input: ButlerDeliveryInput): Promise<ButlerDeliveryResult> {
   const { task, run, ports } = input
 
@@ -81,30 +62,62 @@ export async function deliverTaskResult(input: ButlerDeliveryInput): Promise<But
     return { status: 'none' }
   }
 
-  if (task.deliveryPref === 'feishu') {
-    const imResult = await deliverToIm(ports.sendFeishu, 'feishu', input)
-    if (imResult.status === 'delivered') return { status: 'delivered' }
-    if (ports.notifyDesktop) {
-      ports.notifyDesktop(run.resultSummary ?? '任务已完成', { taskId: task.id, taskName: task.name, ...(run.sessionId ? { sessionId: run.sessionId } : {}), runId: run.runId })
-      return { status: 'failed-degraded', degradedReason: imResult.degradedReason }
+  const hub = input.hub ?? createDeliveryHub()
+  hub.registerDriver({
+    id: 'desktop',
+    isReachable: () => Boolean(ports.notifyDesktop),
+    deliver: async (payload) => {
+      ports.notifyDesktop!(payload.text ?? '任务已完成', {
+        taskId: task.id,
+        taskName: task.name,
+        ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+        runId: run.runId
+      })
     }
-    return imResult
+  })
+  const imDriver = (id: 'feishu' | 'wechat', send: ((text: string, target?: string) => Promise<void>) | undefined) => ({
+    id,
+    isReachable: () => Boolean(send),
+    deliver: async (payload: { text?: string }) => {
+      await send!(buildSimpleOutboundText({
+        body: payload.text ?? '',
+        sessionId: run.sessionId,
+        maxLen: IM_MAX_LEN,
+        truncationSuffix: IM_TRUNCATION_SUFFIX
+      }), task.deliveryTarget)
+    }
+  })
+  hub.registerDriver(imDriver('feishu', ports.sendFeishu))
+  hub.registerDriver(imDriver('wechat', ports.sendWechat))
+
+  const withImFallback = async (target: 'feishu' | 'wechat'): Promise<ButlerDeliveryResult> => {
+    const imRecord = await hub.deliver({ target, ttlMs: 30_000 }, { kind: 'butler-run-result', text: `[管家] ${task.name}\n${run.resultSummary ?? '任务已完成'}` })
+    if (imRecord.outcome === 'delivered') {
+      return { status: 'delivered', deliveryRecords: [{ driverId: target, outcome: imRecord.outcome }] }
+    }
+    // 显式降级桌面（保留 P5 降级语义；降级本身也经 hub 留送达记录）
+    const desktopRecord = await hub.deliver({ target: 'desktop', ttlMs: 30_000 }, { kind: 'butler-run-result', text: run.resultSummary ?? '任务已完成' })
+    return {
+      status: 'failed-degraded',
+      degradedReason: `${target} 投递未完成（${imRecord.outcome}${imRecord.error ? `: ${imRecord.error}` : ''}）`,
+      deliveryRecords: [
+        { driverId: target, outcome: imRecord.outcome },
+        { driverId: 'desktop', outcome: desktopRecord.outcome }
+      ]
+    }
   }
 
-  if (task.deliveryPref === 'wechat') {
-    const imResult = await deliverToIm(ports.sendWechat, 'wechat', input)
-    if (imResult.status === 'delivered') return { status: 'delivered' }
-    if (ports.notifyDesktop) {
-      ports.notifyDesktop(run.resultSummary ?? '任务已完成', { taskId: task.id, taskName: task.name, ...(run.sessionId ? { sessionId: run.sessionId } : {}), runId: run.runId })
-      return { status: 'failed-degraded', degradedReason: imResult.degradedReason }
-    }
-    return imResult
-  }
+  if (task.deliveryPref === 'feishu') return withImFallback('feishu')
+  if (task.deliveryPref === 'wechat') return withImFallback('wechat')
 
   // desktop
-  if (ports.notifyDesktop) {
-    ports.notifyDesktop(run.resultSummary ?? '任务已完成', { taskId: task.id, taskName: task.name, ...(run.sessionId ? { sessionId: run.sessionId } : {}), runId: run.runId })
-    return { status: 'delivered' }
+  const desktopRecord = await hub.deliver({ target: 'desktop', ttlMs: 30_000 }, { kind: 'butler-run-result', text: run.resultSummary ?? '任务已完成' })
+  if (desktopRecord.outcome === 'delivered') {
+    return { status: 'delivered', deliveryRecords: [{ driverId: 'desktop', outcome: desktopRecord.outcome }] }
   }
-  return { status: 'failed-degraded', degradedReason: '桌面通知端口未接线' }
+  return {
+    status: 'failed-degraded',
+    degradedReason: '桌面通知端口未接线',
+    deliveryRecords: [{ driverId: 'desktop', outcome: desktopRecord.outcome }]
+  }
 }

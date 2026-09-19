@@ -75,6 +75,55 @@ export function isPolicyRuleDisabled(db: AppDatabase, ruleId: string): boolean {
  * 保证未配置套餐/覆盖时与 P1–P3 行为逐项等价；strict/loose/custom 经 resolvePolicyRules 变换。
  * P2-5：agent 回答者的 lane 不得 loose、custom 只保留收紧覆盖（解析期兜底，写入期另有强校验）。
  */
+/** 规则来源（P3：审计能回答「我设的 allow 为什么没生效」）。 */
+export type PolicyRuleOriginSource = 'builtin' | 'package' | 'user-override' | 'migration'
+
+export interface PolicyRuleOrigin {
+  source: PolicyRuleOriginSource
+  /** 被遮蔽规则的痕迹（哪条被哪条盖住）。 */
+  shadowed?: Array<{ source: PolicyRuleOriginSource }>
+}
+
+/**
+ * 带来源的生效规则解析（P3）：规则集与 loadEffectivePolicyRules 同判，
+ * 额外携带每条生效规则的来源维度与被遮蔽痕迹。
+ */
+export function resolveEffectivePolicyRulesWithOrigin(
+  db: AppDatabase,
+  lane: ExecutionLane
+): { rules: PolicyRule[]; origins: Record<string, PolicyRuleOrigin> } {
+  const origins: Record<string, PolicyRuleOrigin> = {}
+  const packages = readPolicyPackages(db)
+  const answererKind = resolveLaneAnswererKind(db, lane)
+  const disabledRuleIds = readDisabledPolicyRuleIds(db)
+  const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
+  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !lockedIds.has(id))
+  const pkg = packages[lane] ?? 'standard'
+  const baseRules = safeDisabledRuleIds.length
+    ? (DEFAULT_POLICY_RULES.filter((r) => !safeDisabledRuleIds.includes(r.id)) as PolicyRule[])
+    : DEFAULT_POLICY_RULES
+  if (pkg === 'standard' && safeDisabledRuleIds.length === 0) {
+    for (const rule of DEFAULT_POLICY_RULES) origins[rule.id] = { source: 'builtin' }
+    return { rules: DEFAULT_POLICY_RULES, origins }
+  }
+  const overrides = pkg === 'custom' ? new PolicyRuleStore(getDbConnection(db)).listOverrides() : []
+  const resolved = resolvePolicyRules({ lane, packages, overrides, rules: baseRules, answererKind })
+  const overrideById = new Map(overrides.map((o) => [o.ruleId, o]))
+  const baseById = new Map(baseRules.map((r) => [r.id, r]))
+  for (const rule of resolved) {
+    const override = overrideById.get(rule.id)
+    if (override && rule.action !== baseById.get(rule.id)?.action) {
+      origins[rule.id] = { source: 'user-override', shadowed: [{ source: 'builtin' }] }
+    } else if (baseById.get(rule.id)?.action !== rule.action) {
+      // 套餐变换（strict 上调 / loose 下调）改变了内置动作
+      origins[rule.id] = { source: 'package', shadowed: [{ source: 'builtin' }] }
+    } else {
+      origins[rule.id] = { source: 'builtin' }
+    }
+  }
+  return { rules: resolved, origins }
+}
+
 export function loadEffectivePolicyRules(db: AppDatabase, lane: ExecutionLane): PolicyRule[] {
   const packages = readPolicyPackages(db)
   const answererKind = resolveLaneAnswererKind(db, lane)

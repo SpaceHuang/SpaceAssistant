@@ -99,6 +99,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeSender(): WebContents {
@@ -156,7 +163,7 @@ describe('runToolChatSession locale injection', () => {
 
 
   async function runSession(overrides: Partial<Parameters<typeof runToolChatSession>[0]> = {}) {
-    return runToolChatSession({
+    return runAssembledSession({
       sender: makeSender(),
       requestId: 'req-1',
       sessionId: 'sess-1',
@@ -166,6 +173,8 @@ describe('runToolChatSession locale injection', () => {
       workDir: '/tmp',
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
+      emitFactEvent: () => undefined,
+      emitSessionEvent: async () => undefined,
       appDb: makeDb('zh-CN'),
       ...overrides
     })

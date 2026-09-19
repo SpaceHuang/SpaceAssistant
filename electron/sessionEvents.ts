@@ -3,6 +3,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
+import { withTransientLockRetry } from './safeAtomicWrite'
 
 export type SessionEventPayload = Record<string, unknown>
 export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
@@ -426,7 +427,7 @@ export class SessionEventWriter implements SessionEventSink {
     const temp = path.join(this.directory, `.events-index-${randomUUID()}.tmp`)
     try {
       await fs.writeFile(temp, JSON.stringify({ formatVersion: 2, seq: this.seq, eventCount: this.eventCount, bytes: this.bytes, lastAt: lastEvent.time }))
-      await fs.rename(temp, this.indexPath)
+      await withTransientLockRetry(() => fs.rename(temp, this.indexPath))
     } finally {
       await fs.rm(temp, { force: true }).catch(() => undefined)
     }
@@ -608,7 +609,7 @@ export async function reconcileSessionEventFilesDetailed(workDir: string): Promi
       const temp = path.join(root, entry.name, `.events-index-${randomUUID()}.tmp`)
       try {
         await fs.writeFile(temp, JSON.stringify({ formatVersion: 2, seq: last.seq, lastAt: last.time, eventCount: readResult.events.length + repairs.length, bytes }))
-        await fs.rename(temp, path.join(root, entry.name, 'events.index.json'))
+        await withTransientLockRetry(() => fs.rename(temp, path.join(root, entry.name, 'events.index.json')))
       } finally {
         await fs.rm(temp, { force: true }).catch(() => undefined)
       }

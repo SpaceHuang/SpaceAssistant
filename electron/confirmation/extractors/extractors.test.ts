@@ -98,7 +98,9 @@ describe('pathClassifier', () => {
   it('POSIX 绝对敏感路径保持 sensitive-file 分类', () => {
     expect(classifyPath('/root/.ssh/id_ed25519', env)).toBe('sensitive-file')
   })
-  it('解析 symlink 后识别 workdir 外目标', async () => {
+  // 用例模拟 darwin 环境并依赖宿主真实 fs 的 realpath：Windows 宿主上 POSIX 形式路径无法解析（junction 也不适用），由 POSIX 宿主覆盖
+  const itDarwinSymlink = process.platform === 'win32' ? it.skip : it
+  itDarwinSymlink('解析 symlink 后识别 workdir 外目标', async () => {
     const fs = await import('fs/promises')
     const os = await import('os')
     const path = await import('path')

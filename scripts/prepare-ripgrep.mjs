@@ -95,8 +95,11 @@ export async function downloadArchive(url, fetchImpl = fetch) {
   throw lastError
 }
 export function safeJoin(base, relative) {
-  const resolved = path.resolve(base, relative)
-  if (resolved !== base && !resolved.startsWith(`${base}${path.sep}`)) throw new Error(`unsafe archive path: ${relative}`)
+  // base 必须先归一化：Windows 上 resolve 会补盘符（/tmp/extract → E:	mp\extract），
+  // 未归一化的原始 base 会让前缀判断必假、合法相对路径被误判为穿越
+  const normalizedBase = path.resolve(base)
+  const resolved = path.resolve(normalizedBase, relative)
+  if (resolved !== normalizedBase && !resolved.startsWith(`${normalizedBase}${path.sep}`)) throw new Error(`unsafe archive path: ${relative}`)
   return resolved
 }
 

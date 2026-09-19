@@ -1,5 +1,6 @@
 import { decide } from '../../src/shared/policy/policyEngine'
-import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
+import type { PolicyRule } from '../../src/shared/confirmation/types'
+import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -33,21 +34,16 @@ import type { ActDangerAssessment } from '../browser/browserActionPolicy'
 import { classifyLarkCliImpact } from '../feishu/larkCliImpactPolicy'
 import type { McpToolSnapshotEntry } from '../mcp/mcpToolRegistry'
 import type { RemoteContext } from '../tools/types'
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database'
 import { checkRemoteTaskBudget, type RemoteTaskBudgetState } from '../remote/remoteTaskBudget'
 import {
   isRemoteSecurityMigrationComplete,
   shouldSkipRemoteBrowserActConfirm
 } from '../remote/remoteToolPolicy'
 import { AuditedDecisionCache } from './auditedDecisionCache'
-import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getSecurityAuditLog } from './audit'
-import { loadEffectivePolicyRules } from './policyRulesRuntime'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 
-const EMPTY_CACHE: DecisionCacheView = { lookup: () => null }
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
 export function isOutboundWriteTool(toolName: string, toolInput: Record<string, unknown>): boolean {
@@ -55,6 +51,11 @@ export function isOutboundWriteTool(toolName: string, toolInput: Record<string, 
   if (toolName !== 'run_lark_cli') return false
   return classifyLarkCliImpact(toolInput.args).impact !== 'read'
 }
+
+export { validatePolicyRulesFloor }
+
+/** 门控消费的决策缓存完整形状（lookup + 写/清理族；由装配期注入 SqliteDecisionCache 或等价内存实现）。 */
+export type GateDecisionCache = import('./auditedDecisionCache').AuditedDecisionCacheDeps['cache']
 
 export interface ToolCallGateArgs {
   toolName: string
@@ -70,7 +71,20 @@ export interface ToolCallGateArgs {
   browserConfig?: BrowserConfig | null
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
-  appDb?: AppDatabase
+  /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
+  effectiveRules: PolicyRule[]
+  /** 装配期随规则集携带的来源标注（P3）；审计据此回答规则为何未生效。 */
+  policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
+  /**
+   * P5（偏差 4）factsProvider 端口：宿主补充审批可见输入（返回 undefined = 本次无补充；
+   * 未提供端口 = 忘了声明——两者在 facts.factsProviderDeclared 上可区分）。
+   */
+  factsProvider?: (input: { toolName: string; toolInput: Record<string, unknown> }) =>
+    import('../../src/shared/confirmation/types').FactSignal[] | undefined
+  /** 装配期构造的决策缓存视图（B1：必填，缺料 fail-loud，不回退空缓存）。 */
+  decisionCache: GateDecisionCache
+  /** 装配期注入的 shell 预检材料（B1：必填；trusted-command 记账写不允许静默停写）。 */
+  shellPrecheck: { touchTrustedCommand: (command: string) => void }
   remoteBudgetState?: RemoteTaskBudgetState | null
   /** 浏览器 act 的危险评估结论（由执行链路先行评估注入）。 */
   dangerAssessment?: ActDangerAssessment | null
@@ -136,6 +150,66 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     facts: undefined as unknown as ContentFacts
   }
 
+  // ===== B1 缺料 fail-loud：端口材料缺失 = 调用失败 + 审计（不回退任何静默默认）=====
+  const materialsMissing: string[] = []
+  if (!Array.isArray(args.effectiveRules)) materialsMissing.push('effectiveRules')
+  if (!args.decisionCache || typeof args.decisionCache.lookup !== 'function') materialsMissing.push('decisionCache')
+  if (!args.shellPrecheck || typeof args.shellPrecheck.touchTrustedCommand !== 'function') materialsMissing.push('shellPrecheck')
+  if (materialsMissing.length > 0) {
+    audit.record({
+      ts: Date.now(),
+      event: 'policy.decision',
+      lane,
+      origin,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      riskLevel: 'high',
+      factsSummary: args.toolName,
+      signals: [],
+      decision: 'deny',
+      ruleId: 'gate-materials-missing',
+      reason: `TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`,
+      cause: 'gate-materials-missing',
+      actor: 'system'
+    })
+    throw new Error(`TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`)
+  }
+
+  // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
+  // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
+  if (!floorCheck.ok) {
+    result.decision = {
+      type: 'deny',
+      ruleId: 'rules-violated',
+      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`
+    }
+    result.facts = {
+      toolName: args.toolName,
+      actionClass: 'execute',
+      baseRiskLevel: 'high',
+      signals: [],
+      summary: { text: args.toolName }
+    }
+    audit.record({
+      ts: Date.now(),
+      event: 'policy.decision',
+      lane,
+      origin,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      riskLevel: 'high',
+      factsSummary: args.toolName,
+      signals: [],
+      decision: 'deny',
+      ruleId: 'rules-violated',
+      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`,
+      cause: 'rules-violated',
+      actor: 'system'
+    })
+    return result
+  }
+
   // ===== 前置 validator：run_shell 预检（deny 短路，不进引擎）=====
   let shellLegacyAutoAllowEligible = false
   if (args.toolName === 'run_shell') {
@@ -144,7 +218,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       workDir: args.workDir,
       userDataDir: args.userDataDir,
       shellConfig: args.shellConfig,
-      appDb: args.appDb
+      shellPrecheck: args.shellPrecheck
     })
     if (!precheck.ok) {
       result.shellPrecheckDeny = {
@@ -189,9 +263,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible
   }
 
-  // ===== 生效规则集（套餐/覆盖，§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用 =====
-  // 提前加载：桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作
-  const rules = args.appDb ? loadEffectivePolicyRules(args.appDb, lane) : DEFAULT_POLICY_RULES
+  // ===== 生效规则集（§4 第 1 区）：装配期解析注入（B1）——门控不再持库，缺料在入口已 fail-loud =====
+  // （桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作）
+  const rules = args.effectiveRules
 
   // ===== 桌面写/编辑自动审批（预计算，评估器闭包消费）=====
   // 生效条件：desktop-auto-approve 动作为 auto-evaluator；默认规则带 confirmMode=auto 门控，
@@ -329,26 +403,42 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   // ===== 决策（缓存走 AuditedDecisionCache，落 cache.hit 审计）=====
-  const cache: DecisionCacheView = args.appDb
-    ? new AuditedDecisionCache({
-        cache: new SqliteDecisionCache(getDbConnection(args.appDb)),
-        audit,
-        sessionId: args.sessionId,
-        lane,
-        origin
-      })
-    : EMPTY_CACHE
+  // 底层视图由装配期注入（B1）；审计装饰仍在此完成，保证 args.audit 注入语义不变
+  const cache: DecisionCacheView = new AuditedDecisionCache({
+    cache: args.decisionCache,
+    audit,
+    sessionId: args.sessionId,
+    lane,
+    origin
+  })
+  // P5（偏差 4）AutoEvaluator 数据化：预过滤器路由由生效规则数据驱动（action='auto-evaluator'
+  // 条目的 match.toolName + match.lane 声明评估域与 lane 标注），不再是按工具名写死的代码分支。
+  // 确定性预过滤地位保留在回答者之前（审批计划已拍板，复核记录留痕）。
+  const autoEvaluatorRoutes = new Map<string, string>()
+  for (const rule of rules) {
+    if (rule.action !== 'auto-evaluator') continue
+    const laneMatch = rule.match?.lane
+    if (laneMatch && !laneMatch.includes(lane)) continue
+    const names = rule.match?.toolName === undefined
+      ? []
+      : Array.isArray(rule.match.toolName)
+        ? rule.match.toolName
+        : [rule.match.toolName]
+    for (const name of names) autoEvaluatorRoutes.set(name, rule.id)
+  }
   const deps: PolicyEngineDeps = {
     cache,
     config,
     migrationComplete: isRemoteSecurityMigrationComplete(channelConfig),
     autoEvaluator: (f) => {
-      if (f.toolName === 'run_shell') {
+      const route = autoEvaluatorRoutes.get(f.toolName)
+      if (!route) return { approve: false as const, reason: '无评估器' }
+      if (route === 'shell-precheck-auto-allow') {
         return shellLegacyAutoAllowEligible
           ? { approve: true as const, reason: 'shell-precheck' }
           : { approve: false as const, reason: 'shell-precheck 未放行' }
       }
-      if (f.toolName === 'write_file' || f.toolName === 'edit_file') {
+      if (route === 'desktop-auto-approve') {
         return fileAutoApprove === true
           ? { approve: true as const, reason: 'desktop-auto-approve' }
           : { approve: false as const, reason: '文件自动审批未通过' }
@@ -356,6 +446,20 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       return { approve: false as const, reason: '无评估器' }
     }
   }
+  // P5：factsProvider 补充并入（工具契约 ∪ 宿主环境，逐项标注来源半区）
+  let providerSignals: import('../../src/shared/confirmation/types').FactSignal[] | undefined
+  if (args.factsProvider) {
+    providerSignals = args.factsProvider({ toolName: args.toolName, toolInput: args.toolInput })
+  }
+  const factSources: Record<string, 'tool-contract' | 'host-environment'> = {}
+  for (const signal of facts.signals) factSources[signal.kind] = 'tool-contract'
+  for (const signal of providerSignals ?? []) {
+    if (!(signal.kind in factSources)) factSources[signal.kind] = 'host-environment'
+  }
+  facts.signals = [...facts.signals, ...(providerSignals ?? [])]
+  facts.factSources = factSources
+  facts.factsProviderDeclared = args.factsProvider !== undefined
+
   // 生效规则集已在上方加载（自动审批预计算依赖），此处直接判定
   let decision = decide(facts, context, rules, deps)
 
@@ -385,6 +489,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'
       ? { cause: 'recursion-blocked' as const }
       : {}),
+    ...(args.policyOrigins?.[decision.ruleId]
+      ? { ruleOrigin: args.policyOrigins[decision.ruleId]!.source }
+      : {}),
+    ...(args.factsProvider ? { factSources } : {}),
     actor: 'system'
   })
 

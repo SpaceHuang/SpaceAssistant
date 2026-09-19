@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import type { AppDatabase } from '../database'
+import { AppDatabase, openDatabase, setConfigValue } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 
@@ -17,9 +17,13 @@ vi.mock('../appIpc', () => ({
   readAppLocale: (...args: unknown[]) => mockReadAppLocale(...args)
 }))
 
-vi.mock('../database', () => ({
-  getMessages: (...args: unknown[]) => mockGetMessages(...args)
-}))
+vi.mock('../database', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../database')>()
+  return {
+    ...actual,
+    getMessages: (...args: unknown[]) => mockGetMessages(...args)
+  }
+})
 
 vi.mock('../llmServiceResolver', () => ({
   resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args)
@@ -53,14 +57,9 @@ vi.mock('../workDirManager', async (importOriginal) => {
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 
 function makeDb(): AppDatabase {
-  return {
-    data: {
-      configs: { 'config.locale': { value: 'en-US', createdAt: 0, updatedAt: 0 } },
-      sessions: [{ id: 'sess-1', name: '', model: 'claude-sonnet-4-20250514' }],
-      messages: []
-    },
-    save: vi.fn()
-  } as unknown as AppDatabase
+  const db = openDatabase(':memory:')
+  setConfigValue(db, 'config.locale', 'en-US')
+  return db
 }
 
 function makeWorkDirManager() {
@@ -112,10 +111,10 @@ describe('runFeishuRemoteAgent locale', () => {
 
   it('I8: invokes runToolChatSession with appDb and raw feishu appendix (locale injected in tool loop)', async () => {
     let capturedSystem: string | undefined
-    mockRunToolChatSession.mockImplementation(async (args: { system?: string; appDb?: unknown; locale?: unknown }) => {
-      capturedSystem = args.system
-      expect(args.appDb).toBeDefined()
-      expect(args.locale).toBe('en-US')
+    mockRunToolChatSession.mockImplementation(async (invocation: { profile: { system?: string; locale?: unknown } }, ports: { legacy?: { appDb?: unknown } }) => {
+      capturedSystem = invocation.profile.system
+      expect(ports.legacy?.appDb).toBeDefined()
+      expect(invocation.profile.locale).toBe('en-US')
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
     })
 
@@ -130,7 +129,8 @@ describe('runFeishuRemoteAgent locale', () => {
     await runFeishuRemoteAgent(baseCtx(() => null))
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
-      expect.objectContaining({ appDb: expect.anything() })
+      expect.anything(),
+      expect.objectContaining({ legacy: expect.objectContaining({ appDb: expect.anything() }) })
     )
   })
 
@@ -141,8 +141,8 @@ describe('runFeishuRemoteAgent locale', () => {
       browserRemoteHint: undefined
     })
 
-    mockRunToolChatSession.mockImplementation(async (args: { system?: string }) => {
-      const finalWithLocale = `${args.system ?? ''}\n\n<ui_locale_preference>\nEnglish\n</ui_locale_preference>`
+    mockRunToolChatSession.mockImplementation(async (invocation: { profile: { system?: string } }) => {
+      const finalWithLocale = `${invocation.profile.system ?? ''}\n\n<ui_locale_preference>\nEnglish\n</ui_locale_preference>`
       expect(finalWithLocale.indexOf(appendix.slice(0, 20))).toBeLessThan(
         finalWithLocale.indexOf('<ui_locale_preference>')
       )
@@ -150,15 +150,21 @@ describe('runFeishuRemoteAgent locale', () => {
     })
 
     await runFeishuRemoteAgent(baseCtx(() => null))
-    expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({ system: appendix }))
+    expect(mockRunToolChatSession).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: expect.objectContaining({ system: appendix }) }),
+      expect.anything()
+    )
   })
 
   it('passes workDirManager and resolveWorkDir to runToolChatSession', async () => {
     await runFeishuRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        workDirManager: expect.anything(),
-        resolveWorkDir: expect.any(Function)
+        workspace: expect.objectContaining({
+          workDirManager: expect.anything(),
+          resolveWorkDir: expect.any(Function)
+        })
       })
     )
   })

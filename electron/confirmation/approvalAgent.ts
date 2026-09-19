@@ -16,6 +16,7 @@ import type { BrowserConfig, ShellConfig, ToolsConfig } from '../../src/shared/d
 import type { AppDatabase } from '../database'
 import { createSession } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
+import { assembleInvocation } from '../runtime/invocationAssembler'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import { buildFinalSystemPrompt } from '../llmSystemPrompt'
 import type { AppLocale } from '../../src/shared/locale'
@@ -38,16 +39,12 @@ export const APPROVAL_MAX_ROUNDS = 3
 export const DEFAULT_APPROVAL_MODEL = 'claude-haiku-4-5-20251001'
 
 /** 封闭只读工具集（Profile 工具集只能收窄，不能加宽——「免再审批」的安全前提）。 */
-export const APPROVAL_READONLY_TOOLS: readonly string[] = [
-  'read_file',
-  'list_directory',
-  'grep',
-  'list_work_dirs',
-  'history.read',
-  'skills.read'
-]
+import { APPROVAL_READONLY_TOOLS } from './approvalToolset'
+export { APPROVAL_READONLY_TOOLS }
 
 export interface ApprovalAgentDeps {
+  /** P3：父调用规则集上界（嵌套交集；缺省 = 无上界约束）。 */
+  policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
   db: AppDatabase
   workDir: string
   userDataDir: string
@@ -284,8 +281,13 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       locale: deps.locale ?? 'zh-CN'
     })
 
-    const runPromise = runToolChatSession({
+    const { invocation, ports } = assembleInvocation({
       requestId: inv.requestId,
+      // 子调用零成本档：审批推理不产生 thinking（基线 §5.4 规则 5）
+      effort: 'off',
+      // P7（偏差 16）：封闭只读工具集平移为按调用裁剪声明（数据化实例，白名单内容不变）
+      toolsTrim: { allow: APPROVAL_READONLY_TOOLS },
+      ...(deps.policyRuleFloor ? { policyRuleFloor: deps.policyRuleFloor } : {}),
       sessionId,
       lane: 'automation',
       internalConfirmExemption: 'approval-agent',
@@ -308,6 +310,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       emitFactEvent: () => undefined,
       emitSessionEvent: () => undefined
     })
+    const runPromise = runToolChatSession(invocation, ports)
     runCreated = true
     // P1-4：run 收敛时置位（孤儿 run 存续期窗口由 finally 判断保持开启）；拒绝已被 race 派生分支处理
     void runPromise.then(

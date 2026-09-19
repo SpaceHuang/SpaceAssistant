@@ -136,6 +136,10 @@ export interface ContentFacts {
   baseRiskLevel: RiskLevel
   signals: FactSignal[]
   summary: ConfirmSummary
+  /** P5：事实来源标注（信号 kind → 来源半区：工具契约 / 宿主环境）；审计可回答「结论基于谁提供的事实」。 */
+  factSources?: Record<string, 'tool-contract' | 'host-environment'>
+  /** P5：宿主是否声明了 factsProvider——「声明为空」与「忘了声明」必须可区分（基线 §5.2 硬要求）。 */
+  factsProviderDeclared?: boolean
 }
 
 // ===== 策略层输出 =====
@@ -267,6 +271,8 @@ export type ConfirmOutcomeCause =
   | 'config-error'
   | 'recursion-blocked'
   | 'no-answerer'
+  | 'gate-materials-missing'
+  | 'rules-violated'
 
 export type ConfirmOutcome =
   | {
@@ -334,6 +340,10 @@ export interface DecisionCacheEntry {
 export interface SecurityAuditEvent {
   ts: number
   event: SecurityAuditEventKind
+  /** P3：命中规则的来源维度（builtin / package / user-override / migration），审计可回答「我设的 allow 为什么没生效」。 */
+  ruleOrigin?: 'builtin' | 'package' | 'user-override' | 'migration'
+  /** P5：事实来源标注（仅宿主声明 factsProvider 时携带）。 */
+  factSources?: Record<string, 'tool-contract' | 'host-environment'>
   lane: ExecutionLane
   origin?: OriginInfo
   sessionId: string
