@@ -409,6 +409,8 @@
     }
   },
   "shell": {
+    "scriptParserUnavailable": "脚本安全解析不可用",
+    "scriptParserUnavailableDetail": "脚本内容安全解析服务未就绪，所有脚本/Shell 命令判定已全部降级为人工确认。请查看日志中的 treesitter.init.failed / treesitter.selfcheck.failed 事件排查原因。",
     "boundaryTitle": "Shell 命令能力边界",
     "boundaryDescription": "Shell 在会话工作目录下启动，系统会扫描命令中的路径并在越界/敏感时显著警示；注入类高危模式会直接拒绝。Shell 无法像文件工具一样约束子进程的全部行为。请勿对不可信命令点击确认。",
     "defaultTimeoutLabel": "默认超时（秒）",

@@ -49,6 +49,13 @@ export type ToolConfirmResponsePayload = {
   memoryTierOptionId?: number
 }
 
+/** P0-T4：脚本安全解析服务状态（主进程 ScriptParserService.getStatus() 的 IPC 投影）。 */
+export type ScriptParserStatusPayload = {
+  ready: boolean
+  failedReason?: string
+  notReadyParseCount: number
+}
+
 export type ShellManageTrustedCommandsAction =
   | { action: 'list' }
   | { action: 'add'; command: string }
@@ -408,6 +415,9 @@ export type SpaceAssistantApi = {
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>
+
+  // P0-T4：脚本安全解析服务状态（诊断展示）
+  treesitterGetStatus: () => Promise<ScriptParserStatusPayload>
 
   usageStatsDaily: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageDailyPoint[]>
   usageStatsSummary: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageSummary>

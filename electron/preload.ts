@@ -133,6 +133,8 @@ const api: SpaceAssistantApi = {
 
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),
+  treesitterGetStatus: () =>
+    ipcRenderer.invoke('treesitter:get-status') as Promise<import('../src/shared/api').ScriptParserStatusPayload>,
 
   usageStatsDaily: (args) => ipcRenderer.invoke('usage-stats:daily', args),
   usageStatsSummary: (args) => ipcRenderer.invoke('usage-stats:summary', args),

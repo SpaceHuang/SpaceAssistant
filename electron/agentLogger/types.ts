@@ -126,5 +126,9 @@ export type AgentLogEventName =
   | 'usageStats.write.failed'
   | 'usageStats.retention.cleaned'
   | 'usageStats.backfill.completed'
+  | 'treesitter.init.failed'
+  | 'treesitter.selfcheck.failed'
+  | 'treesitter.selfcheck.passed'
+  | 'treesitter.parse.not_ready'
 
 export type AgentLogFields = Record<string, unknown>

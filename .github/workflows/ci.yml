@@ -15,6 +15,9 @@ jobs:
       # （背景：Node 22 node:sqlite 按 NUL 截断读出字符串，字面 NUL 曾致 CI 与本地结果不一致）
       - name: Check source files for NUL bytes
         run: npm run check:no-nul
+      # tree-sitter 受控 wasm/node-types 哈希校验：只需 node，与 check:no-nul 同层秒级失败
+      - name: Check tree-sitter wasm hashes
+        run: npm run check:treesitter-wasm
       - uses: actions/setup-node@v5
         with:
           node-version: '22'

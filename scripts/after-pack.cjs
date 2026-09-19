@@ -7,12 +7,38 @@ const crypto = require('crypto')
 module.exports = async function afterPack(context) {
   const platform = context.electronPlatformName
   if (platform === 'win32' || platform === 'darwin') copyBundledRipgrep(context)
+  verifyTreeSitterAssets(context)
   if (platform === 'win32') {
     return patchWindowsIcon(context)
   }
   if (platform === 'darwin') {
     return adHocSignMacApp(context)
   }
+}
+
+// P0-T6：打包产物内 tree-sitter 受控资产（4 wasm + 3 node-types.json）必须存在
+// 且哈希与 resources/tree-sitter/SHA256SUMS.txt 一致，不符即打包失败。
+function verifyTreeSitterAssets(context) {
+  const projectDir = context.packager.info.projectDir
+  const sumsPath = path.join(projectDir, 'resources', 'tree-sitter', 'SHA256SUMS.txt')
+  const entries = new Map()
+  for (const rawLine of fs.readFileSync(sumsPath, 'utf8').split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const match = /^([0-9a-f]{64})\s+\*?(.+)$/.exec(line)
+    if (!match) throw new Error(`[afterPack] malformed SHA256SUMS line: ${rawLine}`)
+    entries.set(match[2], match[1])
+  }
+  const destinationBase = context.electronPlatformName === 'darwin'
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'tree-sitter')
+    : path.join(context.appOutDir, 'resources', 'tree-sitter')
+  for (const [name, expected] of entries) {
+    const target = path.join(destinationBase, name)
+    if (!fs.existsSync(target)) throw new Error(`[afterPack] missing tree-sitter asset in package: ${target}`)
+    const digest = crypto.createHash('sha256').update(fs.readFileSync(target)).digest('hex')
+    if (digest !== expected) throw new Error(`[afterPack] tree-sitter asset hash mismatch: ${name}`)
+  }
+  console.log(`[afterPack] verified ${entries.size} tree-sitter assets in package`)
 }
 
 function copyBundledRipgrep(context) {

@@ -2,3 +2,6 @@
 # 而 core.autocrlf=true 的机器上 git 检出为 CRLF，导致每次 build/pack 触发
 # prebuild:renderer 重新生成后，git status 显示「已修改」但 diff 为空（内容其实一致）。
 src/renderer/i18n/types.ts text eol=lf
+
+# tree-sitter wasm 为二进制资产（P0-T2）：禁止换行符转换破坏 SHA256SUMS 哈希
+*.wasm binary

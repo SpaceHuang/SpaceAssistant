@@ -137,6 +137,7 @@ import { mergeWikiConfig, mergeFeishuConfig } from '../src/shared/domainTypes'
 import type { WikiConfig, WikiStatus, FeishuConfig, WeChatConfig, BrowserConfig, ShellConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb, persistBrowserConfig } from './browser/browserConfigDb'
 import { persistShellConfig, readShellConfigFromDb, syncShellDeniedTools } from './shell/shellConfigDb'
+import { scriptParserService } from './shell/scriptParserService'
 import { stagehandService } from './browser/stagehandService'
 import type { BrowserDetectContext } from './browser/browserDependencyDetect'
 import { readFeishuConfigFromDb, persistFeishuConfig } from './feishu/feishuIpc'
@@ -2183,6 +2184,9 @@ function readExposureInputsFromDb(
   })
 
   ipcMain.handle('search:get-history', (): string[] => listSearchHistory(ctx.db))
+
+  // P0-T4：脚本安全解析状态（诊断展示：解析不可用时 UI 显示「全部降级为人工确认」）
+  ipcMain.handle('treesitter:get-status', () => scriptParserService.getStatus())
 
   ipcMain.handle('usage-stats:daily', (_e, args: UsageStatsRangeArgs): UsageDailyPoint[] =>
     queryUsageDaily(ctx.db, args))
