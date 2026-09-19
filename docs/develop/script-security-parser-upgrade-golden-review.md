@@ -29,17 +29,27 @@
 | legacy-parseable（现状可解析集） | 51 | 0 |
 | previously-failed（原必失败集） | 40 | 40 |
 
-### P1-T5 比对结果（切换后填写）
+### P1-T5 比对结果
 
-- 比对基线 commit：`9c2df39bd1a93c8e5164cb5ade0d56cd45c3ec02`（与 P1-T0 一致）✓
-- 比对时间：（待 P1-T5 填写）
-- 判定变化条目与处置结论：（待 P1-T5 填写，逐条登记，无「未评审」条目）
+- 比对基线 commit：`9c2df39bd1a93c8e5164cb5ade0d56cd45c3ec02`（与 P1-T0 一致，`scriptGolden.test.ts` 比对模式引用同一基线 `.json`）✓
+- 比对时间：2026-09-20 03:00
+- 机器可读明细：`docs/develop/golden-data/python-drift-after-switch.json`
+- **drift 总量：48 条 / 91 样本**（legacy-parseable 8 + previously-failed 40），处置结论全部「接受」，无「未评审」条目：
 
-### P1-T6 实测统计（切换后填写）
+| 形态组 | 条数 | 判定变化 | 处置结论 |
+| --- | --- | --- | --- |
+| A 组 certify 严格化 | 8（b04/b19/b22/b23/b27/b29/b30/b33） | verdict/patterns 零变化，仅新增 `script-uncertified` 信号 | **接受**：RemoteCertifier 对 IR 扩展构造（f-string 路径/下标/三元/推导式/del/assert/raise/链式比较）fail → remote `allow` 降 `ask`。方向安全（over-ask）；desktop 判定零变化；旧实现 certify 通过源于宽松解析静默丢内容（假阴性风险），严格化是安全改进 |
+| B 组纯语法构造改善 | 29 | `A-fail/ask` → `allow/A0`（其中 b06/b44 → A8 allow 相对路径写） | **接受**：旧 A-fail 源于语法不支持（dict/f-string/with-read/def/class/async/lambda/推导式/while 等），并非识别出危险；样本均为无危险调用/导入的纯构造，证据见样本源码（`testdata/golden/python/*.py`） |
+| B 组变严 | 1（b36） | `A-fail/ask` → `deny/A7` | **接受**：`with open("/etc/passwd","w")` 真实命中绝对路径写 deny，变严方向 |
+| B 组真实命中（verdict 保持 ask） | 10（b35/b37/b38/b39/b40/b41/b42/b43 及同形态） | `A-fail` → `A1/A3/A6/B9` | **接受**：解析失败兜底 → 危险调用真实命中（def/try/class/f-string 内 os.system、async 内网络、lambda 内 eval、dict 下标动态分派 eval→B9），verdict 均保持 `ask` 不降级 |
 
-- 原必失败集语法解析失败 A-fail 数：（待填，应为 0）
-- IrCoverageError 引起的 A-fail 条目与补全计划：（待填）
-- 现状可解析集 A-fail（含 IrCoverageError）数：（待填，硬门禁 = 0）
+- 特记（评审 v4 B1‴-d 包裹式反向用例闭环）：`b42-dict-wraps-eval-value`（`actions = {"eval": eval}; actions["eval"](...)`）切换初版曾落 `allow`（下标调用 callee 静态不可解析而旧规则不命中）——已按 fail-closed 修复：Analyzer 新增「动态成员调用（callee.kind === 'subscript'）→ B9 ask」保守规则（复用既有模式 ID，集合不变），修复后 verdict 保持 `ask`，与基线兜底语义等价。
+
+### P1-T6 实测统计
+
+- **原必失败集语法解析失败 A-fail 数：0 / 40**（✓ 归零）
+- **IrCoverageError 引起的 A-fail：0 条**（91 样本无 ④ 未建模构造；该通道由 `scriptParseCount.test.ts` 的 match 语句反向用例单独覆盖）
+- **现状可解析集 A-fail（含 IrCoverageError）：0 / 51**（✓ 硬门禁满足，禁净退化成立）
 
 ## Bash 段（P2-T0 建立）
 

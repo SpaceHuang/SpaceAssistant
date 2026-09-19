@@ -25,7 +25,8 @@ import type {
 } from '../../src/shared/confirmation/types'
 import { runExtractors } from './extractors/runExtractors'
 import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
-import { analyzeScriptContent, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import type { IrModule } from '../shell/scriptIr/types'
 import { precheckRunShellTool } from '../shell/shellToolLoopHelpers'
 import { getBuiltinSensitivePrefixes } from '../shell/shellSensitivePaths'
 import { evaluateFileToolAutoApproval } from '../tools/writeFileAutoApproval'
@@ -349,7 +350,14 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     result.mcpEntry = args.mcpEntry
   } else if (args.toolName === 'run_script') {
     const code = typeof args.toolInput.code === 'string' ? args.toolInput.code : ''
-    const { signals, summary } = extractScriptSignals(code, env)
+    // P1-T3：解析一次（恰好 1 次 parse），IR 同时供信号提取与 rawScriptAnalysis；判定逻辑零改动
+    let preParsedIr: IrModule | undefined
+    try {
+      preParsedIr = parsePythonModule(code)
+    } catch {
+      // 解析失败（语法错误 / 服务未就绪 / IrCoverageError）：下游经既有 catch 通道产出 A-fail / extraction-failed
+    }
+    const { signals, summary } = extractScriptSignals(code, env, preParsedIr)
     facts = {
       toolName: 'run_script',
       actionClass: 'execute',
@@ -357,7 +365,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       signals,
       summary
     }
-    result.rawScriptAnalysis = analyzeScriptContent(code, { remote: lane !== 'desktop' })
+    result.rawScriptAnalysis = analyzeScriptContent(code, { remote: lane !== 'desktop' }, preParsedIr)
   } else {
     const descriptor = getBuiltinToolMetadata(args.toolName)
     if (descriptor) {

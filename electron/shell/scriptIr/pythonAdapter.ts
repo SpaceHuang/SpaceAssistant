@@ -866,7 +866,7 @@ function adaptSliceNode(node: TsNode): IrExpr {
 function operatorToken(node: TsNode): TsNode | null {
   for (let i = 0; i < node.childCount; i += 1) {
     const child = node.child(i)
-    if (child && !child.isNamed() && child.type !== '(' && child.type !== ')') {
+    if (child && !child.isNamed && child.type !== '(' && child.type !== ')') {
       const t = child.type
       if (/^[+\-*/%<>=!&|^~]|and$|or$|not$|in$|is$/.test(t)) return child
     }

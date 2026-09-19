@@ -56,7 +56,57 @@ function snapshotOf(id: string, group: GoldenBaseline['group'], code: string): G
 
 // P1-T5 登记表：Golden 评审通过后，把「接受」的漂移 id → 结论填入此处。
 // 约束：deny/ask → allow 的降级、eligible=false → true 的升级绝不允许进白名单（P2-T5 同规则）。
-const ACCEPTED_DRIFT: Record<string, string> = {}
+// 逐条处置结论与证据见 docs/develop/script-security-parser-upgrade-golden-review.md Python 段。
+const ACCEPTED_DRIFT: Record<string, string> = {
+    'b04-fstring-path': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b19-subscript-read': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b22-conditional-expr': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b23-list-comprehension': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b27-del-statement': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b29-assert-statement': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b30-raise-statement': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b33-chained-compare': '接受：certify 对 IR 扩展构造严格化，仅新增 script-uncertified（remote allow→ask 方向安全；desktop 判定零变化；A 组 A-fail=0）',
+    'b01-dict-literal': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b02-dict-empty': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b03-fstring-basic': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b05-with-open-read': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b06-with-open-write': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b07-try-except': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b08-try-finally': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b09-def-basic': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b10-def-default-args': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b11-class-basic': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b12-class-inheritance': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b13-decorator-staticmethod': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b14-decorator-functools': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b15-async-def': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b16-async-with': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b17-lambda-basic': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b18-lambda-key': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b20-subscript-write': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b21-slice': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b24-dict-comprehension': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b25-while-augassign': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b26-return-value': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b28-global-statement': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b31-set-literal': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b32-star-args': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'a07-for-if-nested': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'a08-if-else': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'a42-danger-in-for-if': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'a45-compare-and-unary': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b35-def-wraps-os-system': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b36-with-wraps-open-absolute-write': '接受：A-fail ask → 真实命中 deny（变严方向）',
+    'b37-try-wraps-os-system': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b38-class-wraps-subprocess': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b39-async-wraps-requests': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b40-lambda-wraps-eval': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b41-fstring-wraps-network-arg': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b42-dict-wraps-eval-value': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b43-socket-in-def': '接受：A-fail 兜底 → 真实模式命中（verdict 保持 ask，不降级）',
+    'b44-with-wraps-relative-write': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+    'b45-while-loop': '接受：原必失败集改善——旧 A-fail 因语法不支持，实为纯安全构造无危险面（逐条证据见评审文档）',
+}
 
 describe('scriptGolden（Python 判定基线，P1-T0/P1-T5）', () => {
   const samples = loadSamples()

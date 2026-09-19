@@ -1,0 +1,248 @@
+{
+  "generatedBy": "scripts/generate-shell-golden-samples.mjs (P2-T0)",
+  "count": 60,
+  "bashCount": 48,
+  "psCount": 12,
+  "samples": [
+    {
+      "id": "b01-rmrf-root",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b02-rmrf-tmp",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b03-sudo-install",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b04-curl-pipe-bash",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b05-wget-pipe-sh",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b06-base64-decode-exec",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b07-dd-devsda",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b08-chmod-777",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b09-cat-pipe-grep",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b10-and-list",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b11-or-list",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b12-semi-list",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b13-dquote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b14-squote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b15-mixed-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b16-escaped-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b17-space-variant",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b18-assign-prefix",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b19-assign-echo-var",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b20-cd-and-ls",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b21-cd-dotdot",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b22-redirect-abs",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b23-redirect-append-rel",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b24-redirect-input",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b25-redirect-stderr",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b26-cmd-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b27-backtick-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b28-process-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b29-var-home",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b30-var-brace",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b31-export-path",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b32-escape-space",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b33-printf-escapes",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b34-unicode-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b35-crlf",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b36-unclosed-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b37-trailing-pipe",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b38-leading-and",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b39-truncated-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b40-bare-paren-echo",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b41-bare-paren-grep",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b42-bare-paren-text",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b43-redirect-sensitive",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b44-cat-shadow",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b45-pipe-to-python",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b46-eval-var",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b47-glob-star",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b48-nc-reverse",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "p01-get-childitem",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p02-pipeline-foreach",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p03-invoke-expression",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p04-iex-cradle",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p05-encoded-command",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p06-remove-item-recurse",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p07-here-string-outfile",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p08-subexpression",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p09-backtick-continuation",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p10-set-content",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p11-sort-pipeline",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p12-format-volume",
+      "dialect": "windows-powershell"
+    }
+  ]
+}

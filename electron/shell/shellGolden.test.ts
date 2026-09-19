@@ -1,0 +1,184 @@
+// P2-T0 / P2-T5：Shell Golden 基线录制与比对（判定 + 签名 + facts + 免确认资格四类）。
+//
+// 录制模式（SHELL_GOLDEN_RECORD=1）：在「P2 改动前」的基线 commit 上导出每条样本的
+//   ① analyzeShellCommand 判定、② normalizeShellSignature / parseShellCommandForTrust 签名、
+//   ③ analyzeShellFacts 字段级 facts、④ precheckRunShellTool 派生免确认资格
+// （legacyAutoAllowEligible + analysisCompleteness + persistable/hasMetasyntax；bash 全量录制，
+//   裸括号形态含 trusted / untrusted 双配置——发现 H：facts 翻转 → eligible 翻转必须可见）。
+// 比对模式（默认，P2-T5）：逐条 diff；判定只允许「严格不弱于基线」（rank 单调不减），
+//   签名要求逐字节一致（PS 组零容忍），facts 逐字段比对。
+import fs from 'node:fs'
+import path from 'node:path'
+import { analyzeShellCommand } from './analyzeShellCommand'
+import { analyzeShellFacts } from './shellAnalyzer'
+import { normalizeShellSignature } from '../confirmation/extractors/commandSequenceExtractor'
+import { parseShellCommandForTrust, commandHasShellMetasyntax } from './shellCommandParser'
+import { precheckRunShellTool } from './shellToolLoopHelpers'
+import type { ShellConfig, TrustedShellCommand } from '../../src/shared/domainTypes'
+
+const GOLDEN_DIR = path.resolve(__dirname, 'testdata/golden/shell')
+const RECORD_MODE = process.env.SHELL_GOLDEN_RECORD === '1'
+
+const WORK_DIR = 'WORKDIR'
+const USER_DATA_DIR = 'USERDATADIR'
+const PLATFORM: NodeJS.Platform = process.platform
+
+// 发现 H：裸括号样本的 trusted 配置（命中 trustedCommands，验证 eligible 随 facts 翻转可见）
+const TRUSTED_CONFIG_FOR_BARE_PAREN: ShellConfig = {
+  trustedCommands: [
+    {
+      id: 'golden-trusted-b40',
+      schemaVersion: 2,
+      executable: 'echo',
+      fixedArgvPrefix: ['a(b)'],
+      trailingArgv: 'plain-tokens',
+      createdAt: 0
+    } as TrustedShellCommand
+  ]
+} as unknown as ShellConfig
+
+type ShellGoldenBaseline = {
+  id: string
+  dialect: string
+  platform: string
+  analysis: Record<string, unknown>
+  signature: Record<string, unknown>
+  facts: Record<string, unknown>
+  precheck: Record<string, unknown>
+  precheckTrusted?: Record<string, unknown>
+}
+
+function loadSamples(): Array<{ id: string; dialect: string; code: string }> {
+  const manifest = JSON.parse(fs.readFileSync(path.join(GOLDEN_DIR, 'manifest.json'), 'utf8'))
+  return manifest.samples.map(({ id, dialect }: { id: string; dialect: string }) => ({
+    id,
+    dialect,
+    code: fs.readFileSync(path.join(GOLDEN_DIR, `${id}.txt`), 'utf8')
+  }))
+}
+
+async function snapshot(id: string, dialect: string, code: string): Promise<ShellGoldenBaseline> {
+  const analysis = await analyzeShellCommand(WORK_DIR, code, PLATFORM, null, USER_DATA_DIR)
+  const trust = parseShellCommandForTrust(code, commandHasShellMetasyntax)
+  const facts = analyzeShellFacts(code, dialect as never)
+  const precheck = await precheckRunShellTool({
+    command: code,
+    workDir: WORK_DIR,
+    userDataDir: USER_DATA_DIR,
+    shellConfig: null
+  })
+  const snap: ShellGoldenBaseline = {
+    id,
+    dialect,
+    platform: PLATFORM,
+    analysis: normalizePaths(JSON.parse(JSON.stringify(analysis))),
+    signature: {
+      normalized: normalizeShellSignature(code),
+      trust,
+      persistableSingle: trust.persistable
+    },
+    facts: JSON.parse(JSON.stringify(facts)),
+    precheck: {
+      ok: precheck.ok,
+      ...(precheck.ok
+        ? {
+            legacyAutoAllowEligible: precheck.legacyAutoAllowEligible,
+            analysisCompleteness: precheck.analysis.facts?.analysisCompleteness ?? null,
+            persistable: trust.persistable,
+            hasMetasyntax: trust.hasMetasyntax
+          }
+        : { auditReason: precheck.auditReason })
+    }
+  }
+  if (isBareParenSample(id)) {
+    const precheckTrusted = await precheckRunShellTool({
+      command: code,
+      workDir: WORK_DIR,
+      userDataDir: USER_DATA_DIR,
+      shellConfig: TRUSTED_CONFIG_FOR_BARE_PAREN
+    })
+    snap.precheckTrusted = {
+      ok: precheckTrusted.ok,
+      ...(precheckTrusted.ok
+        ? {
+            legacyAutoAllowEligible: precheckTrusted.legacyAutoAllowEligible,
+            analysisCompleteness: precheckTrusted.analysis.facts?.analysisCompleteness ?? null
+          }
+        : { auditReason: precheckTrusted.auditReason })
+    }
+  }
+  return snap
+}
+
+function isBareParenSample(id: string): boolean {
+  return /^b4[012]-bare-paren/.test(id)
+}
+
+function normalizePaths(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.split(WORK_DIR).join('<WORKDIR>').split(USER_DATA_DIR).join('<USERDATA>')
+  }
+  if (Array.isArray(value)) return value.map(normalizePaths)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalizePaths(v)]))
+  }
+  return value
+}
+
+describe('shellGolden（Shell 判定/签名/facts/免确认资格基线，P2-T0/P2-T5）', () => {
+  const samples = loadSamples()
+
+  it('样本集规模：bash ≥ 40（含裸括号 ≥3）+ PS ≥ 10', () => {
+    expect(samples.filter((s) => s.dialect === 'posix-bash').length).toBeGreaterThanOrEqual(40)
+    expect(samples.filter((s) => s.dialect === 'windows-powershell').length).toBeGreaterThanOrEqual(10)
+    expect(samples.filter((s) => isBareParenSample(s.id)).length).toBeGreaterThanOrEqual(3)
+  })
+
+  if (RECORD_MODE) {
+    it('录制模式：导出全部样本基线 .json（仅限基线 commit 运行）', async () => {
+      for (const { id, dialect, code } of samples) {
+        const snap = await snapshot(id, dialect, code)
+        fs.writeFileSync(path.join(GOLDEN_DIR, `${id}.json`), JSON.stringify(snap, null, 2) + '\n', 'utf8')
+      }
+      console.log(`[shellGolden] recorded ${samples.length} baselines into ${GOLDEN_DIR}`)
+    })
+  } else {
+    it.each(samples)('$id：四类基线逐条比对', async (sample) => {
+      const baselinePath = path.join(GOLDEN_DIR, `${sample.id}.json`)
+      expect(fs.existsSync(baselinePath)).toBe(true)
+      const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8')) as ShellGoldenBaseline
+      const current = await snapshot(sample.id, sample.dialect, sample.code)
+
+      const drift: string[] = []
+      // ① 判定：只允许严格不弱于基线（rank 单调不减）
+      const rank = { allow: 0, ask: 1, deny: 2 } as Record<string, number>
+      const bv = (baseline.analysis as { verdict?: string }).verdict
+      const cv = (current.analysis as { verdict?: string }).verdict
+      if ((rank[cv ?? 'ask'] ?? 1) < (rank[bv ?? 'ask'] ?? 1)) {
+        drift.push(`verdict 弱化（禁止）: ${bv} -> ${cv}`)
+      } else if (bv !== cv) {
+        drift.push(`verdict 变严（登记评审）: ${bv} -> ${cv}`)
+      }
+      if (JSON.stringify(current.analysis) !== JSON.stringify(baseline.analysis) && bv === cv) {
+        drift.push('analysis 字段变化（登记评审）')
+      }
+      // ② 签名：逐字节一致（等价类只拆不并，PS 组零容忍）
+      if (JSON.stringify(current.signature) !== JSON.stringify(baseline.signature)) {
+        drift.push('signature 变化（逐字节不一致，禁止合并等价类）')
+      }
+      // ③ facts：字段级比对
+      if (JSON.stringify(current.facts) !== JSON.stringify(baseline.facts)) {
+        drift.push('facts 变化（登记评审；analysisCompleteness 翻转须双面论证）')
+      }
+      // ④ 免确认资格
+      if (JSON.stringify(current.precheck) !== JSON.stringify(baseline.precheck)) {
+        drift.push('precheck 派生取值变化（登记评审；false→true 禁止静默）')
+      }
+      if (JSON.stringify(current.precheckTrusted) !== JSON.stringify(baseline.precheckTrusted)) {
+        drift.push('precheckTrusted 派生取值变化（登记评审）')
+      }
+
+      if (drift.length > 0) throw new Error(`Shell Golden drift for ${sample.id}: ${drift.join(' | ')}`)
+    })
+  }
+})
