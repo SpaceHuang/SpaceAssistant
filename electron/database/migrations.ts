@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, SCHEMA_META_KEYS } from './schema'
 import { runInTransaction } from './transaction'
 
 export class DatabaseUpgradeRequiredError extends Error {
@@ -134,6 +134,20 @@ export function runMigrations(conn: DatabaseSync): void {
       // Agent Token 用量统计事实表（CREATE TABLE IF NOT EXISTS，幂等）
       conn.exec(MIGRATION_V16_USAGE_STATS_SQL)
       version = 16
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 16) {
+      // Thinking 强度：sessions.thinking_effort 覆盖列（带列存在性防护，容忍重复升级的库；
+      // 无 sessions 表的开发库直接跳过，保持升级幂等）
+      const hasSessionsTable =
+        (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").all() as unknown[]).length > 0
+      if (hasSessionsTable) {
+        const sessionColumns = conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+        if (!sessionColumns.some((column) => column.name === 'thinking_effort')) {
+          conn.exec(MIGRATION_V17_SESSION_THINKING_EFFORT_SQL)
+        }
+      }
+      version = 17
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
   })
