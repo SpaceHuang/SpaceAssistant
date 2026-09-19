@@ -305,7 +305,7 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     const options = await screen.findAllByText('允许')
     fireEvent.click(options[options.length - 1]!)
     await waitFor(() => {
-      expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({ ruleId: 'im-write-ask', action: 'allow' })
+      expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({ ruleId: 'im-write-ask', action: 'allow', lane: 'wechat' })
     })
   })
 })
@@ -346,7 +346,8 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     await waitFor(() => {
       expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({
         ruleId: 'mcp-tool-ask',
-        action: 'auto-evaluator'
+        action: 'auto-evaluator',
+        lane: 'desktop'
       })
     })
   })
