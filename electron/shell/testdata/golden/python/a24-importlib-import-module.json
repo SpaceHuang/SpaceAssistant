@@ -1,0 +1,31 @@
+{
+  "id": "a24-importlib-import-module",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "A4",
+    "B4",
+    "B10"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "A4",
+        "B4",
+        "B10"
+      ]
+    },
+    {
+      "kind": "script-network",
+      "patterns": [
+        "B10"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

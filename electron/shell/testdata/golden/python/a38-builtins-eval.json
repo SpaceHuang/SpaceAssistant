@@ -1,0 +1,25 @@
+{
+  "id": "a38-builtins-eval",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "B6",
+    "B8",
+    "A3"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "B6",
+        "B8",
+        "A3"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

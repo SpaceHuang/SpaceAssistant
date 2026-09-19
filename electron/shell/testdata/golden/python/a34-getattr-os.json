@@ -1,0 +1,21 @@
+{
+  "id": "a34-getattr-os",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "B1"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "B1"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

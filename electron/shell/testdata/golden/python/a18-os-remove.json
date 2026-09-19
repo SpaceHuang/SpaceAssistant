@@ -1,0 +1,21 @@
+{
+  "id": "a18-os-remove",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "A2"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "A2"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

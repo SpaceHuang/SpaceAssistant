@@ -1,0 +1,27 @@
+{
+  "id": "a26-socket",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "A6"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "A6"
+      ]
+    },
+    {
+      "kind": "script-network",
+      "patterns": [
+        "A6"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

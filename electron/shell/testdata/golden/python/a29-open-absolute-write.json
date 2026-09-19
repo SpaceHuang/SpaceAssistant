@@ -1,0 +1,18 @@
+{
+  "id": "a29-open-absolute-write",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "deny",
+  "patterns": [
+    "A7"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "dangerous",
+      "patterns": [
+        "A7"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "a41-module-rebind",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "B5",
+    "A1"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "B5",
+        "A1"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}
