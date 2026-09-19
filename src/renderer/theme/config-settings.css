@@ -1874,6 +1874,37 @@
   background: color-mix(in srgb, #7c5cff 22%, var(--sa-bg-elevated));
 }
 
+/* 会话级 Thinking 强度选择器（§5.2）：复用模型 chip 视觉，列表为 5 项单列 */
+.composer-thinking-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-thinking-picker__item {
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: var(--sa-config-font);
+  color: var(--sa-text);
+}
+
+.composer-thinking-picker__item:hover {
+  background: var(--sa-bg-muted);
+}
+
+.composer-thinking-picker__item--active {
+  color: var(--sa-accent);
+  font-weight: 500;
+}
+
 .composer-model-picker__service {
   font-size: var(--sa-config-font-meta);
   line-height: 1.35;
