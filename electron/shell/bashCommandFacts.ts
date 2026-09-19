@@ -90,6 +90,8 @@ interface Body {
   commands: BashCommandFact[]
   pipelines: BashPipelineFact[]
   lists: string[]
+  /** 按原文出现顺序的连接词流（'|'、'&&'、'||'、';'）——facts.connectors 投影源 */
+  connectorFlow: string[]
 }
 
 function isStatementLike(node: TsNode): boolean {

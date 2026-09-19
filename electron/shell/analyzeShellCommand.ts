@@ -13,6 +13,8 @@ import { shouldSkipShellConfirmForTrust } from './shellCommandTrust'
 import { analyzeShellFacts } from './shellAnalyzer'
 import { profileForPlatform } from './shellProfiles'
 import { extractBashCommandFacts, type BashCommandFacts } from './bashCommandFacts'
+import { extractPowershellCommandFacts, type PsCommandFacts } from './powershellCommandFacts'
+import { matchPsDangerousPatterns } from './psSecurityRules'
 
 export async function analyzeShellCommand(
   workDir: string,
@@ -24,12 +26,16 @@ export async function analyzeShellCommand(
   const dialect = profileForPlatform(platform).dialect
   // P2-T2（发现 B）：单次 analyzeShellCommand（posix-bash）内恰好 1 次解析——
   // 树事实同时供主裁决链增强与 facts 附加复用。
-  let bashFacts: BashCommandFacts | undefined
+  let treeFacts: BashCommandFacts | PsCommandFacts | undefined
   if (dialect === 'posix-bash') {
-    bashFacts = extractBashCommandFacts(command)
+    treeFacts = extractBashCommandFacts(command)
+  } else if (dialect === 'windows-powershell') {
+    treeFacts = extractPowershellCommandFacts(command)
   }
-  const result = await analyzeShellCommandWithPolicy(workDir, command, platform, shellConfig, userDataDir, bashFacts)
-  return { ...result, facts: analyzeShellFacts(command, dialect, bashFacts) }
+  const bashFacts = treeFacts && 'connectorFlow' in treeFacts ? (treeFacts as BashCommandFacts) : undefined
+  const psFacts = treeFacts && !('connectorFlow' in treeFacts) ? (treeFacts as PsCommandFacts) : undefined
+  const result = await analyzeShellCommandWithPolicy(workDir, command, platform, shellConfig, userDataDir, bashFacts, psFacts)
+  return { ...result, facts: analyzeShellFacts(command, dialect, treeFacts) }
 }
 
 async function analyzeShellCommandWithPolicy(
@@ -38,8 +44,24 @@ async function analyzeShellCommandWithPolicy(
   platform: NodeJS.Platform,
   shellConfig?: ShellConfig | null,
   userDataDir?: string,
-  bashFacts?: BashCommandFacts
+  bashFacts?: BashCommandFacts,
+  psFacts?: PsCommandFacts
 ): Promise<ShellAnalysisResult> {
+  // P3-T5：PS 树事实解析失败 → 与 bash 同语义的失败兜底（fail-closed）
+  if (psFacts && !psFacts.ok) {
+    const msg = '命令语法解析失败，无法进行安全分析'
+    return {
+      verdict: 'deny',
+      denyReason: msg,
+      segments: [],
+      pathVerdict: emptyPathVerdict(msg),
+      shellSecurityHints: {
+        requiresRiskAck: true,
+        outsideWorkDirRisk: true,
+        warnings: [msg]
+      }
+    }
+  }
   // P2-T2：树事实解析失败 → 与既有分段失败分支同形的失败结果（fail-closed，只增不减的更严侧）
   if (bashFacts && !bashFacts.ok) {
     const msg = '命令语法解析失败，无法进行安全分析'
@@ -134,7 +156,31 @@ async function analyzeShellCommandWithPolicy(
     }
   }
 
-  // P2-T4：结构性危险模式（树事实驱动，只向更严合并）
+  // P3-T5：PS 路径增强（树事实 redirects/args → 补充字面量 → 只增不减并入）
+  if (psFacts?.ok) {
+    const extraLiterals = collectPsTreePathLiterals(psFacts)
+    if (extraLiterals.length > 0) {
+      const extraVerdict = await verifyPathsInWorkDir(workDir, extraLiterals, userDataDir, shellConfig?.customSensitivePrefixes)
+      finalPathVerdict = mergePathVerdicts(finalPathVerdict, extraVerdict)
+    }
+  }
+
+  // P2-T4 / P3-T3：结构性危险模式（树事实驱动，只向更严合并）
+  if (psFacts?.ok) {
+    const pattern = matchPsDangerousPatterns(psFacts, userDataDir, shellConfig?.customSensitivePrefixes)
+    if (pattern) {
+      return {
+        verdict: pattern.verdict === 'deny' ? 'deny' : 'ask',
+        denyReason: pattern.verdict === 'deny' ? pattern.reason : undefined,
+        validatorId: pattern.id,
+        denyType: pattern.verdict === 'deny' ? 'strong' : 'weak',
+        segments,
+        pathVerdict: finalPathVerdict,
+        permissionDecision: perm.decision,
+        shellSecurityHints: buildHints(finalPathVerdict, pattern.id, pattern.verdict === 'deny' ? 'strong' : 'weak', pattern.reason)
+      }
+    }
+  }
   if (bashFacts?.ok) {
     const pattern = matchBashDangerousPatterns(bashFacts, userDataDir, shellConfig?.customSensitivePrefixes)
     if (pattern) {
@@ -159,6 +205,21 @@ async function analyzeShellCommandWithPolicy(
     permissionDecision: perm.decision,
     shellSecurityHints: hints
   }
+}
+
+function collectPsTreePathLiterals(facts: PsCommandFacts): ShellPathLiteral[] {
+  const out: ShellPathLiteral[] = []
+  const push = (raw: string) => {
+    if (!raw || raw.startsWith('-') || raw.startsWith('$')) return
+    if (/[\/]/.test(raw) || /^[A-Za-z]:/.test(raw) || raw.startsWith('~') || raw.startsWith('.')) {
+      out.push({ raw, segmentIndex: 0, kind: 'arg' })
+    }
+  }
+  for (const cmd of facts.commands) {
+    for (const arg of cmd.args) push(arg)
+    for (const r of cmd.redirects) push(r.target)
+  }
+  return out
 }
 
 /** 树事实中的路径形态字面量（redirects 目标 + 路径形态 args）。 */

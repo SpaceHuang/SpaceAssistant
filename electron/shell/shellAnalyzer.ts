@@ -1,6 +1,7 @@
 import { parseShellSegments, tokenizeSimpleCommand } from './shellCommandParser'
 import type { ShellDialect } from './shellProfiles'
 import { extractBashCommandFacts, type BashCommandFacts } from './bashCommandFacts'
+import { extractPowershellCommandFacts, type PsCommandFacts } from './powershellCommandFacts'
 
 export type ShellAnalysisCompleteness = 'complete' | 'partial'
 
@@ -27,14 +28,17 @@ export interface ShellFactAnalysis {
 export function analyzeShellFacts(
   command: string,
   dialect: ShellDialect,
-  preParsedBashFacts?: BashCommandFacts
+  preParsedTreeFacts?: BashCommandFacts | PsCommandFacts
 ): ShellFactAnalysis {
-  // P2-T2（发现 B/E/H）：posix-bash 入口分叉——语法级树事实产出 ShellFactAnalysis；
-  // windows-powershell 完整保留现状共享实现（P3 接管）。preParsedBashFacts 供
-  // analyzeShellCommand 单次解析共享（恰好 1 次解析）。
+  // P2-T2（发现 B/E/H）+ P3-T5：dialect 入口分叉——语法级树事实产出 ShellFactAnalysis。
+  // preParsedTreeFacts 供 analyzeShellCommand 单次解析共享（恰好 1 次解析）。
   if (dialect === 'posix-bash') {
-    const treeFacts = preParsedBashFacts ?? extractBashCommandFacts(command)
-    return bashTreeFactsToAnalysis(dialect, treeFacts)
+    const treeFacts = preParsedTreeFacts ?? extractBashCommandFacts(command)
+    return treeFactsToAnalysis(dialect, treeFacts)
+  }
+  if (dialect === 'windows-powershell') {
+    const treeFacts = preParsedTreeFacts ?? extractPowershellCommandFacts(command)
+    return treeFactsToAnalysis(dialect, treeFacts)
   }
   const unresolved: string[] = []
   const analysisCommand = stripComments(command).replace(/[\r\n]+/g, ';')
@@ -78,8 +82,8 @@ export function analyzeShellFacts(
   }
 }
 
-/** posix-bash：树事实 → ShellFactAnalysis 投影（字段形态对齐旧实现，值差异走 Golden 评审）。 */
-function bashTreeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts): ShellFactAnalysis {
+/** bash/PS 树事实 → ShellFactAnalysis 统一投影（commands 结构同构；cwd 动词按 dialect 匹配）。 */
+function treeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts | PsCommandFacts): ShellFactAnalysis {
   if (!f.ok) {
     return {
       dialect, operations: [], connectors: [], paths: [], cwdChanges: [],
@@ -91,6 +95,7 @@ function bashTreeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts): Sh
   const paths: string[] = []
   const cwdChanges: string[] = []
   const stripQuotes = (t: string) => t.replace(/^["']+|["']+$/g, '')
+  const cwdVerbs = dialect === 'windows-powershell' ? ['cd', 'set-location', 'sl'] : ['cd']
   for (const [index, cmd] of f.commands.entries()) {
     if (!cmd.name) continue
     operations.push({ verb: cmd.name, args: cmd.args, segmentIndex: index })
@@ -102,12 +107,12 @@ function bashTreeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts): Sh
       const target = stripQuotes(r.target)
       if (target && /[\/]|^[A-Za-z]:/.test(target)) paths.push(target)
     }
-    if (cmd.name.toLowerCase() === 'cd' && cmd.args[0]) cwdChanges.push(stripQuotes(cmd.args[0]))
+    if (cwdVerbs.includes(cmd.name.toLowerCase()) && cmd.args[0]) cwdChanges.push(stripQuotes(cmd.args[0]))
   }
   return {
     dialect,
     operations,
-    connectors: f.connectorFlow.length > 0 ? f.connectorFlow : [],
+    connectors: f.connectorFlow,
     paths,
     cwdChanges,
     analysisCompleteness: f.unresolved.length === 0 ? 'complete' : 'partial',

