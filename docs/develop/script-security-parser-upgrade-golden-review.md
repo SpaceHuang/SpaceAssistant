@@ -127,6 +127,10 @@
   - 1 条 b36 签名漂移（normalizeShellSignature 空折叠缺陷修复，等价类拆分，方向安全）。
 - bash 组：零漂移（P2 状态稳定）✓。bash+PS 判定比对：`deny/ask → allow` 零静默降级 ✓、
   `eligible=false → true` 零静默升级 ✓（trusted 场景 b40 翻转已在 P2-T5 登记论证）。
+- **下游 facts 投影消费面登记修改**（发现 E 链路）：`shellConfirmationAdapter.test.ts`
+  「marks incomplete」用例——`echo ok > ./.env` complete 化后不再触发
+  `shell-analysis-incomplete` 的 extraction-failed 投影；`.env` 敏感路径仍由
+  path-target（sensitive-file）信号覆盖，安全面不弱化。
 
 ### P3-T7 端到端验证（Windows PS 路径）
 
