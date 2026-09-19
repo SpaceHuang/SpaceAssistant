@@ -437,5 +437,6 @@ P0 特征化测试基线（本阶段新增文件）：
 4. **裁决顺序澄清**（P0 特征化发现）：custom deny 覆盖 auto-evaluator 条目时，readonly 放行失效落 ask 兜底；ask 分支查询决策缓存，既有会话信任仍可放行（cache-hit）。该行为已在 `toolCallGate.ports.test.ts` 钉住。
 5. **P6 送达记录实现取舍**：按「沿用会话台账的保留语义风格」落 agentLogger JSON Lines + 内存窗口（不动 SQLite schema 主干，规避 v14+ 迁移线变更）；跨进程持久化送达台账留待驱动权路径或后续阶段评估。
 6. **存量测试失败清零（P8 后追加）**：P8 期间基线（`784d86b3`）即红的 11 条平台性失败已修复——ripgrep 系测试期望改为与实现同构的 `path.resolve`；`safeJoin` 修 base 未归一化的盘符前缀误判真 bug（`scripts/prepare-ripgrep.mjs`，Windows 上原本无法安全解压）；symlink 特权用例改 junction 或条件跳过（POSIX 宿主覆盖）；`safeAtomicWrite` 新增 `withTransientLockRetry`（Windows 杀软/索引器瞬时锁）并覆盖全部 9 处 rename/link 提交点（含 `imProcessedStore` 等裸 rename 写点，属产品健壮性修复）；vitest 两项目 `testTimeout` 5s→15s、两处性能界限断言去时长耦合。最终连续两轮 `npm test` 全绿（630 文件 / 4206 通过 / 0 失败）。
-7. **待真机/外部系统人工验收**（§6 清单，不阻塞提交）：桌面 dev 真实会话带工具回合、关窗收敛、确认卡片真人批/拒；飞书/微信远程托管收发+审计落盘；浮动通知弹出（P1 改造点）；设置页 test-connection（P4 凭据路径改动后必测）。
+7. **评审修复（2026-09-19，评审报告 docs/review/agent-core-contract-path-code-review-v1.md）**：P0-1 origins/policyOrigins 键名失配（装配器写入与门控消费键名不一致，as 强转掩盖，ruleOrigin 审计在生产链路为死代码）——键名统一 + 契约补声明 + 端到端回归断言；P0-2 deliveryHub deferred 按 id 重查驱动源的错投隐患——改为入队快照 driver 引用、覆盖注册清积压落 superseded、队列有界、移除 main.ts 死代码注册；P1-1 底线校验补 when + match 条件比对（防 locked 条目条件掏空）。提交 7dc0f767。
+8. **待真机/外部系统人工验收**（§6 清单，不阻塞提交）：桌面 dev 真实会话带工具回合、关窗收敛、确认卡片真人批/拒；飞书/微信远程托管收发+审计落盘；浮动通知弹出（P1 改造点）；设置页 test-connection（P4 凭据路径改动后必测）。
 8. **worktree 依赖变化**：实施中段主仓库 `node_modules` 被外部清空，worktree 已改为独立 `npm ci`（junction 解除），后续在该 worktree 工作无需依赖主仓库。
