@@ -7,6 +7,17 @@ export type WikiCommandResult =
   | { type: 'command'; hint: string; skillsState?: SessionSkillsState }
   | { type: 'run'; text: string; hint: string; skillsState: SessionSkillsState; wikiModeActive: true }
 
+export type WikiCommandDeps = {
+  wikiInit: (payload?: {
+    overwrite?: boolean
+    installSkill?: boolean
+  }) => Promise<{ ok: true; rootPath: string; skillInstalled: boolean } | { ok: false; error: string }>
+  wikiStatus: () => Promise<WikiStatus>
+  wikiImportRaw: (payload: {
+    srcRelPath: string
+  }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
+}
+
 const WIKI_SKILL = 'llm-wiki'
 const INGEST_ALIASES = new Set(['ingest', '摄取', '提取'])
 
@@ -37,7 +48,8 @@ function formatStatus(status: WikiStatus): string {
 export async function parseWikiCommand(
   text: string,
   wikiConfig: WikiConfig,
-  sessionSkillsState: SessionSkillsState
+  sessionSkillsState: SessionSkillsState,
+  deps: WikiCommandDeps
 ): Promise<WikiCommandResult> {
   const trimmed = text.trim()
   if (!trimmed.startsWith('/wiki')) return { type: 'chat', text }
@@ -58,7 +70,7 @@ export async function parseWikiCommand(
   }
 
   if (sub === 'init') {
-    const result = await window.api.wikiInit({ installSkill: true })
+    const result = await deps.wikiInit({ installSkill: true })
     if (!result.ok) return { type: 'command', hint: `[Wiki] 初始化失败: ${result.error}` }
     return {
       type: 'command',
@@ -67,11 +79,11 @@ export async function parseWikiCommand(
   }
 
   if (sub === 'status') {
-    const status = await window.api.wikiStatus()
+    const status = await deps.wikiStatus()
     return { type: 'command', hint: formatStatus(status) }
   }
 
-  const status = await window.api.wikiStatus()
+  const status = await deps.wikiStatus()
   if (!status.initialized) {
     return { type: 'command', hint: '[Wiki] Wiki 尚未初始化，请先执行 /wiki init 或在设置中初始化' }
   }
@@ -93,7 +105,7 @@ export async function parseWikiCommand(
       }
     }
 
-    const importResult = await window.api.wikiImportRaw({ srcRelPath: target })
+    const importResult = await deps.wikiImportRaw({ srcRelPath: target })
     if (!importResult.ok) {
       return { type: 'command', hint: `[Wiki] ${importResult.error}` }
     }

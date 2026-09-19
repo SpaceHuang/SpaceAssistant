@@ -1,44 +1,66 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { parseWikiCommand, isWikiPathLink } from './wikiCommandService'
 import { DEFAULT_WIKI_CONFIG } from '../../shared/domainTypes'
 
-describe('wikiCommandService', () => {
-  beforeEach(() => {
-    vi.stubGlobal('window', {
-      api: {
-        wikiInit: vi.fn().mockResolvedValue({ ok: true, rootPath: 'llm-wiki', skillInstalled: true }),
-        wikiStatus: vi.fn().mockResolvedValue({
-          enabled: true,
-          rootPath: 'llm-wiki',
-          initialized: true,
-          pageCount: 2,
-          rawCount: 0
-        }),
-        wikiImportRaw: vi.fn().mockImplementation(async ({ srcRelPath }: { srcRelPath: string }) => {
-          if (srcRelPath.startsWith('llm-wiki/raw/')) {
-            return { ok: true, rawRelPath: srcRelPath, copied: false }
-          }
-          return { ok: true, rawRelPath: `llm-wiki/raw/${srcRelPath.split('/').pop()}`, copied: true }
-        })
+function makeDeps() {
+  return {
+    wikiInit: vi.fn().mockResolvedValue({ ok: true, rootPath: 'llm-wiki', skillInstalled: true }),
+    wikiStatus: vi.fn().mockResolvedValue({
+      enabled: true,
+      rootPath: 'llm-wiki',
+      initialized: true,
+      pageCount: 2,
+      rawCount: 0
+    }),
+    wikiImportRaw: vi.fn().mockImplementation(async ({ srcRelPath }: { srcRelPath: string }) => {
+      if (srcRelPath.startsWith('llm-wiki/raw/')) {
+        return { ok: true, rawRelPath: srcRelPath, copied: false }
       }
+      return { ok: true, rawRelPath: `llm-wiki/raw/${srcRelPath.split('/').pop()}`, copied: true }
     })
-  })
+  }
+}
 
+describe('wikiCommandService', () => {
   it('returns chat for normal messages', async () => {
-    const r = await parseWikiCommand('hello', DEFAULT_WIKI_CONFIG, { manualActivated: [], manualDisabled: [] })
+    const r = await parseWikiCommand(
+      'hello',
+      DEFAULT_WIKI_CONFIG,
+      { manualActivated: [], manualDisabled: [] },
+      makeDeps()
+    )
     expect(r.type).toBe('chat')
   })
 
   it('shows help', async () => {
     const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
-    const r = await parseWikiCommand('/wiki help', enabled, { manualActivated: [], manualDisabled: [] })
+    const r = await parseWikiCommand(
+      '/wiki help',
+      enabled,
+      { manualActivated: [], manualDisabled: [] },
+      makeDeps()
+    )
     expect(r.type).toBe('command')
     if (r.type === 'command') expect(r.hint).toContain('ingest')
   })
 
+  it('runs init via injected wikiInit port', async () => {
+    const deps = makeDeps()
+    const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
+    const r = await parseWikiCommand('/wiki init', enabled, { manualActivated: [], manualDisabled: [] }, deps)
+    expect(r.type).toBe('command')
+    expect(deps.wikiInit).toHaveBeenCalledWith({ installSkill: true })
+    if (r.type === 'command') expect(r.hint).toContain('已初始化')
+  })
+
   it('runs ingest command for raw path', async () => {
     const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
-    const r = await parseWikiCommand('/wiki ingest llm-wiki/raw/test.md', enabled, { manualActivated: [], manualDisabled: [] })
+    const r = await parseWikiCommand(
+      '/wiki ingest llm-wiki/raw/test.md',
+      enabled,
+      { manualActivated: [], manualDisabled: [] },
+      makeDeps()
+    )
     expect(r.type).toBe('run')
     if (r.type === 'run') {
       expect(r.skillsState.manualActivated).toContain('llm-wiki')
@@ -48,9 +70,15 @@ describe('wikiCommandService', () => {
   })
 
   it('imports external path before ingest', async () => {
+    const deps = makeDeps()
     const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
-    const r = await parseWikiCommand('/wiki ingest docs/note.md', enabled, { manualActivated: [], manualDisabled: [] })
-    expect(window.api.wikiImportRaw).toHaveBeenCalledWith({ srcRelPath: 'docs/note.md' })
+    const r = await parseWikiCommand(
+      '/wiki ingest docs/note.md',
+      enabled,
+      { manualActivated: [], manualDisabled: [] },
+      deps
+    )
+    expect(deps.wikiImportRaw).toHaveBeenCalledWith({ srcRelPath: 'docs/note.md' })
     expect(r.type).toBe('run')
     if (r.type === 'run') {
       expect(r.text).toContain('llm-wiki/raw/note.md')
@@ -60,7 +88,12 @@ describe('wikiCommandService', () => {
 
   it.each(['摄取', '提取'])('runs ingest via Chinese alias %s', async (alias) => {
     const enabled = { ...DEFAULT_WIKI_CONFIG, enabled: true }
-    const r = await parseWikiCommand(`/wiki ${alias} raw/article.md`, enabled, { manualActivated: [], manualDisabled: [] })
+    const r = await parseWikiCommand(
+      `/wiki ${alias} raw/article.md`,
+      enabled,
+      { manualActivated: [], manualDisabled: [] },
+      makeDeps()
+    )
     expect(r.type).toBe('run')
     if (r.type === 'run') {
       expect(r.text).toContain('raw/article.md')

@@ -538,7 +538,7 @@ export function ChatView() {
       const runSessionId = options?.targetSessionId ?? sessionId
 
       // /test-pop 无需 API key、会话或 cfg，优先处理
-      const testPopCmd = parseTestPopCommand(text)
+      const testPopCmd = parseTestPopCommand(text, { isDev: import.meta.env.DEV })
       if (testPopCmd.type === 'command') {
         if (runSessionId) {
           await persistSkillHintSystemMessage(runSessionId, testPopCmd.hint)
@@ -580,7 +580,7 @@ export function ChatView() {
         return
       }
 
-      const testCmd = parseTestCardsCommand(text)
+      const testCmd = parseTestCardsCommand(text, { isDev: import.meta.env.DEV })
       if (testCmd.type === 'command') {
         await persistSkillHintSystemMessage(runSessionId, testCmd.hint)
         return
@@ -611,7 +611,11 @@ export function ChatView() {
       let chatText = text
       let wikiModeRun = false
 
-      const wikiCmd = await parseWikiCommand(text, wikiConfig, sessionSkillsState)
+      const wikiCmd = await parseWikiCommand(text, wikiConfig, sessionSkillsState, {
+        wikiInit: (payload) => window.api.wikiInit(payload),
+        wikiStatus: () => window.api.wikiStatus(),
+        wikiImportRaw: (payload) => window.api.wikiImportRaw(payload)
+      })
       if (wikiCmd.type === 'command') {
         await persistSkillHintSystemMessage(runSessionId, wikiCmd.hint)
         if (wikiCmd.skillsState) {
@@ -633,7 +637,10 @@ export function ChatView() {
         if (updated) dispatch(upsertSession(updated))
       }
 
-      const cmd = await parseSkillCommand(chatText, sessionSkillsState)
+      const cmd = await parseSkillCommand(chatText, sessionSkillsState, {
+        listSkills: () => window.api.skillList(),
+        getSkill: (payload) => window.api.skillGet(payload)
+      })
       if (cmd.type === 'command') {
         await persistSkillHintSystemMessage(runSessionId, cmd.hint)
         if (cmd.skillsState) {

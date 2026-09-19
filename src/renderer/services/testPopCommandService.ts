@@ -3,7 +3,9 @@ export type TestPopCommandResult =
   | { type: 'command'; hint: string }
   | { type: 'run' }
 
-export function parseTestPopCommand(text: string): TestPopCommandResult {
+export type TestPopCommandDeps = { isDev: boolean }
+
+export function parseTestPopCommand(text: string, deps: TestPopCommandDeps): TestPopCommandResult {
   const trimmed = text.trim()
   if (!trimmed.startsWith('/test-pop')) return { type: 'chat', text }
 
@@ -17,7 +19,7 @@ export function parseTestPopCommand(text: string): TestPopCommandResult {
     }
   }
 
-  if (!import.meta.env.DEV) {
+  if (!deps.isDev) {
     return { type: 'command', hint: '[Dev] /test-pop 仅在开发模式下可用' }
   }
 

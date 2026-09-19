@@ -1,17 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { parseTestCardsCommand } from './testCardsCommandService'
 
 describe('parseTestCardsCommand', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs()
-  })
-
   it('returns chat for non-command text', () => {
-    expect(parseTestCardsCommand('hello')).toEqual({ type: 'chat', text: 'hello' })
+    expect(parseTestCardsCommand('hello', { isDev: true })).toEqual({ type: 'chat', text: 'hello' })
   })
 
   it('returns help command', () => {
-    const result = parseTestCardsCommand('/test-cards help')
+    const result = parseTestCardsCommand('/test-cards help', { isDev: true })
     expect(result.type).toBe('command')
     if (result.type === 'command') {
       expect(result.hint).toContain('/test-cards')
@@ -20,13 +16,11 @@ describe('parseTestCardsCommand', () => {
   })
 
   it('returns dev-only hint in production', () => {
-    vi.stubEnv('DEV', false)
-    const result = parseTestCardsCommand('/test-cards')
+    const result = parseTestCardsCommand('/test-cards', { isDev: false })
     expect(result).toEqual({ type: 'command', hint: '[Dev] /test-cards 仅在开发模式下可用' })
   })
 
   it('returns run in development', () => {
-    vi.stubEnv('DEV', true)
-    expect(parseTestCardsCommand('/test-cards')).toEqual({ type: 'run' })
+    expect(parseTestCardsCommand('/test-cards', { isDev: true })).toEqual({ type: 'run' })
   })
 })
