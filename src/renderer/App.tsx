@@ -12,6 +12,7 @@ import { WikiPane, type WikiPaneHandle } from './components/WikiPane'
 import { WikiPaneToolbar } from './components/WikiPane/WikiPaneToolbar'
 import { collectToWiki } from './services/wikiImportService'
 import { ensureWorkDirForSession } from './services/workDirSessionSync'
+import { startInvalidationService } from './services/invalidationService'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { initTurnProjectionBridge } from './services/turnProjectionService'
@@ -92,6 +93,9 @@ function AppShellInner() {
   const wikiEnabled = Boolean(config?.wiki?.enabled)
 
   useEffect(() => { void refreshMcpToolCatalog() }, [])
+
+  // 偏差 11:失效通知服务(通知驱动重取,真相只从 Storage 取)
+  useEffect(() => startInvalidationService(), [])
 
   useEffect(() => {
     const onOpenSettings = (event: Event) => {

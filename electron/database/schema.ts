@@ -2,6 +2,11 @@
 export const DB_SCHEMA_VERSION = 16
 
 export const CREATE_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS scope_versions (
+  scope TEXT PRIMARY KEY NOT NULL,
+  version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL

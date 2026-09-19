@@ -38,6 +38,11 @@ const api: SpaceAssistantApi = {
   messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
   messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),
   chatSubmitOutbound: (intent) => ipcRenderer.invoke('chat:submit-outbound', intent),
+  onScopeInvalidated: (cb: (payload: { scope: string; version: number }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { scope: string; version: number }) => cb(payload)
+    ipcRenderer.on('scope:invalidated', listener)
+    return () => ipcRenderer.removeListener('scope:invalidated', listener)
+  },
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
   chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
   chatRetryTurnCheckpoint: (turnId) => ipcRenderer.invoke('chat:retry-turn-checkpoint', turnId),

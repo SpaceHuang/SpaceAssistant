@@ -44,6 +44,7 @@ import { resolveMessageToolsInteractive } from '../../services/resolveMessageToo
 import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
+import { registerMessagesReloadHandler } from '../../services/invalidationService'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import { buildToolChatPayload } from '../../services/chatToolSessionService'
@@ -316,18 +317,20 @@ export function ChatView() {
     [dispatch, fetchMessagePage]
   )
 
+  // 偏差 11:入站消息等 Storage 变更统一由失效通知驱动重取(主进程广播 session:<id>:messages);
+  // 渲染端只注册当前重载通道,不再各自直连订阅。会话元数据刷新保留(轻量、乐观路径)。
   useEffect(() => {
     const refreshSessionMeta = (targetSessionId: string) => {
       void window.api.sessionGet(targetSessionId).then((s) => {
         if (s) dispatch(upsertSession(s))
       })
     }
-    const offInbound = window.api.feishuOnInboundMessage(({ sessionId: inboundSessionId }) => {
-      refreshSessionMeta(inboundSessionId)
-      void reloadSessionMessagesFromDb(inboundSessionId)
+    registerMessagesReloadHandler((targetSessionId) => {
+      refreshSessionMeta(targetSessionId)
+      void reloadSessionMessagesFromDb(targetSessionId)
     })
     return () => {
-      offInbound()
+      registerMessagesReloadHandler(null)
     }
   }, [dispatch, reloadSessionMessagesFromDb])
 

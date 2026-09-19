@@ -254,6 +254,7 @@ export type SpaceAssistantApi = {
     >
   }) => Promise<{ message: Message; sequence: number } | null>
   chatSubmitOutbound: (intent: import('./outboundProtocol').OutboundSubmitIntent) => Promise<import('./outboundProtocol').OutboundSubmitResult>
+  onScopeInvalidated: (cb: (payload: { scope: string; version: number }) => void) => () => void
   chatCancelTurn: (turnId: string) => Promise<boolean>
   chatGetTurnTerminal: (turnId: string) => Promise<(import('./assistantFactAggregator').TurnTerminal & { committedVersion?: number; commitStatus?: 'pending' | 'committed' | 'failed' }) | undefined>
   chatRetryTurnCheckpoint: (turnId: string) => Promise<boolean>

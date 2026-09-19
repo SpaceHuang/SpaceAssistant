@@ -21,6 +21,7 @@ import {
 } from '../messageCodec'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { changesToNumber, runInTransaction } from './transaction'
+import { bumpScopeVersionInTx } from './scopeVersion'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
 import { queueInputFingerprint } from '../queueInputFingerprint'
@@ -202,36 +203,40 @@ export function createSession(
   }
 
   const conn = getDbConnection(db)
-  conn
-    .prepare(
-      `INSERT INTO sessions (
-        id, name, preview, model, llm_service_id, temperature, max_tokens,
-        created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
-        ownership, visibility
-      ) VALUES (
-        @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
-        @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
-        @ownership, @visibility
-      )`
-    )
-    .run({
-      id: session.id,
-      name: session.name,
-      preview: session.preview,
-      model: session.model,
-      llmServiceId: session.llmServiceId ?? null,
-      temperature: session.temperature,
-      maxTokens: session.maxTokens,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      messageCount: session.messageCount,
-      skillsState: JSON.stringify(session.skillsState),
-      metadata: JSON.stringify(session.metadata),
-      schemaVersion: session.schemaVersion,
-      workDirProfileId: session.workDirProfileId ?? null,
-      ownership,
-      visibility
-    })
+  runInTransaction(conn, () => {
+    conn
+      .prepare(
+        `INSERT INTO sessions (
+          id, name, preview, model, llm_service_id, temperature, max_tokens,
+          created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
+          ownership, visibility
+        ) VALUES (
+          @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
+          @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
+          @ownership, @visibility
+        )`
+      )
+      .run({
+        id: session.id,
+        name: session.name,
+        preview: session.preview,
+        model: session.model,
+        llmServiceId: session.llmServiceId ?? null,
+        temperature: session.temperature,
+        maxTokens: session.maxTokens,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        messageCount: session.messageCount,
+        skillsState: JSON.stringify(session.skillsState),
+        metadata: JSON.stringify(session.metadata),
+        schemaVersion: session.schemaVersion,
+        workDirProfileId: session.workDirProfileId ?? null,
+        ownership,
+        visibility
+      })
+    // 偏差 11:会话列表版本在同一事务内递增
+    bumpScopeVersionInTx(db, 'session-list')
+  })
   db.save()
   return session
 }
@@ -269,6 +274,7 @@ export function updateSession(
   }
 
   const conn = getDbConnection(db)
+  runInTransaction(conn, () => {
   conn
     .prepare(
       `UPDATE sessions SET
@@ -303,6 +309,10 @@ export function updateSession(
       ownership: normalizeOwnership(next.ownership),
       visibility: normalizeVisibility(next.visibility)
     })
+    // 偏差 11:列表与单会话版本同事务递增
+    bumpScopeVersionInTx(db, 'session-list')
+    bumpScopeVersionInTx(db, `session:${sessionId}`)
+  })
   db.save()
   return next
 }
@@ -311,6 +321,7 @@ export function deleteSession(db: AppDatabase, sessionId: string, options?: { fl
   const conn = getDbConnection(db)
   runInTransaction(conn, () => {
     conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
+    bumpScopeVersionInTx(db, 'session-list')
   })
   deleteSessionUsage(db, sessionId)
   if (options?.flush !== false) db.flushSave()
@@ -785,6 +796,7 @@ export function appendMessage(
   msg: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
 ): { message: Message; sequence: number } {
   const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
   const seqRow = conn
     .prepare('SELECT COALESCE(MAX(sequence), -1) AS maxSeq FROM messages WHERE session_id = ?')
     .get(msg.sessionId) as { maxSeq: number }
@@ -832,7 +844,10 @@ export function appendMessage(
     preview: full.content.slice(0, 120),
     messageCount: countRow.c
   })
+  // 偏差 11:消息列表版本同事务递增(嵌套事务为 SAVEPOINT,与外层兼容)
+  bumpScopeVersionInTx(db, `session:${full.sessionId}:messages`)
   return { message: full, sequence: maxSeq }
+  })
 }
 
 /** 在同一连接事务中追加一组消息；用于 turn prepare，保证 user/assistant 占位不会半成功。 */
@@ -1137,22 +1152,25 @@ export function deleteQueuedUserMessage(
   if (row.role !== 'user' || row.status !== 'queued') return { ok: false, error: 'message_not_queued' }
 
   const sessionId = row.session_id
-  const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ?').get(messageId) as { session_id: string; request_id: string } | undefined
-  if (receipt) updateQueueInputReceiptState(db, receipt.session_id, receipt.request_id, 'cancelled')
-  conn.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
+  return runInTransaction(conn, () => {
+    const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ?').get(messageId) as { session_id: string; request_id: string } | undefined
+    if (receipt) updateQueueInputReceiptState(db, receipt.session_id, receipt.request_id, 'cancelled')
+    conn.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
 
-  const last = conn
-    .prepare('SELECT content FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1')
-    .get(sessionId) as { content: string } | undefined
-  const countRow = conn
-    .prepare('SELECT COUNT(*) AS c FROM messages WHERE session_id = ?')
-    .get(sessionId) as { c: number }
+    const last = conn
+      .prepare('SELECT content FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1')
+      .get(sessionId) as { content: string } | undefined
+    const countRow = conn
+      .prepare('SELECT COUNT(*) AS c FROM messages WHERE session_id = ?')
+      .get(sessionId) as { c: number }
 
-  updateSession(db, sessionId, {
-    messageCount: countRow.c,
-    preview: last ? last.content.slice(0, 120) : ''
+    updateSession(db, sessionId, {
+      messageCount: countRow.c,
+      preview: last ? last.content.slice(0, 120) : ''
+    })
+    bumpScopeVersionInTx(db, `session:${sessionId}:messages`)
+    return { ok: true, sessionId }
   })
-  return { ok: true, sessionId }
 }
 
 export type PersistedMessageEntry = {
