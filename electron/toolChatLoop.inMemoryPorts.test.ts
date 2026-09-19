@@ -146,7 +146,8 @@ describe('runToolChatSession 内存端口完整回合（P2 §2.4 标准 2）', (
       ])
     )
 
-    const res = await runInMemory(inMemoryMaterials())
+    // P1：无库宿主缺省 standard → write_file 走「自动」；批准确认/拒绝交互显式声明 strict 档
+    const res = await runInMemory(inMemoryMaterials({ policyLanePackage: 'strict' }))
     expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'done with approval and denial' }] })
 
     const factOf = (id: string) => capturedFacts.find((f) => f.type === 'tool-result' && (f as { id?: string }).id === id) as { result?: { success?: boolean; notExecuted?: boolean } } | undefined

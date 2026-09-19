@@ -244,7 +244,8 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
         { content: [{ type: 'text', text: 'written' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
       ])
     )
-    const res = await run(baseMaterials({ floatingNotificationManager: manager as never }))
+    // P1：无库宿主缺省 standard → write_file 走「自动」（agent 无浮动通知）；user 确认出口契约显式声明 strict
+    const res = await run(baseMaterials({ policyLanePackage: 'strict', floatingNotificationManager: manager as never }))
     expect(res).toMatchObject({ ok: true })
     const confirmReq = notifications.find((n) => n.kind === 'confirm-request')
     expect(confirmReq).toMatchObject({ sessionId: 'sess-invocation-1', toolUseId: 'tu-inv2', toolName: 'write_file', requestId: 'req-invocation-1' })

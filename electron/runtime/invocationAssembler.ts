@@ -260,7 +260,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const effectiveRules = materials.policyRuleFloor
     ? intersectPolicyRulesWithFloor(withOrigin.rules, materials.policyRuleFloor)
     : withOrigin.rules
-  const lanePackage = db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard'
+  // 档位来源：显式声明（无库宿主 / 测试收紧）优先；有库宿主读实际配置；否则 standard
+  const explicitLanePackage = (materials as { policyLanePackage?: import('../../src/shared/policy/policyPackages').PolicyPackage })
+    .policyLanePackage
+  const lanePackage =
+    explicitLanePackage ?? (db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard')
   const policy = db
     ? {
         effectiveRules,

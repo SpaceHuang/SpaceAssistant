@@ -278,7 +278,7 @@ describe('action.mcp.list 能力', () => {
         }) as McpServerWriteInput
       ])
       // 模拟真实链路：lastError.message 为原始 error.message（getaddrinfo/URL 形态）
-      updateServerStatus(db, 'srv-err', {
+      await updateServerStatus(db, 'srv-err', {
         lastError: {
           code: 'refresh-failed',
           message: 'getaddrinfo ENOTFOUND leaky.example.com; discovery failed at https://auth.leaky.example.com',
