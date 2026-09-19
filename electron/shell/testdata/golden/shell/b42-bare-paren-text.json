@@ -27,7 +27,7 @@
         {
           "verb": "echo",
           "args": [
-            "text (with parens) here"
+            "\"text (with parens) here\""
           ],
           "segmentIndex": 0
         }
@@ -35,10 +35,8 @@
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "partial",
-      "unresolved": [
-        "segment:0:shell-control-flow"
-      ]
+      "analysisCompleteness": "complete",
+      "unresolved": []
     }
   },
   "signature": {
@@ -59,7 +57,7 @@
       {
         "verb": "echo",
         "args": [
-          "text (with parens) here"
+          "\"text (with parens) here\""
         ],
         "segmentIndex": 0
       }
@@ -67,21 +65,19 @@
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "partial",
-    "unresolved": [
-      "segment:0:shell-control-flow"
-    ]
+    "analysisCompleteness": "complete",
+    "unresolved": []
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial",
+    "analysisCompleteness": "complete",
     "persistable": true,
     "hasMetasyntax": false
   },
   "precheckTrusted": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial"
+    "analysisCompleteness": "complete"
   }
 }

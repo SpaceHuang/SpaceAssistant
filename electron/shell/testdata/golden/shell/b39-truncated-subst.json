@@ -3,41 +3,40 @@
   "dialect": "posix-bash",
   "platform": "linux",
   "analysis": {
-    "verdict": "ask",
-    "segments": [
-      "echo $("
-    ],
+    "verdict": "deny",
+    "denyReason": "命令语法解析失败，无法进行安全分析",
+    "segments": [],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
-      "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "violations": [
+        {
+          "code": "PARSE_ERROR",
+          "message": "命令语法解析失败，无法进行安全分析",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令语法解析失败，无法进行安全分析"
+      ],
+      "outsideWorkDirRisk": true,
+      "requiresRiskAck": true
     },
-    "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
-      "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": []
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": true,
+      "warnings": [
+        "命令语法解析失败，无法进行安全分析"
+      ]
     },
     "facts": {
       "dialect": "posix-bash",
-      "operations": [
-        {
-          "verb": "echo",
-          "args": [
-            "$("
-          ],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "parse:tree-error"
       ]
     }
   },
@@ -53,28 +52,17 @@
   },
   "facts": {
     "dialect": "posix-bash",
-    "operations": [
-      {
-        "verb": "echo",
-        "args": [
-          "$("
-        ],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "parse:tree-error"
     ]
   },
   "precheck": {
-    "ok": true,
-    "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial",
-    "persistable": false,
-    "hasMetasyntax": true
+    "ok": false,
+    "auditReason": "命令语法解析失败，无法进行安全分析"
   }
 }

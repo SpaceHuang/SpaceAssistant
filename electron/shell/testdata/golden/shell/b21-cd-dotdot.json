@@ -16,10 +16,17 @@
           "message": "cd 目标不在工作目录内：..",
           "path": "..",
           "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：..",
+          "path": "..",
+          "severity": "warning"
         }
       ],
       "warnings": [
-        "cd 目标不在工作目录内：.."
+        "cd 目标不在工作目录内：..",
+        "命令包含工作目录外的路径：.."
       ],
       "outsideWorkDirRisk": false,
       "requiresRiskAck": true
@@ -29,13 +36,16 @@
       "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
       "warnings": [
-        "cd 目标不在工作目录内：.."
+        "cd 目标不在工作目录内：..",
+        "命令包含工作目录外的路径：.."
       ],
       "scannedPaths": [
+        "..",
         ".."
       ],
       "violationCodes": [
-        "CD_OUTSIDE_<WORKDIR>"
+        "CD_OUTSIDE_<WORKDIR>",
+        "PATH_OUTSIDE_<WORKDIR>"
       ]
     },
     "facts": {

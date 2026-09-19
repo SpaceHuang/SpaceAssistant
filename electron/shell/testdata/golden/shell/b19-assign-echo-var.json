@@ -25,9 +25,8 @@
       "dialect": "posix-bash",
       "operations": [
         {
-          "verb": "VAR=value",
+          "verb": "echo",
           "args": [
-            "echo",
             "$VAR"
           ],
           "segmentIndex": 0
@@ -54,9 +53,8 @@
     "dialect": "posix-bash",
     "operations": [
       {
-        "verb": "VAR=value",
+        "verb": "echo",
         "args": [
-          "echo",
           "$VAR"
         ],
         "segmentIndex": 0

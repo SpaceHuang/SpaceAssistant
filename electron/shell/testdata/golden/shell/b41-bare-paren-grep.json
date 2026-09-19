@@ -27,7 +27,7 @@
         {
           "verb": "grep",
           "args": [
-            "foo(bar)",
+            "\"foo(bar)\"",
             "x.txt"
           ],
           "segmentIndex": 0
@@ -36,10 +36,8 @@
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "partial",
-      "unresolved": [
-        "segment:0:shell-control-flow"
-      ]
+      "analysisCompleteness": "complete",
+      "unresolved": []
     }
   },
   "signature": {
@@ -61,7 +59,7 @@
       {
         "verb": "grep",
         "args": [
-          "foo(bar)",
+          "\"foo(bar)\"",
           "x.txt"
         ],
         "segmentIndex": 0
@@ -70,21 +68,19 @@
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "partial",
-    "unresolved": [
-      "segment:0:shell-control-flow"
-    ]
+    "analysisCompleteness": "complete",
+    "unresolved": []
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial",
+    "analysisCompleteness": "complete",
     "persistable": true,
     "hasMetasyntax": false
   },
   "precheckTrusted": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial"
+    "analysisCompleteness": "complete"
   }
 }

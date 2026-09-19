@@ -27,7 +27,7 @@
         {
           "verb": "eval",
           "args": [
-            "$CMD"
+            "\"$CMD\""
           ],
           "segmentIndex": 0
         }
@@ -55,7 +55,7 @@
       {
         "verb": "eval",
         "args": [
-          "$CMD"
+          "\"$CMD\""
         ],
         "segmentIndex": 0
       }

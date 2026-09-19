@@ -4,6 +4,8 @@
   "platform": "linux",
   "analysis": {
     "verdict": "ask",
+    "validatorId": "redirect-sensitive-target",
+    "denyType": "weak",
     "segments": [
       "echo secret > ~/.ssh/authorized_keys"
     ],
@@ -16,10 +18,16 @@
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
+      "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
       "warnings": [],
-      "scannedPaths": []
+      "scannedPaths": [],
+      "violationCodes": [
+        "redirect-sensitive-target"
+      ],
+      "validatorId": "redirect-sensitive-target",
+      "denyType": "weak",
+      "securityWarning": "重定向目标为敏感路径（~/.ssh/authorized_keys），需人工确认"
     },
     "facts": {
       "dialect": "posix-bash",
@@ -27,9 +35,7 @@
         {
           "verb": "echo",
           "args": [
-            "secret",
-            ">",
-            "~/.ssh/authorized_keys"
+            "secret"
           ],
           "segmentIndex": 0
         }
@@ -39,10 +45,8 @@
         "~/.ssh/authorized_keys"
       ],
       "cwdChanges": [],
-      "analysisCompleteness": "partial",
-      "unresolved": [
-        "segment:0:shell-control-flow"
-      ]
+      "analysisCompleteness": "complete",
+      "unresolved": []
     }
   },
   "signature": {
@@ -61,9 +65,7 @@
       {
         "verb": "echo",
         "args": [
-          "secret",
-          ">",
-          "~/.ssh/authorized_keys"
+          "secret"
         ],
         "segmentIndex": 0
       }
@@ -73,15 +75,13 @@
       "~/.ssh/authorized_keys"
     ],
     "cwdChanges": [],
-    "analysisCompleteness": "partial",
-    "unresolved": [
-      "segment:0:shell-control-flow"
-    ]
+    "analysisCompleteness": "complete",
+    "unresolved": []
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial",
+    "analysisCompleteness": "complete",
     "persistable": false,
     "hasMetasyntax": true
   }

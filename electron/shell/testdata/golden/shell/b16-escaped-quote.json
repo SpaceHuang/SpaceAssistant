@@ -27,7 +27,7 @@
         {
           "verb": "echo",
           "args": [
-            "with \"escape\" inside"
+            "\"with \\\"escape\\\" inside\""
           ],
           "segmentIndex": 0
         }
@@ -57,7 +57,7 @@
       {
         "verb": "echo",
         "args": [
-          "with \"escape\" inside"
+          "\"with \\\"escape\\\" inside\""
         ],
         "segmentIndex": 0
       }

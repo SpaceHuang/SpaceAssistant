@@ -27,9 +27,7 @@
         {
           "verb": "echo",
           "args": [
-            "x",
-            ">>",
-            "out.txt"
+            "x"
           ],
           "segmentIndex": 0
         }
@@ -37,10 +35,8 @@
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "partial",
-      "unresolved": [
-        "segment:0:shell-control-flow"
-      ]
+      "analysisCompleteness": "complete",
+      "unresolved": []
     }
   },
   "signature": {
@@ -59,9 +55,7 @@
       {
         "verb": "echo",
         "args": [
-          "x",
-          ">>",
-          "out.txt"
+          "x"
         ],
         "segmentIndex": 0
       }
@@ -69,15 +63,13 @@
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "partial",
-    "unresolved": [
-      "segment:0:shell-control-flow"
-    ]
+    "analysisCompleteness": "complete",
+    "unresolved": []
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial",
+    "analysisCompleteness": "complete",
     "persistable": false,
     "hasMetasyntax": true
   }

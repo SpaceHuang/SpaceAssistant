@@ -30,6 +30,11 @@
             "`pwd`"
           ],
           "segmentIndex": 0
+        },
+        {
+          "verb": "pwd",
+          "args": [],
+          "segmentIndex": 1
         }
       ],
       "connectors": [],
@@ -58,6 +63,11 @@
           "`pwd`"
         ],
         "segmentIndex": 0
+      },
+      {
+        "verb": "pwd",
+        "args": [],
+        "segmentIndex": 1
       }
     ],
     "connectors": [],

@@ -1,0 +1,104 @@
+{
+  "id": "t1-18-single-dash-flag",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "robocopy a b /MIR"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/MIR",
+          "path": "/MIR",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：/MIR"
+      ],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": true
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": false,
+      "warnings": [
+        "命令包含工作目录外的路径：/MIR"
+      ],
+      "scannedPaths": [
+        "/MIR"
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>"
+      ]
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "robocopy",
+          "args": [
+            "a",
+            "b",
+            "/MIR"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [
+        "/MIR"
+      ],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "robocopy a b /MIR",
+    "trust": {
+      "executable": "robocopy",
+      "argv": [
+        "a",
+        "b",
+        "/MIR"
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "robocopy",
+        "args": [
+          "a",
+          "b",
+          "/MIR"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [
+      "/MIR"
+    ],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": true,
+    "hasMetasyntax": false
+  }
+}

@@ -27,10 +27,8 @@
         {
           "verb": "diff",
           "args": [
-            "<(sort",
-            "a.txt)",
-            "<(sort",
-            "b.txt)"
+            "<(sort a.txt)",
+            "<(sort b.txt)"
           ],
           "segmentIndex": 0
         }
@@ -38,10 +36,8 @@
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "partial",
-      "unresolved": [
-        "segment:0:shell-control-flow"
-      ]
+      "analysisCompleteness": "complete",
+      "unresolved": []
     }
   },
   "signature": {
@@ -60,10 +56,8 @@
       {
         "verb": "diff",
         "args": [
-          "<(sort",
-          "a.txt)",
-          "<(sort",
-          "b.txt)"
+          "<(sort a.txt)",
+          "<(sort b.txt)"
         ],
         "segmentIndex": 0
       }
@@ -71,15 +65,13 @@
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "partial",
-    "unresolved": [
-      "segment:0:shell-control-flow"
-    ]
+    "analysisCompleteness": "complete",
+    "unresolved": []
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial",
+    "analysisCompleteness": "complete",
     "persistable": false,
     "hasMetasyntax": true
   }

@@ -27,7 +27,7 @@
         {
           "verb": "printf",
           "args": [
-            "tabtnewlinen"
+            "\"tab\\tnewline\\n\""
           ],
           "segmentIndex": 0
         }
@@ -57,7 +57,7 @@
       {
         "verb": "printf",
         "args": [
-          "tabtnewlinen"
+          "\"tab\\tnewline\\n\""
         ],
         "segmentIndex": 0
       }

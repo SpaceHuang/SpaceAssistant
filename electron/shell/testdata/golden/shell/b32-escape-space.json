@@ -27,16 +27,13 @@
         {
           "verb": "echo",
           "args": [
-            "a\\",
-            "b"
+            "a\\ b"
           ],
           "segmentIndex": 0
         }
       ],
       "connectors": [],
-      "paths": [
-        "a\\"
-      ],
+      "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -61,16 +58,13 @@
       {
         "verb": "echo",
         "args": [
-          "a\\",
-          "b"
+          "a\\ b"
         ],
         "segmentIndex": 0
       }
     ],
     "connectors": [],
-    "paths": [
-      "a\\"
-    ],
+    "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

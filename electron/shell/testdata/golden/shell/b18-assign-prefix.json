@@ -25,9 +25,8 @@
       "dialect": "posix-bash",
       "operations": [
         {
-          "verb": "FOO=1",
+          "verb": "cmd",
           "args": [
-            "cmd",
             "--flag"
           ],
           "segmentIndex": 0
@@ -54,9 +53,8 @@
     "dialect": "posix-bash",
     "operations": [
       {
-        "verb": "FOO=1",
+        "verb": "cmd",
         "args": [
-          "cmd",
           "--flag"
         ],
         "segmentIndex": 0

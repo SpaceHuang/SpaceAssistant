@@ -30,15 +30,18 @@
             "$(pwd)"
           ],
           "segmentIndex": 0
+        },
+        {
+          "verb": "pwd",
+          "args": [],
+          "segmentIndex": 1
         }
       ],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "partial",
-      "unresolved": [
-        "segment:0:shell-control-flow"
-      ]
+      "analysisCompleteness": "complete",
+      "unresolved": []
     }
   },
   "signature": {
@@ -60,20 +63,23 @@
           "$(pwd)"
         ],
         "segmentIndex": 0
+      },
+      {
+        "verb": "pwd",
+        "args": [],
+        "segmentIndex": 1
       }
     ],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "partial",
-    "unresolved": [
-      "segment:0:shell-control-flow"
-    ]
+    "analysisCompleteness": "complete",
+    "unresolved": []
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "partial",
+    "analysisCompleteness": "complete",
     "persistable": false,
     "hasMetasyntax": true
   }

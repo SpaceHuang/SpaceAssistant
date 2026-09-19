@@ -74,6 +74,27 @@
 - 既有测试登记修改（facts 语义固化的同类漂移，均为 posix-bash 分叉面）：`shellBehaviorMatrix.test.ts`（redirection / command substitution → complete，PS 期望经 `expectedCompletenessPs` 保持 partial 不变）、`shellAnalyzer.test.ts`（complete 化、connectors 原文顺序、`\;` 为字面参数的树事实语义）。
 
 
-## PowerShell 段（P3-T0 建立）
+## PowerShell 段
 
-（待 P3-T0 填写）
+### 基线信息（P3-T0）
+
+- **基线 commit**：P2 收尾提交（`90288c48`）之后的样本扩展 commit——录制时 windows-powershell 路径仍为旧共享实现（P3-T2/T5 未动）
+- 样本集：PS 54 条（基线 12 + Tier-1 常见形态 22 + Tier-2 扩展方言 20），bash 48 条不变；shellGolden 基线共 102 条
+- 四类基线（原语基线经导入口径）：parseShellSegments / tokenizeShellArgv / tokenizeSimpleCommand / extractPathLiterals / analyzeSegmentPaths 行为以 P2 基线数据为准延续监控（导出函数在 P3 期间零改动，由冻结 diff 直证）
+
+### P3-T1 分层 ERROR 门禁统计（tree-sitter-powershell@0.26.4）
+
+| 层 | 条数 | ERROR 数 | 率 | 门禁 |
+| --- | --- | --- | --- | --- |
+| Tier-1 常见形态 | 22 | 0 | 0% | ✓（= 0 硬门禁） |
+| Tier-2 扩展方言 | 20 | 1（t2-03 反引号开头命令） | 5% | ✓（≤ 5%） |
+
+**上游缺陷跟踪表**（grammar 0.26.4 已知缺陷形态，均为合法脚本误报 → ask 兜底 fail-closed；待上报/跟随 grammar 升级复测）：
+
+| 形态 | 状态 |
+| --- | --- |
+| `--flag=value` / `-flag=value` 带等号参数 token | ERROR（样本调整为 `-flag value`，原形态保留跟踪） |
+| switch 带 default 子句完整形态 | ERROR（样本简化，完整形态保留跟踪） |
+| 字符串插值内含 `#` 注释 | ERROR（样本替换，形态保留跟踪） |
+| PS7 三元运算符 `$a ? 1 : 2` | ERROR（grammar 语法陈旧，形态保留跟踪） |
+| 反引号开头命令（t2-03） | ERROR（保留 1 条作为已知缺陷代表，恰达 Tier-2 5% 边界） |

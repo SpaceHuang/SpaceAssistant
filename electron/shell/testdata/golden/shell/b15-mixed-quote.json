@@ -27,7 +27,7 @@
         {
           "verb": "echo",
           "args": [
-            "mixed 'quote' inside"
+            "\"mixed 'quote' inside\""
           ],
           "segmentIndex": 0
         }
@@ -57,7 +57,7 @@
       {
         "verb": "echo",
         "args": [
-          "mixed 'quote' inside"
+          "\"mixed 'quote' inside\""
         ],
         "segmentIndex": 0
       }

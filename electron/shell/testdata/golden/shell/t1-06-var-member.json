@@ -1,0 +1,76 @@
+{
+  "id": "t1-06-var-member",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "Write-Output $env.PATH"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "Write-Output",
+          "args": [
+            "$env.PATH"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "Write-Output $env.PATH",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "Write-Output",
+        "args": [
+          "$env.PATH"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

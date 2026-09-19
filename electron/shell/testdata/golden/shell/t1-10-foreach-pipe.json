@@ -1,0 +1,95 @@
+{
+  "id": "t1-10-foreach-pipe",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "Get-ChildItem",
+      "ForEach-Object { $_.FullName }"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "Get-ChildItem",
+          "args": [],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "ForEach-Object",
+          "args": [
+            "{",
+            "$_.FullName",
+            "}"
+          ],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "|"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "Get-ChildItem | ForEach-Object { $_.FullName }",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "Get-ChildItem",
+        "args": [],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "ForEach-Object",
+        "args": [
+          "{",
+          "$_.FullName",
+          "}"
+        ],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "|"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

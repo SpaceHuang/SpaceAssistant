@@ -3,40 +3,41 @@
   "dialect": "posix-bash",
   "platform": "linux",
   "analysis": {
-    "verdict": "ask",
-    "segments": [
-      "ls"
-    ],
+    "verdict": "deny",
+    "denyReason": "命令语法解析失败，无法进行安全分析",
+    "segments": [],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
-      "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "violations": [
+        {
+          "code": "PARSE_ERROR",
+          "message": "命令语法解析失败，无法进行安全分析",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令语法解析失败，无法进行安全分析"
+      ],
+      "outsideWorkDirRisk": true,
+      "requiresRiskAck": true
     },
-    "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
-      "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": []
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": true,
+      "warnings": [
+        "命令语法解析失败，无法进行安全分析"
+      ]
     },
     "facts": {
       "dialect": "posix-bash",
-      "operations": [
-        {
-          "verb": "ls",
-          "args": [],
-          "segmentIndex": 0
-        }
-      ],
-      "connectors": [
-        "|"
-      ],
+      "operations": [],
+      "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "parse:tree-error"
+      ]
     }
   },
   "signature": {
@@ -51,26 +52,17 @@
   },
   "facts": {
     "dialect": "posix-bash",
-    "operations": [
-      {
-        "verb": "ls",
-        "args": [],
-        "segmentIndex": 0
-      }
-    ],
-    "connectors": [
-      "|"
-    ],
+    "operations": [],
+    "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "parse:tree-error"
+    ]
   },
   "precheck": {
-    "ok": true,
-    "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
-    "persistable": false,
-    "hasMetasyntax": true
+    "ok": false,
+    "auditReason": "命令语法解析失败，无法进行安全分析"
   }
 }

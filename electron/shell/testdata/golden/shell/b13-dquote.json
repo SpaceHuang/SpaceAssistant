@@ -27,7 +27,7 @@
         {
           "verb": "echo",
           "args": [
-            "hello world"
+            "\"hello world\""
           ],
           "segmentIndex": 0
         }
@@ -57,7 +57,7 @@
       {
         "verb": "echo",
         "args": [
-          "hello world"
+          "\"hello world\""
         ],
         "segmentIndex": 0
       }
