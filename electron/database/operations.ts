@@ -24,6 +24,7 @@ import { changesToNumber, runInTransaction } from './transaction'
 import { bumpScopeVersionInTx } from './scopeVersion'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
+import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import {
   estimateThinkingTokensFromMessage,
@@ -47,6 +48,7 @@ type SessionRow = {
   work_dir_profile_id: string | null
   ownership: string | null
   visibility: string | null
+  thinking_effort: string | null
 }
 
 type MessageRow = {
@@ -93,7 +95,9 @@ function rowToSession(row: SessionRow): Session {
     ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {}),
     // 偏差 7：归属/可见性缺失或损坏时按谓词模块归一（历史行等价 user/primary）
     ...(row.ownership ? { ownership: normalizeOwnership(row.ownership) } : {}),
-    ...(row.visibility ? { visibility: normalizeVisibility(row.visibility) } : {})
+    ...(row.visibility ? { visibility: normalizeVisibility(row.visibility) } : {}),
+    // Thinking 强度覆盖：NULL = 继承全局（不产出字段即继承）；损坏值视为继承
+    ...(isThinkingEffort(row.thinking_effort) ? { thinkingEffort: row.thinking_effort } : {})
   })
 }
 
@@ -174,6 +178,8 @@ export function createSession(
     ownership?: SessionOwnership
     /** 偏差 7：创建强制声明可见性；缺省 primary。 */
     visibility?: SessionVisibility
+    /** Thinking 强度覆盖（composer 草稿带入场景）；缺省 = 继承全局。 */
+    thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
   }
 ): Session {
   const now = Date.now()
@@ -199,7 +205,8 @@ export function createSession(
     schemaVersion: CURRENT_SCHEMA_VERSION,
     workDirProfileId: input.workDirProfileId,
     ownership,
-    visibility
+    visibility,
+    ...(isThinkingEffort(input.thinkingEffort) ? { thinkingEffort: input.thinkingEffort } : {})
   }
 
   const conn = getDbConnection(db)
@@ -209,11 +216,11 @@ export function createSession(
         `INSERT INTO sessions (
           id, name, preview, model, llm_service_id, temperature, max_tokens,
           created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
-          ownership, visibility
+          ownership, visibility, thinking_effort
         ) VALUES (
           @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
           @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
-          @ownership, @visibility
+          @ownership, @visibility, @thinkingEffort
         )`
       )
       .run({
@@ -232,7 +239,8 @@ export function createSession(
         schemaVersion: session.schemaVersion,
         workDirProfileId: session.workDirProfileId ?? null,
         ownership,
-        visibility
+        visibility,
+        thinkingEffort: session.thinkingEffort ?? null
       })
     // 偏差 11:会话列表版本在同一事务内递增
     bumpScopeVersionInTx(db, 'session-list')
@@ -259,18 +267,24 @@ export function updateSession(
       | 'workDirProfileId'
       | 'ownership'
       | 'visibility'
-    >
+    > & {
+      /** Thinking 强度覆盖；传 null = 清除覆盖（回到继承全局）。 */
+      thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort | null
+    }
   >
 ): Session | undefined {
   const cur = getSession(db, sessionId)
   if (!cur) return undefined
   const metadata = patch.metadata ?? cur.metadata
+  // thinkingEffort 单独处理：patch 允许 null（清除覆盖），Session 语义为「缺省 = 继承」
+  const { thinkingEffort: patchedEffort, ...restPatch } = patch
   const next: Session = {
     ...cur,
-    ...patch,
+    ...restPatch,
     metadata,
     skillsState: patch.skillsState ? normalizeSessionSkillsState(patch.skillsState) : cur.skillsState,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    ...(patchedEffort !== undefined ? { thinkingEffort: patchedEffort ?? undefined } : {})
   }
 
   const conn = getDbConnection(db)
@@ -290,7 +304,8 @@ export function updateSession(
         metadata = @metadata,
         work_dir_profile_id = @workDirProfileId,
         ownership = @ownership,
-        visibility = @visibility
+        visibility = @visibility,
+        thinking_effort = @thinkingEffort
       WHERE id = @id`
     )
     .run({
@@ -307,14 +322,17 @@ export function updateSession(
       metadata: JSON.stringify(next.metadata),
       workDirProfileId: next.workDirProfileId ?? null,
       ownership: normalizeOwnership(next.ownership),
-      visibility: normalizeVisibility(next.visibility)
+      visibility: normalizeVisibility(next.visibility),
+      // 合法档位写值；null / 未设置 / 损坏值写 NULL（= 继承全局）
+      thinkingEffort: isThinkingEffort(next.thinkingEffort) ? next.thinkingEffort : null
     })
     // 偏差 11:列表与单会话版本同事务递增
     bumpScopeVersionInTx(db, 'session-list')
     bumpScopeVersionInTx(db, `session:${sessionId}`)
   })
   db.save()
-  return next
+  // 清除覆盖（null）时返回不含该字段的对象，保持 Session.thinkingEffort 语义为「缺省 = 继承」
+  return isThinkingEffort(next.thinkingEffort) ? next : { ...next, thinkingEffort: undefined }
 }
 
 export function deleteSession(db: AppDatabase, sessionId: string, options?: { flush?: boolean }): void {

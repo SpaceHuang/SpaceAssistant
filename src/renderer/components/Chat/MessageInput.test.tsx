@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 
 vi.mock('./ContextUsageRing', () => ({
   ContextUsageRing: () => null
@@ -88,5 +88,42 @@ describe('MessageInput', () => {
     renderInput()
     const sendBtn = screen.getByRole('button', { name: '发送消息' })
     expect((sendBtn as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // §5.2.1（OQ-9）：idle 态状态区整块不渲染（原「Enter 发送」提示已移除），不占位
+  it('renders no composer status area while idle', () => {
+    const { container } = renderInput()
+    expect(container.querySelector('.composer-status')).toBeNull()
+    expect(container.querySelector('.composer-hint-trigger')).toBeNull()
+    expect(container.textContent).not.toContain('Enter 发送')
+  })
+
+  // §10.2 回归重点：running 态仍显示运行状态标签与耗时（§5.2.1 保留清单）
+  it('still renders running status label and elapsed while running', () => {
+    const { container } = renderInput({ running: true, runningStatus: '生成中', runningElapsed: '3s' })
+    expect(container.querySelector('.composer-status__label')?.textContent).toBe('生成中')
+    expect(container.querySelector('.composer-status__elapsed')?.textContent).toBe('3s')
+  })
+
+  // §10.2：排队提示（hintRunningQueue）保留——running + 已输入文本（canQueueSend）时显示
+  it('still shows the queue hint when a send is queued while running', () => {
+    const { container } = renderInput({ running: true, runningStatus: '生成中' })
+    fireEvent.change(container.querySelector('textarea')!, { target: { value: 'hi' } })
+    expect(container.querySelector('.composer-status__hint')?.textContent).toContain('发送并排队')
+  })
+
+  // §5.2：强度控件落位在模型 chip 之后、状态区之前
+  it('places thinking slot after model slot and before status area', () => {
+    const { container } = renderInput({
+      modelSlot: <span data-testid="model-slot">model</span>,
+      thinkingSlot: <button type="button">默认（中）</button>,
+      running: true,
+      runningStatus: '生成中'
+    })
+    const modelSlot = container.querySelector('[data-testid="model-slot"]')!
+    const thinking = screen.getByRole('button', { name: '默认（中）' })
+    const status = container.querySelector('.composer-status--running')!
+    expect(modelSlot.compareDocumentPosition(thinking) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(thinking.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

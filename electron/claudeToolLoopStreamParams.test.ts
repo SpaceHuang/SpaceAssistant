@@ -53,6 +53,49 @@ describe('buildClaudeToolLoopStreamParams', () => {
     expect(p.system).toBe('  you are helpful  ')
     expect(p.thinking).toEqual({ type: 'adaptive' })
   })
+
+  // §7.3 档位 → wire：output_config 在 tool_choice 之后、thinking 之前（thinking 仍置尾）
+  it('emits output_config with effort between tool_choice and thinking', () => {
+    const p = buildClaudeToolLoopStreamParams({
+      model: 'm',
+      max_tokens: 100,
+      messages,
+      tools,
+      thinking: { type: 'adaptive' },
+      outputConfig: { effort: 'low' }
+    })
+    expect(Object.keys(p)).toEqual(['model', 'max_tokens', 'messages', 'tools', 'tool_choice', 'output_config', 'thinking'])
+    expect(p.output_config).toEqual({ effort: 'low' })
+  })
+
+  it('keeps output_config before thinking when a system prompt is present', () => {
+    const p = buildClaudeToolLoopStreamParams({
+      model: 'm',
+      max_tokens: 100,
+      system: 'sys',
+      messages,
+      tools,
+      thinking: { type: 'adaptive' },
+      outputConfig: { effort: 'high' }
+    })
+    expect(Object.keys(p)).toEqual(['model', 'max_tokens', 'system', 'messages', 'tools', 'tool_choice', 'output_config', 'thinking'])
+    expect(p.output_config).toEqual({ effort: 'high' })
+  })
+
+  it('omits output_config when off / not provided (off 请求不含强度字段)', () => {
+    const p = buildClaudeToolLoopStreamParams({ model: 'm', max_tokens: 100, messages, tools, thinking: { type: 'disabled' } })
+    expect(p.output_config).toBeUndefined()
+    expect(Object.keys(p)).not.toContain('output_config')
+    const p2 = buildClaudeToolLoopStreamParams({ model: 'm', max_tokens: 100, messages, tools, thinking: { type: 'disabled' }, outputConfig: undefined })
+    expect(p2.output_config).toBeUndefined()
+  })
+
+  it('low 与 high 的请求体不相等（档位未被折叠，§10.3）', () => {
+    const base = { model: 'm', max_tokens: 100, messages, tools, thinking: { type: 'adaptive' } as const }
+    const low = buildClaudeToolLoopStreamParams({ ...base, outputConfig: { effort: 'low' } })
+    const high = buildClaudeToolLoopStreamParams({ ...base, outputConfig: { effort: 'high' } })
+    expect(JSON.stringify(low)).not.toBe(JSON.stringify(high))
+  })
 })
 
 describe('provider message serialization', () => {
@@ -96,5 +139,28 @@ describe('buildClaudeNarrativeCompletionParams', () => {
       cache_control: { type: 'ephemeral' }
     })
     expect(p.cache_control).toEqual({ type: 'ephemeral' })
+  })
+
+  it('emits output_config with effort and keeps it before thinking', () => {
+    const p = buildClaudeNarrativeCompletionParams({
+      model: 'x',
+      max_tokens: 4096,
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hello' }],
+      thinking: { type: 'adaptive' },
+      outputConfig: { effort: 'medium' }
+    })
+    expect(p.output_config).toEqual({ effort: 'medium' })
+    expect(Object.keys(p).indexOf('output_config')).toBeLessThan(Object.keys(p).indexOf('thinking'))
+  })
+
+  it('omits output_config when not provided', () => {
+    const p = buildClaudeNarrativeCompletionParams({
+      model: 'x',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: 'hello' }],
+      thinking: { type: 'disabled' }
+    })
+    expect(p.output_config).toBeUndefined()
   })
 })

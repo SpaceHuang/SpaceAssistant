@@ -1,3 +1,5 @@
+> **状态更新（2026-09-19）**：本档所述「默认开启 Thinking」布尔开关已由 [thinking-effort-settings-requirement.md](./thinking-effort-settings-requirement.md) 实施变更——设置页现为「Thinking 强度」四档选择（关闭 / 低 / 中 / 高），原开关语义经等价迁移（开=中、关=关闭）。本档其余描述以现网为准。
+
 # 设置界面需求文档
 
 ## 1. 设置界面整体结构

@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 16
+export const DB_SCHEMA_VERSION = 17
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -272,6 +272,14 @@ CREATE INDEX IF NOT EXISTS idx_usage_turn_day ON usage_turn_facts(day);
 CREATE INDEX IF NOT EXISTS idx_usage_turn_session_day ON usage_turn_facts(session_id, day);
 CREATE INDEX IF NOT EXISTS idx_usage_turn_model_day ON usage_turn_facts(model, day);
 CREATE INDEX IF NOT EXISTS idx_usage_turn_app_version_day ON usage_turn_facts(app_version, day);
+`
+
+/**
+ * Thinking 强度（v17）：会话级覆盖列。
+ * NULL = 继承全局 config.thinkingEffort（§4.2 继承语义）——存量行不加默认值即天然兼容，禁止回填。
+ */
+export const MIGRATION_V17_SESSION_THINKING_EFFORT_SQL = `
+ALTER TABLE sessions ADD COLUMN thinking_effort TEXT;
 `
 
 export const SCHEMA_META_KEYS = {

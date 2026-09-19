@@ -46,6 +46,8 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.system?.trim() ? { system: config.system.trim() } : {}),
     ...(config.skillFragments?.length ? { skillFragments: config.skillFragments.filter((fragment) => typeof fragment === 'string' && fragment.trim()).map((fragment) => fragment.trim()) } : {}),
     ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens } : {}),
+    ...(config.thinkingEffort !== undefined ? { thinkingEffort: config.thinkingEffort } : {}),
+    ...(config.requestedThinkingEffort !== undefined ? { requestedThinkingEffort: config.requestedThinkingEffort } : {}),
     ...(config.enableThinking !== undefined ? { enableThinking: config.enableThinking } : {}),
     ...(config.locale?.trim() ? { locale: config.locale.trim() } : {}),
     ...(config.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: config.projectMemoryEnabled } : {}),

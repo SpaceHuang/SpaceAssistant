@@ -6,6 +6,13 @@ import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'
+import {
+  buildThinkingWireParams,
+  consumeEffortMemoizedAudit,
+  isEffortUnsupportedByUpstream,
+  isOutputConfigRejectedError,
+  memoizeEffortUnsupported
+} from './effortFallback'
 import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
@@ -789,8 +796,24 @@ async function runToolChatSessionInner(
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
   const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
-  // P4：thinking 由 effort 档位推导（off = 关闭；其余档位本期统一 adaptive，budget 细分随后续阶段）
-  const thinking = reasoningEffort !== 'off' ? ({ type: 'adaptive' as const }) : ({ type: 'disabled' as const })
+  // Thinking 由 effort 档位映射（§7.3）：off → disabled、其余档 adaptive + output_config.effort 同发。
+  // 上游拒绝 output_config 时的去强度降级与进程内记忆见 effortFallback（§7.4）。
+  const { thinking, outputConfig: requestedOutputConfig } = buildThinkingWireParams(reasoningEffort ?? 'off')
+  let effortOutputConfig = requestedOutputConfig
+  let effortRetryUsed = false
+  // 进程内记忆命中（OQ-6，key = llmServiceId + model）：跳过 output_config 避免每轮重试；首次跳过落一次审计
+  if (effortOutputConfig && isEffortUnsupportedByUpstream(args.llmServiceId, model)) {
+    effortOutputConfig = undefined
+    if (consumeEffortMemoizedAudit(args.llmServiceId, model)) {
+      logAgentEvent('info', 'llm.effort.unsupported_memoized', {
+        requestId,
+        sessionId,
+        model,
+        llmServiceId: args.llmServiceId,
+        requestedEffort: reasoningEffort
+      })
+    }
+  }
 
   if (maxTokensEffective !== toolLoopOptions.maxTokens) {
     logAgentEvent('info', 'llm.max_tokens_floor', {
@@ -984,6 +1007,7 @@ async function runToolChatSessionInner(
       messages: wireMessages as Anthropic.MessageParam[],
       tools: tools as Anthropic.Tool[],
       thinking,
+      outputConfig: effortOutputConfig,
       cacheControl: true
     })
     // 计划面先冻结为不含内部 id 的协议中立表示；wire 面只接受 serializer 最终产物。
@@ -1032,7 +1056,9 @@ async function runToolChatSessionInner(
       messages: messagesStripped,
       toolNames,
       maxTokens: maxTokensEffective,
-      enableThinking: reasoningEffort !== 'off'
+      effort: reasoningEffort,
+      // 评审 N2：降级 / 记忆跳过后 wire 已无 output_config，标注实际生效状态便于排障
+      ...(requestedOutputConfig !== undefined && effortOutputConfig === undefined ? { effortSuppressed: true } : {})
     })
     beginLlm(sessionId, requestId)
 
@@ -1222,6 +1248,25 @@ async function runToolChatSessionInner(
       })
     } catch (e) {
       if (e instanceof ChatCancelledError) throw e
+      // §7.4：上游拒绝 output_config（明确未知字段类 400）→ 去强度（保留 adaptive）自动重试一次，
+      // 落 llm.effort.unsupported 审计 + 进程内记忆（粒度 llmServiceId+model）；其余错误按既有路径上抛
+      if (effortOutputConfig && !effortRetryUsed && isOutputConfigRejectedError(e)) {
+        effortRetryUsed = true
+        memoizeEffortUnsupported(args.llmServiceId, model)
+        effortOutputConfig = undefined
+        logAgentEvent('warn', 'llm.effort.unsupported', {
+          requestId,
+          sessionId,
+          loopRound,
+          model,
+          llmServiceId: args.llmServiceId,
+          requestedEffort: reasoningEffort,
+          fallback: 'adaptive',
+          error: e instanceof Error ? e.message : String(e)
+        })
+        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt: 1, backoffMs: 0, code: 'effort_unsupported' } })
+        continue
+      }
       const error = e instanceof Error ? e.message : String(e)
       const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
       if (recovery.action === 'reset_and_retry_provider') {

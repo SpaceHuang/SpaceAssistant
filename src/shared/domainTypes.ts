@@ -689,6 +689,8 @@ export interface Session {
   ownership?: import('./sessionOwnership').SessionOwnership
   /** 可见性（偏差 7）；缺省等价 primary */
   visibility?: import('./sessionOwnership').SessionVisibility
+  /** Thinking 强度覆盖；缺省 / null = 继承全局 config.thinkingEffort（继承语义，非快照） */
+  thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
 }
 
 /** 用户消息附带的图片（DB 只存引用，不存 base64） */
@@ -786,7 +788,10 @@ export interface AppConfig {
   preferredFastLanguageModelId: string
   preferredVisionModelId: string
   models: ModelEntry[]
+  /** @deprecated 由 thinkingEnabled 迁移而来，迁移后仅作只读镜像，运行时不再消费 */
   thinkingEnabled: boolean
+  /** 全局 Thinking 强度（默认值提供者）；会话可按 Session.thinkingEffort 覆盖 */
+  thinkingEffort: import('./agent/invocation').AgentReasoningEffort
   workDir: string
   workDirProfiles: WorkDirProfile[]
   activeWorkDirProfileId: string

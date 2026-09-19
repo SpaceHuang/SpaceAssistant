@@ -50,7 +50,9 @@ import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import { buildToolChatPayload } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelPicker } from './ComposerModelPicker'
-import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
+import { resolveSessionModelBinding, resolveSessionThinkingBinding } from '../../services/sessionModelBinding'
+import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
+import { ComposerThinkingPicker } from './ComposerThinkingPicker'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
 import { loadTurnFailureReasons } from '../../services/turnFailureHydration'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
@@ -123,12 +125,31 @@ export function ChatView() {
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
   const [draftModelOption, setDraftModelOption] = useState<ChatModelOption | undefined>(undefined)
+  const [draftThinkingEffort, setDraftThinkingEffort] = useState<AgentReasoningEffort | undefined>(undefined)
   const sessionBinding = useMemo(
     () => (cfg ? resolveSessionModelBinding(cfg, currentSession, draftModelOption) : null),
     [cfg, currentSession, draftModelOption]
   )
+  // 会话级 Thinking 强度（§4.2 两层解析）：会话覆盖 > composer 草稿 > 全局默认
+  const thinkingBinding = useMemo(
+    () => (cfg ? resolveSessionThinkingBinding(cfg, currentSession, draftThinkingEffort) : null),
+    [cfg, currentSession, draftThinkingEffort]
+  )
+  // 评审 N6：草稿只服务「composer 先于首个会话」的窗口；一旦存在会话（含侧边栏新建）即清除，
+  // 防止草稿在回到无会话状态时「复活」并被带入无关会话（draftModelOption 同款沿袭缺陷一并修复）
+  const currentSessionId = currentSession?.id
+  useEffect(() => {
+    if (currentSessionId) {
+      setDraftThinkingEffort(undefined)
+      setDraftModelOption(undefined)
+    }
+  }, [currentSessionId])
   const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
   const chatLlmServiceId = sessionBinding?.llmServiceId
+  const currentModelEntry = useMemo(
+    () => (cfg && chatModelName ? cfg.models.find((m) => m.name === chatModelName) : undefined),
+    [cfg, chatModelName]
+  )
   const chatBaseUrl = useMemo(() => {
     if (!cfg) return undefined
     const svc = cfg.llmServices.find((s) => s.id === chatLlmServiceId)
@@ -549,13 +570,26 @@ export function ChatView() {
   const send = useCallback(
     async (text: string, attachments?: ChatImageAttachment[]) => {
       if (!text.trim()) return
-      // 无会话 → 主进程创建；运行中 → 主进程分类立即命令/排队；决定全部回主进程（偏差 9）
-      await submitOutbound(text, undefined, {
+      // 无会话 → 主进程创建（附带 composer 草稿偏好，B2）；运行中 → 主进程分类立即命令/排队；决定全部回主进程（偏差 9）
+      const result = await submitOutbound(text, undefined, {
         targetSessionId: sessionId ?? undefined,
-        contextIntent: { kind: 'create-user', text, attachments }
+        contextIntent: { kind: 'create-user', text, attachments },
+        ...(sessionId
+          ? {}
+          : {
+              sessionPrefs: {
+                model: chatModelName,
+                ...(chatLlmServiceId ? { llmServiceId: chatLlmServiceId } : {}),
+                ...(draftThinkingEffort ? { thinkingEffort: draftThinkingEffort } : {})
+              }
+            })
       })
+      // §5.2 草稿保持:档位随主进程代建的首个会话落库后即清理
+      if (result && result.accepted === 'turn-started' && result.sessionId !== sessionId) {
+        setDraftThinkingEffort(undefined)
+      }
     },
-    [sessionId, submitOutbound]
+    [sessionId, submitOutbound, chatModelName, chatLlmServiceId, draftThinkingEffort]
   )
 
   const retryFailedAssistant = useCallback(
@@ -763,6 +797,23 @@ export function ChatView() {
     [sessionId, dispatch]
   )
 
+  /** §5.2：会话级强度选择；null = 清除覆盖（回到继承全局）。无会话时保留为草稿，随创建写入。 */
+  const handleThinkingSelect = useCallback(
+    async (effort: AgentReasoningEffort | null) => {
+      if (!sessionId) {
+        setDraftThinkingEffort(effort ?? undefined)
+        return
+      }
+      try {
+        const updated = await window.api.sessionUpdate({ sessionId, thinkingEffort: effort })
+        if (updated) dispatch(upsertSession(updated))
+      } catch (e) {
+        message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+      }
+    },
+    [sessionId, dispatch, message]
+  )
+
   const scrollToLatestLabel = t('scrollToLatest.label')
 
   const resolveFailureReason = useCallback(
@@ -891,6 +942,18 @@ export function ChatView() {
               displayName={sessionBinding?.displayName ?? chatModelName}
               unavailable={Boolean(sessionBinding && !sessionBinding.option)}
               onSelect={(opt) => void handleModelSelect(opt)}
+            />
+          ) : null
+        }
+        thinkingSlot={
+          cfg && thinkingBinding ? (
+            <ComposerThinkingPicker
+              value={thinkingBinding.effort}
+              overridden={thinkingBinding.overridden}
+              globalEffort={thinkingBinding.globalEffort}
+              disabled={currentModelEntry?.supportsThinking === false}
+              disabledReason={currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined}
+              onSelect={(effort) => void handleThinkingSelect(effort)}
             />
           ) : null
         }

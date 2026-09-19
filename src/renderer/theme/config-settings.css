@@ -1112,6 +1112,25 @@
   padding-top: 2px;
 }
 
+/* Thinking 强度四档选择器（§5.1） */
+.config-settings-page .config-models-effort-select {
+  width: 128px;
+}
+
+/* 「无思考」弱化标记（§5.3）：仅 supportsThinking === false 的模型名后显示 */
+.config-settings-page .config-models-catalog-row__no-thinking {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--sa-radius-sm);
+  border: 1px solid var(--sa-border-strong);
+  color: var(--sa-text-tertiary);
+  font-size: var(--sa-config-font-sm);
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .config-settings-page .config-models-section__content {
   display: flex;
   flex-direction: column;
@@ -1853,6 +1872,43 @@
 .composer-model-picker__item:hover .config-model-badge--vision {
   border-color: color-mix(in srgb, #7c5cff 48%, transparent);
   background: color-mix(in srgb, #7c5cff 22%, var(--sa-bg-elevated));
+}
+
+/* 会话级 Thinking 强度选择器（§5.2）：复用模型 chip 视觉，列表为 5 项单列 */
+.composer-thinking-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-thinking-picker__item {
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: var(--sa-config-font);
+  color: var(--sa-text);
+}
+
+.composer-thinking-picker__item:hover {
+  background: var(--sa-bg-muted);
+}
+
+.composer-thinking-picker__item--active {
+  color: var(--sa-accent);
+  font-weight: 500;
+}
+
+/* 禁用态包裹层（评审 B2）：Tooltip 挂点——disabled chip 自身不派发鼠标事件，提示由外层 span 承载 */
+.composer-thinking-chip--disabled-wrapper {
+  display: inline-flex;
+  cursor: not-allowed;
 }
 
 .composer-model-picker__service {

@@ -14,6 +14,8 @@ export type AgentLogEventName =
   | 'outbound.drain.failed'
   | 'llm.request'
   | 'llm.max_tokens_floor'
+  | 'llm.effort.unsupported'
+  | 'llm.effort.unsupported_memoized'
   | 'llm.response'
   | 'llm.output_recovery'
   | 'llm.error'
