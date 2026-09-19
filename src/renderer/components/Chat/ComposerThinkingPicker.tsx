@@ -29,14 +29,17 @@ export function ComposerThinkingPicker({ value, overridden, globalEffort, disabl
     ? effortLabel(value)
     : t('composer.thinking.inheritWithGlobal', { effort: effortLabel(globalEffort) })
 
-  const items: Array<{ key: string; label: string; select: () => void }> = [
-    { key: 'inherit', label: t('composer.thinking.inherit'), select: () => onSelect(null) },
-    ...THINKING_EFFORT_LEVELS.map((level) => ({
-      key: level,
-      label: effortLabel(level),
-      select: () => onSelect(level)
-    }))
-  ]
+  // 交互定稿（用户指示）：「是否默认」是档位的属性而非独立选项——
+  // 等于当前全局档位的项带「· 默认」标记，点它 = 清除覆盖回到继承（写 null）
+  const items = THINKING_EFFORT_LEVELS.map((level) => ({
+    key: level,
+    isDefaultSlot: level === globalEffort,
+    label:
+      level === globalEffort
+        ? t('composer.thinking.defaultSuffix', { effort: effortLabel(level) })
+        : effortLabel(level),
+    select: () => onSelect(level === globalEffort ? null : level)
+  }))
 
   const content = (
     <ul className="composer-thinking-picker__list" role="menu">
@@ -47,7 +50,7 @@ export function ComposerThinkingPicker({ value, overridden, globalEffort, disabl
             role="menuitem"
             className={[
               'composer-thinking-picker__item',
-              (item.key === 'inherit' ? !overridden : item.key === value) ? 'composer-thinking-picker__item--active' : ''
+              (item.isDefaultSlot ? !overridden : item.key === value) ? 'composer-thinking-picker__item--active' : ''
             ]
               .filter(Boolean)
               .join(' ')}

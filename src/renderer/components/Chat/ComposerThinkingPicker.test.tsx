@@ -4,7 +4,7 @@ import { ComposerThinkingPicker } from './ComposerThinkingPicker'
 
 function renderPicker(props: Partial<React.ComponentProps<typeof ComposerThinkingPicker>> = {}) {
   const onSelect = vi.fn()
-  render(
+  const view = render(
     <ComposerThinkingPicker
       value="medium"
       overridden={false}
@@ -13,7 +13,7 @@ function renderPicker(props: Partial<React.ComponentProps<typeof ComposerThinkin
       {...props}
     />
   )
-  return { onSelect }
+  return { onSelect, unmount: () => view.unmount() }
 }
 
 describe('ComposerThinkingPicker（§5.2 会话级强度覆盖）', () => {
@@ -28,22 +28,36 @@ describe('ComposerThinkingPicker（§5.2 会话级强度覆盖）', () => {
     expect(screen.queryByRole('button', { name: /默认/ })).toBeNull()
   })
 
-  it('点击弹出 5 项：默认 / 关闭 / 低 / 中 / 高', () => {
-    renderPicker()
+  // 交互定稿（用户指示）：「是否默认」是档位的属性而非独立选项——
+  // 列表只有 4 档，等于当前全局档位的项带「· 默认」标记；点它 = 清除覆盖回到继承
+  it('点击弹出 4 档，等于全局档位的项带「· 默认」属性标记', () => {
+    renderPicker({ globalEffort: 'medium' })
     fireEvent.click(screen.getByRole('button', { name: /默认（中）/ }))
     const options = screen.getAllByRole('menuitem')
-    expect(options.map((o) => o.textContent)).toEqual(['默认', '关闭', '低', '中', '高'])
+    expect(options.map((o) => o.textContent)).toEqual(['关闭', '低', '中 · 默认', '高'])
   })
 
-  it('选择「默认」回调 null（清除覆盖）', () => {
-    const { onSelect } = renderPicker({ value: 'low', overridden: true })
+  it('未覆盖时带默认标记的项处于选中态；覆盖后选中项切到覆盖档位', () => {
+    const first = renderPicker({ globalEffort: 'medium' })
+    fireEvent.click(screen.getByRole('button', { name: /默认（中）/ }))
+    expect(screen.getByRole('menuitem', { name: '中 · 默认' }).className).toContain('--active')
+    // 清理后重渲染：覆盖 low
+    first.unmount()
+    renderPicker({ value: 'low', overridden: true, globalEffort: 'medium' })
     fireEvent.click(screen.getByRole('button', { name: /低/ }))
-    fireEvent.click(screen.getByRole('menuitem', { name: '默认' }))
+    expect(screen.getByRole('menuitem', { name: '低' }).className).toContain('--active')
+    expect(screen.getByRole('menuitem', { name: '中 · 默认' }).className).not.toContain('--active')
+  })
+
+  it('点带默认标记的档位回调 null（清除覆盖，回到继承）', () => {
+    const { onSelect } = renderPicker({ value: 'low', overridden: true, globalEffort: 'medium' })
+    fireEvent.click(screen.getByRole('button', { name: /低/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '中 · 默认' }))
     expect(onSelect).toHaveBeenCalledWith(null)
   })
 
   it('选择「高」回调 high', () => {
-    const { onSelect } = renderPicker()
+    const { onSelect } = renderPicker({ globalEffort: 'medium' })
     fireEvent.click(screen.getByRole('button', { name: /默认（中）/ }))
     fireEvent.click(screen.getByRole('menuitem', { name: '高' }))
     expect(onSelect).toHaveBeenCalledWith('high')

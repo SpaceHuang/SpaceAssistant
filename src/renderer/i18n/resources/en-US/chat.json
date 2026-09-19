@@ -252,8 +252,8 @@
     "thinking": {
       "label": "Thinking effort",
       "aria": "Choose thinking effort",
-      "inherit": "Default",
       "inheritWithGlobal": "Default ({{effort}})",
+      "defaultSuffix": "{{effort}} · Default",
       "off": "Off",
       "low": "Low",
       "medium": "Medium",

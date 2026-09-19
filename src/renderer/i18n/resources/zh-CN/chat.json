@@ -252,8 +252,8 @@
     "thinking": {
       "label": "思考强度",
       "aria": "选择思考强度",
-      "inherit": "默认",
       "inheritWithGlobal": "默认（{{effort}}）",
+      "defaultSuffix": "{{effort}} · 默认",
       "off": "关闭",
       "low": "低",
       "medium": "中",
