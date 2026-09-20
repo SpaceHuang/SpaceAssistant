@@ -564,6 +564,37 @@ export function noteToolResultForStats(stats: TurnUsageStats, result: ToolCallRe
   }
 }
 
+/**
+ * P1-D（D4）：确认拒绝 → notExecutedReason 的显式归类表。
+ * agent-deny（安全审批机审拒绝）不再误标为 user_rejected——那会污染 token 统计、
+ * UI 文案与错误归因；errorCode（远程只读/授权撤销）优先级最高，维持既有归类；
+ * 通道机器侧 fail-closed 拒绝（超时/不可用/不可解析/递归阻断等）归入 policy_denied。
+ */
+export function notExecutedReasonForConfirmation(input: {
+  cause?: ConfirmOutcomeCause
+  errorCode?: string
+}): ToolCallResultPersisted['notExecutedReason'] {
+  if (input.errorCode === 'REMOTE_READ_ONLY') return 'remote_read_only'
+  if (input.errorCode === 'AUTHORIZATION_REVOKED') return 'authorization_revoked'
+  switch (input.cause) {
+    case 'agent-deny':
+      return 'agent_denied'
+    case 'timeout':
+      return 'confirm_timeout'
+    case 'recursion-blocked':
+    case 'unavailable':
+    case 'unparsable':
+    case 'config-error':
+    case 'no-answerer':
+    case 'gate-materials-missing':
+    case 'rules-violated':
+      return 'policy_denied'
+    default:
+      // user-denied / 未走通道的既有拒绝路径：保底 user_rejected，迁移期行为不回归
+      return 'user_rejected'
+  }
+}
+
 function failToolLoopWithLastUsage(
   requestId: string,
   sessionId: string,
@@ -2370,12 +2401,11 @@ async function runToolChatSessionInner(
               ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
               : (channelRejectSummary ?? '用户拒绝执行此工具')
         // §7.6 #11：确认未批准覆盖三类来源（用户拒绝 / 远程只读 / 授权撤销），均未进入执行流程
-        const notExecutedReason: ToolCallResultPersisted['notExecutedReason'] =
-          confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
-            ? 'remote_read_only'
-            : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
-              ? 'authorization_revoked'
-              : 'user_rejected'
+        // P1-D（D4）：按 cause 归类——agent-deny 不再误标为「用户拒绝」污染统计与归因。
+        const notExecutedReason = notExecutedReasonForConfirmation({
+          cause: confirmOutcomeCause,
+          errorCode: confirmationDecision.errorCode
+        })
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,

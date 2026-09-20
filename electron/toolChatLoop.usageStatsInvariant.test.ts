@@ -16,7 +16,7 @@ function mulberry32(seed: number): () => number {
 }
 
 const NOT_EXECUTED_REASONS = [
-  'user_rejected', 'confirm_timeout', 'remote_read_only', 'authorization_revoked',
+  'user_rejected', 'agent_denied', 'confirm_timeout', 'remote_read_only', 'authorization_revoked',
   'policy_denied', 'budget_paused', 'remote_budget_exhausted', 'not_authorized',
   'unknown_tool', 'model_output_truncated'
 ] as const
