@@ -35,14 +35,15 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(readPolicyPackages(d).desktop).toBe('standard')
   })
 
-  it('strict 套餐：非 locked allow 条目上调为 ask', () => {
+  it('strict 范围档：lark-read-allow 被 scope-strict ask 条目取代（S1，偏差 15）；locked 不动', () => {
     const d = db()
     const packages = readPolicyPackages(d)
     packages.desktop = 'strict'
     writePolicyPackages(d, packages)
     const rules = loadEffectivePolicyRules(d, 'desktop')
-    const lark = rules.find((r) => r.id === 'lark-read-allow')
-    expect(lark?.action).toBe('ask')
+    expect(rules.find((r) => r.id === 'lark-read-allow')).toBeUndefined()
+    const scope = rules.find((r) => r.id === 'scope-strict-lark-read-allow')
+    expect(scope?.action).toBe('ask')
     const locked = rules.find((r) => r.id === 'remote-shell-disabled')
     expect(locked?.action).toBe('deny')
     // 其它链路不受影响

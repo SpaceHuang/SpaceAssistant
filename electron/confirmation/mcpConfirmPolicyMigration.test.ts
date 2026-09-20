@@ -88,9 +88,10 @@ describe('runMcpConfirmPolicyMigrationOnce（R5 MCP 确认策略收敛迁移）'
       feishu: 'custom',
       automation: 'standard'
     })
-    // strict 链路：mcp-readonly-allow 经套餐上调已为 ask（不依赖覆盖），迁移意图天然达成
+    // strict 链路：mcp-readonly-allow 被 scope-strict ask 范围条目取代（不依赖覆盖），迁移意图天然达成
     const rules = loadEffectivePolicyRules(db, 'desktop')
-    expect(rules.find((rule) => rule.id === 'mcp-readonly-allow')?.action).toBe('ask')
+    expect(rules.find((rule) => rule.id === 'mcp-readonly-allow')).toBeUndefined()
+    expect(rules.find((rule) => rule.id === 'scope-strict-mcp-readonly-allow')?.action).toBe('ask')
   })
 
   it('全部 readonly-auto：无需迁移，不写覆盖不动套餐不落审计，但推进版本', () => {

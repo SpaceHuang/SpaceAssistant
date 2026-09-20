@@ -13,7 +13,8 @@ import type {
   SecuritySettingsRuleView
 } from '../../../shared/confirmation/settingsCenter'
 import type { PolicyPackage } from '../../../shared/policy/policyPackages'
-import { LANE_PROFILES, effectiveActionFor } from '../../../shared/policy/policyPackages'
+import { LANE_PROFILES, effectiveActionFor, resolvePolicyRules } from '../../../shared/policy/policyPackages'
+import type { PolicyRule } from '../../../shared/confirmation/types'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
 import { groupMemoryEntries, memoryEntrySummary } from './toolsSecurityFormat'
@@ -162,9 +163,28 @@ function PolicyPackageSection({
     return null
   }
 
-  /** 当前 Tab 链路的生效规则：无 lane 限定的通用规则对每个链路都适用。 */
-  const rulesForLane = (lane: (typeof LANES)[number]): SecuritySettingsRuleView[] =>
-    (model?.rules ?? []).filter((r) => !r.lanes || r.lanes.includes(lane))
+  /** 范围条目（scope-*，S1 偏差 15）合成视图行：档位机制产物，不在用户可编辑覆盖体系内。 */
+  const scopeView = (rule: PolicyRule, lane: (typeof LANES)[number]): SecuritySettingsRuleView => ({
+    id: rule.id,
+    when: rule.when,
+    action: rule.action,
+    defaultAction: rule.action,
+    enabled: true,
+    locked: false,
+    reason: rule.reason,
+    overridden: false,
+    lanes: [lane]
+  })
+
+  /** 当前 Tab 链路的生效规则（显示=实际）：经 resolvePolicyRules 注入当前档位的范围条目（scope-*）；
+   * 无 lane 限定的通用规则对每个链路都适用。 */
+  const rulesForLane = (lane: (typeof LANES)[number]): SecuritySettingsRuleView[] => {
+    const views = model?.rules ?? []
+    const effective = resolvePolicyRules({ lane, packages: model?.packages, rules: views as PolicyRule[] })
+    return effective
+      .map((r) => views.find((v) => v.id === r.id) ?? scopeView(r, lane))
+      .filter((r) => !r.lanes || r.lanes.includes(lane))
+  }
 
   const renderRulesTable = (lane: (typeof LANES)[number]) => (
     <Table<SecuritySettingsRuleView>

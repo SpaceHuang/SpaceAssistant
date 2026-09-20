@@ -54,37 +54,19 @@ describe('policyPackages（§4 第 1 区 套餐解析）', () => {
     expect(effectiveActionFor('desktop', 'standard', { action: 'ask' })).toBe('auto-evaluator')
   })
 
-  it('desktop strict：非 locked 的 allow/auto-evaluator 上调为 ask，locked 不动', () => {
+  it('desktop strict：范围档不整体变换宽严——合成规则集无清单目标时恒等返回原引用（S1，偏差 15）', () => {
     const out = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'strict' }, rules: RULES })
-    expect(out.map((r) => [r.id, r.action])).toEqual([
-      ['locked-deny', 'deny'],
-      ['locked-ask', 'ask'],
-      ['auto-1', 'ask'],
-      ['ask-1', 'ask'],
-      ['allow-1', 'ask']
-    ])
+    expect(out).toBe(RULES)
   })
 
-  it('desktop loose：非 locked 的 ask 下调为 allow，auto-evaluator 保持，locked 不动', () => {
+  it('desktop loose：范围档不整体变换宽严——合成规则集无清单目标时恒等（S1，偏差 15）', () => {
     const out = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'loose' }, rules: RULES })
-    expect(out.map((r) => [r.id, r.action])).toEqual([
-      ['locked-deny', 'deny'],
-      ['locked-ask', 'ask'],
-      ['auto-1', 'auto-evaluator'],
-      ['ask-1', 'allow'],
-      ['allow-1', 'allow']
-    ])
+    expect(out).toBe(RULES)
   })
 
-  it('wechat loose：非 locked 的 ask 下调为 allow（现状等价）', () => {
+  it('wechat loose：范围档不整体变换宽严——恒等（S1，偏差 15）', () => {
     const out = resolvePolicyRules({ lane: 'wechat', packages: { wechat: 'loose' }, rules: RULES })
-    expect(out.map((r) => [r.id, r.action])).toEqual([
-      ['locked-deny', 'deny'],
-      ['locked-ask', 'ask'],
-      ['auto-1', 'auto-evaluator'],
-      ['ask-1', 'allow'],
-      ['allow-1', 'allow']
-    ])
+    expect(out).toBe(RULES)
   })
 
   it('automation 伪造档位（loose/strict/custom）一律按 standard 恒等（M2 运行时防护）', () => {

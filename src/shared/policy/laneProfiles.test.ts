@@ -8,26 +8,27 @@ const BASELINE_ACTIONS: PolicyAction[] = ['deny', 'allow', 'ask', 'auto-evaluato
 const ALL_LANES: ExecutionLane[] = ['desktop', 'wechat', 'feishu', 'automation']
 
 /**
- * §2.1 档位变换期望矩阵（locked/deny/confirm-every-time 例外另测）：
+ * §2.1 档位变换期望矩阵（S1，偏差 15：strict / loose 已范围化，不再做宽严变换——
+ * 映射表仅剩 desktop standard 的「自动」路径映射；locked/deny/confirm-every-time 例外另测；
  * custom 档是用户显式覆盖，不经变换表改写（恒等）。
  */
 const EXPECTED: Record<ExecutionLane, Record<PolicyPackage, Partial<Record<PolicyAction, PolicyAction>>>> = {
   desktop: {
-    strict: { allow: 'ask', 'auto-evaluator': 'ask' },
+    strict: {},
     standard: { ask: 'auto-evaluator' },
-    loose: { ask: 'allow' },
+    loose: {},
     custom: {}
   },
   wechat: {
-    strict: { allow: 'ask' },
+    strict: {},
     standard: {},
-    loose: { ask: 'allow' },
+    loose: {},
     custom: {}
   },
   feishu: {
-    strict: { allow: 'ask' },
+    strict: {},
     standard: {},
-    loose: { ask: 'allow' },
+    loose: {},
     custom: {}
   },
   // automation 仅提供 standard 且恒等（其唯一 ask 为 locked；回答者=agent 由 lane 派生，等价现状）
