@@ -29,6 +29,8 @@ jobs:
       # SDK 包边界护栏(A3,偏差 19):禁 electron / 禁 sqlite 直依赖 / 入口闭包零 electron
       - run: npm run check:agent-core
       - run: npm run build:electron
+      # SDK 级验收常驻回归（A4，偏差 20）：createAgentRuntime + 内存端口，不启动 Electron 跑完整回合
+      - run: npm exec vitest run electron/toolChatLoop.inMemoryPorts.test.ts packages/agent-core/test/agentCore.test.ts
       - run: npm test
 
   sqlite-electron-probe:

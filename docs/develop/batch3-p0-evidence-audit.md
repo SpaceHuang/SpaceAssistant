@@ -56,3 +56,22 @@ A1 实际改造面以本清单为准(可能缩为「方法简写归一 + 形状�
 - MCP semaphore:`mcpToolExecutor.ts` 内 `:137` 等消费;
 - confirmId:`electron/remote/confirmId.ts` 导出函数群(远程确认一次性消费);
 - chatCancelRegistry / toolRevocationRegistry:导出函数群,消费方在 toolChatLoop / cancel IPC / revocation IPC。
+
+## A4 补记:probe:sqlite 的 Electron 依赖评估(偏差 20 第 2 条)
+
+**结论:保留 Electron 探针,落宿主适配层(现状即满足,无改动)。**
+`npm run probe:sqlite`(scripts/probe-node-sqlite.mjs)的存在意义是验证 **Electron 内嵌运行时**的
+node:sqlite 可用性——解除 Electron 依赖即失去探测对象。探针已在宿主侧(CI `sqlite-electron-probe`
+job 以真实 Electron 应用启动);SDK 面的 sqlite 禁依赖由 A3 护栏(check:agent-core)锁定,
+两侧分工成立。
+
+## A4 补记:验收达标面(偏差 20)
+
+- ✅ `createAgentRuntime` 装配 + 内存端口,不启动 Electron、不碰 SQLite,跑完
+  「带工具调用的回合 + 一次批准确认 + 一次拒绝」,断言结果四态与事件台账
+  (electron/toolChatLoop.inMemoryPorts.test.ts);
+- ✅ CI 常驻回归:ci.yml test job 独立 step(vitest node 项目)+ 全量 npm test;
+- ✅ 包级组件语义验收(packages/agent-core/test/agentCore.test.ts,纯 node);
+- ⏳ 「测试文件及其 import 闭包 rg -l electron → 0 文件」子项未达标:回合执行引擎
+  (toolChatLoop 执行闭包,实测 442 文件 / 32 文件 import electron)物理切分属基线 §13
+  完整 P5,列后续批次(见 A3 边界形态说明)。
