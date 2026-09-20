@@ -3,7 +3,9 @@ export type TestCardsCommandResult =
   | { type: 'command'; hint: string }
   | { type: 'run' }
 
-export function parseTestCardsCommand(text: string): TestCardsCommandResult {
+export type TestCardsCommandDeps = { isDev: boolean }
+
+export function parseTestCardsCommand(text: string, deps: TestCardsCommandDeps): TestCardsCommandResult {
   const trimmed = text.trim()
   if (!trimmed.startsWith('/test-cards')) return { type: 'chat', text }
 
@@ -17,7 +19,7 @@ export function parseTestCardsCommand(text: string): TestCardsCommandResult {
     }
   }
 
-  if (!import.meta.env.DEV) {
+  if (!deps.isDev) {
     return { type: 'command', hint: '[Dev] /test-cards 仅在开发模式下可用' }
   }
 

@@ -229,9 +229,6 @@ export type SpaceAssistantApi = {
     nextSequence: number
     hasMore: boolean
   }>
-  chatGetNextQueuedMessage: (payload: {
-    sessionId: string
-  }) => Promise<import('./displayOrder').QueuedMessageEntry | null>
   chatEnqueueQueuedMessage: (payload: { sessionId: string; requestId: string; content: string; attachments?: ChatImageAttachment[] }) => Promise<{ receipt: unknown; persisted: import('./displayOrder').PersistedMessageAck; duplicate: boolean }>
   chatResolveRetryContext: (payload: {
     sessionId: string
@@ -260,8 +257,8 @@ export type SpaceAssistantApi = {
       >
     >
   }) => Promise<{ message: Message; sequence: number } | null>
-  chatPrepareTurn: (intent: import('./assistantFactAggregator').TurnIntent) => Promise<import('./turnCoordinator').TurnStarted>
-  chatExecuteTurn: (payload: TurnExecutePayload) => Promise<{ ok: true; accepted: true; turnId: string }>
+  chatSubmitOutbound: (intent: import('./outboundProtocol').OutboundSubmitIntent) => Promise<import('./outboundProtocol').OutboundSubmitResult>
+  onScopeInvalidated: (cb: (payload: { scope: string; version: number; hint?: unknown }) => void) => () => void
   chatCancelTurn: (turnId: string) => Promise<boolean>
   chatGetTurnTerminal: (turnId: string) => Promise<(import('./assistantFactAggregator').TurnTerminal & { committedVersion?: number; commitStatus?: 'pending' | 'committed' | 'failed' }) | undefined>
   chatRetryTurnCheckpoint: (turnId: string) => Promise<boolean>
@@ -402,9 +399,7 @@ export type SpaceAssistantApi = {
   fileRename: (relPath: string, newName: string) => Promise<void>
   fileMove: (srcRelPath: string, destDirRelPath: string) => Promise<void>
   fileCopy: (payload: { srcRelPath: string; destRelPath: string }) => Promise<void>
-  fileOnTreeChanged: (cb: (event: import('./fileTreeSync').FileTreeChangeEvent) => void) => () => void
   fileWatchContent: (relPath: string | null) => Promise<void>
-  fileOnContentChanged: (cb: (event: import('./fileContentSync').FileContentChangedEvent) => void) => () => void
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>

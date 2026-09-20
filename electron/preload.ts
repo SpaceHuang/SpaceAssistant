@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppConfig, FileInfo, Message, SearchResult, Session } from '../src/shared/domainTypes'
-import type { SpaceAssistantApi, TurnExecutePayload } from '../src/shared/api'
+import type { SpaceAssistantApi } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
@@ -32,14 +32,17 @@ const api: SpaceAssistantApi = {
   chatGetContextHistorySummaryBaseline: (payload) =>
     ipcRenderer.invoke('chat:get-context-history-summary-baseline', payload),
   chatGetSearchCorpusPage: (payload) => ipcRenderer.invoke('chat:get-search-corpus-page', payload),
-  chatGetNextQueuedMessage: (payload) => ipcRenderer.invoke('chat:get-next-queued-message', payload),
   chatEnqueueQueuedMessage: (payload) => ipcRenderer.invoke('chat:enqueue-queued-message', payload),
   chatResolveRetryContext: (payload) => ipcRenderer.invoke('chat:resolve-retry-context', payload),
   chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
   messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
   messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),
-  chatPrepareTurn: (intent) => ipcRenderer.invoke('chat:prepare-turn', intent),
-  chatExecuteTurn: (payload: TurnExecutePayload) => ipcRenderer.invoke('chat:execute-turn', payload),
+  chatSubmitOutbound: (intent) => ipcRenderer.invoke('chat:submit-outbound', intent),
+  onScopeInvalidated: (cb: (payload: { scope: string; version: number }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { scope: string; version: number }) => cb(payload)
+    ipcRenderer.on('scope:invalidated', listener)
+    return () => ipcRenderer.removeListener('scope:invalidated', listener)
+  },
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
   chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
   chatRetryTurnCheckpoint: (turnId) => ipcRenderer.invoke('chat:retry-turn-checkpoint', turnId),
@@ -119,17 +122,9 @@ const api: SpaceAssistantApi = {
   fileRename: (relPath, newName) => ipcRenderer.invoke('file:rename', relPath, newName),
   fileMove: (srcRelPath, destDirRelPath) => ipcRenderer.invoke('file:move', srcRelPath, destDirRelPath),
   fileCopy: (payload) => ipcRenderer.invoke('file:copy', payload),
-  fileOnTreeChanged: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/fileTreeSync').FileTreeChangeEvent) => cb(data)
-    ipcRenderer.on('file:tree-changed', fn)
-    return () => ipcRenderer.removeListener('file:tree-changed', fn)
-  },
+
   fileWatchContent: (relPath) => ipcRenderer.invoke('file:watch-content', { relPath }),
-  fileOnContentChanged: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/fileContentSync').FileContentChangedEvent) => cb(data)
-    ipcRenderer.on('file:content-changed', fn)
-    return () => ipcRenderer.removeListener('file:content-changed', fn)
-  },
+
 
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),

@@ -30,6 +30,7 @@ import {
 import { getConfigValue, getDefaultDbPath, getMessage, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
 import { randomUUID } from 'node:crypto'
 import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
+import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
@@ -392,6 +393,10 @@ app.whenReady().then(async () => {
   void cleanupOrphanedChatAttachments(app.getPath('userData'), activeSessionIds, isSessionActive).catch((error) => {
     console.warn('[chatAttachment] orphan cleanup failed:', error instanceof Error ? error.message : String(error))
   })
+  // 偏差 11:失效通知出口——Storage 版本递增后经主窗口广播 { scope, version }
+  setInvalidationBroadcaster((scope, version) => {
+    getMainWindow()?.webContents.send('scope:invalidated', { scope, version })
+  })
   const turnRuntime = new TurnRuntime({
     storage: createTurnCoordinatorStorage(db),
     deps: { now: Date.now, id: randomUUID },
@@ -554,7 +559,7 @@ app.whenReady().then(async () => {
     turnRuntime
   })
 
-  const executeTurn = async (sender: Electron.WebContents, payload: ClaudeChatCreateWithToolsPayload) => {
+  const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
     return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {

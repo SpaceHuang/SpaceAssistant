@@ -149,6 +149,26 @@ describe('ChatView auto-create session', () => {
 
     Object.assign(window.api, {
       sessionCreate: vi.fn().mockResolvedValue(newSession),
+      chatSubmitOutbound: vi.fn().mockImplementation(
+        async (intent: { sessionId?: string; text: string }): Promise<unknown> => {
+          const sessionId = intent.sessionId ?? 'new-session-id'
+          return {
+            accepted: 'turn-started',
+            sessionId,
+            turnId: `turn-${intent.text.replace(/\s+/g, '-')}`,
+            assistantMessage: {
+              id: `assistant-${intent.text.replace(/\s+/g, '-')}`,
+              sessionId,
+              role: 'assistant',
+              content: '',
+              timestamp: Date.now(),
+              status: 'streaming',
+              schemaVersion: 1
+            },
+            warnings: []
+          }
+        }
+      ),
       chatGetMessages: vi.fn().mockResolvedValue([]),
       chatGetMessagePage: vi.fn().mockResolvedValue({
         entries: [],
@@ -170,50 +190,8 @@ describe('ChatView auto-create session', () => {
         sequence: Date.now()
       })),
       messagePatchNonTurn: vi.fn().mockResolvedValue(null),
-      chatGetNextQueuedMessage: vi.fn().mockResolvedValue(null),
       chatResolveRetryContext: vi.fn().mockResolvedValue(null),
       chatGetMessageSequence: vi.fn().mockResolvedValue(null),
-      chatPrepareTurn: vi.fn().mockImplementation(async (payload: { sessionId: string; requestId: string; input: { text: string } }) => ({
-        turnId: `turn-${payload.requestId}`,
-        requestId: payload.requestId,
-        sessionId: payload.sessionId,
-        userMessage: {
-          id: `user-${payload.requestId}`,
-          sessionId: payload.sessionId,
-          role: 'user',
-          content: payload.input.text,
-          timestamp: Date.now(),
-          status: 'sent',
-          schemaVersion: 1
-        },
-        assistantMessage: {
-          id: `assistant-${payload.requestId}`,
-          sessionId: payload.sessionId,
-          role: 'assistant',
-          content: '',
-          timestamp: Date.now() + 1,
-          status: 'streaming',
-          schemaVersion: 1
-        },
-        version: 0,
-        startToken: `token-${payload.requestId}`
-      })),
-      chatExecuteTurn: vi.fn().mockResolvedValue({ ok: true, accepted: true }),
-      chatEnqueueQueuedMessage: vi.fn().mockResolvedValue({
-        ok: true,
-        persisted: {
-          message: {
-            id: 'queued-user',
-            sessionId: 'new-session-id',
-            role: 'user',
-            content: 'queued',
-            timestamp: Date.now(),
-            status: 'queued'
-          },
-          messageId: 'queued-user',
-          sequence: 1
-        }
-      }),
       sessionGet: vi.fn().mockResolvedValue(null),
       sessionBackfillAutoTitleIfNeeded: vi.fn().mockResolvedValue(null),
       feishuOnInboundMessage: vi.fn().mockReturnValue(() => {}),
@@ -247,25 +225,22 @@ describe('ChatView auto-create session', () => {
     expect(screen.getByRole('button', { name: '发送消息' }).disabled).toBe(false)
   })
 
-  it('creates session and sends message when sending without a session (AC3)', async () => {
+  it('submits intent without sessionId when sending without a session; main process owns creation (AC3)', async () => {
     const { store } = renderChatView()
     fireEvent.change(getTextarea(), { target: { value: 'hello world' } })
     fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
 
-    await waitFor(() => {
-      expect(window.api.sessionCreate).toHaveBeenCalledWith({
-        model: 'claude-sonnet-4-6',
-        temperature: 0.7,
-        name: '',
-        metadata: {}
-      })
-    })
+    await waitFor(() => expect(window.api.chatSubmitOutbound).toHaveBeenCalled())
+    // 渲染端不再持有「无会话则创建」的决定（偏差 9）：意图不带 sessionId，渲染端不调 sessionCreate
+    const intent = vi.mocked(window.api.chatSubmitOutbound).mock.calls[0]![0] as { sessionId?: string; text: string }
+    expect(intent.sessionId).toBeUndefined()
+    expect(intent.text).toBe('hello world')
+    expect(window.api.sessionCreate).not.toHaveBeenCalled()
+    // 主进程代建会话后渲染端切换视图
     await waitFor(() => {
       expect(store.getState().chat.currentSessionId).toBe('new-session-id')
     })
-    await waitFor(() => expect(window.api.chatPrepareTurn).toHaveBeenCalled())
     expect(window.api.messageAppendNonTurn).not.toHaveBeenCalled()
-    expect(window.api.chatExecuteTurn).toHaveBeenCalled()
   })
 
   it('keeps user message in API payload when session message load races with send', async () => {
@@ -290,14 +265,14 @@ describe('ChatView auto-create session', () => {
     expect(window.api.messageAppendNonTurn).not.toHaveBeenCalled()
   })
 
-  it('does not send when sessionCreate fails', async () => {
-    vi.mocked(window.api.sessionCreate).mockRejectedValueOnce(new Error('create failed'))
+  it('does not switch session when the outbound submission fails', async () => {
+    vi.mocked(window.api.chatSubmitOutbound).mockRejectedValueOnce(new Error('OUTBOUND_SESSION_CREATE_FAILED'))
     const { store } = renderChatView()
     fireEvent.change(getTextarea(), { target: { value: 'hello' } })
     fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
 
     await waitFor(() => {
-      expect(window.api.sessionCreate).toHaveBeenCalled()
+      expect(window.api.chatSubmitOutbound).toHaveBeenCalled()
     })
     expect(window.api.messageAppendNonTurn).not.toHaveBeenCalled()
     expect(store.getState().chat.currentSessionId).toBeNull()
@@ -313,9 +288,10 @@ describe('ChatView auto-create session', () => {
     fireEvent.change(getTextarea(), { target: { value: 'follow up' } })
     fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
 
-    await waitFor(() => expect(window.api.chatExecuteTurn).toHaveBeenCalled())
+    await waitFor(() => expect(window.api.chatSubmitOutbound).toHaveBeenCalled())
+    const intent = vi.mocked(window.api.chatSubmitOutbound).mock.calls[0]![0] as { sessionId?: string }
+    expect(intent.sessionId).toBe('existing-session')
     expect(window.api.messageAppendNonTurn).not.toHaveBeenCalled()
-    expect(window.api.sessionCreate).not.toHaveBeenCalled()
   })
 
   it('auto-creates session when pressing Enter without a session (AC5)', async () => {
@@ -325,11 +301,12 @@ describe('ChatView auto-create session', () => {
     fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false })
 
     await waitFor(() => {
-      expect(window.api.sessionCreate).toHaveBeenCalled()
+      expect(window.api.chatSubmitOutbound).toHaveBeenCalled()
     })
     await waitFor(() => {
       expect(store.getState().chat.currentSessionId).toBe('new-session-id')
     })
+    expect(window.api.sessionCreate).not.toHaveBeenCalled()
     expect(window.api.messageAppendNonTurn).not.toHaveBeenCalled()
   })
 })

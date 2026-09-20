@@ -909,7 +909,7 @@ body.hide-dev .dev{display:none}
       </tbody>
     </table>
   </div>
-  <p><strong>一条接缝上的规范：Driver 不直接调 Core。</strong><span class="dev">今天 feishuRemoteAgent.ts:46 与 weChatRemoteAgent.ts:48 直接调 runToolChatSession，跳过 Runtime 装配 —— 代价是每加一个平台就复制一遍装配逻辑</span>新驱动源（定时 / 事件 / 新 IM）必须走 Runtime 装配。</p>
+  <p><strong>一条接缝上的规范：Driver 不直接调 Core。</strong><span class="dev">2026-09-19 复核：原证据（feishuRemoteAgent.ts:46 / weChatRemoteAgent.ts:48 直调 runToolChatSession）已随 <code>033beb8e</code> 失效——两个 IM 驱动源现均委托共享入口 <code>imRemoteAgent.ts</code>，自 <code>assembleInvocation</code>（electron/runtime/invocationAssembler.ts）装配后才执行，<code>rg -n assembleInvocation electron/remote/imRemoteAgent.ts</code> 命中装配调用。本节转为「已达成，防退化」</span>新驱动源（定时 / 事件 / 新 IM）必须走 Runtime 装配。</p>
 
   <h3>视图更新：事实、失效通知与界面语义</h3>
   <div class="tbl-wrap">
@@ -1548,6 +1548,22 @@ body.hide-dev .dev{display:none}
       </table>
     </div>
     <p><strong>文件级漂移（结论不变）</strong>：偏差 13 的主进程手写菜单字典已由 <code>electron/menuLabels.ts</code> 移到 <code>src/shared/menuLabels.ts</code>（仍是与渲染端 i18next 并行的第二套字典，未走 <code>translate</code> 端口）；偏差 5 的 <code>TurnExecutionConfig</code> 现位于 <code>src/shared/assistantFactAggregator.ts</code>（<code>baseUrl</code> 仍在可声明的执行快照里）—— <strong>2026-09-19 更新：偏差 5 已解决</strong>，该快照已无 <code>baseUrl</code>，网络目标归宿主端口 <code>ports.credentials.networkTarget</code>；偏差 13 仍未解决（文件级漂移部分保留，见下表）。</p>
+  <div class="callout">
+    <p><strong>复核记录（2026-09-19 ｜ 基线 HEAD <code>3829424b</code>，本轮分支 <code>codex/driver-authority-refactor</code>）</strong>：按《驱动权路径重构计划》（<code>docs/develop/driver-authority-refactor-plan.md</code> v3）整轮推进驱动权路径（1 → 9 → 8、10、11、12），Phase 1a-1c / 2 / 3a-3c / 4 / 5 分九次提交落地。<strong>9、10、11 翻转为「已解决」</strong>，<strong>8 收尾为「已解决」</strong>（存量直连清零 + IM 装配确认早已收敛），<strong>12 回归确认无退化</strong>。仍不删行：原始证据保持摸排快照，状态与依据见下。</p>
+    <div class="tbl-wrap">
+      <table id="devreview-0919">
+        <thead><tr><th>#</th><th>状态</th><th>变化</th><th>证据 / 落地提交</th></tr></thead>
+        <tbody>
+          <tr><td><strong>9</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>回合发起、出站分类、排队排水全部回主进程：出站命令解析纯函数化下沉 <code>src/shared/outbound/</code>（渲染端 re-export 与包装删除）；新增受理端口 <code>chat:submit-outbound</code>（electron/outbound/outboundAcceptor.ts，决定序列：命令 → 会话创建 → 并发守卫 → apiKey → wiki/skill → 排队/发起）；主进程排水器（createOutboundDrainer）挂 turnRuntime 终态投影，队首 queued 以 reuse-user + 原 requestId 自动驱动；渲染端 drainQueueForSession / classifyOutbound / sessionCreate / prepare-execute 两步调用全部退役，ChatView 收敛为 submitOutbound 意图表达</td><td><code>1a/1b/1c 提交</code>（2026-09-19）<br><code>rg classifyOutbound src/renderer --glob '!*.test.*'</code> → <strong>0 行</strong><br><code>rg 'chatExecuteTurn|chatPrepareTurn|drainQueue' src/renderer --glob '!*.test.*'</code> → <strong>0 行</strong><br><code>rg sessionCreate src/renderer/components/Chat/ChatView.tsx</code> → <strong>0 行</strong></td></tr>
+          <tr><td><strong>10</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>IPC 面按领域拆分（纯移动，通道名不变）：appIpc.ts 收缩为组合器 registerAppIpcHandlers + AppIpcContext 类型；七域文件落 electron/ipc/（agentProtocol / session / file / search / config / security / desktop），跨域 helper 下沉 ipcShared.ts；<code>chat:submit-outbound</code> 落 agentProtocolIpc</td><td><code>Phase 2 提交</code>（2026-09-19）<br><code>rg -c "ipcMain.(handle|on)" electron/appIpc.ts</code> → <strong>0</strong></td></tr>
+          <tr><td><strong>11</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>失效通知契约收口：新表 scope_versions，会话/消息写路径在<strong>同一事务内</strong>递增版本（createSession/updateSession/deleteSession/appendMessage/deleteQueuedUserMessage），回滚随之回滚；统一出口 <code>scope:invalidated { scope, version }</code>（scope 清单：session-list / session:&lt;id&gt; / session:&lt;id&gt;:messages / file-tree / file:&lt;path&gt;）；文件域用单调计数器（不用 mtime）；渲染端 invalidationService 版本比较 + 防抖合并重取，同/低版本幂等忽略；文件树与文件内容两处 safeWebContentsSend 直连一并闭环</td><td><code>Phase 3a+3b / 3c 提交</code>（2026-09-19）<br><code>electron/database/scopeVersion.ts</code>、<code>src/renderer/services/invalidationService.ts</code><br><code>rg safeWebContentsSend electron/ --glob '!*.test.*'</code> → 仅 <code>safeWebContentsSend.ts</code> 自身（+ floatingNotification 的 isWebContentsAlive 辅助）</td></tr>
+          <tr><td><strong>8</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>投递出口归一收尾：claudeStreamHandlers 的 safeWebContentsSend 死导入删除；fileTreeSyncNotify / fileContentWatcher 两处直连改经统一失效出口（并入 11）；管家此前已迁移 deliveryHub；聊天主链路经受理端口统一发起，无独立直发点。<strong>IM 装配陈旧证据修正</strong>：原「feishuRemoteAgent.ts:46 / weChatRemoteAgent.ts:48 直调」快照已随 <code>033beb8e</code> 失效，现均委托 imRemoteAgent.ts 共享装配入口（assembleInvocation 命中）——§「Driver 不直接调 Core」一处已改写</td><td><code>Phase 3c / 4 提交</code>（2026-09-19）<br><code>rg -n safeWebContentsSend electron/claudeStreamHandlers.ts</code> → <strong>0 行</strong><br><code>rg -n assembleInvocation electron/remote/imRemoteAgent.ts</code> → <strong>命中</strong></td></tr>
+          <tr><td><strong>12</strong></td><td><span class="st st-done">回归确认 20260919</span></td><td>防退化检查通过：<code>rg 'parseSkillCommand|buildSystemPrompt' src/renderer --glob '!*.test.*'</code> → <strong>0 行</strong>（技能解析已进一步下沉 src/shared/outbound/ 供双端复用，渲染端无路由/拼装逻辑）</td><td><code>Phase 5 回归</code>（2026-09-19）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>全量验收（2026-09-19）</strong>：npm test 全量、npm run build、npm run i18n:check 于 <code>codex/driver-authority-refactor</code> 分支收尾提交上执行通过；分阶段提交节奏 1a-纯函数化 / 1a-移动 / 1b / 1c / 2 / 3a+3b / 3c / 4 / 5 各一次。需真机 / 外部系统验收项（飞书 / 微信真实回合、托盘与浮动通知真实窗口、打包冒烟）移交用户。</p>
+  </div>
     <p><strong>为什么 8、23 不回写</strong>：两份计划都把这两条记为<strong>显式例外</strong>并对例外依据留档 —— 偏差 8 的整项受益人是后续调用方与复用面，对管家 v1 业务零贡献，收敛既有 IM 回复路径有真实回归风险；偏差 23 的威胁模型（无人值守调用自行堆积）当前只对 automation lane 成立，把准入拦进桌面 / 远程两条生产链路是给现网注入回归风险。二者的剩余边界记录在两份计划的「债务移交清单」，整项关闭交由块 1 收敛。</p>
     <p><strong>为什么 4、15、16 判「部分解决」而不是「已解决」</strong>：三者都是审批 Agent 接入的<strong>连带改善</strong>，各自仍有一半语义未落地（4 的事实端口、15 的 user lane 宽严、16 的通用子调用裁剪）。判「部分解决」是为了让后续计划一眼看出「剩的那半是什么、归谁」。</p>
   </div>

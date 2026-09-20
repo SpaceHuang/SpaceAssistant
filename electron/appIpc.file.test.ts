@@ -220,7 +220,8 @@ describe('file IPC handlers', () => {
     ctx.turnRuntime = {
       coordinator,
       cancel: vi.fn(),
-      listActive: vi.fn(() => [])
+      listActive: vi.fn(() => []),
+      subscribe: vi.fn(() => () => undefined)
     } as unknown as AppIpcContext['turnRuntime']
     const executeTurn = vi.fn().mockResolvedValue(undefined)
     ctx.executeTurn = executeTurn
@@ -286,7 +287,8 @@ describe('file IPC handlers', () => {
       },
       consume: runtimeConsume,
       cancel: vi.fn(),
-      listActive: vi.fn(() => [])
+      listActive: vi.fn(() => []),
+      subscribe: vi.fn(() => () => undefined)
     } as unknown as AppIpcContext['turnRuntime']
     vi.mocked(database.getTurnByRequestId).mockReturnValue(undefined)
     vi.mocked(database.getPersistedTurn).mockReturnValue({
@@ -340,7 +342,7 @@ describe('file IPC handlers', () => {
       getTerminal: vi.fn()
     }
     const runtimeCancel = vi.fn(() => true)
-    ctx.turnRuntime = { coordinator, cancel: runtimeCancel, listActive: vi.fn(() => []) } as unknown as AppIpcContext['turnRuntime']
+    ctx.turnRuntime = { coordinator, cancel: runtimeCancel, listActive: vi.fn(() => []), subscribe: vi.fn(() => () => undefined) } as unknown as AppIpcContext['turnRuntime']
     const executeTurn = vi.fn().mockResolvedValue(undefined)
     ctx.executeTurn = executeTurn
     let cancelled = false
@@ -377,7 +379,8 @@ describe('file IPC handlers', () => {
     ctx.turnRuntime = {
       coordinator: { cancel, recover },
       cancel: runtimeCancel,
-      listActive: vi.fn().mockReturnValue([])
+      listActive: vi.fn().mockReturnValue([]),
+      subscribe: vi.fn(() => () => undefined)
     } as unknown as AppIpcContext['turnRuntime']
     ipc = mockIpcMain()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
@@ -416,6 +419,7 @@ describe('file IPC handlers', () => {
     ctx.turnRuntime = {
       coordinator: { recover: vi.fn() },
       listActive: vi.fn().mockReturnValue([]),
+      subscribe: vi.fn(() => () => undefined),
       listTerminals: vi.fn().mockReturnValue([terminal]),
       checkpointStatus: vi.fn().mockReturnValue('pending')
     } as unknown as AppIpcContext['turnRuntime']
@@ -436,6 +440,7 @@ describe('file IPC handlers', () => {
     ctx.turnRuntime = {
       coordinator: { recover: vi.fn() },
       listActive: vi.fn().mockReturnValue([]),
+      subscribe: vi.fn(() => () => undefined),
       listTerminals: vi.fn().mockReturnValue([terminal]),
       checkpointStatus: vi.fn().mockReturnValue('committed')
     } as unknown as AppIpcContext['turnRuntime']
@@ -456,6 +461,7 @@ describe('file IPC handlers', () => {
     ctx.turnRuntime = {
       coordinator: { recover: vi.fn() },
       listActive: vi.fn().mockReturnValue([]),
+      subscribe: vi.fn(() => () => undefined),
       listTerminals: vi.fn().mockReturnValue([terminal]),
       checkpointStatus
     } as unknown as AppIpcContext['turnRuntime']
@@ -489,7 +495,8 @@ describe('file IPC handlers', () => {
       ctx.turnRuntime = {
         coordinator: { getTerminalByAssistantMessageId, recover: vi.fn(), listActive: vi.fn(() => []) },
         listActive: vi.fn(() => []),
-        cancel: vi.fn()
+        cancel: vi.fn(),
+        subscribe: vi.fn(() => () => undefined)
       } as unknown as AppIpcContext['turnRuntime']
       ipc = mockIpcMain()
       registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)

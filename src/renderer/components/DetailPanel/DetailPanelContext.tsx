@@ -22,7 +22,6 @@ import {
 } from '../../utils/contentScrollRestore'
 import {
   cancelFileContentSync,
-  ensureFileContentSyncIpc,
   subscribeFileContentSync
 } from '../../services/fileContentSyncBus'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -499,7 +498,6 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   }, [contentMode, fileType, selectedFile, stopContentWatch])
 
   useEffect(() => {
-    ensureFileContentSyncIpc()
     return subscribeFileContentSync((event) => {
       if (contentModeRef.current !== 'file') return
       const currentFile = selectedFileRef.current

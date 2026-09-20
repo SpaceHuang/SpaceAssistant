@@ -1,9 +1,14 @@
-import type { SessionSkillsState, SkillDefinition } from '../../shared/domainTypes'
-import { normalizeSessionSkillsState } from '../../shared/domainTypes'
+import type { SessionSkillsState, SkillDefinition } from '../domainTypes'
+import { normalizeSessionSkillsState } from '../domainTypes'
 
 export type SkillCommandResult =
   | { type: 'chat'; text: string }
   | { type: 'command'; hint: string; skillsState?: SessionSkillsState }
+
+export type SkillCommandDeps = {
+  listSkills: () => Promise<SkillDefinition[]>
+  getSkill: (payload: { name: string }) => Promise<SkillDefinition | null>
+}
 
 function formatSkillList(skills: SkillDefinition[]): string {
   if (skills.length === 0) return '[Skill] 当前没有可用 Skill'
@@ -15,7 +20,8 @@ function formatSkillList(skills: SkillDefinition[]): string {
 
 export async function parseSkillCommand(
   text: string,
-  sessionState: SessionSkillsState
+  sessionState: SessionSkillsState,
+  deps: SkillCommandDeps
 ): Promise<SkillCommandResult> {
   const trimmed = text.trim()
   if (!trimmed.startsWith('/skill')) return { type: 'chat', text }
@@ -33,7 +39,7 @@ export async function parseSkillCommand(
   const state = normalizeSessionSkillsState(sessionState)
 
   if (sub === 'list') {
-    const skills = await window.api.skillList()
+    const skills = await deps.listSkills()
     return { type: 'command', hint: formatSkillList(skills) }
   }
 
@@ -49,7 +55,7 @@ export async function parseSkillCommand(
   }
 
   if (sub === 'use') {
-    const skill = await window.api.skillGet({ name: arg })
+    const skill = await deps.getSkill({ name: arg })
     if (!skill) return { type: 'command', hint: `[Skill] 未找到 Skill「${arg}」` }
     const manualActivated = [...new Set([...state.manualActivated, arg])]
     const manualDisabled = state.manualDisabled.filter((n) => n !== arg)
@@ -61,7 +67,7 @@ export async function parseSkillCommand(
   }
 
   if (sub === 'disable') {
-    const skill = await window.api.skillGet({ name: arg })
+    const skill = await deps.getSkill({ name: arg })
     if (!skill) return { type: 'command', hint: `[Skill] 未找到 Skill「${arg}」` }
     const manualDisabled = [...new Set([...state.manualDisabled, arg])]
     const manualActivated = state.manualActivated.filter((n) => n !== arg)

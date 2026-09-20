@@ -87,8 +87,8 @@ export class TurnCoordinator {
     let userMessage: Message | undefined
     if (intent.mode === 'reuse-user') {
       userMessage = this.storage.getMessage(intent.userMessageId)
-      if (!userMessage || userMessage.sessionId !== intent.sessionId) throw new Error('reuse user message session mismatch')
-      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && userMessage.status !== 'queued')) throw new Error('reuse target must be a user message')
+      if (!userMessage || userMessage.sessionId !== intent.sessionId) throw new Error('TURN_REUSE_SESSION_MISMATCH')
+      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && userMessage.status !== 'queued')) throw new Error('TURN_REUSE_TARGET_NOT_USER')
       if (userMessage.status === 'queued') {
         const turnId = this.deps.id()
         const assistantId = this.deps.id()
