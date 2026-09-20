@@ -99,7 +99,7 @@ describe('P1-T2/T3 未知构造与包裹式反向用例（IrCoverageError → ex
     const forElse = 'for i in [1]:\n    pass\nelse:\n    eval("1")'
     const r = analyzeScriptContent(forElse, {})
     expect(r.verdict).not.toBe('allow')
-    const whileElse = 'while x:\n    pass\nelse:\n    import os\nos.system("id")'
+    const whileElse = 'while x:\n    pass\nelse:\n    import os\n    os.system("id")'
     const r2 = analyzeScriptContent(whileElse, {})
     expect(r2.verdict).not.toBe('allow')
     // remote：certify 必须 fail（else 体藏 eval/危险调用不得通过认证）

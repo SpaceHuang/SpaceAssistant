@@ -54,7 +54,10 @@ export function matchPsDangerousPatterns(
         const recursive = argsLower.some((a) => a === '-recurse' || a === '-r')
         const force = argsLower.some((a) => a === '-force' || a === '-f')
         if (recursive) {
-          const targets = cmd.args.filter((a) => !a.startsWith('-') && !argsLower.slice(0, cmd.args.indexOf(a)).join(' ').endsWith(a))
+          // P1（v3 复验残留）修复：targets 从剥引号后的参数取（"C:\" 引号降级 deny→ask 的根因）
+          const targets = cmd.args
+            .map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase())
+            .filter((a) => a !== '' && !a.startsWith('-'))
           for (const t of targets) {
             const norm = normalizeWindowsPath(t).toLowerCase()
             const isRoot = /^[a-z]:\/?$/.test(norm) || norm === '/' || norm === '~' || norm === '$home' || norm === '\\'
