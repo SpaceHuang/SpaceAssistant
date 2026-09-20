@@ -57,6 +57,7 @@ import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
+import { createAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntime'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
@@ -356,6 +357,8 @@ app.whenReady().then(async () => {
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
+  // A2(偏差 18):宿主装配单例 runtime(行为等价)——旧全局注册函数经兼容转发落到本实例
+  setDefaultAgentRuntime(createAgentRuntime())
   // S3(偏差 14):跨天节流清理——新日志文件开启时读统一保留策略并删除超期日志(每日至多一次)
   setAgentLogDailyPrune(() => {
     void pruneAgentLogs({

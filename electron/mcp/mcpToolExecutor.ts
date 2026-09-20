@@ -16,6 +16,7 @@ import { cleanupMcpArtifacts } from './mcpArtifactCleanup'
 import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from '../tools/types'
 import type { McpSession } from './mcpConnectionManager'
 import { Semaphore, withSemaphore } from './semaphore'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntime'
 import type { McpToolSnapshotEntry } from './mcpToolRegistry'
 import { resolveMcpArtifactOwnerPath } from './mcpArtifactPath'
 
@@ -28,20 +29,38 @@ import { resolveMcpArtifactOwnerPath } from './mcpArtifactPath'
  * - 错误分类为安全的模型可见文案，附脱敏后的原始错误摘要与该服务近期诊断
  */
 
-const globalSemaphore = new Semaphore(MCP_GLOBAL_CONCURRENCY)
-const perServerSemaphores = new Map<string, Semaphore>()
+/**
+ * MCP 并发闸(A2,偏差 18):全局 + 每服务信号量随实例走,一个进程可多实例并存
+ * (经 createAgentRuntime);不再持有模块级 semaphore 池。
+ */
+export class McpConcurrencyGate {
+  private readonly perServerSemaphores = new Map<string, Semaphore>()
+  private readonly globalSemaphore: Semaphore
+
+  constructor(
+    readonly globalConcurrency: number = MCP_GLOBAL_CONCURRENCY,
+    private readonly perServerConcurrency: number = MCP_PER_SERVER_CONCURRENCY
+  ) {
+    this.globalSemaphore = new Semaphore(this.globalConcurrency)
+  }
+
+  perServer(serverId: string): Semaphore {
+    let semaphore = this.perServerSemaphores.get(serverId)
+    if (!semaphore) {
+      semaphore = new Semaphore(this.perServerConcurrency)
+      this.perServerSemaphores.set(serverId, semaphore)
+    }
+    return semaphore
+  }
+
+  /** 先过全局闸、再过该服务闸地执行。 */
+  run<T>(serverId: string, fn: () => Promise<T>): Promise<T> {
+    return withSemaphore(this.globalSemaphore, () => withSemaphore(this.perServer(serverId), fn))
+  }
+}
 
 export function shouldPersistMcpArtifact(displayText: string): boolean {
   return displayText.length > 512 * 1024
-}
-
-function getPerServerSemaphore(serverId: string): Semaphore {
-  let semaphore = perServerSemaphores.get(serverId)
-  if (!semaphore) {
-    semaphore = new Semaphore(MCP_PER_SERVER_CONCURRENCY)
-    perServerSemaphores.set(serverId, semaphore)
-  }
-  return semaphore
 }
 
 export type McpToolExecutorDeps = {
@@ -119,7 +138,9 @@ function appendRecentDiagnostics(
 
 export function createMcpToolExecutor(
   entry: McpToolSnapshotEntry,
-  deps: McpToolExecutorDeps
+  deps: McpToolExecutorDeps,
+  /** 并发闸(A2,偏差 18):缺省经默认 runtime;装配器可注入具体 runtime 实例的闸。 */
+  gate: McpConcurrencyGate = getDefaultAgentRuntime().mcpGate
 ): ToolExecutor {
   return {
     name: entry.mappedName,
@@ -134,8 +155,7 @@ export function createMcpToolExecutor(
       }
 
       const timeoutMs = profile.timeoutSec * 1000
-      return withSemaphore(globalSemaphore, () =>
-        withSemaphore(getPerServerSemaphore(entry.serverId), async () => {
+      return gate.run(entry.serverId, async () => {
           const session = await deps.getSession(entry.serverId)
           try {
             const result = await session.client.callTool(
@@ -235,7 +255,6 @@ export function createMcpToolExecutor(
             }
           }
         })
-      )
     }
   }
 }
