@@ -18,8 +18,9 @@ export function buildShellEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   }
   const pathValue = augmentShellPathEnv(base)
   if (process.platform === 'win32') {
+    // P2-G(b)（§5.8）：win32 只写一份 Path——此前 Path/PATH 双写靠 libuv 大小写不敏感
+    // 去重"保命"，属实现细节依赖；Windows 环境块键名大小写不敏感，单写 Path 即可。
     env.Path = pathValue
-    env.PATH = pathValue
     // 取到有效值才写（P0-0b 纵深防御）：空串与缺键同样导致宿主初始化失败（0x8009001D），
     // 不再主动注入空值制造"看起来有值"的假象；上游过滤恰好删掉某键时从 process.env 兜底拿回。
     const systemRoot = base.SystemRoot || process.env.SystemRoot

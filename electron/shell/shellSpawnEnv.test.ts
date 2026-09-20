@@ -1,3 +1,6 @@
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import { describe, expect, it } from 'vitest'
 import {
   applyPlaywrightInstallShellEnv,
@@ -12,17 +15,22 @@ describe('shellSpawnEnv', () => {
     expect(resolveShellPathEnv({ Path: '/b' })).toBe('/b')
   })
 
-  it('augmentShellPathEnv adds npm and nodejs on Windows', () => {
+  it('augmentShellPathEnv 只注入真实存在的 npm/nodejs 目录（P2-G/D8）', () => {
     if (process.platform !== 'win32') return
+    const existingNpm = fs.mkdtempSync(path.join(os.tmpdir(), 'npm-probe-'))
+    fs.mkdirSync(path.join(existingNpm, 'npm'))
     const merged = augmentShellPathEnv({
       Path: 'C:\\Windows\\system32',
-      APPDATA: 'C:\\Users\\x\\AppData\\Roaming',
+      APPDATA: existingNpm,
       ProgramFiles: 'C:\\Program Files',
       LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local'
     })
-    expect(merged).toContain('C:\\Users\\x\\AppData\\Roaming\\npm')
-    expect(merged).toContain('C:\\Program Files\\nodejs')
+    // 存在的候选目录（%APPDATA%\npm 需真实存在）被注入
+    expect(merged).toContain(path.join(existingNpm, 'npm'))
+    // 不存在的候选目录不再被注入
+    expect(merged).not.toContain('C:\\Program Files\\nodejs')
     expect(merged).toContain('C:\\Windows\\system32')
+    fs.rmSync(existingNpm, { recursive: true, force: true })
   })
 
   it('pickSafeNodeOptions keeps only --use-system-ca', () => {

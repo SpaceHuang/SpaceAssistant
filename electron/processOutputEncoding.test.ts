@@ -8,7 +8,9 @@ describe('processOutputEncoding', () => {
       OPENAI_API_KEY: 'secret',
       HOME: '/home/user'
     })
-    expect(env.PATH).toBe('/bin')
+    // P2-G(b)：win32 只写一份 Path；POSIX 写 PATH
+    if (process.platform === 'win32') expect(env.Path).toContain('/bin')
+    else expect(env.PATH).toBe('/bin')
     expect(env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(env.OPENAI_API_KEY).toBeUndefined()
   })
@@ -21,11 +23,12 @@ describe('processOutputEncoding', () => {
       ProgramFiles: 'C:\\Program Files',
       LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local',
       USERPROFILE: 'C:\\Users\\x',
-      SystemRoot: 'C:\\Windows',
-      ComSpec: 'cmd.exe'
+      SystemRoot: 'C:\\WINDOWS'
     })
     expect(env.Path).toContain('nodejs')
-    expect(env.PATH).toBe(env.Path)
+    // P2-G(b)：win32 环境块中 PATH 类键只出现一份（不再 PATH/Path 双写，§7.1 #13）
+    const pathClassKeys = Object.keys(env).filter((k) => /^path$/i.test(k))
+    expect(pathClassKeys).toEqual(['Path'])
     expect(env.Path).not.toBe('')
   })
 
@@ -94,7 +97,7 @@ describe('processOutputEncoding', () => {
     })
     expect(env.PYTHONIOENCODING).toBe('utf-8')
     expect(env.ANTHROPIC_API_KEY).toBeUndefined()
-    expect(env.PATH).toBeTruthy()
+    expect(env.PATH ?? env.Path).toBeTruthy()
     if (process.platform === 'win32') {
       expect(env.PYTHONUTF8).toBe('1')
     }
