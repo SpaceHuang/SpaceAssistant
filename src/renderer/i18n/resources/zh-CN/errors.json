@@ -12,6 +12,7 @@
   "CANNOT_OPEN_TERMINAL": "无法打开终端",
   "FILE_NOT_FOUND": "文件未找到",
   "INVALID_PATH": "路径无效",
+  "EDIT_OLD_STRING_NOT_FOUND": "未找到待替换的字符串",
   "LLM_EMPTY_RESPONSE": "LLM 未返回有效内容",
   "NAME_CONTAINS_PATH_SEPARATOR": "新名称不允许包含路径分隔符",
   "NO_ENABLED_MODEL": "请先在默认大模型设置中启用至少一个模型",

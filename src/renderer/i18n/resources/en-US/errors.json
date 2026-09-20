@@ -12,6 +12,7 @@
   "CANNOT_OPEN_TERMINAL": "Could not open terminal",
   "FILE_NOT_FOUND": "File not found",
   "INVALID_PATH": "Invalid path",
+  "EDIT_OLD_STRING_NOT_FOUND": "The string to replace was not found",
   "LLM_EMPTY_RESPONSE": "The model returned no usable content",
   "NAME_CONTAINS_PATH_SEPARATOR": "Name must not contain path separators",
   "NO_ENABLED_MODEL": "Enable at least one model in default model settings first",
