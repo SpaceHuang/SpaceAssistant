@@ -77,4 +77,35 @@ describe('shellLogFields', () => {
     expect(Array.isArray(out.outputDiag)).toBe(true)
   })
 
+  // ===== P0-B：诊断字段进得了日志（回归 D2，§7.1 #3；§5.2 验收断言）=====
+  it('shell.exec.finish 保留 hresult / exitCodeAdvice / degradedFrom（数组形态正确）', () => {
+    const out = projectShellAgentLogFields('shell.exec.finish', {
+      exitCode: 4294901760,
+      exitCodeHint: 'Windows 宿主进程初始化失败（0xFFFF0000）',
+      hresult: {
+        code: '0x8009001D',
+        name: 'NTE_PROVIDER_DLL_FAIL',
+        meaning: '加密服务提供程序 DLL 加载或初始化失败',
+        advice: ['疑似宿主机安全/加密组件拦截；宿主级降级链会自动尝试其他 shell 宿主，无需改写命令']
+      },
+      exitCodeAdvice: [
+        'shell 宿主不可用，属宿主机环境问题，请勿改写命令或改用其他执行工具',
+        '稍后重试一次；若持续失败，按诊断字段上报（含 hresult 原文）'
+      ],
+      degradedFrom: 'builtin-windows-powershell'
+    })
+    expect(out.hresult).toBeDefined()
+    expect((out.hresult as { code?: string }).code).toBe('0x8009001D')
+    expect(Array.isArray(out.exitCodeAdvice)).toBe(true)
+    expect((out.exitCodeAdvice as string[]).length).toBe(2)
+    expect(out.degradedFrom).toBe('builtin-windows-powershell')
+  })
+
+  it('P0-B 验收断言：WINDOWS_HOST_INIT_FAILED 失败的 finish 日志可检索到 8009001d', () => {
+    const out = projectShellAgentLogFields('shell.exec.finish', {
+      hresult: { code: '0x8009001D', name: 'NTE_PROVIDER_DLL_FAIL', meaning: '加密服务提供程序 DLL 加载或初始化失败', advice: [] }
+    })
+    expect(JSON.stringify(out)).toContain('8009001D')
+  })
+
 })

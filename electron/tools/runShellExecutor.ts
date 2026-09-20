@@ -477,6 +477,9 @@ export async function executePreparedShellExecution(
           exitCodeHint,
           exitCodeFamily: exitDetails?.family,
           exitCodeSemantics: exitDetails?.semantics,
+          // P0-B（D2）：诊断字段进入日志，宿主初始化类故障无需回到 events.jsonl 取证
+          hresult,
+          exitCodeAdvice: exitDetails?.advice,
           interrupted,
           timedOut,
           cancelled,

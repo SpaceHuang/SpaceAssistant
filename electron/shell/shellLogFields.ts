@@ -29,7 +29,10 @@ const ALLOWED_KEYS = new Set([
   'caseId', 'convergenceCaseId', 'validatorId', 'denyType', 'userAction', 'violationCodes',
   'requiresRiskAck', 'outsideWorkDirRisk', 'warningsCount', 'scannedPathsCount', 'canTrust', 'skipConfirm',
   'outcome', 'verdict', 'retryCount', 'retryExhausted', 'status', 'terminationReason', 'redacted',
-  'errorCode', 'reasonCode', 'errorRedacted', 'reasonRedacted'
+  'errorCode', 'reasonCode', 'errorRedacted', 'reasonRedacted',
+  // P0-B（D2）：宿主初始化类故障的关键诊断字段——此前被 allowlist 丢弃，
+  // 线上日志查不到 0x8009001D 本体，只能回 sessions/*/events.jsonl 取证。
+  'hresult', 'exitCodeAdvice', 'degradedFrom'
 ])
 
 function fingerprint(value: string): string {
