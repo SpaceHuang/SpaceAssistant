@@ -1,5 +1,6 @@
 import { parseShellSegments } from './shellCommandParser'
 import { analyzeSegmentPaths, verifyPathsInWorkDir } from './shellPathAnalysis'
+import type { ShellPathPlatform } from './shellSensitivePaths'
 import { evaluateShellPermission } from './shellPermissions'
 import {
   buildSecurityContext,
@@ -49,7 +50,7 @@ async function analyzeShellCommandWithPolicy(
   psFacts?: PsCommandFacts
 ): Promise<ShellAnalysisResult> {
   // P1-8 评审修复：路径语义平台随调用方 platform 参数（Golden 按样本 dialect 传 win32/posix）
-  const pathPlatform: 'win32' | 'posix' = platform === 'win32' ? 'win32' : 'posix'
+  const pathPlatform: ShellPathPlatform = platform === 'win32' ? 'win32' : platform === 'darwin' ? 'darwin' : 'posix'
   // P3-T5：PS 树事实解析失败 → 与 bash 同语义的失败兜底（fail-closed）
   if (psFacts && !psFacts.ok) {
     const msg = '命令语法解析失败，无法进行安全分析'

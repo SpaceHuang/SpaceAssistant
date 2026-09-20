@@ -299,10 +299,28 @@ describeWin('shellGolden（Shell 判定/签名/facts/免确认资格基线，P2-
         drift.push('precheckTrusted 派生取值变化（登记评审）')
       }
 
+      // —— P1-c 评审修复：三类硬禁令在此直接 throw，先于任何白名单豁免判断 ——
+      if ((rank[cv ?? 'ask'] ?? 1) < (rank[bv ?? 'ask'] ?? 1)) {
+        throw new Error(`Shell Golden HARD-FAIL for ${sample.id}: verdict 弱化（禁止，白名单不可豁免）: ${bv} -> ${cv}`)
+      }
+      const eligibleFlipped =
+        (baseline.precheck as { legacyAutoAllowEligible?: boolean }).legacyAutoAllowEligible === false &&
+        (current.precheck as { legacyAutoAllowEligible?: boolean }).legacyAutoAllowEligible === true
+      if (eligibleFlipped) {
+        throw new Error(`Shell Golden HARD-FAIL for ${sample.id}: legacyAutoAllowEligible false→true（禁止，白名单不可豁免）`)
+      }
+      const eligibleFlippedTrusted =
+        (baseline.precheckTrusted as { legacyAutoAllowEligible?: boolean } | undefined)?.legacyAutoAllowEligible === false &&
+        (current.precheckTrusted as { legacyAutoAllowEligible?: boolean } | undefined)?.legacyAutoAllowEligible === true
+      if (eligibleFlippedTrusted) {
+        throw new Error(`Shell Golden HARD-FAIL for ${sample.id}: precheckTrusted legacyAutoAllowEligible false→true（禁止，白名单不可豁免）`)
+      }
+
       if (drift.length > 0) {
         const accepted = SHELL_ACCEPTED_DRIFT[sample.id]
-        // P1-7 评审修复：白名单按类别豁免。硬禁令（verdict 弱化 / eligible false→true）已在上方直接 throw，
-        // 不受白名单影响；signature 仅接受显式 signatureSplit；verdict 变严需 verdictStricter；facts/precheck 需 factsPrecision。
+        // P1-7/P1-c 评审修复：白名单按类别豁免。三类硬禁令（verdict 弱化 / eligible false→true 含
+        // trusted 配置）已在上方直接 throw，不受白名单影响；signature 仅接受显式 signatureSplit；
+        // verdict 变严需 verdictStricter；facts/precheck 需 factsPrecision。
         if (accepted) {
           const covered = drift.every((d) => {
             if (d.startsWith('verdict 变严')) return Boolean(accepted.verdictStricter)

@@ -95,6 +95,18 @@ describe('P1-T2/T3 未知构造与包裹式反向用例（IrCoverageError → ex
     expect(signals.some((s) => s.kind === 'extraction-failed')).toBe(true)
   })
 
+  it('P0-3/P1-1 回归：for...else / while...else 的 else 体不得 allow（desktop + remote）', () => {
+    const forElse = 'for i in [1]:\n    pass\nelse:\n    eval("1")'
+    const r = analyzeScriptContent(forElse, {})
+    expect(r.verdict).not.toBe('allow')
+    const whileElse = 'while x:\n    pass\nelse:\n    import os\nos.system("id")'
+    const r2 = analyzeScriptContent(whileElse, {})
+    expect(r2.verdict).not.toBe('allow')
+    // remote：certify 必须 fail（else 体藏 eval/危险调用不得通过认证）
+    const rRemote = analyzeScriptContent(forElse, { remote: true })
+    expect(rRemote.verdict).not.toBe('allow')
+  })
+
   it('包裹式反向（危险调用真藏在未建模体内）：不得 allow', () => {
     const wrapped = 'import os\n\ndef dispatch(x):\n    match x:\n        case "go":\n            os.system("ls")\n'
     const r = analyzeScriptContent(wrapped, {})

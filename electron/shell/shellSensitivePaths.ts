@@ -12,10 +12,17 @@ function expandHome(p: string): string {
   return p
 }
 
-export type ShellPathPlatform = 'win32' | 'posix'
+export type ShellPathPlatform = 'win32' | 'posix' | 'darwin'
 
-/** 内置敏感路径前缀（不可删除）。platform 参数供 Golden 跨平台录制/比对显式指定（缺省宿主平台，生产行为不变）。 */
-export function getBuiltinSensitivePrefixes(userDataDir?: string, platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : 'posix'): string[] {
+/**
+ * 内置敏感路径前缀（不可删除）。platform 参数供 Golden 跨平台录制/比对显式指定；
+ * 缺省 = 宿主平台（P1-b 评审修复：macOS 宿主缺省 'darwin'，保留 ~/Library 保护，
+ * 不再被 'posix' 归并弱化）。golden bash 样本显式传 'posix' 与 win32 录制基线一致。
+ */
+export function getBuiltinSensitivePrefixes(
+  userDataDir?: string,
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
+): string[] {
   const pp = platform === 'win32' ? path.win32 : path.posix
   const home = os.homedir()
   const prefixes: string[] = [
@@ -26,7 +33,7 @@ export function getBuiltinSensitivePrefixes(userDataDir?: string, platform: Shel
   if (platform === 'win32') {
     prefixes.push(pp.join(home, 'AppData', 'Roaming'))
     prefixes.push(pp.join('C:', 'Windows'))
-  } else if (process.platform === 'darwin' && platform !== 'posix') {
+  } else if (platform === 'darwin') {
     prefixes.push(pp.join(home, 'Library'))
   } else {
     prefixes.push('/etc')
@@ -40,7 +47,7 @@ export function isSensitivePath(
   resolvedPath: string,
   userDataDir?: string,
   customPrefixes?: string[],
-  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : 'posix'
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
 ): boolean {
   const pp = platform === 'win32' ? path.win32 : path.posix
   const norm = pp.normalize(resolvedPath).toLowerCase()

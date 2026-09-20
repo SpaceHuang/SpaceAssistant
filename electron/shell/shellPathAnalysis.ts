@@ -1,7 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { resolveSafePath, resolveSafePathReal } from '../pathSecurity'
-import { isSensitivePath } from './shellSensitivePaths'
+import { isSensitivePath, type ShellPathPlatform } from './shellSensitivePaths'
 import type { ShellPathLiteral, ShellPathVerdict } from './shellTypes'
 
 const READ_CMDS = new Set(['cat', 'type', 'more', 'head', 'tail', 'less', 'dir', 'copy', 'xcopy'])
@@ -115,7 +115,7 @@ export async function verifyPathsInWorkDir(
   literals: ShellPathLiteral[],
   userDataDir?: string,
   customSensitivePrefixes?: string[],
-  platform: 'win32' | 'posix' = process.platform === 'win32' ? 'win32' : 'posix'
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
 ): Promise<ShellPathVerdict> {
   // P1-8 评审修复：路径语义显式平台化（Golden 跨平台录制/比对按样本 dialect 传 win32/posix）；
   // 缺省宿主平台，生产行为不变。
@@ -223,7 +223,7 @@ export async function analyzeSegmentPaths(
   segments: string[],
   userDataDir?: string,
   customSensitivePrefixes?: string[],
-  platform: 'win32' | 'posix' = process.platform === 'win32' ? 'win32' : 'posix'
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
 ): Promise<{ literals: ShellPathLiteral[]; pathVerdict: ShellPathVerdict }> {
   const literals: ShellPathLiteral[] = []
   for (let i = 0; i < segments.length; i++) {

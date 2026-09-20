@@ -2,7 +2,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import type { PsCommandFacts } from './powershellCommandFacts'
-import { isSensitivePath } from './shellSensitivePaths'
+import { isSensitivePath, type ShellPathPlatform } from './shellSensitivePaths'
 import { normalizeWindowsPath } from './shellPathAnalysis'
 
 export interface PsPatternHit {
@@ -26,13 +26,14 @@ export function matchPsDangerousPatterns(
   facts: PsCommandFacts,
   userDataDir?: string,
   customSensitivePrefixes?: string[],
-  platform: 'win32' | 'posix' = process.platform === 'win32' ? 'win32' : 'posix'
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
 ): PsPatternHit | null {
   const hits: PsPatternHit[] = []
 
   for (const cmd of facts.commands) {
-    const verb = cmd.name.toLowerCase()
-    const argsLower = cmd.args.map((a) => a.toLowerCase())
+    // P1-a 评审修复：& "Format-Volume" 形态的命令名/参数带引号——匹配前剥除（引号不改变语义）
+    const verb = cmd.name.replace(/^["']+|["']+$/g, '').toLowerCase()
+    const argsLower = cmd.args.map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase())
 
     // 1) ps-iex-cradle：iex/Invoke-Expression 包裹下载调用（结构匹配：参数文本含下载方法）
     if (IEX_NAMES.has(verb)) {

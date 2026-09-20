@@ -445,6 +445,8 @@ class Analyzer {
         const child = createScope(scope)
         child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
         this.walkStmts(stmt.body, child, stmtIndex)
+        // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
+        this.walkStmts(stmt.orelse, child, stmtIndex)
         continue
       }
 
@@ -459,6 +461,8 @@ class Analyzer {
       if (stmt.kind === 'while') {
         this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
         this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
+        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex)
         continue
       }
       if (stmt.kind === 'with') {
@@ -1061,6 +1065,8 @@ class RemoteCertifier {
           const child = createScope(scope)
           child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
           this.walkStmts(stmt.body, child)
+          // P0-3 评审修复：else 体不遍历会让藏在其中的未建模/危险构造逃过认证（remote fail-open）
+          this.walkStmts(stmt.orelse, child)
           break
         }
         case 'pass':
