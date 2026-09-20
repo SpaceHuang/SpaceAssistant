@@ -85,6 +85,8 @@ export class AgentChannel implements ConfirmationChannel {
       taskDigest?: string
       audit?: AuditSink
       invokeApproval: (inv: ApprovalInvocation) => Promise<ApprovalInvocationResult>
+      /** B1(偏差 23):统一准入门(嵌套:审批回答者继承等待方 interactive 优先级 + 保留位)。 */
+      admissionGate?: import('../runtime/callAdmissionGate').CallAdmissionGate
     }
   ) {}
 
@@ -169,9 +171,30 @@ export class AgentChannel implements ConfirmationChannel {
           clearTimeout(timer)
           resolve(r)
         }
-        this.deps
-          .invokeApproval(invocation)
-          .then((r) => finish(r), () => finish({ ok: false, cause: 'unavailable' }))
+        // B1(偏差 23):嵌套准入——保留位防自锁(等待方持票,回答者凭 reserved 位准入);
+        // 拿不到准入位 = 「拿不到裁决」(cause=unavailable),与裁决为否(agent-deny)分立
+        this.deps.admissionGate
+          ? void this.deps.admissionGate
+              .acquire({
+                lane: 'automation',
+                priority: 'interactive',
+                role: 'approval-answerer',
+                disposition: 'reject',
+                requestId: innerRequestId
+              })
+              .then((admission) => {
+                if (!admission.ok) {
+                  finish({ ok: false, cause: 'unavailable' })
+                  return
+                }
+                admission.ticket.release()
+                this.deps
+                  .invokeApproval(invocation)
+                  .then((r) => finish(r), () => finish({ ok: false, cause: 'unavailable' }))
+              }, () => finish({ ok: false, cause: 'unavailable' }))
+          : this.deps
+              .invokeApproval(invocation)
+              .then((r) => finish(r), () => finish({ ok: false, cause: 'unavailable' }))
         this.inflightSettle = (r) => finish(r)
       })
     } finally {

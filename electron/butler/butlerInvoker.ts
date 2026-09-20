@@ -16,7 +16,7 @@ import type { WorkDirManager } from '../workDirManager'
 import type { TurnRuntime } from '../turnRuntime'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { createButlerSessionEvents } from './butlerSessionEvents'
-import { ButlerAdmission } from './butlerAdmission'
+import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { deliverTaskResult, type ButlerDeliveryPorts } from './butlerDelivery'
 import { getAutomationTask, insertAutomationTaskRun, updateAutomationTaskRun } from './taskStore'
 
@@ -52,7 +52,8 @@ export type ButlerInvokerDeps = {
   resolveWorkDirForSession?: (sessionId: string) => string
   /** 活动工作目录 profile id（会话创建时绑定）。 */
   getActiveWorkDirProfileId?: () => string | undefined
-  admission?: ButlerAdmission
+  /** B1(偏差 23):统一调用级准入门(automation lane 配置数据化,ButlerAdmission 退役)。 */
+  admissionGate?: import('../runtime/callAdmissionGate').CallAdmissionGate
   /** 投递端口（主进程装配注入；缺省 = IM 未接线走显式降级路径）。 */
   deliveryPorts?: ButlerDeliveryPorts
   /** P6：共享投递入口（装配器持有）；缺省为调用级实例。 */
@@ -109,12 +110,20 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     return { ok: false, runId, error: '重复触发（幂等键已存在）' }
   }
 
-  const admission = deps.admission ?? new ButlerAdmission()
-  const ticket = await admission.acquire(requestId)
-  if (!ticket.ok) {
-    updateAutomationTaskRun(db, runId, { status: 'failed', error: `准入拒绝：${ticket.reason}` })
-    return { ok: false, runId, error: `准入拒绝：${ticket.reason}`, admissionDenied: ticket.reason }
+  const admissionGate = deps.admissionGate ?? getCallAdmissionGate()
+  const admission = await admissionGate.acquire({
+    lane: 'automation',
+    priority: 'background',
+    role: 'top-level',
+    disposition: 'queue',
+    requestId
+  })
+  if (!admission.ok) {
+    const reason = admission.verdict === 'rejected' ? admission.cause : admission.verdict
+    updateAutomationTaskRun(db, runId, { status: 'failed', error: `准入拒绝：${reason}` })
+    return { ok: false, runId, error: `准入拒绝：${reason}`, admissionDenied: reason as 'hourly-limit' | 'queue-full' }
   }
+  const ticket = admission.ticket
 
   try {
     updateAutomationTaskRun(db, runId, { status: 'running' })

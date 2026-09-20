@@ -244,7 +244,8 @@ export function parseApprovalVerdict(
 
 /**
  * 执行一次审批调用。失败一律返回 ok:false 且 cause 可区分（timeout/unavailable/unparsable/config-error），
- * 绝不向上抛错；绝不取 butlerAdmission 票（外层管家回合持票等待结论，内层取票即并发=1 下自死锁）。
+ * 绝不向上抛错；内层审批回答者绝不取顶层准入票据——经统一准入的 approval-answerer 角色
+ * 走保留位（B1，偏差 23：保留位同时放宽全局 interactive 与 lane 配额维度，防自锁）。
  */
 export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInvocation): Promise<ApprovalInvocationResult> {
   const db = deps.db

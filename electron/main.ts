@@ -10,7 +10,6 @@ import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { registerButlerIpcHandlers } from './butler/butlerIpc'
 import { createDeliveryHub } from './driver/deliveryHub'
-import { ButlerAdmission } from './butler/butlerAdmission'
 import { ButlerTaskScheduler } from './butler/taskScheduler'
 import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
 import { stagehandService } from './browser/stagehandService'
@@ -58,6 +57,8 @@ import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { createAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntime'
+import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
+import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
@@ -615,7 +616,9 @@ app.whenReady().then(async () => {
   })
 
   // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
-  const butlerAdmission = new ButlerAdmission()
+  // B1(偏差 23):统一调用级准入(状态归 Storage);butlerAdmission 退役
+  setCallAdmissionGate(new CallAdmissionGate({ db }))
+  resetActiveAdmissionOnStartup(db, Date.now())
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。
@@ -648,7 +651,7 @@ app.whenReady().then(async () => {
       return resolved?.workDir ?? workDirState
     },
     getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
-    admission: butlerAdmission,
+    admissionGate: getCallAdmissionGate(),
     onSessionCreated: (session) => getMainWindow()?.webContents.send('session:created', { session }),
     // P6（偏差 8 机制面）：驱动源层唯一投递入口——桌面 sink（系统通知）注册进共享 hub；
     // butler 投递经 hub 路由并落送达记录。桌面终态发送通道（notifyMainWindow 路径）与
