@@ -41,6 +41,15 @@ describe('compactOversizedToolResultContent（P1-4 中段截断）', () => {
     expect(isTruncatedToolResultContent(result.content)).toBe(true)
   })
 
+  it('评审 P1-2：天然包含 marker 字面量的超限原文不被误判为已截断，仍被压缩', () => {
+    const marker = '…[tool_result truncated:'
+    const content = (marker + 'x'.repeat(1000)).repeat(50)
+    expect(content.length).toBeGreaterThan(MAX_TOOL_RESULT_CONTENT_CHARS)
+    const result = compactOversizedToolResultContent(content)
+    expect(result.compacted).toBe(true)
+    expect(result.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
+  })
+
   it('幂等：已截断内容二次压缩不再变化', () => {
     const content = 'y'.repeat(MAX_TOOL_RESULT_CONTENT_CHARS + 100)
     const first = compactOversizedToolResultContent(content)

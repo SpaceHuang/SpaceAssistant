@@ -17,8 +17,13 @@ export function isOversizedToolResultPlaceholder(content: string): boolean {
 /** P1-4：中段截断标记前缀（幂等判定用）。 */
 export const TRUNCATED_TOOL_RESULT_MARKER_PREFIX = '…[tool_result truncated:'
 
-export function isTruncatedToolResultContent(content: string): boolean {
-  return content.includes(TRUNCATED_TOOL_RESULT_MARKER_PREFIX)
+/**
+ * 已截断内容的幂等识别：必须同时满足「含 marker」与「长度不超过上限 + 容差」。
+ * 仅 includes 会让天然包含 marker 字面量的超限原文（如 grep 本仓库源码）跳过压缩，
+ * 最坏 2 MiB 原文进上下文（评审 P1-2）；真截断产物长度必 ≤ maxChars（marker 预算内）。
+ */
+export function isTruncatedToolResultContent(content: string, maxChars: number = MAX_TOOL_RESULT_CONTENT_CHARS): boolean {
+  return content.includes(TRUNCATED_TOOL_RESULT_MARKER_PREFIX) && content.length <= maxChars + TRUNCATION_MARKER_BUDGET
 }
 
 export interface CompactOversizedToolResultResult {
@@ -37,7 +42,7 @@ export function compactOversizedToolResultContent(
   maxChars: number = MAX_TOOL_RESULT_CONTENT_CHARS
 ): CompactOversizedToolResultResult {
   const originalLength = content.length
-  if (isOversizedToolResultPlaceholder(content) || isTruncatedToolResultContent(content) || originalLength <= maxChars) {
+  if (isOversizedToolResultPlaceholder(content) || isTruncatedToolResultContent(content, maxChars) || originalLength <= maxChars) {
     return { content, compacted: false, originalLength }
   }
   return { content: truncateMiddle(content, maxChars), compacted: true, originalLength }

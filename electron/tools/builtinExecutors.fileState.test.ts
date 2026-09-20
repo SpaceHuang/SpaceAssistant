@@ -82,6 +82,64 @@ describe('read_file 重复读取提示（P1-5，agent-context-token-cost-optimiz
     expect(data.content).toContain('line one')
   })
 
+  it('评审 P1-1a：mtime 不变但内容变化（size 不同）→ 第二次读取返回新内容，不命中提示', async () => {
+    const rel = 'covert-edit.md'
+    const abs = path.join(tmpDir, rel)
+    await fs.writeFile(abs, 'original content v1', 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    const first = await readFileExecutor.execute({ path: rel }, ctx)
+    expect(first.success).toBe(true)
+
+    // 模拟 FAT32 2s 精度 / 同步软件保留时间戳：内容变化但 mtime 回拨到读取时记录的同一值。
+    // utimes 的 Date 只到整毫秒，先统一到整毫秒刻度再驱动，确保 mtime 精确一致。
+    const recorded = cache.get(abs)!
+    const wholeMs = new Date(Math.ceil(recorded.mtime)).getTime()
+    await fs.utimes(abs, new Date(wholeMs), new Date(wholeMs))
+    cache.set(abs, { ...recorded, mtime: wholeMs })
+
+    await fs.writeFile(abs, 'original content v1 EXTENDED to a different size', 'utf8')
+    await fs.utimes(abs, new Date(wholeMs), new Date(wholeMs))
+
+    const second = await readFileExecutor.execute({ path: rel }, ctx)
+    expect(second.success).toBe(true)
+    const data = second.data as { content?: string; unchangedSinceLastRead?: boolean }
+    expect(data.unchangedSinceLastRead).toBeUndefined()
+    expect(data.content).toContain('EXTENDED')
+  })
+
+  it('评审 P1-1b：同 size 同 mtime 的隐蔽改动 → edit 护栏报错时失效缓存，重读可自愈', async () => {
+    const rel = 'same-size.md'
+    const abs = path.join(tmpDir, rel)
+    await fs.writeFile(abs, 'aaaaaaaaaa', 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    const first = await readFileExecutor.execute({ path: rel }, ctx)
+    expect(first.success).toBe(true)
+
+    // 同长度替换 + mtime 回拨（整毫秒刻度，保证恢复精确一致）：mtime 与 size 双重校验都无法察觉
+    const recorded = cache.get(abs)!
+    const wholeMs = new Date(Math.ceil(recorded.mtime)).getTime()
+    await fs.utimes(abs, new Date(wholeMs), new Date(wholeMs))
+    cache.set(abs, { ...recorded, mtime: wholeMs })
+
+    await fs.writeFile(abs, 'bbbbbbbbbb', 'utf8')
+    await fs.utimes(abs, new Date(wholeMs), new Date(wholeMs))
+
+    // edit 护栏应报「外部修改」（内容比对失败），且报错时缓存被失效
+    const edit = await editFileExecutor.execute({ path: rel, old_string: 'aaaaaaaaaa', new_string: 'EDITED' }, ctx)
+    expect(edit.success).toBe(false)
+    expect(String(edit.error)).toContain('重新读取')
+
+    // 重读不再命中去重提示（缓存已失效）→ 拿到真实内容 → 可自愈
+    const reread = await readFileExecutor.execute({ path: rel }, ctx)
+    const data = reread.data as { content?: string; unchangedSinceLastRead?: boolean }
+    expect(data.unchangedSinceLastRead).toBeUndefined()
+    expect(data.content).toBe('bbbbbbbbbb')
+
+    // 按新内容编辑成功
+    const edit2 = await editFileExecutor.execute({ path: rel, old_string: 'bbbbbbbbbb', new_string: 'EDITED' }, ctx)
+    expect(edit2.success).toBe(true)
+  })
+
   it('重复读取提示后 edit_file 护栏不受影响（缓存保持完整快照）', async () => {
     const rel = 'editable.md'
     const abs = path.join(tmpDir, rel)

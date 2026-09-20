@@ -59,7 +59,7 @@ function recordReadFileCache(
   cache: ToolExecutionContext['fileStateCache'],
   abs: string,
   mtimeMs: number,
-  opts: { content: string; truncated: boolean; rangeRequested: boolean }
+  opts: { content: string; truncated: boolean; rangeRequested: boolean; size: number }
 ): void {
   const prev = cache.get(abs)
   if (opts.rangeRequested) {
@@ -83,7 +83,8 @@ function recordReadFileCache(
     mtime: mtimeMs,
     readAt: Date.now(),
     isPartial: opts.truncated,
-    isRangeView: false
+    isRangeView: false,
+    size: opts.size
   })
 }
 
@@ -92,7 +93,8 @@ async function assertDiskMatchesReadCache(
   stCache: FileState,
   cur: string,
   op: AbortSignal,
-  errorMessage: string
+  errorMessage: string,
+  cache: ToolExecutionContext['fileStateCache']
 ): Promise<ToolExecutorResult | null> {
   if (stCache.isRangeView) {
     throwIfAborted(op)
@@ -103,11 +105,14 @@ async function assertDiskMatchesReadCache(
       return null
     }
     if (stNow.mtimeMs !== stCache.mtime) {
+      // 评审 P1-1：报「外部修改」即失效缓存，保证随后的重读绕过去重提示拿到真实内容（自愈出口）
+      cache.invalidate(abs)
       return { success: false, error: errorMessage }
     }
     return null
   }
   if (cur !== stCache.content) {
+    cache.invalidate(abs)
     return { success: false, error: errorMessage }
   }
   return null
@@ -231,9 +236,11 @@ export const readFileExecutor: ToolExecutor = {
       // P1-5（agent-context-token-cost-optimization-plan §5.5）：会话内已完整读取过且文件未变化
       // （mtime 一致）时，不再重发全文，只返回提示——实测 read_file 重复率 43%（69 读 / 39 路径）。
       // 只提示不拒绝：需要特定区间传 offset/limit；需要强制重读全文传 offset=0。
+      // 评审 P1-1：mtime 单判据会被 FAT32 2s 精度 / 同步软件保留时间戳绕过（内容已变却提示
+      // 「已在上下文」→ edit 护栏报外部修改 → 重读又命中提示，不可自愈），故加 size 双重校验。
       if (!rangeRequested) {
         const cached = ctx.fileStateCache.get(abs)
-        if (cached && !cached.isPartial && !cached.isRangeView && cached.mtime === st.mtimeMs) {
+        if (cached && !cached.isPartial && !cached.isRangeView && cached.mtime === st.mtimeMs && (cached.size === undefined || cached.size === st.size)) {
           return {
             success: true,
             data: {
@@ -253,7 +260,8 @@ export const readFileExecutor: ToolExecutor = {
         recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
           content: '',
           truncated: true,
-          rangeRequested: false
+          rangeRequested: false,
+          size: st.size
         })
         return {
           success: true,
@@ -287,7 +295,8 @@ export const readFileExecutor: ToolExecutor = {
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
             content: limited.content,
             truncated,
-            rangeRequested: true
+            rangeRequested: true,
+            size: st.size
           })
           return {
             success: true,
@@ -322,7 +331,8 @@ export const readFileExecutor: ToolExecutor = {
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
             content: limited.content,
             truncated,
-            rangeRequested: true
+            rangeRequested: true,
+            size: st.size
           })
           const data: Record<string, unknown> = {
             path: rel,
@@ -353,7 +363,8 @@ export const readFileExecutor: ToolExecutor = {
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
             content: '',
             truncated: true,
-            rangeRequested: false
+            rangeRequested: false,
+            size: st.size
           })
           return {
             success: true,
@@ -372,7 +383,8 @@ export const readFileExecutor: ToolExecutor = {
         recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
           content: text,
           truncated: false,
-          rangeRequested: false
+          rangeRequested: false,
+          size: st.size
         })
         return {
           success: true,
@@ -623,7 +635,8 @@ export const editFileExecutor: ToolExecutor = {
           stCache,
           cur,
           op,
-          '文件已被外部程序修改，请重新读取后再编辑'
+          '文件已被外部程序修改，请重新读取后再编辑',
+          ctx.fileStateCache
         )
         if (mismatch) return { ...mismatch, duration: Date.now() - started }
       }
@@ -746,7 +759,8 @@ export const writeFileExecutor: ToolExecutor = {
             stCache,
             cur,
             op,
-            '文件已被外部程序修改，请重新读取后再写入'
+            '文件已被外部程序修改，请重新读取后再写入',
+            ctx.fileStateCache
           )
           if (mismatch) return { ...mismatch, duration: Date.now() - started }
         }

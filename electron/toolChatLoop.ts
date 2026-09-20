@@ -258,9 +258,17 @@ function buildRequestPrefixTelemetry(args: { contextWindowId: string; plannedMes
  * 含 tool_use / thinking 等非 text 块时不转换——重建路径对带 toolCalls 的 assistant 同样输出块数组。
  */
 function normalizeAssistantContentForHistoryParity(content: Anthropic.ContentBlock[]): string | Anthropic.ContentBlock[] {
-  const allText = content.every((block) => Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
-  if (!allText) return content
-  return ensureApiTextContent(content.map((block) => ((block as { text?: unknown }).text ?? '')).join(''))
+  // 先剔除空白 text 块：重建侧只保留非空白正文（buildClaudeToolChatMessages 的 content.trim() 判断），
+  // 实时侧若保留空白块，混合数组（text+tool_use）与前缀都会从该项分歧（评审观察 1）。
+  const meaningful = content.filter((block) => {
+    if (Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
+      return String((block as { text?: unknown }).text ?? '').trim().length > 0
+    }
+    return true
+  })
+  const allText = meaningful.every((block) => Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+  if (!allText) return meaningful
+  return ensureApiTextContent(meaningful.map((block) => ((block as { text?: unknown }).text ?? '')).join(''))
 }
 
 export function getFileStateCacheForSession(sessionId: string): FileStateCache {

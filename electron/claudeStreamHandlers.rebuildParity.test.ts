@@ -392,6 +392,40 @@ describe('Phase 0 静态比对：turn 边界重建 vs 实时累积（§3.4.5）'
     expectSurfaceParity(finalSurface as unknown[], rebuiltHistory, '多工具场景').assert()
   })
 
+  it('评审观察 1：tool_use 轮中的空白 text 块剔除后与重建产出 parity（§3.4.5 残留缺口）', async () => {
+    await fs.writeFile(path.join(tmpDir, 'doc.md'), 'whitespace parity', 'utf8')
+    const u1 = makeUserMessage(sessionId, 'u1', 'read the doc', 1_000)
+    const turn1 = await driveTurn({
+      history: [],
+      userMessage: u1,
+      rounds: [
+        {
+          content: [
+            { type: 'text', text: '   ' },
+            { type: 'tool_use', id: 'tu-ws', name: 'read_file', input: { path: 'doc.md' } }
+          ],
+          stop_reason: 'tool_use',
+          usage: { input_tokens: 10, output_tokens: 8 }
+        },
+        { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
+      ]
+    })
+    const finalSurface = turn1.res.finalSurfaceMessages
+    expect(finalSurface).toBeTruthy()
+    const a1 = makeAssistantMessage(sessionId, 'a1', '', 1_100, [
+      makeToolCallRecord('tu-ws', { path: 'doc.md' }, factOf('tu-ws')?.result)
+    ])
+    const a2 = makeAssistantMessage(sessionId, 'a2', 'done', 1_200)
+    const u2 = makeUserMessage(sessionId, 'u2', 'next', 2_000)
+    const turn2 = await driveTurn({
+      history: [u1, a1, a2],
+      userMessage: u2,
+      rounds: [{ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 30, output_tokens: 5 } }]
+    })
+    const rebuiltHistory = rebuiltHistoryOf(turn2.round1Messages as unknown[])
+    expectSurfaceParity(finalSurface as unknown[], rebuiltHistory, '空白 text 块场景').assert()
+  })
+
   it('特征化报告：输出两层口径的首个分歧位置（诊断用，不因分歧失败）', async () => {
     await fs.writeFile(path.join(tmpDir, 'doc.md'), 'diagnostic content', 'utf8')
     const u1 = makeUserMessage(sessionId, 'u1', 'read the doc', 1_000)

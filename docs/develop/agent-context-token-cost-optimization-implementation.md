@@ -41,6 +41,26 @@
 
 **残留观察（未修复，影响面小）**：① 混合 text 多块 + tool_use 的轮，重建侧合并为单 text 块而实时侧保留多块（罕见）；② thinking 开启时实时侧保留 thinking 块而重建不重建（与 effort 链路相关，超出本计划范围）。
 
+## 2.1 代码评审修复（2026-09-21，评审：docs/review/20260921-agent-context-token-cost-optimization-code-review.md）
+
+评审结论：无 P0；2 个 P1 建议合并前处理 + 2 个主要观察。处理记录：
+
+**P1-1（已修复）：read_file 去重仅以 mtime 判新鲜度，可与 edit 护栏形成不可自愈死循环。**
+FAT32 2s 精度 / 同步软件保留时间戳时 mtime 相同但内容已变：read 返回提示（空内容）→ edit 护栏内容比对报「外部修改请重读」→ 重读又命中提示。双层修复：
+- 读侧：`FileState` 增加 `size?: number`（完整快照的磁盘字节），去重判定改为 mtime + size 双重校验（size 缺省保守放行重读）；
+- 护栏侧：`assertDiskMatchesReadCache` 报「外部修改」时失效缓存（edit/write 两处调用），保证随后重读必然绕过提示拿到真实内容——同 size 同 mtime 的极端改动也自愈。
+测试：`builtinExecutors.fileState.test.ts` 两个评审场景（不同 size / 同 size 同 mtime）。
+
+**P1-2（已修复）：`isTruncatedToolResultContent` 仅 `.includes()` 判幂等，天然包含 marker 字面量的超限原文（如 grep 本仓库源码）会跳过压缩，最坏 2 MiB 原文进上下文。**
+修复：幂等识别加长度约束——「含 marker 且长度 ≤ maxChars + marker 预算（400）」；真截断产物长度必 ≤ maxChars，天然含 marker 的超限原文不再误判。测试：`oversizedToolResult.test.ts` 评审场景。
+
+**观察 1（已修复）：tool_use 轮中空白 text 块的 parity 缺口。**
+重建侧只保留非空白正文（`m.content?.trim()` 判断），实时侧若保留空白 text 块，混合数组与前缀从该项分歧。`normalizeAssistantContentForHistoryParity` 规范化前先剔除空白 text 块。测试：`rebuildParity.test.ts` 新增场景（空白 text + tool_use 轮）。
+
+**观察 2（记录，不改）：埋点对 text 形态分歧（数组 vs 字符串）的监控盲区。**
+这是 `canonicalizeSurfaceMessages` 口径的固有特性而非缺陷——计划 §5.2.3-1 明确要求 messages 面比较基于「模型可见语义」（剥离 cache_control、合并纯 text 块数组），形态差异在该口径下不可见是**有意为之**（否则 §3 的形态修复会表现为每次 turn 边界的假分歧）。wire 面形态分歧由独立的 `cacheBreakpoints`（positions/tailIsString/moved）覆盖观测；若未来需要形态级取证，可在 messages 面旁增设「wire 严格口径」的第二组 digest，属增强项。
+
+
 ## 4. Phase 0-3 调研结论（P1-3(b) 前提）
 
 - `request_header` 的唯一程序化读取方 `computeContextPressureFromEvents`（`contextMeter.ts`）只读 `requestId` + `surfaceSnapshot`，**不读 `system`/`tools`**；
