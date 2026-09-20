@@ -22,11 +22,20 @@ afterEach(() => {
 })
 
 describe('resolveI18nResourcesDir(偏差 13:主进程直读渲染端 i18n 真源)', () => {
-  it('开发态:dist-electron/electron → 项目根 src/renderer/i18n/resources', () => {
-    const mainDirname = path.join('proj', 'dist-electron', 'electron')
-    expect(resolveI18nResourcesDir(false, mainDirname)).toBe(
-      path.resolve('proj', 'src', 'renderer', 'i18n', 'resources')
-    )
+  it('开发态:真实编译布局(dist-electron/electron/i18n)向上探测命中项目根资源目录', () => {
+    // P1-4 修复语义:逐级向上探测真实存在的 src/renderer/i18n/resources——
+    // 用真实临时目录结构(编译输出三层深)验证探测命中
+    const root = mkdtempSync(path.join(tmpdir(), 'i18n-proj-'))
+    tmpDirs.push(root)
+    const mainDirname = path.join(root, 'dist-electron', 'electron', 'i18n')
+    const expected = path.join(root, 'src', 'renderer', 'i18n', 'resources')
+    mkdirSync(expected, { recursive: true })
+    expect(resolveI18nResourcesDir(false, mainDirname)).toBe(expected)
+  })
+
+  it('开发态异常布局:不抛错,路径以 src/renderer/i18n/resources 结尾(探测或回退均然)', () => {
+    const result = resolveI18nResourcesDir(false, path.join('nonexistent-proj', 'dist-electron', 'electron'))
+    expect(result.endsWith(path.join('src', 'renderer', 'i18n', 'resources'))).toBe(true)
   })
 
   it('打包态:process.resourcesPath/i18n-resources(extraResources 拷贝)', () => {
