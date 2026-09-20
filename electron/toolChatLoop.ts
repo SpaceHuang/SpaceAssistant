@@ -182,6 +182,7 @@ import {
 } from './toolWriteConflict'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
+import { ensureApiTextContent } from '../src/shared/claudeToolHistory'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
@@ -202,6 +203,19 @@ import {
 } from './outputRecovery'
 
 const fileCaches = new Map<string, FileStateCache>()
+
+/**
+ * turn 边界历史重建（buildClaudeToolChatMessages）对无 toolCalls 的 assistant 输出纯字符串
+ * content（ensureApiTextContent：拼接、trim、空则单空格）。实时累积路径若保留 text 块数组，
+ * 次轮 round:1 的重建前缀会从上一 turn 的最终回复处分歧，造成该 turn 边界缓存整段失效
+ * （agent-context-token-cost-optimization §3.4.5 候选 A 静态比对结论）。
+ * 含 tool_use / thinking 等非 text 块时不转换——重建路径对带 toolCalls 的 assistant 同样输出块数组。
+ */
+function normalizeAssistantContentForHistoryParity(content: Anthropic.ContentBlock[]): string | Anthropic.ContentBlock[] {
+  const allText = content.every((block) => Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+  if (!allText) return content
+  return ensureApiTextContent(content.map((block) => ((block as { text?: unknown }).text ?? '')).join(''))
+}
 
 export function getFileStateCacheForSession(sessionId: string): FileStateCache {
   let c = fileCaches.get(sessionId)
@@ -833,8 +847,11 @@ async function runToolChatSessionInner(
   })) as Anthropic.MessageParam[]
   if (args.skillFragments?.length) {
     const fragmentMessage: Anthropic.MessageParam = { role: 'user', content: args.skillFragments.join('\n\n') }
-    const lastUserIndex = messagesForApi.map((message) => message.role).lastIndexOf('user')
-    messagesForApi.splice(lastUserIndex >= 0 ? lastUserIndex : messagesForApi.length, 0, fragmentMessage)
+    // fragment 必须固定注入在第一条 user 消息之前：它不落 DB，次轮 round:1 的重建历史不含
+    // 上一 turn 的 fragment——若随「最后一条 user」移动，重建前缀从 item 0 整段错位，造成
+    // turn 边界缓存全量失效（agent-context-token-cost-optimization §3.4.5 候选 A 静态比对结论）。
+    const firstUserIndex = messagesForApi.map((message) => message.role).indexOf('user')
+    messagesForApi.splice(firstUserIndex >= 0 ? firstUserIndex : messagesForApi.length, 0, fragmentMessage)
   }
 
   /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
@@ -1218,7 +1235,7 @@ async function runToolChatSessionInner(
           llmServiceId: args.llmServiceId
         })
         turnUsageStats.stepCount += 1
-        const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: content as Anthropic.ContentBlock[] }]
+        const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: normalizeAssistantContentForHistoryParity(content as Anthropic.ContentBlock[]) }]
         const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system, tools: requestHeader.tools, messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
         const finalProjection = computeContextPressure({
           currentSurface: finalHeader.surfaceSnapshot,
@@ -1311,7 +1328,7 @@ async function runToolChatSessionInner(
       })
       : replayableAssistantContent
     if (Array.isArray(safeAssistantContent) && safeAssistantContent.length > 0) {
-      messagesForApi = [...messagesForApi, { role: 'assistant', content: safeAssistantContent as Anthropic.ContentBlock[] }]
+      messagesForApi = [...messagesForApi, { role: 'assistant', content: normalizeAssistantContentForHistoryParity(safeAssistantContent as Anthropic.ContentBlock[]) }]
     }
 
     const outputRecoveryKind = classifyOutputRecovery({ stopReason, content })

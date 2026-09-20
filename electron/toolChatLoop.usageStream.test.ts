@@ -507,7 +507,8 @@ describe('runToolChatSession message_start usage', () => {
     })
     expect(res.ok).toBe(true)
     expect(boundary).toHaveBeenCalledWith(expect.objectContaining({
-      messages: expect.arrayContaining([expect.objectContaining({ role: 'assistant', content: expect.arrayContaining([expect.objectContaining({ type: 'text', text: longReply })]) })]),
+      // 纯文本最终回复经 normalizeAssistantContentForHistoryParity 规范化为字符串（与历史重建同形，保证 turn 边界前缀连续）
+      messages: expect.arrayContaining([expect.objectContaining({ role: 'assistant', content: longReply.trim() })]),
       surfaceSnapshot: expect.objectContaining({ messageTokens: expect.any(Number) })
     }))
     const input = boundary.mock.calls[0]?.[0]
