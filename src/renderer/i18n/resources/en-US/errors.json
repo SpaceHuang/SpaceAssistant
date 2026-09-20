@@ -47,5 +47,11 @@
   "OUTBOUND_QUEUE_FULL": "Message queue is full. Please try again later.",
   "OUTBOUND_API_KEY_MISSING": "API Key is not configured. Add it in Settings → Models first.",
   "OUTBOUND_CONTEXT_PRESSURE_80": "Context usage is above 80%. Consider starting a new session or compacting history.",
-  "OUTBOUND_WORKDIR_SWITCH_FAILED": "Failed to switch the working directory. Check the directory bound to this session."
+  "OUTBOUND_WORKDIR_SWITCH_FAILED": "Failed to switch the working directory. Check the directory bound to this session.",
+  "TURN_CONFIGURATION_INCOMPLETE": "The turn is still being configured. Try again shortly.",
+  "TURN_SESSION_NOT_FOUND": "Session not found or deleted.",
+  "TURN_USER_MESSAGE_MISSING": "The original message no longer exists and cannot be retried.",
+  "TURN_PREPARE_PERSISTENCE_MISSING": "Turn initialization persistence is missing. Try again.",
+  "TURN_EXECUTION_CONFIG_NOT_PREPARED": "Turn execution config is not ready. Try again.",
+  "TURN_VISION_MODEL_NOT_CONFIGURED": "No vision model available. Enable one in Settings."
 }

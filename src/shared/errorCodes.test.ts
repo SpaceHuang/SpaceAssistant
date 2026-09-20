@@ -65,3 +65,34 @@ describe('splitCodedError', () => {
     })
   })
 })
+
+describe('errors.json ↔ ErrorCodes 对齐(v3-N6/B7 防漏注册复发)', () => {
+  const CODE_SHAPE = /^[A-Z][A-Z0-9_]+$/
+  const registered = new Set<string>(Object.values(ErrorCodes))
+
+  async function topLevelCodeKeys(locale: 'zh-CN' | 'en-US'): Promise<string[]> {
+    const mod = (await import(`../renderer/i18n/resources/${locale}/errors.json`)) as { default: Record<string, unknown> }
+    const table = (mod as { default?: Record<string, unknown> }).default ?? (mod as Record<string, unknown>)
+    return Object.keys(table).filter((k) => CODE_SHAPE.test(k))
+  }
+
+  it('zh-CN 顶层错误码 key 全部已在 ErrorCodes 注册', async () => {
+    const keys = await topLevelCodeKeys('zh-CN')
+    expect(keys.length).toBeGreaterThan(0)
+    const unregistered = keys.filter((k) => !registered.has(k))
+    expect(unregistered).toEqual([])
+  })
+
+  it('en-US 顶层错误码 key 全部已在 ErrorCodes 注册', async () => {
+    const keys = await topLevelCodeKeys('en-US')
+    const unregistered = keys.filter((k) => !registered.has(k))
+    expect(unregistered).toEqual([])
+  })
+
+  it('zh-CN 与 en-US 的错误码 key 集合一致(无单侧漏译)', async () => {
+    const zh = new Set(await topLevelCodeKeys('zh-CN'))
+    const en = new Set(await topLevelCodeKeys('en-US'))
+    expect([...zh].filter((k) => !en.has(k))).toEqual([])
+    expect([...en].filter((k) => !zh.has(k))).toEqual([])
+  })
+})

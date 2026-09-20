@@ -47,5 +47,11 @@
   "OUTBOUND_QUEUE_FULL": "排队消息已达上限，请稍后再发送",
   "OUTBOUND_API_KEY_MISSING": "API Key 未配置，请先在「设置 → 模型」中补齐",
   "OUTBOUND_CONTEXT_PRESSURE_80": "上下文占用已超过 80%，建议开启新会话或压缩历史",
-  "OUTBOUND_WORKDIR_SWITCH_FAILED": "工作目录切换失败,请检查该会话绑定的工作目录配置"
+  "OUTBOUND_WORKDIR_SWITCH_FAILED": "工作目录切换失败，请检查该会话绑定的工作目录配置",
+  "TURN_CONFIGURATION_INCOMPLETE": "回合配置尚未完成，请稍后重试",
+  "TURN_SESSION_NOT_FOUND": "会话不存在或已被删除",
+  "TURN_USER_MESSAGE_MISSING": "原始消息已不存在，无法重试",
+  "TURN_PREPARE_PERSISTENCE_MISSING": "回合初始化持久化缺失，请重试",
+  "TURN_EXECUTION_CONFIG_NOT_PREPARED": "回合执行配置未就绪，请重试",
+  "TURN_VISION_MODEL_NOT_CONFIGURED": "没有可用的视觉模型，请在设置中启用视觉模型"
 }
