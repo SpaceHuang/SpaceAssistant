@@ -20,10 +20,16 @@ export function buildShellEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
   if (process.platform === 'win32') {
     env.Path = pathValue
     env.PATH = pathValue
-    env.SystemRoot = base.SystemRoot ?? ''
-    env.USERPROFILE = base.USERPROFILE ?? ''
-    env.LOCALAPPDATA = base.LOCALAPPDATA ?? ''
-    env.ComSpec = base.ComSpec ?? 'cmd.exe'
+    // 取到有效值才写（P0-0b 纵深防御）：空串与缺键同样导致宿主初始化失败（0x8009001D），
+    // 不再主动注入空值制造"看起来有值"的假象；上游过滤恰好删掉某键时从 process.env 兜底拿回。
+    const systemRoot = base.SystemRoot || process.env.SystemRoot
+    if (systemRoot) env.SystemRoot = systemRoot
+    const userProfile = base.USERPROFILE || process.env.USERPROFILE
+    if (userProfile) env.USERPROFILE = userProfile
+    const localAppData = base.LOCALAPPDATA || process.env.LOCALAPPDATA
+    if (localAppData) env.LOCALAPPDATA = localAppData
+    const comSpec = base.ComSpec || process.env.ComSpec
+    env.ComSpec = comSpec || 'cmd.exe'
   } else {
     env.PATH = pathValue
     env.HOME = base.HOME ?? ''
