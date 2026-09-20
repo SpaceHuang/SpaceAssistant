@@ -62,7 +62,7 @@ export type IrExpr =
   | { kind: 'set'; elts: IrExpr[] }
   | { kind: 'subscript'; value: IrExpr; index: IrExpr }
   | { kind: 'slice'; lower: IrExpr | null; upper: IrExpr | null; step: IrExpr | null }
-  | { kind: 'lambda'; params: string[]; body: IrExpr }
+  | { kind: 'lambda'; params: string[]; defaults: IrExpr[]; body: IrExpr }
   | { kind: 'await'; value: IrExpr }
   | { kind: 'starred'; value: IrExpr }
   | { kind: 'yield'; value: IrExpr | null }
@@ -84,7 +84,7 @@ export type IrStmt =
   | { kind: 'expr'; value: IrExpr }
   | { kind: 'if'; test: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
   | { kind: 'for'; target: string; iter: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
-  | { kind: 'while'; test: IrExpr; body: IrStmt[] }
+  | { kind: 'while'; test: IrExpr; body: IrStmt[]; orelse: IrStmt[] }
   | { kind: 'with'; items: Array<{ contextExpr: IrExpr; optionalVars: string[] }>; body: IrStmt[] }
   | {
       kind: 'try'
@@ -93,8 +93,9 @@ export type IrStmt =
       orelse: IrStmt[]
       finalbody: IrStmt[]
     }
-  | { kind: 'function_def'; name: string; params: string[]; body: IrStmt[]; decorators: IrExpr[]; isAsync: boolean }
-  | { kind: 'class_def'; name: string; body: IrStmt[]; decorators: IrExpr[] }
+  // P0-1 评审修复：defaults/bases 在定义/创建时求值——必须进 IR 被分析（禁止静默丢弃）
+  | { kind: 'function_def'; name: string; params: string[]; defaults: IrExpr[]; body: IrStmt[]; decorators: IrExpr[]; isAsync: boolean }
+  | { kind: 'class_def'; name: string; bases: IrExpr[]; body: IrStmt[]; decorators: IrExpr[] }
   | { kind: 'return'; value: IrExpr | null }
   | { kind: 'pass' }
   | { kind: 'break' }

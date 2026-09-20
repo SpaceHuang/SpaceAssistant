@@ -171,7 +171,14 @@ function adaptStmt(node: TsNode): IrStmt | null {
     case 'while_statement': {
       const cond = fieldNode(node, 'condition')
       const body = fieldNode(node, 'body')
-      return { kind: 'while', test: cond ? adaptExpr(cond) : { kind: 'none' }, body: body ? adaptBlock(body) : [] }
+      // P1-1 评审修复：while...else 的 else 体必须进 IR（for 已处理 alternative）
+      const alts = fieldNodes(node, 'alternative')
+      return {
+        kind: 'while',
+        test: cond ? adaptExpr(cond) : { kind: 'none' },
+        body: body ? adaptBlock(body) : [],
+        orelse: alts.length > 0 ? adaptAlternatives(alts) : []
+      }
     }
     case 'with_statement': {
       const body = fieldNode(node, 'body')
@@ -277,6 +284,8 @@ function adaptStmt(node: TsNode): IrStmt | null {
       if (returnType) for (const c of namedChildren(returnType)) adaptExpr(c)
       const typeParams = fieldNode(node, 'type_parameters')
       if (typeParams) for (const c of namedChildren(typeParams)) adaptExpr(c)
+      // P0-1 评审修复：默认参数值在定义时求值——递归进 IR（禁止静默丢弃）
+      const defaults = params ? collectParamDefaults(params) : []
       // async def：tree-sitter 产出 function_definition，其首个子节点为匿名 'async' token
       const first = node.child(0)
       const isAsync = first?.type === 'async'
@@ -284,6 +293,7 @@ function adaptStmt(node: TsNode): IrStmt | null {
         kind: 'function_def',
         name: name ? nodeText(name) : '',
         params: params ? collectParamNames(params) : [],
+        defaults,
         body: body ? adaptBlock(body) : [],
         decorators: decorators.map((d) => adaptDecorator(d)),
         isAsync
@@ -293,9 +303,23 @@ function adaptStmt(node: TsNode): IrStmt | null {
       const name = fieldNode(node, 'name')
       const body = fieldNode(node, 'body')
       const decorators = fieldNodes(node, 'decorator')
+      // P0-1 评审修复：基类/关键字参数表达式在 class 创建时求值——递归进 IR
+      const bases: IrExpr[] = []
+      const argsNode = fieldNode(node, 'arguments') ?? namedChildren(node).find((c) => c.type === 'argument_list')
+      if (argsNode) {
+        for (const child of namedChildren(argsNode)) {
+          if (child.type === 'keyword_argument') {
+            const value = fieldNode(child, 'value')
+            if (value) bases.push(adaptExpr(value))
+          } else {
+            bases.push(adaptExpr(child))
+          }
+        }
+      }
       return {
         kind: 'class_def',
         name: name ? nodeText(name) : '',
+        bases,
         body: body ? adaptBlock(body) : [],
         decorators: decorators.map((d) => adaptDecorator(d))
       }
@@ -391,6 +415,18 @@ function paramName(node: TsNode): string {
     default:
       throw new IrCoverageError(node.type, 'parameter name')
   }
+}
+
+/** default_parameter / typed_default_parameter 的默认值表达式（定义时求值，P0-1）。 */
+function collectParamDefaults(paramsNode: TsNode): IrExpr[] {
+  const defaults: IrExpr[] = []
+  for (const child of namedChildren(paramsNode)) {
+    if (child.type === 'default_parameter' || child.type === 'typed_default_parameter') {
+      const value = fieldNode(child, 'value')
+      if (value) defaults.push(adaptExpr(value))
+    }
+  }
+  return defaults
 }
 
 function assignTargetName(target: TsNode): string {
@@ -618,6 +654,7 @@ function adaptExpr(node: TsNode): IrExpr {
       return {
         kind: 'lambda',
         params: params ? collectParamNames(params) : [],
+        defaults: params ? collectParamDefaults(params) : [],
         body: body ? adaptExpr(body) : { kind: 'none' }
       }
     }

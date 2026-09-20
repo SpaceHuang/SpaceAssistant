@@ -480,12 +480,16 @@ class Analyzer {
       }
       if (stmt.kind === 'function_def') {
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
+        // P0-1 评审修复：默认参数值在 def 定义时真实执行——必须分析
+        for (const dv of stmt.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
         // 函数体在定义作用域内静态可见：递归捕获（禁止 def 内危险调用逃逸）
         this.walkStmts(stmt.body, createScope(scope), stmtIndex)
         continue
       }
       if (stmt.kind === 'class_def') {
         for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
+        // P0-1 评审修复：基类/关键字参数表达式在 class 创建时真实执行——必须分析
+        for (const b of stmt.bases) this.analyzeExpr(b, scope, decodeBindings, stmtIndex)
         this.walkStmts(stmt.body, createScope(scope), stmtIndex)
         continue
       }
@@ -597,6 +601,8 @@ class Analyzer {
       return
     }
     if (expr.kind === 'lambda') {
+      // P0-1 评审修复：lambda 默认值在定义时真实执行——必须分析
+      for (const dv of expr.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.body, scope, decodeBindings, stmtIndex)
       return
     }

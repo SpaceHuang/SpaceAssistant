@@ -151,6 +151,16 @@ describe('scriptGolden（Python 判定基线，P1-T0/P1-T5）', () => {
       }
 
       if (drift.length > 0) {
+        // P1-7 评审修复：硬禁令不可被白名单豁免——非 A-fail 基线的 verdict 弱化
+        //（真实危险识别不得降级；A-fail 是解析失败兜底，其消失属改善可登记）。
+        const rank: Record<string, number> = { allow: 0, ask: 1, deny: 2 }
+        const isAFailBaseline = baseline.patterns.includes('A-fail')
+        if (
+          !isAFailBaseline &&
+          (rank[current.verdict] ?? 1) < (rank[baseline.verdict] ?? 1)
+        ) {
+          throw new Error(`Golden HARD-FAIL for ${sample.id}: 非 A-fail 基线 verdict 弱化（禁止，白名单不可豁免）: ${baseline.verdict} -> ${current.verdict}`)
+        }
         const accepted = ACCEPTED_DRIFT[sample.id]
         if (accepted) {
           console.warn(`[scriptGolden] accepted drift for ${sample.id}: ${drift.join('; ')} — ${accepted}`)

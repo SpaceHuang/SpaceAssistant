@@ -25,7 +25,8 @@ function expandHomeTilde(target: string): string {
 export function matchPsDangerousPatterns(
   facts: PsCommandFacts,
   userDataDir?: string,
-  customSensitivePrefixes?: string[]
+  customSensitivePrefixes?: string[],
+  platform: 'win32' | 'posix' = process.platform === 'win32' ? 'win32' : 'posix'
 ): PsPatternHit | null {
   const hits: PsPatternHit[] = []
 
@@ -71,7 +72,7 @@ export function matchPsDangerousPatterns(
     for (const r of cmd.redirects) {
       if (!r.target) continue
       const expanded = expandHomeTilde(r.target)
-      if (isSensitivePath(normalizeWindowsPath(expanded), userDataDir, customSensitivePrefixes)) {
+      if (isSensitivePath(normalizeWindowsPath(expanded), userDataDir, customSensitivePrefixes, platform)) {
         hits.push({ id: 'ps-redirect-sensitive', verdict: 'ask', reason: `重定向目标为敏感路径（${r.target}），需人工确认` })
       }
     }

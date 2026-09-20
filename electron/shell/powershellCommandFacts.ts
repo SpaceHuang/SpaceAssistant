@@ -76,10 +76,22 @@ export function extractPowershellCommandFacts(source: string): PsCommandFacts {
   const outcome = scriptParserService.parse('powershell', source)
   if (!outcome.ok) return emptyFacts(false)
   try {
+    return adaptPowershellTree(outcome.tree)
+  } catch {
+    // P1-6 评审修复：TS 侧递归 walker 深嵌套（RangeError 等）→ ok:false（fail-closed），
+    // 禁止异常穿透门控打掉整轮工具循环。
+    return emptyFacts(false, ['extract:internal-error'])
+  } finally {
+    outcome.tree.delete()
+  }
+}
+
+function adaptPowershellTree(tree: import('./scriptIr/types').TsTree): PsCommandFacts {
+  {
     const ctx: Ctx = { substitutions: [], comments: [], unresolved: [] }
     const body: Body = { commands: [], pipelines: [], lists: [], connectorFlow: [] }
-    collectComments(outcome.tree.rootNode, ctx)
-    walkStatementList(outcome.tree.rootNode, ctx, body)
+    collectComments(tree.rootNode, ctx)
+    walkStatementList(tree.rootNode, ctx, body)
     return {
       ok: true,
       commands: body.commands,
@@ -90,8 +102,6 @@ export function extractPowershellCommandFacts(source: string): PsCommandFacts {
       comments: ctx.comments,
       unresolved: ctx.unresolved
     }
-  } finally {
-    outcome.tree.delete()
   }
 }
 
@@ -125,7 +135,7 @@ function walkStatementList(node: TsNode, ctx: Ctx, body: Body): void {
       default:
         // 赋值/语句级构造：提取其中的命令与替换，语句本体保守入 unresolved
         ctx.unresolved.push(`${child.type}:${child.text.slice(0, 40)}`)
-        collectSubstitutions(child, ctx)
+        collectSubstitutions(child, ctx, body)
         collectCommandNames(child, ctx, body)
     }
   }
@@ -148,7 +158,7 @@ function adaptPipeline(node: TsNode, ctx: Ctx, body: Body): void {
         } else if (seg.isNamed) {
           // 非命令语句（赋值/语句级构造）：显式 unresolved（不静默丢弃）
           ctx.unresolved.push(`${seg.type}:${seg.text.slice(0, 40)}`)
-          collectSubstitutions(seg, ctx)
+          collectSubstitutions(seg, ctx, body)
         }
       }
     } else if (child.type === 'pipeline_chain_tail') {
@@ -159,9 +169,11 @@ function adaptPipeline(node: TsNode, ctx: Ctx, body: Body): void {
         }
       }
     } else if (child.type !== 'pipeline_chain') {
-      // 非管道链语句（赋值/语句级构造）：显式 unresolved（不静默丢弃）
+      // 非管道链语句（赋值/语句级构造）：显式 unresolved（不静默丢弃）；
+      // P1-3 评审修复：RHS 内的真实命令仍提取进 facts.commands
       ctx.unresolved.push(`${child.type}:${child.text.slice(0, 40)}`)
-      collectSubstitutions(child, ctx)
+      collectCommandNames(child, ctx, body)
+      collectSubstitutions(child, ctx, body)
     }
   }
   if (segments.length > 1) body.pipelines.push({ segments })
@@ -169,7 +181,24 @@ function adaptPipeline(node: TsNode, ctx: Ctx, body: Body): void {
 
 function adaptCommand(node: TsNode, ctx: Ctx, body: Body): void {
   const nameNode = namedChildren(node).find((c) => c.type === 'command_name')
-  const name = nameNode?.text ?? ''
+  let name = nameNode?.text ?? ''
+  // P1-2 评审修复：& "exe" / . .\pwn.ps1 的命令名是 command 顶层节点 command_name_expr
+  //（调用操作符 & / 点源 . 之后无 command_name 包裹）——提取其文本作为命令事实；
+  // 含 script_block 时（& { ... }）内部语句递归提取；无法确定 name 时整条进 unresolved。
+  if (!name) {
+    const nameExpr = namedChildren(node).find((c) => c.type === 'command_name_expr')
+    if (nameExpr) {
+      const inner = namedChildren(nameExpr)[0]
+      if (inner?.type === 'script_block_expression') {
+        walkStatementList(inner, ctx, body)
+      }
+      name = nameExpr.text.trim()
+      if (!name) {
+        ctx.unresolved.push(`command_name_expr:${node.text.slice(0, 40)}`)
+        return
+      }
+    }
+  }
   const fact: PsCommandFact = { name, args: [], redirects: [], assignments: [] }
   body.commands.push(fact)
   const elements = namedChildren(node).find((c) => c.type === 'command_elements')
@@ -185,7 +214,7 @@ function adaptCommand(node: TsNode, ctx: Ctx, body: Body): void {
       case 'string':
       case 'number':
         fact.args.push(el.text)
-        collectSubstitutions(el, ctx)
+        collectSubstitutions(el, ctx, body)
         break
       case 'redirection': {
         const r = adaptRedirection(el)
@@ -196,7 +225,7 @@ function adaptCommand(node: TsNode, ctx: Ctx, body: Body): void {
       case 'member_access':
       case 'unary_expression':
         fact.args.push(el.text)
-        collectSubstitutions(el, ctx)
+        collectSubstitutions(el, ctx, body)
         break
       default:
         fact.args.push(el.text)
@@ -213,14 +242,21 @@ function adaptRedirection(node: TsNode): PsRedirectFact | null {
   return { op, target }
 }
 
-function collectSubstitutions(node: TsNode, ctx: Ctx): void {
+function collectSubstitutions(node: TsNode, ctx: Ctx, body: Body): void {
   switch (node.type) {
     case 'sub_expression':
     case 'parenthesized_expression': {
       if (node.type === 'sub_expression' || node.text.startsWith('$(')) {
         ctx.substitutions.push({ kind: 'sub-expression', inner: node.text })
       }
-      for (const child of namedChildren(node)) collectSubstitutions(child, ctx)
+      // P1-3 评审修复：子表达式内部的真实命令必须进 facts.commands（matchPsDangerousPatterns 只遍历 commands）
+      for (const child of namedChildren(node)) {
+        if (child.type === 'statement_list' || child.type === 'pipeline') {
+          walkStatementList(child, ctx, body)
+        } else {
+          collectSubstitutions(child, ctx, body)
+        }
+      }
       break
     }
     case 'variable':
@@ -228,9 +264,15 @@ function collectSubstitutions(node: TsNode, ctx: Ctx): void {
       break
     case 'script_block_expression':
       ctx.substitutions.push({ kind: 'script-block', inner: node.text })
+      // 脚本块内部命令（& { ... } / { Remove-Item ... }）同样进 facts
+      for (const child of namedChildren(node)) {
+        if (child.type === 'statement_list' || child.type === 'pipeline') {
+          walkStatementList(child.type === 'statement_list' ? child : child, ctx, body)
+        } else collectSubstitutions(child, ctx, body)
+      }
       break
     default:
-      for (const child of namedChildren(node)) collectSubstitutions(child, ctx)
+      for (const child of namedChildren(node)) collectSubstitutions(child, ctx, body)
   }
 }
 

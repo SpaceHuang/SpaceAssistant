@@ -96,10 +96,10 @@ function tokenizeSegment(segment: string): string[] {
   return tokens
 }
 
-function isOutsideWorkDir(workDir: string, resolved: string): boolean {
-  const base = path.resolve(workDir)
-  const rel = path.relative(base, path.resolve(resolved))
-  return rel.startsWith('..') || path.isAbsolute(rel)
+function isOutsideWorkDir(workDir: string, resolved: string, pp: typeof path.win32 = path): boolean {
+  const base = pp.resolve(workDir)
+  const rel = pp.relative(base, pp.resolve(resolved))
+  return rel.startsWith('..') || pp.isAbsolute(rel)
 }
 
 export function detectOutsideWorkDirRisk(segment: string): boolean {
@@ -114,8 +114,14 @@ export async function verifyPathsInWorkDir(
   workDir: string,
   literals: ShellPathLiteral[],
   userDataDir?: string,
-  customSensitivePrefixes?: string[]
+  customSensitivePrefixes?: string[],
+  platform: 'win32' | 'posix' = process.platform === 'win32' ? 'win32' : 'posix'
 ): Promise<ShellPathVerdict> {
+  // P1-8 评审修复：路径语义显式平台化（Golden 跨平台录制/比对按样本 dialect 传 win32/posix）；
+  // 缺省宿主平台，生产行为不变。
+  const pp = platform === 'win32' ? path.win32 : path.posix
+  const isSensitivePlatform = (resolved: string) =>
+    isSensitivePath(resolved, userDataDir, customSensitivePrefixes, platform)
   const violations: ShellPathVerdict['violations'] = []
   const warnings: string[] = []
   const violationCodes: string[] = []
@@ -126,8 +132,8 @@ export async function verifyPathsInWorkDir(
     let resolved: string
     const pathToken = normalizeWindowsPath(lit.raw)
     try {
-      if (path.isAbsolute(pathToken) || path.isAbsolute(lit.raw)) {
-        resolved = path.resolve(pathToken.startsWith('//') && !pathToken.startsWith('//?') ? lit.raw : pathToken)
+      if (pp.isAbsolute(pathToken) || pp.isAbsolute(lit.raw)) {
+        resolved = pp.resolve(pathToken.startsWith('//') && !pathToken.startsWith('//?') ? lit.raw : pathToken)
       } else {
         resolved = resolveSafePath(workDir, pathToken)
       }
@@ -147,7 +153,7 @@ export async function verifyPathsInWorkDir(
       continue
     }
 
-    if (isOutsideWorkDir(workDir, resolved)) {
+    if (isOutsideWorkDir(workDir, resolved, pp)) {
       violations.push({
         code: 'PATH_OUTSIDE_WORKDIR',
         message: `命令包含工作目录外的路径：${lit.raw}`,
@@ -158,7 +164,7 @@ export async function verifyPathsInWorkDir(
       requiresRiskAck = true
     }
 
-    if (lit.kind === 'cd-target' && isOutsideWorkDir(workDir, resolved)) {
+    if (lit.kind === 'cd-target' && isOutsideWorkDir(workDir, resolved, pp)) {
       violations.push({
         code: 'CD_OUTSIDE_WORKDIR',
         message: `cd 目标不在工作目录内：${lit.raw}`,
@@ -169,7 +175,7 @@ export async function verifyPathsInWorkDir(
       requiresRiskAck = true
     }
 
-    if (isSensitivePath(resolved, userDataDir, customSensitivePrefixes)) {
+    if (isSensitivePlatform(resolved)) {
       violations.push({
         code: 'SENSITIVE_PATH',
         message: `命令涉及敏感路径：${lit.raw}（如密钥、凭据目录）`,
@@ -180,10 +186,10 @@ export async function verifyPathsInWorkDir(
       requiresRiskAck = true
     }
 
-    if (!path.isAbsolute(lit.raw)) {
+    if (!pp.isAbsolute(lit.raw)) {
       try {
         const real = await resolveSafePathReal(workDir, lit.raw)
-        if (isOutsideWorkDir(workDir, real)) {
+        if (isOutsideWorkDir(workDir, real, pp)) {
           violations.push({
             code: 'SYMLINK_OUTSIDE',
             message: `符号链接解析后指向工作目录外：${lit.raw}`,
@@ -216,7 +222,8 @@ export async function analyzeSegmentPaths(
   workDir: string,
   segments: string[],
   userDataDir?: string,
-  customSensitivePrefixes?: string[]
+  customSensitivePrefixes?: string[],
+  platform: 'win32' | 'posix' = process.platform === 'win32' ? 'win32' : 'posix'
 ): Promise<{ literals: ShellPathLiteral[]; pathVerdict: ShellPathVerdict }> {
   const literals: ShellPathLiteral[] = []
   for (let i = 0; i < segments.length; i++) {
@@ -226,7 +233,7 @@ export async function analyzeSegmentPaths(
     }
   }
 
-  const pathVerdict = await verifyPathsInWorkDir(workDir, literals, userDataDir, customSensitivePrefixes)
+  const pathVerdict = await verifyPathsInWorkDir(workDir, literals, userDataDir, customSensitivePrefixes, platform)
 
   for (const seg of segments) {
     if (detectOutsideWorkDirRisk(seg)) {

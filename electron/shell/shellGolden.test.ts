@@ -53,73 +53,103 @@ type ShellGoldenBaseline = {
 // P2-T5 登记表：经评审登记为「接受」的漂移 id → 处置结论（逐条证据见评审文档 Bash 段）。
 // 约束：verdict 弱化（allow/ask 降级）、eligible false→true 的静默升级绝不入白名单；
 // b40-b42 的 trusted eligible 翻转在 bashPathFork.test.ts 成对断言并登记论证。
-const SHELL_ACCEPTED_DRIFT: Record<string, string> = {
-    'b06-base64-decode-exec': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b12-semi-list': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b13-dquote': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b14-squote': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b15-mixed-quote': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b16-escaped-quote': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b18-assign-prefix': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b19-assign-echo-var': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b21-cd-dotdot': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b22-redirect-abs': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b23-redirect-append-rel': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b24-redirect-input': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b25-redirect-stderr': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b26-cmd-subst': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b27-backtick-subst': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b28-process-subst': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b30-var-brace': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b31-export-path': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b32-escape-space': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b33-printf-escapes': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b34-unicode-quote': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b35-crlf': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b36-unclosed-quote': '接受：畸形/截断命令旧实现落 ask（分段解析不报错），切换后 tree parse_error → deny 兜底（fail-closed，变严方向）',
-    'b37-trailing-pipe': '接受：畸形/截断命令旧实现落 ask（分段解析不报错），切换后 tree parse_error → deny 兜底（fail-closed，变严方向）',
-    'b38-leading-and': '接受：畸形/截断命令旧实现落 ask（分段解析不报错），切换后 tree parse_error → deny 兜底（fail-closed，变严方向）',
-    'b39-truncated-subst': '接受：畸形/截断命令旧实现落 ask（分段解析不报错），切换后 tree parse_error → deny 兜底（fail-closed，变严方向）',
-    'b40-bare-paren-echo': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b41-bare-paren-grep': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b42-bare-paren-text': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b43-redirect-sensitive': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',
-    'b46-eval-var': '接受：旧 partial 源于引号内元字符误报启发式（shell-control-flow）；语法树完整解析后 complete 化，路径安全面由树事实增强（verifyPathsInWorkDir 只增不减）覆盖；desktop/remote 判定不弱化',    'p02-pipeline-foreach': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    'p03-invoke-expression': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    'p04-iex-cradle': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    'p07-here-string-outfile': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    'p08-subexpression': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    'p09-backtick-continuation': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    'p10-set-content': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-04-dquote-unicode': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-05-squote': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-09-redirect': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-10-foreach-pipe': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-12-variable-assign': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-13-if-statement': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-14-member-call': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-15-where-object': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-16-param-colon': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-17-double-quoted-var': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-20-semicolon-list': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't1-22-string-concat-arg': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-01-class-def': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-02-nested-index': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-03-backtick-lead': 'P3 接受：畸形 PS 命令 tree parse_error → deny 兜底（fail-closed 变严）',
-    't2-04-nested-scriptblock': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-05-type-literal': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-06-cast-generic': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-08-multiline-pipe': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-10-double-quoted-here': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-11-switch-statement': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-12-add-range-step': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-13-enum-member-access': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-14-nested-hashtable': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-15-sub-expression-in-string': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-16-array-subexpression': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-17-param-block': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-19-method-chaining': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
-    't2-20-using-namespace': 'P3 接受：PS 语法级树事实分叉——旧字符启发式 partial → complete 化（operations/paths 形态精确化）；路径安全面由树事实增强只增不减覆盖；无 eligible 静默升级（已核验）',
+// P2/P3-T5/T6 评审登记表（类别化，P1-7 评审修复）：白名单只豁免「登记过的具体类别」；
+// 三类硬禁令不可豁免（见比对逻辑）：verdict 弱化、signature 非拆分变化、eligible false→true。
+// verdictStricter：判定变严；factsPrecision：facts/analysis 形态精确化；signatureSplit：显式登记的签名等价类拆分。
+const SHELL_ACCEPTED_DRIFT: Record<string, { verdictStricter?: string; factsPrecision?: string; signatureSplit?: string }> = {
+  'b04-curl-pipe-bash': { factsPrecision: '同 b06（URL 参数已排除路径增强误报）' },
+  'b05-wget-pipe-sh': { factsPrecision: '同 b06（URL 参数已排除路径增强误报）' },
+  'b07-dd-devsda': { factsPrecision: '树事实路径增强捕获 dd 的 /dev/zero→/dev/sda 写入违规（旧实现漏检，violations 新增=变严；verdict 保持 deny 不变）' },
+  'b09-cat-pipe-grep': { factsPrecision: '同 b06；树事实增强额外捕获 /etc/passwd 读取违规（posix /etc 敏感前缀，violations 新增=变严）' },
+  'b45-pipe-to-python': { factsPrecision: '同 b06（URL 参数已排除路径增强误报）' },
+  'b06-base64-decode-exec': { factsPrecision: '旧 partial 源于引号内元字符误报启发式；语法树完整解析后 complete 化；路径安全面由树事实增强只增不减覆盖' },
+  'b12-semi-list': { factsPrecision: '同 b06' },
+  'b13-dquote': { factsPrecision: '同 b06' },
+  'b14-squote': { factsPrecision: '同 b06' },
+  'b15-mixed-quote': { factsPrecision: '同 b06' },
+  'b16-escaped-quote': { factsPrecision: '同 b06' },
+  'b18-assign-prefix': { factsPrecision: '同 b06' },
+  'b19-assign-echo-var': { factsPrecision: '同 b06' },
+  'b21-cd-dotdot': { factsPrecision: '同 b06' },
+  'b22-redirect-abs': { factsPrecision: '同 b06' },
+  'b23-redirect-append-rel': { factsPrecision: '同 b06' },
+  'b24-redirect-input': { factsPrecision: '同 b06' },
+  'b25-redirect-stderr': { factsPrecision: '同 b06' },
+  'b26-cmd-subst': { factsPrecision: '同 b06' },
+  'b27-backtick-subst': { factsPrecision: '同 b06' },
+  'b28-process-subst': { factsPrecision: '同 b06' },
+  'b29-var-home': { factsPrecision: '同 b06' },
+  'b30-var-brace': { factsPrecision: '同 b06' },
+  'b31-export-path': { factsPrecision: '同 b06' },
+  'b32-escape-space': { factsPrecision: '同 b06' },
+  'b33-printf-escapes': { factsPrecision: '同 b06' },
+  'b34-unicode-quote': { factsPrecision: '同 b06' },
+  'b35-crlf': { factsPrecision: '同 b06' },
+  'b40-bare-paren-echo': { factsPrecision: '发现 H 锚点：complete 化；trusted eligible 翻转已在 bashPathFork 成对断言并登记论证' },
+  'b41-bare-paren-grep': { factsPrecision: '发现 H 锚点：complete 化' },
+  'b42-bare-paren-text': { factsPrecision: '发现 H 锚点：complete 化' },
+  'b43-redirect-sensitive': { factsPrecision: '同 b06（敏感路径由 path-target 与路径增强双覆盖）' },
+  'b44-cat-shadow': { factsPrecision: '同 b06' },
+  'b46-eval-var': { factsPrecision: '同 b06' },
+  'b47-glob-star': { factsPrecision: '同 b06' },
+  'b36-unclosed-quote': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化', signatureSplit: '签名空折叠缺陷修复（P3-T4）：未闭合引号不再折叠为空签名——旧实现全部失败输入塌缩为同一空串等价类，修复为拆分（方向安全）' },
+  'b37-trailing-pipe': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化' },
+  'b38-leading-and': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化' },
+  'b39-truncated-subst': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化' },
+  't2-03-backtick-lead': { verdictStricter: '上游已知缺陷形态 ERROR → deny 兜底（fail-closed 变严）', factsPrecision: 'PS 语法级 facts 形态变化' },
+  'p01-get-childitem': { factsPrecision: 'PS 语法级树事实分叉：operations/paths/connectors 按语法结构精确化（P3-T6 登记）' },
+  'p02-pipeline-foreach': { factsPrecision: '同 p01' },
+  'p03-invoke-expression': { factsPrecision: '同 p01' },
+  'p04-iex-cradle': { verdictStricter: 'P0-2 修复后 ps-iex-cradle 模式真实生效：ask → deny（变严）', factsPrecision: '同 p01' },
+  'p05-encoded-command': { factsPrecision: '同 p01' },
+  'p06-remove-item-recurse': { verdictStricter: 'P0-2 修复后 ps-destructive 模式真实生效：ask → deny（变严）', factsPrecision: '同 p01' },
+  'p07-here-string-outfile': { factsPrecision: '同 p01' },
+  'p08-subexpression': { factsPrecision: '同 p01' },
+  'p09-backtick-continuation': { factsPrecision: '同 p01' },
+  'p10-set-content': { factsPrecision: '同 p01' },
+  'p11-sort-pipeline': { factsPrecision: '同 p01' },
+  'p12-format-volume': { verdictStricter: 'P0-2 修复后 ps-destructive 模式真实生效：ask → deny（变严）', factsPrecision: '同 p01' },
+  't1-01-get-date': { factsPrecision: '同 p01' },
+  't1-02-param-value': { factsPrecision: '同 p01' },
+  't1-03-flag-equals': { factsPrecision: '同 p01' },
+  't1-04-dquote-unicode': { factsPrecision: '同 p01' },
+  't1-05-squote': { factsPrecision: '同 p01' },
+  't1-06-var-member': { factsPrecision: '同 p01' },
+  't1-07-and-list': { factsPrecision: '同 p01' },
+  't1-08-or-list': { factsPrecision: '同 p01' },
+  't1-09-redirect': { factsPrecision: '同 p01' },
+  't1-10-foreach-pipe': { factsPrecision: '同 p01' },
+  't1-11-splatting': { factsPrecision: '同 p01' },
+  't1-12-variable-assign': { factsPrecision: '同 p01' },
+  't1-13-if-statement': { factsPrecision: '同 p01' },
+  't1-14-member-call': { factsPrecision: '同 p01' },
+  't1-15-where-object': { factsPrecision: '同 p01' },
+  't1-16-param-colon': { factsPrecision: '同 p01' },
+  't1-17-double-quoted-var': { factsPrecision: '同 p01' },
+  't1-18-single-dash-flag': { factsPrecision: '同 p01' },
+  't1-19-negative-number-param': { factsPrecision: '同 p01' },
+  't1-20-semicolon-list': { factsPrecision: '同 p01' },
+  't1-21-cmdlet-format': { factsPrecision: '同 p01' },
+  't1-22-string-concat-arg': { factsPrecision: '同 p01' },
+  't2-01-class-def': { factsPrecision: '同 p01' },
+  't2-02-nested-index': { factsPrecision: '同 p01' },
+  't2-04-nested-scriptblock': { factsPrecision: '同 p01' },
+  't2-05-type-literal': { factsPrecision: '同 p01' },
+  't2-06-cast-generic': { factsPrecision: '同 p01' },
+  't2-07-range-operator': { factsPrecision: '同 p01' },
+  't2-08-multiline-pipe': { factsPrecision: '同 p01' },
+  't2-09-dollar-dollar': { factsPrecision: '同 p01' },
+  't2-10-double-quoted-here': { factsPrecision: '同 p01' },
+  't2-11-switch-statement': { factsPrecision: '同 p01' },
+  't2-12-add-range-step': { factsPrecision: '同 p01' },
+  't2-13-enum-member-access': { factsPrecision: '同 p01' },
+  't2-14-nested-hashtable': { factsPrecision: '同 p01' },
+  't2-15-sub-expression-in-string': { factsPrecision: '同 p01' },
+  't2-16-array-subexpression': { factsPrecision: '同 p01' },
+  't2-17-param-block': { factsPrecision: '同 p01' },
+  't2-18-filter-left': { factsPrecision: '同 p01' },
+  't2-19-method-chaining': { factsPrecision: '同 p01' },
+  't2-20-using-namespace': { factsPrecision: '同 p01' }
 }
 
 function loadSamples(): Array<{ id: string; dialect: string; code: string }> {
@@ -211,7 +241,12 @@ function normalizePaths(value: unknown): unknown {
   return value
 }
 
-describe('shellGolden（Shell 判定/签名/facts/免确认资格基线，P2-T0/P2-T5）', () => {
+// P1-8 评审处置：路径判定语义（node:path / pathSecurity resolveSafePath）与宿主平台耦合，
+// 全链路参数化需重构 pathSecurity，超出本次范围。Golden 固定在 win32 运行（录制平台），
+// CI 由新增的 windows golden job 覆盖（ci.yml），非 win32 宿主跳过。
+const describeWin = process.platform === 'win32' ? describe : describe.skip
+
+describeWin('shellGolden（Shell 判定/签名/facts/免确认资格基线，P2-T0/P2-T5）', () => {
   const samples = loadSamples()
 
   it('样本集规模：bash ≥ 40（含裸括号 ≥3）+ PS ≥ 10', () => {
@@ -266,9 +301,20 @@ describe('shellGolden（Shell 判定/签名/facts/免确认资格基线，P2-T0/
 
       if (drift.length > 0) {
         const accepted = SHELL_ACCEPTED_DRIFT[sample.id]
+        // P1-7 评审修复：白名单按类别豁免。硬禁令（verdict 弱化 / eligible false→true）已在上方直接 throw，
+        // 不受白名单影响；signature 仅接受显式 signatureSplit；verdict 变严需 verdictStricter；facts/precheck 需 factsPrecision。
         if (accepted) {
-          console.warn(`[shellGolden] accepted drift for ${sample.id}: ${drift.join(' | ')} — ${accepted}`)
-          return
+          const covered = drift.every((d) => {
+            if (d.startsWith('verdict 变严')) return Boolean(accepted.verdictStricter)
+            if (d.startsWith('signature')) return Boolean(accepted.signatureSplit)
+            if (d.startsWith('analysis') || d.startsWith('facts') || d.startsWith('precheck')) return Boolean(accepted.factsPrecision)
+            return false
+          })
+          if (covered) {
+            console.warn(`[shellGolden] accepted drift for ${sample.id}（类别化豁免，详见评审文档）`)
+            return
+          }
+          throw new Error(`Shell Golden drift for ${sample.id}: 白名单类别未覆盖实际漂移（登记与实现不符）: ${drift.join(' | ')}`)
         }
         throw new Error(`Shell Golden drift for ${sample.id}: ${drift.join(' | ')}`)
       }

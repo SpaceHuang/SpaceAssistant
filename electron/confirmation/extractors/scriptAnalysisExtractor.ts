@@ -50,9 +50,26 @@ export function extractScriptSignals(
   if (parseFailed || !ir) {
     signals.push({ kind: 'extraction-failed', reason: 'parse_error' })
   } else {
-    const networkPatterns = collectPatternHits(ir, {})
-      .filter((h) => NETWORK_PATTERN_IDS.has(h.pattern))
-      .map((h) => h.pattern)
+    // P2-1 评审修复：二次 hits 与第一次同输入，防御性兜底（若抛错按 extraction-failed 落人工，保持 fail-closed）
+    let networkPatterns: string[] = []
+    let hitsFailed = false
+    try {
+      networkPatterns = collectPatternHits(ir, {})
+        .filter((h) => NETWORK_PATTERN_IDS.has(h.pattern))
+        .map((h) => h.pattern)
+    } catch {
+      hitsFailed = true
+    }
+    if (hitsFailed) {
+      signals.push({ kind: 'extraction-failed', reason: 'pattern-hit-error' })
+      return {
+        signals,
+        summary: {
+          text: CONFIRMATION_LABELS.summarySuspiciousScript,
+          sections: analysis.patterns.length > 0 ? [{ label: '命中模式', value: analysis.patterns.join(', ') }] : []
+        }
+      }
+    }
     if (networkPatterns.length > 0) {
       signals.push({ kind: 'script-network', patterns: networkPatterns })
     }
