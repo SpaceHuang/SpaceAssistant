@@ -24,6 +24,7 @@ import { ProgressThrottle } from '../shell/progressThrottle'
 import { ExecutionLifecycle } from '../shell/executionLifecycle'
 import { ProcessSupervisor } from '../shell/processSupervisor'
 import { DialectRetryBreaker } from '../shell/dialectRetryBreaker'
+import { snapshotEnvForLog } from '../shell/envSnapshot'
 import { buildShellArgs, profileForPlatform } from '../shell/shellProfiles'
 import { cleanupExpiredOutputArtifacts } from '../shell/outputArtifactCleanup'
 import { SHELL_CASE_IDS } from '../shell/shellCaseIds'
@@ -185,6 +186,8 @@ export async function executePreparedShellExecution(
   const timeoutSec = prepared.timeoutMs / 1000
   const ioMax = prepared.ioMaxBytes
   const contract = prepared.profile.outputEncoding
+  // P0-D3 组 5（§5.4.3）：env 快照（键计数 + 哈希，值不落盘），与 run_script 的 finish 对齐后可双路径 diff
+  const envSnapshot = snapshotEnvForLog(prepared.environment)
   const spec: ShellSpawnSpec = {
     executable: prepared.spawnSpec.executable,
     args: [...prepared.spawnSpec.args],
@@ -505,6 +508,9 @@ export async function executePreparedShellExecution(
           // P0-B（D2）：诊断字段进入日志，宿主初始化类故障无需回到 events.jsonl 取证
           hresult,
           exitCodeAdvice: exitDetails?.advice,
+          envKeyCount: envSnapshot.keyCount,
+          envKeysSha256: envSnapshot.keysSha256,
+          envEntriesSha256: envSnapshot.entriesSha256,
           interrupted,
           timedOut,
           cancelled,

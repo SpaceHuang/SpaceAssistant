@@ -24,6 +24,8 @@ import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
 import { ProcessSupervisor } from '../shell/processSupervisor'
+import { snapshotEnvForLog } from '../shell/envSnapshot'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 import {
   classifyRipgrepSpawnError,
   inspectRipgrepBinary,
@@ -1222,6 +1224,25 @@ export const runScriptExecutor: ToolExecutor = {
     let stdout = ''
     let stderr = ''
     let timedOut = false
+    // P0-D3 组 1（§5.4.3 缺口）：run_script 此前没有执行期埋点，"成功路径"无事后证据。
+    // 事件字段与 shell.exec.* 对齐；code 传原始值、指纹化由投影层负责（评审观察项 5，
+    // 与 run_shell 的 command 同模式）；env 只留键计数与哈希（组 5）。
+    const scriptBaseLog = {
+      requestId: ctx.requestId,
+      sessionId: ctx.sessionId,
+      toolUseId: ctx.toolUseId,
+      code,
+      interpreter: path.basename(interpreter.command),
+      timeoutSec,
+      envKeyCount: 0,
+      envKeysSha256: '',
+      envEntriesSha256: ''
+    }
+    const envSnapshot = snapshotEnvForLog(env)
+    scriptBaseLog.envKeyCount = envSnapshot.keyCount
+    scriptBaseLog.envKeysSha256 = envSnapshot.keysSha256
+    scriptBaseLog.envEntriesSha256 = envSnapshot.entriesSha256
+    logAgentEvent('info', 'script.exec.start', scriptBaseLog)
     return await new Promise((resolve) => {
       const proc = spawn(py, ['-c', code], {
         cwd: ctx.workDir,
@@ -1229,6 +1250,7 @@ export const runScriptExecutor: ToolExecutor = {
         windowsHide: true,
         shell: false
       })
+      logAgentEvent('info', 'script.exec.spawned', { ...scriptBaseLog, pid: proc.pid ?? null })
       const supervisor = new ProcessSupervisor(proc, processTreeKiller)
       const onDataOut = (b: Buffer) => {
         stdout += stdoutDecoder.write(b)
@@ -1252,6 +1274,15 @@ export const runScriptExecutor: ToolExecutor = {
       proc.on('error', (err) => {
         clearTimeout(killTimer)
         ctx.signal.removeEventListener('abort', onAbort)
+        logAgentEvent('error', 'script.exec.finish', {
+          ...scriptBaseLog,
+          pid: proc.pid ?? null,
+          exitCode: null,
+          status: 'spawn_failed',
+          success: false,
+          error: 'SCRIPT_SPAWN_ERROR',
+          durationMs: Date.now() - started
+        })
         resolve({
           success: false,
           error: 'SCRIPT_SPAWN_ERROR',
@@ -1276,6 +1307,24 @@ export const runScriptExecutor: ToolExecutor = {
           status,
           terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : signal ? 'external_signal' : 'process_exit'
         }
+        // P0-D3 组 1：finish 与 shell.exec.finish 字段对齐（exitCode/status/字节口径/时长），
+        // 文本正文与秘密不落盘（allowlist 之外的 stdout/stderr 会被丢弃）。
+        logAgentEvent(status === 'succeeded' ? 'info' : 'warn', 'script.exec.finish', {
+          ...scriptBaseLog,
+          pid: proc.pid ?? null,
+          exitCode: signal ? null : code,
+          signal: signal ?? undefined,
+          status,
+          success: status === 'succeeded',
+          interrupted: ctx.signal.aborted,
+          timedOut,
+          cancelled: ctx.signal.aborted,
+          stdoutBytes: Buffer.byteLength(stdoutSafe.text, 'utf8'),
+          stderrBytes: Buffer.byteLength(stderrSafe.text, 'utf8'),
+          stdoutRedacted: stdoutSafe.redacted,
+          stderrRedacted: stderrSafe.redacted,
+          durationMs: Date.now() - started
+        })
         if (ctx.signal.aborted) {
           resolve({ success: false, error: 'SCRIPT_CANCELLED', userMessage: '用户取消执行', data, duration: Date.now() - started })
           return
