@@ -1,0 +1,91 @@
+{
+  "id": "t1-08-or-list",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "Get-Date",
+      "Write-Output fallback"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "Get-Date",
+          "args": [],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "Write-Output",
+          "args": [
+            "fallback"
+          ],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "||"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "Get-Date || Write-Output fallback",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "Get-Date",
+        "args": [],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "Write-Output",
+        "args": [
+          "fallback"
+        ],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "||"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

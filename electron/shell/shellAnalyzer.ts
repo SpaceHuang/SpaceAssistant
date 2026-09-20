@@ -1,5 +1,7 @@
 import { parseShellSegments, tokenizeSimpleCommand } from './shellCommandParser'
 import type { ShellDialect } from './shellProfiles'
+import { extractBashCommandFacts, type BashCommandFacts } from './bashCommandFacts'
+import { extractPowershellCommandFacts, type PsCommandFacts } from './powershellCommandFacts'
 
 export type ShellAnalysisCompleteness = 'complete' | 'partial'
 
@@ -23,7 +25,21 @@ export interface ShellFactAnalysis {
  * 只提取 Shell 事实，不进行 allow/deny/confirm 裁决。
  * 策略层必须消费此结果后独立决策，避免 parser 通过 verdict 反向控制授权。
  */
-export function analyzeShellFacts(command: string, dialect: ShellDialect): ShellFactAnalysis {
+export function analyzeShellFacts(
+  command: string,
+  dialect: ShellDialect,
+  preParsedTreeFacts?: BashCommandFacts | PsCommandFacts
+): ShellFactAnalysis {
+  // P2-T2（发现 B/E/H）+ P3-T5：dialect 入口分叉——语法级树事实产出 ShellFactAnalysis。
+  // preParsedTreeFacts 供 analyzeShellCommand 单次解析共享（恰好 1 次解析）。
+  if (dialect === 'posix-bash') {
+    const treeFacts = preParsedTreeFacts ?? extractBashCommandFacts(command)
+    return treeFactsToAnalysis(dialect, treeFacts)
+  }
+  if (dialect === 'windows-powershell') {
+    const treeFacts = preParsedTreeFacts ?? extractPowershellCommandFacts(command)
+    return treeFactsToAnalysis(dialect, treeFacts)
+  }
   const unresolved: string[] = []
   const analysisCommand = stripComments(command).replace(/[\r\n]+/g, ';')
   let segments: string[]
@@ -63,6 +79,44 @@ export function analyzeShellFacts(command: string, dialect: ShellDialect): Shell
     dialect, operations, connectors, paths, cwdChanges,
     analysisCompleteness: unresolved.length ? 'partial' : 'complete',
     unresolved
+  }
+}
+
+/** bash/PS 树事实 → ShellFactAnalysis 统一投影（commands 结构同构；cwd 动词按 dialect 匹配）。 */
+function treeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts | PsCommandFacts): ShellFactAnalysis {
+  if (!f.ok) {
+    return {
+      dialect, operations: [], connectors: [], paths: [], cwdChanges: [],
+      analysisCompleteness: 'partial',
+      unresolved: ['parse:tree-error']
+    }
+  }
+  const operations: ShellOperation[] = []
+  const paths: string[] = []
+  const cwdChanges: string[] = []
+  const stripQuotes = (t: string) => t.replace(/^["']+|["']+$/g, '')
+  const cwdVerbs = dialect === 'windows-powershell' ? ['cd', 'set-location', 'sl'] : ['cd']
+  for (const [index, cmd] of f.commands.entries()) {
+    if (!cmd.name) continue
+    operations.push({ verb: cmd.name, args: cmd.args, segmentIndex: index })
+    for (const arg of cmd.args) {
+      const bare = stripQuotes(arg)
+      if (/[\/]|^[A-Za-z]:/.test(bare)) paths.push(bare)
+    }
+    for (const r of cmd.redirects) {
+      const target = stripQuotes(r.target)
+      if (target && /[\/]|^[A-Za-z]:/.test(target)) paths.push(target)
+    }
+    if (cwdVerbs.includes(cmd.name.toLowerCase()) && cmd.args[0]) cwdChanges.push(stripQuotes(cmd.args[0]))
+  }
+  return {
+    dialect,
+    operations,
+    connectors: f.connectorFlow,
+    paths,
+    cwdChanges,
+    analysisCompleteness: f.unresolved.length === 0 ? 'complete' : 'partial',
+    unresolved: f.unresolved
   }
 }
 

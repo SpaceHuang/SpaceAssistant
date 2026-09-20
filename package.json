@@ -34,6 +34,7 @@
     "typecheck:shared": "node scripts/check-shared-config-types.mjs",
     "check:message-fact-ownership": "node scripts/check-message-fact-ownership.mjs",
     "check:no-nul": "node scripts/check-no-nul.mjs",
+    "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
     "probe:chat-ipc-transport": "electron scripts/probe-chat-ipc-transport.cjs",
     "probe:chat-business-ipc": "electron scripts/probe-chat-business-ipc.cjs",
@@ -82,6 +83,10 @@
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",
     "shiki": "^4.0.2",
+    "tree-sitter-bash": "0.25.1",
+    "tree-sitter-powershell": "0.26.4",
+    "tree-sitter-python": "0.25.0",
+    "web-tree-sitter": "0.27.0",
     "yaml": "^2.9.0",
     "zod": "^3.24.0"
   },
@@ -131,6 +136,10 @@
       {
         "from": "resources/tray",
         "to": "tray"
+      },
+      {
+        "from": "resources/tree-sitter",
+        "to": "tree-sitter"
       },
       {
         "from": "res/icons",
@@ -183,5 +192,13 @@
         "AppImage"
       ]
     }
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "sharp@0.33.5": true,
+    "@google/genai@1.52.0": true,
+    "bufferutil@4.1.0": true,
+    "protobufjs@7.6.5": true,
+    "electron@44.1.1": true
   }
 }

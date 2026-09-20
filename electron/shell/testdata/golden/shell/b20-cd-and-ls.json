@@ -1,0 +1,125 @@
+{
+  "id": "b20-cd-and-ls",
+  "dialect": "posix-bash",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "cd /tmp",
+      "ls"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/tmp",
+          "path": "/tmp",
+          "severity": "warning"
+        },
+        {
+          "code": "CD_OUTSIDE_<WORKDIR>",
+          "message": "cd 目标不在工作目录内：/tmp",
+          "path": "/tmp",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：/tmp",
+        "cd 目标不在工作目录内：/tmp"
+      ],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": true
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": false,
+      "warnings": [
+        "命令包含工作目录外的路径：/tmp",
+        "cd 目标不在工作目录内：/tmp"
+      ],
+      "scannedPaths": [
+        "/tmp",
+        "/tmp"
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "CD_OUTSIDE_<WORKDIR>"
+      ]
+    },
+    "facts": {
+      "dialect": "posix-bash",
+      "operations": [
+        {
+          "verb": "cd",
+          "args": [
+            "/tmp"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "ls",
+          "args": [],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "&&"
+      ],
+      "paths": [
+        "/tmp"
+      ],
+      "cwdChanges": [
+        "/tmp"
+      ],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "cd /tmp && ls",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "cd",
+        "args": [
+          "/tmp"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "ls",
+        "args": [],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "&&"
+    ],
+    "paths": [
+      "/tmp"
+    ],
+    "cwdChanges": [
+      "/tmp"
+    ],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

@@ -1,7 +1,12 @@
 /**
  * Python `run_script` content security analyzer.
- * Hand-written AST subset + string folding + import alias tracking.
+ * P1-T3 起：解析前端为 tree-sitter-python（ScriptParserService）+ scriptIr 适配器产出的
+ * 事实 IR；本文件保留 Analyzer（A0–A9/B1–B11）/ RemoteCertifier / 模式 ID 体系等全部
+ * 判定语义，消费对象自研 AST 换为 IR（§2.2 锚点契约逐条保持）。
  */
+import { scriptParserService } from './scriptParserService'
+import { adaptPythonModule, foldStringIr } from './scriptIr/pythonAdapter'
+import { IrCoverageError, type IrExpr, type IrModule, type IrStmt } from './scriptIr/types'
 
 export type ScriptVerdict = 'allow' | 'ask' | 'deny'
 
@@ -133,541 +138,33 @@ const VERDICT_RANK: Record<ScriptVerdict, number> = {
   deny: 2
 }
 
-// --- AST types ---
-
-export type Expr =
-  | { kind: 'string'; value: string }
-  | { kind: 'number'; value: string }
-  | { kind: 'name'; id: string }
-  | { kind: 'attr'; base: Expr; attr: string }
-  | { kind: 'call'; callee: Expr; args: Expr[]; kwargs: { name: string; value: Expr }[] }
-  | { kind: 'binop'; op: string; left: Expr; right: Expr }
-  | { kind: 'list'; elts: Expr[] }
-  | { kind: 'tuple'; elts: Expr[] }
-  | { kind: 'bool'; value: boolean }
-  | { kind: 'none' }
-
-export type Stmt =
-  | { kind: 'import'; names: { module: string; alias?: string }[] }
-  | { kind: 'from_import'; module: string; names: { name: string; alias?: string }[] }
-  | { kind: 'assign'; targets: string[]; value: Expr }
-  | { kind: 'expr'; value: Expr }
-  | { kind: 'if'; test: Expr; body: Stmt[]; orelse: Stmt[] }
-  | { kind: 'for'; target: string; iter: Expr; body: Stmt[]; orelse: Stmt[] }
-  | { kind: 'pass' }
-
-export interface ModuleAst {
-  body: Stmt[]
-}
-
-// --- Tokenizer ---
-
-type TokKind =
-  | 'ident'
-  | 'string'
-  | 'number'
-  | 'op'
-  | 'newline'
-  | 'indent'
-  | 'dedent'
-  | 'eof'
-
-interface Token {
-  kind: TokKind
-  value: string
-  line: number
-}
-
-function stripComments(source: string): string {
-  let out = ''
-  let i = 0
-  let quote: '"' | "'" | null = null
-  let triple = 0
-
-  while (i < source.length) {
-    const ch = source[i]!
-    if (triple > 0) {
-      out += ch
-      if (ch === quote) {
-        triple--
-        if (triple === 0) quote = null
-      }
-      i++
-      continue
-    }
-    if (quote) {
-      out += ch
-      if (ch === quote && source[i - 1] !== '\\') quote = null
-      i++
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      if (source.slice(i, i + 3) === ch.repeat(3)) {
-        quote = ch
-        triple = 2
-        out += ch.repeat(3)
-        i += 3
-        continue
-      }
-      quote = ch
-      out += ch
-      i++
-      continue
-    }
-    if (ch === '#') {
-      while (i < source.length && source[i] !== '\n') i++
-      continue
-    }
-    out += ch
-    i++
-  }
-  return out
-}
-
-function tokenize(source: string): Token[] {
-  const tokens: Token[] = []
-  const lines = stripComments(source).split('\n')
-  const indents: number[] = [0]
-  let lineNo = 1
-
-  for (const rawLine of lines) {
-    const line = rawLine.replace(/\r$/, '')
-    const trimmed = line.trim()
-    if (!trimmed) {
-      lineNo++
-      continue
-    }
-
-    const leading = line.match(/^\s*/)?.[0]?.length ?? 0
-    const curIndent = indents[indents.length - 1]!
-    if (leading > curIndent) {
-      indents.push(leading)
-      tokens.push({ kind: 'indent', value: '', line: lineNo })
-    } else {
-      while (leading < indents[indents.length - 1]!) {
-        indents.pop()
-        tokens.push({ kind: 'dedent', value: '', line: lineNo })
-      }
-    }
-
-    let i = 0
-    const push = (kind: TokKind, value: string) => tokens.push({ kind, value, line: lineNo })
-
-    while (i < line.length) {
-      const ch = line[i]!
-      if (ch === ' ' || ch === '\t') {
-        i++
-        continue
-      }
-      if ((ch === 'b' || ch === 'B') && (line[i + 1] === '"' || line[i + 1] === "'")) {
-        const quote = line[i + 1]!
-        let j = i + 2
-        let val = ''
-        while (j < line.length) {
-          if (line[j] === quote && line[j - 1] !== '\\') break
-          val += line[j]!
-          j++
-        }
-        if (j >= line.length) throw new ParseError('unterminated bytes literal', lineNo)
-        push('string', val)
-        i = j + 1
-        continue
-      }
-      if (ch === '"' || ch === "'") {
-        const quote = ch
-        let j = i + 1
-        let val = ''
-        if (line.slice(i, i + 3) === quote.repeat(3)) {
-          j = i + 3
-          const end = line.indexOf(quote.repeat(3), j)
-          if (end === -1) throw new ParseError('unterminated string', lineNo)
-          val = line.slice(j, end)
-          i = end + 3
-        } else {
-          while (j < line.length) {
-            if (line[j] === quote && line[j - 1] !== '\\') break
-            val += line[j]!
-            j++
-          }
-          if (j >= line.length) throw new ParseError('unterminated string', lineNo)
-          i = j + 1
-        }
-        push('string', val)
-        continue
-      }
-      if (/[0-9]/.test(ch)) {
-        let j = i
-        while (j < line.length && /[0-9.xXa-fA-F_]/.test(line[j]!)) j++
-        push('number', line.slice(i, j))
-        i = j
-        continue
-      }
-      if (/[A-Za-z_]/.test(ch)) {
-        let j = i
-        while (j < line.length && /[A-Za-z0-9_]/.test(line[j]!)) j++
-        push('ident', line.slice(i, j))
-        i = j
-        continue
-      }
-      const two = line.slice(i, i + 2)
-      if (two === '==' || two === '!=' || two === '<=' || two === '>=' || two === '+=' || two === '-=' || two === '**' || two === '//' || two === '<<' || two === '>>') {
-        push('op', two)
-        i += 2
-        continue
-      }
-      if ('()[]{},.:;+-*/%=<>&|@'.includes(ch)) {
-        push('op', ch)
-        i++
-        continue
-      }
-      throw new ParseError(`unexpected char ${ch}`, lineNo)
-    }
-
-    tokens.push({ kind: 'newline', value: '', line: lineNo })
-    lineNo++
-  }
-
-  while (indents.length > 1) {
-    indents.pop()
-    tokens.push({ kind: 'dedent', value: '', line: lineNo })
-  }
-  tokens.push({ kind: 'eof', value: '', line: lineNo })
-  return tokens
-}
-
-export class ParseError extends Error {
-  constructor(
-    message: string,
-    readonly line: number
-  ) {
-    super(message)
-    this.name = 'ParseError'
+/** 解析失败 / 服务未就绪（等价 parse 失败，§3 不变量 1(a)(b)）。 */
+export class ScriptParseUnavailableError extends Error {
+  constructor(public readonly reason: 'not_initialized' | 'parse_error') {
+    super(`script parse unavailable: ${reason}`)
+    this.name = 'ScriptParseUnavailableError'
   }
 }
 
-// --- Parser ---
-
-class Parser {
-  private pos = 0
-
-  constructor(private readonly tokens: Token[]) {}
-
-  parseModule(): ModuleAst {
-    const body = this.parseStmtList()
-    this.expect('eof')
-    return { body }
-  }
-
-  private peek(): Token {
-    return this.tokens[this.pos] ?? { kind: 'eof', value: '', line: 0 }
-  }
-
-  private advance(): Token {
-    return this.tokens[this.pos++] ?? { kind: 'eof', value: '', line: 0 }
-  }
-
-  private expect(kind: TokKind, value?: string): Token {
-    const t = this.advance()
-    if (t.kind !== kind || (value !== undefined && t.value !== value)) {
-      throw new ParseError(`expected ${kind}${value ? ` ${value}` : ''}`, t.line)
-    }
-    return t
-  }
-
-  private at(kind: TokKind, value?: string): boolean {
-    const t = this.peek()
-    return t.kind === kind && (value === undefined || t.value === value)
-  }
-
-  private skipNewlines(): void {
-    while (this.at('newline')) this.advance()
-  }
-
-  private parseStmtList(): Stmt[] {
-    const stmts: Stmt[] = []
-    this.skipNewlines()
-    while (!this.at('dedent') && !this.at('eof')) {
-      if (this.at('newline')) {
-        this.advance()
-        continue
-      }
-      stmts.push(this.parseStmt())
-      this.skipNewlines()
-    }
-    return stmts
-  }
-
-  private parseSuite(): Stmt[] {
-    if (this.at('newline')) {
-      this.advance()
-      this.expect('indent')
-      const body = this.parseStmtList()
-      if (this.at('dedent')) this.advance()
-      return body
-    }
-    return [this.parseSimpleStmt()]
-  }
-
-  private parseStmt(): Stmt {
-    if (this.at('ident', 'if')) return this.parseIf()
-    if (this.at('ident', 'for')) return this.parseFor()
-    if (this.at('ident', 'pass')) {
-      this.advance()
-      return { kind: 'pass' }
-    }
-    return this.parseSimpleStmt()
-  }
-
-  private parseIf(): Stmt {
-    this.advance()
-    const test = this.parseExpr()
-    const body = this.parseSuite()
-    let orelse: Stmt[] = []
-    this.skipNewlines()
-    if (this.at('ident', 'else')) {
-      this.advance()
-      orelse = this.parseSuite()
-    }
-    return { kind: 'if', test, body, orelse }
-  }
-
-  private parseFor(): Stmt {
-    this.advance()
-    const target = this.expect('ident').value
-    this.expect('ident', 'in')
-    const iter = this.parseExpr()
-    const body = this.parseSuite()
-    return { kind: 'for', target, iter, body, orelse: [] }
-  }
-
-  private parseSimpleStmt(): Stmt {
-    if (this.at('ident', 'import')) return this.parseImport()
-    if (this.at('ident', 'from')) return this.parseFromImport()
-
-    const expr = this.parseExpr()
-    if (this.at('op', '=')) {
-      this.advance()
-      const value = this.parseExpr()
-      const targets = this.exprToTargets(expr)
-      return { kind: 'assign', targets, value }
-    }
-    return { kind: 'expr', value: expr }
-  }
-
-  private exprToTargets(expr: Expr): string[] {
-    if (expr.kind === 'name') return [expr.id]
-    if (expr.kind === 'tuple') {
-      return expr.elts.filter((e): e is Extract<Expr, { kind: 'name' }> => e.kind === 'name').map((e) => e.id)
-    }
-    throw new ParseError('invalid assign target', this.peek().line)
-  }
-
-  private parseDottedName(): string {
-    let name = this.expect('ident').value
-    while (this.at('op', '.')) {
-      this.advance()
-      name += '.' + this.expect('ident').value
-    }
-    return name
-  }
-
-  private parseImport(): Stmt {
-    this.advance()
-    const names: { module: string; alias?: string }[] = []
-    do {
-      const module = this.parseDottedName()
-      let alias: string | undefined
-      if (this.at('ident', 'as')) {
-        this.advance()
-        alias = this.expect('ident').value
-      }
-      names.push({ module, alias })
-    } while (this.at('op', ',') && (this.advance(), true))
-    return { kind: 'import', names }
-  }
-
-  private parseFromImport(): Stmt {
-    this.advance()
-    const module = this.parseDottedName()
-    this.expect('ident', 'import')
-    const names: { name: string; alias?: string }[] = []
-    const first = this.expect('ident').value
-    if (first === '*') {
-      names.push({ name: '*' })
-    } else {
-      let name = first
-      let alias: string | undefined
-      if (this.at('ident', 'as')) {
-        this.advance()
-        alias = this.expect('ident').value
-      }
-      names.push({ name, alias })
-      while (this.at('op', ',')) {
-        this.advance()
-        name = this.expect('ident').value
-        alias = undefined
-        if (this.at('ident', 'as')) {
-          this.advance()
-          alias = this.expect('ident').value
-        }
-        names.push({ name, alias })
-      }
-    }
-    return { kind: 'from_import', module, names }
-  }
-
-  private parseExpr(): Expr {
-    return this.parseCompare()
-  }
-
-  private parseCompare(): Expr {
-    let left = this.parseBinOp(0)
-    while (this.at('op', '<') || this.at('op', '>') || this.at('op', '==') || this.at('op', '!=') || this.at('ident', 'in') || this.at('ident', 'is')) {
-      const op = this.advance().value
-      const right = this.parseBinOp(0)
-      left = { kind: 'call', callee: { kind: 'name', id: '__compare__' }, args: [left, { kind: 'string', value: op }, right], kwargs: [] }
-    }
-    return left
-  }
-
-  private parseBinOp(minPrec: number): Expr {
-    let left = this.parseUnary()
-    while (true) {
-      const t = this.peek()
-      if (t.kind !== 'op' || !'+-*/%'.includes(t.value)) break
-      const prec = t.value === '+' || t.value === '-' ? 1 : 2
-      if (prec < minPrec) break
-      const op = this.advance().value
-      const right = this.parseBinOp(prec + 1)
-      left = { kind: 'binop', op, left, right }
-    }
-    return left
-  }
-
-  private parseUnary(): Expr {
-    if (this.at('op', '+') || this.at('op', '-') || this.at('op', '~')) {
-      const op = this.advance().value
-      const arg = this.parseUnary()
-      return { kind: 'call', callee: { kind: 'name', id: '__unary__' }, args: [{ kind: 'string', value: op }, arg], kwargs: [] }
-    }
-    return this.parsePrimary()
-  }
-
-  private parsePrimary(): Expr {
-    let expr = this.parseAtom()
-    while (true) {
-      if (this.at('op', '.')) {
-        this.advance()
-        const attr = this.expect('ident').value
-        expr = { kind: 'attr', base: expr, attr }
-        continue
-      }
-      if (this.at('op', '(')) {
-        this.advance()
-        const args: Expr[] = []
-        const kwargs: { name: string; value: Expr }[] = []
-        if (!this.at('op', ')')) {
-          do {
-            if (this.at('ident') && this.tokens[this.pos + 1]?.kind === 'op' && this.tokens[this.pos + 1]?.value === '=') {
-              const name = this.advance().value
-              this.advance()
-              kwargs.push({ name, value: this.parseExpr() })
-            } else {
-              args.push(this.parseExpr())
-            }
-          } while (this.at('op', ',') && (this.advance(), true))
-        }
-        this.expect('op', ')')
-        expr = { kind: 'call', callee: expr, args, kwargs }
-        continue
-      }
-      break
-    }
-    return expr
-  }
-
-  private parseAtom(): Expr {
-    const t = this.peek()
-    if (t.kind === 'string') {
-      this.advance()
-      return { kind: 'string', value: t.value }
-    }
-    if (t.kind === 'number') {
-      this.advance()
-      return { kind: 'number', value: t.value }
-    }
-    if (t.kind === 'ident') {
-      const id = this.advance().value
-      if (id === 'True') return { kind: 'bool', value: true }
-      if (id === 'False') return { kind: 'bool', value: false }
-      if (id === 'None') return { kind: 'none' }
-      return { kind: 'name', id }
-    }
-    if (this.at('op', '(')) {
-      this.advance()
-      if (this.at('op', ')')) {
-        this.advance()
-        return { kind: 'tuple', elts: [] }
-      }
-      const first = this.parseExpr()
-      if (this.at('op', ',')) {
-        this.advance()
-        const elts = [first]
-        while (!this.at('op', ')')) {
-          elts.push(this.parseExpr())
-          if (!this.at('op', ',')) break
-          this.advance()
-        }
-        this.expect('op', ')')
-        return { kind: 'tuple', elts }
-      }
-      this.expect('op', ')')
-      return first
-    }
-    if (this.at('op', '[')) {
-      this.advance()
-      if (this.at('op', ']')) {
-        this.advance()
-        return { kind: 'list', elts: [] }
-      }
-      const first = this.parseExpr()
-      if (this.at('ident', 'for')) {
-        this.advance()
-        const target = this.expect('ident').value
-        this.expect('ident', 'in')
-        const iter = this.parseExpr()
-        this.expect('op', ']')
-        return { kind: 'list', elts: [{ kind: 'call', callee: { kind: 'name', id: '__listcomp__' }, args: [first, { kind: 'name', id: target }, iter], kwargs: [] }] }
-      }
-      const elts: Expr[] = [first]
-      while (this.at('op', ',')) {
-        this.advance()
-        if (this.at('op', ']')) break
-        elts.push(this.parseExpr())
-      }
-      this.expect('op', ']')
-      return { kind: 'list', elts }
-    }
-    throw new ParseError('expected expression', t.line)
+/**
+ * P1-T3：ScriptParserService.parse('python') → scriptIr 适配器 → IR 根。
+ * 失败语义与旧实现对齐：抛错（解析失败 → ScriptParseUnavailableError；适配器未覆盖
+ * 构造 → IrCoverageError），由调用方既有 catch 通道统一落 `A-fail`/`extraction-failed`。
+ */
+export function parsePythonModule(source: string): IrModule {
+  const outcome = scriptParserService.parse('python', source)
+  if (!outcome.ok) throw new ScriptParseUnavailableError(outcome.reason)
+  try {
+    return adaptPythonModule(outcome.tree)
+  } finally {
+    outcome.tree.delete()
   }
 }
 
-export function parsePythonModule(source: string): ModuleAst {
-  const tokens = tokenize(source)
-  return new Parser(tokens).parseModule()
-}
+// --- String folding（IR 版本，折叠规则与旧实现一致 + f-string 全静态折叠）---
 
-// --- String folding ---
-
-export function foldStringExpr(expr: Expr): string | null {
-  if (expr.kind === 'string') return expr.value
-  if (expr.kind === 'binop' && expr.op === '+') {
-    const left = foldStringExpr(expr.left)
-    const right = foldStringExpr(expr.right)
-    if (left !== null && right !== null) return left + right
-  }
-  if (expr.kind === 'tuple' && expr.elts.length === 1) return foldStringExpr(expr.elts[0]!)
-  return null
+export function foldStringExpr(expr: IrExpr): string | null {
+  return foldStringIr(expr)
 }
 
 // --- Scope / resolution ---
@@ -696,11 +193,11 @@ export interface ResolvedChain {
   fullName: string | null
 }
 
-export function resolveExprChain(expr: Expr, scope: Scope): ResolvedChain {
+export function resolveExprChain(expr: IrExpr, scope: Scope): ResolvedChain {
   const attrs: string[] = []
   let root: string | null = null
   let module: string | null = null
-  let cur: Expr = expr
+  let cur: IrExpr = expr
 
   if (cur.kind === 'name') {
     root = cur.id
@@ -777,7 +274,7 @@ function addHit(hits: PatternHit[], pattern: string, verdict: ScriptVerdict): vo
   }
 }
 
-function applyImportStmt(stmt: Extract<Stmt, { kind: 'import' }>, scope: Scope): void {
+function applyImportStmt(stmt: Extract<IrStmt, { kind: 'import' }>, scope: Scope): void {
   for (const { module, alias } of stmt.names) {
     const root = module.split('.')[0]!
     const bound = alias ?? root
@@ -785,7 +282,7 @@ function applyImportStmt(stmt: Extract<Stmt, { kind: 'import' }>, scope: Scope):
   }
 }
 
-function applyFromImportStmt(stmt: Extract<Stmt, { kind: 'from_import' }>, scope: Scope): void {
+function applyFromImportStmt(stmt: Extract<IrStmt, { kind: 'from_import' }>, scope: Scope): void {
   const mod = stmt.module.split('.')[0]!
   for (const { name, alias } of stmt.names) {
     if (name === '*') {
@@ -805,7 +302,7 @@ function applyFromImportStmt(stmt: Extract<Stmt, { kind: 'from_import' }>, scope
  * Also tracks direct aliasing of bare dangerous builtins (e.g. `imp = __import__`,
  * `g = getattr`) which are never registered via import/from-import scope tracking.
  */
-function applyAssignmentRebind(target: string, value: Expr, scope: Scope): void {
+function applyAssignmentRebind(target: string, value: IrExpr, scope: Scope): void {
   if (value.kind === 'name') {
     if (scope.modules.has(value.id)) {
       scope.modules.set(target, scope.modules.get(value.id)!)
@@ -831,7 +328,7 @@ function applyAssignmentRebind(target: string, value: Expr, scope: Scope): void 
 }
 
 /** Extract a static Path(...) constructor literal path, if resolvable, for write-path checks. */
-function extractPathLiteral(base: Expr, scope: Scope): string | null {
+function extractPathLiteral(base: IrExpr, scope: Scope): string | null {
   if (base.kind === 'call') {
     const ctor = resolveExprChain(base.callee, scope)
     const pathBinding = ctor.root ? scope.attrs.get(ctor.root) : undefined
@@ -848,14 +345,14 @@ function extractPathLiteral(base: Expr, scope: Scope): string | null {
   return null
 }
 
-function isDecodeCall(expr: Expr): boolean {
+function isDecodeCall(expr: IrExpr): boolean {
   if (expr.kind !== 'call') return false
   const chain = resolveExprChain(expr.callee, createScope())
   const last = chain.attrs[chain.attrs.length - 1] ?? chain.module
   return last !== null && DECODE_FUNCS.has(last)
 }
 
-function isExecImportCallee(callee: Expr): boolean {
+function isExecImportCallee(callee: IrExpr): boolean {
   if (callee.kind === 'name') return EXEC_IMPORT_NAMES.has(callee.id)
   if (callee.kind === 'attr') {
     const folded = foldStringExpr({ kind: 'string', value: callee.attr }) // noop, attr is ident
@@ -879,12 +376,12 @@ class Analyzer {
     this.ctx = ctx
   }
 
-  analyze(ast: ModuleAst): PatternHit[] {
+  analyze(ast: IrModule): PatternHit[] {
     this.walkStmts(ast.body, createScope(), 0)
     return this.hits
   }
 
-  private walkStmts(stmts: Stmt[], scope: Scope, startIndex: number): void {
+  private walkStmts(stmts: IrStmt[], scope: Scope, startIndex: number): void {
     const decodeBindings: { name: string; stmtOffset: number }[] = []
 
     for (let i = 0; i < stmts.length; i++) {
@@ -948,12 +445,74 @@ class Analyzer {
         const child = createScope(scope)
         child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
         this.walkStmts(stmt.body, child, stmtIndex)
+        // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
+        this.walkStmts(stmt.orelse, child, stmtIndex)
+        continue
+      }
+
+      // —— IR 扩展语句（tree-sitter 全语法；判定语义保守对齐：体/表达式递归，不新增黑名单）——
+      if (stmt.kind === 'aug_assign') {
+        // i += 1：按赋值重绑同语义处理（value 为 os.system 等 attr 时保持别名追踪）
+        applyAssignmentRebind(stmt.target, stmt.value, scope)
+        if (isDecodeCall(stmt.value)) decodeBindings.push({ name: stmt.target, stmtOffset: stmtIndex })
+        this.analyzeExpr(stmt.value, scope, decodeBindings, stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'while') {
+        this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
+        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'with') {
+        for (const item of stmt.items) {
+          this.analyzeExpr(item.contextExpr, scope, decodeBindings, stmtIndex)
+        }
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'try') {
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        for (const handler of stmt.handlers) {
+          if (handler.typeExpr) this.analyzeExpr(handler.typeExpr, scope, decodeBindings, stmtIndex)
+          this.walkStmts(handler.body, createScope(scope), stmtIndex)
+        }
+        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex)
+        this.walkStmts(stmt.finalbody, createScope(scope), stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'function_def') {
+        for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
+        // P0-1 评审修复：默认参数值在 def 定义时真实执行——必须分析
+        for (const dv of stmt.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
+        // 函数体在定义作用域内静态可见：递归捕获（禁止 def 内危险调用逃逸）
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'class_def') {
+        for (const d of stmt.decorators) this.analyzeExpr(d, scope, decodeBindings, stmtIndex)
+        // P0-1 评审修复：基类/关键字参数表达式在 class 创建时真实执行——必须分析
+        for (const b of stmt.bases) this.analyzeExpr(b, scope, decodeBindings, stmtIndex)
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'return' || stmt.kind === 'assert' || stmt.kind === 'raise') {
+        if (stmt.kind === 'assert') this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
+        else if (stmt.value) this.analyzeExpr(stmt.value, scope, decodeBindings, stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'delete') {
+        for (const t of stmt.targets) this.analyzeExpr(t, scope, decodeBindings, stmtIndex)
+        continue
+      }
+      if (stmt.kind === 'global_nonlocal' || stmt.kind === 'break' || stmt.kind === 'continue' || stmt.kind === 'pass') {
         continue
       }
     }
   }
 
-  private extractImportModuleName(expr: Expr): string | null {
+  private extractImportModuleName(expr: IrExpr): string | null {
     if (expr.kind !== 'call') return null
     const chain = resolveExprChain(expr.callee, createScope())
     const fn = chain.attrs[chain.attrs.length - 1] ?? chain.module
@@ -970,28 +529,92 @@ class Analyzer {
   }
 
   private analyzeExpr(
-    expr: Expr,
+    expr: IrExpr,
     scope: Scope,
     decodeBindings: { name: string; stmtOffset: number }[] = [],
     stmtIndex = 0
   ): void {
     if (expr.kind === 'call') {
       this.analyzeCall(expr, scope, decodeBindings, stmtIndex)
+      return
     }
     if (expr.kind === 'binop') {
       this.analyzeExpr(expr.left, scope, decodeBindings, stmtIndex)
       this.analyzeExpr(expr.right, scope, decodeBindings, stmtIndex)
+      return
     }
     if (expr.kind === 'attr') {
       this.analyzeExpr(expr.base, scope, decodeBindings, stmtIndex)
+      return
     }
-    if (expr.kind === 'list' || expr.kind === 'tuple') {
+    if (expr.kind === 'list' || expr.kind === 'tuple' || expr.kind === 'set') {
       for (const e of expr.elts) this.analyzeExpr(e, scope, decodeBindings, stmtIndex)
+      return
     }
+    // —— IR 扩展表达式（递归保证调用不逃逸）——
+    if (expr.kind === 'f_string') {
+      for (const interp of expr.interpolations) this.analyzeExpr(interp, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'unaryop') {
+      this.analyzeExpr(expr.operand, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'compare') {
+      this.analyzeExpr(expr.left, scope, decodeBindings, stmtIndex)
+      this.analyzeExpr(expr.right, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'boolop') {
+      for (const v of expr.values) this.analyzeExpr(v, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'conditional') {
+      this.analyzeExpr(expr.test, scope, decodeBindings, stmtIndex)
+      this.analyzeExpr(expr.body, scope, decodeBindings, stmtIndex)
+      this.analyzeExpr(expr.orelse, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'subscript') {
+      this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
+      this.analyzeExpr(expr.index, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'slice') {
+      if (expr.lower) this.analyzeExpr(expr.lower, scope, decodeBindings, stmtIndex)
+      if (expr.upper) this.analyzeExpr(expr.upper, scope, decodeBindings, stmtIndex)
+      if (expr.step) this.analyzeExpr(expr.step, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'dict') {
+      for (const k of expr.keys) if (k) this.analyzeExpr(k, scope, decodeBindings, stmtIndex)
+      for (const v of expr.values) this.analyzeExpr(v, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'starred' || expr.kind === 'await') {
+      this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'yield') {
+      if (expr.value) this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'comprehension') {
+      this.analyzeExpr(expr.elt, scope, decodeBindings, stmtIndex)
+      for (const g of expr.generators) this.analyzeExpr(g.iter, scope, decodeBindings, stmtIndex)
+      return
+    }
+    if (expr.kind === 'lambda') {
+      // P0-1 评审修复：lambda 默认值在定义时真实执行——必须分析
+      for (const dv of expr.defaults) this.analyzeExpr(dv, scope, decodeBindings, stmtIndex)
+      this.analyzeExpr(expr.body, scope, decodeBindings, stmtIndex)
+      return
+    }
+    // string/number/name/bool/none/ellipsis：叶子，无子表达式
   }
 
   private analyzeCall(
-    call: Expr & { kind: 'call' },
+    call: IrExpr & { kind: 'call' },
     scope: Scope,
     decodeBindings: { name: string; stmtOffset: number }[],
     stmtIndex: number
@@ -1000,6 +623,14 @@ class Analyzer {
     this.analyzeExpr(callee, scope, decodeBindings, stmtIndex)
     for (const a of call.args) this.analyzeExpr(a, scope, decodeBindings, stmtIndex)
     for (const kw of call.kwargs) this.analyzeExpr(kw.value, scope, decodeBindings, stmtIndex)
+
+    // 动态成员调用 d[k](...)：静态不可解析的动态分派，保守 ask。
+    // 旧实现下该构造因 dict/下标解析失败而 A-fail → ask；本规则是切换后的等价保守投影
+    // （复用 B9「动态查找成员」语义，模式 ID 集合不变）。
+    if (callee.kind === 'subscript') {
+      addHit(this.hits, 'B9', 'ask')
+      return
+    }
 
     // getattr / hasattr
     const calleeChain = resolveExprChain(callee, scope)
@@ -1241,7 +872,7 @@ class Analyzer {
   }
 
   private wouldB11(
-    arg: Expr,
+    arg: IrExpr,
     scope: Scope,
     decodeBindings: { name: string; stmtOffset: number }[],
     stmtIndex: number,
@@ -1256,7 +887,7 @@ class Analyzer {
     return false
   }
 
-  private checkGetattr(call: Expr & { kind: 'call' }, scope: Scope, isHas: boolean, fromBuiltins = false): void {
+  private checkGetattr(call: IrExpr & { kind: 'call' }, scope: Scope, isHas: boolean, fromBuiltins = false): void {
     void isHas
     const base = call.args[0]
     const attrExpr = call.args[1]
@@ -1297,7 +928,7 @@ class Analyzer {
   }
 
   private checkB11(
-    arg: Expr | undefined,
+    arg: IrExpr | undefined,
     scope: Scope,
     decodeBindings: { name: string; stmtOffset: number }[],
     stmtIndex: number,
@@ -1319,7 +950,7 @@ class Analyzer {
     this.analyzeExpr(arg, scope, decodeBindings, stmtIndex)
   }
 
-  private checkOpenCall(call: Expr & { kind: 'call' }): void {
+  private checkOpenCall(call: IrExpr & { kind: 'call' }): void {
     const pathExpr = call.args[0]
     const modeKw = call.kwargs.find((k) => k.name === 'mode')
     const modeExpr = modeKw?.value ?? call.args[1]
@@ -1345,7 +976,7 @@ class Analyzer {
   }
 }
 
-export function collectPatternHits(ast: ModuleAst, ctx?: ScriptAnalysisContext): PatternHit[] {
+export function collectPatternHits(ast: IrModule, ctx?: ScriptAnalysisContext): PatternHit[] {
   return new Analyzer(ctx).analyze(ast)
 }
 
@@ -1370,8 +1001,8 @@ function isForcedAskName(name: string | null): boolean {
 /** Explicit remote safe-capability whitelist for calls that touch a DANGEROUS_MODULES root. */
 function isCertifiedSafeDangerousCall(
   chain: ResolvedChain,
-  callee: Expr,
-  call: Expr & { kind: 'call' },
+  callee: IrExpr,
+  call: IrExpr & { kind: 'call' },
   scope: Scope
 ): boolean {
   const lastAttr = chain.attrs[chain.attrs.length - 1]
@@ -1396,7 +1027,7 @@ function isCertifiedSafeDangerousCall(
 class RemoteCertifier {
   private safe = true
 
-  certify(ast: ModuleAst): boolean {
+  certify(ast: IrModule): boolean {
     this.walkStmts(ast.body, createScope())
     return this.safe
   }
@@ -1405,7 +1036,7 @@ class RemoteCertifier {
     this.safe = false
   }
 
-  private walkStmts(stmts: Stmt[], scope: Scope): void {
+  private walkStmts(stmts: IrStmt[], scope: Scope): void {
     for (const stmt of stmts) {
       if (!this.safe) return
       switch (stmt.kind) {
@@ -1434,6 +1065,8 @@ class RemoteCertifier {
           const child = createScope(scope)
           child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
           this.walkStmts(stmt.body, child)
+          // P0-3 评审修复：else 体不遍历会让藏在其中的未建模/危险构造逃过认证（remote fail-open）
+          this.walkStmts(stmt.orelse, child)
           break
         }
         case 'pass':
@@ -1445,7 +1078,7 @@ class RemoteCertifier {
     }
   }
 
-  private walkExpr(expr: Expr, scope: Scope): void {
+  private walkExpr(expr: IrExpr, scope: Scope): void {
     if (!this.safe) return
     switch (expr.kind) {
       case 'string':
@@ -1473,7 +1106,7 @@ class RemoteCertifier {
     }
   }
 
-  private walkCall(call: Expr & { kind: 'call' }, scope: Scope): void {
+  private walkCall(call: IrExpr & { kind: 'call' }, scope: Scope): void {
     const callee = call.callee
 
     if (callee.kind !== 'name' && callee.kind !== 'attr') {
@@ -1522,7 +1155,7 @@ class RemoteCertifier {
  * whitelisted (os.chdir / Path write with static relative path). Used only to *downgrade* an
  * otherwise-`allow` verdict to `ask` on remote; never used to escalate to `deny`.
  */
-export function isScriptCertifiedRemoteSafe(ast: ModuleAst): boolean {
+export function isScriptCertifiedRemoteSafe(ast: IrModule): boolean {
   return new RemoteCertifier().certify(ast)
 }
 
@@ -1534,9 +1167,13 @@ export function aggregateVerdict(hits: PatternHit[]): ScriptVerdict {
   return verdict
 }
 
-export function analyzeScriptContent(code: string, ctx?: ScriptAnalysisContext): ScriptAnalysisResult {
+export function analyzeScriptContent(
+  code: string,
+  ctx?: ScriptAnalysisContext,
+  preParsedIr?: IrModule
+): ScriptAnalysisResult {
   try {
-    const ast = parsePythonModule(code)
+    const ast = preParsedIr ?? parsePythonModule(code)
     const hits = collectPatternHits(ast, ctx)
     const patterns = hits.map((h) => h.pattern)
     const dedupedPatterns = patterns.length === 0 ? ['A0'] : [...new Set(patterns)]

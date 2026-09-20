@@ -1,0 +1,91 @@
+{
+  "id": "t1-21-cmdlet-format",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "Get-Service",
+      "Format-Table -AutoSize"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "Get-Service",
+          "args": [],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "Format-Table",
+          "args": [
+            "-AutoSize"
+          ],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "|"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "Get-Service | Format-Table -AutoSize",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "Get-Service",
+        "args": [],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "Format-Table",
+        "args": [
+          "-AutoSize"
+        ],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "|"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

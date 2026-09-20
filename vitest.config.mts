@@ -16,7 +16,8 @@ export default defineConfig({
           pool: 'forks',
           maxWorkers: 1,
           fileParallelism: false,
-          setupFiles: ['./src/test/setup.ts']
+          // electron 项目专属第二 setup：脚本安全解析服务初始化（§2.3 归属约束）
+          setupFiles: ['./src/test/setup.ts', './src/test/setup-electron-parser.ts']
         }
       },
       {

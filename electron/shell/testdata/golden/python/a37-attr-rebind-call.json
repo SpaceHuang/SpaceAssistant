@@ -1,0 +1,21 @@
+{
+  "id": "a37-attr-rebind-call",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "A1"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "A1"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

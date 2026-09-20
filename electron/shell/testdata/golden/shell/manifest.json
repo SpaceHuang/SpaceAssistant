@@ -1,0 +1,504 @@
+{
+  "generatedBy": "scripts/generate-shell-golden-samples.mjs (P2-T0/P3-T0)",
+  "count": 102,
+  "bashCount": 48,
+  "psCount": 54,
+  "tier1": [
+    "t1-01-get-date",
+    "t1-02-param-value",
+    "t1-03-flag-equals",
+    "t1-04-dquote-unicode",
+    "t1-05-squote",
+    "t1-06-var-member",
+    "t1-07-and-list",
+    "t1-08-or-list",
+    "t1-09-redirect",
+    "t1-10-foreach-pipe",
+    "t1-11-splatting",
+    "t1-12-variable-assign",
+    "t1-13-if-statement",
+    "t1-14-member-call",
+    "t1-15-where-object",
+    "t1-16-param-colon",
+    "t1-17-double-quoted-var",
+    "t1-18-single-dash-flag",
+    "t1-19-negative-number-param",
+    "t1-20-semicolon-list",
+    "t1-21-cmdlet-format",
+    "t1-22-string-concat-arg"
+  ],
+  "tier2": [
+    "t2-01-class-def",
+    "t2-02-nested-index",
+    "t2-03-backtick-lead",
+    "t2-04-nested-scriptblock",
+    "t2-05-type-literal",
+    "t2-06-cast-generic",
+    "t2-07-range-operator",
+    "t2-08-multiline-pipe",
+    "t2-09-dollar-dollar",
+    "t2-10-double-quoted-here",
+    "t2-11-switch-statement",
+    "t2-12-add-range-step",
+    "t2-13-enum-member-access",
+    "t2-14-nested-hashtable",
+    "t2-15-sub-expression-in-string",
+    "t2-16-array-subexpression",
+    "t2-17-param-block",
+    "t2-18-filter-left",
+    "t2-19-method-chaining",
+    "t2-20-using-namespace"
+  ],
+  "samples": [
+    {
+      "id": "b01-rmrf-root",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b02-rmrf-tmp",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b03-sudo-install",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b04-curl-pipe-bash",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b05-wget-pipe-sh",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b06-base64-decode-exec",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b07-dd-devsda",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b08-chmod-777",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b09-cat-pipe-grep",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b10-and-list",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b11-or-list",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b12-semi-list",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b13-dquote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b14-squote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b15-mixed-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b16-escaped-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b17-space-variant",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b18-assign-prefix",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b19-assign-echo-var",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b20-cd-and-ls",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b21-cd-dotdot",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b22-redirect-abs",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b23-redirect-append-rel",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b24-redirect-input",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b25-redirect-stderr",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b26-cmd-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b27-backtick-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b28-process-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b29-var-home",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b30-var-brace",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b31-export-path",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b32-escape-space",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b33-printf-escapes",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b34-unicode-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b35-crlf",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b36-unclosed-quote",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b37-trailing-pipe",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b38-leading-and",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b39-truncated-subst",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b40-bare-paren-echo",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b41-bare-paren-grep",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b42-bare-paren-text",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b43-redirect-sensitive",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b44-cat-shadow",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b45-pipe-to-python",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b46-eval-var",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b47-glob-star",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "b48-nc-reverse",
+      "dialect": "posix-bash"
+    },
+    {
+      "id": "p01-get-childitem",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p02-pipeline-foreach",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p03-invoke-expression",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p04-iex-cradle",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p05-encoded-command",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p06-remove-item-recurse",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p07-here-string-outfile",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p08-subexpression",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p09-backtick-continuation",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p10-set-content",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p11-sort-pipeline",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "p12-format-volume",
+      "dialect": "windows-powershell"
+    },
+    {
+      "id": "t1-01-get-date",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-02-param-value",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-03-flag-equals",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-04-dquote-unicode",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-05-squote",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-06-var-member",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-07-and-list",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-08-or-list",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-09-redirect",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-10-foreach-pipe",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-11-splatting",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-12-variable-assign",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-13-if-statement",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-14-member-call",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-15-where-object",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-16-param-colon",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-17-double-quoted-var",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-18-single-dash-flag",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-19-negative-number-param",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-20-semicolon-list",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-21-cmdlet-format",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t1-22-string-concat-arg",
+      "dialect": "windows-powershell",
+      "tier": 1
+    },
+    {
+      "id": "t2-01-class-def",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-02-nested-index",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-03-backtick-lead",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-04-nested-scriptblock",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-05-type-literal",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-06-cast-generic",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-07-range-operator",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-08-multiline-pipe",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-09-dollar-dollar",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-10-double-quoted-here",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-11-switch-statement",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-12-add-range-step",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-13-enum-member-access",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-14-nested-hashtable",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-15-sub-expression-in-string",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-16-array-subexpression",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-17-param-block",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-18-filter-left",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-19-method-chaining",
+      "dialect": "windows-powershell",
+      "tier": 2
+    },
+    {
+      "id": "t2-20-using-namespace",
+      "dialect": "windows-powershell",
+      "tier": 2
+    }
+  ]
+}

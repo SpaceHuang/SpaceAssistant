@@ -409,6 +409,8 @@
     }
   },
   "shell": {
+    "scriptParserUnavailable": "Script security parsing unavailable",
+    "scriptParserUnavailableDetail": "The script content security parser is not ready. All script/shell command verdicts have been downgraded to manual confirmation. Check logs for treesitter.init.failed / treesitter.selfcheck.failed events.",
     "boundaryTitle": "Shell command boundaries",
     "boundaryDescription": "Shell starts in the session work directory. The system scans command paths and warns on out-of-bounds or sensitive access; high-risk injection patterns are rejected outright. Shell cannot constrain all child-process behavior like file tools can. Do not confirm untrusted commands.",
     "defaultTimeoutLabel": "Default timeout (seconds)",

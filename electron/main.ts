@@ -45,6 +45,7 @@ import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
 import { cleanupPersistedOrphansOnStartup } from './shell/startupOrphanCleanup'
+import { scriptParserService, runSelfCheck, setInitFailureListener, setNotReadyParseListener } from './shell/scriptParserService'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
@@ -360,6 +361,32 @@ app.whenReady().then(async () => {
   if (!app.isPackaged && agentLogDir) {
     console.info('[AgentLogger] 开发模式日志目录:', agentLogDir)
   }
+
+  // 脚本安全解析服务（P0-T4，§2.3/§3 不变量 8）：初始化前置到启动（三语法全量加载，
+  // fire-and-forget 不阻断），失败/未就绪运行期一律 ask 兜底（fail-closed），降级可观测：
+  // 初始化失败 → treesitter.init.failed；自检失败 → treesitter.selfcheck.failed；
+  // 运行期 not_initialized → 每会话首次 treesitter.parse.not_ready。
+  setInitFailureListener(({ failedReason }) => {
+    logAgentEvent('error', 'treesitter.init.failed', { reason: failedReason })
+  })
+  setNotReadyParseListener(({ language, notReadyParseCount }) => {
+    logAgentEvent('warn', 'treesitter.parse.not_ready', { language, notReadyParseCount })
+  })
+  void scriptParserService
+    .ensureInitialized()
+    .then(() => runSelfCheck())
+    .then(() => {
+      logAgentEvent('info', 'treesitter.selfcheck.passed', {})
+    })
+    .catch((err) => {
+      // ensureInitialized 失败已由 setInitFailureListener 记录 treesitter.init.failed；
+      // 此处只补记「初始化成功但自检失败」的自检分支，避免同一失败双写。
+      if (scriptParserService.getStatus().ready) {
+        logAgentEvent('error', 'treesitter.selfcheck.failed', {
+          reason: err instanceof Error ? err.message : String(err)
+        })
+      }
+    })
 
   initFeishuCliLogger({
     getWorkDir: () => workDirManager?.getActiveWorkDir() ?? workDirState,

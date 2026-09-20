@@ -1,0 +1,1 @@
+Write-Output "unicode “text” inside"

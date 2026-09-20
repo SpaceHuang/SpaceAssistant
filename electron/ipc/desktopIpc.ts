@@ -10,6 +10,7 @@ import { getMainWindow } from '../windowRef'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { openExternalLink } from '../externalLink'
 import { stagehandService } from '../browser/stagehandService'
+import { scriptParserService } from '../shell/scriptParserService'
 
 export function registerDesktopIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('app:get-tray-enabled', () => ctx.isTrayEnabled?.() ?? false)
@@ -157,4 +158,7 @@ export function registerDesktopIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     if (!ctx.floatingNotificationManager) return
     ctx.floatingNotificationManager.showTestNotification()
   })
+
+  // P0-T4：脚本安全解析状态（诊断展示：解析不可用时 UI 显示「全部降级为人工确认」）
+  ipcMain.handle('treesitter:get-status', () => scriptParserService.getStatus())
 }

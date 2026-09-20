@@ -1,8 +1,10 @@
 import { Alert, App, Button, Form, Input, InputNumber, Select, Space, Table, Tooltip } from 'antd'
+import { useEffect, useState } from 'react'
 import { ConfigSettingsStack } from './ConfigField'
 import { Info } from 'lucide-react'
 import type { ShellConfig, ShellRule } from '../../../shared/domainTypes'
 import { DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
+import type { ScriptParserStatusPayload } from '../../../shared/api'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigResultAlert } from './ConfigResultAlert'
 
@@ -34,6 +36,27 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
   const { t } = useTypedTranslation('config')
   const { t: tCommon } = useTypedTranslation('common')
 
+  // P0-T4：脚本安全解析降级状态的最小诊断展示（解析不可用 → 全部判定降级为人工确认）
+  const [scriptParserStatus, setScriptParserStatus] = useState<ScriptParserStatusPayload | null>(null)
+  useEffect(() => {
+    let disposed = false
+    try {
+      window.api
+        ?.treesitterGetStatus?.()
+        .then((status) => {
+          if (!disposed) setScriptParserStatus(status)
+        })
+        .catch(() => {
+          // 状态拉取失败不打断设置页渲染
+        })
+    } catch {
+      // preload 桥不可用（如旧宿主）时不打断设置页渲染
+    }
+    return () => {
+      disposed = true
+    }
+  }, [])
+
   const builtinDenyDisplay = [
     { pattern: 'sudo:*', reason: t('shell.builtinDenyReason.privilege') },
     { pattern: 'doas:*', reason: t('shell.builtinDenyReason.privilege') },
@@ -60,6 +83,14 @@ export function ShellSettingsTab({ shell, onChange, onTestShell, shellTesting, s
 
   return (
     <ConfigSettingsStack>
+      {scriptParserStatus && !scriptParserStatus.ready && (
+        <Alert
+          type="error"
+          showIcon
+          message={t('shell.scriptParserUnavailable')}
+          description={t('shell.scriptParserUnavailableDetail')}
+        />
+      )}
       <Alert
         type="warning"
         showIcon

@@ -5,7 +5,7 @@ import {
   collectPatternHits,
   NETWORK_PATTERN_IDS
 } from '../../shell/scriptContentSecurity'
-import type { ModuleAst } from '../../shell/scriptContentSecurity'
+import type { IrModule } from '../../shell/scriptIr/types'
 import type { ContentFacts, EnvFacts, FactSignal, ConfirmSummary } from '../../../src/shared/confirmation/types'
 import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
 
@@ -18,40 +18,63 @@ import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
  * run_shell 的网络事实混用）；远程认证态未通过时产 `script-uncertified` 信号。
  * 提取器本身不感知 lane——链路的差异由策略层规则按 lane 消费。
  *
- * 注意：为保持外部行为完全等价，这里仍复用现有的黑名单命中分析；但返回值类型不再含
- * verdict 判定字段，判定完全交给策略层。
+ * P1-T3：单次解析——`preParsedIr` 传入时不再自解析（toolCallGate 门控路径恰好 1 次 parse）；
+ * 第二调用点 runExtractors（descriptor 驱动）不传预解析，自解析能力保留。
+ * 解析失败（语法错误 / 服务未就绪 / IrCoverageError）→ `extraction-failed` 信号落人工（fail-closed）。
  */
-
-function analyzeOnce(code: string): { ast: ModuleAst | null; networkPatterns: string[] } {
-  try {
-    const ast = parsePythonModule(code)
-    const hits = collectPatternHits(ast, {})
-    const networkPatterns = hits.filter((h) => NETWORK_PATTERN_IDS.has(h.pattern)).map((h) => h.pattern)
-    return { ast, networkPatterns }
-  } catch {
-    return { ast: null, networkPatterns: [] }
-  }
-}
 
 export function extractScriptSignals(
   code: string,
-  _env: EnvFacts
+  _env: EnvFacts,
+  preParsedIr?: IrModule
 ): { signals: FactSignal[]; summary: ConfirmSummary } {
   const signals: FactSignal[] = []
-  const analysis = analyzeScriptContent(code, {})
+
+  // 单次解析（M8 / P1-T3）：IR 同时供 verdict 判定、网络命中识别与远程认证态
+  let ir: IrModule | null = preParsedIr ?? null
+  let parseFailed = false
+  if (!ir) {
+    try {
+      ir = parsePythonModule(code)
+    } catch {
+      parseFailed = true
+    }
+  }
+
+  const analysis = ir
+    ? analyzeScriptContent(code, {}, ir)
+    : { verdict: 'ask' as const, patterns: ['A-fail'], reason: 'parse_error' }
   const signal = analysis.verdict === 'allow' ? 'clean' : analysis.verdict === 'deny' ? 'dangerous' : 'suspicious'
   signals.push({ kind: 'script-analysis', signal, patterns: analysis.patterns })
 
-  // 共享同一次解析（M8）：AST 同时用于网络命中识别与远程认证态
-  const once = analyzeOnce(code)
-  if (!once.ast) {
+  if (parseFailed || !ir) {
     signals.push({ kind: 'extraction-failed', reason: 'parse_error' })
   } else {
-    if (once.networkPatterns.length > 0) {
-      signals.push({ kind: 'script-network', patterns: once.networkPatterns })
+    // P2-1 评审修复：二次 hits 与第一次同输入，防御性兜底（若抛错按 extraction-failed 落人工，保持 fail-closed）
+    let networkPatterns: string[] = []
+    let hitsFailed = false
+    try {
+      networkPatterns = collectPatternHits(ir, {})
+        .filter((h) => NETWORK_PATTERN_IDS.has(h.pattern))
+        .map((h) => h.pattern)
+    } catch {
+      hitsFailed = true
+    }
+    if (hitsFailed) {
+      signals.push({ kind: 'extraction-failed', reason: 'pattern-hit-error' })
+      return {
+        signals,
+        summary: {
+          text: CONFIRMATION_LABELS.summarySuspiciousScript,
+          sections: analysis.patterns.length > 0 ? [{ label: '命中模式', value: analysis.patterns.join(', ') }] : []
+        }
+      }
+    }
+    if (networkPatterns.length > 0) {
+      signals.push({ kind: 'script-network', patterns: networkPatterns })
     }
     // 远程认证态：未通过 isScriptCertifiedRemoteSafe 认证时产 script-uncertified 信号
-    if (!isScriptCertifiedRemoteSafe(once.ast)) {
+    if (!isScriptCertifiedRemoteSafe(ir)) {
       signals.push({ kind: 'script-uncertified' })
     }
   }

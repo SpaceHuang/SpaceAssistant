@@ -1,0 +1,113 @@
+{
+  "id": "b06-base64-decode-exec",
+  "dialect": "posix-bash",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "deny",
+    "denyReason": "检测到危险的远程脚本执行\n\n这个命令会从网络下载脚本并直接运行。如果网址被劫持或下载内容被篡改，可能造成损失。\n\n建议：先用 curl … -o script.sh 下载到本地，查看内容后再执行。",
+    "validatorId": "pipe_to_shell",
+    "denyType": "strong",
+    "segments": [
+      "echo aGVsbG8=",
+      "base64 -d",
+      "sh"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": [],
+      "violationCodes": [
+        "pipe_to_shell"
+      ],
+      "validatorId": "pipe_to_shell",
+      "denyType": "strong"
+    },
+    "facts": {
+      "dialect": "posix-bash",
+      "operations": [
+        {
+          "verb": "echo",
+          "args": [
+            "aGVsbG8="
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "base64",
+          "args": [
+            "-d"
+          ],
+          "segmentIndex": 1
+        },
+        {
+          "verb": "sh",
+          "args": [],
+          "segmentIndex": 2
+        }
+      ],
+      "connectors": [
+        "|",
+        "|"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "echo aGVsbG8= | base64 -d | sh",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "echo",
+        "args": [
+          "aGVsbG8="
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "base64",
+        "args": [
+          "-d"
+        ],
+        "segmentIndex": 1
+      },
+      {
+        "verb": "sh",
+        "args": [],
+        "segmentIndex": 2
+      }
+    ],
+    "connectors": [
+      "|",
+      "|"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": false,
+    "auditReason": "检测到危险的远程脚本执行\n\n这个命令会从网络下载脚本并直接运行。如果网址被劫持或下载内容被篡改，可能造成损失。\n\n建议：先用 curl … -o script.sh 下载到本地，查看内容后再执行。"
+  }
+}

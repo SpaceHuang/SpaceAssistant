@@ -1,0 +1,9 @@
+# tree-sitter 受控资产清单（P0-T2）。来源：web-tree-sitter@0.27.0 与 tree-sitter-{python@0.25.0,bash@0.25.1,powershell@0.26.4} npm 包内同版本文件，vendor 后哈希锁定。
+# node-types.json 取自各包 src/node-types.json（npm 包内自带，非上游仓库另行获取）。校验：npm run check:treesitter-wasm
+c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3 *web-tree-sitter.wasm
+16108b50df4ee9a30168794252ab55e7c93bfc5765d7fa0aa3e335752c515f47 *tree-sitter-python.wasm
+8292919c88a0f7d3fb31d0cd0253ca5a9531bc1ede82b0537f2c63dd8abe6a7a *tree-sitter-bash.wasm
+796124137f0500e59713fd9dccda6812ff73d25f22e33430b1c5af6e132efa5e *tree-sitter-powershell.wasm
+a2456847bea3adff5b2222b2f7b03a870159470d8908622204e6eb29ee2fe45e *python-node-types.json
+b644629f7f9460cb0af080cb88f3bef898e6c47b6f8a76ed512b67ae16ef5ac5 *bash-node-types.json
+dc314fa2746de2c2048ad5c95e0c6488d1b2873e524a95473356c685f18a9707 *powershell-node-types.json

@@ -1,0 +1,2166 @@
+[
+  {
+    "id": "b04-fstring-path",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b19-subscript-read",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b22-conditional-expr",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b23-list-comprehension",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b27-del-statement",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b29-assert-statement",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b30-raise-statement",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b33-chained-compare",
+    "group": "legacy-parseable",
+    "drift": {
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b01-dict-literal",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b02-dict-empty",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b03-fstring-basic",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b05-with-open-read",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b06-with-open-write",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A8"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A8"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b07-try-except",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b08-try-finally",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b09-def-basic",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b10-def-default-args",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b11-class-basic",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b12-class-inheritance",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b13-decorator-staticmethod",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b14-decorator-functools",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b15-async-def",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "B4"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "B4"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b16-async-with",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b17-lambda-basic",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b18-lambda-key",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b20-subscript-write",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b21-slice",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b24-dict-comprehension",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b25-while-augassign",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b26-return-value",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b28-global-statement",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b31-set-literal",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b32-star-args",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "a07-for-if-nested",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "a08-if-else",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "a42-danger-in-for-if",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A1"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A1"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "a45-compare-and-unary",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b35-def-wraps-os-system",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A1"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A1"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b36-with-wraps-open-absolute-write",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "deny"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A7"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "dangerous",
+            "patterns": [
+              "A7"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b37-try-wraps-os-system",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A1"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A1"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b38-class-wraps-subprocess",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A1"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A1"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b39-async-wraps-requests",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A6"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A6"
+            ]
+          },
+          {
+            "kind": "script-network",
+            "patterns": [
+              "A6"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b40-lambda-wraps-eval",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A3"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A3"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b41-fstring-wraps-network-arg",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A1"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A1"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b42-dict-wraps-eval-value",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "B9"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "B9"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b43-socket-in-def",
+    "group": "previously-failed",
+    "drift": {
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A6"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A6"
+            ]
+          },
+          {
+            "kind": "script-network",
+            "patterns": [
+              "A6"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b44-with-wraps-relative-write",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A8"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A8"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "b45-while-loop",
+    "group": "previously-failed",
+    "drift": {
+      "verdict": {
+        "baseline": "ask",
+        "current": "allow"
+      },
+      "patterns": {
+        "baseline": [
+          "A-fail"
+        ],
+        "current": [
+          "A0"
+        ]
+      },
+      "reason": {
+        "baseline": "parse_error",
+        "current": null
+      },
+      "signals": {
+        "baseline": [
+          {
+            "kind": "script-analysis",
+            "signal": "suspicious",
+            "patterns": [
+              "A-fail"
+            ]
+          },
+          {
+            "kind": "extraction-failed",
+            "reason": "parse_error"
+          }
+        ],
+        "current": [
+          {
+            "kind": "script-analysis",
+            "signal": "clean",
+            "patterns": [
+              "A0"
+            ]
+          },
+          {
+            "kind": "script-uncertified"
+          }
+        ]
+      }
+    }
+  }
+]

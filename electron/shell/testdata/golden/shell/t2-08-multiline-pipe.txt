@@ -1,0 +1,3 @@
+Get-ChildItem |
+  Where-Object Name |
+  Measure-Object

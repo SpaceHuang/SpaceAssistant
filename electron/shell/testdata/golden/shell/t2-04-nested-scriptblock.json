@@ -1,0 +1,111 @@
+{
+  "id": "t2-04-nested-scriptblock",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "& { param($f) $f",
+      "ForEach-Object { & $_ } }"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "&",
+          "args": [
+            "{",
+            "param($f)",
+            "$f"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "ForEach-Object",
+          "args": [
+            "{",
+            "&",
+            "$_",
+            "}",
+            "}"
+          ],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "|"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "segment:0:shell-control-flow"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "& { param($f) $f | ForEach-Object { & $_ } }",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "&",
+        "args": [
+          "{",
+          "param($f)",
+          "$f"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "ForEach-Object",
+        "args": [
+          "{",
+          "&",
+          "$_",
+          "}",
+          "}"
+        ],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "|"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "segment:0:shell-control-flow"
+    ]
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

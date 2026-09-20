@@ -1,0 +1,370 @@
+{
+  "generatedBy": "scripts/generate-golden-samples.mjs (P1-T0)",
+  "count": 91,
+  "samples": [
+    {
+      "id": "a01-print-literal",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a02-binop-add",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a03-print-binop-literals",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a04-string-concat-var",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a05-bool-none",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a06-list-tuple",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a09-pass-only",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a10-comment-only",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a11-empty",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a12-os-system",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a13-subprocess-run",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a14-pty-spawn",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a15-os-system-alias",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a16-from-import-system",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a17-from-import-as",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a18-os-remove",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a19-shutil-rmtree",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a20-eval-literal",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a21-exec-string",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a22-compile",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a23-dunder-import",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a24-importlib-import-module",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a25-ctypes-cdll",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a26-socket",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a27-urllib-urlopen",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a28-requests-get",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a29-open-absolute-write",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a30-open-relative-write",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a31-open-kwarg-mode",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a32-open-read",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a33-os-chdir",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a34-getattr-os",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a35-getattr-dunder-import",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a36-import-module-rebind-chain",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a37-attr-rebind-call",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a38-builtins-eval",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a39-b64-decode-exec-inline",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a40-b64-decode-exec-var",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a41-module-rebind",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a43-open-concat-path",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a44-open-single-tuple",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a46-kwargs-call",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "a48-multi-assign-expr",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b04-fstring-path",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b19-subscript-read",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b22-conditional-expr",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b23-list-comprehension",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b27-del-statement",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b29-assert-statement",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b30-raise-statement",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b33-chained-compare",
+      "group": "legacy-parseable"
+    },
+    {
+      "id": "b01-dict-literal",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b02-dict-empty",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b03-fstring-basic",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b05-with-open-read",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b06-with-open-write",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b07-try-except",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b08-try-finally",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b09-def-basic",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b10-def-default-args",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b11-class-basic",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b12-class-inheritance",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b13-decorator-staticmethod",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b14-decorator-functools",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b15-async-def",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b16-async-with",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b17-lambda-basic",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b18-lambda-key",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b20-subscript-write",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b21-slice",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b24-dict-comprehension",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b25-while-augassign",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b26-return-value",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b28-global-statement",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b31-set-literal",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b32-star-args",
+      "group": "previously-failed"
+    },
+    {
+      "id": "a07-for-if-nested",
+      "group": "previously-failed"
+    },
+    {
+      "id": "a08-if-else",
+      "group": "previously-failed"
+    },
+    {
+      "id": "a42-danger-in-for-if",
+      "group": "previously-failed"
+    },
+    {
+      "id": "a45-compare-and-unary",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b35-def-wraps-os-system",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b36-with-wraps-open-absolute-write",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b37-try-wraps-os-system",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b38-class-wraps-subprocess",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b39-async-wraps-requests",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b40-lambda-wraps-eval",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b41-fstring-wraps-network-arg",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b42-dict-wraps-eval-value",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b43-socket-in-def",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b44-with-wraps-relative-write",
+      "group": "previously-failed"
+    },
+    {
+      "id": "b45-while-loop",
+      "group": "previously-failed"
+    }
+  ]
+}
