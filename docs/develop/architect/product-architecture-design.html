@@ -204,14 +204,14 @@ body.hide-dev .dev{display:none}
 <main>
 
 <header class="head">
-  <p class="eyebrow">SpaceAssistant · 架构理想态 · v0.1.8</p>
+  <p class="eyebrow">SpaceAssistant · 架构理想态 · v0.1.9</p>
   <h1>一个内核，加若干装配层与驱动源</h1>
   <p class="lede">Core 只做一件事：给定<strong>这次要什么</strong>（session / messages / profile / limits）、<strong>结果往哪里说</strong>（events），跑完这一次调用。它不认识业务身份、数据库、窗口；桌面界面、飞书 / 微信、定时器、事件源都只是<strong>调用者</strong>，不是宿主。</p>
   <div class="meta">
     <span><b>状态</b> 待评审</span>
-    <span><b>基线</b> 工作区 HEAD <code>c725896e</code> · v0.1.8（摸排时为 <code>6fea42c1</code>）</span>
+    <span><b>基线</b> 工作区 HEAD <code>dff15a69</code> · v0.1.9（摸排时为 <code>6fea42c1</code>，上一轮复核为 <code>c725896e</code>）</span>
     <span><b>摸排</b> 2026-09-12</span>
-    <span><b>复核</b> 2026-09-16 · 2026-09-18</span>
+    <span><b>复核</b> 2026-09-16 · 2026-09-18 · 2026-09-19</span>
     <span><b>节号</b> 页内 01 – 13，正文引用同此</span>
     <span><b>自足</b> 单文件 · 不引用其他文档，结论与依据全部写在页内</span>
   </div>
@@ -989,7 +989,7 @@ body.hide-dev .dev{display:none}
     </table>
   </div>
   <p><strong>永不开放改写</strong>的理由：参数一旦被改写，「历史记录 / 审计 / 界面 / 实际执行」四者就不再一致，「这次执行是谁改的」无法回答。要改工具行为就换或包一个 <code>ToolExecutor</code>；要改「怎么想」就改 Skill。</p>
-  <p><span class="dev">今天唯一反例是 AutoEvaluator：让外部直接给出结论（同步返回 {approve}、按工具名写死）—— 违反的正是「注入式端口只做补事实、给实现、报事实」</span>目标形态：拆成 <code>factsProvider</code> 补事实、<code>answerer</code> 在末端受控给结论。</p>
+  <p><span class="dev">已解决 20260919（偏差 4）：AutoEvaluator 已降为<strong>确定性预过滤</strong>（不再由外部直接给结论），事实改由 <code>factsProvider</code> 端口补充，末端结论由回答者位置受控给出</span>目标形态：拆成 <code>factsProvider</code> 补事实、<code>answerer</code> 在末端受控给结论。</p>
   <h4>「给审批看什么」要拆成两半</h4>
   <div class="tbl-wrap">
     <table>
@@ -1245,7 +1245,7 @@ body.hide-dev .dev{display:none}
     </table>
   </div>
   <p><strong>但有一半不能外置：底线。</strong>「内容在外」的前提是<strong>放宽方向必须受阻</strong>。<code>locked: true</code> 的规则不能被下调为 allow，也不能被覆盖。目标形态是把这条不变量提到接口上：<strong>Core 只接受「可收紧、不可放宽」的规则集</strong>；相对底线放宽任何一条，Core 拒绝这次调用并落审计。<strong>「不可放宽」在子调用上的具体形状是「不继承」</strong>：子调用的放行集合是<strong>替换</strong>而非继承，父批过的那一次不构成子那一次的授权。</p>
-  <p><strong>规则要有「来源」维度。</strong><span class="dev">今天 PolicyRule 只有内容与 locked，没有「谁设的」，于是「我设的 allow 为什么没生效」无法回答</span>目标形态下每条生效规则都能回答来源（内置默认 / 套餐 / 用户覆盖 / 迁移），并保留<strong>被遮蔽规则的痕迹</strong>。</p>
+  <p><strong>规则要有「来源」维度。</strong><span class="dev">已解决 20260919（偏差 3）：生效规则带<strong>来源标注</strong>（内置默认 / 套餐 / 用户覆盖 / 迁移），审计落 <code>ruleOrigin</code>，被遮蔽规则的痕迹保留</span>目标形态下每条生效规则都能回答来源（内置默认 / 套餐 / 用户覆盖 / 迁移），并保留<strong>被遮蔽规则的痕迹</strong>。</p>
   <div class="callout"><p><strong>不得为缺失的托管值静默提供默认值。</strong>托管值缺失时只有两种合法行为：按<strong>显式声明的默认</strong>兜底，或失败并落审计。最坏的做法是「取不到就回退到内置常量」，它把配置错误变成静默的行为差异。</p></div>
   <p><strong>连续拒绝要有回退阈值。</strong>同一调用内<strong>连续 3 次</strong>被拒时，从「继续尝试」退到更保守的行为。<span class="dev">今天这个计数器与「工具执行失败」共用，安全拒绝会被执行失败带着触发中止</span>两者必须分开计数，且安全拒绝的阈值应更高。</p>
   <h4>三条判据（决定任何东西该在里还是在外）</h4>
@@ -1260,7 +1260,7 @@ body.hide-dev .dev{display:none}
     <li><strong>Driver 不做安全判定</strong>：它能把 <code>'y'</code> 这个字符串带回来，但无权判定「这次批准有效」。<span class="dev">今天 PendingDecision = 'y' | 'n' | 'timeout' 把管道事实与语义结论混在一个枚举里</span></li>
     <li><strong>Safety 不自己发消息</strong>：只产出「决策请求」，由 Driver 投递。这是「确认通道可插拔」的前提。</li>
     <li><strong>审计必须区分「没送到」与「送到了没人回」</strong>：它们是不同的安全事实。<span class="dev">今天 mapToolOutcome 把两者统一压成 timeout</span></li>
-    <li><strong>lane 不是回答者</strong>：回答者由 Profile 解析、与 lane 正交。<span class="dev">今天 channelFor({ lane }) 按 lane 硬编码返回通道</span></li>
+    <li><strong>lane 不是回答者</strong>：回答者由 Profile 解析、与 lane 正交。<span class="dev">已解决 20260919（偏差 4）：通道改为<strong>二维解析</strong> —— 回答者种类（user / agent / deny）与 lane 正交，传输通道由 lane 派生</span></li>
     <li><strong>端口形状不预设「单次同步问答」</strong>：回答者可以本身是一次 Core 调用，端口必须容纳「多轮 + 有界预算 + 有界输出」。</li>
   </ol>
   <h4>多轮回答者的装配与发起</h4>
@@ -1332,7 +1332,7 @@ body.hide-dev .dev{display:none}
   <p><strong>真正的解法是反向的</strong>：把 Core 对存储的依赖压到两个端口 —— <code>loadContext(invocation)</code> 与 <code>persist(InvocationResult)</code>，Core 不认识表、事务与 SQLite。<code>loadContext</code> 只按会话锚点取回<strong>原始材料</strong>，<strong>装配（裁剪与注入）留在 Core</strong> 不下沉。这既保证装配规则唯一，也让 Core 能脱 SQLite 单测。</p>
   <h4>三条验收标准</h4>
   <ol class="plain">
-    <li>Core 能脱离 SQLite 跑单测。<span class="dev">今天不能，appDb 是入参且被直接使用</span></li>
+    <li>Core 能脱离 SQLite 跑单测。<span class="dev">已解决 20260919（偏差 2）：Core 已脱库，<code>appDb</code> 不再是入参；用内存端口实现即可跑完一个完整回合</span></li>
     <li>换一种存储实现（例如把某个 Agent 的记录落成 JSONL）不需要改 Core。</li>
     <li>存储不可用时 Core 的行为有明确约定（fail-closed 还是降级），而不是未定义。</li>
   </ol>
@@ -1386,7 +1386,7 @@ body.hide-dev .dev{display:none}
 
 <section id="s12">
   <h2><span class="sec-num">12</span>今天与理想态的偏差</h2>
-  <p class="lead">1 – 12 是 <strong>Agent 主线</strong>的偏差（阻塞自动审批、SubAgent、后台管家三条业务线）；13 – 14 是<strong>横切关注点</strong>的偏差，与主线正交，可并行处理；15 – 16 是<strong>对照研究</strong>新增的两条：机制在代码里是否真的成立（对照对象是 Codex、DeepSeek Harness、Claude Code 三个同类产品的架构；结论已全部并进本页，那些原始对照记录不是阅读前提）。17 – 20 是<strong>复用面</strong>的偏差：只对「拆成可复用的 Agent SDK、给外部复用者用」成立，本产品自己用不到。21 – 23 是<strong>驱动源与准入面</strong>的偏差：从「后台管家的驱动源不是人」推出来，与 SDK 无关。三组都挂在契约（1、2）之后（23 还要等 9），不新增关键路径。<strong>24</strong> 是<strong>存储面</strong>的偏差（保留与清理的归属，本次新增，未参与 2026-09-16 复核）：事件台账的保留语义没有归位 —— 清理写在 Core 文件里、上限参数钉在 Driver；与 13、14 同属横切性质，不阻塞关键路径 —— 但 21 – 23 的证据形式与前二十条正好相反：它们描述的是<strong>还不存在的东西</strong>，复现命令应当返回<strong>空</strong>。表末的<strong>状态</strong>列记 <strong>2026-09-16</strong> 与 <strong>2026-09-18</strong> 两次复核结果：09-16 复核时绝大多数仍未解决（<strong>12 已解决</strong>，9、11 部分解决）；<strong>2026-09-18 复核更新</strong> —— <strong>1、7、21、22 已解决</strong>，<strong>4、15、16 转为部分解决</strong>，8、23 为两处<strong>显式例外</strong>保持未解决，其余条目仍未解决 —— 见表后的两张复核记录。</p>
+  <p class="lead">1 – 12 是 <strong>Agent 主线</strong>的偏差（阻塞自动审批、SubAgent、后台管家三条业务线）；13 – 14 是<strong>横切关注点</strong>的偏差，与主线正交，可并行处理；15 – 16 是<strong>对照研究</strong>新增的两条：机制在代码里是否真的成立（对照对象是 Codex、DeepSeek Harness、Claude Code 三个同类产品的架构；结论已全部并进本页，那些原始对照记录不是阅读前提）。17 – 20 是<strong>复用面</strong>的偏差：只对「拆成可复用的 Agent SDK、给外部复用者用」成立，本产品自己用不到。21 – 23 是<strong>驱动源与准入面</strong>的偏差：从「后台管家的驱动源不是人」推出来，与 SDK 无关。三组都挂在契约（1、2）之后（23 还要等 9），不新增关键路径。<strong>24</strong> 是<strong>存储面</strong>的偏差（保留与清理的归属，本次新增，未参与 2026-09-16 复核）：事件台账的保留语义没有归位 —— 清理写在 Core 文件里、上限参数钉在 Driver；与 13、14 同属横切性质，不阻塞关键路径 —— 但 21 – 23 的证据形式与前二十条正好相反：它们描述的是<strong>还不存在的东西</strong>，复现命令应当返回<strong>空</strong>。表末的<strong>状态</strong>列记 <strong>2026-09-16</strong>、<strong>2026-09-18</strong> 与 <strong>2026-09-19</strong> 三次复核结果：09-16 复核时绝大多数仍未解决（<strong>12 已解决</strong>，9、11 部分解决）；<strong>2026-09-18 复核更新</strong> —— <strong>1、7、21、22 已解决</strong>，<strong>4、15、16 转为部分解决</strong>，8、23 为两处<strong>显式例外</strong>保持未解决；<strong>2026-09-19 复核更新</strong>（调用契约路径重构落地）—— <strong>2、3、4、5、6、16 已解决</strong>，<strong>8 转为部分解决</strong>（机制面收口 + 管家首批迁移），其余条目证据仍可复现、结论不变 —— 见表后的三张复核记录。</p>
 
   <figure>
     <div class="figframe"><span class="ft">图 F · 两条关键路径</span><span class="fk">dependency · 5 nodes</span></div>
@@ -1465,9 +1465,9 @@ body.hide-dev .dev{display:none}
     <div class="note" data-panel="dgm-f">
       <p class="nt">点选图中任一节点</p>
       <p class="nh">两条关键路径</p>
-      <p><strong>调用契约路径</strong>：1、2 → 3、4、5、6、8、16。<strong>驱动权路径</strong>：1 → 9 → 8、10、11、12。契约是公共前置，先做完这一对，下游才能并行铺开。21 – 23 是驱动源与准入面，都不在关键路径上。</p><p class="nh">2026-09-18 复核</p><p>关键路径本身开始推进：<strong>1 已解决</strong>（sender 全链路移除、事件出口化），7、21、22 一并解决，4、15、16 部分解决。<strong>2 仍未解决</strong>（Core 端口收口未动），<strong>9、10 仍未解决</strong>。</p><p class="nh">2026-09-16 复核</p><p>下游已经先动了两处：<strong>12 已解决</strong>（渲染端的技能路由与系统提示拼装收回主进程）、<strong>11 部分落地</strong>（turn 视图已有版本契约），<strong>9 降为部分解决</strong>（事实权属、排队、取消已回主进程，「发起」还没有）。<strong>10 未动</strong>。</p>
+      <p><strong>调用契约路径</strong>：1、2 → 3、4、5、6、8、16。<strong>驱动权路径</strong>：1 → 9 → 8、10、11、12。契约是公共前置，先做完这一对，下游才能并行铺开。21 – 23 是驱动源与准入面，都不在关键路径上。</p><p class="nh">2026-09-19 复核</p><p>契约路径整条推进：<strong>2、3、4、5、6、16 已解决</strong> —— Core 脱库（loadContext / persist 两个端口）这道公共前置闭合后，安全规则底线校验与来源标注、模型档与思维强度分档、factsProvider 端口、按调用工具集裁剪随之落地；<strong>8 部分解决</strong>（唯一投递入口与送达记录入库、管家首批迁移，存量直连点仍随 9 / 10 / 11）。<strong>9、10 仍未解决</strong>。</p><p class="nh">2026-09-18 复核</p><p>关键路径本身开始推进：<strong>1 已解决</strong>（sender 全链路移除、事件出口化），7、21、22 一并解决，4、15、16 部分解决。<strong>2 仍未解决</strong>（Core 端口收口未动），<strong>9、10 仍未解决</strong>。</p><p class="nh">2026-09-16 复核</p><p>下游已经先动了两处：<strong>12 已解决</strong>（渲染端的技能路由与系统提示拼装收回主进程）、<strong>11 部分落地</strong>（turn 视图已有版本契约），<strong>9 降为部分解决</strong>（事实权属、排队、取消已回主进程，「发起」还没有）。<strong>10 未动</strong>。</p>
     </div>
-    <p class="figcap">13、14、24 不阻塞任何人，可整条并行；15 只等 3；16 是主线里最靠后的一条，等 1、2、4、6 齐了再动。17 – 20 只等 1、2，可与 3 – 8 并行；20 是这一组的验收节点，等 17、18、19 齐了再动。21、22 与 15 同批（都等 3，lane 得先可达，规则才有承载对象）；23 等 1、2、9 —— 驱动权不在主进程，准入就无处统一施加。<strong>2026-09-16 复核</strong>：12 已解决、11 与 9 部分解决。<strong>2026-09-18 复核</strong>：关键路径本身已开始推进 —— <strong>1 已解决</strong>（Invocation 契约的驱动源一侧闭合），7、21、22 一并解决，4、15、16 部分解决；<strong>2 与 9、10 仍未解决</strong>（Core 端口收口、驱动权回收、IPC 面拆分未动）。</p>
+    <p class="figcap">13、14、24 不阻塞任何人，可整条并行；15 只等 3；16 是主线里最靠后的一条，等 1、2、4、6 齐了再动。17 – 20 只等 1、2，可与 3 – 8 并行；20 是这一组的验收节点，等 17、18、19 齐了再动。21、22 与 15 同批（都等 3，lane 得先可达，规则才有承载对象）；23 等 1、2、9 —— 驱动权不在主进程，准入就无处统一施加。<strong>2026-09-16 复核</strong>：12 已解决、11 与 9 部分解决。<strong>2026-09-18 复核</strong>：关键路径本身已开始推进 —— <strong>1 已解决</strong>（Invocation 契约的驱动源一侧闭合），7、21、22 一并解决，4、15、16 部分解决；<strong>2 与 9、10 仍未解决</strong>（Core 端口收口、驱动权回收、IPC 面拆分未动）。<strong>2026-09-19 复核</strong>：契约路径这一对整条收口 —— <strong>2 已解决</strong>（Core 脱库，两个端口落形），3 – 6 与 16 随之解决，<strong>8 转为部分解决</strong>；<strong>9、10、11 仍未解决</strong>（驱动权回收与 IPC 面拆分未动）。</p>
   </figure>
 
   <h3>偏差清单</h3>
@@ -1478,7 +1478,7 @@ body.hide-dev .dev{display:none}
     <button class="btn" data-filter="cross">横切与对照</button>
     <button class="btn" data-filter="sdk">复用面（17 – 20）</button>
     <button class="btn" data-filter="admission">驱动源与准入（21 – 23）</button>
-    <button class="btn" data-filter="done">已解决 / 部分解决（1 · 4 · 7 · 9 · 11 · 12 · 15 · 16 · 21 · 22）</button>
+    <button class="btn" data-filter="done">已解决 / 部分解决（1 · 2 · 3 · 4 · 5 · 6 · 7 · 8 · 9 · 11 · 12 · 15 · 16 · 21 · 22）</button>
     <span class="sep"></span>
     <input class="search" id="devsearch" type="search" placeholder="搜索偏差 / 文件 / 关键词">
   </div>
@@ -1487,13 +1487,13 @@ body.hide-dev .dev{display:none}
       <thead><tr><th>#</th><th>偏差</th><th>证据</th><th>应该往哪走</th><th>前置 → 后置</th><th>状态</th></tr></thead>
       <tbody>
         <tr data-path="contract driver done"><td><strong>1</strong></td><td>Core 依赖驱动源：<code>sender</code> 是必填参数，窗口存活决定回合存亡</td><td><code>toolChatLoop.ts:389</code>、<code>:623</code></td><td>事件出口取代 <code>sender</code>；调用存亡只由取消 / 超时 / 错误决定</td><td>— → 3、4、5、6、8、9、16</td><td><span class="st st-done">已解决 20260917</span></td></tr>
-        <tr data-path="contract"><td><strong>2</strong></td><td>Core 依赖 Storage：入口直接持有数据库句柄，循环内查询 10 处以上</td><td><code>toolChatLoop.ts:411</code>、<code>:543</code>、<code>:594</code>、<code>:596</code>、<code>:636</code>、<code>:923</code>、<code>:1363</code>、<code>:1580</code></td><td>收敛为 <code>loadContext()</code> / <code>persist()</code> 两个端口</td><td>— → 3、4、5、6、7、8、16</td><td><span class="st st-open">未解决</span></td></tr>
-        <tr data-path="contract"><td><strong>3</strong></td><td>Safety 依赖 Storage 与宿主配置：门控自己读库</td><td><code>toolCallGate.ts:185</code></td><td>生效规则由调用方解析后随 Invocation 传入</td><td>1、2 → 15</td><td><span class="st st-open">未解决</span></td></tr>
-        <tr data-path="contract done"><td><strong>4</strong></td><td>扩展点形状不对：<code>AutoEvaluator</code> 同步返回结论、按工具名写死</td><td><code>confirmation/types.ts:295</code>、<code>toolCallGate.ts:336</code></td><td>拆成 <code>factsProvider</code>（补事实）+ <code>answerer</code>（末端受控给结论）</td><td>1、2 → 16</td><td><span class="st st-part">部分解决 20260917</span></td></tr>
-        <tr data-path="contract"><td><strong>5</strong></td><td>描述与实现混在一个结构：<code>baseUrl</code> 出现在可声明的执行快照里</td><td><code>assistantFactAggregator.ts</code>（<code>TurnExecutionConfig</code>）</td><td>端点与凭据留在宿主端口</td><td>1、2 → —</td><td><span class="st st-open">未解决</span></td></tr>
-        <tr data-path="contract"><td><strong>6</strong></td><td>思维强度是全局布尔，不能按调用覆盖；模型元数据没有能力标记</td><td><code>domainTypes.ts:734</code>、<code>:678</code></td><td><code>profile.reasoning.effort</code> 分档 + 宿主机能力校验</td><td>1、2 → 16</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract done"><td><strong>2</strong></td><td>Core 依赖 Storage：入口直接持有数据库句柄，循环内查询 10 处以上</td><td><code>toolChatLoop.ts:411</code>、<code>:543</code>、<code>:594</code>、<code>:596</code>、<code>:636</code>、<code>:923</code>、<code>:1363</code>、<code>:1580</code></td><td>收敛为 <code>loadContext()</code> / <code>persist()</code> 两个端口</td><td>— → 3、4、5、6、7、8、16</td><td><span class="st st-done">已解决 20260919</span></td></tr>
+        <tr data-path="contract done"><td><strong>3</strong></td><td>Safety 依赖 Storage 与宿主配置：门控自己读库</td><td><code>toolCallGate.ts:185</code></td><td>生效规则由调用方解析后随 Invocation 传入</td><td>1、2 → 15</td><td><span class="st st-done">已解决 20260919</span></td></tr>
+        <tr data-path="contract done"><td><strong>4</strong></td><td>扩展点形状不对：<code>AutoEvaluator</code> 同步返回结论、按工具名写死</td><td><code>confirmation/types.ts:295</code>、<code>toolCallGate.ts:336</code></td><td>拆成 <code>factsProvider</code>（补事实）+ <code>answerer</code>（末端受控给结论）</td><td>1、2 → 16</td><td><span class="st st-done">已解决 20260919</span></td></tr>
+        <tr data-path="contract done"><td><strong>5</strong></td><td>描述与实现混在一个结构：<code>baseUrl</code> 出现在可声明的执行快照里</td><td><code>assistantFactAggregator.ts</code>（<code>TurnExecutionConfig</code>）</td><td>端点与凭据留在宿主端口</td><td>1、2 → —</td><td><span class="st st-done">已解决 20260919</span></td></tr>
+        <tr data-path="contract done"><td><strong>6</strong></td><td>思维强度是全局布尔，不能按调用覆盖；模型元数据没有能力标记</td><td><code>domainTypes.ts:734</code>、<code>:678</code></td><td><code>profile.reasoning.effort</code> 分档 + 宿主机能力校验</td><td>1、2 → 16</td><td><span class="st st-done">已解决 20260919</span></td></tr>
         <tr data-path="contract done"><td><strong>7</strong></td><td>Storage 缺归属与可见性：列表全表加载，跨会话搜索只按 profile 过滤</td><td><code>database/operations.ts:118</code>、<code>:1231</code>、<code>SessionListPane.tsx:24</code></td><td>补归属与可见性维度；内部调用不落用户会话</td><td>2 → 11</td><td><span class="st st-done">已解决 20260917</span></td></tr>
-        <tr data-path="contract driver"><td><strong>8</strong></td><td>投递点散落，没有统一入口，也没有送达记录</td><td><code>toolChatLoop.ts:419</code>、<code>safeWebContentsSend.ts:3</code></td><td>驱动源层唯一投递入口 + 送达记录</td><td>1、2、9 → 11</td><td><span class="st st-open">未解决</span></td></tr>
+        <tr data-path="contract driver done"><td><strong>8</strong></td><td>投递点散落，没有统一入口，也没有送达记录</td><td><code>toolChatLoop.ts:419</code>、<code>safeWebContentsSend.ts:3</code></td><td>驱动源层唯一投递入口 + 送达记录</td><td>1、2、9 → 11</td><td><span class="st st-part">部分解决 20260919</span></td></tr>
         <tr data-path="driver done"><td><strong>9</strong></td><td>驱动权在渲染端</td><td><code>ChatView.tsx:852</code>、<code>chatRunnerService.ts:165</code></td><td>主进程为驱动权威，桌面只是其中一个驱动源</td><td>1 → 8、10、11、12</td><td><span class="st st-part">部分解决 20260916</span></td></tr>
         <tr data-path="driver"><td><strong>10</strong></td><td>IPC 面混了两类东西：Agent 驱动协议与桌面应用功能同处一个文件</td><td><code>appIpc.ts:207</code>、<code>:2029</code></td><td>拆开：驱动协议属驱动源实现，桌面功能单列</td><td>9 → 12</td><td><span class="st st-open">未解决</span></td></tr>
         <tr data-path="driver done"><td><strong>11</strong></td><td>视图更新没有契约：列表靠拉全表，UI 失效通知直连</td><td><code>database/operations.ts:118</code>、<code>safeWebContentsSend.ts:3</code></td><td>失效通知（scope + 版本）作为一种出口形态；真相只从 Storage 取</td><td>7、8、9 → —</td><td><span class="st st-part">部分解决 20260915</span></td></tr>
@@ -1501,7 +1501,7 @@ body.hide-dev .dev{display:none}
         <tr data-path="cross"><td><strong>13</strong></td><td>i18n 有两套机制、两份文案：渲染端 i18next，主进程菜单另写一份手写字典</td><td><code>menuLabels.ts</code>、<code>i18n/resources/</code></td><td>主进程只产出「键 + 参数」；直接显示处走注入的 <code>translate</code> 端口</td><td>— → —</td><td><span class="st st-open">未解决</span></td></tr>
         <tr data-path="cross"><td><strong>14</strong></td><td>日志只增不减：按日文件没有保留期与轮转（对照：会话台账有保留期）</td><td><code>agentLogPaths.ts:15</code>、<code>:25</code>、<code>main.ts:391</code></td><td>把保留期与轮转纳入 Storage 的保留语义，不靠人工清理</td><td>— → —</td><td><span class="st st-open">未解决</span></td></tr>
         <tr data-path="contract cross done"><td><strong>15</strong></td><td>安全裁决能不能被配置放宽：档位是在调范围，还是能调宽严</td><td><code>policyPackages.ts:105</code>：<code>resolvePolicyRules</code> 对任意 lane 按 <code>packages[lane]</code> 整体变换</td><td>档位只调<strong>范围</strong>不调<strong>宽严</strong>：底线不可放宽、无远程开关；<code>kind === 'agent'</code> 的 lane 不得用 <code>loose</code></td><td>3 → —</td><td><span class="st st-part">部分解决 20260917</span></td></tr>
-        <tr data-path="contract done"><td><strong>16</strong></td><td>子 Agent 的能力裁剪落在哪里：工具集，还是提示词</td><td>今天没有 SubAgent，工具按会话与配置整体装配（<code>effectiveTools.ts:16</code>），不存在「按子调用裁剪工具集」的机制</td><td>裁剪必须落在<strong>工具集</strong>上，不落在提示词上 —— 无人类应答者的 Agent 就不给它「问人」的工具</td><td>1、2、4、6 → —</td><td><span class="st st-part">部分解决 20260917</span></td></tr>
+        <tr data-path="contract done"><td><strong>16</strong></td><td>子 Agent 的能力裁剪落在哪里：工具集，还是提示词</td><td>今天没有 SubAgent，工具按会话与配置整体装配（<code>effectiveTools.ts:16</code>），不存在「按子调用裁剪工具集」的机制</td><td>裁剪必须落在<strong>工具集</strong>上，不落在提示词上 —— 无人类应答者的 Agent 就不给它「问人」的工具</td><td>1、2、4、6 → —</td><td><span class="st st-done">已解决 20260919</span></td></tr>
         <tr data-path="sdk"><td><strong>17</strong></td><td>契约里允许出现函数与句柄：SDK 的物理边界无法上移</td><td><code>toolChatLoop.ts:409</code> 的 <code>getApiKey</code>、<code>:421</code> / <code>:423</code> 的 <code>emitFactEvent</code> / <code>emitSessionEvent</code> 都是闭包参数；入口同时持有 <code>sender</code> 与数据库句柄</td><td>契约只放可序列化数据与消息；端口表达为「宿主实现的服务接口」，本地绑定时由绑定层适配</td><td>1、2 → 20</td><td><span class="st st-open">未解决</span></td></tr>
         <tr data-path="sdk"><td><strong>18</strong></td><td>一次调用不能多实例并存：四处模块级可变状态</td><td><code>builtinExecutors.ts:1300</code>、<code>confirmation/audit.ts:11</code>、<code>mcpToolExecutor.ts:24</code>、<code>remote/confirmId.ts:6</code>，另有 <code>registerChatCancel</code> / <code>registerToolRevocationRequest</code> 两个注册入口</td><td>状态随 runtime 实例走、不随进程走：<code>createAgentRuntime(deps)</code></td><td>1、2 → 20</td><td><span class="st st-open">未解决</span></td></tr>
         <tr data-path="sdk"><td><strong>19</strong></td><td>没有包边界与依赖护栏：SDK 面靠约定，不靠机制</td><td>从 <code>toolChatLoop.ts</code> 静态可达 368 个本地模块，其中 26 个直接 <code>import 'electron'</code>（15 个为 <code>import type</code>）；<code>package.json</code> 无 workspaces，宿主与 provider 依赖混装</td><td>包边界 + <code>exports</code> + lint 规则 + CI 断言；SDK 包不得依赖 electron 与 Electron 内嵌的 <code>node:sqlite</code></td><td>1、2 → 20</td><td><span class="st st-open">未解决</span></td></tr>
@@ -1513,7 +1513,7 @@ body.hide-dev .dev{display:none}
       </tbody>
     </table>
   </div>
-  <p class="figcap">证据约定：上表的行号是当次摸排的快照（基线见文首），会随代码演进失效。每条证据都应能由命令复现：用 <code>rg -n '&lt;符号&gt;' &lt;文件&gt;</code> 定位到同一个事实，行号只作辅助。21 – 23 用<strong>反向证据</strong>（表中标 <span class="rev">反向</span>）：它们描述的是还不存在的东西，所以「证据」列写的是复现命令与期望的空结果 —— 命令<strong>仍返回 0 行</strong>时该条成立；哪天返回了行号，说明东西已经补上，这条就该从清单里划掉。 <strong>2026-09-16 复核</strong>：三条的形态变了，见下表。<strong>2026-09-18 复核</strong>：21、22 的反向证据已翻转（复现命令已返回行号）、判「已解决」；23 仍成立（保持未解决）。</p>
+  <p class="figcap">证据约定：上表的行号是当次摸排的快照（基线见文首），会随代码演进失效。每条证据都应能由命令复现：用 <code>rg -n '&lt;符号&gt;' &lt;文件&gt;</code> 定位到同一个事实，行号只作辅助。21 – 23 用<strong>反向证据</strong>（表中标 <span class="rev">反向</span>）：它们描述的是还不存在的东西，所以「证据」列写的是复现命令与期望的空结果 —— 命令<strong>仍返回 0 行</strong>时该条成立；哪天返回了行号，说明东西已经补上，这条就该从清单里划掉。 <strong>2026-09-16 复核</strong>：三条的形态变了，见下表。<strong>2026-09-18 复核</strong>：21、22 的反向证据已翻转（复现命令已返回行号）、判「已解决」；23 仍成立（保持未解决）。<strong>2026-09-19 复核</strong>：1 – 20 逐条重跑（基线见文首），2、3、4、5、6、16 的证据位已指向落地实现、判「已解决」；8 的机制面（唯一投递入口 + 送达记录）已入仓、存量直连点未收敛，判「部分解决」；21、22 的反向证据保持翻转（已解决），23 仍成立（保持未解决）。</p>
   <div class="callout">
     <p><strong>复核记录（2026-09-16 ｜ 工作区 HEAD <code>6fea42c1</code> ｜ v0.1.8）</strong>：按最新代码逐条重跑了 23 条的证据命令。<strong>绝大多数偏差仍在</strong> —— 1 – 8、10、13 – 23 的证据都能复现（行号有漂移，结论不变）；只有三条的形态变了。<strong>解决不等于删除</strong>：改的是哪一条、什么时候改的，都留在表里，靠「状态」列和下面这张表追溯。</p>
     <div class="tbl-wrap">
@@ -1547,9 +1547,29 @@ body.hide-dev .dev{display:none}
         </tbody>
       </table>
     </div>
-    <p><strong>文件级漂移（结论不变）</strong>：偏差 13 的主进程手写菜单字典已由 <code>electron/menuLabels.ts</code> 移到 <code>src/shared/menuLabels.ts</code>（仍是与渲染端 i18next 并行的第二套字典，未走 <code>translate</code> 端口）；偏差 5 的 <code>TurnExecutionConfig</code> 现位于 <code>src/shared/assistantFactAggregator.ts</code>（<code>baseUrl</code> 仍在可声明的执行快照里）。两者均<strong>未解决</strong>。</p>
+    <p><strong>文件级漂移（结论不变）</strong>：偏差 13 的主进程手写菜单字典已由 <code>electron/menuLabels.ts</code> 移到 <code>src/shared/menuLabels.ts</code>（仍是与渲染端 i18next 并行的第二套字典，未走 <code>translate</code> 端口）；偏差 5 的 <code>TurnExecutionConfig</code> 现位于 <code>src/shared/assistantFactAggregator.ts</code>（<code>baseUrl</code> 仍在可声明的执行快照里）—— <strong>2026-09-19 更新：偏差 5 已解决</strong>，该快照已无 <code>baseUrl</code>，网络目标归宿主端口 <code>ports.credentials.networkTarget</code>；偏差 13 仍未解决（文件级漂移部分保留，见下表）。</p>
     <p><strong>为什么 8、23 不回写</strong>：两份计划都把这两条记为<strong>显式例外</strong>并对例外依据留档 —— 偏差 8 的整项受益人是后续调用方与复用面，对管家 v1 业务零贡献，收敛既有 IM 回复路径有真实回归风险；偏差 23 的威胁模型（无人值守调用自行堆积）当前只对 automation lane 成立，把准入拦进桌面 / 远程两条生产链路是给现网注入回归风险。二者的剩余边界记录在两份计划的「债务移交清单」，整项关闭交由块 1 收敛。</p>
     <p><strong>为什么 4、15、16 判「部分解决」而不是「已解决」</strong>：三者都是审批 Agent 接入的<strong>连带改善</strong>，各自仍有一半语义未落地（4 的事实端口、15 的 user lane 宽严、16 的通用子调用裁剪）。判「部分解决」是为了让后续计划一眼看出「剩的那半是什么、归谁」。</p>
+  </div>
+  <div class="callout">
+    <p><strong>复核记录（2026-09-19 ｜ 工作区 HEAD <code>dff15a69</code> ｜ v0.1.9）</strong>：本轮是<strong>调用契约路径重构</strong>（实施计划 <code>docs/develop/agent-core-contract-path-refactor-plan.md</code>，阶段提交 P0 <code>8ad19d6f</code> → P8 <code>185e1596</code>）落地后的复核。契约路径这对公共前置整条收口：<strong>2、3、4、5、6、16 翻转为「已解决」</strong>，<strong>8 转为「部分解决」</strong>（机制面收口 + 管家首批迁移）；1 属收尾确认（主体已于 2026-09-17 解决）；其余条目证据仍可复现、结论不变（9、10、11 未动，15 仍部分解决，23 仍是显式例外）。<strong>仍不删行</strong>：每条都按「改的是哪一条、什么时候改的」写在下表。</p>
+    <div class="tbl-wrap">
+      <table id="devreview-0919">
+        <thead><tr><th>#</th><th>状态</th><th>变化</th><th>证据 / 落地提交</th></tr></thead>
+        <tbody>
+          <tr><td><strong>2</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>Core 脱库：入口不再直接持有数据库句柄，循环内 10 处以上查询收敛为 <code>loadContext()</code> / <code>persist()</code> 两个端口；门控材料与宿主端口在装配期解析后随调用传入，缺失即 fail-loud。§2.4 的「persist 失败可观测且 rethrow」「端口接口化（内存 / SQLite 双实现不改 Core）」同步达成</td><td>P2 <code>fefd5646</code><br><code>rg -n 'appDb' electron/toolChatLoop.ts electron/confirmation/toolCallGate.ts</code> → <strong>0 行</strong><br><code>rg -n "import .*database" electron/toolChatLoop.ts</code> → <strong>0 行</strong><br>内存端口完整回合测试 <code>electron/toolChatLoop.inMemoryPorts.test.ts</code>（带工具调用 + 一次批准 + 一次拒绝）</td></tr>
+          <tr><td><strong>3</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>门控不再自己读库、也不再静默回退内置常量：生效规则由调用方解析后随 Invocation 传入；新增「可收紧不可放宽」的底线校验（违规 → deny(rules-violated) + 审计）、嵌套交集（子 allow 只取交集、deny 继承）与规则<strong>来源标注</strong>（builtin / package / user-override / migration）；托管材料缺失 fail-loud</td><td>P2 <code>fefd5646</code> + P3 <code>b36c95cf</code><br><code>rg -n 'appDb|DEFAULT_POLICY_RULES|EMPTY_CACHE' electron/confirmation/toolCallGate.ts</code> → <strong>0 行</strong><br><code>src/shared/policy/policyFloor.ts</code>（<code>validatePolicyRulesFloor</code> / <code>intersectPolicyRulesWithFloor</code>）<br><code>electron/confirmation/policyFloor.test.ts</code></td></tr>
+          <tr><td><strong>4</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>扩展点按设计拆成「事实 + 回答者」两段，且事实<strong>不再由门控内部构造</strong>：<code>factsProvider</code> 端口补事实、逐项标注来源半区（工具契约 / 宿主环境）、「声明为空」与「忘了声明」可区分；末端结论走回答者位置，确认通道改为二维解析（回答者种类 × 传输通道，<code>AgentChannel</code> / <code>DenyChannel</code> 落地）；<code>AutoEvaluator</code> 保留为<strong>确定性预过滤</strong>（由规则 match + lane 驱动，属有意决策）</td><td>P5 <code>22a8a2f7</code><br><code>electron/confirmation/factsProvider.test.ts</code><br><code>electron/confirmation/channels.ts</code> 的 <code>resolveConfirmChannel</code>（二维解析）</td></tr>
+          <tr><td><strong>5</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>描述与实现分家：可声明的执行快照（<code>TurnExecutionConfig</code>）不再含 <code>baseUrl</code>，网络目标留在宿主端口，不进可序列化契约；桌面 frozen.baseUrl 伪造路径同步移除</td><td>P4 <code>ce08d1ff</code><br><code>rg -n 'baseUrl' src/shared/assistantFactAggregator.ts</code> → <strong>0 行</strong><br><code>src/shared/agent/invocation.ts</code> 的 <code>AgentCredentialsPorts.networkTarget</code></td></tr>
+          <tr><td><strong>6</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>思维强度由全局布尔改为<strong>按调用分档</strong>：<code>profile.reasoning.effort</code>（off / low / medium / high）+ 模型能力标记 <code>ModelEntry.supportsThinking</code> + 宿主定死规则校验（不支持 → 降级为 off，留 <code>degraded</code> 痕迹与 <code>agent.profile.reasoning_degraded</code> 日志，不静默换档）；子调用默认 off，旧布尔保留一个发布周期做兼容映射（true → medium）</td><td>P4 <code>ce08d1ff</code><br><code>src/shared/agent/invocation.ts</code> 的 <code>AgentReasoningProfile</code>；<code>src/shared/domainTypes.ts</code> 的 <code>supportsThinking</code><br><code>electron/runtime/profileReasoning.test.ts</code><br>设置页档位选择器不在本项（随 Settings / Config 组件独立排期）</td></tr>
+          <tr><td><strong>8</strong></td><td><span class="st st-part">部分解决 20260919</span></td><td>机制面收口：新增驱动源层唯一投递入口 <code>deliver(preference, payload)</code> + 驱动源注册与可达性 + 送达记录（成对性）+ 有界补投三件套（TTL 默认 10 分钟、取代键、送达即止）+ 延后不丢弃；管家 <code>deliverTaskResult</code> 首批迁入，<code>main.ts</code> 装配共享 hub 并注册桌面 sink。<strong>仍然成立的部分</strong>：桌面通知路径与文件树 / 文件内容的失效通知仍直连 <code>safeWebContentsSend</code> —— 原条目「投递点散落、没有统一入口」这半句未兑现</td><td>P6 <code>591c110b</code><br><code>electron/driver/deliveryHub.ts</code>、<code>electron/driver/deliveryHub.test.ts</code><br><code>rg -n 'safeWebContentsSend' electron/fileTreeSyncNotify.ts electron/fileContentWatcher.ts electron/claudeStreamHandlers.ts</code> → <strong>仍有直连点</strong></td></tr>
+          <tr><td><strong>16</strong></td><td><span class="st st-done">已解决 20260919</span></td><td>裁剪有了<strong>通用机制</strong>且落在工具集上：<code>profile.tools.trim</code>（allow 为封闭集合、deny 只收窄）在 builtin + MCP 合成层统一过滤；嵌套调用做装配期交集断言（子 allow 超出父 allow → <code>TOOLS_TRIM_WIDEN_DENIED</code> + 日志）；审批 Agent 的只读白名单数据化平移为首个实例（<code>approvalToolset.ts</code>，白名单内容不变）。SubAgent 派生的具体业务属块 3，不在本项</td><td>P7 <code>22a9fa9b</code><br><code>electron/effectiveTools.ts</code>（<code>computeEffectiveTools</code> 的 trim）、<code>electron/effectiveTools.trim.test.ts</code><br><code>electron/confirmation/approvalToolset.ts</code>；<code>electron/runtime/invocationAssembler.ts</code> 的嵌套断言</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>为什么 4、16 由「部分解决」升为「已解决」</strong>：2026-09-18 判「部分」时各自剩的那半句已在本轮落地 —— 4 的「事实仍由门控内部构造、未抽象」由 <code>factsProvider</code> 端口补上（<code>AutoEvaluator</code> 保留为确定性预过滤是明确的有意决策，不再是「外部直接给结论」）；16 的「尚无通用子调用裁剪机制」由 <code>profile.tools.trim</code> + 嵌套交集断言补上。15 不在本轮范围：其剩余部分（<code>user</code> lane 仍保留 strict / loose 宽严档位）仍未兑现，保持「部分解决」。</p>
+    <p><strong>文件级漂移（结论不变）</strong>：偏差 17 证据里的后半句（「入口同时持有 <code>sender</code> 与数据库句柄」）已随偏差 1、2 一同消失，但前半句仍成立 —— 旧扁平入口 <code>RunToolChatSessionArgs</code> 仍以闭包参数承载 <code>getApiKey</code> / <code>emitFactEvent</code> / <code>emitSessionEvent</code>；新落形的 <code>AgentInvocation</code> 契约（<code>src/shared/agent/invocation.ts</code>）本身不含函数句柄，物理边界的收口仍归偏差 19 / 20，故 17 保持<strong>未解决</strong>。偏差 9、10、11、13、14、18 – 20、23、24 的证据位仍在，结论不变。</p>
+    <p><strong>下一次复核怎么跑</strong>：与上一轮相同 —— 1 – 20 用「证据列的命令能 <code>rg</code> 到同一个事实」判成立，形态变了就改证据位；21 – 23 反过来，扫描命令<strong>返回 0 行</strong>才是成立。条目补上后<strong>不要删行</strong>：把「状态」列改成 <span class="st st-done">已解决 YYYYMMDD</span>，并在这里补一张表。</p>
   </div>
 </section>
 
