@@ -53,5 +53,8 @@
   "TURN_USER_MESSAGE_MISSING": "原始消息已不存在，无法重试",
   "TURN_PREPARE_PERSISTENCE_MISSING": "回合初始化持久化缺失，请重试",
   "TURN_EXECUTION_CONFIG_NOT_PREPARED": "回合执行配置未就绪，请重试",
-  "TURN_VISION_MODEL_NOT_CONFIGURED": "没有可用的视觉模型，请在设置中启用视觉模型"
+  "TURN_VISION_MODEL_NOT_CONFIGURED": "没有可用的视觉模型，请在设置中启用视觉模型",
+  "TURN_REQUEST_FINGERPRINT_MISMATCH": "发送请求与进行中的回合不一致，请稍后重试",
+  "TURN_REUSE_SESSION_MISMATCH": "原始消息与会话不匹配，无法重试",
+  "TURN_REUSE_TARGET_NOT_USER": "原始消息已不可重试"
 }
