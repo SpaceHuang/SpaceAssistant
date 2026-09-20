@@ -31,14 +31,19 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'edit_file',
     description:
-      '通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
+      '通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。old_string 未命中时返回结构化诊断（diagnosis，含最相似块行号、字符级差异与反斜杠计数），并在通过可用性预检后附上可直接重试的 suggestedOldString——请按诊断修正 old_string 后重试本工具，不要改用脚本写文件。',
     input_schema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对于工作目录的文件路径' },
         old_string: { type: 'string', description: '待替换的字符串（必须精确匹配，包括缩进）。空字符串表示创建新文件。' },
         new_string: { type: 'string', description: '替换后的新字符串（需与 old_string 不同）。空字符串表示删除内容。' },
-        replace_all: { type: 'boolean', description: '是否全局替换（替换所有匹配项），默认 false' }
+        replace_all: { type: 'boolean', description: '是否全局替换（替换所有匹配项），默认 false' },
+        tolerate_escape_layer: {
+          type: 'boolean',
+          description:
+            '可选（默认 false）。开启后，当 old_string 未命中且存在「仅反斜杠层数或字面 \\n 形态不同」的唯一变体恰好在文件中命中一次时，自动按该变体完成编辑并在结果中标注 matchedVariant/notice；多个变体命中或命中多次时不回退，仍返回诊断。'
+        }
       },
       required: ['path', 'old_string', 'new_string']
     }
@@ -98,7 +103,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'run_script',
     description:
-      '执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。',
+      '执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。修改文件请优先使用 edit_file——它带未读校验、外部修改检测、检查点备份与原子写保护；edit_file 匹配失败时按其返回的 diagnosis 修正 old_string 后重试，不要改用脚本直接读写文件。',
     input_schema: {
       type: 'object',
       properties: {

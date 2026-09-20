@@ -44,6 +44,8 @@ import '../capabilities/registerBuiltinCapabilities'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
+import { ErrorCodes } from '../../src/shared/errorCodes'
+import { buildEscapeLayerVariants, diagnoseMissingOldString } from './editDiagnosis'
 import type { FileState } from '../fileStateCache'
 import { sliceFileTailLines } from '../../src/shared/readFileRange'
 import {
@@ -489,6 +491,24 @@ function countOccurrencesWithEolTolerance(hay: string, needle: string): number {
   return countOccurrences(normalizeLineEndingsForMatch(hay), normalizeLineEndingsForMatch(needle))
 }
 
+/**
+ * P1-C：转义归一后唯一命中回退（§5.3，默认关闭，入参 tolerate_escape_layer 显式开启）。
+ * 仅在有限变体集（反斜杠 run ±1、字面 \n ↔ 真实换行）中「恰好一个变体、且该变体在
+ * 文件中恰好命中一次」时返回该变体；否则返回 null，退回诊断路径。不做任何模糊匹配。
+ */
+function applyEditWithEscapeTolerance(
+  cur: string,
+  oldS: string
+): { variant: string; kind: 'escape-layer' | 'literal-newline'; backslashRunDelta: number } | null {
+  const curNorm = normalizeLineEndingsForMatch(cur)
+  const oldNorm = normalizeLineEndingsForMatch(oldS)
+  const hits = buildEscapeLayerVariants(oldNorm)
+    .map((v) => ({ variant: v.text, kind: v.kind, backslashRunDelta: v.backslashRunDelta }))
+    .filter((v) => countOccurrences(curNorm, v.variant) === 1)
+  if (hits.length !== 1) return null
+  return hits[0]
+}
+
 import { toolErrMissingPath } from '../toolInputGuards'
 import { extractPathField } from '../toolPathField'
 
@@ -587,43 +607,71 @@ export const editFileExecutor: ToolExecutor = {
         if (mismatch) return { ...mismatch, duration: Date.now() - started }
       }
       const occ = countOccurrencesWithEolTolerance(cur, oldS)
-      if (occ === 0 && oldS !== '') {
-        return { success: false, error: '未找到待替换的字符串', duration: Date.now() - started }
-      }
-      if (!replaceAll && oldS !== '' && occ > 1) {
-        return { success: false, error: '找到多个匹配，请提供更精确的上下文或使用 replace_all', duration: Date.now() - started }
-      }
-      const next = applyEditWithEolTolerance(cur, oldS, newS, replaceAll)
-      throwIfAborted(op)
-      if (existed && ctx.toolsConfig.fileCheckpointingEnabled) {
+      // 写路径（检查点备份 + 原子写 + 身份校验）对正常编辑与 P1-C 回退共用；
+      // 护栏次序保持不变：backupIfEnabled → safeAtomicWrite → recordFileStateAfterWrite。
+      const applyAndWrite = async (oldForEdit: string, extraData?: Record<string, unknown>): Promise<ToolExecutorResult> => {
+        const next = applyEditWithEolTolerance(cur, oldForEdit, newS, replaceAll)
+        throwIfAborted(op)
+        if (existed && ctx.toolsConfig.fileCheckpointingEnabled) {
+          try {
+            await backupIfEnabled(ctx, rel.replace(/\\/g, '/'), Buffer.from(cur, 'utf8'), op)
+          } catch (e) {
+            const ab = fileToolAbortResult(op, '编辑超时', started)
+            if (ab) return ab
+            throw e
+          }
+        }
+        throwIfAborted(op)
         try {
-          await backupIfEnabled(ctx, rel.replace(/\\/g, '/'), Buffer.from(cur, 'utf8'), op)
+          await safeAtomicWrite({
+            targetPath: abs,
+            parentReal: writeTarget.parentReal,
+            body: next,
+            expectedIdentity,
+            signal: op
+          })
         } catch (e) {
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
           throw e
         }
+        await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
+        return {
+          success: true,
+          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'), ...extraData },
+          duration: Date.now() - started
+        }
       }
-      throwIfAborted(op)
-      try {
-        await safeAtomicWrite({
-          targetPath: abs,
-          parentReal: writeTarget.parentReal,
-          body: next,
-          expectedIdentity,
-          signal: op
-        })
-      } catch (e) {
-        const ab = fileToolAbortResult(op, '编辑超时', started)
-        if (ab) return ab
-        throw e
+      // P1-C：显式开启 tolerate_escape_layer 时，先尝试转义归一后的唯一命中回退；
+      // 恰好一个变体命中才执行，其余情况一律走诊断分支，匹配语义保持确定性。
+      if (occ === 0 && oldS !== '' && input.tolerate_escape_layer === true) {
+        const hit = applyEditWithEscapeTolerance(cur, oldS)
+        if (hit) {
+          const submitRun = (normalizeLineEndingsForMatch(oldS).match(/\\+/g) ?? []).reduce((n, r) => n + r.length, 0)
+          return await applyAndWrite(hit.variant, {
+            matchedVariant: { kind: hit.kind, backslashRunDelta: hit.backslashRunDelta },
+            notice: hit.kind === 'escape-layer'
+              ? `已按转义层归一匹配（提交 ${submitRun} 个反斜杠，文件 ${submitRun + hit.backslashRunDelta} 个）`
+              : '已按字面换行归一匹配（字面 \\n 与真实换行视为等价）'
+          })
+        }
       }
-      await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
-      return {
-        success: true,
-        data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8') },
-        duration: Date.now() - started
+      if (occ === 0 && oldS !== '') {
+        // P0-A/P0-B/P1-E：结构化诊断 + 可用性预检后的建议片段 + 恢复路径提示（§5.1/§5.2/§5.5）。
+        // error 为稳定错误码（投影层原样保留），userMessage 保持原文案以兼容展示层。
+        const diagnosis = diagnoseMissingOldString(cur, oldS)
+        return {
+          success: false,
+          error: ErrorCodes.EDIT_OLD_STRING_NOT_FOUND,
+          userMessage: '未找到待替换的字符串',
+          data: { diagnosis },
+          duration: Date.now() - started
+        }
       }
+      if (!replaceAll && oldS !== '' && occ > 1) {
+        return { success: false, error: '找到多个匹配，请提供更精确的上下文或使用 replace_all', duration: Date.now() - started }
+      }
+      return await applyAndWrite(oldS)
     } finally {
       dispose()
     }
