@@ -147,8 +147,6 @@ export type SessionRecoverySummary = {
   sessions: Array<{ sessionName: string; fixed: number; integrity: SessionEventIntegrity; issues: SessionEventIssue[] }>
   failures: SessionRecoveryFailure[]
 }
-export type SessionRetentionSummary = { removed: number; failures: SessionRecoveryFailure[] }
-
 /** 事件流唯一的压缩重放入口；未提交候选不会改变模型面。 */
 export function replayCompactionEvents(events: readonly SessionEvent[]): CompactionReplay {
   return foldCompactionEvents(events.filter((event) => event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end').map((event) => ({ seq: event.seq, type: event.type as 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: event.payload })))
@@ -630,37 +628,6 @@ export async function reconcileSessionEventFilesDetailed(workDir: string): Promi
     }
   }
   return summary
-}
-
-export async function enforceSessionEventRetention(workDir: string, maxSessions: number): Promise<number> {
-  return (await enforceSessionEventRetentionDetailed(workDir, maxSessions)).removed
-}
-
-export async function enforceSessionEventRetentionDetailed(workDir: string, maxSessions: number): Promise<SessionRetentionSummary> {
-  if (!Number.isInteger(maxSessions) || maxSessions < 1) throw new Error('maxSessions must be positive')
-  const root = path.join(workDir, 'sessions')
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
-  const candidates: Array<{ name: string; lastAt: number }> = []
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    try {
-      const index = JSON.parse(await fs.readFile(path.join(root, entry.name, 'events.index.json'), 'utf8')) as { lastAt?: number }
-      candidates.push({ name: entry.name, lastAt: typeof index.lastAt === 'number' ? index.lastAt : 0 })
-    } catch { /* no event stream, leave ordinary backups untouched */ }
-  }
-  candidates.sort((a, b) => b.lastAt - a.lastAt)
-  const removed = candidates.slice(maxSessions)
-  const failures: SessionRecoveryFailure[] = []
-  let count = 0
-  for (const entry of removed) {
-    try {
-      await fs.rm(path.join(root, entry.name), { recursive: true, force: true })
-      count += 1
-    } catch (error) {
-      failures.push({ sessionName: entry.name, phase: 'retention-delete', error, jsonlCommitted: false })
-    }
-  }
-  return { removed: count, failures }
 }
 
 export function reconcileSessionEvents(events: SessionEvent[], startSeq = events.reduce((m, e) => Math.max(m, e.seq), 0) + 1): SessionEvent[] {

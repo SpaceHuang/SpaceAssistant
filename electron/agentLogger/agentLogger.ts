@@ -26,6 +26,16 @@ let deps: AgentLoggerDeps | null = null
 let currentDateKey = ''
 let writeChain: Promise<void> = Promise.resolve()
 
+/**
+ * 跨天节流钩子(S3,偏差 14):日期翻转(=新日志文件开启)时触发一次,由宿主注入
+ * 「读保留策略 + 清理超期日志」;fire-and-forget,失败不阻断日志写入。
+ */
+let dailyPruneHook: (() => void) | null = null
+
+export function setAgentLogDailyPrune(hook: (() => void) | null): void {
+  dailyPruneHook = hook
+}
+
 export function initAgentLogger(loggerDeps: AgentLoggerDeps): void {
   // agentLogger 位于 electron/agentLogger/，默认应使用上级 electron/ 目录（即 main.js 所在目录）
   deps = {
@@ -58,6 +68,7 @@ export function resetAgentLoggerForTests(): void {
   bindAgentLogErrorDeps(() => null)
   currentDateKey = ''
   writeChain = Promise.resolve()
+  dailyPruneHook = null
 }
 
 function getMainDirname(): string {
@@ -73,7 +84,9 @@ async function appendLine(line: string): Promise<void> {
   await fs.mkdir(logDir, { recursive: true })
 
   if (dateKey !== currentDateKey) {
+    const crossedDay = currentDateKey !== ''
     currentDateKey = dateKey
+    if (crossedDay) dailyPruneHook?.()
   }
 
   const filePath = path.join(logDir, formatAgentLogFileName(now))

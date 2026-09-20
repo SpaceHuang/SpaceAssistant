@@ -36,7 +36,10 @@ import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, enforceSessionEventRetentionDetailed, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { beginSessionEventShutdown, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
+import { pruneAgentLogs } from './storage/agentLogRetention'
+import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
@@ -53,6 +56,7 @@ import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
+import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
@@ -352,6 +356,13 @@ app.whenReady().then(async () => {
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
+  // S3(偏差 14):跨天节流清理——新日志文件开启时读统一保留策略并删除超期日志(每日至多一次)
+  setAgentLogDailyPrune(() => {
+    void pruneAgentLogs({
+      logDir: getAgentLogDir() ?? '',
+      retentionDays: resolveRetentionPolicyFromDb(db).agentLogRetentionDays
+    }).catch(() => undefined)
+  })
   const agentLogDir = getAgentLogDir()
   logAgentEvent('info', 'agent.startup', {
     workDir: workDirState,
@@ -441,13 +452,19 @@ app.whenReady().then(async () => {
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
-    const retention = await enforceSessionEventRetentionDetailed(workDirState, 100)
+    // S3(偏差 24):保留上限由 Storage 统一保留策略持有(configs 可配、显式默认),启动流程只触发
+    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, workDirState)
     for (const failure of retention.failures) {
       console.warn('[sessionEvents] retention cleanup failed:', {
         sessionName: failure.sessionName,
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
+    // S3(偏差 14):Agent 日志超保留期清理挂同一保留策略(启动维护触发)
+    await pruneAgentLogs({
+      logDir: getAgentLogDir() ?? '',
+      retentionDays: retentionPolicy.agentLogRetentionDays
+    })
   } catch (error) {
     // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))

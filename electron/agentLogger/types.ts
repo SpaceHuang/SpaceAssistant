@@ -130,6 +130,9 @@ export type AgentLogEventName =
   | 'usageStats.write.failed'
   | 'i18n.resource_load_failed'
   | 'i18n.missing_key'
+  | 'retention.sessionEvents.cleaned'
+  | 'retention.agentLogs.cleaned'
+  | 'retention.agentLogs.crossday_prune_failed'
   | 'usageStats.retention.cleaned'
   | 'usageStats.backfill.completed'
 
