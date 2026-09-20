@@ -8,7 +8,8 @@ export default defineConfig({
         // 主进程测试：Windows 上 threads 池易出现 worker 启动超时，保持 forks + 单 worker
         test: {
           name: 'electron',
-          include: ['electron/**/*.test.ts'],
+          // SDK 包级测试(A3):纯 node,随 electron 项目 forks 单 worker 跑
+          include: ['electron/**/*.test.ts', 'packages/agent-core/**/*.test.ts'],
           environment: 'node',
           // Windows 慢机满载下 5s 默认值会误杀重 IO 用例（如 1000 并发台账写盘）；断言本身不受影响
           testTimeout: 15_000,

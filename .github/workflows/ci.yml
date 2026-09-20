@@ -24,6 +24,10 @@ jobs:
       - run: npm run i18n:check
       - run: npm run typecheck:shared
       - run: npm run typecheck:renderer
+      # SDK 包独立 tsconfig(A3,偏差 19:包 typecheck 独立于 tsconfig.electron.json)
+      - run: npm run typecheck:agent-core
+      # SDK 包边界护栏(A3,偏差 19):禁 electron / 禁 sqlite 直依赖 / 入口闭包零 electron
+      - run: npm run check:agent-core
       - run: npm run build:electron
       - run: npm test
 
