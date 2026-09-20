@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FeishuImChannel, buildFeishuConfirmPromptText } from './feishuImChannel'
 import type { ConfirmRequest } from '../../src/shared/confirmation/types'
+import { createAgentRuntime } from '../runtime/agentRuntime'
+import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
+import { ConfirmIdSpace } from '../remote/confirmId'
+import { ChatCancelRegistry } from '../chatCancelRegistry'
+import { ToolRevocationRegistry } from '../toolRevocationRegistry'
+import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
+
 
 vi.mock('./feishuReply', () => ({
   replyFeishuText: vi.fn().mockResolvedValue(undefined)
@@ -41,6 +49,17 @@ function p2p(overrides: {
     mentionsBot: false
   }
 }
+
+// P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+setDefaultAgentRuntime(
+  createAgentRuntime({
+    confirmIds: new ConfirmIdSpace(),
+    chatCancels: new ChatCancelRegistry(),
+    toolRevocations: new ToolRevocationRegistry(),
+    mcpGate: new McpConcurrencyGate(),
+    builtinRegistry: createBuiltinToolRegistry()
+  })
+)
 
 describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
   it('does not resolve confirm from group chat', async () => {

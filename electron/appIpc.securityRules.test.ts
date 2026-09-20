@@ -4,6 +4,14 @@ import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { isToolRevoked, registerToolRevocationRequest, clearToolRevocationRequest } from './toolRevocationRegistry'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import { createAgentRuntime } from './runtime/agentRuntime'
+import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createBuiltinToolRegistry } from './tools/builtinExecutors'
+import { ConfirmIdSpace } from './remote/confirmId'
+import { ChatCancelRegistry } from './chatCancelRegistry'
+import { ToolRevocationRegistry } from './toolRevocationRegistry'
+import { McpConcurrencyGate } from './mcp/mcpToolExecutor'
+
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -152,6 +160,17 @@ function makeCtx(): AppIpcContext {
     })
   }
 }
+
+// P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+setDefaultAgentRuntime(
+  createAgentRuntime({
+    confirmIds: new ConfirmIdSpace(),
+    chatCancels: new ChatCancelRegistry(),
+    toolRevocations: new ToolRevocationRegistry(),
+    mcpGate: new McpConcurrencyGate(),
+    builtinRegistry: createBuiltinToolRegistry()
+  })
+)
 
 describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail-closed ask 不可禁用）', () => {
   let ipc: ReturnType<typeof mockIpcMain>

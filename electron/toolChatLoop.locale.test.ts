@@ -116,6 +116,14 @@ function runAssembledSession(materials: unknown) {
   return runToolChatSession(invocation, ports)
 }
 import { createMemoryAppDb } from './database/testHelpers'
+import { createAgentRuntime } from './runtime/agentRuntime'
+import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createBuiltinToolRegistry } from './tools/builtinExecutors'
+import { ConfirmIdSpace } from './remote/confirmId'
+import { ChatCancelRegistry } from './chatCancelRegistry'
+import { ToolRevocationRegistry } from './toolRevocationRegistry'
+import { McpConcurrencyGate } from './mcp/mcpToolExecutor'
+
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
@@ -124,6 +132,17 @@ function makeSender(): WebContents {
 function makeDb(locale: 'zh-CN' | 'en-US' = 'zh-CN'): AppDatabase {
   return createMemoryAppDb(locale)
 }
+
+// P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+setDefaultAgentRuntime(
+  createAgentRuntime({
+    confirmIds: new ConfirmIdSpace(),
+    chatCancels: new ChatCancelRegistry(),
+    toolRevocations: new ToolRevocationRegistry(),
+    mcpGate: new McpConcurrencyGate(),
+    builtinRegistry: createBuiltinToolRegistry()
+  })
+)
 
 describe('runToolChatSession locale injection', () => {
   beforeEach(() => {

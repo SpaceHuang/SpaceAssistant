@@ -1,6 +1,14 @@
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
 import { getToolExecutor, resolvePythonInterpreter } from './builtinExecutors'
+import { createAgentRuntime } from '../runtime/agentRuntime'
+import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
+import { ConfirmIdSpace } from '../remote/confirmId'
+import { ChatCancelRegistry } from '../chatCancelRegistry'
+import { ToolRevocationRegistry } from '../toolRevocationRegistry'
+import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
+
 
 /**
  * run_script 的结果契约依赖宿主 Python 解释器。探测顺序对齐产品默认值
@@ -56,6 +64,17 @@ describe.skipIf(!pythonInterpreter)('run_script result contract', () => {
     expect(result).toMatchObject({ success: true, data: { status: 'succeeded', exitCode: 0 } })
   }, 20_000)
 })
+
+// P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+setDefaultAgentRuntime(
+  createAgentRuntime({
+    confirmIds: new ConfirmIdSpace(),
+    chatCancels: new ChatCancelRegistry(),
+    toolRevocations: new ToolRevocationRegistry(),
+    mcpGate: new McpConcurrencyGate(),
+    builtinRegistry: createBuiltinToolRegistry()
+  })
+)
 
 describe('resolvePythonInterpreter', () => {
   it('默认值不可用时按平台回退到 py / python3', async () => {

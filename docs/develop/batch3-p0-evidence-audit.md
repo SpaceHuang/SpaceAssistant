@@ -119,3 +119,17 @@ A3 `3d44bc68` / A4 `76fefd24` / B1 `7005d0a6`。全量回归与本记录同提�
 
 24 条偏差全部闭环后,按基线 §12 收束:定时/事件驱动源编排(23 为其直接前置)、通用 SubAgent
 派生业务、设置页 reasoning 档位选择器、执行闭包物理切分(19/20 遗留)。
+
+### P8 补记:全量回归修复与结构解环(提交 `4b20923a` 之后)
+
+首轮全量回归暴露两类问题并修复,最终全量 **4632 passed / 0 failed**(另有 typecheck 双 tsconfig、
+i18n:check、check:agent-core 全绿):
+
+1. **CJS 加载环**(channels/imChannel 实测「Class extends value undefined」):六原模块(兼容转发)
+   → agentRuntime → builtinExecutors(442 文件闭包)→ feishu 工具链 → imChannel,首条边在环内触发
+   半初始化类。终态:**agentRuntime.ts 纯工厂化**(组件全注入,零业务 import)、
+   **agentRuntimeDefaults.ts 零依赖纯槽位**(未装配 fail-loud)、六原模块兼容转发改指 defaults。
+2. **测试装配**:electron 项目新增 testSetup.ts(装配真组件类——兼容转发联动语义在测试同样生效;
+   但不 import builtinExecutors 重链,避免抢先实例化模块图致 vi.mock('electron') 失效);
+   需要 builtin registry 的 6 个测试文件显式 createBuiltinToolRegistry() 注入。
+3. approvalAgent.test P2-7 用例随 butlerAdmission 退役迁移到统一准入门。
