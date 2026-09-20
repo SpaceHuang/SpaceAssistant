@@ -28,6 +28,12 @@
 >     - **实现落点**：`electron/tools/editDiagnosis.ts`（新增：块窗口两阶段粗筛/精算 + 最小 LCS/opcode 回溯 + 差异分类 + §5.2.1 预检）；`electron/tools/builtinExecutors.ts`（`occ === 0` 分支接入诊断；新增 `applyEditWithEscapeTolerance`，`applyEditWithEolTolerance` 不变；写路径护栏次序不变）。
 >     - **与计划的偏差（1 处，代码内已注释说明）**：常量取值对调为 `MAX_LCS_INPUT_CHARS = 4096 > MAX_SUGGESTED_OLD_STRING_CHARS = 4000`——按本表建议值（4000/4096）时 too-long 抑制不可达（候选块先被精算守卫拦截，§7.1 #8 无法触发）；对调后两阈值语义完整。
 >     - **未实施（按计划建议保留）**：P1-D（`read_file` 原始字符视图——§5.4 建议观察 P0 效果后再定）；P2-F2（`run_script` 写文件观测——§5.6 允许「二选一」，已做 F1 提示层）。
+>   - **v1.4**（2026-09-20）：评审修复记录（分支提交 `08355e03`，响应 `docs/review/edit-file-diagnosis-review.md` v1 四项发现）。
+>     - **P1（阻断）**：`editDiagnosis.ts` 精算候选改为以 LCS 占比**替换**粗筛分（原 `Math.max` 使顺序盲的直方图粗筛分成为下限），精算后按新分数**重排**再取 top1/top2；`lineSimilarity` 增加位置一致率项（仍为线性代价）。评审实证用例（old=`abcde`、文件含异位词 `edcba` 与真目标 `abcdx`）修复后 top1=`abcdx`、similarity=0.800。
+>     - **P1.5**：「候选过多放弃」改在粗筛全量上计数（`coarseAboveCount > MAX_CANDIDATES`），原短名单计数条件恒为假（死代码）。
+>     - **P2**：`similarityGap` 随重排恒非负（新增断言）。
+>     - **P3**：本文档已提交入库（此前为未跟踪文件导致代码注释悬空引用）。
+>     - **连带修正**：精算候选存在时 oversized 候选不参与排序竞争（其粗筛分同样顺序盲）；新增回归测试 #P1（异位词排序）、#P1.5（七候选窗口计数歧义）。
 
 ## 1. 结论摘要
 
