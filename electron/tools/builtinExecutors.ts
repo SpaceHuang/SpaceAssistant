@@ -491,7 +491,7 @@ function countOccurrencesWithEolTolerance(hay: string, needle: string): number {
 
 import { toolErrMissingPath } from '../toolInputGuards'
 import { extractPathField } from '../toolPathField'
-import { getDefaultAgentRuntime } from '../runtime/agentRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 const ERR_FILE_NOT_READ_FOR_EDIT =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
@@ -1337,10 +1337,10 @@ export function createBuiltinToolRegistry(): TypedToolRegistry {
 
 /** @deprecated 兼容转发(偏差 18,一个发布周期,P8 评估删除):经默认 runtime 实例。 */
 export function getToolExecutor(name: string): ToolExecutor | undefined {
-  return getDefaultAgentRuntime().builtinRegistry.getLegacyExecutor(name)
+  return getDefaultAgentRuntime().builtinRegistry.getLegacyExecutor(name) as ToolExecutor | undefined
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */
-export function getRegisteredTool(name: string) {
-  return getDefaultAgentRuntime().builtinRegistry.get(name)
+export function getRegisteredTool(name: string): import('./plannedToolRegistry').RegisteredTool | undefined {
+  return getDefaultAgentRuntime().builtinRegistry.get(name) as import('./plannedToolRegistry').RegisteredTool | undefined
 }

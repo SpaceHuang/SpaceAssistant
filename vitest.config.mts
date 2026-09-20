@@ -17,7 +17,7 @@ export default defineConfig({
           pool: 'forks',
           maxWorkers: 1,
           fileParallelism: false,
-          setupFiles: ['./src/test/setup.ts']
+          setupFiles: ['./src/test/setup.ts', './electron/testSetup.ts']
         }
       },
       {

@@ -1,6 +1,6 @@
 import { getAgentLogDir } from '../agentLogger/agentLogger'
 import { SecurityAuditLog } from './securityAuditLog'
-import { getDefaultAgentRuntime } from '../runtime/agentRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 
 export interface AuditSink {
@@ -34,9 +34,13 @@ export function getSecurityAuditLog(): AuditSink {
   return getDefaultAgentRuntime().audit
 }
 
-/** @deprecated 兼容转发(偏差 18)。仅供测试重置默认 runtime。 */
+/** @deprecated 兼容转发(偏差 18)。仅供测试重置;未装配时无需重置(幂等)。 */
 export function resetSecurityAuditLogForTests(): void {
-  getDefaultAgentRuntime().resetAuditForTests()
+  try {
+    getDefaultAgentRuntime().resetAuditForTests()
+  } catch {
+    // 未装配:没有可重置的审计实例
+  }
 }
 
 /** @deprecated 兼容转发(偏差 18)。设置页调整保留天数(§5.6-1)。 */

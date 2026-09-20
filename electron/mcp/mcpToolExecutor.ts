@@ -16,7 +16,7 @@ import { cleanupMcpArtifacts } from './mcpArtifactCleanup'
 import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from '../tools/types'
 import type { McpSession } from './mcpConnectionManager'
 import { Semaphore, withSemaphore } from './semaphore'
-import { getDefaultAgentRuntime } from '../runtime/agentRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import type { McpToolSnapshotEntry } from './mcpToolRegistry'
 import { resolveMcpArtifactOwnerPath } from './mcpArtifactPath'
 
@@ -140,7 +140,7 @@ export function createMcpToolExecutor(
   entry: McpToolSnapshotEntry,
   deps: McpToolExecutorDeps,
   /** 并发闸(A2,偏差 18):缺省经默认 runtime;装配器可注入具体 runtime 实例的闸。 */
-  gate: McpConcurrencyGate = getDefaultAgentRuntime().mcpGate
+  gate: import('../runtime/agentRuntime').McpConcurrencyGateLike = getDefaultAgentRuntime().mcpGate
 ): ToolExecutor {
   return {
     name: entry.mappedName,

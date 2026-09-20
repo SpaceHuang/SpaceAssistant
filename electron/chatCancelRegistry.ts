@@ -4,7 +4,7 @@ import {
   cancelAllToolConfirmsForRequest,
   cancelAllToolsForRequest
 } from './toolConfirmRegistry'
-import { getDefaultAgentRuntime } from './runtime/agentRuntime'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 
 export { CHAT_CANCELLED_MESSAGE }
 

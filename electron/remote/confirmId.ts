@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import { getDefaultAgentRuntime } from '../runtime/agentRuntime'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 /**
  * confirmId 一次性消费空间(A2,偏差 18):状态随 ConfirmIdSpace 实例走,

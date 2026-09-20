@@ -1,4 +1,4 @@
-import { getDefaultAgentRuntime } from './runtime/agentRuntime'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 
 /**
  * 工具撤回注册表(A2,偏差 18):状态随实例走,一个进程可多实例并存

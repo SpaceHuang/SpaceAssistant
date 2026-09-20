@@ -75,3 +75,47 @@ job 以真实 Electron 应用启动);SDK 面的 sqlite 禁依赖由 A3 护栏(ch
 - ⏳ 「测试文件及其 import 闭包 rg -l electron → 0 文件」子项未达标:回合执行引擎
   (toolChatLoop 执行闭包,实测 442 文件 / 32 文件 import electron)物理切分属基线 §13
   完整 P5,列后续批次(见 A3 边界形态说明)。
+
+---
+
+## P8 实施记录(2026-09-20,分支 codex/batch3-runtime-admission-sdk-reuse)
+
+各阶段提交:S1 `06e1f1ea` / S2 `748dc239` / S3 `9a0db31c` / A1 `94ddabc3` / A2 `fa545fcd` /
+A3 `3d44bc68` / A4 `76fefd24` / B1 `7005d0a6`。全量回归与本记录同提交。
+
+### 偏差表回写(按 §8 预期逐项)
+
+| 偏差 | 回写状态 | 依据(实测) |
+| --- | --- | --- |
+| 15 | **已解决** | user lane 档位范围化(scopePackages 显式清单取代目标条目);全 lane 无宽严变换结构断言;「任意 lane × 档位不放宽 locked 底线」属性测试入仓(policyPackages.scope.test.ts);底线校验全 lane 生效 |
+| 13 | **已解决** | `rg 'menuLabels' src/shared electron` → 0 行;translate 端口入契约(AgentHostPorts.translate)+ 宿主实现直读 zh-CN 真源(electron/i18n/hostTranslate.ts);菜单/系统通知文案键化;i18n:check 通过 |
+| 14 | **已解决** | Agent 日志保留期清理归 Storage(electron/storage/agentLogRetention.ts)挂统一保留策略;按日文件天然轮转;启动维护 + 跨天节流双触发;删除留痕(retention.agentLogs.cleaned) |
+| 24 | **已解决** | `rg 'enforceSessionEventRetention' electron/sessionEvents.ts` → 0 行;`rg 'enforceSessionEventRetentionDetailed' electron/main.ts` → 0 行(runSessionEventRetentionMaintenance 维护入口,启动流程只触发不持参数);删除留痕测试入仓 |
+| 17 | **已解决** | 契约函数属性 0 行(`=>` 仅剩 1 行注释;P0 复测在 4 处证据外追查到 :245 嵌套函数属性一并收口);契约形状断言测试防退化(invocation.contractShape.test.ts) |
+| 18 | **已解决** | 四处模块级可变状态归 createAgentRuntime 实例 + 两个注册入口随实例;四点名文件 `^(let\|const)` 四类状态绑定 0;同进程双 runtime 并存互不串状态测试入仓;兼容转发 @deprecated 一个发布周期 |
+| 19 | **已解决**(边界形态见附注) | workspaces 生效(`npm query .workspace`);exports 只暴露 createAgentRuntime 与契约类型;CI 断言脚本入仓入 CI(三条:零 electron / 零 sqlite 直依赖 / 入口闭包 20 模块零 electron);typecheck 双 tsconfig(typecheck:agent-core) |
+| 20 | **已解决**(子项遗留见附注) | createAgentRuntime + 内存端口不启动 Electron、不碰 SQLite 跑完「带工具调用回合 + 批准确认 + 拒绝」四态断言;CI 独立 step 常驻;probe:sqlite 评估结论:保留(探针即探测 Electron 内嵌运行时,已落宿主侧) |
+| 23 | **已解决** | 四处发起入口(桌面受理端口 / runImRemoteAgent / butlerInvoker / 嵌套 invokeApproval)统一准入;四维处置(排队/延后/降级/拒绝)调用方声明;优先级(交互式 > 后台,background 子界);保留位防自锁(全局 + lane 双维度);cause 分立审计(admission.rejected[cause] ≠ agent-deny);`rg 'butlerAdmission' electron` 机制 0 消费(仅注释性提及);渲染端无绕过结构断言入仓;属性/不变量测试(mulberry32)入仓 |
+
+### 附注(如实记录的边界与遗留)
+
+1. **偏差 19 边界形态**(计划风险 #3 回退条款):契约层物理文件暂留宿主树,经包入口
+   `@spaceassistant/agent-core` 门面转发;宿主主进程为 tsc CJS 直出,包名 require 无运行时解析面,
+   物理迁移会破坏构建链。逻辑边界由护栏闭包断言锁定(SDK 入口展开 20 模块零 electron)。
+   **遗留**:执行闭包物理切分——基线 §13 预估 35-45 文件,P0 实测 builtinExecutors 闭包 442 文件
+   (328 个在 electron/),预估已漂移;列为后续批次。
+2. **偏差 20 子项遗留**:SDK 验收测试的「import 闭包零 electron」子项依赖上述执行闭包切分,
+   当前由 vi.mock 隔离 electron 本体(不启动 Electron 达成,import 闭包未达成)。
+3. **worktree 环境备注**:worktree 的 node_modules 为 junction 链接;workspaces 链接
+   (node_modules/@spaceassistant/agent-core)以 junction 手工模拟使 `npm query .workspace` 可验,
+   合入主线后 `npm install` 会自然重建为正确链接。
+4. **护栏实现选型**:仓库无 ESLint 基础设施,计划改动清单中的 `no-restricted-paths` 以 CI 断言
+   脚本(scripts/check-agent-core-boundary.mjs)等价落地,三条断言语义一致。
+5. **真机验收项**(§6,不阻塞提交,合并后人工过一遍):桌面菜单/托盘/系统通知 zh-CN 文案(S2);
+   日志与台账轮转触发(S3);桌面高优先发起抢占管家调用、定时任务被拒后审计可见(B1);
+   CI 干净环境跑通 SDK 验收与护栏(A3/A4)。
+
+### 下一批议题(从偏差面切到能力面)
+
+24 条偏差全部闭环后,按基线 §12 收束:定时/事件驱动源编排(23 为其直接前置)、通用 SubAgent
+派生业务、设置页 reasoning 档位选择器、执行闭包物理切分(19/20 遗留)。
