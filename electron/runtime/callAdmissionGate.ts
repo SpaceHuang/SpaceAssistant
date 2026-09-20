@@ -6,6 +6,7 @@ import {
   applyRelease,
   emptyAdmissionState,
   judgeAdmission,
+  rollAdmissionWindow,
   type AdmissionPolicy,
   type AdmissionRequest,
   type AdmissionState
@@ -25,6 +26,16 @@ import { loadAdmissionState, resolveAdmissionPolicy, saveAdmissionState } from '
 export type AdmissionTicket = {
   request: AdmissionRequest
   release: () => void
+}
+
+/** release 幂等守卫(P2,评审):双释放会吞掉其他活跃调用的计数。 */
+function onceRelease(request: AdmissionRequest, release: () => void): () => void {
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    release()
+  }
 }
 
 export type AdmissionAcquireResult =
@@ -58,12 +69,15 @@ export class CallAdmissionGate {
 
   /** 判定 + 占位(即时判定与队列唤醒复核共用)。返回 null = 应排队。 */
   private tryAdmit(request: AdmissionRequest): AdmissionAcquireResult | null {
+    // P1-2(评审):滚动结果必须写回状态——只在副本上判定会让 windowStart 永不前进,
+    // 跨过首个小时边界后速率/配额限流永久失效
+    this.state = rollAdmissionWindow(this.state, this.nowFn())
     const verdict = judgeAdmission(request, this.state, this.policy, this.nowFn())
     switch (verdict.verdict) {
       case 'admit': {
         this.state = applyAdmit(this.state, request)
         this.persist()
-        return { ok: true, ticket: { request, release: () => this.release(request) } }
+        return { ok: true, ticket: { request, release: onceRelease(request, () => this.release(request)) } }
       }
       case 'queue':
         if (this.waiters.length >= this.policy.queueLimit) {
@@ -109,11 +123,12 @@ export class CallAdmissionGate {
       this.persist()
       return
     }
+    this.state = rollAdmissionWindow(this.state, this.nowFn())
     const verdict = judgeAdmission(next.request, this.state, this.policy, this.nowFn())
     if (verdict.verdict === 'admit') {
       this.state = applyAdmit(this.state, next.request)
       this.persist()
-      next.resolve({ ok: true, ticket: { request: next.request, release: () => this.release(next.request) } })
+      next.resolve({ ok: true, ticket: { request: next.request, release: onceRelease(next.request, () => this.release(next.request)) } })
     } else {
       // 队首仍不足(如 lane 配额未随该次释放恢复):队尾重排,等待后续释放
       this.waiters.push(next)

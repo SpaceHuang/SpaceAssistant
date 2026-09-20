@@ -94,11 +94,11 @@ export async function runImRemoteAgent(args: {
     }
   }
 
-  const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
-  const adapter = args.createProgressAdapter(getOutboundSessionId)
-  startRemoteProgressSession(args.sessionId, adapter, args.progressConfig, args.progressDefaults)
-
   try {
+    const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
+    const adapter = args.createProgressAdapter(getOutboundSessionId)
+    // P2(评审):progress session 启动在票据持有窗口内——挪进 try,同步抛出也走 release
+    startRemoteProgressSession(args.sessionId, adapter, args.progressConfig, args.progressDefaults)
     return await runAdmittedTurn()
   } finally {
     if (admission.ok) admission.ticket.release()

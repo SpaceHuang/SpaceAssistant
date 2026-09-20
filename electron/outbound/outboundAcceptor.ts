@@ -263,7 +263,8 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       lane: 'desktop',
       priority: 'interactive',
       role: 'top-level',
-      disposition: 'reject'
+      disposition: 'reject',
+      requestId: deps.newRequestId()
     })
     if (!admission.ok) {
       if (admission.verdict === 'rejected') {

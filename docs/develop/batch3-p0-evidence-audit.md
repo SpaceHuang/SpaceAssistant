@@ -133,3 +133,24 @@ i18n:check、check:agent-core 全绿):
    但不 import builtinExecutors 重链,避免抢先实例化模块图致 vi.mock('electron') 失效);
    需要 builtin registry 的 6 个测试文件显式 createBuiltinToolRegistry() 注入。
 3. approvalAgent.test P2-7 用例随 butlerAdmission 退役迁移到统一准入门。
+
+### P8 补记:评审修复(docs/review/batch3-runtime-admission-sdk-review.md,P0-1 + P1-1..5 + 部分 P2)
+
+评审结论「1 P0 + 5 P1」逐项处置(全部由源码复核确认属实):
+
+| 项 | 处置 |
+| --- | --- |
+| P0-1 生产装配空壳 | 新增 `electron/runtime/desktopAgentRuntime.ts`(createDesktopAgentRuntime:六真组件 + builtinRegistry + 审计惰性工厂,独立模块不进加载环);main.ts 装配改用它并注释禁空参;**生产装配 smoke 测试**入仓(desktopAgentRuntime.smoke.test.ts,不经 testSetup:builtin 解析/confirmId 非空/取消真实中止/撤回生效/槽位兼容链) |
+| P1-1 启动顺序颠倒 | main.ts 调换:先 resetActiveAdmissionOnStartup 再 new CallAdmissionGate({db});补「脏活跃状态 db → new Gate 容量不被蚕食」用例 |
+| P1-2 速率窗口永不回写 | gate.tryAdmit / wakeNext 判定前 `this.state = rollAdmissionWindow(this.state, now)` 滚动落状态;补跨 HOUR 边界 gate 级用例(全局速率 + 管家 lane 配额两维度:窗口内拒、跨窗恢复) |
+| P1-3 嵌套准入三缺陷 | ①生产接线:toolChatLoop 装配 AgentChannel 传 `admissionGate: getCallAdmissionGate()`;②lane 改继承 `this.deps.lane`(去掉硬编码 automation);③票据覆盖内层回合全程(settle 时释放,不再 invokeApproval 前瞬时释放) |
+| P1-4 hostTranslate 目录错一级 | 开发态从 mainDirname 逐级向上探测 `src/renderer/i18n/resources`(最多 5 级,编译输出深度变化不再漂);探测不到回退历史口径 |
+| P1-5 护栏漏边 | check-agent-core-boundary 重写:扫描面统一为「SDK 入口完整闭包」(此前 20 模块中约 16 个在宿主树不受禁令约束,实测修复后闭包 29 模块);正则覆盖单/双引号、副作用 import、require()、动态 import、`export * from`;bare `electron`/子路径与 `node:sqlite` 闭包内一律违规 |
+| P2(本批顺手) | ticket.release once 幂等守卫;defaults 重复装配告警;imRemoteAgent progress session 挪进票据 try(消除泄漏窗口);outboundAcceptor acquire 带 requestId |
+| P2(记录为遗留) | 排队无取消/超时(与 chatCancel 联动,涉及 butlerInvoker 取消面,下批);packages/agent-core main 指向 .ts 的潜在 require 地雷(当前无消费方);桌面受理票据瞬时(设计取舍,注释已声明) |
+
+**偏差结论复核**(评审指出「全绿=假安全」与表述过头):
+
+- **偏差 18「已解决」表述修正**:多实例能力(createAgentRuntime 任意多实例、互不串状态)对**显式注入**消费方成立并有测试;生产消费面经 defaults 槽位为**单例装配**(宿主选择,重复装配有告警)——「多实例化」指状态随实例走与工厂能力,非生产多实例运行。
+- **偏差 23**:四处入口(含嵌套第四入口)现已真实接线并统一准入,「已解决」结论在修复后成立。
+- **「4632 全绿」**:修复后重新全量核验(见下),且新增生产装配 smoke 不经 testSetup,测试/生产装配不一致的假安全面已关闭。

@@ -249,6 +249,74 @@ describe('CallAdmissionGate 排队唤醒与审计(0b 语义)', () => {
   })
 })
 
+describe('评审修复验收(P1-1 / P1-2)', () => {
+  it('P1-1 脏活跃状态 db → new Gate:幻影票据不蚕食有效容量', async () => {
+    const db = openSqliteDatabase(':memory:')
+    // 上一进程遗留:活跃 2(全局上界 4)+ automation lane 满 1
+    const dirty = emptyAdmissionState(0)
+    saveAdmissionState(db, {
+      ...dirty,
+      activeInteractive: 2,
+      laneActive: { ...dirty.laneActive, automation: 1 }
+    })
+    resetActiveAdmissionOnStartup(db, 1_000)
+    const gate = new CallAdmissionGate({ db, now: () => 1_000 })
+    // 修复前:gate 构造读入幻影票据,容量被蚕食/automation lane 直接拒
+    const a = await gate.acquire(req({ requestId: 'a' }))
+    expect(a.ok).toBe(true)
+    const b = await gate.acquire(req({ lane: 'automation', priority: 'background', requestId: 'b' }))
+    expect(b.ok).toBe(true)
+    a.ok && a.ticket.release()
+    b.ok && b.ticket.release()
+  })
+
+  it('P1-2 跨 HOUR 边界:速率窗口随滚动落状态,每小时内限流、跨窗重置', async () => {
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalHourlyStarts: 2, globalMaxConcurrent: 50 }
+    let now = 0
+    const gate = new CallAdmissionGate({ policy, now: () => now })
+    const r1 = await gate.acquire(req({ requestId: 'r1' }))
+    const r2 = await gate.acquire(req({ requestId: 'r2' }))
+    expect(r1.ok && r2.ok).toBe(true)
+    // 窗口内第 3 次:超每小时启动上限 → 拒绝(disposition=reject)
+    const queued = await gate.acquire(req({ requestId: 'r3', disposition: 'reject' }))
+    expect(queued).toEqual({ ok: false, verdict: 'rejected', cause: 'rate-limit' })
+    // 跨窗口边界:滚动落状态 → 计数重置,重新放行
+    now = 3_600_000
+    const r4 = await gate.acquire(req({ requestId: 'r4', disposition: 'reject' }))
+    expect(r4.ok).toBe(true)
+    r4.ok && r4.ticket.release()
+    r1.ok && r1.ticket.release()
+    r2.ok && r2.ticket.release()
+  })
+
+  it('P1-2(管家 lane 配额维度)跨边界同样恢复', async () => {
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), laneHourlyStarts: { ...DEFAULT_ADMISSION_POLICY.laneHourlyStarts, automation: 1 } }
+    let now = 0
+    const gate = new CallAdmissionGate({ policy, now: () => now })
+    const first = await gate.acquire(req({ lane: 'automation', priority: 'background', disposition: 'reject', requestId: 'a1' }))
+    if (!first.ok) console.error('[DEBUG a1]', JSON.stringify(first))
+    expect(first.ok).toBe(true)
+    const second = await gate.acquire(req({ lane: 'automation', priority: 'background', disposition: 'reject', requestId: 'a2' }))
+    expect(second).toEqual({ ok: false, verdict: 'rejected', cause: 'lane-hourly-quota' })
+    now = 3_600_000
+    first.ok && first.ticket.release() // 释放并发位(验证的是配额窗口恢复,不并发占位)
+    const third = await gate.acquire(req({ lane: 'automation', priority: 'background', disposition: 'reject', requestId: 'a3' }))
+    expect(third.ok).toBe(true)
+    third.ok && third.ticket.release()
+  })
+
+  it('ticket 双释放幂等(P2):第二次 release 不吞其他活跃调用计数', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'r1' }))
+    expect(first.ok).toBe(true)
+    first.ok && first.ticket.release()
+    first.ok && first.ticket.release() // 双释放
+    const next = await gate.acquire(req({ requestId: 'r2', disposition: 'reject' }))
+    expect(next.ok).toBe(true)
+    next.ok && next.ticket.release()
+  })
+})
+
 describe('Storage 状态(callAdmissionStore,偏差 23:准入状态归 Storage)', () => {
   it('状态持久化跨实例可读;启动维护清零活跃段、保留速率窗口计数', () => {
     const db = openSqliteDatabase(':memory:')

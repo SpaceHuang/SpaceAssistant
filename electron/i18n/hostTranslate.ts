@@ -15,14 +15,25 @@ const PACKAGED_DIR_NAME = 'i18n-resources'
 
 /**
  * 渲染端 i18n 资源目录：
- * - 开发态：`{项目根}/src/renderer/i18n/resources`（mainDirname = dist-electron/electron）；
+ * - 开发态：`{项目根}/src/renderer/i18n/resources`——从 mainDirname 逐级向上探测
+ *   （编译输出深度随构建配置变化，写死层级必漂：P1-4 评审实测 dist-electron/electron/i18n
+ *   需向上三级）；探测不到时回退「向上两级」的历史口径；
  * - 打包态：`{process.resourcesPath}/i18n-resources`（extraResources 拷贝，见 package.json build 字段）。
  */
 export function resolveI18nResourcesDir(isPackaged: boolean, mainDirname: string, resourcesPath?: string): string {
   if (isPackaged) {
     return path.join(resourcesPath ?? process.resourcesPath, PACKAGED_DIR_NAME)
   }
-  return path.resolve(mainDirname, '..', '..', 'src', 'renderer', 'i18n', 'resources')
+  const REL = path.join('src', 'renderer', 'i18n', 'resources')
+  let dir = path.resolve(mainDirname)
+  for (let depth = 0; depth < 5; depth++) {
+    const candidate = path.join(dir, REL)
+    if (existsSync(candidate)) return candidate
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return path.resolve(mainDirname, '..', '..', REL)
 }
 
 type NamespaceTable = Record<string, string>

@@ -172,29 +172,44 @@ export class AgentChannel implements ConfirmationChannel {
           resolve(r)
         }
         // B1(偏差 23):嵌套准入——保留位防自锁(等待方持票,回答者凭 reserved 位准入);
+        // lane 继承等待方(this.deps.lane,P1-3:硬编码 automation 会让所有 lane 的嵌套审批
+        // 与管家任务抢 30/小时配额且保留位检错 lane);票据覆盖内层回合全程,
         // 拿不到准入位 = 「拿不到裁决」(cause=unavailable),与裁决为否(agent-deny)分立
-        this.deps.admissionGate
-          ? void this.deps.admissionGate
-              .acquire({
-                lane: 'automation',
-                priority: 'interactive',
-                role: 'approval-answerer',
-                disposition: 'reject',
-                requestId: innerRequestId
-              })
-              .then((admission) => {
+        const settleWithRelease = (r: ApprovalInvocationResult): void => {
+          if (admissionTicket) {
+            admissionTicket.release()
+            admissionTicket = null
+          }
+          finish(r)
+        }
+        let admissionTicket: import('../runtime/callAdmissionGate').AdmissionTicket | null = null
+        if (this.deps.admissionGate) {
+          this.deps.admissionGate
+            .acquire({
+              lane: this.deps.lane,
+              priority: 'interactive',
+              role: 'approval-answerer',
+              disposition: 'reject',
+              requestId: innerRequestId
+            })
+            .then(
+              (admission) => {
                 if (!admission.ok) {
                   finish({ ok: false, cause: 'unavailable' })
                   return
                 }
-                admission.ticket.release()
+                admissionTicket = admission.ticket
                 this.deps
                   .invokeApproval(invocation)
-                  .then((r) => finish(r), () => finish({ ok: false, cause: 'unavailable' }))
-              }, () => finish({ ok: false, cause: 'unavailable' }))
-          : this.deps
-              .invokeApproval(invocation)
-              .then((r) => finish(r), () => finish({ ok: false, cause: 'unavailable' }))
+                  .then(settleWithRelease, () => settleWithRelease({ ok: false, cause: 'unavailable' }))
+              },
+              () => finish({ ok: false, cause: 'unavailable' })
+            )
+        } else {
+          this.deps
+            .invokeApproval(invocation)
+            .then((r) => finish(r), () => finish({ ok: false, cause: 'unavailable' }))
+        }
         this.inflightSettle = (r) => finish(r)
       })
     } finally {

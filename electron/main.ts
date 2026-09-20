@@ -56,8 +56,8 @@ import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
-import { createAgentRuntime } from './runtime/agentRuntime'
 import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
 import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
 import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
@@ -359,8 +359,10 @@ app.whenReady().then(async () => {
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
-  // A2(偏差 18):宿主装配单例 runtime(行为等价)——旧全局注册函数经兼容转发落到本实例
-  setDefaultAgentRuntime(createAgentRuntime())
+  // A2(偏差 18):宿主装配单例 runtime——必须经 createDesktopAgentRuntime 注入完整组件集
+  // (空参 createAgentRuntime 全组件 no-op 桩:内置工具/取消/撤销/confirmId/MCP 限流/审计静默失效,
+  //  评审 batch3-runtime-admission-sdk-review P0-1);旧全局注册函数经兼容转发落到本实例
+  setDefaultAgentRuntime(createDesktopAgentRuntime())
   // S3(偏差 14):跨天节流清理——新日志文件开启时读统一保留策略并删除超期日志(每日至多一次)
   setAgentLogDailyPrune(() => {
     void pruneAgentLogs({
@@ -617,9 +619,11 @@ app.whenReady().then(async () => {
   })
 
   // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
-  // B1(偏差 23):统一调用级准入(状态归 Storage);butlerAdmission 退役
-  setCallAdmissionGate(new CallAdmissionGate({ db }))
+  // B1(偏差 23):统一调用级准入(状态归 Storage);butlerAdmission 退役。
+  // 顺序纪律(P1-1,评审):先清零 DB 活跃段、再构造门——门构造即 loadAdmissionState,
+  // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
   resetActiveAdmissionOnStartup(db, Date.now())
+  setCallAdmissionGate(new CallAdmissionGate({ db }))
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。

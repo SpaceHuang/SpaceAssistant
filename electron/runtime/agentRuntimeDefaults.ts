@@ -19,8 +19,14 @@ export function getDefaultAgentRuntime(): AgentRuntime {
   return defaultRuntime
 }
 
-/** 宿主装配入口(main.ts 启动时调用一次)。 */
+/** 宿主装配入口(main.ts 启动时调用一次;重复装配打告警——槽位是全局单点,防意外覆盖)。 */
 export function setDefaultAgentRuntime(runtime: AgentRuntime): void {
+  if (defaultRuntime && defaultRuntime !== runtime) {
+    console.warn('[agentRuntime] 默认 runtime 被重复装配(先前的实例仍被既有引用持有)', {
+      previousInstanceId: defaultRuntime.instanceId,
+      nextInstanceId: runtime.instanceId
+    })
+  }
   defaultRuntime = runtime
 }
 
