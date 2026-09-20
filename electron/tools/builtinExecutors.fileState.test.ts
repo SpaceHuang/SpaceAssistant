@@ -21,6 +21,81 @@ function makeCtx(workDir: string, cache: FileStateCache): ToolExecutionContext {
   }
 }
 
+describe('read_file 重复读取提示（P1-5，agent-context-token-cost-optimization-plan §5.5）', () => {
+  let tmpDir: string
+  let cache: FileStateCache
+
+  beforeEach(async () => {
+    tmpDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-reread-hint-')))
+    cache = new FileStateCache()
+  })
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('同会话第二次完整读取且文件未变化 → 返回提示而非重发全文', async () => {
+    const rel = 'doc.md'
+    const abs = path.join(tmpDir, rel)
+    await fs.writeFile(abs, 'stable content', 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+
+    const first = await readFileExecutor.execute({ path: rel }, ctx)
+    expect(first.success).toBe(true)
+    expect((first.data as { content?: string }).content).toBe('stable content')
+
+    const second = await readFileExecutor.execute({ path: rel }, ctx)
+    expect(second.success).toBe(true)
+    const data = second.data as { content?: string; unchangedSinceLastRead?: boolean; note?: string; path?: string }
+    expect(data.unchangedSinceLastRead).toBe(true)
+    expect(data.content).toBe('')
+    expect(data.path).toBe(rel)
+    expect(data.note).toContain('offset/limit')
+  })
+
+  it('文件被修改后重复读取 → 正常返回全文（提示不误触发）', async () => {
+    const rel = 'changed.md'
+    const abs = path.join(tmpDir, rel)
+    await fs.writeFile(abs, 'version one', 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    await readFileExecutor.execute({ path: rel }, ctx)
+
+    await fs.writeFile(abs, 'version two with different content', 'utf8')
+    const second = await readFileExecutor.execute({ path: rel }, ctx)
+    expect(second.success).toBe(true)
+    const data = second.data as { content?: string; unchangedSinceLastRead?: boolean }
+    expect(data.unchangedSinceLastRead).toBeUndefined()
+    expect(data.content).toBe('version two with different content')
+  })
+
+  it('带 offset/limit 的重复读取不受提示影响，正常返回内容', async () => {
+    const rel = 'ranged.md'
+    const abs = path.join(tmpDir, rel)
+    await fs.writeFile(abs, ['line one', 'line two', 'line three'].join('\n'), 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    await readFileExecutor.execute({ path: rel }, ctx)
+
+    const ranged = await readFileExecutor.execute({ path: rel, offset: 0, limit: 10 }, ctx)
+    expect(ranged.success).toBe(true)
+    const data = ranged.data as { content?: string; unchangedSinceLastRead?: boolean }
+    expect(data.unchangedSinceLastRead).toBeUndefined()
+    expect(data.content).toContain('line one')
+  })
+
+  it('重复读取提示后 edit_file 护栏不受影响（缓存保持完整快照）', async () => {
+    const rel = 'editable.md'
+    const abs = path.join(tmpDir, rel)
+    await fs.writeFile(abs, 'alpha beta', 'utf8')
+    const ctx = makeCtx(tmpDir, cache)
+    await readFileExecutor.execute({ path: rel }, ctx)
+    await readFileExecutor.execute({ path: rel }, ctx)
+
+    const edit = await editFileExecutor.execute({ path: rel, old_string: 'alpha', new_string: 'ALPHA' }, ctx)
+    expect(edit.success).toBe(true)
+    expect(await fs.readFile(abs, 'utf8')).toBe('ALPHA beta')
+  })
+})
+
 describe('edit/write fileStateCache', () => {
   let tmpDir: string
   let cache: FileStateCache

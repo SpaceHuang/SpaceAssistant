@@ -228,6 +228,26 @@ export const readFileExecutor: ToolExecutor = {
       const hasLimit = limitRaw !== undefined && limitRaw !== null
       const rangeRequested = hasTail || hasOffset || hasLimit
 
+      // P1-5（agent-context-token-cost-optimization-plan §5.5）：会话内已完整读取过且文件未变化
+      // （mtime 一致）时，不再重发全文，只返回提示——实测 read_file 重复率 43%（69 读 / 39 路径）。
+      // 只提示不拒绝：需要特定区间传 offset/limit；需要强制重读全文传 offset=0。
+      if (!rangeRequested) {
+        const cached = ctx.fileStateCache.get(abs)
+        if (cached && !cached.isPartial && !cached.isRangeView && cached.mtime === st.mtimeMs) {
+          return {
+            success: true,
+            data: {
+              path: rel,
+              content: '',
+              unchangedSinceLastRead: true,
+              byteSize: st.size,
+              note: '该文件已在本次会话中完整读取且此后未变化，正文不再重复返回。如需特定区间请传 offset/limit；如需强制重读全文请传 offset=0。'
+            },
+            duration: Date.now() - started
+          }
+        }
+      }
+
       // Meta：大文件且无范围参数
       if (!rangeRequested && st.size > READ_FILE_MAX_CHARS) {
         recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
