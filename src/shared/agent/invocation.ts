@@ -164,7 +164,7 @@ export interface AgentWorkspacePorts {
   workDir: string
   /** electron 侧为 WorkDirManager。 */
   workDirManager?: unknown
-  resolveWorkDir?: () => string
+  resolveWorkDir?(): string
   userDataDir: string
 }
 
@@ -242,7 +242,7 @@ export interface AgentPolicyPorts {
   effectiveRules: readonly PolicyRule[]
   /** electron 侧为 GateDecisionCache（lookup + 写/清理族的完整形状）。 */
   decisionCache: unknown
-  shellPrecheck: { touchTrustedCommand: (command: string) => void }
+  shellPrecheck: { touchTrustedCommand(command: string): void }
   /** P3：规则来源标注（键 = 规则 id），随门控入参透传、落审计 ruleOrigin。 */
   policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
 }
@@ -280,7 +280,7 @@ export interface AgentHostPorts {
   /** electron 侧为 ContextMeter（Core 以 session event ledger 提供的测量适配器）。 */
   contextMeter?: unknown
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
-  turnBoundary?: (input: unknown) => Promise<void>
+  turnBoundary?(input: unknown): Promise<void>
 }
 
 /** 调用结果（本期先落形状：ok/cancelled 布尔的四态化在后续阶段收敛为 status）。 */
