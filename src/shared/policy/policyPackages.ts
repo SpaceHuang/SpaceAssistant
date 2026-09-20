@@ -1,14 +1,22 @@
 import type { ExecutionLane, PolicyAction, PolicyRule } from '../confirmation/types'
+import { DEFAULT_POLICY_RULES } from './defaultRules'
 
 /**
  * 策略套餐（顶层设计 §4 第 1 区 / §5）：每条链路选择 严格/标准/宽松/自定义 之一。
- * - standard：内置默认规则原样生效；
- * - strict：非 locked 的 allow/auto-evaluator 条目上调为 ask（宁可多问）；
- * - loose：非 locked 的 ask 条目下调为 allow（用户显式选择，设置页带风险警示）；
+ * - standard：内置默认规则原样生效（desktop 的「自动」ask→auto-evaluator 由引擎产出层解释）；
+ * - strict / loose（S1，偏差 15 收口）：**范围档**——档位决定「哪些域落入确认范围」，
+ *   以显式 ScopeRule 清单取代目标条目（机械命名 scope-<档>-<目标 id>），不对任意条目做整体宽严变换；
+ *   strict = 全部非 locked 自动放行域纳入确认范围；loose = 显式低风险域移出确认范围（清单外一律 standard）；
  * - custom：应用用户在 policy_rules 表中的规则覆盖（仅动作/参数，规则不可增删、顺序不可改）。
  *
- * locked 条目在任何套餐下都不可被调松/改写（系统保护底线）。
+ * locked 条目在任何套餐下都不可被调松/改写（系统保护底线，policyFloor 校验兜底）。
  */
+
+/** 范围条目（S1）：取代 supersedes 指向的默认条目（仅本档生效集内），其余字段为完整 PolicyRule。 */
+export interface ScopeRule extends PolicyRule {
+  /** 被本范围条目取代的默认条目 id（目标必须存在且非 locked）。 */
+  supersedes: string
+}
 export type PolicyPackage = 'strict' | 'standard' | 'loose' | 'custom'
 
 export type PolicyPackageMap = Record<ExecutionLane, PolicyPackage>
@@ -59,25 +67,96 @@ export interface LaneProfile {
   availableActions: readonly PolicyAction[]
   /**
    * 档位 → 基线动作 → 生效动作映射（仅声明清单，未列出即恒等）。
+   * S1（偏差 15）：仅保留 standard 的 desktop「自动」映射（路径选择，非宽严）；
+   * strict / loose 已范围化（scopePackages），不再做宽严变换。
    * custom 档是用户显式覆盖，不经变换表改写。
    */
   transforms: Partial<Record<'strict' | 'standard' | 'loose', Partial<Record<PolicyAction, PolicyAction>>>>
+  /**
+   * 范围档条目清单（S1，偏差 15）：strict / loose 的域覆盖面显式数据化。
+   * 条目经 resolvePolicyRules 取代 supersedes 目标注入本档生效集；
+   * 目标不存在于传入规则集时不注入（合成规则集恒等）。
+   */
+  scopePackages?: Partial<Record<'strict' | 'loose', readonly ScopeRule[]>>
 }
 
 /**
- * 桌面（决策 7/8）：standard 非 locked `ask → auto-evaluator`（=「自动」：快通道 + 审批 Agent）；
- * strict 收紧（allow/auto-evaluator → ask）；loose 放宽（ask → allow，auto-evaluator 保持）。
+ * 桌面（决策 7/8）：standard 非 locked `ask → auto-evaluator`（=「自动」：快通道 + 审批 Agent）。
+ * S1：strict / loose 宽严映射移除（范围化，见 DESKTOP_SCOPE_PACKAGES）。
  */
 const DESKTOP_TRANSFORMS: LaneProfile['transforms'] = {
-  strict: { allow: 'ask', 'auto-evaluator': 'ask' },
-  standard: { ask: 'auto-evaluator' },
-  loose: { ask: 'allow' }
+  standard: { ask: 'auto-evaluator' }
 }
 
-/** wechat/feishu：standard 恒等（本轮零行为变化硬回归）；无 auto-evaluator 条目，strict 只上调 allow。 */
-const IM_TRANSFORMS: LaneProfile['transforms'] = {
-  strict: { allow: 'ask' },
-  loose: { ask: 'allow' }
+/** wechat/feishu：恒等（S1：strict / loose 宽严映射移除，范围化见各 lane scope 清单）。 */
+const IM_TRANSFORMS: LaneProfile['transforms'] = {}
+
+/**
+ * 范围条目构造（S1）：从默认规则派生本档副本——机械命名 scope-<档>-<目标 id>、
+ * match.lane 收窄为本 lane、locked 强制 false。
+ * strict（收紧）保留目标条目的确认条件门控（askUnless/configRequires/requiresContext）——
+ * 收紧不越过用户显式配置；loose（放行）剥离门控——「何时确认」条件不约束档位显式放行。
+ */
+function scopeVariant(
+  lane: ExecutionLane,
+  pkg: 'strict' | 'loose',
+  supersedesId: string,
+  action: PolicyAction,
+  reason: string
+): ScopeRule {
+  const base = DEFAULT_POLICY_RULES.find((r) => r.id === supersedesId)
+  if (!base) throw new Error(`scope supersedes target not found: ${supersedesId}`)
+  const { askUnless: _a, configRequires: _c, requiresContext: _r, ...ungated } = base
+  return {
+    ...(pkg === 'strict' ? base : ungated),
+    id: `scope-${pkg}-${supersedesId}`,
+    action,
+    locked: false,
+    reason,
+    match: { ...base.match, lane: [lane] },
+    supersedes: supersedesId
+  }
+}
+
+/**
+ * desktop 范围档（S1）：strict = 全部非 locked 自动放行域（预检快通道 / clean 脚本 / act 免确认开关 /
+ * lark 读 / toolkit 读 / MCP 只读）纳入确认范围——判定集合与原宽严档等价；
+ * loose = 显式低风险域（打开网页 / MCP 工具调用）移出确认范围——较原全域 ask→allow 收窄（偏差 15 预期收紧）。
+ */
+const DESKTOP_SCOPE_PACKAGES: LaneProfile['scopePackages'] = {
+  strict: [
+    scopeVariant('desktop', 'strict', 'shell-precheck-auto-allow', 'ask', 'strict 范围档：shell 预检快通道纳入确认范围'),
+    scopeVariant('desktop', 'strict', 'script-clean-allow-desktop', 'ask', 'strict 范围档：clean 脚本免确认纳入确认范围'),
+    scopeVariant('desktop', 'strict', 'browser-act-allow-unconfigured', 'ask', 'strict 范围档：浏览器 act 免确认开关域纳入确认范围'),
+    scopeVariant('desktop', 'strict', 'lark-read-allow', 'ask', 'strict 范围档：lark 读类免确认纳入确认范围'),
+    scopeVariant('desktop', 'strict', 'toolkit-read-allow', 'ask', 'strict 范围档：能力集合只读免确认纳入确认范围'),
+    scopeVariant('desktop', 'strict', 'mcp-readonly-allow', 'ask', 'strict 范围档：MCP 只读注解免确认纳入确认范围')
+  ],
+  loose: [
+    scopeVariant('desktop', 'loose', 'browser-navigate-ask-desktop', 'allow', 'loose 范围档：打开网页属低风险域，移出确认范围'),
+    scopeVariant('desktop', 'loose', 'mcp-tool-ask', 'allow', 'loose 范围档：MCP 工具调用属显式放行域，移出确认范围')
+  ]
+}
+
+/** wechat 范围档（S1）：远程链路保守——strict 只收 act 免确认开关域；loose 只放行打开网页。 */
+const WECHAT_SCOPE_PACKAGES: LaneProfile['scopePackages'] = {
+  strict: [
+    scopeVariant('wechat', 'strict', 'browser-act-allow-unconfigured', 'ask', 'strict 范围档：浏览器 act 免确认开关域纳入确认范围')
+  ],
+  loose: [
+    scopeVariant('wechat', 'loose', 'browser-navigate-ask-remote', 'allow', 'loose 范围档：远程打开网页属低风险域，移出确认范围')
+  ]
+}
+
+/** feishu 范围档（S1）：在 wechat 基础上 strict 额外收 lark 读类域。 */
+const FEISHU_SCOPE_PACKAGES: LaneProfile['scopePackages'] = {
+  strict: [
+    scopeVariant('feishu', 'strict', 'lark-read-allow', 'ask', 'strict 范围档：lark 读类免确认纳入确认范围'),
+    scopeVariant('feishu', 'strict', 'browser-act-allow-unconfigured', 'ask', 'strict 范围档：浏览器 act 免确认开关域纳入确认范围')
+  ],
+  loose: [
+    scopeVariant('feishu', 'loose', 'browser-navigate-ask-remote', 'allow', 'loose 范围档：远程打开网页属低风险域，移出确认范围')
+  ]
 }
 
 export const LANE_PROFILES: Record<ExecutionLane, LaneProfile> = {
@@ -85,19 +164,22 @@ export const LANE_PROFILES: Record<ExecutionLane, LaneProfile> = {
     availablePackages: ['strict', 'standard', 'loose', 'custom'],
     userSelectable: true,
     availableActions: ['deny', 'allow', 'ask', 'auto-evaluator'],
-    transforms: DESKTOP_TRANSFORMS
+    transforms: DESKTOP_TRANSFORMS,
+    scopePackages: DESKTOP_SCOPE_PACKAGES
   },
   wechat: {
     availablePackages: ['strict', 'standard', 'loose', 'custom'],
     userSelectable: true,
     availableActions: ['deny', 'allow', 'ask'],
-    transforms: IM_TRANSFORMS
+    transforms: IM_TRANSFORMS,
+    scopePackages: WECHAT_SCOPE_PACKAGES
   },
   feishu: {
     availablePackages: ['strict', 'standard', 'loose', 'custom'],
     userSelectable: true,
     availableActions: ['deny', 'allow', 'ask'],
-    transforms: IM_TRANSFORMS
+    transforms: IM_TRANSFORMS,
+    scopePackages: FEISHU_SCOPE_PACKAGES
   },
   // automation：仅 standard、不可用户选、无可编辑档（其唯一 ask 为 locked；回答者=agent 由 lane 派生）
   automation: {
@@ -119,8 +201,9 @@ function isTransformExempt(rule: Pick<PolicyRule, 'action' | 'locked'>): boolean
 
 /**
  * 基线动作 → 生效动作（显示=实际：渲染端与引擎共用）。
+ * S1（偏差 15）：映射表仅剩 desktop standard「自动」（路径选择非宽严）；strict / loose 恒等。
  * custom 档恒等（用户覆盖即最终动作，动作域合法性由 validateRuleOverride 按 lane 校验）；
- * 档位不在本链路 transforms 中（如 automation × strict）按恒等返回，收敛责任在调用方（M2）。
+ * 档位不在本链路 transforms 中按恒等返回，收敛责任在调用方（M2）。
  */
 export function effectiveActionFor(
   lane: ExecutionLane,
@@ -158,12 +241,6 @@ export function validateRuleOverride(
   return { ok: true, rule }
 }
 
-/** 档位生效动作作用于单条规则：动作不变时保持原引用（恒等快路径）。 */
-function withEffectiveAction(lane: ExecutionLane, pkg: PolicyPackage, rule: PolicyRule): PolicyRule {
-  const action = effectiveActionFor(lane, pkg, rule)
-  return action === rule.action ? rule : { ...rule, action }
-}
-
 /**
  * custom 覆盖应用（M2 纵深防御）：过滤掉不在本链路 availableActions 的覆盖
  * （B2：auto-evaluator 仅 desktop；wechat/feishu 拒绝——入口校验之外的引擎层防线）。
@@ -192,11 +269,37 @@ export function isPackageAvailableForLane(lane: ExecutionLane, pkg: PolicyPackag
   return LANE_PROFILES[lane].availablePackages.includes(pkg)
 }
 
+/** 范围条目注入生效集时剥离机制字段 supersedes（生效集内是普通 PolicyRule）。 */
+function scopeAsRule(scope: ScopeRule): PolicyRule {
+  const { supersedes: _superseded, ...rule } = scope
+  return rule
+}
+
 /**
- * 按链路解析生效规则集（§2.1 LANE_PROFILES）：基础规则 + 档位变换/自定义覆盖。
- * - 恒等情形（standard 的恒等 lane、无覆盖的 custom）返回原数组引用，保证零行为变化快路径；
+ * 范围档应用（S1，偏差 15）：以显式清单条目取代 supersedes 目标（本档生效集内）。
+ * 目标不在传入规则集时不注入（合成规则集恒等、返回原引用）；其余条目一律原样——
+ * 档位只决定「哪些域」的裁定条目被取代，不做任何整体宽严变换。
+ */
+function applyScope(lane: ExecutionLane, pkg: 'strict' | 'loose', rules: PolicyRule[]): PolicyRule[] {
+  const scopes = LANE_PROFILES[lane].scopePackages?.[pkg]
+  if (!scopes || scopes.length === 0) return rules
+  const bySupersedes = new Map(scopes.map((s) => [s.supersedes, s]))
+  let hit = false
+  const out = rules.map((r) => {
+    const scope = bySupersedes.get(r.id)
+    if (!scope) return r
+    hit = true
+    return scopeAsRule(scope)
+  })
+  return hit ? out : rules
+}
+
+/**
+ * 按链路解析生效规则集（§2.1 LANE_PROFILES）：基础规则 + 范围档条目取代 / 自定义覆盖。
+ * - 恒等情形（standard、无清单目标命中的 strict / loose、无覆盖的 custom）返回原数组引用，保证零行为变化快路径；
  * - 档位不在本链路可用集合 → 视为 standard（M2：automation 伪造 loose/custom 等）；
- * - 决策 1：不再按回答者收紧套餐（「非 user 不许 loose」论证不成立，以用户显式选择为准）。
+ * - 决策 1：不再按回答者收紧套餐（「非 user 不许 loose」论证不成立，以用户显式选择为准）；
+ * - S1（偏差 15）：strict / loose 为范围档——显式 ScopeRule 取代目标条目，全 lane 无宽严变换。
  */
 export function resolvePolicyRules(args: {
   lane: ExecutionLane
@@ -210,7 +313,7 @@ export function resolvePolicyRules(args: {
   switch (pkg) {
     case 'strict':
     case 'loose':
-      return args.rules.map((r) => withEffectiveAction(args.lane, pkg, r))
+      return applyScope(args.lane, pkg, args.rules)
     case 'custom':
       return applyCustom(args.lane, args.rules, args.overrides ?? [])
     default:

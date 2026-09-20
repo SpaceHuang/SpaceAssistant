@@ -2,8 +2,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 /**
- * P2 §2.4 标准 2：Core 以内存端口实现跑完整回合——不启动 Electron、不碰 SQLite，
- * 完成「带工具调用的回合 + 一次确认（批准）+ 一次拒绝」。这也是 SDK 面 20 号偏差的预演。
+ * SDK 级验收（A4，偏差 20）：`createAgentRuntime` 装配 + 内存端口，**不启动 Electron、不碰 SQLite**，
+ * 跑完「带工具调用的回合 + 一次确认（批准）+ 一次拒绝」，断言结果四态与事件台账。
+ * CI 以独立 step 常驻回归（ci.yml test job）。
+ * 边界说明：回合执行引擎（toolChatLoop 执行闭包，实测 442 文件）物理切分属基线 §13 完整 P5，
+ * 本测试仍从宿主闭包消费（vi.mock 隔离 electron 本体）；「import 闭包零 electron」子项待切分后达标。
  * （runShellRegisteredTool 的 plan 超时为存量环境问题，与此无关。）
  */
 
@@ -37,9 +40,19 @@ vi.mock('./anthropicClientFactory', () => ({
 
 vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  signalChatCancel: vi.fn(),
   clearChatCancel: vi.fn(),
   throwIfChatCancelled: vi.fn(),
-  ChatCancelledError: class ChatCancelledError extends Error {}
+  cancelAllActiveChats: vi.fn(),
+  ChatCancelledError: class ChatCancelledError extends Error {},
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  ChatCancelRegistry: class ChatCancelRegistry {
+    register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    signalChatCancel = vi.fn()
+    clear = vi.fn()
+    throwIfCancelled = vi.fn()
+    cancelAllActiveChats = vi.fn()
+  }
 }))
 
 vi.mock('./sessionTitleSuggest', () => ({

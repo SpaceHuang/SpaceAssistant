@@ -10,6 +10,7 @@ import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../s
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import type { RemoteContext } from '../tools/types'
+import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { readAppLocale } from '../appIpc'
 import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { logHistoryOversizedToolResult } from '../oversizedToolResultLog'
@@ -41,6 +42,8 @@ export function extractTextFromContent(content: unknown[]): string {
 export type ImRemoteAgentResult = { summary: string; pendingConfirm: boolean; ok: boolean; outcome?: 'cancelled' | 'timed-out' }
 
 export async function runImRemoteAgent(args: {
+  /** B1(偏差 23):准入门注入(测试);缺省全局默认门。 */
+  admissionGate?: import('../runtime/callAdmissionGate').CallAdmissionGate
   db: AppDatabase
   sessionId: string
   requestId: string
@@ -74,10 +77,34 @@ export async function runImRemoteAgent(args: {
 }): Promise<ImRemoteAgentResult> {
   const requestId = args.requestId
 
-  const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
-  const adapter = args.createProgressAdapter(getOutboundSessionId)
-  startRemoteProgressSession(args.sessionId, adapter, args.progressConfig, args.progressDefaults)
+  // B1(偏差 23):调用级准入——远端发起入口(四处之一)。票据覆盖整回合,拒绝即答复「资源忙」。
+  const admissionGate = args.admissionGate ?? getCallAdmissionGate()
+  const admission = await admissionGate.acquire({
+    lane: args.remoteContext.source,
+    priority: 'interactive',
+    role: 'top-level',
+    disposition: 'reject',
+    requestId
+  })
+  if (!admission.ok) {
+    return {
+      summary: admission.verdict === 'rejected' ? '当前调用并发已达上限，请稍后再试。' : '当前调用已被限流，请稍后再试。',
+      pendingConfirm: false,
+      ok: false
+    }
+  }
 
+  try {
+    const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
+    const adapter = args.createProgressAdapter(getOutboundSessionId)
+    // P2(评审):progress session 启动在票据持有窗口内——挪进 try,同步抛出也走 release
+    startRemoteProgressSession(args.sessionId, adapter, args.progressConfig, args.progressDefaults)
+    return await runAdmittedTurn()
+  } finally {
+    if (admission.ok) admission.ticket.release()
+  }
+
+  async function runAdmittedTurn(): Promise<ImRemoteAgentResult> {
   try {
     const resolved = resolveWorkDirForSession(
       args.db,
@@ -183,5 +210,6 @@ export async function runImRemoteAgent(args: {
     stopRemoteProgressSession(args.sessionId)
     clearRemoteProgressSession(args.sessionId)
     args.onFinally?.()
+  }
   }
 }

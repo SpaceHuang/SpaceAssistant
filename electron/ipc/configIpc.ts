@@ -27,6 +27,7 @@ import { readBrowserConfigFromDb, persistBrowserConfig } from '../browser/browse
 import { readFeishuConfigFromDb, persistFeishuConfig } from '../feishu/feishuIpc'
 import { readWeChatConfigFromDb, persistWeChatConfig } from '../wechat/weChatIpc'
 import { rebuildAppMenu } from '../menu'
+import { createHostTranslator } from '../i18n/hostTranslate'
 import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
 import { revokeToolForAllLanes } from '../toolRevocationRegistry'
 
@@ -443,7 +444,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       }
       if (payload.locale !== undefined && isAppLocale(payload.locale)) {
         setConfigValue(ctx.db, CONFIG_KEYS.locale, payload.locale)
-        rebuildAppMenu(payload.locale)
+        rebuildAppMenu(createHostTranslator({ locale: payload.locale }))
       }
       stripPlanConfigFromDbIfNeeded(ctx.db)
       ctx.db.flushSave()

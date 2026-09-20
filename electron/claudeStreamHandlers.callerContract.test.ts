@@ -64,7 +64,18 @@ vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
   signalChatCancel: vi.fn(),
-  CHAT_CANCELLED_MESSAGE: 'cancelled'
+  CHAT_CANCELLED_MESSAGE: 'cancelled',
+  throwIfChatCancelled: vi.fn(),
+  cancelAllActiveChats: vi.fn(),
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  ChatCancelledError: class ChatCancelledError extends Error {},
+  ChatCancelRegistry: class ChatCancelRegistry {
+    register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    signalChatCancel = vi.fn()
+    clear = vi.fn()
+    throwIfCancelled = vi.fn()
+    cancelAllActiveChats = vi.fn()
+  }
 }))
 
 import { ipcMain } from 'electron'

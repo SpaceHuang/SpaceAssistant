@@ -1,10 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import { authorizeToolCall, computeEffectiveTools } from './effectiveTools'
 import { getRegisteredTool } from './tools/builtinExecutors'
+import { createAgentRuntime } from './runtime/agentRuntime'
+import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createBuiltinToolRegistry } from './tools/builtinExecutors'
+import { ConfirmIdSpace } from './remote/confirmId'
+import { ChatCancelRegistry } from './chatCancelRegistry'
+import { ToolRevocationRegistry } from './toolRevocationRegistry'
+import { McpConcurrencyGate } from './mcp/mcpToolExecutor'
+
 
 // B1 复现/回归：点号内部名（history.read/skills.read）出向被 sanitize 为 compat 名，
 // 分发侧必须经 compatToInternal 逆映射才能命中以内部名为 key 的注册表。
 const enabledCfg = { enabled: true, allowedTools: [], deniedTools: [] }
+
+// P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+setDefaultAgentRuntime(
+  createAgentRuntime({
+    confirmIds: new ConfirmIdSpace(),
+    chatCancels: new ChatCancelRegistry(),
+    toolRevocations: new ToolRevocationRegistry(),
+    mcpGate: new McpConcurrencyGate(),
+    builtinRegistry: createBuiltinToolRegistry()
+  })
+)
 
 describe('工具名双向转换（B1）', () => {
   it('出向为 compat 名，逆映射表把 compat 名还原为内部注册名', () => {

@@ -122,7 +122,7 @@ export function resolveEffectivePolicyRulesWithOrigin(
     if (override && rule.action !== baseById.get(rule.id)?.action) {
       origins[rule.id] = { source: 'user-override', shadowed: [{ source: 'builtin' }] }
     } else if (baseById.get(rule.id)?.action !== rule.action) {
-      // 套餐变换（strict 上调 / loose 下调）改变了内置动作
+      // 档位范围条目（scope-*，S1 偏差 15）改变了默认动作来源
       origins[rule.id] = { source: 'package', shadowed: [{ source: 'builtin' }] }
     } else {
       origins[rule.id] = { source: 'builtin' }
@@ -146,8 +146,9 @@ export function loadLanePolicyContext(db: AppDatabase, lane: ExecutionLane): { r
 }
 
 /**
- * 按链路加载生效规则集：恒等 lane 的 standard 返回 DEFAULT_POLICY_RULES 引用（零行为变化快路径）；
- * desktop standard 的非 locked ask 变换为 auto-evaluator（「自动」动作，§2.1）。
+ * 按链路加载生效规则集：恒等情形（standard、无清单目标命中的 strict/loose）返回 DEFAULT_POLICY_RULES
+ * 引用（零行为变化快路径）；strict / loose 为范围档（scope-* 条目取代目标，S1 偏差 15）；
+ * desktop standard 的「自动」ask→auto-evaluator 由引擎产出层经 deps.transform 解释，不在规则集层面。
  */
 export function loadEffectivePolicyRules(db: AppDatabase, lane: ExecutionLane): PolicyRule[] {
   return loadLanePolicyContext(db, lane).rules

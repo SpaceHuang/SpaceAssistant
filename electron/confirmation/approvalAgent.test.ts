@@ -276,11 +276,19 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     expect(messages[0]!.content).toContain('out.txt')
   })
 
-  it('P2-7 准入死锁禁令：外层持票（并发=1）状态下审批调用限时完成、不复取票', async () => {
-    // 真 ButlerAdmission，外层先取唯一票据；若审批链再取票即被拒/排队，限时完成即证明不取票
-    const { ButlerAdmission } = await import('../butler/butlerAdmission')
-    const admission = new ButlerAdmission()
-    const outer = await admission.acquire('outer-req')
+  it('P2-7 准入死锁禁令：外层持票（automation lane 配额=1）状态下审批调用限时完成、不复取票', async () => {
+    // B1(偏差 23):真统一准入门,外层管家先占满 automation lane 唯一配额;
+    // 审批链若按顶层角色再取票即被拒/排队,限时完成即证明不复取顶层票(回答者走保留位)。
+    const { CallAdmissionGate } = await import('../runtime/callAdmissionGate')
+    const { DEFAULT_ADMISSION_POLICY } = await import('../runtime/callAdmission')
+    const gate = new CallAdmissionGate({
+      policy: {
+        ...structuredClone(DEFAULT_ADMISSION_POLICY),
+        globalMaxConcurrent: 1,
+        laneMaxConcurrent: { ...DEFAULT_ADMISSION_POLICY.laneMaxConcurrent, automation: 1 }
+      }
+    })
+    const outer = await gate.acquire({ lane: 'automation', priority: 'background', role: 'top-level', disposition: 'queue', requestId: 'outer-req' })
     if (!outer.ok) throw new Error('外层取票应成功')
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
@@ -291,7 +299,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error('审批在持票状态下未限时完成')), 2000))
     ])
     expect(res).toMatchObject({ ok: true })
-    outer.release()
+    outer.ok && outer.ticket.release()
   })
 })
 

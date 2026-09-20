@@ -2,6 +2,7 @@ import type { Message, SessionSkillsState, SkillDefinition, WikiConfig, WikiStat
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
 import { MAX_CHAT_MESSAGE_QUEUE_SIZE, countQueuedUserMessages } from '../../src/shared/chatMessageQueue'
 import type { OutboundSessionPrefs, OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
+import { getCallAdmissionGate, type CallAdmissionGate } from '../runtime/callAdmissionGate'
 import type { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import { parseTestPopCommand } from '../../src/shared/outbound/testPopCommandService'
 import { parseTestCardsCommand } from '../../src/shared/outbound/testCardsCommandService'
@@ -194,10 +195,15 @@ export type OutboundAcceptorDeps = {
   contextUsageWarn?: (input: { sessionId: string; model: string; attachments?: Message['attachments'] }) => Promise<string[]>
   newRequestId: () => string
   audit: (event: string, data: Record<string, unknown>) => void
+  /** B1(偏差 23):调用级准入门;缺省全局默认门(db 装配由 main.ts 持有)。 */
+  admissionGate?: AdmissionGate
 }
 
 /** 仅取 id 的会话形（避免拉入完整 Session 类型依赖） */
 type Session_Requested = { id: string }
+
+/** 准入门最小面(偏差 23):便于测试注入;与 CallAdmissionGate.acquire 同形。 */
+export type AdmissionGate = Pick<CallAdmissionGate, 'acquire'>
 
 export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
   const io: OutboundClassifierIo = {
@@ -250,6 +256,24 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       return { accepted: 'local-command', command: { kind: 'hint-only', hint: testPopCmd.hint } }
     }
 
+    // B1(偏差 23):调用级准入——桌面受理端口(四处发起入口之一,评审 N2 口径)。
+    // 受理级票据(瞬时)+ 全局速率约束;queue 语义由既有会话级出站排队承载,故此处声明 reject。
+    const admissionGate = deps.admissionGate ?? getCallAdmissionGate()
+    const admission = await admissionGate.acquire({
+      lane: 'desktop',
+      priority: 'interactive',
+      role: 'top-level',
+      disposition: 'reject',
+      requestId: deps.newRequestId()
+    })
+    if (!admission.ok) {
+      if (admission.verdict === 'rejected') {
+        deps.audit('outbound.submit.rejected', { reason: `ADMISSION_${admission.cause.toUpperCase()}` })
+        return { rejected: { reason: `ADMISSION_${admission.cause.toUpperCase()}` } }
+      }
+      return { rejected: { reason: 'ADMISSION_THROTTLED' } }
+    }
+    try {
     // 会话解析/创建：无会话 = 请主进程创建（决定回主进程）
     let sessionId = intent.sessionId
     if (!sessionId) {
@@ -373,6 +397,9 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           return { rejected: { reason: msg } }
         }
       }
+    }
+    } finally {
+      admission.ticket.release()
     }
   }
 

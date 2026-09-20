@@ -19,6 +19,7 @@ import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolP
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getRegisteredTool, getToolExecutor } from './tools/builtinExecutors'
+import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { executeRegisteredTool } from './tools/toolInvocationCoordinator'
 import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { executePreparedShellExecution } from './tools/runShellExecutor'
@@ -2036,6 +2037,8 @@ async function runToolChatSessionInner(
             agentChannelFactory: (agentDeps) =>
               new AgentChannel({
                 ...agentDeps,
+                // B1(偏差 23,P1-3 生产接线):第四发起入口(嵌套审批)统一准入
+                admissionGate: getCallAdmissionGate(),
                 // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面链路经 claudeStreamHandlers
                 // 传当前 turn 用户消息摘要；缺省 = 无任务上下文
                 ...(args.approvalTaskDigest ? { taskDigest: args.approvalTaskDigest } : {}),

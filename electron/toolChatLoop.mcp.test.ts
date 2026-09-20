@@ -55,7 +55,15 @@ vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
   throwIfChatCancelled: vi.fn(),
-  ChatCancelledError: class ChatCancelledError extends Error {}
+  ChatCancelledError: class ChatCancelledError extends Error {},
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  ChatCancelRegistry: class ChatCancelRegistry {
+    register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    signalChatCancel = vi.fn()
+    clear = vi.fn()
+    throwIfCancelled = vi.fn()
+    cancelAllActiveChats = vi.fn()
+  }
 }))
 
 vi.mock('./sessionTitleSuggest', () => ({
@@ -104,6 +112,12 @@ vi.mock('./mcp/mcpConnectionManager', () => ({
 }))
 
 vi.mock('./mcp/mcpToolExecutor', () => ({
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  McpConcurrencyGate: class McpConcurrencyGate {
+    run = vi.fn((_serverId: string, fn: () => Promise<unknown>) => fn())
+    perServer = vi.fn()
+    globalConcurrency = 8
+  },
   createMcpToolExecutor: vi.fn(() => ({
     name: 'mcp-exec',
     execute: vi.fn(async () => mockExecutorResult)

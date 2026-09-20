@@ -10,7 +10,6 @@ import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { registerButlerIpcHandlers } from './butler/butlerIpc'
 import { createDeliveryHub } from './driver/deliveryHub'
-import { ButlerAdmission } from './butler/butlerAdmission'
 import { ButlerTaskScheduler } from './butler/taskScheduler'
 import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
 import { stagehandService } from './browser/stagehandService'
@@ -36,7 +35,10 @@ import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, enforceSessionEventRetentionDetailed, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { beginSessionEventShutdown, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
+import { pruneAgentLogs } from './storage/agentLogRetention'
+import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
@@ -50,9 +52,15 @@ import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspac
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
+import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
+import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
+import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
+import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
+import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
@@ -352,6 +360,17 @@ app.whenReady().then(async () => {
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
+  // A2(偏差 18):宿主装配单例 runtime——必须经 createDesktopAgentRuntime 注入完整组件集
+  // (空参 createAgentRuntime 全组件 no-op 桩:内置工具/取消/撤销/confirmId/MCP 限流/审计静默失效,
+  //  评审 batch3-runtime-admission-sdk-review P0-1);旧全局注册函数经兼容转发落到本实例
+  setDefaultAgentRuntime(createDesktopAgentRuntime())
+  // S3(偏差 14):跨天节流清理——新日志文件开启时读统一保留策略并删除超期日志(每日至多一次)
+  setAgentLogDailyPrune(() => {
+    void pruneAgentLogs({
+      logDir: getAgentLogDir() ?? '',
+      retentionDays: resolveRetentionPolicyFromDb(db).agentLogRetentionDays
+    }).catch(() => undefined)
+  })
   const agentLogDir = getAgentLogDir()
   logAgentEvent('info', 'agent.startup', {
     workDir: workDirState,
@@ -467,13 +486,19 @@ app.whenReady().then(async () => {
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
-    const retention = await enforceSessionEventRetentionDetailed(workDirState, 100)
+    // S3(偏差 24):保留上限由 Storage 统一保留策略持有(configs 可配、显式默认),启动流程只触发
+    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, workDirState)
     for (const failure of retention.failures) {
       console.warn('[sessionEvents] retention cleanup failed:', {
         sessionName: failure.sessionName,
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
+    // S3(偏差 14):Agent 日志超保留期清理挂同一保留策略(启动维护触发)
+    await pruneAgentLogs({
+      logDir: getAgentLogDir() ?? '',
+      retentionDays: retentionPolicy.agentLogRetentionDays
+    })
   } catch (error) {
     // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
@@ -621,7 +646,11 @@ app.whenReady().then(async () => {
   })
 
   // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
-  const butlerAdmission = new ButlerAdmission()
+  // B1(偏差 23):统一调用级准入(状态归 Storage);butlerAdmission 退役。
+  // 顺序纪律(P1-1,评审):先清零 DB 活跃段、再构造门——门构造即 loadAdmissionState,
+  // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
+  resetActiveAdmissionOnStartup(db, Date.now())
+  setCallAdmissionGate(new CallAdmissionGate({ db }))
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。
@@ -654,7 +683,7 @@ app.whenReady().then(async () => {
       return resolved?.workDir ?? workDirState
     },
     getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
-    admission: butlerAdmission,
+    admissionGate: getCallAdmissionGate(),
     onSessionCreated: (session) => getMainWindow()?.webContents.send('session:created', { session }),
     // P6（偏差 8 机制面）：驱动源层唯一投递入口——桌面 sink（系统通知）注册进共享 hub；
     // butler 投递经 hub 路由并落送达记录。桌面终态发送通道（notifyMainWindow 路径）与
@@ -666,7 +695,7 @@ app.whenReady().then(async () => {
       notifyDesktop: (summary) => {
         if (!Notification.isSupported()) return
         const notification = new Notification({
-          title: 'SpaceAssistant 管家',
+          title: createHostTranslator({ locale: readAppLocale(db) })({ key: 'notification.desktopButlerTitle' }),
           body: summary.slice(0, 280)
         })
         notification.on('click', () => void showMainWindow())
@@ -802,7 +831,7 @@ app.whenReady().then(async () => {
       usageStatsStartupMaintenance?.()
       usageStatsStartupMaintenance = null
     })
-  setupAppMenu(readAppLocale(db))
+  setupAppMenu(createHostTranslator({ locale: readAppLocale(db) }))
 }).catch((err) => {
   console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
 })

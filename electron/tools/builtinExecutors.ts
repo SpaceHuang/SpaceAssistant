@@ -491,6 +491,7 @@ function countOccurrencesWithEolTolerance(hay: string, needle: string): number {
 
 import { toolErrMissingPath } from '../toolInputGuards'
 import { extractPathField } from '../toolPathField'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 const ERR_FILE_NOT_READ_FOR_EDIT =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
@@ -1300,37 +1301,46 @@ export const runScriptExecutor: ToolExecutor = {
   }
 }
 
-const registry = new TypedToolRegistry()
-registry.register(runShellRegisteredTool)
-registry.register(skillsReadTool)
-registry.register(historyReadTool)
-// toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
-registry.register(toolkitFindTool)
-registry.register(toolkitCallTool)
-for (const executor of [
-  readFileExecutor,
-  listDirectoryExecutor,
-  editFileExecutor,
-  writeFileExecutor,
-  grepExecutor,
-  runScriptExecutor,
-  runLarkCliExecutor,
-  readFeishuAttachmentExecutor,
-  wechatReplyExecutor,
-  wechatSendExecutor,
-  browserExecutor,
-  runShellExecutor,
-  listWorkDirsExecutor,
-  switchWorkDirExecutor,
-  switchSessionExecutor
-]) {
-  registry.registerLegacyExecutor(executor)
+/**
+ * 内置工具注册表(A2,偏差 18):registry 随 runtime 实例走——
+ * 工厂每次构建全新 registry(工具定义与 executor 为模块级无状态纯函数,可安全共享引用)。
+ */
+export function createBuiltinToolRegistry(): TypedToolRegistry {
+  const registry = new TypedToolRegistry()
+  registry.register(runShellRegisteredTool)
+  registry.register(skillsReadTool)
+  registry.register(historyReadTool)
+  // toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
+  registry.register(toolkitFindTool)
+  registry.register(toolkitCallTool)
+  for (const executor of [
+    readFileExecutor,
+    listDirectoryExecutor,
+    editFileExecutor,
+    writeFileExecutor,
+    grepExecutor,
+    runScriptExecutor,
+    runLarkCliExecutor,
+    readFeishuAttachmentExecutor,
+    wechatReplyExecutor,
+    wechatSendExecutor,
+    browserExecutor,
+    runShellExecutor,
+    listWorkDirsExecutor,
+    switchWorkDirExecutor,
+    switchSessionExecutor
+  ]) {
+    registry.registerLegacyExecutor(executor)
+  }
+  return registry
 }
 
+/** @deprecated 兼容转发(偏差 18,一个发布周期,P8 评估删除):经默认 runtime 实例。 */
 export function getToolExecutor(name: string): ToolExecutor | undefined {
-  return registry.getLegacyExecutor(name)
+  return getDefaultAgentRuntime().builtinRegistry.getLegacyExecutor(name) as ToolExecutor | undefined
 }
 
-export function getRegisteredTool(name: string) {
-  return registry.get(name)
+/** @deprecated 兼容转发(偏差 18)。 */
+export function getRegisteredTool(name: string): import('./plannedToolRegistry').RegisteredTool | undefined {
+  return getDefaultAgentRuntime().builtinRegistry.get(name) as import('./plannedToolRegistry').RegisteredTool | undefined
 }

@@ -39,15 +39,17 @@ describe('automation lane 显式规则集（偏差 21/22：反向证据翻转）
     expect(rule!.match?.toolName).toBeUndefined()
   })
 
-  it('resolvePolicyRules guard：automation lane 不得套用 loose 档（偏差 15 最小防护）', () => {
+  it('resolvePolicyRules guard：automation lane 不得套用 loose 档（偏差 15 最小防护；S1 范围档语义）', () => {
+    // 对照：user lane（desktop）loose 生效——清单内低风险域被 allow 范围条目取代
     const loosened = resolvePolicyRules({
       lane: 'desktop',
       packages: { desktop: 'loose' },
       rules: DEFAULT_POLICY_RULES
     })
-    const loosenedAsk = loosened.find((r) => r.id === 'im-write-ask')
-    expect(loosenedAsk?.action).toBe('allow')
+    const loosenedScope = loosened.find((r) => r.id === 'scope-loose-mcp-tool-ask')
+    expect(loosenedScope?.action).toBe('allow')
 
+    // automation 伪造 loose：仅提供 standard，规则集恒等（M2 收敛）
     const automation = resolvePolicyRules({
       lane: 'automation',
       packages: { automation: 'loose' },
@@ -55,6 +57,7 @@ describe('automation lane 显式规则集（偏差 21/22：反向证据翻转）
     })
     const automationAsk = automation.find((r) => r.id === 'im-write-ask')
     expect(automationAsk?.action).toBe('ask')
+    expect(automation.find((r) => r.id.startsWith('scope-'))).toBeUndefined()
   })
 })
 
