@@ -541,7 +541,8 @@ export interface AutoApprovedWriteMeta {
   added: number
   removed: number
   bytesWritten: number
-  diff?: { oldContent: string; newContent: string; oldPath: string }
+  /** P1-3(a)：不再携带 diff 全文（oldContent/newContent）——渲染层零引用（UI diff 卡片走 confirmDiff 链路），
+   *  历史重建白名单投影也一律丢弃；写入全文曾占 events.jsonl/DB 约 10.83 MB/会话（实测 b680b181）。 */
 }
 
 export interface ToolCallResultPersisted {
