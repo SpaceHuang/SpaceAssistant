@@ -91,7 +91,11 @@ function charHistogram(text: string): Map<string, number> {
   return hist
 }
 
-/** 行级廉价相似度：字符直方图 Dice 系数为主、长度差为辅（线性代价，用于粗筛） */
+/**
+ * 行级廉价相似度（线性代价，用于粗筛）：字符直方图 Dice + 长度差 + 位置一致率。
+ * 位置一致率用于抑制「乱序同字符」行的虚高——直方图对顺序盲，异位词行会拿满 Dice
+ * （评审 v1 P1 实证：old="abcde" 时 "edcba" 粗筛满分、LCS 占比仅 0.2）。
+ */
 function lineSimilarity(a: string, ha: Map<string, number>, b: string, hb: Map<string, number>): number {
   const maxLen = Math.max(a.length, b.length)
   if (maxLen === 0) return 1
@@ -103,7 +107,13 @@ function lineSimilarity(a: string, ha: Map<string, number>, b: string, hb: Map<s
   }
   const dice = (2 * inter) / (a.length + b.length)
   const lenSim = 1 - Math.abs(a.length - b.length) / maxLen
-  return dice * 0.7 + lenSim * 0.3
+  const n = Math.min(a.length, b.length)
+  let posMatch = 0
+  for (let i = 0; i < n; i++) {
+    if (a.charCodeAt(i) === b.charCodeAt(i)) posMatch++
+  }
+  const posSim = posMatch / maxLen
+  return dice * 0.5 + lenSim * 0.2 + posSim * 0.3
 }
 
 export type Opcode = { tag: 'equal' | 'replace' | 'delete' | 'insert'; i1: number; i2: number; j1: number; j2: number }
@@ -249,7 +259,10 @@ export function diagnoseMissingOldString(fileText: string, oldS: string): EditMi
     coarse.sort((a, b) => b.score - a.score)
   }
 
-  // 步骤 1b：仅对短名单窗口精算 LCS（LCS 只对短名单计算，控成本）
+  // 步骤 1b：仅对短名单窗口精算 LCS（LCS 只对短名单计算，控成本）。
+  // 精算完成的候选以 LCS 占比【替换】粗筛分，而非取 max：粗筛的字符直方图对顺序不敏感
+  // （乱序同字符的异位词行会打满分），不能作为精算候选的分数下限，否则 top1 错选且相似度虚高
+  //（评审 v1 P1 实证：old="abcde" 时异位词行 "edcba" 粗筛 1.0、LCS 占比仅 0.2，会压过真目标 "abcdx" 0.8）。
   const shortlist = coarse.slice(0, MAX_LCS_WINDOWS)
   const candidates: WindowCandidate[] = shortlist.map((c) => {
     const blockText = fileLines.slice(c.windowIndex, c.windowIndex + oldLineCount).join('\n')
@@ -260,17 +273,28 @@ export function diagnoseMissingOldString(fileText: string, oldS: string): EditMi
       const ops = lcsOpcodes(oldNorm, blockText)
       let lcs = 0
       for (const op of ops) if (op.tag === 'equal') lcs += op.i2 - op.i1
-      const ratio = lcs / Math.max(oldNorm.length, blockText.length, 1)
-      score = Math.max(score, ratio)
+      score = lcs / Math.max(oldNorm.length, blockText.length, 1)
       precise = true
     }
     return { windowIndex: c.windowIndex, score, precise, blockText }
   })
 
+  // 精算改分后必须重排：top1/top2 必须取自精算序（评审 v1 P1）。
+  // 精算候选存在时，oversized 候选不参与排序竞争——其粗筛分同样顺序盲、可能虚高，
+  // 会让真正合格的候选被误降级为 block-too-large；仅当短名单全部 oversized 时才按粗筛分选块。
+  const preciseCandidates = candidates.filter((c) => c.precise)
+  const pool = preciseCandidates.length > 0 ? preciseCandidates : candidates
+  pool.sort((a, b) => b.score - a.score)
+
   const lineRangeOf = (c: WindowCandidate): [number, number] => [c.windowIndex + 1, c.windowIndex + oldLineCount]
 
+  // 「候选过多放弃」（MAX_CANDIDATES）在粗筛全量上判定：短名单只有 MAX_LCS_WINDOWS 个，
+  // 用短名单计数该条件恒为假（评审 v1 P1.5 死代码）；文件中相似窗口多到超过上限时，
+  // 无论精算结果如何都应当放弃下发建议。
+  const coarseAboveCount = coarse.filter((c) => c.score >= 0.5).length
+
   // 步骤 2：候选筛选（阈值 0.5；歧义不下发建议）
-  if (candidates.length === 0 || candidates[0].score < 0.5) {
+  if (pool.length === 0 || pool[0].score < 0.5) {
     return {
       ...base,
       kind: 'no-similar-line',
@@ -278,11 +302,12 @@ export function diagnoseMissingOldString(fileText: string, oldS: string): EditMi
       hint: `未找到待替换的字符串。文件共 ${totalLines} 行，未找到与 old_string 相似的块（提交首行：${truncatePreview(oldLines[0] ?? '', NO_SIMILAR_PREVIEW_CHARS)}）。请确认目标内容后重试 edit_file，不要改用脚本写文件。`
     }
   }
-  const above = candidates.filter((c) => c.score >= 0.5)
+  const above = pool.filter((c) => c.score >= 0.5)
   const top1 = above[0]
   const top2 = above[1]
+  // pool 已降序排列，gap 恒非负（评审 v1 P2）
   const gap = top1.score - (top2?.score ?? 0)
-  if (above.length > MAX_CANDIDATES || (top2 && gap < MIN_SIM_GAP)) {
+  if (coarseAboveCount > MAX_CANDIDATES || (top2 && gap < MIN_SIM_GAP)) {
     return {
       ...base,
       kind: 'ambiguous-candidate',
@@ -294,7 +319,7 @@ export function diagnoseMissingOldString(fileText: string, oldS: string): EditMi
     }
   }
 
-  // top1 明确但块超长（无法精算也无法下发）→ block-too-large
+  // 短名单全部 oversized：top1 明确但块超长（无法精算也无法下发）→ block-too-large
   if (!top1.precise) {
     return {
       ...base,

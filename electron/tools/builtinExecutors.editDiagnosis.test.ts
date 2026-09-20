@@ -247,6 +247,50 @@ describe('edit_file 匹配失败诊断（§7.1 场景）', () => {
     expect(diag.suggestedOldString).toBeUndefined()
     expect(diag.usableAsOldString).toBe(false)
     expect(typeof diag.similarityGap).toBe('number')
+    // P2：pool 已按精算分降序，top1 ≥ top2，gap 恒非负
+    expect(diag.similarityGap!).toBeGreaterThanOrEqual(0)
+  })
+
+  it('#P1 回归（评审 v1 实证）：异位词行不得凭直方图满分胜出，top1 必须是精算最优', async () => {
+    const rel = 'anagram.md'
+    // "edcba" 与 old_string "abcde" 字符直方图完全相同（粗筛 Dice=1.0），
+    // 但 LCS 占比仅 1/5；真正只差 1 字符的 "abcdx"（LCS 占比 4/5）在第 4 行。
+    // 修复前：Math.max 让粗筛分成为下限且精算后未重排 → edcba 以 similarity 1.000 胜出并被下发。
+    await fs.writeFile(
+      path.join(tmpDir, rel),
+      ['xxxx0', 'edcba', 'xxxx2', 'abcdx', 'xxxx4'].join('\n'),
+      'utf8'
+    )
+    const res = await readThenEdit(tmpDir, cache, rel, { old_string: 'abcde', new_string: 'x' })
+    const diag = diagOf(res)
+    expect(diag.kind).toBe('content-mismatch')
+    expect(diag.candidateLineRange).toEqual([4, 4])
+    expect(diag.similarity).toBeCloseTo(0.8, 5)
+    expect(diag.suggestedOldString).toBe('abcdx')
+    expect(diag.usableAsOldString).toBe(true)
+  })
+
+  it('#P1.5 回归（评审 v1）：粗筛相似窗口数超过 MAX_CANDIDATES 时判歧义，即使 top1/top2 差距大', async () => {
+    const rel = 'too-many.md'
+    // 6 个异位词行（字符集同 "abcde"、乱序 → 粗筛满分、精算占比极低）+ 1 个真目标行（差 1 字符）：
+    // 粗筛全量 ≥0.5 的窗口共 7 个 > MAX_CANDIDATES(5)；精算后仅真目标窗口 ≥0.5（top2 不存在，
+    // gap 条件不触发）——只有 coarseAboveCount 路径能拦下该场景，防止向 6 个相似块中下发建议。
+    const anagrams = ['edcba', 'badce', 'cebad', 'dabce', 'ebcda', 'cbade']
+    await fs.writeFile(
+      path.join(tmpDir, rel),
+      [...anagrams.slice(0, 3), 'abcdf', ...anagrams.slice(3)].join('\n'),
+      'utf8'
+    )
+    const res = await readThenEdit(tmpDir, cache, rel, { old_string: 'abcde', new_string: 'x' })
+    const diag = diagOf(res)
+    expect(diag.kind).toBe('ambiguous-candidate')
+    expect(diag.suggestedOldString).toBeUndefined()
+    expect(diag.usableAsOldString).toBe(false)
+    // top1 仍是精算最优的真目标窗口（第 4 行，LCS 占比 4/5）；top2 为某异位词窗口（LCS 3/5 = 0.6），
+    // gap = 0.2 ≥ 0 且 ≥ MIN_SIM_GAP——本用例的歧义判定只能来自 coarseAboveCount 路径
+    expect(diag.candidateLineRange).toEqual([4, 4])
+    expect(diag.similarity).toBeCloseTo(0.8, 5)
+    expect(diag.similarityGap).toBeCloseTo(0.2, 5)
   })
 
   it('#11 多处命中（occ > 1）→ 仍返回原文案，不进入诊断分支（回归）', async () => {
@@ -306,14 +350,10 @@ describe('edit_file 匹配失败诊断（§7.1 场景）', () => {
     expect(diagOf(res).suggestedOldString).toBeUndefined()
 
     // n 行 vs 10n 行：两阶段（粗筛线性 + LCS 仅短名单）使耗时比 ≲ 15（宽松上界，防 CI 抖动）
-    // 仅第 51 行含 'unique-needle-token'（非目标 anchor 行用不同词形，保证 top1 唯一、不触发歧义降级）
+    // 仅第 51 行含 'unique-needle-token'，其余为低重合填料行——top1 唯一、粗筛 ≥0.5 窗口仅 1 个
     const mkFile = (rows: number) =>
       Array.from({ length: rows }, (_, i) =>
-        i === 50
-          ? 'anchor-50 unique-needle-token'
-          : i % 50 === 0
-            ? `anchor-${i} filler-row-marker`
-            : `row-${i} lorem ipsum dolor`
+        i === 50 ? 'anchor-50 unique-needle-token' : `row-${i} lorem ipsum dolor`
       ).join('\n')
     const smallRel = 'perf-small.md'
     const largeRel = 'perf-large.md'
