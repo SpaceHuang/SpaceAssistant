@@ -72,10 +72,10 @@ export function matchPsDangerousPatterns(
       }
     }
 
-    // 4) ps-redirect-sensitive：重定向目标落敏感路径
+    // 4) ps-redirect-sensitive：重定向目标落敏感路径（v3 复验建议：target 套用同一剥引号）
     for (const r of cmd.redirects) {
       if (!r.target) continue
-      const expanded = expandHomeTilde(r.target)
+      const expanded = expandHomeTilde(r.target.replace(/^["']+|["']+$/g, ''))
       if (isSensitivePath(normalizeWindowsPath(expanded), userDataDir, customSensitivePrefixes, platform)) {
         hits.push({ id: 'ps-redirect-sensitive', verdict: 'ask', reason: `重定向目标为敏感路径（${r.target}），需人工确认` })
       }

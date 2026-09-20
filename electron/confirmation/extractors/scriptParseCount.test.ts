@@ -107,6 +107,15 @@ describe('P1-T2/T3 未知构造与包裹式反向用例（IrCoverageError → ex
     expect(rRemote.verdict).not.toBe('allow')
   })
 
+  it('P0-3 Certifier 回归锁：Analyzer 无命中、else 体藏 certifier 未建模构造（with）时 remote 不得 allow', () => {
+    // 该样本 Analyzer 零命中（with open 无危险 attr）→ verdict=allow 的前提是 certifier 通过；
+    // certifier 若回退 orelse 遍历，with（未建模）会被跳过 → certify=true → remote allow。
+    // 断言 remote verdict !== 'allow' 即锁死 certifier 的 orelse 遍历路径。
+    const code = 'for i in [1]:\n    pass\nelse:\n    with open("f") as fh:\n        pass'
+    const r = analyzeScriptContent(code, { remote: true })
+    expect(r.verdict).not.toBe('allow')
+  })
+
   it('包裹式反向（危险调用真藏在未建模体内）：不得 allow', () => {
     const wrapped = 'import os\n\ndef dispatch(x):\n    match x:\n        case "go":\n            os.system("ls")\n'
     const r = analyzeScriptContent(wrapped, {})
