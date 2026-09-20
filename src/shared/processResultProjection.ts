@@ -77,6 +77,8 @@ const PROCESS_KEYS = new Set([
   'stdoutRawBytes', 'stderrRawBytes', 'stdoutTextBytes', 'stderrTextBytes', 'stdoutRawSha256', 'stderrRawSha256',
   'rawArtifact', 'outputArtifactReason', 'exitCodeHint', 'exitCodeFamily', 'exitCodeSemantics', 'exitCodeAdvice',
   'hresult', 'planMs', 'spawnToExitMs',
+  // P0-C（§5.3 约束 3）：宿主降级必须让用户/模型知道命令实际由谁执行
+  'degradedFrom', 'incompatible', 'hostInitExitCode',
   // §10.3：方言错配等计划错误的结构化 data（signals/hints 必须到达模型）
   'signals', 'hints', 'detectedSyntax', 'expectedDialect', 'shellProfileId', 'reason'
 ])

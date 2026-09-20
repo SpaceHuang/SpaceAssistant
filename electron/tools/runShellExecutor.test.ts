@@ -721,7 +721,15 @@ describe('runShellExecutor', () => {
       shellOutputMode: 'terminal' as const,
       shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, outputMode: 'terminal' as const }
     }
-    const result = await runShellExecutor.execute({ command: accidentReplayCommand('stdout') }, ctx)
+    // 事故重放以 exit 0xFFFF0000 结尾，会命中 P0-C 降级编排；本用例验证单次执行的解码管线，
+    // 因此直接驱动 executePreparedShellExecution（降级编排在 runShellHostDegrade.test.ts 覆盖）。
+    const prepared = await planRunShellExecution({ command: accidentReplayCommand('stdout') }, {
+      workDir,
+      userDataDir,
+      shellConfig: ctx.shellConfig,
+      policyRevision: 'runtime'
+    })
+    const result = await executePreparedShellExecution(prepared, ctx, Date.now(), { requestId: 'req', sessionId: 'sess', toolUseId: 'tool-1' })
     const data = result.data as Record<string, any>
     // 文本投影复用同一契约：事故字节还原为中文，而不是 GBK 乱码
     expect(data.decode.stdout).toMatchObject({ encoding: 'utf-16le', source: 'utf16-pattern', replacements: 0 })
@@ -834,7 +842,15 @@ describe('runShellExecutor', () => {
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('Gate 1：重放事故字节 → UTF-16LE 还原 + HRESULT + 原始字节留档，且不再出现 NUL', async () => {
-    const result = await runShellExecutor.execute({ command: accidentReplayCommand() }, baseCtx(workDir, userDataDir))
+    // 同 T13：exit 0xFFFF0000 会命中 P0-C 降级编排，此处验证单次执行的解码/取证管线，
+    // 直接驱动 executePreparedShellExecution。
+    const prepared = await planRunShellExecution({ command: accidentReplayCommand() }, {
+      workDir,
+      userDataDir,
+      shellConfig: baseCtx(workDir, userDataDir).shellConfig,
+      policyRevision: 'runtime'
+    })
+    const result = await executePreparedShellExecution(prepared, baseCtx(workDir, userDataDir), Date.now(), { requestId: 'req', sessionId: 'sess', toolUseId: 'tool-1' })
     const data = result.data as Record<string, any>
     // 判定链：UTF-16 零字节奇偶先于契约与严格 UTF-8（§8.1）
     expect(data.decode.stderr).toMatchObject({

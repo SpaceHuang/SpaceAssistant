@@ -29,6 +29,8 @@ import { cleanupExpiredOutputArtifacts } from '../shell/outputArtifactCleanup'
 import { SHELL_CASE_IDS } from '../shell/shellCaseIds'
 import { type PreparedShellExecution } from '../shell/preparedShellExecution'
 import { planRunShellExecution, revalidatePreparedShellExecution, RunShellPlanError } from './runShellPlan'
+import { runShellWithHostFallback } from './runShellHostDegrade'
+import { shouldAttemptHostDegrade } from '../shell/shellHostFallback'
 
 const PROGRESS_TAIL = 4000
 /** 进度用滚动文本窗口：只需覆盖 PROGRESS_TAIL，避免为进度保留全量文本。 */
@@ -128,8 +130,31 @@ export const runShellExecutor: ToolExecutor = {
 
     logShellAgentEvent('info', 'shell.exec.start', baseLog)
 
-    return executePreparedShellExecution(prepared, ctx, started, baseLog)
+    return executePreparedShellExecutionWithHostFallback(prepared, ctx, started, baseLog)
   }
+}
+
+/**
+ * 执行一次 prepared shell invocation，并在宿主初始化失败（0xFFFF0000 / 0xC0000142）时
+ * 沿 powershell → pwsh → cmd 降级（P0-C）。其余失败（超时/取消/普通退出/方言错配）不触发。
+ * run_shell 的全部执行入口（legacy executor / planned registration / 确认后重执行）统一走这里。
+ */
+export async function executePreparedShellExecutionWithHostFallback(
+  prepared: PreparedShellExecution,
+  ctx: ToolExecutionContext,
+  started: number,
+  baseLog: Record<string, unknown>
+): Promise<ToolExecutorResult> {
+  const primary = await executePreparedShellExecution(prepared, ctx, started, baseLog)
+  if (!shouldAttemptHostDegrade(primary)) return primary
+  return runShellWithHostFallback({
+    prepared,
+    ctx,
+    started,
+    baseLog,
+    primaryResult: primary,
+    runPrepared: executePreparedShellExecution
+  })
 }
 
 /**

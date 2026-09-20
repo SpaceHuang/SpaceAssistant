@@ -22,7 +22,7 @@ import { getRegisteredTool, getToolExecutor } from './tools/builtinExecutors'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { executeRegisteredTool } from './tools/toolInvocationCoordinator'
 import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
-import { executePreparedShellExecution } from './tools/runShellExecutor'
+import { executePreparedShellExecutionWithHostFallback } from './tools/runShellExecutor'
 import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
 import { validateToolExecutorResultForTool, type ToolExecutorResult } from './tools/types'
@@ -2498,7 +2498,7 @@ async function runToolChatSessionInner(
             historyFacts: args.historyFacts
           }
           execResult = preparedShellExecution
-            ? await executePreparedShellExecution(preparedShellExecution, executionContext, execStartedAt, {
+            ? await executePreparedShellExecutionWithHostFallback(preparedShellExecution, executionContext, execStartedAt, {
                 requestId,
                 sessionId,
                 toolUseId,

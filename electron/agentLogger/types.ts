@@ -90,6 +90,7 @@ export type AgentLogEventName =
   | 'shell.exec.background'
   | 'shell.exec.finish'
   | 'shell.exec.error'
+  | 'shell.exec.degrade'
   | 'shell.orphan_cleanup'
   | 'workdir.switch.start'
   | 'workdir.switch.done'

@@ -111,7 +111,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'run_shell',
     description:
-      '在会话工作目录下执行 shell 命令（macOS/Linux：POSIX Bash；Windows：Windows PowerShell 5.1）。用于 npm、git、构建/测试等 CLI。文本搜索请用 grep 工具，勿在此执行 grep/findstr/head/find/sed/awk；Python 片段请用 run_script，飞书请用 run_lark_cli。执行前需用户确认。不要混用另一种 Shell 方言；Windows 不回退 cmd。',
+      '在会话工作目录下执行 shell 命令（macOS/Linux：POSIX Bash；Windows：Windows PowerShell 5.1）。用于 npm、git、构建/测试等 CLI。文本搜索请用 grep 工具，勿在此执行 grep/findstr/head/find/sed/awk；Python 片段请用 run_script，飞书请用 run_lark_cli。执行前需用户确认。不要混用另一种 Shell 方言；Windows 宿主初始化失败时会自动降级到 pwsh/cmd 执行并在结果中标注 degradedFrom，失败时按诊断字段重试上报，勿改写命令或改用其他执行工具。',
     input_schema: {
       type: 'object',
       properties: {
