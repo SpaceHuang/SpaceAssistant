@@ -49,6 +49,7 @@ import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspac
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
+import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
@@ -639,7 +640,7 @@ app.whenReady().then(async () => {
       notifyDesktop: (summary) => {
         if (!Notification.isSupported()) return
         const notification = new Notification({
-          title: 'SpaceAssistant 管家',
+          title: createHostTranslator({ locale: readAppLocale(db) })({ key: 'notification.desktopButlerTitle' }),
           body: summary.slice(0, 280)
         })
         notification.on('click', () => void showMainWindow())
@@ -775,7 +776,7 @@ app.whenReady().then(async () => {
       usageStatsStartupMaintenance?.()
       usageStatsStartupMaintenance = null
     })
-  setupAppMenu(readAppLocale(db))
+  setupAppMenu(createHostTranslator({ locale: readAppLocale(db) }))
 }).catch((err) => {
   console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
 })

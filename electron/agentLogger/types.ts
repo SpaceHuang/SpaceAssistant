@@ -128,6 +128,8 @@ export type AgentLogEventName =
   | 'automation.scheduler.disabled-no-tray'
   | 'automation.scheduler.tick-failed'
   | 'usageStats.write.failed'
+  | 'i18n.resource_load_failed'
+  | 'i18n.missing_key'
   | 'usageStats.retention.cleaned'
   | 'usageStats.backfill.completed'
 

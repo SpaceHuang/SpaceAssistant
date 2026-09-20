@@ -11,6 +11,7 @@ import type {
   WikiConfig
 } from '../domainTypes'
 import type { DecisionCacheView, ExecutionLane, PolicyRule } from '../confirmation/types'
+import type { LocalizedMessage } from '../localization'
 
 /**
  * Agent 调用契约（基线 §6.2；本计划 P1 落形）。
@@ -274,6 +275,8 @@ export interface AgentHostPorts {
   hostFacts?: {
     getBrowserDetectContext?(): BrowserDetectContext
   }
+  /** 偏差 13：主进程只产出「键 + 参数」，宿主直接显示处经此解析（实现委托渲染端 i18n 真源）。 */
+  translate?(message: LocalizedMessage): string
   /** electron 侧为 ContextMeter（Core 以 session event ledger 提供的测量适配器）。 */
   contextMeter?: unknown
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */

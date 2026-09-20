@@ -133,6 +133,10 @@
         "to": "tray"
       },
       {
+        "from": "src/renderer/i18n/resources",
+        "to": "i18n-resources"
+      },
+      {
         "from": "res/icons",
         "to": "icons",
         "filter": [
