@@ -17,6 +17,21 @@ export function serializeProviderMessages(messages: unknown[]): Array<{ role: un
   })
 }
 
+/**
+ * P0-1 wire 面埋点（agent-context-token-cost-optimization-plan §5.2.3-2）：
+ * 按 buildClaudeToolLoopStreamParams 的注入规则推导本次请求的 cache_control 断点位置
+ * （'system' 或 'msg:<index>'）。必须与本文件的注入逻辑保持同源，注入规则变化时观测不漂移。
+ */
+export function computeCacheBreakpointPositions(args: { messages: readonly unknown[]; hasSystem: boolean; cacheControl: boolean }): string[] {
+  const positions: string[] = []
+  // 与 buildClaudeToolLoopStreamParams 同源：system 断点受 cacheControl 开关，消息级断点只要末条是字符串就注入
+  if (args.cacheControl && args.hasSystem) positions.push('system')
+  const last = args.messages.length > 0 ? args.messages[args.messages.length - 1] : undefined
+  const tailIsString = typeof (last as { content?: unknown } | undefined)?.content === 'string'
+  if (tailIsString) positions.push(`msg:${args.messages.length - 1}`)
+  return positions
+}
+
 export function buildClaudeToolLoopStreamParams(args: {
   model: string
   max_tokens: number

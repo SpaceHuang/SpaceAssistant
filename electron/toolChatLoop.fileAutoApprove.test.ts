@@ -161,4 +161,20 @@ describe('desktop standard write_file 自动批准（H2 审计回归）', () => 
       | undefined
     expect(toolResult?.payload.result.autoApprovedWrite).toMatchObject({ path: 'a.txt' })
   })
+
+  it('P1-3(a)：事件流事实载荷不再携带 autoApprovedWrite.diff 全文（渲染层零引用的死字段）', async () => {
+    await runSession()
+
+    const toolResult = capturedSessionEvents.find((e) => e.type === 'tool_result') as
+      | { payload: { result: { autoApprovedWrite?: Record<string, unknown> } } }
+      | undefined
+    const meta = toolResult?.payload.result.autoApprovedWrite
+    expect(meta, '自动批准的 tool_result 应保留 autoApprovedWrite 元数据').toBeTruthy()
+    expect(meta).not.toHaveProperty('diff')
+    // 行统计元数据保留（供审计/展示聚合）
+    expect(meta).toMatchObject({ path: 'a.txt' })
+    expect(typeof meta?.added).toBe('number')
+    expect(typeof meta?.removed).toBe('number')
+    expect(typeof meta?.bytesWritten).toBe('number')
+  })
 })

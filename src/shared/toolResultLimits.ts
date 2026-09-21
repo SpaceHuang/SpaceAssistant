@@ -4,10 +4,18 @@ export const READ_FILE_MAX_CHARS = 2 * 1024 * 1024
 /** read_file 单次按行读取的最大行数 */
 export const READ_FILE_MAX_LINE_LIMIT = 2000
 
-/** tool_result / API 消息块最大字符数（与最大工具输出对齐） */
-export const MAX_TOOL_RESULT_CONTENT_CHARS = READ_FILE_MAX_CHARS
+/** tool_result 压缩上限（tokens 口径，P1-4）：对齐 Codex 的 tool_output_token_limit 默认 10,000。
+ *  旧值 2 MiB ≈ 572k tokens，实际等于不设限。 */
+export const TOOL_RESULT_MAX_TOKENS = 10_000
 
-/** IPC 校验：user/assistant 文本与 content block 上限 */
+/** tool_result / API 消息块最大字符数（P1-4：由 TOOL_RESULT_MAX_TOKENS 派生，系数与
+ *  estimateTokensFromUtf8Text 的 len/3.5 反推一致）。
+ *  注意与 READ_FILE_MAX_CHARS 分离：执行器单次仍可读 2 MiB，超出压缩上限的部分由
+ *  compactOversizedToolResultContent 中段截断（保留头尾），模型可再用 offset/limit 定位。 */
+export const MAX_TOOL_RESULT_CONTENT_CHARS = Math.ceil(TOOL_RESULT_MAX_TOKENS * 3.5)
+
+/** IPC 校验：user/assistant 文本与 content block 上限（与工具结果压缩上限独立：
+ *  它是请求体防御性上限，不随 P1-4 的上下文体积治理下调——§5.4.4 影响面评估结论） */
 export const MAX_API_MESSAGE_TEXT_CHARS = READ_FILE_MAX_CHARS
 
 // ---- edit_file 匹配失败诊断（docs/develop/edit-file-match-failure-diagnosis-and-improvement-plan.md §5）----

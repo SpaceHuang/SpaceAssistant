@@ -67,8 +67,10 @@ function compactToolResultBuild(
   return { content: result.content, isError }
 }
 
-/** API 不接受空字符串 content；无正文时用单空格占位，避免阻断后续请求 */
-function ensureApiTextContent(content: string | undefined | null): string {
+/** API 不接受空字符串 content；无正文时用单空格占位，避免阻断后续请求。
+ *  实时 tool loop 追加 assistant 时必须复用同一规则（toolChatLoop），否则 turn 边界
+ *  历史重建与实时累积的 wire 前缀会从最终回复处分歧（缓存前缀失效）。 */
+export function ensureApiTextContent(content: string | undefined | null): string {
   const trimmed = (content ?? '').trim()
   return trimmed.length > 0 ? trimmed : ' '
 }

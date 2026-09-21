@@ -2,10 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
-import {
-  OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX,
-  formatOversizedToolResultPlaceholder
-} from '../src/shared/oversizedToolResult'
+import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
 const mockLogAgentEvent = vi.fn()
@@ -207,9 +204,9 @@ describe('toolChatLoop oversized tool_result gate 3', () => {
     const results = secondRoundToolResults()
     const block = results.find((b) => b.tool_use_id === 'tu-oversize')
     expect(block).toBeDefined()
-    expect(block!.content).toBe(
-      formatOversizedToolResultPlaceholder(oversized.length, MAX_TOOL_RESULT_CONTENT_CHARS)
-    )
+    // P1-4：中段截断（保留头尾 + 标记），不再整体替换为占位符
+    expect(isTruncatedToolResultContent(block!.content)).toBe(true)
+    expect(block!.content).toContain('xxxx')
     expect(block!.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
     expect(block!.is_error).toBeUndefined()
     expect(mockLogAgentEvent).toHaveBeenCalledWith(
@@ -235,7 +232,7 @@ describe('toolChatLoop oversized tool_result gate 3', () => {
     const block = results.find((b) => b.tool_use_id === 'tu-oversize')
     expect(block).toBeDefined()
     expect(block!.is_error).toBe(true)
-    expect(block!.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+    expect(isTruncatedToolResultContent(block!.content)).toBe(true)
     expect(block!.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
   })
 })

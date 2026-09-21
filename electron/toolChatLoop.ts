@@ -5,7 +5,7 @@ import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
 import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
-import { buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'
+import { buildClaudeToolLoopStreamParams, computeCacheBreakpointPositions } from './claudeToolLoopStreamParams'
 import {
   buildThinkingWireParams,
   consumeEffortMemoizedAudit,
@@ -182,9 +182,10 @@ import {
 } from './toolWriteConflict'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
+import { ensureApiTextContent } from '../src/shared/claudeToolHistory'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
-import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
+import { buildRequestContextPayload, buildRequestHeaderPayload, computeMessagePrefixStats, digestSurfaceItems, elideConstantHeaderFields, type CacheBreakpoints, type ConstantHeaderFingerprints } from '../src/shared/requestContext'
 import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
 import type { ContextMeter } from '../src/shared/contextMeterService'
@@ -202,6 +203,73 @@ import {
 } from './outputRecovery'
 
 const fileCaches = new Map<string, FileStateCache>()
+
+/**
+ * P0-1 双面埋点的「上一请求」状态（agent-context-token-cost-optimization-plan §5.2）：
+ * key = contextWindowId（缓存域），跨 turn 存活——turn 首请求的 messages 前缀统计必须
+ * 对照上一 turn 末请求。只保存上一请求的 item digest 列表与断点位置（§5.2.3 要点 6）。
+ */
+interface RequestPrefixState { prevItemDigests: string[] | null; prevBreakpointPositions: string[] | null; lastHeaderFingerprints: ConstantHeaderFingerprints | null; prevCompletedToolUseIds: string[] | null }
+const requestPrefixStates = new Map<string, RequestPrefixState>()
+const REQUEST_PREFIX_STATE_MAX_KEYS = 500
+
+function getRequestPrefixState(contextWindowId: string): RequestPrefixState {
+  let state = requestPrefixStates.get(contextWindowId)
+  if (!state) {
+    if (requestPrefixStates.size >= REQUEST_PREFIX_STATE_MAX_KEYS) {
+      const oldest = requestPrefixStates.keys().next().value
+      if (oldest !== undefined) requestPrefixStates.delete(oldest)
+    }
+    state = { prevItemDigests: null, prevBreakpointPositions: null, lastHeaderFingerprints: null, prevCompletedToolUseIds: null }
+    requestPrefixStates.set(contextWindowId, state)
+  }
+  return state
+}
+
+/** 组装本次请求的双面埋点与前缀经济性字段并推进 prev 状态（必须在请求实际发出前调用一次）。 */
+function buildRequestPrefixTelemetry(args: { contextWindowId: string; plannedMessages: unknown[]; wireMessages: readonly unknown[]; hasSystem: boolean; completedToolUseIds: string[] }): { messagePrefixStats: ReturnType<typeof computeMessagePrefixStats>; cacheBreakpoints: CacheBreakpoints; incrementalCompletedToolUseIds: string[] } {
+  const state = getRequestPrefixState(args.contextWindowId)
+  const messagePrefixStats = computeMessagePrefixStats(args.plannedMessages, state.prevItemDigests)
+  const positions = computeCacheBreakpointPositions({ messages: args.wireMessages, hasSystem: args.hasSystem, cacheControl: true })
+  const prevPositions = state.prevBreakpointPositions
+  const cacheBreakpoints: CacheBreakpoints = {
+    count: positions.length,
+    positions,
+    tailIsString: positions.some((p) => p.startsWith('msg:')),
+    prevPositions,
+    moved: prevPositions !== null && JSON.stringify(prevPositions) !== JSON.stringify(positions)
+  }
+  // P1-3(c)：completedToolUseIds 随轮次单调增长（实测均值 5.6 KB/请求、最大 11.8 KB），而
+  // request_header 的 checkpoint 无程序化读取方（压缩恢复走内存对象）。改为增量编码：
+  // 仅写相对上一请求新增的 toolUseId，语义由 RequestHeaderPayload 注释声明。
+  const prevIdSet = new Set(state.prevCompletedToolUseIds ?? [])
+  const incrementalCompletedToolUseIds = args.completedToolUseIds.filter((id) => !prevIdSet.has(id))
+  state.prevItemDigests = digestSurfaceItems(args.plannedMessages)
+  state.prevBreakpointPositions = positions
+  state.prevCompletedToolUseIds = args.completedToolUseIds
+  return { messagePrefixStats, cacheBreakpoints, incrementalCompletedToolUseIds }
+}
+
+/**
+ * turn 边界历史重建（buildClaudeToolChatMessages）对无 toolCalls 的 assistant 输出纯字符串
+ * content（ensureApiTextContent：拼接、trim、空则单空格）。实时累积路径若保留 text 块数组，
+ * 次轮 round:1 的重建前缀会从上一 turn 的最终回复处分歧，造成该 turn 边界缓存整段失效
+ * （agent-context-token-cost-optimization §3.4.5 候选 A 静态比对结论）。
+ * 含 tool_use / thinking 等非 text 块时不转换——重建路径对带 toolCalls 的 assistant 同样输出块数组。
+ */
+function normalizeAssistantContentForHistoryParity(content: Anthropic.ContentBlock[]): string | Anthropic.ContentBlock[] {
+  // 先剔除空白 text 块：重建侧只保留非空白正文（buildClaudeToolChatMessages 的 content.trim() 判断），
+  // 实时侧若保留空白块，混合数组（text+tool_use）与前缀都会从该项分歧（评审观察 1）。
+  const meaningful = content.filter((block) => {
+    if (Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
+      return String((block as { text?: unknown }).text ?? '').trim().length > 0
+    }
+    return true
+  })
+  const allText = meaningful.every((block) => Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+  if (!allText) return meaningful
+  return ensureApiTextContent(meaningful.map((block) => ((block as { text?: unknown }).text ?? '')).join(''))
+}
 
 export function getFileStateCacheForSession(sessionId: string): FileStateCache {
   let c = fileCaches.get(sessionId)
@@ -878,8 +946,11 @@ async function runToolChatSessionInner(
   })) as Anthropic.MessageParam[]
   if (args.skillFragments?.length) {
     const fragmentMessage: Anthropic.MessageParam = { role: 'user', content: args.skillFragments.join('\n\n') }
-    const lastUserIndex = messagesForApi.map((message) => message.role).lastIndexOf('user')
-    messagesForApi.splice(lastUserIndex >= 0 ? lastUserIndex : messagesForApi.length, 0, fragmentMessage)
+    // fragment 必须固定注入在第一条 user 消息之前：它不落 DB，次轮 round:1 的重建历史不含
+    // 上一 turn 的 fragment——若随「最后一条 user」移动，重建前缀从 item 0 整段错位，造成
+    // turn 边界缓存全量失效（agent-context-token-cost-optimization §3.4.5 候选 A 静态比对结论）。
+    const firstUserIndex = messagesForApi.map((message) => message.role).indexOf('user')
+    messagesForApi.splice(firstUserIndex >= 0 ? firstUserIndex : messagesForApi.length, 0, fragmentMessage)
   }
 
   /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
@@ -980,8 +1051,8 @@ async function runToolChatSessionInner(
 
     const outputHeader = buildRequestHeaderPayload({
       requestId: `${requestId}:recovery:${retry}`,
-      system: inputHeader.system,
-      tools: inputHeader.tools,
+      system: inputHeader.system ?? '',
+      tools: inputHeader.tools ?? [],
       messages: recoveredMessages,
       requiredSurfaceSet: inputHeader.requiredSurfaceSet,
       toolExecutionCheckpoint: { ...inputHeader.toolExecutionCheckpoint, replayForbidden: true }
@@ -1004,8 +1075,8 @@ async function runToolChatSessionInner(
 
     const inputItems = surfaceItemIdentities(inputSurface).map((id) => ({ id }))
     const outputItems = surfaceItemIdentitiesForProjectionSubset(inputProjection, outputProjection).map((id) => ({ id }))
-    const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, inputSurface)
-    const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, outputSurface)
+    const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system ?? '', inputSurface)
+    const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system ?? '', outputSurface)
     const shadowedRanges = computeShadowedRanges(inputItems, outputItems)
     if (!shadowedRanges.length || !args.appendCompactionTransaction) return false
     const compactionId = `${contextWindowId}:preflight:${requestId}:${retry}`
@@ -1059,7 +1130,16 @@ async function runToolChatSessionInner(
     // 计划面先冻结为不含内部 id 的协议中立表示；wire 面只接受 serializer 最终产物。
     // 两者必须独立计算，才能捕获 serializer 在发送前改变消息/工具的漂移。
     const plannedMessages = wireMessages
-    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+    const prefixTelemetry = buildRequestPrefixTelemetry({
+      contextWindowId,
+      plannedMessages: plannedMessages as unknown[],
+      // 断点位置推导必须用注入前的计划面：serializer 产物里末条字符串已被替换为
+      // cache_control 数组，「末条是否字符串」的判定会永远为 false。
+      wireMessages: plannedMessages,
+      hasSystem: typeof systemPrompt === 'string' && systemPrompt.trim().length > 0,
+      completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses
+    })
+    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: prefixTelemetry.incrementalCompletedToolUseIds, replayForbidden: false }, messagePrefixStats: prefixTelemetry.messagePrefixStats, cacheBreakpoints: prefixTelemetry.cacheBreakpoints })
     const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: toolLoopStreamParams.messages as unknown[], requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
@@ -1088,7 +1168,14 @@ async function runToolChatSessionInner(
       }
       return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
     }
-    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
+    // P1-3(b)：事件流落盘的 request_header 对恒定前缀去重——首见写全量，指纹未变省略
+    // system/tools（实测恒定 ≈93 KB/请求 × 146 请求 ≈ 13.65 MB/会话）。lastRequestHeader
+    // 保持完整版供内部派生使用；指纹未变的读取方按 surfaceSnapshot 指纹回填（当前唯一程序化
+    // 读取方 computeContextPressureFromEvents 只读 requestId + surfaceSnapshot，无需回填）。
+    const prefixState = getRequestPrefixState(contextWindowId)
+    const { elided: emittedHeader, fingerprints: emittedFingerprints } = elideConstantHeaderFields(requestHeader, prefixState.lastHeaderFingerprints)
+    prefixState.lastHeaderFingerprints = emittedFingerprints
+    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...emittedHeader } })
     await args.emitSessionEvent?.({ type: 'request_context', payload: requestContext })
 
     logAgentEvent('info', 'llm.request', {
@@ -1263,8 +1350,8 @@ async function runToolChatSessionInner(
           llmServiceId: args.llmServiceId
         })
         turnUsageStats.stepCount += 1
-        const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: content as Anthropic.ContentBlock[] }]
-        const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system, tools: requestHeader.tools, messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
+        const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: normalizeAssistantContentForHistoryParity(content as Anthropic.ContentBlock[]) }]
+        const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system ?? '', tools: requestHeader.tools ?? [], messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
         const finalProjection = computeContextPressure({
           currentSurface: finalHeader.surfaceSnapshot,
           anchor: { requestId: attemptRequestId, surfaceTokens: requestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: requestHeader.surfaceSnapshot.fingerprint, systemFingerprint: requestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: requestHeader.surfaceSnapshot.toolsFingerprint, provider: 'anthropic', model, estimatorVersion: requestContext.budget.estimatorVersion, serializationVersion: requestContext.budget.serializationVersion, realUsage: finalUsage, contextWindow: requestContext.contextWindow.tokens },
@@ -1356,7 +1443,7 @@ async function runToolChatSessionInner(
       })
       : replayableAssistantContent
     if (Array.isArray(safeAssistantContent) && safeAssistantContent.length > 0) {
-      messagesForApi = [...messagesForApi, { role: 'assistant', content: safeAssistantContent as Anthropic.ContentBlock[] }]
+      messagesForApi = [...messagesForApi, { role: 'assistant', content: normalizeAssistantContentForHistoryParity(safeAssistantContent as Anthropic.ContentBlock[]) }]
     }
 
     const outputRecoveryKind = classifyOutputRecovery({ stopReason, content })
@@ -1481,7 +1568,9 @@ async function runToolChatSessionInner(
       if (needsFinalAnswerReconciliation || hasOutputRecovery) args.emitFactEvent?.({ type: 'content-reconciled', text: finalText })
       args.emitFactEvent?.({ type: 'source-completed' })
       if (args.onTurnBoundary && lastRequestHeader && lastRequestContext) {
-        await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system, tools: lastRequestHeader.tools, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: lastRequestHeader.toolExecutionCheckpoint, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
+        // P1-3(c)：压缩 summary 的 checkpoint 是恢复语义（需要完整集合）；header 里的是增量编码。
+        // onTurnBoundary 必须传全量，不能透传 lastRequestHeader.toolExecutionCheckpoint。
+        await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system ?? '', tools: lastRequestHeader.tools ?? [], surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: lastRequestHeader.toolExecutionCheckpoint.replayForbidden }, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
       }
       const finalContent = answerRecoveryText || hasOutputRecovery
         ? ([{ type: 'text', text: finalText }] as Anthropic.ContentBlock[])
@@ -1949,8 +2038,8 @@ async function runToolChatSessionInner(
           path: relPath,
           added: stats.add,
           removed: stats.remove,
-          bytesWritten,
-          ...(diff ? { diff } : {})
+          bytesWritten
+          // P1-3(a)：不再写入 diff 全文——只写不读（渲染层零引用、重建白名单丢弃），10.83 MB/会话磁盘浪费
         }
       }
       const needsConfirm = gate.decision.type === 'require-confirm'
@@ -2754,7 +2843,8 @@ async function runToolChatSessionInner(
       const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
       args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
       if (lastRequestHeader && lastRequestContext) {
-        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi], requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+        // lastRequestHeader 本体永远持完整 system/tools（elide 只作用于事件流落盘副本），?? 兜底仅为类型层
+        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system ?? '', tools: lastRequestHeader.tools ?? [], messages: [...messagesForApi], requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
         const nextProjectionInput = {
           currentSurface: nextHeader.surfaceSnapshot,
           budget: lastRequestContext.budget,

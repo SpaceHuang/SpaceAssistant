@@ -1,10 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { normalizeAndValidateClaudeMessagesWithContentBlocks } from './claudeStreamHandlers'
-import {
-  OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX,
-  formatOversizedToolResultPlaceholder
-} from '../src/shared/oversizedToolResult'
+import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { ORPHAN_REMOVED_MESSAGE } from '../src/shared/toolResultPairing'
 
@@ -67,9 +64,9 @@ describe('normalizeAndValidateClaudeMessagesWithContentBlocks pairing integratio
     const out = normalizeAndValidateClaudeMessagesWithContentBlocks(input, { sessionId: 's-over' })
     const blocks = out[2]!.content as Array<{ type: string; tool_use_id: string; content: string }>
     expect(blocks[0]!.tool_use_id).toBe('t1')
-    expect(blocks[0]!.content).toBe(
-      formatOversizedToolResultPlaceholder(oversized.length, MAX_TOOL_RESULT_CONTENT_CHARS)
-    )
+    // P1-4：中段截断（保留头尾），不再整体替换为占位符
+    expect(isTruncatedToolResultContent(blocks[0]!.content)).toBe(true)
+    expect(blocks[0]!.content).toContain('xxxx')
     expect(blocks[0]!.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
     expect(logAgentEvent).toHaveBeenCalledWith(
       'warn',
@@ -103,7 +100,7 @@ describe('normalizeAndValidateClaudeMessagesWithContentBlocks pairing integratio
       is_error?: boolean
     }>
     expect(blocks[0]!.is_error).toBe(true)
-    expect(blocks[0]!.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+    expect(isTruncatedToolResultContent(blocks[0]!.content)).toBe(true)
   })
 
   it('leaves short tool_result content unchanged', () => {
@@ -142,6 +139,6 @@ describe('normalizeAndValidateClaudeMessagesWithContentBlocks pairing integratio
     })
     expect(out.every((m) => m.content !== undefined && m.content !== '')).toBe(true)
     const last = out[out.length - 1]!.content as Array<{ content: string }>
-    expect(last[0]!.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+    expect(isTruncatedToolResultContent(last[0]!.content)).toBe(true)
   })
 })
