@@ -1,4 +1,10 @@
-import { buildShellArgs, WINDOWS_POWERSHELL_PROFILE, WINDOWS_POWERSHELL_PRELUDE } from './shellProfiles'
+import {
+  buildShellArgs,
+  WINDOWS_POWERSHELL_PROFILE,
+  WINDOWS_POWERSHELL_PRELUDE,
+  WINDOWS_PWSH_PROFILE,
+  type ShellProfile
+} from './shellProfiles'
 
 export type ShellSpawnSpec = {
   executable: string
@@ -12,9 +18,16 @@ export type ShellExecPlan = {
   spawnArgs: string[]
 }
 
+/** powershell 家族（5.1 / pwsh）使用 EncodedCommand 模板；cmd 走 {command} 占位符。 */
+const POWERSHELL_FAMILY_PROFILES: Record<string, ShellProfile> = {
+  [WINDOWS_POWERSHELL_PROFILE.id]: WINDOWS_POWERSHELL_PROFILE,
+  [WINDOWS_PWSH_PROFILE.id]: WINDOWS_PWSH_PROFILE
+}
+
 function buildSpawnArgs(spec: ShellSpawnSpec, command: string): string[] {
-  if (spec.shellId === WINDOWS_POWERSHELL_PROFILE.id) {
-    return buildShellArgs(WINDOWS_POWERSHELL_PROFILE, command, WINDOWS_POWERSHELL_PRELUDE)
+  const powershellFamilyProfile = POWERSHELL_FAMILY_PROFILES[spec.shellId]
+  if (powershellFamilyProfile) {
+    return buildShellArgs(powershellFamilyProfile, command, WINDOWS_POWERSHELL_PRELUDE)
   }
   const args = [...spec.args]
   const commandIndex = args.indexOf('')

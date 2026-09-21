@@ -10,9 +10,13 @@ import type {
 } from '../../src/shared/confirmation/types'
 import { signalChatCancel } from '../chatCancelRegistry'
 import type { AuditSink } from './channels'
+import { renderCommandSequence } from './extractors/commandSequenceExtractor'
 
 /** 审批调用默认超时上界（方案 §12-2 取值 30s）；req.timeoutMs / policy.timeoutMs 可覆盖，必须有上界。 */
 export const DEFAULT_AGENT_APPROVAL_TIMEOUT_MS = 30_000
+
+/** P1-E(c)：线索包 [命令] 字段最多列出的子命令条数（超出以总数标注，保持有界）。 */
+export const CLUE_COMMAND_MAX = 5
 
 /**
  * P1-4 修复：递归兜底以「审批会话」为作用域（同调用树语义），不再是全局计数——
@@ -45,14 +49,24 @@ function summaryFor(cause: 'timeout' | 'unavailable' | 'unparsable' | 'config-er
   }
 }
 
-/** 从事实信号提取结构化线索（方案 §12-1：目标路径 / 命令 / URL），不给全量会话。 */
-function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<ApprovalCluePack> {
+/**
+ * 从事实信号提取结构化线索（方案 §12-1：目标路径 / 命令 / URL），不给全量会话。
+ * P1-E(c)（D7）：[命令] 覆盖全部子命令（前 N 条 + 总数标注，有界）——
+ * 旧实现只取 commands[0]，真正触发 high 风险的后续子命令（如 whoami）不进线索包。
+ */
+export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<ApprovalCluePack> {
   const extras: Partial<ApprovalCluePack> = {}
   for (const s of facts.signals) {
     if (s.kind === 'path-target' && !extras.targetPath) extras.targetPath = s.path
     if (s.kind === 'command-sequence' && !extras.command && s.commands.length > 0) {
-      const c = s.commands[0]!
-      extras.command = [c.verb, ...c.args].join(' ')
+      const rendered = renderCommandSequence(
+        s.commands.slice(0, CLUE_COMMAND_MAX).map((cmd) => ({
+          text: [cmd.verb, ...cmd.args].join(' '),
+          connector: cmd.connector
+        }))
+      )
+      extras.command =
+        s.commands.length > CLUE_COMMAND_MAX ? `${rendered} （共 ${s.commands.length} 条）` : rendered
       const files = s.commands.flatMap((cmd) => (cmd.redirectTarget ? [cmd.redirectTarget] : []))
       if (files.length > 0) extras.involvedFiles = files
     }

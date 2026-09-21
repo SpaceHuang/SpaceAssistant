@@ -2,7 +2,7 @@ import { detectShellDialectMismatch, type ShellDialectMismatch } from './shellDi
 import { defaultContractForPlatform, UTF8_CONTRACT } from '../processOutput/contracts'
 import type { OutputEncodingContract } from '../../src/shared/outputEncoding'
 
-export type ShellDialect = 'posix-bash' | 'windows-powershell'
+export type ShellDialect = 'posix-bash' | 'windows-powershell' | 'windows-cmd'
 
 export interface ShellProfile {
   id: string
@@ -71,6 +71,48 @@ export const WINDOWS_POWERSHELL_PROFILE: ShellProfile = Object.freeze({
  * 「期望编码」由 plan 里的 outputEncoding 契约表达。
  */
 export const WINDOWS_POWERSHELL_PRELUDE = "$ProgressPreference = 'SilentlyContinue';"
+
+/**
+ * P0-C 降级候选：pwsh（PowerShell 7+）。托管宿主实现与 5.1 不同，可能不受同一阻断影响。
+ * 仅作降级候选，不改变 profileForPlatform 的默认行为（降级由执行层决策）。
+ */
+export const WINDOWS_PWSH_PROFILE: ShellProfile = Object.freeze({
+  id: 'builtin-windows-pwsh',
+  dialect: 'windows-powershell',
+  executable: 'pwsh.exe',
+  commandArgsTemplate: [
+    '-NoLogo',
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-EncodedCommand',
+    '{encodedCommand}'
+  ],
+  loginMode: 'none',
+  get outputEncoding(): OutputEncodingContract {
+    return defaultContractForPlatform('win32')
+  },
+  encodingSource: 'detected',
+  source: 'builtin'
+})
+
+/**
+ * P0-C 降级保底：cmd。能力弱于 PowerShell（无 cmdlet、无 $LASTEXITCODE 语义、管道语义不同），
+ * 降级是保底可用而非等价替代——方言预检必须在新 profile 上重跑，结果必须标注 degradedFrom。
+ */
+export const WINDOWS_CMD_PROFILE: ShellProfile = Object.freeze({
+  id: 'builtin-windows-cmd',
+  dialect: 'windows-cmd',
+  executable: 'cmd.exe',
+  commandArgsTemplate: ['/d', '/s', '/c', '{command}'],
+  loginMode: 'none',
+  get outputEncoding(): OutputEncodingContract {
+    return defaultContractForPlatform('win32')
+  },
+  encodingSource: 'detected',
+  source: 'builtin'
+})
 
 export function freezeShellProfileSnapshot(profile: ShellProfile): ShellProfile {
   return Object.freeze({

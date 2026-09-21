@@ -1,3 +1,5 @@
+import type { ShellDialect } from './shellProfiles'
+
 export type ShellSecurityVerdict = 'allow' | 'deny' | 'ask'
 
 export type ShellSecurityDenyType = 'strong' | 'weak'
@@ -53,7 +55,7 @@ export interface ShellAnalysisResult {
   permissionDecision?: 'allow' | 'deny' | 'ask'
   /** 仅包含解析事实，不包含授权裁决；由统一 Analyzer 生成。 */
   facts?: {
-    dialect: 'posix-bash' | 'windows-powershell'
+    dialect: ShellDialect
     operations: readonly { verb: string; args: readonly string[]; segmentIndex: number }[]
     connectors: readonly string[]
     paths: readonly string[]

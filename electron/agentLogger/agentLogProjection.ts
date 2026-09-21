@@ -45,6 +45,8 @@ export function projectAgentLogFields(
   fields: Record<string, unknown>
 ): Record<string, unknown> {
   if (event.startsWith('shell.')) return projectShellAgentLogFields(event, fields)
+  // P0-D3 组 1：run_script 执行期事件与 shell.exec.* 共用同一 Shell/Script allowlist
+  if (event.startsWith('script.exec.')) return projectShellAgentLogFields(event, fields)
   if (!TARGET_EVENTS.has(event)) return fields
 
   const out: Record<string, unknown> = {}

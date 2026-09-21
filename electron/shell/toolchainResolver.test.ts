@@ -8,7 +8,7 @@ describe('resolveNodeToolchainPath', () => {
       FNM_MULTISHELL_PATH: '/Users/test/.fnm_multishells/123',
       VOLTA_HOME: '/Users/test/.volta',
       PATH: '/usr/bin:/bin'
-    }, 'darwin')
+    }, 'darwin', { exists: () => true })
     expect(result.sources).toEqual(['nvm', 'fnm', 'volta'])
     expect(result.pathEntries).toEqual([
       '/Users/test/.nvm/versions/node/v22/bin',
@@ -24,7 +24,7 @@ describe('resolveNodeToolchainPath', () => {
       ProgramFiles: 'C:\\Program Files',
       APPDATA: 'C:\\Users\\test\\AppData\\Roaming',
       Path: 'C:\\Windows\\System32;C:\\Other'
-    }, 'win32')
+    }, 'win32', { exists: () => true })
     expect(result.sources).toEqual(['windows-node', 'windows-npm'])
     expect(result.pathEntries.slice(0, 2)).toEqual([
       'C:\\Program Files\\nodejs',
@@ -34,7 +34,37 @@ describe('resolveNodeToolchainPath', () => {
   })
 
   it('Windows 合并 PATH/Path/path 且去重', () => {
-    const result = resolveNodeToolchainPath({ PATH: 'C:\\A;C:\\B', Path: 'C:\\B;C:\\C', path: 'C:\\D' }, 'win32')
+    const result = resolveNodeToolchainPath({ PATH: 'C:\\A;C:\\B', Path: 'C:\\B;C:\\C', path: 'C:\\D' }, 'win32', { exists: () => true })
     expect(result.pathEntries).toEqual(['C:\\A', 'C:\\B', 'C:\\C', 'C:\\D'])
+  })
+
+  // ===== P2-G(a)：注入的候选目录必须真实存在（回归 D8，§7.1 #12）=====
+  it('不存在的 nodejs 目录不进入 pathEntries（生产默认做存在性检查）', () => {
+    const result = resolveNodeToolchainPath({
+      ProgramFiles: 'C:\\Program Files',
+      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
+      LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local',
+      APPDATA: 'C:\\Users\\test\\AppData\\Roaming',
+      Path: 'C:\\Windows\\System32'
+    }, 'win32')
+    expect(result.pathEntries).toEqual(['C:\\Windows\\System32'])
+    expect(result.sources).toEqual([])
+  })
+
+  it('存在性检查按候选粒度生效：存在者进入，不存在者跳过且不影响顺序', () => {
+    const result = resolveNodeToolchainPath({
+      ProgramFiles: 'C:\\Program Files',
+      APPDATA: 'C:\\Users\\test\\AppData\\Roaming',
+      Path: 'C:\\Windows\\System32'
+    }, 'win32', {
+      exists: (dir) => dir.endsWith('npm') || dir.endsWith('System32')
+    })
+    expect(result.sources).toEqual(['windows-npm'])
+    expect(result.pathEntries).toEqual(['C:\\Users\\test\\AppData\\Roaming\\npm', 'C:\\Windows\\System32'])
+  })
+
+  it('已有 PATH 条目不做存在性过滤（用户自己的 PATH 原样保留）', () => {
+    const result = resolveNodeToolchainPath({ Path: 'C:\\Ghost;C:\\Real' }, 'win32', { exists: () => false })
+    expect(result.pathEntries).toEqual(['C:\\Ghost', 'C:\\Real'])
   })
 })

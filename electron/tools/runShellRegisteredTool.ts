@@ -1,7 +1,7 @@
 import { definePlannedTool, type RegisteredTool } from './plannedToolRegistry'
 import type { ToolExecutionContext as RuntimeToolExecutionContext, ToolExecutorResult } from './types'
 import type { PreparedShellExecution } from '../shell/preparedShellExecution'
-import { executePreparedShellExecution } from './runShellExecutor'
+import { executePreparedShellExecutionWithHostFallback } from './runShellExecutor'
 import { planRunShellExecution } from './runShellPlan'
 
 export type RunShellRegisteredExecutionContext = RuntimeToolExecutionContext & {
@@ -28,7 +28,7 @@ export const runShellRegisteredTool: RegisteredTool = definePlannedTool<
   execute: async (prepared, execution) => {
     const runtime = (execution as RunShellRegisteredExecutionContext).runtimeContext
     if (!runtime) throw new Error('RUN_SHELL_RUNTIME_CONTEXT_REQUIRED')
-    return executePreparedShellExecution(prepared, runtime, Date.now(), {
+    return executePreparedShellExecutionWithHostFallback(prepared, runtime, Date.now(), {
       requestId: runtime.requestId,
       sessionId: runtime.sessionId,
       toolUseId: runtime.toolUseId,

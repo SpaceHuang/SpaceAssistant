@@ -22,7 +22,7 @@ import { getRegisteredTool, getToolExecutor } from './tools/builtinExecutors'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { executeRegisteredTool } from './tools/toolInvocationCoordinator'
 import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
-import { executePreparedShellExecution } from './tools/runShellExecutor'
+import { executePreparedShellExecutionWithHostFallback } from './tools/runShellExecutor'
 import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
 import { validateToolExecutorResultForTool, type ToolExecutorResult } from './tools/types'
@@ -562,6 +562,51 @@ export function noteToolResultForStats(stats: TurnUsageStats, result: ToolCallRe
   } else if (!result.success) {
     stats.toolErrorCount += 1
   }
+}
+
+/**
+ * P1-D（D4）：确认拒绝 → notExecutedReason 的显式归类表。
+ * agent-deny（安全审批机审拒绝）不再误标为 user_rejected——那会污染 token 统计、
+ * UI 文案与错误归因；errorCode（远程只读/授权撤销）优先级最高，维持既有归类；
+ * 通道机器侧 fail-closed 拒绝（超时/不可用/不可解析/递归阻断等）归入 policy_denied。
+ */
+export function notExecutedReasonForConfirmation(input: {
+  cause?: ConfirmOutcomeCause
+  errorCode?: string
+}): ToolCallResultPersisted['notExecutedReason'] {
+  if (input.errorCode === 'REMOTE_READ_ONLY') return 'remote_read_only'
+  if (input.errorCode === 'AUTHORIZATION_REVOKED') return 'authorization_revoked'
+  switch (input.cause) {
+    case 'agent-deny':
+      return 'agent_denied'
+    case 'timeout':
+      return 'confirm_timeout'
+    case 'recursion-blocked':
+    case 'unavailable':
+    case 'unparsable':
+    case 'config-error':
+    case 'no-answerer':
+    case 'gate-materials-missing':
+    case 'rules-violated':
+      return 'policy_denied'
+    default:
+      // user-denied / 未走通道的既有拒绝路径：保底 user_rejected，迁移期行为不回归
+      return 'user_rejected'
+  }
+}
+
+/**
+ * P2-F F3：无人档位下高风险操作的机审拒绝是安全设计的必然结果（§5.7），
+ * 但拒绝必须可解释、可操作——理由要包含「如何获批」的可操作指引。
+ * 只补可操作性，不改变安全策略、不预设放行结论。
+ */
+export function agentDenyHowToApproveGuidance(): string {
+  return (
+    '本次为安全审批的机审拒绝（当前执行档位下高风险且授权不足会必然拒绝，属预期安全策略）。' +
+    '若确认该操作必要且安全，可用的获批途径：让用户在交互式会话中对确认卡片手动批准；' +
+    '将命令加入信任列表（低风险简单命令可被信任放行）；' +
+    '或把操作拆分为低风险只读步骤逐步完成。'
+  )
 }
 
 function failToolLoopWithLastUsage(
@@ -2363,19 +2408,20 @@ async function runToolChatSessionInner(
       if (!confirmationDecision.approved) {
         // P1-2 拒绝理由回传：优先通道裁决的 reason.summary（模型可读、可据此改方案）；
         // 无理由时按来源回退既有文案，迁移期文案逐一对照不回归。
+        // P2-F F3：agent-deny 的理由追加「如何获批」指引——拒绝必须可解释、可操作（换行分隔）。
         const rejectedError =
           confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
             ? '远程只读策略禁止执行需确认的工具。请在设置中将「远程写确认策略」改为「微信/飞书确认」，或开启「大模型生成的脚本自动允许执行」。'
             : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
               ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
-              : (channelRejectSummary ?? '用户拒绝执行此工具')
+              : (channelRejectSummary ?? '用户拒绝执行此工具') +
+                (confirmOutcomeCause === 'agent-deny' ? `\n${agentDenyHowToApproveGuidance()}` : '')
         // §7.6 #11：确认未批准覆盖三类来源（用户拒绝 / 远程只读 / 授权撤销），均未进入执行流程
-        const notExecutedReason: ToolCallResultPersisted['notExecutedReason'] =
-          confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
-            ? 'remote_read_only'
-            : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
-              ? 'authorization_revoked'
-              : 'user_rejected'
+        // P1-D（D4）：按 cause 归类——agent-deny 不再误标为「用户拒绝」污染统计与归因。
+        const notExecutedReason = notExecutedReasonForConfirmation({
+          cause: confirmOutcomeCause,
+          errorCode: confirmationDecision.errorCode
+        })
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
@@ -2498,7 +2544,7 @@ async function runToolChatSessionInner(
             historyFacts: args.historyFacts
           }
           execResult = preparedShellExecution
-            ? await executePreparedShellExecution(preparedShellExecution, executionContext, execStartedAt, {
+            ? await executePreparedShellExecutionWithHostFallback(preparedShellExecution, executionContext, execStartedAt, {
                 requestId,
                 sessionId,
                 toolUseId,
