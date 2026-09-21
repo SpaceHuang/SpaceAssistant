@@ -12,7 +12,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src')
-    }
+    },
+    // React 必须在渲染器、Recharts 及其依赖之间保持单一运行时实例，
+    // 否则开发期依赖重新预构建后会触发 Invalid hook call。
+    dedupe: ['react', 'react-dom', 'react-redux']
+  },
+  optimizeDeps: {
+    // 统计面板首次渲染时不要再临时发现并重新预构建 Recharts，避免与已加载的
+    // React 运行时形成两个模块实例。
+    include: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-redux', 'recharts']
   },
   build: {
     outDir: 'dist/renderer',
