@@ -62,4 +62,18 @@ describe('FileToolbar web mode', () => {
 
     expect(screen.getByRole('tablist', { name: 'HTML 视图' })).toBeTruthy()
   })
+
+  it('shows both markdown export formats only for markdown files', async () => {
+    render(
+      <FileToolbar filePath="方案.md" fileType="markdown" viewMode="render" previewContent="# 标题" onViewModeChange={vi.fn()} onClose={vi.fn()} onRefresh={vi.fn()} />
+    )
+    fireEvent.click(screen.getByLabelText('导出为...'))
+    expect(await screen.findByText('导出为 DOCX')).toBeTruthy()
+    expect(await screen.findByText('导出为 PDF')).toBeTruthy()
+  })
+
+  it('allows exporting an already-loaded empty markdown document', () => {
+    render(<FileToolbar filePath="empty.md" fileType="markdown" viewMode="render" previewContent="" onViewModeChange={vi.fn()} onClose={vi.fn()} onRefresh={vi.fn()} />)
+    expect((screen.getByLabelText('导出为...') as HTMLButtonElement).disabled).toBe(false)
+  })
 })
