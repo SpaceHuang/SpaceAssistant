@@ -1,4 +1,5 @@
 import type { AppLocale } from './locale'
+import type { MarkdownExportRequest, MarkdownExportResult } from './markdownExport'
 import type {
   SecurityAuditQueryPayload,
   SecurityAuditQueryResult,
@@ -376,10 +377,7 @@ export type SpaceAssistantApi = {
   fileToViewerUrl: (relPath: string) => Promise<FileViewerUrlResult>
   fileOpenInSystem: (relPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
   fileShowInExplorer: (relPath: string) => Promise<{ ok: true } | { ok: false; error: string }>
-  fileExportPdf: (payload: {
-    htmlContent: string
-    defaultPath: string
-  }) => Promise<{ ok: true; path: string } | { ok: false; canceled?: boolean; error?: string }>
+  fileExportMarkdown: (payload: MarkdownExportRequest) => Promise<MarkdownExportResult>
   fileCreateFile: (relPath: string) => Promise<void>
   fileCreateDirectory: (relPath: string) => Promise<void>
   fileDelete: (relPath: string) => Promise<void>

@@ -1,7 +1,6 @@
-import { useRef, type RefObject } from 'react'
+import { useRef, useState, type RefObject } from 'react'
 import { App, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
-import { renderToStaticMarkup } from 'react-dom/server'
 import {
   ArrowLeft,
   ArrowRight,
@@ -15,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { FileTypeCategory } from '../../../shared/fileTypes'
+import type { MarkdownExportFormat } from '../../../shared/markdownExport'
 import type { ViewMode } from './DetailPanelContext'
 import { MarkdownRenderView } from './MarkdownRenderView'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -117,8 +117,10 @@ export function FileToolbar({
   const { message } = App.useApp()
   const { t } = useTypedTranslation('detailPanel')
   const fallbackAddressRef = useRef<HTMLInputElement>(null)
+  const [isExporting, setIsExporting] = useState(false)
   const inputRef = addressInputRef ?? fallbackAddressRef
   const isMarkdown = fileType === 'markdown'
+  const canExportMarkdown = isMarkdown && Boolean(filePath && /(?:^|[\\/])[^\\/]+\.md$/i.test(filePath))
   const isHtml = fileType === 'html'
   const hasFilePath = Boolean(filePath)
 
@@ -134,15 +136,20 @@ export function FileToolbar({
     if (!r.ok) message.error(r.error ?? t('toolbar.openDirFailed'))
   }
 
-  const handleExportPdf = async () => {
-    if (!previewContent || !filePath) return
-    const html = renderToStaticMarkup(<MarkdownRenderView content={previewContent} />)
-    const r = await window.api.fileExportPdf({ htmlContent: html, defaultPath: filePath })
-    if (r.ok) message.success(`${t('toolbar.exportedTo')} ${r.path}`)
-    else if (!r.canceled) message.error(r.error ?? t('toolbar.exportFailed'))
+  const handleExport = async (format: MarkdownExportFormat) => {
+    if (previewContent == null || !filePath || isExporting) return
+    setIsExporting(true)
+    try {
+      const r = await window.api.fileExportMarkdown({ format, markdown: previewContent, sourcePath: filePath })
+      if (r.ok) message.success(`${t('toolbar.exportedTo')} ${r.path}${r.warnings?.length ? ` (${r.warnings.join('；')})` : ''}`)
+      else if (!r.canceled) message.error(r.error ?? t('toolbar.exportFailed'))
+    } finally { setIsExporting(false) }
   }
 
-  const exportItems: MenuProps['items'] = [{ key: 'pdf', label: 'PDF', onClick: () => void handleExportPdf() }]
+  const exportItems: MenuProps['items'] = [
+    { key: 'docx', label: t('toolbar.exportDocx'), disabled: previewContent == null || isExporting, onClick: () => void handleExport('docx') },
+    { key: 'pdf', label: t('toolbar.exportPdf'), disabled: previewContent == null || isExporting, onClick: () => void handleExport('pdf') }
+  ]
   const fileName = filePath ? fileBaseName(filePath) : ''
 
   const renderViewToggle = (label: string) => (
@@ -242,9 +249,9 @@ export function FileToolbar({
           </>
         ) : null}
         {!showWebNavigation ? <ToolbarBtn title={t('toolbar.refresh')} icon={RefreshCw} onClick={() => void onRefresh()} /> : null}
-        {isMarkdown && (
+        {canExportMarkdown && (
           <Dropdown menu={{ items: exportItems }} trigger={['click']}>
-            <button type="button" className="detail-toolbar-btn" title={t('toolbar.exportAs')} aria-label={t('toolbar.exportAs')}>
+            <button type="button" className="detail-toolbar-btn" disabled={previewContent == null || isExporting} title={t('toolbar.exportAs')} aria-label={t('toolbar.exportAs')}>
               <FileDown className="detail-toolbar-icon" size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden />
             </button>
           </Dropdown>

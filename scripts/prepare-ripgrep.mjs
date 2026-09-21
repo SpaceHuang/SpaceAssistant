@@ -83,6 +83,8 @@ export async function downloadArchive(url, fetchImpl = fetch) {
       return await downloadArchiveOnce(url, fetchImpl)
     } catch (error) {
       lastError = error
+      // 安全策略拒绝类错误是确定性的，重试会重复请求并削弱重定向上限。
+      if (error instanceof Error && /redirect limit|untrusted ripgrep redirect|redirect missing location/.test(error.message)) throw error
       if (attempt < DOWNLOAD_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)))
     }
   }

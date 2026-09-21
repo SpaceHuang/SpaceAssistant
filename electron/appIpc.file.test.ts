@@ -4,11 +4,13 @@ import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { waitForToolConfirm } from './toolConfirmRegistry'
 import * as database from './database'
+import { getMainWindow } from './windowRef'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
 const mockFs = vi.hoisted(() => ({
   writeFile: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  mkdtemp: vi.fn<() => Promise<string>>().mockResolvedValue('/tmp/spaceassistant-markdown-pdf-test'),
   mkdir: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   rm: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   rename: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -24,7 +26,8 @@ vi.mock('fs/promises', () => ({
 }))
 
 vi.mock('electron', () => ({
-  dialog: { showOpenDialog: vi.fn() }
+  dialog: { showOpenDialog: vi.fn(), showSaveDialog: vi.fn(), showMessageBox: vi.fn() },
+  BrowserWindow: vi.fn()
 }))
 
 vi.mock('./database', () => ({
@@ -147,10 +150,78 @@ describe('file IPC handlers', () => {
     mockFs.stat.mockResolvedValue({ isDirectory: () => true } as unknown as import('fs').Stats)
     mockSkillManager.route.mockResolvedValue({ skills: [] })
     mockSkillManager.buildSystemPrompt.mockReturnValue('')
+    vi.mocked(getMainWindow).mockReturnValue(undefined)
 
     ipc = mockIpcMain()
     ctx = makeCtx()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+  })
+
+  it('统一 Markdown 导出接口拒绝非法参数且不弹保存框', async () => {
+    const handler = ipc.getHandler('file:export-markdown')!
+    await expect(handler({}, { format: 'html', markdown: '# x', sourcePath: 'x.md' })).resolves.toEqual({ ok: false, error: '导出参数无效' })
+    const { dialog } = await import('electron')
+    expect(vi.mocked(dialog.showSaveDialog)).not.toHaveBeenCalled()
+  })
+
+  it('统一 Markdown 导出接口拒绝非 Markdown 来源', async () => {
+    const handler = ipc.getHandler('file:export-markdown')!
+    await expect(handler({}, { format: 'pdf', markdown: '# x', sourcePath: 'x.txt' })).resolves.toEqual({ ok: false, error: '仅支持导出 Markdown 文件' })
+  })
+
+  it('保存框取消时不生成文件', async () => {
+    const { dialog } = await import('electron')
+    vi.mocked(getMainWindow).mockReturnValue({} as never)
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: true, filePath: '' } as never)
+    const handler = ipc.getHandler('file:export-markdown')!
+    await expect(handler({}, { format: 'pdf', markdown: '# x', sourcePath: '方案.v2.md' })).resolves.toEqual({ ok: false, canceled: true })
+    expect(vi.mocked(dialog.showSaveDialog)).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ defaultPath: expect.stringMatching(/方案\.v2\.pdf$/), filters: [{ name: 'PDF', extensions: ['pdf'] }] }))
+  })
+
+  it('DOCX 保存框使用正确过滤器并通过统一写入边界', async () => {
+    const { dialog } = await import('electron')
+    vi.mocked(getMainWindow).mockReturnValue({} as never)
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.docx' } as never)
+    const handler = ipc.getHandler('file:export-markdown')!
+    await expect(handler({}, { format: 'docx', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.docx' })
+    expect(vi.mocked(dialog.showSaveDialog)).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ filters: [{ name: 'Word 文档', extensions: ['docx'] }] }))
+    expect(mockFs.writeFile).toHaveBeenCalled()
+    expect(mockFs.rename).toHaveBeenCalled()
+  })
+
+  it('补正扩展名后目标已存在且取消覆盖时不写入', async () => {
+    const { dialog } = await import('electron')
+    vi.mocked(getMainWindow).mockReturnValue({} as never)
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.txt' } as never)
+    vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0 } as never)
+    let statCalls = 0
+    mockFs.stat.mockImplementation(async () => ({ dev: 1, ino: statCalls++ === 0 ? 1 : 2, isDirectory: () => false } as unknown as import('fs').Stats))
+    const handler = ipc.getHandler('file:export-markdown')!
+    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: false, canceled: true })
+    expect(vi.mocked(dialog.showMessageBox)).toHaveBeenCalled()
+    expect(mockFs.writeFile).not.toHaveBeenCalled()
+  })
+
+  it('PDF 使用离屏打印、A4 参数和原子写入', async () => {
+    const { dialog, BrowserWindow } = await import('electron')
+    vi.mocked(getMainWindow).mockReturnValue({} as never)
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.txt' } as never)
+    vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 1 } as never)
+    mockFs.stat.mockResolvedValueOnce({ dev: 1, ino: 1, isDirectory: () => false } as unknown as import('fs').Stats)
+    mockFs.stat.mockRejectedValueOnce(new Error('ENOENT'))
+    const printToPDF = vi.fn().mockResolvedValue(Buffer.from('pdf'))
+    const destroy = vi.fn()
+    vi.mocked(BrowserWindow).mockImplementation(class {
+      loadURL = vi.fn().mockResolvedValue(undefined)
+      loadFile = vi.fn().mockResolvedValue(undefined)
+      webContents = { printToPDF }
+      destroy = destroy
+    } as never)
+    const handler = ipc.getHandler('file:export-markdown')!
+    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.pdf' })
+    expect(printToPDF).toHaveBeenCalledWith({ printBackground: true, pageSize: 'A4', margins: { top: 0.4, bottom: 0.4, left: 0.5, right: 0.5 } })
+    expect(mockFs.writeFile).toHaveBeenCalled()
+    expect(destroy).toHaveBeenCalled()
   })
 
   it('accepts a prepared turn and starts execution asynchronously', async () => {

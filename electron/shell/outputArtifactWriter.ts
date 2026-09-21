@@ -47,7 +47,16 @@ export class OutputArtifactWriter {
   /** 文本路径（非原始字节）：仅供仍持有解码后文本的调用方使用。 */
   append(text: string): void {
     if (!text) return
-    this.appendBytes(Buffer.from(text, 'utf8'))
+    const buf = Buffer.from(text, 'utf8')
+    const remaining = this.maxBytes - this.bytes
+    let end = Math.min(buf.length, remaining)
+    if (end < buf.length) {
+      const decoder = new TextDecoder('utf-8', { fatal: true })
+      while (end > 0) {
+        try { decoder.decode(buf.subarray(0, end)); break } catch { end -= 1 }
+      }
+    }
+    this.appendBytes(buf.subarray(0, end))
   }
 
   async close(): Promise<{ path: string; bytes: number; sha256: string }> {

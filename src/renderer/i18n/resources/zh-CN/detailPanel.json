@@ -28,6 +28,8 @@
     "addressPlaceholder": "输入 http(s):// URL 并回车",
     "htmlView": "HTML 视图",
     "exportAs": "导出为...",
+    "exportDocx": "导出为 DOCX",
+    "exportPdf": "导出为 PDF",
     "close": "关闭"
   },
   "fileView": {

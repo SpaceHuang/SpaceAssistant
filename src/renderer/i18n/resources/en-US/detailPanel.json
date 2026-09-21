@@ -28,6 +28,8 @@
     "addressPlaceholder": "Enter an http(s):// URL and press Enter",
     "htmlView": "HTML view",
     "exportAs": "Export as...",
+    "exportDocx": "Export as DOCX",
+    "exportPdf": "Export as PDF",
     "close": "Close"
   },
   "fileView": {
